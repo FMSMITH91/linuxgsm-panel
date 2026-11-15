@@ -456,6 +456,9 @@ def _create_first_admin(state, data, username, password, email):
             email=encrypt_secret(email) if email else None,
             display_name=username,
             is_superadmin=True,
+            # The account that sets the panel up owns it (panel/security/owner.py). The check
+            # above, under the same lock, means no superadmin and so no owner exists yet.
+            is_owner=True,
             is_active=True,
             # Carry the language chosen during setup into the admin account, so
             # they land in it after logging in (falls back to en).

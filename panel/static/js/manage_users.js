@@ -86,6 +86,27 @@ function _euFillSwitches(u) {
   // Same reasoning as the 2FA box: a password reset is destructive and must be chosen fresh each
   // time the dialog opens, never inherited from the last user you edited.
   document.getElementById('eu-reset-password').checked = false;
+  _euFillOwnRow(u);
+}
+
+// Your own row, and the panel owner's (only its owner edits it): the switches edit_user refuses
+// there are not offered. Hidden rather than disabled, and set to the value the account keeps — a
+// hidden checkbox still posts, a disabled one does not, and an absent is_active reads as
+// "deactivate". The resets are for other people's accounts; yours are on the Account page.
+function _euFillOwnRow(u) {
+  var self = !!u.is_self, owner = !!u.is_owner;
+  var show = function (id, on) { var el = document.getElementById(id); if (el) { el.hidden = !on; } };
+  if (self) { document.getElementById('eu-active').checked = true; }
+  show('eu-status-block', !self);
+  show('eu-reset-pw-block', !self);
+  show('eu-2fa-block', !self);
+  var euSuper = document.getElementById('eu-superadmin');
+  if (euSuper && owner) { euSuper.checked = true; }
+  show('eu-acct-type-block', !owner);
+  document.getElementById('eu-username').readOnly = owner;
+  show('eu-self-note', self);
+  show('eu-owner-note', self && owner);
+  show('eu-own-note', self && !owner);
 }
 
 // Show a one-time password the server just minted. Called by the ajax-form handler the moment the

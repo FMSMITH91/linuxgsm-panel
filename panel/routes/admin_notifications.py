@@ -15,6 +15,7 @@ from panel.security.auth import (MANAGE_USERS, accessible_remote_ids, can_admini
     permission_required, superadmin_required)
 from panel.services import (notifications)
 from panel.security.account_guard import step_up_required
+from panel.security import owner as _owner
 from panel.services.monitoring import _autoblock_threshold
 from panel.services import host_reboot as _hr
 from sqlalchemy.exc import IntegrityError
@@ -248,6 +249,11 @@ def _register_user_edits(app):
         _refused = _edit_user_refusal(user, want_superadmin) or _self_reset_refusal(user)
         if _refused:
             return _form_err(_refused, "manage_users")
+        # The owner's account (panel/security/owner.py): nobody else may change it, and the owner
+        # may not deactivate, demote or rename it. Every account is refused deactivating itself.
+        _refused = _owner.owner_edit_refusal(current_user, user, request.form)
+        if _refused:
+            return _owner.refuse(current_user, user, _owner_edit_what(user), _refused, "manage_users")
 
         # Renaming. Admins could change everything about an account EXCEPT the name it signs in
         # with, so a typo at creation (or a person changing theirs) meant deleting the account and
@@ -489,6 +495,10 @@ def _register_user_delete(app):
             return _form_err("Cannot delete the last superadmin.", "manage_users")
         if user.id == current_user.id:
             return _form_err("You can't delete your own account.", "manage_users")
+        _refused = _owner.owner_delete_refusal(user)
+        if _refused:
+            return _owner.refuse(current_user, user, "deletion of the panel owner's account", _refused,
+                                 "manage_users")
         username = user.username
         db.session.delete(user)
         db.session.commit()
@@ -511,6 +521,13 @@ def _edit_user_refusal(user, want_superadmin):
             return ("That account holds permissions you don't have — "
                     "only a superadmin can edit it.")
     return None
+
+
+def _owner_edit_what(user):
+    """The audit row's words for a refused edit: of the owner's account, or of the actor's own."""
+    if _owner.is_owner(user):
+        return "an edit of the panel owner's account"
+    return "deactivating their own account"
 
 
 def _self_reset_refusal(user):

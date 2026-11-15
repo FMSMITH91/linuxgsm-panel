@@ -84,29 +84,32 @@ def _may_use_terminal():
 def may_shell_on(user, remote):
     """May `user` have a shell on `remote`? The per-HOST half of the question.
 
-    On the panel's OWN host the answer is superadmin only, whatever the grants say. A shell there
-    runs as the panel's service account, and that account owns data/: panel.db (every user and
+    On the panel's OWN host the answer is the panel's owner only, whatever the grants say. A shell
+    there runs as the panel's service account, and that account owns data/: panel.db (every user and
     every is_superadmin flag), secret_key (which signs every session cookie) and cred_key (which
     decrypts every remote's stored SSH credential). So it is not a shell on one host; it is the
     panel itself, and through it every host the panel reaches. It was grantable by accident:
     USE_TERMINAL and a whole-host grant covering the panel host are both ordinary, delegable
     grants, unioned across a user's groups, and neither says that together they add up to
     superadmin. Every other panel-host management surface is already @superadmin_required.
+    And not every superadmin: that account can run `manage.py set-owner` or edit panel.db, so a
+    shell there would let any superadmin take the panel from its owner (panel/security/owner.py),
+    which is what the owner's protections exist to stop.
 
     On a remote the host grant stays the rule: the panel is root there by design, and a shell on
     it reaches that host and nothing else the panel holds.
     """
     if remote is None or user is None or not getattr(user, "is_authenticated", False):
         return False
+    if is_local_server(remote):
+        return bool(user.is_superadmin and getattr(user, "is_owner", False))
     if user.is_superadmin:
         return True
-    if is_local_server(remote):
-        return False
     from panel.security.auth import can_access_remote
     return bool(can_access_remote(user, remote.id))
 
 
-LOCAL_HOST_REFUSAL = ("A terminal on the panel's own host is for superadmins only: it runs as "
+LOCAL_HOST_REFUSAL = ("A terminal on the panel's own host is for the panel owner only: it runs as "
                       "the account that owns the panel's database and keys.")
 
 
@@ -334,7 +337,7 @@ def _terminal_target(data):
     remote = db.session.get(RemoteServer, remote_id)
     if remote is None:
         return None, None, "That host no longer exists."
-    # ...and the panel's own host is superadmin-only, which no host grant changes. The page
+    # ...and the panel's own host is the owner's only, which no host grant changes. The page
     # route refuses it as well, but this event is reachable without ever loading the page.
     if not may_shell_on(current_user, remote):
         return None, None, LOCAL_HOST_REFUSAL

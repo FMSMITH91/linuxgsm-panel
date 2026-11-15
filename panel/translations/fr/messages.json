@@ -16,7 +16,6 @@
   "A tag needs a name.": "Une étiquette doit avoir un nom.",
   "A tag with that name already exists.": "Une étiquette portant ce nom existe déjà.",
   "A terminal is already open on this connection. Reload the page to start another.": "Un terminal est déjà ouvert sur cette connexion. Rechargez la page pour en ouvrir un autre.",
-  "A terminal on the panel's own host is for superadmins only: it runs as the account that owns the panel's database and keys.": "Un terminal sur l'hôte du panneau lui-même est réservé aux superadministrateurs : il s'exécute sous le compte qui possède la base de données et les clés du panneau.",
   "A topic may use letters, digits, - and _ only (no spaces or slashes).": "Un sujet ne peut contenir que des lettres, des chiffres, - et _ (ni espaces ni barres obliques).",
   "Added": "Ajouté",
   "An SSH port change is already running for this host.": "Un changement de port SSH est déjà en cours pour cet hôte.",

@@ -184,7 +184,11 @@ def _cmpb_whats_new_stamp():
 class User(UserMixin, db.Model):
     # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
     # panel/db/id_sequence.py, which also converts a table an older version created.
-    __table_args__ = {"sqlite_autoincrement": True}
+    # ix_user_one_owner: a partial UNIQUE index over the rows with is_owner set, so the database
+    # itself refuses a second owner, whatever code path writes the flag (see is_owner below).
+    __table_args__ = (db.Index("ix_user_one_owner", "is_owner", unique=True,
+                               sqlite_where=text("is_owner = 1")),
+                      {"sqlite_autoincrement": True})
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
@@ -197,6 +201,14 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), nullable=True)
     display_name = db.Column(db.String(120), default="")
     is_superadmin = db.Column(db.Boolean, default=False)
+    # The panel's owner: the account that set the panel up (or, on an upgrade, the active superadmin
+    # with the lowest id). At most one row has it (ix_user_one_owner above) and _ensure_one_owner
+    # gives it to someone whenever an active superadmin exists and nobody holds it. No web route
+    # deactivates, demotes, renames, deletes or resets the owner, so one superadmin cannot take
+    # the panel from another; it moves only by the owner's own transfer (password and a live 2FA
+    # code) or by `manage.py set-owner` on the panel host. See panel/security/owner.py.
+    # server_default too: a row inserted by plain SQL (a salvage, a test fixture) is not an owner.
+    is_owner = db.Column(db.Boolean, default=False, nullable=False, server_default=text("0"))
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
@@ -1769,6 +1781,9 @@ _LIGHT_MIGRATIONS = {
     # Empty on upgrade: the panel never stored past passwords, so there is no history to
     # backfill. It starts filling on the next change each account makes.
     ("user", "password_history"): "ALTER TABLE user ADD COLUMN password_history TEXT DEFAULT ''",
+    # 0 for every row on upgrade; _ensure_one_owner then makes the active superadmin with the
+    # lowest id the owner, in the same start.
+    ("user", "is_owner"): "ALTER TABLE user ADD COLUMN is_owner BOOLEAN DEFAULT 0 NOT NULL",
     # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
     # an install that already has session rows, and its DEFAULT exists solely to backfill
     # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives
@@ -1803,6 +1818,26 @@ def _cmpb_stamp_whats_new():
                            {"s": stamp})
 
 
+def _ensure_one_owner():
+    """Give the owner flag to the active superadmin with the lowest id when no account holds it.
+
+    Run at EVERY start, and by manage.py after a command that can make a superadmin. On the start
+    that adds the column this picks the owner of an upgraded install: the oldest active superadmin
+    is the one most likely to have set the panel up. Afterwards it changes nothing while an owner
+    exists, so it never moves ownership; it only fills the gap a database with no owner has (one
+    edited by hand, or restored from a backup made before the column). One statement, so there is
+    no window in which two starts could both pick someone; the unique index refuses a second
+    owner anyway. Returns whether it gave the flag to anyone. The caller commits.
+    """
+    if db.session.execute(text("SELECT 1 FROM user WHERE is_owner = 1 LIMIT 1")).first() is not None:
+        return False
+    res = db.session.execute(text(
+        "UPDATE user SET is_owner = 1 WHERE id = (SELECT MIN(id) FROM user "
+        "WHERE is_superadmin = 1 AND is_active = 1) "
+        "AND NOT EXISTS (SELECT 1 FROM user WHERE is_owner = 1)"))
+    return bool(res.rowcount)
+
+
 def _run_light_migrations():
     """Add columns that may be missing on databases created by older versions.
 
@@ -1818,6 +1853,7 @@ def _run_light_migrations():
             db.session.execute(text(ddl))
     if _has_user:
         _cmpb_stamp_whats_new()
+        _ensure_one_owner()
     if _audit_ids_new:
         _backfill_audit_object_ids()
         # Committed HERE: _create_declared_indexes builds on db.engine, another connection, and
@@ -2008,8 +2044,9 @@ def _create_declared_indexes(existing):
         for ix in GameServer.__table__.indexes:
             ix.create(db.engine, checkfirst=True)
     # The history tables' (id, ts) composites — same reason as above: create_all() adds them to a
-    # fresh DB only, so an upgraded install would keep the slow plans forever without this.
-    for _model in (MetricSample, HostSample):
+    # fresh DB only, so an upgraded install would keep the slow plans forever without this. And the
+    # user table's one-owner index, which an upgraded install must have as much as a fresh one.
+    for _model in (MetricSample, HostSample, User):
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)

@@ -4245,6 +4245,9 @@ _MUT_NO_PERM_OK = {
     "account_set_theme", "account_whats_new_seen",
     # Step-up: re-proves the caller's OWN password (and code) to restore its confirmation window.
     "account_reauth",
+    # The panel owner handing over the panel: the caller's OWN flag is the gate (owner.is_owner,
+    # refused with a 403 for anyone else), confirmed with their password and a live 2FA code.
+    "account_owner_transfer",
     # The viewer's own UI language. POST because the PROFILE write is a stored state change and
     # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
     # pre-login (the switcher is on the login page), so there is no permission to require.

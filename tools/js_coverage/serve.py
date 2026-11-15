@@ -201,7 +201,8 @@ GAMES = [
 def _seed_users(now):
     """Add the signed-in admin, an operator in a group, and a deactivated account."""
     db.session.add(User(username=USER, password_hash=auth.hash_password(PASSWORD),
-                        display_name="Coverage Admin", is_superadmin=True, is_active=True))
+                        display_name="Coverage Admin", is_superadmin=True, is_owner=True,
+                        is_active=True))
     other = User(username="operator", password_hash=auth.hash_password(secrets.token_hex(16)),
                  display_name="Operator", email="op@example.com", is_superadmin=False,
                  is_active=True, last_login=now - timedelta(days=2))

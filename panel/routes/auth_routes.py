@@ -64,6 +64,9 @@ def register(app):
     # Required 2FA, step-up confirmation, denial logging and the Fetch Metadata guard.
     from panel.routes import account_security
     account_security.register(app)
+    # Transferring the panel's ownership (panel/security/owner.py).
+    from panel.routes import owner_transfer
+    owner_transfer.register(app)
 
 
 def _flash_signed_out(bye):

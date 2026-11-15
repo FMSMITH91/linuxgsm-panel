@@ -937,6 +937,10 @@ try:
         _u = User.query.filter_by(username="firstadmin").first()
         check("open: the first admin is active and a superadmin",
               _u is not None and _u.is_superadmin and _u.is_active)
+        check("open: ...and the panel's owner, the only one",
+              _u is not None and _u.is_owner
+              and [o.username for o in User.query.filter_by(is_owner=True).all()] == ["firstadmin"],
+              repr([o.username for o in User.query.filter_by(is_owner=True).all()]))
         check("open: their password is HASHED, never stored in the clear",
               _u is not None and _ADMIN_PASSWORD not in (_u.password_hash or ""))
         check("open: their email is encrypted at rest, not stored in the clear",
