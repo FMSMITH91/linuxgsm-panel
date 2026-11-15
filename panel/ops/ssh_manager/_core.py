@@ -17,7 +17,8 @@ import subprocess  # nosec B404 - every call site below passes an argv LIST, nev
 import tempfile
 import threading
 import time
-import paramiko
+from panel.ops.ssh_manager import _lazy
+paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
@@ -99,8 +100,12 @@ class HostKeyMismatch(ConnectionError):
     """
 
 
-class _PinPolicy(paramiko.MissingHostKeyPolicy):
+class _PinPolicy:
     """Trust-on-first-use SSH host-key pinning, replacing paramiko's AutoAddPolicy.
+
+    Not a subclass of paramiko.MissingHostKeyPolicy, so defining it does not import paramiko (see
+    _lazy): SSHClient.set_missing_host_key_policy takes any object with this one method, and that
+    base class has nothing else.
 
     AutoAddPolicy blindly trusts any key and is a MITM risk. We never pre-load keys into the
     client, so paramiko always hands the presented key here and we decide:

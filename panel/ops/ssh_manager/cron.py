@@ -2022,7 +2022,41 @@ def _batch_target_filter():
             % (_core.GAMEDIG_HUMANS_JQ, _BATCH_LIST_JQ))
 
 
-def _batch_body(queries, host):
+# A target whose last batch query got no answer is asked with _FAILED_TARGET_MS per packet next time,
+# not gamedig's 2 s: a Valheim on -crossplay answers no Steam query, and each pass waited out 2 s for
+# each of the two ports gamedig tries (4.4 s measured on the test host), keeping the ~85 MB batch node
+# alive for that long every 45 s. The query goes from the game's own host to its own address, where
+# 500 ms per packet is long (the Minecraft reasoning above). Every _FULL_WAIT_EVERY-th consecutive
+# failure is asked with the full wait again, so a server that is only slow is not kept unknown
+# for more than that many passes; the first answer ends the short waits.
+_FAILED_TARGET_MS = 500
+_FULL_WAIT_EVERY = 10
+_batch_fail_streak = _core.register_remote_cache({})   # {(remote_id, port): consecutive failed passes}
+
+
+def _short_wait_ports(server, queries):
+    """The ports of `queries` this pass asks with the short per-packet wait (see _FAILED_TARGET_MS)."""
+    rid = getattr(server, "id", None)
+    return {port for _key, _gdtype, port in queries
+            if _batch_fail_streak.get((rid, port), 0) % _FULL_WAIT_EVERY}
+
+
+def _note_target(server, port, answered):
+    """Count a batch target's consecutive failed passes (an answer resets it)."""
+    key = (getattr(server, "id", None), port)
+    if answered:
+        _batch_fail_streak.pop(key, None)
+    else:
+        _batch_fail_streak[key] = _batch_fail_streak.get(key, 0) + 1
+
+
+def _target_wait_ms(gdtype, port, short):
+    """The socketTimeout a batch target is given: its game's own, shortened when its port is in `short`."""
+    ms = GAMEDIG_SOCKET_TIMEOUT_MS.get(gdtype, 0)
+    return min(ms or _FAILED_TARGET_MS, _FAILED_TARGET_MS) if port in short else ms
+
+
+def _batch_body(queries, host, short=frozenset()):
     """The shell that runs every (key, gdtype, port) query at `host` in one node process.
 
     ONE line: sudo logs the command it ran, and a newline in it would print as a log line of its
@@ -2032,7 +2066,7 @@ def _batch_body(queries, host):
     unknown, as before), and NOT when node could not load gamedig: see _BATCH_NO_LIB.
     """
     import json as _json
-    targets = [[int(key), gdtype, host, int(port), GAMEDIG_SOCKET_TIMEOUT_MS.get(gdtype, 0)]
+    targets = [[int(key), gdtype, host, int(port), _target_wait_ms(gdtype, port, short)]
                for key, gdtype, port in queries]
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     return (f"g=$(command -v gamedig) || {{ echo {_BATCH_END}; exit 0; }}; "
@@ -2104,7 +2138,7 @@ def player_slots_batch(server, user, targets):
         return None
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     try:
-        body = _batch_body(queries, _core._gamedig_host(server))
+        body = _batch_body(queries, _core._gamedig_host(server), _short_wait_ports(server, queries))
         out, _, rc = _core.shell_as_game_user(server, user, body, stdin_text=_BATCH_NODE,
                                               timeout=groups * (_BATCH_TARGET_TIMEOUT + 5) + 5)
     except Exception:
@@ -2115,6 +2149,7 @@ def player_slots_batch(server, user, targets):
     result = {}
     for key, gdtype, port in queries:
         d = replies.get(key)
+        _note_target(server, port, bool(d and d.get("ok")))
         if not (d and d.get("ok")):
             _remember_map_failed(server, port)
             result[key] = (None, None, None)
