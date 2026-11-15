@@ -3,7 +3,6 @@ import json
 import logging
 import re
 import time
-import bcrypt
 from markupsafe import Markup
 from panel.core import i18n
 from panel.core.clock import utcnow
@@ -80,10 +79,10 @@ class EncryptedString(db.TypeDecorator):
         return out
 
 
-# How many previous passwords an account may not go straight back to. Each one costs a bcrypt
-# comparison (~0.2s at cost 12) on a password change, so this is a small number on purpose — it
-# stops the "change it, then change it back" cycle, which is what it is for, rather than trying to
-# be an archive.
+# How many previous passwords an account may not go straight back to. Each one costs a password-hash
+# comparison on a password change (~0.2s for a bcrypt one written before Argon2id), so this is a
+# small number on purpose — it stops the "change it, then change it back" cycle, which is what it
+# is for, rather than trying to be an archive.
 PASSWORD_HISTORY_LEN = 3
 
 # Identifiers that get interpolated into remote shell commands (Linux usernames, the
@@ -205,9 +204,9 @@ class User(UserMixin, db.Model):
     totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
-    backup_codes = db.Column(db.Text, default="")   # JSON list of bcrypt-hashed one-time 2FA backup codes
+    backup_codes = db.Column(db.Text, default="")   # JSON list of hashed one-time 2FA backup codes
     # The last PASSWORD_HISTORY_LEN passwords this account has finished with, newest first, as
-    # bcrypt hashes — the same thing stored for the current one, so history reveals nothing the
+    # password hashes — the same thing stored for the current one, so history reveals nothing the
     # user table did not already hold. Kept so "change your password" cannot be satisfied by
     # putting back the one you just left, which is what a person does when they are asked to
     # change a password they did not want to change.
@@ -279,16 +278,13 @@ class User(UserMixin, db.Model):
         return (code or "").strip().lower().replace("-", "").replace(" ", "")
 
     def set_backup_codes(self, plain_codes):
-        """Store one-time 2FA backup codes as bcrypt hashes.
+        """Store one-time 2FA backup codes as Argon2id hashes.
 
         The plaintext is shown to the user once and never persisted.
         """
-        from panel.security.auth import run_off_hub   # lazy: auth imports this module
-        # Off the eventlet hub: eight cost-12 hashes held every other request for ~2-3s.
-        self.backup_codes = json.dumps([
-            run_off_hub(bcrypt.hashpw, self._norm_code(c).encode(), bcrypt.gensalt()).decode()
-            for c in plain_codes
-        ])
+        from panel.security.auth import hash_backup_code   # lazy: auth imports this module
+        # hash_backup_code runs each hash off the eventlet hub, as a password's is.
+        self.backup_codes = json.dumps([hash_backup_code(self._norm_code(c)) for c in plain_codes])
 
     def use_backup_code(self, code):
         """Consume `code` if it matches an unused backup code (one-time); return True if it did.
@@ -302,15 +298,10 @@ class User(UserMixin, db.Model):
             hashes = json.loads(self.backup_codes)
         except (ValueError, TypeError):
             return False
-        from panel.security.auth import run_off_hub   # lazy: auth imports this module
-        match = None
-        for h in hashes:
-            try:
-                if run_off_hub(bcrypt.checkpw, code.encode(), h.encode()):
-                    match = h
-                    break
-            except (ValueError, TypeError):
-                continue
+        # Argon2id, or bcrypt for a code made before Argon2id; never raises. Looked up on the module
+        # at call time (lazy: auth imports this module).
+        from panel.security import auth as _auth
+        match = next((h for h in hashes if _auth.backup_code_matches(code, h)), None)
         if match is None:
             return False
         return self._spend_backup_hash(match, self.backup_codes, hashes)
@@ -318,7 +309,7 @@ class User(UserMixin, db.Model):
     def _spend_backup_hash(self, match, old_blob, hashes):
         """Remove `match` from the stored list, conditionally on the list not having changed.
 
-        The read-check-write was not atomic. Each bcrypt compare above runs in a worker thread
+        The read-check-write was not atomic. Each hash compare above runs in a worker thread
         (run_off_hub), so the greenlet YIELDS between reading backup_codes and writing it back, and
         a second request for the same account ran in that gap: both read the same list, both found
         the same code, both wrote "the list minus it" — one backup code, two logins. Two DIFFERENT
@@ -329,7 +320,7 @@ class User(UserMixin, db.Model):
         invites: UPDATE ... WHERE backup_codes = <what we read>. When it touches no row, somebody
         spent a code in between; re-read — the UPDATE already holds SQLite's write lock, so that
         read is the committed list and nobody can change it before our commit — and spend `match`
-        from THAT, or refuse if it is no longer there. No second bcrypt: the hash is already known.
+        from THAT, or refuse if it is no longer there. No second compare: the hash is already known.
 
         A transient User (not in a session — the unit checks build them) has no row to race over
         and keeps the plain attribute write. Caller still commits.
@@ -390,8 +381,8 @@ class User(UserMixin, db.Model):
     def password_reused(self, candidate):
         """True if `candidate` is this account's current password or one of its last few.
 
-        EXPENSIVE — up to PASSWORD_HISTORY_LEN + 1 bcrypt comparisons at cost 12, which is a few
-        hundred milliseconds each. Call it LAST, after every free check has already rejected what
+        EXPENSIVE — up to PASSWORD_HISTORY_LEN + 1 password-hash comparisons (a bcrypt one, from
+        before Argon2id, is a few hundred milliseconds). Call it LAST, after every free check has already rejected what
         it can, and only where a human picked the password: a generated one is random, and paying
         a second of hashing to rule out a collision that will not happen is not a trade worth
         making.
@@ -404,15 +395,16 @@ class User(UserMixin, db.Model):
                 history = []
         except (ValueError, TypeError):
             history = []
-        # check_password, NOT bcrypt.checkpw: hashes are stored as `sha256$<bcrypt>` now, and a
-        # raw checkpw against one raises, which this loop would swallow as "not a match" — reuse
-        # detection would quietly stop detecting anything. Deferred import because auth.py imports
+        # check_password, NOT a single algorithm's check: the history holds Argon2id hashes and the
+        # bcrypt formats from before them, and one algorithm's check against another's hash
+        # fails, which this loop would read as "not a match" — reuse detection would quietly stop
+        # detecting anything. Deferred import because auth.py imports
         # this module; models.py already defers panel.core.config the same way.
         from panel.security.auth import check_password
         for h in [self.password_hash] + history:
             if not isinstance(h, str) or not h:
                 continue
-            if check_password(candidate, h):   # never raises; handles both hash formats
+            if check_password(candidate, h):   # never raises; handles every hash format
                 return True
         return False
 
@@ -1073,7 +1065,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "browse_files", "read_file", "upload_check", "create_file", "create_folder", "list_cron",
     "lgsm_postponed", "lgsm_refused", "lgsm_busy", "mc_list_read", "mc_list_change", "plugin_list",
     "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove", "workshop_read", "workshop_save",
-    "db_create", "db_reveal", "db_password", "db_delete", "db_restore",
+    "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
@@ -1081,7 +1073,7 @@ AUDIT_HOST_ACTIONS = frozenset({
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
     "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
     "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
-    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete",
+    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
@@ -1244,9 +1236,13 @@ class MetricSample(db.Model):
     # the whole 14-day slice in a temp B-tree to satisfy ORDER BY. Measured on 806k rows (40
     # servers x 14 days at the real 1/min cadence): 3.6ms -> 2.5ms, and the temp sort disappears.
     # The single-column ts index STAYS — _prune_metric_samples deletes on `ts < cutoff` alone.
+    # The single-column server_id index is GONE: every lookup by server_id alone (the deleted-row
+    # prune, the remote's cleanup) uses this composite's leading column, and that index was one
+    # more B-tree each sample INSERT wrote — ~25% of the history's WAL bytes, ~1 commit a minute
+    # (measured on the test host). _create_declared_indexes drops it from an existing database.
     __table_args__ = (db.Index("ix_metric_sample_server_ts", "server_id", "ts"),)
     id = db.Column(db.Integer, primary_key=True)
-    server_id = db.Column(db.Integer, index=True, nullable=False)
+    server_id = db.Column(db.Integer, nullable=False)
     ts = db.Column(db.DateTime, default=utcnow, index=True)
     cpu = db.Column(db.Float, default=0.0)          # game CPU %
     ram_mb = db.Column(db.Integer, default=0)       # game RAM MB
@@ -1263,9 +1259,10 @@ class HostSample(db.Model):
     # than servers, SQLite preferred the ts index and scanned half the table before filtering
     # remote_id. Measured on 100k rows: 7.7ms -> 2.7ms, a 2.8x improvement on the same query the
     # history endpoint runs beside the metric one.
+    # No single-column remote_id index either: see MetricSample.
     __table_args__ = (db.Index("ix_host_sample_remote_ts", "remote_id", "ts"),)
     id = db.Column(db.Integer, primary_key=True)
-    remote_id = db.Column(db.Integer, index=True, nullable=False)
+    remote_id = db.Column(db.Integer, nullable=False)
     ts = db.Column(db.DateTime, default=utcnow, index=True)
     cpu = db.Column(db.Float, default=0.0)
     ram_pct = db.Column(db.Float, default=0.0)
@@ -1586,6 +1583,63 @@ class GameDatabase(db.Model):
     dumped_at = db.Column(db.DateTime, nullable=True)            # last dump written into the game's files
     created_at = db.Column(db.DateTime, default=utcnow)
     created_by = db.Column(db.String(80), default="")
+    # A database on a server on another machine: its DatabaseEndpoint, and the one address its
+    # account was made for (the game host's, as that server sees it). Both NULL: the game host's own
+    # server, with the two accounts 'name'@'localhost' and 'name'@'127.0.0.1'.
+    endpoint_id = db.Column(db.Integer, nullable=True, index=True)
+    account_host = db.Column(db.String(45), nullable=True)
+
+
+class DatabaseEndpoint(db.Model):
+    """A MariaDB/MySQL server on another machine that game hosts reach over Tailscale.
+
+    kind 'managed': a host the panel manages (`remote_id`), whose own HostDatabaseServer row says
+    how the panel signs in there; the accounts are made on that host. kind 'external': a server the
+    panel does not manage, signed in to with `admin_user`/`admin_secret` (a superadmin's, encrypted
+    like an SSH credential) from each game host that uses it. `address` is a tailnet address (plain:
+    it is validated and compared, and an address is not a secret); `warnings` a JSON list of keys
+    as HostDatabaseServer's.
+    """
+
+    __tablename__ = "database_endpoint"
+    # AUTOINCREMENT: a deleted row's id is never handed to a new one (panel/db/id_sequence.py).
+    __table_args__ = {"sqlite_autoincrement": True}
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(80), default="")
+    kind = db.Column(db.String(8), default="external")          # 'managed' | 'external'
+    remote_id = db.Column(db.Integer, nullable=True, index=True)  # managed: the database's host
+    address = db.Column(db.String(45), default="")
+    port = db.Column(db.Integer, default=3306)
+    flavor = db.Column(db.String(8), default="mariadb")
+    version = db.Column(db.String(40), default="")
+    native_ok = db.Column(db.Boolean, default=True)
+    warnings = db.Column(db.Text, default="")
+    admin_user = db.Column(EncryptedString, default="")          # external only
+    admin_secret = db.Column(db.Text, default="")                # encrypt_secret(password), external only
+    created_by = db.Column(db.String(80), default="")
+    created_at = db.Column(db.DateTime, default=utcnow)
+    checked_at = db.Column(db.DateTime, nullable=True)
+
+    @property
+    def auth_mode(self):
+        """How the panel signs in, as HostDatabaseServer says it: always with a login (over the tailnet)."""
+        return "login"
+
+
+class EndpointClient(db.Model):
+    """A game host whose new databases go to a DatabaseEndpoint, and its address as that server sees it.
+
+    One per game host (the unique `remote_id`): a superadmin chose it. Databases made before keep
+    their own server (GameDatabase.endpoint_id says where each one is).
+    """
+
+    __tablename__ = "endpoint_client"
+    __table_args__ = {"sqlite_autoincrement": True}
+    id = db.Column(db.Integer, primary_key=True)
+    endpoint_id = db.Column(db.Integer, nullable=False, index=True)
+    remote_id = db.Column(db.Integer, nullable=False, unique=True)
+    seen_addr = db.Column(db.String(45), default="")
+    checked_at = db.Column(db.DateTime, nullable=True)
 
 
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
@@ -1596,7 +1650,8 @@ class GameDatabase(db.Model):
 # session's Revoke are the same shape. Every one has `sqlite_autoincrement` in its __table_args__;
 # a unit check holds the two lists together.
 _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
-                         GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase)
+                         GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase, DatabaseEndpoint,
+                         EndpointClient)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {
@@ -1681,6 +1736,9 @@ _LIGHT_MIGRATIONS = {
     # real value.
     ("user_session", "remember"):
         "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
+    # NULL on upgrade: every database made before is on its game host's own server.
+    ("game_database", "endpoint_id"): "ALTER TABLE game_database ADD COLUMN endpoint_id INTEGER",
+    ("game_database", "account_host"): "ALTER TABLE game_database ADD COLUMN account_host VARCHAR(45)",
 }
 
 
@@ -1912,6 +1970,11 @@ def _create_declared_indexes(existing):
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)
+    # ...and the single-column server_id / remote_id indexes those composites made redundant (see
+    # MetricSample), dropped once the composites exist. IF EXISTS: a no-op on every later start.
+    with db.engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS ix_metric_sample_server_id"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_host_sample_remote_id"))
 
 
 def database_stats():

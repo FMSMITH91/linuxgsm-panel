@@ -823,6 +823,16 @@
       "GET"
     ]
   },
+  "GET /databases": {
+    "endpoint": "databases_overview",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:databases_overview"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /game-icon/<script>": {
     "endpoint": "game_icon",
     "guards": [
@@ -1072,6 +1082,18 @@
     "guards": [
       "utils.py:decorated_view",
       "view:account_2fa_enable"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "GET,POST /api/remote/<int:remote_id>/databases/endpoint": {
+    "endpoint": "api_remote_databases_endpoint",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_remote_databases_endpoint"
     ],
     "methods": [
       "GET",
@@ -2314,6 +2336,17 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_database_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/move": {
+    "endpoint": "api_server_database_move",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_move"
     ],
     "methods": [
       "POST"

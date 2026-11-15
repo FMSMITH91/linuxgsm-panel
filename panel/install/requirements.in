@@ -63,6 +63,7 @@ pyotp
 qrcode
 paramiko
 bcrypt
+argon2-cffi
 eventlet
 cryptography
 websocket-client

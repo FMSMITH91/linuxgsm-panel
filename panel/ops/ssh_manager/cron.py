@@ -1942,10 +1942,13 @@ _BATCH_NO_LIB = 3
 # its deadline prints nothing, as the `timeout` the command ran under did. One line per answered
 # target, {"k": key, "r": reply}, written by this one process, so no two lines can interleave.
 # argv: the gamedig command's path, the targets [[key, type, host, port, socketTimeout|0], ...]
-# as JSON, the concurrency, and the per-target deadline in ms.
+# as JSON, the concurrency, and the per-target deadline in ms. The script itself goes on node's
+# STDIN (`node -`), not in the command: sudo logs the whole command line, and this script in it was
+# ~2 KB of journal (three "command continued" lines) on every 45 s pass, most of what the panel
+# logged with no page open. The "-" node leaves in argv is dropped.
 _BATCH_NODE = "".join((
     'const fs=require("fs"),path=require("path"),url=require("url");',
-    'const [bin,list,par,wait]=process.argv.slice(1);',
+    'const A=process.argv.slice(1);if(A[0]==="-")A.shift();const [bin,list,par,wait]=A;',
     'const base={pretty:false,debug:false,givenPortOnly:false,requestRules:false,',
     'requestRulesRequired:false,requestPlayersRequired:false,noBreadthOrder:false,checkOldIDs:false,',
     'rejectUnauthorized:false,stripColors:true,portCache:true,requestPlayers:true};',
@@ -1968,6 +1971,35 @@ _BATCH_NODE = "".join((
 ))
 
 
+# The Players card's list, read from the same reply: the names with score (or frags) and time, as
+# game._gamedig_player_list's own query asks for them.
+_BATCH_LIST_JQ = ('[.players[] | {name:(.name // ""), score:(.raw.score // .score // .raw.frags // .frags // null), '
+                  'time:(.raw.time // .time // null)}]')
+
+# The player list each batch read, for the server page's Players poll: {(remote_id, port, gdtype):
+# (read at, {"p": list, "c": count})}. That poll ran a gamedig of its own every other 15 s poll per
+# open page, an ~85 MB node process beside the batch's, for a list the batch had just read from the
+# same reply. Kept one player-poll period (45 s) plus a margin, so the poll finds the next pass's
+# list before this one lapses; a pass that runs late leaves the poll to ask on its own, as before.
+_batch_lists = _core.register_remote_cache({})
+_BATCH_LIST_TTL = 55
+
+
+def _remember_list(server, gdtype, port, reply):
+    """Keep the player list a batch reply carried (see _batch_lists). Never raises."""
+    if isinstance(reply.get("l"), list):
+        _batch_lists[(getattr(server, "id", None), port, gdtype)] = (
+            time.time(), {"p": reply["l"], "c": reply.get("c")})
+
+
+def batch_list(key):
+    """(read at, {"p", "c"}) of the list the last batch read for `key`, or None when none is fresh."""
+    hit = _batch_lists.get(key)
+    if hit and hit[0] + _BATCH_LIST_TTL > time.time():
+        return hit
+    return None
+
+
 def _batch_target_filter():
     """The jq filter of player_slots for one `{"k": key, "r": reply}` line of a batch, tagged with its key.
 
@@ -1980,26 +2012,65 @@ def _batch_target_filter():
     treats anything else as "no map" (null here is the same answer), and tostring would invent one.
     One jq reads every line, so a line it cannot evaluate is skipped (`try`) rather than ending the
     rest: that target alone reads unknown, as when each target had a jq of its own.
+
+    `l` is the player list the server page's Players card shows (see _remember_list), in its own
+    `try`: a list jq cannot read is no list, and never costs the target its count.
     """
     return ('.k as $k | try (.r | {k:$k, c:%s, m:.maxplayers, n:((.name // "")|tostring|.[:120]), '
             'p:((.map // "") | if type == "string" then .[:120] else null end), '
-            'ok:(.players|type=="array")})' % _core.GAMEDIG_HUMANS_JQ)
+            'ok:(.players|type=="array"), l:(try %s catch null)})'
+            % (_core.GAMEDIG_HUMANS_JQ, _BATCH_LIST_JQ))
 
 
-def _batch_body(queries, host):
+# A target whose last batch query got no answer is asked with _FAILED_TARGET_MS per packet next time,
+# not gamedig's 2 s: a Valheim on -crossplay answers no Steam query, and each pass waited out 2 s for
+# each of the two ports gamedig tries (4.4 s measured on the test host), keeping the ~85 MB batch node
+# alive for that long every 45 s. The query goes from the game's own host to its own address, where
+# 500 ms per packet is long (the Minecraft reasoning above). Every _FULL_WAIT_EVERY-th consecutive
+# failure is asked with the full wait again, so a server that is only slow is not kept unknown
+# for more than that many passes; the first answer ends the short waits.
+_FAILED_TARGET_MS = 500
+_FULL_WAIT_EVERY = 10
+_batch_fail_streak = _core.register_remote_cache({})   # {(remote_id, port): consecutive failed passes}
+
+
+def _short_wait_ports(server, queries):
+    """The ports of `queries` this pass asks with the short per-packet wait (see _FAILED_TARGET_MS)."""
+    rid = getattr(server, "id", None)
+    return {port for _key, _gdtype, port in queries
+            if _batch_fail_streak.get((rid, port), 0) % _FULL_WAIT_EVERY}
+
+
+def _note_target(server, port, answered):
+    """Count a batch target's consecutive failed passes (an answer resets it)."""
+    key = (getattr(server, "id", None), port)
+    if answered:
+        _batch_fail_streak.pop(key, None)
+    else:
+        _batch_fail_streak[key] = _batch_fail_streak.get(key, 0) + 1
+
+
+def _target_wait_ms(gdtype, port, short):
+    """The socketTimeout a batch target is given: its game's own, shortened when its port is in `short`."""
+    ms = GAMEDIG_SOCKET_TIMEOUT_MS.get(gdtype, 0)
+    return min(ms or _FAILED_TARGET_MS, _FAILED_TARGET_MS) if port in short else ms
+
+
+def _batch_body(queries, host, short=frozenset()):
     """The shell that runs every (key, gdtype, port) query at `host` in one node process.
 
     ONE line: sudo logs the command it ran, and a newline in it would print as a log line of its
-    own (the debug report counts these calls by the first line of that entry). The end marker is
+    own (the debug report counts these calls by the first line of that entry). _BATCH_NODE is not
+    in it: the caller hands it to node on stdin (`node -`), so sudo does not log it. The end marker is
     printed whenever the run got as far as asking (no `gamedig` command at all is every target
     unknown, as before), and NOT when node could not load gamedig: see _BATCH_NO_LIB.
     """
     import json as _json
-    targets = [[int(key), gdtype, host, int(port), GAMEDIG_SOCKET_TIMEOUT_MS.get(gdtype, 0)]
+    targets = [[int(key), gdtype, host, int(port), _target_wait_ms(gdtype, port, short)]
                for key, gdtype, port in queries]
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     return (f"g=$(command -v gamedig) || {{ echo {_BATCH_END}; exit 0; }}; "
-            f"timeout -k 5 {groups * _BATCH_TARGET_TIMEOUT + 5} node -e {_core._quote(_BATCH_NODE)} "
+            f"timeout -k 5 {groups * _BATCH_TARGET_TIMEOUT + 5} node - "
             f"\"$g\" {_core._quote(_json.dumps(targets, separators=(',', ':')))} {_BATCH_PARALLEL} "
             f"{_BATCH_TARGET_TIMEOUT * 1000} 2>/dev/null | jq -c {_core._quote(_batch_target_filter())} "
             f"2>/dev/null; [ \"${{PIPESTATUS[0]}}\" = {_BATCH_NO_LIB} ] || echo {_BATCH_END}")
@@ -2067,8 +2138,8 @@ def player_slots_batch(server, user, targets):
         return None
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     try:
-        body = _batch_body(queries, _core._gamedig_host(server))
-        out, _, rc = _core.shell_as_game_user(server, user, body,
+        body = _batch_body(queries, _core._gamedig_host(server), _short_wait_ports(server, queries))
+        out, _, rc = _core.shell_as_game_user(server, user, body, stdin_text=_BATCH_NODE,
                                               timeout=groups * (_BATCH_TARGET_TIMEOUT + 5) + 5)
     except Exception:
         return None
@@ -2076,13 +2147,15 @@ def player_slots_batch(server, user, targets):
     if replies is None:
         return None
     result = {}
-    for key, _gdtype, port in queries:
+    for key, gdtype, port in queries:
         d = replies.get(key)
+        _note_target(server, port, bool(d and d.get("ok")))
         if not (d and d.get("ok")):
             _remember_map_failed(server, port)
             result[key] = (None, None, None)
             continue
         _remember_map(server, port, d.get("p"))
+        _remember_list(server, gdtype, port, d)
         result[key] = _slots_from_reply(d)
     return result
 

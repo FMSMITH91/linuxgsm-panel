@@ -14,6 +14,16 @@ compares git commits, not this file.
 
 ### Added
 
+- **Databases on another machine.** A super admin can send a host's new databases to a MariaDB or
+  MySQL server on another machine, reached over Tailscale only: another host the panel manages, or a
+  server it does not manage, with that server's admin login (stored encrypted). Each database's
+  account signs in only from the game host's own Tailscale address, and the database is kept only
+  once that sign-in works.
+
+- **Databases page.** A read-only list, in the sidebar under Servers, of every database on the
+  servers you can see and of each host's database server, with a link to each server's Databases
+  tab.
+
 - **Databases for game plugins.** A server's Files & Config page has a Databases tab: add a
   MariaDB/MySQL database with one name, copy its host, port, name, user and password, or a
   ready-made config for LuckPerms, CoreProtect, Plan, FiveM, SourceMod, extDB3 or MySQLOO; reset its
@@ -267,6 +277,14 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The database exposure warning reads the firewall.** A database server that listens on the
+  network is called exposed only when the host's firewall lets other machines reach its port; when
+  the firewall cannot be read, the tab says so instead.
+
+- **A dedicated database login.** The admin login form offers ready-made statements for a login of
+  the panel's own, with only the rights it needs, and says the login is saved once for the whole
+  machine.
+
 - **The HTTPS guide says when an IP ban keeps a visitor out.** Behind Caddy or nginx on the same host the firewall drops a banned
   address; behind a Cloudflare Tunnel or Tailscale Funnel the panel refuses it itself, on the panel only.
 
@@ -381,6 +399,23 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **Open pages cost the host less CPU.** The live figures on the dashboard and the server page are
+  read with one process listing instead of four, and the server page's Players list comes from the
+  player check the panel already runs instead of a query of its own.
+
+- **A quiet console is read less often.** A console with no new output is read every 6 seconds
+  instead of every 2, and goes straight back to every 2 seconds when output arrives, a command is
+  sent or the panel starts an action: fewer privileged reads and far fewer system-log lines. The
+  first line after a quiet spell can take up to 6 seconds to show.
+
+- **Pages load faster on a second visit.** The panel's scripts and styles are answered from the
+  browser's cache, the sign-in cookie is re-sent every few minutes instead of with every reply, and
+  status replies are smaller.
+
+- **Less memory and disk.** The SSH library is loaded only when a host is reached over direct SSH,
+  the metric history writes one index fewer, and a game whose status query never answers is asked
+  with a shorter wait.
 
 - **Valheim shows as online while it runs.** A Valheim server started with crossplay listens on the
   port after its own, so the panel read it as offline; that port now counts as its own.
@@ -1404,6 +1439,12 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Passwords are stored the way OWASP recommends.** Account passwords and new 2FA backup codes are
+  hashed with Argon2id at OWASP's recommended settings, in place of bcrypt over SHA-256; each
+  existing password is upgraded the next time its owner signs in, with no reset. New encrypted
+  backups derive their key with scrypt at OWASP's recommended strength; older backups still restore,
+  and a backup asking for an unreasonable amount of memory is refused.
 
 - **Database passwords stay off command lines and logs.** The panel's database logins and each
   database's password reach the database client only through its input, are scrubbed from any

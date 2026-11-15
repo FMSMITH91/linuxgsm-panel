@@ -72,18 +72,33 @@ _R16C_SAFETY_COPY_FAILED = ("The pre-restore safety copy could not be written ({
                             "overwrite panel.db, config.json, secret_key and cred_key with no way back — "
                             "without cred_key every stored SSH credential becomes unreadable. Confirm "
                             "again to restore without one.")
-# ~32MB, ~0.1s. A backup passphrase is typed rarely, so this can be far costlier than a login hash.
-_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 15, 8, 1
+# The OWASP Password Storage Cheat Sheet's scrypt configuration: N=2^17, r=8, p=1. That is 128 MiB
+# (scrypt needs about 128·N·r bytes) and roughly 0.15 s on a desktop CPU, held only while one archive
+# is written or opened. Archives written before this used N=2^15 (32 MiB); the header records the
+# parameters each archive was written with, and restore reads them from there.
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 17, 8, 1
+# The most a header may ask for. The header is part of the FILE, so its parameters are only as
+# trustworthy as the archive, and they decide what the derivation costs: one step above the
+# defaults on n (2^18, 256 MiB) and p (2, twice the time), and r as written. Anything above is
+# refused before scrypt allocates anything.
+_SCRYPT_MAX_N, _SCRYPT_MAX_R, _SCRYPT_MAX_P = 2 * _SCRYPT_N, _SCRYPT_R, 2 * _SCRYPT_P
+
+
+def _scrypt(passphrase_bytes, salt, n, r, p):
+    """The raw 32-byte scrypt output; the call run off the eventlet hub."""
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(passphrase_bytes)
 
 
 def _derive_key(passphrase, salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P):
     """scrypt(passphrase) -> a urlsafe-b64 Fernet key.
 
     Memory-hard, so a stolen archive cannot be brute-forced at GPU speed the way a plain SHA-based
-    KDF would allow.
+    KDF would allow. The derivation is one native call that releases the GIL, so it runs on a
+    worker thread (run_off_hub) and the eventlet hub keeps serving every other request meanwhile.
     """
-    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-    raw = Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(passphrase.encode("utf-8"))
+    from panel.security.auth import run_off_hub   # lazy: auth pulls in the models and Flask
+    raw = run_off_hub(_scrypt, passphrase.encode("utf-8"), salt, n, r, p)
     return base64.urlsafe_b64encode(raw)
 
 
@@ -181,14 +196,13 @@ def _parse_enc_header(body):
         n, r, p = int(head["n"]), int(head["r"]), int(head["p"])
     except Exception:
         return "The encrypted backup's header is damaged.", None, None
-    # The header is part of the FILE, so these are only as trustworthy as the archive. Nothing can
-    # upload one today — every archive here was written by this panel — but they decide what the
-    # derivation costs, and it runs as ONE blocking call on the eventlet hub, so every request
-    # waits for it. scrypt needs about 128·n·r bytes and time in proportion to n·r·p: the defaults
-    # (2**15, 8, 1) are 32 MiB and roughly a tenth of a second. The old ceiling (2**20, 32, 16) was
-    # 4 GiB and some 2000 times as long — a panel frozen for minutes by one file. This panel has
-    # only ever written the defaults, so the bound is one step above them: 64 MiB, ~4x the time.
-    if not (2 ** 12 <= n <= 2 ** 16) or not (1 <= r <= 8) or not (1 <= p <= 2) or len(salt) > 64:
+    # The header is part of the FILE, so these are only as trustworthy as the archive (an archive
+    # can be uploaded for a restore), and they decide what the derivation costs: scrypt needs about
+    # 128·n·r bytes and time in proportion to n·r·p. An earlier ceiling (2**20, 32, 16) was 4 GiB
+    # and minutes of work from one file. The bound is _SCRYPT_MAX_*: one step above the
+    # parameters this panel writes, and every archive it wrote before them is below it.
+    if (not (2 ** 12 <= n <= _SCRYPT_MAX_N) or not (1 <= r <= _SCRYPT_MAX_R)
+            or not (1 <= p <= _SCRYPT_MAX_P) or len(salt) > 64):
         return ("The encrypted backup's header asks for parameters this panel will not use.",
                 None, None)
     if head.get("kdf") != "scrypt":

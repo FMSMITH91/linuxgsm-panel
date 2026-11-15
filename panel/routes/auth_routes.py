@@ -796,7 +796,7 @@ def _login_second_factor(attempt, pending_id):
         if by_code is not None:
             return by_code
         # Fall back to a one-time backup code (for a lost authenticator) — only for
-        # an entry shaped like one: trying them costs a bcrypt per stored code, and a
+        # an entry shaped like one: trying them costs a password hash per stored code, and a
         # mistyped six-digit TOTP can never match.
         if backup_code_shaped(entered) and u.use_backup_code(entered):
             db.session.commit()
@@ -856,7 +856,7 @@ def _login_password(attempt):
     user = User.query.filter_by(username=username).first()
     if user and user.is_active and check_password(password, user.password_hash):
         return _login_password_ok(attempt, user, password, remember)
-    # For a missing/inactive user we skipped the (slow) bcrypt compare above;
+    # For a missing/inactive user we skipped the (slow) hash compare above;
     # run a dummy one now so response time doesn't reveal whether the account
     # exists (username-enumeration by timing).
     if not (user and user.is_active):
@@ -883,7 +883,7 @@ def _login_password_ok(attempt, user, password, remember):
     # hand-rolled migration, a truncated key file), and the old condition then fell
     # straight through to _succeed — granting a full session on the password alone for
     # an account that has 2FA switched on, silently. A second factor that turns itself
-    # off when a file is unreadable is not a second factor. Backup codes are bcrypt
+    # off when a file is unreadable is not a second factor. Backup codes are
     # hashes in their own column and do not depend on cred_key, so the prompt below is
     # still answerable and nobody is locked out.
     if user.totp_enabled:

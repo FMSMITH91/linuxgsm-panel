@@ -128,13 +128,19 @@
   {# Sidebar active-state: each nav item must list EVERY endpoint that renders under it, including a
      page's subpages (e.g. a server's Files & Config = server_files) — otherwise the highlight drops
      when you're on that subpage. #}
-  {% if has_permission('manage_servers') or has_permission('install_server') %}
+  {% set _db_nav = db_overview() %}
+  {% if has_permission('manage_servers') or has_permission('install_server') or _db_nav %}
   <div class="sidebar-section">Servers</div>
   <ul class="sidebar-nav">
-    {# No guard of its own: this section's own {% if %} is already
-       manage_servers OR install_server, which is exactly the pair install_server_page requires. #}
+    {% if has_permission('manage_servers') or has_permission('install_server') %}
+    {# manage_servers OR install_server: exactly the pair install_server_page requires. #}
     <li><a href="{{ url_for('install_server_page') }}" class="{% if request.endpoint == 'install_server_page' %}active{% endif %}">
       <i class="bi bi-plus-circle"></i> Install a Server</a></li>
+    {% endif %}
+    {% if _db_nav %}
+    <li><a href="{{ url_for('databases_overview') }}" class="{% if request.endpoint == 'databases_overview' %}active{% endif %}">
+      <i class="bi bi-database"></i> Databases</a></li>
+    {% endif %}
   </ul>
   {% endif %}
 

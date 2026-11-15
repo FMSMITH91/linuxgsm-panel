@@ -1011,19 +1011,25 @@ check("backup/enc: ...and so is an absurd r, an absurd p, and an oversized salt"
       not _bk._decrypt_archive(_kdf_blob(r=4096), _kdf_out, "pw")[0]
       and not _bk._decrypt_archive(_kdf_blob(p=9999), _kdf_out, "pw")[0]
       and not _bk._decrypt_archive(_kdf_blob(salt_len=8192), _kdf_out, "pw")[0])
+
+
+def _kdf_header_ok(path):
+    """Whether the header's parameters pass the bound, read without deriving anything."""
+    with open(path, "rb") as _fh:
+        return _bk._parse_enc_header(_fh.read())[1] is not None
+
+
 check("backup/enc: the parameters this panel itself writes are still accepted",
-      _bk._decrypt_archive(_kdf_blob(), _kdf_out, "pw")[1]
-      != "The encrypted backup's header asks for parameters this panel will not use.")
-# The old ceiling was n<=2**20, r<=32, p<=16: about 4 GiB and ~2000x the default derivation time,
-# run as one blocking call on the eventlet hub. Each parameter is refused at the old ceiling alone.
-for _kw in ({"n": 2 ** 20}, {"r": 32}, {"p": 16}, {"n": 2 ** 17}, {"r": 9}, {"p": 3}):
+      _kdf_header_ok(_kdf_blob(n=_bk._SCRYPT_N, r=_bk._SCRYPT_R, p=_bk._SCRYPT_P)))
+# An earlier ceiling was n<=2**20, r<=32, p<=16: about 4 GiB and ~2000x the derivation time. Each
+# parameter is refused at that ceiling alone, and one step past the current bound (2**18, 8, 2).
+for _kw in ({"n": 2 ** 20}, {"r": 32}, {"p": 16}, {"n": 2 ** 19}, {"r": 9}, {"p": 3}):
     check("backup/enc: a costly scrypt header %r is refused before deriving" % (_kw,),
           _bk._decrypt_archive(_kdf_blob(**_kw), _kdf_out, "pw")
           == (False, "The encrypted backup's header asks for parameters this panel will not use."))
 # ...while one step above the defaults, the most the bound allows, is still accepted.
-check("backup/enc: the bound's own ceiling (n=2**16, r=8, p=2) is still accepted",
-      _bk._decrypt_archive(_kdf_blob(n=2 ** 16, r=8, p=2), _kdf_out, "pw")[1]
-      != "The encrypted backup's header asks for parameters this panel will not use.")
+check("backup/enc: the bound's own ceiling (n=2**18, r=8, p=2) is still accepted",
+      _kdf_header_ok(_kdf_blob(n=2 ** 18, r=8, p=2)))
 _sh2.rmtree(_kdf_tmp, ignore_errors=True)
 
 _sh2.rmtree(_bktmp, ignore_errors=True)
@@ -3129,15 +3135,16 @@ check("check_password: None stored hash -> False (no raise)", not check_password
 check("check_password: garbage stored hash -> False (no raise)", not check_password("x", "not-a-bcrypt-hash"))
 check("dummy_password_check always returns False", dummy_password_check("anything") is False)
 
-# ── bcrypt runs OFF the eventlet hub ────────────────────────────────────────────────────────
-# bcrypt is a native call that never yields, and the panel is one eventlet hub: every /login POST
-# (unauthenticated, including the dummy compare for an unknown username) held every page, console
-# and poller for a whole cost-12 hash. Under a monkey-patched runtime each bcrypt call must go
+# ── password hashing runs OFF the eventlet hub ──────────────────────────────────────────────
+# A password hash is a native call that never yields, and the panel is one eventlet hub: every
+# /login POST (unauthenticated, including the dummy compare for an unknown username) held every
+# page, console and poller for a whole hash. Under a monkey-patched runtime each hash call must go
 # through eventlet.tpool. The suite is not monkey-patched, so the patch check and tpool.execute are
 # stubbed and the REAL password, dummy and backup-code functions are driven through them.
 import eventlet.patcher as _bh_patcher                                               # noqa: E402
 import eventlet.tpool as _bh_tpool                                                   # noqa: E402
 import bcrypt as _bh_bcrypt                                                          # noqa: E402
+_bh_auth = _lp_auth   # the same module part02 imported above as _lp_auth
 from panel.db.models import User as _BhUser                                          # noqa: E402
 _bh_saved = (_bh_patcher.is_monkey_patched, _bh_tpool.execute)
 _bh_calls = []
@@ -3165,14 +3172,25 @@ try:
     _bh_calls_codes = list(_bh_calls)
 finally:
     _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
-check("bcrypt off-hub: hash + both checks go through tpool, and still answer correctly",
-      _bh_calls_pw == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw, _bh_bcrypt.checkpw]
+check("hash off-hub: hash + both checks go through tpool, and still answer correctly",
+      _bh_calls_pw == [_bh_auth._argon2_hash, _bh_auth._argon2_verify, _bh_auth._argon2_verify]
       and _bh_ok is True and _bh_bad is False, "%r ok=%r bad=%r" % (_bh_calls_pw, _bh_ok, _bh_bad))
-check("bcrypt off-hub: the unknown-username dummy compare goes through tpool too",
-      _bh_bcrypt.checkpw in _bh_calls_dummy, repr(_bh_calls_dummy))
-check("bcrypt off-hub: backup codes are hashed and checked through tpool",
-      _bh_calls_codes == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw] and _bh_used is True,
+check("hash off-hub: the unknown-username dummy compare goes through tpool too",
+      _bh_auth._argon2_verify in _bh_calls_dummy, repr(_bh_calls_dummy))
+check("hash off-hub: backup codes are hashed and checked through tpool",
+      _bh_calls_codes == [_bh_auth._argon2_hash, _bh_auth._argon2_verify] and _bh_used is True,
       "%r used=%r" % (_bh_calls_codes, _bh_used))
+# A bcrypt hash from before Argon2id is checked through tpool too.
+_bh_patcher.is_monkey_patched = lambda name: True
+_bh_tpool.execute = _bh_exec
+try:
+    del _bh_calls[:]
+    _bh_legacy_ok = check_password("Off-hub1!pass", _bh_bcrypt.hashpw(b"Off-hub1!pass",
+                                                                     _bh_bcrypt.gensalt(4)).decode())
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("hash off-hub: a bcrypt hash from before Argon2id is checked through tpool",
+      _bh_legacy_ok is True and _bh_calls == [_bh_bcrypt.checkpw], repr(_bh_calls))
 # Off eventlet (manage.py, a bare script) it is a plain call: tpool is not touched at all. Stated
 # explicitly, because THIS suite is monkey-patched — importing app runs eventlet.monkey_patch().
 del _bh_calls[:]
@@ -3182,7 +3200,7 @@ try:
     _bh_plain = check_password("Off-hub1!pass", _bh_hash)
 finally:
     _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
-check("bcrypt off-hub: without monkey-patching it is a direct call (control)",
+check("hash off-hub: without monkey-patching it is a direct call (control)",
       _bh_plain is True and _bh_calls == [], repr(_bh_calls))
 
 # ── the login and token throttles count an IPv6 client by its /64 ───────────────────────────

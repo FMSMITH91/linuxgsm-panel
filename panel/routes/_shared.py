@@ -36,6 +36,7 @@ from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDA
     VIEW_CONSOLE, get_user_permissions, log_action)
 from panel.services import (notifications)
 from panel.services import console_secrets as _console_secrets
+from panel.routes import console_rest as _console_rest
 from panel.services import lgsm_players as _lgp
 import threading
 import time
@@ -1718,6 +1719,7 @@ def _console_push(app, server_id, text, ts=None):
     """
     if not text:
         return
+    _console_rest.wake(server_id)   # a resting console is read again on the poller's next pass
     ts = float(ts if ts is not None else time.time())
     # Masked as the game's own console text is (services/console_secrets), from the values already
     # cached for this server: a long action's output can echo a start line or a SteamCMD login.
@@ -2250,8 +2252,8 @@ def reauth_release(user, stamp):
 def reauth_password(user, password):
     """Check `user`'s CURRENT password under the throttle: "ok", "wrong" or "throttled".
 
-    A throttled attempt is refused before bcrypt runs. A `password` that is not a string (a JSON
-    body can send 5) is a wrong password rather than a 500 — check_password's prehash raises on it.
+    A throttled attempt is refused before the hash runs. A `password` that is not a string (a JSON
+    body can send 5) is a wrong password rather than a 500.
     """
     from panel.security.auth import check_password
     stamp = reauth_reserve(user)

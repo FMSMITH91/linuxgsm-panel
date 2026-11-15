@@ -239,7 +239,7 @@ def _metrics(command):
     a, b = _cpu_lines(k * 2), _cpu_lines(k * 2 + 1)
     users = ["mcserver", "gmodserver", "rustserver", "cs2server", "vhserver"]
     out = [a[0]]
-    host_form = "ps -eo user:32=,rss=" in command
+    host_form = "ps -eo user:32=" in command
     if host_form:
         out += ["GJA %s %d" % (u, 5000 + 7 * k) for u in users]
     else:
@@ -478,7 +478,7 @@ _TABLE = [
     (r"gamedig .*\.map", "de_dust2"),
     (r"appmanifest_", "appid=740\nbuild=15234567\nupdated=1758337200\n"),
     (r"cd /home/([a-z0-9_]+) && \./[a-z0-9_]+'?\s*$", _LGSM_COMMANDS),
-    (r"ps -eo user:32=,rss=|grep '\^cpu ' /proc/stat", _metrics),
+    (r"ps -eo user:32=|ps -u \S+ -o pid=,rss=,etimes=|grep '\^cpu ' /proc/stat", _metrics),
     (r"echo ===A", _live),
     (r"^OS=\$\(\. /etc/os-release", _SPECS),
     (r"\$\{ID\}-\$\{VERSION_ID\}", "ubuntu-24.04"),

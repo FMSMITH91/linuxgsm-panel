@@ -236,13 +236,13 @@ def ufw_stored_answer(ipv6="no"):
     return "".join("==> %s <==\n%s" % (p, t) for p, t in zip(_privmod.FWA_STORED_PATHS, texts)), "", 0
 
 
-# ── perf guard: importing `auth` must NOT compute the ~400ms bcrypt "dummy" hash.
+# ── perf guard: importing `auth` must NOT compute the login-timing "dummy" password hash.
 #    It's lazy (computed on the first bad-login attempt, warmed off-thread by init_auth)
-#    so panel startup stays fast — a regression here re-adds ~0.4s to every boot. This
+#    so panel startup stays fast — a regression here re-adds a full hash to every boot. This
 #    runs BEFORE the dummy_password_check() call later in this file, which is what
 #    actually populates it. ──
-check("perf: auth import does no bcrypt work (dummy hash stays lazy)",
-      sys.modules["panel.security.auth"]._DUMMY_BCRYPT_HASH is None)
+check("perf: auth import does no password-hash work (dummy hash stays lazy)",
+      sys.modules["panel.security.auth"]._DUMMY_HASH is None)
 
 # ── password policy ───────────────────────────────────────────
 check("weak: too short", password_problem("Ab1!") is not None)

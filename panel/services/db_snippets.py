@@ -157,20 +157,23 @@ _RENDER = {"luckperms": _luckperms, "coreprotect": _coreprotect, "plan": _plan, 
            "sourcemod": _sourcemod, "extdb3": _extdb3, "mysqloo": _mysqloo, "generic": _generic}
 
 
-def render(kind, flavor, port, name, secret):
-    """One kind's text for database `name` (also its user) on port `port`, with `secret` as the password.
+def render(kind, flavor, port, name, secret, host=HOST):
+    """One kind's text for database `name` (also its user) on `host`:`port`, with `secret` as the password.
+
+    `host` is 127.0.0.1 for the game host's own server, or the tailnet IPv4 address of a server on
+    another machine.
 
     `flavor` ('mariadb' or 'mysql') picks LuckPerms' storage-method and the JDBC driver. The Databases
     tab renders with a placeholder for the password and puts the real one in only when it is asked
     for. An unknown kind is the generic one.
     """
     maria = flavor != "mysql"
-    v = {"host": HOST, "port": int(port), "name": name, "user": name, "password": secret,
+    v = {"host": host, "port": int(port), "name": name, "user": name, "password": secret,
          "lp_method": "mariadb" if maria else "mysql", "jdbc": "mariadb" if maria else "mysql",
          "sm_entry": "sourcebans" if name.endswith("_sourcebans") else "default"}
     return _RENDER.get(kind, _generic)(v)
 
 
-def render_all(game_type, flavor, port, name, secret):
+def render_all(game_type, flavor, port, name, secret, host=HOST):
     """Every kind this game offers, rendered: [(kind, label, text)], the game's own first."""
-    return [(k, LABELS[k], render(k, flavor, port, name, secret)) for k in kinds_for(game_type)]
+    return [(k, LABELS[k], render(k, flavor, port, name, secret, host)) for k in kinds_for(game_type)]
