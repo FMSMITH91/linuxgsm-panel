@@ -551,7 +551,6 @@ def remove_setup_token():
 
 # ── Encryption for secrets stored in the DB and config.json (see panel/core/cred_keyring.py) ──
 CRED_KEY_FILE = DATA_DIR / "cred_key"
-_ENC_PREFIX = "enc:v1:"     # the legacy (Fernet) format; encrypt_secret writes enc:v2:
 
 
 def _cred_keyring():

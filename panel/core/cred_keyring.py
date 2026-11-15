@@ -289,17 +289,26 @@ def update_unused(path, current, unused, drop):
     """Record `unused` and remove the retired keys in `drop`, if `current` is still the current key.
 
     A rotation since the pass began means its findings describe an older ring: nothing changes.
-    Returns the ring as it now is.
+    Returns the ring as it now is. Nothing to change is answered without taking the lock.
     """
+    if _pruned(read_ring(path), current, unused, drop) is None:
+        return read_ring(path)
     with ring_lock(path):
         ring = read_ring(path)
-        if ring.current != current:
-            return ring
-        new = ring.without(set(drop) & ring.retired())
-        new.unused = sorted(set(unused) & new.retired())
-        if new.to_bytes() != ring.to_bytes():
+        new = _pruned(ring, current, unused, drop)
+        if new is not None:
             _write_ring(path, new)
-        return new
+            return new
+        return ring
+
+
+def _pruned(ring, current, unused, drop):
+    """The ring after update_unused's change, or None when it changes nothing (or `current` moved)."""
+    if ring.current != current:
+        return None
+    new = ring.without(set(drop) & ring.retired())
+    new.unused = sorted(set(unused) & new.retired())
+    return None if new.to_bytes() == ring.to_bytes() else new
 
 
 def new_ring_bytes():

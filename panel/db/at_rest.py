@@ -246,4 +246,4 @@ def key_status():
         last = dict(STATUS)
     return {"present": True, "current": ring.current or "", "created": created,
             "algorithm": "AES-256-GCM" if ring.current else "Fernet (AES-128-CBC + HMAC-SHA256)",
-            "retired": len(ring.retired()) - (0 if ring.current else 1), "pass": last}
+            "retired": max(0, len(ring.retired()) - (0 if ring.current else 1)), "pass": last}
