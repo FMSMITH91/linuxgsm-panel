@@ -376,6 +376,46 @@ def _cleanup212():
     _p9_queue.clear()
 
 
+# ── 8. the absolute session lifetime (OWASP Session Management, "Absolute Timeout") ───────────────
+def _aged212(uid, hours, remember=False):
+    """Make the user's one session row `hours` old (signed in then) but active a minute ago."""
+    from datetime import timedelta as _td212
+    with _p9.app_context():
+        row = _US212.query.filter_by(user_id=uid).first()
+        if row is None:
+            return False
+        now = _auth212.utcnow()
+        row.created_at, row.last_seen, row.remember = now - _td212(hours=hours), now - _td212(minutes=1), remember
+        _db212.session.commit()
+        return True
+
+
+def _s212_absolute():
+    from panel.db import models as _models212
+    plain, remember = _models212.session_absolute_limits()
+    check("session: a plain login ends 8 hours after sign-in (OWASP's full-day absolute timeout), a remember-me "
+          "login after its 3-day cookie, however active either is",
+          (plain, remember) == (8 * 3600.0, 3 * 86400.0), repr((plain, remember)))
+    results = {}
+    for label, hours, rem in (("7h", 7, False), ("9h", 9, False), ("rem-2d", 48, True), ("rem-4d", 96, True)):
+        name = "p212_abs_%s" % label.replace("-", "")
+        uid = _user212(name, _auth212.hash_password(_K212_CUR))
+        c = _client212("198.51.100.%d" % (60 + len(results)))
+        c.post("/login", data={"username": name, "password": _K212_CUR})
+        aged = _aged212(uid, hours, rem)
+        r = c.get("/")
+        with _p9.app_context():
+            left = _US212.query.filter_by(user_id=uid).count()
+        results[label] = (aged, r.status_code, left)
+    check("session: an active login signed in 7 hours ago still works; at 9 hours the server ends it (the page "
+          "asks for a sign-in) and drops the session row",
+          results["7h"] == (True, 200, 1) and results["9h"][0] is True and results["9h"][1] in (302, 401)
+          and results["9h"][2] == 0, repr(results))
+    check("session: a remember-me login signed in 2 days ago still works; at 4 days it ends the same way",
+          results["rem-2d"] == (True, 200, 1) and results["rem-4d"][0] is True
+          and results["rem-4d"][1] in (302, 401) and results["rem-4d"][2] == 0, repr(results))
+
+
 try:
     _p9_arm(who="part212")
     _p9_patch(_notif212, "notify", lambda *a, **k: None)
@@ -386,6 +426,7 @@ try:
     _s212_history()
     _s212_backup_codes()
     _s212_backups()
+    _s212_absolute()
 finally:
     _p9_restore_all()
     _cleanup212()

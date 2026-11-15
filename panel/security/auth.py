@@ -939,7 +939,8 @@ def init_auth(app):
                     return None                       # this device's session was revoked
                 now = utcnow()
                 if sess.is_expired(now):
-                    # The login has been idle past its cookie's life. The Flask session cookie is
+                    # The login has been idle past its cookie's life, or signed in longer than its
+                    # absolute lifetime (UserSession.is_expired). The Flask session cookie is
                     # already rejected by its own signed max_age, but flask-login's "remember me"
                     # cookie carries no timestamp at all — so without this check a remember cookie
                     # captured months ago still logged straight in. Drop the row as well: an expired
