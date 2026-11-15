@@ -8,8 +8,10 @@ stops it guessing otherwise). On those types the three headers protected nothing
 bytes per response, about a quarter of every dashboard poll over HTTP/1.1; the CSP also carries the
 per-request nonce, so it never repeats for HTTP/2's header table either.
 
-So they are left off exactly the types in _INERT_TYPES, and kept on everything else: HTML, SVG and
-XML (which can run script when opened), plain text, a download, and any type not named here.
+So the full set is kept on everything a browser could show as a document: HTML, SVG and XML (which
+can run script when opened), plain text, a download, and any type not named here. The types in
+_INERT_TYPES get only INERT_CSP instead, ~45 bytes in place of ~400: the API-response policy OWASP
+recommends, so that an answer opened on its own can load nothing, run nothing and be framed by no one.
 X-Content-Type-Options, Referrer-Policy and X-Robots-Tag stay on every response (app.py): the last
 exists for the responses that are NOT HTML, where no <meta> tag can say it.
 """
@@ -20,6 +22,9 @@ _INERT_TYPES = frozenset((
     "image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon", "image/vnd.microsoft.icon",
     "font/woff", "font/woff2", "font/ttf", "font/otf", "application/font-woff",
 ))
+
+# For a response that never renders as a page (OWASP REST Security Cheat Sheet, "Security headers").
+INERT_CSP = "default-src 'none'; frame-ancestors 'none'"
 
 # The panel uses none of these powerful browser features, so a page is denied them outright: a
 # defence-in-depth limit on what an injected or compromised script could reach for.
@@ -32,8 +37,10 @@ def renders_as_page(resp):
 
 
 def set_page_headers(resp, csp):
-    """Set CSP (csp() builds it), X-Frame-Options and Permissions-Policy on a response that renders as a page."""
-    if renders_as_page(resp):
-        resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
-        resp.headers.setdefault("Permissions-Policy", PERMISSIONS_POLICY)
-        resp.headers.setdefault("Content-Security-Policy", csp())
+    """Set CSP (csp() builds it), X-Frame-Options and Permissions-Policy on a page; INERT_CSP on the rest."""
+    if not renders_as_page(resp):
+        resp.headers.setdefault("Content-Security-Policy", INERT_CSP)
+        return
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    resp.headers.setdefault("Permissions-Policy", PERMISSIONS_POLICY)
+    resp.headers.setdefault("Content-Security-Policy", csp())
