@@ -35,7 +35,15 @@
         <button class="btn btn-primary text-nowrap" type="submit">Confirm &amp; enable</button>
       </div>
     </form>
+    {% if show_app_chrome %}
     <a href="{{ url_for('account') }}" class="btn btn-link btn-sm text-secondary mt-2 px-0">Cancel</a>
+    {% else %}
+    {# Held here by "Require 2FA" (no app chrome): Cancel would only come back to this page, so the
+       way out is signing out — someone without their phone at hand is not stuck. #}
+    <form method="POST" action="{{ url_for('logout') }}" class="mt-2">
+      <button type="submit" class="btn btn-link btn-sm text-secondary px-0">Sign out instead</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 
