@@ -38,11 +38,13 @@ ACCEPT_PAGES = [
 ]
 
 # Controls never pressed: they end the session this walk is signed in with, (Transfer ownership: its
-# fold toggle and its form, on the panel owner's Account page) would hand the panel away, or change a
-# database's contents.
+# fold toggle and its form, on the panel owner's Account page) would hand the panel away, change a
+# database's contents, or (the Account page's alerts buttons) would ask the browser for notification
+# permission, subscribe it to a real push service or send a push.
 SKIP = ["Sign out", "_acctSignOutAll", "Transfer ownership", "/account/owner/transfer",
         # The Databases manager's changes: a new database, a row saved, a statement run, a dump made.
-        "dbmAdd", "dbmSaveRow", "dbmRunSql", "dbmDump", "dbmUpload"]
+        "dbmAdd", "dbmSaveRow", "dbmRunSql", "dbmDump", "dbmUpload",
+        "push-enable", "push-disable", "push-test", "/account/push/devices/"]
 # ...and never confirmed: each asks the panel to reboot the host it runs on, restore over its own
 # database, update, re-bind or repair itself. Faked or not, the panel then behaves as though that
 # were under way (a restore really does replace the throwaway database the walk is signed in to),

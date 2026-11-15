@@ -5847,11 +5847,14 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (/account/reauth, login_required: any signed-in account confirms its own password).
 # 279, was 278: one genuinely new view, panel/routes/owner_transfer.py's transfer of the panel's
 # ownership (/account/owner/transfer, login_required; the route refuses anyone but the panel owner).
-# 290, was 279: eleven genuinely new views, the Databases manager's (MANAGE_DATABASES and server access;
-# rows and SQL also EDIT_DATABASE_DATA): databases_data.py's tables, rows, cell, row and sql, and
-# databases_files.py's dump, its download, and an upload's start, piece, finish and cancel.
-check("register_routes: every one of the 290 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 290,
+# 296, was 279: seventeen genuinely new views. Eleven are the Databases manager's (MANAGE_DATABASES and
+# server access; rows and SQL also EDIT_DATABASE_DATA): databases_data.py's tables, rows, cell, row and
+# sql, and databases_files.py's dump, its download, and an upload's start, piece, finish and cancel. Six
+# are panel/routes/push_devices.py's alert devices (Web Push): subscribe, unsubscribe, remove a device,
+# test alert, alert choices and the sign-out page, all login_required and each acting on the caller's
+# own rows only.
+check("register_routes: every one of the 296 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 296,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

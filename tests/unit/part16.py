@@ -159,7 +159,7 @@ try:
               lambda force_refresh=False: NS(dns_name=None, installed=False, serve_config={},
                                              serve_unreadable=False))
     _N16 = []
-    _p9_patch(_p9_notif, "notify", lambda key, title, body="": _N16.append((key, title, body)))
+    _p9_patch(_p9_notif, "notify", lambda key, title, body="", **_kw: _N16.append((key, title, body)))
     _E16 = []
     _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: _E16.append((event, data, k)))
     _p9_patch(_rm16, "ssh_test_connection", lambda *a, **k: (True, "Connected."))

@@ -1,0 +1,449 @@
+"""The panel's alerts on a user's own browsers and phones, as Web Push notifications.
+
+notifications.notify() hands every alert here as well as to the panel-wide channels, and log_action
+hands the changes to an account's own security (account_notices) here too, so "your password was
+changed" reaches the person whose password it is, even signed out, even with the panel tab closed.
+
+WHO GETS WHAT, decided when the push is SENT, not when it was queued (OWASP Authorization Cheat Sheet,
+"Validate the Permissions on Every Request", "Deny by Default"): an active account, with the event
+among the ones it chose, and allowed to see what the event is about: a game server it can access
+(can_access_server), a host it was granted (can_access_remote), and anything panel-wide (backups,
+updates, sign-ins, bans, other accounts) superadmins only. An account removed from a server's group,
+deactivated or deleted between the alert and the send gets nothing.
+
+WHAT A PUSH SAYS: what a lock screen may show. The event's short title and the server's or host's
+name; never an address, a player, a username of someone else, a token or anything read from a file.
+The panel-wide channels keep their fuller text; a push is a pointer back into the panel, and clicking
+it opens the page the alert is about.
+
+Sends run on one background thread fed by a bounded queue (the request or monitor pass that raised the
+alert never waits on a push service), and a burst for one device is folded into a single notification.
+"""
+import hashlib
+import logging
+import queue
+import threading
+import time
+from collections import deque
+
+from panel.core import i18n
+from panel.core.clock import utcnow
+from panel.services import webpush
+
+_log = logging.getLogger("push_alerts")
+
+SERVER_EVENTS = frozenset({"server_down", "server_up", "server_empty", "server_full", "server_peak"})
+HOST_EVENTS = frozenset({"remote_unreachable", "remote_recovered", "high_load", "disk_low"})
+MY_ACCOUNT = "my_account"
+MY_ACCOUNT_LABEL = "A change to your own account's security (password, two-factor, API token, a new alert device)"
+# The important ones, on until the user says otherwise: a crash, a host gone, an attack, an account change.
+DEFAULT_EVENTS = frozenset({"server_down", "remote_unreachable", "admin_bruteforce", "account_locked",
+                            "credential_change", "ban_spike", MY_ACCOUNT})
+_URGENT = frozenset({"server_down", "remote_unreachable", "admin_bruteforce", "account_locked", "ban_spike",
+                     MY_ACCOUNT})
+
+DEVICE_MAX = 10                 # alert devices one account may have
+TEST_MAX, TEST_WINDOW = 3, 600  # test alerts per account per ten minutes
+TTL_ALERT = 6 * 3600            # how long a push service holds an alert for a device that is offline
+TTL_TEST = 600
+_FOLD_AT = 3                    # more alerts than this for one device in one batch: one summary instead
+_NAME_MAX = 60
+
+# (title, body) per event; {server} / {host} are the object's name. Each sentence is in the catalogs.
+_TEXT = {
+    "server_down": ("Server offline", "{server} went offline unexpectedly."),
+    "server_up": ("Server back online", "{server} is back online."),
+    "server_empty": ("Server is empty", "{server} has no players now."),
+    "server_full": ("Server full", "{server} is full."),
+    "server_peak": ("New player record", "{server} set a new player record."),
+    "remote_unreachable": ("Host unreachable", "{host} stopped responding."),
+    "remote_recovered": ("Host back online", "{host} is responding again."),
+    "high_load": ("Host under load", "{host} is under sustained load."),
+    "disk_low": ("Disk running low", "{host} is running low on disk space."),
+    "auto_reboot": ("Host auto-rebooting", ""),
+    "host_reboot": ("Host reboot", ""),
+    "backup_failed": ("Backup failed", ""),
+    "update_available": ("Panel update available", ""),
+    "os_updates": ("OS updates waiting", ""),
+    "cert_expiring": ("TLS certificate expiring", ""),
+    "admin_login": ("Super admin signed in", ""),
+    "admin_bruteforce": ("A super admin account is being brute-forced", ""),
+    "account_change": ("A user or group changed", ""),
+    "credential_change": ("Administrator account changed", ""),
+    "account_locked": ("Sign-ins paused for an account", ""),
+    "twofa_enforced": ("Two-factor setup required", ""),
+    "ip_banned": ("IP banned on the panel login", ""),
+    "ban_spike": ("Login attack in progress", ""),
+}
+_OPEN_PANEL = "Open the panel for details."
+_ACCOUNT_TITLE = "Your account changed"
+_TEST_TITLE = "Test alert"
+_TEST_BODY = "Alerts reach this device."
+_FOLDED_TITLE = "{n} alerts"
+# The page a panel-wide alert opens, relative to the panel's root.
+_PAGE = {"update_available": "settings", "backup_failed": "server-management", "admin_login": "logs",
+         "admin_bruteforce": "logs", "account_locked": "logs", "ip_banned": "logs", "ban_spike": "logs",
+         "account_change": "users", "credential_change": "logs", "twofa_enforced": "users"}
+
+_QUEUE_MAX = 200
+_BATCH_MAX = 50
+_queue = queue.Queue(maxsize=_QUEUE_MAX)
+_lock = threading.Lock()
+_sender = [False]
+_APP = [None]
+_TESTS = {}
+_TESTS_LOCK = threading.Lock()
+
+
+def register(app):
+    """Remember the app the sender opens its database context in (the routes call this)."""
+    _APP[0] = app
+
+
+def endpoint_hash(endpoint):
+    """The SHA-256 hex digest a subscription is found by (PushSubscription.endpoint_hash)."""
+    return hashlib.sha256(str(endpoint or "").encode("utf-8")).hexdigest()
+
+
+# ── what a user may choose ────────────────────────────────────────────────────────────────────────
+def available_events(user):
+    """[(key, label)] of the alerts `user` could be pushed: every event for a superadmin, else theirs."""
+    from panel.services.notifications import EVENTS
+    out = [(MY_ACCOUNT, MY_ACCOUNT_LABEL)]
+    if user.is_superadmin:
+        return out + [(k, v[0]) for k, v in EVENTS.items()]
+    from panel.security.auth import accessible_remote_ids
+    hosts = bool(accessible_remote_ids(user))
+    return out + [(k, v[0]) for k, v in EVENTS.items()
+                  if k in SERVER_EVENTS or (hosts and k in HOST_EVENTS)]
+
+
+def chosen_events(user):
+    """The event keys `user` chose to be pushed (DEFAULT_EVENTS until they choose)."""
+    try:
+        saved = user.get_ui_prefs().get("push_events")
+    except Exception:  # noqa: BLE001 - a bad blob is the default, never a failed send
+        saved = None
+    if not isinstance(saved, list):
+        return set(DEFAULT_EVENTS)
+    return {k for k in saved if isinstance(k, str)}
+
+
+def save_events(user, keys):
+    """Store the subset of `keys` that `user` may choose. Caller commits."""
+    allowed = [k for k, _label in available_events(user)]
+    want = {k for k in (keys or []) if isinstance(k, str)}
+    user.set_ui_pref("push_events", [k for k in allowed if k in want])
+
+
+# ── subscriptions ─────────────────────────────────────────────────────────────────────────────────
+def parse_subscription(data):
+    """(endpoint, p256dh, auth) from a browser's PushSubscription JSON, or (None, why)."""
+    if not isinstance(data, dict):
+        return None, "That isn't a push subscription."
+    endpoint = data.get("endpoint")
+    keys = data.get("keys") if isinstance(data.get("keys"), dict) else {}
+    if webpush.parse_endpoint(endpoint) is None:
+        return None, "This browser's push service isn't one the panel sends to."
+    p256dh = webpush.b64url_decode(keys.get("p256dh"))
+    auth = webpush.b64url_decode(keys.get("auth"))
+    if p256dh is None or auth is None or len(auth) != 16 or len(p256dh) != 65 or not _on_curve(p256dh):
+        return None, "This browser's push keys aren't usable."
+    return (endpoint, webpush.b64url(p256dh), webpush.b64url(auth)), ""
+
+
+def _on_curve(raw):
+    from cryptography.hazmat.primitives.asymmetric import ec
+    try:
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), raw)
+    except ValueError:
+        return False
+    return True
+
+
+def subscribe(user, data, label):
+    """Store (or refresh) this browser's subscription for `user`. -> (row, error message).
+
+    An endpoint already stored for another account moves to this one: a browser has one subscription,
+    and the account that last turned alerts on there is the one it shows. Caller commits and audits.
+    """
+    from panel.db.models import PushSubscription, db
+    parsed, why = parse_subscription(data)
+    if parsed is None:
+        return None, why
+    endpoint, p256dh, auth = parsed
+    digest = endpoint_hash(endpoint)
+    row = PushSubscription.query.filter_by(endpoint_hash=digest).first()
+    others = PushSubscription.query.filter(PushSubscription.user_id == user.id,
+                                           PushSubscription.endpoint_hash != digest).count()
+    if others >= DEVICE_MAX:
+        return None, i18n.tr("You already have {n} alert devices. Remove one first.", n=DEVICE_MAX)
+    if row is None:
+        row = PushSubscription(endpoint_hash=digest, endpoint=endpoint)
+        db.session.add(row)
+    row.user_id, row.p256dh, row.auth, row.label = user.id, p256dh, auth, (label or "")[:80]
+    return row, ""
+
+
+def find(user, endpoint):
+    """`user`'s subscription for `endpoint`, or None."""
+    from panel.db.models import PushSubscription
+    if not isinstance(endpoint, str) or not endpoint or len(endpoint) > webpush.ENDPOINT_MAX:
+        return None
+    return PushSubscription.query.filter_by(endpoint_hash=endpoint_hash(endpoint), user_id=user.id).first()
+
+
+def drop_user(user_id):
+    """Delete every subscription of an account (deactivated). Caller commits."""
+    from panel.db.models import PushSubscription
+    PushSubscription.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+
+
+def test_allowed(user_id, now=None):
+    """Whether `user_id` may send another test alert now (TEST_MAX per TEST_WINDOW); counts it if so."""
+    now = time.monotonic() if now is None else now
+    with _TESTS_LOCK:
+        times = _TESTS.setdefault(user_id, deque())
+        while times and now - times[0] > TEST_WINDOW:
+            times.popleft()
+        if len(times) >= TEST_MAX:
+            return False
+        times.append(now)
+        return True
+
+
+def reset_tests():
+    """Forget every test-alert count (for the unit suite)."""
+    with _TESTS_LOCK:
+        _TESTS.clear()
+
+
+def card(user):
+    """What the Account page's alerts card shows: the key, this account's devices and its choices."""
+    from panel.db.models import PushSubscription
+    from panel.security import account_guard
+    rows = user.push_subscriptions.order_by(PushSubscription.id).all()
+    chosen = chosen_events(user)
+    return {"key": webpush.vapid_public_key(), "reauth": account_guard.step_up_needed(),
+            "devices": [{"id": r.id, "label": r.label or "", "hash": r.endpoint_hash,
+                         "created": r.created_at, "last": r.last_success} for r in rows],
+            "events": [(k, label, k in chosen) for k, label in available_events(user)],
+            "max": DEVICE_MAX}
+
+
+# ── queueing (callers: notifications.notify, auth.log_action, the test route) ─────────────────────
+def queue_event(event_key, server_id=None, remote_id=None):
+    """Queue one alert for every device allowed and wanting it. Never raises."""
+    _put(("event", event_key, server_id, remote_id))
+
+
+def note_audit(action, target, success):
+    """log_action's hook: a change to an account's own security pushes to that account's devices."""
+    from panel.security.account_notices import _CHANGES
+    if action in _CHANGES and (success or action == "login_locked") and target:
+        _put(("account", action, str(target)))
+
+
+def queue_test(user_id):
+    """Queue a test alert to every device of `user_id`."""
+    _put(("test", user_id))
+
+
+def _put(item):
+    if _APP[0] is None:
+        return
+    try:
+        _queue.put_nowait(item)
+    except queue.Full:
+        _log.warning("push queue is full (%d waiting); an alert was dropped", _QUEUE_MAX)
+        return
+    with _lock:
+        if _sender[0]:
+            return
+        _sender[0] = True
+    try:
+        threading.Thread(target=_drain, daemon=True, name="push-alerts").start()
+    except Exception:  # noqa: BLE001 - an alert must never break the action that raised it
+        with _lock:
+            _sender[0] = False
+        _log.debug("push sender could not start", exc_info=True)
+
+
+def _take():
+    with _lock:
+        items = []
+        while len(items) < _BATCH_MAX:
+            try:
+                items.append(_queue.get_nowait())
+            except queue.Empty:
+                break
+        if not items:
+            _sender[0] = False
+        return items
+
+
+def _drain():
+    """The sender thread: deliver batches until the queue is empty, then stand down."""
+    while True:
+        items = _take()
+        if not items:
+            return
+        app = _APP[0]
+        try:
+            with app.app_context():
+                try:
+                    deliver(items)
+                finally:
+                    from panel.db.models import db
+                    db.session.remove()
+        except Exception:  # noqa: BLE001 - the sender must keep the queue it owns moving
+            _log.warning("push delivery failed", exc_info=True)
+
+
+def flush(timeout=10.0):
+    """Wait until every queued push has been handed to its push service; True when that happened."""
+    end = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        with _lock:
+            if _queue.empty() and not _sender[0]:
+                return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
+# ── deciding, writing and sending (in the sender's app context) ───────────────────────────────────
+def may_see(user, event_key, server_id, remote_id):
+    """Whether `user` may be told about this event NOW (deny by default)."""
+    from panel.security.auth import can_access_remote, can_access_server
+    if not user.is_active:
+        return False
+    if event_key in SERVER_EVENTS:
+        return server_id is not None and can_access_server(user, server_id)
+    if event_key in HOST_EVENTS:
+        return remote_id is not None and can_access_remote(user, remote_id)
+    return bool(user.is_superadmin)
+
+
+def _names(server_id, remote_id):
+    """(server name, host name, page) for the object an event is about, from the database now."""
+    from panel.db.models import GameServer, RemoteServer, db
+    gs = db.session.get(GameServer, server_id) if server_id is not None else None
+    rs = db.session.get(RemoteServer, remote_id) if remote_id is not None else None
+    if gs is not None:
+        return str(gs.name or "")[:_NAME_MAX], "", "server/%d" % gs.id
+    if rs is not None:
+        page = "server-management" if rs.is_local else "remote/%d/manage" % rs.id
+        return "", str(rs.display_name or "")[:_NAME_MAX], page
+    return "", "", ""
+
+
+def _say(lang, text, **vals):
+    return i18n.fill(i18n.translate(lang, text), **vals) if text else ""
+
+
+def _event_note(lang, event_key, server_id, remote_id):
+    """(title, body, page, urgent) for an event, in `lang`."""
+    title, body = _TEXT.get(event_key, (event_key, ""))
+    server, host, page = _names(server_id, remote_id)
+    filled = _say(lang, body, server=server or "?", host=host or "?") if body else _say(lang, _OPEN_PANEL)
+    return _say(lang, title), filled, page or _PAGE.get(event_key, ""), event_key in _URGENT
+
+
+def _plan(items):
+    """{user id: [(title, body, page, urgent, ttl)]} for a batch, each user checked as described above."""
+    from panel.db.models import PushSubscription, User
+    holders = {u.id: u for u in User.query.join(PushSubscription, PushSubscription.user_id == User.id).all()}
+    plan = {}
+    for item in items:
+        for uid, note in _PLANNERS[item[0]](holders, item):
+            plan.setdefault(uid, []).append(note)
+    return plan, holders
+
+
+def _plan_test(holders, item):
+    """A test alert: to its own account's devices, while that account is active."""
+    u = holders.get(item[1])
+    if u is None or not u.is_active:
+        return []
+    return [(u.id, (_say(u.language, _TEST_TITLE), _say(u.language, _TEST_BODY), "account", False, TTL_TEST))]
+
+
+def _plan_account(holders, item):
+    """A change to an account's own security: to that account's devices, if it wants them."""
+    from panel.security.account_notices import _CHANGES
+    u = next((h for h in holders.values() if h.username == item[2]), None)
+    if u is None or not u.is_active or MY_ACCOUNT not in chosen_events(u):
+        return []
+    return [(u.id, (_say(u.language, _ACCOUNT_TITLE), _say(u.language, _CHANGES[item[1]][0]), "account", True,
+                    TTL_ALERT))]
+
+
+def _plan_event(holders, item):
+    """A panel alert: to every holder who chose it and may see what it is about."""
+    _, key, server_id, remote_id = item
+    out = []
+    for u in holders.values():
+        if key in chosen_events(u) and may_see(u, key, server_id, remote_id):
+            title, body, page, urgent = _event_note(u.language, key, server_id, remote_id)
+            out.append((u.id, (title, body, page, urgent, TTL_ALERT)))
+    return out
+
+
+_PLANNERS = {"test": _plan_test, "account": _plan_account, "event": _plan_event}
+
+
+def _fold(lang, notes):
+    """One notification for a device's batch: the note itself, or a summary past _FOLD_AT."""
+    if len(notes) <= _FOLD_AT:
+        return notes
+    titles = [n[0] for n in notes]
+    body = ", ".join(titles[:4]) + ("…" if len(titles) > 4 else "")
+    return [(_say(lang, _FOLDED_TITLE, n=len(notes)), body, "", any(n[3] for n in notes),
+             max(n[4] for n in notes))]
+
+
+def deliver(items):
+    """Send a batch: decide who gets what, then one POST per note per device. Never raises past here."""
+    import json as _json
+    from panel.db.models import PushSubscription, db
+    plan, holders = _plan(items)
+    for uid, notes in plan.items():
+        lang = holders[uid].language
+        for title, body, page, urgent, ttl in _fold(lang, notes):
+            payload = _json.dumps({"title": title, "body": body, "url": page},
+                                  ensure_ascii=False).encode("utf-8")
+            for row in PushSubscription.query.filter_by(user_id=uid).all():
+                try:
+                    _send_one(row, payload, ttl, "high" if urgent else "normal")
+                except Exception:  # noqa: BLE001 - one device must not stop the others
+                    _log.warning("push to one device failed", exc_info=True)
+    try:
+        db.session.commit()
+    except Exception:  # noqa: BLE001 - a lost "last delivered" time is not a lost alert
+        db.session.rollback()
+        _log.debug("recording push results failed", exc_info=True)
+
+
+# A push service's answer that means the subscription is gone (RFC 8030 7.3: 404/410), or that the
+# row can never be sent to again (its endpoint no longer passes the allow-list, its keys unreadable).
+_GONE = frozenset({404, 410, -1, -3})
+
+
+def _send_one(row, payload, ttl, urgency):
+    """One device: send, and record what came back on the row (deleted when the service says gone)."""
+    from panel.db.models import db
+    p256dh = webpush.b64url_decode(row.p256dh or "") or b""
+    auth = webpush.b64url_decode(row.auth or "") or b""
+    status, label = webpush.send(row.endpoint or "", p256dh, auth, payload, ttl, urgency)
+    if 200 <= status < 300:
+        row.last_success = utcnow()
+    elif status in _GONE:
+        _log.info("push subscription removed: %s answered %d", label, status)
+        db.session.delete(row)
+    elif status == -2:
+        _log.warning("push to %s refused: its name resolved to a non-public address", label)
+    elif status == 0:
+        _log.warning("push to %s failed: no answer", label)
+    else:
+        _log.warning("push to %s rejected: HTTP %d", label, status)

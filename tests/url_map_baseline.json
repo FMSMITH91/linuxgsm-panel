@@ -19,6 +19,16 @@
       "GET"
     ]
   },
+  "GET /account/signout": {
+    "endpoint": "account_signout",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_signout"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/account/sessions": {
     "endpoint": "api_account_sessions",
     "guards": [
@@ -1454,6 +1464,57 @@
     "guards": [
       "utils.py:decorated_view",
       "view:account_update_profile"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/devices/<int:sub_id>/remove": {
+    "endpoint": "account_push_device_remove",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_device_remove"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/events": {
+    "endpoint": "account_push_events",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_events"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/subscribe": {
+    "endpoint": "account_push_subscribe",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:account_push_subscribe"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/test": {
+    "endpoint": "account_push_test",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_test"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/unsubscribe": {
+    "endpoint": "account_push_unsubscribe",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_unsubscribe"
     ],
     "methods": [
       "POST"

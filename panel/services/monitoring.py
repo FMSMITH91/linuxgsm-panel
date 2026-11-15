@@ -570,7 +570,7 @@ def _notify_if_emptied(gs, count):
         else:
             notifications.notify("server_empty", "Server is empty",
                                  "%s on %s now has 0 players — safe to make changes."
-                                 % (gs.name, gs.remote.display_name))
+                                 % (gs.name, gs.remote.display_name), server=gs)
 
 
 def _track_server_full(gs, count, mx):
@@ -581,7 +581,7 @@ def _track_server_full(gs, count, mx):
             if not notifications.alerts_muted(gs):
                 notifications.notify("server_full", "Server full",
                                      "%s on %s is full (%d/%d players)."
-                                     % (gs.name, gs.remote.display_name, count, mx))
+                                     % (gs.name, gs.remote.display_name, count, mx), server=gs)
             # Marked alerted regardless, so unmuting mid-session doesn't fire retroactively
             # for a server that has been sitting at its cap the whole time.
             _server_full_alerted[gs.id] = True
@@ -605,7 +605,7 @@ def _track_player_peak(gs, count):
             _server_peak_notified[gs.id] = time.time()
             notifications.notify("server_peak", "New player record",
                                  "%s on %s just hit %d players — a new record."
-                                 % (gs.name, gs.remote.display_name, count))
+                                 % (gs.name, gs.remote.display_name, count), server=gs)
 
 
 _METRIC_SAMPLE_SECONDS = 60
@@ -1149,10 +1149,10 @@ def _record_host_reachability(remote, reachable):
             misses.pop(remote.id, None)
             if not muted:
                 notifications.notify("remote_unreachable", "Host unreachable",
-                                     "%s stopped responding." % remote.display_name)
+                                     "%s stopped responding." % remote.display_name, remote=remote)
     if prev is False and reachable and not muted:
         notifications.notify("remote_recovered", "Host back online",
-                             "%s is responding again." % remote.display_name)
+                             "%s is responding again." % remote.display_name, remote=remote)
     _monitor_state["remotes"][remote.id] = recorded
     # ...and to the COLUMN, not just this pass's memory. is_online was written in exactly three
     # places — host creation (hardcoded True), the manual "Test connection" button, and a
@@ -1193,7 +1193,7 @@ def _check_host_disk(remote, pct, th):
         alerted = _monitor_state["disk"].get(remote.id, False)
         if pct >= th["disk_pct"] and not alerted:
             notifications.notify("disk_low", "Disk running low",
-                                 "%s is at %d%% disk usage." % (remote.display_name, pct))
+                                 "%s is at %d%% disk usage." % (remote.display_name, pct), remote=remote)
             _monitor_state["disk"][remote.id] = True
         elif pct < th["disk_pct"] - 5 and alerted:
             _monitor_state["disk"][remote.id] = False
@@ -1215,7 +1215,7 @@ def _check_host_load(remote, load_mem, th):
         if st[kind + "_hi"] >= need and not st.get(kind + "_alerted"):
             notifications.notify("high_load", "Host under load",
                                  "%s is at %d%% %s (sustained %d+ min)."
-                                 % (remote.display_name, val, label, th["load_mins"]))
+                                 % (remote.display_name, val, label, th["load_mins"]), remote=remote)
             st[kind + "_alerted"] = True
         elif val < thresh - 10 and st.get(kind + "_alerted"):
             st[kind + "_alerted"] = False
@@ -1378,7 +1378,8 @@ def _mon_server_went_down(remote, gs, up, prev_up, muted):
         return up
     if not muted:
         notifications.notify("server_down", "Server offline",
-                             "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
+                             "%s on %s went offline unexpectedly." % (gs.name, remote.display_name),
+                             server=gs)
     return up
 
 
@@ -1413,7 +1414,7 @@ def _mon_server_came_up(remote, gs, prev_up, muted):
     quiet = _monitor_state["server_unannounced"].pop(gs.id, False)
     if prev_up is False and not muted and not quiet:
         notifications.notify("server_up", "Server back online",
-                             "%s on %s is back online." % (gs.name, remote.display_name))
+                             "%s on %s is back online." % (gs.name, remote.display_name), server=gs)
 
 
 def _forget_deleted_rows(remote_ids, server_ids):

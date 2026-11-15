@@ -308,7 +308,7 @@ def _throttle_setup215():
     _reset215()
     _user215("p215_target")
     _NOTES215.clear()
-    _p9_patch(_nt215, "notify", lambda key, title, body="": _NOTES215.append((key, body)))
+    _p9_patch(_nt215, "notify", lambda key, title, body="", **_kw: _NOTES215.append((key, body)))
     return _last_id215(), _fake_clock215(_time215.time())
 
 
@@ -405,7 +405,7 @@ def _s215_required_2fa():
     admin = _user215("p215_sa", superadmin=True)
     term = _user215("p215_term", perms=(_auth215.USE_TERMINAL,))
     _NOTES215.clear()
-    _p9_patch(_nt215, "notify", lambda key, title, body="": _NOTES215.append((key, body)))
+    _p9_patch(_nt215, "notify", lambda key, title, body="", **_kw: _NOTES215.append((key, body)))
     was = _p9.config.get("REQUIRE_2FA")
     first = _last_id215()
     try:
@@ -539,7 +539,7 @@ def _s215_notices():
         u.last_login = _now215() - _td215(hours=1)
         _db215.session.commit()
     _NOTES215.clear()
-    _p9_patch(_nt215, "notify", lambda key, title, body="": _NOTES215.append((key, body)))
+    _p9_patch(_nt215, "notify", lambda key, title, body="", **_kw: _NOTES215.append((key, body)))
     try:
         r = c.post("/account/api-token/generate", data={"password": _K215, "expires_days": "30"})
         with _p9.app_context():

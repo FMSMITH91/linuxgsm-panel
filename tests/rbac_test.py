@@ -4276,6 +4276,9 @@ _MUT_NO_PERM_OK = {
     "account_set_theme", "account_whats_new_seen",
     # Step-up: re-proves the caller's OWN password (and code) to restore its confirmation window.
     "account_reauth",
+    # The caller's OWN alert devices (Web Push): each looks its row up by id AND the caller's user id.
+    "account_push_subscribe", "account_push_unsubscribe", "account_push_device_remove",
+    "account_push_test", "account_push_events",
     # The panel owner handing over the panel: the caller's OWN flag is the gate (owner.is_owner,
     # refused with a 403 for anyone else), confirmed with their password and a live 2FA code.
     "account_owner_transfer",
@@ -4435,6 +4438,7 @@ _NO_AUDIT_OK = {
     "set_language",                  # the viewer's own UI language; usable pre-login
     "account_set_theme",             # the viewer's own colour scheme — a UI preference
     "account_whats_new_seen",        # the viewer closed "What's new"; dismisses a dialog
+    "account_push_events",           # which alerts the viewer's own devices get — a preference
     # SSH reachability probe. It records is_online / last_seen, and pins the key it met on a host
     # with no pin yet, exactly as that host's next connection from anywhere in the panel would
     # (_persist_host_key), and none of those write a row either.

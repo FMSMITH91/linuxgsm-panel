@@ -67,6 +67,9 @@ def register(app):
     # Transferring the panel's ownership (panel/security/owner.py).
     from panel.routes import owner_transfer
     owner_transfer.register(app)
+    # An account's alert devices (Web Push) and the sign-out page that keeps or stops them.
+    from panel.routes import push_devices
+    push_devices.register(app)
 
 
 def _flash_signed_out(bye):
@@ -160,14 +163,20 @@ def _register_sign_in(app):
                 db.session.rollback()
                 with suppress(Exception):
                     _log.warning("logout: the auth_epoch fallback failed too", exc_info=True)
+        from panel.routes.push_devices import signout_keeps_alerts
+        keep_alerts = signout_keeps_alerts(current_user._get_current_object(), request.form)
         logout_user()
         # Clear-Site-Data (Session Management Cheat Sheet, "Web Content Caching and Clear-Site-Data"):
         # the browser drops this site's cookies and storage (the console's command history among
         # them). Not "cache": the panel's own pages are no-cache already, and it would also throw
         # away the cached scripts and styles. The message rides the URL, not a flash: the flash is
         # kept in the session cookie this header deletes.
+        # "storage" also unregisters the site's service workers, and with them this device's push
+        # subscription, so a device whose alerts stay on after sign-out (by design; the sign-out page
+        # says so and offers to stop them) gets "cookies" alone: that page clears localStorage and
+        # sessionStorage itself before it posts.
         resp = redirect("/login?signed_out=%d" % (1 if revoked else 2))
-        resp.headers["Clear-Site-Data"] = '"cookies", "storage"'
+        resp.headers["Clear-Site-Data"] = '"cookies"' if keep_alerts else '"cookies", "storage"'
         return resp
 
 

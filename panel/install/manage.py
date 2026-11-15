@@ -378,6 +378,9 @@ def _set_flag(username, field, value, label):
             UserSession.query.filter_by(user_id=u.id).delete(synchronize_session=False)
             u.auth_epoch = (u.auth_epoch or 0) + 1
             u.revoke_api_token()
+            # ...and its alert devices: a deactivated account is pushed nothing (push_alerts).
+            from panel.services.push_alerts import drop_user
+            drop_user(u.id)
         db.session.flush()
         # Never let the panel end up with no way to administer it.
         if User.query.filter_by(is_superadmin=True, is_active=True).count() == 0:
