@@ -38,7 +38,7 @@ def new_entries(before, after):
 def render(entries, sha, tag, first=False):
     """The release notes as Markdown: entries grouped by category, then how to check the signature."""
     out = []
-    if first:
+    if first:   # the caller passes no entries then
         out.append("The first release published here. Everything before it is in docs/CHANGELOG.md.")
     elif not entries:
         out.append("No user-facing change in the changelog for this release (maintenance, tests or CI).")
@@ -66,7 +66,10 @@ def main(argv):
         sys.stderr.write("usage: release_notes.py <changelog before> <changelog after> <commit> <tag>\n")
         return 2
     before, after = _read(argv[1]), _read(argv[2])
-    sys.stdout.write(render(new_entries(before, after), argv[3], argv[4], first=not before))
+    if not before:      # the first release: all of history is "new", so point at the changelog instead
+        sys.stdout.write(render([], argv[3], argv[4], first=True))
+    else:
+        sys.stdout.write(render(new_entries(before, after), argv[3], argv[4]))
     return 0
 
 
