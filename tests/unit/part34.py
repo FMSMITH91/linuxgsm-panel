@@ -123,14 +123,14 @@ def _as_account34(user, sh, selfname=None):
     return cmd[len(prefix):] if cmd.startswith(prefix) else "false"
 
 
-def _bash34(sh, env_path=None, timeout=60):
+def _bash34(sh, env_path=None, timeout=60, stdin_text=None):
     """Run `sh` with bash, as a host would; (out, err, rc) shaped like run_command's (stripped)."""
     env = dict(os.environ)
     if env_path:
         env["PATH"] = env_path + os.pathsep + env.get("PATH", "")
     try:
         r = _sp34.run(["bash", "-c", sh],  # nosec B603 B607 - bash on this part's own fixtures
-                      capture_output=True, text=True, timeout=timeout, env=env, check=False)
+                      capture_output=True, text=True, timeout=timeout, env=env, check=False, input=stdin_text)
     # Both classes: under the monkey-patched suite run(timeout=) raises the ORIGINAL module's
     # TimeoutExpired (part43/part44 measure it), so a hung bash raised past this and ended part38's
     # whole section instead of answering as a timed-out command (review 1011d).
@@ -156,7 +156,7 @@ def _fresh_db34():
     db.create_all()
     for m, _snap in _PSTATE34:
         m.clear()
-    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache,
+    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache, _cron34._batch_lists,
                   _mon34._restart_flags_read_at, _mon34._batch_failed_at):
         cache.clear()
 
@@ -230,12 +230,12 @@ class _GameShell34:
         self.calls, self.fail = [], 0
         self.tamper = _as_is34      # rewrites the next BATCH's output (rc stays 0), then is reset
 
-    def __call__(self, server, user, sh, timeout=30, selfname=None):
+    def __call__(self, server, user, sh, timeout=30, selfname=None, stdin_text=None):
         self.calls.append((user, sh))
         if self.fail:
             self.fail -= 1
             return "", "SSH command timed out", -1
-        out, err, rc = _bash34(_as_account34(user, sh, selfname), env_path=_BIN34, timeout=60)
+        out, err, rc = _bash34(_as_account34(user, sh, selfname), env_path=_BIN34, timeout=60, stdin_text=stdin_text)
         if "@@lgsm-batch-end" in sh:
             tamper, self.tamper = self.tamper, _as_is34
             out = tamper(out)
@@ -460,8 +460,8 @@ def _section_batch_shell34():
     many = _cron34._batch_body([(i, "garrysmod", 27015 + i) for i in range(17)], "127.0.0.1")
     check("C batch: the 17 queries run in ONE node process, at most _BATCH_PARALLEL at once, and the "
           "whole command is ONE line (sudo logs it; a newline would print as a log line of its own)",
-          all((many.count("node -e") == 1, " %d %d 2>" % (_cron34._BATCH_PARALLEL, 20000) in many,
-               "\n" not in many, "node -e" in body)), many[:120])
+          all((many.count("node - ") == 1, " %d %d 2>" % (_cron34._BATCH_PARALLEL, 20000) in many,
+               "\n" not in many, "node - " in body)), many[:120])
 
 
 def _section_map_cache34():
@@ -1719,7 +1719,7 @@ def _cleanup34():
     for m, snap in _PSTATE34:
         m.clear()
         m.update(snap)
-    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache,
+    for cache in (_cron34._game_map_cache, _cron34._lgsm_query_cache, _game34._playerlist_cache, _cron34._batch_lists,
                   _mon34._restart_flags_read_at, _mon34._batch_failed_at):
         cache.clear()
     _ps34._console_offsets.pop(-3401, None)

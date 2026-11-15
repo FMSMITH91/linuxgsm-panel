@@ -8,7 +8,8 @@ import re
 import socket
 from panel.core import clock, i18n, terminal
 import time
-import paramiko
+from panel.ops.ssh_manager import _lazy
+paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core.config import decrypt_secret
 from panel.core.validation import canonical_ip, ip_address_or_none, ip_network_or_none
 from panel.security import privileged as _priv

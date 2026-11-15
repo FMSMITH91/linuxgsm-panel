@@ -2424,8 +2424,15 @@ _ct_poller = next((n for n in _ct_ast.walk(_ct_tree)
                    if isinstance(n, _ct_ast.FunctionDef) and n.name == "console_poller"), None)
 _ct_calls = {c.func.id for c in _ct_ast.walk(_ct_poller or _ct_ast.Module(body=[]))
              if isinstance(c, _ct_ast.Call) and isinstance(c.func, _ct_ast.Name)}
-check("console poller: it drives _console_tick and forgets unwatched consoles",
-      _ct_poller is not None and {"_console_tick", "_forget_unwatched_consoles"} <= _ct_calls,
+# The tick is driven directly, or handed to console_rest.tick (which skips a resting console's read):
+# `_crest.tick(_console_tick, ...)`, an attribute call whose first argument is the tick itself.
+_ct_drives = "_console_tick" in _ct_calls or any(
+    isinstance(c, _ct_ast.Call) and isinstance(c.func, _ct_ast.Attribute) and c.func.attr == "tick"
+    and c.args and isinstance(c.args[0], _ct_ast.Name) and c.args[0].id == "_console_tick"
+    for c in _ct_ast.walk(_ct_poller or _ct_ast.Module(body=[])))
+check("console poller: it drives _console_tick (directly or through console_rest.tick) and forgets "
+      "unwatched consoles",
+      _ct_poller is not None and _ct_drives and "_forget_unwatched_consoles" in _ct_calls,
       "console_poller calls %s" % sorted(_ct_calls))
 
 
