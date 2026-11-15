@@ -2931,16 +2931,36 @@ _STAT_JIFFIES_EXPR = "b[%d]+b[%d]" % (_STAT_UTIME_IDX, _STAT_STIME_IDX)
 # 0.25s window as the host's, which the per-game version could not do.
 _host_metrics_cache = register_remote_cache({})   # remote id -> (expiry_epoch, parsed dict)
 
-# Sum utime+stime per user in ONE awk pass: ps gives pid -> user, getline reads each
-# /proc/<pid>/stat. comm can contain spaces and ')', so split on the LAST ')' — the same rule the
-# per-game version uses, for the same reason.
-_JIFFIES_BY_USER = (
-    "ps -eo user:32=,pid= | awk -v TAG=%s '"
-    "{ gsub(/^ +| +$/, \"\", $1); u[$2] = $1 } "
-    "END { for (p in u) { f = \"/proc/\" p \"/stat\"; "
-    "if ((getline line < f) > 0) { n = split(line, a, \")\"); split(a[n], b, \" \"); "
-    "s[u[p]] += " + _STAT_JIFFIES_EXPR + " } close(f) } "
-    "for (x in s) print TAG, x, s[x] }'"
+# ONE `ps` per sample. The sample used to run four (`ps | awk` for the jiffies before the 0.25 s
+# window and again after it, then one for RSS and one for uptime), each 16-25 ms of CPU on a host
+# with ~180 processes: ~120 ms per sample, polled every few seconds by every open dashboard and
+# server page. Now one ps lists every process once, and one awk takes everything from that list:
+# the RSS and process count per user, the oldest process's age, and the jiffies read from
+# /proc/<pid>/stat for the same pids on both sides of the window (a process that exits inside it
+# drops out of the second sum, which max(0, ...) clamps, as before). The /proc/stat `cpu` lines
+# that bound the window are read by the same awk, so the host's window and the games' are one.
+#
+# /proc/<pid>/stat is split on the LAST ')' (comm can contain spaces and ')'), then fields
+# _STAT_UTIME_IDX and _STAT_STIME_IDX are summed: see _STAT_JIFFIES_EXPR.
+_AWK_CPU_LINE = ('while ((getline l < "/proc/stat") > 0) if (l ~ /^cpu /) { print l; break } '
+                 'close("/proc/stat"); ')
+
+
+def _awk_jiffies(pids, into):
+    """Awk adding each pid's utime+stime (pids: an array of pid -> key) into array `into`."""
+    return (f'for (p in {pids}) {{ f = "/proc/" p "/stat"; if ((getline line < f) > 0) {{ '
+            f'n = split(line, a, ")"); split(a[n], b, " "); {into}[{pids}[p]] += '
+            f'{_STAT_JIFFIES_EXPR} }} close(f) }} ')
+
+
+# Every process as `user pid rss etimes`, fed to _HOST_SAMPLE_AWK.
+_HOST_PS = "ps -eo user:32=,pid=,rss=,etimes= 2>/dev/null"
+_HOST_SAMPLE_AWK = (
+    '{ gsub(/^ +| +$/, "", $1); u[$2] = $1; r[$1] += $3; c[$1]++; if ($4 > m[$1]) m[$1] = $4 } '
+    'END { ' + _AWK_CPU_LINE + _awk_jiffies("u", "s") + 'for (x in s) print "GJA", x, s[x]; '
+    'system("sleep 0.25"); ' + _AWK_CPU_LINE + _awk_jiffies("u", "t") +
+    'for (x in t) print "GJB", x, t[x]; '
+    'for (x in r) print "GAMERAM", x, r[x], c[x]; for (x in m) print "GUP", x, m[x] }'
 )
 
 
@@ -2979,22 +2999,16 @@ def host_live_metrics(server, force=False):
 # "Pamięć:" on a Polish one): no MEM line, ram_total 0, and every consumer reads that as "this host
 # was not read". LC_ALL=C on that one command, so nothing else here changes locale.
 def _host_sample_cmd():
-    """host_live_metrics' one command: two CPU samples 0.25s apart, then every other figure."""
+    """host_live_metrics' one command: two CPU samples 0.25s apart and the per-user figures, then the rest."""
     parts = [
-        "grep '^cpu ' /proc/stat",
-        _JIFFIES_BY_USER % "GJA",
-        "sleep 0.25",
-        "grep '^cpu ' /proc/stat",
-        _JIFFIES_BY_USER % "GJB",
+        # The two CPU samples 0.25 s apart, every user's jiffies at each, RAM, process count and
+        # uptime per user: ONE ps (see _HOST_SAMPLE_AWK).
+        f"{_HOST_PS} | awk '{_HOST_SAMPLE_AWK}'",
         "LC_ALL=C free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
         "df -B1 / | tail -1 | awk '{print \"DISK\",$2,$3}'",
         "echo CORES $(nproc)",
         "echo UPTIME $(awk '{print int($1)}' /proc/uptime)",
-        ("ps -eo user:32=,rss= --no-headers 2>/dev/null | awk '{gsub(/^ +| +$/,\"\",$1); "
-         "s[$1]+=$2; n[$1]++} END{for(u in s) print \"GAMERAM\", u, s[u], n[u]}'"),
-        ("ps -eo user:32=,etimes= --no-headers 2>/dev/null | awk '{gsub(/^ +| +$/,\"\",$1); "
-         "if($2>m[$1]) m[$1]=$2} END{for(u in m) print \"GUP\", u, m[u]}'"),
         "ss -H -ltnu 2>/dev/null | awk '{n=split($5,a,\":\"); print \"PORT\", a[n]}' | sort -u",
         # Every interface's received and sent byte counters (fields 1 and 9 after the name). The
         # name is glued to the first counter once it is large ("eth0:123456"), so the ":" becomes
@@ -3178,31 +3192,26 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
     return m
 
 
-def _game_jiffies_cmd(short_name, tag):
-    """Shell printing `<tag> <sum>`: the jiffies (utime+stime) every process of `short_name` used.
-
-    Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can contain
-    spaces/parens, so split on the LAST ')' before reading numeric fields.
-    """
-    # b[12]+b[13], NOT b[13]+b[14]. awk's split(s, b, " ") drops the leading blank, so after the
-    # comm field b[1] is STATE — which puts utime at 12 and stime at 13. The old indices summed
-    # stime + CUTIME instead: cutime only counts reaped children, and a game server spends
-    # almost everything in user time, so this reported ~0% CPU per game no matter how hard a
-    # server was working. Verified against a process burning a known second of CPU: b[12]=99,
-    # b[13]=0, b[14]=0.
-    return (f"for p in $(ps -u {short_name} -o pid= 2>/dev/null); do "
-            f"awk '{{n=split($0,a,\")\"); split(a[n],b,\" \"); print {_STAT_JIFFIES_EXPR}}}' "
-            f"/proc/$p/stat 2>/dev/null; done | awk '{{s+=$1}} END{{print \"{tag}\",s+0}}'")
+# The one game's processes as `pid rss etimes`, from ONE ps (see _HOST_SAMPLE_AWK): their
+# jiffies on both sides of the 0.25 s window, their RSS and count, and the oldest one's age. It was
+# four `ps -u` runs and an awk per process for each jiffies pass. b[12]+b[13] (_STAT_JIFFIES_EXPR),
+# NOT b[13]+b[14]: awk's split(s, b, " ") drops the leading blank, so after the comm b[1] is STATE —
+# which puts utime at 12 and stime at 13. The old indices summed stime + CUTIME, and a game server
+# reported ~0% CPU however hard it worked. No process at all prints GJA 0, GAMERAM 0 0 and GUP 0.
+_GAME_SAMPLE_AWK = (
+    '{ g[$1] = "x"; r += $2; c++; if ($3 > m) m = $3 } '
+    'END { ' + _AWK_CPU_LINE + _awk_jiffies("g", "s") + 'print "GJA", s["x"] + 0; '
+    'system("sleep 0.25"); ' + _AWK_CPU_LINE + _awk_jiffies("g", "t") + 'print "GJB", t["x"] + 0; '
+    'print "GAMERAM", r + 0, c + 0; print "GUP", m + 0 }'
+)
 
 
 def _game_sample_cmd(short_name, game_port):
     """server_live_metrics' one command; `short_name` and `game_port` are already validated."""
-    parts = ["grep '^cpu ' /proc/stat"]
     if short_name:
-        parts.append(_game_jiffies_cmd(short_name, "GJA"))
-    parts += ["sleep 0.25", "grep '^cpu ' /proc/stat"]
-    if short_name:
-        parts.append(_game_jiffies_cmd(short_name, "GJB"))
+        parts = [f"ps -u {short_name} -o pid=,rss=,etimes= 2>/dev/null | awk '{_GAME_SAMPLE_AWK}'"]
+    else:
+        parts = ["grep '^cpu ' /proc/stat", "sleep 0.25", "grep '^cpu ' /proc/stat"]
     parts += [
         "LC_ALL=C free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
@@ -3210,9 +3219,6 @@ def _game_sample_cmd(short_name, game_port):
         "echo CORES $(nproc)",
         "echo UPTIME $(awk '{print int($1)}' /proc/uptime)",
     ]
-    if short_name:
-        parts.append(f"ps -u {short_name} -o rss= --no-headers 2>/dev/null | awk '{{s+=$1}} END{{print \"GAMERAM\",s+0,NR+0}}'")
-        parts.append(f"echo GUP $(ps -u {short_name} -o etimes= --no-headers 2>/dev/null | sort -rn | head -1)")
     if game_port:
         parts.append(f"echo PORT $(ss -H -ltnu 'sport = :{game_port}' 2>/dev/null | wc -l)")
     return " ; ".join(parts)

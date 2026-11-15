@@ -2428,8 +2428,9 @@ check("metrics: ...and a comm containing spaces and parens does not shift the fi
       _sub.run(["awk", _awk_prog], input="1 (weird ) name) " + " ".join(_STAT_FIELDS),
                capture_output=True, text=True).stdout.strip() == "73000")
 # Both samplers must use it — the per-game one and the batched per-host one.
-check("metrics: the batched host sampler uses the same expression",
-      _sm_core._STAT_JIFFIES_EXPR in (_sm_core._JIFFIES_BY_USER % "GJA"))
+check("metrics: the batched host sampler and the one-game sampler use the same expression",
+      _sm_core._STAT_JIFFIES_EXPR in _sm_core._HOST_SAMPLE_AWK
+      and _sm_core._STAT_JIFFIES_EXPR in _sm_core._GAME_SAMPLE_AWK)
 
 # ── The helper must refuse uid 0, wherever a name reaches it ──────────────────────────────────
 # USERNAME_RE accepts "root", and nothing downstream asked WHO the name was. The download verbs'
