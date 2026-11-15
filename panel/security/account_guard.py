@@ -159,8 +159,7 @@ def twofa_required(user):
     """Whether `user` must set up 2FA before using the panel (Settings' switch, see the module note)."""
     if not current_app.config.get("REQUIRE_2FA") or getattr(user, "totp_enabled", True):
         return False
-    if user.is_superadmin:
-        return True
+    # A superadmin's permissions are all of them (get_user_permissions), so this covers superadmins.
     from panel.security.auth import MANAGE_GROUPS, MANAGE_USERS, USE_TERMINAL, get_user_permissions
     return bool(get_user_permissions(user) & {USE_TERMINAL, MANAGE_USERS, MANAGE_GROUPS})
 

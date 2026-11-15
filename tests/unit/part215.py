@@ -149,8 +149,10 @@ def _s215_settings():
         applied = (_p9.config.get("PERMANENT_SESSION_LIFETIME"), _p9.config.get("SESSION_ABSOLUTE_SECONDS"),
                    _p9.config.get("REQUIRE_2FA"))
         stored = dict(saved)
-        refused = _p9_client(P9_ADMIN).post("/settings/save", data={
-            "session_idle_minutes": "900", "session_absolute_hours": "8"})
+        _p9.config["REQUIRE_2FA"] = False       # or the switch just saved would gate this admin
+        rc = _p9_client(P9_ADMIN)
+        refused = rc.post("/settings/save", data={"session_idle_minutes": "900", "session_absolute_hours": "8"})
+        refused_said = _p9_flashes(rc)
         after = dict(saved)
     finally:
         _p9.config.update(live)
@@ -169,8 +171,10 @@ def _s215_settings():
           and stored.get("session_absolute_hours") == 9 and stored.get("remember_days") == 5
           and stored.get("require_2fa") is True and "session_lifetime_hours" not in stored
           and applied == (45 * 60, 9 * 3600, True), repr((r.status_code, stored, applied)))
-    check("settings: an idle timeout past the absolute limit is refused and nothing is written",
-          refused.status_code == 302 and after == stored, repr((refused.status_code, after)))
+    check("settings: an idle timeout past the absolute limit is refused, says why, and nothing is written",
+          refused.status_code == 302 and after == stored
+          and any("cannot be longer than the absolute session limit" in m for m in refused_said),
+          repr((refused.status_code, after, refused_said)))
 
 
 def _row_seen215(uid):
@@ -288,6 +292,9 @@ def _s215_account_throttle():
         paused_text = paused.get_data(as_text=True)
         locks = _audits215("login_locked", first)
         notes = list(_NOTES215)
+        # Any later failure for the name inside this pause (a wrong 2FA code reaches _login_fail too)
+        # must not report the same lockout again.
+        reported_again = _ag215.account_new_lockout("p215_target", now[0])
         _c, ghost = _login215("p215_nobody", _K215_WRONG, ip="203.0.113.78")
         now[0] += _ag215.LOCK_BASE + 1
         c_ok, back = _login215("p215_target", _K215, ip="203.0.113.79")
@@ -311,7 +318,7 @@ def _s215_account_throttle():
     check("throttle: the lockout writes ONE audit row and ONE alert, naming the account",
           len(locks) == 1 and locks[0][0] == "p215_target" and locks[0][2] is False
           and [k for k, _b in notes if k == "account_locked"] == ["account_locked"]
-          and "p215_target" in notes[0][1], repr((locks, notes)))
+          and "p215_target" in notes[0][1] and reported_again == 0, repr((locks, notes, reported_again)))
     check("throttle: a name that does not exist is answered the same as one that does (no enumeration)",
           ghost.status_code == 200 and "Invalid username or password" in ghost.get_data(as_text=True), "")
     check("throttle: after the pause the right password signs in (the lock is never permanent)",
@@ -322,6 +329,19 @@ def _s215_account_throttle():
     pauses = [_ag215._pause_end([t - 1] * (n - 1) + [t], t) - t for n in (9, 10, 11, 12, 14, 30)]
     eq("throttle: under ten recent failures no pause; then 1, 2, 4 and 16 minutes, capped at 15",
        pauses, [0 - t, 60, 120, 240, 900, 900])
+
+
+def _s215_successes_not_counted():
+    _reset215()
+    _user215("p215_regular")
+    ins = []
+    for i in range(_ag215.ACCOUNT_SOFT_FAILS + 2):
+        c, _r = _login215("p215_regular", ip="198.51.100.%d" % (120 + i))
+        with c.session_transaction() as s:
+            ins.append(bool(s.get("_user_id")))
+    _reset215()
+    eq("throttle: signing in correctly again and again never pauses the name (a success gives its slot back)",
+       ins, [True] * (_ag215.ACCOUNT_SOFT_FAILS + 2))
 
 
 def _s215_ip_day():
@@ -535,6 +555,20 @@ def _s215_binding():
     rows = _audits215("session_binding_mismatch", first)
     check("logging: a session replayed from another address is refused and audited once (rate-limited)",
           moved.status_code == 401 and len(rows) == 1 and rows[0][0] == "p215_bind", repr((moved.status_code, rows)))
+    # A login from before per-device sessions ("<id>:<epoch>", no row) bound to another client.
+    legacy = _user215("p215_bind_old")
+    first = _last_id215()
+    _p9.config["SESSION_PROTECTION"] = "strong"
+    try:
+        c = _p9.test_client()
+        with c.session_transaction() as s:
+            s["_user_id"], s["_fresh"], s["_bind"] = "%d:0" % legacy, True, "0" * 32
+        old = c.get("/api/auth/ping", headers=_XHR215)
+    finally:
+        _p9.config["SESSION_PROTECTION"] = was
+    rows = _audits215("session_binding_mismatch", first)
+    check("logging: ...and so is a login with no session row bound to another client",
+          old.status_code == 401 and [r[0] for r in rows] == ["p215_bind_old"], repr((old.status_code, rows)))
     return uid
 
 
@@ -668,7 +702,7 @@ def _s215_serve_disable_warning():
 try:
     _p9_arm(who="part215")
     for _fn215 in (_s215_policy, _s215_settings, _s215_polls, _s215_password_rules, _s215_password_routes,
-                   _s215_account_throttle, _s215_ip_day, _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
+                   _s215_account_throttle, _s215_successes_not_counted, _s215_ip_day, _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
                    _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_binding,
                    _s215_rotation_and_logout, _s215_fetch_metadata, _s215_serve_path,
                    _s215_serve_disable_warning):

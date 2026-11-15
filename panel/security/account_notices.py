@@ -51,8 +51,7 @@ RECENT_DAYS = 90
 
 def _admin_level(user):
     """Whether `user` is a superadmin or may use the terminal, users or groups (the 2FA-required set)."""
-    if getattr(user, "is_superadmin", False):
-        return True
+    # A superadmin's permissions are all of them (get_user_permissions), so this covers superadmins.
     from panel.security.auth import MANAGE_GROUPS, MANAGE_USERS, USE_TERMINAL, get_user_permissions
     return bool(get_user_permissions(user) & {USE_TERMINAL, MANAGE_USERS, MANAGE_GROUPS})
 
