@@ -172,11 +172,26 @@ def _serve_enable(port, mount, funnel, page):
     return _changed(with_leftover_note(msg, left), port, page)
 
 
-def _serve_disable(port, mount):
+def came_through_serve(info):
+    """Whether this request reached the panel through Tailscale Serve (its host is the node's ts.net name)."""
+    dns = (getattr(info, "dns_name", None) or "").lower().rstrip(".")
+    host = (request.host or "").rsplit("]", 1)[-1].split(":")[0].lower().rstrip(".")
+    return bool(dns) and host == dns
+
+
+# Said before Disable runs when the request itself came through Serve (the page shows it in the
+# confirmation; the route refuses an unconfirmed disable with it).
+_DISABLE_CUTS_YOU = ("You are using the panel through this Tailscale Serve address. Disabling Serve "
+                     "ends this connection: afterwards open the panel at its direct address.")
+
+
+def _serve_disable(port, mount, confirmed=False):
     """Stop publishing the panel: every route to it comes down (ts.disable_tailscale_serve)."""
     refusal = _disable_would_strand_panel(load_config())
     if refusal:
         return jsonify({"success": False, "message": refusal}), 400
+    if not confirmed and came_through_serve(ts.get_tailscale_info()):
+        return jsonify({"success": False, "needs_confirm": True, "message": i18n.tr(_DISABLE_CUTS_YOU)}), 409
     success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
     if not success:
         # A mount that is another app's is refused before anything runs: the request's fault, a
@@ -190,6 +205,43 @@ def _serve_disable(port, mount):
                     tailscale_mount="")
     log_action(current_user, "tailscale_serve_disable", target=LOCAL_HOST_LABEL, detail=msg)
     return jsonify({"success": True, "message": i18n.tr(msg)})
+
+
+def _serve_change_mount(port, mount, page):
+    """Move the panel's Serve path: publish the NEW mount, confirm Serve maps it, then remove the old.
+
+    Never disable-then-enable: on a panel reached through Serve (it binds 127.0.0.1) the gap between
+    the two cuts the admin's own connection, and a failed enable leaves no way back in. Here a
+    failure to publish the new mount changes nothing, and a new mount Serve does not then show
+    leaves the old one in place. Funnel and the backend scheme stay as they are.
+    """
+    cfg = load_config()
+    old = cfg.get("tailscale_mount") or "/"
+    if not cfg.get("tailscale_setup_done"):
+        return jsonify({"success": False, "message": "Tailscale Serve is not set up for the panel. "
+                                                     "Use Enable Serve instead."}), 400
+    if mount == old:
+        return jsonify({"success": False, "message": "The panel is already at that path."}), 400
+    scheme = _serve_scheme_now(cfg, current_app.config)
+    ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=bool(cfg.get("tailscale_use_funnel")),
+                                       backend_scheme=scheme)
+    detail = "moved the panel's Serve path from %s to %s" % (old, mount)
+    if not ok:
+        log_action(current_user, "tailscale_serve_change_path", target=LOCAL_HOST_LABEL,
+                   detail="%s: %s" % (detail, msg), success=False)
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
+    route = ts.panel_route(ts.get_tailscale_info(force_refresh=True).serve_config, port, mount, scheme)
+    if route is None:
+        log_action(current_user, "tailscale_serve_change_path", target=LOCAL_HOST_LABEL,
+                   detail=detail + ": the new path did not show in Serve's configuration; the old was kept",
+                   success=False)
+        return jsonify({"success": False, "message": "Serve did not show the new path afterwards, so the old "
+                                                     "path was kept and still works."}), 500
+    set_config_keys(load_config(), tailscale_mount=mount)
+    log_action(current_user, "tailscale_serve_change_path", target=LOCAL_HOST_LABEL, detail=detail)
+    left = _remove_serve_leftovers(port, mount, "Change path on the Tailscale page", _serve_audit)
+    said = i18n.tr("The panel is now at {url}. Open it there; the old path was removed.", url=ts.route_url(route))
+    return _changed(with_leftover_note(said, left), port, page)
 
 
 def _serve_remove_route(port, data):
@@ -302,7 +354,7 @@ def _register_tailscale_setup(app):
                                panel_routes=panel_routes, panel_leftovers=panel_leftovers,
                                shared_funnel=shared_funnel,
                                serve_default_mount=_serve_default_mount(info, cfg, port),
-                               ts_detail=ts_detail)
+                               ts_detail=ts_detail, via_serve=came_through_serve(info))
 
     @app.route("/api/tailscale")
     @login_required
@@ -397,7 +449,7 @@ def _register_tailscale_serve(app):
         port = ts._r13b_bound_port(load_config())
         if action == "remove-route":
             return _serve_remove_route(port, data)
-        if action not in ("enable", "disable"):
+        if action not in ("enable", "disable", "change-mount"):
             return jsonify({"success": False, "message": i18n.tr("Unknown action: {action}", action=action)}), 400
         # Checked HERE as well as in setup_tailscale_serve, for the reason api_tags_create gives
         # about tag names: this is where the value came from a request, so this is where a bad one
@@ -419,7 +471,9 @@ def _register_tailscale_serve(app):
             if funnel is None:
                 return jsonify({"success": False, "message": "funnel must be true or false."}), 400
             return _serve_enable(port, mount, funnel, _json_str(data, "page"))
-        return _serve_disable(port, mount)
+        if action == "change-mount":
+            return _serve_change_mount(port, mount, _json_str(data, "page"))
+        return _serve_disable(port, mount, confirmed=data.get("confirm") is True)
 
     @app.route("/api/tailscale/check-peer", methods=["POST"])
     @login_required

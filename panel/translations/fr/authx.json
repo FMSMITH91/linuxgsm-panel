@@ -54,5 +54,15 @@
   "Since you last signed in: sign-ins to your account were paused after repeated failed attempts ({when}, last from {ip}).": "Depuis votre dernière connexion : les connexions à votre compte ont été suspendues après plusieurs tentatives échouées ({when}, la dernière depuis {ip}).",
   "An administrator's password, two-factor setting or API token changes": "Le mot de passe, la double authentification ou le jeton d'API d'un administrateur change",
   "Sign-ins for an account are paused after repeated failures": "Les connexions d'un compte sont suspendues après plusieurs échecs",
-  "An administrator without 2FA is made to set it up (Settings switch)": "Un administrateur sans 2FA doit la configurer (option des Paramètres)"
+  "An administrator without 2FA is made to set it up (Settings switch)": "Un administrateur sans 2FA doit la configurer (option des Paramètres)",
+  "You are using the panel through this Tailscale Serve address. Disabling Serve ends this connection: afterwards open the panel at its direct address.": "Vous utilisez le panneau via cette adresse Tailscale Serve. Désactiver Serve coupe cette connexion : ouvrez ensuite le panneau à son adresse directe.",
+  "Tailscale Serve is not set up for the panel. Use Enable Serve instead.": "Tailscale Serve n'est pas configuré pour le panneau. Utilisez plutôt Activer Serve.",
+  "The panel is already at that path.": "Le panneau est déjà à ce chemin.",
+  "Serve did not show the new path afterwards, so the old path was kept and still works.": "Serve n'a pas affiché le nouveau chemin ensuite ; l'ancien a donc été conservé et fonctionne toujours.",
+  "The panel is now at {url}. Open it there; the old path was removed.": "Le panneau est maintenant à {url}. Ouvrez-le là ; l'ancien chemin a été supprimé.",
+  "Change path": "Changer de chemin",
+  "New path": "Nouveau chemin",
+  "The new path is published and checked first; the old one is removed only after that, so this page keeps working until you move.": "Le nouveau chemin est d'abord publié et vérifié ; l'ancien n'est supprimé qu'ensuite, donc cette page continue de fonctionner jusqu'à ce que vous changiez.",
+  "Change the panel's Serve path": "Changer le chemin Serve du panneau",
+  "Error changing the Serve path": "Erreur lors du changement du chemin Serve"
 }

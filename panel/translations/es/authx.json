@@ -54,5 +54,15 @@
   "Since you last signed in: sign-ins to your account were paused after repeated failed attempts ({when}, last from {ip}).": "Desde tu último inicio de sesión: los inicios de sesión en tu cuenta se pausaron tras varios intentos fallidos ({when}, el último desde {ip}).",
   "An administrator's password, two-factor setting or API token changes": "Cambia la contraseña, la autenticación de dos factores o el token de API de un administrador",
   "Sign-ins for an account are paused after repeated failures": "Los inicios de sesión de una cuenta se pausan tras varios fallos",
-  "An administrator without 2FA is made to set it up (Settings switch)": "Se obliga a un administrador sin 2FA a configurarla (opción de Ajustes)"
+  "An administrator without 2FA is made to set it up (Settings switch)": "Se obliga a un administrador sin 2FA a configurarla (opción de Ajustes)",
+  "You are using the panel through this Tailscale Serve address. Disabling Serve ends this connection: afterwards open the panel at its direct address.": "Estás usando el panel a través de esta dirección de Tailscale Serve. Desactivar Serve cierra esta conexión: después abre el panel en su dirección directa.",
+  "Tailscale Serve is not set up for the panel. Use Enable Serve instead.": "Tailscale Serve no está configurado para el panel. Usa Activar Serve.",
+  "The panel is already at that path.": "El panel ya está en esa ruta.",
+  "Serve did not show the new path afterwards, so the old path was kept and still works.": "Serve no mostró la nueva ruta después, así que se mantuvo la antigua, que sigue funcionando.",
+  "The panel is now at {url}. Open it there; the old path was removed.": "El panel está ahora en {url}. Ábrelo ahí; la ruta antigua se eliminó.",
+  "Change path": "Cambiar ruta",
+  "New path": "Nueva ruta",
+  "The new path is published and checked first; the old one is removed only after that, so this page keeps working until you move.": "Primero se publica y comprueba la nueva ruta; la antigua solo se elimina después, así que esta página sigue funcionando hasta que te muevas.",
+  "Change the panel's Serve path": "Cambiar la ruta de Serve del panel",
+  "Error changing the Serve path": "Error al cambiar la ruta de Serve"
 }

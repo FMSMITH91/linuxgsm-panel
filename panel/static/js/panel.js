@@ -140,6 +140,13 @@ window.addEventListener('pageshow', function(ev){
   ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function(ev){
     document.addEventListener(ev, function(){ _lastInput = Date.now(); }, {capture: true, passive: true});
   });
+  var _confirmHandled = false;
+  function _goConfirm(){
+    if (_confirmHandled) return;
+    _confirmHandled = true;
+    var here = location.pathname + location.search;
+    location.assign((window.MOUNT || '') + '/account/reauth?next=' + encodeURIComponent(here));
+  }
   window.fetch = function(input, init){
     init = init || {};
     var method = (init.method || 'GET').toUpperCase();
@@ -159,6 +166,9 @@ window.addEventListener('pageshow', function(ev){
     init.headers = h;
     return _fetch(input, init).then(function(r){
       if (r.status === 401 && r.headers.get('X-Auth-Required')) window.sessionExpired();
+      // A high-risk action after the confirmation window (account_guard.step_up_required): the
+      // whole tab goes to the confirm page, which comes back here; the action is then clicked again.
+      else if (r.status === 403 && r.headers.get('X-Reauth-Required') === '1') _goConfirm();
       return r;
     });
   };

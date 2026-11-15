@@ -586,12 +586,94 @@ def _s215_fetch_metadata():
           len(rows) == 1 and _audits215("access_denied", first) == [], repr(rows))
 
 
+# ── 7. Tailscale Serve: change the path in one step; Disable warns from a Serve page ─────────────
+def _serve_rig215(add_ok=True, shown=True, host_dns="panel-box.tail-p215.ts.net"):
+    """Stub the Serve layer for the change-path and disable routes; the call log, in order."""
+    from panel.ops import tailscale_integration as _tsi
+    from panel.routes import tailscale as _rts
+    log, cfg = [], {"tailscale_setup_done": True, "tailscale_mount": "/lgsm", "tailscale_use_funnel": False}
+    _p9_patch(_rts, "load_config", lambda: dict(cfg))
+    _p9_patch(_rts, "set_config_keys", lambda c, **kw: (cfg.update(kw), log.append(("config", kw))))
+    _p9_patch(_rts, "_serve_scheme_now", lambda c, conf: "http")
+    _p9_patch(_rts, "_disable_would_strand_panel", lambda c: "")
+    _p9_patch(_tsi, "setup_tailscale_serve",
+              lambda **kw: (log.append(("add", kw["mount"])) or (add_ok, "Tailscale Serve enabled" if add_ok else "boom")))
+    _p9_patch(_tsi, "get_tailscale_info", lambda force_refresh=False: _tsi.TailscaleInfo(
+        installed=True, running=True, backend_state="Running", dns_name=host_dns + ".", serve_config={}))
+    _p9_patch(_tsi, "panel_route", lambda conf, port, mount, scheme: (
+        {"url": "https://" + host_dns, "mount": mount} if shown else None))
+    _p9_patch(_tsi, "route_url", lambda r: r["url"] + r["mount"])
+    _p9_patch(_rts, "_remove_serve_leftovers", lambda port, mount, where, audit: (log.append(("remove-old", mount)),
+                                                                                 "removed:/lgsm")[1])
+    _p9_patch(_tsi, "disable_tailscale_serve", lambda **kw: (log.append(("disable", kw)), (True, "Serve off"))[1])
+    return log, cfg
+
+
+def _s215_serve_path():
+    first = _last_id215()
+    a = _p9_client(P9_ADMIN)
+    results = {}
+    for label, kw in (("ok", {}), ("add-fails", {"add_ok": False}), ("not-shown", {"shown": False})):
+        try:
+            log, cfg = _serve_rig215(**kw)
+            r = a.post("/api/tailscale/serve", json={"action": "change-mount", "mount": "/panel", "page": ""})
+            results[label] = (r.status_code, _p9_json(r), list(log), dict(cfg))
+        finally:
+            _p9_restore_all()
+    st, body, log, cfg = results["ok"]
+    check("serve path: the new mount is published, then confirmed, and only then the old one removed; the config "
+          "follows and the answer names the new address",
+          st == 200 and [e[0] for e in log] == ["add", "config", "remove-old"] and log[0][1] == "/panel"
+          and cfg["tailscale_mount"] == "/panel" and "https://panel-box.tail-p215.ts.net/panel" in body.get("message", ""),
+          repr(results["ok"]))
+    for label in ("add-fails", "not-shown"):
+        st, body, log, cfg = results[label]
+        check("serve path: when %s, the old mount is left untouched and the config unchanged" % label,
+              st == 500 and "remove-old" not in [e[0] for e in log] and cfg["tailscale_mount"] == "/lgsm",
+              repr(results[label]))
+    rows = _audits215("tailscale_serve_change_path", first)
+    check("serve path: each attempt is audited, failures as failures",
+          [r[2] for r in rows] == [True, False, False], repr(rows))
+    viewer = _p9_client(P9_VIEWER).post("/api/tailscale/serve", json={"action": "change-mount", "mount": "/x"})
+    check("serve path: superadmin-only, like the rest of Serve", viewer.status_code in (302, 401, 403),
+          repr(viewer.status_code))
+
+
+def _s215_serve_disable_warning():
+    out = {}
+    # The test client is at "localhost": a node whose ts.net name is that is one this page came through.
+    for label, dns, data in (("via-serve", "localhost", {}), ("via-serve-confirmed", "localhost", {"confirm": True}),
+                             ("direct", "panel-box.tail-p215.ts.net", {})):
+        try:
+            log, _cfg = _serve_rig215(host_dns=dns)
+            r = _p9_client(P9_ADMIN).post("/api/tailscale/serve", json=dict({"action": "disable", "mount": "/lgsm"}, **data))
+            out[label] = (r.status_code, _p9_json(r), [e[0] for e in log])
+        finally:
+            _p9_restore_all()
+    check("serve disable: from a page that came through Serve, an unconfirmed disable is refused with the plain warning",
+          out["via-serve"][0] == 409 and out["via-serve"][1].get("needs_confirm") is True
+          and "ends this connection" in out["via-serve"][1].get("message", "") and out["via-serve"][2] == [],
+          repr(out["via-serve"]))
+    eq("serve disable: ...confirmed, it runs; reached directly, it runs with no extra step (control)",
+       (out["via-serve-confirmed"][2], out["direct"][2]), (["disable", "config"], ["disable", "config"]))
+    try:
+        _serve_rig215(host_dns="localhost")
+        _pr215 = _p9_client(P9_ADMIN).get("/tailscale")
+        page = _pr215.get_data(as_text=True)
+    finally:
+        _p9_restore_all()
+    check("serve disable: the page marks its Disable as reached through Serve, and offers Change path",
+          'data-via-serve="1"' in page and 'data-action="changeServePath"' in page,
+          repr((_pr215.status_code, page[:200])))
+
+
 try:
     _p9_arm(who="part215")
     for _fn215 in (_s215_policy, _s215_settings, _s215_polls, _s215_password_rules, _s215_password_routes,
                    _s215_account_throttle, _s215_ip_day, _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
                    _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_binding,
-                   _s215_rotation_and_logout, _s215_fetch_metadata):
+                   _s215_rotation_and_logout, _s215_fetch_metadata, _s215_serve_path,
+                   _s215_serve_disable_warning):
         _p9_arm(who="part215")
         try:
             _fn215()
