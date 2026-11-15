@@ -664,3 +664,4 @@ daf96f7c Signing out clears the browser.
 496769fa Releases on GitHub.
 fe818fb0 Transfer the panel's ownership.
 9976ce40 The panel owner can no longer be removed by another superadmin.
+3d846343 "Remember me" keeps you signed in.
