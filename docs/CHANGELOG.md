@@ -14,6 +14,14 @@ compares git commits, not this file.
 
 ### Added
 
+- **Releases on GitHub.** Each release is published on the project's Releases page, named by its
+  date, with the changes it brings and its release signature attached, which anyone can check
+  against the release key in panel/install/release-signers.
+
+- **Transfer the panel's ownership.** The owner can hand the panel to another superadmin who has
+  two-factor authentication on, from the Account page, confirmed with their password and a current
+  authenticator code. On the panel host, `linuxgsm-panel-recover set-owner <user>` does the same.
+
 - **Require 2FA for administrators.** A Settings switch (off by default) makes superadmins and anyone
   allowed the terminal, users or groups set up two-factor authentication before using the panel.
 
@@ -1454,6 +1462,11 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **The panel owner can no longer be removed by another superadmin.** The account that set the
+  panel up is its owner: no other administrator can deactivate, demote, rename or delete it, or reset
+  its password or two-factor authentication. A terminal on the panel's own host, and restoring or
+  downloading a panel backup, are the owner's only. No account can deactivate itself.
 
 - **Sign-in throttling per account.** Failed sign-ins are counted per account name as well as per
   address, with a pause that grows with each failure (never a permanent lock), and an alert when an

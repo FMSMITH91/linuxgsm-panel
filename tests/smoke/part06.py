@@ -2836,9 +2836,14 @@ try:
     _lt_sessions.clear()
 
     # The per-keystroke re-check asks the same question: a superadmin with a panel-host shell
-    # open who is demoted keeps nothing, even though their groups still grant the host.
+    # open who is demoted keeps nothing, even though their groups still grant the host. The shell
+    # there is the panel owner's only, so they are made the owner for this (and put back after).
     with app.app_context():
-        db.session.get(User, _lt_uid).is_superadmin = True
+        _lt_owners = [u.id for u in User.query.filter_by(is_owner=True).all()]
+        User.query.filter_by(is_owner=True).update({"is_owner": False})
+        db.session.flush()
+        _lt_u = db.session.get(User, _lt_uid)
+        _lt_u.is_superadmin, _lt_u.is_owner = True, True
         db.session.commit()
     _lt_c2 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
     _lt_c2.emit("term_open", {"remote_id": _lt_lid, "cols": 80, "rows": 24})
@@ -2855,6 +2860,11 @@ try:
     check("terminal: ...and once they are demoted the re-check refuses the panel host, "
           "though a group still grants it",
           "after-demotion" not in _lt_w, "writes=%r" % (_lt_w,))
+    with app.app_context():
+        db.session.get(User, _lt_uid).is_owner = False
+        db.session.flush()
+        User.query.filter(User.id.in_(_lt_owners)).update({"is_owner": True}, synchronize_session=False)
+        db.session.commit()
 
     # Losing the terminal ITSELF must close the shell, not only refuse the keystroke. When
     # _may_use_terminal() said no, the handlers returned: the shell stayed up and its output

@@ -30,6 +30,7 @@ from panel.routes._shared import (_button_backup_running, _json_int, _marked_bac
     _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock,
     _lg264_bk_status, _r39a_backup_held, _R39A_BACKUP_HELD)
 from panel.security.account_guard import step_up_required
+from panel.security import owner as _owner
 
 
 class _FullBackupTally:
@@ -829,6 +830,8 @@ def _register_backup_overview(app):
             # Top-line disk uses the first host (kept for the summary); per-server disk is authoritative.
             first = next(iter(disk_by_remote.values()), {"free": 0, "total": 0})
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
+                            # Whether this viewer is offered Restore and Download (the routes' own rule).
+                            "owner_tools": _owner.is_owner(current_user),
                             # The retention numbers are TYPED in the UI now, not picked from a list,
                             # so the browser needs the same bounds the server clamps to — one
                             # source, rather than the same two numbers written out in three places.
@@ -881,7 +884,14 @@ def _register_panel_backups(app):
 
         It takes a pre-restore safety backup, then swaps the data into place and restarts the
         panel.
+
+        The panel owner's only (panel/security/owner.py): an archive replaces every account row,
+        so any other superadmin could upload one in which they own the panel, or put back an old
+        one from before a transfer.
         """
+        if not _owner.is_owner(current_user):
+            return _owner.refuse(current_user, _owner.owner(), "a panel backup restore (the owner's only)",
+                                 _owner.RESTORE_OWNER_ONLY)
         _b = _json_body()
         name = _json_str(_b, "name")
         # Optional: only an encrypted archive needs it, and only when it was written under a
@@ -905,6 +915,15 @@ def _register_panel_backups(app):
     @login_required
     @superadmin_required
     def api_panel_backup_download(name):
+        """Send one panel backup archive (the panel owner's only).
+
+        The archive holds secret_key, which signs every session cookie, and cred_key, which decrypts
+        every stored SSH credential: with them another superadmin could sign in as the owner without
+        the owner's password or 2FA, which is what panel/security/owner.py exists to stop.
+        """
+        if not _owner.is_owner(current_user):
+            return _owner.refuse(current_user, _owner.owner(), "a panel backup download (the owner's only)",
+                                 _owner.DOWNLOAD_OWNER_ONLY)
         p = bk._safe_path(name)
         if not p:
             abort(404)

@@ -428,8 +428,9 @@ try:
         db.create_all()
         db.session.add(SetupState(step="complete", complete=True))
         _pw = _p9_auth.hash_password("Str0ng!passw0rd")
+        # The panel owner, as the account that set a panel up is (panel/security/owner.py).
         _p9_admin = User(username="p9_admin", password_hash=_pw, display_name="Admin",
-                         is_superadmin=True, is_active=True)
+                         is_superadmin=True, is_owner=True, is_active=True)
         _p9_host = RemoteServer(name="p9-host", host="192.0.2.10", port=22, username="root",
                                 auth_method="key", auth_credential="", is_online=True)
         _p9_host2 = RemoteServer(name="p9-host2", host="192.0.2.11", port=22, username="root",

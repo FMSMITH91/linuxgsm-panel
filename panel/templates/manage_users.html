@@ -40,6 +40,9 @@
            superadmins, and handed their emails, only for every save to be refused. `administrable`
            is decided once per account by the route: asking per row, twice, was an N+1. #}
         {% set may_admin = user.id in administrable %}
+        {# The owner's account (panel/security/owner.py) is changed by its owner alone, and never
+           deleted: edit_user and delete_user refuse anyone else, so nobody else is offered either. #}
+        {% set may_edit = may_admin and (not user.is_owner or user.id == current_user.id) %}
         <tr>
           <td data-no-i18n><strong>{{ user.username }}</strong></td>
           <td data-no-i18n>{{ user.display_name }}</td>
@@ -54,6 +57,7 @@
           <td>
             {% if user.is_superadmin %}
               <span class="badge bg-danger">Super Admin</span>
+              {% if user.is_owner %}<span class="badge bg-warning text-dark" title="The panel owner: no other administrator can deactivate, demote, rename or delete this account, or reset its password or two-factor authentication.">Owner</span>{% endif %}
             {% else %}
               <span class="badge bg-info text-dark">Standard</span>
             {% endif %}
@@ -67,15 +71,19 @@
           </td>
           <td class="text-secondary small">{{ user.last_login|datetime if user.last_login else 'Never' }}</td>
           <td class="text-end">
-            {% if may_admin %}
+            {% if may_edit %}
             <button class="btn btn-outline-secondary btn-sm"
                     data-action="openEditUser" data-args='[{{ user.id }}]'
                     aria-label="{{ t('Edit %s')|format(user.username) }}" title="{{ t('Edit %s')|format(user.username) }}">
               <i class="bi bi-pencil"></i>
             </button>
             {% endif %}
-            {# delete_user refuses your own account and the last superadmin, so neither gets the button. #}
-            {% if may_admin and user.id != current_user.id
+            {% if may_admin and not may_edit %}
+            <span class="text-secondary" title="Only the panel owner can change the owner's account."><i class="bi bi-lock-fill" aria-hidden="true"></i><span class="visually-hidden">Only the panel owner can change the owner's account.</span></span>
+            {% endif %}
+            {# delete_user refuses your own account, the owner's and the last superadmin, so none of
+               them gets the button. #}
+            {% if may_admin and user.id != current_user.id and not user.is_owner
                   and not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
             <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;"
                   class="ajax-form" data-ajax-refresh="#users-list"
@@ -300,13 +308,15 @@
    ~210KB of duplicated markup in the page. The single modal below is populated from this. It lives
    INSIDE #users-list so an ajax refresh after a save keeps it current. #}
 <script type="application/json" id="users-data" nonce="{{ csp_nonce }}">
-[{% for user in users if user.id in administrable %}{"id": {{ user.id|int }},
+[{% for user in users if user.id in administrable and (not user.is_owner or user.id == current_user.id) %}{"id": {{ user.id|int }},
   "username": {{ user.username|tojson }},
   "display_name": {{ (user.display_name or '')|tojson }},
   "email": {{ (user.email_display or '')|tojson }},
   "groups": {{ (user.groups|map(attribute='id')|list)|tojson }},
   "is_superadmin": {{ 'true' if user.is_superadmin else 'false' }},
   "is_active": {{ 'true' if user.is_active else 'false' }},
+  "is_owner": {{ 'true' if user.is_owner else 'false' }},
+  "is_self": {{ 'true' if user.id == current_user.id else 'false' }},
   "totp_enabled": {{ 'true' if user.totp_enabled else 'false' }}}{{ "," if not loop.last }}{% endfor %}]
 </script>
 </div><!-- /#users-list -->
@@ -339,7 +349,13 @@
             <label class="form-label" for="eu-email">Email</label>
             <input type="email" name="email" id="eu-email" class="form-control">
           </div>
-          <div class="mb-3 form-check">
+          {# Your own row: shown instead of the switches it hides (manage_users.js _euFillSwitches).
+             Both sentences are rendered and one is shown, so each is translated whole. #}
+          <div class="alert alert-secondary py-2 px-3 small mb-3" role="note" id="eu-self-note" hidden>
+            <span id="eu-owner-note" hidden>You own this panel, so your account stays active and a superadmin, and its username can't change. To hand the panel to someone else, use Transfer ownership on your Account page.</span>
+            <span id="eu-own-note" hidden>This is your own account: change your password and two-factor authentication on your Account page.</span>
+          </div>
+          <div class="mb-3 form-check" id="eu-reset-pw-block">
             <input type="checkbox" name="reset_password" id="eu-reset-password" class="form-check-input">
             <label class="form-check-label" for="eu-reset-password">Reset password</label>
             <div class="form-text">Generates a one-time password, shown once when you save, and signs
@@ -364,8 +380,8 @@
              superadmin is offered the switch. manage_users.js guards the lookup for exactly this
              reason — see the comment there. #}
           {% if current_user.is_superadmin %}
-          <hr class="border-secondary">
-          <div class="mb-3" role="group" aria-labelledby="eu-acct-type-label">
+          <div class="mb-3" role="group" aria-labelledby="eu-acct-type-label" id="eu-acct-type-block">
+            <hr class="border-secondary">
             <span class="form-label mb-1 d-inline-block" id="eu-acct-type-label">Account type</span>
             <div class="form-check form-switch">
               <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch" id="eu-superadmin">
@@ -376,8 +392,8 @@
             </div>
           </div>
           {% endif %}
-          <hr class="border-secondary">
-          <div role="group" aria-labelledby="eu-status-label">
+          <div role="group" aria-labelledby="eu-status-label" id="eu-status-block">
+            <hr class="border-secondary">
             <span class="form-label mb-1 d-inline-block" id="eu-status-label">Status</span>
             <div class="form-check form-switch">
               <input type="checkbox" name="is_active" class="form-check-input" role="switch" id="eu-active">

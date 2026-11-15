@@ -161,6 +161,69 @@ def _run_setup_token(raw=True):
 # A username or group name stored with ESC sequences — cursor up, erase line, an OSC 52
 # clipboard write — was printed raw, so a delegate could hide or forge rows in exactly that
 # listing. Rows stored before validation existed are why the OUTPUT is escaped too.
+def _owners():
+    with manage.app.app_context():
+        return [u.username for u in User.query.filter_by(is_owner=True).all()]
+
+
+def _said(fn, *a):
+    """(exited, message, stdout) of one command."""
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        exited, msg = raises_exit(fn, *a)
+    return exited, msg, out.getvalue()
+
+
+def _check_owner():
+    """The panel owner: set-owner moves it, and deactivate/demote refuse it until it has moved."""
+    _check_owner_refusals()
+    _check_set_owner()
+
+
+def _check_owner_refusals():
+    """set-owner refuses an account that cannot own the panel; deactivate/demote refuse the owner."""
+    check("owner: create-admin made no new owner; the one owner is the oldest active superadmin",
+          _owners() == ["cli_admin"], repr(_owners()))
+    for who, why in (("cli_user", "a plain account"), ("cli_gone_admin", "an inactive superadmin")):
+        exited, msg, _out = _said(manage.cmd_set_owner, Args(username=who))
+        check("set-owner: refuses %s, and the owner stays" % why,
+              exited and "active superadmin" in msg and _owners() == ["cli_admin"], msg[:90])
+    for field, label in (("is_active", "deactivated"), ("is_superadmin", "demoted from superadmin")):
+        exited, msg = raises_exit(manage._set_flag, "cli_admin", field, False, label)
+        with manage.app.app_context():
+            u = User.query.filter_by(username="cli_admin").one()
+            intact = u.is_active and u.is_superadmin and u.is_owner
+        check("owner: the owner cannot be %s here, and the message names set-owner" % label,
+              exited and "panel owner" in msg and "set-owner" in msg and intact, msg[:120])
+
+
+def _check_set_owner():
+    """set-owner moves the owner and audits it; after it, the old owner is an ordinary superadmin."""
+    exited, msg, out = _said(manage.cmd_set_owner, Args(username="cli_new"))
+    check("set-owner: moves ownership to an active superadmin (no 2FA needed) and says what changed",
+          not exited and _owners() == ["cli_new"] and "'cli_new' is now the panel owner (was: cli_admin)" in out,
+          repr((msg, out, _owners())))
+    with manage.app.app_context():
+        from panel.db.models import AuditLog
+        rows = [(r.username, r.target, r.detail) for r in AuditLog.query.filter_by(action="owner_transferred")]
+    check("set-owner: audited under both accounts, naming the two and the command",
+          rows == [("manage.py", n, "ownership moved from 'cli_admin' to 'cli_new' (manage.py set-owner)")
+                   for n in ("cli_admin", "cli_new")], repr(rows))
+    exited, msg = raises_exit(manage._set_flag, "cli_admin", "is_superadmin", False, "demoted from superadmin")
+    check("owner: once set-owner has moved it, the old owner can be demoted", not exited, msg[:90])
+    exited, msg, out = _said(manage.cmd_set_owner, Args(username="cli_new"))
+    check("set-owner: run for the current owner changes nothing and says so",
+          not exited and "already the panel owner" in out and _owners() == ["cli_new"], repr((msg, out)))
+    _said(manage.cmd_create_admin, Args(username="cli_after", password=_PW_NEW))  # nosec B106 - test fixture
+    check("create-admin: a new superadmin on a panel with an owner does not become the owner",
+          _owners() == ["cli_new"], repr(_owners()))
+    _e, _m, out = _said(manage.cmd_list_users, Args())
+    check("list-users: the owner is tagged",
+          any("cli_new" in line and "[owner, superadmin, active]" in line for line in out.splitlines()), out)
+
+
 def _check_tty_safe():
     """The recovery CLI shows stored names escaped, and still acts on the real rows."""
     from panel.db.models import Group
@@ -444,6 +507,7 @@ try:
     finally:
         builtins.input = _saved_input
 
+    _check_owner()
     _check_tty_safe()
 
 except BaseException:

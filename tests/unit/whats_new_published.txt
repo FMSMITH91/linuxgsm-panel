@@ -661,3 +661,6 @@ f7a385d6 Change the Tailscale Serve path in one step.
 a389fb82 Sessions end when you stop using the panel.
 d1fbe743 Security events are logged.
 daf96f7c Signing out clears the browser.
+496769fa Releases on GitHub.
+fe818fb0 Transfer the panel's ownership.
+9976ce40 The panel owner can no longer be removed by another superadmin.

@@ -30,8 +30,12 @@
           <label class="form-label" for="acct-username">Username</label>
           <input type="text" id="acct-username" class="form-control font-monospace"
                  value="{{ current_user.username }}" disabled data-no-i18n>
+          {% if current_user.is_owner %}
+          <div class="form-text">What you sign in with. The panel owner's username can't be changed.</div>
+          {% else %}
           <div class="form-text">What you sign in with. Ask an administrator to change it — it is
             what your audit history is filed under.</div>
+          {% endif %}
         </div>
         <button type="submit" class="btn btn-primary btn-sm">Save</button>
       </form>
@@ -172,6 +176,39 @@
       {% endif %}
     </div>
   </div>
+
+  {% if current_user.is_owner %}
+  {# The panel owner only (panel/security/owner.py). Folded: it is used once in a panel's life, if
+     ever. The list is the route's own rule: active superadmins with 2FA on. #}
+  <div class="card" id="sec-owner">
+    <div class="card-header"><i class="bi bi-award-fill"></i> Panel owner</div>
+    <div class="card-body">
+      {% call fold('Transfer ownership') %}
+      <p class="text-secondary small mb-2">You own this panel: no other administrator can deactivate, demote, rename or delete your account, or reset its password or two-factor authentication.</p>
+      {% if not current_user.totp_enabled %}
+      <p class="text-secondary small mb-0">Turn on two-factor authentication first: a transfer of ownership is confirmed with your password and a code from your authenticator.</p>
+      {% else %}
+      {% set successors = owner_successors(current_user) %}
+      {% if not successors %}
+      <p class="text-secondary small mb-0">Ownership can only go to another active superadmin who has two-factor authentication turned on, and there is none yet.</p>
+      {% else %}
+      <form method="POST" action="{{ url_for('account_owner_transfer') }}" autocomplete="off">
+        <p class="text-secondary small mb-2">They become the owner; you stay a superadmin. Confirm with your password and a code from your authenticator (not a backup code).</p>
+        <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
+          <select id="account-owner_new" name="new_owner" class="form-select form-select-sm" style="min-width:10rem;flex:1 1 10rem;" aria-label="New owner" required>
+            {% for s in successors %}<option value="{{ s.id }}" data-no-i18n>{{ s.username }}</option>{% endfor %}
+          </select>
+          <input id="account-owner_password" type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+          <input id="account-owner_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" inputmode="numeric" placeholder="Authenticator code" aria-label="Authenticator code" required>
+          <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Transfer ownership</button>
+        </div>
+      </form>
+      {% endif %}
+      {% endif %}
+      {% endcall %}
+    </div>
+  </div>
+  {% endif %}
 
   <div class="card" id="sec-sessions">
     <div class="card-header"><i class="bi bi-box-arrow-right"></i> Active Sessions</div>

@@ -14,6 +14,7 @@ Run from the panel directory with its venv (or `sudo linuxgsm-panel-recover`):
     ./venv/bin/python panel/install/manage.py create-admin <username>
     ./venv/bin/python panel/install/manage.py promote <username>
     ./venv/bin/python panel/install/manage.py activate <username>
+    ./venv/bin/python panel/install/manage.py set-owner <username>      # make them the panel owner
     ./venv/bin/python panel/install/manage.py setup-token               # the first-run wizard's link, again
 
 Run interactively with no username and you get a numbered menu of users to choose
@@ -46,6 +47,7 @@ with warnings.catch_warnings():
     from panel.core.validation import password_problem, username_problem   # noqa: E402
     from panel.db.models import db, User                     # noqa: E402
     from panel.security import auth                                      # noqa: E402
+    from panel.security import owner as _owner_mod                       # noqa: E402
     from panel.db.models import NO_SELF_HEAL_ENV                         # noqa: E402
 
 # No database self-heal from here. create_app() runs it, and this CLI is run beside the LIVE
@@ -120,7 +122,7 @@ def cmd_list_users(args):
             print("(no users yet — run: manage.py create-admin <name>)")
             return
         for u in users:
-            flags = (["superadmin"] if u.is_superadmin else []) + \
+            flags = (["owner"] if u.is_owner else []) + (["superadmin"] if u.is_superadmin else []) + \
                     (["active"] if u.is_active else ["INACTIVE"])
             groups = ", ".join(_tty_safe(g.name) for g in u.groups) or "-"
             print("  %-20s [%s]  groups: %s" % (_tty_safe(u.username), ", ".join(flags), groups))
@@ -150,7 +152,8 @@ def _print_user_menu(prompt, users):
     """Print `prompt`, then one numbered line per user, tagged superadmin / inactive where so."""
     print(prompt)
     for i, u in enumerate(users, 1):
-        flags = (["superadmin"] if u.is_superadmin else []) + ([] if u.is_active else ["inactive"])
+        flags = (["owner"] if u.is_owner else []) + (["superadmin"] if u.is_superadmin else []) + \
+            ([] if u.is_active else ["inactive"])
         tag = ("  [" + ", ".join(flags) + "]") if flags else ""
         print("  %2d) %s%s" % (i, _tty_safe(u.username), tag))
 
@@ -230,6 +233,7 @@ def cmd_create_admin(args):
         db.session.add(u)
         db.session.commit()
         print("Superadmin '%s' created." % _tty_safe(username))
+        _ensure_owner()
 
 
 def _r32a_running_port(proc="/proc", app_py=None):
@@ -352,9 +356,17 @@ def cmd_disable_2fa(args):
         print("Two-factor auth disabled for '%s'." % _tty_safe(username))
 
 
+# The changes the owner's account refuses here, as on the Users page (panel/security/owner.py).
+_OWNER_KEEPS = {("is_active", False), ("is_superadmin", False)}
+
+
 def _set_flag(username, field, value, label):
     with app.app_context():
         u = _require_user(username)
+        if u.is_owner and (field, value) in _OWNER_KEEPS:
+            sys.exit("Refusing — '%s' is the panel owner, whose account cannot be %s. Make another "
+                     "active superadmin the owner first:  manage.py set-owner <username>"
+                     % (_tty_safe(username), label))
         _was_active = bool(u.is_active)
         setattr(u, field, value)
         if field == "is_active" and _was_active and not value:
@@ -374,6 +386,42 @@ def _set_flag(username, field, value, label):
                      "Create or promote another admin first.")
         db.session.commit()
         print("'%s' %s." % (_tty_safe(username), label))
+        if value:
+            _ensure_owner()     # promote / activate can make the first active superadmin
+
+
+def _ensure_owner():
+    """Give the owner flag to the oldest active superadmin when nobody holds it; say so when it does.
+
+    Only fills a gap (models._ensure_one_owner): a panel that has an owner keeps it.
+    """
+    from panel.db.models import _ensure_one_owner
+    if _ensure_one_owner():
+        db.session.commit()
+        print("The panel had no owner; '%s' is now the owner." % _tty_safe(_owner_mod.owner().username))
+    else:
+        db.session.rollback()
+
+
+def cmd_set_owner(args):
+    """Make an active superadmin the panel's owner (the host shell is the authority; no 2FA needed)."""
+    with app.app_context():
+        u = _require_user(args.username)
+        if not (u.is_superadmin and u.is_active):
+            sys.exit("Refusing — the owner must be an active superadmin, and '%s' is not. "
+                     "Run `manage.py promote` / `manage.py activate` first." % _tty_safe(u.username))
+        if u.is_owner:
+            print("'%s' is already the panel owner; nothing changed." % _tty_safe(u.username))
+            return
+        ok, previous = _owner_mod.set_owner(u)
+        if not ok:
+            sys.exit("Refusing — the accounts changed while this ran; nothing was changed. Try again.")
+        detail = "ownership moved from '%s' to '%s' (manage.py set-owner)" % (previous or "(nobody)", u.username)
+        for who in [n for n in (previous, u.username) if n]:
+            auth.log_action(None, "owner_transferred", target=who, detail=detail, actor="manage.py")
+        print("'%s' is now the panel owner (was: %s). The owner's account cannot be deactivated, "
+              "demoted, renamed or deleted from the web UI."
+              % (_tty_safe(u.username), _tty_safe(previous) if previous else "nobody"))
 
 
 def main():
@@ -399,6 +447,10 @@ def main():
     dp2 = sub.add_parser("disable-2fa", help="Turn off a user's two-factor auth (menu if no username)")
     dp2.add_argument("username", nargs="?", help="Omit for a numbered menu")
     dp2.set_defaults(func=cmd_disable_2fa)
+
+    so = sub.add_parser("set-owner", help="Make an active superadmin the panel owner")
+    so.add_argument("username")
+    so.set_defaults(func=cmd_set_owner)
 
     for name, field, val, lbl in [
         ("promote", "is_superadmin", True, "promoted to superadmin"),

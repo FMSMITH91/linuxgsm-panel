@@ -188,6 +188,22 @@ Groups grant any mix of these, scoped to specific servers/hosts. Super Admin is 
 them — it is the `is_superadmin` flag on the account, set on the Users page, and it bypasses every
 check.
 
+### The panel owner
+
+One account is the panel's **owner**: the one the setup wizard creates (on an upgraded install, the
+active superadmin with the lowest id). It is marked **Owner** on the Users page, and no other
+administrator can deactivate, demote, rename or delete it, or reset its password or 2FA, so one
+superadmin cannot take the panel from another. The owner can still change their own display name,
+password, 2FA and sessions on the Account page. A terminal on the panel's own host, and restoring or
+downloading a panel backup, are the owner's only: each reaches the panel's database, where every
+account lives, or the keys that sign every sign-in.
+
+To hand the panel over, the owner uses **Account → Panel owner → Transfer ownership**: it goes to
+another active superadmin who has 2FA turned on, and is confirmed with the owner's password and a
+current authenticator code (so the owner needs 2FA on too). Both accounts see the change at their
+next sign-in. If the owner can no longer sign in, ownership is moved from the panel host's shell
+(see [Recovery](#recovery)).
+
 | Permission | Grants |
 |------------|--------|
 | `view_servers` / `view_console` / `view_logs` | See status / console / audit logs |
@@ -231,7 +247,7 @@ location / {
 
 - **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
 - **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup and changing users or groups ask for the password again after 10 minutes (`step_up_minutes` in `config.json`; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
-  - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page, or on the panel host run `linuxgsm-panel-recover` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
+  - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page (not the panel owner's: only the panel host can), or on the panel host run `linuxgsm-panel-recover disable-2fa <user>` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Encryption at rest** — SSH credentials, database logins, emails, 2FA secrets and bot tokens are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Host → Maintenance → Diagnostics); `data/` is `chmod 700`.
 - **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict CSP and security headers, and input validation on anything that becomes an OS operation.
@@ -247,7 +263,13 @@ sudo linuxgsm-panel-recover                          # reset the sole superadmin
 sudo linuxgsm-panel-recover reset-password <user>
 sudo linuxgsm-panel-recover disable-2fa <user>       # lost your authenticator
 sudo linuxgsm-panel-recover create-admin <user>      # or: promote / activate <user>
+sudo linuxgsm-panel-recover set-owner <user>         # make an active superadmin the panel owner
 ```
+
+The panel host's shell is the authority over the panel owner. `set-owner` moves ownership to any
+active superadmin (2FA is not needed there) and records it in the audit log; `deactivate` and
+`demote` refuse the current owner until `set-owner` has moved it. `create-admin` never takes
+ownership from an existing owner.
 
 Run `--help` for the full list. On an older install without the command, update it first with the installer already on the host (see [Updating](#updating)), which places the command. Don't pipe `recover.sh` from GitHub into a root shell: no release signature covers it.
 

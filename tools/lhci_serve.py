@@ -113,7 +113,7 @@ with app.app_context():
     if not User.query.filter_by(username="lhci").first():
         db.session.add(User(username="lhci",
                             password_hash=auth.hash_password("Str0ng!passw0rd-lhci"),
-                            display_name="LHCI", is_superadmin=True, is_active=True))
+                            display_name="LHCI", is_superadmin=True, is_owner=True, is_active=True))
     # Seed a host + game server so the dashboard renders a full server card (status
     # badge, Start/Restart/Stop + Console controls) — that's the UI Lighthouse audits.
     if not RemoteServer.query.first():

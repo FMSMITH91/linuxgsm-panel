@@ -40,6 +40,9 @@ _CHANGES = {
                            "Since you last signed in: a new API token was created ({when}, from {ip})."),
     "api_token_revoke": ("API token revoked",
                          "Since you last signed in: your API token was revoked ({when}, from {ip})."),
+    "owner_transferred": ("Panel ownership transferred",
+                          "Since you last signed in: ownership of this panel was transferred ({when}, "
+                          "from {ip})."),
     "login_locked": ("Sign-ins paused after repeated failed attempts",
                      "Since you last signed in: sign-ins to your account were paused after repeated "
                      "failed attempts ({when}, last from {ip})."),
