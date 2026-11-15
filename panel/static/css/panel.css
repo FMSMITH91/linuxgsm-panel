@@ -2516,6 +2516,20 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   white-space:pre;
 }
 
+/* The Databases manager (js/databases_manager.js): a page of rows scrolls inside its own box, both
+   ways, and each value stays on one short line, so a wide table never widens the dialog. */
+.dbm-rows{
+  max-height:60vh;
+  overflow:auto;
+}
+
+.dbm-cell{
+  max-width:18rem;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
 @media (width <= 767.98px){
   .db-icon-btn{
     min-width:44px;

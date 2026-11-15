@@ -37,6 +37,7 @@ from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after, game_a
 from panel.security.auth import (MANAGE_DATABASES, MANAGE_REMOTES, VIEW_SERVERS, get_game, get_host_remote, get_remote,
                                  has_permission, log_action, server_access_required, superadmin_required)
 from panel.routes import databases_net as _net
+from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.services import db_snippets as _snip
 
 _SLUG_RE = re.compile(r"[a-z0-9]{1,16}\Z")
@@ -488,6 +489,7 @@ def _delete_answer(gs, r):
     with _r20b_audit_on_raise("db_delete", target=gs.name, detail=name, server=gs):
         ok, said = drop_row(gs.remote, local, r, gs.short_name)
     if ok:
+        _forget_data(r.id)
         db.session.delete(r)
         db.session.commit()
     reply = {"success": bool(ok), "message": i18n.tr(
@@ -513,6 +515,7 @@ def _restore_answer(gs, r):
         return _say(409, refused)
     with _r20b_audit_on_raise("db_restore", target=gs.name, detail=r.name, server=gs):
         ok, said = _dbs.restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
+    _forget_data(r.id)
     if ok is None:
         # No dump of it in the server's files: nothing was touched, and the tab stops offering it.
         r.dumped_at = None
@@ -525,6 +528,12 @@ def _restore_answer(gs, r):
             ok, "restored database %s from its dump" % r.name, "database %s not restored" % r.name, said),
             success=bool(ok), server=gs)
     return jsonify(reply), 200 if ok else (409 if ok is None else 502)
+
+
+def _forget_data(db_id):
+    """The manager's cached structure of a database that was restored or deleted."""
+    from panel.routes import databases_data
+    databases_data.forget(db_id)
 
 
 def _restore_target(gs, r):
@@ -964,6 +973,8 @@ def _server_routes(app):
         """A new password for the database's user."""
         if not has_permission(current_user, MANAGE_DATABASES):
             return _say(403, _DENIED)
+        if step_up_needed():
+            return step_up_refusal()
         return _row_action(server_id, db_id, _reset_answer, "password reset")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/delete", methods=["POST"])
@@ -973,6 +984,8 @@ def _server_routes(app):
         """Delete the database and its user, a dump kept on the host first."""
         if not has_permission(current_user, MANAGE_DATABASES):
             return _say(403, _DENIED)
+        if step_up_needed():
+            return step_up_refusal()
         return _row_action(server_id, db_id, _delete_answer, "delete")
 
     @app.route("/api/server/<int:server_id>/databases/<int:db_id>/restore", methods=["POST"])
@@ -982,6 +995,8 @@ def _server_routes(app):
         """Load the database from the dump in the server's files (panel-db-dumps/<name>.sql.gz)."""
         if not has_permission(current_user, MANAGE_DATABASES):
             return _say(403, _DENIED)
+        if step_up_needed():
+            return step_up_refusal()
         return _row_action(server_id, db_id, _restore_answer, "restore")
 
 
@@ -1047,9 +1062,12 @@ def _remote_routes(app):
 
 
 def register(app):
-    """The Databases tab's routes, and the template's `db_tab()`."""
+    """The Databases tab's routes, the manager's (browse, edit, SQL, dumps), and the template's `db_tab()`."""
+    from panel.routes import databases_data, databases_files
     app.jinja_env.globals["db_tab"] = tab_access
     _server_routes(app)
     _move_route(app)
     _remote_routes(app)
     _net.register(app)
+    databases_data.register(app)
+    databases_files.register(app)
