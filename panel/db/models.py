@@ -1073,7 +1073,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "browse_files", "read_file", "upload_check", "create_file", "create_folder", "list_cron",
     "lgsm_postponed", "lgsm_refused", "lgsm_busy", "mc_list_read", "mc_list_change", "plugin_list",
     "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove", "workshop_read", "workshop_save",
-    "db_create", "db_reveal", "db_password", "db_delete", "db_restore",
+    "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
@@ -1081,7 +1081,7 @@ AUDIT_HOST_ACTIONS = frozenset({
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
     "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
     "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
-    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete",
+    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
