@@ -2965,8 +2965,9 @@ check("translateY" in _sf and "g.scrollTop = ta.scrollTop" not in _sf,
       "whenever a horizontal scrollbar is present")
 
 # ── a password field must not be capped in the markup ────────────────────────────────────────
-# The panel deliberately has no maximum password length: hash_password() SHA-256s the password to a
-# fixed 44 bytes before bcrypt, so any length works, and password_problem() sets no upper bound.
+# The panel deliberately has no practical maximum password length: hash_password() is Argon2id,
+# which takes any length (its only bound is 1 MiB, above what a form can send), and
+# password_problem() sets no upper bound.
 # A `maxlength` on the input undoes all of that from the one place no test would look — the browser
 # silently stops accepting keystrokes, so a passphrase is truncated before it is ever submitted and
 # the person ends up with a different password than the one they typed. Worse on a CHANGE form:

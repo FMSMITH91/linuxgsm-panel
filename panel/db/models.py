@@ -3,7 +3,6 @@ import json
 import logging
 import re
 import time
-import bcrypt
 from markupsafe import Markup
 from panel.core import i18n
 from panel.core.clock import utcnow
@@ -80,10 +79,10 @@ class EncryptedString(db.TypeDecorator):
         return out
 
 
-# How many previous passwords an account may not go straight back to. Each one costs a bcrypt
-# comparison (~0.2s at cost 12) on a password change, so this is a small number on purpose — it
-# stops the "change it, then change it back" cycle, which is what it is for, rather than trying to
-# be an archive.
+# How many previous passwords an account may not go straight back to. Each one costs a password-hash
+# comparison on a password change (~0.2s for a bcrypt one written before Argon2id), so this is a
+# small number on purpose — it stops the "change it, then change it back" cycle, which is what it
+# is for, rather than trying to be an archive.
 PASSWORD_HISTORY_LEN = 3
 
 # Identifiers that get interpolated into remote shell commands (Linux usernames, the
@@ -205,9 +204,9 @@ class User(UserMixin, db.Model):
     totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
-    backup_codes = db.Column(db.Text, default="")   # JSON list of bcrypt-hashed one-time 2FA backup codes
+    backup_codes = db.Column(db.Text, default="")   # JSON list of hashed one-time 2FA backup codes
     # The last PASSWORD_HISTORY_LEN passwords this account has finished with, newest first, as
-    # bcrypt hashes — the same thing stored for the current one, so history reveals nothing the
+    # password hashes — the same thing stored for the current one, so history reveals nothing the
     # user table did not already hold. Kept so "change your password" cannot be satisfied by
     # putting back the one you just left, which is what a person does when they are asked to
     # change a password they did not want to change.
@@ -279,16 +278,13 @@ class User(UserMixin, db.Model):
         return (code or "").strip().lower().replace("-", "").replace(" ", "")
 
     def set_backup_codes(self, plain_codes):
-        """Store one-time 2FA backup codes as bcrypt hashes.
+        """Store one-time 2FA backup codes as Argon2id hashes.
 
         The plaintext is shown to the user once and never persisted.
         """
-        from panel.security.auth import run_off_hub   # lazy: auth imports this module
-        # Off the eventlet hub: eight cost-12 hashes held every other request for ~2-3s.
-        self.backup_codes = json.dumps([
-            run_off_hub(bcrypt.hashpw, self._norm_code(c).encode(), bcrypt.gensalt()).decode()
-            for c in plain_codes
-        ])
+        from panel.security.auth import hash_backup_code   # lazy: auth imports this module
+        # hash_backup_code runs each hash off the eventlet hub, as a password's is.
+        self.backup_codes = json.dumps([hash_backup_code(self._norm_code(c)) for c in plain_codes])
 
     def use_backup_code(self, code):
         """Consume `code` if it matches an unused backup code (one-time); return True if it did.
@@ -302,15 +298,10 @@ class User(UserMixin, db.Model):
             hashes = json.loads(self.backup_codes)
         except (ValueError, TypeError):
             return False
-        from panel.security.auth import run_off_hub   # lazy: auth imports this module
-        match = None
-        for h in hashes:
-            try:
-                if run_off_hub(bcrypt.checkpw, code.encode(), h.encode()):
-                    match = h
-                    break
-            except (ValueError, TypeError):
-                continue
+        # Argon2id, or bcrypt for a code made before Argon2id; never raises. Looked up on the module
+        # at call time (lazy: auth imports this module).
+        from panel.security import auth as _auth
+        match = next((h for h in hashes if _auth.backup_code_matches(code, h)), None)
         if match is None:
             return False
         return self._spend_backup_hash(match, self.backup_codes, hashes)
@@ -318,7 +309,7 @@ class User(UserMixin, db.Model):
     def _spend_backup_hash(self, match, old_blob, hashes):
         """Remove `match` from the stored list, conditionally on the list not having changed.
 
-        The read-check-write was not atomic. Each bcrypt compare above runs in a worker thread
+        The read-check-write was not atomic. Each hash compare above runs in a worker thread
         (run_off_hub), so the greenlet YIELDS between reading backup_codes and writing it back, and
         a second request for the same account ran in that gap: both read the same list, both found
         the same code, both wrote "the list minus it" — one backup code, two logins. Two DIFFERENT
@@ -329,7 +320,7 @@ class User(UserMixin, db.Model):
         invites: UPDATE ... WHERE backup_codes = <what we read>. When it touches no row, somebody
         spent a code in between; re-read — the UPDATE already holds SQLite's write lock, so that
         read is the committed list and nobody can change it before our commit — and spend `match`
-        from THAT, or refuse if it is no longer there. No second bcrypt: the hash is already known.
+        from THAT, or refuse if it is no longer there. No second compare: the hash is already known.
 
         A transient User (not in a session — the unit checks build them) has no row to race over
         and keeps the plain attribute write. Caller still commits.
@@ -390,8 +381,8 @@ class User(UserMixin, db.Model):
     def password_reused(self, candidate):
         """True if `candidate` is this account's current password or one of its last few.
 
-        EXPENSIVE — up to PASSWORD_HISTORY_LEN + 1 bcrypt comparisons at cost 12, which is a few
-        hundred milliseconds each. Call it LAST, after every free check has already rejected what
+        EXPENSIVE — up to PASSWORD_HISTORY_LEN + 1 password-hash comparisons (a bcrypt one, from
+        before Argon2id, is a few hundred milliseconds). Call it LAST, after every free check has already rejected what
         it can, and only where a human picked the password: a generated one is random, and paying
         a second of hashing to rule out a collision that will not happen is not a trade worth
         making.
@@ -404,15 +395,16 @@ class User(UserMixin, db.Model):
                 history = []
         except (ValueError, TypeError):
             history = []
-        # check_password, NOT bcrypt.checkpw: hashes are stored as `sha256$<bcrypt>` now, and a
-        # raw checkpw against one raises, which this loop would swallow as "not a match" — reuse
-        # detection would quietly stop detecting anything. Deferred import because auth.py imports
+        # check_password, NOT a single algorithm's check: the history holds Argon2id hashes and the
+        # bcrypt formats from before them, and one algorithm's check against another's hash
+        # fails, which this loop would read as "not a match" — reuse detection would quietly stop
+        # detecting anything. Deferred import because auth.py imports
         # this module; models.py already defers panel.core.config the same way.
         from panel.security.auth import check_password
         for h in [self.password_hash] + history:
             if not isinstance(h, str) or not h:
                 continue
-            if check_password(candidate, h):   # never raises; handles both hash formats
+            if check_password(candidate, h):   # never raises; handles every hash format
                 return True
         return False
 
