@@ -203,7 +203,7 @@ def _stored_key(cfg):
 def vapid_key():
     """The panel's VAPID signing key, made on first use and kept in config.json encrypted.
 
-    Stored like the panel's other secrets (config.encrypt_secret: AES-256-GCM under data/cred_key, the
+    Stored like the panel's other secrets (config.encrypt_secret: AES-256 in GCM mode under data/cred_key, the
     key ring panel/db/at_rest.py re-encrypts on rotation). Made once under a lock and written with
     update_config, so two first sends at once keep one key. One key, one purpose: it only signs VAPID
     tokens; every message's ECDH key is a fresh one (RFC 8292 3.2).

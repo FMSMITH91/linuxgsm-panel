@@ -11,8 +11,9 @@
       if (settled) return;
       settled = true;
       if (hasAlerts) {
-        window.location.href = form.getAttribute('data-push-signout');
-        return;
+        // The sign-out page's own path, rendered by the server; only ever on this origin.
+        var u = new URL(form.getAttribute('data-push-signout') || '/', window.location.href);
+        if (u.origin === window.location.origin) { window.location.assign(u.href); return; }
       }
       if (window.ensureCsrfFields) window.ensureCsrfFields(form);
       form.submit();

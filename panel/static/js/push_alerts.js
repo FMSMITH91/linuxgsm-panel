@@ -58,6 +58,12 @@
     });
   }
 
+  // Go to a page the server rendered into a data attribute, only if it is on this panel's own origin.
+  function goSameSite(path) {
+    var u = new URL(path || '/', window.location.href);
+    if (u.origin === window.location.origin) window.location.assign(u.href);
+  }
+
   function postJson(url, body) {
     return fetch(url, {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json'},  // nosemgrep
                        body: JSON.stringify(body || {})})
@@ -120,7 +126,7 @@
 
     btnOn.addEventListener('click', function () {
       if (el.getAttribute('data-reauth') === '1') {
-        window.location.href = el.getAttribute('data-reauth-url');
+        goSameSite(el.getAttribute('data-reauth-url'));
         return;
       }
       btnOn.disabled = true;
@@ -142,7 +148,7 @@
               if (res.status === 200 && res.d.success) { window.location.reload(); return; }
               // Not stored: take the browser's half back too, so the card tells the truth.
               return sub.unsubscribe().then(function () {
-                if (res.d.error === 'reauth_required') { window.location.href = el.getAttribute('data-reauth-url'); return; }
+                if (res.d.error === 'reauth_required') { goSameSite(el.getAttribute('data-reauth-url')); return; }
                 notice(res.d, 'danger');
                 show(false);
                 btnOn.disabled = false;
