@@ -140,9 +140,10 @@ def address_refused(ip_text):
         addr = _unwrapped(ipaddress.ip_address(str(ip_text).split("%", 1)[0]))
     except ValueError:
         return True
-    return (not addr.is_global or addr.is_multicast or addr.is_reserved or addr.is_loopback
-            or addr.is_link_local or addr.is_unspecified or addr.is_private
-            or (addr.version == 4 and addr in _TAILNET))
+    # is_global is False for private, loopback, link-local, unspecified, reserved, documentation and
+    # shared (100.64.0.0/10, which Tailscale uses) space alike; a multicast address can still be
+    # "global", so it is refused by name. The tailnet range is named too, though is_global covers it.
+    return not addr.is_global or addr.is_multicast or (addr.version == 4 and addr in _TAILNET)
 
 
 class RefusedAddress(OSError):

@@ -245,7 +245,7 @@ def _s218_endpoints():
     public = ("142.250.1.1", "2607:f8b0:4004::1")
     refused = ("10.1.2.3", "172.16.0.1", "192.168.1.1", "127.0.0.1", "169.254.169.254", "100.100.100.100",
                "100.64.0.1", "0.0.0.0", "224.0.0.1", "240.0.0.1", "::1", "fe80::1", "fd7a:115c:a1e0::1",
-               "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "not an address")
+               "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "ff02::1", "192.0.2.1", "not an address")
     eq("ssrf: a public address may be connected to", [_wp218.address_refused(a) for a in public], [False, False])
     eq("ssrf: private, loopback, link-local/metadata, tailnet, multicast, reserved, and an IPv4 inside an IPv6 "
        "form are refused", [_wp218.address_refused(a) for a in refused], [True] * len(refused))
@@ -451,9 +451,14 @@ def _s218_send_time_checks(pusher, bs, admin, can):
         _db218.session.commit()
     pusher.sent.clear()
     _nt218.notify("server_down", "Server offline", "x", server=_NS218(id=P9_GS))
-    _nt218.notify("server_up", "Server back online", "x", server=_NS218(id=P9_GS))
+    # "back online" from the monitor itself (the caller passes the server it is about).
+    from panel.services import monitoring as _mon218
+    _mon218._monitor_state["server_unannounced"].pop(P9_GS, None)
+    _mon218._mon_server_came_up(_NS218(id=P9_HOST, display_name="p9-host"),
+                                _NS218(id=P9_GS, name="p9-cs"), False, False)
     _p9_drain()
-    eq("who: each user's own choice: an admin who chose only 'back online' is not pushed 'offline'",
+    eq("who: each user's own choice: an admin who chose only 'back online' is not pushed 'offline' (and the "
+       "monitor's own 'back online' names its server, so it is pushed)",
        [n["title"] for n in pusher.to(bs[admin])], ["Server back online"])
 
 
