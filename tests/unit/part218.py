@@ -20,6 +20,7 @@ import os as _os218
 import time as _time218
 from types import SimpleNamespace as _NS218
 
+from cryptography.exceptions import InvalidTag as _InvalidTag218
 from cryptography.hazmat.primitives import hashes as _h218
 from cryptography.hazmat.primitives.asymmetric import ec as _ec218
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature as _dss218
@@ -83,8 +84,11 @@ def _decrypt218(body, ua_key, auth):
     def kdf(s, ikm, info, n):
         return _HKDF218(algorithm=_h218.SHA256(), length=n, salt=s, info=info).derive(ikm)
     ikm = kdf(auth, secret, b"WebPush: info\x00" + ua_pub + as_pub, 32)
-    plain = _GCM218(kdf(salt, ikm, b"Content-Encoding: aes128gcm\x00", 16)).decrypt(
-        kdf(salt, ikm, b"Content-Encoding: nonce\x00", 12), body[21 + idlen:], None)
+    try:
+        plain = _GCM218(kdf(salt, ikm, b"Content-Encoding: aes128gcm\x00", 16)).decrypt(
+            kdf(salt, ikm, b"Content-Encoding: nonce\x00", 12), body[21 + idlen:], None)
+    except _InvalidTag218:   # wrong keys or labels: a failed check by name, never a crash of the part
+        return b"<undecryptable>"
     return plain[:-1] if plain.endswith(b"\x02") else b"<no delimiter>"
 
 
@@ -116,6 +120,14 @@ def _claims218(token):
     return _json218.loads(_b64_218.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
 
 
+def _payload218(raw):
+    """A push payload as a dict; {"unreadable": ...} when it is not JSON (so a check fails by name)."""
+    try:
+        return _json218.loads(raw)
+    except ValueError:
+        return {"unreadable": raw[:40].decode("latin-1")}
+
+
 class _Pusher218:
     """webpush._post's stand-in: records each POST; answers `status` (or per-target from `by_target`)."""
 
@@ -129,7 +141,7 @@ class _Pusher218:
     def to(self, browser):
         """The decrypted payloads that reached `browser`, as dicts."""
         target = browser.sub["endpoint"].split("fcm.googleapis.com", 1)[1]
-        return [_json218.loads(_decrypt218(s.body, browser.key, browser.auth)) for s in self.sent
+        return [_payload218(_decrypt218(s.body, browser.key, browser.auth)) for s in self.sent
                 if s.target == target]
 
 
