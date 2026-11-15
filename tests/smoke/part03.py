@@ -739,12 +739,11 @@ check("2FA backup code is one-time (reuse rejected, not 302)",
       s3.status_code != 302 and "Invalid authentication code or backup code." in s3.get_data(as_text=True),
       "got %d" % s3.status_code)
 
-# ...and a wrong six-digit code does NOT try the backup codes. Each try is a cost-12 bcrypt
-# per stored code (~2s for eight), for an entry that cannot match: anyone holding one password
-# could spend that on every wrong TOTP they submitted.
-import bcrypt as _bc_mod
+# ...and a wrong six-digit code does NOT try the backup codes. Each try is a password hash per
+# stored code, for an entry that cannot match: anyone holding one password could spend that on
+# every wrong TOTP they submitted.
 from app import _LOGIN_FAILS as _bc_fails
-_bc_real = _bc_mod.checkpw
+_bc_real = auth.backup_code_matches
 _bc_calls = []
 
 
@@ -755,19 +754,19 @@ def _bc_count(*a):
 
 b4 = app.test_client()
 b4.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
-_bc_mod.checkpw = _bc_count
+auth.backup_code_matches = _bc_count
 try:
     b4.post("/login", data={"totp_code": "123456"})
     _bc_totp = len(_bc_calls)
     b4.post("/login", data={"totp_code": "zzzzz-zzzzz"})
     _bc_shaped = len(_bc_calls) - _bc_totp
 finally:
-    _bc_mod.checkpw = _bc_real
+    auth.backup_code_matches = _bc_real
     _bc_fails.clear()      # two deliberate failures: don't leave this IP nearer the lockout
 check("2FA: (control) a backup-shaped wrong code does try the stored backup codes",
-      _bc_shaped >= 1, "no bcrypt compare ran — the check below proves nothing")
-check("2FA: a wrong six-digit code does not run a bcrypt per backup code",
-      _bc_totp == 0, "%d bcrypt compares for a mistyped TOTP" % _bc_totp)
+      _bc_shaped >= 1, "no backup-code compare ran — the check below proves nothing")
+check("2FA: a wrong six-digit code does not run a hash compare per backup code",
+      _bc_totp == 0, "%d backup-code compares for a mistyped TOTP" % _bc_totp)
 
 # A TOTP code is valid for ~90s (its step plus one either side for skew). Accepting it on
 # "is it valid" alone lets a code observed once — a phishing proxy, a shoulder-surf, a leaked
@@ -2105,7 +2104,7 @@ with app.app_context():
           and db.session.get(User, _sr_id).display_name == "Self Renamed",
           "status %d" % _selfedit.status_code)
 
-# ── An install that predates the `sha256$` format signs in, and is upgraded in place ──
+# ── An install that predates the `sha256$` and Argon2id formats signs in, and is upgraded in place ──
 # Every existing installation hits this branch on its first login after the hash format
 # changed, and it was covered only at the level of check_password()/needs_rehash(): the route
 # that calls them had no test. Each property below is a distinct regression if it stops
@@ -2146,7 +2145,7 @@ check("legacy login: ...and the session it just created is usable",
 with app.app_context():
     _lu2 = db.session.get(User, _lu_id)
     check("legacy login: the stored hash was upgraded to the new format",
-          _lu2.password_hash.startswith("sha256$"), _lu2.password_hash[:14])
+          _lu2.password_hash.startswith("$argon2id$"), _lu2.password_hash[:14])
     check("legacy login: ...and the same password verifies against it",
           auth.check_password(_LEGACY_PW, _lu2.password_hash))
     check("legacy login: ...so it is not flagged for upgrade a second time",

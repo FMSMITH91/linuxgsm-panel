@@ -404,7 +404,7 @@ def _register_remote_delete_and_test(app):
             return _busy
         # Re-authenticate: deleting a remote (and ALL its game servers) is destructive, so require
         # the operator to re-enter their own account password — a guard against an accidental or
-        # hijacked click. Verified constant-time via bcrypt (check_password).
+        # hijacked click. Verified constant-time by check_password.
         #
         # Under the per-account re-authentication throttle, like the account page's checks: this
         # is one more place a borrowed session could guess the password at bcrypt speed. And the

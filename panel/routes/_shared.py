@@ -2252,8 +2252,8 @@ def reauth_release(user, stamp):
 def reauth_password(user, password):
     """Check `user`'s CURRENT password under the throttle: "ok", "wrong" or "throttled".
 
-    A throttled attempt is refused before bcrypt runs. A `password` that is not a string (a JSON
-    body can send 5) is a wrong password rather than a 500 — check_password's prehash raises on it.
+    A throttled attempt is refused before the hash runs. A `password` that is not a string (a JSON
+    body can send 5) is a wrong password rather than a 500.
     """
     from panel.security.auth import check_password
     stamp = reauth_reserve(user)

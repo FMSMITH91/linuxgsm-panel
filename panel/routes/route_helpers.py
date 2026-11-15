@@ -31,7 +31,7 @@ _STEP_ORDER = ("welcome", "admin_user", "tailscale", "remote_server")
 # Held from "is there a superadmin yet?" to the commit that creates one, so two admin_user POSTs
 # cannot both pass the check. Green under eventlet's monkey_patch (app.py patches before any panel
 # import), so a greenlet waiting on it parks rather than blocking the hub; the panel is one
-# process. The password is hashed BEFORE it is taken — bcrypt is the slow part, and it yields.
+# process. The password is hashed BEFORE it is taken — hashing is the slow part, and it yields.
 _ADMIN_CREATE_LOCK = threading.Lock()
 
 

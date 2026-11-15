@@ -456,8 +456,8 @@ def _pw_request_refusal(u, old, new, confirm, back):
         flash(pw_err, "danger")
         return redirect(back)
     # LAST of the free-ish checks, and deliberately after password_problem: this is up to four
-    # bcrypt comparisons, so a password that fails the cheap rules never pays for it. Covers the
-    # current password — which on the forced-change page is the one the admin handed over, so
+    # password-hash comparisons, so a password that fails the cheap rules never pays for it. Covers
+    # the current password — which on the forced-change page is the one the admin handed over, so
     # "set it to the password you were given" is refused here — and the last few before it.
     if u.password_reused(new):
         flash("That is a password you have used before — please choose a new one.", "danger")

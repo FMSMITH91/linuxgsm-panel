@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 import base64
 import bcrypt
+from argon2 import PasswordHasher, Type as Argon2Type, extract_parameters
+from argon2.exceptions import VerificationError
 import hashlib
 from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user
@@ -145,51 +147,69 @@ ACTION_PERMISSION_MAP = {
 
 # ─── Helpers ──────────────────────────────────────────────────
 
-# bcrypt takes at most 72 BYTES and ignores the rest. That is not a policy we chose and not one a
-# person can see: it is a property of the algorithm. Left alone it produced two bad outcomes here.
+# ─── Password hashing ─────────────────────────────────────────
+# New hashes are Argon2id, the first choice of the OWASP Password Storage Cheat Sheet, at its
+# minimum configuration: 19 MiB of memory (19456 KiB), 2 iterations, 1 lane. They are stored as the
+# PHC string argon2-cffi writes (`$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`), which carries its
+# own algorithm and parameters, so a later increase can still verify every hash written before it.
+# The parameters are pinned here rather than taken from the library's defaults: a defaults change
+# in an argon2-cffi upgrade must not silently change what the panel stores, or what it costs.
+# One hash takes about 13 ms and 19 MiB on a desktop CPU; it runs off the eventlet hub.
 #
-#   * Setting a longer password 500'd. password_problem() has a minimum and no maximum, so a
-#     104-character password passed every strength rule and then bcrypt 5.0 raised ValueError out
-#     of hash_password, uncaught.
-#   * Anyone who set one while bcrypt 4.x was installed is locked out NOW. 4.x truncated silently,
-#     so the stored hash is of the first 72 bytes; 5.0 raises instead, check_password catches it
-#     and returns False, and a correct password reads as "wrong password" with nothing to explain
-#     it. requirements.txt asked for >=4.1 before it pinned 5.0.0, so that window was real.
-#
-# Hashing the password with SHA-256 first makes bcrypt's input a fixed 44 bytes whatever the
-# password is, so length stops being a limit at all — the only bound left is the request body,
-# which MAX_CONTENT_LENGTH already caps. base64, not raw digest: a raw digest can contain a NUL,
-# and bcrypt stops at one.
+# Two older formats still VERIFY, so nobody is locked out by the upgrade, and are replaced with an
+# Argon2id hash the next time their owner signs in (needs_rehash, the login route):
+#   * `sha256$<bcrypt>` — bcrypt (cost 12) over base64(SHA-256(password)). The SHA-256 step made
+#     bcrypt's 72-byte input limit irrelevant; Argon2 has no such limit, so new hashes have no
+#     pre-hash at all (OWASP warns against pre-hashing for bcrypt; Argon2 does not need it).
+#   * a bare `$2b$...` — bcrypt over the raw password, from before that.
+ARGON2_TIME_COST = 2
+ARGON2_MEMORY_KIB = 19456
+ARGON2_PARALLELISM = 1
+_ARGON2 = PasswordHasher(time_cost=ARGON2_TIME_COST, memory_cost=ARGON2_MEMORY_KIB,
+                         parallelism=ARGON2_PARALLELISM, hash_len=32, salt_len=16,
+                         encoding="utf-8", type=Argon2Type.ID)
+_ARGON2_PREFIX = "$argon2id$"
+# A stored hash names its own cost, and verifying it spends that cost. Every hash here was written
+# by this panel, but a restored database is only as trustworthy as the backup it came from, so a
+# hash that asks for more than four times the current parameters is refused rather than allowed to
+# claim gigabytes of memory on a login.
+_ARGON2_MAX_FACTOR = 4
+
+# The longest password the panel will hash or compare, in UTF-8 bytes. Argon2 reads its whole
+# input, so its time grows with the length (about 60 ms for a 50 MB password, the size of the
+# largest request body the panel takes). A form field is already capped below this (Werkzeug's
+# 500 kB form memory limit), so no password anyone could set is affected: this bounds the JSON
+# paths, where a body near MAX_CONTENT_LENGTH would otherwise be hashed whole.
+MAX_PASSWORD_BYTES = 1024 * 1024
 _SHA256_PREFIX = "sha256$"
 
 
 def _prehash(password):
-    """SHA-256 of the password, base64'd — a fixed 44 bytes for bcrypt, whatever came in.
+    """SHA-256 of the password, base64'd — the input the `sha256$<bcrypt>` format hashed.
 
-    CodeQL flags this as py/weak-sensitive-data-hashing and it is a false positive: SHA-256 is not
-    the password hash here, it is a LENGTH NORMALISER. Its output has exactly two consumers,
-    bcrypt.hashpw and bcrypt.checkpw below — it is never stored, compared or returned — so the
-    credential at rest is bcrypt(sha256(pw)), salted, at cost 12. That is the standard bcrypt
-    pre-hash (Django and passlib's bcrypt_sha256 do the same thing for the same reason). The query
-    sees sha256(password) and stops before the bcrypt call.
+    Used only to VERIFY a stored `sha256$` hash; new hashes are Argon2id with no pre-hash. CodeQL
+    flags this as py/weak-sensitive-data-hashing and it is a false positive: SHA-256 is not the
+    password hash here, it is the LENGTH NORMALISER that format used so bcrypt always saw 44 bytes.
+    Its output has one consumer, bcrypt.checkpw in _check_bcrypt — it is never stored, compared
+    or returned. The credential at rest was bcrypt(sha256(pw)), salted, at cost 12, and is
+    replaced with an Argon2id hash on its owner's next sign-in. base64, not the raw digest: a raw
+    digest can contain a NUL, and bcrypt stops at one.
 
-    Alert 441 was dismissed on that basis, and it reopened as 492 WITHOUT this function moving:
-    routing the bcrypt calls through run_off_hub changed the flow CodeQL traces, and a changed
-    flow is a new alert. So it reopens when this function moves OR when its callers' flow changes.
-    Before dismissing it again, re-read this note and both call sites (hash_password and
-    check_password) to confirm the digest still reaches only bcrypt.
+    The alert reopens whenever this function moves or its callers' flow changes (a changed flow is
+    a new alert). Before dismissing it again, re-read this note and _check_bcrypt to confirm the
+    digest still reaches only bcrypt.checkpw.
     """
     return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
 
 
 def run_off_hub(fn, *args):
-    """Run a CPU-bound call that never yields — bcrypt — on a real OS thread under eventlet.
+    """Run a CPU-bound call that never yields — a password hash — on a real OS thread under eventlet.
 
-    The panel is one eventlet hub. bcrypt is a native call that holds it for the whole cost-12
-    hash (~250-400ms), and every /login POST ran one, unauthenticated, including the dummy compare
-    for an unknown username: a few hundred source addresses each spending their allowed failures
-    kept the hub busy hashing, and every page, console stream and poller with it stalled. tpool
-    hands the call to a worker thread and parks only the calling greenlet. Off eventlet (the test
+    The panel is one eventlet hub. A password hash is a native call that holds it for the whole
+    computation, and every /login POST ran one, unauthenticated, including the dummy compare for
+    an unknown username: a few hundred source addresses each spending their allowed failures kept
+    the hub busy hashing, and every page, console stream and poller with it stalled. tpool hands
+    the call to a worker thread and parks only the calling greenlet. Off eventlet (the test
     suites) it is a direct call; inside a tpool worker tpool runs it inline itself. manage.py IS
     patched (it imports app), so there this hop yields to the hub: which is why that CLI starts no
     background workers (app.NO_WORKERS_ENV).
@@ -205,73 +225,147 @@ def run_off_hub(fn, *args):
     return fn(*args)
 
 
-def hash_password(password):
-    """Hash a password of ANY length.
+def _argon2_hash(secret):
+    """Argon2id PHC string of `secret` at the pinned parameters."""
+    return _ARGON2.hash(secret)
 
-    Stored as `sha256$<bcrypt>` so check_password can tell the two schemes apart — a bare `$2b$...`
-    row is a legacy hash of the raw password.
+
+def _argon2_cost_ok(stored):
+    """Whether a stored Argon2id hash is well formed and asks for no more than the allowed cost."""
+    try:
+        params = extract_parameters(stored)
+    except ValueError:
+        return False
+    return (params.type is Argon2Type.ID
+            and params.memory_cost <= ARGON2_MEMORY_KIB * _ARGON2_MAX_FACTOR
+            and params.time_cost <= ARGON2_TIME_COST * _ARGON2_MAX_FACTOR
+            and params.parallelism <= ARGON2_PARALLELISM * _ARGON2_MAX_FACTOR)
+
+
+def _argon2_verify(stored, secret):
+    """True if `secret` matches the Argon2id hash `stored`; False for a mismatch or a bad hash.
+
+    The comparison inside libargon2 is constant-time. A hash whose cost is above the bound is
+    refused before any memory is allocated for it.
     """
-    return _SHA256_PREFIX + run_off_hub(bcrypt.hashpw, _prehash(password),
-                                        bcrypt.gensalt()).decode()
+    if not _argon2_cost_ok(stored):
+        return False
+    try:
+        return _ARGON2.verify(stored, secret)
+    except (VerificationError, ValueError):
+        return False
+
+
+def _password_bytes(password):
+    """The password as UTF-8, or None when it is not a string or is over MAX_PASSWORD_BYTES."""
+    if not isinstance(password, str):
+        return None
+    raw = password.encode("utf-8")
+    return raw if len(raw) <= MAX_PASSWORD_BYTES else None
+
+
+def hash_password(password):
+    """Hash a password as Argon2id (a PHC string; see the section note above).
+
+    Raises ValueError for a password over MAX_PASSWORD_BYTES, which no form can submit.
+    """
+    raw = _password_bytes(password)
+    if raw is None:
+        raise ValueError("password is not a string or is over %d bytes" % MAX_PASSWORD_BYTES)
+    return run_off_hub(_argon2_hash, raw)
+
+
+def _check_bcrypt(password, stored):
+    """Verify against one of the two bcrypt formats this panel wrote before Argon2id."""
+    if stored.startswith(_SHA256_PREFIX):
+        return run_off_hub(bcrypt.checkpw, _prehash(password),
+                           stored[len(_SHA256_PREFIX):].encode())
+    # Bcrypt over the raw password.
+    raw = password.encode("utf-8")
+    # Over 72 bytes against such a hash: whatever wrote it truncated to 72 (that is what bcrypt 4.x
+    # did; 5.0 raises instead), so compare the same 72 bytes rather than refusing. This is the line
+    # that lets an account stranded by the 4.x -> 5.0 upgrade sign in again — and it accepts
+    # nothing a 4.x panel would not have accepted from the same person.
+    return run_off_hub(bcrypt.checkpw, raw[:72], stored.encode())
 
 
 def check_password(password, password_hash):
-    """Verify a password against either hash format.
+    """Verify a password against any of the stored formats.
 
-    Returns False (never raises) if the stored hash is missing or malformed, so a bad DB row can't
-    500 the login.
+    Returns False (never raises) if the stored hash is missing or malformed, or the password is not
+    a string or is over MAX_PASSWORD_BYTES, so a bad DB row or request can't 500 the login.
     """
-    stored = (password_hash or "").strip()
-    if not stored:
+    stored = (password_hash or "").strip() if isinstance(password_hash, str) else ""
+    raw = _password_bytes(password)
+    if not stored or raw is None:
         return False
     try:
-        if stored.startswith(_SHA256_PREFIX):
-            return run_off_hub(bcrypt.checkpw, _prehash(password),
-                               stored[len(_SHA256_PREFIX):].encode())
-        # Legacy: bcrypt over the raw password.
-        raw = (password or "").encode("utf-8")
-        if len(raw) <= 72:
-            return run_off_hub(bcrypt.checkpw, raw, stored.encode())
-        # Over 72 bytes against a legacy hash: whatever wrote it truncated to 72 (that is what
-        # bcrypt 4.x did), so compare the same 72 bytes rather than refusing. This is the line
-        # that lets an account stranded by the 4.x -> 5.0 upgrade sign in again — and it accepts
-        # nothing a 4.x panel would not have accepted from the same person.
-        return run_off_hub(bcrypt.checkpw, raw[:72], stored.encode())
+        if stored.startswith(_ARGON2_PREFIX):
+            return run_off_hub(_argon2_verify, stored, raw)
+        return _check_bcrypt(password, stored)
     except (ValueError, TypeError):
         return False
 
 
 def needs_rehash(password_hash):
-    """True if the stored hash is the legacy format.
+    """True if the stored hash should be replaced with an Argon2id hash at the current parameters.
 
-    A caller can then quietly upgrade it after a successful sign-in. The password is unchanged, so
-    this is a re-encoding, not a reset.
+    That is any bcrypt-era hash, and an Argon2id hash written with other parameters. A caller can
+    then quietly upgrade it after a successful sign-in. The password is unchanged, so this is a
+    re-encoding, not a reset.
     """
-    return not (password_hash or "").startswith(_SHA256_PREFIX)
+    stored = password_hash or ""
+    if not stored.startswith(_ARGON2_PREFIX):
+        return True
+    try:
+        return _ARGON2.check_needs_rehash(stored)
+    except ValueError:
+        return True
 
 
-# A bcrypt hash of a random throwaway value. Comparing against it when a login's
-# username doesn't exist (or is inactive) makes that path spend the same time as a
-# real password check — bcrypt is deliberately slow, so skipping it would otherwise
-# leak, by timing, whether an account exists (username enumeration).
+def hash_backup_code(code):
+    """Argon2id hash of a normalised 2FA backup code, made off the hub like a password's."""
+    return run_off_hub(_argon2_hash, code.encode("utf-8"))
+
+
+def backup_code_matches(code, stored):
+    """Whether a normalised backup code matches one stored hash: Argon2id, or bcrypt from before.
+
+    Never raises. A bcrypt code is not rehashed: each is spent the first time it matches.
+    """
+    if not isinstance(stored, str) or not stored:
+        return False
+    raw = code.encode("utf-8")
+    try:
+        if stored.startswith(_ARGON2_PREFIX):
+            return run_off_hub(_argon2_verify, stored, raw)
+        return run_off_hub(bcrypt.checkpw, raw, stored.encode())
+    except (ValueError, TypeError):
+        return False
+
+
+# An Argon2id hash of a random throwaway value. Comparing against it when a login's username doesn't
+# exist (or is inactive) makes that path spend the same time as a real password check — hashing is
+# deliberately slow, so skipping it would otherwise leak, by timing, whether an account exists
+# (username enumeration).
 #
-# Computed LAZILY (a single bcrypt hash is ~400ms) so it doesn't add that to every panel
-# start/restart. init_auth() pre-warms it in the background, so it's ready before the first
-# login without either delaying startup or making that first login abnormally slow.
-_DUMMY_BCRYPT_HASH = None
+# Computed LAZILY so it doesn't add a hash to every panel start/restart. init_auth() pre-warms it in
+# the background, so it's ready before the first login without either delaying startup or making
+# that first login abnormally slow.
+_DUMMY_HASH = None
 
 
 def _dummy_hash():
-    global _DUMMY_BCRYPT_HASH
-    if _DUMMY_BCRYPT_HASH is None:
-        # hash_password, not a bare bcrypt call: the timing this exists to equalise must be the
-        # timing of the REAL path, prehash included.
-        _DUMMY_BCRYPT_HASH = hash_password(secrets.token_hex(16))
-    return _DUMMY_BCRYPT_HASH
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        # hash_password, not a bare argon2 call: the timing this exists to equalise must be the
+        # timing of the REAL path.
+        _DUMMY_HASH = hash_password(secrets.token_hex(16))
+    return _DUMMY_HASH
 
 
 def dummy_password_check(password):
-    """Run a throwaway bcrypt compare to equalize login timing for a nonexistent or inactive user.
+    """Run a throwaway compare to equalize login timing for a nonexistent or inactive user.
 
     Always returns False.
     """
@@ -286,7 +380,7 @@ _BACKUP_CODE_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 def generate_backup_codes(n=8, length=10):
     """Generate `n` human-friendly one-time 2FA backup codes, formatted xxxxx-xxxxx.
 
-    Returned in plaintext ONCE — only their bcrypt hashes are stored (User.set_backup_codes).
+    Returned in plaintext ONCE — only their Argon2id hashes are stored (User.set_backup_codes).
     """
     codes = []
     for _ in range(n):
@@ -302,7 +396,7 @@ def backup_code_shaped(code, length=10):
     dropped (the same normalisation User.use_backup_code compares with).
 
     The login's 2FA step fell back to the backup codes after EVERY wrong entry, and trying them is
-    one cost-12 bcrypt per stored code — about 2s of work for a mistyped six-digit TOTP, which
+    one password hash per stored code — wasted work for a mistyped six-digit TOTP, which
     can never match anyway: 0 and 1 are not in the alphabet and it is the wrong length.
     """
     norm = (code or "").strip().lower().replace("-", "").replace(" ", "")
@@ -808,10 +902,10 @@ def _warm():
 def init_auth(app):
     login_manager.init_app(app)
     app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
-    # Pre-compute the login-timing dummy hash (~400ms bcrypt) so it's ready before the first login
-    # WITHOUT adding it to startup or to the first failed-login timing. Run it on a real worker
+    # Pre-compute the login-timing dummy hash so it's ready before the first login WITHOUT adding
+    # it to startup or to the first failed-login timing. hash_password runs it on a real worker
     # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
-    # green thread would, since bcrypt never yields). Falls back to a daemon thread off eventlet.
+    # green thread would, since the hash never yields). Falls back to a daemon thread off eventlet.
     try:
         import eventlet
         eventlet.spawn_n(_warm)

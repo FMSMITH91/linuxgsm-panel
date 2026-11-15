@@ -6108,7 +6108,8 @@ check("suites: ...a walk is found by what its root name is bound to, with keywor
 # was installed — 4.x truncated SILENTLY where 5.0 raises — is refused at login now, with their
 # correct password reading as "wrong password".
 #
-# hash_password SHA-256s first, so bcrypt always sees 44 bytes and length stops mattering.
+# hash_password is Argon2id now, which reads its whole input (no 72-byte limit and no pre-hash);
+# the `sha256$<bcrypt>` format that fixed this before still verifies.
 from panel.security import auth as _auth_pw
 import bcrypt as _bcrypt_pw
 

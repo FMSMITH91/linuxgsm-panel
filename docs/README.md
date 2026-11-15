@@ -230,7 +230,7 @@ location / {
 ## Security
 
 - **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
-- **Passwords** bcrypt-hashed with a strength policy; logins are rate-limited. Optional **TOTP 2FA** with backup codes.
+- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in) with a strength policy; logins are rate-limited. Optional **TOTP 2FA** with backup codes.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Encryption at rest** — SSH credentials, emails and 2FA secrets are encrypted in `data/panel.db` (key in `data/cred_key`); `data/` is `chmod 700`.
 - **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict CSP and security headers, and input validation on anything that becomes an OS operation.
