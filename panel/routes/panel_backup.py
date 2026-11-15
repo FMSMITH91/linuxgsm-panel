@@ -348,10 +348,14 @@ def _back_up_one_now(app, server_id, gname, opts, born):
     if not g or not g.remote:
         return {"running": False, "ok": False, "msg": "server is no longer available",
                 "ts": time.time()}
-    ok, reason, was_skipped = run_game_backup(
+    # The server's databases are dumped into its files first, as on every other backup path
+    # (_shared._marked_backup); a dump that fails is said in the outcome and never stops the backup.
+    from panel.routes import databases as _dbr
+    db_note = _dbr.dump_for_backup(server_id, g.remote, g.short_name)
+    ok, reason, was_skipped = _dbr.with_note(run_game_backup(
         g.remote, g.short_name, g.lgsm_name, keep,
         game_type=g.game_type, port=g.port, force=force,
-        query_type=g.query_type)
+        query_type=g.query_type), db_note)
     if ok and not was_skipped and still_held(g):
         # Move this server's schedule clock, exactly as the scheduled path does.
         # record_game_backup is what game_backup_due measures against, and it was
@@ -412,6 +416,9 @@ def register(app):
     _register_game_backup_files(app)
     _grs.register(app)
     _bup.register(app)
+    # The Databases tab: its databases go into each game backup (_shared._marked_backup).
+    from panel.routes import databases as _dbr
+    _dbr.register(app)
     _register_game_backup_settings(app)
     _register_backup_overview(app)
     _register_panel_backups(app)

@@ -125,11 +125,12 @@ _SECTIONS134 = {
                  "cron-help", "cron-presets", "cron-explain", "cron-desc", "cron-msg", "cron-tbody"),
     "alerts": ("alerts-card", "alerts-body", "alerts-msg"),
     "mods": ("mods-card", "mods-list", "mods-body"),
+    "databases": ("db-card", "db-add", "db-list", "db-setup"),
 }
 _ACTIONS134 = {"saveConfig": "config", "saveGameCfg": "config", "saveRaw": "config",
                "doUpload": "files", "saveBkSchedule": "backups", "backupNow": "backups",
                "saveCron": "schedule", "cancelCronEdit": "schedule", "saveAlerts": "alerts",
-               "testAlert": "alerts", "loadMods": "mods"}
+               "testAlert": "alerts", "loadMods": "mods", "dbLoad": "databases", "dbSetup": "databases"}
 _files134 = {}
 try:
     from unit.part12 import P9_FILES as _FILE_USER134   # a file manager on host 1, not a superadmin
@@ -171,20 +172,20 @@ def _sf_misplaced134(page, want):
 
 
 _bad134 = _sf_misplaced134("admin", list(_SECTIONS134))
-check("files & config (superadmin): every control is inside the section its tab opens, and all six "
+check("files & config (superadmin): every control is inside the section its tab opens, and all seven "
       "sections have a tab", not _bad134, repr(_bad134))
 _a134 = _FP134.get("admin")
-check("files & config: the tabs and the sections are the same six, in the same order (no tab opening "
+check("files & config: the tabs and the sections are the same seven, in the same order (no tab opening "
       "nothing, no section no tab opens)",
       _a134 is not None and _a134.buttons == _a134.sections
-      == ["config", "files", "backups", "schedule", "alerts", "mods"],
+      == ["config", "files", "backups", "schedule", "alerts", "mods", "databases"],
       repr((_a134.buttons, _a134.sections) if _a134 else None))
 _first134 = {m.group(1): "display:none" in m.group(0)
              for m in _re134.finditer(r'<div [^>]*data-sfsub="([a-z]+)"[^>]*>', _files134.get("admin", (0, ""))[1])}
 check("files & config: Config shows from the first paint and every other section is hidden until opened "
       "(no section shifts the page in after load)",
       _first134 == {"config": False, "files": True, "backups": True, "schedule": True, "alerts": True,
-                    "mods": True}, repr(_first134))
+                    "mods": True, "databases": True}, repr(_first134))
 if "files" in _FP134:
     _f134 = _FP134["files"]
     check("files & config (a file manager): no Backups tab and no Backups card (a superadmin's), the "

@@ -58,6 +58,10 @@ DEFAULT_CONFIG = {
     # Write the panel's DEBUG records to data/debug.log (size-capped, owner-only) — for a test box
     # where a fault has to be traced. Read at start; off unless this is exactly true.
     "debug_log": False,
+    # The Databases tab (routes/databases.py): how many databases one game server may have, and how
+    # many connections each database's user may hold at once (a plugin's pool is about 10).
+    "db_max_per_server": 5,
+    "db_max_user_connections": 30,
 }
 
 

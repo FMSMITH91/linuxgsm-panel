@@ -67,10 +67,22 @@ document.addEventListener('click', function(e){
   var form = b.closest('form'); if(!form) return;
   var name = form.getAttribute('data-server-name') || '';
   var short = form.getAttribute('data-server-short') || '';
+  // The server's databases are deleted with it (routes/databases.py), so the dialog names them. Asked
+  // of the panel only (no host), and a viewer who may not list them gets the dialog without them.
+  var sid = /\/servers\/(\d+)\/delete$/.exec(form.getAttribute('action') || '');
+  var dbs = sid ? fetch((window.MOUNT || '') + '/api/server/' + sid[1] + '/databases?names=1', {cache: 'no-store'})
+    .then(function(r){ return r.ok ? r.json() : {}; }).then(function(d){ return (d && d.names) || []; })
+    .catch(function(){ return []; }) : Promise.resolve([]);
+  dbs.then(function(names){ _uninstallDialog(form, name, short, names); },
+           function(){ _uninstallDialog(form, name, short, []); });
+});
+function _uninstallDialog(form, name, short, names){
   confirmDialog({
     title:'Uninstall server', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Uninstall',
     body:tfHtml('Uninstall {name}? This permanently deletes the server, all its files, AND every backup it has — this cannot be undone.',
-                {name: {html: '<strong data-no-i18n>'+escapeHtml(name)+'</strong>'}}),
+                {name: {html: '<strong data-no-i18n>'+escapeHtml(name)+'</strong>'}})
+         + (names.length ? '\n' + tfHtml('Its databases are deleted too: {names}. A copy of each is kept on the host for 30 days.',
+                                          {names: names.join(', ')}) : ''),
     requireText: short,
     requireLabel:tf('Type the server’s username ({user}) to confirm:', {user: short}),
     // form.submit() is a NATIVE post: no fetch wrapper, so no X-CSRFToken header, so the hidden
@@ -79,7 +91,7 @@ document.addEventListener('click', function(e){
     // re-arms after every swap, and this re-arms the one form about to be submitted.
     onConfirm:function(){ if (window.ensureCsrfFields) window.ensureCsrfFields(form); form.submit(); }
   });
-});
+}
 
 window.onServersChanged = function(cb){
   var s = window.ensureSocket();

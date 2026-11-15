@@ -16,6 +16,7 @@ from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or, ip_address_or_none)
 from panel.core.panel_state import (forget_rows)
+from panel.routes import databases as _dbr
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
 from contextlib import contextmanager
 import logging
@@ -446,6 +447,8 @@ def _register_remote_delete_and_test(app):
             from panel.db.models import MetricSample
             db.session.execute(MetricSample.__table__.delete()
                                .where(MetricSample.server_id.in_(_doomed_ids)))
+        # ...and its databases' rows (the databases themselves stay on that machine).
+        _dbr.forget_remote(remote_id)
         # Delete group associations
         group_servers_table = db.Table(
             "group_servers", db.metadata, autoload_with=db.engine

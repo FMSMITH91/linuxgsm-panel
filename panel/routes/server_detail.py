@@ -1073,6 +1073,21 @@ def _restart_after_mods_update(app, gs, remote, action, rc):
                                row_label(gs, "name"), exc_info=True)
 
 
+def _db_dump_before(app, server_id, remote, short_name, action):
+    """Before LinuxGSM's own `backup` (the Backup action, a chat bot's /backup): the databases first.
+
+    The server's databases are dumped into its files in one call, so the archive carries them, as
+    on the panel's backup paths (_shared._marked_backup). A dump that fails or is refused is said in
+    the console; it never stops the backup.
+    """
+    if action != "backup":
+        return
+    from panel.routes import databases as _dbr
+    note = _dbr.dump_for_backup(server_id, remote, short_name)
+    if note:
+        _console_push(app, server_id, f"[panel] {action}: {note}")
+
+
 def _bg_action(app, gs, remote, action, on_done=None):
     """Run a long LinuxGSM command in the background (green thread).
 
@@ -1111,6 +1126,7 @@ def _bg_action(app, gs, remote, action, on_done=None):
                         log_action(None, f"{action}_complete", target=name, success=False,
                                    detail=detail[:300], server=claim_row(GameServer, server_id, born))
                         return
+                    _db_dump_before(_app, server_id, remote, short_name, action)
                     with _r41r_audit_raise(f"{action}_complete", name, (None, None), (server_id, born)):
                         out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname,
                                                  monitor=autostart)

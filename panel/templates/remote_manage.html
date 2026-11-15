@@ -1088,6 +1088,18 @@
 </div>
 {% endif %}
 
+{# Databases kept on this host after their game server was removed from the panel (routes/databases.py).
+   Hidden (d-none, which the tab switch leaves alone) until host_databases.js finds one. #}
+{% if db_tab().manage %}
+<div class="card mt-3 d-none" data-mtab="overview" id="host-db-card">
+  <div class="card-header"><i class="bi bi-database"></i> Databases with no game server</div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">These databases belonged to game servers that were removed from the panel. Delete one you no longer need: a copy is kept on the host for 30 days.</p>
+    <ul class="list-unstyled mb-0 d-flex flex-column gap-1" id="host-db-list"></ul>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
 {% block scripts %}
 {# Server-rendered values for remote_manage.js. Kept inline (and BEFORE it, so its top-level code can
@@ -1098,6 +1110,7 @@ var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 var REMOTE_NAME = {{ remote.name|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage.js') }}"></script>
+{% if db_tab().manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/host_databases.js') }}"></script>{% endif %}
 {# Loaded in this order on purpose: together they are the one script this page used to have,
    and later parts define functions the earlier ones call (always deferred and guarded). #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage_host.js') }}"></script>
