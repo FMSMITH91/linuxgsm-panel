@@ -7,6 +7,15 @@ gives no number for a persistent ("remember me") login; its "Expire and Max-Age 
 only advises non-persistent cookies where a login need not outlive the browser. Every value stays
 editable: the Settings page shows these ranges beside the fields and notes a value past them.
 
+Step-up (`step_up_minutes`, default 10, 0 = off): how long a sign-in or password confirmation lets the
+holder open a terminal, uninstall a server, restore a backup or change users and groups before the
+password is asked for again (panel/security/account_guard.py). No OWASP page gives a number: the
+Session Management and Authentication Cheat Sheets ("Reauthentication After Risk Events") and the
+Transaction Authorization Cheat Sheet (2.9, "a limited time period") name none, and ASVS 5.0 V7.1.1
+points at NIST SP 800-63B for re-authentication. NIST SP 800-63B-4, 2.3.3 (AAL3, read 2026-11-15):
+"The inactivity timeout SHOULD be no more than 15 minutes", the strictest freshness it sets, used here
+for the high-risk actions; past it Settings notes the value, and saves it.
+
 Config keys: `session_idle_minutes` (new installs: 30) and `session_absolute_hours` (8). An install
 from before they existed carries `session_lifetime_hours`, read as that many hours of idle time, and
 an absolute limit of the longer of 8 hours and that idle time (the rule it already had), so an upgrade
@@ -30,6 +39,9 @@ REMEMBER_MAX_DAYS = 90
 # Settings page says "Longer than OWASP recommends", and saves anyway.
 OWASP_IDLE_MAX_MINUTES = 30
 OWASP_ABSOLUTE_MAX_HOURS = 8
+STEP_UP_DEFAULT_MINUTES = 10
+STEP_UP_MAX_MINUTES = 1440              # 0 (off) .. one day
+NIST_STEP_UP_MAX_MINUTES = 15           # SP 800-63B-4 2.3.3; OWASP gives no number (docstring above)
 
 
 def _num(value, default, lo, hi):
@@ -69,6 +81,12 @@ def remember_days(cfg):
                 REMEMBER_MIN_DAYS, REMEMBER_MAX_DAYS)
 
 
+def step_up_minutes(cfg):
+    """Minutes a sign-in or confirmation covers the high-risk actions (0 switches step-up off)."""
+    return _num(cfg.get("step_up_minutes", STEP_UP_DEFAULT_MINUTES), STEP_UP_DEFAULT_MINUTES, 0,
+                STEP_UP_MAX_MINUTES)
+
+
 def lifetimes(cfg):
     """(idle seconds, absolute seconds, remember timedelta) for `cfg`."""
     return idle_minutes(cfg) * 60, absolute_hours(cfg) * 3600, timedelta(days=remember_days(cfg))
@@ -80,15 +98,18 @@ def apply(app, cfg):
     app.config["PERMANENT_SESSION_LIFETIME"] = idle
     app.config["SESSION_ABSOLUTE_SECONDS"] = absolute
     app.config["REMEMBER_COOKIE_DURATION"] = remember
+    if "step_up_minutes" in cfg:        # a save without the field leaves the window as it was
+        app.config["STEP_UP_MINUTES"] = step_up_minutes(cfg)
 
 
 def form_values(cfg):
-    """The three Settings fields, with whether each is past OWASP's range."""
-    idle, absolute = idle_minutes(cfg), absolute_hours(cfg)
+    """The four Settings fields, with whether each is outside its recommended range."""
+    idle, absolute, step_up = idle_minutes(cfg), absolute_hours(cfg), step_up_minutes(cfg)
     return {"session_idle_minutes": idle, "session_absolute_hours": absolute,
-            "remember_days": remember_days(cfg),
+            "remember_days": remember_days(cfg), "step_up_minutes": step_up,
             "idle_past_owasp": idle > OWASP_IDLE_MAX_MINUTES,
-            "absolute_past_owasp": absolute > OWASP_ABSOLUTE_MAX_HOURS}
+            "absolute_past_owasp": absolute > OWASP_ABSOLUTE_MAX_HOURS,
+            "step_up_past_nist": step_up > NIST_STEP_UP_MAX_MINUTES, "step_up_off": step_up == 0}
 
 
 def parse_form(form):
@@ -100,4 +121,18 @@ def parse_form(form):
     if idle > absolute * 60:
         return None, ("The idle timeout cannot be longer than the absolute session limit. Shorten the "
                       "idle timeout or lengthen the limit.")
-    return {"session_idle_minutes": idle, "session_absolute_hours": absolute, "remember_days": days}, None
+    out = {"session_idle_minutes": idle, "session_absolute_hours": absolute, "remember_days": days}
+    if "step_up_minutes" in form:       # absent (an older form): the stored window is kept
+        out["step_up_minutes"] = step_up_minutes(form)
+    return out, None
+
+
+_AUDITED = (("session_idle_minutes", "idle timeout %s min"), ("session_absolute_hours", "absolute limit %s h"),
+            ("remember_days", "remember me %s d"), ("step_up_minutes", "step-up %s min"))
+
+
+def change_note(cfg, saved):
+    """The audit detail for a save: each session value `saved` changes, old -> new ("" if none)."""
+    before = form_values(cfg)
+    return "; ".join(label % ("%s -> %s" % (before[key], saved[key])) for key, label in _AUDITED
+                     if key in saved and saved[key] != before[key])

@@ -15,6 +15,29 @@
     if(s < 86400) return tf('{n}h ago', {n: Math.floor(s/3600)});
     return tf('{n}d ago', {n: Math.floor(s/86400)});
   }
+  // When a sign-in ends, in the viewer's own zone: the time alone when that is today, else the date too.
+  function at(iso){
+    var d = new Date(iso);
+    if(Number.isNaN(d.getTime())) return '';
+    var opts = {hour:'numeric', minute:'2-digit'};
+    if(d.toDateString() !== new Date().toDateString()){ opts.month = 'short'; opts.day = 'numeric'; }
+    return d.toLocaleString(undefined, opts);
+  }
+  function span(m){
+    if(m >= 2880 && m % 1440 === 0) return tf('{n} d', {n: m / 1440});
+    if(m >= 120 && m % 60 === 0) return tf('{n} h', {n: m / 60});
+    return tf('{n} min', {n: m});
+  }
+  // What kind of sign-in a row is and when it ends: `ends` and `idle_minutes` are the server's own
+  // expiry rule for that row (UserSession.signs_out_at / idle_signout_minutes), not a copy of it.
+  function ending(s){
+    if(!s.ends) return '';
+    var when = at(s.ends), idle = s.idle_minutes;
+    if(s.remember && idle) return tf('Remembered · signs out after {idle} idle or at {when}', {idle: span(idle), when: when});
+    if(s.remember) return tf('Remembered · signs out {when}', {when: when});
+    if(idle) return tf('Signs out after {idle} idle or at {when}', {idle: span(idle), when: when});
+    return tf('Signs out {when}', {when: when});
+  }
   function row(s){
     var wrap = document.createElement('div');
     wrap.className = 'd-flex justify-content-between align-items-center gap-2 border rounded px-2 py-2 mb-2';
@@ -35,6 +58,15 @@
       btn.className = 'btn btn-outline-danger btn-sm text-nowrap'; btn.textContent = 'Revoke';
       btn.addEventListener('click', function(){ revoke(s.id, btn); });
       wrap.appendChild(btn);
+    }
+    // The end on its own line across the whole row, under the Revoke button too, so it does not
+    // wrap in the narrower column beside it on a phone.
+    var end = ending(s);
+    if(end){
+      wrap.classList.add('flex-wrap'); wrap.style.setProperty('row-gap', '0', 'important');   // over .gap-2's !important
+      var ends = document.createElement('div'); ends.className = 'text-secondary w-100';
+      ends.style.fontSize = '.72rem'; ends.textContent = end;
+      wrap.appendChild(ends);
     }
     return wrap;
   }

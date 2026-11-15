@@ -95,8 +95,21 @@
                      class="form-control form-control-sm" value="{{ settings.remember_days }}">
               <div class="small text-secondary mt-1">OWASP gives no number; keep it short.</div>
             </div>
+            {# The step-up window (account_guard.step_up_needed). OWASP names no number; NIST SP
+               800-63B-4 2.3.3 (AAL3) re-authenticates after 15 minutes at most (session_policy). #}
+            <div class="col-6">
+              <label class="form-label small mb-1" for="s-stepup">Ask for the password again after (minutes)</label>
+              <input type="number" id="s-stepup" name="step_up_minutes" min="0" max="1440"
+                     class="form-control form-control-sm" value="{{ settings.step_up_minutes }}"
+                     data-owasp-max="15" data-off-note="s-stepup-off">
+              <div class="small text-secondary mt-1">OWASP gives no number; NIST: 15 min at most. 0 = off.</div>
+              <div class="small text-warning{% if not settings.step_up_past_nist %} d-none{% endif %}" id="s-stepup-note">Longer than NIST recommends.</div>
+              <div class="small text-warning{% if not settings.step_up_off %} d-none{% endif %}" id="s-stepup-off">Off: these actions will not ask for the password again.</div>
+            </div>
           </div>
-          <div class="small text-secondary mt-1">A login ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.</div>
+          <div class="small text-secondary mt-1">A normal sign-in ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.</div>
+          <div class="small text-secondary" id="s-remember-rule">{{ remember_rule() }}</div>
+          <div class="small text-secondary">The password is asked again before a terminal, an uninstall, a backup restore or a user or group change.</div>
 
           <div class="form-check mt-3">
             <input class="form-check-input" type="checkbox" id="s-require-2fa" name="require_2fa"

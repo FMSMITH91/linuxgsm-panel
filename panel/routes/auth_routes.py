@@ -620,14 +620,7 @@ def _register_session_list(app):
                 cur = getattr(current_user, "_sid", None)
         rows = (UserSession.query.filter_by(user_id=current_user.id)
                 .order_by(UserSession.last_seen.desc()).all())
-        return jsonify({"sessions": [{
-            "id": r.id,
-            "device": _session_label(r.user_agent),
-            "ip": r.ip or "",
-            "created": (r.created_at.isoformat() + "Z") if r.created_at else None,
-            "last_seen": (r.last_seen.isoformat() + "Z") if r.last_seen else None,
-            "current": (r.sid == cur),
-        } for r in rows]})
+        return jsonify({"sessions": [_session_entry(r, cur) for r in rows]})
 
     @app.route("/api/account/sessions/<int:sess_id>/revoke", methods=["POST"])
     @login_required
@@ -649,6 +642,30 @@ def _register_session_list(app):
         if is_current:
             logout_user()
         return jsonify({"success": True, "current": is_current})
+
+
+def _utc_iso(value):
+    """A stored naive-UTC time as ISO text with its Z (the browser reads it as UTC), or None."""
+    return (value.isoformat() + "Z") if value else None
+
+
+def _session_entry(r, cur):
+    """One Active Sessions row: the device, and what kind of sign-in it is and when it ends.
+
+    `ends` and `idle_minutes` come from the row's own signs_out_at / idle_signout_minutes, the
+    rule is_expired and the sweep apply, so the list cannot promise a time the server does not keep.
+    """
+    return {
+        "id": r.id,
+        "device": _session_label(r.user_agent),
+        "ip": r.ip or "",
+        "created": _utc_iso(r.created_at),
+        "last_seen": _utc_iso(r.last_seen),
+        "current": (r.sid == cur),
+        "remember": bool(r.remember),
+        "ends": _utc_iso(r.signs_out_at()),
+        "idle_minutes": r.idle_signout_minutes(),
+    }
 
 
 # One POST to /login: the client address, its throttle bucket (an IPv6 client is counted by its

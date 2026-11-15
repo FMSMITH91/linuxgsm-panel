@@ -1342,7 +1342,29 @@ class UserSession(db.Model):
         last = self.last_seen or self.created_at
         if last is not None and (now - last).total_seconds() > self.idle_limit():
             return True
-        return self.created_at is not None and (now - self.created_at).total_seconds() > self.absolute_limit()
+        end = self.signs_out_at()
+        return end is not None and now > end
+
+    def signs_out_at(self):
+        """The moment this login ends however active it is (sign-in + absolute_limit), or None.
+
+        is_expired and the Account page's Active Sessions list both read it, so the time a row
+        shows is the time the server ends it.
+        """
+        if self.created_at is None:
+            return None
+        from datetime import timedelta
+        return self.created_at + timedelta(seconds=self.absolute_limit())
+
+    def idle_signout_minutes(self):
+        """Minutes without use that end this login before signs_out_at, or None when idling cannot.
+
+        The idle limit less the registry's last_seen grace, which is the cookie's own lifetime. A
+        "remember me" login is signed straight back in by its remember cookie, so its idle limit
+        reaches its absolute one and only the absolute end applies.
+        """
+        idle = self.idle_limit() - SESSION_LAST_SEEN_GRACE
+        return int(round(idle / 60.0)) if idle < self.absolute_limit() else None
 
 
 # `last_seen` is only written every ~5 minutes (the throttle in load_user), so it can lag real
