@@ -420,6 +420,7 @@ def _proved(gs, ep, remote, target, name, secret, client):
     if kind == "denied" and seen and seen != client:
         return False, i18n.Sentence(_dbs.S_NET_SEEN, host=gs.remote.name, seen=seen, client=client)
     text = {"unreachable": _dbs.S_NET_UNREACHABLE, "denied": _dbs.S_NET_DENIED, "tls": _dbs.S_NET_TLS,
+            "keyauth": _dbs.S_NET_KEY,
             "noclient": _dbs.S_NO_CLIENT}.get(kind, _dbs.S_NET_ERROR)
     return False, i18n.Sentence(text, **vals) if "{" in text else text
 
@@ -480,12 +481,12 @@ def _delete_answer(gs, r):
     """POST {"confirm": name}: the database and its user dropped (a dump kept on the host first)."""
     if not _confirmed(r):
         return _say(400, "Type the database's name to confirm.")
-    remote, hd = _net.admin_target(gs.remote, _host_row(gs.remote_id), r)
-    if remote is None:
+    local = _host_row(gs.remote_id)
+    if _net.admin_target(gs.remote, local, r)[0] is None:
         return _say(409, _NOT_READY)
     name = r.name
     with _r20b_audit_on_raise("db_delete", target=gs.name, detail=name, server=gs):
-        ok, said = _dbs.drop(remote, hd, gs.short_name, name)
+        ok, said = drop_row(gs.remote, local, r, gs.short_name)
     if ok:
         db.session.delete(r)
         db.session.commit()
@@ -721,12 +722,12 @@ def _orphan_delete_answer(remote, db_id):
         return _say(404, _NO_SUCH)
     if not _confirmed(r):
         return _say(400, "Type the database's name to confirm.")
-    where, hd = _net.admin_target(remote, _host_row(remote.id), r)
-    if where is None:
+    local = _host_row(remote.id)
+    if _net.admin_target(remote, local, r)[0] is None:
         return _say(409, _NOT_READY)
     name = r.name
     with _r20b_audit_on_raise("db_delete", target=remote.name, detail=name, remote=remote):
-        ok, said = _dbs.drop(where, hd, None, name)
+        ok, said = drop_row(remote, local, r, None)
     if ok:
         db.session.delete(r)
         db.session.commit()
@@ -781,9 +782,49 @@ def _dump_rows(remote, account, hd, rows):
 
 
 def _dump_calls(hd, rows):
-    """(target, rows) per dump call: the host's own databases together, each one on another machine alone."""
+    """(target, rows) per dump call.
+
+    Root over the socket dumps the host's own databases together; with a stored admin login each is
+    dumped alone, signed in as its own account (a narrow login can't read another account's stored
+    routines), and so is each one on another machine.
+    """
     local = [r for r in rows if r.endpoint_id is None]
-    return ([(hd, local)] if local else []) + [(_net.game_view(r), [r]) for r in rows if r.endpoint_id is not None]
+    if hd is not None and hd.auth_mode == "login":
+        mine = [(_dbs.target_view(hd, login=(r.name, r.secret)), [r]) for r in local]
+    else:
+        mine = [(hd, local)] if local else []
+    return mine + [(_net.game_view(r), [r]) for r in rows if r.endpoint_id is not None]
+
+
+def own_view(local_hd, r):
+    """The target a dump of `r` signs in with as its own account on its game host; None where root's socket can."""
+    if r.endpoint_id is not None:
+        return _net.game_view(r)
+    if local_hd is not None and local_hd.auth_mode == "login":
+        return _dbs.target_view(local_hd, login=(r.name, r.secret))
+    return None
+
+
+S_NO_COPY = "No copy of {name} could be kept, so it was not deleted."
+
+
+def drop_row(gs_remote, local_hd, r, account):
+    """Delete database `r` where its accounts are made, its archive copy kept first: (ok, sentence).
+
+    With root over the socket the drop keeps the copy itself. Otherwise the copy is dumped on the
+    game host by the database's own account (least privilege: an admin login with fewer rights than
+    root can't read the stored routines of another account), and the drop is told it was kept.
+    """
+    remote, target = _net.admin_target(gs_remote, local_hd, r)
+    if remote is None:
+        return False, i18n.Sentence("no database server")
+    own = own_view(local_hd, r)
+    if own is not None:
+        ok, _said = _dbs.dump(gs_remote, own, "archive", None, [r.name])
+        if not ok:
+            return False, i18n.Sentence(S_NO_COPY, name=r.name)
+        target = _dbs.copy_kept(target)
+    return _dbs.drop(remote, target, account, r.name)
 
 
 def _dump_group(remote, account, target, group):
@@ -821,8 +862,7 @@ def drop_for_uninstall(remote, server_id):
     for r in rows:
         name = r.name
         try:
-            where, target = _net.admin_target(remote, hd, r)
-            ok, said = _dbs.drop(where, target, None, name) if where is not None else (False, "")
+            ok, said = drop_row(remote, hd, r, None)
         except Exception:
             ok, said = False, _log_and_generic("database drop failed")
         if ok:

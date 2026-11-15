@@ -138,6 +138,16 @@ def _client_args(hostdb):
     return [client] if client else []
 
 
+def _drop_args(hostdb):
+    """db-drop's optional arguments: the account host, then `kept` when a copy was already made."""
+    return _client_args(hostdb) + (["kept"] if getattr(hostdb, "copy_kept", False) else [])
+
+
+def copy_kept(hostdb):
+    """`hostdb` as a drop target whose copy was already kept (by the database's own account): no second dump."""
+    return SimpleNamespace(**dict(vars(target_view(hostdb, client=getattr(hostdb, "client", None))), copy_kept=True))
+
+
 def target_view(hostdb, client=None, login=None, address=None):
     """`hostdb` as a verb target that makes accounts for `client`, signs in with `login`, at `address`.
 
@@ -635,7 +645,7 @@ def drop(remote, hostdb, account, name):
     del account
     with db_lock(remote):
         rc, _out, refused = _admin_verb(remote, hostdb, "db-drop", [hostdb.flavor, _auth(hostdb), name]
-                                        + _client_args(hostdb))
+                                        + _drop_args(hostdb))
     if refused:
         return False, S_LOGIN_REFUSED
     if rc == 3:
@@ -649,6 +659,11 @@ def drop(remote, hostdb, account, name):
 # handshake) and for "this server takes TLS connections only" (MySQL 3159, MariaDB 4036).
 _UNREACHABLE_MARKS = ("ERROR 2002", "ERROR 2003", "ERROR 2013")
 _TLS_MARKS = ("ERROR 3159", "ERROR 4036")
+# ...and "this password type wants TLS or the server's key" (2061, caching_sha2_password).
+_KEY_MARKS = _priv.DB_KEY_ERRORS
+# MySQL 8: the account is the definer of an event or routine, so a login without SET_USER_ID may not
+# rename or drop it (ER_CANNOT_USER_REFERENCED_AS_DEFINER).
+_DEFINER_MARKS = ("ERROR 4006",)
 _SEEN_RE = re.compile(r"Access denied for user '[^']*'@'([0-9A-Fa-f:.]{2,45})'")
 S_NET_UNREACHABLE = ("{host} can't reach the database server at {address}, port {port}. Check that it listens on "
                      "that address and that its firewall lets {host} in over Tailscale; the panel changes neither.")
@@ -656,14 +671,21 @@ S_NET_DENIED = "The database server refused the new account from {host}."
 S_NET_SEEN = "The database server sees {host} as {seen}, not {client}."
 S_NET_TLS = "This database server only accepts TLS connections; the panel can use it over Tailscale only without TLS."
 S_NET_ERROR = "The database server could not be reached from {host}."
+S_NET_KEY = ("The database server would not take this login's password without TLS (caching_sha2_password, error "
+             "2061), and it did not send its public key. Make the login with mysql_native_password, or let the "
+             "server hand out its key.")
+S_REHOST_DEFINER = ("MySQL refused to move the account of {name}: it defines an event or a stored routine in its "
+                    "database (error 4006), which only a login with SET_USER_ID may move. Nothing was changed.")
 
 
 def _net_kind(rc, out):
-    """'ok', 'noclient', 'unreachable', 'tls', 'denied' or 'error' for a sign-in from a game host."""
+    """'ok', 'noclient', 'unreachable', 'tls', 'keyauth', 'denied' or 'error' for a sign-in from a game host."""
     if rc == 0:
         return "ok"
     if rc == 127:
         return "noclient"
+    if any(m in out for m in _KEY_MARKS):
+        return "keyauth"
     if any(m in out for m in _TLS_MARKS) or "secure transport" in out.lower():
         return "tls"
     if any(m in out for m in _UNREACHABLE_MARKS):
@@ -699,7 +721,7 @@ def endpoint_check(remote, address, port, user, pw):
     if rc == 127:
         return "noclient", {}
     words = out.split()
-    return next((w for w in ("unreachable", "tls") if w in words), "unreadable"), {}
+    return next((w for w in ("unreachable", "keyauth", "tls") if w in words), "unreadable"), {}
 
 
 def sign_in_check(remote, hostdb, name, pw):
@@ -722,8 +744,11 @@ def rehost(remote, hostdb, name, old, new):
     """Move `name`'s account from game-host address `old` to `new`: (ok, sentence)."""
     with db_lock(remote):
         rc, _out, refused = _admin_verb(remote, hostdb, "db-rehost", [hostdb.flavor, _auth(hostdb), name, old, new])
+    _out = _out or ""
     if refused:
         return False, S_LOGIN_REFUSED
+    if rc != 0 and any(m in _out for m in _DEFINER_MARKS):
+        return False, i18n.Sentence(S_REHOST_DEFINER, name=name)
     return _sentence(rc, "The account of {name} now signs in from {new}.",
                      "The database server did not move the account of {name}.", name=name, new=new)
 

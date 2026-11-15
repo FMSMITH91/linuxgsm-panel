@@ -57,6 +57,7 @@ _VERDICTS = {
                    "address and that its firewall lets {host} in over Tailscale; the panel changes neither.",
     "tls": "This database server only accepts TLS connections; the panel can use it over Tailscale only without TLS.",
     "noclient": "{host} has no database client.",
+    "keyauth": _dbs.S_NET_KEY,
 }
 
 

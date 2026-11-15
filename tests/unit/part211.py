@@ -519,3 +519,108 @@ _lst211 = [_net211._listens_on({"listeners": [a]}, "100.64.7.8")
 eq("databases remote: a server listening on every address (0.0.0.0, ::, *) or on the tailnet address itself "
    "is reachable there; loopback, another address or an unparsable listener is not",
    _lst211, [True, True, True, True, False, False, False, False])
+
+# ── 5. the test box's findings: a dead address, MySQL 8 passwords, routines, definers ─────────────
+_NET211 = "tcp3306@100.64.0.5"
+check("databases verbs: a tailnet sign-in gives up after 10 s (--connect-timeout), asks a MySQL 8 server for its "
+      "key, and keeps TLS off; a sign-in on 127.0.0.1 gets none of them; both twins alike",
+      all(o in _priv211.db_conn_net(_NET211) for o in ("--connect-timeout=10", "--loose-get-server-public-key",
+                                                         "--loose-skip-ssl"))
+      and not any(o.startswith(("--connect-timeout", "--loose")) for o in _priv211.db_conn_net("tcp3306"))
+      and _helper.db_conn_net(_NET211) == _priv211.db_conn_net(_NET211)
+      and _helper.db_conn_net("tcp3306") == _priv211.db_conn_net("tcp3306"), repr(_priv211.db_conn_net(_NET211)))
+check("databases verbs: the remote rendering's tailnet sign-in carries the timeout and the key option too",
+      all(o in _priv211._db_conn_sh(_NET211) for o in ("--connect-timeout=10", "--loose-get-server-public-key"))
+      and "connect-timeout" not in _priv211._db_conn_sh("tcp3306"), _priv211._db_conn_sh(_NET211))
+_E2061 = ("ERROR 2061 (HY000): Authentication plugin 'caching_sha2_password' reported error: Authentication "
+          "requires secure connection.")
+eq("databases verbs: ERROR 2061 (a caching_sha2 password without TLS or the server's key) is its own answer, not "
+   "'did not answer', in the helper, privileged.py and the remote shell",
+   (_helper.db_failed_word(_E2061), _priv211.db_failed_word(_E2061),
+    '*"ERROR 2061"*) echo keyauth; exit 1;;' in _priv211.remote_command("db-admin-check", ["mysql", _NET211]),
+    _dbs211._net_kind(1, _E2061)), ("keyauth", "keyauth", True, "keyauth"))
+eq("databases verbs: a database is dropped before its accounts (MySQL 8 won't drop an event's definer first), in "
+   "both twins", [_priv211.db_sql_drop("gs12_lp").splitlines()[0], _helper.db_sql_drop("gs12_lp", "100.70.1.2")
+                  == _priv211.db_sql_drop("gs12_lp", "100.70.1.2")], ["DROP DATABASE IF EXISTS `gs12_lp`;", True])
+_kept_sh211 = _priv211.remote_command("db-drop", ["mysql", "tcp3306", "gs12_lp", "kept"])
+_full_sh211 = _priv211.remote_command("db-drop", ["mysql", "tcp3306", "gs12_lp"])
+_hd_calls211 = []
+_saved_h211 = (_helper._db_dump_archive, _helper._db_run)
+try:
+    _helper._db_dump_archive = lambda sess, names: (_hd_calls211.append(("archive", list(names))), 0)[1]
+    _helper._db_run = lambda sess, sql: (_hd_calls211.append(("sql", sql.split()[0:2])), (0, "", ""))[1]
+    _sess211 = {"secrets": [], "flavor": "mysql"}
+    _helper._db_drop(_sess211, ["mysql", "tcp3306", "gs12_lp", "kept"])
+    _R211["helper_kept"] = list(_hd_calls211)
+    _hd_calls211.clear()
+    _helper._db_drop(_sess211, ["mysql", "tcp3306", "gs12_lp", "100.70.1.2"])
+    _R211["helper_full"] = list(_hd_calls211)
+finally:
+    _helper._db_dump_archive, _helper._db_run = _saved_h211
+check("databases verbs: db-drop told the copy is kept makes no dump of its own (helper and remote rendering), and "
+      "without it still dumps first",
+      _R211.get("helper_kept") == [("sql", ["DROP", "DATABASE"])]
+      and _R211.get("helper_full") == [("archive", ["gs12_lp"]), ("sql", ["DROP", "DATABASE"])]
+      and "dump1" not in _kept_sh211 and "dump1" in _full_sh211,
+      repr((_R211.get("helper_kept"), _R211.get("helper_full"))))
+_rp_saved211 = _core211.run_privileged
+_core211.run_privileged = _fake_rp211
+try:
+    _ANS211["db-rehost"] = ("ERROR 4006 (HY000): Operation RENAME USER failed for 'gs1_lp'@'100.70.1.2' as it is "
+                            "referenced as a definer account in an event.", "", 1)
+    _rh211 = _dbs211.rehost(_NS211(id=1), _NS211(flavor="mysql", auth_mode="socket", port=3306, native_ok=True),
+                            "gs1_lp", "100.70.1.2", "100.70.1.3")
+    _ANS211["db-admin-check"] = ("keyauth\n", "", 1)
+    _R211["ep_key"] = _dbs211.endpoint_check(_NS211(id=1), "100.64.0.5", 3306, "panel", "Pw211x")[0]
+finally:
+    _core211.run_privileged = _rp_saved211
+check("databases remote: MySQL refusing to move a definer account (4006) is said as such, nothing changed",
+      _rh211[0] is False and "4006" in str(_rh211[1]) and "Nothing was changed" in str(_rh211[1]), repr(_rh211))
+check("databases remote: an endpoint check answered keyauth reads keyauth, and the choice route words it",
+      _R211.get("ep_key") == "keyauth" and "2061" in _net211._VERDICTS.get("keyauth", ""), repr(_R211.get("ep_key")))
+
+# The copy before a delete, and a backup's dumps, with a stored admin login: each database's own account.
+_C5 = []
+_SID5_211 = None
+try:
+    _p9_arm(who="part211")
+    for _n211 in ("dump", "drop"):
+        _p9_patch(_dbs211, _n211, (lambda name: lambda remote, hostdb, *a: (
+            _C5.append((name, getattr(remote, "id", None), _dbs211._auth(hostdb), getattr(hostdb, "admin_user", None),
+                        bool(getattr(hostdb, "copy_kept", False))) + a), (True, ""))[1])(_n211))
+    _p9_patch(_dbr211, "game_account_write_refusal", lambda remote, user, **k: None)
+    _SID5_211 = _p9_new_server(P9_HOST, "p211w", "pmc", 25567, name="p211 login")
+    with _p9.app_context():
+        _db211.session.add(_HD211(remote_id=P9_HOST, flavor="mysql", version="8.0.46", auth_mode="login", port=3306,
+                                  admin_user="linuxgsm_panel", admin_secret=_enc211("Zscoped211pw")))
+        _db211.session.add_all([_GD211(remote_id=P9_HOST, game_server_id=_SID5_211, name="gs%d_a" % _SID5_211,
+                                       secret=_enc211(_PW211)),
+                                _GD211(remote_id=P9_HOST, game_server_id=_SID5_211, name="gs%d_b" % _SID5_211,
+                                       secret=_enc211(_PW211))])
+        _db211.session.commit()
+        _R211["login_backup_note"] = _dbr211.dump_for_backup(_SID5_211, _db211.session.get(_RS211, P9_HOST), "p211w")
+        _ida211 = _GD211.query.filter_by(name="gs%d_a" % _SID5_211).first().id
+    _R211["login_backup"] = [c for c in _C5 if c[0] == "dump"]
+    _C5.clear()
+    _r211 = _p9_client(P9_ADMIN).post("/api/server/%d/databases/%d/delete" % (_SID5_211, _ida211),
+                                      json={"confirm": "gs%d_a" % _SID5_211})
+    _R211["login_delete"] = (_r211.status_code, list(_C5))
+finally:
+    _p9_restore_all()
+    with _p9.app_context():
+        if _SID5_211 is not None:
+            _GD211.query.filter_by(game_server_id=_SID5_211).delete()
+        _HD211.query.filter_by(remote_id=P9_HOST).delete()
+        _db211.session.commit()
+    if _SID5_211 is not None:
+        _p9_delete_server(_SID5_211)
+_a5, _b5 = "gs%d_a" % (_SID5_211 or 0), "gs%d_b" % (_SID5_211 or 0)
+eq("databases login mode: a backup dumps each database signed in as its own account (a narrow admin login can't "
+   "read another account's routines), one call each",
+   [c[1:] for c in _R211.get("login_backup", [])],
+   [(P9_HOST, "tcp3306", _a5, False, "game", "p211w", [_a5]), (P9_HOST, "tcp3306", _b5, False, "game", "p211w", [_b5])])
+eq("databases login mode: a delete keeps the copy first as the database's own account, then the admin login drops "
+   "it without dumping again",
+   (_R211.get("login_delete", (0, []))[0], [c[:5] + c[5:6] for c in _R211.get("login_delete", (0, []))[1]]),
+   (200, [("dump", P9_HOST, "tcp3306", _a5, False, "archive"), ("drop", P9_HOST, "tcp3306", "linuxgsm_panel", True, "p211w")]))
+check("part211: section 5 reached no real transport", len(_P9_TRIPPED) == _trips211, repr(_P9_TRIPPED[_trips211:][:4]))

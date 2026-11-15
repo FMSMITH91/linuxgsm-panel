@@ -2075,6 +2075,8 @@ DB_NO_SERVER_ERRORS = ("ERROR 2002",)
 # the handshake) and "it takes TLS connections only" (MySQL 3159, MariaDB 4036).
 DB_UNREACHABLE_ERRORS = ("ERROR 2002", "ERROR 2003", "ERROR 2013")
 DB_TLS_ERRORS = ("ERROR 3159", "ERROR 4036")
+# ...and "this password type needs TLS or the server's key" (2061, caching_sha2_password).
+DB_KEY_ERRORS = ("ERROR 2061",)
 # Which verbs carry a password in the document, and where each verb's auth argument is.
 DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import"})
 DB_AUTH_ARG = {"db-create": 1, "db-password": 1, "db-sizes": 1, "db-dump": 1, "db-drop": 1,
@@ -2088,6 +2090,14 @@ DB_NET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
 # no other kind is accepted. `loose-` makes the client that does not know an option skip it
 # (MariaDB's client knows skip-ssl, MySQL's ssl-mode).
 DB_NET_TLS_OFF = ("--loose-skip-ssl", "--loose-ssl-mode=DISABLED")
+# ...and, over the same tunnel only, the server's RSA public key for a caching_sha2_password login
+# (MySQL 8.0+). Without TLS, MySQL's client refuses that login (ERROR 2061) until the server has
+# cached the password; asking the server for its key is safe here because WireGuard has already
+# authenticated the machine at the other end. MariaDB's client skips the `loose-` option.
+DB_NET_KEY = ("--loose-get-server-public-key",)
+# A tailnet server that does not answer (a dropped port, a node that is off) is given up on after
+# 10 seconds and said as such, well inside the verb's own timeout.
+DB_NET_CONNECT = ("--connect-timeout=10",)
 
 
 def _db_name(s):
@@ -2136,7 +2146,23 @@ def db_net_target(auth):
 def db_conn_net(auth):
     """The client's TCP options for a `tcp...` sign-in: host, port, and TLS off for a tailnet server."""
     port, addr = db_net_target(auth)
-    return ["--protocol=tcp", "--host=" + addr, "--port=" + port] + (list(DB_NET_TLS_OFF) if "@" in auth else [])
+    net = list(DB_NET_CONNECT + DB_NET_TLS_OFF + DB_NET_KEY) if "@" in auth else []
+    return ["--protocol=tcp", "--host=" + addr, "--port=" + port] + net
+
+
+def db_drop_extra(s):
+    """One of db-drop's optional arguments: the account host (a tailnet address), or `kept`.
+
+    `kept`: the caller already dumped the database into the archive, signed in as its own account
+    (a login with fewer rights than root can't read its stored routines), so no second dump is made.
+    """
+    return "kept" if s == "kept" else db_client_host(s)
+
+
+def db_drop_opts(extras):
+    """(client host or None, kept) from db-drop's optional arguments."""
+    hosts = [e for e in extras if e != "kept"]
+    return (hosts[0] if hosts else None), "kept" in extras
 
 
 def db_client_host(s):
@@ -2263,10 +2289,14 @@ def db_sql_exists(name):
 
 
 def db_sql_drop(name, client=None):
-    """The statements that remove database `name` and its accounts (db_hosts(client)); each may run twice."""
+    """The statements that remove database `name` and its accounts (db_hosts(client)); each may run twice.
+
+    The database first: MySQL 8 refuses DROP USER for the definer of an event or routine (error
+    4006) to a login without SET_USER_ID, and once the database is gone the account defines nothing.
+    """
     name = db_sql_name(name)
-    return ("".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in db_hosts(client))
-            + "DROP DATABASE IF EXISTS `%s`;\n" % name)
+    return ("DROP DATABASE IF EXISTS `%s`;\n" % name
+            + "".join("DROP USER IF EXISTS '%s'@'%s';\n" % (name, h) for h in db_hosts(client)))
 
 
 def db_sql_rehost(name, old, new):
@@ -2339,9 +2369,11 @@ def db_error_kind(text):
 
 
 def db_failed_word(text):
-    """'unreachable', 'tls' or 'unreadable' for a sign-in that failed with `text` (not a refused login)."""
+    """'unreachable', 'tls', 'keyauth' or 'unreadable' for a sign-in that failed with `text` (not refused)."""
     if any(e in text for e in DB_UNREACHABLE_ERRORS):
         return "unreachable"
+    if any(e in text for e in DB_KEY_ERRORS):
+        return "keyauth"
     return "tls" if any(e in text for e in DB_TLS_ERRORS) else "unreadable"
 
 
@@ -2498,13 +2530,19 @@ def _db_dump_remote(a):
 
 
 def _db_drop_remote(a):
-    """db-drop: flavor auth name [client]. Keep an archive copy, or drop only an empty database."""
+    """db-drop: flavor auth name [client] [kept]. Keep an archive copy, or drop only an empty database.
+
+    `kept`: the copy was made already, by the database's own account; none is made here.
+    """
     flavor, auth, name = a[:3]
+    client, copied = db_drop_opts(a[3:])
+    drop = "cl -e %s </dev/null && echo dropped" % shlex.quote(db_sql_drop(name, client))
+    if copied:
+        return _db_prelude(flavor, auth) + drop
     return (_db_prelude(flavor, auth, dump=True) + _db_dd_sh(flavor) + _db_archive_sh([name])
             + 'k=; if [ "$rc" != 0 ]; then t=$(cl -e %s </dev/null) || exit 1; '
             '[ "$t" = 0 ] || { echo "panel-db: no copy could be kept and the database is not empty"; exit 3; }; '
-            "k=nocopy; fi; cl -e %s </dev/null && echo dropped $k"
-            % (shlex.quote(db_sql_tables(name)), shlex.quote(db_sql_drop(name, _db_client(a, 3)))))
+            "k=nocopy; fi; %s $k" % (shlex.quote(db_sql_tables(name)), drop))
 
 
 def _db_create_remote(a):
@@ -2551,6 +2589,7 @@ def _db_admin_check_remote(a):
     """
     fails = ('case "$o" in *"%s"*|*"%s"*) echo denied; exit 0;; ' % DB_DENIED_ERRORS
              + '*"%s"*|*"%s"*|*"%s"*) echo unreachable; exit 1;; ' % DB_UNREACHABLE_ERRORS
+             + '*"%s"*) echo keyauth; exit 1;; ' % DB_KEY_ERRORS
              + '*"%s"*|*"%s"*) echo tls; exit 1;; esac; echo unreadable; exit 1' % DB_TLS_ERRORS)
     return (_db_prelude(a[0], a[1])
             + "o=$(cl -e %s </dev/null 2>&1); rc=$?; " % shlex.quote(DB_SQL_GRANTS)
@@ -2641,7 +2680,7 @@ _ARGV.update({
     "db-dump": ([_choice(*DB_FLAVORS), _db_auth, _choice("game", "archive"), _db_account,
                  Rest(_db_name, maximum=64)], lambda a: [], None),
     "db-import": ([_choice(*DB_FLAVORS), _db_target, _managed_user, _db_name], lambda a: [], None),
-    "db-drop": ([_choice(*DB_FLAVORS), _db_auth, _db_name, Rest(db_client_host, minimum=0, maximum=1)],
+    "db-drop": ([_choice(*DB_FLAVORS), _db_auth, _db_name, Rest(db_drop_extra, minimum=0, maximum=2)],
                 lambda a: [], None),
     "db-admin-check": ([_choice(*DB_FLAVORS), _db_auth_tcp], lambda a: [], None),
     "db-rehost": ([_choice(*DB_FLAVORS), _db_auth, _db_name, db_client_host, db_client_host],
