@@ -2923,7 +2923,7 @@ def _create_console_socket(app):
     """Construct the app's one SocketIO instance, with its connect handler and the ban sweep."""
     # A per-request check (app._socket_origin_allowed): same origin including the port, or
     # site_domain, or the operator's explicit list. See _socketio_cors.
-    socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet")
+    socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet", **_socket_hooks.LIMITS)
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).

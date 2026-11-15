@@ -193,4 +193,50 @@ check("ntfy: the Test button names the refusal, and nothing was connected to",
       and _rconn214 == [], repr(_route214))
 
 
+# ── 5. Socket.IO: an explicit message limit, and a terminal paste that fits under it ────────────
+_eio214 = _p9.socketio.server.eio
+eq("socket.io: the app's SocketIO takes no message over 64 KB, pings every 25 s and drops a peer silent "
+   "for 20 s more", (_eio214.max_http_buffer_size, _eio214.ping_interval, _eio214.ping_timeout),
+   (64 * 1024, 25, 20))
+_CHUNK_JS214 = r"""
+%s
+const paste = 'a'.repeat(8191) + '\u{1F600}' + '\u0001'.repeat(9000) + 'z';
+const parts = _termChunks(paste);
+const bytes = parts.map(p => Buffer.byteLength(JSON.stringify(['term_input', {data: p}])));
+const lone = parts.some(p => /[\uD800-\uDBFF]$/.test(p) || /^[\uDC00-\uDFFF]/.test(p));
+console.log(JSON.stringify({joined: parts.join('') === paste, n: parts.length, max: Math.max(...bytes),
+                            lone: lone, empty: _termChunks('').length, small: _termChunks('ls\r')}));
+"""
+
+
+def _chunks214():
+    if not _shutil214.which("node"):
+        skip("terminal: a paste is sent in pieces under the server's message limit", "no node on this machine")
+        return
+    with open(_os214.path.join(str(_ROOT214), "panel", "static", "js", "host_terminal.js"), encoding="utf-8") as fh:
+        src = fh.read()
+    a, b = src.find("var TERM_CHUNK = 8192;"), src.find("function _r17cTermText(s) {")
+    if min(a, b) < 0:
+        check("terminal: a paste is sent in pieces under the server's message limit", False, "source not found")
+        return
+    r = _sp214.run(["node", "-"], input=_CHUNK_JS214 % src[a:b], capture_output=True, text=True,  # nosec B603 B607
+                   timeout=60, check=False)
+    try:
+        got = _json214.loads(r.stdout.strip())
+    except ValueError:
+        got = {"error": (r.stdout + r.stderr)[-300:]}
+    check("terminal: a paste is sent in pieces that rebuild it exactly, each under the server's 64 KB "
+          "limit even when every character is JSON-escaped, never splitting an emoji",
+          got.get("joined") is True and got.get("n") == 3 and got.get("max", 1 << 20) < 64 * 1024
+          and got.get("lone") is False and got.get("empty") == 0 and got.get("small") == ["ls\r"], repr(got))
+    with open(_os214.path.join(str(_ROOT214), "panel", "static", "js", "host_terminal.js"), encoding="utf-8") as fh:
+        src = fh.read()
+    check("terminal: keystrokes go out through _termChunks, one emit per piece",
+          "_termChunks(data).forEach(function (part) { sock.emit('term_input', { data: part }); });" in src
+          and src.count("emit('term_input'") == 1, "")
+
+
+_chunks214()
+
+
 eq("part214: nothing reached a real transport", _P9_TRIPPED[_trips214:], [])
