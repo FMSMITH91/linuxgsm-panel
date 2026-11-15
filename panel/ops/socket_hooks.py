@@ -22,6 +22,16 @@ _log = logging.getLogger(__name__)
 
 _hooks = {}
 
+# The app's one SocketIO is built with these (routes/server_files.py). OWASP WebSocket Security Cheat
+# Sheet, "Denial-of-Service Protection": an explicit message size limit, 64 KB, and heartbeats that find
+# a dead connection. The largest message a browser sends is a terminal paste, which host_terminal.js
+# cuts into pieces of 8192 UTF-16 units (under 50 KB JSON-escaped); the rest are a server id or a
+# terminal size. A bigger message closes that connection (engineio's own rule, for the websocket frame
+# and a polling POST alike), and the handshake tells the client the limit (maxPayload). The heartbeat
+# is engineio's: a ping every 25 s, and a peer silent 20 s more is gone, so a vanished phone's console
+# viewer and terminal are dropped within 45 s while a slow link is not.
+LIMITS = {"max_http_buffer_size": 64 * 1024, "ping_interval": 25, "ping_timeout": 20}
+
 
 def add_disconnect_hook(fn):
     """Register fn(sid) to run when any socket disconnects.

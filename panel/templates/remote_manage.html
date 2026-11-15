@@ -525,6 +525,22 @@
       </div>
     </div>
 
+    <!-- The key that encrypts stored secrets -->
+    <div id="diag-enc" class="mt-3">
+      <hr class="my-2">
+      <div class="small text-secondary mb-1"><i class="bi bi-key"></i> Encryption key</div>
+      <div id="diag-enc-status" class="small text-secondary">—</div>
+      <div class="mt-2 d-flex gap-2 align-items-center flex-wrap">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-enc-rotate-btn" data-action="rotateEncKey">
+          <i class="bi bi-arrow-repeat"></i> Rotate encryption key
+        </button>
+        <span id="diag-enc-msg" class="small"></span>
+      </div>
+      <div class="small text-secondary mt-1">
+        SSH credentials, database logins, 2FA secrets and bot tokens are stored encrypted (AES-256-GCM). Rotating makes a new key and re-encrypts them in the background.
+      </div>
+    </div>
+
     <!-- Automatic security updates -->
     <div id="diag-autoupd" class="mt-3">
       <hr class="my-2">
@@ -557,7 +573,7 @@
           <i class="bi bi-download"></i> Download
         </a>
         <a class="btn btn-sm btn-outline-primary" id="diag-report-gh" style="display:none;"
-           target="_blank" rel="noopener">
+           target="_blank" rel="noopener noreferrer">
           <i class="bi bi-github"></i> Open a GitHub issue
         </a>
         <span id="diag-report-msg" class="small"></span>

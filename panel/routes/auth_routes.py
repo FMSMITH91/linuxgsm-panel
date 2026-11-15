@@ -12,6 +12,7 @@ from panel.core.clock import (utcnow)
 from panel.core.validation import (MAX_USERNAME_LEN)
 from panel.core.config import (decrypt_secret, encrypt_secret)
 from panel.security import banlist as _banlist
+from panel.security.headers import (no_store)
 from panel.db.models import (User, db)
 from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash, check_password, client_ip,
     dummy_password_check,
@@ -241,7 +242,7 @@ def _register_account(app):
         log_action(u, "api_token_generate", target=u.username)
         # Render directly (not a redirect) so the plaintext token is shown exactly once and never
         # stored in the session cookie.
-        return render_template("account.html", languages=i18n.LANGUAGES, new_token=token)
+        return no_store(render_template("account.html", languages=i18n.LANGUAGES, new_token=token))
 
     @app.route("/account/api-token/revoke", methods=["POST"])
     @login_required
@@ -429,7 +430,7 @@ def _register_2fa_and_profile(app):
                 log_action(current_user, "2fa_enabled", target=current_user.username)
                 flash("Two-factor authentication is now enabled.", "success")
                 # Show the one-time backup codes once, right now — they're never shown again.
-                return render_template("backup_codes.html", codes=codes, first_time=True)
+                return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
             flash("That code didn't match — check your device's time and try again.", "danger")
         # (Re)issue a pending secret for this enrolment attempt. Encrypted in the session: Flask's
         # session is a SIGNED cookie, not an encrypted one, and on success this exact value becomes
@@ -439,7 +440,7 @@ def _register_2fa_and_profile(app):
         secret = decrypt_secret(session.get("_2fa_setup_secret", "")) or generate_totp_secret()
         session["_2fa_setup_secret"] = encrypt_secret(secret)
         uri = totp_provisioning_uri(secret, current_user.username)
-        return render_template("account_2fa.html", secret=secret, qr_svg=_qr_svg(uri))
+        return no_store(render_template("account_2fa.html", secret=secret, qr_svg=_qr_svg(uri)))
 
     @app.route("/account/profile", methods=["POST"])
     @login_required

@@ -1,0 +1,15 @@
+{
+  "Encryption key": "Clave de cifrado",
+  "Rotate encryption key": "Rotar la clave de cifrado",
+  "SSH credentials, database logins, 2FA secrets and bot tokens are stored encrypted (AES-256-GCM). Rotating makes a new key and re-encrypts them in the background.": "Las credenciales SSH, los accesos a bases de datos, los secretos 2FA y los tokens de bots se guardan cifrados (AES-256-GCM). Rotar crea una clave nueva y los vuelve a cifrar en segundo plano.",
+  "Could not read the encryption key status.": "No se pudo leer el estado de la clave de cifrado.",
+  "No key yet: nothing has been encrypted on this panel.": "Aún no hay clave: no se ha cifrado nada en este panel.",
+  "{algorithm} · key {id} since {date} · older keys kept: {n}": "{algorithm} · clave {id} desde {date} · claves anteriores conservadas: {n}",
+  "re-encrypting…": "volviendo a cifrar…",
+  "{n} stored value(s) could not be decrypted and were left as they are": "{n} valor(es) guardado(s) no se pudieron descifrar y se dejaron como estaban",
+  "Rotate": "Rotar",
+  "A new key will encrypt every stored secret, and the existing ones are re-encrypted under it in the background. Older keys are kept until nothing uses them, so nothing stops working meanwhile. Continue?": "Una clave nueva cifrará todos los secretos guardados, y los existentes se vuelven a cifrar con ella en segundo plano. Las claves anteriores se conservan hasta que nada las use, así que nada deja de funcionar mientras tanto. ¿Continuar?",
+  "Rotating…": "Rotando…",
+  "Rotation failed.": "La rotación falló.",
+  "New encryption key in use. Stored secrets are being re-encrypted under it in the background.": "Nueva clave de cifrado en uso. Los secretos guardados se están volviendo a cifrar con ella en segundo plano."
+}

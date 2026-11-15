@@ -7554,7 +7554,7 @@ from panel.db.models import EncryptedString as _ES, UnreadableSecret as _US     
 from panel.db.models import RemoteServer as _RS                                    # noqa: E402
 from panel.ops import backup as _bk                                                # noqa: E402
 
-_foreign = _cfg._ENC_PREFIX + _Fer(_Fer.generate_key()).encrypt(b"hunter2").decode()
+_foreign = _cfg._kr.V1_PREFIX + _Fer(_Fer.generate_key()).encrypt(b"hunter2").decode()
 check("secrets: a token this host cannot decrypt IS structurally encrypted",
       _cfg.is_encrypted(_foreign) and _cfg.decrypt_secret(_foreign) == "")
 _rv = _ES().process_result_value(_foreign, None)

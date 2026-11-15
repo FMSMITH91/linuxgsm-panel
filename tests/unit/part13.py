@@ -4592,7 +4592,7 @@ from pathlib import Path as _Path13  # noqa: E402
 
 from flask import Response as _Resp13, abort as _abort13, request as _req13  # noqa: E402
 
-from panel.db import models as _models13  # noqa: E402
+from panel.db import at_rest as _atrest13, models as _models13  # noqa: E402
 from panel.ops import socket_hooks as _hooks13  # noqa: E402
 from panel.routes import _shared as _shared13  # noqa: E402
 from panel.security import banlist as _banlist13  # noqa: E402
@@ -5002,13 +5002,13 @@ def _ca13_check_compression(app, client):
                st.headers.get("Cache-Control") == "public, max-age=604800",
                "Accept-Encoding" in (st.headers.get("Vary") or ""))), repr(dict(st.headers)))
     big = client.get("/_p13/big", headers=gz)
-    check("app responses: a big page is gzipped, its own Vary kept with Accept-Encoding added, "
-          "and it must be revalidated", all((
+    check("app responses: a big JSON answer is gzipped, its own Vary kept with Accept-Encoding added, "
+          "and no cache keeps it", all((
               big.headers.get("Content-Encoding") == "gzip",
               (_ca13_body(big, gz=True) or {}).get("rows", [""])[0] == "x" * 40,
               [v.strip() for v in big.headers.get("Vary", "").split(",")][:2]
               == ["Origin", "Accept-Encoding"],
-              big.headers.get("Cache-Control") == "no-cache, private")), repr(dict(big.headers)))
+              big.headers.get("Cache-Control") == "no-store")), repr(dict(big.headers)))
     plain, small = client.get("/_p13/big"), client.get("/_p13/small", headers=gz)
     check("app responses: no gzip without Accept-Encoding, nor below the size floor",
           all(("Content-Encoding" not in plain.headers, "Content-Encoding" not in small.headers,
@@ -5025,7 +5025,7 @@ def _ca13_check_compression(app, client):
                "response gzip skipped" in _ca13_logs(cap))), repr((broken.status_code, cap.msgs)))
     hsts = client.get("/_p13/small", headers={"X-Forwarded-Proto": "https"})
     check("app responses: HSTS is sent over proxied HTTPS, and not over plain HTTP",
-          all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
+          all(("max-age=63072000" in (hsts.headers.get("Strict-Transport-Security") or ""),
                "Strict-Transport-Security" not in small.headers)), repr(dict(hsts.headers)))
 
 
@@ -5245,7 +5245,7 @@ def _ca13_check_failing_boot():
     before = _ca13_raw("SELECT COUNT(*) FROM audit_log")
     for owner, name, exc in ((_n10, "migrate_master_switch", "config locked"),
                              (_app10mod, "strip_legacy_superadmin_grants", "database locked"),
-                             (_app10mod, "is_encrypted", "cred_key unreadable"),
+                             (_atrest13, "encrypt_legacy_plaintext", "cred_key unreadable"),
                              (_models13, "encrypt_at_rest_columns", "disk full"),
                              (_models13, "anonymise_audit_ips", "disk full")):
         _ca13_set(owner, name, _raiser10(RuntimeError(exc)))
@@ -5257,7 +5257,7 @@ def _ca13_check_failing_boot():
         off_a()
         off_p()
         _ca13_restore_some(("migrate_master_switch", "strip_legacy_superadmin_grants",
-                            "is_encrypted", "encrypt_at_rest_columns", "anonymise_audit_ips"))
+                            "encrypt_legacy_plaintext", "encrypt_at_rest_columns", "anonymise_audit_ips"))
     logs = _ca13_logs(cap_a) + "\n" + _ca13_logs(cap_p)
     names = [type(w).__name__ for w in _ca13_wsgi_chain(app)]
     check("create_app: with every one-time step failing, the panel still boots, routes and all",
@@ -5276,7 +5276,7 @@ def _ca13_check_failing_boot():
     plain = client.get("/_p13/small")
     check("app responses: with no proxy trusted, X-Forwarded-Proto: https alone still earns HSTS "
           "(Tailscale Serve sets it), and plain HTTP does not",
-          all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
+          all(("max-age=63072000" in (hsts.headers.get("Strict-Transport-Security") or ""),
                "Strict-Transport-Security" not in plain.headers)),
           repr((dict(hsts.headers), dict(plain.headers))))
     return app

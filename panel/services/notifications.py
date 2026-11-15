@@ -6,10 +6,11 @@ super admin signed in, an IP was banned, a disk is filling up.
 
 Best-effort and non-blocking: a send happens on a background thread and a failure is logged and
 swallowed, never propagated to the caller (an alert must never break the action that triggered it).
-Secrets (the bot token, the webhook URL, an ntfy access token) are Fernet-encrypted at rest via
+Secrets (the bot token, the webhook URL, an ntfy access token) are encrypted at rest (AES-256-GCM) via
 config.encrypt_secret.
 """
 import http.client
+import ipaddress
 import json
 import logging
 import queue
@@ -101,6 +102,9 @@ _NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 _NTFY_URL_RE = re.compile(r"^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?"
                           r"(?::\d{1,5})?/[A-Za-z0-9_-]{1,64}\Z")
 NTFY_DEFAULT_SERVER = "https://ntfy.sh"
+# send_ntfy's answer when the server's name resolves to an address _ntfy_address_refused refuses.
+NTFY_ADDRESS_REFUSED = ("that ntfy server's address is one alerts are never sent to (this host, link-local "
+                        "or cloud metadata, multicast or reserved). An address on your LAN or tailnet is fine.")
 
 
 # ── config read/write ──────────────────────────────────────────
@@ -433,7 +437,11 @@ _CONNECT_EACH = 4.0
 def _connect_each(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
     """socket.create_connection, with every address but the last capped at _CONNECT_EACH."""
     host, port = address
-    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    return _connect_infos(socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM), timeout, source_address)
+
+
+def _connect_infos(infos, timeout, source_address):
+    """Connect to the first of `infos` (getaddrinfo's answer) that answers: _connect_each's loop."""
     full = timeout if isinstance(timeout, (int, float)) else None
     err = None
     for i, (family, stype, proto, _canon, sockaddr) in enumerate(infos):
@@ -473,24 +481,97 @@ class _FallbackHTTPSConnection(http.client.HTTPSConnection):
 
 
 class _FallbackHTTPS(urllib.request.HTTPSHandler):
-    """HTTPSHandler opening _FallbackHTTPSConnection; build_opener puts it in place of the stock one.
+    """HTTPSHandler opening _FallbackHTTPSConnection (_NtfyHTTPSConnection for ntfy); replaces the stock one.
 
     Only `context` is passed on, as Python 3.12+ does: certificates and hostnames are checked by the
     default context exactly as before.
     """
 
     def https_open(self, req):
-        return self.do_open(_FallbackHTTPSConnection, req, context=self._context)
+        # A request _post marked as going to the operator-chosen ntfy server also has the address its
+        # name resolves to checked (_NtfyHTTPSConnection); Telegram's and Discord's fixed hosts do not.
+        conn = _NtfyHTTPSConnection if getattr(req, "ntfy_address_check", False) else _FallbackHTTPSConnection
+        return self.do_open(conn, req, context=self._context)
 
 
 _OPENER = urllib.request.build_opener(_NoRedirect, _FallbackHTTPS)
+
+
+# ── the address an ntfy request may reach ─────────────────────────────────────────────────────────
+# OWASP Server Side Request Forgery Prevention Cheat Sheet: validate what the name RESOLVES to, connect
+# only to the validated address (a second lookup between the check and the connect is how DNS
+# rebinding gets past a check), and normalise an IPv6 form of an IPv4 address first. The ntfy server is
+# the one notification host the panel does not fix (see _NTFY_URL_RE): the superadmin who sets it is
+# the allow-list, and a self-hosted ntfy normally lives on a LAN, a VPN or a tailnet, so private
+# ranges stay reachable. What is refused is every address that is never an ntfy server: this host
+# itself (loopback, 0.0.0.0/8, unspecified), link-local (169.254.0.0/16 holds the cloud metadata
+# service), multicast, reserved and broadcast, and the metadata addresses outside those ranges.
+_NTFY_NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
+_NTFY_THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
+_NTFY_METADATA = frozenset(ipaddress.ip_address(a)
+                           for a in ("169.254.169.254", "fd00:ec2::254", "100.100.100.200"))
+
+
+def _ntfy_unmapped(addr):
+    """The IPv4 address an IPv6 one carries (IPv4-mapped, NAT64 with the address last, 6to4), else `addr`."""
+    if addr.version == 4:
+        return addr
+    if addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    if any(addr in net for net in _NTFY_NAT64):
+        return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    return addr.sixtofour or addr
+
+
+def _ntfy_address_refused(ip_text):
+    """Whether an ntfy request must not connect to `ip_text` (one address getaddrinfo answered)."""
+    try:
+        addr = _ntfy_unmapped(ipaddress.ip_address(str(ip_text).split("%", 1)[0]))
+    except ValueError:
+        return True
+    return (addr in _NTFY_METADATA or addr.is_loopback or addr.is_link_local or addr.is_multicast
+            or addr.is_unspecified or addr.is_reserved
+            or (addr.version == 4 and addr in _NTFY_THIS_NETWORK))
+
+
+class _RefusedAddress(OSError):
+    """The ntfy server's name resolved to an address notifications are never sent to."""
+
+
+def _connect_ntfy(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """_connect_each for the ntfy server: refuse when ANY resolved address is refused, else connect.
+
+    One lookup, and the connect goes to the addresses that lookup answered and this checked.
+    """
+    host, port = address
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    if any(_ntfy_address_refused(info[4][0]) for info in infos):
+        raise _RefusedAddress("refused address")
+    return _connect_infos(infos, timeout, source_address)
+
+
+class _NtfyHTTPSConnection(http.client.HTTPSConnection):
+    """An HTTPSConnection whose connect checks the ntfy server's resolved addresses first.
+
+    The certificate and SNI still name the server (only the socket is opened differently). Through an
+    HTTPS proxy from the environment (https_proxy) the socket goes to the proxy and the PROXY resolves
+    the server's name, so no address of the server's can be checked here: that path keeps the plain
+    connect, and the allow-list, https only and the refused redirects still apply to it.
+    """
+
+    def connect(self):
+        """Open the socket through _connect_ntfy (or _connect_each to a proxy), then TLS as usual."""
+        self._create_connection = _connect_each if self._tunnel_host else _connect_ntfy
+        super().connect()
+
 
 
 def _post(url, data, headers, allow_configured_host=False, provider="?"):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx.
 
     `reason` is a FIXED word describing the outcome — 'sent' / 'rejected' (the provider answered
-    with an error status) / 'unreachable' (couldn't connect) / 'blocked' (host not allow-listed).
+    with an error status) / 'unreachable' (couldn't connect) / 'blocked' (host not allow-listed) /
+    'refused' (the ntfy server's name resolved to an address alerts are never sent to).
     It carries no data read back from the response, so this can never become an SSRF exfiltration
     sink. Never raises.
     """
@@ -509,6 +590,8 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
         return False, "blocked"
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
+    # The ntfy server's address is checked when the connection opens (_FallbackHTTPS, _connect_ntfy).
+    req.ntfy_address_check = allow_configured_host
     try:
         # _OPENER, not urlopen: the allow-list above is only worth as much as the request that
         # follows it, and the default opener follows redirects off the allow-listed host.
@@ -541,13 +624,22 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
         runtime_stats.put("notify", "%s|last_http" % _PROVIDER_LABELS.get(provider, "?"), _code)
         return False, "rejected"
     except (urllib.error.URLError, OSError, ValueError) as e:
-        # The exception TYPE, not exc_info. A URLError renders the URL into its message and the
-        # traceback, and for ntfy that URL carries an operator-chosen host and topic — so
-        # exc_info=True put a value from outside this module into the log verbatim. The class
-        # name is a stdlib literal and says the same thing at this level (cannot resolve /
-        # refused / timed out / TLS), which is all a debug line here needs.
-        _log.debug("notification POST failed (%s)", e.__class__.__name__)
-        return False, "unreachable"
+        return False, _not_sent_reason(e, provider)
+
+
+def _not_sent_reason(e, provider):
+    """The reason word for a POST that raised before any answer: 'refused' or 'unreachable', logged."""
+    if isinstance(getattr(e, "reason", None), _RefusedAddress):
+        _log.warning("notification to %s refused: its server resolves to an address alerts are "
+                     "never sent to", _PROVIDER_LABELS.get(provider, "?"))
+        return "refused"
+    # The exception TYPE, not exc_info. A URLError renders the URL into its message and the
+    # traceback, and for ntfy that URL carries an operator-chosen host and topic — so
+    # exc_info=True put a value from outside this module into the log verbatim. The class
+    # name is a stdlib literal and says the same thing at this level (cannot resolve /
+    # refused / timed out / TLS), which is all a debug line here needs.
+    _log.debug("notification POST failed (%s)", e.__class__.__name__)
+    return "unreachable"
 
 
 def send_telegram(token, chat_id, text):
@@ -761,6 +853,8 @@ def send_ntfy(server, topic, token, text):
         return False, "couldn't reach that ntfy server — check the URL and the host's outbound network."
     if reason == "blocked":
         return False, "that ntfy URL was refused before sending — https and a plain topic only."
+    if reason == "refused":
+        return False, NTFY_ADDRESS_REFUSED
     return False, ("ntfy rejected it — the topic may be reserved, or the access token is wrong "
                    "or missing.")
 

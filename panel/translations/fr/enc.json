@@ -1,0 +1,15 @@
+{
+  "Encryption key": "Clé de chiffrement",
+  "Rotate encryption key": "Renouveler la clé de chiffrement",
+  "SSH credentials, database logins, 2FA secrets and bot tokens are stored encrypted (AES-256-GCM). Rotating makes a new key and re-encrypts them in the background.": "Les identifiants SSH, les accès aux bases de données, les secrets 2FA et les jetons de bots sont stockés chiffrés (AES-256-GCM). Le renouvellement crée une nouvelle clé et les rechiffre en arrière-plan.",
+  "Could not read the encryption key status.": "Impossible de lire l'état de la clé de chiffrement.",
+  "No key yet: nothing has been encrypted on this panel.": "Pas encore de clé : rien n'a été chiffré sur ce panneau.",
+  "{algorithm} · key {id} since {date} · older keys kept: {n}": "{algorithm} · clé {id} depuis le {date} · anciennes clés conservées : {n}",
+  "re-encrypting…": "rechiffrement…",
+  "{n} stored value(s) could not be decrypted and were left as they are": "{n} valeur(s) stockée(s) n'ont pas pu être déchiffrée(s) et ont été laissée(s) telles quelles",
+  "Rotate": "Renouveler",
+  "A new key will encrypt every stored secret, and the existing ones are re-encrypted under it in the background. Older keys are kept until nothing uses them, so nothing stops working meanwhile. Continue?": "Une nouvelle clé chiffrera chaque secret stocké, et les secrets existants sont rechiffrés avec elle en arrière-plan. Les anciennes clés sont conservées tant que quelque chose les utilise, donc rien ne cesse de fonctionner entre-temps. Continuer ?",
+  "Rotating…": "Renouvellement…",
+  "Rotation failed.": "Le renouvellement a échoué.",
+  "New encryption key in use. Stored secrets are being re-encrypted under it in the background.": "Nouvelle clé de chiffrement en service. Les secrets stockés sont rechiffrés avec elle en arrière-plan."
+}

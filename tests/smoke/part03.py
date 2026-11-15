@@ -611,12 +611,13 @@ lr = victim.post("/login", data={"username": "smoke_admin",
 check("real login succeeds (302 to app)", lr.status_code == 302, "got %d" % lr.status_code)
 names = _cookie_names(victim)
 check("login issued a session cookie", any("session" in n for n in names), str(names))
-check("login issued a remember_token cookie", "remember_token" in names, str(names))
+_RT_NAME = app.config.get("REMEMBER_COOKIE_NAME", "remember_token")   # __Host-… when the cookies are Secure
+check("login issued a remember_token cookie", _RT_NAME in names, str(names))
 
 # Snapshot the cookies a thief would hold — BOTH cookies, and the remember_token
 # (the long-lived one) on its own — while the victim is still logged in.
 thief = _clone_cookies(victim)
-thief_rt = _clone_cookies(victim, keep={"remember_token"})
+thief_rt = _clone_cookies(victim, keep={_RT_NAME})
 check("stolen cookie works BEFORE logout (200)", thief.get("/").status_code == 200)
 
 # Log the victim out (a real login carries a sid, so this deletes the victim's own session row; only
@@ -1001,8 +1002,8 @@ _fx.post("/logout")
 
 # ── Security headers present on every response ────────────────
 hr = app.test_client().get("/login")
-check("security header: X-Frame-Options=SAMEORIGIN",
-      hr.headers.get("X-Frame-Options") == "SAMEORIGIN",
+check("security header: X-Frame-Options=DENY (nothing frames a panel page)",
+      hr.headers.get("X-Frame-Options") == "DENY",
       "got %r" % hr.headers.get("X-Frame-Options"))
 check("security header: X-Content-Type-Options=nosniff",
       hr.headers.get("X-Content-Type-Options") == "nosniff")
@@ -1020,6 +1021,36 @@ check("icon webfont is preloaded (CLS fix)",
       b'rel="preload"' in hr.data and b"bootstrap-icons.woff2" in hr.data)
 check("Server header genericized (no framework/version leak)",
       hr.headers.get("Server") == "LinuxGSM Panel" and "Werkzeug" not in (hr.headers.get("Server") or ""))
+# The app's own response hooks, in the order Flask runs them (the cache step, then the headers).
+_hcsp = hr.headers.get("Content-Security-Policy") or ""
+check("security header: the page CSP refuses framing, any <base> and a form posting off the panel",
+      all(d in _hcsp for d in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'",
+                               "object-src 'none'")) and "frame-ancestors 'self'" not in _hcsp, _hcsp)
+check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and keeps "
+      "no-cache, private (the back/forward cache)",
+      (hr.headers.get("Cross-Origin-Opener-Policy"), hr.headers.get("Cross-Origin-Resource-Policy"),
+       hr.headers.get("X-DNS-Prefetch-Control"), hr.headers.get("Cache-Control"))
+      == ("same-origin", "same-origin", "off", "no-cache, private"), repr(dict(hr.headers)))
+_hj = app.test_client().get("/healthz")
+check("security header: a JSON answer is no-store, with CORP and the inert CSP",
+      (_hj.headers.get("Cache-Control"), _hj.headers.get("Cross-Origin-Resource-Policy"),
+       _hj.headers.get("Content-Security-Policy")) == ("no-store", "same-origin", "default-src 'none'; frame-ancestors 'none'"),
+      repr(dict(_hj.headers)))
+_hp = client_as(admin_id).get("/api/auth/ping")
+check("security header: a signed-in JSON answer (/api/auth/ping) is no-store",
+      _hp.status_code == 200 and _hp.headers.get("Cache-Control") == "no-store",
+      "%d %r" % (_hp.status_code, _hp.headers.get("Cache-Control")))
+_hs = app.test_client().get("/healthz", headers={"X-Forwarded-Proto": "https"})
+check("security header: HSTS over proxied HTTPS is two years with includeSubDomains, no preload",
+      _hs.headers.get("Strict-Transport-Security") == "max-age=63072000; includeSubDomains",
+      repr(_hs.headers.get("Strict-Transport-Security")))
+_hsio = app.test_client().get("/socket.io/?EIO=4&transport=polling").get_data(as_text=True)
+check("Socket.IO: the handshake tells the browser the 64 KB message limit (maxPayload)",
+      '"maxPayload":65536' in _hsio.replace(" ", ""), _hsio[:200])
+_h2fa = client_as(admin_id).get("/account/2fa/enable")
+check("security header: the 2FA enrolment page (a secret and its QR code) is no-store",
+      _h2fa.status_code == 200 and _h2fa.headers.get("Cache-Control") == "no-store",
+      "%d %r" % (_h2fa.status_code, _h2fa.headers.get("Cache-Control")))
 
 # ── Data-dir hardening: sensitive files must be owner-only. chmod only sets POSIX bits, so
 #    this is a no-op check off-Linux (Windows dev boxes); CI runs on Linux and enforces it.
@@ -2261,7 +2292,7 @@ with app.app_context():
         "SELECT host, username, linuxgsm_user, public_ip, host_key FROM remote_server"
         " WHERE id = :i"), {"i": _er_id}).fetchone()
     check("at-rest: the stored hostname is ciphertext, not the hostname",
-          _raw[0] != _SECRET_HOST and _raw[0].startswith("enc:v1:"), str(_raw[0])[:40])
+          _raw[0] != _SECRET_HOST and _raw[0].startswith("enc:v2:"), str(_raw[0])[:40])
     check("at-rest: no plaintext survives in ANY of the five columns",
           not any(v in (_raw[0] or "") + (_raw[1] or "") + (_raw[2] or "")
                          + (_raw[3] or "") + (_raw[4] or "")
@@ -2297,7 +2328,7 @@ with app.app_context():
     _leg_raw2 = db.session.execute(_enc_sql(
         "SELECT host, username FROM remote_server WHERE name = 'legacy-host'")).fetchone()
     check("at-rest: the migration encrypts the legacy row", _n1 >= 1
-          and _leg_raw2[0].startswith("enc:v1:") and "legacy.example" not in _leg_raw2[0]
+          and _leg_raw2[0].startswith("enc:v2:") and "legacy.example" not in _leg_raw2[0]
           and "oldroot" not in (_leg_raw2[1] or ""), "touched=%s raw=%.40s" % (_n1, _leg_raw2[0]))
     db.session.expire_all()
     _leg2 = RemoteServer.query.filter_by(name="legacy-host").first()
@@ -2318,12 +2349,12 @@ with app.app_context():
           _sess_raw is not None and _any_sess is not None,
           "no user_session row carried an IP — this block would prove nothing")
     check("at-rest: session IP and user-agent are ciphertext",
-          _sess_raw is not None and (_sess_raw[0] or "").startswith("enc:v1:")
-          and (not _sess_raw[1] or _sess_raw[1].startswith("enc:v1:")),
+          _sess_raw is not None and (_sess_raw[0] or "").startswith("enc:v2:")
+          and (not _sess_raw[1] or _sess_raw[1].startswith("enc:v2:")),
           str(_sess_raw)[:60])
     check("at-rest: ...and still read back as the real values",
           _any_sess is not None and bool(_any_sess.ip)
-          and not _any_sess.ip.startswith("enc:v1:"),
+          and not _any_sess.ip.startswith("enc:v"),
           repr(getattr(_any_sess, "ip", None)))
 
 # ── audit IPs age out into network prefixes ──────────────────────────────────────────────
@@ -3138,7 +3169,7 @@ s1, r1 = _real_login()
 # the browser process — and on Android the browser is killed constantly — which shows up as
 # "it forgets my login every time", with a new server-side session row per re-login.
 _login_cookies = {h.split("=", 1)[0]: h for h in r1.headers.getlist("Set-Cookie")}
-_sess_cookie = _login_cookies.get("lgpanel_session", "")
+_sess_cookie = _login_cookies.get(app.config["SESSION_COOKIE_NAME"], "")
 check("session: the login cookie is persistent, not a browser-session cookie",
       "Expires=" in _sess_cookie or "Max-Age=" in _sess_cookie,
       "Set-Cookie: %s" % (_sess_cookie[:160] or "(none issued)"))

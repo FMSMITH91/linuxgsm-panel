@@ -222,6 +222,17 @@
       "GET"
     ]
   },
+  "GET /api/panel/encryption": {
+    "endpoint": "api_panel_encryption",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_encryption"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/panel/integrity": {
     "endpoint": "api_panel_integrity",
     "guards": [
@@ -1698,6 +1709,17 @@
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
       "view:api_panel_enable_auto_updates"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/panel/encryption/rotate": {
+    "endpoint": "api_panel_encryption_rotate",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_panel_encryption_rotate"
     ],
     "methods": [
       "POST"

@@ -188,7 +188,7 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
-    # NOT unique: every writer stores encrypt_secret(email) and Fernet uses a fresh IV per write,
+    # NOT unique: every writer stores encrypt_secret(email) and AES-GCM uses a fresh nonce per write,
     # so two accounts with the same address produce different ciphertext and the constraint never
     # fired. Demonstrated — two rows, one address, both committed. The column is also unindexable
     # for the same reason (EncryptedString's own docstring: "only safe for columns nothing filters,
@@ -1305,18 +1305,25 @@ class UserSession(db.Model):
         """Seconds this login may sit idle before its cookie is certainly dead."""
         return session_idle_limits()[1 if self.remember else 0]
 
-    def is_expired(self, now=None):
-        """True once no cookie for this login can still authenticate.
+    def absolute_limit(self):
+        """Seconds after sign-in this login ends however active it is (session_absolute_limits)."""
+        return session_absolute_limits()[1 if self.remember else 0]
 
-        Both cookies are refreshed on use, so it is idle time — not age — that kills them, and
-        `last_seen` is the panel's record of that. The registry used to prune only at 45 days,
-        so the account page listed logins that had expired days or weeks earlier as "active":
-        alarming to read, and impossible to act on, since revoking one revokes nothing.
+    def is_expired(self, now=None):
+        """True once this login may no longer authenticate: idle too long, or signed in too long ago.
+
+        Idle: both cookies are refreshed on use, so idle time kills them, and `last_seen` is the
+        panel's record of that. The registry used to prune only at 45 days, so the account page
+        listed logins that had expired days or weeks earlier as "active". Absolute: an open
+        dashboard polls every few seconds, so idle time alone let a tab stay signed in forever;
+        OWASP's Session Management Cheat Sheet ("Absolute Timeout") ends a session a fixed time
+        after it began, whatever its activity, enforced here on the server.
         """
+        now = now or utcnow()
         last = self.last_seen or self.created_at
-        if last is None:
-            return False
-        return ((now or utcnow()) - last).total_seconds() > self.idle_limit()
+        if last is not None and (now - last).total_seconds() > self.idle_limit():
+            return True
+        return self.created_at is not None and (now - self.created_at).total_seconds() > self.absolute_limit()
 
 
 # `last_seen` is only written every ~5 minutes (the throttle in load_user), so it can lag real
@@ -1352,6 +1359,23 @@ def session_idle_limits():
     return plain, max(plain, remember)
 
 
+# A plain login's absolute lifetime: OWASP gives 4-8 hours for a full day's use. Never shorter than the
+# configured idle window (Settings allows up to 168 h), which would otherwise outlast it.
+SESSION_ABSOLUTE_SECONDS = 8 * 3600
+
+
+def session_absolute_limits():
+    """(plain, remember) seconds after sign-in that a login ends, however active it has been.
+
+    A plain login: SESSION_ABSOLUTE_SECONDS, or the idle window when that is set longer. A "remember
+    me" login: the remember cookie's own duration counted from the original sign-in, so polling
+    cannot stretch it either.
+    """
+    plain_idle, remember_idle = session_idle_limits()
+    plain = max(float(SESSION_ABSOLUTE_SECONDS), plain_idle - SESSION_LAST_SEEN_GRACE)
+    return plain, max(plain, remember_idle - SESSION_LAST_SEEN_GRACE)
+
+
 def prune_expired_sessions(user_id=None):
     """Delete session rows whose cookies have expired. Scoped to one user when given.
 
@@ -1361,6 +1385,7 @@ def prune_expired_sessions(user_id=None):
     from datetime import timedelta
     from sqlalchemy import and_, or_
     plain, remember = session_idle_limits()
+    abs_plain, abs_remember = session_absolute_limits()
     now = utcnow()
     q = UserSession.query
     if user_id is not None:
@@ -1368,6 +1393,8 @@ def prune_expired_sessions(user_id=None):
     q = q.filter(or_(
         and_(UserSession.remember.is_(True), UserSession.last_seen < now - timedelta(seconds=remember)),
         and_(UserSession.remember.isnot(True), UserSession.last_seen < now - timedelta(seconds=plain)),
+        and_(UserSession.remember.is_(True), UserSession.created_at < now - timedelta(seconds=abs_remember)),
+        and_(UserSession.remember.isnot(True), UserSession.created_at < now - timedelta(seconds=abs_plain)),
     ))
     try:
         n = q.delete(synchronize_session=False)

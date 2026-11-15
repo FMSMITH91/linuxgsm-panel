@@ -118,14 +118,14 @@ from panel.security.auth import (ALL_PERMISSIONS, R17C_MAX_ROW_ID, accessible_re
     init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
-    encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
+    harden_data_permissions, read_setup_token, remove_setup_token,
     autoblock_host_ids, _r13a_cfg_text, _r15a_cfg_int)
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
 from panel.services.bots.discord import (_discord_command_watch, _report_dc_pending_update)
 from panel.services.bots.telegram import (_report_tg_pending_update, _telegram_command_watch)
-from panel.services.certs import (_ensure_self_signed_cert)
+from panel.services.certs import (_ensure_self_signed_cert, tls_failed_bind)
 from panel.db.prefs import (_effective_prefs, _panel_layout)
 from panel.core.middleware import PrefixMiddleware, ProxiedBanGate
 from panel.security import banlist as _banlist
@@ -1880,7 +1880,7 @@ def create_app():
     # style-src keeps 'unsafe-inline': the UI uses inline style="…" attributes throughout, and CSP
     # can't nonce inline STYLE attributes (only <style> blocks). Style injection is far lower risk
     # than script injection, so this is the standard, deliberate split.
-    # All assets are self-hosted, so no external origins are allowed.
+    # Self-hosted assets only; nothing frames a panel page, none has a <base>, every form posts to the panel.
     def _csp():
         nonce = getattr(g, "csp_nonce", "")
         return (
@@ -1890,7 +1890,7 @@ def create_app():
             "img-src 'self' data:; "
             "font-src 'self' data:; "
             "connect-src 'self'; "
-            "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         )
 
     @app.after_request
@@ -1918,7 +1918,7 @@ def create_app():
         self_tls = app.config["_R32A_SELF_TLS"] = _effective_https(cfg)
         if (request.headers.get("X-Forwarded-Proto", "") == "https"
                 or (request.is_secure and not self_tls)):
-            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            resp.headers.setdefault("Strict-Transport-Security", _sec_headers.HSTS)
         return resp
 
     # Compressible content types worth gzipping (skip already-compressed images/fonts/archives).
@@ -1979,19 +1979,8 @@ def create_app():
     # (remote SSH credentials, and user email addresses).
     with app.app_context():
         try:
-            from panel.db.models import RemoteServer, User
-            changed = False
-            for r in RemoteServer.query.all():
-                if r.auth_credential and not is_encrypted(r.auth_credential) \
-                        and r.auth_method in ("password", "key"):
-                    r.auth_credential = encrypt_secret(r.auth_credential)
-                    changed = True
-            for u in User.query.all():
-                if u.email and not is_encrypted(u.email):
-                    u.email = encrypt_secret(u.email)
-                    changed = True
-            if changed:
-                db.session.commit()
+            from panel.db.at_rest import encrypt_legacy_plaintext
+            encrypt_legacy_plaintext()
         except Exception:
             db.session.rollback()
 
@@ -3301,7 +3290,7 @@ def _boot_ssl_args(app, cfg, host, port):
 
     app.config["BOOT_TLS"] is whether the panel serves TLS itself since boot; BOOT_TLS_ERROR the
     exception CLASS when TLS was configured and failed to start (never its message: it carries
-    paths). The flow is the one this block always had: a failure prints and serves plain HTTP.
+    paths). A failure serves plain HTTP on loopback only and says so (certs.tls_failed_bind).
     """
     ssl_args = {}
     app.config["BOOT_TLS_ERROR"] = None
@@ -3315,7 +3304,7 @@ def _boot_ssl_args(app, cfg, host, port):
             print("     Browsers will show a certificate warning; click through to proceed.")
         except Exception as e:
             app.config["BOOT_TLS_ERROR"] = type(e).__name__
-            print(f"  [!] Could not enable HTTPS ({e}); serving plain HTTP instead.")
+            tls_failed_bind(app.config, host, port, e)   # never plain HTTP off this host
     app.config["BOOT_TLS"] = bool(ssl_args)
     return ssl_args
 
@@ -3430,6 +3419,11 @@ if __name__ == "__main__":
     # every stop signals them — from before the helper gave each its own scope. Move them out once.
     threading.Thread(target=_adopt_game_processes, name="cgroup-adopt", daemon=True).start()
 
+    # Every stored secret under the current encryption key: values from before AES-256-GCM, or
+    # under a key retired by a rotation, are re-encrypted in the background (panel/db/at_rest.py).
+    from panel.db.at_rest import start_reencrypt
+    start_reencrypt(app, prune=True)
+
     # Every installed server's port, read again from LinuxGSM once per start: an import used to
     # store whatever port the browser sent, and 27015 when it sent none, so a Minecraft server
     # could be monitored on Garry's Mod's port. A minute in, so the start itself is not slowed.
@@ -3532,4 +3526,4 @@ if __name__ == "__main__":
     except Exception:
         _log.debug("ignored non-fatal error", exc_info=True)
 
-    app.socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
+    app.socketio.run(app, app.config["BOOT_BIND"], port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)

@@ -859,7 +859,7 @@ window.UPro = (function(){
       + '<button class="btn btn-success"' + _da('_uproAttach') + '><i class="bi bi-shield-check"></i> Attach</button></div>';
   }
   // The dashboard link, markup tfHtml puts into "Get a token at {link}." as it is.
-  var UPRO_LINK = {html: '<a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener">ubuntu.com/pro/dashboard</a>'};
+  var UPRO_LINK = {html: '<a href="https://ubuntu.com/pro/dashboard" target="_blank" rel="noopener noreferrer">ubuntu.com/pro/dashboard</a>'};
   function render(d){
     if(!EL) return;
     // "could not read" before "not attached". The route used to answer a failed read as

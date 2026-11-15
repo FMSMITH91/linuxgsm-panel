@@ -1643,6 +1643,12 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True, self
     fn = _pp.basename((filename or "").replace("\x00", ""))
     if not fn or fn in (".", ".."):
         return False, "Invalid filename"
+    # The rules a rename's or a created file's name meets (OWASP File Upload Cheat Sheet, "Filename
+    # Safety"): a control character, a direction override or a space at either end made a name
+    # that reads as another one in the file list and the audit log.
+    problem = name_problem(fn)
+    if problem:
+        return False, problem
     target = _pp.join(apdir, fn)
     if not (target.startswith(f"/home/{user}/")):
         return False, "Invalid path"
@@ -1833,11 +1839,9 @@ def name_problem(name):
     One path component of a Linux filename: not empty, not '.' or '..', no '/', valid UTF-8, at
     most RENAME_NAME_MAX bytes, and nothing that makes the name read as something else: no control
     character (Cc: NUL, newline, DEL, U+0085...), no line or paragraph separator (U+2028, U+2029),
-    no text-direction control, and no whitespace at either end. upload_file's rules ('', '.', '..',
-    the '/' basename() removes and the NUL it strips) are the subset of these an upload could meet;
-    a rename's new name and a created file's or folder's name are TYPED, so they get a reason for
-    each instead of having the name quietly changed into one that passes. Shared by rename_path and
-    create_path, so its wording names neither.
+    no text-direction control, and no whitespace at either end. A name is refused with the reason,
+    never quietly changed into one that passes. Shared by rename_path, create_path and upload_file
+    (after it keeps the basename and drops a NUL, as it always has), so its wording names none of them.
     """
     if not isinstance(name, str) or not name:
         return "Enter a name."

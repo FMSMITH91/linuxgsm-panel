@@ -114,9 +114,10 @@ def _login212(name, secret, ip):
 # ── 1. what a new hash is ──────────────────────────────────────────────────────────────────────
 def _s212_new_hash():
     new = _auth212.hash_password(_K212_CUR)
-    params = _xp212(new)
+    # Read only from an Argon2id string: anything else fails the check by name, not the part.
+    params = _xp212(new) if new.startswith("$argon2id$") else None
     check("argon2: a new password hash is an Argon2id PHC string at the pinned parameters",
-          new.startswith(_PINNED212) and params.type is _AT212.ID
+          params is not None and new.startswith(_PINNED212) and params.type is _AT212.ID
           and (params.memory_cost, params.time_cost, params.parallelism) == (19456, 2, 1)
           and _auth212.check_password(_K212_CUR, new)
           and not _auth212.check_password(_K212_WRONG, new), new[:40])
@@ -375,6 +376,146 @@ def _cleanup212():
     _p9_queue.clear()
 
 
+# ── 8. the absolute session lifetime (OWASP Session Management, "Absolute Timeout") ───────────────
+def _aged212(uid, hours, remember=False):
+    """Make the user's one session row `hours` old (signed in then) but active a minute ago."""
+    from datetime import timedelta as _td212
+    with _p9.app_context():
+        row = _US212.query.filter_by(user_id=uid).first()
+        if row is None:
+            return False
+        from panel.core import clock as _clock212
+        now = _clock212.utcnow()
+        row.created_at, row.last_seen, row.remember = now - _td212(hours=hours), now - _td212(minutes=1), remember
+        _db212.session.commit()
+        return True
+
+
+def _s212_absolute():
+    from panel.db import models as _models212
+    plain, remember = _models212.session_absolute_limits()
+    check("session: a plain login ends 8 hours after sign-in (OWASP's full-day absolute timeout), a remember-me "
+          "login after its 3-day cookie, however active either is",
+          (plain, remember) == (8 * 3600.0, 3 * 86400.0), repr((plain, remember)))
+    from datetime import timedelta as _tdl212
+    results, saved = {}, {k: _p9.config.get(k) for k in ("PERMANENT_SESSION_LIFETIME", "REMEMBER_COOKIE_DURATION")}
+    # The shipped defaults (8 h idle, 3-day remember-me): the test app's own windows are longer, and an
+    # idle window longer than 8 h raises the absolute limit with it (session_absolute_limits).
+    _p9.config.update(PERMANENT_SESSION_LIFETIME=8 * 3600, REMEMBER_COOKIE_DURATION=_tdl212(days=3))
+    try:
+        _absolute_runs212(results)
+    finally:
+        _p9.config.update(saved)
+    _absolute_checks212(results)
+
+
+def _absolute_runs212(results):
+    for label, hours, rem in (("7h", 7, False), ("9h", 9, False), ("rem-2d", 48, True), ("rem-4d", 96, True)):
+        name = "p212_abs_%s" % label.replace("-", "")
+        uid = _user212(name, _auth212.hash_password(_K212_CUR))
+        c = _client212("198.51.100.%d" % (60 + len(results)))
+        c.post("/login", data={"username": name, "password": _K212_CUR})
+        aged = _aged212(uid, hours, rem)
+        r = c.get("/")
+        with _p9.app_context():
+            left = _US212.query.filter_by(user_id=uid).count()
+        results[label] = (aged, r.status_code, left)
+
+
+def _absolute_checks212(results):
+    check("session: an active login signed in 7 hours ago still works; at 9 hours the server ends it (the page "
+          "asks for a sign-in) and drops the session row",
+          results["7h"] == (True, 200, 1) and results["9h"][0] is True and results["9h"][1] in (302, 401)
+          and results["9h"][2] == 0, repr(results))
+    check("session: a remember-me login signed in 2 days ago still works; at 4 days it ends the same way",
+          results["rem-2d"] == (True, 200, 1) and results["rem-4d"][0] is True
+          and results["rem-4d"][1] in (302, 401) and results["rem-4d"][2] == 0, repr(results))
+
+
+# ── 9. __Host- cookies when the login cookies are Secure (OWASP Session Management) ──────────────
+def _s212_host_prefix():
+    from flask import Flask as _Flask212, session as _fsession212
+    names = {}
+    for secure in (True, False):
+        app = _Flask212("unit_part212_cookies_%s" % secure)
+        app.config.update(SECRET_KEY="k" * 32, SESSION_COOKIE_NAME="lgpanel_session", SESSION_COOKIE_SECURE=secure,
+                          REMEMBER_COOKIE_SECURE=secure, SESSION_COOKIE_DOMAIN="example.invalid")
+        _auth212._host_prefix_cookies(app)
+        app.session_interface = _auth212._session_cookie.ThrottledCookieSessions()
+
+        @app.route("/set")
+        def _set212():
+            _fsession212["x"] = 1
+            return "ok"
+        hdr = app.test_client().get("/set", base_url="https://panel.invalid").headers.get("Set-Cookie", "")
+        names[secure] = (app.config["SESSION_COOKIE_NAME"], app.config.get("REMEMBER_COOKIE_NAME"), hdr)
+    sec_hdr = names[True][2]
+    check("cookies: over HTTPS (Secure cookies) the login cookies are __Host-lgpanel_session and "
+          "__Host-remember_token, sent Secure with Path=/ and no Domain",
+          names[True][:2] == ("__Host-lgpanel_session", "__Host-remember_token")
+          and sec_hdr.startswith("__Host-lgpanel_session=") and "Secure" in sec_hdr and "Path=/" in sec_hdr
+          and "Domain=" not in sec_hdr, repr(names[True]))
+    via = _Flask212("unit_part212_cookies_init_auth")
+    via.config.update(SECRET_KEY="k" * 32, SESSION_COOKIE_NAME="lgpanel_session", SESSION_COOKIE_SECURE=True,
+                      REMEMBER_COOKIE_SECURE=True)
+    _auth212.init_auth(via)
+    check("cookies: init_auth itself (the app factory's call) gives a Secure panel the __Host- names",
+          (via.config["SESSION_COOKIE_NAME"], via.config.get("REMEMBER_COOKIE_NAME"))
+          == ("__Host-lgpanel_session", "__Host-remember_token"),
+          repr((via.config["SESSION_COOKIE_NAME"], via.config.get("REMEMBER_COOKIE_NAME"))))
+    check("cookies: ...while an install served over plain HTTP keeps the plain names",
+          names[False][0] == "lgpanel_session" and not str(names[False][1] or "").startswith("__Host-"),
+          repr(names[False][:2]))
+
+
+# ── 10. the self-signed fallback certificate (OWASP Transport Layer Security) ────────────────────
+def _old_rsa_cert212(cert_path, key_path):
+    """Write a pre-change certificate: RSA-2048, ten years."""
+    import datetime as _dtc212
+    from cryptography import x509 as _x509
+    from cryptography.x509.oid import NameOID as _NameOID
+    from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = _x509.Name([_x509.NameAttribute(_NameOID.COMMON_NAME, "old.invalid")])
+    start = _dtc212.datetime.now(_dtc212.timezone.utc)
+    cert = (_x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(_x509.random_serial_number()).not_valid_before(start)
+            .not_valid_after(start + _dtc212.timedelta(days=3650)).sign(key, _hashes.SHA256()))
+    _os212.makedirs(_os212.path.dirname(cert_path), exist_ok=True)
+    with open(key_path, "wb") as fh:
+        fh.write(key.private_bytes(_ser.Encoding.PEM, _ser.PrivateFormat.PKCS8, _ser.NoEncryption()))
+    with open(cert_path, "wb") as fh:
+        fh.write(cert.public_bytes(_ser.Encoding.PEM))
+
+
+def _s212_cert():
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from panel.services import certs as _certs212
+    tmp = _tf212.mkdtemp(prefix="p212-cert-")
+    try:
+        cp, kp = _os212.path.join(tmp, "ssl", "cert.pem"), _os212.path.join(tmp, "ssl", "key.pem")
+        _old_rsa_cert212(cp, kp)
+        _certs212._ensure_self_signed_cert(cp, kp, "panel.invalid")
+        with open(cp, "rb") as fh:
+            new = _x509.load_pem_x509_certificate(fh.read())
+        days = (new.not_valid_after_utc - new.not_valid_before_utc).days
+        key = new.public_key()
+        check("tls: the fallback certificate is ECDSA P-256 / SHA-256 for about 397 days, and an older RSA one "
+              "(ten years) is replaced at the next start",
+              isinstance(key, _ec.EllipticCurvePublicKey) and key.curve.name == "secp256r1"
+              and new.signature_hash_algorithm.name == "sha256" and 396 <= days <= 399, repr((type(key), days)))
+        serial = new.serial_number
+        _certs212._ensure_self_signed_cert(cp, kp, "panel.invalid")
+        with open(cp, "rb") as fh:
+            again = _x509.load_pem_x509_certificate(fh.read())
+        check("tls: ...while a current ECDSA certificate is kept as it is (no new one at every start)",
+              again.serial_number == serial)
+    finally:
+        _sh212.rmtree(tmp, ignore_errors=True)
+
+
 try:
     _p9_arm(who="part212")
     _p9_patch(_notif212, "notify", lambda *a, **k: None)
@@ -385,6 +526,9 @@ try:
     _s212_history()
     _s212_backup_codes()
     _s212_backups()
+    _s212_absolute()
+    _s212_host_prefix()
+    _s212_cert()
 finally:
     _p9_restore_all()
     _cleanup212()

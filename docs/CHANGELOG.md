@@ -1440,6 +1440,50 @@ compares git commits, not this file.
 
 ### Security
 
+- **Stored secrets are encrypted with AES-256-GCM, under a key you can rotate.** SSH credentials,
+  database logins, e-mail addresses, 2FA secrets and bot tokens were encrypted with AES-128
+  (Fernet); they are now AES-256-GCM, the option OWASP recommends, and existing values are re-
+  encrypted in the background after the update. Host page > Maintenance > Diagnostics shows the key
+  in use and has Rotate encryption key, which re-encrypts everything under a new key while the old
+  one keeps working until nothing uses it.
+
+- **Built-in HTTPS that fails to start no longer serves plain HTTP to the network.** The panel then
+  listens on 127.0.0.1 only and says why and how to fix it; Tailscale Serve and an SSH tunnel still
+  reach it.
+
+- **ntfy alerts are never sent to this host, link-local or cloud-metadata addresses.** The server's
+  name is checked after it resolves, and the request goes to the address that was checked.
+
+- **Stricter browser security headers.** Pages cannot be framed or given a different base URL, forms
+  post only to the panel, pages and files are isolated from other sites, and HSTS lasts two years.
+
+- **Nothing caches API answers or pages that show a secret.** JSON answers, a new API token, a 2FA
+  setup code and backup codes are sent no-store.
+
+- **Uploaded file names follow the rename rules.** A name with a control character, a text-direction
+  character or a space at either end is refused with the reason.
+
+- **Live console and terminal connections refuse oversized messages.** A large paste into the
+  terminal is sent in pieces, so it still arrives whole.
+
+- **Links that open a new tab never give that tab access to the panel.** Every one carries
+  rel="noopener noreferrer".
+
+- **A login ends 8 hours after sign-in, however active.** An open page polls every few seconds, so a
+  signed-in tab used to stay signed in for as long as it stayed open. Following OWASP's session
+  guidance, a login now ends 8 hours after sign-in (or after the idle window set in Settings, if
+  that is longer), and a remember-me login after its own number of days; you are asked to sign in
+  again.
+
+- **Login cookies are tied to the panel's own address.** Over HTTPS the login cookies are named
+  __Host-…, so the browser only accepts them from this exact address over HTTPS and nothing on
+  another subdomain can set or replace them. You are asked to sign in once more after updating.
+
+- **The built-in HTTPS certificate uses a modern key.** When the panel serves HTTPS itself, its
+  self-signed certificate is now an ECDSA P-256 one valid for 397 days, renewed at start-up near its
+  end; an older RSA certificate is replaced once at the next start, so the browser asks you to
+  accept it again.
+
 - **Passwords are stored the way OWASP recommends.** Account passwords and new 2FA backup codes are
   hashed with Argon2id at OWASP's recommended settings, in place of bcrypt over SHA-256; each
   existing password is upgraded the next time its owner signs in, with no reset. New encrypted

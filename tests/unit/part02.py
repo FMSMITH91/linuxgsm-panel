@@ -2017,7 +2017,7 @@ finally:
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)
         if os.path.exists(p)}
 enc = config.encrypt_secret("hunter2")
-check("encrypt adds enc: prefix", enc.startswith("enc:v1:"))
+check("encrypt adds the enc:v2: prefix (AES-256-GCM)", enc.startswith("enc:v2:"))
 check("is_encrypted true for ciphertext", config.is_encrypted(enc))
 eq("decrypt round-trips", config.decrypt_secret(enc), "hunter2")
 eq("encrypt empty -> empty", config.encrypt_secret(""), "")
@@ -2045,7 +2045,7 @@ eq("encrypt: ...round-tripped after the second call too",
 # to read as encrypted, or the startup migration would re-encrypt it under a new key and put it
 # permanently out of reach of the original one.
 check("is_encrypted: a real ciphertext still reads as encrypted without consulting the key",
-      config._is_fernet_token(_stored[len("enc:v1:"):]))
+      config._kr.split_v2(_stored) is not None)
 check("is_encrypted: rejects a prefix followed by valid base64 that is not a Fernet token",
       not config.is_encrypted("enc:v1:aGVsbG8gd29ybGQ="))
 
@@ -3811,11 +3811,15 @@ try:
     _atg_routes.url_for = lambda _ep, **kw: "/" + _ep
 
     def _atg_post(user, **form):
-        """POST the mint form as `user`; returns the rendered body (a redirect means refused)."""
+        """POST the mint form as `user`; returns the rendered body (a redirect means refused).
+
+        A minted token's page comes back as a Response (sent no-store), so its text is read.
+        """
         _atg_routes.current_user = user
         with _atg_app.test_request_context("/account/api-token/generate",
                                            method="POST", data=form):
-            return _atg_mint()
+            out = _atg_mint()
+            return out.get_data(as_text=True) if hasattr(out, "get_data") else out
 
     # A FRESH user per case on purpose. Sharing one would make the mint counter cumulative, and
     # then the positive controls below would fail alongside the refusals whenever the gate came

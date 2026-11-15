@@ -41,6 +41,24 @@ function _sizeFor(el) {
 // \ and a newline (SAFE_LABEL_RE) — ESC included. Written raw, xterm acted on what followed it as
 // a control sequence: a delegate who may rename a host could clear the screen or draw a fake
 // prompt in the superadmin's terminal. C0 and C1 controls go; _status (textContent) needs no help.
+// The server takes no Socket.IO message over 64 KB (max_http_buffer_size, OWASP WebSocket Security Cheat
+// Sheet), and a paste can be far longer. One UTF-16 unit is at most 6 bytes once JSON-escaped (\u0001),
+// so 8192 of them stay under the limit with room for the envelope. A pair is never split: half of an
+// emoji alone is not text the server can write to the shell.
+var TERM_CHUNK = 8192;
+
+function _termChunks(data) {
+  var out = [];
+  for (var i = 0; i < data.length;) {
+    var end = Math.min(i + TERM_CHUNK, data.length);
+    var c = data.charCodeAt(end - 1);
+    if (end < data.length && c >= 0xD800 && c <= 0xDBFF) end -= 1;
+    out.push(data.slice(i, end));
+    i = end;
+  }
+  return out;
+}
+
 function _r17cTermText(s) {
   return String(s).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
 }
@@ -160,7 +178,9 @@ function initTerminal() {
 
   // Keystrokes go straight out and are never stored anywhere, here or on the server: people type
   // passwords into terminals.
-  term.onData(function (data) { sock.emit('term_input', { data: data }); });
+  term.onData(function (data) {
+    _termChunks(data).forEach(function (part) { sock.emit('term_input', { data: part }); });
+  });
 
   var resizeTimer = null;
   window.addEventListener('resize', function () {

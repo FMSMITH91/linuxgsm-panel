@@ -78,6 +78,7 @@
     "layoutEditOn": "writable",
     "loadAutoUpd": "writable",
     "loadDbStats": "writable",
+    "loadEncStatus": "writable",
     "loadHistory": "writable",
     "loadIntegrity": "writable",
     "loadPanelBranches": "writable",
