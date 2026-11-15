@@ -5847,8 +5847,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (/account/reauth, login_required: any signed-in account confirms its own password).
 # 279, was 278: one genuinely new view, panel/routes/owner_transfer.py's transfer of the panel's
 # ownership (/account/owner/transfer, login_required; the route refuses anyone but the panel owner).
-check("register_routes: every one of the 279 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 279,
+# 285, was 279: six genuinely new views, panel/routes/push_devices.py's alert devices (Web Push): subscribe,
+# unsubscribe, remove a device, test alert, alert choices and the sign-out page, all login_required and
+# each acting on the caller's own rows only.
+check("register_routes: every one of the 285 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 285,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

@@ -1878,6 +1878,7 @@ def create_app():
     # can't nonce inline STYLE attributes (only <style> blocks). Style injection is far lower risk
     # than script injection, so this is the standard, deliberate split.
     # Self-hosted assets only; nothing frames a panel page, none has a <base>, every form posts to the panel.
+    # worker-src 'self': the one worker is the alerts service worker (static/push/sw.js), same origin.
     def _csp():
         nonce = getattr(g, "csp_nonce", "")
         return (
@@ -1886,7 +1887,7 @@ def create_app():
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "font-src 'self' data:; "
-            "connect-src 'self'; "
+            "connect-src 'self'; worker-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         )
 

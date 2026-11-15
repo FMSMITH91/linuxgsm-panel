@@ -241,6 +241,8 @@
     </div>
   </div>
 
+  {% include "_push_card.html" %}
+
   {# API access. This card was dropped in c1f63e5 while the routes and the Bearer auth path stayed,
      which left a live way into every endpoint that nobody could see, mint or revoke — and made
      /account/api-token/generate store a credential whose plaintext it then threw away, because
@@ -321,4 +323,5 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/account_sessions.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/push_alerts.js') }}"></script>
 {% endblock %}

@@ -150,7 +150,7 @@ def reset_throttle():
 # ── Required 2FA ──────────────────────────────────────────────────────────────────────────────────
 # Reachable while 2FA setup is required: the setup page and the form it posts to, signing out, the
 # page's own language switcher and the session probe.
-TWOFA_GATE_OPEN = frozenset(("account_2fa_enable", "logout", "set_language", "api_i18n_catalog",
+TWOFA_GATE_OPEN = frozenset(("account_2fa_enable", "logout", "account_signout", "set_language", "api_i18n_catalog",
                              "api_auth_ping", "healthz", "static", "force_password_change",
                              "account_change_password"))
 

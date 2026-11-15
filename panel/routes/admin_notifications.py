@@ -577,6 +577,10 @@ def _apply_profile_fields(user):
         UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         user.auth_epoch = (user.auth_epoch or 0) + 1
         user.revoke_api_token()
+        # Its alert devices too: an offboarded account's phone gets no more alerts (push_alerts also
+        # checks is_active when it sends, for any other way an account is switched off).
+        from panel.services.push_alerts import drop_user
+        drop_user(user.id)
 
 
 def _apply_resets(user, _pending_audit):

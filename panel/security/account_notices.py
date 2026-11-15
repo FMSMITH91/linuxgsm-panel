@@ -43,6 +43,8 @@ _CHANGES = {
     "owner_transferred": ("Panel ownership transferred",
                           "Since you last signed in: ownership of this panel was transferred ({when}, "
                           "from {ip})."),
+    "push_subscribe": ("Alerts turned on for a new device",
+                       "Since you last signed in: alerts were turned on for a new device ({when}, from {ip})."),
     "login_locked": ("Sign-ins paused after repeated failed attempts",
                      "Since you last signed in: sign-ins to your account were paused after repeated "
                      "failed attempts ({when}, last from {ip})."),

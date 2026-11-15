@@ -1696,7 +1696,7 @@ try:  # noqa: MC0001
     _bk_notify_saved = _bksh.notifications.notify
     _bk_due_saved = _bkops.game_backup_due
     try:
-        _bksh.notifications.notify = lambda k, t, b="": _bk_notes.append((k, t))
+        _bksh.notifications.notify = lambda k, t, b="", **_kw: _bk_notes.append((k, t))
         _bkops.game_backup_due = lambda sid: sid == gs_id    # only OUR server is due
         _bkops.record_game_backup(gs_id)                     # a clock: not "never run before"
         _bkops.set_game_schedule(gs_id, 1, 2)                # ...and the schedule is ON
@@ -1876,7 +1876,7 @@ try:  # noqa: MC0001
     _bkc_saved = (_bksh.notifications.notify, _bkops.game_backup_due, _bksh.run_game_backup,
                   _bkmod.run_game_backup, _bkmod.threading)
     try:
-        _bksh.notifications.notify = lambda k, t, b="": _bkc_notes.append((k, t))
+        _bksh.notifications.notify = lambda k, t, b="", **_kw: _bkc_notes.append((k, t))
         _bkops.game_backup_due = lambda sid: sid == gs_id    # only OUR server is due
         _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec, _bkc_full
         _bkops.start_game_clock = _bkc_start

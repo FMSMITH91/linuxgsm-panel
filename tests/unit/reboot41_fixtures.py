@@ -487,7 +487,7 @@ def _slots41(gs, allow_console=False, primary=None):
     return (n, 16, None)
 
 
-def _notify41(key, title, body=""):
+def _notify41(key, title, body="", **_kw):
     _NOTES41.append((key, title, body))
     _TRACE41.append(("notify", key + ":" + title))
 

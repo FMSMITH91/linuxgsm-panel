@@ -38,8 +38,11 @@ ACCEPT_PAGES = [
 ]
 
 # Controls never pressed: they end the session this walk is signed in with, or (Transfer
-# ownership: its fold toggle and its form, on the panel owner's Account page) would hand the panel away.
-SKIP = ["Sign out", "_acctSignOutAll", "Transfer ownership", "/account/owner/transfer"]
+# ownership: its fold toggle and its form, on the panel owner's Account page) would hand the panel away,
+# or (the Account page's alerts buttons) would ask the browser for notification permission, subscribe
+# it to a real push service or send a push.
+SKIP = ["Sign out", "_acctSignOutAll", "Transfer ownership", "/account/owner/transfer",
+        "push-enable", "push-disable", "push-test", "/account/push/devices/"]
 # ...and never confirmed: each asks the panel to reboot the host it runs on, restore over its own
 # database, update, re-bind or repair itself. Faked or not, the panel then behaves as though that
 # were under way (a restore really does replace the throwaway database the walk is signed in to),

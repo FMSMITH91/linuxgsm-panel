@@ -328,7 +328,7 @@ def _arm43():
                      _CLOSED43.append((port, name)), (1, "Port %s: 1 rule(s) removed" % port, []))[1])
     _p9_patch(_disc43, "privileged_accounts", lambda remote, users: {})
     _p9_patch(_disc43, "_bg_cache_commands", lambda *a, **k: None)
-    _p9_patch(_notif43, "notify", lambda key, title, body="": _NOTIFIED43.append((key, body)))
+    _p9_patch(_notif43, "notify", lambda key, title, body="", **_kw: _NOTIFIED43.append((key, body)))
     _p9_patch(_mon43, "_lgsm_maintenance_running", lambda remote, gs: False)
     _p9_patch(_mon43, "_lgsm_stopped_on_purpose", lambda remote, gs: False)
     _p9_patch(_lgd43, "serverlist", lambda *a, **k: _ROWS43)
@@ -1070,7 +1070,7 @@ def _rv43_arm():
     # The fields _p9_arm's stand-in has, which a render reads (review 1012d: dns_name alone).
     _p9_patch(_ts43, "get_tailscale_info",
               lambda force_refresh=False: _NS43(dns_name=None, serve_config={}, serve_unreadable=False))
-    _p9_patch(_notif43, "notify", lambda key, title, body="": None)
+    _p9_patch(_notif43, "notify", lambda key, title, body="", **_kw: None)
     _p9_patch(_p9.socketio, "emit", lambda *a, **k: None)
     _p9_patch(_sd43, "threading", _p9_threading(_P9Thread))
     _p9_patch(_sh43, "privileged_accounts", lambda remote, users: {})

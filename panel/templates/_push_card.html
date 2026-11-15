@@ -1,0 +1,66 @@
+{# The Account page's "Alerts on this device" card (panel/routes/push_devices.py, push_alerts.card).
+   push_alerts.js picks which status line shows and which buttons; every line is rendered here, hidden,
+   so each is translated like any other template text. "Turn on alerts" shows from the first paint (the
+   usual answer) and the status row keeps one line's height, so the card does not move when the script
+   decides. #}
+{% set pc = push_card(current_user) %}
+<div class="card" id="sec-push"
+     data-key="{{ pc.key }}" data-reauth="{{ '1' if pc.reauth else '0' }}"
+     data-sw="{{ url_for('static', filename='push/sw.js') }}"
+     data-scope="{{ url_for('static', filename='push/') }}"
+     data-reauth-url="{{ url_for('account_reauth') }}?next=%2Faccount"
+     data-subscribe-url="{{ url_for('account_push_subscribe') }}"
+     data-unsubscribe-url="{{ url_for('account_push_unsubscribe') }}"
+     data-test-url="{{ url_for('account_push_test') }}">
+  <div class="card-header"><i class="bi bi-bell-fill"></i> Alerts on this device</div>
+  <div class="card-body">
+    <div class="small mb-2" style="min-height:1.5em;" id="push-status">
+      <span data-push-msg="checking">Checking this browser…</span>
+      <span data-push-msg="on" class="d-none"><span class="badge bg-success">On</span> Alerts reach this device, even when you are signed out.</span>
+      <span data-push-msg="off" class="d-none"><span class="badge bg-secondary">Off</span> This device gets no alerts.</span>
+      <span data-push-msg="insecure" class="d-none text-warning">Alerts need the panel opened over HTTPS. This page is plain HTTP, so this browser cannot receive them.</span>
+      <span data-push-msg="ios" class="d-none text-secondary">On iPhone and iPad: add the panel to your Home Screen (Share, then Add to Home Screen), open it from there, and turn alerts on.</span>
+      <span data-push-msg="unsupported" class="d-none text-secondary">This browser cannot receive push alerts.</span>
+      <span data-push-msg="blocked" class="d-none text-warning">Notifications are blocked for this site in your browser's settings. Allow them there, then reload this page.</span>
+      <span data-push-msg="denied" class="d-none text-warning">Notifications were not allowed, so alerts stay off.</span>
+      <span data-push-msg="failed" class="d-none text-danger">This browser could not turn alerts on. Try again in a moment.</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap mb-2">
+      <button type="button" class="btn btn-primary btn-sm" id="push-enable"><i class="bi bi-bell"></i> Turn on alerts</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="push-disable"><i class="bi bi-bell-slash"></i> Turn off on this device</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="push-test"><i class="bi bi-send"></i> Send a test alert</button>
+    </div>
+    {% call fold('Your devices and which alerts') %}
+    {% if pc.devices %}
+    <ul class="list-unstyled small mb-2" id="push-devices">
+      {% for d in pc.devices %}
+      <li class="d-flex justify-content-between align-items-center gap-2 border rounded px-2 py-1 mb-1" data-push-hash="{{ d.hash }}">
+        <div style="min-width:0;">
+          <strong data-no-i18n>{{ d.label or 'Unknown device' }}</strong>
+          <span class="badge bg-success ms-1 d-none" data-push-this>This device</span>
+          <div class="text-secondary" style="font-size:.72rem;"><span>Added</span> <span>{{ d.created|datetime }}</span>{% if d.last %} · <span>Last alert delivered</span> <span>{{ d.last|datetime }}</span>{% endif %}</div>
+        </div>
+        <form method="POST" action="{{ url_for('account_push_device_remove', sub_id=d.id) }}">
+          <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-secondary small mb-2">No devices yet.</p>
+    {% endif %}
+    <p class="text-secondary small mb-2">Alerts keep arriving after you sign out, until you turn them off on that device, remove it here, or choose "Stop alerts on this device" when you sign out.</p>
+    <div class="small fw-semibold mb-1">Which alerts</div>
+    <form method="POST" action="{{ url_for('account_push_events') }}">
+      {% for key, label, on in pc.events %}
+      <div class="form-check small">
+        <input class="form-check-input" type="checkbox" name="events" value="{{ key }}" id="push-ev-{{ key }}"{% if on %} checked{% endif %}>
+        <label class="form-check-label" for="push-ev-{{ key }}">{{ label }}</label>
+      </div>
+      {% endfor %}
+      <button class="btn btn-outline-primary btn-sm mt-2" type="submit">Save alert choices</button>
+    </form>
+    <p class="text-secondary small mt-2 mb-0">A lock screen shows only the alert's title and the server's or host's name: never an address, a player or a password.</p>
+    {% endcall %}
+  </div>
+</div>
