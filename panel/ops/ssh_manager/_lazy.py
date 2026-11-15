@@ -19,8 +19,10 @@ class LazyModule:
     """A module imported at the first attribute read, and answered from from then on."""
 
     def __init__(self, name):
+        """Stand for module `name`, not yet imported."""
         self._name = name
 
     def __getattr__(self, attr):
+        """Import the module (once: sys.modules keeps it) and answer `attr` from it."""
         return getattr(importlib.import_module(self._name), attr)
 
