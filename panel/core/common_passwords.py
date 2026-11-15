@@ -20,8 +20,26 @@ _LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t
 _KEYBOARD_ROWS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm", "abcdefghijklmnopqrstuvwxyz",
                   "1qaz2wsx3edc4rfv5tgb6yhn7ujm8ik9ol0p", "qazwsxedcrfvtgbyhnujmikolp",
                   "1q2w3e4r5t6y7u8i9o0p", "q1w2e3r4t5y6u7i8o9p0")
-_EDGE = re.compile(r"\A[\d\W_]+|[\d\W_]+\Z")
-_TRAILING = re.compile(r"[\d\W_]+\Z")
+# Longer than any listed password, roots run together included: past this only the whole-password
+# checks run. The root checks slice the password at every position (quadratic), and a password may
+# be up to MAX_PASSWORD_BYTES long — a megabyte of input must not cost seconds of CPU.
+_MAX_SCREENED = 128
+
+
+def _trim_end(s):
+    """`s` without the digits and symbols at its end (letters are kept). Linear, not a regex."""
+    i = len(s)
+    while i and not s[i - 1].isalpha():
+        i -= 1
+    return s[:i]
+
+
+def _trim_edges(s):
+    """`s` without the digits and symbols at either end."""
+    j = 0
+    while j < len(s) and not s[j].isalpha():
+        j += 1
+    return _trim_end(s[j:])
 
 
 def _load():
@@ -63,8 +81,8 @@ def _unit(s):
 
 def _cores(s):
     """The roots a password may hide: its letters with leetspeak read back and the edges set aside."""
-    return {c for c in (_EDGE.sub("", s), _EDGE.sub("", s).translate(_LEET),
-                        _TRAILING.sub("", s).translate(_LEET), _EDGE.sub("", s.translate(_LEET)))
+    return {c for c in (_trim_edges(s), _trim_edges(s).translate(_LEET),
+                        _trim_end(s).translate(_LEET), _trim_edges(s.translate(_LEET)))
             if c}
 
 
@@ -75,7 +93,7 @@ def _two_roots(core, roots):
 
 def _whole_is_common(s, unit, literals):
     """Whether the whole password (spaces gone, case folded) is listed, a repeat or a keyboard walk."""
-    return (not s or s in literals or _EDGE.sub("", s) in literals or len(set(s)) <= 2
+    return (not s or s in literals or _trim_edges(s) in literals or len(set(s)) <= 2
             or len(unit) <= 3 or _is_walk(s) or _is_walk(unit))
 
 
@@ -92,4 +110,6 @@ def is_common(password):
     unit = _unit(s)
     if _whole_is_common(s, unit, literals):
         return True
+    if len(s) > _MAX_SCREENED:
+        return False
     return any(_core_is_common(core, roots, literals) for core in _cores(s) | _cores(unit))

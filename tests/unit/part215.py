@@ -259,6 +259,17 @@ def _s215_password_rules():
        _pp215("p215_alice-gardens-blue", avoid=("p215_alice",)), "Password must not contain your username.")
 
 
+def _s215_password_screen_cost():
+    # A long run of symbols before letters made the screen's old edge regex backtrack: 2 s at 20 000
+    # characters, quadratic, and a password may be a megabyte. Linear now: well under a second.
+    hostile = "!#" * 25000 + "abc"          # 50 000 characters: the old regex took about 13 s here
+    t0 = _time215.monotonic()
+    verdict = _common215(hostile)
+    took = _time215.monotonic() - t0
+    check("passwords: the common-password screen takes well under a second on 50 000 symbols "
+          "then letters (it backtracked quadratically)", took < 1.0 and verdict is False, "%.3fs %r" % (took, verdict))
+
+
 def _change215(uid, new, code=None):
     data = {"current_password": _K215, "new_password": new, "confirm_password": new}
     if code:
@@ -763,7 +774,8 @@ def _s215_serve_disable_warning():
 
 try:
     _p9_arm(who="part215")
-    for _fn215 in (_s215_policy, _s215_settings, _s215_polls, _s215_password_rules, _s215_password_routes,
+    for _fn215 in (_s215_policy, _s215_settings, _s215_polls, _s215_password_rules,
+                   _s215_password_screen_cost, _s215_password_routes,
                    _s215_account_throttle, _s215_pause_table, _s215_successes_not_counted, _s215_ip_day,
                    _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
                    _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_binding,
