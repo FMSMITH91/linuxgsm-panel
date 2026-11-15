@@ -274,8 +274,11 @@ check("i18n gate: a callback's keyword called inside a lambda in the callee is r
 # French, and the two saves raced on the server. The real handler, with fetch answered by hand.
 _PJ81 = _read81("panel", "static", "js", "panel.js")
 _HANDLER81 = "document.addEventListener('change', function(e){\n  var el = e.target;\n  if (!el || !el.matches || !el.matches('select[data-lang-select]')"
+# Timers are held, never run: the es save is left unanswered, and its 15 s give-up timer (part84's
+# subject) kept node alive for 15 s after the answer was printed.
 _lang_prog81 = (
     _SETTLE47 + "global.window = global; global.MOUNT = '';\n"
+    "global.setTimeout = () => 0; global.clearTimeout = () => {};\n"
     "const handlers = [], pickers = [{value: 'en'}], pending = [], posts = [], applied = [];\n"
     "global.document = {addEventListener: (t, f) => handlers.push(f), querySelectorAll: () => pickers};\n"
     "global.fetch = (url, opts) => { let res; const p = new Promise(r => { res = r; });\n"
