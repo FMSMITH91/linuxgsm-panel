@@ -14,6 +14,21 @@ compares git commits, not this file.
 
 ### Added
 
+- **Require 2FA for administrators.** A Settings switch (off by default) makes superadmins and anyone
+  allowed the terminal, users or groups set up two-factor authentication before using the panel.
+
+- **Session limits in Settings.** The idle timeout is set in minutes (30 for new installs; an existing
+  setting keeps its length), with an absolute session limit beside it. Each shows OWASP's recommended
+  range and a note when a value is outside it; the value is still saved.
+
+- **Account change notices.** You are told at sign-in, and on your Account page, when your password,
+  two-factor setting or API token changed, when and from which address.
+
+- **API token expiry.** A new API token can expire after 30 days, 90 days or a year, or never.
+
+- **Change the Tailscale Serve path in one step.** The Tailscale page moves the panel to a new path
+  without cutting you off, and Disable warns first when you are using the panel through Serve.
+
 - **Databases on another machine.** A super admin can send a host's new databases to a MariaDB or
   MySQL server on another machine, reached over Tailscale only: another host the panel manages, or a
   server it does not manage, with that server's admin login (stored encrypted). Each database's
@@ -1439,6 +1454,27 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Sign-in throttling per account.** Failed sign-ins are counted per account name as well as per
+  address, with a pause that grows with each failure (never a permanent lock), and an alert when an
+  account is paused. A name that does not exist gets the same answer as one that does.
+
+- **Stronger password rules.** A new password needs 15 characters, or 8 with two-factor
+  authentication on, with no rules about character types; common passwords are refused. Existing
+  passwords keep working.
+
+- **Confirm your password for risky actions.** Opening a terminal, uninstalling a server, restoring a
+  panel backup and changing users, groups or invites ask for your password (and 2FA code) again if
+  you last proved it more than 10 minutes ago.
+
+- **Sessions end when you stop using the panel.** The idle timeout counts your own clicks and typing,
+  not the page refreshing itself.
+
+- **Security events are logged.** Refused requests, failed security-token checks, cross-site form
+  posts and sessions used from a different device are recorded in the audit log.
+
+- **Signing out clears the browser.** Signing out clears the panel's cookies and stored data in the
+  browser, and turning two-factor authentication on or off signs out your other sessions.
 
 - **Stored secrets are encrypted with AES-256-GCM, under a key you can rotate.** SSH credentials,
   database logins, e-mail addresses, 2FA secrets and bot tokens were encrypted with AES-128
