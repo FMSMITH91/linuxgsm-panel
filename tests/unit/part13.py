@@ -5002,13 +5002,13 @@ def _ca13_check_compression(app, client):
                st.headers.get("Cache-Control") == "public, max-age=604800",
                "Accept-Encoding" in (st.headers.get("Vary") or ""))), repr(dict(st.headers)))
     big = client.get("/_p13/big", headers=gz)
-    check("app responses: a big page is gzipped, its own Vary kept with Accept-Encoding added, "
-          "and it must be revalidated", all((
+    check("app responses: a big JSON answer is gzipped, its own Vary kept with Accept-Encoding added, "
+          "and no cache keeps it", all((
               big.headers.get("Content-Encoding") == "gzip",
               (_ca13_body(big, gz=True) or {}).get("rows", [""])[0] == "x" * 40,
               [v.strip() for v in big.headers.get("Vary", "").split(",")][:2]
               == ["Origin", "Accept-Encoding"],
-              big.headers.get("Cache-Control") == "no-cache, private")), repr(dict(big.headers)))
+              big.headers.get("Cache-Control") == "no-store")), repr(dict(big.headers)))
     plain, small = client.get("/_p13/big"), client.get("/_p13/small", headers=gz)
     check("app responses: no gzip without Accept-Encoding, nor below the size floor",
           all(("Content-Encoding" not in plain.headers, "Content-Encoding" not in small.headers,
@@ -5025,7 +5025,7 @@ def _ca13_check_compression(app, client):
                "response gzip skipped" in _ca13_logs(cap))), repr((broken.status_code, cap.msgs)))
     hsts = client.get("/_p13/small", headers={"X-Forwarded-Proto": "https"})
     check("app responses: HSTS is sent over proxied HTTPS, and not over plain HTTP",
-          all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
+          all(("max-age=63072000" in (hsts.headers.get("Strict-Transport-Security") or ""),
                "Strict-Transport-Security" not in small.headers)), repr(dict(hsts.headers)))
 
 
@@ -5276,7 +5276,7 @@ def _ca13_check_failing_boot():
     plain = client.get("/_p13/small")
     check("app responses: with no proxy trusted, X-Forwarded-Proto: https alone still earns HSTS "
           "(Tailscale Serve sets it), and plain HTTP does not",
-          all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
+          all(("max-age=63072000" in (hsts.headers.get("Strict-Transport-Security") or ""),
                "Strict-Transport-Security" not in plain.headers)),
           repr((dict(hsts.headers), dict(plain.headers))))
     return app

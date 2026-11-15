@@ -3811,11 +3811,15 @@ try:
     _atg_routes.url_for = lambda _ep, **kw: "/" + _ep
 
     def _atg_post(user, **form):
-        """POST the mint form as `user`; returns the rendered body (a redirect means refused)."""
+        """POST the mint form as `user`; returns the rendered body (a redirect means refused).
+
+        A minted token's page comes back as a Response (sent no-store), so its text is read.
+        """
         _atg_routes.current_user = user
         with _atg_app.test_request_context("/account/api-token/generate",
                                            method="POST", data=form):
-            return _atg_mint()
+            out = _atg_mint()
+            return out.get_data(as_text=True) if hasattr(out, "get_data") else out
 
     # A FRESH user per case on purpose. Sharing one would make the mint counter cumulative, and
     # then the positive controls below would fail alongside the refusals whenever the gate came

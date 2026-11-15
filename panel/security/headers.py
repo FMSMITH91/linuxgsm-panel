@@ -12,6 +12,7 @@ So the full set is kept on everything a browser could show as a document: HTML, 
 can run script when opened), plain text, a download, and any type not named here. The types in
 _INERT_TYPES get only INERT_CSP instead, ~45 bytes in place of ~400: the API-response policy OWASP
 recommends, so that an answer opened on its own can load nothing, run nothing and be framed by no one.
+Cross-Origin-Resource-Policy goes on every response: it is what stops another site loading one.
 X-Content-Type-Options, Referrer-Policy and X-Robots-Tag stay on every response (app.py): the last
 exists for the responses that are NOT HTML, where no <meta> tag can say it.
 """
@@ -27,8 +28,30 @@ _INERT_TYPES = frozenset((
 INERT_CSP = "default-src 'none'; frame-ancestors 'none'"
 
 # The panel uses none of these powerful browser features, so a page is denied them outright: a
-# defence-in-depth limit on what an injected or compromised script could reach for.
-PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), usb=(), payment=(), interest-cohort=()"
+# defence-in-depth limit on what an injected or compromised script could reach for (OWASP HTTP Headers
+# Cheat Sheet, "Permissions-Policy": disable all the features the site does not need).
+PERMISSIONS_POLICY = ("camera=(), microphone=(), geolocation=(), usb=(), payment=(), interest-cohort=(), "
+                      "accelerometer=(), gyroscope=(), magnetometer=(), serial=(), bluetooth=()")
+
+# OWASP HTTP Headers Cheat Sheet, "Strict-Transport-Security (HSTS)": two years. Without `preload`:
+# submitting a name to the browsers' preload list is permanent and belongs to whoever owns the domain
+# (a *.ts.net name or the operator's own), not to the panel. Sent only for trusted TLS (app.py).
+HSTS = "max-age=63072000; includeSubDomains"
+
+# The browsing-context and resource isolation the HTTP Headers Cheat Sheet recommends. The panel opens
+# no window it needs to script (its target=_blank links carry rel="noopener noreferrer") and nothing
+# loads its responses from another origin (Tailscale Serve and a reverse proxy are the same origin to
+# the browser), so both can be as strict as there is.
+COOP = "same-origin"
+CORP = "same-origin"
+
+# What the after-request cache step gives a response that set no Cache-Control of its own (app.py).
+PRIVATE_REVALIDATE = "no-cache, private"
+# OWASP HTTP Headers Cheat Sheet, "Cache-Control": no-store for sensitive responses. Every JSON answer
+# is one (server state, a user's details, a generated password, a debug report), and no page reads a
+# JSON answer back from the cache. HTML pages keep PRIVATE_REVALIDATE so the back/forward cache still
+# works (panel.js re-checks the session on a restore), except a page that shows a secret (no_store).
+NO_STORE = "no-store"
 
 
 def renders_as_page(resp):
@@ -37,10 +60,36 @@ def renders_as_page(resp):
 
 
 def set_page_headers(resp, csp):
-    """Set CSP (csp() builds it), X-Frame-Options and Permissions-Policy on a page; INERT_CSP on the rest."""
+    """Set the document headers on a page and the inert ones on the rest; no-store on JSON.
+
+    A page gets CSP (csp() builds it), X-Frame-Options DENY (the CSP's frame-ancestors 'none' for the
+    browsers that predate it: OWASP Clickjacking Defense Cheat Sheet), Permissions-Policy,
+    Cross-Origin-Opener-Policy and X-DNS-Prefetch-Control off (HTTP Headers Cheat Sheet: the page's
+    links are not all the panel's own). Every response gets Cross-Origin-Resource-Policy. A JSON answer
+    left at PRIVATE_REVALIDATE by the cache step (which runs before this one) becomes NO_STORE.
+    """
+    resp.headers.setdefault("Cross-Origin-Resource-Policy", CORP)
     if not renders_as_page(resp):
         resp.headers.setdefault("Content-Security-Policy", INERT_CSP)
+        if (resp.mimetype or "").lower() == "application/json" \
+                and resp.headers.get("Cache-Control", PRIVATE_REVALIDATE) == PRIVATE_REVALIDATE:
+            resp.headers["Cache-Control"] = NO_STORE
         return
-    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Permissions-Policy", PERMISSIONS_POLICY)
+    resp.headers.setdefault("Cross-Origin-Opener-Policy", COOP)
+    resp.headers.setdefault("X-DNS-Prefetch-Control", "off")
     resp.headers.setdefault("Content-Security-Policy", csp())
+
+
+def no_store(body):
+    """A response for `body` (a rendered page) that no cache keeps: for a page that shows a secret.
+
+    The API token just generated, a TOTP enrolment secret and its QR code, and the 2FA backup codes are
+    each shown once; with no-store neither the disk cache nor the back/forward cache holds a copy for
+    the next person at the browser.
+    """
+    from flask import make_response
+    resp = make_response(body)
+    resp.headers["Cache-Control"] = NO_STORE
+    return resp

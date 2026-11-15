@@ -193,6 +193,72 @@ check("ntfy: the Test button names the refusal, and nothing was connected to",
       and _rconn214 == [], repr(_route214))
 
 
+# ── 4. headers ──────────────────────────────────────────────────────────────────────────────────
+_happ214 = _Flask214("unit_part214_headers")
+_happ214.add_url_rule("/page", "page", lambda: "<p>p</p>")
+_happ214.add_url_rule("/api/x", "api", lambda: _jsonify214(ok=True))
+_happ214.add_url_rule("/api/own", "own", lambda: (_jsonify214(ok=True), 200, {"Cache-Control": "public, max-age=300"}))
+_happ214.add_url_rule("/css", "css", lambda: ("a{}", 200, {"Content-Type": "text/css"}))
+_happ214.add_url_rule("/secret", "secret", lambda: _hdr214.no_store("<p>token</p>"))
+
+
+@_happ214.after_request
+def _hook214(resp):
+    """The two steps app.py runs, in Flask's order: the cache step first, then the security headers."""
+    if "Cache-Control" not in resp.headers:
+        resp.headers["Cache-Control"] = _hdr214.PRIVATE_REVALIDATE
+    _hdr214.set_page_headers(resp, lambda: "default-src 'self'")
+    return resp
+
+
+_hc214 = _happ214.test_client()
+_page214, _api214, _own214, _css214, _sec214 = (_hc214.get(u) for u in ("/page", "/api/x", "/api/own", "/css", "/secret"))
+check("headers: a page is never framed (X-Frame-Options DENY), keeps no opener, prefetches no DNS, "
+      "and loads only on its own origin",
+      _page214.headers.get("X-Frame-Options") == "DENY"
+      and _page214.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
+      and _page214.headers.get("X-DNS-Prefetch-Control") == "off"
+      and _page214.headers.get("Cross-Origin-Resource-Policy") == "same-origin", repr(dict(_page214.headers)))
+check("headers: ...and keeps no-cache, private, so the back/forward cache still works",
+      _page214.headers.get("Cache-Control") == "no-cache, private", repr(_page214.headers.get("Cache-Control")))
+check("headers: a JSON answer is no-store, with the inert CSP and CORP",
+      _api214.headers.get("Cache-Control") == "no-store"
+      and _api214.headers.get("Content-Security-Policy") == _hdr214.INERT_CSP
+      and _api214.headers.get("Cross-Origin-Resource-Policy") == "same-origin"
+      and "X-Frame-Options" not in _api214.headers, repr(dict(_api214.headers)))
+eq("headers: ...a JSON answer that chose its own caching keeps it", _own214.headers.get("Cache-Control"),
+   "public, max-age=300")
+check("headers: a stylesheet keeps its caching and gets CORP",
+      _css214.headers.get("Cache-Control") == "no-cache, private"
+      and _css214.headers.get("Cross-Origin-Resource-Policy") == "same-origin", repr(dict(_css214.headers)))
+eq("headers: no_store() makes a page that shows a secret no-store", _sec214.headers.get("Cache-Control"), "no-store")
+eq("headers: HSTS is two years with includeSubDomains, and no preload", _hdr214.HSTS,
+   "max-age=63072000; includeSubDomains")
+check("headers: Permissions-Policy denies the sensors, serial and Bluetooth too",
+      all(f + "=()" in _hdr214.PERMISSIONS_POLICY for f in ("camera", "microphone", "geolocation", "usb",
+                                                           "accelerometer", "gyroscope", "magnetometer",
+                                                           "serial", "bluetooth")), _hdr214.PERMISSIONS_POLICY)
+with open(_os214.path.join(str(_ROOT214), "panel", "install", "app.py"), encoding="utf-8") as _fh214:
+    _appsrc214 = _fh214.read()
+_csp214 = _appsrc214[_appsrc214.index("    def _csp():"):_appsrc214.index("    @app.after_request")]
+check("headers: the page CSP sends frame-ancestors 'none', base-uri 'none' and form-action 'self'",
+      "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'" in _csp214
+      and "frame-ancestors 'self'" not in _csp214, _csp214[-200:])
+check("headers: HSTS in app.py is the module's value",
+      'setdefault("Strict-Transport-Security", _sec_headers.HSTS)' in _appsrc214
+      and "max-age=31536000" not in _appsrc214, "")
+_tfa214 = _p9_client(P9_ADMIN).get("/account/2fa/enable")
+check("headers: the 2FA enrolment page (its secret and QR code) is no-store, through its route",
+      _tfa214.status_code == 200 and _tfa214.headers.get("Cache-Control") == "no-store",
+      "%d %r" % (_tfa214.status_code, _tfa214.headers.get("Cache-Control")))
+with open(_os214.path.join(str(_ROOT214), "panel", "routes", "auth_routes.py"), encoding="utf-8") as _fh214:
+    _authsrc214 = _fh214.read()
+check("headers: the new API token and the backup codes are rendered through no_store()",
+      'no_store(render_template("account.html", languages=i18n.LANGUAGES, new_token=token))' in _authsrc214
+      and 'no_store(render_template("backup_codes.html", codes=codes, first_time=True))' in _authsrc214
+      and _authsrc214.count("new_token=") == 1 and _authsrc214.count('"backup_codes.html"') == 1, "")
+
+
 # ── 5. Socket.IO: an explicit message limit, and a terminal paste that fits under it ────────────
 _eio214 = _p9.socketio.server.eio
 eq("socket.io: the app's SocketIO takes no message over 64 KB, pings every 25 s and drops a peer silent "

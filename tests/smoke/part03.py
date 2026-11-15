@@ -1002,8 +1002,8 @@ _fx.post("/logout")
 
 # ── Security headers present on every response ────────────────
 hr = app.test_client().get("/login")
-check("security header: X-Frame-Options=SAMEORIGIN",
-      hr.headers.get("X-Frame-Options") == "SAMEORIGIN",
+check("security header: X-Frame-Options=DENY (nothing frames a panel page)",
+      hr.headers.get("X-Frame-Options") == "DENY",
       "got %r" % hr.headers.get("X-Frame-Options"))
 check("security header: X-Content-Type-Options=nosniff",
       hr.headers.get("X-Content-Type-Options") == "nosniff")
@@ -1021,6 +1021,36 @@ check("icon webfont is preloaded (CLS fix)",
       b'rel="preload"' in hr.data and b"bootstrap-icons.woff2" in hr.data)
 check("Server header genericized (no framework/version leak)",
       hr.headers.get("Server") == "LinuxGSM Panel" and "Werkzeug" not in (hr.headers.get("Server") or ""))
+# The app's own response hooks, in the order Flask runs them (the cache step, then the headers).
+_hcsp = hr.headers.get("Content-Security-Policy") or ""
+check("security header: the page CSP refuses framing, any <base> and a form posting off the panel",
+      all(d in _hcsp for d in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'",
+                               "object-src 'none'")) and "frame-ancestors 'self'" not in _hcsp, _hcsp)
+check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and keeps "
+      "no-cache, private (the back/forward cache)",
+      (hr.headers.get("Cross-Origin-Opener-Policy"), hr.headers.get("Cross-Origin-Resource-Policy"),
+       hr.headers.get("X-DNS-Prefetch-Control"), hr.headers.get("Cache-Control"))
+      == ("same-origin", "same-origin", "off", "no-cache, private"), repr(dict(hr.headers)))
+_hj = app.test_client().get("/healthz")
+check("security header: a JSON answer is no-store, with CORP and the inert CSP",
+      (_hj.headers.get("Cache-Control"), _hj.headers.get("Cross-Origin-Resource-Policy"),
+       _hj.headers.get("Content-Security-Policy")) == ("no-store", "same-origin", "default-src 'none'; frame-ancestors 'none'"),
+      repr(dict(_hj.headers)))
+_hp = client_as(admin_id).get("/api/auth/ping")
+check("security header: a signed-in JSON answer (/api/auth/ping) is no-store",
+      _hp.status_code == 200 and _hp.headers.get("Cache-Control") == "no-store",
+      "%d %r" % (_hp.status_code, _hp.headers.get("Cache-Control")))
+_hs = app.test_client().get("/healthz", headers={"X-Forwarded-Proto": "https"})
+check("security header: HSTS over proxied HTTPS is two years with includeSubDomains, no preload",
+      _hs.headers.get("Strict-Transport-Security") == "max-age=63072000; includeSubDomains",
+      repr(_hs.headers.get("Strict-Transport-Security")))
+_hsio = app.test_client().get("/socket.io/?EIO=4&transport=polling").get_data(as_text=True)
+check("Socket.IO: the handshake tells the browser the 64 KB message limit (maxPayload)",
+      '"maxPayload":65536' in _hsio.replace(" ", ""), _hsio[:200])
+_h2fa = client_as(admin_id).get("/account/2fa/enable")
+check("security header: the 2FA enrolment page (a secret and its QR code) is no-store",
+      _h2fa.status_code == 200 and _h2fa.headers.get("Cache-Control") == "no-store",
+      "%d %r" % (_h2fa.status_code, _h2fa.headers.get("Cache-Control")))
 
 # ── Data-dir hardening: sensitive files must be owner-only. chmod only sets POSIX bits, so
 #    this is a no-op check off-Linux (Windows dev boxes); CI runs on Linux and enforces it.

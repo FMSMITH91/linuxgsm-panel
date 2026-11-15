@@ -1880,7 +1880,7 @@ def create_app():
     # style-src keeps 'unsafe-inline': the UI uses inline style="…" attributes throughout, and CSP
     # can't nonce inline STYLE attributes (only <style> blocks). Style injection is far lower risk
     # than script injection, so this is the standard, deliberate split.
-    # All assets are self-hosted, so no external origins are allowed.
+    # Self-hosted assets only; nothing frames a panel page, none has a <base>, every form posts to the panel.
     def _csp():
         nonce = getattr(g, "csp_nonce", "")
         return (
@@ -1890,7 +1890,7 @@ def create_app():
             "img-src 'self' data:; "
             "font-src 'self' data:; "
             "connect-src 'self'; "
-            "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         )
 
     @app.after_request
@@ -1918,7 +1918,7 @@ def create_app():
         self_tls = app.config["_R32A_SELF_TLS"] = _effective_https(cfg)
         if (request.headers.get("X-Forwarded-Proto", "") == "https"
                 or (request.is_secure and not self_tls)):
-            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            resp.headers.setdefault("Strict-Transport-Security", _sec_headers.HSTS)
         return resp
 
     # Compressible content types worth gzipping (skip already-compressed images/fonts/archives).
