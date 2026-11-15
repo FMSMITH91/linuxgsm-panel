@@ -242,13 +242,17 @@ it is also where you manage them: **Add a database** (choose the game server, gi
 - **Connection**: host, port, database, user and password, each with a copy button (revealing or copying
   the password is audited).
 - **Tables**: each table's approximate row count, size and columns, and its rows 50 at a time. Long values
-  are cut (**Show all** reads the whole one), binary values show their length. With `edit_database_data`,
+  are cut (**Show all** reads the whole one), binary values show their length, and a NUL character inside
+  text shows as ␀ (such a value is changed through the SQL box, not the row editor). With `edit_database_data`,
   **Add row**, **Edit** and **Delete** change one row at a time, addressed by its primary key; a view or a
   table without a primary key is read-only here.
 - **SQL** (with `edit_database_data`): one statement per run, for at most 30 seconds, with at most 200 rows
   shown. SELECT, SHOW, DESCRIBE and EXPLAIN run at once in a read-only transaction; anything else shows
-  the statement and asks you to confirm it first. MySQL runs each statement as a prepared statement, so
+  the statement and asks you to confirm it first (each confirmation runs it once). MySQL runs each statement as a prepared statement, so
   a few kinds (DESCRIBE, CREATE TRIGGER/PROCEDURE) are not available there: use SHOW COLUMNS FROM.
+  On MariaDB the 30 seconds stop the statement that is running; a stored procedure whose `SLEEP()` is
+  cut short carries on with its next statement (that is MariaDB's behaviour), so a procedure is better
+  tried on a copy first.
 - **Dump and restore**: download a dump (it is written to the server's files as
   `panel-db-dumps/<name>.sql.gz` first, the file each backup writes), or upload a `.sql` / `.sql.gz` dump
   (up to 2 GiB) to replace the database's contents. The upload is checked on the host before anything is

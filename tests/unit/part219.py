@@ -321,8 +321,9 @@ eq("db_data.quote_ident: a backtick inside a name is doubled; an empty, NUL or o
 _rows_st219 = _dd219.rows_statement(_pl219, 2)
 eq("db_data.rows_statement: key columns whole, text cut server-side, binary as its length, ordered by the key, a "
    "fixed page of 50 (+1 to tell there are more)", _rows_st219,
-   {"sql": "SELECT `id`, LEFT(`name`, 257), LENGTH(`skin`), LEFT(`len`, 257) FROM `players` ORDER BY `id` "
-           "LIMIT 51 OFFSET 100"})
+   {"sql": "SELECT `id`, REPLACE(CONVERT(LEFT(`name`, 257) USING utf8mb4), _utf8mb4 X'00', _utf8mb4 X'E29080'), "
+           "LENGTH(`skin`), REPLACE(CONVERT(LEFT(`len`, 257) USING utf8mb4), _utf8mb4 X'00', _utf8mb4 X'E29080') "
+           "FROM `players` ORDER BY `id` LIMIT 51 OFFSET 100"})
 check("db_data.rows_statement: a page past the last is the last",
       _dd219.rows_statement(_pl219, 10 ** 9)["sql"].endswith(" LIMIT 51 OFFSET %d" % (_dd219.PAGE_MAX * 50)))
 eq("db_data.update_statement: names from the structure, quoted; every value and the key bound as parameters; a "
@@ -360,6 +361,16 @@ eq("db_data.sql_kind: SELECT/SHOW/DESCRIBE/EXPLAIN read (comments and brackets s
 eq("db_data.mask_literals: every quoted string, hex and bit literal masked, identifiers kept, one line",
    _dd219.mask_literals("UPDATE `us'er` SET pw = 'hunter2', n = \"x\\\"y\", b = X'ABCD', h = 0xFF\n WHERE a = 'it''s'"),
    "UPDATE `us'er` SET pw = '?', n = \"?\", b = X'?', h = 0x? WHERE a = '?'")
+_bin219 = _dd219.sql_result(_dd219.parse(_answer219(([(["b"], [["\x00\ufffd"]])], -1))))
+eq("db_data.sql_result: bytes that are not text are said to be binary, with no length guessed from what the "
+   "client's decoding left of them (N8)", _bin219["sets"][0]["rows"], [[{"binary": None}]])
+_nul219 = _dd219.rows(_dd219.parse(_answer219(([(["id", "name", "skin", "len"], [["1", "a\u2400b", "3", "4"]])], -1))),
+                      _pl219)
+eq("db_data.rows: a text value whose NUL the server marked (U+2400) is flagged, so the editor leaves it alone (N3)",
+   _nul219["rows"][0]["cells"][1], {"text": "a\u2400b", "nul": True})
+check("manager script: a cell flagged nul is not editable here, and says why",
+      "cell.more || cell.nul" in open(_os219.path.join(_root, "panel", "static", "js", "databases_manager.js"),
+                                      encoding="utf-8").read())
 check("db_data.mask_literals: an unterminated literal is masked to the end; long text is cut",
       _dd219.mask_literals("SELECT 'secret") == "SELECT '?'" and len(_dd219.mask_literals("x" * 999)) == 300)
 _got219 = []
@@ -409,9 +420,13 @@ _HOST_ANSWERS219 = (
     (lambda q, m: "information_schema.TABLES" in q, lambda q: (_STRUCT_ANS219, "", 0)),
     (lambda q, m: q.startswith("SELECT `id`"), lambda q: (_answer219(([(["id", "name", "skin", "len"], [
         ["1", "x" * 300, "9", "5"], ["2", None, None, None]])], -1)), "", 0)),
-    (lambda q, m: q.startswith("SELECT LEFT"), lambda q: (_answer219(([(["v"], [["the whole value"]])], -1)), "", 0)),
+    (lambda q, m: q.startswith("SELECT REPLACE("), lambda q: (_answer219(([(["v"], [["the whole value"]])], -1)), "", 0)),
     (lambda q, m: "writes" in q and m == "ro", lambda q: (_answer219(error=(
         1792, "25006", "Cannot execute statement in a READ ONLY transaction")), "", 1)),
+    (lambda q, m: "OUTFILE" in q, lambda q: (_answer219(error=(
+        1045, "28000", "Access denied for user 'gs1_lp'@'127.0.0.1' (using password: YES)")), "", 1)),
+    (lambda q, m: "nosignin" in q, lambda q: (
+        "ERROR 1045 (28000): Access denied for user 'gs1_lp'@'127.0.0.1' (using password: YES)\n", "", 1)),
     (lambda q, m: "boom" in q, lambda q: (_answer219(error=(1064, "42000", "You have an error near 'boom'")), "", 1)),
     (lambda q, m: q.upper().startswith(("SELECT", "SHOW")), lambda q: (_answer219(([(["n"], [["1"]])], -1)), "", 0)),
 )
@@ -520,6 +535,22 @@ try:
     _n219 = len(_CALLS219)
     _r219 = _E219.post(_api219 + "/sql", json={"sql": _w219, "confirm": _tok219})
     _R5["sql_write"] = (_r219.status_code, _p9_json(_r219), _CALLS219[_n219:])
+    # ...and the same token again: spent (M1, OWASP Transaction Authorization 1.5 / 2.10).
+    _n219 = len(_CALLS219)
+    _r219 = _E219.post(_api219 + "/sql", json={"sql": _w219, "confirm": _tok219})
+    _R5["sql_replay"] = (_r219.status_code, _p9_json(_r219).get("message", ""), len(_CALLS219) - _n219)
+    _tok2 = _p9_json(_E219.post(_api219 + "/sql", json={"sql": _w219})).get("confirm") or ""
+    _p9_patch(_ddr219, "_BOOT", "another-process")
+    _n219 = len(_CALLS219)
+    _R5["sql_restarted"] = (_E219.post(_api219 + "/sql", json={"sql": _w219, "confirm": _tok2}).status_code,
+                            len(_CALLS219) - _n219)
+    _tok3 = _p9_json(_E219.post(_api219 + "/sql", json={"sql": _w219})).get("confirm") or ""
+    _R5["sql_fresh"] = _E219.post(_api219 + "/sql", json={"sql": _w219, "confirm": _tok3}).status_code
+    # A statement the server refuses with 1045 after signing in, and a sign-in it refuses (N2).
+    _R5["sql_outfile"] = (lambda r: (r.status_code, _p9_json(r)))(
+        _E219.post(_api219 + "/sql", json={"sql": "SELECT 1 INTO OUTFILE '/tmp/x'", "confirm": None}))
+    _R5["sql_nosignin"] = (lambda r: (r.status_code, _p9_json(r)))(
+        _E219.post(_api219 + "/sql", json={"sql": "SELECT nosignin"}))
     _r219 = _E219.post(_api219 + "/sql", json={"sql": "SELECT writes()"})
     _R5["sql_sneaky"] = (_r219.status_code, _p9_json(_r219).get("needs_confirm"), _CALLS219[-1][0])
     _R5["sql_error"] = _p9_json(_E219.post(_api219 + "/sql", json={"sql": "SELECT boom"}))
@@ -621,7 +652,9 @@ check("manager: opening a table is audited once (page 0 only), naming the table,
       len([a for a in _audits219("db_browse") if "players" in a[1]]) == 1)
 check("manager: Show all reads one value by the row's key, bound as a parameter, read-only",
       _R5.get("mgr_cell", {}).get("text") == "the whole value" and _R5.get("mgr_cell_call", ("",))[0] == "ro"
-      and _R5.get("mgr_cell_call", ("", [""]))[1][0].startswith("SELECT LEFT(`name`, 262144) FROM `players` WHERE `id` = ?")
+      and _R5.get("mgr_cell_call", ("", [""]))[1][0].startswith(
+          "SELECT REPLACE(CONVERT(LEFT(`name`, 262144) USING utf8mb4), _utf8mb4 X'00', _utf8mb4 X'E29080') FROM "
+          "`players` WHERE `id` = ?")
       and _R5.get("mgr_cell_call", ("", "", None))[2] == ["1"], repr(_R5.get("mgr_cell_call")))
 eq("manager: changing a row and the SQL box need Edit database data (403), and Edit database data alone does not "
    "open a database; another server's database id is 404",
@@ -660,6 +693,19 @@ check("sql: each statement is audited (kind, database, rows) with its string lit
       len(_sa219) >= 3 and all("hunter2" not in a[1] for a in _sa219)
       and any(a[1].startswith("update (write) in ") and "3 row(s)" in a[1] and "name = '?'" in a[1] for a in _sa219)
       and any(a[1].startswith("select (read) in ") for a in _sa219), repr(_sa219))
+_rp5 = _R5.get("sql_replay", (0, "", 1))
+check("sql: a confirm token runs its statement once: used again it is refused (409, said as used) and nothing runs",
+      _rp5[0] == 409 and "was used already" in _rp5[1] and _rp5[2] == 0, repr(_rp5))
+eq("sql: a token made before the panel restarted is refused, and a fresh one still works",
+   (_R5.get("sql_restarted"), _R5.get("sql_fresh")), ((409, 0), 200))
+_of5 = _R5.get("sql_outfile", (0, {}))
+check("sql: a statement the server refuses with 1045 after the sign-in worked (INTO OUTFILE without FILE) says the "
+      "server's own words, not that the account was refused", _of5[0] == 200
+      and _of5[1].get("error", {}).get("code") == 1045 and "Access denied" in _of5[1].get("message", "")
+      and "Reset password" not in repr(_of5[1]), repr(_of5))
+_ns5 = _R5.get("sql_nosignin", (0, {}))
+check("sql: ...and a sign-in the server refuses (no connection id came back) still says use Reset password",
+      _ns5[0] == 502 and "Reset password" in _ns5[1].get("message", ""), repr(_ns5))
 eq("sql: a 'read' the read-only transaction refused (it writes) is sent to the confirm step (409)",
    _R5.get("sql_sneaky"), (409, True, "ro"))
 check("sql: the server's error comes back with its code (the viewer's own statement, as text)",
@@ -718,7 +764,15 @@ _HOSTILE_DUMPS219 = {
     "drop schema": "-- dump\nDROP SCHEMA gs9_other;\n",
     "another panel database": "-- dump\nCREATE TABLE `gs9_other`.`t` (i int);\n",
     "a system schema": "-- dump\nINSERT INTO t SELECT * FROM `mysql`.`user`;\nUPDATE `mysql` . `user` SET x=1;\n",
+    "an INSERT into another panel database": "-- dump\nINSERT INTO `gs9_other`.`t` VALUES (1);\n",
+    "an UPDATE of another database chained on an INSERT line":
+        "-- dump\nINSERT INTO `t` VALUES (1); UPDATE `gs9_other`.`t` SET a=1;\n",
+    "a USE chained on an INSERT line": "-- dump\nINSERT INTO `t` VALUES (1);USE gs9_other;\n",
+    "a DROP DATABASE chained on an INSERT line": "-- dump\nINSERT INTO `t` VALUES (1); DROP DATABASE IF EXISTS `gs9_o`;\n",
 }
+_INSERT_VERDICT219 = {"an INSERT into another panel database": "OTHER",
+                      "an UPDATE of another database chained on an INSERT line": "OTHER",
+                      "a USE chained on an INSERT line": "SWITCH", "a DROP DATABASE chained on an INSERT line": "SWITCH"}
 
 
 def _bash219(script, stdin=None):
@@ -760,7 +814,12 @@ eq("upload check: a dump that switches to or names another database is refused, 
    {k: _R6[k] for k in _HOSTILE_DUMPS219},
    {"use another": (("refused", "SWITCH"), None), "create database": (("refused", "SWITCH"), None),
     "executable-comment use": (("refused", "SWITCH"), None), "drop schema": (("refused", "SWITCH"), None),
-    "another panel database": (("refused", "OTHER"), None), "a system schema": (("refused", "OTHER"), None)})
+    "another panel database": (("refused", "OTHER"), None), "a system schema": (("refused", "OTHER"), None),
+    **{k: (("refused", v), None) for k, v in _INSERT_VERDICT219.items()}})
+_chat219 = (b"-- dump\nINSERT INTO `chat` VALUES (1,'ok; use /help; things; select settings'),"
+            b"(2,'USE gs9_x; then `mysql`.`user`.; drop database x');\nINSERT INTO `gs12_lp`.`chat` VALUES (3,'mine');\n")
+eq("upload check: data in an INSERT that only mentions statements or other databases, and an INSERT into the "
+   "database's own name, are stored", _finish219(_chat219), (("ok", ""), _chat219))
 eq("upload check: NUL bytes, a file that is not SQL, an empty one and a damaged gzip are refused",
    [_R6[k] for k in ("nul", "notsql", "empty-gz", "damaged")],
    [(("refused", "NOTTEXT"), None), (("refused", "NOTSQL"), None), (("refused", "FORMAT"), None),

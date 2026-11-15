@@ -175,17 +175,38 @@ def piece_script(user, uid, offset):
         'rm -f -- "$c"; echo "%s $(stat -c %%s -- "$p")"' % _M["SIZE"]]) + "\n"
 
 
-# The scan of the whole SQL (mawk/gawk alike): its size unpacked, and any line outside an INSERT that
-# switches database or names another one as `schema`. Prints one verdict (`exit` still runs END, hence
-# `done`) and stops at the first.
-_SCAN_AWK = r'''{ t += length($0) + 1; if (t > max) { print "BIG"; done = 1; exit }
-  if ($0 ~ /^INSERT INTO /) next
-  l = tolower($0)
-  if (l ~ /^[ \t]*(\/\*![0-9]*[ \t]*)?(use[ \t`]|use$|connect[ \t]|(create|drop|alter)[ \t]+(database|schema)([ \t`]|$))/) { print "SWITCH"; done = 1; exit }
+# The scan of the whole SQL (mawk/gawk alike): its size unpacked, and any statement that switches database
+# or names another one as `schema`. Prints one verdict (`exit` still runs END, hence `done`) and stops at
+# the first. A dump's INSERT lines are most of its bytes and hold the data, so on those it reads only the
+# INSERT's own head (up to " VALUES") and, on a line that holds a system or panel database's name at all,
+# each statement chained after a ";" (data that merely says "; use ..." or "`mysql`." is not refused).
+_SCAN_AWK = r'''function other(l,   n) {
   while (match(l, /`(mysql|sys|information_schema|performance_schema|gs[0-9]+_[a-z0-9]+)`[ \t]*\./)) {
     n = substr(l, RSTART + 1); n = substr(n, 1, index(n, "`") - 1)
-    if (n != me) { print "OTHER"; done = 1; exit }
-    l = substr(l, RSTART + RLENGTH) } }
+    if (n != me) return 1
+    l = substr(l, RSTART + RLENGTH) }
+  return 0 }
+function switches(l) {
+  return l ~ /^[ \t]*(\/\*![0-9]*[ \t]*)?(use[ \t]+|(create|drop|alter)[ \t]+(database|schema)[ \t]+(if[ \t]+(not[ \t]+)?exists[ \t]+)?)`?(mysql|sys|information_schema|performance_schema|gs[0-9]+_)/ }
+function named(l) {
+  return l ~ /gs[0-9]/ || index(l, "mysql") || index(l, "_schema") || index(l, "`sys`") || index(l, " sys;") || index(l, " sys ") }
+function chained(l,   rest, e, st) {
+  while (match(l, /;[ \t]*(\/\*![0-9]*[ \t]*)?(use|update|delete|insert|replace|select|create|drop|alter|rename|truncate|call|with|lock|grant|set|do|handler|load)[ \t`(]/)) {
+    rest = substr(l, RSTART + 1); e = index(rest, ";"); st = e ? substr(rest, 1, e - 1) : rest
+    if (switches(st)) return "SWITCH"
+    if (other(st)) return "OTHER"
+    l = rest }
+  return "" }
+function verdict(v) { print v; done = 1; exit }
+{ t += length($0) + 1; if (t > max) verdict("BIG")
+  if ($0 ~ /^INSERT INTO /) {
+    v = index($0, " VALUES"); h = v ? substr($0, 1, v) : $0
+    if ((index(h, "`.") || index(h, "` .")) && other(tolower(h))) verdict("OTHER")
+    if (named($0) && index($0, ";")) { c = chained(tolower($0)); if (c != "") verdict(c) }
+    next }
+  l = tolower($0)
+  if (l ~ /^[ \t]*(\/\*![0-9]*[ \t]*)?(use[ \t`]|use$|connect[ \t]|(create|drop|alter)[ \t]+(database|schema)([ \t`]|$))/) verdict("SWITCH")
+  if (other(l)) verdict("OTHER") }
 END { if (!done) print "SCANNED" }'''
 
 

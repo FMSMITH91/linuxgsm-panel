@@ -20,6 +20,8 @@ and every SQL statement writes an audit row: what kind, which database, how many
 statement with its string literals masked (db_data.mask_literals), never a value.
 """
 import hashlib
+import secrets
+import threading
 import time
 
 from flask import current_app, jsonify, request
@@ -36,6 +38,13 @@ from panel.security.auth import (EDIT_DATABASE_DATA, MANAGE_DATABASES, get_game,
 
 STRUCT_FRESH = 60           # seconds a database's structure is reused for its rows and edits
 CONFIRM_MAX_AGE = 300       # seconds a SQL confirm token stays good
+# A confirm token is good ONCE (OWASP Transaction Authorization 1.5 / 2.10): the nonce of each token
+# that ran is kept here until the token would have expired anyway, and a second use is refused like an
+# expired one. A token made before this process started names another _BOOT, so a restart, which
+# empties the list, can't make a spent token good again.
+_SPENT = {}                 # nonce -> monotonic time it was spent
+_SPENT_LOCK = threading.Lock()
+_BOOT = secrets.token_hex(8)
 _STRUCT = {}                # GameDatabase id -> (monotonic time, {table name: table})
 
 _DENIED = "Permission denied"
@@ -87,7 +96,10 @@ def _problem(gs, ans):
     if ans.get("late"):
         return 504, i18n.Sentence(S_LATE, s=_dd._priv.DB_QUERY_SECONDS)
     code = (ans.get("error") or {}).get("code")
-    if code in (1045, 1698):
+    if code in (1045, 1698) and ans.get("conn") is None:
+        # Refused at sign-in: no session, so no connection id came back. With one, the account signed in
+        # and the server refused a statement (MariaDB says 1045 for INTO OUTFILE without FILE): that is the
+        # statement's own error, said as such by the caller.
         return 502, S_REFUSED_LOGIN
     if code in (2002, 2003, 2013, 2005):
         return 502, i18n.Sentence(S_UNREACHABLE, host=gs.remote.name if gs.remote else "")
@@ -297,18 +309,39 @@ def _confirm_claim(r, text):
 
 
 def confirm_token(r, text):
-    """A token that confirms exactly `text` in database `r` for this viewer, for CONFIRM_MAX_AGE seconds."""
-    return _confirm_serializer().dumps(_confirm_claim(r, text))
+    """A token that confirms exactly `text` in database `r` for this viewer, once, within CONFIRM_MAX_AGE seconds."""
+    return _confirm_serializer().dumps(dict(_confirm_claim(r, text), n=secrets.token_hex(16), b=_BOOT))
 
 
 def confirmed(r, text, token):
-    """Whether `token` confirms exactly `text` in database `r` for this viewer, and is still fresh."""
+    """Whether `token` confirms exactly `text` in database `r` for this viewer, is fresh, and was never used.
+
+    A token that passes is spent here, in the same step: a second use answers False.
+    """
     if not isinstance(token, str) or not token or len(token) > 500:
         return False
     try:
-        return _confirm_serializer().loads(token, max_age=CONFIRM_MAX_AGE) == _confirm_claim(r, text)
+        got = _confirm_serializer().loads(token, max_age=CONFIRM_MAX_AGE)
     except BadSignature:
         return False
+    if not isinstance(got, dict):
+        return False
+    nonce, boot = got.pop("n", None), got.pop("b", None)
+    if got != _confirm_claim(r, text) or boot != _BOOT or not isinstance(nonce, str):
+        return False
+    return _spend(nonce)
+
+
+def _spend(nonce):
+    """Mark `nonce` used: True the first time, False ever after (until it would have expired anyway)."""
+    now = time.monotonic()
+    with _SPENT_LOCK:
+        for old in [n for n, t in _SPENT.items() if now - t > CONFIRM_MAX_AGE]:
+            del _SPENT[old]
+        if nonce in _SPENT:
+            return False
+        _SPENT[nonce] = now
+        return True
 
 
 _SQL_MAX = 65536
@@ -325,7 +358,8 @@ def _sql_text(body):
 def _confirm_refusal(r, text, token, kind):
     """A confirm step the statement still needs (a change with no token), or a token that is not for it; else None."""
     if token is not None and not confirmed(r, text, token):
-        return _say(409, "That confirmation is for another statement or has expired. Run the statement again.")
+        return _say(409, "That confirmation is for another statement, was used already, or has expired. Run the "
+                         "statement again.")
     if token is None and kind[0] == "write":
         return _needs_confirm(r, text, kind[1])
     return None

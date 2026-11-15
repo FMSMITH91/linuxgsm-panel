@@ -226,11 +226,23 @@ def _col(table, name):
     return next((c for c in table["columns"] if c["name"] == name), None)
 
 
+# The client's XML writes a NUL byte as a space, so a text value read for the page has each NUL put back as
+# NUL_MARK (U+2400, "␀") on the server: visible, and a value holding it is not offered to the editor (a
+# save would write the mark, or a space, where the NUL was). CONVERT first: REPLACE then works in utf8mb4,
+# whatever the column's character set, with the two literals (coercible) taking its collation.
+NUL_MARK = chr(0x2400)
+
+
+def _nul_marked(expr):
+    """`expr` (text) with every NUL byte shown as NUL_MARK."""
+    return "REPLACE(CONVERT(%s USING utf8mb4), _utf8mb4 X'00', _utf8mb4 X'E29080')" % expr
+
+
 def _select_expr(c, is_key):
     q = quote_ident(c["name"])
     if c["binary"]:
         return "LENGTH(%s)" % q
-    return q if is_key else "LEFT(%s, %d)" % (q, PREVIEW_CHARS + 1)
+    return q if is_key else _nul_marked("LEFT(%s, %d)" % (q, PREVIEW_CHARS + 1))
 
 
 def rows_statement(table, page):
@@ -251,9 +263,10 @@ def _cell(c, v, is_key):
         return {"null": True}
     if c["binary"]:
         return {"binary": _dd_int(v)}
-    if not is_key and len(v) > PREVIEW_CHARS:
-        return {"text": v[:PREVIEW_CHARS], "more": True}
-    return {"text": v}
+    out = {"text": v[:PREVIEW_CHARS], "more": True} if not is_key and len(v) > PREVIEW_CHARS else {"text": v}
+    if NUL_MARK in v:
+        out["nul"] = True
+    return out
 
 
 def rows(ans, table):
@@ -299,8 +312,8 @@ def cell_statement(table, column, key):
     if c is None or c["binary"]:
         raise RowRefused("not a text column")
     where, params = _key_match(table, key)
-    sql = "SELECT LEFT(%s, %d) FROM %s WHERE %s LIMIT 1" % (  # nosec B608 - quoted identifiers, bound values
-        quote_ident(column), FULL_CHARS, quote_ident(table["name"]), where)
+    sql = "SELECT %s FROM %s WHERE %s LIMIT 1" % (  # nosec B608 - quoted identifiers, bound values
+        _nul_marked("LEFT(%s, %d)" % (quote_ident(column), FULL_CHARS)), quote_ident(table["name"]), where)
     return {"sql": sql, "params": params}
 
 
@@ -458,7 +471,9 @@ def _sql_value(v):
     if v is None:
         return {"null": True}
     if _REPLACED in v:
-        return {"binary": len(v.encode("utf-8"))}
+        # Bytes that are not UTF-8 reach the panel already replaced, so their count is not known here
+        # (Browse asks the server for LENGTH instead).
+        return {"binary": None}
     if len(v) > SQL_CELL_CHARS:
         return {"text": v[:SQL_CELL_CHARS], "more": True}
     return {"text": v}
