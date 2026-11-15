@@ -433,6 +433,12 @@ def _s215_required_2fa():
     _all215("2fa required: the setup page itself stays reachable (the last superadmin cannot be shut out)",
           [setup.status_code == 200,
               'name="totp_code"' in setup.get_data(as_text=True)], repr(setup.status_code))
+    setup_html = setup.get_data(as_text=True)
+    _all215("2fa required: ...offers Sign out instead of a Cancel that leads back to itself, and starts no "
+            "host polls the gate can only refuse",
+            ['action="/logout"' in setup_html, "Sign out instead" in setup_html,
+             "window.OS_NAG = false" in setup_html, "window.LOCAL_HOST_ID = null" in setup_html,
+             "window.LOCAL_HOST_CTL = false" in setup_html], repr(setup.status_code))
     _all215("2fa required: a terminal holder is covered; a viewer is not; with the switch off nobody is",
           [term_page.status_code == 302,
               viewer.status_code != 403,
