@@ -270,7 +270,7 @@ def _s215_password_routes():
     _reset215()
     plain = _user215("p215_plain")
     short, said = _change215(plain, "fourteen chars")
-    common, said_common = _change215(plain, "Password12345678")
+    _common, said_common = _change215(plain, "Password12345678")
     secret = _pyotp215.random_base32()
     mfa = _user215("p215_mfa", totp=secret)
     ok, said_ok = _change215(mfa, _K215_SHORT, code=_pyotp215.TOTP(secret).now())
@@ -344,6 +344,9 @@ def _s215_account_throttle():
     _all215("throttle: the next failure doubles the pause: refused after one base pause, signed in after two",
           ["Too many failed attempts" in still.get_data(as_text=True),
               second_in], repr(second_in))
+
+
+def _s215_pause_table():
     t = 10 ** 6
     pauses = [_ag215._pause_end([t - 1] * (n - 1) + [t], t) - t for n in (9, 10, 11, 12, 14, 30)]
     eq("throttle: under ten recent failures no pause; then 1, 2, 4 and 16 minutes, capped at 15",
@@ -743,7 +746,7 @@ def _s215_serve_disable_warning():
 try:
     _p9_arm(who="part215")
     for _fn215 in (_s215_policy, _s215_settings, _s215_polls, _s215_password_rules, _s215_password_routes,
-                   _s215_account_throttle, _s215_successes_not_counted, _s215_ip_day, _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
+                   _s215_account_throttle, _s215_pause_table, _s215_successes_not_counted, _s215_ip_day, _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
                    _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_binding,
                    _s215_rotation_and_logout, _s215_fetch_metadata, _s215_serve_path,
                    _s215_serve_disable_warning):
