@@ -127,7 +127,9 @@ def row_endpoint(row):
 
 
 def endpoint_info(ep):
-    """What the tab says about the server a host's databases go to."""
+    """What the tab says about the server a host's databases go to (None for none)."""
+    if ep is None:
+        return None
     try:
         warnings = [w for w in json.loads(ep.warnings or "[]") if isinstance(w, str)]
     except ValueError:
@@ -147,10 +149,15 @@ def tailnet_ip(remote, force=False):
         got = _hosts.remote_check_tailscale(remote) or {}
     except Exception:
         got = {}
-    ip = next((w.strip() for w in str(got.get("tailscale_ip") or "").split(",") if _is_tailnet_v4(w.strip())), "")
+    ip = _first_tailnet_v4(got.get("tailscale_ip"))
     if ip or not got.get("unreachable"):
         _TS_IPS[remote.id] = (time.monotonic(), ip)
     return ip
+
+
+def _first_tailnet_v4(text):
+    """The first Tailscale IPv4 address in a comma-separated list, or ""."""
+    return next((w.strip() for w in str(text or "").split(",") if _is_tailnet_v4(w.strip())), "")
 
 
 def moved_to(gs_remote, rows):
@@ -362,7 +369,7 @@ def _overview_hosts(remote_ids, names, eps):
 
 
 def _server_name(hd):
-    """'MariaDB 10.11.14' / 'MySQL 8.4.11' for a host's server row, or "" with none."""
+    """The server's name and version ('MariaDB 10.11.14', 'MySQL 8.4.11') from a host's row, or "" with none."""
     if hd is None:
         return ""
     return ("MySQL" if hd.flavor == "mysql" else "MariaDB") + " " + (hd.version or "")[:8]

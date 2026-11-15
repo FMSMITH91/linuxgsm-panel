@@ -311,7 +311,7 @@ def _list_answer(gs):
     moved = _net.moved_to(gs.remote, rows) if manage else ""
     return jsonify({
         "state": state, "remote_id": gs.remote_id, "host": _host_info(hd),
-        "endpoint": _net.endpoint_info(ep) if ep is not None else None, "moved_to": moved,
+        "endpoint": _net.endpoint_info(ep), "moved_to": moved,
         "probe_warnings": [w for w in (p.get("warnings") or []) if isinstance(w, str)],
         "setup_error": i18n.tr(setup["why"]) if setup.get("why") else "",
         "can": {"manage": manage, "setup": _can_setup(), "su": bool(current_user.is_superadmin)},
@@ -542,7 +542,7 @@ def _move_answer(gs, r):
     """
     new = _net.tailnet_ip(gs.remote, force=True)
     old = r.account_host or ""
-    if r.endpoint_id is None or not old or not new or new == old:
+    if _nothing_to_move(r, old, new):
         return _say(409, "This database's account already signs in from this host's address.")
     ep = db.session.get(_net.DatabaseEndpoint, r.endpoint_id)
     remote, target = _net.admin_target(gs.remote, _host_row(gs.remote_id), r)
@@ -558,6 +558,11 @@ def _move_answer(gs, r):
             ok, "account of %s moved from %s to %s" % (r.name, old, new), "account of %s not moved" % r.name, said),
             success=bool(ok), server=gs)
     return jsonify(reply), 200 if ok else 502
+
+
+def _nothing_to_move(r, old, new):
+    """Whether `r` has no account on another machine to move, or it already signs in from `new`."""
+    return r.endpoint_id is None or not old or not new or new == old
 
 
 def _rehost_proved(gs, ep, where, r, move):
@@ -765,16 +770,20 @@ def _dump_rows(remote, account, hd, rows):
     The game host's own databases in one call; each one on another machine in a call of its own,
     signed in as its own account (each has its own password). Every dump is written by the account.
     """
-    local = [r for r in rows if r.endpoint_id is None]
-    if local and hd is None:
+    if hd is None and any(r.endpoint_id is None for r in rows):
         return i18n.Sentence("the host's database server is not set up in the panel.")
     refused = game_account_write_refusal(remote, account)
     if refused is not None:
         return refused
-    calls = ([(hd, local)] if local else []) + [(_net.game_view(r), [r]) for r in rows if r.endpoint_id is not None]
-    why = [w for w in (_dump_group(remote, account, target, group) for target, group in calls) if w]
+    why = [w for w in (_dump_group(remote, account, target, group) for target, group in _dump_calls(hd, rows)) if w]
     db.session.commit()
     return i18n.Sentences(*why) if why else ""
+
+
+def _dump_calls(hd, rows):
+    """(target, rows) per dump call: the host's own databases together, each one on another machine alone."""
+    local = [r for r in rows if r.endpoint_id is None]
+    return ([(hd, local)] if local else []) + [(_net.game_view(r), [r]) for r in rows if r.endpoint_id is not None]
 
 
 def _dump_group(remote, account, target, group):

@@ -184,10 +184,6 @@ function dbHostLink(h, text, action) {
     if (!u.value && !p.value) { u.value = g.user; p.value = st.grantPw; }
   }
 
-  window.dbCopyGrant = function () {
-    var pre = el('db-grant');
-    if (pre && pre.textContent) window.copyText(pre.textContent, T('Copied'));
-  };
 
   function drawHost(d) {
     var line = hostLine(d), h = el('db-host');
@@ -511,6 +507,11 @@ function dbHostLink(h, text, action) {
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
   if (!c) return;
+  window.dbCopyGrant = function () {
+    var pre = c.el('db-grant');
+    if (pre && pre.textContent) window.copyText(pre.textContent, T('Copied'));
+  };
+
   window.dbMove = function (id) {
     var db = c.row(id);
     if (!db) return;
