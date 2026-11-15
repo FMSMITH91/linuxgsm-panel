@@ -232,7 +232,10 @@ def _row_change_answer(gs, r):
     try:
         stmt = _row_statement(t, op, body)
     except ValueError as e:
-        return _say(400, i18n.Sentence("That change doesn't fit the table: {why}.", why=str(e)))
+        # Only a sentence from the fixed list goes back (db_data.RowRefused), never an exception's own text.
+        known = str(e) if isinstance(e, _dd.RowRefused) else ""
+        why = next((w for w in _dd.ROW_REFUSALS if w == known), "a value is not one the column takes")
+        return _say(400, i18n.Sentence("That change doesn't fit the table: {why}.", why=why))
     ans = _query(gs, r, "rw", [stmt])
     values = body.get("values") if op != "delete" and isinstance(body.get("values"), dict) else {}
     return _row_change_done(gs, r, t, (op, values), ans)

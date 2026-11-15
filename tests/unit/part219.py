@@ -494,6 +494,16 @@ try:
                                             "values": {"`id` = 1; --": {"value": "1"}}}).status_code,
         _E219.post(_api219 + "/row", json={"op": "drop", "table": "players"}).status_code,
         len(_CALLS219) - _n219]
+    # What a refusal says back: a sentence from db_data.ROW_REFUSALS, and for any other bad value a fixed
+    # one, never an exception's own text (CodeQL py/stack-trace-exposure).
+    def _refusal_text219(values):
+        return _p9_json(_E219.post(_api219 + "/row", json={"op": "update", "table": "players", "key": {"id": "1"},
+                                                           "values": values})).get("message")
+    _upd219 = _dd219.update_statement
+    _R5["refused_text"] = [_refusal_text219({"`id` = 1; --": {"value": "1"}})]
+    _p9_patch(_dd219, "update_statement", lambda *a, **k: int("internal detail"))
+    _R5["refused_text"].append(_refusal_text219({"name": {"value": "x"}}))
+    _p9_patch(_dd219, "update_statement", _upd219)
 
     # ── 5c. the SQL box ──────────────────────────────────────────────────────────────────────────
     _n219 = len(_CALLS219)
@@ -627,6 +637,9 @@ check("editor: the change is audited with the table, the columns and the rows ch
       and "(columns: name)" in _ua219[0][1] and "DROP" not in _ua219[0][1], repr(_ua219))
 eq("editor: a table with no key (409), a column not in the table (400) and an unknown operation (400) are refused "
    "without asking the host", _R5.get("update_refused"), [409, 400, 400, 0])
+eq("row change: a refusal says only a fixed sentence, never an exception's own text",
+   _R5.get("refused_text"), ["That change doesn't fit the table: not a column that can be set.",
+                             "That change doesn't fit the table: a value is not one the column takes."])
 _sr219 = _R5.get("sql_read", ({}, [("", [""])]))
 check("sql: a SELECT runs at once, in a read-only transaction, its rows capped", _sr219[0].get("success") is True
       and _sr219[1][0][0] == "ro" and _sr219[0].get("result", {}).get("sets", [{}])[0].get("rows") == [[{"text": "1"}]],

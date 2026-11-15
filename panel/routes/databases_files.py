@@ -207,8 +207,8 @@ def finish_script(user, uid, size, name):
         'if [ "$h" != "$n" ]; then %s echo %s; exit 5; fi' % (rm, _M["NOTTEXT"]),
         # Counted, never `grep -q` under pipefail: grep stopping early ends the reader with SIGPIPE, and
         # a large dump would read as "not SQL".
-        "c=$(rd 2>/dev/null | head -c 65536 | grep -ciE '^(--|/\\*|CREATE |INSERT |SET |DROP |LOCK |ALTER |START |"
-        "BEGIN|DELIMITER )')",
+        ("c=$(rd 2>/dev/null | head -c 65536 | grep -ciE '^(--|/\\*|CREATE |INSERT |SET |DROP |LOCK |ALTER |START |"
+         + "BEGIN|DELIMITER )')"),
         'if [ "${c:-0}" -lt 1 ]; then %s echo %s; exit 5; fi' % (rm, _M["NOTSQL"]),
         # A verdict first (awk stopping early ends the reader with SIGPIPE); a scan that read everything
         # also needs the reader to have read it all without an error (a damaged or cut gzip).

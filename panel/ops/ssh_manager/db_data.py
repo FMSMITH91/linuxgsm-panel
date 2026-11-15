@@ -49,10 +49,20 @@ _REPLACED = chr(0xFFFD)
 _ERROR_RE = re.compile(r"^ERROR (\d{1,5}) \(([0-9A-Z]{5})\)(?: at line \d+)?: (.*)$", re.M)
 
 
+
+# Why a row change does not fit its table: the only sentences a refusal may say back to the browser.
+ROW_REFUSALS = ("not an identifier", "not this table's key", "not a text column", "no values",
+                "not a column that can be set", "that column can't be empty (NULL)", "not a value")
+
+
+class RowRefused(ValueError):
+    """A request that does not fit the table; its text is one of ROW_REFUSALS."""
+
+
 def quote_ident(name):
     """`name` as a quoted identifier (backticks, a backtick inside doubled). Only for a name structure() read."""
     if not isinstance(name, str) or not name or len(name) > 64 or "\x00" in name:
-        raise ValueError("not an identifier")
+        raise RowRefused("not an identifier")
     return "`" + name.replace("`", "``") + "`"
 
 
@@ -268,7 +278,7 @@ def _page_row(cols, r, keys):
 def _key_match(table, key):
     """The WHERE clause and its values for the row `key` ({key column: value}) addresses; ValueError if not whole."""
     if not isinstance(key, dict) or set(key) != set(table["pk"]) or not all(isinstance(v, str) for v in key.values()):
-        raise ValueError("not this table's key")
+        raise RowRefused("not this table's key")
     parts, params = [], []
     for name in table["pk"]:
         c = _col(table, name)
@@ -287,7 +297,7 @@ def cell_statement(table, column, key):
     """The statement that reads one whole value (at most FULL_CHARS characters) of the row `key` addresses."""
     c = _col(table, column)
     if c is None or c["binary"]:
-        raise ValueError("not a text column")
+        raise RowRefused("not a text column")
     where, params = _key_match(table, key)
     sql = "SELECT LEFT(%s, %d) FROM %s WHERE %s LIMIT 1" % (  # nosec B608 - quoted identifiers, bound values
         quote_ident(column), FULL_CHARS, quote_ident(table["name"]), where)
@@ -304,21 +314,21 @@ def _value_param(c, v):
 def _values(table, values):
     """[(column, value or None)] for `values` ({column: {"null": bool, "value": text}}); ValueError on a bad one."""
     if not isinstance(values, dict) or not values:
-        raise ValueError("no values")
+        raise RowRefused("no values")
     return [_value(_col(table, name), v) for name, v in values.items()]
 
 
 def _value(c, v):
     """(column, value or None) for one value set on column `c` (None: not in the table); ValueError if not fit."""
     if c is None or c["binary"] or c["generated"] or not isinstance(v, dict):
-        raise ValueError("not a column that can be set")
+        raise RowRefused("not a column that can be set")
     if v.get("null"):
         if not c["nullable"]:
-            raise ValueError("that column can't be empty (NULL)")
+            raise RowRefused("that column can't be empty (NULL)")
         return c, None
     if isinstance(v.get("value"), str) and len(v["value"].encode("utf-8", "replace")) <= _priv.DB_QUERY_VALUE_MAX:
         return c, v["value"]
-    raise ValueError("not a value")
+    raise RowRefused("not a value")
 
 
 def insert_statement(table, values):

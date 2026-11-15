@@ -970,6 +970,10 @@ with app.app_context():
     db.session.add(_mon); db.session.commit()
     _mon_id, _r1_id = _mon.id, _r1.id
     _rec = []
+
+    def _rec_notify(key, title, body="", **_kw):
+        """Record the alert's key (stands in for notifications.notify)."""
+        _rec.append(key)
     _saved = {n: getattr(_monmod, n) for n in ("_host_reachable", "_remote_listening_ports",
               "_host_disk_pct", "_host_load_mem", "_server_slots", "_server_max_config",
               "_batched_slots")}
@@ -985,7 +989,7 @@ with app.app_context():
     _saved_peak = dict(_ps._server_peak_notified)
     _saved_pc = dict(_ps._player_counts)
     try:  # noqa: MC0001
-        _am.notifications.notify = lambda key, title, body="", **_kw: _rec.append(key)
+        _am.notifications.notify = _rec_notify
         _monmod._host_reachable = lambda r: True
         _monmod._host_disk_pct = lambda r: 40
         _monmod._host_load_mem = lambda r: (10, 10)
@@ -1059,7 +1063,7 @@ with app.app_context():
         check("monitor: ...while a recovery the panel did not cause IS announced",
               any(k == "server_up" and "mon-srv" in b for k, b in _exp_bodies),
               str(_exp_bodies)[:140])
-        _am.notifications.notify = lambda key, title, body="", **_kw: _rec.append(key)
+        _am.notifications.notify = _rec_notify
         _ps._expected_offline.pop(_mon_id, None)
 
         # ── A server a reboot plan holds is not "went offline unexpectedly" ──────────────────
@@ -1117,7 +1121,7 @@ with app.app_context():
             _monmod.time = _rw_real_time
             _monmod._remote_listening_ports = _rw_saved_ports
             _ps._expected_offline.pop(_mon_id, None)
-            _am.notifications.notify = lambda key, title, body="", **_kw: _rec.append(key)
+            _am.notifications.notify = _rec_notify
 
         # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
         # It computed `up` from a live port scan every 60s and kept it only in an in-memory
