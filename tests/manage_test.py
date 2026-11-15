@@ -178,6 +178,12 @@ def _said(fn, *a):
 
 def _check_owner():
     """The panel owner: set-owner moves it, and deactivate/demote refuse it until it has moved."""
+    _check_owner_refusals()
+    _check_set_owner()
+
+
+def _check_owner_refusals():
+    """set-owner refuses an account that cannot own the panel; deactivate/demote refuse the owner."""
     check("owner: create-admin made no new owner; the one owner is the oldest active superadmin",
           _owners() == ["cli_admin"], repr(_owners()))
     for who, why in (("cli_user", "a plain account"), ("cli_gone_admin", "an inactive superadmin")):
@@ -191,6 +197,10 @@ def _check_owner():
             intact = u.is_active and u.is_superadmin and u.is_owner
         check("owner: the owner cannot be %s here, and the message names set-owner" % label,
               exited and "panel owner" in msg and "set-owner" in msg and intact, msg[:120])
+
+
+def _check_set_owner():
+    """set-owner moves the owner and audits it; after it, the old owner is an ordinary superadmin."""
     exited, msg, out = _said(manage.cmd_set_owner, Args(username="cli_new"))
     check("set-owner: moves ownership to an active superadmin (no 2FA needed) and says what changed",
           not exited and _owners() == ["cli_new"] and "'cli_new' is now the panel owner (was: cli_admin)" in out,

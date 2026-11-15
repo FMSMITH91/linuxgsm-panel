@@ -199,31 +199,40 @@ def _edit216(actor, target, **form):
     return _p9_client(actor).post("/users/%d/edit" % target, data=data, headers=_XHR216)
 
 
+_EDITS216 = (("display name", {}), ("deactivate", {"is_active": None}), ("demote", {"is_superadmin": None}),
+             ("rename", {"username": "p216-taken"}), ("reset password", {"reset_password": "on"}),
+             ("reset 2fa", {"reset_2fa": "on"}))
+
+
+def _others_try216(other, own):
+    """Every kind of /users edit, and the delete, of `own` by `other`: {label: (status, message)}."""
+    out = {}
+    for label, form in _EDITS216:
+        r = _edit216(other, own, **form)
+        out[label] = (r.status_code, _p9_json(r).get("message"))
+    r = _p9_client(other).post("/users/%d/delete" % own, headers=_XHR216)
+    out["delete"] = (r.status_code, _p9_json(r).get("message"))
+    return out
+
+
 def _s216_others_refused():
     _no_owner216()
     own = _user216("p216-own", owner=True, totp=_pyotp216.random_base32())
     other = _user216("p216-other")
     before = _row216(own)
     since = _last_id216()
-    out = {}
-    for label, form in (("display name", {}), ("deactivate", {"is_active": None}),
-                        ("demote", {"is_superadmin": None}), ("rename", {"username": "p216-taken"}),
-                        ("reset password", {"reset_password": "on"}), ("reset 2fa", {"reset_2fa": "on"})):
-        r = _edit216(other, own, **form)
-        out[label] = (r.status_code, _p9_json(r).get("message"))
-    r = _p9_client(other).post("/users/%d/delete" % own, headers=_XHR216)
-    out["delete"] = (r.status_code, _p9_json(r).get("message"))
+    out = _others_try216(other, own)
     eq("untouchable: another superadmin's edit of the panel owner is refused whole, every kind of it",
        {k: v for k, v in out.items() if k != "delete"},
-       {k: (403, _ow216.NOT_YOURS) for k in ("display name", "deactivate", "demote", "rename",
-                                              "reset password", "reset 2fa")})
+       {k: (403, _ow216.NOT_YOURS) for k, _f in _EDITS216})
     eq("untouchable: ...and so is deleting the panel owner", out["delete"], (403, _ow216.NO_DELETE))
     eq("untouchable: ...and the account is exactly as it was (name, active, superadmin, owner, 2FA, password)",
        _row216(own), before)
     rows = _audits216("access_denied", since)
-    check("untouchable: each refusal is an access_denied audit row naming who asked and whose account",
-          len(rows) == 7 and all(r[0] == "p216-other" and r[1] == "p216-own" and r[3] is False for r in rows)
-          and "deletion of the panel owner's account" in rows[-1][2], repr(rows))
+    eq("untouchable: each refusal is an access_denied audit row naming who asked and whose account",
+       [(r[0], r[1], r[2], r[3]) for r in rows],
+       [("p216-other", "p216-own", "refused: an edit of the panel owner's account", False)] * 6
+       + [("p216-other", "p216-own", "refused: deletion of the panel owner's account", False)])
     _edit216(other, other)                       # positive control: a non-owner peer is still editable
     r = _edit216(own, other, is_active=None)
     check("untouchable: the panel owner can still deactivate another superadmin (control)",
@@ -400,7 +409,7 @@ def _s216_transfer_race():
             _NOTIFIED216.append(("race", ok))
     _NOTIFIED216.clear()
     _p9_patch(_ot216, "reauth_release", _meanwhile)
-    r, flashes = _transfer216(ids["own"], ids["new"], s_own)
+    _r, flashes = _transfer216(ids["own"], ids["new"], s_own)
     eq("transfer: two transfers racing from the same panel owner leave exactly one owner, the first to land, "
        "and the second says nothing moved", (flashes, _owners216(), _NOTIFIED216[:1]),
        ([_ot216.CHANGED_MEANWHILE], [racer], [("race", True)]))
