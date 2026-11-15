@@ -157,9 +157,8 @@ def _s215_settings():
         _p9_restore_all()
     check("settings: the idle and absolute fields show the values in force with OWASP's ranges beside them",
           'name="session_idle_minutes"' in inside and 'value="20"' in inside and 'value="6"' in inside
-          and "OWASP recommends 15–30 minutes (2–5 for high-value panels)." in inside
-          and "OWASP recommends 4–8 hours." in inside
-          and "OWASP gives no number; it advises keeping persistent logins short." in inside, inside[:0])
+          and "OWASP: 15–30 min (2–5 for high-value panels)." in inside and "OWASP: 4–8 hours." in inside
+          and "OWASP gives no number; keep it short." in inside, "")
     eq("settings: the 'Longer than OWASP recommends' notes follow the values (hidden inside the ranges, shown past)",
        (_note_shown215(inside, "s-idle-note"), _note_shown215(inside, "s-absolute-note"),
         _note_shown215(outside, "s-idle-note"), _note_shown215(outside, "s-absolute-note")),

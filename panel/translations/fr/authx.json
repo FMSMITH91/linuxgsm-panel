@@ -1,13 +1,8 @@
 {
   "Session idle timeout (minutes)": "Délai d'inactivité de la session (minutes)",
-  "OWASP recommends 15–30 minutes (2–5 for high-value panels).": "L'OWASP recommande 15 à 30 minutes (2 à 5 pour les panneaux à forte valeur).",
   "Longer than OWASP recommends.": "Plus long que ce que recommande l'OWASP.",
   "Absolute session limit (hours)": "Durée maximale de la session (heures)",
-  "OWASP recommends 4–8 hours.": "L'OWASP recommande 4 à 8 heures.",
-  "OWASP gives no number; it advises keeping persistent logins short.": "L'OWASP ne donne pas de chiffre ; il conseille de garder les connexions persistantes courtes.",
-  "A login ends after the idle timeout without use, and at the absolute limit however active. Background refreshes do not count as use.": "Une session se termine après le délai d'inactivité sans utilisation, et à la durée maximale même si elle est active. Les actualisations en arrière-plan ne comptent pas comme une utilisation.",
   "Require two-factor authentication for administrators": "Exiger l'authentification à deux facteurs pour les administrateurs",
-  "Superadmins and anyone allowed the terminal, users or groups must set up 2FA right after signing in before they can do anything else.": "Les super-administrateurs et toute personne autorisée au terminal, aux utilisateurs ou aux groupes doivent configurer la 2FA juste après la connexion avant de pouvoir faire quoi que ce soit d'autre.",
   "Confirm it is you": "Confirmez qu'il s'agit bien de vous",
   "This action needs your password again because you signed in a while ago. You will not be asked again for a few minutes.": "Cette action demande à nouveau votre mot de passe, car vous vous êtes connecté il y a un moment. Il ne vous sera plus demandé pendant quelques minutes.",
   "Confirm and continue": "Confirmer et continuer",
@@ -64,5 +59,10 @@
   "New path": "Nouveau chemin",
   "The new path is published and checked first; the old one is removed only after that, so this page keeps working until you move.": "Le nouveau chemin est d'abord publié et vérifié ; l'ancien n'est supprimé qu'ensuite, donc cette page continue de fonctionner jusqu'à ce que vous changiez.",
   "Change the panel's Serve path": "Changer le chemin Serve du panneau",
-  "Error changing the Serve path": "Erreur lors du changement du chemin Serve"
+  "Error changing the Serve path": "Erreur lors du changement du chemin Serve",
+  "OWASP: 15–30 min (2–5 for high-value panels).": "OWASP : 15 à 30 min (2 à 5 pour les panneaux à forte valeur).",
+  "OWASP: 4–8 hours.": "OWASP : 4 à 8 heures.",
+  "OWASP gives no number; keep it short.": "L'OWASP ne donne pas de chiffre ; restez court.",
+  "A login ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.": "Une session se termine après le délai d'inactivité sans utilisation, ou à la durée maximale. Les actualisations en arrière-plan ne comptent pas.",
+  "Superadmins and anyone with terminal, user or group rights must set up 2FA before anything else.": "Les super-administrateurs et toute personne ayant les droits terminal, utilisateurs ou groupes doivent configurer la 2FA avant toute autre chose."
 }

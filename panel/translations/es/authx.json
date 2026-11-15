@@ -1,13 +1,8 @@
 {
   "Session idle timeout (minutes)": "Tiempo de inactividad de la sesión (minutos)",
-  "OWASP recommends 15–30 minutes (2–5 for high-value panels).": "OWASP recomienda 15–30 minutos (2–5 para paneles de alto valor).",
   "Longer than OWASP recommends.": "Más largo de lo que recomienda OWASP.",
   "Absolute session limit (hours)": "Límite absoluto de la sesión (horas)",
-  "OWASP recommends 4–8 hours.": "OWASP recomienda 4–8 horas.",
-  "OWASP gives no number; it advises keeping persistent logins short.": "OWASP no da una cifra; aconseja que los inicios de sesión persistentes sean cortos.",
-  "A login ends after the idle timeout without use, and at the absolute limit however active. Background refreshes do not count as use.": "Una sesión termina tras el tiempo de inactividad sin uso, y en el límite absoluto aunque esté activa. Las actualizaciones en segundo plano no cuentan como uso.",
   "Require two-factor authentication for administrators": "Exigir autenticación de dos factores a los administradores",
-  "Superadmins and anyone allowed the terminal, users or groups must set up 2FA right after signing in before they can do anything else.": "Los superadministradores y quien tenga permiso para la terminal, los usuarios o los grupos deben configurar la 2FA justo después de iniciar sesión antes de poder hacer cualquier otra cosa.",
   "Confirm it is you": "Confirma que eres tú",
   "This action needs your password again because you signed in a while ago. You will not be asked again for a few minutes.": "Esta acción necesita tu contraseña de nuevo porque iniciaste sesión hace un rato. No se te volverá a pedir durante unos minutos.",
   "Confirm and continue": "Confirmar y continuar",
@@ -64,5 +59,10 @@
   "New path": "Nueva ruta",
   "The new path is published and checked first; the old one is removed only after that, so this page keeps working until you move.": "Primero se publica y comprueba la nueva ruta; la antigua solo se elimina después, así que esta página sigue funcionando hasta que te muevas.",
   "Change the panel's Serve path": "Cambiar la ruta de Serve del panel",
-  "Error changing the Serve path": "Error al cambiar la ruta de Serve"
+  "Error changing the Serve path": "Error al cambiar la ruta de Serve",
+  "OWASP: 15–30 min (2–5 for high-value panels).": "OWASP: 15–30 min (2–5 para paneles de alto valor).",
+  "OWASP: 4–8 hours.": "OWASP: 4–8 horas.",
+  "OWASP gives no number; keep it short.": "OWASP no da una cifra; que sea corto.",
+  "A login ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.": "Una sesión termina tras el tiempo de inactividad sin uso, o en el límite absoluto. Las actualizaciones en segundo plano no son uso.",
+  "Superadmins and anyone with terminal, user or group rights must set up 2FA before anything else.": "Los superadministradores y quien tenga permisos de terminal, usuarios o grupos deben configurar la 2FA antes de nada."
 }
