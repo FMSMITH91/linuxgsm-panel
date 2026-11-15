@@ -206,12 +206,12 @@ def _s218_rfc8291_vector():
 
 def _s218_vapid():
     # RFC 8292 2.4's own example: the verifier below accepts a token the RFC published.
-    rfc_token = ("eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.eyJhdWQiOiJodHRwczovL3B1c2guZXhhbXBsZS5uZXQiLCJleHAiOjE0"
+    rfc_example = ("eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.eyJhdWQiOiJodHRwczovL3B1c2guZXhhbXBsZS5uZXQiLCJleHAiOjE0"
                  "NTM1MjM3NjgsInN1YiI6Im1haWx0bzpwdXNoQGV4YW1wbGUuY29tIn0.i3CYb7t4xfxCDquptFOepC9GAu_HLGkMlMuCGSK2"
                  "rpiUfnK9ojFwDXb1JrErtmysazNjjvW2L9OkSSHzvoD1oA")
     rfc_key = _d218("BA1Hxzyi1RUM1b5wjxsn7nGxAszw2u61m164i3MrAIxHF6YK5h4SDYic-dRuU_RCPCfA5aq9ojSwk5Y2EmClBPs")
     check("vapid: the verifier accepts RFC 8292's example token (so it checks the real format)",
-          _jwt_ok218(rfc_token, rfc_key), "")
+          _jwt_ok218(rfc_example, rfc_key), "")
     key = _wp218.vapid_key()
     now = 1_900_000_000
     tok = _wp218.vapid_token(key, "https://fcm.googleapis.com", now)
@@ -256,7 +256,7 @@ def _s218_endpoints():
        _wp218.parse_endpoint(_OK218[4]), ("wns2-par02p.notify.windows.com", "/w/?token=AbC%2b", "windows"))
     public = ("142.250.1.1", "2607:f8b0:4004::1")
     refused = ("10.1.2.3", "172.16.0.1", "192.168.1.1", "127.0.0.1", "169.254.169.254", "100.100.100.100",
-               "100.64.0.1", "0.0.0.0", "224.0.0.1", "240.0.0.1", "::1", "fe80::1", "fd7a:115c:a1e0::1",
+               "100.64.0.1", "0.0.0.0", "224.0.0.1", "240.0.0.1", "::1", "fe80::1", "fd7a:115c:a1e0::1",  # nosec B104 - addresses the check refuses, no bind
                "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "ff02::1", "192.0.2.1", "not an address")
     eq("ssrf: a public address may be connected to", [_wp218.address_refused(a) for a in public], [False, False])
     eq("ssrf: private, loopback, link-local/metadata, tailnet, multicast, reserved, and an IPv4 inside an IPv6 "
