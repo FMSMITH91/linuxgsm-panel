@@ -1433,7 +1433,8 @@ check("part18: every deferred worker was run (none left to leak into a later che
 # to a database made before it
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _KEYED18 = ("user", "group", "remote_server", "game_server", "custom_command", "server_tag",
-            "global_ban", "invite", "user_session", "host_database_server", "game_database")
+            "global_ban", "invite", "user_session", "host_database_server", "game_database",
+            "database_endpoint", "endpoint_client")
 check("autoincrement: exactly the keyed tables declare it, and they are the ones the migration "
       "rebuilds",
       sorted(t.name for t in db.metadata.sorted_tables

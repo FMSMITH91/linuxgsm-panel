@@ -1660,6 +1660,7 @@ _VERB_SAMPLES = {
     "db-import": ["mariadb", "3306", "gmodserver", "gs12_luckperms"],
     "db-drop": ["mysql", "socket", "gs12_luckperms"],
     "db-admin-check": ["mysql", "tcp3306"],
+    "db-rehost": ["mysql", "socket", "gs12_luckperms", "100.70.1.2", "100.70.1.3"],
 }
 check("privileged: every verb has a sample (new verbs cannot skip the parity check)",
       set(_VERB_SAMPLES) == set(_priv.verbs()),

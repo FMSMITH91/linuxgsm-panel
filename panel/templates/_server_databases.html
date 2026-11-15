@@ -20,6 +20,14 @@
     <form id="db-login" class="border rounded p-2 mb-2" style="display:none;" data-action="dbLogin" data-args='["@event"]' data-on="submit">
       <p id="db-login-new" class="small mb-2">A database server is already running here, but the panel can't sign in to it yet. Enter an admin login that can create users and grant them rights. The panel keeps it encrypted.</p>
       <p id="db-login-old" class="small mb-2" style="display:none;">Enter an admin login to replace the stored one, or clear it to have the panel sign in as root over the socket again.</p>
+      <p class="small mb-2">This login is saved once for this whole machine: every game server on it uses it for its databases.</p>
+      <details id="db-grant-box" class="small mb-2" style="display:none;">
+        <summary>Recommended: a login of the panel's own instead of the server's root or master login</summary>
+        <p class="mb-1 mt-1">Run these statements on the database server as its administrator (in phpMyAdmin or the mysql client, for example), then save the login below: the form is already filled in with it. The panel never runs them itself.</p>
+        <pre id="db-grant" class="db-snip small border rounded p-2 mb-1" data-no-i18n></pre>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbCopyGrant"><i class="bi bi-clipboard"></i> Copy the statements</button>
+        <div class="form-text">CREATE USER lets this login change or drop any account on the server, so keep it as safe as an administrator's. Its other rights reach only the panel's gs… databases and the user names in mysql.user.</div>
+      </details>
       <div class="d-flex flex-wrap gap-2">
         <label for="db-login-user" class="visually-hidden">Admin user</label>
         <input type="text" id="db-login-user" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
@@ -27,6 +35,28 @@
         <input type="password" id="db-login-pw" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
         <button type="submit" class="btn btn-sm btn-primary">Save</button>
         <button type="button" id="db-login-clear" class="btn btn-sm btn-outline-secondary" style="display:none;" data-action="dbLoginClear" data-args='["@self"]'>Clear the stored login</button>
+      </div>
+    </form>
+    <form id="db-remote" class="border rounded p-2 mb-2" style="display:none;" data-action="dbRemoteSave" data-args='["@event"]' data-on="submit">
+      <p class="small mb-2">New databases on this host can go to a MariaDB or MySQL server on another machine, reached over Tailscale only. Databases made before stay where they are.</p>
+      <label for="db-remote-kind" class="form-label small mb-1">Database server</label>
+      <select id="db-remote-kind" class="form-select form-select-sm mb-2" data-no-i18n data-action="dbRemoteKind" data-on="change"></select>
+      <div id="db-remote-ext" style="display:none;">
+        <div class="d-flex flex-wrap gap-2 mb-1">
+          <label for="db-remote-addr" class="visually-hidden">Tailscale address</label>
+          <input type="text" id="db-remote-addr" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="15" autocomplete="off" spellcheck="false" placeholder="Tailscale address (100.x.y.z)" aria-label="Tailscale address">
+          <label for="db-remote-port" class="visually-hidden">Port</label>
+          <input type="number" id="db-remote-port" class="form-control form-control-sm" style="flex:0 1 6rem;min-width:0;" min="1" max="65535" value="3306" aria-label="Port">
+          <label for="db-remote-user" class="visually-hidden">Admin user</label>
+          <input type="text" id="db-remote-user" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
+          <label for="db-remote-pw" class="visually-hidden">Admin password</label>
+          <input type="password" id="db-remote-pw" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
+        </div>
+        <div class="form-text">The panel signs in from this host to check the login, and keeps it encrypted. The server must let it sign in from this host's Tailscale address.</div>
+      </div>
+      <div class="d-flex flex-wrap gap-2 mt-2">
+        <button type="submit" class="btn btn-sm btn-primary">Save</button>
+        <button type="button" id="db-remote-clear" class="btn btn-sm btn-outline-secondary" style="display:none;" data-action="dbRemoteClear">Use this host's own server again</button>
       </div>
     </form>
     <form id="db-add" class="mb-2 fpm-edit" style="display:none;" data-action="dbAdd" data-args='["@event"]' data-on="submit">

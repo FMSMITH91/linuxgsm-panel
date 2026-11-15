@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ t('Databases') }}{% endblock %}
+{% block content %}
+{# Read only: every change happens on a server's own Databases tab (Files & Config), where each row
+   links. Built from what the panel has stored, so opening it asks nothing of any host. #}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h1 class="page-title mb-0"><i class="bi bi-database"></i> Databases</h1>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-hdd-stack"></i> Database servers</div>
+  <div class="card-body">
+    {% if hosts %}
+    <ul class="list-unstyled mb-0">
+      {% for h in hosts %}
+      <li class="d-flex flex-wrap gap-2 align-items-baseline py-1 border-bottom">
+        <strong class="text-break" data-no-i18n>{{ h.name }}</strong>
+        <span class="small text-secondary text-break" data-no-i18n>{{ h.state }}</span>
+        {% if h.server %}<span class="small text-secondary" data-no-i18n>{{ h.server }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="small text-secondary mb-0">No servers you can see yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header"><i class="bi bi-database"></i> Databases</div>
+  <div class="card-body">
+    {% if databases %}
+    <ul class="list-unstyled mb-0">
+      {% for d in databases %}
+      <li class="py-1 border-bottom" style="min-width:0;">
+        <div class="d-flex flex-wrap gap-2 align-items-baseline justify-content-between">
+          <a class="text-break fw-semibold" data-no-i18n
+             href="{{ url_for('server_files', server_id=d.server_id) }}#databases">{{ d.name }}</a>
+          <span class="small text-secondary text-nowrap" data-no-i18n>{{ d.size_text }}</span>
+        </div>
+        <div class="small text-secondary text-break">
+          <span data-no-i18n>{{ d.server }}</span> · <span data-no-i18n>{{ d.host }}</span>{% if d.where %} · <span data-no-i18n>{{ d.where }}</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="small text-secondary mb-0">No databases yet. Add one on a server's Databases tab, under Files &amp; Config.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

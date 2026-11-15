@@ -6,9 +6,15 @@
 
 // What the tab says about the host's database server: a warning it shows, and a state with no row yet.
 var DB_WARN = {
-  exposed: 'This database server also listens on the network. The panel won\'t change it: set bind-address = 127.0.0.1 in its config, or block its port in the firewall.',
+  exposed: 'This database server listens on the network, and this host\'s firewall lets other machines reach its port. The panel won\'t change either: allow the port on Tailscale (tailscale0) only, or set bind-address to 127.0.0.1 or this host\'s Tailscale address.',
+  firewall_unknown: 'This database server listens on the network, and the panel couldn\'t read this host\'s firewall to check whether other machines can reach its port.',
   skip_networking: 'This database server doesn\'t accept network connections (skip-networking), so games that connect by address can\'t use it.',
   tls_required: 'This database server only accepts encrypted connections (require_secure_transport), which some game plugins can\'t make.'
+};
+// Who can reach the server, when no warning says more (the first that applies is shown).
+var DB_REACH = {
+  firewalled: 'It listens on the network, but this host\'s firewall lets no other machine reach its port except over Tailscale.',
+  tailnet: 'Reachable from this machine and over Tailscale.'
 };
 var DB_STATE = {
   setting_up: 'Setting up databases on this host. This takes a minute or two.',
@@ -16,6 +22,15 @@ var DB_STATE = {
   unreadable: 'Couldn\'t read the database server on this host: it did not answer. Try again.',
   needs_login: 'A database server is already running here, but the panel can\'t sign in to it yet. A super admin can add its admin login.'
 };
+
+// A password for the dedicated panel login: 26 random letters and digits, then one of each class a
+// server's password policy may ask for (validate_password MEDIUM), nothing SQL or a shell would read.
+function dbNewPassword() {
+  var abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', out = '', buf = new Uint32Array(26);
+  window.crypto.getRandomValues(buf);
+  for (var i = 0; i < buf.length; i++) out += abc.charAt(buf[i] % abc.length);
+  return out + 'Aa7-';   // i18n-ignore: a password's last characters
+}
 
 // Plain builders the tab's rows are made of (no state of the tab's own).
 function dbNode(tag, cls, text) {
@@ -76,9 +91,28 @@ function dbHostLink(h, text, action) {
   h.appendChild(b);
 }
 
+// New databases go to a server on another machine (over Tailscale): the tab's host line.
+function dbEndpointLine(e) {
+  var T = function (s) { return window.t ? window.t(s) : s; }, TF = function (s, v) { return window.tf ? window.tf(s, v) : s; };
+  var ver = /^(\d+\.\d+)/.exec(e.version || ''), name = e.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
+  var bad = (e.warnings || []).filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
+  return {text: [TF('New databases go to {server} on {label} ({address}), over Tailscale.',
+                    {server: name + (ver ? ' ' + ver[1] : ''), label: e.label, address: e.address})].concat(bad).join(' '),
+          warn: bad.length > 0};
+}
+
+// The dedicated login's statements, with a password made here (it never leaves this page until the
+// form is saved), and the form filled in with that login unless something was typed already.
+function dbDrawGrant(g, st) {
+  if (!st.grantPw) st.grantPw = dbNewPassword();
+  document.getElementById('db-grant').textContent = g.sql.split(g.mark).join(st.grantPw);
+  var u = document.getElementById('db-login-user'), p = document.getElementById('db-login-pw');
+  if (!u.value && !p.value) { u.value = g.user; p.value = st.grantPw; }
+}
+
 (function () {
   'use strict';
-  var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false};
+  var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false, grantPw: ''};
 
   var node = dbNode, iconButton = dbIconButton, textButton = dbTextButton, kvRow = dbKvRow;
   function T(s) { return window.t ? window.t(s) : s; }
@@ -112,11 +146,13 @@ function dbHostLink(h, text, action) {
 
   function hostLine(d) {
     var h = d.host;
+    if (d.endpoint) return dbEndpointLine(d.endpoint);
     if (!h) return stateLine(d);
     var ver = /^(\d+\.\d+)/.exec(h.version || ''), name = h.flavor === 'mysql' ? 'MySQL' : 'MariaDB';
     var text = TF('{server} on this host.', {server: name + (ver ? ' ' + ver[1] : '')});
-    var bad = (h.warnings || []).filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
-    if (!bad.length) text += ' ' + T('Only reachable from this machine.');
+    var ws = h.warnings || [], bad = ws.filter(function (w) { return DB_WARN[w]; }).map(function (w) { return T(DB_WARN[w]); });
+    var reach = ws.filter(function (w) { return DB_REACH[w]; })[0];
+    if (!bad.length) text += ' ' + T(reach ? DB_REACH[reach] : 'Only reachable from this machine.');
     return {text: [text].concat(bad).join(' ') + loginLine(h, d.can.su), warn: bad.length > 0 || !!h.login_refused};
   }
 
@@ -131,6 +167,7 @@ function dbHostLink(h, text, action) {
 
   // A superadmin's links after the host line.
   function hostLinks(h, d) {
+    if (d.can.su) dbHostLink(h, d.endpoint ? T('Change the database server') : T('Use a database server on another machine'), 'dbRemoteShow');
     if (!d.can.su || !d.host) return;
     if (d.host.installed_by_panel) dbHostLink(h, T('Show the panel\'s admin login'), 'dbAdminReveal');
     if (d.host.login) dbHostLink(h, T('Change the admin login'), 'dbLoginShow');
@@ -139,11 +176,13 @@ function dbHostLink(h, text, action) {
   // The admin login form: a server the panel can't sign in to yet, or a superadmin replacing or
   // clearing the stored login (opened by its link, or by itself once the server refused it).
   function drawLogin(d) {
-    var login = !!(d.host && d.host.login);
-    show('db-login', d.can.su && (d.state === 'needs_login' || (login && (d.host.login_refused || st.loginOpen))));
+    var login = !!(d.host && d.host.login), on = d.can.su && (d.state === 'needs_login' || (login && (d.host.login_refused || st.loginOpen)));
+    show('db-login', on);
     show('db-login-new', !login);
     show('db-login-old', login);
     show('db-login-clear', login);
+    show('db-grant-box', on && !!d.grant);
+    if (on && d.grant) dbDrawGrant(d.grant, st);
   }
 
   function drawHost(d) {
@@ -224,6 +263,11 @@ function dbHostLink(h, text, action) {
     head.appendChild(title);
     head.appendChild(node('span', 'small text-secondary text-nowrap', dbSizeText(db.size)));
     card.appendChild(head);
+    if (db.moved) {
+      var mv = card.appendChild(node('div', 'small text-warning mb-1', TF('This host now reaches the database server from {now}, but the account is for {old}, so the game can\'t sign in.', {now: st.d.moved_to, old: db.account_host})));
+      mv.appendChild(document.createTextNode(' '));
+      mv.appendChild(textButton(T('Move the account'), 'bi-arrow-left-right', 'dbMove', [db.id], 'btn-outline-warning'));
+    }
     if (db.old_logins) card.appendChild(node('div', 'small text-warning mb-1', T('This database server only offers newer logins. SourceMod 1.12 and some older plugins can\'t sign in to it.')));
     var kvs = card.appendChild(node('div', 'db-kvs'));
     [['Host', 'host'], ['Port', 'port'], ['Database', 'name'], ['User', 'user']].forEach(function (f) {
@@ -442,12 +486,81 @@ function dbHostLink(h, text, action) {
     }).catch(failed);
   };
 
-  // Typing in the name field keeps what was typed when the tab is drawn again.
-  window.dbEdited = function () { st.edited = true; };
+  // What the remote-server form and Move (below, in their own scope) use of this tab's.
+  window.dbTabCtx = {st: st, row: row, act: act, show: show, el: el, say: say, postJson: postJson, after: after, failed: failed};
+
 
   // Load when the tab is first opened (or the page opens on it).
   document.addEventListener('click', function (e) {
     if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="databases"]')) void window.dbLoad(false); });
   window.addEventListener('hashchange', function () { if (location.hash === '#databases') void window.dbLoad(false); });
   if (location.hash === '#databases') void window.dbLoad(false);
+})();
+
+// Move account, and a super admin's choice of a database server on another machine (over Tailscale).
+// The tab's own state and helpers are reached through window.dbTabCtx.
+(function () {
+  'use strict';
+  var c = window.dbTabCtx, node = dbNode;
+  function T(s) { return window.t ? window.t(s) : s; }
+  function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
+  if (!c) return;
+  // Typing in the name field keeps what was typed when the tab is drawn again.
+  window.dbEdited = function () { c.st.edited = true; };
+
+  window.dbCopyGrant = function () {
+    var pre = c.el('db-grant');
+    if (pre && pre.textContent) window.copyText(pre.textContent, T('Copied'));
+  };
+
+  window.dbMove = function (id) {
+    var db = c.row(id);
+    if (!db) return;
+    window.confirmDialog({title: T('Move the account'), icon: 'arrow-left-right', confirmClass: 'btn-warning', confirmLabel: T('Move the account'),
+      bodyText: TF('Let {name} sign in from {now} instead of {old}? Its password stays the same.', {name: db.name, now: c.st.d.moved_to, old: db.account_host}),
+      onConfirm: function () { void c.act(id, 'move', {}, T('Moving the account…')); }});
+  };
+
+  function remoteApi() { return MOUNT + '/api/remote/' + c.st.d.remote_id + '/databases/endpoint'; }
+  function remoteOpt(sel, value, text) { var o = node('option', null, text); o.value = value; sel.appendChild(o); return o; }
+
+  window.dbRemoteShow = function () {
+    var f = c.el('db-remote');
+    if (!f || !c.st.d) return Promise.resolve(false);
+    if (f.style.display !== 'none') { c.show('db-remote', false); return Promise.resolve(true); }
+    return fetch(remoteApi(), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (ch) {
+      var sel = c.el('db-remote-kind');
+      sel.textContent = '';
+      remoteOpt(sel, '', T('Choose a database server…'));
+      (ch.hosts || []).forEach(function (h) { remoteOpt(sel, 'h:' + h.id, TF('{host} (a host the panel manages)', {host: h.name})); });
+      (ch.external || []).forEach(function (e) { remoteOpt(sel, 'e:' + e.id, e.label + ' (' + e.address + ':' + e.port + ')'); });
+      remoteOpt(sel, 'new', T('Another server: enter its address'));
+      c.show('db-remote-ext', false);
+      c.show('db-remote-clear', !!ch.current);
+      c.show('db-remote', true);
+      return true;
+    }).catch(c.failed);
+  };
+
+  window.dbRemoteKind = function () { c.show('db-remote-ext', c.el('db-remote-kind').value === 'new'); };
+
+  window.dbRemoteSave = function (ev) {
+    if (ev) ev.preventDefault();
+    var v = c.el('db-remote-kind').value, body;
+    if (c.st.busy || !v) return;
+    if (v.indexOf('h:') === 0) body = {kind: 'managed', db_remote_id: Number.parseInt(v.slice(2), 10)};
+    else if (v.indexOf('e:') === 0) body = {endpoint_id: Number.parseInt(v.slice(2), 10)};
+    else body = {kind: 'external', address: c.el('db-remote-addr').value.trim(), port: Number.parseInt(c.el('db-remote-port').value, 10),
+                 user: c.el('db-remote-user').value, password: c.el('db-remote-pw').value};
+    c.st.busy = true;
+    c.say(T('Checking the database server from this host…'));
+    c.postJson(remoteApi(), body).then(function (r) { c.el('db-remote-pw').value = ''; if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
+  };
+
+  window.dbRemoteClear = function () {
+    if (c.st.busy) return;
+    c.st.busy = true;
+    c.postJson(remoteApi(), {clear: true}).then(function (r) { if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
+  };
+
 })();
