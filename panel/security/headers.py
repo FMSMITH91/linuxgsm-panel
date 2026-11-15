@@ -31,7 +31,9 @@ INERT_CSP = "default-src 'none'; frame-ancestors 'none'"
 # defence-in-depth limit on what an injected or compromised script could reach for (OWASP HTTP Headers
 # Cheat Sheet, "Permissions-Policy": disable all the features the site does not need).
 PERMISSIONS_POLICY = ("camera=(), microphone=(), geolocation=(), usb=(), payment=(), interest-cohort=(), "
-                      "accelerometer=(), gyroscope=(), magnetometer=(), serial=(), bluetooth=()")
+                      "accelerometer=(), gyroscope=(), magnetometer=(), serial=()")
+# Only features browsers recognise: Chrome logs "Unrecognized feature" for each unknown one on every
+# page (`bluetooth` was dropped for that; a real browser on the test box logged it).
 
 # OWASP HTTP Headers Cheat Sheet, "Strict-Transport-Security (HSTS)": two years. Without `preload`:
 # submitting a name to the browsers' preload list is permanent and belongs to whoever owns the domain

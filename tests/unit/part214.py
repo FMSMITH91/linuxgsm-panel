@@ -234,10 +234,11 @@ check("headers: a stylesheet keeps its caching and gets CORP",
 eq("headers: no_store() makes a page that shows a secret no-store", _sec214.headers.get("Cache-Control"), "no-store")
 eq("headers: HSTS is two years with includeSubDomains, and no preload", _hdr214.HSTS,
    "max-age=63072000; includeSubDomains")
-check("headers: Permissions-Policy denies the sensors, serial and Bluetooth too",
+check("headers: Permissions-Policy denies the sensors and serial, and names no feature browsers do not know (bluetooth)",
       all(f + "=()" in _hdr214.PERMISSIONS_POLICY for f in ("camera", "microphone", "geolocation", "usb",
                                                            "accelerometer", "gyroscope", "magnetometer",
-                                                           "serial", "bluetooth")), _hdr214.PERMISSIONS_POLICY)
+                                                           "serial")) and "bluetooth" not in _hdr214.PERMISSIONS_POLICY,
+          _hdr214.PERMISSIONS_POLICY)
 with open(_os214.path.join(str(_ROOT214), "panel", "install", "app.py"), encoding="utf-8") as _fh214:
     _appsrc214 = _fh214.read()
 _csp214 = _appsrc214[_appsrc214.index("    def _csp():"):_appsrc214.index("    @app.after_request")]
