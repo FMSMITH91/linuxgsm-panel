@@ -7,6 +7,10 @@ Held here, each against the code that made the cost:
 * The server page's Players poll answers from the player poller's batch, which read the same gamedig
   reply: no gamedig of its own while that list is fresh. A refresh the page asks for still reads,
   and wins; a start, stop or restart drops the batch's list too.
+* A watched console whose log has stopped growing rests: read every 6 s, not on every 2 s pass, and
+  straight back to every pass when the log grows, a line is typed into it, or the panel says
+  something in it. While output flows every pass reads it, as before.
+* The player batch's node script goes to node on stdin, not into the command line sudo logs.
 
 HOW IT RUNS. Host commands are stubbed on their definition sites behind part12's tripwire; a sample
 command runs for real, with bash, behind a `ps` that counts its runs. Routes run on part12's app.
@@ -21,9 +25,11 @@ import time as _time210
 from types import SimpleNamespace as NS
 
 from unit.part01 import check, eq, skip
-from unit.part12 import (P9_ADMIN, P9_HOST, _p9_arm, _p9_client, _p9_delete_server, _p9_json, _p9_new_server,
-                         _p9_patch_sm, _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json,
+                         _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
+from panel.core import panel_state as _pstate210
 from panel.ops.ssh_manager import _core as _core210, cron as _cron210, game as _game210, portscan as _ps210
+from panel.routes import _shared as _shared210, console_rest as _crest210, server_files as _sf210
 
 _TMP210 = _tf210.mkdtemp(prefix="lgsm-unit-p210-")
 _ME210 = _pwd210.getpwuid(os.getuid()).pw_name
@@ -178,8 +184,124 @@ def _players210():
     _batch_then_poll210()
 
 
+# ── The idle console rests ─────────────────────────────────────────────────────────────────────
+class _LogHost210:
+    """read_as_game_user against this part's console log, run by bash; counts the console reads."""
+
+    def __init__(self, log):
+        self.log, self.reads = log, 0
+
+    def __call__(self, server, user, sh, timeout=30, selfname=None):
+        if "__LGSMP_W0_B__" in sh:
+            return "", "", 1                # the console-secrets config read: nothing to mask here
+        self.reads += 1
+        p = _sp210.run(["bash", "-c", sh], capture_output=True, text=True, timeout=30, check=False)  # nosec B603 B607
+        return p.stdout, p.stderr, p.returncode
+
+
+class _Sio210:
+    def __init__(self):
+        self.lines = []
+
+    def emit(self, event, data=None, **_kw):
+        if event == "console_output":
+            self.lines += (data or {}).get("data", "").split("\n")
+
+
+def _console_rig210():
+    log = os.path.join(_TMP210, "crserver-console.log")
+    with open(log, "w", encoding="utf-8") as fh:
+        fh.write("boot\n")
+    host, sio, clock = _LogHost210(log), _Sio210(), [1000.0]
+    gs = NS(id=-21001, console_log=log, remote=NS(id=-2109, timezone=""), short_name="cr210", lgsm_name="crserver")
+    _p9_patch(_sf210, "_host_timezone_cached", lambda *a, **k: "")
+    _p9_patch_sm("read_as_game_user", host)
+    _p9_patch(_crest210, "time", NS(time=lambda: clock[0]))
+    return log, host, sio, clock, gs
+
+
+def _passes210(rig, n, grow=None):
+    """`n` poller passes 2 s apart (the log grown by `grow` before the first); the reads they made."""
+    log, host, sio, clock, gs = rig
+    if grow:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(grow + "\n")
+    before = host.reads
+    for _ in range(n):
+        clock[0] += 2.0
+        _crest210.tick(_sf210._console_tick, _sf210._console_catchups, _p9, sio, gs, gs.id)
+    return host.reads - before
+
+
+def _rest210():
+    rig = _console_rig210()
+    sid = rig[4].id
+    try:
+        first = _passes210(rig, 1)
+        flowing = [_passes210(rig, 1, grow="line %d" % i) for i in range(5)]
+        quiet = _passes210(rig, 3)
+        rest = [_passes210(rig, 1) for _ in range(6)]
+        eq("console rest: while output flows every 2 s pass reads the log and pushes it; after 3 reads that "
+           "found nothing the console rests, read every 6 s (every third pass) instead of every pass",
+           (first, flowing, quiet, rest, rig[2].lines[-1:]), (1, [1] * 5, 3, [0, 0, 1, 0, 0, 1], ["line 4"]))
+        late = [_passes210(rig, 1, grow="after the quiet")] + [_passes210(rig, 1) for _ in range(3)]
+        eq("console rest: a line written while it rests is read on the next 6 s read, and from then on every "
+           "pass reads again", (late, rig[2].lines[-1:]), ([0, 0, 1, 1], ["after the quiet"]))
+        _passes210(rig, 3)
+        _p9_patch_sm("shell_as_game_user", lambda *a, **k: ("", "", 0))
+        _core210.send_console_command(rig[4].remote, "cr210", "say hi", selfname="crserver")
+        _core210.console_sent[(-2109, "cr210")] = rig[3][0] + 1.0     # sent after the last read
+        sent = [_passes210(rig, 1) for _ in range(3)]
+        _passes210(rig, 3)
+        _shared210._console_push(NS(socketio=None), sid, "[panel] restart started")
+        pushed = [_passes210(rig, 1) for _ in range(2)]
+        _passes210(rig, 3)
+        _sf210._console_catchups[sid] = {"x210": {"id": 1, "since": None, "tries": 0}}
+        caught = _passes210(rig, 1)
+        _sf210._console_catchups.pop(sid, None)
+        eq("console rest: a line typed into it, the panel saying something in it, and a page asking to be "
+           "caught up each wake it at once, back to every pass",
+           (sent, pushed, caught), ([1, 1, 1], [1, 1], 1))
+    finally:
+        _core210.console_sent.pop((-2109, "cr210"), None)
+        _crest210._woken.pop(sid, None)
+        for m in (_sf210._console_offsets, _sf210._console_partial, _pstate210._console_backlog):
+            m.pop(sid, None)
+
+
+def _sent_stamp210():
+    """send_console_command stamps when a line was typed, for the console poller to wake on."""
+    _p9_patch_sm("shell_as_game_user", lambda *a, **k: ("", "", 0))
+    _core210.console_sent.pop((-2108, "cr210"), None)
+    _core210.send_console_command(NS(id=-2108), "cr210", "say hi", selfname="crserver")
+    stamped = _core210.console_sent.pop((-2108, "cr210"), None)
+    _core210.send_console_command(NS(id=-2108), "cr210", "say \x07", selfname="crserver")
+    eq("console rest: typing a line stamps its console's wake time; a refused line stamps nothing",
+       (isinstance(stamped, float), _core210.console_sent.pop((-2108, "cr210"), None)), (True, None))
+
+
+# ── The batch's node script is not in the command sudo logs ────────────────────────────────────
+def _batch_stdin210():
+    sent = []
+    _p9_patch_sm("_gamedig_host", lambda server: "127.0.0.1")
+    _p9_patch_sm("shell_as_game_user", lambda server, user, sh, timeout=30, selfname=None, stdin_text=None:
+                 (sent.append((sh, stdin_text)), ("", "", 1))[1])
+    _cron210.player_slots_batch(NS(id=-2107), "gmod210", [(k, "gmod", 27014 + k, None) for k in range(1, 9)])
+    sh, stdin = sent[-1] if sent else ("", None)
+    check("player batch: node reads its script from stdin (`node -`), so the command sudo logs is short (8 "
+          "targets: under 1000 characters, one syslog line) and holds none of the script",
+          stdin == _cron210._BATCH_NODE and " node - " in sh and "GameDig" not in sh and len(sh) < 1000,
+          repr((len(sh), sh[:200])))
+
+
+def _console210():
+    _rest210()
+    _sent_stamp210()
+    _batch_stdin210()
+
+
 try:
-    for _fn210 in (_one_ps210, _players210):
+    for _fn210 in (_one_ps210, _players210, _console210):
         _p9_restore_all()
         _p9_arm(who="part210")
         _fn210()

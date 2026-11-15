@@ -1942,10 +1942,13 @@ _BATCH_NO_LIB = 3
 # its deadline prints nothing, as the `timeout` the command ran under did. One line per answered
 # target, {"k": key, "r": reply}, written by this one process, so no two lines can interleave.
 # argv: the gamedig command's path, the targets [[key, type, host, port, socketTimeout|0], ...]
-# as JSON, the concurrency, and the per-target deadline in ms.
+# as JSON, the concurrency, and the per-target deadline in ms. The script itself goes on node's
+# STDIN (`node -`), not in the command: sudo logs the whole command line, and this script in it was
+# ~2 KB of journal (three "command continued" lines) on every 45 s pass, most of what the panel
+# logged with no page open. The "-" node leaves in argv is dropped.
 _BATCH_NODE = "".join((
     'const fs=require("fs"),path=require("path"),url=require("url");',
-    'const [bin,list,par,wait]=process.argv.slice(1);',
+    'const A=process.argv.slice(1);if(A[0]==="-")A.shift();const [bin,list,par,wait]=A;',
     'const base={pretty:false,debug:false,givenPortOnly:false,requestRules:false,',
     'requestRulesRequired:false,requestPlayersRequired:false,noBreadthOrder:false,checkOldIDs:false,',
     'rejectUnauthorized:false,stripColors:true,portCache:true,requestPlayers:true};',
@@ -2023,7 +2026,8 @@ def _batch_body(queries, host):
     """The shell that runs every (key, gdtype, port) query at `host` in one node process.
 
     ONE line: sudo logs the command it ran, and a newline in it would print as a log line of its
-    own (the debug report counts these calls by the first line of that entry). The end marker is
+    own (the debug report counts these calls by the first line of that entry). _BATCH_NODE is not
+    in it: the caller hands it to node on stdin (`node -`), so sudo does not log it. The end marker is
     printed whenever the run got as far as asking (no `gamedig` command at all is every target
     unknown, as before), and NOT when node could not load gamedig: see _BATCH_NO_LIB.
     """
@@ -2032,7 +2036,7 @@ def _batch_body(queries, host):
                for key, gdtype, port in queries]
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     return (f"g=$(command -v gamedig) || {{ echo {_BATCH_END}; exit 0; }}; "
-            f"timeout -k 5 {groups * _BATCH_TARGET_TIMEOUT + 5} node -e {_core._quote(_BATCH_NODE)} "
+            f"timeout -k 5 {groups * _BATCH_TARGET_TIMEOUT + 5} node - "
             f"\"$g\" {_core._quote(_json.dumps(targets, separators=(',', ':')))} {_BATCH_PARALLEL} "
             f"{_BATCH_TARGET_TIMEOUT * 1000} 2>/dev/null | jq -c {_core._quote(_batch_target_filter())} "
             f"2>/dev/null; [ \"${{PIPESTATUS[0]}}\" = {_BATCH_NO_LIB} ] || echo {_BATCH_END}")
@@ -2101,7 +2105,7 @@ def player_slots_batch(server, user, targets):
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
     try:
         body = _batch_body(queries, _core._gamedig_host(server))
-        out, _, rc = _core.shell_as_game_user(server, user, body,
+        out, _, rc = _core.shell_as_game_user(server, user, body, stdin_text=_BATCH_NODE,
                                               timeout=groups * (_BATCH_TARGET_TIMEOUT + 5) + 5)
     except Exception:
         return None

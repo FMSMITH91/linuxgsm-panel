@@ -2361,11 +2361,13 @@ def game_user_exec_cmd(user, argv, selfname=None):
     return " ".join([f"sudo -u {_quote(user)}"] + [_quote(str(a)) for a in argv])
 
 
-def shell_as_game_user(server, user, sh, timeout=30, selfname=None, scope=False):
+def shell_as_game_user(server, user, sh, timeout=30, selfname=None, scope=False, stdin_text=None):
     """Run shell `sh` AS the game account; (out, err, rc).
 
     An unsafe account or script name sends nothing and answers GAME_ACCOUNT_REFUSED. `sh` is
     panel-built text; pass `selfname` whenever it names the LinuxGSM script (see game_user_cmd).
+    `stdin_text`, when given, is the command's stdin (see run_command): text that should not be in
+    the command line sudo logs.
 
     `scope` is for a command that can leave a game server running. On the panel's own host it is
     started in a transient scope of the user manager when it can be (user_scope_argv), so the
@@ -2379,8 +2381,10 @@ def shell_as_game_user(server, user, sh, timeout=30, selfname=None, scope=False)
         return GAME_ACCOUNT_REFUSED
     if scope and is_local_server(server):
         cmd = " ".join(user_scope_argv() + [cmd])
-    # The command self-escalates via `sudo -u`, so it must not be wrapped in root sudo too.
-    return run_command(server, cmd, timeout=timeout, sudo=False)
+    # The command self-escalates via `sudo -u`, so it must not be wrapped in root sudo too. stdin_text
+    # only when given: a caller that hands none sends run_command exactly the call it always made.
+    kw = {} if stdin_text is None else {"stdin_text": stdin_text}
+    return run_command(server, cmd, timeout=timeout, sudo=False, **kw)
 
 
 # ── Keeping a game server out of the panel's cgroup without the helper ─────────────────────────
@@ -2883,7 +2887,13 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
     inner = (_tmux_live_socket_sh(selfname) + pos
              + f'tmux -L "$SOCK" send-keys -t {selfname} -l -- {_quote(typed)} \\; '
                f'send-keys -t {selfname} Enter')
+    console_sent[(getattr(server, "id", None), user)] = time.time()   # the console poller wakes on it
     return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
+
+
+# When a line was last typed into each (host id, account)'s console: a console the poller has let
+# rest (routes/console_rest.py) is read again at once, for the reply.
+console_sent = register_remote_cache({})
 
 
 def remote_public_ip(server):

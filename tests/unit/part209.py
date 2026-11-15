@@ -85,11 +85,11 @@ def _rig209(name, with_lib=True):
 
 def _bash209(path, log):
     """shell_as_game_user's stand-in: the body run by bash with `path` first on PATH."""
-    def _run(server, user, sh, timeout=30, selfname=None):
+    def _run(server, user, sh, timeout=30, selfname=None, stdin_text=None):
         env = dict(os.environ, PATH=path + os.pathsep + _TOOLS209, P209_LOG=log)
         try:
             r = _sp209.run(["bash", "-c", sh], capture_output=True, text=True, timeout=60,  # nosec B603 B607
-                           env=env, check=False)
+                           env=env, check=False, input=stdin_text)
         except (_sp209.TimeoutExpired,
                 __import__("eventlet.patcher", fromlist=["original"]).original("subprocess").TimeoutExpired):
             return "", "Command timed out", -1

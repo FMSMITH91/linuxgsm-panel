@@ -24,7 +24,7 @@ from panel.ops import ssh_manager as _sm
 from panel.ops import socket_hooks as _socket_hooks
 # The audit write that rolls back instead of raising (_r25b_audit), through the module so a stub on
 # server_detail's log_action is the one seam for both routes.
-from panel.routes import server_detail as _sd
+from panel.routes import console_rest as _crest, server_detail as _sd
 from panel.routes import game_config_form as _gcf_routes
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
     _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
@@ -3083,9 +3083,10 @@ def _start_console_poller(app, socketio, supervise):
                                 # the operator to watch it for.
                                 _drain_action_output(app, gs.remote, server_id)
                                 # A page back from a hidden spell is caught up first, from where
-                                # the poller stands before this tick (_serve_console_catchups).
+                                # the poller stands before this tick (_serve_console_catchups). A log
+                                # that has stopped growing is read less often (console_rest).
                                 _serve_console_catchups(app, socketio, gs, server_id)
-                                _console_tick(app, socketio, gs, server_id)
+                                _crest.tick(_console_tick, _console_catchups, app, socketio, gs, server_id)
                             except Exception as exc:  # nosec B112 - try/except/continue is the point:
                                 # one unreadable console must not stop the poll for every OTHER
                                 # server. The next tick retries this one; the failure is visible

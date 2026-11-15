@@ -919,7 +919,7 @@ def _readers36(reply, game_type="mcb", gdtype="mbe"):
             p = _sp36.run(["bash", "-c", sh],  # nosec B603 B607 - bash on the panel's own batch command
                           env={"PATH": os.pathsep.join([os.path.join(root, "bin")] + _TOOL_DIRS36 + ["/usr/bin:/bin"]),
                                "HOME": root},
-                          capture_output=True, text=True, timeout=60, check=False)
+                          capture_output=True, text=True, timeout=60, check=False, input=_k.get("stdin_text"))
             return p.stdout, p.stderr, p.returncode
         _p9_patch(_p9_core, "shell_as_game_user", _batch_sh)
         got["batch"] = (_cron36.player_slots_batch(srv, "p36mcb", [(1, game_type, 19132, None),
