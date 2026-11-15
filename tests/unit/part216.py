@@ -132,7 +132,7 @@ def _old_db216(path):
     eng = _sa216.create_engine("sqlite:///" + path)
     _db216.metadata.create_all(eng)
     with eng.begin() as c:
-        c.exec_driver_sql("DROP INDEX ix_user_one_owner")
+        c.exec_driver_sql("DROP INDEX IF EXISTS ix_user_one_owner")
         c.exec_driver_sql("ALTER TABLE user DROP COLUMN is_owner")
         for i, sup, act in ((1, 1, 0), (2, 0, 1), (3, 1, 1), (4, 1, 1)):
             c.exec_driver_sql("INSERT INTO user (id, username, password_hash, is_superadmin, is_active, "
