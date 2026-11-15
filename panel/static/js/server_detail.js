@@ -1950,15 +1950,18 @@ function initChart() {
 var _lastStatus = '';
 
 var _statsTimer = null;
+var _statsAt = 0;   // when the last /stats read was sent (Date.now())
+
+function _statsDelay() { return (_lastStatus === 'online') ? 8000 : 20000; }
 
 function _scheduleStats() {
   if (_statsTimer) { clearTimeout(_statsTimer); }
-  var delay = (_lastStatus === 'online') ? 8000 : 20000;
-  _statsTimer = setTimeout(pollStats, delay);
+  _statsTimer = setTimeout(pollStats, _statsDelay());
 }
 
 function pollStats() {
   if (document.hidden) { _scheduleStats(); return; }   // don't poll a backgrounded tab; re-check later
+  _statsAt = Date.now();
   fetch(MOUNT + '/api/server/' + serverId + '/stats')
     .then(r => r.json())
     .then(d => {
@@ -2367,7 +2370,11 @@ initChart();
 
 pollStats();
 
-document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStats(); });
+// Back on the tab: read at once if the last read is older than one poll period, else the poll's own
+// timer (due within that period) reads. Each read is a ~120 ms sample on the host.
+document.addEventListener('visibilitychange', function(){
+  if (!document.hidden && Date.now() - _statsAt >= _statsDelay()) pollStats();
+});
 
 // The same 30 s poll notices a tab that is in view but whose console is still set aside — a return
 // that no visibilitychange or focus announced — and rejoins it (_onConsoleVisibility); in view and

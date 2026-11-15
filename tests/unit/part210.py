@@ -11,6 +11,16 @@ Held here, each against the code that made the cost:
   straight back to every pass when the log grows, a line is typed into it, or the panel says
   something in it. While output flows every pass reads it, as before.
 * The player batch's node script goes to node on stdin, not into the command line sudo logs.
+* An unchanged session cookie is re-sent once it is 5 minutes old, not on every response; a changed
+  one at once. A /static file carries no Set-Cookie and no `Vary: Cookie`. CSP, X-Frame-Options and
+  Permissions-Policy are on every response a browser can show as a page, and not on JSON or assets.
+* The metric-history tables lose their single-column server_id / remote_id indexes (an upgrade drops
+  them); every lookup by that column alone uses the (id, ts) composite.
+* paramiko is imported the first time a direct-SSH host is used, not when the panel starts.
+* A batch target whose last query got no answer is asked with 500 ms per packet, not gamedig's 2 s,
+  except every 10th failure in a row; an answer ends it.
+* The server page reads /stats on a return to its tab only when the last read is older than one poll
+  period (the page's own server_detail.js, run in node).
 
 HOW IT RUNS. Host commands are stubbed on their definition sites behind part12's tripwire; a sample
 command runs for real, with bash, behind a `ps` that counts its runs. Routes run on part12's app.
@@ -18,18 +28,20 @@ command runs for real, with bash, behind a `ps` that counts its runs. Routes run
 import json as _json210
 import os
 import pwd as _pwd210
+import re as _re210
 import shutil as _shutil210
 import subprocess as _sp210  # nosec B404 - runs bash on this part's own fixtures
 import tempfile as _tf210
 import time as _time210
 from types import SimpleNamespace as NS
 
-from unit.part01 import check, eq, skip
+from unit.part01 import _root, check, eq, skip
 from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json,
                          _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.core import panel_state as _pstate210
 from panel.ops.ssh_manager import _core as _core210, cron as _cron210, game as _game210, portscan as _ps210
 from panel.routes import _shared as _shared210, console_rest as _crest210, server_files as _sf210
+from panel.security import session_cookie as _scookie210
 
 _TMP210 = _tf210.mkdtemp(prefix="lgsm-unit-p210-")
 _ME210 = _pwd210.getpwuid(os.getuid()).pw_name
@@ -300,8 +312,193 @@ def _console210():
     _batch_stdin210()
 
 
+# ── The session cookie and the page-only headers ───────────────────────────────────────────────
+def _client210():
+    """A signed-in test client whose session is permanent, as every panel login makes it."""
+    c = _p9_client(P9_ADMIN)
+    with c.session_transaction() as sess:
+        sess.permanent = True
+    return c
+
+
+def _cookie210():
+    c, later = _client210(), [None]
+    _p9_patch(_scookie210, "time", NS(time=lambda: (later[0] or _time210.time())))
+    poll = c.get("/api/servers")
+    later[0] = _time210.time() + _scookie210._REISSUE_SECONDS + 1
+    old = c.get("/api/servers")
+    later[0] = None
+    again = c.get("/api/servers")
+    eq("session cookie: a poll with a cookie signed moments ago sends no Set-Cookie; one 5 minutes old is re-sent "
+       "(the idle timeout still slides), and the re-sent one is new again",
+       ("Set-Cookie" in poll.headers, "session=" in old.headers.get("Set-Cookie", ""),
+        "Set-Cookie" in again.headers),
+       (False, True, False))
+    js = sorted(f for f in os.listdir(os.path.join(_root, "panel", "static", "js")) if f.endswith(".js"))[0]
+    later[0] = _time210.time() + 10 * _scookie210._REISSUE_SECONDS
+    st = c.get("/static/js/" + js)
+    eq("static file: no Set-Cookie and no Vary: Cookie, even past the re-send age (the same bytes for every "
+       "viewer, so the browser keeps its cache)",
+       (st.status_code, "Set-Cookie" in st.headers, "cookie" in st.headers.get("Vary", "").lower()),
+       (200, False, False))
+    later[0] = None
+    lang = c.get("/set-language/fr?ajax=1")
+    eq("session cookie: a request that changes the session (a language switch) sends it at once",
+       "Set-Cookie" in lang.headers, True)
+    _p9_restore_all()
+    _p9_arm(who="part210")
+
+
+def _headers210():
+    """Which types keep the page-only headers (the responses themselves: part13, on create_app's app)."""
+    from panel.security import headers as _hdr210
+    kept = [t for t in ("text/html", "image/svg+xml", "application/xml", "text/plain", "application/octet-stream",
+                        "application/x-unknown") if _hdr210.renders_as_page(NS(mimetype=t))]
+    eq("security headers: kept on every type a browser could show as a document, and on any type not "
+       "known to be inert", len(kept), 6)
+
+
+# ── The history tables' redundant indexes ──────────────────────────────────────────────────────
+def _indexes210():
+    from flask import Flask as _Flask210
+    from sqlalchemy import inspect as _inspect210, text as _sql210
+    from panel.db import models as _models210
+    app = _Flask210("unit_part210_mig")
+    app.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_TMP210, "upgrade.db"),
+                      SQLALCHEMY_TRACK_MODIFICATIONS=False)
+    _models210.db.init_app(app)
+    with app.app_context():
+        db = _models210.db
+        db.create_all()
+        fresh = {t: {ix["name"] for ix in _inspect210(db.engine).get_indexes(t)} for t in ("metric_sample", "host_sample")}
+        # An install from before: the single-column indexes the columns used to declare.
+        db.session.execute(_sql210("CREATE INDEX ix_metric_sample_server_id ON metric_sample (server_id)"))
+        db.session.execute(_sql210("CREATE INDEX ix_host_sample_remote_id ON host_sample (remote_id)"))
+        db.session.commit()
+        _models210._run_light_migrations()
+        after = {t: {ix["name"] for ix in _inspect210(db.engine).get_indexes(t)} for t in ("metric_sample", "host_sample")}
+        plans = [" ".join(str(r[-1]) for r in db.session.execute(_sql210("EXPLAIN QUERY PLAN " + q)))
+                 for q in ("DELETE FROM metric_sample WHERE server_id = 7",
+                           "SELECT id FROM host_sample WHERE remote_id = 7 LIMIT 1")]
+        db.session.remove()
+        db.engine.dispose()
+    want = {"metric_sample": {"ix_metric_sample_server_ts", "ix_metric_sample_ts"},
+            "host_sample": {"ix_host_sample_remote_ts", "ix_host_sample_ts"}}
+    eq("history tables: a new database has the (id, ts) composite and the ts index, and no single-column "
+       "id index; an upgrade drops the old one", (fresh, after), (want, want))
+    check("history tables: a lookup by server_id or remote_id alone uses the composite's leading column",
+          "ix_metric_sample_server_ts" in plans[0] and "ix_host_sample_remote_ts" in plans[1], repr(plans))
+
+
+# ── paramiko loads at first use ────────────────────────────────────────────────────────────────
+_LAZY_PROBE210 = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import panel.ops.ssh_manager as sm
+import panel.ops.ssh_manager.hosts
+at_import = "paramiko" in sys.modules
+sm._core._PinPolicy("")
+after_policy = "paramiko" in sys.modules
+client = sm._core.paramiko.SSHClient
+print(at_import, after_policy, "paramiko" in sys.modules, client.__module__)
+"""
+
+
+def _lazy210():
+    import sys as _sys210
+    r = _sp210.run([_sys210.executable, "-I", "-W", "ignore", "-c", _LAZY_PROBE210, _root],  # nosec B603
+                   capture_output=True, text=True, timeout=120, check=False, cwd=_root,
+                   env=dict(os.environ, EVENTLET_NO_GREENDNS="yes"))
+    eq("paramiko: importing the SSH package (and building a host-key policy) loads no paramiko; the first "
+       "use of paramiko.SSHClient loads it", r.stdout.split(), ["False", "False", "True", "paramiko.client"])
+
+
+# ── A failing batch target is asked with a short wait ─────────────────────────────────────────
+def _waits210(sent):
+    """{port: socketTimeout} of the targets in the last batch command sent."""
+    m = _re210.search(r"'(\[\[.*?\]\])'", sent[-1] if sent else "")
+    return {t[3]: t[4] for t in _json210.loads(m.group(1))} if m else {}
+
+
+def _short_wait210():
+    sent, answer = [], {"ok": set()}
+
+    def _shell(server, user, sh, timeout=30, selfname=None, stdin_text=None):
+        sent.append(sh)
+        lines = [_json210.dumps({"k": k, "c": 1, "m": 8, "n": "x", "p": None, "ok": True, "l": []})
+                 for k in sorted(answer["ok"])]
+        return "\n".join(lines + [_cron210._BATCH_END]), "", 0
+    _p9_patch_sm("_gamedig_host", lambda server: "127.0.0.1")
+    _p9_patch_sm("shell_as_game_user", _shell)
+    srv, targets = NS(id=-2106), [(1, "gmod", 27015, None), (2, "vh", 2456, None), (3, "mc", 25565, None)]
+    for k in list(_cron210._batch_fail_streak):
+        if k[0] == -2106:
+            _cron210._batch_fail_streak.pop(k, None)
+    try:
+        answer["ok"] = {1}
+        waits = []
+        for _ in range(11):
+            _cron210.player_slots_batch(srv, "gm210", targets)
+            waits.append(_waits210(sent))
+        eq("player batch: a target that got no answer is asked with 500 ms per packet on the next passes (a "
+           "Minecraft one keeps its 500), the one that answered keeps gamedig's own wait, and every 10th "
+           "failure in a row is asked with the full wait again",
+           [(w.get(27015), w.get(2456), w.get(25565)) for w in waits],
+           [(0, 0, 500)] + [(0, 500, 500)] * 9 + [(0, 0, 500)])
+        answer["ok"] = {1, 2, 3}
+        _cron210.player_slots_batch(srv, "gm210", targets)
+        _cron210.player_slots_batch(srv, "gm210", targets)
+        eq("player batch: ...and its first answer ends the short wait", _waits210(sent).get(2456), 0)
+    finally:
+        for k in list(_cron210._batch_fail_streak):
+            if k[0] == -2106:
+                _cron210._batch_fail_streak.pop(k, None)
+
+
+# ── The server page's tab-return /stats read ───────────────────────────────────────────────────
+_STATS_JS210 = """
+let now = 1000000; Date.now = () => now;
+const on = {}; let fetches = 0;
+global.document = {hidden: false, addEventListener: (e, f) => { on[e] = f; }};
+global.fetch = () => { fetches += 1; return Promise.resolve({json: () => ({status: 'online'})}); };
+global.setTimeout = () => 1; global.clearTimeout = () => {};
+global.MOUNT = ''; global.serverId = 1;
+%s
+%s
+const flush = () => new Promise(r => setImmediate(r));
+const back = async ms => { now += ms; document.hidden = true; on.visibilitychange(); document.hidden = false;
+                           on.visibilitychange(); await flush(); return fetches; };
+(async () => {
+  pollStats(); await flush();
+  const got = [fetches, await back(3000), await back(3000), await back(6000)];
+  console.log(JSON.stringify(got));
+})();
+"""
+
+
+def _stats_return210():
+    if not _shutil210.which("node"):
+        skip("server page: a tab return reads /stats only past one poll period", "no node on this machine")
+        return
+    with open(os.path.join(_root, "panel", "static", "js", "server_detail.js"), encoding="utf-8") as fh:
+        src = fh.read()
+    a = src.find("var _lastStatus = '';")
+    b = src.find("// The connect address", a)
+    c = src.find("document.addEventListener('visibilitychange', function(){", b)
+    d = src.find("});", c)
+    if min(a, b, c, d) < 0:
+        check("server page: a tab return reads /stats only past one poll period", False, "source not found")
+        return
+    prog = _STATS_JS210 % (src[a:b], src[c:d + 3])
+    r = _sp210.run(["node", "-"], input=prog, capture_output=True, text=True, timeout=60, check=False)  # nosec B603 B607
+    eq("server page: a return to the tab 3 s and 6 s after the last /stats read reads nothing (the poll's "
+       "own timer is due); one 12 s after it (past the 8 s period of a running server) reads at once",
+       r.stdout.strip() or r.stderr[-300:], "[1,1,1,2]")
+
+
 try:
-    for _fn210 in (_one_ps210, _players210, _console210):
+    for _fn210 in (_one_ps210, _players210, _console210, _cookie210, _headers210, _indexes210, _lazy210,
+                   _short_wait210, _stats_return210):
         _p9_restore_all()
         _p9_arm(who="part210")
         _fn210()
