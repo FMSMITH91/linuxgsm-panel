@@ -616,6 +616,10 @@ def _s215_binding():
             epoch = _db215.session.get(_U215, legacy).auth_epoch or 0
         c = _p9.test_client()
         with c.session_transaction() as s:
+            # Permanent, as every panel login is: flask-login's own "strong" mode would otherwise
+            # wipe a non-permanent session before load_user runs, and this check would pass on
+            # that instead of on the panel's binding check.
+            s.permanent = True
             s["_user_id"], s["_fresh"], s["_bind"] = "%d:%d" % (legacy, epoch), True, "0" * 32
         old = c.get("/api/auth/ping", headers=_XHR215)
     finally:
