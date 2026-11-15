@@ -388,7 +388,7 @@ def _s218_test_route():
     got = (pusher.to(b1), pusher.to(b2), pusher.to(bb))
     check("test alert: refused with no device; otherwise sent to each of this account's devices only, and the "
           "route returned before any push was sent", none.status_code == 400 and first.status_code == 200
-          and len(got[0]) == 1 and len(got[1]) == 1 and got[2] == [] and got[0][0]["url"] == "account",
+          and len(got[0]) == 1 and len(got[1]) == 1 and got[2] == [] and got[0][0].get("url") == "account",
           repr((none.status_code, first.status_code, got)))
     more = [_p9_client(uid).post("/account/push/test").status_code for _ in range(_pa218.TEST_MAX)]
     _p9_drain()
@@ -471,7 +471,7 @@ def _s218_send_time_checks(pusher, bs, admin, can):
     _p9_drain()
     eq("who: each user's own choice: an admin who chose only 'back online' is not pushed 'offline' (and the "
        "monitor's own 'back online' names its server, so it is pushed)",
-       [n["title"] for n in pusher.to(bs[admin])], ["Server back online"])
+       [n.get("title") for n in pusher.to(bs[admin])], ["Server back online"])
 
 
 def _s218_account_change():
@@ -488,13 +488,13 @@ def _s218_account_change():
     _p9_drain()
     got = pusher.to(ba)
     check("account: a change to an account's own security is pushed to that account's devices only, failed "
-          "attempts are not", len(got) == 1 and got[0]["title"] == "Your account changed"
-          and got[0]["body"] == "Password changed" and pusher.to(bb) == [], repr((got, pusher.to(bb))))
+          "attempts are not", len(got) == 1 and got[0].get("title") == "Your account changed"
+          and got[0].get("body") == "Password changed" and pusher.to(bb) == [], repr((got, pusher.to(bb))))
     pusher.sent.clear()
     _subscribe218(a, _browser218(63))
     _p9_drain()
     check("account: a new alert device is itself such a change: the account's devices are told",
-          any(n["body"] == "Alerts turned on for a new device" for n in pusher.to(ba)), repr(pusher.to(ba)))
+          any(n.get("body") == "Alerts turned on for a new device" for n in pusher.to(ba)), repr(pusher.to(ba)))
 
 
 def _s218_gone_and_failures():
