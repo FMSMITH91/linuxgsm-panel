@@ -6,7 +6,7 @@ super admin signed in, an IP was banned, a disk is filling up.
 
 Best-effort and non-blocking: a send happens on a background thread and a failure is logged and
 swallowed, never propagated to the caller (an alert must never break the action that triggered it).
-Secrets (the bot token, the webhook URL, an ntfy access token) are Fernet-encrypted at rest via
+Secrets (the bot token, the webhook URL, an ntfy access token) are encrypted at rest (AES-256-GCM) via
 config.encrypt_secret.
 """
 import http.client

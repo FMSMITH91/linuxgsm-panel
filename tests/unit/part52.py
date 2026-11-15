@@ -317,7 +317,7 @@ def _cred_key52():
               empty.read_bytes() == b"", repr(empty.read_bytes()[:8]))
     finally:
         # Back to the run's own path now, not at part52's final restore: until then any section
-        # whose route decrypted a field reached _cred_fernet in the directory removed below.
+        # whose route decrypted a field reached _cred_keyring in the directory removed below.
         _p9_patch(_cfg52, "CRED_KEY_FILE", orig)
         _shutil52.rmtree(tmp, ignore_errors=True)
 

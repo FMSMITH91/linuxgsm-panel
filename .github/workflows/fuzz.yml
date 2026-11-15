@@ -83,6 +83,8 @@ jobs:
               'panel/core/whats_new.py'
               # The last module every harness pre-loads (part29 counts the pre-load too).
               'panel/core/config.py'
+              # ...and the key ring config.py imports.
+              'panel/core/cred_keyring.py'
               'panel/security/privileged.py'
               'panel/db/models.py'
               'panel/ops/__init__.py'

@@ -128,7 +128,7 @@ import unit as _unit_pkg  # noqa: E402
 from panel.core import config as _cfg_live  # noqa: E402
 
 _WATCHED = {"CONFIG_FILE": ("load_config", "save_config", "update_config", "config_unreadable"),
-            "SECRET_FILE": ("get_secret_key",), "CRED_KEY_FILE": ("_cred_fernet",)}
+            "SECRET_FILE": ("get_secret_key",), "CRED_KEY_FILE": ("_cred_keyring",)}
 # The checkout's own paths, for the one part01 check that asserts where they resolve.
 _unit_pkg.LIVE_PATHS = {_n: getattr(_cfg_live, _n) for _n in _WATCHED}
 _LIVE_REAL = {_n: os.path.realpath(str(_p)) for _n, _p in _unit_pkg.LIVE_PATHS.items()}
@@ -2068,15 +2068,14 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
           "part65", "part66", "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74", "part75", "part76", "part77", "part78", "part79",
           "part80", "part81", "part82", "part83", "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91", "part92", "part93", "part94",
           "part95", "part96", "part97", "part98", "part99", "part100", "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
-          "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117", "part118", "part119", "part120", "part121",
-          "part122", "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131", "part132", "part133", "part134",
-          "part135", "part136", "part137", "part138", "part140", "part141", "part142", "part143", "part144", "part145", "part146", "part147", "part148",
-          "part149", "part150", "part151", "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159", "part160", "part161",
-          "part162", "part163", "part164", "part165", "part166", "part167", "part168", "part169", "part170", "part171", "part172", "part173", "part174",
-          "part175", "part176", "part177", "part178", "part179", "part180", "part181", "part182", "part183", "part184", "part185", "part186", "part187",
-          "part188", "part189", "part191", "part192", "part193", "part194", "part195", "part190", "part196", "part199", "part197", "part200", "part198",
-          "part201", "part205", "part202", "part204", "part206", "part203", "part207", "part208", "part209", "part210", "part211", "part212",
-           "part214", "part15")
+    "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117", "part118", "part119", "part120", "part121", "part122",
+    "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131", "part132", "part133", "part134", "part135", "part136",
+    "part137", "part138", "part140", "part141", "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150", "part151",
+    "part152", "part153", "part154", "part155", "part156", "part157", "part158", "part159", "part160", "part161", "part162", "part163", "part164", "part165",
+    "part166", "part167", "part168", "part169", "part170", "part171", "part172", "part173", "part174", "part175", "part176", "part177", "part178", "part179",
+    "part180", "part181", "part182", "part183", "part184", "part185", "part186", "part187", "part188", "part189", "part191", "part192", "part193", "part194",
+    "part195", "part190", "part196", "part199", "part197", "part200", "part198", "part201", "part205", "part202", "part204", "part206", "part203", "part207",
+    "part208", "part209", "part210", "part211", "part212", "part213", "part214", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

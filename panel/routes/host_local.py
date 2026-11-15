@@ -35,6 +35,7 @@ def register(app):
     _register_panel_repair(app)
     _register_panel_db_upkeep(app)
     _register_panel_db_repair(app)
+    _register_panel_encryption(app)
     _register_panel_ban_lists(app)
     _register_panel_blocking(app)
     _register_panel_security_misc(app)
@@ -354,6 +355,44 @@ def _register_panel_db_repair(app):
             return jsonify({"success": ok, "message": i18n.tr(msg)})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
+
+
+def _register_panel_encryption(app):
+    """The key ring that encrypts stored secrets: its status, and rotating to a new key."""
+    @app.route("/api/panel/encryption")
+    @login_required
+    @superadmin_required
+    def api_panel_encryption():
+        """Key ids, dates and the last re-encryption pass; never key material."""
+        try:
+            from panel.db.at_rest import key_status
+            return jsonify(key_status())
+        except Exception:
+            return jsonify({"error": _log_and_generic("encryption status failed")}), 500
+
+    @app.route("/api/panel/encryption/rotate", methods=["POST"])
+    @login_required
+    @superadmin_required
+    def api_panel_encryption_rotate():
+        """Make a new key current, then re-encrypt every stored secret under it in the background.
+
+        OWASP Cryptographic Storage Cheat Sheet, "Key Lifetimes and Rotation". The old key stays
+        in the ring, so everything keeps reading while the pass runs.
+        """
+        from panel.core.config import rotate_cred_key
+        from panel.db.at_rest import start_reencrypt
+        try:
+            ring = rotate_cred_key()
+        except Exception:
+            log_action(current_user, "panel_cred_key_rotate", target=LOCAL_HOST_LABEL, success=False)
+            return jsonify({"success": False,
+                            "message": _log_and_generic("encryption key rotation failed")}), 500
+        log_action(current_user, "panel_cred_key_rotate", target=LOCAL_HOST_LABEL,
+                   detail="new key %s" % ring.current, success=True)
+        start_reencrypt(app, rotated=True)
+        return jsonify({"success": True, "current": ring.current,
+                        "message": i18n.tr("New encryption key in use. Stored secrets are being "
+                                           "re-encrypted under it in the background.")})
 
 
 def _register_panel_ban_lists(app):

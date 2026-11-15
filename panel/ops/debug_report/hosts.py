@@ -12,7 +12,7 @@ classifier or a fixed-shape check (_tok) before it is printed.
 WHAT THIS NEVER DOES: probe, scan, poll players, SSH or fetch. Everything below is a database read
 of plain columns, or a read of a cache something else already filled. Decrypting columns (address,
 login, host key) happens only when data/cred_key exists: decrypting without it would CREATE a new
-key (config._cred_fernet), on exactly the install this report is trying to diagnose (R10's rule).
+key (config._cred_keyring), on exactly the install this report is trying to diagnose (R10's rule).
 """
 import datetime
 import importlib
@@ -396,8 +396,8 @@ def key_present():
     """Whether data/cred_key exists and is not empty.
 
     Every decrypting read here is gated on it: without the key, decrypting CREATES a new one
-    (config._cred_fernet), on exactly the install this report is diagnosing. An EMPTY file counts
-    as missing (config._key_missing, as _cred_fernet itself decides): `.exists()` passed it, and
+    (config._cred_keyring), on exactly the install this report is diagnosing. An EMPTY file counts
+    as missing (config._key_missing, as _cred_keyring itself decides): `.exists()` passed it, and
     the decrypt then wrote a fresh key over it.
     """
     cfg = mod("panel.core.config")

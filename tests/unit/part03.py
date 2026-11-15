@@ -1819,7 +1819,7 @@ try:
         check("keyonce: never overwrites an existing key file", _f.read() == b"FIRST")
     # And a full encrypt→decrypt round-trip still works against a created cred key.
     _sec = config.encrypt_secret("hunter2-secret")
-    check("keyonce: encrypt produces an enc:v1: blob", config.is_encrypted(_sec))
+    check("keyonce: encrypt produces an encrypted blob", config.is_encrypted(_sec))
     check("keyonce: decrypt round-trips the plaintext", config.decrypt_secret(_sec) == "hunter2-secret")
 finally:
     _shutil.rmtree(_kd, ignore_errors=True)

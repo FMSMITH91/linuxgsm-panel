@@ -2017,7 +2017,7 @@ finally:
 _pre = {p for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE)
         if os.path.exists(p)}
 enc = config.encrypt_secret("hunter2")
-check("encrypt adds enc: prefix", enc.startswith("enc:v1:"))
+check("encrypt adds the enc:v2: prefix (AES-256-GCM)", enc.startswith("enc:v2:"))
 check("is_encrypted true for ciphertext", config.is_encrypted(enc))
 eq("decrypt round-trips", config.decrypt_secret(enc), "hunter2")
 eq("encrypt empty -> empty", config.encrypt_secret(""), "")
@@ -2045,7 +2045,7 @@ eq("encrypt: ...round-tripped after the second call too",
 # to read as encrypted, or the startup migration would re-encrypt it under a new key and put it
 # permanently out of reach of the original one.
 check("is_encrypted: a real ciphertext still reads as encrypted without consulting the key",
-      config._is_fernet_token(_stored[len("enc:v1:"):]))
+      config._kr.split_v2(_stored) is not None)
 check("is_encrypted: rejects a prefix followed by valid base64 that is not a Fernet token",
       not config.is_encrypted("enc:v1:aGVsbG8gd29ybGQ="))
 

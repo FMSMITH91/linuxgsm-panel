@@ -4592,7 +4592,7 @@ from pathlib import Path as _Path13  # noqa: E402
 
 from flask import Response as _Resp13, abort as _abort13, request as _req13  # noqa: E402
 
-from panel.db import models as _models13  # noqa: E402
+from panel.db import at_rest as _atrest13, models as _models13  # noqa: E402
 from panel.ops import socket_hooks as _hooks13  # noqa: E402
 from panel.routes import _shared as _shared13  # noqa: E402
 from panel.security import banlist as _banlist13  # noqa: E402
@@ -5245,7 +5245,7 @@ def _ca13_check_failing_boot():
     before = _ca13_raw("SELECT COUNT(*) FROM audit_log")
     for owner, name, exc in ((_n10, "migrate_master_switch", "config locked"),
                              (_app10mod, "strip_legacy_superadmin_grants", "database locked"),
-                             (_app10mod, "is_encrypted", "cred_key unreadable"),
+                             (_atrest13, "encrypt_legacy_plaintext", "cred_key unreadable"),
                              (_models13, "encrypt_at_rest_columns", "disk full"),
                              (_models13, "anonymise_audit_ips", "disk full")):
         _ca13_set(owner, name, _raiser10(RuntimeError(exc)))
@@ -5257,7 +5257,7 @@ def _ca13_check_failing_boot():
         off_a()
         off_p()
         _ca13_restore_some(("migrate_master_switch", "strip_legacy_superadmin_grants",
-                            "is_encrypted", "encrypt_at_rest_columns", "anonymise_audit_ips"))
+                            "encrypt_legacy_plaintext", "encrypt_at_rest_columns", "anonymise_audit_ips"))
     logs = _ca13_logs(cap_a) + "\n" + _ca13_logs(cap_p)
     names = [type(w).__name__ for w in _ca13_wsgi_chain(app)]
     check("create_app: with every one-time step failing, the panel still boots, routes and all",
