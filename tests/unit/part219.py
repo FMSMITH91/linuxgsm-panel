@@ -763,4 +763,45 @@ check("manager script: nothing it shows goes through innerHTML or insertAdjacent
       "innerHTML" not in _js219 and "insertAdjacentHTML" not in _js219 and "outerHTML" not in _js219
       and _js219.count("textContent") >= 10)
 
+
+# ── 8. two database messages and a way out (from the remote-database proof on a real MySQL) ─────
+_N219 = {}
+
+
+def _n1_rp219(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, secrets=None):
+    return ("ERROR 2061 (HY000): Authentication plugin 'caching_sha2_password' reported error: Authentication "
+            "requires secure connection.", "", 1)
+
+
+def _n2_rp219(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, secrets=None):
+    return ("ERROR 4006 (HY000): Operation RENAME USER failed for 'gs1_mv'@'100.70.1.2' as it is referenced as a "
+            "definer account in an event.", "", 1)
+
+
+_login_hd219 = _dbs219.target_view(_HD219(flavor="mysql", port=3306, native_ok=False, auth_mode="login",
+                                           admin_user="rootadmin", admin_secret=_enc219("Zadmin219" + "q" * 20)))
+try:
+    _p9_patch(_core219, "run_privileged", _n1_rp219)
+    _N219["create"] = _dbs219.create(None, _login_hd219, "gs1_sk", _K219, 30)
+    _p9_patch(_core219, "run_privileged", _n2_rp219)
+    _N219["move"] = _dbs219.rehost(None, _login_hd219, "gs1_mv", "100.70.1.2", "100.70.1.3")
+    _drops219 = []
+    _p9_patch(_dbr219, "own_view", lambda local_hd, r: "own-account")
+    _p9_patch(_dbr219._net, "admin_target", lambda gs_remote, local_hd, r: ("remote", _login_hd219))
+    _p9_patch(_dbs219, "dump", lambda remote, hostdb, dest, account, names: (False, "refused"))
+    _p9_patch(_dbs219, "drop", lambda remote, hostdb, account, name: _drops219.append(
+        (remote, getattr(hostdb, "copy_kept", False), name)) or (True, "dropped"))
+    _N219["drop"] = (_dbr219.drop_row("game-host", None, _GD219(name="gs1_mv"), None), list(_drops219))
+finally:
+    _p9_restore_all()
+eq("create: an admin login whose own sign-in hits 2061 (no TLS, no key from the server) is said as that, not as "
+   "the server refusing the database", _N219.get("create"), (False, _dbs219.S_NET_KEY))
+check("move: MySQL refusing to move a definer account (4006) also says how its administrator moves it as root",
+      _N219.get("move", (None,))[0] is False and "RENAME USER 'gs1_mv'@'100.70.1.2' TO 'gs1_mv'@'100.70.1.3';"
+      in str(_N219.get("move", ("", ""))[1]) and "Nothing was changed" in str(_N219.get("move", ("", ""))[1]),
+      repr(_N219.get("move")))
+eq("delete: when the database's own account can't make the copy (it signs in from an old address), the drop is "
+   "still asked, to keep its own copy where the accounts are made (it deletes only an empty database without one)",
+   _N219.get("drop"), ((True, "dropped"), [("remote", False, "gs1_mv")]))
+
 _sh219.rmtree(_T219, ignore_errors=True)

@@ -814,9 +814,6 @@ def own_view(local_hd, r):
     return None
 
 
-S_NO_COPY = "No copy of {name} could be kept, so it was not deleted."
-
-
 def drop_row(gs_remote, local_hd, r, account):
     """Delete database `r` where its accounts are made, its archive copy kept first: (ok, sentence).
 
@@ -830,9 +827,11 @@ def drop_row(gs_remote, local_hd, r, account):
     own = own_view(local_hd, r)
     if own is not None:
         ok, _said = _dbs.dump(gs_remote, own, "archive", None, [r.name])
-        if not ok:
-            return False, i18n.Sentence(S_NO_COPY, name=r.name)
-        target = _dbs.copy_kept(target)
+        if ok:
+            target = _dbs.copy_kept(target)
+        # Otherwise (the account signs in from an address the game host no longer has, say) the drop
+        # keeps its own copy, signed in where the accounts are made, and deletes only an empty
+        # database when that copy fails too: never a database with no copy kept.
     return _dbs.drop(remote, target, account, r.name)
 
 

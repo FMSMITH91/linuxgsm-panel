@@ -214,8 +214,10 @@ def rows_statement(table, page):
     keys = set(table["pk"]) if not editable(table) else set()
     exprs = ", ".join(_select_expr(c, c["name"] in keys) for c in table["columns"])
     order = (" ORDER BY " + ", ".join(quote_ident(k) for k in table["pk"])) if keys else ""
-    return {"sql": "SELECT %s FROM %s%s LIMIT %d OFFSET %d" % (exprs, quote_ident(table["name"]), order,
-                                                                PAGE_ROWS + 1, page * PAGE_ROWS)}
+    # Identifiers quoted from the structure; the page numbers are ints this function made.
+    sql = "SELECT %s FROM %s%s LIMIT %d OFFSET %d" % (  # nosec B608 - see the line above
+        exprs, quote_ident(table["name"]), order, PAGE_ROWS + 1, page * PAGE_ROWS)
+    return {"sql": sql}
 
 
 def _cell(c, v, is_key):
@@ -269,9 +271,9 @@ def cell_statement(table, column, key):
     if c is None or c["binary"]:
         raise ValueError("not a text column")
     where, params = _key_match(table, key)
-    return {"sql": "SELECT LEFT(%s, %d) FROM %s WHERE %s LIMIT 1" % (quote_ident(column), FULL_CHARS,
-                                                                     quote_ident(table["name"]), where),
-            "params": params}
+    sql = "SELECT LEFT(%s, %d) FROM %s WHERE %s LIMIT 1" % (  # nosec B608 - quoted identifiers, bound values
+        quote_ident(column), FULL_CHARS, quote_ident(table["name"]), where)
+    return {"sql": sql, "params": params}
 
 
 def _value_param(c, v):
@@ -304,9 +306,10 @@ def _values(table, values):
 def insert_statement(table, values):
     """INSERT one row with `values` (a column left out gets its default)."""
     vals = _values(table, values)
-    return {"sql": "INSERT INTO %s (%s) VALUES (%s)" % (
+    sql = "INSERT INTO %s (%s) VALUES (%s)" % (  # nosec B608 - quoted identifiers, bound values
         quote_ident(table["name"]), ", ".join(quote_ident(c["name"]) for c, _v in vals),
-        ", ".join(_value_param(c, v) for c, v in vals)), "params": [v for _c, v in vals]}
+        ", ".join(_value_param(c, v) for c, v in vals))
+    return {"sql": sql, "params": [v for _c, v in vals]}
 
 
 def update_statement(table, key, values):
@@ -314,14 +317,16 @@ def update_statement(table, key, values):
     vals = _values(table, values)
     where, wparams = _key_match(table, key)
     sets = ", ".join("%s = %s" % (quote_ident(c["name"]), _value_param(c, v)) for c, v in vals)
-    return {"sql": "UPDATE %s SET %s WHERE %s LIMIT 1" % (quote_ident(table["name"]), sets, where),
-            "params": [v for _c, v in vals] + wparams}
+    sql = "UPDATE %s SET %s WHERE %s LIMIT 1" % (  # nosec B608 - quoted identifiers, bound values
+        quote_ident(table["name"]), sets, where)
+    return {"sql": sql, "params": [v for _c, v in vals] + wparams}
 
 
 def delete_statement(table, key):
     """DELETE the one row `key` addresses."""
     where, params = _key_match(table, key)
-    return {"sql": "DELETE FROM %s WHERE %s LIMIT 1" % (quote_ident(table["name"]), where), "params": params}
+    sql = "DELETE FROM %s WHERE %s LIMIT 1" % (quote_ident(table["name"]), where)  # nosec B608 - quoted identifiers, bound values
+    return {"sql": sql, "params": params}
 
 
 # ── the SQL box ──────────────────────────────────────────────────────────────────────────────────

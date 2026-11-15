@@ -533,6 +533,11 @@ def _sentence(rc, ok, fail, **vals):
     return False, i18n.Sentence(fail, **vals)
 
 
+def _key_refused(rc, out):
+    """Whether a write failed because the admin login's own sign-in hit 2061 (no TLS and no key from the server)."""
+    return rc not in (0, 2, 3, 127) and any(m in (out or "") for m in _priv.DB_KEY_ERRORS)
+
+
 def create(remote, hostdb, name, pw, maxconn):
     """Make database `name` and its two accounts with password `pw`: (ok, sentence)."""
     args = [hostdb.flavor, _auth(hostdb), name, plugin_for(hostdb), str(int(maxconn))] + _client_args(hostdb)
@@ -540,6 +545,10 @@ def create(remote, hostdb, name, pw, maxconn):
         rc, _out, refused = _admin_verb(remote, hostdb, "db-create", args, pw)
     if refused:
         return False, S_LOGIN_REFUSED
+    if _key_refused(rc, _out):
+        # The admin login itself could not sign in (caching_sha2_password, no TLS, no public key):
+        # said as that, not as the server refusing the database.
+        return False, S_NET_KEY
     if rc == 3:
         return False, i18n.Sentence(S_EXISTS, name=name)
     return _sentence(rc, S_CREATED, S_CREATE_FAILED, name=name)
@@ -675,7 +684,8 @@ S_NET_KEY = ("The database server would not take this login's password without T
              "2061), and it did not send its public key. Make the login with mysql_native_password, or let the "
              "server hand out its key.")
 S_REHOST_DEFINER = ("MySQL refused to move the account of {name}: it defines an event or a stored routine in its "
-                    "database (error 4006), which only a login with SET_USER_ID may move. Nothing was changed.")
+                    "database (error 4006), which only a login with SET_USER_ID may move. Nothing was changed. The "
+                    "server's administrator can move it as root: RENAME USER '{name}'@'{old}' TO '{name}'@'{new}';")
 
 
 def _net_kind(rc, out):
@@ -746,7 +756,7 @@ def rehost(remote, hostdb, name, old, new):
     if refused:
         return False, S_LOGIN_REFUSED
     if rc != 0 and any(m in _out for m in _DEFINER_MARKS):
-        return False, i18n.Sentence(S_REHOST_DEFINER, name=name)
+        return False, i18n.Sentence(S_REHOST_DEFINER, name=name, old=old, new=new)
     return _sentence(rc, "The account of {name} now signs in from {new}.",
                      "The database server did not move the account of {name}.", name=name, new=new)
 
