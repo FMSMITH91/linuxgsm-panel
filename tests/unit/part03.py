@@ -518,18 +518,31 @@ _R26D_FORBIDDEN = (
 _R26D_TOKEN = _re_bk.compile(r"[a-z0-9](?:[a-z0-9.\-]*[a-z0-9])?")
 
 
-def _r26d_candidates(text):
-    """Every string in `text` (lower-cased) that one forbidden value could be written as."""
+def _r26d_token_candidates(tok):
+    """Every string one lower-cased token could hold a forbidden value as."""
     out = set()
-    for tok in _R26D_TOKEN.findall(text.lower()):
-        for form in {tok, tok.replace("-", ".")}:
-            labels = form.split(".")
-            for i in range(len(labels)):
-                for j in range(i + 1, min(i + 4, len(labels)) + 1):
-                    out.add(".".join(labels[i:j]))
-                parts = labels[i].split("-")
-                out.update("-".join(parts[a:b]) for a in range(len(parts))
-                           for b in range(a + 1, len(parts) + 1))
+    for form in {tok, tok.replace("-", ".")}:
+        labels = form.split(".")
+        for i in range(len(labels)):
+            for j in range(i + 1, min(i + 4, len(labels)) + 1):
+                out.add(".".join(labels[i:j]))
+            parts = labels[i].split("-")
+            out.update("-".join(parts[a:b]) for a in range(len(parts))
+                       for b in range(a + 1, len(parts) + 1))
+    return out
+
+
+def _r26d_candidates(text, seen=None):
+    """Every string in `text` (lower-cased) that one forbidden value could be written as.
+
+    `seen` (a set of tokens) carries across calls: a token already expanded is skipped, since the
+    tree repeats most of its words and the candidates are wanted once.
+    """
+    seen = set() if seen is None else seen
+    out = set()
+    for tok in set(_R26D_TOKEN.findall(text.lower())) - seen:
+        seen.add(tok)
+        out |= _r26d_token_candidates(tok)
     return out
 
 
@@ -549,30 +562,70 @@ def _r26d_entry(value, salt=None):
     return (salt.hex(), _r26d_tag(salt, value.encode("utf-8")), _r26d_digest(salt, value.encode("utf-8")))
 
 
-def _r26d_hits(text, forbidden, memo=None):
-    """The forbidden entries' digests that some candidate string in `text` matches.
+def _r26d_digests(pairs):
+    """The slow digest of each (salt, value) in `pairs`, on native threads (PBKDF2 drops the GIL).
 
-    `memo` (candidate -> its hits) carries across calls: the tree repeats most candidates, and each
-    one costs a tag per entry, plus PBKDF2 for an entry whose tag it shares.
+    Only the candidates whose tag an entry shares get here, about 1 in 16384 per entry: around a
+    hundred across the tree, at ~60 ms each, which one thread spent ~6 s on.
     """
-    memo = {} if memo is None else memo
+    out, todo = [None] * len(pairs), list(enumerate(pairs))
+
+    def _work():
+        while todo:
+            try:
+                i, (salt, raw) = todo.pop()
+            except IndexError:
+                return
+            out[i] = _r26d_digest(salt, raw)
+
+    workers = [_sm_core._real_threading.Thread(target=_work, daemon=True)
+               for _ in range(min(8, os.cpu_count() or 1, len(pairs)))]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+    return out
+
+
+def _r26d_matches(cands, forbidden):
+    """{candidate: the forbidden entries' digests it matches} for the candidates that match one.
+
+    The tag rules out all but ~1 candidate in 16384 per entry; PBKDF2 decides the rest.
+    """
     keyed = [(bytes.fromhex(_s), _t, _d) for _s, _t, _d in forbidden]
-    hits = set()
-    for cand in _r26d_candidates(text):
-        if cand not in memo:
-            raw = cand.encode("utf-8")
-            memo[cand] = frozenset(_d for _s, _t, _d in keyed
-                                   if _r26d_tag(_s, raw) == _t and _r26d_digest(_s, raw) == _d)
-        hits |= memo[cand]
-    return hits
+    pairs = [(c, _s, _d) for c in cands for _s, _t, _d in keyed if _r26d_tag(_s, c.encode("utf-8")) == _t]
+    out = {}
+    for (c, _s, _d), got in zip(pairs, _r26d_digests([(_s, c.encode("utf-8")) for c, _s, _d in pairs])):
+        if got == _d:
+            out.setdefault(c, set()).add(_d)
+    return out
 
 
-_r26d_found, _r26d_memo = [], {}
-for _r26d_f in _cls_files:
-    with open(os.path.join(_root, _r26d_f), "rb") as _r26d_fh:
-        _r26d_text = _r26d_fh.read().decode("utf-8", "ignore")
-    if _r26d_hits(_r26d_text, _R26D_FORBIDDEN, _r26d_memo):
-        _r26d_found.append(_r26d_f)
+def _r26d_hits(text, forbidden):
+    """The forbidden entries' digests that some candidate string in `text` matches."""
+    return set().union(*_r26d_matches(_r26d_candidates(text), forbidden).values())
+
+
+def _r26d_read(rel):
+    """Repository file `rel`'s text, undecodable bytes dropped."""
+    with open(os.path.join(_root, rel), "rb") as fh:
+        return fh.read().decode("utf-8", "ignore")
+
+
+def _r26d_scan(files, forbidden, read=_r26d_read):
+    """The files among `files` that name a forbidden value.
+
+    Every distinct candidate of the whole set is tested once, then only when one matched are the
+    files read again to say which hold it: a clean tree is read once.
+    """
+    seen, cands = set(), set()
+    for f in files:
+        cands |= _r26d_candidates(read(f), seen)
+    matched = set(_r26d_matches(cands, forbidden))
+    return [f for f in files if matched and _r26d_candidates(read(f)) & matched]
+
+
+_r26d_found = _r26d_scan(_cls_files, _R26D_FORBIDDEN)
 check("privacy: no file in the repository names a real host, tailnet or address",
       len(_cls_files) >= 300 and not _r26d_found,
       "files naming a forbidden value: %r (replace each with a synthetic one of the same shape: "
@@ -589,7 +642,11 @@ check("privacy: the scan finds a forbidden value written as a label, an address 
           "https://node.TAILE00000.ts.net:5000", "->alice@100.64.0.10:22",
           "100-64-0-10.example", "the test VPS (vps-00000000, ufw)", "box-vps-00000000-old",
           "taile000001.ts.net", "100.64.0.101", "vps-000000001", "1100.64.0.10")]
-      == [True, True, True, True, True, False, False, False, False])
+      == [True, True, True, True, True, False, False, False, False]
+      # ...and the tree scan names every file holding one, a value already seen in an earlier file too
+      and _r26d_scan(["a", "b", "c", "d"], _r26d_ctl, read={
+          "a": "near 100.64.0.101", "b": "ssh alice@100.64.0.10", "c": "node.TAILE00000.ts.net",
+          "d": "again 100.64.0.10"}.get) == ["b", "c", "d"])
 # ...a tag shared is not a match (PBKDF2 decides), and the stored entries are what the comment above
 # says: one salt each, 600000 rounds, and no line naming what a value is.
 _r26d_salt = os.urandom(16)
