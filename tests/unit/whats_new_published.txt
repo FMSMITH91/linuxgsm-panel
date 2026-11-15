@@ -3,6 +3,9 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+3825e157 A login ends 8 hours after sign-in, however active.
+6f96c888 Login cookies are tied to the panel's own address.
+b5147dd6 The built-in HTTPS certificate uses a modern key.
 fa18fa39 Passwords are stored the way OWASP recommends.
 3ba4317c Databases on another machine.
 f8a42bc1 Databases page.
