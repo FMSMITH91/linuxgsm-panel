@@ -3,6 +3,14 @@
 # reworded title shows an old change again to every account. tests/unit/part150.py holds
 # docs/CHANGELOG.md to this list: add a line for a genuinely new entry; never reword a title
 # listed here; delete a line only together with its entry.
+3ba4317c Databases on another machine.
+f8a42bc1 Databases page.
+03ae9fba The database exposure warning reads the firewall.
+db8bc42e A dedicated database login.
+a19e77d8 Open pages cost the host less CPU.
+0db1b7e3 A quiet console is read less often.
+bf2c00fb Pages load faster on a second visit.
+8f64f952 Less memory and disk.
 da70d0b4 Databases for game plugins.
 bb0a111a Backups include a server's databases.
 a9c9ae51 Database passwords stay off command lines and logs.
