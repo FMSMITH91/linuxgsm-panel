@@ -25,8 +25,14 @@
 #      unless <sha> itself changes only paths CI does not run for (ci.yml's paths-ignore): its
 #      deploy would wait 20 minutes for checks that never come, and then fail.
 #
+#   6. for main, publishes a GitHub Release of <sha>: tag YYYY.M.D (the commit's date in UTC; .2, .3
+#      for a later release the same day), the CHANGELOG entries it added as the notes (the same
+#      entries a panel's "What's new" shows), and the signature attached. A release that already
+#      exists is left alone. A failure here is reported, never fatal: the signature is already pushed.
+#
 # Environment: SIGN_RELEASE_REMOTE (default origin), SIGN_RELEASE_KEY, SIGN_RELEASE_NO_DEPLOY=1 to
-# skip step 5's deploy.
+# skip step 5's deploy and step 6's release, SIGN_RELEASE_NO_RELEASE=1 to skip only the release,
+# SIGN_RELEASE_GH (default gh) for the GitHub CLI command.
 set -euo pipefail
 export LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE=
 
@@ -47,6 +53,8 @@ if [[ "${YES}" -eq 1 ]] && [[ -t 0 ]]; then
     die "--yes is refused at a terminal: run without it and type the commit id when asked."
 fi
 REMOTE="${SIGN_RELEASE_REMOTE:-origin}"
+read -ra GH <<< "${SIGN_RELEASE_GH:-gh}"
+TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEY="${SIGN_RELEASE_KEY:-${HOME}/.ssh/id_ed25519_signing}"
 
 case "${SHA}" in ""|*[!0-9a-f]*) die "'${SHA}' is not a full commit id (40 lowercase hex)." ;; esac
@@ -186,6 +194,48 @@ if [[ -z "${PUSHED:-}" ]]; then
 fi
 unset GIT_INDEX_FILE
 
+# 6. The GitHub Release.
+changelog_at() {   # changelog_at <commit>: that commit's CHANGELOG, from docs/ or the root
+    git cat-file blob "$1:docs/CHANGELOG.md" 2>/dev/null || git cat-file blob "$1:CHANGELOG.md" 2>/dev/null
+}
+release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when that tag is another commit's
+    local base tag at n=1
+    base="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%-m.%-d "$1")" || return 1
+    tag="${base}"
+    while at="$(git ls-remote --tags "$2" "refs/tags/${tag}" "refs/tags/${tag}^{}" | awk '{print $1}' | tail -n 1)" \
+          && [[ -n "${at}" ]] && [[ "${at}" != "$1" ]]; do
+        n=$(( n + 1 )); tag="${base}.${n}"
+    done
+    printf '%s\n' "${tag}"
+}
+publish_release() {   # publish_release <commit> <previous signed commit or ""> <signature file>
+    local tag
+    tag="$(release_tag "$1" "${REMOTE}")" || { echo "sign-release: could not name the release." >&2; return 1; }
+    if "${GH[@]}" release view "${tag}" >/dev/null 2>&1; then
+        echo "sign-release: release ${tag} already exists; left as it is."
+        return 0
+    fi
+    if [[ -n "$2" ]]; then changelog_at "$2" > "${TMP}/changelog.before" || : > "${TMP}/changelog.before"
+    else : > "${TMP}/changelog.before"; fi
+    changelog_at "$1" > "${TMP}/changelog.after" || : > "${TMP}/changelog.after"
+    python3 "${TOOLS_DIR}/release_notes.py" "${TMP}/changelog.before" "${TMP}/changelog.after" "$1" "${tag}" \
+        > "${TMP}/notes.md" || { echo "sign-release: could not write the release notes." >&2; return 1; }
+    cp "$3" "${TMP}/linuxgsm-panel-${tag}.sig"
+    "${GH[@]}" release create "${tag}" --target "$1" --title "${tag}" --notes-file "${TMP}/notes.md" \
+        "${TMP}/linuxgsm-panel-${tag}.sig" >/dev/null \
+        || { echo "sign-release: could not create the GitHub release ${tag}." >&2; return 1; }
+    echo "sign-release: published GitHub release ${tag}."
+}
+if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
+   && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]]; then
+    if command -v "${GH[0]}" >/dev/null 2>&1; then
+        publish_release "${SHA}" "${BASE}" "${TMP}/msg.sig" \
+            || echo "sign-release: the signature is pushed; publish the release later by re-running this." >&2
+    else
+        echo "sign-release: ${GH[0]} is not installed; no GitHub release was published." >&2
+    fi
+fi
+
 # A commit that changes only what ci.yml's paths-ignore lists ('**/*.md', 'docs/**', LICENSE,
 # .gitignore, .editorconfig; system_ops._ci_path_ignored reads the same list) gets no CI or CodeQL
 # run, so the deploy's verify step, which waits for their checks on this exact commit, could only
@@ -200,8 +250,8 @@ ci_ignored_only() {
 if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] && ci_ignored_only "${SHA}"; then
     echo "sign-release: ${SHA:0:12} changes only documentation, which CI does not run for, so no deploy was started."
 elif [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]]; then
-    if command -v gh >/dev/null 2>&1; then
-        gh workflow run deploy.yml --ref main -f sha="${SHA}" \
+    if command -v "${GH[0]}" >/dev/null 2>&1; then
+        "${GH[@]}" workflow run deploy.yml --ref main -f sha="${SHA}" \
             || echo "sign-release: could not start the deploy; run: gh workflow run deploy.yml --ref main -f sha=${SHA}" >&2
     else
         echo "sign-release: gh is not installed; start the deploy with: gh workflow run deploy.yml --ref main -f sha=${SHA}" >&2
