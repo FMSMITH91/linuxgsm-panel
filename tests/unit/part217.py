@@ -92,7 +92,8 @@ def _tag217(repo, sha, remote):
     """Run sign-release.sh's own release_tag on a fixture repository."""
     script = (_tagfn217.group(0) if _tagfn217 else "") + "cd %s && release_tag %s %s" % (
         _shlex217.quote(repo), sha, _shlex217.quote(remote))
-    return _run142(["bash", "-c", script]).stdout.strip()
+    # A local zone far from UTC, so a name taken from local time instead of UTC shows on any machine.
+    return _run142(["bash", "-c", script], env=dict(_ENV142, TZ="Pacific/Auckland")).stdout.strip()
 
 
 if _HAVE217:
