@@ -899,12 +899,6 @@ def _warm():
         _dummy_hash()
 
 
-def init_auth(app):
-    login_manager.init_app(app)
-    app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
-    _host_prefix_cookies(app)
-
-
 def _host_prefix_cookies(app):
     """Name the login cookies `__Host-…` when they are Secure (the panel is reached over HTTPS).
 
@@ -922,6 +916,12 @@ def _host_prefix_cookies(app):
     for prefix in ("SESSION", "REMEMBER"):
         app.config[prefix + "_COOKIE_DOMAIN"] = None
         app.config[prefix + "_COOKIE_PATH"] = "/"
+
+
+def init_auth(app):
+    login_manager.init_app(app)
+    app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
+    _host_prefix_cookies(app)
     # Pre-compute the login-timing dummy hash so it's ready before the first login WITHOUT adding
     # it to startup or to the first failed-login timing. hash_password runs it on a real worker
     # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
