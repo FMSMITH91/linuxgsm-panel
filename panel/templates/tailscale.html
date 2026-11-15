@@ -283,10 +283,21 @@
            at /lgsm because another app holds "/", Disable targeted the other app. The server
            re-checks the mount against the host's config before removing anything. #}
         {% if info.running and (panel_routes or config.tailscale_setup_done) and current_user.is_superadmin %}
+        <span class="d-flex gap-1">
+        {# Change path publishes the new mount first and removes the old one only once Serve shows
+           the new one (tailscale._serve_change_mount), so the page in use never loses its way in. #}
+        {% if config.tailscale_setup_done %}
+        <button class="btn btn-outline-secondary btn-sm" data-action="changeServePath" data-args='["@self"]'
+                data-current-mount="{{ config.tailscale_mount or '/' }}">
+          <i class="bi bi-signpost-split"></i> Change path
+        </button>
+        {% endif %}
         <button class="btn btn-outline-danger btn-sm" data-action="disableServe" data-args='["@self"]'
+                data-via-serve="{{ '1' if via_serve else '' }}"
                 data-mount="{{ (panel_routes[0].mount if panel_routes else config.tailscale_mount) or '/' }}">
           <i class="bi bi-x-circle"></i> Disable
         </button>
+        </span>
         {% endif %}
       </div>
       <div class="card-body p-0">

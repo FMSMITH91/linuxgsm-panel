@@ -21,6 +21,7 @@ from flask_login import LoginManager, current_user
 
 from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
 from panel.security import session_cookie as _session_cookie
+from panel.security import account_guard as _account_guard
 
 # The largest id SQLite can bind (a signed 64-bit INTEGER). A larger Python int is not "no such
 # row" to the driver: binding it raises OverflowError, which every lookup below let straight through
@@ -884,8 +885,11 @@ def _drop_expired_session(sess):
 
 
 def _touch_session(sess, now):
-    """Throttled "last active" update (~5 min) of a login-session row."""
-    if not sess.last_seen or (now - sess.last_seen).total_seconds() > 300:
+    """Throttled "last active" update (~5 min) of a login-session row; a background poll is not one."""
+    if _session_cookie.background_request():
+        return
+    step = _session_cookie.reissue_seconds(current_app)
+    if not sess.last_seen or (now - sess.last_seen).total_seconds() > step:
         sess.last_seen = now
         db.session.commit()
 
@@ -969,7 +973,13 @@ def init_auth(app):
                     _drop_expired_session(sess)
                     return None
                 if _session_row_binding_ok(sess) is False:
-                    return None                       # "strong": not the client that signed in
+                    # "strong": not the client that signed in. A stolen cookie looks exactly like
+                    # this, so it is audited (Session Management Cheat Sheet, "Detecting Session ID
+                    # Anomalies"; rate-limited in account_guard). A phone that changed network
+                    # does too, so the session is refused for this request, not deleted.
+                    _account_guard.note_denial("session_binding_mismatch",
+                                               detail="IP or browser differs from sign-in", user=user)
+                    return None
                 user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
                 _touch_session(sess, now)
             except Exception:
@@ -998,6 +1008,8 @@ def init_auth(app):
         # an unbound session may be bound to it. Without one there is no row, and an unbound
         # session is exactly what a replayed remember cookie arrives in — see _session_binding_ok.
         if not _session_binding_ok(bind_unbound=bool(sid)):
+            _account_guard.note_denial("session_binding_mismatch",
+                                       detail="IP or browser differs from sign-in", user=user)
             return None                               # "strong": replayed from another client
         return user
 

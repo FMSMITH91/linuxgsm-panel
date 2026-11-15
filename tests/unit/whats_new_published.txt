@@ -650,3 +650,14 @@ b6b67bec The Telegram /update completion check compares the git commit, not the 
 f5257a0c The Maintenance tab names the release you run.
 b4b1b89c See what an update brings before you install it.
 59910875 The Install page asks for only the game icons you can see.
+dfa4618d Require 2FA for administrators.
+26387afb Session limits in Settings.
+52c12374 Account change notices.
+b008392d API token expiry.
+f7a385d6 Change the Tailscale Serve path in one step.
+707446bc Sign-in throttling per account.
+26960dbd Stronger password rules.
+633efb75 Confirm your password for risky actions.
+a389fb82 Sessions end when you stop using the panel.
+d1fbe743 Security events are logged.
+daf96f7c Signing out clears the browser.

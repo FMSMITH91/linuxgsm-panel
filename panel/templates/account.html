@@ -116,12 +116,12 @@
         </div>
         <div class="mb-2" style="max-width: 420px;">
           <label class="form-label small mb-1" for="account-new_password">New password</label>
-          <input id="account-new_password" type="password" name="new_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
-          <div class="form-text">At least 10 characters with upper &amp; lowercase, a number, and a symbol.</div>
+          <input id="account-new_password" type="password" name="new_password" class="form-control form-control-sm" autocomplete="new-password" minlength="8" required>
+          <div class="form-text">At least 15 characters (8 with two-factor authentication on); any characters, spaces too. Not a common password.</div>
         </div>
         <div class="mb-2" style="max-width: 420px;">
           <label class="form-label small mb-1" for="account-confirm_password">Confirm new password</label>
-          <input id="account-confirm_password" type="password" name="confirm_password" class="form-control form-control-sm" autocomplete="new-password" minlength="10" required>
+          <input id="account-confirm_password" type="password" name="confirm_password" class="form-control form-control-sm" autocomplete="new-password" minlength="8" required>
         </div>
         {% if current_user.totp_enabled %}
         <div class="mb-3" style="max-width: 420px;">
@@ -179,6 +179,18 @@
       <p class="text-secondary mb-2">Every device or browser signed in to your account. Revoke any you
         don't recognise — the one you're using now is marked <span class="badge bg-success">This device</span>.</p>
       <div id="sessions-list" class="mb-2"><div class="text-secondary small">Loading…</div></div>
+      {% set changes = account_changes(current_user) %}
+      {% if changes %}
+      {# Recent changes to this account's security (account_notices.recent_changes), so a change
+         made in a borrowed session or by an admin is seen here as well as at the next sign-in. #}
+      <div class="small fw-semibold mt-2" id="acct-changes-title">Recent security changes</div>
+      <ul class="list-unstyled small mb-1" id="acct-changes">
+        {% for label, when, ip in changes %}
+        <li><span>{{ label }}</span> · <span class="text-secondary">{{ when|datetime }}</span>{% if ip %} · <span class="text-secondary" data-no-i18n>{{ ip }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      <div class="small text-secondary">Wasn't you? Change your password and use "Sign out everywhere" on your Account page.</div>
+      {% endif %}
       <hr class="my-2">
       <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
         <button class="btn btn-outline-danger btn-sm" type="button" data-action="_acctSignOutAll">
@@ -220,6 +232,8 @@
       <p class="small mb-2">
         Status:
         {% if current_user.has_api_token %}<span class="badge bg-success">A token is active</span>
+        {% if current_user.api_token_expires %}<span class="small text-secondary">Expires <span>{{ current_user.api_token_expires|datetime }}</span></span>
+        {% else %}<span class="small text-secondary">Never expires</span>{% endif %}
         {% else %}<span class="badge bg-secondary">No token</span>{% endif %}
       </p>
       {# The fields are not optional decoration: the route requires them, exactly as the password
@@ -242,6 +256,14 @@
           {% if current_user.totp_enabled %}
           <input id="account-api_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
           {% endif %}
+          {# How long a new token lives (Authorization Cheat Sheet: short-lived credentials). A token
+             minted before this choice existed keeps working until it is replaced or revoked. #}
+          <select name="expires_days" class="form-select form-select-sm" style="width:auto;" aria-label="Token lifetime">
+            <option value="30">Expires in 30 days</option>
+            <option value="90" selected>Expires in 90 days</option>
+            <option value="365">Expires in a year</option>
+            <option value="0">Never expires</option>
+          </select>
           <button class="btn btn-primary btn-sm text-nowrap" type="submit">
             <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}
           </button>

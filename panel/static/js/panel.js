@@ -135,6 +135,18 @@ window.addEventListener('pageshow', function(ev){
     location.replace(_loginPath() + '?next=' + encodeURIComponent(here));
   };
 
+  // When the person last used the page. Starts at load: opening a page is a use of it.
+  var _lastInput = Date.now(), _INPUT_GRACE_MS = 10000;
+  ['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(function(ev){
+    document.addEventListener(ev, function(){ _lastInput = Date.now(); }, {capture: true, passive: true});
+  });
+  var _confirmHandled = false;
+  function _goConfirm(){
+    if (_confirmHandled) return;
+    _confirmHandled = true;
+    var here = location.pathname + location.search;
+    location.assign((window.MOUNT || '') + '/account/reauth?next=' + encodeURIComponent(here));
+  }
   window.fetch = function(input, init){
     init = init || {};
     var method = (init.method || 'GET').toUpperCase();
@@ -147,9 +159,16 @@ window.addEventListener('pageshow', function(ev){
     // in-page call from a browser navigation when the session has expired, so it can answer
     // with a 401 a script can act on rather than a login page a script cannot parse.
     if (!h.has('X-Requested-With')) h.set('X-Requested-With', 'XMLHttpRequest');
+    // A fetch with no click, key press, tap or scroll in the last few seconds was started by a
+    // timer (a poll, a wake-up check), not by the person: the server then leaves the login's idle
+    // clock alone, so an open tab no longer keeps a session alive forever (session_cookie.py).
+    if (Date.now() - _lastInput > _INPUT_GRACE_MS && !h.has('X-Panel-Background')) h.set('X-Panel-Background', '1');
     init.headers = h;
     return _fetch(input, init).then(function(r){
       if (r.status === 401 && r.headers.get('X-Auth-Required')) window.sessionExpired();
+      // A high-risk action after the confirmation window (account_guard.step_up_required): the
+      // whole tab goes to the confirm page, which comes back here; the action is then clicked again.
+      else if (r.status === 403 && r.headers.get('X-Reauth-Required') === '1') _goConfirm();
       return r;
     });
   };

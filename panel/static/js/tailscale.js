@@ -182,13 +182,18 @@ function enableServe(btn) {
 function disableServe(btn) {
   // The mount comes from the button's data-mount: the route the host reports proxying the panel.
   var mount = (btn && btn.dataset && btn.dataset.mount) || '/';
+  // data-via-serve: this page itself came through Serve, so Disable ends this connection; said
+  // plainly before anything runs (the route refuses an unconfirmed disable from such a page).
+  var viaServe = !!(btn && btn.dataset && btn.dataset.viaServe);
   confirmDialog({title:'Disable Tailscale Serve', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Disable',
-    bodyText:'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',
+    bodyText: viaServe
+      ? 'You are using the panel through this Tailscale Serve address. Disabling Serve ends this connection: afterwards open the panel at its direct address.'
+      : 'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',
     onConfirm:function(){
       fetch(MOUNT + '/api/tailscale/serve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({action: 'disable', mount: mount}),
+        body: JSON.stringify({action: 'disable', mount: mount, confirm: true}),
       })
       .then(r => r.json())
       .then(data => {
@@ -201,6 +206,42 @@ function disableServe(btn) {
       })
       .catch(function() {
         if (window.toast) toast('Error disabling Tailscale Serve', 'danger');
+      });
+    }});
+}
+
+// Move the panel's Serve path in one step. The server publishes the new path, checks Serve shows it,
+// and only then removes the old one; the answer names the new address, and the page goes there.
+function changeServePath(btn) {
+  var current = (btn && btn.dataset && btn.dataset.currentMount) || '/';
+  var wrap = document.createElement('div');
+  var note = document.createElement('p');
+  note.className = 'small mb-2';
+  note.textContent = 'The new path is published and checked first; the old one is removed only after that, so this page keeps working until you move.';
+  var label = document.createElement('label');
+  label.className = 'form-label small'; label.htmlFor = 'ts-new-mount'; label.textContent = 'New path';
+  var input = document.createElement('input');
+  input.type = 'text'; input.id = 'ts-new-mount'; input.className = 'form-control'; input.value = current;
+  input.setAttribute('autocomplete', 'off'); input.setAttribute('data-no-i18n', '');
+  wrap.appendChild(note); wrap.appendChild(label); wrap.appendChild(input);
+  confirmDialog({title:'Change the panel\'s Serve path', icon:'signpost-split', confirmLabel:'Change path', bodyNode: wrap,
+    onConfirm:function(){
+      fetch(MOUNT + '/api/tailscale/serve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'change-mount', mount: input.value || '/', page: location.href}),
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          if (window.toast) toast(data.message, 'success');
+          setTimeout(function(){ _tsAfterServeChange(data.go); }, 2500);
+        } else if (window.toast) {
+          toast(data.message, 'danger');
+        }
+      })
+      .catch(function() {
+        if (window.toast) toast('Error changing the Serve path', 'danger');
       });
     }});
 }

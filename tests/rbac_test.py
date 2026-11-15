@@ -605,13 +605,13 @@ def _invite_happy_path_and_replays():
     _pw_real = _anmod.password_problem
     _iid_race, _tok_race = _mint(_sa)
 
-    def _pw_then_steal(pw):
+    def _pw_then_steal(pw, **kw):
         with app.app_context():
             _row = db.session.get(_Inv, _iid_race)
             if _row is not None and _row.used_at is None:
                 _row.used_at = _inv_utcnow()
                 db.session.commit()
-        return _pw_real(pw)
+        return _pw_real(pw, **kw)
 
     _anmod.password_problem = _pw_then_steal
     try:
@@ -634,13 +634,13 @@ def _invite_revoked_during_the_race():
     #     revoke_invite already claims its side on both columns; same window, same stub.
     _iid_rev, _tok_rev = _mint(_sa)
 
-    def _pw_then_revoke(pw):
+    def _pw_then_revoke(pw, **kw):
         with app.app_context():
             _row = db.session.get(_Inv, _iid_rev)
             if _row is not None and _row.revoked_at is None:
                 _row.revoked_at = _inv_utcnow()
                 db.session.commit()
-        return _pw_real(pw)
+        return _pw_real(pw, **kw)
 
     _anmod.password_problem = _pw_then_revoke
     try:
@@ -4243,6 +4243,8 @@ _MUT_NO_PERM_OK = {
     "account_api_token_revoke", "api_account_ui_order", "logout", "api_account_session_revoke",
     "api_account_ui_order_reset", "account_dismiss_otp_nag",
     "account_set_theme", "account_whats_new_seen",
+    # Step-up: re-proves the caller's OWN password (and code) to restore its confirmation window.
+    "account_reauth",
     # The viewer's own UI language. POST because the PROFILE write is a stored state change and
     # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
     # pre-login (the switcher is on the login page), so there is no permission to require.

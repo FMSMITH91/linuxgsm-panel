@@ -49,6 +49,9 @@ EVENTS = {
     "admin_login":        ("A super admin signs in", True),
     "admin_bruteforce":   ("A super admin account is being brute-forced", True),
     "account_change":     ("A user is created or a group's permissions change", True),
+    "credential_change":  ("An administrator's password, two-factor setting or API token changes", True),
+    "account_locked":     ("Sign-ins for an account are paused after repeated failures", True),
+    "twofa_enforced":     ("An administrator without 2FA is made to set it up (Settings switch)", True),
     "ip_banned":          ("fail2ban bans an IP on the panel login", False),
     "ban_spike":          ("A burst of fail2ban bans (attack wave)", True),
 }

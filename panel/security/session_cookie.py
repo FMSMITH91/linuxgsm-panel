@@ -18,6 +18,12 @@ Two changes, and nothing else about the cookie (its name, flags, lifetime and co
   viewer, and a cookie that changed on every response defeated the browser's cache of the panel's
   content-hashed assets (each page load re-asked for all ~20 of them). A static request that did
   change the session still sends it.
+* A request the page marks as BACKGROUND (X-Panel-Background: 1, which panel.js adds to a fetch that
+  no click, key press, tap or scroll started: a poll) never re-sends an unchanged cookie, and does not
+  move the login's last-seen time (auth._touch_session). So the idle timeout counts from the person's
+  last use of the panel, not from the dashboard's last poll: OWASP Session Management Cheat Sheet,
+  "Idle Timeout", ends a session that has not been USED; a tab left open polling every few seconds
+  used to keep it alive until the absolute limit.
 """
 import time
 
@@ -26,8 +32,20 @@ from flask.sessions import SecureCookieSession, SecureCookieSessionInterface
 from itsdangerous import BadSignature
 
 # How old an unchanged session's cookie may get before a response re-sends it. The same step as
-# auth._touch_session's write of the login's last-seen time.
+# auth._touch_session's write of the login's last-seen time. A fifth of the idle timeout when that is
+# shorter (reissue_seconds), or a 5-minute timeout would end 4 minutes after a use.
 _REISSUE_SECONDS = 300
+
+
+def reissue_seconds(app):
+    """Seconds after which an unchanged session's cookie is re-sent: _REISSUE_SECONDS, or less."""
+    life = app.permanent_session_lifetime.total_seconds()
+    return min(_REISSUE_SECONDS, max(1.0, life / 5.0))
+
+
+def background_request():
+    """Whether this request was started by a timer in the page rather than by the person (see above)."""
+    return has_request_context() and request.headers.get("X-Panel-Background") == "1"
 
 
 class _Session(SecureCookieSession):
@@ -59,13 +77,15 @@ class ThrottledCookieSessions(SecureCookieSessionInterface):
         return sess
 
     def should_set_cookie(self, app, session):
-        """Changed: always. Unchanged and permanent: once its cookie is _REISSUE_SECONDS old."""
+        """Changed: always. Unchanged and permanent: once its cookie is reissue_seconds old, on a use."""
         if session.modified:
             return True
         if not (session.permanent and app.config["SESSION_REFRESH_EACH_REQUEST"]):
             return False
+        if background_request():
+            return False            # a poll is not a use: the idle clock keeps running
         issued = getattr(session, "issued_at", None)
-        return issued is None or time.time() - issued >= _REISSUE_SECONDS
+        return issued is None or time.time() - issued >= reissue_seconds(app)
 
     def save_session(self, app, session, response):
         """Flask's save, except that a static file leaves an unchanged session alone."""

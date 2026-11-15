@@ -77,6 +77,11 @@ import manage  # noqa: E402   (creates its own app at import, exactly as the CLI
 from panel.db.models import db, User, UserSession  # noqa: E402
 from panel.security import auth  # noqa: E402
 
+# Fixture passwords: plain words, past the 15 characters a password without 2FA needs. No real credential.
+_PW_ESC = "quiet orchard lantern"
+_PW_RESET = "copper river morning"
+_PW_NEW = "silver meadow kettle"
+
 results = []
 
 
@@ -205,7 +210,7 @@ def _check_tty_safe():
     for _what, _fn, _args in (
             ("disable-2fa", manage.cmd_disable_2fa, Args(username=_esc_name)),
             ("reset-password", manage.cmd_reset_password,
-             Args(username=_esc_name, password="An0ther!passw0rd")),  # nosec B106 - test fixture
+             Args(username=_esc_name, password=_PW_ESC)),  # nosec B106 - test fixture
             ("disable", manage._set_flag, None)):
         if _args is None:
             _said = _captured(_fn, _esc_name, "is_active", False, "deactivated")
@@ -302,12 +307,12 @@ try:
         old_hash, old_epoch = before.password_hash, (before.auth_epoch or 0)
         db.session.add(UserSession(user_id=admin_id, sid="mt-reset-a"))
         db.session.commit()
-    manage.cmd_reset_password(Args(username="cli_admin", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
+    manage.cmd_reset_password(Args(username="cli_admin", password=_PW_RESET))  # nosec B106 - test fixture
     with manage.app.app_context():
         after = db.session.get(User, admin_id)
         check("reset: the password actually changes", after.password_hash != old_hash)
         check("reset: the new password verifies",
-              auth.check_password("An0ther!Str0ng1", after.password_hash))
+              auth.check_password(_PW_RESET, after.password_hash))
         check("reset: auth_epoch is bumped, so existing sessions die",
               (after.auth_epoch or 0) > old_epoch,
               "%s -> %s" % (old_epoch, after.auth_epoch))
@@ -321,7 +326,7 @@ try:
     check("reset: a weak --password is refused before anything is written",
           exited and "Weak password" in msg, msg[:60])
     exited, msg = raises_exit(manage.cmd_reset_password,
-                              Args(username="nobody_here", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
+                              Args(username="nobody_here", password=_PW_RESET))  # nosec B106 - test fixture
     check("reset: an unknown username is refused", exited and "No such user" in msg, msg[:60])
 
     # ── 3. disable-2fa must clear the SECRET, not just the flag ───────────────────────────────
@@ -362,23 +367,23 @@ try:
         sys.stdin = _real_stdin
 
     # ── 5. create-admin ───────────────────────────────────────────────────────────────────────
-    manage.cmd_create_admin(Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
+    manage.cmd_create_admin(Args(username="cli_new", password=_PW_NEW))  # nosec B106 - test fixture
     with manage.app.app_context():
         n = User.query.filter_by(username="cli_new").first()
         check("create-admin: the account exists, superadmin and active",
               n is not None and n.is_superadmin and n.is_active)
     exited, msg = raises_exit(manage.cmd_create_admin,
-                              Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
+                              Args(username="cli_new", password=_PW_NEW))  # nosec B106 - test fixture
     check("create-admin: refuses to clobber an existing user",
           exited and "already exists" in msg, msg[:60])
     # The web forms' username rule applies here too. "cli_pad " (a stray space in the quotes) was
     # stored verbatim, and the login form strips what is typed, so it could never sign in.
-    manage.cmd_create_admin(Args(username="cli_pad ", password="Br@ndNew1pass"))  # nosec B106 - test fixture
+    manage.cmd_create_admin(Args(username="cli_pad ", password=_PW_NEW))  # nosec B106 - test fixture
     with manage.app.app_context():
         _pad = [u.username for u in User.query.filter(User.username.like("cli_pad%")).all()]
     check("create-admin: the name is stored stripped, as the login form looks it up", _pad == ["cli_pad"],
           repr(_pad))
-    _bad = [raises_exit(manage.cmd_create_admin, Args(username=n, password="Br@ndNew1pass"))  # nosec B106
+    _bad = [raises_exit(manage.cmd_create_admin, Args(username=n, password=_PW_NEW))  # nosec B106
             for n in ("ab", "cli two", "cli\x1bx")]
     with manage.app.app_context():
         _made = User.query.filter(User.username.in_(["ab", "cli two", "cli\x1bx"])).count()

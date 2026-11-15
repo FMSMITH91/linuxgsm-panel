@@ -618,7 +618,8 @@ check("account: the panel-default buttons, sign-out-everywhere and the API token
       repr(sorted(_ac134.actions) if _ac134 else None))
 _st134 = _PG134.get("settings")
 _SETNAMES134 = {"site_title", "site_domain", "login_tagline", "accent_color", "default_language",
-                "session_lifetime_hours", "remember_days", "session_protection", "reboot_wait_max_hours",
+                "session_idle_minutes", "session_absolute_hours", "remember_days", "session_protection",
+                "reboot_wait_max_hours",
                 "reboot_restore_no_autostart"}
 check("settings: every field the page saved before the columns moved is still in its one form, every "
       "section still has its anchor",

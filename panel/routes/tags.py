@@ -13,6 +13,7 @@ from panel.security.auth import (_can_edit_tags, _r17c_row_id, get_game, get_use
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
 from panel.core.validation import (_valid_hex_color, password_problem)
 from app import (_has_remember_cookie, _log, _register_session, _tag_json)
+from panel.security import account_guard, account_notices
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _json_int, reauth_password, reauth_release,
     reauth_reserve, spend_totp_step)
 
@@ -451,7 +452,7 @@ def _pw_request_refusal(u, old, new, confirm, back):
     if new != confirm:
         flash("The new passwords don't match.", "danger")
         return redirect(back)
-    pw_err = password_problem(new)
+    pw_err = password_problem(new, has_mfa=bool(u.totp_enabled), avoid=(u.username,))
     if pw_err:
         flash(pw_err, "danger")
         return redirect(back)
@@ -504,7 +505,9 @@ def _pw_sign_back_in(u, remember, was_forced, back):
               "with your new password.", "warning")
         return redirect(url_for("login"))
     login_user(u, remember=remember)        # refresh THIS session (new epoch + sid) so we stay in
+    account_guard.mark_authenticated()      # the current password and the code were just proved
     log_action(u, "password_changed", target=u.username)
+    account_notices.alert_credential_change(u, "password changed")
     if was_forced:
         flash("Password set — this account is yours now. Welcome.", "success")
         return redirect(url_for("index"))
@@ -560,7 +563,14 @@ def _register_account_routes(app):
         u.backup_codes = ""   # 2FA off → its backup codes no longer apply
         db.session.commit()
         log_action(u, "2fa_disabled", target=u.username)
-        flash("Two-factor authentication disabled.", "success")
+        account_notices.alert_credential_change(u, "two-factor authentication turned off")
+        # A privilege-level change (Session Management Cheat Sheet, "Renew the Session ID After Any
+        # Privilege Level Change"): every other session ends, and this one gets a new identifier.
+        if not account_guard.rotate_sessions(u):
+            flash("Two-factor authentication disabled. Every session was signed out, including this "
+                  "one — please sign in again.", "warning")
+            return redirect(url_for("login"))
+        flash("Two-factor authentication disabled. Any other sessions were signed out.", "success")
         return redirect(url_for("account"))
 
     @app.route("/account/password", methods=["POST"])

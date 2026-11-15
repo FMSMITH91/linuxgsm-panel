@@ -323,18 +323,13 @@ def _attachment_header(name):
         ascii_name, quote(base, safe=""))
 
 
-MIN_PASSWORD_LEN = 10
-import string as _string
-_PW_SYMBOLS = set(_string.punctuation)
-
-# Each character class a password must include, in the order they are checked, with the error for
-# a password that lacks it. The symbol test reads _PW_SYMBOLS when it runs, not when this is built.
-_PW_CLASSES = (
-    (str.islower, "Password must include a lowercase letter."),
-    (str.isupper, "Password must include an uppercase letter."),
-    (str.isdecimal, "Password must include a number."),
-    (lambda c: c in _PW_SYMBOLS, "Password must include a symbol (e.g. !@#$%)."),
-)
+# OWASP Authentication Cheat Sheet, "Implement Proper Password Strength Controls" (read 2026-11-15):
+# "Password Length" — under 15 characters is weak without MFA, 8 is the floor with it, and the
+# maximum should be at least 64 (the panel's is MAX_PASSWORD_BYTES, 1 MB); "There should be no
+# password composition rules limiting the type of characters permitted", so any character counts,
+# spaces and every script included; and common or breached passwords are refused (common_passwords).
+MIN_PASSWORD_LEN = 15
+MIN_PASSWORD_LEN_MFA = 8
 
 
 # The username column is String(80) and the creation form asked only for >= 3 characters, so a
@@ -403,16 +398,26 @@ def group_name_problem(name):
     return None
 
 
-def password_problem(pw):
+def password_problem(pw, has_mfa=False, avoid=()):
     """Return a human error if the password is too weak, else None.
 
-    Requires: length, lower, upper, digit, and a symbol (_PW_CLASSES, checked in that order).
+    At least MIN_PASSWORD_LEN characters, or MIN_PASSWORD_LEN_MFA for an account with two-factor
+    authentication on (`has_mfa`); not a common or breached password; and not containing any of
+    `avoid` (the username) of three or more characters. No composition rules. Applied
+    when a password is set or changed: a password set before keeps working.
     """
-    if not pw or len(pw) < MIN_PASSWORD_LEN:
-        return f"Password must be at least {MIN_PASSWORD_LEN} characters."  # i18n-ignore: as username_problem's
-    for has_class, problem in _PW_CLASSES:
-        if not any(has_class(c) for c in pw):
-            return problem
+    from panel.core.common_passwords import is_common
+    floor = MIN_PASSWORD_LEN_MFA if has_mfa else MIN_PASSWORD_LEN
+    if not pw or len(pw) < floor:
+        if has_mfa:
+            return "Password must be at least 8 characters."
+        return "Password must be at least 15 characters, or 8 with two-factor authentication on."
+    folded = pw.casefold()
+    if any(len(w.strip()) >= 3 and w.strip().casefold() in folded for w in avoid if isinstance(w, str)):
+        return "Password must not contain your username."
+    if is_common(pw):
+        return ("That password is too common or too easy to guess. A few unrelated words make a long "
+                "password that is easy to remember.")
     return None
 
 
@@ -440,7 +445,7 @@ def generate_password(length=GENERATED_PASSWORD_LEN):
     would ever let an attacker reach, and still short enough to read aloud. Uses secrets, not
     random: this is a credential, and random's Mersenne Twister is reconstructible from its output.
     """
-    length = max(MIN_PASSWORD_LEN, int(length))
+    length = max(MIN_PASSWORD_LEN, int(length))   # 16 by default: past the non-2FA floor
     pools = (_GEN_LOWER, _GEN_UPPER, _GEN_DIGIT, _GEN_SYMBOL)
     chars = [_secrets.choice(p) for p in pools]
     chars += [_secrets.choice(_GEN_ALL) for _ in range(length - len(pools))]

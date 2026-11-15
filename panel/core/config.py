@@ -39,7 +39,9 @@ DEFAULT_CONFIG = {
     "setup_complete": False,
     "port": 5000,
     "bind_host": "",   # empty = auto (127.0.0.1 if Tailscale can proxy, else 0.0.0.0)
-    "session_lifetime_hours": 8,    # idle session timeout (sliding, refreshed each request)
+    # The idle timeout (session_idle_minutes) and the absolute limit (session_absolute_hours) have
+    # no defaults here on purpose: unset is what tells panel/core/session_policy.py a new install
+    # (30 min, 8 h) from an older one, whose session_lifetime_hours it converts.
     "remember_days": 3,             # "remember me" cookie lifetime
     "ssh_timeout": 10,
     "session_protection": "strong", # flask-login: "strong" | "basic" | null (IP+UA session binding)

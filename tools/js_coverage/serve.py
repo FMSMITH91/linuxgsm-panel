@@ -338,6 +338,15 @@ def _installing():
 
 app = create_app()
 seed(app)
+# The walk signs in once, as a superadmin without 2FA, and runs for longer than the step-up window.
+# Its job is the pages' JavaScript, not these two gates (tests/unit/part215 covers them): the walk
+# presses every control on /settings, the "Require 2FA" switch among them, which would then hold
+# every later page at the 2FA setup page; and past ten minutes the terminal would ask for the password
+# again. So, on this throwaway panel only: step-up off (STEP_UP_MINUTES 0, as config.json's
+# step_up_minutes 0 does) and the 2FA requirement never applies to the walk's account.
+app.config["STEP_UP_MINUTES"] = 0
+from panel.security import account_guard as _jscov_guard  # noqa: E402
+_jscov_guard.twofa_required = lambda user: False
 threading.Thread(target=_installing, daemon=True).start()
 print("js_coverage panel: seeded, serving on 127.0.0.1:%d" % PORT, flush=True)
 app.socketio.run(app, host="127.0.0.1", port=PORT, debug=False, allow_unsafe_werkzeug=True)

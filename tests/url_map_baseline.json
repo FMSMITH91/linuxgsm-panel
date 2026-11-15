@@ -1071,6 +1071,7 @@
     "guards": [
       "utils.py:decorated_view(use_terminal)",
       "auth.py:decorated_function(use_terminal)",
+      "account_guard.py:wrapped",
       "view:host_terminal"
     ],
     "methods": [
@@ -1093,6 +1094,17 @@
     "guards": [
       "utils.py:decorated_view",
       "view:account_2fa_enable"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ]
+  },
+  "GET,POST /account/reauth": {
+    "endpoint": "account_reauth",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_reauth"
     ],
     "methods": [
       "GET",
@@ -1630,6 +1642,7 @@
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
       "_shared.py:refused_or_view",
+      "account_guard.py:wrapped",
       "view:api_panel_backup_restore"
     ],
     "methods": [
@@ -2786,6 +2799,7 @@
     "guards": [
       "utils.py:decorated_view(manage_groups)",
       "auth.py:decorated_function(manage_groups)",
+      "account_guard.py:wrapped",
       "view:delete_group"
     ],
     "methods": [
@@ -2797,6 +2811,7 @@
     "guards": [
       "utils.py:decorated_view(manage_groups)",
       "auth.py:decorated_function(manage_groups)",
+      "account_guard.py:wrapped",
       "view:edit_group"
     ],
     "methods": [
@@ -2808,6 +2823,7 @@
     "guards": [
       "utils.py:decorated_view(manage_groups)",
       "auth.py:decorated_function(manage_groups)",
+      "account_guard.py:wrapped",
       "view:add_group"
     ],
     "methods": [
@@ -2917,6 +2933,7 @@
     "guards": [
       "utils.py:decorated_view(uninstall_server)[server_access]",
       "auth.py:decorated_function(uninstall_server)[server_access]",
+      "account_guard.py:wrapped[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:uninstall_server"
     ],
@@ -2984,6 +3001,7 @@
     "guards": [
       "utils.py:decorated_view(manage_users)",
       "auth.py:decorated_function(manage_users)",
+      "account_guard.py:wrapped",
       "view:delete_user"
     ],
     "methods": [
@@ -2995,6 +3013,7 @@
     "guards": [
       "utils.py:decorated_view(manage_users)",
       "auth.py:decorated_function(manage_users)",
+      "account_guard.py:wrapped",
       "view:edit_user"
     ],
     "methods": [
@@ -3006,6 +3025,7 @@
     "guards": [
       "utils.py:decorated_view(manage_users)",
       "auth.py:decorated_function(manage_users)",
+      "account_guard.py:wrapped",
       "view:add_user"
     ],
     "methods": [
@@ -3017,6 +3037,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:create_invite"
     ],
     "methods": [
@@ -3028,6 +3049,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:revoke_invite"
     ],
     "methods": [

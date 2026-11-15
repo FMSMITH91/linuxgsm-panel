@@ -425,8 +425,8 @@ def _setup_admin_user(state, data):
     # cannot reproduce), a control or bidi character, and a name longer than the column.
     if username_problem(username):
         flash(username_problem(username), "danger")
-    elif password_problem(password):
-        flash(password_problem(password), "danger")
+    elif password_problem(password, avoid=(username,)):
+        flash(password_problem(password, avoid=(username,)), "danger")
     elif password != confirm:
         flash("Passwords do not match.", "danger")
     else:

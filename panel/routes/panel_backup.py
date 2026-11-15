@@ -29,6 +29,7 @@ from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
     _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock,
     _lg264_bk_status, _r39a_backup_held, _R39A_BACKUP_HELD)
+from panel.security.account_guard import step_up_required
 
 
 class _FullBackupTally:
@@ -874,6 +875,7 @@ def _register_panel_backups(app):
     @login_required
     @superadmin_required
     @_r23a_not_while_panel_host_reboots
+    @step_up_required
     def api_panel_backup_restore():
         """Restore a panel backup (destructive).
 

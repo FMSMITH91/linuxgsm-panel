@@ -201,6 +201,8 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=utcnow)
     last_login = db.Column(db.DateTime, nullable=True)
     api_token = db.Column(db.String(64), unique=True, nullable=True)
+    # When the API token stops working (UTC); NULL: never. A token minted before this column has none.
+    api_token_expires = db.Column(db.DateTime, nullable=True)
     totp_secret = db.Column(db.Text, nullable=True)      # TOTP secret, encrypted at rest
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
@@ -442,16 +444,18 @@ class User(UserMixin, db.Model):
         """Mint a new API token: return the plaintext (shown to the user ONCE), store its hash.
 
         Only the SHA-256 hash is stored, so a leaked DB never yields a working token. Replaces any
-        existing token.
+        existing token, and with it any expiry (the caller sets the new one's).
         """
         import hashlib
         import secrets
         token = "lgsm_" + secrets.token_hex(24)
         self.api_token = hashlib.sha256(token.encode()).hexdigest()
+        self.api_token_expires = None
         return token
 
     def revoke_api_token(self):
         self.api_token = None
+        self.api_token_expires = None
 
     @property
     def has_api_token(self):
@@ -467,7 +471,10 @@ class User(UserMixin, db.Model):
         if not token:
             return None
         digest = hashlib.sha256(token.encode()).hexdigest()
-        return User.query.filter_by(api_token=digest, is_active=True).first()
+        from sqlalchemy import or_
+        return User.query.filter(User.api_token == digest, User.is_active.is_(True),
+                                 or_(User.api_token_expires.is_(None),
+                                     User.api_token_expires > utcnow())).first()
 
 
 user_groups = db.Table(
@@ -1367,12 +1374,19 @@ SESSION_ABSOLUTE_SECONDS = 8 * 3600
 def session_absolute_limits():
     """(plain, remember) seconds after sign-in that a login ends, however active it has been.
 
-    A plain login: SESSION_ABSOLUTE_SECONDS, or the idle window when that is set longer. A "remember
-    me" login: the remember cookie's own duration counted from the original sign-in, so polling
-    cannot stretch it either.
+    A plain login: the Settings page's absolute limit (app.config SESSION_ABSOLUTE_SECONDS, see
+    panel/core/session_policy.py); without one, SESSION_ABSOLUTE_SECONDS or the idle window when that
+    is set longer. A "remember me" login: the remember cookie's own duration counted from the original
+    sign-in, so polling cannot stretch it either.
     """
+    from flask import current_app
     plain_idle, remember_idle = session_idle_limits()
-    plain = max(float(SESSION_ABSOLUTE_SECONDS), plain_idle - SESSION_LAST_SEEN_GRACE)
+    try:
+        configured = current_app.config.get("SESSION_ABSOLUTE_SECONDS")
+    except RuntimeError:      # no app context: the shipped rule below
+        configured = None
+    plain = (float(configured) if configured else
+             max(float(SESSION_ABSOLUTE_SECONDS), plain_idle - SESSION_LAST_SEEN_GRACE))
     return plain, max(plain, remember_idle - SESSION_LAST_SEEN_GRACE)
 
 
@@ -1739,6 +1753,8 @@ _LIGHT_MIGRATIONS = {
     ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
     ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
     ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
+    # NULL on upgrade: a token minted before an expiry could be chosen keeps working until replaced.
+    ("user", "api_token_expires"): "ALTER TABLE user ADD COLUMN api_token_expires DATETIME",
     ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
     ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
     ("user", "theme"): "ALTER TABLE user ADD COLUMN theme VARCHAR(8) DEFAULT 'system'",
