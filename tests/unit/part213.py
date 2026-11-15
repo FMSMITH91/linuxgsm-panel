@@ -63,6 +63,15 @@ def _use_files213(tag):
     return folder / "cred_key"
 
 
+def _relabel_refused213(ring, value):
+    """True when `ring` refuses `value` (UndecryptableValue), False when it opens it."""
+    try:
+        ring.decrypt(value)
+    except _kr213.UndecryptableValue:
+        return True
+    return False
+
+
 # ── 1. the format ───────────────────────────────────────────────────────────────────────────────
 def _s213_format():
     _use_files213("format")
@@ -81,8 +90,14 @@ def _s213_format():
     moved = "enc:v2:%s:%s" % (other.current, _kr213._b64e(parts[1]))
     check("v2: a value with one bit flipped is refused by the GCM tag and reads as '', not raised",
           all((_cfg213.is_encrypted(tampered), _cfg213.decrypt_secret(tampered) == "")))
-    check("v2: a value moved under another key id of the same ring is refused too (the id is "
-          "authenticated)", all((_cfg213.decrypt_secret(moved) == "", _cfg213.decrypt_secret(enc) == _S213_NEW)))
+    # The id is in the associated data: relabelled under a second id holding the SAME key bytes, the
+    # value must still fail its tag (a different key would fail without the id being authenticated).
+    twin = _kr213.KeyRing("aaaaaaaa", {"aaaaaaaa": (b"k" * 32, 0), "bbbbbbbb": (b"k" * 32, 0)})
+    relabelled = "enc:v2:bbbbbbbb:" + twin.encrypt(_S213_NEW).split(":", 3)[3]
+    check("v2: a value moved under another key id is refused too, even where both ids hold the same "
+          "key (the id is authenticated)",
+          all((_cfg213.decrypt_secret(moved) == "", _cfg213.decrypt_secret(enc) == _S213_NEW,
+               _relabel_refused213(twin, relabelled))))
     col = _RS213.__table__.c.host.type
     check("v2: through an encrypted column a tampered value reads as UnreadableSecret",
           isinstance(col.process_result_value(tampered, None), _UR213))
