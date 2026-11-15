@@ -6,6 +6,7 @@
 #   sudo linuxgsm-panel-recover reset-password [user]
 #   sudo linuxgsm-panel-recover disable-2fa <user>      # lost your authenticator
 #   sudo linuxgsm-panel-recover create-admin <user>     # no superadmin left
+#   sudo linuxgsm-panel-recover set-owner <user>        # make an active superadmin the panel owner
 #   sudo linuxgsm-panel-recover list-users
 #   sudo linuxgsm-panel-recover setup-token             # the first-run wizard's link, again
 #

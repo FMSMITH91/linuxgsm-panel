@@ -80,6 +80,16 @@ A superadmin is root on the panel's host (see "Known trust-model limitation" bel
 these shows someone else, treat the host as compromised: rebuild it rather than only deleting the
 account.
 
+### The panel owner
+
+The panel owner ([docs/README.md](../docs/README.md#the-panel-owner)) is one account that the web UI
+never lets another administrator deactivate, demote, rename, delete or reset, and that alone may open a
+terminal on the panel's host or restore a panel backup (the two ways in to `panel.db` from the UI).
+Ownership moves by the owner's password plus a live 2FA code, or by `manage.py set-owner` from the
+host's shell. It guards the account controls; it is not a boundary against a superadmin who uses the
+other root-equivalent powers a superadmin has on the panel's host (see below), so give superadmin only
+to people you would trust with the host.
+
 ## Updates are signed with a release key
 
 Every commit on `main` is a GitHub squash merge signed by GitHub's key, which says nothing about who
