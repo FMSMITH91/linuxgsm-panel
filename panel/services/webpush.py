@@ -172,8 +172,21 @@ class _PushConnection(http.client.HTTPSConnection):
     """
 
     def __init__(self, host):
-        super().__init__(host, 443, timeout=_TIMEOUT, context=ssl.create_default_context())
+        super().__init__(host, 443, timeout=_TIMEOUT, context=_tls_context())
         self._create_connection = _connect_checked
+
+
+def _tls_context():
+    """The default verified context, said outright: certificate and host name checked, TLS 1.2 at least.
+
+    ssl.create_default_context() already checks both; the settings are written out so a reader (or a
+    scanner) need not know that, and the floor follows OWASP's Transport Layer Security Cheat Sheet.
+    """
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
 
 
 # ── keys ──────────────────────────────────────────────────────────────────────────────────────────
