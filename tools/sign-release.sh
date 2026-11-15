@@ -215,11 +215,11 @@ publish_release() {   # publish_release <commit> <previous signed commit or ""> 
         echo "sign-release: release ${tag} already exists; left as it is."
         return 0
     fi
-    if [[ -n "$2" ]]; then changelog_at "$2" > "${TMP}/changelog.before" || : > "${TMP}/changelog.before"
-    else : > "${TMP}/changelog.before"; fi
-    changelog_at "$1" > "${TMP}/changelog.after" || : > "${TMP}/changelog.after"
-    python3 "${TOOLS_DIR}/release_notes.py" "${TMP}/changelog.before" "${TMP}/changelog.after" "$1" "${tag}" \
-        > "${TMP}/notes.md" || { echo "sign-release: could not write the release notes." >&2; return 1; }
+    # The two changelogs go in on stdin, the previous release's first, split by a NUL (which no
+    # changelog holds); none for the previous one on the first release.
+    { if [[ -n "$2" ]]; then changelog_at "$2" || :; fi; printf '\0'; changelog_at "$1" || :; } \
+        | python3 "${TOOLS_DIR}/release_notes.py" "$1" "${tag}" > "${TMP}/notes.md" \
+        || { echo "sign-release: could not write the release notes." >&2; return 1; }
     cp "$3" "${TMP}/linuxgsm-panel-${tag}.sig"
     "${GH[@]}" release create "${tag}" --target "$1" --title "${tag}" --notes-file "${TMP}/notes.md" \
         "${TMP}/linuxgsm-panel-${tag}.sig" >/dev/null \

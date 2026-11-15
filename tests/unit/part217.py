@@ -51,7 +51,7 @@ _AFTER217 = """# Changelog
 
 ### Security
 
-- **New hardening.** Shipped in this one.
+- **New hardening.** Shipped in this one; run `tool <user>`.
 """
 
 
@@ -67,17 +67,23 @@ def _git217(*a, **kw):
 
 
 # ── 1. the notes ───────────────────────────────────────────────────────────────────────────────
-_b217, _a217 = _write217("before.md", _BEFORE217), _write217("after.md", _AFTER217)
-_n217 = _run142(["python3", _NOTES217, _b217, _a217, "a" * 40, "2026.3.5"]).stdout
+
+
+def _notes217(before, after, sha, tag):
+    """release_notes.py's output for these two changelogs, piped in as sign-release.sh does."""
+    return _run142(["python3", _NOTES217, sha, tag], input=before + "\0" + after).stdout
+
+
+_n217 = _notes217(_BEFORE217, _AFTER217, "a" * 40, "2026.3.5")
 check("release notes: only the entries the release added, grouped by category, with their text",
       "### Added\n\n- **New feature.** Just added across two lines." in _n217
-      and "### Security\n\n- **New hardening.** Shipped in this one." in _n217
+      and "### Security\n\n- **New hardening.** Shipped in this one; run tool &lt;user>." in _n217
       and "Old feature" not in _n217 and "Old fix" not in _n217, _n217[:400])
 check("release notes: ...and how to check the attached signature against the release key",
       "linuxgsm-panel-2026.3.5.sig" in _n217 and "commit %s" % ("a" * 40) in _n217
       and "-n linuxgsm-panel-release" in _n217, _n217[-400:])
-_same217 = _run142(["python3", _NOTES217, _a217, _a217, "b" * 40, "2026.3.6"]).stdout
-_first217 = _run142(["python3", _NOTES217, os.path.join(_SB217, "missing.md"), _a217, "c" * 40, "2026.3.7"]).stdout
+_same217 = _notes217(_AFTER217, _AFTER217, "b" * 40, "2026.3.6")
+_first217 = _notes217("", _AFTER217, "c" * 40, "2026.3.7")
 eq("release notes: a release that added no entry says so; the first release points at the changelog "
    "instead of listing all of history",
    ("No user-facing change" in _same217, "first release published here" in _first217,
