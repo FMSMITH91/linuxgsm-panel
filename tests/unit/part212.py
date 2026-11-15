@@ -455,6 +455,14 @@ def _s212_host_prefix():
           names[True][:2] == ("__Host-lgpanel_session", "__Host-remember_token")
           and sec_hdr.startswith("__Host-lgpanel_session=") and "Secure" in sec_hdr and "Path=/" in sec_hdr
           and "Domain=" not in sec_hdr, repr(names[True]))
+    via = _Flask212("unit_part212_cookies_init_auth")
+    via.config.update(SECRET_KEY="k" * 32, SESSION_COOKIE_NAME="lgpanel_session", SESSION_COOKIE_SECURE=True,
+                      REMEMBER_COOKIE_SECURE=True)
+    _auth212.init_auth(via)
+    check("cookies: init_auth itself (the app factory's call) gives a Secure panel the __Host- names",
+          (via.config["SESSION_COOKIE_NAME"], via.config.get("REMEMBER_COOKIE_NAME"))
+          == ("__Host-lgpanel_session", "__Host-remember_token"),
+          repr((via.config["SESSION_COOKIE_NAME"], via.config.get("REMEMBER_COOKIE_NAME"))))
     check("cookies: ...while an install served over plain HTTP keeps the plain names",
           names[False][0] == "lgpanel_session" and not str(names[False][1] or "").startswith("__Host-"),
           repr(names[False][:2]))
