@@ -460,6 +460,54 @@ def _s212_host_prefix():
           repr(names[False][:2]))
 
 
+# ── 10. the self-signed fallback certificate (OWASP Transport Layer Security) ────────────────────
+def _old_rsa_cert212(cert_path, key_path):
+    """Write a pre-change certificate: RSA-2048, ten years."""
+    import datetime as _dtc212
+    from cryptography import x509 as _x509
+    from cryptography.x509.oid import NameOID as _NameOID
+    from cryptography.hazmat.primitives import hashes as _hashes, serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = _x509.Name([_x509.NameAttribute(_NameOID.COMMON_NAME, "old.invalid")])
+    start = _dtc212.datetime.now(_dtc212.timezone.utc)
+    cert = (_x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(_x509.random_serial_number()).not_valid_before(start)
+            .not_valid_after(start + _dtc212.timedelta(days=3650)).sign(key, _hashes.SHA256()))
+    _os212.makedirs(_os212.path.dirname(cert_path), exist_ok=True)
+    with open(key_path, "wb") as fh:
+        fh.write(key.private_bytes(_ser.Encoding.PEM, _ser.PrivateFormat.PKCS8, _ser.NoEncryption()))
+    with open(cert_path, "wb") as fh:
+        fh.write(cert.public_bytes(_ser.Encoding.PEM))
+
+
+def _s212_cert():
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from panel.services import certs as _certs212
+    tmp = _tf212.mkdtemp(prefix="p212-cert-")
+    try:
+        cp, kp = _os212.path.join(tmp, "ssl", "cert.pem"), _os212.path.join(tmp, "ssl", "key.pem")
+        _old_rsa_cert212(cp, kp)
+        _certs212._ensure_self_signed_cert(cp, kp, "panel.invalid")
+        with open(cp, "rb") as fh:
+            new = _x509.load_pem_x509_certificate(fh.read())
+        days = (new.not_valid_after_utc - new.not_valid_before_utc).days
+        key = new.public_key()
+        check("tls: the fallback certificate is ECDSA P-256 / SHA-256 for about 397 days, and an older RSA one "
+              "(ten years) is replaced at the next start",
+              isinstance(key, _ec.EllipticCurvePublicKey) and key.curve.name == "secp256r1"
+              and new.signature_hash_algorithm.name == "sha256" and 396 <= days <= 399, repr((type(key), days)))
+        serial = new.serial_number
+        _certs212._ensure_self_signed_cert(cp, kp, "panel.invalid")
+        with open(cp, "rb") as fh:
+            again = _x509.load_pem_x509_certificate(fh.read())
+        check("tls: ...while a current ECDSA certificate is kept as it is (no new one at every start)",
+              again.serial_number == serial)
+    finally:
+        _sh212.rmtree(tmp, ignore_errors=True)
+
+
 try:
     _p9_arm(who="part212")
     _p9_patch(_notif212, "notify", lambda *a, **k: None)
@@ -472,6 +520,7 @@ try:
     _s212_backups()
     _s212_absolute()
     _s212_host_prefix()
+    _s212_cert()
 finally:
     _p9_restore_all()
     _cleanup212()

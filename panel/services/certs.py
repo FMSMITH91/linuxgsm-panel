@@ -59,36 +59,43 @@ def _maybe_alert_cert_expiring(boot=None):
         _log.debug("cert-expiry check failed", exc_info=True)
 
 
-def _ensure_self_signed_cert(cert_path, key_path, hostname):
-    """Create a long-lived (10-year) self-signed cert/key unless a valid one is already present.
+# OWASP Transport Layer Security Cheat Sheet: ECDSA P-256 keys, SHA-256 signatures, and certificates
+# that do not live for years. 397 days is the longest validity browsers accept for any certificate;
+# a new one is made at start-up once fewer than 30 days remain (the expiry notice warns before that).
+_CERT_DAYS = 397
 
-    A new pair is made when either file is missing or the cert has (nearly) expired. Used when
-    use_https is on and there's no reverse proxy. Returns (cert_path, key_path). Uses cryptography
-    (already a dependency).
+
+def _ensure_self_signed_cert(cert_path, key_path, hostname):
+    """Create a self-signed ECDSA P-256 cert/key (397 days) unless a current one is already present.
+
+    A new pair is made when either file is missing, the cert has (nearly) expired, or its key is
+    not an elliptic-curve key (an RSA-2048 / 10-year certificate from before is replaced once). Used
+    when use_https is on and there's no reverse proxy. Returns (cert_path, key_path).
     """
     import datetime as _dt
     from cryptography import x509
     from cryptography.x509.oid import NameOID
     from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.asymmetric import ec
 
     if os.path.exists(cert_path) and os.path.exists(key_path):
         try:
             with open(cert_path, "rb") as f:
                 existing = x509.load_pem_x509_certificate(f.read())
-            if existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30):
+            if (existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30)
+                    and isinstance(existing.public_key(), ec.EllipticCurvePublicKey)):
                 return cert_path, key_path
         except Exception:
             _log.debug("_ensure_self_signed_cert: ignored non-fatal error", exc_info=True)
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname or "linuxgsm-panel")])
     cert = (x509.CertificateBuilder()
             .subject_name(name).issuer_name(name)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
             .not_valid_before(aware_utcnow() - _dt.timedelta(days=1))
-            .not_valid_after(aware_utcnow() + _dt.timedelta(days=3650))
+            .not_valid_after(aware_utcnow() + _dt.timedelta(days=_CERT_DAYS))
             .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname or "localhost")]), critical=False)
             .sign(key, hashes.SHA256()))
     os.makedirs(os.path.dirname(cert_path), exist_ok=True)
@@ -103,7 +110,7 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
     fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM,
-                                  serialization.PrivateFormat.TraditionalOpenSSL,
+                                  serialization.PrivateFormat.PKCS8,
                                   serialization.NoEncryption()))
     os.chmod(key_path, 0o600)   # belt and braces on a pre-existing file / odd umask
     with open(cert_path, "wb") as f:
