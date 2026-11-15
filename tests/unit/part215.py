@@ -764,7 +764,8 @@ def _s215_serve_disable_warning():
 try:
     _p9_arm(who="part215")
     for _fn215 in (_s215_policy, _s215_settings, _s215_polls, _s215_password_rules, _s215_password_routes,
-                   _s215_account_throttle, _s215_pause_table, _s215_successes_not_counted, _s215_ip_day, _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
+                   _s215_account_throttle, _s215_pause_table, _s215_successes_not_counted, _s215_ip_day,
+                   _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
                    _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_binding,
                    _s215_rotation_and_logout, _s215_fetch_metadata, _s215_serve_path,
                    _s215_serve_disable_warning):
