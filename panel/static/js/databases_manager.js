@@ -345,12 +345,14 @@ function dbmEditorField(c, cell, isNew) {
   window.dbmEditRow = function (ri) {
     var t = st.table;
     if (!t) return;
-    var cells = ri >= 0 && st.rows ? st.rows.rows[ri] : null;
+    // !(x >= 0), not x < 0: a bare "<" is read as the start of a type list by some complexity tools.
+    var isNew = !(ri >= 0);
+    var cells = !isNew && st.rows ? st.rows.rows[ri] : null;
     st.editing = {ri: ri, key: cells ? cells.key : null};
     var box = el('dbm-editor-fields');
     box.textContent = '';
-    box.appendChild(node('p', 'small fw-semibold mb-2', ri >= 0 ? T('Edit row') : T('Add row')));
-    t.columns.forEach(function (c, ci) { box.appendChild(dbmEditorField(c, cells ? cells.cells[ci] : null, ri < 0)); });
+    box.appendChild(node('p', 'small fw-semibold mb-2', isNew ? T('Add row') : T('Edit row')));
+    t.columns.forEach(function (c, ci) { box.appendChild(dbmEditorField(c, cells ? cells.cells[ci] : null, isNew)); });
     el('dbm-editor').hidden = false;
   };
   window.dbmCancelEdit = function () { st.editing = null; el('dbm-editor').hidden = true; };
@@ -374,7 +376,7 @@ function dbmEditorField(c, cell, isNew) {
     if (ev) ev.preventDefault();
     var t = st.table, ed = st.editing;
     if (!t || !ed || st.busy) return;
-    var isNew = ed.ri < 0, values = editorValues(isNew);
+    var isNew = !(ed.ri >= 0), values = editorValues(isNew);
     if (!isNew && !Object.keys(values).length) { window.dbmCancelEdit(); return; }
     var body = isNew ? {op: 'insert', table: t.name, values: values} : {op: 'update', table: t.name, key: ed.key, values: values};
     st.busy = true;

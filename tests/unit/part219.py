@@ -139,7 +139,10 @@ for a in "$@"; do case "$a" in "KILL QUERY"*) echo "$a" > "$O/kill"; exit 0;; es
 printf '%s\n' "$@" > "$O/argv"
 for a in "$@"; do case "$a" in --defaults-file=*) cat "${a#*=}" > "$O/def";; --defaults-extra-file=*) echo extra > "$O/extra";; esac; done
 cat > "$O/stdin"
-if [ -f "$O/late" ]; then printf '<resultset statement="SELECT CONNECTION_ID() AS panel_conn" x="y">\n  <row>\n\t<field name="panel_conn">77</field>\n  </row>\n</resultset>\n'; exec sleep 20; fi
+if [ -f "$O/late" ]; then
+  printf '<resultset statement="SELECT CONNECTION_ID() AS panel_conn" x="y">\n  <row>\n'
+  printf '\t<field name="panel_conn">77</field>\n  </row>\n</resultset>\n'; exec sleep 20
+fi
 if [ -f "$O/big" ]; then head -c 3000000 /dev/zero | tr '\0' 'a'; exit 0; fi
 cat "$O/answer"; echo "ERROR 1064 (42000) at line 9: near '$(grep -o 'password=.*' "$O/def")'" >&2; exit 1
 '''

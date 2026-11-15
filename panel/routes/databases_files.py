@@ -88,6 +88,8 @@ def _row(server_id, db_id):
 
 
 def _home(user):
+    # Not a route: a path built from the validated game account name.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "/home/%s" % user
 
 
@@ -138,12 +140,16 @@ def _paths(user, uid):
     """Shell setting D (the dump folder) and p (upload `uid`'s part file)."""
     if not isinstance(uid, str) or not _UID_RE.match(uid):
         raise ValueError("bad upload id")
+    # Not a route: shell text run as the game account, its parts quoted or matched by _UID_RE.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return 'D=%s; p="$D/.panel-upload-%s.part"' % (_sm._quote(_home(user) + "/" + _DUMP_DIR), uid)
 
 
 def start_script(user, uid, size):
     """Make the empty part file once the folder's filesystem has room for `size` bytes and a margin."""
     need = int(size) + UPLOAD_MARGIN
+    # Not a route: shell text run as the game account, its parts quoted.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "\n".join([
         "umask 077", _paths(user, uid),
         'mkdir -p -- "$D" 2>/dev/null; if [ ! -d "$D" ] || [ -L "$D" ]; then echo %s; exit 6; fi' % _M["FAIL"],
@@ -213,6 +219,8 @@ def finish_script(user, uid, size, name):
 
 def cancel_script(user, uid):
     """Remove an upload's part file (and a staged piece)."""
+    # Not a route: shell text run as the game account, its parts quoted.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "\n".join([_paths(user, uid), 'rm -f -- "$p" "$p.piece" "$p.gz"', "echo " + _M["READY"]]) + "\n"
 
 

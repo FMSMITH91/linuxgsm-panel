@@ -116,7 +116,7 @@
     if (Notification.permission === 'denied') { cannot('blocked'); return; }
 
     existing(scope).then(function (sub) {
-      if (!sub || !sameKey(sub, key)) { show(false); return; }
+      if (!sub || !sameKey(sub, key)) { show(false); return null; }
       return endpointHash(sub.endpoint).then(function (h) {
         var mine = known.indexOf(h) >= 0;
         show(mine);
@@ -145,7 +145,7 @@
           })
           .then(function (sub) {
             return postJson(el.getAttribute('data-subscribe-url'), sub.toJSON()).then(function (res) {
-              if (res.status === 200 && res.d.success) { window.location.reload(); return; }
+              if (res.status === 200 && res.d.success) { window.location.reload(); return null; }
               // Not stored: take the browser's half back too, so the card tells the truth.
               return sub.unsubscribe().then(function () {
                 if (res.d.error === 'reauth_required') { goSameSite(el.getAttribute('data-reauth-url')); return; }
@@ -183,7 +183,7 @@
     var stop = document.getElementById('signout-stop');
     if (!hashes.length || !supported()) return;
     existing(form.getAttribute('data-scope')).then(function (sub) {
-      if (!sub) return;
+      if (!sub) return null;
       return endpointHash(sub.endpoint).then(function (h) {
         if (hashes.indexOf(h) < 0) return;
         input.value = sub.endpoint;
