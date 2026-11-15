@@ -14,6 +14,10 @@ compares git commits, not this file.
 
 ### Added
 
+- **Releases on GitHub.** Each release is published on the project's Releases page, named by its
+  date, with the changes it brings and its release signature attached, which anyone can check
+  against the release key in panel/install/release-signers.
+
 - **Require 2FA for administrators.** A Settings switch (off by default) makes superadmins and anyone
   allowed the terminal, users or groups set up two-factor authentication before using the panel.
 
