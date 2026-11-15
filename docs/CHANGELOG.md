@@ -1440,6 +1440,21 @@ compares git commits, not this file.
 
 ### Security
 
+- **A login ends 8 hours after sign-in, however active.** An open page polls every few seconds, so a
+  signed-in tab used to stay signed in for as long as it stayed open. Following OWASP's session
+  guidance, a login now ends 8 hours after sign-in (or after the idle window set in Settings, if
+  that is longer), and a remember-me login after its own number of days; you are asked to sign in
+  again.
+
+- **Login cookies are tied to the panel's own address.** Over HTTPS the login cookies are named
+  __Host-…, so the browser only accepts them from this exact address over HTTPS and nothing on
+  another subdomain can set or replace them. You are asked to sign in once more after updating.
+
+- **The built-in HTTPS certificate uses a modern key.** When the panel serves HTTPS itself, its
+  self-signed certificate is now an ECDSA P-256 one valid for 397 days, renewed at start-up near its
+  end; an older RSA certificate is replaced once at the next start, so the browser asks you to
+  accept it again.
+
 - **Passwords are stored the way OWASP recommends.** Account passwords and new 2FA backup codes are
   hashed with Argon2id at OWASP's recommended settings, in place of bcrypt over SHA-256; each
   existing password is upgraded the next time its owner signs in, with no reset. New encrypted
