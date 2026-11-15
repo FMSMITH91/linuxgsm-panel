@@ -163,6 +163,8 @@ def start_script(user, uid, size):
 
 def piece_script(user, uid, offset):
     """Append the piece on stdin (base64) when the part file is exactly `offset` bytes long now."""
+    # Not a route: shell text run as the game account, its parts quoted.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "\n".join([
         _paths(user, uid), 'c="$p.piece"',
         'base64 -d > "$c" 2>/dev/null || { rm -f -- "$c"; cat > /dev/null; echo %s; exit 6; }' % _M["FAIL"],
@@ -190,7 +192,9 @@ END { if (!done) print "SCANNED" }'''
 def finish_script(user, uid, size, name):
     """Check the whole upload (format, text, SQL, the scan), gzip a plain one, and make it <name>.sql.gz."""
     rm = 'rm -f -- "$p" "$p.gz";'
-    scan = "awk -v me=%s -v max=%d %s" % (name, UPLOAD_PLAIN_MAX, _sm._quote(_SCAN_AWK))
+    scan = "awk -v me=%s -v max=%d %s" % (_sm._quote(name), UPLOAD_PLAIN_MAX, _sm._quote(_SCAN_AWK))
+    # Not a route: shell text run as the game account, its parts quoted.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "\n".join([
         "set -o pipefail", "export LC_ALL=C", "umask 077", _paths(user, uid),
         'if [ ! -f "$p" ] || [ -L "$p" ]; then echo %s; exit 5; fi' % _M["NOPART"],
@@ -213,7 +217,7 @@ def finish_script(user, uid, size, name):
         'exit 5;; *) %s echo %s; exit 5;; esac' % (rm, _M["DAMAGED"], rm, rm, _M["DAMAGED"]),
         'if [ "$m" != 1f8b ]; then gzip -c -n -- "$p" > "$p.gz" && mv -f -- "$p.gz" "$p" || { %s echo %s; exit 6; }; fi'
         % (rm, _M["FAIL"]),
-        'mv -f -- "$p" "$D"/%s.sql.gz && echo %s && exit 0' % (name, _M["STORED"]),
+        'mv -f -- "$p" "$D"/%s && echo %s && exit 0' % (_sm._quote(name + ".sql.gz"), _M["STORED"]),
         rm + " echo " + _M["FAIL"], "exit 6"]) + "\n"
 
 
