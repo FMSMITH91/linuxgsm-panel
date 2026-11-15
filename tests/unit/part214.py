@@ -119,4 +119,78 @@ for _bad214, _why214 in (("evil\u202egfc.exe", "direction"), ("bell\x07.cfg", "c
           and (_why214 is None or _why214 in _res214.get("message", "")), repr((_res214, _bw214)))
 
 
+# ── 3. the ntfy server is never reached on an address alerts are never sent to ──────────────────
+class _Sock214:
+    """A socket whose connect() records the address and is refused, so no request goes further."""
+
+    def __init__(self, log):
+        self.log = log
+
+    def settimeout(self, _t):
+        return None
+
+    def connect(self, sockaddr):
+        self.log.append(sockaddr[0])
+        raise ConnectionRefusedError("p214 stand-in")
+
+    def close(self):
+        return None
+
+
+def _ntfy214(addrs, via_route=False):
+    """Send to https://ntfy.p214.example/alerts, whose name resolves to `addrs`.
+
+    Returns (answer, getaddrinfo calls, addresses connected to): the answer is send_ntfy's (ok, detail),
+    or the Test route's JSON when `via_route`.
+    """
+    lookups, connected = [], []
+
+    def _gai(host, port, *_a, **_k):
+        lookups.append((host, port))
+        return [(_socket214.AF_INET6 if ":" in a else _socket214.AF_INET, _socket214.SOCK_STREAM, 6, "",
+                 (a, port) if ":" not in a else (a, port, 0, 0)) for a in addrs]
+    _p9_patch(_nt214, "socket", _types214.SimpleNamespace(
+        SOCK_STREAM=_socket214.SOCK_STREAM, getaddrinfo=_gai,
+        socket=lambda *_a: _Sock214(connected)))
+    try:
+        if via_route:
+            r = _p9_client(P9_ADMIN).post("/api/notifications/test", json={
+                "channel": "ntfy", "server": "https://ntfy.p214.example", "topic": "alerts"})
+            return _p9_json(r), lookups, connected
+        return _nt214.send_ntfy("https://ntfy.p214.example", "alerts", "", "p214"), lookups, connected
+    finally:
+        _p9_restore_all()
+
+
+for _addrs214 in (["127.0.0.1"], ["::1"], ["169.254.169.254"], ["::ffff:169.254.169.254"],
+                  ["64:ff9b::a9fe:a9fe"], ["fd00:ec2::254"], ["100.100.100.200"], ["0.0.0.0"], ["0.1.2.3"],
+                  ["224.0.0.251"], ["ff02::1"], ["fe80::1%2"], ["2002:7f00:1::1"], ["240.0.0.1"],
+                  ["255.255.255.255"], ["198.51.100.20", "127.0.0.1"]):
+    _ans214, _look214, _conn214 = _ntfy214(_addrs214)
+    check("ntfy: a server resolving to %s is refused before any connect, and says why" % _addrs214,
+          _ans214 == (False, _nt214.NTFY_ADDRESS_REFUSED) and _conn214 == [] and len(_look214) == 1,
+          repr((_ans214, _look214, _conn214)))
+for _addrs214 in (["198.51.100.20"], ["10.1.2.3"], ["192.168.1.9"], ["100.64.5.6"], ["fd12:3456::5"],
+                  ["2001:db8::20"], ["64:ff9b::c633:6414"]):
+    _ans214, _look214, _conn214 = _ntfy214(_addrs214)
+    check("ntfy: a server on %s (public, LAN, tailnet or NAT64 of a public one) is connected to, on the "
+          "one address that was looked up and checked" % _addrs214,
+          _conn214 == _addrs214 and len(_look214) == 1 and _ans214[0] is False
+          and _ans214[1] != _nt214.NTFY_ADDRESS_REFUSED, repr((_ans214, _look214, _conn214)))
+_seen214 = []
+_p9_patch(_nt214._FallbackHTTPS, "do_open", lambda self, conn, req, **k: _seen214.append(
+    (req.full_url.split("/")[2], conn.__name__)) or (_ for _ in ()).throw(OSError("p214 stand-in")))
+try:
+    _nt214._post("https://api.telegram.org/bot1:x/sendMessage", b"x", {}, provider="telegram")
+    _nt214._post("https://ntfy.p214.example/alerts", b"x", {}, allow_configured_host=True, provider="ntfy")
+finally:
+    _p9_restore_all()
+eq("ntfy: only the ntfy request opens the address-checking connection; Telegram keeps its own",
+   _seen214, [("api.telegram.org", "_FallbackHTTPSConnection"), ("ntfy.p214.example", "_NtfyHTTPSConnection")])
+_route214, _, _rconn214 = _ntfy214(["169.254.169.254"], via_route=True)
+check("ntfy: the Test button names the refusal, and nothing was connected to",
+      _route214.get("success") is False and "never sent to" in (_route214.get("message") or "")
+      and _rconn214 == [], repr(_route214))
+
+
 eq("part214: nothing reached a real transport", _P9_TRIPPED[_trips214:], [])

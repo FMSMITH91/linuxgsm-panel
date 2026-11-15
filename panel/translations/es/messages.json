@@ -411,6 +411,7 @@
   "that isn't a usable ntfy server + topic — the server must be https with no path, and the topic may use letters, digits, - and _ only.": "eso no es un servidor + tema de ntfy utilizable: el servidor debe ser https sin ruta, y el tema solo puede usar letras, dígitos, - y _.",
   "that isn't a valid discord.com webhook URL": "esa no es una URL de webhook de discord.com válida",
   "that ntfy URL was refused before sending — https and a plain topic only.": "esa URL de ntfy se rechazó antes de enviar: solo https y un tema simple.",
+  "that ntfy server's address is one alerts are never sent to (this host, link-local or cloud metadata, multicast or reserved). An address on your LAN or tailnet is fine.": "la dirección de ese servidor ntfy es una a la que nunca se envían alertas (este host, enlace local o metadatos de la nube, multidifusión o reservada). Una dirección de tu LAN o tailnet sirve.",
   "the bot token is missing or malformed": "falta el token del bot o está mal formado",
   "the channel ID is missing or malformed": "falta el ID del canal o está mal formado",
   "the chat ID is missing": "falta el ID del chat",
