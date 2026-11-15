@@ -337,6 +337,11 @@ def _installing():
         time.sleep(3)
 
 
+# Step-up off in this throwaway panel's config.json as well (see below): the window is a Settings field
+# now, saved and put in force by /settings/save, and the walk presses that page's Save. With the
+# field showing 0, its save keeps step-up off instead of turning it back on at 10 minutes.
+from panel.core.config import load_config as _jscov_load, save_config as _jscov_save  # noqa: E402
+_jscov_save(dict(_jscov_load(), step_up_minutes=0))
 app = create_app()
 seed(app)
 # The walk signs in once, as a superadmin without 2FA, and runs for longer than the step-up window.
