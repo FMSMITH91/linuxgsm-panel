@@ -353,26 +353,28 @@ def overview_rows(user, seen=None):
     `seen`: get_user_servers(user) when the caller has it already.
     """
     servers = {gs.id: gs for gs in (get_user_servers(user) if seen is None else seen)}
+    if not servers:
+        return [], []
     rows = (GameDatabase.query.filter(GameDatabase.game_server_id.in_(list(servers)))
-            .order_by(GameDatabase.game_server_id, GameDatabase.id).all() if servers else [])
+            .order_by(GameDatabase.game_server_id, GameDatabase.id).all())
     remote_ids = sorted({gs.remote_id for gs in servers.values()})
-    eps = {e.id: e for e in DatabaseEndpoint.query.all()} if remote_ids else {}
+    eps = {e.id: e for e in DatabaseEndpoint.query.all()}
     names = {gs.remote_id: gs.remote.name for gs in servers.values()}
-    hds = ({h.remote_id: h for h in HostDatabaseServer.query.filter(HostDatabaseServer.remote_id.in_(remote_ids))}
-           if remote_ids else {})
+    hds = {h.remote_id: h for h in HostDatabaseServer.query.filter(HostDatabaseServer.remote_id.in_(remote_ids))}
     hosts = _overview_hosts(remote_ids, names, eps, hds)
-    dbs = []
-    for r in rows:
-        gs, ep = servers[r.game_server_id], eps.get(r.endpoint_id)
-        hd = hds.get(gs.remote_id)
-        # What a game connects to (the manager's Connection tab): the server on another machine at its
-        # tailnet address, else this host's own server on 127.0.0.1.
-        addr, port = ((ep.address, ep.port or 3306) if ep is not None
-                      else ("127.0.0.1", (hd.port if hd is not None else None) or 3306))
-        dbs.append({"id": r.id, "name": r.name, "server_id": gs.id, "server": gs.name,
-                    "host": names.get(gs.remote_id, ""), "where": ep.label if ep is not None else "",
-                    "size": r.size_bytes, "address": addr, "port": port})
-    return hosts, dbs
+    return hosts, [_overview_row(r, servers[r.game_server_id], eps.get(r.endpoint_id), hds, names) for r in rows]
+
+
+def _overview_row(r, gs, ep, hds, names):
+    """One database the overview lists, with what a game connects to (the manager's Connection tab).
+
+    That is the server on another machine at its tailnet address, else this host's own on 127.0.0.1.
+    """
+    hd = hds.get(gs.remote_id)
+    addr, port = ((ep.address, ep.port or 3306) if ep is not None
+                  else ("127.0.0.1", (hd.port if hd is not None else None) or 3306))
+    return {"id": r.id, "name": r.name, "server_id": gs.id, "server": gs.name, "host": names.get(gs.remote_id, ""),
+            "where": ep.label if ep is not None else "", "size": r.size_bytes, "address": addr, "port": port}
 
 
 def _overview_hosts(remote_ids, names, eps, hds):

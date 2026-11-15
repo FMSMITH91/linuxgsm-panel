@@ -2367,20 +2367,26 @@ def db_query_statements(run):
     """
     if not isinstance(run, list) or not 1 <= len(run) <= DB_QUERY_MAX_STATEMENTS:
         raise VerbError("not a list of statements")
-    out = []
-    for item in run:
-        if not isinstance(item, dict) or set(item) - {"sql", "params", "cap"}:
-            raise VerbError("not a statement")
-        sql = _db_query_text(item.get("sql"), DB_QUERY_SQL_MAX, "a statement")
-        params = item.get("params") or []
-        cap = item.get("cap") or 0
-        if not sql.strip() or not isinstance(params, list) or len(params) > DB_QUERY_PARAMS_MAX:
-            raise VerbError("not a statement")
-        if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= DB_QUERY_CAP_MAX:
-            raise VerbError("not a row cap")
-        out.append((sql, [None if p is None else _db_query_text(p, DB_QUERY_VALUE_MAX, "a value") for p in params],
-                    cap))
-    return out
+    return [_db_query_item(item) for item in run]
+
+
+def _db_query_item(item):
+    """One statement of a db-query, validated: (sql, params, cap)."""
+    if not isinstance(item, dict) or set(item) - {"sql", "params", "cap"}:
+        raise VerbError("not a statement")
+    sql = _db_query_text(item.get("sql"), DB_QUERY_SQL_MAX, "a statement")
+    params = item.get("params") or []
+    if not sql.strip() or not isinstance(params, list) or len(params) > DB_QUERY_PARAMS_MAX:
+        raise VerbError("not a statement")
+    return sql, [None if p is None else _db_query_text(p, DB_QUERY_VALUE_MAX, "a value") for p in params], \
+        _db_query_cap(item.get("cap") or 0)
+
+
+def _db_query_cap(cap):
+    """A statement's row cap, 0 (none) to DB_QUERY_CAP_MAX."""
+    if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= DB_QUERY_CAP_MAX:
+        raise VerbError("not a row cap")
+    return cap
 
 
 def db_query_hex(text):

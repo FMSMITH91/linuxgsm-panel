@@ -315,17 +315,24 @@ def _offset():
         return -1
 
 
+def _piece_refusal(e, data, off):
+    """The refusal for a piece that does not fit upload `e` (empty, over UPLOAD_CHUNK, past its size), or None."""
+    if not data or len(data) > UPLOAD_CHUNK:
+        return _say(413, "Each piece must be 1 byte to 4 MB.")
+    if off < 0 or off + len(data) > e["size"]:
+        return _say(400, "That piece does not fit the upload.")
+    return None
+
+
 def _upload_piece(gs, r, uid):
     """Append one piece at its offset; answers how much the host holds now."""
     e = _get_upload(uid, r.id)
     if e is None:
         return _say(404, "No such upload.")
-    data = request.get_data(cache=True)
-    off = _offset()
-    if not data or len(data) > UPLOAD_CHUNK:
-        return _say(413, "Each piece must be 1 byte to 4 MB.")
-    if off < 0 or off + len(data) > e["size"]:
-        return _say(400, "That piece does not fit the upload.")
+    data, off = request.get_data(cache=True), _offset()
+    refused = _piece_refusal(e, data, off)
+    if refused:
+        return refused
     state, val = _upcmd(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
     if state == "ok" and str(val).isdecimal():
         return jsonify({"success": True, "received": int(val)})

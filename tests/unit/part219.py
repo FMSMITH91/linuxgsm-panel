@@ -395,20 +395,23 @@ def _host219(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, se
     sqls = [q["sql"] for q in run]
     _CALLS219.append((args[3], sqls, run[0].get("params"), list(args), (secrets or {}).get("pw")))
     first = sqls[0] if sqls else ""
-    if "information_schema.TABLES" in first:
-        return _STRUCT_ANS219, "", 0
-    if first.startswith("SELECT `id`"):
-        return _answer219(([(["id", "name", "skin", "len"], [["1", "x" * 300, "9", "5"], ["2", None, None, None]])],
-                           -1)), "", 0
-    if first.startswith("SELECT LEFT"):
-        return _answer219(([(["v"], [["the whole value"]])], -1)), "", 0
-    if "writes" in first and args[3] == "ro":
-        return _answer219(error=(1792, "25006", "Cannot execute statement in a READ ONLY transaction")), "", 1
-    if "boom" in first:
-        return _answer219(error=(1064, "42000", "You have an error near 'boom'")), "", 1
-    if first.upper().startswith(("SELECT", "SHOW")):
-        return _answer219(([(["n"], [["1"]])], -1)), "", 0
+    for test, answer in _HOST_ANSWERS219:
+        if test(first, args[3]):
+            return answer(first)
     return _answer219(([], 1 if first.startswith(("INSERT", "DELETE", "UPDATE `")) else 3)), "", 0
+
+
+# (does this statement and mode match, what the host answers): the first that matches answers.
+_HOST_ANSWERS219 = (
+    (lambda q, m: "information_schema.TABLES" in q, lambda q: (_STRUCT_ANS219, "", 0)),
+    (lambda q, m: q.startswith("SELECT `id`"), lambda q: (_answer219(([(["id", "name", "skin", "len"], [
+        ["1", "x" * 300, "9", "5"], ["2", None, None, None]])], -1)), "", 0)),
+    (lambda q, m: q.startswith("SELECT LEFT"), lambda q: (_answer219(([(["v"], [["the whole value"]])], -1)), "", 0)),
+    (lambda q, m: "writes" in q and m == "ro", lambda q: (_answer219(error=(
+        1792, "25006", "Cannot execute statement in a READ ONLY transaction")), "", 1)),
+    (lambda q, m: "boom" in q, lambda q: (_answer219(error=(1064, "42000", "You have an error near 'boom'")), "", 1)),
+    (lambda q, m: q.upper().startswith(("SELECT", "SHOW")), lambda q: (_answer219(([(["n"], [["1"]])], -1)), "", 0)),
+)
 
 
 def _user219(tag, perms):

@@ -1058,6 +1058,14 @@ def _check_limited_user_denied_pages():
           "got %d" % _ov.status_code)
 
 
+def _functions_naming(path, name):
+    """The functions in `path` whose own body uses the name `name`."""
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    return {fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+            and name in {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}}
+
+
 def _check_database_manager_permissions():
     """The Databases manager's routes: VIEW_SERVERS alone gets none of them.
 
@@ -1070,17 +1078,14 @@ def _check_database_manager_permissions():
                          ("post", "/sql"), ("post", "/dump"), ("get", "/dump/download"), ("post", "/upload")):
         code = getattr(c_lim, method)(base + tail, json={}).status_code
         check("limited user DENIED the database manager's %s %s" % (method.upper(), tail), code == 403, "got %d" % code)
-    import ast as _ast_dm
-    src = open(os.path.join(_ROOT, "panel", "routes", "databases_data.py"), encoding="utf-8").read()
-    named = {fn.name for fn in _ast_dm.walk(_ast_dm.parse(src)) if isinstance(fn, _ast_dm.FunctionDef)
-             and "EDIT_DATABASE_DATA" in {n.id for n in _ast_dm.walk(fn) if isinstance(n, _ast_dm.Name)}}
+    named = _functions_naming(os.path.join(_ROOT, "panel", "routes", "databases_data.py"), "EDIT_DATABASE_DATA")
     check("the row and SQL routes each check EDIT_DATABASE_DATA in their own body",
           {"api_server_database_row", "api_server_database_sql"} <= named, repr(sorted(named)))
     with app.app_context():
         holders = [g.name for g in Group.query.all() if auth.EDIT_DATABASE_DATA in (g.get_permissions() or [])]
     check("EDIT_DATABASE_DATA is grantable, labelled, and in no group the panel made",
           auth.EDIT_DATABASE_DATA in auth.ALL_PERMISSIONS and auth.ALL_PERMISSIONS[auth.EDIT_DATABASE_DATA]
-          and not [h for h in holders if not h.startswith(("rbactest_", "p2"))], repr(holders))
+          and not [h for h in holders if not h.startswith("rbactest_")], repr(holders))
 
 
 def _check_specs_os_slug_for_installers():

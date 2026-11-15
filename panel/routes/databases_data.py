@@ -168,16 +168,24 @@ def _rows_answer(gs, r):
                         readonly=why, readonly_text=i18n.tr(S_READONLY[why]) if why else ""))
 
 
-def _cell_answer(gs, r):
-    body = _json_body()
+def _keyed_table(gs, r, body):
+    """(the table `body` names, None) when its rows can be addressed by key, else (None, a refusal)."""
     tables, bad = _structure(gs, r)
     if bad:
-        return _say(*bad)
+        return None, _say(*bad)
     t = tables.get(_json_str(body, "table"))
     if t is None:
-        return _say(404, S_NO_TABLE)
+        return None, _say(404, S_NO_TABLE)
     if _dd.editable(t):
-        return _say(409, S_READONLY[_dd.editable(t)])
+        return None, _say(409, S_READONLY[_dd.editable(t)])
+    return t, None
+
+
+def _cell_answer(gs, r):
+    body = _json_body()
+    t, refused = _keyed_table(gs, r, body)
+    if refused:
+        return refused
     try:
         stmt = _dd.cell_statement(t, _json_str(body, "column"), body.get("key"))
     except ValueError:
@@ -186,6 +194,11 @@ def _cell_answer(gs, r):
     bad = _problem(gs, ans)
     if bad:
         return _say(*bad)
+    return _cell_value(ans)
+
+
+def _cell_value(ans):
+    """The one value a cell statement read, or the row's absence."""
     st = ans.get("statements") or []
     rows = st[0]["sets"][0]["rows"] if st and st[0]["sets"] else []
     if not rows:
@@ -213,14 +226,9 @@ def _row_change_answer(gs, r):
     op = _json_str(body, "op")
     if op not in _ROW_OPS:
         return _say(400, "Say what to do with the row: insert, update or delete.")
-    tables, bad = _structure(gs, r)
-    if bad:
-        return _say(*bad)
-    t = tables.get(_json_str(body, "table"))
-    if t is None:
-        return _say(404, S_NO_TABLE)
-    if _dd.editable(t):
-        return _say(409, S_READONLY[_dd.editable(t)])
+    t, refused = _keyed_table(gs, r, body)
+    if refused:
+        return refused
     try:
         stmt = _row_statement(t, op, body)
     except ValueError as e:
@@ -230,21 +238,32 @@ def _row_change_answer(gs, r):
     return _row_change_done(gs, r, t, (op, values), ans)
 
 
-def _row_change_done(gs, r, t, change, ans):
-    """The answer to a row change, and its audit row (which columns, how many rows; never a value)."""
-    op, values = change
-    action, verb = _ROW_OPS[op]
-    bad = _problem(gs, ans)
-    err = (ans or {}).get("error")
+def _affected(ans):
+    """The first statement's row count in an answer, or None."""
     st = (ans or {}).get("statements") or []
-    affected = st[0]["affected"] if st else None
-    ok = not bad and not err and affected is not None
+    return st[0]["affected"] if st else None
+
+
+def _row_audit(gs, r, t, change, outcome):
+    """The row change's audit row: which table and columns, how many rows (never a value), or why not."""
+    (op, values), (ok, affected, err) = change, outcome
+    action, verb = _ROW_OPS[op]
     detail = "%s %s row(s) in %s.%s" % (verb, affected if ok else 0, r.name, _audit_text(t["name"]))
     if values:
         detail += " (columns: %s)" % ", ".join(sorted(_audit_text(n) for n in values))[:300]
     if not ok:
         detail += ": " + ("error %s" % err["code"] if err else "failed")
     log_action(current_user, action, target=gs.name, server=gs, detail=detail, success=ok)
+
+
+def _row_change_done(gs, r, t, change, ans):
+    """The answer to a row change, and its audit row."""
+    op = change[0]
+    bad = _problem(gs, ans)
+    err = (ans or {}).get("error")
+    affected = _affected(ans)
+    ok = not bad and not err and affected is not None
+    _row_audit(gs, r, t, change, (ok, affected, err))
     if bad:
         return _say(*bad)
     if err:
@@ -255,10 +274,12 @@ def _row_change_done(gs, r, t, change, ans):
         return _say(502, S_UNREAD)
     if op != "update":
         forget(r.id)
-    msg = {"insert": "Row added.", "update": "Row saved.", "delete": "Row deleted."}[op]
-    if affected == 0:
-        msg = "No row was changed: it may have been changed or deleted already. Reload the page."
+    msg = (_ROW_DONE[op] if affected else
+           "No row was changed: it may have been changed or deleted already. Reload the page.")
     return jsonify({"success": affected > 0, "affected": affected, "message": i18n.tr(msg)})
+
+
+_ROW_DONE = {"insert": "Row added.", "update": "Row saved.", "delete": "Row deleted."}
 
 
 # ── the SQL box ──────────────────────────────────────────────────────────────────────────────────
@@ -288,25 +309,46 @@ def confirmed(r, text, token):
 _SQL_MAX = 65536
 
 
-def _sql_answer(gs, r):
-    body = _json_body()
+def _sql_text(body):
+    """The statement a SQL box request carries, or None when it is not one (empty, not text, too long)."""
     text = body.get("sql")
     if not isinstance(text, str) or not text.strip() or len(text.encode("utf-8", "replace")) > _SQL_MAX:
+        return None
+    return text
+
+
+def _confirm_refusal(r, text, token, kind):
+    """A confirm step the statement still needs (a change with no token), or a token that is not for it; else None."""
+    if token is not None and not confirmed(r, text, token):
+        return _say(409, "That confirmation is for another statement or has expired. Run the statement again.")
+    if token is None and kind[0] == "write":
+        return _needs_confirm(r, text, kind[1])
+    return None
+
+
+def _sql_answer(gs, r):
+    body = _json_body()
+    text = _sql_text(body)
+    if text is None:
         return _say(400, "Type one SQL statement (at most 64 KB).")
     kind, word = _dd.sql_kind(text)
-    token = body.get("confirm")
-    if token and not confirmed(r, text, token):
-        return _say(409, "That confirmation is for another statement or has expired. Run the statement again.")
-    write = bool(token) or kind == "write"
-    if write and not token:
-        return _needs_confirm(r, text, word)
-    ans = _query(gs, r, "rw" if write else "ro", [_dd.sql_statement(text)])
-    err = (ans or {}).get("error")
-    if not write and err and err["code"] == 1792:
+    token = body.get("confirm") or None
+    refused = _confirm_refusal(r, text, token, (kind, word))
+    if refused:
+        return refused
+    if token is not None:
+        kind = "write"
+    ans = _query(gs, r, "rw" if kind == "write" else "ro", [_dd.sql_statement(text)])
+    if kind == "read" and _error_code(ans) == 1792:
         # A "read" statement that writes after all (a stored function, EXPLAIN ANALYZE...): the READ
         # ONLY transaction refused it, and it takes the confirm step like any other change.
         return _needs_confirm(r, text, word)
-    return _sql_done(gs, r, (text, kind if not write else "write", word), ans)
+    return _sql_done(gs, r, (text, kind, word), ans)
+
+
+def _error_code(ans):
+    """The client's error code in an answer, or None."""
+    return ((ans or {}).get("error") or {}).get("code")
 
 
 def _needs_confirm(r, text, word):
@@ -316,29 +358,45 @@ def _needs_confirm(r, text, word):
                                                      name=r.name))}), 409
 
 
+def _sql_rows(res):
+    """How many rows a statement changed (its row count) or returned (the rows shown)."""
+    affected = res["affected"]
+    return affected if (affected is not None and affected >= 0) else sum(len(s["rows"]) for s in res["sets"])
+
+
+def _sql_audit(gs, r, stmt, outcome):
+    """The statement's audit row: its kind, the database, how many rows or the error, its literals masked."""
+    (text, kind, word), (ok, res, err) = stmt, outcome
+    said = ("%d row(s)" % _sql_rows(res)) if ok else ("error %s" % err["code"] if err else "failed")
+    log_action(current_user, "db_sql", target=gs.name, server=gs, success=ok, detail="%s (%s) in %s, %s: %s" % (
+        word or "?", kind, r.name, said, _dd.mask_literals(text)))
+
+
 def _sql_done(gs, r, stmt, ans):
     """The SQL box's answer, and the statement's audit row."""
-    text, kind, word = stmt
+    kind = stmt[1]
     bad = _problem(gs, ans)
     err = (ans or {}).get("error")
     res = None if (bad or ans is None) else _dd.sql_result(ans)
-    affected = res["affected"] if res else None
     ok = not bad and not err and res is not None
-    rows = affected if (affected is not None and affected >= 0) else sum(len(s["rows"]) for s in (res or {}).get("sets", []))
-    log_action(current_user, "db_sql", target=gs.name, server=gs, success=ok, detail="%s (%s) in %s, %s: %s" % (
-        word or "?", kind, r.name, ("%d row(s)" % rows) if ok else ("error %s" % err["code"] if err else "failed"),
-        _dd.mask_literals(text)))
+    _sql_audit(gs, r, stmt, (ok, res, err))
     if kind == "write" and ok:
         forget(r.id)
     if bad:
         return _say(*bad)
+    return jsonify(_sql_reply(ok, kind, res, ans)), 200
+
+
+def _sql_reply(ok, kind, res, ans):
+    """The SQL box's JSON: the result, or the server's error (its code and its own words) or why not."""
+    err = ans.get("error")
     out = {"success": ok, "kind": kind, "result": res, "cut": bool(ans.get("cut")), "rows_max": _dd.SQL_ROWS}
     if err:
         out["error"] = {"code": err["code"], "state": err["state"], "text": err["text"]}
         out["message"] = i18n.tr(S_UNSUPPORTED_PS) if err["code"] == 1295 else err["text"]
     elif res is None:
         out["message"] = i18n.tr(S_UNREAD)
-    return jsonify(out), 200
+    return out
 
 
 # ── routes ───────────────────────────────────────────────────────────────────────────────────────

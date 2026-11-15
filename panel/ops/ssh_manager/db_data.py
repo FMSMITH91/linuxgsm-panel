@@ -113,6 +113,11 @@ def _error(text):
     return {"code": int(m.group(1)), "state": m.group(2), "text": m.group(3).strip()[:500]} if m else None
 
 
+def _count(n):
+    """A row count the server printed (-1 for a statement that returns rows), or None."""
+    return int(n) if n and re.fullmatch(r"-?\d{1,19}", n) else None
+
+
 def parse(text):
     """The db-query answer `text`, read.
 
@@ -122,11 +127,11 @@ def parse(text):
     """
     conn, done, cur = None, [], []
     for statement, columns, rows in _resultsets(text or ""):
-        if statement.startswith(_priv.DB_QUERY_CONN_SQL) and conn is None and rows and rows[0]:
-            conn = rows[0][0]
+        first = rows[0][0] if rows and rows[0] else None
+        if statement.startswith(_priv.DB_QUERY_CONN_SQL) and conn is None:
+            conn = first
         elif statement.startswith(_priv.DB_QUERY_ROWS_SQL):
-            n = rows[0][0] if rows and rows[0] else None
-            done.append({"sets": cur, "affected": int(n) if n and re.fullmatch(r"-?\d{1,19}", n) else None})
+            done.append({"sets": cur, "affected": _count(first)})
             cur = []
         else:
             cur.append({"columns": columns, "rows": rows})
@@ -169,20 +174,30 @@ def structure(ans):
     error, or a statement missing.
     """
     st = ans.get("statements") or []
-    if ans.get("error") or len(st) != 3 or not all(s["sets"] for s in st):
+    if not _whole(ans, st):
         return None
-    tables = {}
-    for f in st[0]["sets"][0]["rows"]:
-        if len(f) == 5 and f[0]:
-            tables[f[0]] = {"name": f[0], "type": f[1] or "", "engine": f[2] or "", "rows": _dd_int(f[3]),
-                            "bytes": _dd_int(f[4]), "columns": [], "pk": [], "view": (f[1] or "") == "VIEW"}
-    for f in st[1]["sets"][0]["rows"]:
-        if len(f) == 10 and f[0] in tables:
-            tables[f[0]]["columns"].append(_column(f))
-    for f in st[2]["sets"][0]["rows"]:
-        if len(f) == 2 and f[0] in tables:
-            tables[f[0]]["pk"].append(f[1])
+    tables = {f[0]: _table(f) for f in st[0]["sets"][0]["rows"] if len(f) == 5 and f[0]}
+    for f in _rows_for(st[1], 10, tables):
+        tables[f[0]]["columns"].append(_column(f))
+    for f in _rows_for(st[2], 2, tables):
+        tables[f[0]]["pk"].append(f[1])
     return tables
+
+
+def _whole(ans, st):
+    """Whether a structure answer has no error and all three statements, each with its resultset."""
+    return not ans.get("error") and len(st) == 3 and all(s["sets"] for s in st)
+
+
+def _table(f):
+    """One information_schema.TABLES row as the manager's table (its columns and key added after)."""
+    return {"name": f[0], "type": f[1] or "", "engine": f[2] or "", "rows": _dd_int(f[3]), "bytes": _dd_int(f[4]),
+            "columns": [], "pk": [], "view": (f[1] or "") == "VIEW"}
+
+
+def _rows_for(statement, width, tables):
+    """The rows of `statement`'s first resultset that have `width` values and name a table in `tables`."""
+    return [f for f in statement["sets"][0]["rows"] if len(f) == width and f[0] in tables]
 
 
 def editable(table):
@@ -234,17 +249,20 @@ def _cell(c, v, is_key):
 def rows(ans, table):
     """One page of rows read from a rows_statement answer: {"rows": [{"cells", "key"}], "more"}, or None."""
     st = ans.get("statements") or []
-    if ans.get("error") or not st or not st[0]["sets"]:
-        return None if (ans.get("error") or not st) else {"rows": [], "more": False}
+    if ans.get("error") or not st:
+        return None
+    if not st[0]["sets"]:
+        return {"rows": [], "more": False}
     keys = set(table["pk"]) if not editable(table) else set()
     cols = table["columns"]
     got = [r for r in st[0]["sets"][0]["rows"] if len(r) == len(cols)]
-    out = []
-    for r in got[:PAGE_ROWS]:
-        cells = [_cell(c, v, c["name"] in keys) for c, v in zip(cols, r)]
-        key = {c["name"]: v for c, v in zip(cols, r) if c["name"] in keys}
-        out.append({"cells": cells, "key": key if keys else None})
-    return {"rows": out, "more": len(got) > PAGE_ROWS}
+    return {"rows": [_page_row(cols, r, keys) for r in got[:PAGE_ROWS]], "more": len(got) > PAGE_ROWS}
+
+
+def _page_row(cols, r, keys):
+    """One row of a page: its cells, and its key values when the table has a key the editor uses."""
+    return {"cells": [_cell(c, v, c["name"] in keys) for c, v in zip(cols, r)],
+            "key": {c["name"]: v for c, v in zip(cols, r) if c["name"] in keys} if keys else None}
 
 
 def _key_match(table, key):
@@ -287,20 +305,20 @@ def _values(table, values):
     """[(column, value or None)] for `values` ({column: {"null": bool, "value": text}}); ValueError on a bad one."""
     if not isinstance(values, dict) or not values:
         raise ValueError("no values")
-    out = []
-    for name, v in values.items():
-        c = _col(table, name)
-        if c is None or c["binary"] or c["generated"] or not isinstance(v, dict):
-            raise ValueError("not a column that can be set")
-        if v.get("null"):
-            if not c["nullable"]:
-                raise ValueError("that column can't be empty (NULL)")
-            out.append((c, None))
-        elif isinstance(v.get("value"), str) and len(v["value"].encode("utf-8", "replace")) <= _priv.DB_QUERY_VALUE_MAX:
-            out.append((c, v["value"]))
-        else:
-            raise ValueError("not a value")
-    return out
+    return [_value(_col(table, name), v) for name, v in values.items()]
+
+
+def _value(c, v):
+    """(column, value or None) for one value set on column `c` (None: not in the table); ValueError if not fit."""
+    if c is None or c["binary"] or c["generated"] or not isinstance(v, dict):
+        raise ValueError("not a column that can be set")
+    if v.get("null"):
+        if not c["nullable"]:
+            raise ValueError("that column can't be empty (NULL)")
+        return c, None
+    if isinstance(v.get("value"), str) and len(v["value"].encode("utf-8", "replace")) <= _priv.DB_QUERY_VALUE_MAX:
+        return c, v["value"]
+    raise ValueError("not a value")
 
 
 def insert_statement(table, values):
@@ -339,14 +357,21 @@ def _skip_comments(text):
     s = text
     while True:
         s = s.lstrip(" \t\r\n\f\v(")
-        if s.startswith("#") or (s.startswith("--") and (len(s) == 2 or s[2] in " \t\r\n")):
-            nl = s.find("\n")
-            s = "" if nl < 0 else s[nl + 1:]
-        elif s.startswith("/*") and not s.startswith("/*!") and not s.upper().startswith("/*M!"):
-            end = s.find("*/", 2)
-            s = "" if end < 0 else s[end + 2:]
-        else:
+        rest = _past_comment(s)
+        if rest is None:
             return s
+        s = rest
+
+
+def _past_comment(s):
+    """`s` after the comment it starts with, or None when it starts with none (or an executable one)."""
+    if s.startswith("#") or (s.startswith("--") and (len(s) == 2 or s[2] in " \t\r\n")):
+        nl = s.find("\n")
+        return "" if nl < 0 else s[nl + 1:]
+    if s.startswith("/*") and not s.startswith("/*!") and not s.upper().startswith("/*M!"):
+        end = s.find("*/", 2)
+        return "" if end < 0 else s[end + 2:]
+    return None
 
 
 def sql_kind(text):
