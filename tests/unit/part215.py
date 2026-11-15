@@ -290,13 +290,17 @@ def _fake_clock215(start):
     return now
 
 
-def _s215_account_throttle():
+def _throttle_setup215():
+    """A fresh p215_target, alerts collected in _NOTES215, and a fake clock: (first audit id, clock)."""
     _reset215()
     _user215("p215_target")
     _NOTES215.clear()
     _p9_patch(_nt215, "notify", lambda key, title, body="": _NOTES215.append((key, body)))
-    first = _last_id215()
-    now = _fake_clock215(_time215.time())
+    return _last_id215(), _fake_clock215(_time215.time())
+
+
+def _s215_account_throttle():
+    first, now = _throttle_setup215()
     try:
         tries = [_login215("p215_target", _K215_WRONG, ip="198.51.100.%d" % (10 + i))[1].status_code
                  for i in range(_ag215.ACCOUNT_SOFT_FAILS)]
