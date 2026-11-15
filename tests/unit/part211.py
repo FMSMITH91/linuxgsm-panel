@@ -524,13 +524,13 @@ eq("databases remote: a server listening on every address (0.0.0.0, ::, *) or on
 _NET211 = "tcp3306@100.64.0.5"
 check("databases verbs: a tailnet sign-in gives up after 10 s (--connect-timeout), asks a MySQL 8 server for its "
       "key, and keeps TLS off; a sign-in on 127.0.0.1 gets none of them; both twins alike",
-      all(o in _priv211.db_conn_net(_NET211) for o in ("--connect-timeout=10", "--loose-get-server-public-key",
+      all(o in _priv211.db_conn_net(_NET211) for o in ("--loose-connect-timeout=10", "--loose-get-server-public-key",
                                                          "--loose-skip-ssl"))
-      and not any(o.startswith(("--connect-timeout", "--loose")) for o in _priv211.db_conn_net("tcp3306"))
+      and not any(o.startswith(("--loose",)) for o in _priv211.db_conn_net("tcp3306"))
       and _helper.db_conn_net(_NET211) == _priv211.db_conn_net(_NET211)
       and _helper.db_conn_net("tcp3306") == _priv211.db_conn_net("tcp3306"), repr(_priv211.db_conn_net(_NET211)))
 check("databases verbs: the remote rendering's tailnet sign-in carries the timeout and the key option too",
-      all(o in _priv211._db_conn_sh(_NET211) for o in ("--connect-timeout=10", "--loose-get-server-public-key"))
+      all(o in _priv211._db_conn_sh(_NET211) for o in ("--loose-connect-timeout=10", "--loose-get-server-public-key"))
       and "connect-timeout" not in _priv211._db_conn_sh("tcp3306"), _priv211._db_conn_sh(_NET211))
 _E2061 = ("ERROR 2061 (HY000): Authentication plugin 'caching_sha2_password' reported error: Authentication "
           "requires secure connection.")
@@ -624,3 +624,10 @@ eq("databases login mode: a delete keeps the copy first as the database's own ac
    (_R211.get("login_delete", (0, []))[0], [c[:5] + c[5:6] for c in _R211.get("login_delete", (0, []))[1]]),
    (200, [("dump", P9_HOST, "tcp3306", _a5, False, "archive"), ("drop", P9_HOST, "tcp3306", "linuxgsm_panel", True, "p211w")]))
 check("part211: section 5 reached no real transport", len(_P9_TRIPPED) == _trips211, repr(_P9_TRIPPED[_trips211:][:4]))
+_net_opts211 = [(name, getattr(m, name)) for m in (_priv211, _helper)
+                for name in ("DB_NET_CONNECT", "DB_NET_KEY", "DB_NET_TLS_OFF")]
+check("databases remote: every extra client option for a tailnet server, in both the panel's renderings and the "
+      "root helper, is a --loose- one, so mariadb-dump and mysqldump (which reject an unknown option) skip it "
+      "instead of failing every backup and delete",
+      all(o.startswith("--loose-") for _n, opts in _net_opts211 for o in opts)
+      and dict(_net_opts211[:3]) == dict(_net_opts211[3:]), repr(_net_opts211))

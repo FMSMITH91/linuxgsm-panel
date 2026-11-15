@@ -2097,7 +2097,7 @@ DB_NET_TLS_OFF = ("--loose-skip-ssl", "--loose-ssl-mode=DISABLED")
 DB_NET_KEY = ("--loose-get-server-public-key",)
 # A tailnet server that does not answer (a dropped port, a node that is off) is given up on after
 # 10 seconds and said as such, well inside the verb's own timeout.
-DB_NET_CONNECT = ("--connect-timeout=10",)
+DB_NET_CONNECT = ("--loose-connect-timeout=10",)
 
 
 def _db_name(s):
