@@ -253,7 +253,6 @@ def _s218_endpoints():
 
 def _s218_send_guard():
     import socket
-    from panel.services import notifications as _n
     connects, posts = [], []
     b = _browser218(9)
     p256, auth = _d218(b.sub["keys"]["p256dh"]), b.auth
@@ -262,7 +261,7 @@ def _s218_send_guard():
     def _no_connect(infos, timeout, src):
         connects.append(infos)
         raise OSError("part218: no connection is ever made")
-    _p9_patch(_n, "_connect_infos", _no_connect)
+    _p9_patch(_nt218, "_connect_infos", _no_connect)
     _p9_patch(_wp218, "_resolve", lambda host: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))])
     out_private = _wp218.send(b.sub["endpoint"], p256, auth, b"{}", 60)
     _p9_patch(_wp218, "_resolve", lambda host: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.1.1", 443)),
