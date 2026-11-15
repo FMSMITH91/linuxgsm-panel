@@ -45,6 +45,7 @@ STATUS
 """
 import base64
 import ipaddress
+import json
 import os
 import pwd
 import re
@@ -2078,7 +2079,7 @@ DB_TLS_ERRORS = ("ERROR 3159", "ERROR 4036")
 # ...and "this password type needs TLS or the server's key" (2061, caching_sha2_password).
 DB_KEY_ERRORS = ("ERROR 2061",)
 # Which verbs carry a password in the document, and where each verb's auth argument is.
-DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import"})
+DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import", "db-query"})
 DB_AUTH_ARG = {"db-create": 1, "db-password": 1, "db-sizes": 1, "db-dump": 1, "db-drop": 1,
                "db-admin-check": 1, "db-rehost": 1}
 # A database server on another machine is reached over Tailscale only (this release): its address,
@@ -2316,6 +2317,130 @@ def db_sql_sizes(names):
             "WHERE table_schema IN (%s) GROUP BY table_schema;\n" % ",".join("'%s'" % db_sql_name(n) for n in names))
 
 
+# ── db-query: statements run as a database's own account (the Databases manager) ─────────────────
+# The client only ever reads text this module wrote: each statement's text and each value travel as
+# hexadecimal (X'...'), are put in user variables, and run through the server's own PREPARE and
+# EXECUTE ... USING, so a value is a bound parameter and no character of a statement or a value can
+# reach the client's command parser (`system`, `source`, `\!`...) or end a statement early. PREPARE
+# takes ONE statement. The session gets a statement time limit (MariaDB max_statement_time, every
+# statement but those in stored procedures; MySQL max_execution_time, read-only SELECTs only, so the
+# runner also ends a statement that outlives DB_QUERY_SECONDS with KILL QUERY on its connection),
+# short lock waits, and a row cap per statement (sql_select_limit; a LIMIT in the statement wins, so
+# the answer is also cut at DB_QUERY_OUT_MAX bytes). Mode `ro` runs everything in a READ ONLY
+# transaction that is rolled back.
+DB_QUERY_MODES = ("ro", "rw")
+DB_QUERY_SECONDS = 30
+DB_QUERY_LOCK_WAIT = 10
+DB_QUERY_MAX_STATEMENTS = 4
+DB_QUERY_SQL_MAX = 65536
+DB_QUERY_PARAMS_MAX = 512
+DB_QUERY_VALUE_MAX = 65536
+DB_QUERY_CAP_MAX = 10000
+DB_QUERY_BODY_MAX = 1 << 21
+DB_QUERY_OUT_MAX = 2 << 20
+# The marks the runner's answer is read by: the connection id first, then one row count per statement.
+DB_QUERY_CONN_SQL = "SELECT CONNECTION_ID() AS panel_conn"
+DB_QUERY_ROWS_SQL = "SELECT ROW_COUNT() AS panel_rows"
+# The client's options besides the connection's: no client command but DELIMITER and \C in what it
+# reads (--binary-mode, both clients), no LOAD DATA LOCAL, and the sandbox / system-command refusals
+# where the client has them; XML answers (NULL told from the text NULL), rows streamed, each answer
+# written out at once.
+DB_QUERY_OPTS = ("--binary-mode", "--loose-local-infile=0", "--loose-sandbox", "--loose-system-command=OFF", "--batch",
+                 "--xml", "--quick", "--unbuffered", "--default-character-set=utf8mb4")
+
+
+def _db_query_text(v, limit, what):
+    """`v` when it is a str of at most `limit` UTF-8 bytes, else refuse."""
+    if not isinstance(v, str) or len(v.encode("utf-8", "surrogatepass")) > limit:
+        raise VerbError("%s is not text of at most %d bytes" % (what, limit))
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        raise VerbError("%s is not UTF-8 text" % what) from None
+    return v
+
+
+def db_query_statements(run):
+    """The statements of a db-query, validated: [(sql, params, cap)].
+
+    1..DB_QUERY_MAX_STATEMENTS of {"sql": text, "params": [None | text, ...], "cap": rows (0: none)}.
+    """
+    if not isinstance(run, list) or not 1 <= len(run) <= DB_QUERY_MAX_STATEMENTS:
+        raise VerbError("not a list of statements")
+    return [_db_query_item(item) for item in run]
+
+
+def _db_query_item(item):
+    """One statement of a db-query, validated: (sql, params, cap)."""
+    if not isinstance(item, dict) or set(item) - {"sql", "params", "cap"}:
+        raise VerbError("not a statement")
+    sql = _db_query_text(item.get("sql"), DB_QUERY_SQL_MAX, "a statement")
+    params = item.get("params") or []
+    if not sql.strip() or not isinstance(params, list) or len(params) > DB_QUERY_PARAMS_MAX:
+        raise VerbError("not a statement")
+    return sql, [None if p is None else _db_query_text(p, DB_QUERY_VALUE_MAX, "a value") for p in params], \
+        _db_query_cap(item.get("cap") or 0)
+
+
+def _db_query_cap(cap):
+    """A statement's row cap, 0 (none) to DB_QUERY_CAP_MAX."""
+    if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= DB_QUERY_CAP_MAX:
+        raise VerbError("not a row cap")
+    return cap
+
+
+def db_query_hex(text):
+    """`text` as a hexadecimal literal of its UTF-8 bytes (X'...'): only 0-9 and A-F inside the quotes."""
+    return "X'%s'" % text.encode("utf-8").hex().upper()
+
+
+def _db_query_limits(flavor):
+    """The session's statement time limit and lock waits, in the server's own words."""
+    # MySQL also reads information_schema's row counts and sizes fresh (they are cached a day by default).
+    limit = (["SET SESSION max_statement_time=%d;" % DB_QUERY_SECONDS] if flavor == "mariadb"
+             else ["SET SESSION max_execution_time=%d;" % (DB_QUERY_SECONDS * 1000),
+                   "SET SESSION information_schema_stats_expiry=0;"])
+    return limit + ["SET SESSION innodb_lock_wait_timeout=%d;" % DB_QUERY_LOCK_WAIT,
+                    "SET SESSION lock_wait_timeout=%d;" % DB_QUERY_LOCK_WAIT]
+
+
+def _db_query_one(sql, params, cap):
+    """The lines that run one statement: PREPARE from hex, the values bound, the row count after it."""
+    out = ["SET @panel_q = CONVERT(%s USING utf8mb4);" % db_query_hex(sql), "PREPARE panel_s FROM @panel_q;"]
+    names = ["@panel_p%d" % i for i in range(len(params))]
+    if params:
+        out.append("SET " + ", ".join("%s = %s" % (n, "NULL" if p is None else db_query_hex(p))
+                                      for n, p in zip(names, params)) + ";")
+    if cap:
+        out.append("SET SESSION sql_select_limit = %d;" % cap)
+    out.append("EXECUTE panel_s" + (" USING " + ", ".join(names) if names else "") + ";")
+    out.append(DB_QUERY_ROWS_SQL + ";")
+    if cap:
+        out.append("SET SESSION sql_select_limit = DEFAULT;")
+    out.append("DEALLOCATE PREPARE panel_s;")
+    return out
+
+
+def db_query_script(flavor, mode, run):
+    """What the client reads for a db-query: limits, the connection id, then each statement."""
+    if flavor not in DB_FLAVORS or mode not in DB_QUERY_MODES:
+        raise VerbError("not a query mode")
+    lines = _db_query_limits(flavor) + [DB_QUERY_CONN_SQL + ";"]
+    if mode == "ro":
+        lines.append("START TRANSACTION READ ONLY;")
+    for sql, params, cap in db_query_statements(run):
+        lines += _db_query_one(sql, params, cap)
+    if mode == "ro":
+        lines.append("ROLLBACK;")
+    return "\n".join(lines) + "\n"
+
+
+def db_query_body(run):
+    """The JSON a db-query's helper document carries after its "end" line."""
+    return json.dumps({"run": [{"sql": s, "params": p, "cap": c} for s, p, c in db_query_statements(run)]},
+                      separators=(",", ":"))
+
+
 def db_sql_harden(pw):
     """What mariadb-secure-installation does, without its root-password step, plus the panel's admin.
 
@@ -2421,7 +2546,10 @@ def db_doc(verb, args, secrets=None):
         out += "admin %s\n%s\n" % admin
     if pw:
         out += "pw %s\n" % pw
-    return out + "end\n"
+    out += "end\n"
+    if verb == "db-query":
+        out += db_query_body((secrets or {}).get("query"))
+    return out
 
 
 def _db_client(a, at):
@@ -2446,6 +2574,8 @@ def db_remote_stdin(verb, args, secrets=None):
     admin, pw = _db_checked_secrets(verb, a, secrets)
     if verb == "db-import":
         return db_defaults_text(a[3], pw)
+    if verb == "db-query":
+        return db_defaults_text(a[2], pw) + db_query_script(a[0], a[3], (secrets or {}).get("query"))
     head = db_defaults_text(*admin) if admin else ""
     return head + _db_remote_sql(verb, a, pw)
 
@@ -2636,7 +2766,7 @@ _DB_IMPORT_SH = (
     '[ "$(stat -c %%s -- "$z")" -le %d ] || { echo "panel-db: the dump is larger than 2 GiB"; exit 4; }; '
     'sb=; case "$("$4" --help 2>/dev/null)" in *--sandbox*) sb=--sandbox;; esac; '
     "gzip -dc -- \"$z\" | sed %s | \"$4\" --defaults-extra-file=\"$f\" $sb --protocol=tcp "
-    '--host="$5" --port="$3" "${@:6}" --batch "$2" && echo restored'
+    '--host="$5" --port="$3" "${@:6}" --binary-mode --batch "$2" && echo restored'
     % (DB_DUMP_DIR, DB_IMPORT_MAX,
        shlex.quote("1{\\%^" + re.sub(r"([*\\])", r"\\\1", DB_SANDBOX_LINE) + "$%d;}")))
 
@@ -2650,6 +2780,28 @@ def _db_import_remote(a):
             + "runuser -u %s -- bash -c %s _ %s %s %s \"$C\" %s %s"
             % (shlex.quote(account), shlex.quote(_DB_IMPORT_SH), shlex.quote(home_of(account)), name, port,
                addr, tls)).rstrip()
+
+
+def _db_query_remote(a):
+    """db-query: flavor port[@address] name mode. Run as the database's own account (DB_QUERY_*).
+
+    The sign-in's three option-file lines come first on stdin, then the statements (db_query_script).
+    The answer is cut at DB_QUERY_OUT_MAX bytes; a run that outlives DB_QUERY_SECONDS (+5) is killed,
+    and the statement it left running on the server is ended with KILL QUERY on its connection.
+    """
+    flavor, target, _name, _mode = a
+    conn = shlex.join(db_conn_net("tcp" + target))
+    opts = shlex.join(list(DB_QUERY_OPTS) + [a[2]])
+    return ("set -o pipefail; umask 077; f=; o=; trap 'rm -f -- \"$f\" \"$o\"' EXIT; " + _db_client_sh(flavor)
+            + 'f=$(mktemp) && o=$(mktemp) || exit 1; '
+            '{ IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && printf "%%s\\n" "$l1" "$l2" "$l3"; } '
+            '> "$f" || exit 2; '
+            'timeout -s KILL %d "$C" --defaults-file="$f" %s %s 2>&1 | head -c %d > "$o"; rc=${PIPESTATUS[0]}; '
+            'cat -- "$o"; if [ "$(stat -c %%s -- "$o")" -ge %d ]; then echo; echo "panel-db: output cut"; exit 0; fi; '
+            'if [ "$rc" = 137 ]; then id=$(grep -o -m1 \'<field name="panel_conn">[0-9]*<\' "$o" | tr -dc 0-9); '
+            '[ -n "$id" ] && timeout 15 "$C" --defaults-file="$f" %s --batch -e "KILL QUERY $id" </dev/null >/dev/null 2>&1; '
+            'echo "panel-db: timed out"; exit 124; fi; exit "$rc"'
+            % (DB_QUERY_SECONDS + 5, conn, opts, DB_QUERY_OUT_MAX, DB_QUERY_OUT_MAX, conn))
 
 
 def _db_probe_remote(_a):
@@ -2685,6 +2837,7 @@ _ARGV.update({
     "db-admin-check": ([_choice(*DB_FLAVORS), _db_auth_tcp], lambda a: [], None),
     "db-rehost": ([_choice(*DB_FLAVORS), _db_auth, _db_name, db_client_host, db_client_host],
                   lambda a: [], None),
+    "db-query": ([_choice(*DB_FLAVORS), _db_target, _db_name, _choice(*DB_QUERY_MODES)], lambda a: [], None),
 })
 _REMOTE_ACTIONS.update({
     "db-probe": _db_probe_remote,
@@ -2697,6 +2850,7 @@ _REMOTE_ACTIONS.update({
     "db-drop": _db_drop_remote,
     "db-admin-check": _db_admin_check_remote,
     "db-rehost": _db_rehost_remote,
+    "db-query": _db_query_remote,
 })
 DB_VERBS = frozenset(v for v in _ARGV if v.startswith("db-"))
 

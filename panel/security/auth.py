@@ -81,6 +81,10 @@ MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
 # to no group on upgrade (it reveals passwords); setting up a host's database server also needs
 # MANAGE_REMOTES, and the admin login is superadmin-only.
 MANAGE_DATABASES = "manage_databases"
+# ...and the data inside them: change rows and run SQL statements in the Databases manager (always as
+# the database's own account). Granted to no group by default; it is given with MANAGE_DATABASES,
+# which browsing (and the manager itself) takes.
+EDIT_DATABASE_DATA = "edit_database_data"
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
@@ -118,6 +122,8 @@ ALL_PERMISSIONS = {
     MANAGE_REMOTES: "Add/edit/delete remote VPS nodes",
     MANAGE_DATABASES: ("Manage a server's databases: add, delete, restore and reset them, and see "
                        "their passwords"),
+    EDIT_DATABASE_DATA: ("Change the data in a server's databases: edit rows and run SQL statements (give "
+                         "Manage a server's databases with it)"),
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",

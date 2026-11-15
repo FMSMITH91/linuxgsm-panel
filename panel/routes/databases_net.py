@@ -29,8 +29,8 @@ from panel.core.config import encrypt_secret
 from panel.core.http import _json_body, _json_str, _log_and_generic
 from panel.db.models import DatabaseEndpoint, EndpointClient, GameDatabase, HostDatabaseServer, RemoteServer, db
 from panel.ops.ssh_manager import databases as _dbs
-from panel.security.auth import (MANAGE_DATABASES, VIEW_SERVERS, get_remote, get_user_servers, has_permission,
-                                 log_action, superadmin_required)
+from panel.security.auth import (EDIT_DATABASE_DATA, MANAGE_DATABASES, VIEW_SERVERS, get_remote, get_user_servers,
+                                 has_permission, log_action, superadmin_required)
 
 _TS_FRESH = 600            # a host's tailnet address is read again after 10 minutes
 _TS_IPS = {}               # remote id -> (monotonic time, tailnet IPv4 or "")
@@ -347,26 +347,38 @@ def _host_word(hd, ep, refused):
             else i18n.Sentence("Existing server"))
 
 
-def overview_rows(user):
-    """(hosts, databases) the overview lists for `user`: only the servers they can see, and their hosts."""
-    servers = {gs.id: gs for gs in get_user_servers(user)}
+def overview_rows(user, seen=None):
+    """(hosts, databases) the overview lists for `user`: only the servers they can see, and their hosts.
+
+    `seen`: get_user_servers(user) when the caller has it already.
+    """
+    servers = {gs.id: gs for gs in (get_user_servers(user) if seen is None else seen)}
+    if not servers:
+        return [], []
     rows = (GameDatabase.query.filter(GameDatabase.game_server_id.in_(list(servers)))
-            .order_by(GameDatabase.game_server_id, GameDatabase.id).all() if servers else [])
+            .order_by(GameDatabase.game_server_id, GameDatabase.id).all())
     remote_ids = sorted({gs.remote_id for gs in servers.values()})
-    eps = {e.id: e for e in DatabaseEndpoint.query.all()} if remote_ids else {}
+    eps = {e.id: e for e in DatabaseEndpoint.query.all()}
     names = {gs.remote_id: gs.remote.name for gs in servers.values()}
-    hosts = _overview_hosts(remote_ids, names, eps)
-    dbs = []
-    for r in rows:
-        gs, ep = servers[r.game_server_id], eps.get(r.endpoint_id)
-        dbs.append({"name": r.name, "server_id": gs.id, "server": gs.name, "host": names.get(gs.remote_id, ""),
-                    "where": ep.label if ep is not None else "", "size": r.size_bytes})
-    return hosts, dbs
-
-
-def _overview_hosts(remote_ids, names, eps):
-    """One line per host in `remote_ids`: its name, how the panel uses its database server, and which one."""
     hds = {h.remote_id: h for h in HostDatabaseServer.query.filter(HostDatabaseServer.remote_id.in_(remote_ids))}
+    hosts = _overview_hosts(remote_ids, names, eps, hds)
+    return hosts, [_overview_row(r, servers[r.game_server_id], eps.get(r.endpoint_id), hds, names) for r in rows]
+
+
+def _overview_row(r, gs, ep, hds, names):
+    """One database the overview lists, with what a game connects to (the manager's Connection tab).
+
+    That is the server on another machine at its tailnet address, else this host's own on 127.0.0.1.
+    """
+    hd = hds.get(gs.remote_id)
+    addr, port = ((ep.address, ep.port or 3306) if ep is not None
+                  else ("127.0.0.1", (hd.port if hd is not None else None) or 3306))
+    return {"id": r.id, "name": r.name, "server_id": gs.id, "server": gs.name, "host": names.get(gs.remote_id, ""),
+            "where": ep.label if ep is not None else "", "size": r.size_bytes, "address": addr, "port": port}
+
+
+def _overview_hosts(remote_ids, names, eps, hds):
+    """One line per host in `remote_ids`: its name, how the panel uses its database server, and which one."""
     cls = {c.remote_id: c for c in EndpointClient.query.filter(EndpointClient.remote_id.in_(remote_ids))}
     hosts = []
     for rid in remote_ids:
@@ -411,10 +423,17 @@ def register(app):
         """Every database the viewer may see, by server, and each host's database server (read only)."""
         if not overview_access():
             return _say(403, "Permission denied")
-        hosts, dbs = overview_rows(current_user)
+        seen = get_user_servers(current_user)
+        hosts, dbs = overview_rows(current_user, seen)
         for d in dbs:
             d["size_text"] = _size_text(d["size"])
-        return render_template("databases_overview.html", hosts=hosts, databases=dbs)
+        manage = has_permission(current_user, MANAGE_DATABASES)
+        # The manager (create, connection settings, browse, SQL, dumps) only for a database manager;
+        # the servers a new database can be made for are the ones the viewer can see.
+        servers = ([{"id": gs.id, "name": gs.name} for gs in sorted(seen, key=lambda g: (g.name or "").lower())
+                    if gs.installed] if manage else [])
+        return render_template("databases_overview.html", hosts=hosts, databases=dbs, manage=manage,
+                               edit=manage and has_permission(current_user, EDIT_DATABASE_DATA), servers=servers)
 
     @app.route("/api/remote/<int:remote_id>/databases/endpoint", methods=["GET", "POST"])
     @login_required

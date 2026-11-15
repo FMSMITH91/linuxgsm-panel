@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ t('Databases') }}{% endblock %}
 {% block content %}
-{# Read only: every change happens on a server's own Databases tab (Files & Config), where each row
-   links. Built from what the panel has stored, so opening it asks nothing of any host. #}
+{# The list is built from what the panel has stored, so opening the page asks nothing of any host.
+   A database manager (Manage databases) also gets the manager: Add a database (collapsed), and a
+   Manage button per database that opens it in a dialog (connection settings, tables and rows, SQL,
+   dumps), loaded only when it is opened (js/databases_manager.js). Every change still happens as
+   that database's own account, through the same routes as a server's Databases tab. #}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-database"></i> Databases</h1>
 </div>
@@ -29,6 +32,26 @@
 <div class="card mb-3">
   <div class="card-header"><i class="bi bi-database"></i> Databases</div>
   <div class="card-body">
+    {% if manage and servers %}
+    <details id="dbm-add" class="mb-2">
+      <summary class="small">Add a database</summary>
+      <form class="d-flex flex-wrap gap-2 mt-2" data-action="dbmAdd" data-args='["@event"]' data-on="submit">
+        <label for="dbm-add-server" class="visually-hidden">Game server</label>
+        <select id="dbm-add-server" class="form-select form-select-sm" style="flex:1 1 12rem;min-width:0;" data-no-i18n
+                data-action="dbmAddPrefix" data-on="change">
+          {% for s in servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+        </select>
+        <div class="input-group input-group-sm" style="flex:1 1 12rem;min-width:0;">
+          <span class="input-group-text" id="dbm-add-prefix" data-no-i18n>gs{{ servers[0].id }}_</span>
+          <input type="text" id="dbm-add-name" class="form-control" maxlength="16" autocomplete="off" spellcheck="false"
+                 pattern="[a-z0-9]{1,16}" required aria-describedby="dbm-add-prefix" aria-label="Database name">
+        </div>
+        <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Add database</button>
+      </form>
+      <div class="form-text">The panel makes the database's own user and password. A name is 1 to 16 lower-case letters and digits.</div>
+      <div id="dbm-add-msg" class="small mt-1" role="status"></div>
+    </details>
+    {% endif %}
     {% if databases %}
     <ul class="list-unstyled mb-0">
       {% for d in databases %}
@@ -36,7 +59,11 @@
         <div class="d-flex flex-wrap gap-2 align-items-baseline justify-content-between">
           <a class="text-break fw-semibold" data-no-i18n
              href="{{ url_for('server_files', server_id=d.server_id) }}#databases">{{ d.name }}</a>
-          <span class="small text-secondary text-nowrap" data-no-i18n>{{ d.size_text }}</span>
+          <span class="d-flex gap-2 align-items-baseline">
+            <span class="small text-secondary text-nowrap" data-no-i18n>{{ d.size_text }}</span>
+            {% if manage %}<button type="button" class="btn btn-sm btn-outline-secondary py-0" data-action="dbmOpen"
+              data-args='{{ [d.server_id, d.id, d.name, d.address, d.port]|tojson }}'><i class="bi bi-sliders"></i> Manage</button>{% endif %}
+          </span>
         </div>
         <div class="small text-secondary text-break">
           <span data-no-i18n>{{ d.server }}</span> · <span data-no-i18n>{{ d.host }}</span>{% if d.where %} · <span data-no-i18n>{{ d.where }}</span>{% endif %}
@@ -49,4 +76,95 @@
     {% endif %}
   </div>
 </div>
+
+{% if manage %}
+<div class="modal fade" id="dbm-modal" tabindex="-1" aria-labelledby="dbm-title" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-fullscreen-lg-down modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h2 class="modal-title fs-6 text-break" id="dbm-title" data-no-i18n></h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <ul class="nav nav-tabs flex-nowrap overflow-auto small mb-2" role="tablist">
+          <li class="nav-item" role="presentation"><button type="button" class="nav-link active text-nowrap" data-action="dbmTab" data-args='["conn"]' data-dbm-tab="conn" role="tab">Connection</button></li>
+          <li class="nav-item" role="presentation"><button type="button" class="nav-link text-nowrap" data-action="dbmTab" data-args='["tables"]' data-dbm-tab="tables" role="tab">Tables</button></li>
+          {% if edit %}<li class="nav-item" role="presentation"><button type="button" class="nav-link text-nowrap" data-action="dbmTab" data-args='["sql"]' data-dbm-tab="sql" role="tab">SQL</button></li>{% endif %}
+          <li class="nav-item" role="presentation"><button type="button" class="nav-link text-nowrap" data-action="dbmTab" data-args='["dump"]' data-dbm-tab="dump" role="tab">Dump and restore</button></li>
+          <li class="nav-item" role="presentation"><button type="button" class="nav-link text-nowrap" data-action="dbmTab" data-args='["admin"]' data-dbm-tab="admin" role="tab">Password and delete</button></li>
+        </ul>
+        <div id="dbm-msg" class="small mb-2" role="status"></div>
+
+        <section data-dbm-pane="conn">
+          <div id="dbm-conn" class="db-kvs"></div>
+          <button type="button" class="btn btn-sm btn-outline-secondary mt-2" data-action="dbmCopyAll"><i class="bi bi-clipboard"></i> Copy all settings</button>
+          <div class="form-text">Revealing or copying the password is written to the audit log.</div>
+        </section>
+
+        <section data-dbm-pane="tables" hidden>
+          <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            <label for="dbm-table" class="visually-hidden">Table</label>
+            <select id="dbm-table" class="form-select form-select-sm" style="flex:1 1 14rem;min-width:0;" data-no-i18n data-action="dbmPickTable" data-on="change"></select>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbmLoadTables"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+          </div>
+          <div id="dbm-table-info" class="small text-secondary mb-2"></div>
+          <details id="dbm-structure" class="small mb-2"><summary>Structure</summary><div id="dbm-columns" class="table-responsive"></div></details>
+          <div id="dbm-readonly" class="small text-secondary mb-2" hidden></div>
+          {% if edit %}<button type="button" id="dbm-add-row" class="btn btn-sm btn-outline-primary mb-2" data-action="dbmEditRow" data-args='[-1]' hidden><i class="bi bi-plus-lg"></i> Add row</button>{% endif %}
+          <form id="dbm-editor" class="border rounded p-2 mb-2" hidden data-action="dbmSaveRow" data-args='["@event"]' data-on="submit">
+            <div id="dbm-editor-fields"></div>
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              <button type="submit" class="btn btn-sm btn-primary">Save row</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbmCancelEdit">Cancel</button>
+            </div>
+          </form>
+          <div id="dbm-rows" class="table-responsive dbm-rows"></div>
+          <div class="d-flex gap-2 align-items-center mt-2">
+            <button type="button" id="dbm-prev" class="btn btn-sm btn-outline-secondary" data-action="dbmPage" data-args='[-1]' disabled>Previous</button>
+            <span id="dbm-page" class="small text-secondary" data-no-i18n></span>
+            <button type="button" id="dbm-next" class="btn btn-sm btn-outline-secondary" data-action="dbmPage" data-args='[1]' disabled>Next</button>
+          </div>
+        </section>
+
+        {% if edit %}
+        <section data-dbm-pane="sql" hidden>
+          <label for="dbm-sql" class="form-label small mb-1">One SQL statement</label>
+          <textarea id="dbm-sql" class="form-control form-control-sm font-monospace" rows="4" spellcheck="false" maxlength="65536" data-no-i18n></textarea>
+          <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+            <button type="button" class="btn btn-sm btn-primary" data-action="dbmRunSql"><i class="bi bi-play-fill"></i> Run</button>
+            <span class="form-text m-0">Runs as this database's own account, one statement at a time, for at most 30 seconds. Anything but SELECT, SHOW, DESCRIBE or EXPLAIN asks you to confirm first. Each statement is written to the audit log with its quoted values hidden.</span>
+          </div>
+          <div id="dbm-sql-out" class="mt-2"></div>
+        </section>
+        {% endif %}
+
+        <section data-dbm-pane="dump" hidden>
+          <p class="small mb-2">A dump is saved in the game server's files as panel-db-dumps/&lt;name&gt;.sql.gz (the file each backup writes and Restore reads), then downloaded.</p>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbmDump"><i class="bi bi-download"></i> Download a dump</button>
+          <hr>
+          <label for="dbm-upload-file" class="form-label small mb-1">Restore from a dump file (.sql or .sql.gz, at most 2 GiB)</label>
+          <div class="d-flex flex-wrap gap-2">
+            <input type="file" id="dbm-upload-file" class="form-control form-control-sm" style="flex:1 1 14rem;min-width:0;" accept=".sql,.gz,application/sql,application/gzip">
+            <button type="button" class="btn btn-sm btn-warning" data-action="dbmUpload"><i class="bi bi-upload"></i> Upload and restore</button>
+          </div>
+          <div class="form-text">The file replaces this database's contents. It must be a dump of one database (made without --databases): the panel refuses one that switches to or names another database.</div>
+          <div id="dbm-upload-progress" class="small mt-1" role="status"></div>
+        </section>
+
+        <section data-dbm-pane="admin" hidden>
+          <div class="d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-sm btn-outline-warning" data-action="dbmReset"><i class="bi bi-key"></i> Reset password</button>
+            <button type="button" class="btn btn-sm btn-outline-warning" data-action="dbmRestoreFiles"><i class="bi bi-arrow-counterclockwise"></i> Restore from dump</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" data-action="dbmDelete"><i class="bi bi-trash"></i> Delete</button>
+          </div>
+          <div class="form-text">Each of these asks for your password again when you last confirmed it more than a few minutes ago.</div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/databases_manager.js') }}"></script>{% endif %}
 {% endblock %}

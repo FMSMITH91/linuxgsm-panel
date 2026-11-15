@@ -216,7 +216,42 @@ next sign-in. If the owner can no longer sign in, ownership is moved from the pa
 | `download_backup` / `delete_backup` | Download / delete a game server's backup archives (a deleted backup is gone for good). Taking a backup, its schedule and the panel's own backups stay with superadmins |
 | `restore_backup` | Restore a game server from one of its backups: the server is stopped, a backup of its current state is taken first, then its files are replaced with the archive's. The most destructive backup permission. Uploading a backup to restore also needs `edit_files` (an uploaded archive can hold any file, including the scripts the server runs) |
 | `manage_databases` | A server's MariaDB/MySQL databases: add, delete, restore and reset them, and see their passwords. Given to no group by default. Setting up a host's database server also needs `manage_remotes`; the admin login of an existing server is for superadmins |
+| `edit_database_data` | Change the data inside a server's databases on the Databases page: edit rows and run SQL statements, always as that database's own account. Given to no group by default; give it with `manage_databases`, which browsing (and the manager itself) needs |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
+
+### The Databases manager
+
+The **Databases** page (sidebar) lists every database of the servers you can see. With `manage_databases`
+it is also where you manage them: **Add a database** (choose the game server, give a name), and a
+**Manage** button per database that opens it:
+
+- **Connection**: host, port, database, user and password, each with a copy button (revealing or copying
+  the password is audited).
+- **Tables**: each table's approximate row count, size and columns, and its rows 50 at a time. Long values
+  are cut (**Show all** reads the whole one), binary values show their length. With `edit_database_data`,
+  **Add row**, **Edit** and **Delete** change one row at a time, addressed by its primary key; a view or a
+  table without a primary key is read-only here.
+- **SQL** (with `edit_database_data`): one statement per run, for at most 30 seconds, with at most 200 rows
+  shown. SELECT, SHOW, DESCRIBE and EXPLAIN run at once in a read-only transaction; anything else shows
+  the statement and asks you to confirm it first. MySQL runs each statement as a prepared statement, so
+  a few kinds (DESCRIBE, CREATE TRIGGER/PROCEDURE) are not available there: use SHOW COLUMNS FROM.
+- **Dump and restore**: download a dump (it is written to the server's files as
+  `panel-db-dumps/<name>.sql.gz` first, the file each backup writes), or upload a `.sql` / `.sql.gz` dump
+  (up to 2 GiB) to replace the database's contents. The upload is checked on the host before anything is
+  restored: a dump that switches to or names another database (`USE`, `CREATE DATABASE`, made with
+  `--databases`) is refused.
+- **Password and delete**: reset the password, restore from the dump in the server's files, delete.
+  These and an upload ask for your password again when you last confirmed it more than a few minutes ago,
+  and delete and restore also ask you to type the database's name.
+
+Everything runs as **that database's own account**, never the server's admin login, so the database
+server itself keeps every statement inside that one database; the panel only ever touches the `gs<id>_…`
+databases it made. Statements and values travel to the database client as hexadecimal and run through
+the server's prepared statements, so nothing typed can run a client command.
+
+**What is logged** (the audit log): opening a table, every row change (the table, the columns and how many
+rows; never a value), every SQL statement (its kind, the database, how many rows, and the statement with
+each quoted value replaced by `?`), each dump download and each upload.
 
 ## Production deployment
 

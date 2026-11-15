@@ -171,6 +171,7 @@ _VERB_ARGS = {
     "db-drop": (["mysql", "tcp3306", "gs12_lp"], {"admin": _ADMIN}),
     "db-admin-check": (["mysql", "tcp3306"], {"admin": _ADMIN}),
     "db-rehost": (["mysql", "tcp3306", "gs12_lp", "100.70.1.2", "100.70.1.3"], {"admin": _ADMIN}),
+    "db-query": (["mariadb", "3306", "gs12_lp", "ro"], {"pw": _PW, "query": [{"sql": "SELECT 1"}]}),
 }
 eq("db verbs: every db-* verb is exercised here", sorted(list(_VERB_ARGS) + ["db-probe"]), sorted(_priv207.DB_VERBS))
 _on_argv, _off_stdin = [], []

@@ -617,6 +617,39 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/databases/<int:db_id>/dump/download": {
+    "endpoint": "api_server_database_dump_download",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_dump_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/databases/<int:db_id>/rows": {
+    "endpoint": "api_server_database_rows",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_rows"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/databases/<int:db_id>/tables": {
+    "endpoint": "api_server_database_tables",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_tables"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/game-config": {
     "endpoint": "api_server_game_config",
     "guards": [
@@ -2375,12 +2408,34 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/cell": {
+    "endpoint": "api_server_database_cell",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_cell"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/databases/<int:db_id>/delete": {
     "endpoint": "api_server_database_delete",
     "guards": [
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_database_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/dump": {
+    "endpoint": "api_server_database_dump",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_dump"
     ],
     "methods": [
       "POST"
@@ -2425,6 +2480,72 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_database_reveal"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/row": {
+    "endpoint": "api_server_database_row",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_row"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/sql": {
+    "endpoint": "api_server_database_sql",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_sql"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload": {
+    "endpoint": "api_server_database_upload",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload/<uid>": {
+    "endpoint": "api_server_database_upload_piece",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload_piece"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload/<uid>/cancel": {
+    "endpoint": "api_server_database_upload_cancel",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload_cancel"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload/<uid>/finish": {
+    "endpoint": "api_server_database_upload_finish",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload_finish"
     ],
     "methods": [
       "POST"
