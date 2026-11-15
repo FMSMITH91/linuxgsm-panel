@@ -156,8 +156,7 @@ def _s215_settings():
         stored = dict(saved)
         # The save just put its own values in force: undo the two that would gate this admin's next
         # request (the 2FA switch, and "strong" session protection on a test client's session).
-        _p9.config["REQUIRE_2FA"] = False
-        _p9.config["SESSION_PROTECTION"] = live["SESSION_PROTECTION"]
+        _p9.config.update(REQUIRE_2FA=False, SESSION_PROTECTION=live["SESSION_PROTECTION"])
         rc = _p9_client(P9_ADMIN)
         refused = rc.post("/settings/save", data={"session_idle_minutes": "900", "session_absolute_hours": "8"})
         refused_said = _p9_flashes(rc)
