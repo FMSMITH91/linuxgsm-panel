@@ -608,15 +608,21 @@ def _s215_binding():
     _p9.config["SESSION_PROTECTION"] = "strong"
     _ag215.reset_denials()
     try:
+        with _p9.app_context():
+            # Fresh from the database: SQLite hands a deleted row's id to the next account, and a
+            # cached copy of the old one would carry its epoch (the cookie would then be stale for a
+            # reason this check is not about).
+            _db215.session.expire_all()
+            epoch = _db215.session.get(_U215, legacy).auth_epoch or 0
         c = _p9.test_client()
         with c.session_transaction() as s:
-            s["_user_id"], s["_fresh"], s["_bind"] = "%d:0" % legacy, True, "0" * 32
+            s["_user_id"], s["_fresh"], s["_bind"] = "%d:%d" % (legacy, epoch), True, "0" * 32
         old = c.get("/api/auth/ping", headers=_XHR215)
     finally:
         _p9.config["SESSION_PROTECTION"] = was
     rows = _audits215("session_binding_mismatch", first)
     check("logging: ...and so is a login with no session row bound to another client",
-          old.status_code == 401 and [r[0] for r in rows] == ["p215_bind_old"], repr((old.status_code, rows)))
+          old.status_code == 401 and [r[0] for r in rows] == ["p215_bind_old"], repr((old.status_code, rows, epoch)))
     return uid
 
 
