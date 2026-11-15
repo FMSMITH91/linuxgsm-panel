@@ -595,6 +595,26 @@ def _s215_denials():
           resp is not None and resp[1] == 400 and len(csrf_rows) == 1, repr((resp, csrf_rows)))
 
 
+def _s215_denial_log_line():
+    import logging as _logging215
+    seen = []
+    handler = _logging215.Handler()
+    handler.emit = lambda rec: seen.append(rec.getMessage())
+    _ag215._log.addHandler(handler)
+    _ag215.reset_denials()
+    try:
+        with _p9.test_request_context("/no-such-page%0D%0AFAKE-line", method="POST",
+                                      headers={"X-Forwarded-For": "203.0.113.5 FAKE-line"},
+                                      environ_base={"REMOTE_ADDR": "127.0.0.1"}):
+            _ag215.note_denial("access_denied", detail="unit")
+    finally:
+        _ag215._log.removeHandler(handler)
+        _ag215.reset_denials()
+    lines = [m for m in seen if m.startswith("refused (")]     # the address parser logs its own note
+    check("logging: the panel-log line for a refusal holds nothing the client wrote (no path, no header text)",
+          len(lines) == 1 and "FAKE" not in lines[0] and "\n" not in lines[0] and "(no route)" in lines[0], repr(seen))
+
+
 def _s215_binding():
     _reset215()
     uid = _user215("p215_bind")
@@ -778,7 +798,7 @@ try:
                    _s215_password_screen_cost, _s215_password_routes,
                    _s215_account_throttle, _s215_pause_table, _s215_successes_not_counted, _s215_ip_day,
                    _s215_required_2fa, _s215_step_up, _s215_step_up_rules,
-                   _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_binding,
+                   _s215_terminal_socket, _s215_notices, _s215_token_expiry, _s215_denials, _s215_denial_log_line, _s215_binding,
                    _s215_rotation_and_logout, _s215_fetch_metadata, _s215_serve_path,
                    _s215_serve_disable_warning):
         _p9_arm(who="part215")

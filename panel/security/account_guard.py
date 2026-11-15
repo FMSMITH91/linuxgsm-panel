@@ -340,8 +340,12 @@ def note_denial(kind, detail="", user=None):
             due = _denial_due((kind, uid or ip, where), time.time())
         if not due:
             return False
-        # The panel log too, CR/LF-free (the address is the parsed one, the kind a constant here).
-        _log.warning("refused (%s) %s from %s", kind, where.replace("\r", "").replace("\n", ""), ip)
+        # The panel log too, with nothing the client wrote in it: the kind is a constant here, the
+        # route is the endpoint NAME (a 404 has none, so "(no route)", never the raw path), and the
+        # address is a parsed IP literal or "unknown".
+        from panel.core.validation import canonical_ip
+        route = (request.endpoint or "(no route)") if has_request_context() else "(no request)"
+        _log.warning("refused (%s) %s from %s", kind, route[:120], canonical_ip(str(ip)) or "unknown")
         log_action(user, kind, target=where, detail=detail[:300], success=False,
                    actor=None if user is not None else "(not signed in)")
         return True
