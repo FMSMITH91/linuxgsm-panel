@@ -104,17 +104,16 @@ def _one_ps210():
     mine = host["users"].get(_ME210, {})
     check("host sample: ONE ps for the whole sample (it ran four: the jiffies before and after the window, "
           "RSS, uptime), and every figure is still there",
-          runs == 1 and len(tags.get("cpu", [])) == 2
-          and any(f[1] == _ME210 for f in tags.get("GJA", [])) and any(f[1] == _ME210 for f in tags.get("GJB", []))
-          and mine.get("game_procs", 0) >= 1 and mine.get("game_ram_mb", -1) >= 0
-          and mine.get("game_uptime_secs", 0) > 0 and host["host"]["ram_total"] > 0,
+          all((runs == 1, len(tags.get("cpu", [])) == 2, _ME210 in [f[1] for f in tags.get("GJA", [])],
+               _ME210 in [f[1] for f in tags.get("GJB", [])], mine.get("game_procs", 0) >= 1,
+               mine.get("game_ram_mb", -1) >= 0, mine.get("game_uptime_secs", 0) > 0, host["host"]["ram_total"] > 0)),
           repr((runs, sorted(tags), mine)))
     game = _core210.server_live_metrics(NS(id=-210), short_name=_ME210, game_port=None, force=True)
     runs, tags = _ps_runs210(log), _tags210(outs[-1] if outs else "")
     check("one-game sample: ONE ps (it ran four, and an awk per process twice), and every figure is still there",
-          runs == 1 and len(tags.get("cpu", [])) == 2 and len(tags.get("GJA", [])) == 1
-          and len(tags.get("GJB", [])) == 1 and game["game_procs"] >= 1 and game["game_uptime_secs"] > 0
-          and game["ram_total"] > 0, repr((runs, sorted(tags), game)))
+          all((runs == 1, len(tags.get("cpu", [])) == 2, len(tags.get("GJA", [])) == 1, len(tags.get("GJB", [])) == 1,
+               game["game_procs"] >= 1, game["game_uptime_secs"] > 0, game["ram_total"] > 0)),
+          repr((runs, sorted(tags), game)))
     gone = _core210.server_live_metrics(NS(id=-2101), short_name="nosuchuser210", game_port=None, force=True)
     eq("one-game sample: an account with no process reads zero of everything, and the host's figures stay",
        ([f for k in ("GJA", "GJB", "GAMERAM", "GUP") for f in _tags210(outs[-1]).get(k, [])],
@@ -157,22 +156,22 @@ def _batch_then_poll210():
         rows = [(p.get("name"), p.get("score"), p.get("time")) for p in a.get("players") or []]
         check("players poll: answered from the player poller's batch, which read the same reply: no gamedig "
               "of its own, the same names, scores and times its own query reads, on every poll",
-              got.get(sid) == (2, 16, "Box") and queried == [] and a.get("unknown") is False
-              and rows == [("Ann", 3, 12), ("Bob", 7, None)] and b.get("players") == a.get("players"),
+              all((got.get(sid) == (2, 16, "Box"), queried == [], a.get("unknown") is False,
+                   rows == [("Ann", 3, 12), ("Bob", 7, None)], b.get("players") == a.get("players"))),
               repr((got, queried, rows, b.get("players"))))
         eq("players poll: a target the batch could not read keeps no list, so its page still asks",
            _cron210.batch_list((P9_HOST, 27016, "garrysmod")), None)
         c.get(url + "?console=1")
         names = [p.get("name") for p in _p9_json(c.get(url)).get("players") or []]
         check("players poll: a refresh the page asks for still reads, and its newer list wins over the batch's",
-              len(queried) == 1 and names == ["Own"], repr((queried, names)))
+              (len(queried), names) == (1, ["Own"]), repr((queried, names)))
         _game210._playerlist_cache.clear()
         batch["out"] = _batch_out210({sid: {"players": [], "maxplayers": 16, "name": "Box", "numplayers": 5}})
         _cron210.player_slots_batch(NS(id=P9_HOST), "gmod210", [(sid, "gmod", 27015, None),
                                                                (sid + 1, "gmod", 27016, None)])
         hidden = _p9_json(c.get(url))
         check("players poll: a batch reply with no names while 5 are on reads 'cannot be read', as the poll's "
-              "own query reads it, and asks nothing", hidden.get("unknown") is True and len(queried) == 1,
+              "own query reads it, and asks nothing", (hidden.get("unknown"), len(queried)) == (True, 1),
               repr((hidden, queried)))
         _ps210._invalidate_port_scan(P9_HOST)
         c.get(url)
