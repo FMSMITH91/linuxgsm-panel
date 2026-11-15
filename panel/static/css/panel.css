@@ -2523,11 +2523,15 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   overflow:auto;
 }
 
-.dbm-cell{
+.dbm-cell{ white-space:nowrap; }
+
+/* ...the value itself is what is cut, so a "Show all" after it stays in view. */
+.dbm-text{
+  display:inline-block;
   max-width:18rem;
   overflow:hidden;
   text-overflow:ellipsis;
-  white-space:nowrap;
+  vertical-align:bottom;
 }
 
 @media (width <= 767.98px){

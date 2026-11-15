@@ -34,6 +34,7 @@ from flask_login import current_user, login_required
 
 from panel.core import i18n
 from panel.core.config import decrypt_secret
+from panel.core.validation import _attachment_header
 from panel.core.http import _json_body, _json_str, _log_and_generic
 from panel.core.stdin_chunks import StdinChunks
 from panel.db.models import db
@@ -127,7 +128,7 @@ def _download_answer(gs, r):
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     resp = Response(_sm.stream_path(gs.remote, gs.short_name, rel, limit=info["size"]), mimetype="application/gzip")
     resp.headers["Content-Length"] = str(info["size"])
-    resp.headers["Content-Disposition"] = 'attachment; filename="%s-%s.sql.gz"' % (r.name, stamp)
+    resp.headers["Content-Disposition"] = _attachment_header("%s-%s.sql.gz" % (r.name, stamp))
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -194,8 +195,11 @@ def finish_script(user, uid, size, name):
         'h=$(rd 2>/dev/null | head -c 65536 | wc -c); n=$(rd 2>/dev/null | head -c 65536 | tr -d \'\\000\' | wc -c)',
         'if [ "$h" = 0 ]; then %s echo %s; exit 5; fi' % (rm, _M["FORMAT"]),
         'if [ "$h" != "$n" ]; then %s echo %s; exit 5; fi' % (rm, _M["NOTTEXT"]),
-        "if ! rd 2>/dev/null | head -c 65536 | grep -qiE '^(--|/\\*|CREATE |INSERT |SET |DROP |LOCK |ALTER |START |"
-        "BEGIN|DELIMITER )'; then %s echo %s; exit 5; fi" % (rm, _M["NOTSQL"]),
+        # Counted, never `grep -q` under pipefail: grep stopping early ends the reader with SIGPIPE, and
+        # a large dump would read as "not SQL".
+        "c=$(rd 2>/dev/null | head -c 65536 | grep -ciE '^(--|/\\*|CREATE |INSERT |SET |DROP |LOCK |ALTER |START |"
+        "BEGIN|DELIMITER )')",
+        'if [ "${c:-0}" -lt 1 ]; then %s echo %s; exit 5; fi' % (rm, _M["NOTSQL"]),
         # A verdict first (awk stopping early ends the reader with SIGPIPE); a scan that read everything
         # also needs the reader to have read it all without an error (a damaged or cut gzip).
         'v=$(rd 2>/dev/null | %s); r=$?' % scan,
@@ -213,8 +217,10 @@ def cancel_script(user, uid):
 
 
 def outcome(out):
-    """(state, value) of an upload command: ("ok", number or ""), ("offset", bytes), ("refused", key) or
-    ("unread", "") when none of its marks came back.
+    """(state, value) of an upload command.
+
+    ("ok", number or ""), ("offset", bytes), ("refused", key) or ("unread", "") when none of its
+    marks came back.
     """
     marks = {m: ln for ln in (out or "").splitlines() for m in re.findall(r"^__DBUP_[A-Z]+__", ln)}
     for key in ("STORED", "SIZE", "READY"):
@@ -229,7 +235,7 @@ def outcome(out):
     return "unread", ""
 
 
-def _run(gs, script, timeout, stdin=None):
+def _upcmd(gs, script, timeout, stdin=None):
     """One upload command as the game account: outcome()."""
     try:
         out, err, _rc = _sm.run_command(gs.remote, _sm.game_user_cmd(gs.short_name, script), timeout=timeout,
@@ -287,7 +293,7 @@ def _upload_start(gs, r):
     uid = _new_upload(r.id, size)
     if uid is None:
         return _say(409, "An upload to this database is already running.")
-    state, val = _run(gs, start_script(gs.short_name, uid, size), 60)
+    state, val = _upcmd(gs, start_script(gs.short_name, uid, size), 60)
     if state != "ok":
         _drop_upload(uid)
         return _say(409 if state == "refused" else 502, _refused(val) if state == "refused" else _dbr._UNREAD)
@@ -320,7 +326,7 @@ def _upload_piece(gs, r, uid):
         return _say(413, "Each piece must be 1 byte to 4 MB.")
     if off < 0 or off + len(data) > e["size"]:
         return _say(400, "That piece does not fit the upload.")
-    state, val = _run(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
+    state, val = _upcmd(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
     if state == "ok" and str(val).isdecimal():
         return jsonify({"success": True, "received": int(val)})
     if state == "offset":
@@ -338,7 +344,7 @@ def _upload_finish(gs, r, uid):
     hd = _dbr._restore_target(gs, r)
     if hd is None:
         return _say(409, _dbr._NOT_READY)
-    state, val = _run(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
+    state, val = _upcmd(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
     if state == "unread":
         return jsonify({"success": False, "retry": True, "message": i18n.tr(_dbr._UNREAD)}), 200
     _drop_upload(e["uid"])
@@ -361,7 +367,7 @@ def _upload_cancel(gs, r, uid):
     if e is None:
         return _say(404, "No such upload.")
     _drop_upload(e["uid"])
-    state, _v = _run(gs, cancel_script(gs.short_name, e["uid"]), 60)
+    state, _v = _upcmd(gs, cancel_script(gs.short_name, e["uid"]), 60)
     return jsonify({"success": state == "ok"})
 
 

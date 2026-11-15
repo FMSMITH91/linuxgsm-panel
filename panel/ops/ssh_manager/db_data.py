@@ -44,6 +44,8 @@ READ_WORDS = frozenset(("select", "show", "describe", "desc", "explain"))
 _RESULTSET_RE = re.compile(r'<resultset statement="([^"]*)"[^>]*>')
 _ROW_RE = re.compile(r"<row>(.*?)</row>", re.S)
 _FIELD_RE = re.compile(r'<field name="([^"]*)"(?: xsi:nil="true" />|>(.*?)</field>)', re.S)
+# What decoding puts in place of bytes that are not UTF-8 (a binary value in the SQL box's answer).
+_REPLACED = chr(0xFFFD)
 _ERROR_RE = re.compile(r"^ERROR (\d{1,5}) \(([0-9A-Z]{5})\)(?: at line \d+)?: (.*)$", re.M)
 
 
@@ -145,7 +147,7 @@ STRUCTURE_SQL = (
 )
 
 
-def _int_or_none(v):
+def _dd_int(v):
     return int(v) if isinstance(v, str) and v.isdecimal() else None
 
 
@@ -161,8 +163,10 @@ def _column(f):
 
 
 def structure(ans):
-    """The tables of a structure() run's answer, by name: {name: {"name", "type", "engine", "rows", "bytes",
-    "columns", "pk", "view"}}; None when the answer is not whole (an error, or a statement missing).
+    """The tables of a STRUCTURE_SQL run's answer, by name; None when the answer is not whole.
+
+    {name: {"name", "type", "engine", "rows", "bytes", "columns", "pk", "view"}}. Not whole: an
+    error, or a statement missing.
     """
     st = ans.get("statements") or []
     if ans.get("error") or len(st) != 3 or not all(s["sets"] for s in st):
@@ -170,8 +174,8 @@ def structure(ans):
     tables = {}
     for f in st[0]["sets"][0]["rows"]:
         if len(f) == 5 and f[0]:
-            tables[f[0]] = {"name": f[0], "type": f[1] or "", "engine": f[2] or "", "rows": _int_or_none(f[3]),
-                            "bytes": _int_or_none(f[4]), "columns": [], "pk": [], "view": (f[1] or "") == "VIEW"}
+            tables[f[0]] = {"name": f[0], "type": f[1] or "", "engine": f[2] or "", "rows": _dd_int(f[3]),
+                            "bytes": _dd_int(f[4]), "columns": [], "pk": [], "view": (f[1] or "") == "VIEW"}
     for f in st[1]["sets"][0]["rows"]:
         if len(f) == 10 and f[0] in tables:
             tables[f[0]]["columns"].append(_column(f))
@@ -219,7 +223,7 @@ def _cell(c, v, is_key):
     if v is None:
         return {"null": True}
     if c["binary"]:
-        return {"binary": _int_or_none(v)}
+        return {"binary": _dd_int(v)}
     if not is_key and len(v) > PREVIEW_CHARS:
         return {"text": v[:PREVIEW_CHARS], "more": True}
     return {"text": v}
@@ -379,10 +383,10 @@ _HEX_NUM_RE = re.compile(r"0[xXbB][0-9A-Fa-f]+")
 
 
 def mask_literals(text, limit=300):
-    """The statement for the audit log: each string literal ('...', "...", X'...') as '?', 0x... numbers as
-    0x?, every run of spaces and line breaks one space, at most `limit` characters.
+    """The statement for the audit log, its literals masked, on one line, at most `limit` characters.
 
-    Identifiers in backticks are kept; nothing typed between quotes reaches the log.
+    Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, every run of spaces
+    and line breaks one space. Identifiers in backticks are kept; nothing typed between quotes reaches the log.
     """
     out, i, text = [], 0, text or ""
     while i < len(text):
@@ -413,7 +417,7 @@ def _sql_value(v):
     """One value of a SQL box answer: text (cut at SQL_CELL_CHARS), NULL, or bytes that are not text."""
     if v is None:
         return {"null": True}
-    if "�" in v:
+    if _REPLACED in v:
         return {"binary": len(v.encode("utf-8"))}
     if len(v) > SQL_CELL_CHARS:
         return {"text": v[:SQL_CELL_CHARS], "more": True}

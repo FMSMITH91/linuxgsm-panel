@@ -102,7 +102,7 @@
     var eye = button('', 'btn-outline-secondary db-icon-btn', 'dbmReveal', []);
     eye.title = st.pw ? T('Hide the password') : T('Show the password');
     eye.setAttribute('aria-label', eye.title);
-    var i = node('i', 'bi ' + (st.pw ? 'bi-eye-slash' : 'bi-eye')); i.setAttribute('aria-hidden', 'true'); eye.appendChild(i);
+    var i = node('i', st.pw ? 'bi bi-eye-slash' : 'bi bi-eye'); i.setAttribute('aria-hidden', 'true'); eye.appendChild(i);
     pr.insertBefore(eye, pr.lastChild);
     box.appendChild(pr);
   }
@@ -234,7 +234,7 @@
     var td = node('td', 'dbm-cell');
     if (cell.null) { td.appendChild(node('span', 'text-secondary fst-italic', 'NULL')); return raw(td); }
     if (c.binary) { td.appendChild(node('span', 'text-secondary', TF('binary, {n} bytes', {n: cell.binary == null ? '?' : cell.binary}))); return td; }
-    td.appendChild(raw(node('span', null, cell.text)));
+    td.appendChild(raw(node('span', 'dbm-text', cell.text)));
     if (cell.more) {
       td.appendChild(document.createTextNode('… '));
       td.appendChild(button(T('Show all'), 'btn-link p-0 align-baseline small', 'dbmShowAll', [ri, ci]));
@@ -393,8 +393,7 @@
   function valueNode(v) {
     if (v.null) return raw(node('span', 'text-secondary fst-italic', 'NULL'));
     if (v.binary != null) return node('span', 'text-secondary', TF('binary, {n} bytes', {n: v.binary}));
-    var s = raw(node('span', null, v.text + (v.more ? '…' : '')));
-    return s;
+    return raw(node('span', 'dbm-text', v.text + (v.more ? '…' : '')));
   }
   function resultTable(set, max) {
     var wrap = node('div', 'table-responsive dbm-rows mb-2');

@@ -8580,7 +8580,7 @@ def _outside_single_quotes(cmd):
 _INJ_FILLERS = ["abc", "1", "22", "root", "yes", "no", "prohibit-password", "-", "gmod",
                 "gmodserver", "PermitRootLogin", "PasswordAuthentication", "1720000000", "2",
                 "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05", "hour",
-                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2"]
+                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2", "ro"]
 _inj_bad, _inj_checked, _inj_nofill, _inj_base_exposed = [], 0, [], {}
 for _verb in sorted(_priv._REMOTE_ACTIONS):
     _spec = _priv._ARGV.get(_verb)
@@ -9477,6 +9477,8 @@ _ANCHOR_LINE_PARSERS = {
     "_LATEST_VERSION_RE",
     # One line of a LinuxGSM config (split at \n), another key's plain `key="value"` line.
     "_WWR_OTHER_LINE",
+    # The database client's error line in a db-query answer (re.M): reported, never acted on.
+    "_ERROR_RE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.

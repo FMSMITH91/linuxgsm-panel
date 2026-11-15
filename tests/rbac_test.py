@@ -1059,8 +1059,11 @@ def _check_limited_user_denied_pages():
 
 
 def _check_database_manager_permissions():
-    """The Databases manager's routes: VIEW_SERVERS alone gets none; EDIT_DATABASE_DATA is a grantable permission
-    of its own, held by no group the panel makes, and the row and SQL routes ask for it by name."""
+    """The Databases manager's routes: VIEW_SERVERS alone gets none of them.
+
+    EDIT_DATABASE_DATA is a grantable permission of its own, held by no group the panel makes, and
+    the row and SQL routes ask for it by name.
+    """
     c_lim = client_as(uid)
     base = "/api/server/%d/databases/1" % accessible_id
     for method, tail in (("get", "/tables"), ("get", "/rows?table=t"), ("post", "/cell"), ("post", "/row"),

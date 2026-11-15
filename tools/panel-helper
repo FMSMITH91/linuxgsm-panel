@@ -8018,8 +8018,10 @@ def _db_query_split(content):
 
 
 def _db_query_argv(sess, client, args):
-    """The client's argv: only the sign-in file (--defaults-file: no other option file is read), the
-    connection, DB_QUERY_OPTS and the database, which is the session's default."""
+    """The client's argv: the sign-in file, the connection, DB_QUERY_OPTS and the database.
+
+    --defaults-file: no other option file is read. The database is the session's default.
+    """
     conn = _db_conn_args(sess)
     return [client, conn[0].replace("--defaults-extra-file=", "--defaults-file=", 1)] + conn[1:] \
         + list(DB_QUERY_OPTS) + [args[2]]

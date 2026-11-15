@@ -38,7 +38,7 @@
       <form class="d-flex flex-wrap gap-2 mt-2" data-action="dbmAdd" data-args='["@event"]' data-on="submit">
         <label for="dbm-add-server" class="visually-hidden">Game server</label>
         <select id="dbm-add-server" class="form-select form-select-sm" style="flex:1 1 12rem;min-width:0;" data-no-i18n
-                data-action="dbmAddPrefix" data-on="change" aria-label="Game server">
+                data-action="dbmAddPrefix" data-on="change">
           {% for s in servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
         </select>
         <div class="input-group input-group-sm" style="flex:1 1 12rem;min-width:0;">
@@ -104,7 +104,7 @@
         <section data-dbm-pane="tables" hidden>
           <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
             <label for="dbm-table" class="visually-hidden">Table</label>
-            <select id="dbm-table" class="form-select form-select-sm" style="flex:1 1 14rem;min-width:0;" data-no-i18n data-action="dbmPickTable" data-on="change" aria-label="Table"></select>
+            <select id="dbm-table" class="form-select form-select-sm" style="flex:1 1 14rem;min-width:0;" data-no-i18n data-action="dbmPickTable" data-on="change"></select>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbmLoadTables"><i class="bi bi-arrow-repeat"></i> Refresh</button>
           </div>
           <div id="dbm-table-info" class="small text-secondary mb-2"></div>

@@ -24,6 +24,7 @@
   "Leave out (use its default)": "Omitir (usar su valor por defecto)",
   "Making a dump of the database…": "Haciendo un volcado de la base de datos…",
   "MySQL can't run this kind of statement from the panel's SQL box (each statement runs as a prepared statement). For DESCRIBE use SHOW COLUMNS FROM the table.": "MySQL no puede ejecutar este tipo de sentencia desde el cuadro SQL del panel (cada sentencia se ejecuta como una sentencia preparada). En lugar de DESCRIBE use SHOW COLUMNS FROM la tabla.",
+  "No row was changed: it may have been changed or deleted already. Reload the page.": "No se cambió ninguna fila: puede que ya se hubiera cambiado o eliminado. Recargue la página.",
   "No rows on this page.": "No hay filas en esta página.",
   "No rows.": "No hay filas.",
   "One SQL statement": "Una sentencia SQL",

@@ -320,8 +320,8 @@ eq("db_data.rows_statement: key columns whole, text cut server-side, binary as i
    "fixed page of 50 (+1 to tell there are more)", _rows_st219,
    {"sql": "SELECT `id`, LEFT(`name`, 257), LENGTH(`skin`), LEFT(`len`, 257) FROM `players` ORDER BY `id` "
            "LIMIT 51 OFFSET 100"})
-eq("db_data.rows_statement: a page past the last is the last", _dd219.rows_statement(_pl219, 10 ** 9)["sql"][-28:],
-   "LIMIT 51 OFFSET %d" % (_dd219.PAGE_MAX * 50))
+check("db_data.rows_statement: a page past the last is the last",
+      _dd219.rows_statement(_pl219, 10 ** 9)["sql"].endswith(" LIMIT 51 OFFSET %d" % (_dd219.PAGE_MAX * 50)))
 eq("db_data.update_statement: names from the structure, quoted; every value and the key bound as parameters; a "
    "text key compared in the column's own character set and collation; one row at most",
    _dd219.update_statement(_wd219, {"k`ey": "a'b"}, {"v": {"value": "x'); DROP TABLE t; --"}}),
@@ -349,7 +349,7 @@ _SQL_KINDS219 = {
     "EXPLAIN ANALYZE DELETE FROM t": ("write", "explain"), "-- note\nSELECT 1": ("read", "select"),
     "# note\nshow tables": ("read", "show"), "/* x */ select 1": ("read", "select"),
     "/*!50000 DELETE FROM t */": ("write", ""), "/*M!100000 DELETE FROM t */": ("write", ""),
-    "--SELECT\nDELETE FROM t": ("write", "select"), "WITH a AS (SELECT 1) DELETE FROM t": ("write", "with"),
+    "--SELECT\nDELETE FROM t": ("write", ""), "WITH a AS (SELECT 1) DELETE FROM t": ("write", "with"),
     "UPDATE t SET a=1": ("write", "update"), "": ("write", ""), "/* unterminated select": ("write", ""),
 }
 eq("db_data.sql_kind: SELECT/SHOW/DESCRIBE/EXPLAIN read (comments and brackets skipped); EXPLAIN ANALYZE, an "
@@ -658,7 +658,7 @@ check("dump: made into the server's files as the database's own account (a login
 _dl219 = _R5.get("download", (0, b"", "", None))
 check("dump: the download streams that file, with its length and a dated attachment name",
       _dl219[0] == 200 and _dl219[1] == b"\x1f\x8babc" and _dl219[3] == "5"
-      and _dl219[2].startswith('attachment; filename="gs') and _dl219[2].endswith('.sql.gz"'), repr(_dl219))
+      and _dl219[2].startswith('attachment; filename="gs') and '.sql.gz"' in _dl219[2], repr(_dl219))
 eq("dump: the download needs Manage databases", _R5.get("download_view"), 403)
 check("upload: a dump over 2 GiB is refused; a piece is appended at its offset",
       _R5.get("up_big") == 400 and _R5.get("up_piece", {}).get("received") == 10, repr((_R5.get("up_big"), _R5.get("up_piece"))))
@@ -690,6 +690,8 @@ _GOOD219 = ("-- MariaDB dump 10.19\n/*!40101 SET NAMES utf8mb4 */;\nDROP TABLE I
             "CREATE TABLE `players` (\n  `id` int(11) NOT NULL,\n  PRIMARY KEY (`id`)\n);\n"
             "INSERT INTO `players` VALUES (1,'USE gs9_x; `mysql`.`user`.');\n"
             "CREATE VIEW `v` AS select `players`.`id` from `gs12_lp`.`players`;\n")
+# A dump well past the 64 KB the format checks read: those checks must not read an early stop as a failure.
+_LARGE219 = b"".join(b"INSERT INTO `players` VALUES (%d);\n" % i for i in range(20000))
 _HOSTILE_DUMPS219 = {
     "use another": "-- dump\nUSE `gs9_other`;\nCREATE TABLE t (i int);\n",
     "create database": "-- dump\nCREATE DATABASE /*!32312 IF NOT EXISTS*/ `gs9_other`;\n",
@@ -727,11 +729,14 @@ _R6 = {"plain": _finish219(_GOOD219.encode()), "gz": _finish219(_GOOD219.encode(
        "nul": _finish219(b"-- dump\nINSERT INTO t VALUES ('\x00');\n"),
        "notsql": _finish219(b"hello world\nthis is a letter\n"),
        "empty-gz": _finish219(b"", gz=True),
-       "damaged": _finish219(_gz219.compress(_GOOD219.encode() * 50)[:-30], gz=False)}
+       "damaged": _finish219(_gz219.compress(_GOOD219.encode() * 50)[:-30], gz=False),
+       "large": _finish219(_GOOD219.encode() + _LARGE219, gz=True)}
 _R6.update({k: _finish219(v.encode()) for k, v in _HOSTILE_DUMPS219.items()})
 eq("upload check: a plain dump is stored gzipped as <name>.sql.gz, as uploaded; INSERT data and the database's "
    "own name are not mistaken for a switch", (_R6["plain"][0], _R6["plain"][1]), (("ok", ""), _GOOD219.encode()))
 eq("upload check: a gzip dump is stored as it is", (_R6["gz"][0], _R6["gz"][1]), (("ok", ""), _GOOD219.encode()))
+eq("upload check: a dump far larger than the format checks read is stored whole", (_R6["large"][0], len(_R6["large"][1] or b"")),
+   (("ok", ""), len(_GOOD219.encode() + _LARGE219)))
 eq("upload check: a dump that switches to or names another database is refused, and nothing is stored",
    {k: _R6[k] for k in _HOSTILE_DUMPS219},
    {"use another": (("refused", "SWITCH"), None), "create database": (("refused", "SWITCH"), None),

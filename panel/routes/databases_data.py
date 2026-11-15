@@ -70,7 +70,7 @@ def _where(gs, r):
     return (gs.remote, target) if target is not None else (None, None)
 
 
-def _run(gs, r, mode, statements):
+def _query(gs, r, mode, statements):
     """db_data.run for database `r` signed in as its own account; None when its server is not set up."""
     remote, target = _where(gs, r)
     if target is None:
@@ -101,7 +101,7 @@ def _structure(gs, r, fresh=False):
     got = _STRUCT.get(r.id)
     if got and not fresh and time.monotonic() - got[0] < STRUCT_FRESH:
         return got[1], None
-    ans = _run(gs, r, "ro", list(_dd.STRUCTURE_SQL))
+    ans = _query(gs, r, "ro", list(_dd.STRUCTURE_SQL))
     bad = _problem(gs, ans)
     if bad:
         return None, bad
@@ -155,7 +155,7 @@ def _rows_answer(gs, r):
     if t is None:
         return _say(404, S_NO_TABLE)
     page = _page_arg()
-    ans = _run(gs, r, "ro", [_dd.rows_statement(t, page)])
+    ans = _query(gs, r, "ro", [_dd.rows_statement(t, page)])
     bad = _problem(gs, ans)
     got = None if bad else _dd.rows(ans, t)
     if bad or got is None:
@@ -182,7 +182,7 @@ def _cell_answer(gs, r):
         stmt = _dd.cell_statement(t, _json_str(body, "column"), body.get("key"))
     except ValueError:
         return _say(400, "That value can't be read: name a text column and the row's whole key.")
-    ans = _run(gs, r, "ro", [stmt])
+    ans = _query(gs, r, "ro", [stmt])
     bad = _problem(gs, ans)
     if bad:
         return _say(*bad)
@@ -225,7 +225,7 @@ def _row_change_answer(gs, r):
         stmt = _row_statement(t, op, body)
     except ValueError as e:
         return _say(400, i18n.Sentence("That change doesn't fit the table: {why}.", why=str(e)))
-    ans = _run(gs, r, "rw", [stmt])
+    ans = _query(gs, r, "rw", [stmt])
     values = body.get("values") if op != "delete" and isinstance(body.get("values"), dict) else {}
     return _row_change_done(gs, r, t, (op, values), ans)
 
@@ -300,7 +300,7 @@ def _sql_answer(gs, r):
     write = bool(token) or kind == "write"
     if write and not token:
         return _needs_confirm(r, text, word)
-    ans = _run(gs, r, "rw" if write else "ro", [_dd.sql_statement(text)])
+    ans = _query(gs, r, "rw" if write else "ro", [_dd.sql_statement(text)])
     err = (ans or {}).get("error")
     if not write and err and err["code"] == 1792:
         # A "read" statement that writes after all (a stored function, EXPLAIN ANALYZE...): the READ
