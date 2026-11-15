@@ -1899,17 +1899,23 @@ def _r14d_alias_plan(tree, path=None):
         if isinstance(_n, (_ast_scan.Import, _ast_scan.ImportFrom)):
             steps.append(_n)
         elif isinstance(_n, _ast_scan.Assign):
-            _bound = _r14d_sys_modules_alias(_n)
-            _bound.update(_r16d_import_module_alias(_n))
-            steps += [_bound] if _bound else []
-            _names = [_t.id for _t in _n.targets if isinstance(_t, _ast_scan.Name)]
-            copies += [(_n.value.id, _t) for _t in _names] if isinstance(_n.value, _ast_scan.Name) else []
-            calls += [(_names, _n.value.func.id if isinstance(_n.value.func, _ast_scan.Name) else None)
-                      ] if isinstance(_n.value, _ast_scan.Call) else []
+            _r14d_plan_assign(_n, steps, copies, calls)
         elif isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef)):
             returns += [(_n.name, _r.value.id) for _r in _ast_scan.walk(_n)
                         if isinstance(_r, _ast_scan.Return) and isinstance(_r.value, _ast_scan.Name)]
     return base, steps, copies, calls, returns
+
+
+def _r14d_plan_assign(node, steps, copies, calls):
+    """Add one `x = …` statement to a plan: what it binds, a copy of a name, a call it is bound from."""
+    _bound = _r14d_sys_modules_alias(node)
+    _bound.update(_r16d_import_module_alias(node))
+    steps += [_bound] if _bound else []
+    _names = [_t.id for _t in node.targets if isinstance(_t, _ast_scan.Name)]
+    if isinstance(node.value, _ast_scan.Name):
+        copies += [(node.value.id, _t) for _t in _names]
+    elif isinstance(node.value, _ast_scan.Call):
+        calls.append((_names, node.value.func.id if isinstance(node.value.func, _ast_scan.Name) else None))
 
 
 def _r14d_plan_aliases(plan, carried):
