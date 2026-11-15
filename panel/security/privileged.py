@@ -2788,6 +2788,7 @@ def _db_query_remote(a):
     The sign-in's three option-file lines come first on stdin, then the statements (db_query_script).
     The answer is cut at DB_QUERY_OUT_MAX bytes; a run that outlives DB_QUERY_SECONDS (+5) is killed,
     and the statement it left running on the server is ended with KILL QUERY on its connection.
+    A killed run is rc 137 from GNU timeout and 124 from uutils' (Ubuntu 26.04's coreutils), so both count.
     """
     flavor, target, _name, _mode = a
     conn = shlex.join(db_conn_net("tcp" + target))
@@ -2798,7 +2799,7 @@ def _db_query_remote(a):
             '> "$f" || exit 2; '
             'timeout -s KILL %d "$C" --defaults-file="$f" %s %s 2>&1 | head -c %d > "$o"; rc=${PIPESTATUS[0]}; '
             'cat -- "$o"; if [ "$(stat -c %%s -- "$o")" -ge %d ]; then echo; echo "panel-db: output cut"; exit 0; fi; '
-            'if [ "$rc" = 137 ]; then id=$(grep -o -m1 \'<field name="panel_conn">[0-9]*<\' "$o" | tr -dc 0-9); '
+            'if [ "$rc" = 137 ] || [ "$rc" = 124 ]; then id=$(grep -o -m1 \'<field name="panel_conn">[0-9]*<\' "$o" | tr -dc 0-9); '
             '[ -n "$id" ] && timeout 15 "$C" --defaults-file="$f" %s --batch -e "KILL QUERY $id" </dev/null >/dev/null 2>&1; '
             'echo "panel-db: timed out"; exit 124; fi; exit "$rc"'
             % (DB_QUERY_SECONDS + 5, conn, opts, DB_QUERY_OUT_MAX, DB_QUERY_OUT_MAX, conn))
