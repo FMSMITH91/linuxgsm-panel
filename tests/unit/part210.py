@@ -323,11 +323,11 @@ def _client210():
 def _cookie210():
     c, later = _client210(), [None]
     _p9_patch(_scookie210, "time", NS(time=lambda: (later[0] or _time210.time())))
-    poll = c.get("/api/servers")
+    poll = c.get("/api/auth/ping")
     later[0] = _time210.time() + _scookie210._REISSUE_SECONDS + 1
-    old = c.get("/api/servers")
+    old = c.get("/api/auth/ping")
     later[0] = None
-    again = c.get("/api/servers")
+    again = c.get("/api/auth/ping")
     eq("session cookie: a poll with a cookie signed moments ago sends no Set-Cookie; one 5 minutes old is re-sent "
        "(the idle timeout still slides), and the re-sent one is new again",
        ("Set-Cookie" in poll.headers, "session=" in old.headers.get("Set-Cookie", ""),
@@ -360,6 +360,7 @@ def _headers210():
 # ── The history tables' redundant indexes ──────────────────────────────────────────────────────
 def _indexes210():
     from flask import Flask as _Flask210
+    import sqlalchemy as _sa210
     from sqlalchemy import inspect as _inspect210, text as _sql210
     from panel.db import models as _models210
     app = _Flask210("unit_part210_mig")
@@ -371,14 +372,20 @@ def _indexes210():
         db.create_all()
         fresh = {t: {ix["name"] for ix in _inspect210(db.engine).get_indexes(t)} for t in ("metric_sample", "host_sample")}
         # An install from before: the single-column indexes the columns used to declare.
-        db.session.execute(_sql210("CREATE INDEX ix_metric_sample_server_id ON metric_sample (server_id)"))
-        db.session.execute(_sql210("CREATE INDEX ix_host_sample_remote_id ON host_sample (remote_id)"))
-        db.session.commit()
+        # On a Table of this check's own (not the models'): an Index on a model column joins that
+        # model's declared indexes for the rest of the run.
+        old_md = _sa210.MetaData()
+        for table, column in (("metric_sample", "server_id"), ("host_sample", "remote_id")):
+            t = _sa210.Table(table, old_md, _sa210.Column(column, _sa210.Integer))
+            _sa210.Index("ix_%s_%s" % (table, column), t.c[column]).create(db.engine)
         _models210._run_light_migrations()
         after = {t: {ix["name"] for ix in _inspect210(db.engine).get_indexes(t)} for t in ("metric_sample", "host_sample")}
-        plans = [" ".join(str(r[-1]) for r in db.session.execute(_sql210("EXPLAIN QUERY PLAN " + q)))
-                 for q in ("DELETE FROM metric_sample WHERE server_id = 7",
-                           "SELECT id FROM host_sample WHERE remote_id = 7 LIMIT 1")]
+        # EXPLAIN takes no ORM form; these are this check's own fixed statements, nothing interpolated.
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        explain = (_sql210("EXPLAIN QUERY PLAN DELETE FROM metric_sample WHERE server_id = 7"),
+                   # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+                   _sql210("EXPLAIN QUERY PLAN SELECT id FROM host_sample WHERE remote_id = 7 LIMIT 1"))
+        plans = [" ".join(str(r[-1]) for r in db.session.execute(q)) for q in explain]
         db.session.remove()
         db.engine.dispose()
     want = {"metric_sample": {"ix_metric_sample_server_ts", "ix_metric_sample_ts"},
