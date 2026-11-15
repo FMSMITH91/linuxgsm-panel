@@ -4416,6 +4416,10 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
+    # The Databases manager: one whole value read for the page (a POST so the row's key is never in a URL;
+    # opening the table was audited), one piece of a dump upload (its finish audits what became of it:
+    # restored, or refused and why), and a cancel that removes the part file nothing lists.
+    "api_server_database_cell", "api_server_database_upload_piece", "api_server_database_upload_cancel",
     # One piece of a backup upload, appended to a part file nothing lists: the upload's outcome (the
     # archive kept, or why not) is audited once, by its finish (game_backup_upload / panel_backup_upload).
     "api_panel_backup_game_upload_piece",

@@ -208,8 +208,8 @@ def _cell_value(ans):
                     "more": v is not None and len(v) >= _dd.FULL_CHARS})
 
 
-_ROW_OPS = {"insert": ("db_row_insert", "inserted"), "update": ("db_row_update", "updated"),
-            "delete": ("db_row_delete", "deleted")}
+# What the audit row says each did (its action is db_row_<op>).
+_ROW_OPS = {"insert": "inserted", "update": "updated", "delete": "deleted"}
 
 
 def _row_statement(t, op, body):
@@ -247,13 +247,15 @@ def _affected(ans):
 def _row_audit(gs, r, t, change, outcome):
     """The row change's audit row: which table and columns, how many rows (never a value), or why not."""
     (op, values), (ok, affected, err) = change, outcome
-    action, verb = _ROW_OPS[op]
+    verb = _ROW_OPS[op]
     detail = "%s %s row(s) in %s.%s" % (verb, affected if ok else 0, r.name, _audit_text(t["name"]))
     if values:
         detail += " (columns: %s)" % ", ".join(sorted(_audit_text(n) for n in values))[:300]
     if not ok:
         detail += ": " + ("error %s" % err["code"] if err else "failed")
-    log_action(current_user, action, target=gs.name, server=gs, detail=detail, success=ok)
+    log_action(current_user,
+               "db_row_insert" if op == "insert" else ("db_row_update" if op == "update" else "db_row_delete"),
+               target=gs.name, server=gs, detail=detail, success=ok)
 
 
 def _row_change_done(gs, r, t, change, ans):

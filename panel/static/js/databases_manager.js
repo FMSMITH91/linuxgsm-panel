@@ -128,7 +128,7 @@ function dbmEditorField(c, cell, isNew) {
     document.querySelectorAll('#dbm-modal [data-dbm-pane]').forEach(function (p) {
       p.hidden = p.getAttribute('data-dbm-pane') !== tab;
     });
-    if (tab === 'tables' && !st.loaded.tables) window.dbmLoadTables();
+    if (tab === 'tables' && !st.loaded.tables) void window.dbmLoadTables();
   };
 
   // ── Connection ──────────────────────────────────────────────────────────────────────────────────
@@ -251,7 +251,7 @@ function dbmEditorField(c, cell, isNew) {
     ro.textContent = t.readonly_text || '';
     var add = el('dbm-add-row');
     if (add) add.hidden = !st.canEdit || !!t.readonly;
-    loadRows();
+    void loadRows();
   };
 
   function drawColumns(t) {
@@ -324,7 +324,7 @@ function dbmEditorField(c, cell, isNew) {
     el('dbm-page').textContent = TF('Page {n}', {n: st.page + 1});
   }
 
-  window.dbmPage = function (step) { st.page = Math.max(0, st.page + step); loadRows(); };
+  window.dbmPage = function (step) { st.page = Math.max(0, st.page + step); void loadRows(); };
 
   window.dbmShowAll = function (ri, ci) {
     var t = st.table, r = st.rows && st.rows.rows[ri];
@@ -384,7 +384,7 @@ function dbmEditorField(c, cell, isNew) {
       if (!res.ok || res.d.success === false) { say(failText(res), 'text-danger'); return; }
       say('✓ ' + res.d.message, 'text-success');
       window.dbmCancelEdit();
-      loadRows();
+      void loadRows();
     }).catch(failed);
   };
 
@@ -399,7 +399,7 @@ function dbmEditorField(c, cell, isNew) {
         postJson(api('/row'), {op: 'delete', table: t.name, key: r.key}).then(function (res) {
           if (!res.ok || res.d.success === false) { say(failText(res), 'text-danger'); return; }
           say('✓ ' + res.d.message, 'text-success');
-          loadRows();
+          void loadRows();
         }).catch(failed);
       }});
   };
