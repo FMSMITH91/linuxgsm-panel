@@ -132,6 +132,11 @@ def _note_shown215(page, note_id):
     return None if m is None else "d-none" not in m.group(1)
 
 
+def _all215(name, conds, detail=""):
+    """check() over a list of conditions, so a check of several facts stays one branch."""
+    check(name, all(conds), detail)
+
+
 def _s215_settings():
     saved, live = {}, {k: _p9.config.get(k) for k in ("PERMANENT_SESSION_LIFETIME", "SESSION_ABSOLUTE_SECONDS",
                                                        "REMEMBER_COOKIE_DURATION", "SESSION_PROTECTION",
@@ -157,23 +162,30 @@ def _s215_settings():
     finally:
         _p9.config.update(live)
         _p9_restore_all()
-    check("settings: the idle and absolute fields show the values in force with OWASP's ranges beside them",
-          'name="session_idle_minutes"' in inside and 'value="20"' in inside and 'value="6"' in inside
-          and "OWASP: 15–30 min (2–5 for high-value panels)." in inside and "OWASP: 4–8 hours." in inside
-          and "OWASP gives no number; keep it short." in inside, "")
+    _all215("settings: the idle and absolute fields show the values in force with OWASP's ranges beside them",
+          ['name="session_idle_minutes"' in inside,
+              'value="20"' in inside,
+              'value="6"' in inside,
+              "OWASP: 15–30 min (2–5 for high-value panels)." in inside,
+              "OWASP: 4–8 hours." in inside,
+              "OWASP gives no number; keep it short." in inside], "")
     eq("settings: the 'Longer than OWASP recommends' notes follow the values (hidden inside the ranges, shown past)",
        (_note_shown215(inside, "s-idle-note"), _note_shown215(inside, "s-absolute-note"),
         _note_shown215(outside, "s-idle-note"), _note_shown215(outside, "s-absolute-note")),
        (False, False, True, True))
-    check("settings: a save outside OWASP's ranges is not refused; the three values and the 2FA switch are "
+    _all215("settings: a save outside OWASP's ranges is not refused; the three values and the 2FA switch are "
           "stored, the old hours key dropped, and put in force at once",
-          r.status_code == 302 and stored.get("session_idle_minutes") == 45
-          and stored.get("session_absolute_hours") == 9 and stored.get("remember_days") == 5
-          and stored.get("require_2fa") is True and "session_lifetime_hours" not in stored
-          and applied == (45 * 60, 9 * 3600, True), repr((r.status_code, stored, applied)))
-    check("settings: an idle timeout past the absolute limit is refused, says why, and nothing is written",
-          refused.status_code == 302 and after == stored
-          and any("cannot be longer than the absolute session limit" in m for m in refused_said),
+          [r.status_code == 302,
+              stored.get("session_idle_minutes") == 45,
+              stored.get("session_absolute_hours") == 9,
+              stored.get("remember_days") == 5,
+              stored.get("require_2fa") is True,
+              "session_lifetime_hours" not in stored,
+              applied == (45 * 60, 9 * 3600, True)], repr((r.status_code, stored, applied)))
+    _all215("settings: an idle timeout past the absolute limit is refused, says why, and nothing is written",
+          [refused.status_code == 302,
+              after == stored,
+              any("cannot be longer than the absolute session limit" in m for m in refused_said)],
           repr((refused.status_code, after, refused_said)))
 
 
@@ -311,20 +323,27 @@ def _s215_account_throttle():
     finally:
         _p9_restore_all()
         _reset215()
-    check("throttle: ten wrong passwords from ten addresses pause the name: the right password is then refused "
+    _all215("throttle: ten wrong passwords from ten addresses pause the name: the right password is then refused "
           "with the address throttle's sentence, before any check",
-          tries == [200] * _ag215.ACCOUNT_SOFT_FAILS and "Too many failed attempts" in paused_text
-          and paused.status_code == 200, repr((tries, paused_text[:0])))
-    check("throttle: the lockout writes ONE audit row and ONE alert, naming the account",
-          len(locks) == 1 and locks[0][0] == "p215_target" and locks[0][2] is False
-          and [k for k, _b in notes if k == "account_locked"] == ["account_locked"]
-          and "p215_target" in notes[0][1] and reported_again == 0, repr((locks, notes, reported_again)))
-    check("throttle: a name that does not exist is answered the same as one that does (no enumeration)",
-          ghost.status_code == 200 and "Invalid username or password" in ghost.get_data(as_text=True), "")
-    check("throttle: after the pause the right password signs in (the lock is never permanent)",
-          signed_in and back.status_code == 302, repr(back.status_code))
-    check("throttle: the next failure doubles the pause: refused after one base pause, signed in after two",
-          "Too many failed attempts" in still.get_data(as_text=True) and second_in, repr(second_in))
+          [tries == [200] * _ag215.ACCOUNT_SOFT_FAILS,
+              "Too many failed attempts" in paused_text,
+              paused.status_code == 200], repr((tries, paused_text[:0])))
+    _all215("throttle: the lockout writes ONE audit row and ONE alert, naming the account",
+          [len(locks) == 1,
+              locks[0][0] == "p215_target",
+              locks[0][2] is False,
+              [k for k, _b in notes if k == "account_locked"] == ["account_locked"],
+              "p215_target" in notes[0][1],
+              reported_again == 0], repr((locks, notes, reported_again)))
+    _all215("throttle: a name that does not exist is answered the same as one that does (no enumeration)",
+          [ghost.status_code == 200,
+              "Invalid username or password" in ghost.get_data(as_text=True)], "")
+    _all215("throttle: after the pause the right password signs in (the lock is never permanent)",
+          [signed_in,
+              back.status_code == 302], repr(back.status_code))
+    _all215("throttle: the next failure doubles the pause: refused after one base pause, signed in after two",
+          ["Too many failed attempts" in still.get_data(as_text=True),
+              second_in], repr(second_in))
     t = 10 ** 6
     pauses = [_ag215._pause_end([t - 1] * (n - 1) + [t], t) - t for n in (9, 10, 11, 12, 14, 30)]
     eq("throttle: under ten recent failures no pause; then 1, 2, 4 and 16 minutes, capped at 15",
@@ -383,21 +402,27 @@ def _s215_required_2fa():
     finally:
         _p9.config["REQUIRE_2FA"] = was
         _p9_restore_all()
-    check("2fa required: a superadmin without 2FA is sent to set it up from any page",
-          page.status_code == 302 and page.headers.get("Location", "").endswith("/account/2fa/enable"),
+    _all215("2fa required: a superadmin without 2FA is sent to set it up from any page",
+          [page.status_code == 302,
+              page.headers.get("Location", "").endswith("/account/2fa/enable")],
           repr((page.status_code, page.headers.get("Location"))))
-    check("2fa required: ...an in-page call is refused with a code it can act on; the session probe still answers",
-          servers.status_code == 403 and _p9_json(servers).get("error") == "2fa_setup_required"
-          and api.status_code == 200, repr((servers.status_code, _p9_json(servers), api.status_code)))
-    check("2fa required: the setup page itself stays reachable (the last superadmin cannot be shut out)",
-          setup.status_code == 200 and 'name="totp_code"' in setup.get_data(as_text=True), repr(setup.status_code))
-    check("2fa required: a terminal holder is covered; a viewer is not; with the switch off nobody is",
-          term_page.status_code == 302 and viewer.status_code != 403 and off.status_code != 403,
+    _all215("2fa required: ...an in-page call is refused with a code it can act on; the session probe still answers",
+          [servers.status_code == 403,
+              _p9_json(servers).get("error") == "2fa_setup_required",
+              api.status_code == 200], repr((servers.status_code, _p9_json(servers), api.status_code)))
+    _all215("2fa required: the setup page itself stays reachable (the last superadmin cannot be shut out)",
+          [setup.status_code == 200,
+              'name="totp_code"' in setup.get_data(as_text=True)], repr(setup.status_code))
+    _all215("2fa required: a terminal holder is covered; a viewer is not; with the switch off nobody is",
+          [term_page.status_code == 302,
+              viewer.status_code != 403,
+              off.status_code != 403],
           repr((term_page.status_code, viewer.status_code, off.status_code)))
     rows = [r for r in _audits215("2fa_setup_required", first) if r[0] == "p215_sa"]
-    check("2fa required: enforcement is audited and alerted once per session, naming only the account",
-          len(rows) == 1 and [b for k, b in _NOTES215 if k == "twofa_enforced" and "p215_sa" in b] != []
-          and len([1 for k, b in _NOTES215 if k == "twofa_enforced" and "p215_sa" in b]) == 1, repr((rows, _NOTES215)))
+    _all215("2fa required: enforcement is audited and alerted once per session, naming only the account",
+          [len(rows) == 1,
+              [b for k, b in _NOTES215 if k == "twofa_enforced" and "p215_sa" in b] != [],
+              len([1 for k, b in _NOTES215 if k == "twofa_enforced" and "p215_sa" in b]) == 1], repr((rows, _NOTES215)))
 
 
 # ── 5. step-up ───────────────────────────────────────────────────────────────────────────────────
@@ -421,19 +446,26 @@ def _s215_step_up():
     again = c.post("/groups/add", data={"name": "p215-again"}, headers=_XHR215)
     with _p9.app_context():
         made = sorted(g.name for g in _G215.query.filter(_G215.name.like("p215-%")).all())
-    check("step-up: a fresh sign-in may change groups at once",
-          fresh.status_code == 200 and _p9_json(fresh).get("error") != "reauth_required", repr(_p9_json(fresh)))
-    check("step-up: after the window an in-page change is refused with reauth_required and nothing is made",
-          stale.status_code == 403 and _p9_json(stale).get("error") == "reauth_required"
-          and "p215-stale" not in made, repr((stale.status_code, made)))
-    check("step-up: a form post or the terminal page is sent to the confirm page, coming back where it was",
-          nav.status_code == 302 and "/account/reauth?next=%2Fgroups" in nav.headers.get("Location", "")
-          and term.status_code == 302 and ("next=%2Fterminal%2F" + str(P9_HOST)) in term.headers.get("Location", ""),
+    _all215("step-up: a fresh sign-in may change groups at once",
+          [fresh.status_code == 200,
+              _p9_json(fresh).get("error") != "reauth_required"], repr(_p9_json(fresh)))
+    _all215("step-up: after the window an in-page change is refused with reauth_required and nothing is made",
+          [stale.status_code == 403,
+              _p9_json(stale).get("error") == "reauth_required",
+              "p215-stale" not in made], repr((stale.status_code, made)))
+    _all215("step-up: a form post or the terminal page is sent to the confirm page, coming back where it was",
+          [nav.status_code == 302,
+              "/account/reauth?next=%2Fgroups" in nav.headers.get("Location", ""),
+              term.status_code == 302,
+              ("next=%2Fterminal%2F" + str(P9_HOST)) in term.headers.get("Location", "")],
           repr((nav.headers.get("Location"), term.headers.get("Location"))))
-    check("step-up: a wrong password does not confirm and is audited; the right one does and goes back",
-          wrong.status_code == 200 and right.status_code == 302 and right.headers.get("Location", "").endswith("/groups")
-          and [r[2] for r in _audits215("reauth", first)] == [False, True], repr(_audits215("reauth", first)))
-    check("step-up: ...after which the change goes through", again.status_code == 200 and "p215-again" in made,
+    _all215("step-up: a wrong password does not confirm and is audited; the right one does and goes back",
+          [wrong.status_code == 200,
+              right.status_code == 302,
+              right.headers.get("Location", "").endswith("/groups"),
+              [r[2] for r in _audits215("reauth", first)] == [False, True]], repr(_audits215("reauth", first)))
+    _all215("step-up: ...after which the change goes through", [again.status_code == 200,
+              "p215-again" in made],
           repr((again.status_code, made)))
 
 
@@ -491,15 +523,19 @@ def _s215_notices():
         said = _p9_flashes(c2)
     finally:
         _p9_restore_all()
-    check("api token: a new token gets the chosen expiry (30 days)",
-          r.status_code == 200 and exp is not None and _td215(days=29) < exp - _now215() <= _td215(days=30),
+    _all215("api token: a new token gets the chosen expiry (30 days)",
+          [r.status_code == 200,
+              exp is not None,
+              _td215(days=29) < exp - _now215() <= _td215(days=30)],
           repr((r.status_code, exp)))
-    check("notices: the Account page lists the change, when and from where, with the 'Wasn't you?' pointer",
-          "Recent security changes" in page and "New API token created" in page and "198.51.100.215" in page
-          and "Wasn't you?" in page, "")
-    check("notices: the next sign-in says what changed, when and from which address, then the pointer",
-          any(m.startswith("Since you last signed in: a new API token was created (") and "198.51.100.215" in m
-              for m in said) and any(m.startswith("Wasn't you?") for m in said), repr(said))
+    _all215("notices: the Account page lists the change, when and from where, with the 'Wasn't you?' pointer",
+          ["Recent security changes" in page,
+              "New API token created" in page,
+              "198.51.100.215" in page,
+              "Wasn't you?" in page], "")
+    _all215("notices: the next sign-in says what changed, when and from which address, then the pointer",
+          [any(m.startswith("Since you last signed in: a new API token was created (") and "198.51.100.215" in m for m in said),
+              any(m.startswith("Wasn't you?") for m in said)], repr(said))
     check("notices: a plain user's change sends no panel-wide alert (admin-level events only)",
           [k for k, _b in _NOTES215 if k == "credential_change"] == [], repr(_NOTES215))
 
@@ -653,15 +689,20 @@ def _s215_serve_path():
         finally:
             _p9_restore_all()
     st, body, log, cfg = results["ok"]
-    check("serve path: the new mount is published, then confirmed, and only then the old one removed; the config "
+    _all215("serve path: the new mount is published, then confirmed, and only then the old one removed; the config "
           "follows and the answer names the new address",
-          st == 200 and [e[0] for e in log] == ["add", "config", "remove-old"] and log[0][1] == "/panel"
-          and cfg["tailscale_mount"] == "/panel" and "https://panel-box.tail-p215.ts.net/panel" in body.get("message", ""),
+          [st == 200,
+              [e[0] for e in log] == ["add", "config", "remove-old"],
+              log[0][1] == "/panel",
+              cfg["tailscale_mount"] == "/panel",
+              "https://panel-box.tail-p215.ts.net/panel" in body.get("message", "")],
           repr(results["ok"]))
     for label in ("add-fails", "not-shown"):
         st, body, log, cfg = results[label]
-        check("serve path: when %s, the old mount is left untouched and the config unchanged" % label,
-              st == 500 and "remove-old" not in [e[0] for e in log] and cfg["tailscale_mount"] == "/lgsm",
+        _all215("serve path: when %s, the old mount is left untouched and the config unchanged" % label,
+              [st == 500,
+                  "remove-old" not in [e[0] for e in log],
+                  cfg["tailscale_mount"] == "/lgsm"],
               repr(results[label]))
     rows = _audits215("tailscale_serve_change_path", first)
     check("serve path: each attempt is audited, failures as failures",

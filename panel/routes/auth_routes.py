@@ -66,6 +66,15 @@ def register(app):
     account_security.register(app)
 
 
+def _flash_signed_out(bye):
+    """The sign-out message, carried in the URL because sign-out clears the flash cookie."""
+    if bye == "1":
+        flash("You have been logged out.", "info")
+    elif bye == "2":
+        flash("Signed out on this device, but the server could not revoke the session — "
+              "change your password to revoke it everywhere.", "warning")
+
+
 def _register_sign_in(app):
     """Sign in and sign out."""
     @app.route("/login", methods=["GET", "POST"])
@@ -97,12 +106,7 @@ def _register_sign_in(app):
                 if not g.get("_login_failed"):
                     _release_login_slot(attempt)
 
-        _bye = request.args.get("signed_out")
-        if _bye == "1":
-            flash("You have been logged out.", "info")
-        elif _bye == "2":
-            flash("Signed out on this device, but the server could not revoke the session — "
-                  "change your password to revoke it everywhere.", "warning")
+        _flash_signed_out(request.args.get("signed_out"))
         return render_template("login.html")
 
     @app.route("/logout", methods=["POST"])
@@ -383,6 +387,15 @@ def _register_language(app):
         return resp
 
 
+def _flash_2fa_rotated(user, done):
+    """Rotate `user`'s sessions after a 2FA change and say so (account_guard.rotate_sessions)."""
+    if account_guard.rotate_sessions(user):
+        flash(done, "success")
+    else:
+        flash(done + " Every session was signed out, including this one — please sign in again.",
+              "warning")
+
+
 def _register_2fa_and_profile(app):
     """Enrolling a second factor, and the display name."""
     @app.route("/account/2fa/enable", methods=["GET", "POST"])
@@ -453,11 +466,7 @@ def _register_2fa_and_profile(app):
                 account_notices.alert_credential_change(_u, "two-factor authentication turned on")
                 # A privilege-level change: every other session ends (they signed in without the
                 # factor) and this one gets a new identifier (account_guard.rotate_sessions).
-                if account_guard.rotate_sessions(_u):
-                    flash("Two-factor authentication is now enabled.", "success")
-                else:
-                    flash("Two-factor authentication is now enabled. Every session was signed out, "
-                          "including this one — please sign in again.", "warning")
+                _flash_2fa_rotated(_u, "Two-factor authentication is now enabled.")
                 # Show the one-time backup codes once, right now — they're never shown again.
                 return no_store(render_template("backup_codes.html", codes=codes, first_time=True))
             flash("That code didn't match — check your device's time and try again.", "danger")
@@ -669,6 +678,11 @@ def _login_throttled(attempt):
             _LOGIN_FAILS.pop(_tk, None)
     if not blocked:
         return None
+    return _login_blocked_page(ip, _tk, now)
+
+
+def _login_blocked_page(ip, _tk, now):
+    """Audit (once per window) and log a refused sign-in, and show the login page with the reason."""
     with _LOGIN_FAILS_LOCK:
         _first_block = (now - _LOGIN_BLOCK_LOGGED.get(_tk, 0)) >= LOGIN_WINDOW
         if _first_block:
@@ -715,7 +729,6 @@ def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
     # in-memory throttle counter, isn't reset by a panel restart.
     try:
         from panel.db.models import AuditLog
-        from datetime import timedelta
         _since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
         _cnt = 1 + AuditLog.query.filter(AuditLog.action == "login_failed",
                                          AuditLog.ip_address == ip,

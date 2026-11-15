@@ -73,17 +73,23 @@ def _two_roots(core, roots):
     return any(core[:i] in roots and core[i:] in roots for i in range(3, len(core) - 2))
 
 
+def _whole_is_common(s, unit, literals):
+    """Whether the whole password (spaces gone, case folded) is listed, a repeat or a keyboard walk."""
+    return (not s or s in literals or _EDGE.sub("", s) in literals or len(set(s)) <= 2
+            or len(unit) <= 3 or _is_walk(s) or _is_walk(unit))
+
+
+def _core_is_common(core, roots, literals):
+    """Whether one root a password may hide is listed, a walk, or two listed roots run together."""
+    return (core in roots or _unit(core) in roots or core in literals or _is_walk(core)
+            or _two_roots(core, roots))
+
+
 def is_common(password):
     """True when `password` is a common, breached or easily guessed one (see the module note)."""
     roots, literals = _load()
     s = re.sub(r"\s+", "", (password or "").casefold())
-    if not s or s in literals or _EDGE.sub("", s) in literals or len(set(s)) <= 2:
-        return True
     unit = _unit(s)
-    if len(unit) <= 3 or _is_walk(s) or _is_walk(unit):
+    if _whole_is_common(s, unit, literals):
         return True
-    for core in _cores(s) | _cores(unit):
-        cunit = _unit(core)
-        if core in roots or cunit in roots or core in literals or _is_walk(core) or _two_roots(core, roots):
-            return True
-    return False
+    return any(_core_is_common(core, roots, literals) for core in _cores(s) | _cores(unit))
