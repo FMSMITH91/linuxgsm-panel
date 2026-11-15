@@ -1244,9 +1244,13 @@ class MetricSample(db.Model):
     # the whole 14-day slice in a temp B-tree to satisfy ORDER BY. Measured on 806k rows (40
     # servers x 14 days at the real 1/min cadence): 3.6ms -> 2.5ms, and the temp sort disappears.
     # The single-column ts index STAYS — _prune_metric_samples deletes on `ts < cutoff` alone.
+    # The single-column server_id index is GONE: every lookup by server_id alone (the deleted-row
+    # prune, the remote's cleanup) uses this composite's leading column, and that index was one
+    # more B-tree each sample INSERT wrote — ~25% of the history's WAL bytes, ~1 commit a minute
+    # (measured on the test host). _create_declared_indexes drops it from an existing database.
     __table_args__ = (db.Index("ix_metric_sample_server_ts", "server_id", "ts"),)
     id = db.Column(db.Integer, primary_key=True)
-    server_id = db.Column(db.Integer, index=True, nullable=False)
+    server_id = db.Column(db.Integer, nullable=False)
     ts = db.Column(db.DateTime, default=utcnow, index=True)
     cpu = db.Column(db.Float, default=0.0)          # game CPU %
     ram_mb = db.Column(db.Integer, default=0)       # game RAM MB
@@ -1263,9 +1267,10 @@ class HostSample(db.Model):
     # than servers, SQLite preferred the ts index and scanned half the table before filtering
     # remote_id. Measured on 100k rows: 7.7ms -> 2.7ms, a 2.8x improvement on the same query the
     # history endpoint runs beside the metric one.
+    # No single-column remote_id index either: see MetricSample.
     __table_args__ = (db.Index("ix_host_sample_remote_ts", "remote_id", "ts"),)
     id = db.Column(db.Integer, primary_key=True)
-    remote_id = db.Column(db.Integer, index=True, nullable=False)
+    remote_id = db.Column(db.Integer, nullable=False)
     ts = db.Column(db.DateTime, default=utcnow, index=True)
     cpu = db.Column(db.Float, default=0.0)
     ram_pct = db.Column(db.Float, default=0.0)
@@ -1912,6 +1917,11 @@ def _create_declared_indexes(existing):
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)
+    # ...and the single-column server_id / remote_id indexes those composites made redundant (see
+    # MetricSample), dropped once the composites exist. IF EXISTS: a no-op on every later start.
+    with db.engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS ix_metric_sample_server_id"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_host_sample_remote_id"))
 
 
 def database_stats():
