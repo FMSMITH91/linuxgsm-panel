@@ -21,7 +21,7 @@ from panel.ops.ssh_manager import _lazy
 paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
-from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
+from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4
 from panel.security import privileged as _priv
 from panel.ops import netdev as _netdev
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
@@ -2901,34 +2901,19 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
 console_sent = register_remote_cache({})
 
 
-# Asked only when the host's own default-route address is not public (behind NAT, a cloud VM's private
-# address): one HTTPS service, then the same question over DNS for a host where curl is missing or
-# outbound HTTPS is blocked. A second HTTPS service covered no failure the first did not, and told one
-# more third party that this host exists (OWASP Top 10 Privacy Risks P10).
-_PUBLIC_IP_LOOKUPS = ("curl -fsS --max-time 5 https://api.ipify.org",
-                      "dig +short myip.opendns.com @resolver1.opendns.com")
-
-
-def _global_ipv4(text):
-    """`text` when it is a public (globally routable) IPv4 address, else ""."""
-    import ipaddress
-    try:
-        addr = ipaddress.IPv4Address(str(text or "").strip())
-    except ValueError:
-        return ""
-    return str(addr) if addr.is_global else ""
-
-
 def remote_public_ip(server):
     """Best-effort public IPv4 of the remote (or the panel host for local).
 
     The host's own default-route address first (_gamedig_host: `ip route get`, no packet sent, cached
-    an hour): when it is public, that is the answer and no third party is asked.
+    an hour): when it is public, that is the answer and no third party is asked. Only behind NAT (a
+    cloud VM's private address) one HTTPS service is asked, then the same question over DNS for a host
+    where curl is missing or outbound HTTPS is blocked. A second HTTPS service covered no failure the
+    first did not, and told one more third party that this host exists (OWASP Top 10 Privacy Risks P10).
     """
-    own = _global_ipv4(_gamedig_host(server))
-    if own:
+    if (own := global_ipv4(_gamedig_host(server))):
         return own
-    for cmd in _PUBLIC_IP_LOOKUPS:
+    for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
+                "dig +short myip.opendns.com @resolver1.opendns.com"):
         try:
             out, _, _ = run_command(server, cmd, timeout=8, sudo=False)
             ip = (out or "").strip().split("\n")[0].strip()

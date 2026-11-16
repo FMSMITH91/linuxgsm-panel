@@ -150,6 +150,15 @@ def canonical_ip_or_network(value):
     return canonical_ip(text)
 
 
+def global_ipv4(text):
+    """Return `text` as a public (globally routable) IPv4 address, else ""."""
+    try:
+        addr = ipaddress.IPv4Address(str(text or "").strip())
+    except ValueError:
+        return ""
+    return str(addr) if addr.is_global else ""
+
+
 def unzoned_ip_address_or_none(value):
     """Parse `value` as one IP address with any IPv6 zone id DROPPED rather than refused.
 
