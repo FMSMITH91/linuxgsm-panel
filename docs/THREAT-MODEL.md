@@ -173,7 +173,7 @@ the file that holds them.
 
 | Risk | Response | Why, and who owns it |
 | --- | --- | --- |
-| A superadmin is root on the panel host | Accept | The panel manages the host; SECURITY.md says so and how to drop the local grant. Owner: whoever grants superadmin. |
+| A superadmin is root on the panel host | Accept | The panel manages the host, and every superadmin keeps its host-level powers there (firewall, SSH, OS updates, reboot, the panel's port, Tailscale, IP blocking, Ubuntu Pro) by design. The controls are step-up re-authentication before each of those changes and an audit row for each; the panel-host terminal and panel backup restore stay the panel owner's only. SECURITY.md says so and how to drop the local grant. Owner: whoever grants superadmin. |
 | Wide sudo grant on an install missing a root piece | Accept, with a fix path | The installer prints it; re-running install.sh as root narrows it. |
 | First SSH connection to a remote, and the first install, are trust on first use | Accept | No prior key exists to check against; fingerprints can be checked by hand. |
 | The upload scan is a text scan, not an SQL parser | Accept | A keyword split over lines, a comment or vertical tab between keywords is not read; the database account's one-database grant refuses those statements. |
