@@ -151,6 +151,7 @@ def _register_notifications(app):
             ntfy={"enabled": bool(f.get("ntfy_enabled")),
                   "server": f.get("ntfy_server", ""),
                   "topic": f.get("ntfy_topic", ""),
+                  "private_network": bool(f.get("ntfy_private_network")),
                   "token": (nt_token or None)},
             events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
             thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load"),
@@ -177,6 +178,8 @@ def _register_notifications(app):
             webhook=_json_str(b, "webhook") or None,
             server=_json_str(b, "server") or None,
             topic=_json_str(b, "topic") or None,
+            # The form's switch when it sent one (a JSON boolean), else the saved setting.
+            private_network=b.get("private_network") if isinstance(b.get("private_network"), bool) else None,
         )
         # Translated: the failure is a Sentence ("{service} error: {detail}"), the rest catalog keys.
         return jsonify({"success": ok, "message": i18n.tr(msg)})
