@@ -714,3 +714,4 @@ c412a31f Old audit entries keep the right network for IPv4 clients of a panel bo
 0c558d2c A remote host's SSH key can be checked on the first connection.
 a2aecde6 The panel host page warns when the install still has the wide sudo grant.
 2a7b4e7f The release key's fingerprint is published for first installs.
+f60b50a1 The panel shows the same release name as GitHub.
