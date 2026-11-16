@@ -7,6 +7,7 @@
 // password (and the 2FA code) is asked for in a dialog ON this page, confirmed with /account/reauth,
 // and only then is the form sent, exactly as it was filled in. The server still decides: a form sent
 // any other way, or a window that closes between the question and the send, meets the same refusal.
+// The same check is window.stepUpThen(go, totp) for a page's own fetch() calls (below).
 (function(){
   function mp(){ return window.MOUNT || ''; }
   function send(form){
@@ -31,9 +32,11 @@
     box.appendChild(label); box.appendChild(code); wrap.appendChild(box);
     return code;
   }
-  function confirmThenSend(form){
+  // Ask for the password (and the code when `totp`) in a dialog on this page and confirm it with
+  // /account/reauth; then go().
+  function confirmThen(go, totp){
     var body = intro();
-    var code = form.getAttribute('data-step-up-totp') === '1' ? withCode(body) : null;
+    var code = totp ? withCode(body) : null;
     window.confirmDialog({title: t('Confirm it is you'), icon: 'shield-lock', bodyNode: body,
       requirePassword: true, requireLabel: t('Password'), confirmLabel: t('Confirm and save'),
       onConfirm: function(password, api){
@@ -44,21 +47,28 @@
           .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, d: d || {}}; })
                               .catch(function(){ return {ok: false, d: {}}; }); })
           .then(function(res){
-            if (res.ok && res.d.success) { api.close(); send(form); return; }
+            if (res.ok && res.d.success) { api.close(); go(); return; }
             api.error(res.d.message || t('Incorrect.'));
           })
           .catch(function(){ api.error(t('Incorrect.')); });
       }});
   }
+  // window.stepUpThen(go, totp): run go() once this sign-in may do a high-risk action, asking for
+  // the password in place first when the server says it is needed. For a page's own fetch() to a
+  // step_up_required route, so the page (and what was typed in it) stays put; a fetch sent without
+  // it still meets the 403 + X-Reauth-Required that panel.js turns into the confirm page.
+  window.stepUpThen = function(go, totp){
+    fetch(mp() + '/api/auth/ping?step_up=1', {cache: 'no-store'})
+      .then(function(r){ return r.ok ? r.json() : {}; })
+      // No answer: go on and let the server decide (it refuses a stale request on its own).
+      .then(function(d){ if (d && d.step_up === true) confirmThen(go, totp); else go(); })
+      .catch(function(){ go(); });
+  };
   document.addEventListener('submit', function(e){
     var form = e.target;
     if (!form || !form.hasAttribute || !form.hasAttribute('data-step-up')) return;
     if (form.getAttribute('data-step-up-ok') === '1') { form.removeAttribute('data-step-up-ok'); return; }
     e.preventDefault();
-    fetch(mp() + '/api/auth/ping?step_up=1', {cache: 'no-store'})
-      .then(function(r){ return r.ok ? r.json() : {}; })
-      // No answer: send it and let the server decide (it refuses a stale save on its own).
-      .then(function(d){ if (d && d.step_up === true) confirmThenSend(form); else send(form); })
-      .catch(function(){ send(form); });
+    window.stepUpThen(function(){ send(form); }, form.getAttribute('data-step-up-totp') === '1');
   });
 })();

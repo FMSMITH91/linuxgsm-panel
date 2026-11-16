@@ -417,18 +417,18 @@ def _s220_token_save():
 _STEPUP_JS220 = r"""
 const fs = require('fs');
 const sent = [], calls = [], dialogs = [];
-let listener = null, stale = %s, reauthOk = %s;
+let listener = null, stale = %s, reauthOk = %s, totp = %s;
 global.window = {MOUNT: ''};
 global.t = (s) => s;
 global.document = {addEventListener: (type, fn) => { if (type === 'submit') listener = fn; },
-                   createElement: () => ({appendChild() {}, set textContent(v) {}, className: ''})};
+                   createElement: () => ({appendChild() {}, set textContent(v) {}, className: '', value: ' 123456 '})};
 global.FormData = class { constructor() { this.v = {}; } append(k, v) { this.v[k] = v; } };
 global.fetch = (url, init) => { calls.push([url, init && init.body ? init.body.v : null]);
   if (url.indexOf('/api/auth/ping?step_up=1') === 0) return Promise.resolve({ok: true, json: () => Promise.resolve({step_up: stale})});
   return Promise.resolve({ok: reauthOk, json: () => Promise.resolve({success: reauthOk, message: 'Password incorrect.'})}); };
 window.confirmDialog = (o) => { dialogs.push(o.title);
   o.onConfirm('pw', {close() {}, error(m) { dialogs.push('error:' + m); }}); };
-const attrs = {'data-step-up': '', 'data-step-up-totp': '0'};
+const attrs = {'data-step-up': '', 'data-step-up-totp': totp ? '1' : '0'};
 const form = {hasAttribute: (k) => k in attrs, getAttribute: (k) => (k in attrs ? attrs[k] : null),
               setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: (k) => { delete attrs[k]; },
               requestSubmit() { const ev = {target: form, prevented: false, preventDefault() { this.prevented = true; }};
@@ -440,9 +440,10 @@ setTimeout(() => console.log(JSON.stringify({held: first.prevented, sent, calls,
 """
 
 
-def _run_stepup_js220(stale, reauth_ok):
+def _run_stepup_js220(stale, reauth_ok, totp=False):
     path = _os220.path.join(str(_ROOT), "panel", "static", "js", "step_up_form.js")
-    r = _sp220.run(["node", "-"], input=_STEPUP_JS220 % ("true" if stale else "false", "true" if reauth_ok else "false", path),
+    flags = tuple("true" if v else "false" for v in (stale, reauth_ok, totp))
+    r = _sp220.run(["node", "-"], input=_STEPUP_JS220 % (flags + (path,)),
                    capture_output=True, text=True, timeout=60, check=False)  # nosec B603 B607
     try:
         return _json220.loads(r.stdout.strip())
@@ -452,18 +453,22 @@ def _run_stepup_js220(stale, reauth_ok):
 
 def _s220_stepup_js():
     name = ("step-up form: a fresh sign-in's save goes at once; a stale one is held, confirmed in place with "
-            "/account/reauth, then sent unchanged; a wrong password sends nothing")
+            "/account/reauth (with the code when the account has 2FA), then sent unchanged; a wrong password "
+            "sends nothing")
     if not _shutil220.which("node"):
         skip(name, "no node on this machine")
         return
     fresh, stale, wrong = _run_stepup_js220(False, True), _run_stepup_js220(True, True), _run_stepup_js220(True, False)
+    coded = _run_stepup_js220(True, True, totp=True)
     eq(name, [(fresh.get("held"), fresh.get("sent"), fresh.get("dialogs")),
               (stale.get("sent"), stale.get("dialogs"), [c[0] for c in stale.get("calls", [])],
                (stale.get("calls") or [[0, 0], [0, {}]])[1][1]),
-              (wrong.get("sent"), wrong.get("dialogs"))],
+              (wrong.get("sent"), wrong.get("dialogs")),
+              (coded.get("sent"), (coded.get("calls") or [[0, 0], [0, {}]])[1][1])],
        [(True, ["sent"], []),
         (["sent"], ["Confirm it is you"], ["/api/auth/ping?step_up=1", "/account/reauth"], {"password": "pw"}),
-        ([], ["Confirm it is you", "error:Password incorrect."])])
+        ([], ["Confirm it is you", "error:Password incorrect."]),
+        (["sent"], {"password": "pw", "totp_code": "123456"})])
 
 
 try:
