@@ -21,9 +21,9 @@ on:
     branches: [ main ]
   workflow_dispatch:  # allow manual runs from the Actions tab
 
-# Least-privilege GITHUB_TOKEN: these jobs only read the repo.
-permissions:
-  contents: read
+# No scope at all by default (OWASP Top 10 CI/CD Security Risks, CICD-SEC-5 and CICD-SEC-6): each job
+# grants only what it uses, so a job added without its own block gets a token that can do nothing.
+permissions: {}
 
 # Newer push to the same ref cancels an in-progress run (faster feedback, fewer minutes). The
 # event is part of the group, so a manual run on main never cancels the push run of a commit there
@@ -675,7 +675,13 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            registry.npmjs.org:443
+            release-assets.githubusercontent.com:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false

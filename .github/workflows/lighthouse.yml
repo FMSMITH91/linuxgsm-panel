@@ -32,8 +32,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 # The event is part of the group, as in ci.yml and security.yml: on main a manual run shares the
 # ref with a push run, and without it the manual run CANCELLED the in-progress push run, leaving a

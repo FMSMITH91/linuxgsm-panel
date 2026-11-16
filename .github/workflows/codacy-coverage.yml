@@ -58,8 +58,7 @@ on:
     types: [ completed ]
   # zizmor: ignore[dangerous-triggers] main's copy runs with no checkout; the report is checked as untrusted data first
 
-permissions:
-  contents: read
+permissions: {}
 
 # One upload per commit at a time: the reporter's partial reports and its `final` for a commit must
 # not interleave with a second run's for the same commit (a re-run of CI). Different commits never

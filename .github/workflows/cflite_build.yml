@@ -16,8 +16,7 @@ on:
     branches: [ main ]
   # zizmor: ignore[concurrency-limits] a group would cancel a pending build on main (see the job's note)
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   build:

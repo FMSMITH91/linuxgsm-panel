@@ -8,7 +8,7 @@
   processes, from the first step of every job. Audit mode: no allow-list, though it still routes
   the job's DNS through its proxy and blocks StepSecurity's global blocklist.
 
-Held here: Harden-Runner is the first step of every job, pinned, in audit mode; zizmor's triggers,
+Held here: Harden-Runner is the first step of every job, pinned, in audit or block mode; zizmor's triggers,
 permissions, install and upload; its scan step, cut out of the workflow and run by bash against a
 stand-in zizmor (a run that read fewer workflow files than exist, or could not run, fails); the
 three lists the alert gates keep (the categories, the workflows codeql-alerts.yml is triggered by,
@@ -36,19 +36,22 @@ from unit.part30 import _block30
 
 _WF42 = os.path.join(_root, ".github", "workflows")
 
-# ── Harden-Runner: the first step of every job, pinned, in audit mode ─────────────────────────────
+# ── Harden-Runner: the first step of every job, pinned, in audit or block mode ────────────────────
 # The step every job carries, by its SHAPE: the pin is a full commit SHA with its version comment,
-# and `with:` holds `egress-policy: audit` and nothing else. The SHA itself is read from the
+# and `with:` holds the egress policy and nothing else. The SHA itself is read from the
 # workflows, not written here: Dependabot's weekly github-actions PR moves every copy and its comment
 # together, and that PR must pass. What fails is a job that differs: another pin than the others,
 # block mode, a later position, or one more input. An input is never harmless here:
 # `disable-sudo-and-containers` breaks ci.yml's root step and the docker jobs, and `policy` or
 # `use-policy-store` lets StepSecurity's policy store replace the egress policy (block) for a job
 # that holds id-token: write (the action's policy-utils.ts mergeConfigs).
+# Block mode is the one other shape: `egress-policy: block` and an `allowed-endpoints` list of
+# host:443 names, nothing else (which jobs block, and why the rest audit, is part223's).
 _HR_STEP42 = _re42.compile(r"      - name: Harden Runner\n"
                            r"        uses: step-security/harden-runner@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)\n"
                            r"        with:\n"
-                           r"          egress-policy: audit\n")
+                           r"          egress-policy: (?:audit\n|block\n          allowed-endpoints: >\n"
+                           r"(?:            [a-z0-9.-]+:443\n)+)")
 # Jobs Harden-Runner cannot run in, each with why. A reusable-workflow call site (`uses:` on the job)
 # has no steps of its own and is exempt by its shape; a job in a container must be listed here (the
 # agent needs the runner VM, not a container: the action's docs/limitations.md).
@@ -96,7 +99,7 @@ def _hr_job_bad42(name, job, job_text):
         return "%s/%s: first step is %r" % (name, job, first.split("\n", 1)[0].strip()), None
     more = _hr_more42(first[m.end():])
     if more:
-        return "%s/%s: Harden-Runner carries more than egress-policy: audit: %r" % (name, job, more), None
+        return "%s/%s: Harden-Runner carries more than its egress policy: %r" % (name, job, more), None
     return None, m.groups()
 
 
@@ -140,7 +143,8 @@ _hr_files42 = sorted(_glob42.glob(os.path.join(_WF42, "*.yml"))
 _hr_jobs42, _hr_bad_all42, _hr_pins42 = _hr_scan42(
     [(os.path.basename(_p42), open(_p42, encoding="utf-8").read()) for _p42 in _hr_files42])
 check("harden-runner: every job of every workflow but deploy begins with the Harden-Runner step, "
-      "SHA-pinned with its version comment, in audit mode with no other input, once, and every job "
+      "SHA-pinned with its version comment, in audit mode or in block mode with a host:443 list and no "
+      "other input, once, and every job "
       "on the same pin",
       not _hr_bad_all42 and len(_hr_pins42) == 1 and len(_hr_files42) >= 22 and len(_hr_jobs42) >= 30
       and set(_HR_EXCEPT42) == {("deploy.yml", "deploy")}

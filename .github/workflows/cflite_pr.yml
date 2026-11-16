@@ -17,8 +17,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   code-change:
@@ -85,6 +84,10 @@ jobs:
               'panel/__init__.py'
               'panel/core/__init__.py'
               'panel/core/stdin_chunks.py'
+              # The push alerts' parsers (fuzz_push).
+              'panel/services/__init__.py'
+              'panel/services/webpush.py'
+              'panel/services/push_alerts.py'
               'tests/fuzz/**'
               '.github/workflows/cflite_pr.yml'
               '.clusterfuzzlite/**'

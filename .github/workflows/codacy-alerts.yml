@@ -45,8 +45,7 @@ on:
     - cron: "40 6 * * *"   # daily, after the morning security scans have had their slot
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: codacy-alerts
@@ -64,6 +63,8 @@ jobs:
       deployment: false
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read   # the checkout; nothing else
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
