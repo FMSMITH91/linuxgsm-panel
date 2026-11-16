@@ -917,7 +917,7 @@ function loadAutoUpd(){
 function enableAutoUpdates(){
   confirmDialog({title:'Enable automatic security updates', icon:'shield-check', confirmClass:'btn-primary', confirmLabel:'Enable',
     bodyText:'Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.',
-    onConfirm:_enableAutoUpdates});
+    onConfirm:function(){ _rmhStepUp(_enableAutoUpdates); }});
 }
 function _enableAutoUpdates(){
   var btn=document.getElementById('diag-autoupd-btn'), msg=document.getElementById('diag-autoupd-msg');

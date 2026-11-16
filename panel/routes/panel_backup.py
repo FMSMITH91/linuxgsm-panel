@@ -1005,6 +1005,7 @@ def _register_panel_diagnostics(app):
     @app.route("/api/panel/enable-auto-updates", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # installs a package and changes the system update settings as root
     def api_panel_enable_auto_updates():
         """Install + enable unattended-upgrades so the OS patches itself."""
         try:

@@ -233,7 +233,10 @@ _STEP_UP_POSTS221 = ("/api/remote/{r}/close-port-22", "/api/remote/{r}/ssh-mode"
                      "/api/remote/{r}/retrust-hostkey", "/api/remote/{r}/run-updates", "/api/remote/{r}/bootstrap",
                      "/api/tailscale/install", "/api/tailscale/up", "/api/tailscale/serve",
                      "/api/remote/{r}/databases/setup", "/api/remote/{r}/databases/admin-login",
-                     "/api/remote/{r}/databases/admin-reveal")
+                     "/api/remote/{r}/databases/admin-reveal",
+                     # Ubuntu Pro attach / service / detach and the OS's automatic security updates.
+                     "/api/remote/{r}/pro-attach", "/api/remote/{r}/pro-service", "/api/remote/{r}/pro-detach",
+                     "/api/panel/enable-auto-updates")
 
 
 def _stale221(minutes_ago=60):
