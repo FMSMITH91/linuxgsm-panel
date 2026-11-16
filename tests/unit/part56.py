@@ -219,9 +219,9 @@ check("install.sh: ...a udp range, or a range that misses the port, is still no 
       _fw56["udp range"] == (True, "OPEN=1 RULED=0") and _fw56["range elsewhere"] == (True, "OPEN=1 RULED=0"),
       repr(_fw56))
 _pub56 = _INS56[_INS56.index('PUBLIC_IP="$('):_INS56.index("host_addr_fallback)", _INS56.index('PUBLIC_IP="$('))]
-check("install.sh: the public address printed beside the IPv4 firewall verdict is fetched over IPv4 "
-      "(ifconfig.me answers IPv6 to an IPv6 connection)",
-      _pub56.count("curl ") == 2 and _pub56.count("curl -4 ") == 2, _pub56)
+check("install.sh: the public address printed beside the IPv4 firewall verdict is fetched over IPv4, "
+      "from one outside service at most",
+      _pub56.count("curl ") == 1 and _pub56.count("curl -4 ") == 1, _pub56)
 
 # ── gamedig's osv-scanner ignores describe the tree they ignore ──────────────────────────────────
 # Each reason names the dependency path it reviewed ("got 13.0.0 -> ... -> http-cache-semantics

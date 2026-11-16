@@ -878,14 +878,14 @@ ufw_port_state() {
 # tailnet's fd7a:115c:a1e0::/48, docker's and LXD's fd00::/8 bridges — and it beat the LAN IPv4.
 # The caller brackets an IPv6 answer.
 host_addr_fallback() {
-    hostname -I 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) { a = $i
+    hostname -I 2>/dev/null | awk -v only="${1:-}" '{ for (i = 1; i <= NF; i++) { a = $i
             if (first == "") first = a
             if (a ~ /:/) { if (v6 == "" && a !~ /^[fF][eE][89aAbB][0-9a-fA-F]:/ && a !~ /^[fF][cCdD][0-9a-fA-F][0-9a-fA-F]:/) v6 = a; continue }
             if (v4 == "") v4 = a
             if (a ~ /^(10|127)\./ || a ~ /^169\.254\./ || a ~ /^192\.168\./ \
                 || a ~ /^172\.(1[6-9]|2[0-9]|3[01])\./ || a ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./) continue
             print a; f = 1; exit } }
-        END { if (!f) { if (v6 != "") print v6; else if (v4 != "") print v4; else if (first != "") print first } }'
+        END { if (!f && only == "") { if (v6 != "") print v6; else if (v4 != "") print v4; else if (first != "") print first } }'
 }
 
 # After an update, say the panel serves HTTPS now — only when that is NEWS, and only with addresses
@@ -911,7 +911,9 @@ _post_update_scheme_hint() {
     echo -e "  ${YELLOW}An http:// address to that port will NOT load (ERR_EMPTY_RESPONSE) — use https://.${NC}"
     [[ -z "${ts_url}" ]] || echo -e "  Through Tailscale Serve it is at ${CYAN}${ts_url}${NC} (a trusted certificate)."
     if [[ "${ufw}" != "closed" ]]; then
-        ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+        # The host's own public IPv4 first; only behind NAT is an outside service asked.
+        ip="$(host_addr_fallback public4)"
+        [[ -n "${ip}" ]] || ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
             || host_addr_fallback)"
         # An IPv6-only host's address goes in brackets, or the printed URL opens nothing.
         [[ "${ip}" != *:* ]] || ip="[${ip}]"
@@ -4151,10 +4153,12 @@ echo ""
 PORT="$(panel_port)"
 SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
 
-# -4: the open/closed decision below reads the IPv4 rule, so the address printed must be IPv4 too.
-# api.ipify.org only ever answers IPv4; ifconfig.me answers in whichever family curl connected over.
-PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
-    || curl -4 -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
+# The open/closed decision below reads the IPv4 rule, so the address printed must be IPv4 too.
+# The host's own public IPv4 first (`hostname -I`, nothing sent): when it has one, no third party
+# is told this host exists (OWASP Top 10 Privacy Risks P10). Only behind NAT, where the host holds a
+# private address alone and the public one is the router's, is one service asked over IPv4 (-4).
+PUBLIC_IP="$(host_addr_fallback public4)"
+[[ -n "${PUBLIC_IP}" ]] || PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
     || host_addr_fallback)"
 # An IPv6-only host's address goes in brackets, or the printed URL (the one carrying the setup
 # token) reads the port as part of the address and opens nothing.
@@ -4207,7 +4211,7 @@ if command -v ufw >/dev/null 2>&1; then
         # choice, and PORT_RULED keeps the auto-open below off it: reading "not public" as "no rule
         # at all" appended `ufw allow` over a tailnet-only rule (opening the admin panel to the
         # internet) or behind a DENY (opening nothing, while saying it had).
-        # The IPv4 rule decides, because the address printed is IPv4 (ipify): a `(v6)` ALLOW left
+        # The IPv4 rule decides, because the address printed is IPv4: a `(v6)` ALLOW left
         # alone read as open. And UFW takes the FIRST matching rule, so an ALLOW listed after a
         # DENY/REJECT from Anywhere opens nothing.
         _ufw_blocked=0

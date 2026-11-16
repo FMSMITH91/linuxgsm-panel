@@ -349,7 +349,7 @@ def _ins_region75(start, end):
 
 
 _FALLBACK75 = _ins_region75("\nhost_addr_fallback() {", "\n}\n") + "\n}\n"
-_FRESH75 = _ins_region75('PUBLIC_IP="$(curl -4', "\n# Tailscale address")
+_FRESH75 = _ins_region75('PUBLIC_IP="$(host_addr_fallback public4)"', "\n# Tailscale address")
 
 
 def _fresh_ip75(addrs):
@@ -367,6 +367,25 @@ _ip75 = {k: _fresh_ip75(v) for k, v in (("v6 only", "2001:db8::5 fe80::1"),
 check("install.sh: with no lookup answering, the fresh install's address is the host's IPv4 one, and "
       "an IPv6-only host's goes in brackets (the printed link opens)",
       _ip75 == {"v6 only": "[2001:db8::5]", "dual": "203.0.113.9", "v4": "203.0.113.9"}, repr(_ip75))
+
+
+def _asked75(addrs):
+    """(PUBLIC_IP, outside lookups made) on the fresh path, the lookup answering 198.51.100.77."""
+    script = ("set -euo pipefail\nlog=\"$2\"\ncurl() { echo \"$*\" >> \"${log}\"; echo 198.51.100.77; }\n"
+              "addrs=\"$1\"\nhostname() { echo \"${addrs}\"; }\n" + _FALLBACK75 + _FRESH75
+              + '\nprintf "%s %s" "${PUBLIC_IP}" "$(wc -l < "${log}")"\n')
+    with _tf75.NamedTemporaryFile("w+", suffix=".log") as log:
+        r = _sp75.run(["bash", "-c", script, "p75", addrs, log.name],  # nosec B603 B607 - bash, fixed script
+                      capture_output=True, text=True, timeout=60)
+    return (r.stdout + r.stderr).strip()
+
+
+_ask75 = {k: _asked75(v) for k, v in (("public v4", "203.0.113.9 2001:db8::5"), ("NAT", "10.0.0.2 172.17.0.1"),
+                                      ("NAT v6", "192.168.1.5 2001:db8::5"))}
+check("install.sh: a host with its own public IPv4 prints it and asks no outside service; only one behind NAT "
+      "(a private IPv4 alone) asks one, once",
+      _ask75 == {"public v4": "203.0.113.9 0", "NAT": "198.51.100.77 1", "NAT v6": "198.51.100.77 1"},
+      repr(_ask75))
 check("install.sh: no `hostname -I` fallback is left outside host_addr_fallback (each site brackets)",
       _INS75.count("hostname -I 2>") == 1 and _INS75.count("|| host_addr_fallback)") == 2,
       repr(_INS75.count("hostname -I 2>")))

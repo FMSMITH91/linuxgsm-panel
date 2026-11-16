@@ -332,6 +332,10 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The installer no longer asks a website for the server's address when the server knows it.**
+  It reads the machine's own address first and prints that. Only a server behind a router (NAT),
+  which holds a private address alone, still asks one outside service, and the second fallback
+  service is gone.
 - **Chat alerts no longer name people or addresses by default.** Telegram, Discord and ntfy alerts
   about sign-ins, attacks, bans and account changes say what happened and point to the Audit log.
   Turn on "Include details (IP addresses, usernames) in chat alerts" under Notifications to get the
