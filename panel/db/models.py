@@ -1550,9 +1550,49 @@ def _anonymise_ip(ip):
     return str(ipaddress.ip_network("%s/%d" % (addr, prefix), strict=False))
 
 
+# A full address inside an audit entry's text ("User logged in from 203.0.113.7", a ban's target).
+# Not one followed by "/<digits>": that is a network, which is what a reduced address already is.
+_TEXT_IPV4_RE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.]*\d)(?!/\d)")
+_TEXT_IPV6_RE = re.compile(r"(?<![0-9A-Fa-f:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![0-9A-Fa-f:/])")
+# The SQL pre-filter: only text that could hold an address is read back at all.
+_TEXT_IP_LIKES = ("%_._%._%._%", "%:%:%")
+
+
+def _reduce_text_ips(text):
+    """`text` with each full IP address in it reduced to its network prefix, as _anonymise_ip does."""
+    def _one(m):
+        reduced = _anonymise_ip(m.group(0))
+        return reduced or m.group(0)
+    text = _TEXT_IPV4_RE.sub(_one, text or "")
+    return _TEXT_IPV6_RE.sub(_one, text) if ":" in text else text
+
+
+def _anonymise_audit_text_ips(cutoff):
+    """Reduce the addresses inside the target and detail text of audit rows older than `cutoff`.
+
+    The ip_address column was the only place ageing reached, while the same address sat in full in
+    "User logged in from <ip>", "last from <ip>" and a ban's or whitelist entry's target, and was
+    kept for as long as the row (OWASP Logging Cheat Sheet, "Data to exclude": pseudonymise; OWASP
+    Top 10 Privacy Risks P6). Returns the ids changed; an already-reduced row reads back unchanged.
+    """
+    cols = (AuditLog.target, AuditLog.detail)
+    rows = (AuditLog.query
+            .filter(AuditLog.timestamp < cutoff,
+                    db.or_(*[c.like(p) for c in cols for p in _TEXT_IP_LIKES]))
+            .all())
+    changed = set()
+    for r in rows:
+        target, detail = _reduce_text_ips(r.target), _reduce_text_ips(r.detail)
+        if (target, detail) != (r.target or "", r.detail or ""):
+            r.target, r.detail = target, detail
+            changed.add(r.id)
+    return changed
+
+
 def anonymise_audit_ips(days):
     """Reduce audit IPs older than `days` to their network prefix. Returns rows changed.
 
+    The address column and any address inside the entry's target or detail text alike.
     Cannot affect login throttling: the brute-force counter looks back LOGIN_WINDOW, which is 300
     SECONDS, so it never reads a row old enough for this to touch.
     """
@@ -1581,9 +1621,10 @@ def anonymise_audit_ips(days):
             .all())
     for r in rows:
         r.ip_address = _anonymise_ip(r.ip_address)
-    if rows:
+    changed = {r.id for r in rows} | _anonymise_audit_text_ips(cutoff)
+    if changed:
         db.session.commit()
-    return len(rows)
+    return len(changed)
 
 
 def _unzone_audit_ips():

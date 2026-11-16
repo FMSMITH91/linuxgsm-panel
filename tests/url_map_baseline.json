@@ -1608,6 +1608,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:notifications_test"
     ],
     "methods": [

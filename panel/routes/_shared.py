@@ -173,15 +173,21 @@ def _whitelist_mutate(app, body):
     return jsonify({"success": True, "added": canon, "whitelist": _security_whitelist()})
 
 
+# One try per host per day at most. It was every 5 minutes while a lookup kept failing (no curl,
+# outbound blocked), for as long as any page was open, and each try may ask a third party
+# (remote_public_ip). A found address is stored on the host and never asked for again.
+_PUBIP_RETRY_SECS = 86400
+
+
 def _maybe_resolve_public_ip(app, remote_id):
-    """Resolve + cache a remote's public IP in the BACKGROUND (one SSH), rate-limited per remote.
+    """Resolve + cache a remote's public IP in the BACKGROUND (one SSH), at most once a day per remote.
 
     Request/render paths use remote.host as the immediate connect-address fallback and pick up the
     real public IP on a later load — instead of blocking on an SSH that hangs for the full connect
     timeout when the remote is unreachable. Best-effort; never raises.
     """
     now = time.time()
-    if now - _pubip_resolve_attempts.get(remote_id, 0) < 300:
+    if now - _pubip_resolve_attempts.get(remote_id, 0) < _PUBIP_RETRY_SECS:
         return
     _pubip_resolve_attempts[remote_id] = now
     _app = app

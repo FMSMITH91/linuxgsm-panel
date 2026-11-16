@@ -695,3 +695,10 @@ c84fd72d A download that fails part-way no longer shows a Python traceback.
 023461de The SQL audit line hides quoted values after a comment too.
 c4fdf70f Push alerts never connect to an IPv4-compatible IPv6 address.
 9544d871 Each CI job's token starts with no permissions.
+6df6d62e ntfy privacy help.
+81222504 Where browser alerts travel.
+3c557963 Chat alerts no longer name people or addresses by default.
+f24b992a Fewer public-IP lookups.
+635652b7 Old audit entries no longer keep full IP addresses in their text.
+763edbaf The chat bots mask players' IP addresses in console replies.
+2c635567 Sending a test notification asks for your password again.
