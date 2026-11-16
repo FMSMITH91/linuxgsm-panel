@@ -123,7 +123,7 @@ def _origin_refusal():
             return None
     if origin and _socket_origin_allowed(origin, request.environ):
         return None
-    return "foreign %s %r on %s" % (which, origin[:120], request.method)
+    return "foreign " + which + " " + repr(origin[:120]) + " on " + request.method
 
 
 def _referer_origin(referer):
@@ -138,8 +138,8 @@ def _referer_origin(referer):
         return ""
     if u.scheme not in ("http", "https") or not host:
         return ""
-    host = "[%s]" % host if ":" in host else host
-    return "%s://%s%s" % (u.scheme, host, ":%d" % port if port else "")
+    netloc = ("[" + host + "]" if ":" in host else host) + (":" + str(port) if port else "")
+    return u.scheme + "://" + netloc
 
 
 def _signed_in_user():
