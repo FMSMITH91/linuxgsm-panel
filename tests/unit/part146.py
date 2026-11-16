@@ -91,8 +91,8 @@ check("debug log: a logger outside the panel's two is not written", "p146 not ou
 check("debug log: the file is the owner's alone (0600)", _mode146 == 0o600, repr(_mode146))
 check("debug log: capped at 5 MB a file with 3 older ones kept (20 MB at most), at DEBUG",
       _cap146 == (5 * 1024 * 1024, 3, logging.DEBUG), repr(_cap146))
-check("debug log: the journal's handler stays at WARNING, so DEBUG still goes only to the file",
-      _stderr146 and all(lv == logging.WARNING for lv in _stderr146), repr(_stderr146))
+check("debug log: the journal's handler stays at INFO, so DEBUG still goes only to the file",
+      _stderr146 and all(lv == logging.INFO for lv in _stderr146), repr(_stderr146))
 check("debug log: detaching the handlers closes the file too (no descriptor left open on it)",
       _closed146 == (True, 0), repr(_closed146))
 check("debug log: the suite's own loggers are left as found (no handler of this part remains)",

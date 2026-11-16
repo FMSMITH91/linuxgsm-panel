@@ -1513,7 +1513,7 @@ def _session_lifetimes(cfg, app=None):
 def _attach_debug_logging(app, cfg=None):
     """The stderr handler, the error counter and the opt-in debug log (debug_report/errors.py), once.
 
-    After app.logger exists, so Flask has already added its own default handler. Best-effort: a
+    After app.logger exists, so the stderr handler replaces Flask's default one. Best-effort: a
     logging setup that fails must never stop the panel starting.
     """
     try:

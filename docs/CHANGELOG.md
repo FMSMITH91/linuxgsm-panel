@@ -467,6 +467,9 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Panel warnings and errors are stored at their real priority in the system journal.** Each line
+  the panel writes now carries its level, so `journalctl -p warning` finds the panel's warnings and
+  errors, and informational events such as startup maintenance results reach the journal too.
 - **Every page can ask for the password in place.** The Tailscale pages, the Databases manager
   and the panel's notices sent a stale sign-in to the full confirm page and lost what was typed;
   the in-page dialog now loads on every page.
@@ -1529,6 +1532,8 @@ compares git commits, not this file.
 
 ### Security
 
+- **Log lines cannot forge a journal priority.** Text inside a log message can no longer start a
+  journal line at a priority of its own choosing; every line of a message keeps that message's level.
 - **An added API-token header no longer skips the password re-check.** A request signed in by the
   browser's session cookie must still confirm the password after the step-up window, even if it
   also carries an "Authorization: Bearer" header; only a request an API token signed in, with no

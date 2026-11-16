@@ -4,10 +4,22 @@ Owner: builder B3. The swallowed-error counter fed by the logging handler app.py
 read from runtime_stats.
 
 THE HANDLERS (attached once, by app.create_app() through attach_log_handlers):
-  * a stderr handler at WARNING on the 'panel' and 'notifications' loggers, formatted
-    '%(levelname)s %(name)s: %(message)s'. The panel configured no logging at all, so its warnings
-    reached the journal bare, through logging.lastResort; attaching any handler to a chain turns
-    lastResort off for that chain, which is why this one has to exist before the counter can.
+  * a stderr handler at INFO on the 'panel' and 'notifications' loggers and on Flask's app logger,
+    formatted '%(levelname)s %(name)s: %(message)s'. The panel configured no logging at all, so its
+    warnings reached the journal bare, through logging.lastResort; attaching any handler to a chain
+    turns lastResort off for that chain, which is why this one has to exist before the counter can.
+    INFO, not WARNING: the panel's INFO lines are operational events worth keeping (a startup
+    migration's count, a refused bot command, a stranded install reconciled, an update found), and
+    every one is event-driven, none per poll tick, so the journal does not fill with them. On Flask's
+    logger it REPLACES Flask's default handler, whose lines carried no priority (a 500's traceback
+    still prints: this handler formats exc_info as that one did), and that logger is set to INFO.
+  * When stderr IS the journal (systemd's JOURNAL_STREAM names its device:inode, and fd 2 still
+    matches it), every line of a record starts with its sd-daemon(3) priority, <3> error, <4>
+    warning, <6> info, so journald stores PRIORITY and `journalctl -p warning` finds them. Every
+    line, a traceback's too: journald reads the prefix per line (a newline or a NUL ends one), so a
+    record's continuation lines keep its priority, and a message argument holding a newline cannot
+    start a line journald would read at a priority of its own choosing. Anywhere else (a terminal,
+    a file, a test), plain text as before.
   * the debug log, only when config.json says "debug_log": true (attach_debug_file): every DEBUG
     record of 'panel' and 'notifications' to data/debug.log, size-capped and owner-only.
   * the error counter, on 'panel', 'notifications' and Flask's app logger. It keeps a COUNT per
@@ -17,9 +29,10 @@ THE HANDLERS (attached once, by app.create_app() through attach_log_handlers):
     and any record that carries exc_info (the loops swallow their failures at DEBUG with it).
 
 'panel' and 'notifications' are set to DEBUG so those DEBUG records are made at all; the stderr
-handler's own level keeps them out of the journal. Flask's app logger keeps its level; the counter is
-attached to it at WARNING, after app.logger exists, so Flask still adds its own default handler and a
-500's traceback still prints. panel.auth's file handler (propagate=False) is not touched.
+handler's own level keeps them out of the journal. The counter is attached to Flask's app logger at
+WARNING, after app.logger exists. An app logger whose name is inside one of LOGGERS ('panel.x')
+already reaches that chain's stderr handler, so it gets no second one. panel.auth's file handler
+(propagate=False) is not touched.
 
 Both handlers are safe to call from a native tpool thread: the stderr handler's lock is a NATIVE
 RLock (a green one cannot be waited on from a native thread while a greenlet holds it), and the
@@ -29,6 +42,7 @@ increment under a race is acceptable, a raise or a hang is not).
 import logging
 import logging.handlers
 import os
+import re
 import sys
 import time
 
@@ -37,6 +51,12 @@ from panel.ops.debug_report._base import Result, ago, cut_words
 
 AREA = "Errors since start"
 FORMAT = "%(levelname)s %(name)s: %(message)s"
+JOURNAL_LEVEL = logging.INFO    # what reaches stderr, and so the journal
+# sd-daemon(3): the priority prefix of a line on a stream journald reads, highest first.
+SD_PRIORITY = ((logging.CRITICAL, "<2>"), (logging.ERROR, "<3>"), (logging.WARNING, "<4>"),
+               (logging.INFO, "<6>"))
+SD_DEBUG = "<7>"
+_JOURNAL_LINE_END = re.compile(r"[\n\x00]")     # where journald ends a line (journald-stream.c)
 LOGGERS = ("panel", "notifications")
 TEMPLATE_MAX = 200          # stored
 SHOWN_MAX = 120             # printed
@@ -57,14 +77,49 @@ def _native_rlock():
         return threading.RLock()
 
 
+def sd_prefix(levelno):
+    """The sd-daemon(3) priority prefix for a record at `levelno`."""
+    for floor, prefix in SD_PRIORITY:
+        if levelno >= floor:
+            return prefix
+    return SD_DEBUG
+
+
+def stream_is_journal(stream, environ=None):
+    """Whether `stream` is the journal stream systemd started the process with.
+
+    systemd.exec(5): JOURNAL_STREAM holds the device and inode of that stream as "dev:ino", and a
+    process should compare them with its own descriptor's, since the variable outlives a redirect.
+    """
+    value = (os.environ if environ is None else environ).get("JOURNAL_STREAM", "")
+    dev, sep, ino = value.partition(":")
+    if not (sep and dev.isdecimal() and ino.isdecimal()):
+        return False
+    try:
+        st = os.fstat(stream.fileno())
+    except (AttributeError, OSError, ValueError):   # no descriptor (a StringIO), or a closed one
+        return False
+    return (st.st_dev, st.st_ino) == (int(dev), int(ino))
+
+
+class JournalFormatter(logging.Formatter):
+    """FORMAT with the record's sd-daemon priority at the start of every line."""
+
+    def format(self, record):
+        """Format the record, then prefix each line journald will read with its priority."""
+        prefix = sd_prefix(record.levelno)
+        return "\n".join(prefix + line for line in _JOURNAL_LINE_END.split(super().format(record)))
+
+
 class StderrHandler(logging.StreamHandler):
     """A StreamHandler on sys.stderr whose lock a native thread can wait on."""
 
     def __init__(self):
-        """Write to the process's stderr at WARNING in FORMAT."""
+        """Write to the process's stderr at JOURNAL_LEVEL in FORMAT, priority-prefixed on the journal."""
         super().__init__(sys.stderr)
-        self.setLevel(logging.WARNING)
-        self.setFormatter(logging.Formatter(FORMAT))
+        self.setLevel(JOURNAL_LEVEL)
+        journal = stream_is_journal(self.stream)
+        self.setFormatter(JournalFormatter(FORMAT) if journal else logging.Formatter(FORMAT))
         setattr(self, _MARK, "stderr")
 
     def createLock(self):
@@ -206,21 +261,57 @@ def attach_log_handlers(app_logger=None, cfg=None, data_dir=None):
             lg.addHandler(ErrorCounter())
             added.append(name + ":counter")
         lg.setLevel(logging.DEBUG)
-    if app_logger is not None and not _has(app_logger, "counter"):
-        app_logger.addHandler(ErrorCounter(logging.WARNING))
-        added.append(app_logger.name + ":counter")
+    if app_logger is not None:
+        added += _attach_app_logger(app_logger)
     if data_dir is not None:
         debug_file_from_config(cfg, data_dir)
     return added
 
 
+def _in_chain(logger):
+    """Whether `logger` is one of LOGGERS or below one, so its records reach that chain's handlers."""
+    return any(logger.name == n or logger.name.startswith(n + ".") for n in LOGGERS)
+
+
+def _attach_app_logger(app_logger):
+    """The counter on Flask's app logger, and the stderr handler in place of Flask's default one.
+
+    Flask's default handler goes either way: inside a chain, that chain's stderr handler already
+    writes the logger's records, prefixed.
+    """
+    from flask.logging import default_handler
+    added = []
+    if default_handler in app_logger.handlers:      # a second, unprefixed copy of every line
+        app_logger.removeHandler(default_handler)
+        setattr(app_logger, _MARK, "flask-default")
+    if not _in_chain(app_logger) and not _has(app_logger, "stderr"):
+        app_logger.addHandler(StderrHandler())
+        added.append(app_logger.name + ":stderr")
+    if app_logger.level == logging.NOTSET:
+        app_logger.setLevel(JOURNAL_LEVEL)
+    if not _has(app_logger, "counter"):
+        app_logger.addHandler(ErrorCounter(logging.WARNING))
+        added.append(app_logger.name + ":counter")
+    return added
+
+
+def _restore_flask_default(app_logger):
+    """Give Flask's default handler and the NOTSET level back to a logger _attach_app_logger took it from."""
+    if app_logger is not None and getattr(app_logger, _MARK, None) == "flask-default":
+        from flask.logging import default_handler
+        app_logger.addHandler(default_handler)
+        app_logger.setLevel(logging.NOTSET)
+        delattr(app_logger, _MARK)
+
+
 def detach_log_handlers(app_logger=None):
-    """Remove what attach_log_handlers added (tests), and put the levels back to NOTSET."""
+    """Remove what attach_log_handlers added (tests), and put the levels and Flask's handler back."""
     for lg in [logging.getLogger(n) for n in LOGGERS] + ([app_logger] if app_logger else []):
         for h in [h for h in lg.handlers if getattr(h, _MARK, None)]:
             lg.removeHandler(h)
             if getattr(h, _MARK, None) == "debugfile":
                 h.close()
+    _restore_flask_default(app_logger)
     for name in LOGGERS:
         logging.getLogger(name).setLevel(logging.NOTSET)
 
