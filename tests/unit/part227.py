@@ -8,6 +8,10 @@
   on the row), and checked against the host itself when nothing is pinned, its key then pinned.
 * The fuzz image's base is pinned as tag@sha256, the form Renovate's dockerfile manager tracks, and
   that manager's file pattern matches that Dockerfile and no workflow; Dependabot has no docker entry.
+* A root install that still has the wide sudo grant (system service, no helper, `sudo -n true`
+  allowed) says so on the panel host's page, with the command that narrows it: the root-owned
+  installer when it is there, else GitHub's, never the panel's own checkout. A host with the helper
+  is never asked the sudo probe.
 
 HOW IT RUNS. Through the real routes on part12's Flask app, with its transport tripwire armed and a
 stand-in SSH client whose connect() asks the real host key policy first and records a credential only
@@ -22,11 +26,12 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check, eq
 from unit.part10 import _Over
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
+from unit.part12 import (P9_ADMIN, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
                          _p9_restore_all)
 from panel.core.config import encrypt_secret as _enc227
 from panel.core.validation import host_key_fingerprint_arg as _fp_arg227
 from panel.db.models import RemoteServer as _RS227, db as _db227
+from panel.ops import system_ops as _so227, tailscale_integration as _ts227
 from panel.ops.ssh_manager import hosts as _hosts227
 
 _trips227 = len(_P9_TRIPPED)
@@ -166,6 +171,10 @@ def _parse227():
        [_FP227, _FP227, _FP227, "", None, None, None])
 
 
+# What get_server_status answers for the pages here (part131's stand-in has the same fields).
+_STATUS227 = {"has_sudo": True, "ufw": {"enabled": True, "rules": []},
+              "tailscale_ssh": {"enabled": False, "running": True}, "tailscale_ssh_allowed": False,
+              "tailscale_interface": "tailscale0", "tailscale_ufw_allowed": False, "updates": {}, "uptime": ""}
 _ROOT227 = _os227.path.dirname(_os227.path.dirname(_os227.path.dirname(_os227.path.abspath(__file__))))
 # FROM <registry/image>:<tag>@sha256:<64 hex>: Docker pulls by the digest, Renovate looks the tag up.
 _FROM_PIN227 = _re227.compile(r"^FROM [a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}(?: AS \w+)?$")
@@ -199,6 +208,54 @@ def _docker_pins227():
                               % ("a" * 64, "b" * 64))), 2)
 
 
+def _grant_page227(system, helper, sudo, root_copy=False):
+    """Render the panel host's two pages as a superadmin with this grant; (notes, sudo probes, commands)."""
+    probes = []
+
+    def _probe(force=False):
+        probes.append(1)
+        return sudo
+    real_stat = _os227.stat
+
+    def _stat(path, *a, **k):
+        if path.endswith("linuxgsm-panel/install.sh"):
+            if not root_copy:
+                raise FileNotFoundError(path)
+            return NS(st_uid=0)
+        return real_stat(path, *a, **k)
+    _p9_patch(_so227, "_is_system_service", lambda: system)
+    _p9_patch(_so227, "_helper_present", lambda recheck=False: helper)
+    _p9_patch(_so227, "_check_sudo", _probe)
+    _p9_patch(_so227, "os", _Over(_os227, stat=_stat))
+    # The pages' host reads (status, Funnel), answered as part177 answers them.
+    _p9_patch(_so227, "get_server_status", lambda *a, **k: dict(_STATUS227))
+    _p9_patch(_ts227, "panel_funnel_facts", lambda cfg: {})
+    c = _p9_client(P9_ADMIN)
+    pages = [c.get("/server-management"), c.get("/remote/%d/manage" % P9_LOCAL)]
+    html = [p.get_data(as_text=True) if p.status_code == 200 else "status %d" % p.status_code for p in pages]
+    cmds = [_re227.search(r'id="wide-sudo-note".*?<code[^>]*>([^<]*)</code>', h, _re227.S) for h in html]
+    return (["wide-sudo-note" in h for h in html], len(probes),
+            [m.group(1).replace("&amp;", "&") if m else None for m in cmds])
+
+
+def _wide_grant227():
+    """The wide-grant notice, through both panel-host pages."""
+    curl = "curl -fsSL %s | sudo bash" % _so227._INSTALL_URL
+    eq("sudo grant: a root install with no helper and passwordless sudo is told on both panel host pages, with "
+       "GitHub's installer piped to sudo when no root-owned copy is there",
+       _grant_page227(True, False, True)[0::2], ([True, True], [curl, curl]))
+    got = _grant_page227(True, False, True, root_copy=True)[2]
+    eq("sudo grant: ...and the root-owned installer when it is there, never the panel's own checkout",
+       (got, any(str(_so227.PANEL_DIR) in (c or "") for c in got)),
+       (["cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh"] * 2, False))
+    eq("sudo grant: the narrow grant (helper present) shows no notice and never runs the sudo probe",
+       _grant_page227(True, True, True)[:2], ([False, False], 0))
+    eq("sudo grant: a per-user install (no system service) shows no notice and never runs the sudo probe",
+       _grant_page227(False, False, True)[:2], ([False, False], 0))
+    eq("sudo grant: no helper and sudo refused (no grant at all) shows no notice",
+       _grant_page227(True, False, False)[0], [False, False])
+
+
 def _cleanup227():
     """Remove this part's rows."""
     with _p9.app_context():
@@ -210,7 +267,7 @@ def _cleanup227():
 
 
 try:
-    for _section227 in (_adds227, _edits227, _parse227, _docker_pins227):
+    for _section227 in (_adds227, _edits227, _parse227, _docker_pins227, _wide_grant227):
         _arm227()
         try:
             _section227()
