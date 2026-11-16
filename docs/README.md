@@ -47,7 +47,7 @@ Then open **the link the installer prints at the end** — `https://your-server:
 
 ### Updating
 
-- **In the panel:** *Panel Server → Update* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
+- **In the panel:** *Panel Server → Panel → Panel Updates → Update now* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
 - **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate (or first a release it may not skip, below).
 
 Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
@@ -142,12 +142,13 @@ A pending wait shows on the host's Power card with a **Cancel** button and gives
 
 ### Alerts on your phone or browser
 
-Each user can have the panel's alerts sent to their own browsers and phones as notifications (Web Push). They arrive when the panel tab is closed and **after you sign out**, so a change to your account (a password change, two-factor turned off, a new API token) still reaches you. The panel never sends e-mail.
+Each user can have the panel's alerts sent to their own browsers and phones as notifications (Web Push), and to their own Telegram chat. They arrive when the panel tab is closed and **after you sign out**, so a change to your account (a password change, two-factor turned off, a new API token) still reaches you. The panel never sends e-mail.
 
 - **Turn on:** Account → **Alerts on this device** → **Turn on alerts**, then allow notifications when the browser asks. You confirm your password first if you have not signed in in the last few minutes. Up to 10 devices per account.
 - **HTTPS is required.** Browsers only allow push on a secure page: the panel's HTTPS address (or Tailscale Serve), not plain `http://`. On iPhone and iPad, add the panel to the Home Screen and turn alerts on from there.
 - **Which alerts:** you choose (Account → Which alerts). By default: a server goes offline unexpectedly, a host becomes unreachable, attacks on admin sign-ins, and changes to your own account. You only get alerts about servers and hosts you can access; panel-wide ones (backups, updates, sign-ins, bans) go to super admins only. This is checked when each alert is sent.
 - **What a lock screen shows:** the alert's title and the server's or host's name. Never an IP address, a player, a password or file contents. Tapping it opens the right page (you sign in first if you are signed out). The content is encrypted end to end between the panel and your browser; the push service only carries it.
+- **Telegram:** Account → **Link my Telegram** (shown when the panel's Telegram bot is set up on the Notifications page), then **Open Telegram and press Start**. That chat gets the same alerts, with the same short text, as your browsers; it cannot send the bot commands. Linking asks for your password if you have not signed in recently, and the link code works once, for 10 minutes. **Unlink Telegram** stops it.
 - **Stop them:** **Turn off on this device**, **Remove** a device from Account → Your alert devices, or tick **Stop alerts on this device** when you sign out. Deactivating or deleting an account removes its devices.
 
 Push goes through your browser's own push service (Google for Chrome and most Android browsers, Mozilla for Firefox, Apple for Safari, Microsoft for Edge on Windows); the panel sends only to those services, at public addresses.
@@ -307,8 +308,8 @@ location / {
 - **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup, changing users or groups and saving Settings or Notifications ask for the password again after 10 minutes (Settings > Sessions & Security, 0 to switch it off; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
   - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page (not the panel owner's: only the panel host can), or on the panel host run `linuxgsm-panel-recover disable-2fa <user>` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
-- **Encryption at rest** — SSH credentials, database logins, emails, 2FA secrets and bot tokens are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Host → Maintenance → Diagnostics); `data/` is `chmod 700`.
-- **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict CSP and security headers, and input validation on anything that becomes an OS operation.
+- **Encryption at rest** — SSH credentials and remote host addresses, database logins, emails, 2FA secrets, bot and channel tokens, linked Telegram chats, alert-device subscriptions and session addresses are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Panel Server → Panel → Diagnostics); `data/` is `chmod 700`. Passwords (Argon2id), API tokens, 2FA backup codes and invite links are stored only as hashes.
+- **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a Content Security Policy (scripts by nonce only; inline styles are still allowed while they are moved out) and security headers, and input validation on anything that becomes an OS operation.
 
 > Prefer Tailscale over exposing the panel to the internet, and never commit `data/` (already in `.gitignore`). The security model, including what the panel can do as root on its own host, is in [SECURITY.md](../.github/SECURITY.md).
 
@@ -322,6 +323,7 @@ sudo linuxgsm-panel-recover reset-password <user>
 sudo linuxgsm-panel-recover disable-2fa <user>       # lost your authenticator
 sudo linuxgsm-panel-recover create-admin <user>      # or: promote / activate <user>
 sudo linuxgsm-panel-recover set-owner <user>         # make an active superadmin the panel owner
+sudo linuxgsm-panel-recover set-site-domain <host[:port]>   # the address browsers use, behind a proxy that hides it
 ```
 
 The panel host's shell is the authority over the panel owner. `set-owner` moves ownership to any

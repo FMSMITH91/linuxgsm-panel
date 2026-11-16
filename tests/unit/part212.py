@@ -489,6 +489,29 @@ def _old_rsa_cert212(cert_path, key_path):
         fh.write(cert.public_bytes(_ser.Encoding.PEM))
 
 
+def _operator_cert212(cp, kp):
+    """A CA-signed RSA-2048 certificate with 20 days left in cp/kp, as an operator would install one."""
+    import datetime as _dt
+    from cryptography import x509 as _x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec, rsa as _rsa
+    from cryptography.x509.oid import NameOID
+    ca_key = _ec.generate_private_key(_ec.SECP256R1())
+    ca = _x509.Name([_x509.NameAttribute(NameOID.COMMON_NAME, "p212 test CA")])
+    leaf_key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = _dt.datetime.now(_dt.timezone.utc)
+    cert = (_x509.CertificateBuilder()
+            .subject_name(_x509.Name([_x509.NameAttribute(NameOID.COMMON_NAME, "panel.invalid")]))
+            .issuer_name(ca).public_key(leaf_key.public_key()).serial_number(_x509.random_serial_number())
+            .not_valid_before(now - _dt.timedelta(days=60)).not_valid_after(now + _dt.timedelta(days=20))
+            .sign(ca_key, hashes.SHA256()))
+    with open(cp, "wb") as fh:
+        fh.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(kp, "wb") as fh:
+        fh.write(leaf_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                        serialization.NoEncryption()))
+
+
 def _s212_cert():
     from cryptography import x509 as _x509
     from cryptography.hazmat.primitives.asymmetric import ec as _ec
@@ -512,6 +535,18 @@ def _s212_cert():
             again = _x509.load_pem_x509_certificate(fh.read())
         check("tls: ...while a current ECDSA certificate is kept as it is (no new one at every start)",
               again.serial_number == serial)
+        _operator_cert212(cp, kp)
+        with open(cp, "rb") as fh:
+            mine = _x509.load_pem_x509_certificate(fh.read()).serial_number
+        _certs212._ensure_self_signed_cert(cp, kp, "panel.invalid")
+        with open(cp, "rb") as fh:
+            kept = _x509.load_pem_x509_certificate(fh.read())
+        check("tls: an operator's CA-signed certificate (RSA, 20 days left) is kept, never replaced by a "
+              "self-signed one, and its expiry alert says to renew it and restart",
+              kept.serial_number == mine and kept.issuer != kept.subject
+              and _certs212._expiry_text(20, True).startswith("Your TLS certificate expires in 20 day(s) — renew it")
+              and "restart the panel and it makes a new one" in _certs212._expiry_text(20, False),
+              repr((kept.serial_number == mine, kept.issuer == kept.subject)))
     finally:
         _sh212.rmtree(tmp, ignore_errors=True)
 
