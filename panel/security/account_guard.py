@@ -212,7 +212,18 @@ def mark_authenticated(now=None):
 
 
 def _bearer():
-    return request.headers.get("Authorization", "").startswith("Bearer ")
+    """True only for a request an API token signed in: a Bearer header and NO browser session cookie.
+
+    A header alone is not enough: flask-login signs a request in from its session (or remember)
+    cookie first, so a cookie-borne session with an added "Authorization: Bearer x" header is still
+    the browser session, and must not skip step-up or the required-2FA gate. The same condition the
+    CSRF and Origin checks exempt on (account_security._cookie_less_bearer).
+    """
+    if not request.headers.get("Authorization", "").startswith("Bearer "):
+        return False
+    names = (current_app.config["SESSION_COOKIE_NAME"],
+             current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token"))
+    return not any(request.cookies.get(n) for n in names)
 
 
 def step_up_needed():

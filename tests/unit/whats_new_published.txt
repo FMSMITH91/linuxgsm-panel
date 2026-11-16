@@ -702,3 +702,5 @@ f24b992a Fewer public-IP lookups.
 635652b7 Old audit entries no longer keep full IP addresses in their text.
 763edbaf The chat bots mask players' IP addresses in console replies.
 2c635567 Sending a test notification asks for your password again.
+66bcee55 Every page can ask for the password in place.
+12c3e9a9 An added API-token header no longer skips the password re-check.

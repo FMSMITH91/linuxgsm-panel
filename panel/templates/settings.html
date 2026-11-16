@@ -163,5 +163,4 @@
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/settings.js') }}"></script>
 {# A stale sign-in confirms its password in place before the save (step_up_required on its POST). #}
-<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/step_up_form.js') }}"></script>
 {% endblock %}
