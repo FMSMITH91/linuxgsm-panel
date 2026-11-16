@@ -6,12 +6,21 @@
   and the real queue and sender, with only the provider POST stubbed.
 * The bots' console replies mask players' addresses under the same switch.
 * ntfy without an access token: the page warns and offers a long random topic.
+* Public-IP lookups: the host's own public address asks no third party; one service at most; a
+  failing lookup is retried once a day, not every five minutes.
+* Audit ageing reduces the addresses inside an entry's text too, on the same rule as the IP column.
 Every route runs on part12's app with its transport tripwire armed.
 """
+from datetime import timedelta as _td224
+from types import SimpleNamespace as _NS224
+
 import app as _app224
 from unit.part01 import check, eq
-from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_drain, _p9_patch, _p9_patch_sm,
-                         _p9_restore_all, _p9_threading, _P9Thread)
+from unit.part12 import (P9_ADMIN, P9_HOST2, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_drain, _p9_patch,
+                         _p9_patch_sm, _p9_queue, _p9_restore_all, _p9_set_host, _p9_sh, _p9_threading, _P9Thread)
+from panel.core.clock import utcnow as _utcnow224
+from panel.db import models as _models224
+from panel.ops.ssh_manager import _core as _core224
 from panel.services import chat_privacy as _cp224
 from panel.services import console_secrets as _cs224
 from panel.services import notifications as _nt224
@@ -113,15 +122,102 @@ def _ntfy_warning224():
     tokened = c.get("/notifications").get_data(as_text=True)
     topic = _cp224.suggested_topic()
     eq("ntfy: without an access token the page warns that a guessed topic is readable and offers a random "
-       "topic; with a token it does not; the suggestion is a valid, long topic",
+       "topic; with a token it does not; the self-hosting how-to is linked either way; the suggestion is a "
+       "valid, long topic",
        ("anyone who guesses the topic can read these alerts" in bare, 'data-action="useSuggestedTopic"' in bare,
-        "anyone who guesses the topic can read these alerts" in tokened,
+        "anyone who guesses the topic can read these alerts" in tokened, "/docs/NTFY-SELF-HOST.md" in tokened,
         bool(_nt224._NTFY_TOPIC_RE.match(topic)), len(topic) >= 30, topic != _cp224.suggested_topic()),
-       (True, True, False, True, True, True))
+       (True, True, False, True, True, True, True))
+
+
+def _push_note224():
+    page = _p9_client(P9_ADMIN).get("/account").get_data(as_text=True)
+    eq("push: the Account page's alerts card says who relays a push (Google, Microsoft, Apple or Mozilla, by browser) "
+       "and that ntfy uses no web push",
+       ('id="push-relay-note"' in page, "Google for Chrome and most Chromium browsers, Microsoft for Edge, Apple for Safari, Mozilla" in page),
+       (True, True))
+
+
+# ── 3. public-IP lookups ─────────────────────────────────────────────────────────────────────────
+def _pubip_asked224(route_src, answer):
+    """(result, commands run) for remote_public_ip on a host whose default route leaves from `route_src`."""
+    asked = []
+
+    def _rc(server, cmd, timeout=30, sudo=None, stdin_text=None):
+        asked.append(cmd)
+        return ((route_src if "route get" in cmd else answer), "", 0)
+    _p9_patch(_core224, "run_command", _rc)
+    srv = _NS224(id=-22401, name="p224", host="p224.example.invalid", is_local=False)
+    _core224._gamedig_host_cache.pop(srv.id, None)
+    try:
+        return _core224.remote_public_ip(srv), asked
+    finally:
+        _core224._gamedig_host_cache.pop(srv.id, None)
+
+
+def _pubip_sources224():
+    own, own_asked = _pubip_asked224("1.2.3.4", "1.2.3.5")
+    nat, nat_asked = _pubip_asked224("10.0.0.5", "1.2.3.4")
+    eq("public IP: a host whose own address is public answers with it and asks no third party; behind NAT "
+       "one service answers, and ifconfig.me is never asked",
+       (own, any("ipify" in c or "opendns" in c for c in own_asked), nat, sum("ipify" in c for c in nat_asked),
+        any("ifconfig.me" in c for c in own_asked + nat_asked)),
+       ("1.2.3.4", False, "1.2.3.4", 1, False))
+
+
+def _pubip_daily224():
+    clock = {"t": 1_000_000.0}
+    _p9_patch(_p9_sh, "time", _NS224(time=lambda: clock["t"]))
+    _p9_patch(_p9_sh, "threading", _p9_threading(_P9Thread))
+    _p9_patch(_p9_sh, "remote_public_ip", lambda r: "")        # every lookup fails
+    _p9_set_host(P9_HOST2, public_ip=None)
+    _p9_sh._pubip_resolve_attempts.pop(P9_HOST2, None)
+    del _p9_queue[:]
+    queued = []
+    for step in (0, 6 * 60, 23 * 3600, 25 * 3600):
+        clock["t"] = 1_000_000.0 + step
+        _p9_sh._maybe_resolve_public_ip(_p9, P9_HOST2)
+        queued.append(len(_p9_queue))
+        _p9_drain()
+    _p9_sh._pubip_resolve_attempts.pop(P9_HOST2, None)
+    eq("public IP: a lookup that keeps failing is tried again after a day, not after five minutes "
+       "(asked at 0, 6 min, 23 h, 25 h)", queued, [1, 0, 0, 1])
+
+
+# ── 4. audit text ages like the IP column ────────────────────────────────────────────────────────
+def _audit_text224():
+    now = _utcnow224()
+    seed = (("login", "", "User logged in from 203.0.113.7", 200), ("fail2ban_ban", "198.51.100.9", "", 200),
+            ("login_locked", "bob", "paused (last from 2001:db8:1:2:3:4:5:6)", 200),
+            ("login", "", "User logged in from 203.0.113.8", 1))
+    ids = []
+    with _p9.app_context():
+        for action, target, detail, age in seed:
+            row = _models224.AuditLog(username="p224", action=action, target=target, detail=detail,
+                                      ip_address="", timestamp=now - _td224(days=age))
+            _models224.db.session.add(row)
+            _models224.db.session.commit()
+            ids.append(row.id)
+        try:
+            first = _models224.anonymise_audit_ips(90)
+            again = _models224.anonymise_audit_ips(90)
+            got = [(r.target, r.detail) for r in (_models224.db.session.get(_models224.AuditLog, i) for i in ids)]
+        finally:
+            for i in ids:
+                row = _models224.db.session.get(_models224.AuditLog, i)
+                if row is not None:
+                    _models224.db.session.delete(row)
+            _models224.db.session.commit()
+    eq("audit: past the 90 days the addresses inside an entry's detail and target are reduced to their "
+       "network like the IP column; a recent entry keeps its address; a second run changes nothing",
+       (got, first >= 3, again),
+       ([("", "User logged in from 203.0.113.0/24"), ("198.51.100.0/24", ""),
+         ("bob", "paused (last from 2001:db8:1:2::/64)"), ("", "User logged in from 203.0.113.8")], True, 0))
 
 
 try:
-    for _fn224 in (_chat_alerts224, _details_form224, _bot_console224, _ntfy_warning224):
+    for _fn224 in (_chat_alerts224, _details_form224, _bot_console224, _ntfy_warning224, _push_note224, _pubip_sources224,
+                   _pubip_daily224, _audit_text224):
         _p9_arm(who="part224")
         try:
             _fn224()

@@ -119,6 +119,7 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - One host page for the panel and every remote: specs, live resources, OS updates, UFW firewall with lock-out checks, power controls, Ubuntu Pro, SSH lockdown, and lock-out-safe port changes.
 - **Brute-force defense** — fail2ban logs and top offenders, one-click UFW blocking, and an optional rolling **auto-block**. A whitelist is never banned or blocked, and your Tailscale peers are never banned from the panel or auto-blocked. Bans still keep a visitor out of the panel behind a Cloudflare Tunnel or Funnel ([how](https.md#bans-and-blocks-behind-a-proxy-or-tunnel)).
 - **Admin alerts** to Telegram, Discord and/or [ntfy](https://ntfy.sh) for 23 events — server down, host unreachable, disk low, high CPU/RAM load, brute-force, backup failed, update available, cert expiring, and more.
+  By default an alert names no person and no address (sign-in IPs, usernames, banned IPs stay in the Audit log); a Notifications switch adds them. For alerts that never touch a public server or Google, [run your own ntfy server](NTFY-SELF-HOST.md).
 - **Chat command bot** (Telegram *or* Discord): `/status`, `/servers`, `/players <name>`, `/start` / `/stop` / `/restart <name>`, `/update` and more. Opt-in and locked to the configured chat.
 - Tailscale integration, multiple SSH remotes with host-key pinning, a web terminal, diagnostics, and audit logging.
 

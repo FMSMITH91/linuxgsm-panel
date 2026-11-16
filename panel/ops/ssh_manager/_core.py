@@ -2901,11 +2901,34 @@ def send_console_command(server, user, command, timeout=20, selfname=None, mark=
 console_sent = register_remote_cache({})
 
 
+# Asked only when the host's own default-route address is not public (behind NAT, a cloud VM's private
+# address): one HTTPS service, then the same question over DNS for a host where curl is missing or
+# outbound HTTPS is blocked. A second HTTPS service covered no failure the first did not, and told one
+# more third party that this host exists (OWASP Top 10 Privacy Risks P10).
+_PUBLIC_IP_LOOKUPS = ("curl -fsS --max-time 5 https://api.ipify.org",
+                      "dig +short myip.opendns.com @resolver1.opendns.com")
+
+
+def _global_ipv4(text):
+    """`text` when it is a public (globally routable) IPv4 address, else ""."""
+    import ipaddress
+    try:
+        addr = ipaddress.IPv4Address(str(text or "").strip())
+    except ValueError:
+        return ""
+    return str(addr) if addr.is_global else ""
+
+
 def remote_public_ip(server):
-    """Best-effort public IPv4 of the remote (or the panel host for local)."""
-    for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
-                "curl -fsS --max-time 5 https://ifconfig.me",
-                "dig +short myip.opendns.com @resolver1.opendns.com"):
+    """Best-effort public IPv4 of the remote (or the panel host for local).
+
+    The host's own default-route address first (_gamedig_host: `ip route get`, no packet sent, cached
+    an hour): when it is public, that is the answer and no third party is asked.
+    """
+    own = _global_ipv4(_gamedig_host(server))
+    if own:
+        return own
+    for cmd in _PUBLIC_IP_LOOKUPS:
         try:
             out, _, _ = run_command(server, cmd, timeout=8, sudo=False)
             ip = (out or "").strip().split("\n")[0].strip()
