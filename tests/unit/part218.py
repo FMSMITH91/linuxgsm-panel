@@ -16,6 +16,7 @@ Every route runs on part12's app with its transport tripwire armed; the push POS
 import base64 as _b64_218
 import hashlib as _hl218
 import json as _json218
+import logging as _logging218
 import os as _os218
 import time as _time218
 from types import SimpleNamespace as _NS218
@@ -143,6 +144,40 @@ class _Pusher218:
         target = browser.sub["endpoint"].split("fcm.googleapis.com", 1)[1]
         return [_payload218(_decrypt218(s.body, browser.key, browser.auth)) for s in self.sent
                 if s.target == target]
+
+
+class _Said218(_logging218.Handler):
+    """Every record that reaches it, at WARNING and up (the journal's own threshold)."""
+
+    def __init__(self):
+        """Collect at WARNING, as errors.StderrHandler does."""
+        super().__init__(level=30)
+        self.records = []
+
+    def emit(self, record):
+        """Keep the record."""
+        self.records.append(record)
+
+
+def _journal218(run):
+    """The "subscription removed" records `run()` sends to the loggers the journal's handler is put on."""
+    from panel.ops.debug_report import errors as _err218
+    said = _Said218()
+    journal = [_logging218.getLogger(n) for n in _err218.LOGGERS]
+    for lg in journal:
+        lg.addHandler(said)
+    try:
+        run()
+    finally:
+        for lg in journal:
+            lg.removeHandler(said)
+    return [r for r in said.records if "subscription removed" in r.getMessage()]
+
+
+def _line218(record, hidden):
+    """(level, logger, message up to its note, whether any of `hidden` is in it) for one record."""
+    msg = record.getMessage()
+    return record.levelname, record.name, msg.split(" (")[0], any(x in msg for x in hidden)
 
 
 def _rig218(status=201):
@@ -511,8 +546,13 @@ def _s218_gone_and_failures():
             _row.last_success = None
         _db218.session.commit()
     pusher.by_target = tgt
-    _pa218.queue_test(uid)
-    _p9_drain()
+    gone = _journal218(lambda: (_pa218.queue_test(uid), _p9_drain()))
+    eq("delivery: each removal is a WARNING on a logger the journal's handler covers, naming the service and "
+       "the status and no endpoint, key or payload",
+       sorted(_line218(r, (b410.sub["endpoint"], b404.sub["endpoint"], "p218-", b410.sub["keys"]["auth"]))
+              for r in gone),
+       [("WARNING", "panel.push_alerts", "push subscription removed: fcm answered HTTP 404", False),
+        ("WARNING", "panel.push_alerts", "push subscription removed: fcm answered HTTP 410", False)])
     with _p9.app_context():
         left = sorted(_d.endpoint_hash for _d in _PS218.query.filter_by(user_id=uid).all())
         last = [_d.last_success for _d in _PS218.query.filter_by(user_id=uid).all()]

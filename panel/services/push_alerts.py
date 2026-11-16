@@ -30,7 +30,10 @@ from panel.core import i18n
 from panel.core.clock import utcnow
 from panel.services import webpush
 
-_log = logging.getLogger("push_alerts")
+# Under "panel", like the panel's other modules: that is the logger debug_report/errors.py gives the
+# journal (WARNING and up), the debug-report counter and the opt-in debug log. A logger outside it has
+# no handler, so its INFO lines went nowhere and its WARNINGs only reached Python's last-resort print.
+_log = logging.getLogger("panel.push_alerts")
 
 SERVER_EVENTS = frozenset({"server_down", "server_up", "server_empty", "server_full", "server_peak"})
 HOST_EVENTS = frozenset({"remote_unreachable", "remote_recovered", "high_load", "disk_low"})
@@ -430,6 +433,18 @@ def deliver(items):
 _GONE = frozenset({404, 410, -1, -3})
 
 
+def _log_gone(label, status):
+    """The journal line for a removed subscription: the service's fixed label and an int, nothing else.
+
+    WARNING, so it reaches the journal (debug_report/errors.py gives "panel" a WARNING handler): a
+    device that stops getting alerts is worth a line. Never the endpoint, the keys or the payload.
+    """
+    if status > 0:
+        _log.warning("push subscription removed: %s answered HTTP %d (the browser dropped it)", label, status)
+    else:
+        _log.warning("push subscription removed: its %s endpoint or keys can no longer be used (%d)", label, status)
+
+
 def _send_one(row, payload, ttl, urgency):
     """One device: send, and record what came back on the row (deleted when the service says gone)."""
     from panel.db.models import db
@@ -439,7 +454,7 @@ def _send_one(row, payload, ttl, urgency):
     if 200 <= status < 300:
         row.last_success = utcnow()
     elif status in _GONE:
-        _log.info("push subscription removed: %s answered %d", label, status)
+        _log_gone(label, status)
         db.session.delete(row)
     elif status == -2:
         _log.warning("push to %s refused: its name resolved to a non-public address", label)
