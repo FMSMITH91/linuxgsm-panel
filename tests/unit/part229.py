@@ -114,10 +114,10 @@ def _bot229():
     code = _tl229.new_code(uid)
     grp = {"update_id": 5, "message": {"text": "/start " + code, "chat": {"id": -100777, "type": "group"},
                                        "from": {"id": 777}}}
-    _tgb229._tg_route_update(_p9, _TOKEN229, "999", "PanelBot", grp)
+    _tgb229._tg_handle(_p9, _TOKEN229, "999", "PanelBot", grp)
     mine = {"update_id": 6, "message": {"text": "/start " + code, "chat": {"id": 777, "type": "private"},
                                         "from": {"id": 777}}}
-    _tgb229._tg_route_update(_p9, _TOKEN229, "999", "PanelBot", mine)
+    _tgb229._tg_handle(_p9, _TOKEN229, "999", "PanelBot", mine)
     with _p9.app_context():
         chat = _db229.session.get(_U229, uid).telegram_chat
     eq("telegram link: the command bot's poll links '/start <code>' from a private chat, not from a group, "

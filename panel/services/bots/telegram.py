@@ -148,10 +148,6 @@ def _tg_route_update(app, token, authorized, bot_username, upd):
     chat = str((msg.get("chat") or {}).get("id") or "")
     if not text.startswith("/"):
         return
-    # "/start <code>" from someone linking their own chat for alerts (telegram_link): from any private
-    # chat, since the person is not the authorised one; it links and runs no command.
-    if telegram_link.start_payload(text) and telegram_link.handle_update(app, token, msg):
-        return
     if chat != authorized:
         _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
         return
@@ -172,6 +168,17 @@ def _tg_route_update(app, token, authorized, bot_username, upd):
         _tg_reply(token, authorized, refusal)
         return
     _tg_dispatch(app, token, authorized, text, sender)
+
+
+def _tg_handle(app, token, authorized, bot_username, upd):
+    """One polled update: a chat linking itself for alerts, else what _tg_route_update makes of it.
+
+    "/start <code>" from someone linking their own chat (telegram_link) comes from any private chat,
+    since that person is not the authorised one; it links the chat and runs no command.
+    """
+    if telegram_link.handle_update(app, token, upd.get("message") or {}):
+        return
+    _tg_route_update(app, token, authorized, bot_username, upd)
 
 
 def _tg_command_users():
@@ -238,7 +245,7 @@ def _telegram_command_watch(app):
             failures = 0
             for upd in updates:
                 offset = upd.get("update_id", 0) + 1
-                _tg_route_update(app, token, authorized, bot_username, upd)
+                _tg_handle(app, token, authorized, bot_username, upd)
         except Exception:
             _log.debug("telegram command-watch tick failed", exc_info=True)
             time.sleep(_TG_CMD_BACKOFF)
