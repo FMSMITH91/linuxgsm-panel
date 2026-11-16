@@ -138,7 +138,7 @@ def _push_note224():
     page = _p9_client(P9_ADMIN).get("/account").get_data(as_text=True)
     eq("push: the Account page's alerts card says who relays a push (Google, Microsoft, Apple or Mozilla, by browser) "
        "and that ntfy uses no web push",
-       ('id="push-relay-note"' in page, "Google for Chrome and most Chromium browsers, Microsoft for Edge, Apple for Safari, Mozilla" in page),
+       ('id="push-relay-note"' in page, "(Google, Microsoft, Apple or Mozilla)" in page),
        (True, True))
 
 

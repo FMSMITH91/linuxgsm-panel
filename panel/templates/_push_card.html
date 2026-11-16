@@ -31,7 +31,7 @@
       <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="push-disable"><i class="bi bi-bell-slash"></i> Turn off on this device</button>
       <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="push-test"><i class="bi bi-send"></i> Send a test alert</button>
     </div>
-    <p class="text-secondary small mb-2" id="push-relay-note">Alerts travel encrypted through your browser maker's push service: Google for Chrome and most Chromium browsers, Microsoft for Edge, Apple for Safari, Mozilla for Firefox. ntfy uses no web push.</p>
+    <p class="text-secondary small mb-2" id="push-relay-note">Relayed encrypted by your browser's push service (Google, Microsoft, Apple or Mozilla). ntfy uses none.</p>
     {% call fold('Your devices and which alerts') %}
     {% if pc.devices %}
     <ul class="list-unstyled small mb-2" id="push-devices">
