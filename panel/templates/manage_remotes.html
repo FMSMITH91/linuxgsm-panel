@@ -19,7 +19,8 @@
   </div>
   <div class="card-body">
     <form method="POST" action="{{ url_for('add_remote') }}" class="row g-2 ajax-form"
-          data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
+          data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh"
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
       <div class="col-md-3">
         <label class="form-label" for="manage-remotes-name">Name</label>
         <input id="manage-remotes-name" type="text" name="name" class="form-control" required placeholder="e.g. Main VPS">
@@ -188,7 +189,8 @@
       <div class="card card-body bg-dark">
         <form method="POST" action="{{ url_for('edit_remote', remote_id=remote.id) }}"
               class="row g-2 ajax-form" data-ajax-refresh="#remotes-list"
-              data-ajax-after="afterRemotesRefresh" data-ajax-reset="off">
+              data-ajax-after="afterRemotesRefresh" data-ajax-reset="off"
+              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
           <input type="hidden" name="remote_id" value="{{ remote.id }}">
           <div class="col-md-3">
             <label class="form-label" for="manage-remotes-name-{{ remote.id }}">Name</label>
@@ -271,5 +273,6 @@
 {% endblock %}
 
 {% block scripts %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/step_up_form.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/manage_remotes.js') }}"></script>
 {% endblock %}

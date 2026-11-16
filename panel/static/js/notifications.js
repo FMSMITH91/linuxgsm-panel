@@ -9,7 +9,7 @@ function testChannel(channel, btn) {
   if (channel === 'telegram') { payload.token = _val('telegram_token'); payload.chat_id = _val('telegram_chat_id'); }
   else if (channel === 'discord') { payload.webhook = _val('discord_webhook'); }
   else if (channel === 'discord_bot') { payload.token = _val('discord_bot_token'); payload.chat_id = _val('discord_channel_id'); }
-  else if (channel === 'ntfy') { payload.token = _val('ntfy_token'); payload.server = _val('ntfy_server'); payload.topic = _val('ntfy_topic'); }
+  else if (channel === 'ntfy') { payload.token = _val('ntfy_token'); payload.server = _val('ntfy_server'); payload.topic = _val('ntfy_topic'); var pn = document.querySelector('[name="ntfy_private_network"]'); if (pn) payload.private_network = pn.checked; }
   fetch(MOUNT + '/api/notifications/test', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)

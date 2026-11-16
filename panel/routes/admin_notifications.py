@@ -2,7 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-from flask import (flash, jsonify, redirect, render_template, request, url_for)
+from flask import (flash, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
@@ -153,6 +153,7 @@ def _register_notifications(app):
             ntfy={"enabled": bool(f.get("ntfy_enabled")),
                   "server": f.get("ntfy_server", ""),
                   "topic": f.get("ntfy_topic", ""),
+                  "private_network": bool(f.get("ntfy_private_network")),
                   "token": (nt_token or None)},
             events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
             thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load"),
@@ -179,6 +180,8 @@ def _register_notifications(app):
             webhook=_json_str(b, "webhook") or None,
             server=_json_str(b, "server") or None,
             topic=_json_str(b, "topic") or None,
+            # The form's switch when it sent one (a JSON boolean), else the saved setting.
+            private_network=b.get("private_network") if isinstance(b.get("private_network"), bool) else None,
         )
         # Translated: the failure is a Sentence ("{service} error: {detail}"), the rest catalog keys.
         return jsonify({"success": ok, "message": i18n.tr(msg)})
@@ -349,14 +352,16 @@ def _register_invites(app):
         inv, token = Invite.mint(current_user, hours=hours, superadmin=want_super,
                                  group_ids=[g.id for g in groups],
                                  note=request.form.get("note", ""))
+        code = _invite_code_for(inv, want_super)
         db.session.add(inv)
         db.session.commit()
         log_action(current_user, "invite_created", target=inv.note or "(no note)",
-                   detail="expires in %dh%s" % (hours, " — GRANTS SUPERADMIN" if want_super else ""))
+                   detail="expires in %dh%s%s" % (hours, " — GRANTS SUPERADMIN" if want_super else "",
+                                                 _NO_CODE.get(code is None, "")))
         # Shown once, like a generated password: only the hash is stored, so if this is missed the
-        # link is gone and a new invite has to be minted.
+        # link is gone and a new invite has to be minted. The code likewise.
         return _form_credential("Invite link created — send it to them. It works once.",
-                                "manage_users", username="Invite link", kind="invite",
+                                "manage_users", username="Invite link", kind="invite", code=code,
                                 # Shown only to the superadmin who minted it, on the host they
                                 # reached the panel by.
                                 # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
@@ -420,6 +425,8 @@ def _register_invites(app):
             # confirms it was real, which is information a stranger holding a guessed token has
             # not earned. There is nothing the person can do differently either way.
             return render_template("invite.html", invalid=True), 404
+        if not _invite_code_passed(inv):
+            return _invite_code_step(inv, token)
         if request.method == "GET":
             return render_template("invite.html", invalid=False, token=token, invite=inv)
 
@@ -471,6 +478,7 @@ def _register_invites(app):
             return refused
         inv.used_by_id = user.id
         db.session.commit()
+        session.pop(_CODE_OK, None)
         log_action(user, "invite_redeemed", target=username,
                    detail="from an invite created by user id %s" % (inv.created_by_id,))
         notifications.notify("account_change", "Account created from invite",
@@ -478,6 +486,76 @@ def _register_invites(app):
                              % (username, " (SUPER ADMIN)" if inv.grants_superadmin else ""))
         flash("Account created — sign in with your new username and password.", "success")
         return redirect(url_for("login"))
+
+
+_NO_CODE = {True: " — no second code"}
+
+
+def _invite_code_for(inv, want_super):
+    """Give `inv` its second code when it gets one; the code as shown once, or None.
+
+    Always for a superadmin invite, which no switch can turn off; on by default for the rest (the
+    form's switch starts on, and a post without it means off).
+    """
+    if not (want_super or request.form.get("require_code") == "on"):
+        return None
+    code, inv.code_hash = Invite.new_code()
+    return code
+
+
+# The session key that says which invite's second code this browser has entered. Bound to the invite's
+# id: the code admits that one invite and no other, and the invite itself works once.
+_CODE_OK = "invite_code_ok"
+
+
+def _invite_code_passed(inv):
+    """True when `inv` needs no second code, or this browser has already entered it."""
+    return not inv.code_hash or session.get(_CODE_OK) == inv.id
+
+
+def _invite_code_step(inv, token):
+    """The step before the account form: ask for the second code, check it, count a wrong one.
+
+    OWASP Authentication Cheat Sheet, "Account Lockout": the counter belongs to the invite, not to
+    an address, and the CODE_MAX_TRIES-th wrong code revokes the invite for good (logged, and the
+    administrators alerted). Counted with one conditional UPDATE, so parallel guesses cannot each
+    read the same count.
+    """
+    if request.method == "GET" or "invite_code" not in request.form:
+        return render_template("invite.html", invalid=False, token=token, invite=inv, ask_code=True)
+    if inv.code_matches(request.form.get("invite_code")):
+        session[_CODE_OK] = inv.id
+        log_action(None, "invite_code_ok", actor="(invite)", target=inv.note or "(no note)",
+                   detail="invite id %s" % inv.id)
+        return render_template("invite.html", invalid=False, token=token, invite=inv)
+    left = _count_wrong_code(inv)
+    if left <= 0:
+        return render_template("invite.html", invalid=True, burned=True), 404
+    return render_template("invite.html", invalid=False, token=token, invite=inv, ask_code=True,
+                           error=i18n.tr("That code is not right. Tries left: {n}.", n=left)), 400
+
+
+def _count_wrong_code(inv):
+    """Record one wrong code for `inv`; how many tries are left (0: the invite is now revoked)."""
+    from sqlalchemy import update
+    db.session.execute(update(Invite).where(Invite.id == inv.id, Invite.used_at.is_(None),
+                                            Invite.revoked_at.is_(None))
+                       .values(code_failures=Invite.code_failures + 1))
+    failures = db.session.query(Invite.code_failures).filter(Invite.id == inv.id).scalar() or 0
+    burned = (failures >= Invite.CODE_MAX_TRIES and db.session.execute(
+        update(Invite).where(Invite.id == inv.id, Invite.revoked_at.is_(None), Invite.used_at.is_(None))
+        .values(revoked_at=utcnow())).rowcount)
+    db.session.commit()
+    log_action(None, "invite_code_wrong", actor="(invite)", target=inv.note or "(no note)",
+               detail="invite id %s, wrong code %d of %d" % (inv.id, failures, Invite.CODE_MAX_TRIES),
+               success=False)
+    if burned:
+        log_action(None, "invite_burned", actor="(invite)", target=inv.note or "(no note)",
+                   detail="invite id %s revoked after %d wrong codes" % (inv.id, failures), success=False)
+        notifications.notify("account_change", "Invite revoked after wrong codes",
+                             "An invite link (%s) was revoked after %d wrong codes were entered for it."
+                             % (inv.note or "no note", failures))
+    return max(0, Invite.CODE_MAX_TRIES - failures)
 
 
 def _register_user_delete(app):

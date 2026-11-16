@@ -1,0 +1,17 @@
+{
+  "That request did not come from this panel's own page and was refused.": "Esa solicitud no venía de una página de este panel y se ha rechazado.",
+  "That code is not right. Tries left: {n}.": "Ese código no es correcto. Intentos restantes: {n}.",
+  "{message} {password} — code {code}. Send the code another way. Copy both now, they are not shown again.": "{message} {password} — código {code}. Envía el código por otra vía. Copia los dos ahora, no se vuelven a mostrar.",
+  "Too many wrong codes were entered, so this invite has stopped working. Ask whoever sent it for a new one.": "Se introdujeron demasiados códigos incorrectos, así que esta invitación ha dejado de funcionar. Pide una nueva a quien te la envió.",
+  "Enter your invite code": "Introduce tu código de invitación",
+  "Whoever invited you has an 8-digit code for this link, sent to you separately. Ask them for it if you do not have it.": "Quien te invitó tiene un código de 8 cifras para este enlace, que te envía por separado. Pídeselo si no lo tienes.",
+  "Invite code": "Código de invitación",
+  "Also ask for a code": "Pedir también un código",
+  "An 8-digit code shown once next to the link. Send it another way (say it on a call, or use another app), so the link alone is not enough. Five wrong codes stop the link working. Always on for a Super Administrator invite.": "Un código de 8 cifras que se muestra una vez junto al enlace. Envíalo por otra vía (dilo en una llamada o usa otra aplicación), para que el enlace solo no baste. Cinco códigos incorrectos inutilizan el enlace. Siempre activado en una invitación de Superadministrador.",
+  "Code — send it another way than the link": "Código: envíalo por otra vía distinta del enlace",
+  "The same goes for the code. They need both.": "Lo mismo vale para el código. Necesitan los dos.",
+  "Wrong codes": "Códigos incorrectos",
+  "Five wrong codes were entered for it, so it stopped working.": "Se introdujeron cinco códigos incorrectos, así que dejó de funcionar.",
+  "Asks for a code": "Pide un código",
+  "Code copied": "Código copiado"
+}

@@ -12,6 +12,7 @@ from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.security import banlist as _banlist
 from panel.ops.ssh_manager import (fwa_block_target, host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
+from panel.security.account_guard import step_up_required
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted, host_has_history)
 from types import (SimpleNamespace)
 from panel.core import i18n
@@ -108,6 +109,7 @@ def _register_host_tailscale(app):
     @app.route("/api/server-management/ufw-allow-tailscale", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_ufw_allow_tailscale():
         """Allow traffic on the Tailscale interface via UFW."""
         success, msg = so.ufw_allow_tailscale()
@@ -120,6 +122,7 @@ def _register_host_tailscale(app):
     @app.route("/api/server-management/ts-ssh-enable", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_ts_ssh_enable():
         """Enable Tailscale SSH."""
         success, msg = so.tailscale_ssh_enable()
@@ -136,6 +139,7 @@ def _register_host_tailscale(app):
     @app.route("/api/server-management/ts-ssh-disable", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_ts_ssh_disable():
         """Disable Tailscale SSH."""
         success, msg = so.tailscale_ssh_disable()
@@ -173,6 +177,7 @@ def _register_panel_update(app):
     @app.route("/api/panel/update", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_update():
         """Pull the latest panel code and restart (one-click self-update)."""
         # Not while the panel is rebooting its own host: the restart would cut the plan in two.
@@ -219,6 +224,7 @@ def _register_panel_update(app):
     @login_required
     @superadmin_required
     @_r23a_not_while_panel_host_reboots
+    @step_up_required
     def api_panel_switch_branch():
         """Switch the panel to another branch and pull it (same rollback-safe path as an update)."""
         branch = _json_str(_json_body(), "branch")
@@ -373,6 +379,7 @@ def _register_panel_encryption(app):
     @app.route("/api/panel/encryption/rotate", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_encryption_rotate():
         """Make a new key current, then re-encrypt every stored secret under it in the background.
 
@@ -483,6 +490,7 @@ def _register_panel_blocking(app):
     @app.route("/api/panel/security/block", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = _json_str(_json_body(), "ip")
@@ -509,6 +517,7 @@ def _register_panel_blocking(app):
     @app.route("/api/panel/security/autoblock", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_autoblock():
         """Turn the panel host's rolling auto-block on/off, optionally updating the threshold.
 
@@ -532,6 +541,7 @@ def _register_panel_security_misc(app):
     @app.route("/api/panel/security/whitelist", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_whitelist():
         """Add or remove a global security-whitelist entry (IP or CIDR).
 
@@ -543,6 +553,7 @@ def _register_panel_security_misc(app):
     @app.route("/api/panel/security/unban", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_unban():
         """Lift a fail2ban ban (jail + IP validated server-side)."""
         d = _json_body()

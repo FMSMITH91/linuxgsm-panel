@@ -141,7 +141,10 @@
             });
           })
           .then(function (reg) {
-            return reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: keyBytes(key)});
+            // A refusal HERE is the browser's push service saying no (Brave switches it off by
+            // default), not a passing fault: say what to turn on rather than "try again".
+            return reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: keyBytes(key)})
+              .catch(function (e) { e.pushService = true; throw e; });
           })
           .then(function (sub) {
             return postJson(el.getAttribute('data-subscribe-url'), sub.toJSON()).then(function (res) {
@@ -155,7 +158,9 @@
               });
             });
           });
-      }).catch(function () { say('failed'); btnOn.classList.remove('d-none'); btnOn.disabled = false; });
+      }).catch(function (e) {
+        say(e && e.pushService ? 'pushsvc' : 'failed'); btnOn.classList.remove('d-none'); btnOn.disabled = false;
+      });
     });
 
     btnOff.addEventListener('click', function () {

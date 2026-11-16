@@ -679,3 +679,19 @@ b8b53863 Push alerts show only what a lock screen may.
 cde5533f Deleting, restoring and resetting a database ask for your password again.
 e59be63e A restored dump can no longer run client commands.
 6985f326 Saving Settings or Notifications asks for your password again.
+6193ad3d Invite links can ask for a second code.
+75377df5 A software bill of materials with each release.
+363c4f95 A threat model.
+820cbdd3 Optimize database no longer leaves the WAL file bigger.
+15cc5b37 A restore from an uploaded dump that fails keeps the earlier dump.
+3d769f66 A Tailscale join with routes it cannot use says so as a bad request.
+2434eb39 The file browser no longer writes SSH keys or shell start-up files in a game account's home.
+bbdd37b2 More root-level actions ask for your password again after the confirmation window.
+740726d7 Requests from another site are refused even from older browsers.
+c84fd72d A download that fails part-way no longer shows a Python traceback.
+01aef3f5 ntfy alerts go only to a public address unless you say the server is on your own network.
+049b0f5d Injected style blocks no longer apply.
+2c27fbec The dump upload check catches every way a dump can name another database.
+023461de The SQL audit line hides quoted values after a comment too.
+c4fdf70f Push alerts never connect to an IPv4-compatible IPv6 address.
+9544d871 Each CI job's token starts with no permissions.

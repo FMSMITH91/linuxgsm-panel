@@ -1171,6 +1171,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_settings"
     ],
     "methods": [
@@ -1814,6 +1815,7 @@
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
       "_shared.py:refused_or_view",
+      "account_guard.py:wrapped",
       "view:api_panel_change_port"
     ],
     "methods": [
@@ -1825,6 +1827,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_enable_auto_updates"
     ],
     "methods": [
@@ -1836,6 +1839,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_encryption_rotate"
     ],
     "methods": [
@@ -1881,6 +1885,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_security_autoblock"
     ],
     "methods": [
@@ -1892,6 +1897,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_security_block"
     ],
     "methods": [
@@ -1903,6 +1909,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_security_unban"
     ],
     "methods": [
@@ -1914,6 +1921,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_security_whitelist"
     ],
     "methods": [
@@ -1926,6 +1934,7 @@
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
       "_shared.py:refused_or_view",
+      "account_guard.py:wrapped",
       "view:api_panel_switch_branch"
     ],
     "methods": [
@@ -1937,6 +1946,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_update"
     ],
     "methods": [
@@ -1948,6 +1958,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_bootstrap"
     ],
     "methods": [
@@ -1970,6 +1981,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_close_panel_port"
     ],
     "methods": [
@@ -1981,6 +1993,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_close_port_22"
     ],
     "methods": [
@@ -2002,6 +2015,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_remote_databases_admin_login"
     ],
     "methods": [
@@ -2013,6 +2027,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_remote_databases_admin_reveal"
     ],
     "methods": [
@@ -2034,6 +2049,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_allow_from"
     ],
     "methods": [
@@ -2045,6 +2061,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_block_port"
     ],
     "methods": [
@@ -2056,6 +2073,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_close"
     ],
     "methods": [
@@ -2067,6 +2085,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_delete_rule"
     ],
     "methods": [
@@ -2078,6 +2097,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_limit"
     ],
     "methods": [
@@ -2089,6 +2109,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_firewall_open"
     ],
     "methods": [
@@ -2100,6 +2121,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_game_port_open"
     ],
     "methods": [
@@ -2122,6 +2144,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_os_update_start"
     ],
     "methods": [
@@ -2133,6 +2156,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_pro_attach"
     ],
     "methods": [
@@ -2144,6 +2168,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_pro_detach"
     ],
     "methods": [
@@ -2155,6 +2180,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_pro_service"
     ],
     "methods": [
@@ -2166,6 +2192,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_reboot"
     ],
     "methods": [
@@ -2188,6 +2215,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_retrust_hostkey"
     ],
     "methods": [
@@ -2199,6 +2227,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_run_updates"
     ],
     "methods": [
@@ -2210,6 +2239,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_security_autoblock"
     ],
     "methods": [
@@ -2221,6 +2251,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_security_block"
     ],
     "methods": [
@@ -2232,6 +2263,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_security_unban"
     ],
     "methods": [
@@ -2243,6 +2275,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_remote_security_whitelist"
     ],
     "methods": [
@@ -2254,6 +2287,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_ssh_mode"
     ],
     "methods": [
@@ -2265,6 +2299,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_ssh_port"
     ],
     "methods": [
@@ -2276,6 +2311,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_tailscale_bootstrap"
     ],
     "methods": [
@@ -2298,6 +2334,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_tailscale_install"
     ],
     "methods": [
@@ -2309,6 +2346,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_tailscale_migrate"
     ],
     "methods": [
@@ -2320,6 +2358,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_tailscale_up"
     ],
     "methods": [
@@ -2331,6 +2370,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_os_update_run"
     ],
     "methods": [
@@ -2342,6 +2382,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_server_reboot"
     ],
     "methods": [
@@ -2353,6 +2394,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_ts_ssh_disable"
     ],
     "methods": [
@@ -2364,6 +2406,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_ts_ssh_enable"
     ],
     "methods": [
@@ -2375,6 +2418,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_ufw_allow_tailscale"
     ],
     "methods": [
@@ -2892,6 +2936,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_tailscale_install"
     ],
     "methods": [
@@ -2903,6 +2948,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_tailscale_serve"
     ],
     "methods": [
@@ -2914,6 +2960,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_tailscale_up"
     ],
     "methods": [
@@ -3060,6 +3107,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:edit_remote"
     ],
     "methods": [
@@ -3082,6 +3130,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:add_remote"
     ],
     "methods": [

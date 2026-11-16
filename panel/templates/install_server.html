@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ t('Install a Game Server') }}{% endblock %}
 {% block content %}
-<style>
+<style nonce="{{ csp_nonce }}">
   /* The game picker: a grid of tiles, icon + name + script, filtered by the search box. A tile
      fills the Game select (which the form posts), so the form and the install flow are unchanged. */
   .game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .4rem;

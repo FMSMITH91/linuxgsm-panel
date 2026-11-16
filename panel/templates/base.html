@@ -48,7 +48,7 @@
   <link rel="stylesheet" href="{{ asset_url('css/panel.css') }}">
   {# The brand accent is per-install, so it stays inline — and AFTER the stylesheet above,
      which is what lets it win the cascade over the defaults in it. #}
-  <style>
+  <style nonce="{{ csp_nonce }}">
     {# Configurable brand accent (Settings → Branding). accent_color is server-validated to a
        strict #rrggbb literal; this :root comes after the defaults so it wins the cascade. #}
     {% if accent_color %}:root {
@@ -326,6 +326,8 @@ window.MOUNT = {{ (mount_prefix if mount_prefix and mount_prefix != '/' else '')
 // redirect only mean something then: on /invite/<token> or the setup wizard there is no session to
 // expire, and they threw the visitor off a half-filled form to /login.
 window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};
+// Whether a password confirmation (step_up_form.js) also asks for the 2FA code.
+window.STEP_UP_TOTP = {{ 'true' if current_user.is_authenticated and current_user.totp_enabled else 'false' }};
 // What the command palette needs beyond the sidebar's pages: a card with a stricter gate than the
 // page it sits on (palette.js `need`). The same tests the cards are rendered by.
 window.PALETTE_CAN = {

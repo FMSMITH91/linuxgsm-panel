@@ -9,6 +9,10 @@ if (!IS_LOCAL && window.rebootNagCheck) { window.rebootNagCheck(REMOTE_ID, REMOT
 // ── Security tab: fail2ban bans (panel + ssh), recent events, raw logs ──────────
 // Panel host hits /api/panel/security/*; a remote hits /api/remote/<id>/security/* (over SSH).
 function secBase(){ return IS_LOCAL ? MOUNT+'/api/panel/security' : MOUNT+'/api/remote/'+REMOTE_ID+'/security'; }
+// Every change on the security cards (block, auto-block, whitelist, unban) is a step_up_required route:
+// a sign-in past the confirmation window confirms the password in a dialog first (step_up_form.js's
+// window.stepUpThen); without it the server's 403 still sends the tab to the confirm page and back.
+function _secStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 // True once the Auto-block toggle shows the host's REAL state. The toggle is rendered unchecked and
 // repainted only when /top-ips answers, which comes after several SSH reads (25 s and more on a
 // slow host) — and saveThreshold posts the toggle's state back as `enabled`. Saving before that
@@ -117,12 +121,12 @@ function loadSecurityTopIps(){
 function blockOffender(ip, btn){
   confirmDialog({title:'Block IP', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Block (all ports)',
     bodyText:tf('Firewall-block {ip} on ALL ports (UFW)? It won\'t be able to reach SSH, the panel, or any game server on this host until you unblock it.', {ip: ip}),
-    onConfirm:function(){
+    onConfirm:function(){ _secStepUp(function(){
       if(btn) btn.disabled=true;
       fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})})
         .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Blocked':'Failed'), d.success?'success':'danger'); _uitKeptOutChanged(); })
         .catch(function(){ if(window.toast) toast('Block failed','danger'); if(btn) btn.disabled=false; });
-    }});
+    }); }});
 }
 // A block or unblock from Top offenders changes the Blocked IPs list on the same tab as well:
 // both are repainted (the list from a fresh firewall read, remote_firewall.js).
@@ -130,13 +134,15 @@ function _uitKeptOutChanged(){
   loadSecurityTopIps();
   if (window.refreshFirewall) refreshFirewall();
 }
-function unblockOffender(ip, btn){
+function unblockOffender(ip, btn){ _secStepUp(function(){ _unblockOffenderNow(ip, btn); }); }
+function _unblockOffenderNow(ip, btn){
   if(btn) btn.disabled=true;
   fetch(secBase()+'/block',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,unblock:true})})
     .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Unblocked':'Failed'), d.success?'success':'info'); _uitKeptOutChanged(); })
     .catch(function(){ if(window.toast) toast('Unblock failed','danger'); if(btn) btn.disabled=false; });
 }
-function toggleAutoblock(cb){
+function toggleAutoblock(cb){ _secStepUp(function(){ _toggleAutoblockNow(cb); }); }
+function _toggleAutoblockNow(cb){
   var on=!!(cb&&cb.checked);
   fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
     .then(function(r){return r.json();}).then(function(d){
@@ -155,7 +161,8 @@ function toggleAutoblock(cb){
 // reads as "a non-superadmin was ignored": a superadmin who typed 150000 was told the threshold
 // had not changed and that only a superadmin could change it. Refused here, as below 1 is.
 function _r15aThresholdOk(v){ return !!v && v>=1 && v<=100000; }
-function saveThreshold(btn){
+function saveThreshold(btn){ _secStepUp(function(){ _saveThresholdNow(btn); }); }
+function _saveThresholdNow(btn){
   var inp=document.getElementById('sec-threshold'); var v=Number.parseInt(inp&&inp.value,10);
   if(!_r15aThresholdOk(v)){ if(window.toast) toast('Enter a number of attempts from 1 to 100000','info'); return; }
   // The on/off state rides along (the endpoint sets both), so it has to be the host's real one:
@@ -191,7 +198,8 @@ function renderWhitelist(list){
       +_da('removeWhitelist',[ip])+' title="Remove from whitelist">&times;</button></span>';
   }).join('');
 }
-function addWhitelist(btn){
+function addWhitelist(btn){ _secStepUp(function(){ _addWhitelistNow(btn); }); }
+function _addWhitelistNow(btn){
   var inp=document.getElementById('sec-wl-input'); var ip=((inp&&inp.value)||'').trim();
   if(!ip){ if(window.toast) toast('Enter an IP or CIDR first','info'); return; }
   if(btn) btn.disabled=true;
@@ -203,7 +211,8 @@ function addWhitelist(btn){
       else if(window.toast){ toast(d.message||'Could not add it','danger'); }
     }).catch(function(){ if(btn) btn.disabled=false; if(window.toast) toast('Could not add it','danger'); });
 }
-function removeWhitelist(ip){
+function removeWhitelist(ip){ _secStepUp(function(){ _removeWhitelistNow(ip); }); }
+function _removeWhitelistNow(ip){
   fetch(secBase()+'/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,remove:true})})
     .then(function(r){return r.json();}).then(function(d){
       // A refusal (403 for anyone but a superadmin) has no whitelist in it: rendering `[]` painted
@@ -260,7 +269,8 @@ function loadSecurityBans(){
     }).join('');
   }).catch(function(err){ el.innerHTML=_uidFailHtml('Could not load bans.', err); });  // nosemgrep - _uidFailHtml escapes
 }
-function unbanIp(jail, ip, btn){
+function unbanIp(jail, ip, btn){ _secStepUp(function(){ _unbanIpNow(jail, ip, btn); }); }
+function _unbanIpNow(jail, ip, btn){
   if(btn) btn.disabled=true;
   fetch(secBase()+'/unban',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jail:jail,ip:ip})})
     .then(function(r){return r.json();}).then(function(d){
@@ -649,7 +659,8 @@ function runUpdates(){
     bodyText:'Install all available updates on this host? You can watch it live in a popup; it runs '
       + 'unattended and answers prompts safely (keeps your config files, assumes yes), so it never '
       + 'gets stuck waiting.',
-    onConfirm:_startOsUpdate});
+    // A step_up_required route: a stale sign-in confirms the password in a dialog first (step_up_form.js).
+    onConfirm:function(){ if(window.stepUpThen) window.stepUpThen(_startOsUpdate, window.STEP_UP_TOTP === true); else _startOsUpdate(); }});
 }
 function _startOsUpdate(){
   if(_osuTimer){ clearTimeout(_osuTimer); _osuTimer=null; }

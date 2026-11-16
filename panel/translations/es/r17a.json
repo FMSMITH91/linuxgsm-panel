@@ -9,5 +9,6 @@
   "Couldn't read the versions of '{branch}', so there is no verified version to switch to.": "No se pudieron leer las versiones de '{branch}', así que no hay ninguna versión verificada a la que cambiar.",
   "[output truncated — more than {kb} KB/s. The command is still running; press Ctrl-C to stop it.]": "[salida truncada: más de {kb} KB/s. El comando sigue en ejecución; pulsa Ctrl-C para detenerlo.]",
   "[{n} bytes of input were dropped — the program running here is not reading its input]": "[se descartaron {n} bytes de entrada: el programa que se ejecuta aquí no está leyendo su entrada]",
-  "A console command can't contain control characters or line breaks.": "Un comando de consola no puede contener caracteres de control ni saltos de línea."
+  "A console command can't contain control characters or line breaks.": "Un comando de consola no puede contener caracteres de control ni saltos de línea.",
+  "Database optimized — the WAL file could not be trimmed yet because the database was busy; it shrinks at the next checkpoint or restart.": "Base de datos optimizada: el archivo WAL aún no se pudo recortar porque la base de datos estaba ocupada; se reduce en el siguiente punto de control o reinicio."
 }

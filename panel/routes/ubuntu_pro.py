@@ -8,6 +8,7 @@ from panel.ops.ssh_manager import (_PRO_SERVICES, pro_attach, pro_detach, pro_se
     remote_live_metrics)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action, permission_required)
 from panel.core import i18n
+from panel.security.account_guard import step_up_required
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_pro_status_cached)
 from panel.routes._shared import (_r20b_audit_on_raise)
@@ -38,6 +39,7 @@ def _register_pro_changes(app):
     @app.route("/api/remote/<int:remote_id>/pro-attach", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required       # root-level change to the host (Ubuntu Pro subscription and services)
     def api_remote_pro_attach(remote_id):
         remote = get_host_remote(remote_id)
         token = _json_str(_json_body(), "token")
@@ -59,6 +61,7 @@ def _register_pro_changes(app):
     @app.route("/api/remote/<int:remote_id>/pro-service", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required       # root-level change to the host (Ubuntu Pro subscription and services)
     def api_remote_pro_service(remote_id):
         remote = get_host_remote(remote_id)
         data = _json_body()
@@ -85,6 +88,7 @@ def _register_pro_changes(app):
     @app.route("/api/remote/<int:remote_id>/pro-detach", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required       # root-level change to the host (Ubuntu Pro subscription and services)
     def api_remote_pro_detach(remote_id):
         remote = get_host_remote(remote_id)
         try:

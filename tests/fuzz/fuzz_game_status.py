@@ -30,12 +30,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # 280 modules here (131 of them SQLAlchemy, plus Flask, Werkzeug and Jinja2, which
 # panel.db.models and panel.security pull in) and took ~27s on a runner before the first input,
 # so every PR run killed this target and its three siblings as 'process timed out'. With the
-# list below only the panel's own modules are instrumented. The same list is in fuzz_config,
-# fuzz_cron and fuzz_firewall; part29 holds all four to it.
+# list below only the panel's own modules are instrumented. The same list is in every harness that
+# loads the panel's modules; part29 holds them all to it. HKDF is the one part of cryptography that
+# paramiko does not load and webpush does (fuzz_push).
 # eventlet.tpool is the first eventlet import: greendns off, so no dnspython (panel/core/green_dns.py).
 os.environ["EVENTLET_NO_GREENDNS"] = "yes"
 for _dep in ("paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
-             "sqlalchemy.dialects.sqlite", "panel.core.config"):
+             "sqlalchemy.dialects.sqlite", "cryptography.hazmat.primitives.kdf.hkdf", "panel.core.config"):
     importlib.import_module(_dep)
 
 with atheris.instrument_imports():

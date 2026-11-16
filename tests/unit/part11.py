@@ -2378,8 +2378,10 @@ try:
           and _w.verbs_called("tailscale-up-login") == [("tailscale-up-login", ["no", "10.0.0.0/24"])],
           "result=%r calls=%r" % (_tu, _w.names()))
     _wire(verbs={"tailscale-up-login": (_ts_url + "/../evil", "", 0)})
-    eq("remote tailscale up: a URL the remote padded is refused (fullmatch), falling to status",
-       _H.remote_tailscale_up_url(_p8_srv()), (False, _ts_url + "/../evil"))
+    eq("remote tailscale up: a URL the remote padded is refused (fullmatch), falling to status, and the "
+       "host's text is not handed back (a fixed sentence)",
+       _H.remote_tailscale_up_url(_p8_srv()),
+       (False, "Could not get a Tailscale login link — is Tailscale installed on the remote?"))
     _wire(verbs={"tailscale-up-login": ("", "", -1)})
     eq("remote tailscale up: nothing at all -> a message, not a blank success",
        _H.remote_tailscale_up_url(_p8_srv()),

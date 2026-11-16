@@ -3804,7 +3804,7 @@ for _sf, _anchor, _fn in (("tailscale.js", "if (Date.now() > _deadline)", "tsChe
 # the switch-to-Tailscale offer never came (review 1017c). Its Check again waits on the host again,
 # through the same function the button's flow waits in.
 _mr_dl2 = _js_code_only(_js_block_after(_mr, "if (Date.now() > _tsDeadline)") or "")
-_mr_up = _js_code_only(_js_function_body(_mr, "tailscaleUp") or "")
+_mr_up = _js_code_only(_js_function_body(_mr, "_tailscaleUpNow") or "")   # tailscaleUp asks step-up first
 check("ts-wait-" in _mr_dl2 and "_da('_tsUpWait', [remoteId])" in _mr_dl2 and "Check again" in _mr_dl2
       and "press the button" not in _mr_dl2 and re.search(r"(?m)^function\s+_tsUpWait\s*\(", _mr) is not None
       and "_tsUpWait(remoteId);" in _mr_up,
@@ -4009,7 +4009,7 @@ check("if(sb) sb.disabled=false;" in _wpr_early,
 # pressed before that turned auto-block off for the host, and the toast said "auto-blocking IPs
 # with N+ attempts" regardless — also for a non-superadmin, whose threshold the endpoint ignores.
 _rmj = (ROOT / "panel" / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
-_st_fn = _js_code_only(_js_function_body(_rmj, "saveThreshold"))
+_st_fn = _js_code_only(_js_function_body(_rmj, "_saveThresholdNow"))   # saveThreshold asks step-up first
 check(re.search(r"^var _autoblockKnown = false;", _rmj, re.M) is not None
       and "if(!_autoblockKnown){" in _st_fn and "return; }" in _st_fn.split("if(!_autoblockKnown){")[-1][:200]
       and _st_fn.find("if(!_autoblockKnown){") < _st_fn.find("fetch("),
@@ -4056,7 +4056,7 @@ check(0 <= _lsl_fn.find("if(!d || d.error){") < _lsl_fn.find("'(log is empty)'")
       "js: the raw security log says it could not be read before it can say 'empty'",
       _lsl_fn[:300])
 # ── removing a whitelist entry: a refusal is not "removed" ───────────────────────────────────
-_rwl_fn = _js_code_only(_js_function_body(_rmj, "removeWhitelist"))
+_rwl_fn = _js_code_only(_js_function_body(_rmj, "_removeWhitelistNow"))   # removeWhitelist asks step-up first
 check(0 <= _rwl_fn.find("if(!d || !d.success){") < _rwl_fn.find("renderWhitelist(")
       and "'whitelist' in d" in _rwl_fn,
       "js: a refused whitelist removal is reported, not painted as an empty whitelist",

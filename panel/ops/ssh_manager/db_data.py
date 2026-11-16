@@ -386,15 +386,26 @@ def _skip_comments(text):
         s = rest
 
 
+def _comment_end(text, i):
+    """The index just past the comment that starts at text[i], or None when none starts there.
+
+    MySQL's and MariaDB's comment syntax: # to the end of the line; -- followed by a space or a
+    control character (a tab, a line break) or the end, to the end of the line; /* ... */. An
+    executable comment (/*! ... */, MariaDB's /*M! ... */) is not one: the server runs what it holds.
+    """
+    if text.startswith("#", i) or (text.startswith("--", i) and (i + 2 == len(text) or ord(text[i + 2]) <= 32)):
+        nl = text.find("\n", i)
+        return len(text) if nl < 0 else nl + 1
+    if text.startswith("/*", i) and not text.startswith("/*!", i) and not text[i:i + 4].upper() == "/*M!":
+        end = text.find("*/", i + 2)
+        return len(text) if end < 0 else end + 2
+    return None
+
+
 def _past_comment(s):
     """`s` after the comment it starts with, or None when it starts with none (or an executable one)."""
-    if s.startswith("#") or (s.startswith("--") and (len(s) == 2 or s[2] in " \t\r\n")):
-        nl = s.find("\n")
-        return "" if nl < 0 else s[nl + 1:]
-    if s.startswith("/*") and not s.startswith("/*!") and not s.upper().startswith("/*M!"):
-        end = s.find("*/", 2)
-        return "" if end < 0 else s[end + 2:]
-    return None
+    end = _comment_end(s, 0)
+    return None if end is None else s[end:]
 
 
 def sql_kind(text):
@@ -415,12 +426,16 @@ def sql_kind(text):
     return "read", word
 
 
-def _scan_literal(text, i):
-    """The index just past the quoted literal that starts at text[i] (a quote doubled or escaped stays inside)."""
+def _scan_literal(text, i, escapes=True):
+    """The index just past the quoted literal that starts at text[i] (a doubled quote stays inside).
+
+    escapes: a backslash escapes the next character, as the servers read it by default; without it, as
+    they read it under sql_mode NO_BACKSLASH_ESCAPES.
+    """
     q, j = text[i], i + 1
     while j < len(text):
         ch = text[j]
-        if ch == "\\":
+        if ch == "\\" and escapes:
             j += 2
             continue
         if ch == q:
@@ -435,27 +450,100 @@ def _scan_literal(text, i):
 _HEX_NUM_RE = re.compile(r"0[xXbB][0-9A-Fa-f]+")
 
 
+def _exec_open(text, i):
+    """The index just past an executable comment's opening at text[i] (/*! or /*M!, its version digits), or None."""
+    if text.startswith("/*!", i):
+        j = i + 3
+    elif text[i:i + 4].upper() == "/*M!":
+        j = i + 4
+    else:
+        return None
+    while j < len(text) and text[j] in "0123456789":
+        j += 1
+    return j
+
+
+def _mask_comment(text, i, out, in_exec):
+    """(index after, still in an executable comment) for a comment or an executable comment's edge at text[i], or None.
+
+    An executable comment's opening is kept and its content read as code; its "*/" is kept whole, so the "/"
+    of it never starts a comment with what follows. A comment (one inside an executable comment included)
+    is one space. A second opening inside one is read as a comment, up to its "*/".
+    """
+    if in_exec and text.startswith("*/", i):
+        out.append("*/")
+        return i + 2, False
+    j = _exec_open(text, i)
+    if j is not None and not in_exec:
+        out.append(text[i:j] + " ")
+        return j, True
+    end = _comment_end(text, i)
+    if end is None and j is not None:
+        end = text.find("*/", i + 2)
+        end = len(text) if end < 0 else end + 2
+    if end is None:
+        return None
+    out.append(" ")
+    return end, in_exec
+
+
+def _mask_quoted(text, i, out):
+    """(index after, lost track) for the literal or identifier at text[i], or None when none starts there.
+
+    Lost track: where the literal ends depends on sql_mode (a backslash before its quote); the rest of
+    the text is then masked too (never let text through). An identifier never closed takes the rest.
+    """
+    ch = text[i]
+    if ch in "'\"":
+        out.append(ch + "?" + ch)
+        end = _scan_literal(text, i)
+        return end, end != _scan_literal(text, i, escapes=False)
+    if ch == "`":
+        j = text.find("`", i + 1)
+        if j < 0:
+            out.append("`?")
+            return len(text), False     # the rest is inside it, and not logged
+        out.append(text[i:j + 1])
+        return j + 1, False
+    return None
+
+
+def _mask_next(text, i, out, in_exec):
+    """Append what mask_literals keeps of the token at text[i] to `out`: (index after, in an executable comment).
+
+    Where it loses track the index is the text's end, the rest not logged.
+    """
+    if in_exec and text.startswith("*/*", i):
+        # The servers close the executable comment there, but a reader can't tell that from a comment
+        # opening inside it: what follows is not logged.
+        out.append("*/…")
+        return len(text), False
+    got = _mask_comment(text, i, out, in_exec)
+    if got is not None:
+        return got
+    got = _mask_quoted(text, i, out)
+    if got is None:
+        out.append(text[i])
+        return i + 1, in_exec
+    if got[1]:
+        out.append("…")
+        return len(text), in_exec
+    return got[0], in_exec
+
+
 def mask_literals(text, limit=300):
     """The statement for the audit log, its literals masked, on one line, at most `limit` characters.
 
-    Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, every run of spaces
-    and line breaks one space. Identifiers in backticks are kept; nothing typed between quotes reaches the log.
+    Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, each comment one space
+    (a quote inside a comment opens no literal, and what a comment says is not logged), every run of
+    spaces and line breaks one space. Identifiers in backticks are kept. Where the masking can't be sure
+    what the server reads (a literal whose end depends on sql_mode, an executable comment's "*/" followed
+    by "*", an identifier never closed), the rest is not logged: it ends as '?'…, */… or `?. Nothing typed
+    between quotes reaches the log.
     """
-    out, i, text = [], 0, text or ""
+    out, i, text, in_exec = [], 0, text or "", False
     while i < len(text):
-        ch = text[i]
-        if ch in "'\"":
-            j = _scan_literal(text, i)
-            out.append(ch + "?" + ch)
-            i = j
-        elif ch == "`":
-            j = text.find("`", i + 1)
-            j = len(text) if j < 0 else j + 1
-            out.append(text[i:j])
-            i = j
-        else:
-            out.append(ch)
-            i += 1
+        i, in_exec = _mask_next(text, i, out, in_exec)
     flat = re.sub(r"\s+", " ", _HEX_NUM_RE.sub(lambda m: m.group(0)[:2] + "?", "".join(out))).strip()
     flat = "".join(c if c.isprintable() else "?" for c in flat)
     return flat if len(flat) <= limit else flat[:limit - 1] + "…"

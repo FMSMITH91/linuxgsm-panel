@@ -27,7 +27,8 @@
 #
 #   6. for main, publishes a GitHub Release of <sha>: tag YYYY.M.D (the commit's date in UTC; .2, .3
 #      for a later release the same day), the CHANGELOG entries it added as the notes (the same
-#      entries a panel's "What's new" shows), and the signature attached. A release that already
+#      entries a panel's "What's new" shows), and the signature and an SBOM attached (CycloneDX JSON
+#      of the packages the commit's lockfiles pin, tools/sbom.py). A release that already
 #      exists is left alone. A failure here is reported, never fatal: the signature is already pushed.
 #
 # Environment: SIGN_RELEASE_REMOTE (default origin), SIGN_RELEASE_KEY, SIGN_RELEASE_NO_DEPLOY=1 to
@@ -208,6 +209,14 @@ release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when 
     done
     printf '%s\n' "${tag}"
 }
+sbom_at() {   # sbom_at <commit> <tag>: the CycloneDX SBOM of that commit's lockfiles, on stdout
+    local f
+    for f in panel/install/requirements.txt panel/install/requirements.in tools/gamedig/package-lock.json; do
+        git cat-file blob "$1:${f}" 2>/dev/null || :
+        [[ "${f}" = tools/gamedig/package-lock.json ]] || printf '\0'
+    done | python3 "${TOOLS_DIR}/sbom.py" "$1" "$2" \
+        "$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$1")"
+}
 publish_release() {   # publish_release <commit> <previous signed commit or ""> <signature file>
     local tag
     tag="$(release_tag "$1" "${REMOTE}")" || { echo "sign-release: could not name the release." >&2; return 1; }
@@ -221,8 +230,16 @@ publish_release() {   # publish_release <commit> <previous signed commit or ""> 
         | python3 "${TOOLS_DIR}/release_notes.py" "$1" "${tag}" > "${TMP}/notes.md" \
         || { echo "sign-release: could not write the release notes." >&2; return 1; }
     cp "$3" "${TMP}/linuxgsm-panel-${tag}.sig"
+    local assets=("${TMP}/linuxgsm-panel-${tag}.sig")
+    # The SBOM (CycloneDX JSON) of what this commit installs, from its own lockfiles; a release
+    # without one is still published, and says so.
+    if sbom_at "$1" "${tag}" > "${TMP}/linuxgsm-panel-${tag}.cdx.json"; then
+        assets+=("${TMP}/linuxgsm-panel-${tag}.cdx.json")
+    else
+        echo "sign-release: could not write the SBOM; the release has none." >&2
+    fi
     "${GH[@]}" release create "${tag}" --target "$1" --title "${tag}" --notes-file "${TMP}/notes.md" \
-        "${TMP}/linuxgsm-panel-${tag}.sig" >/dev/null \
+        "${assets[@]}" >/dev/null \
         || { echo "sign-release: could not create the GitHub release ${tag}." >&2; return 1; }
     echo "sign-release: published GitHub release ${tag}."
 }

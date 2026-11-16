@@ -579,6 +579,14 @@ function _ajaxFormSucceeded(form, res){
     doRefresh();
   }
 }
+// A form posting to a step_up_required route carries data-step-up (and data-step-up-totp="1" when the
+// account has 2FA): a sign-in past the confirmation window confirms the password in a dialog first
+// (step_up_form.js's window.stepUpThen), so what was typed is sent, not lost on the confirm page.
+function _ajaxStepUp(form){
+  var go = function(){ _submitAjaxForm(form); };
+  if (form.hasAttribute('data-step-up') && window.stepUpThen) window.stepUpThen(go, form.getAttribute('data-step-up-totp') === '1');
+  else go();
+}
 window.ajaxForm = function(form){
   var msg = form.getAttribute('data-confirm');
   if (msg){
@@ -588,10 +596,10 @@ window.ajaxForm = function(form){
       confirmClass: form.getAttribute('data-confirm-class') || 'btn-primary',
       confirmLabel: form.getAttribute('data-confirm-label') || 'Confirm',
       bodyText: msg,   // data-confirm rendered via textContent — safe for any name, no HTML sink
-      onConfirm: function(){ _submitAjaxForm(form); }
+      onConfirm: function(){ _ajaxStepUp(form); }
     });
   } else {
-    _submitAjaxForm(form);
+    _ajaxStepUp(form);
   }
   return false;   // always prevent the native submit
 };
@@ -975,26 +983,30 @@ window.UPro = (function(){
     attach: function(){
       var t = document.getElementById('upro-token'); if(!t) return;
       var token = t.value.trim(); if(!token){ msg('Enter your Ubuntu Pro token first.', 'danger'); return; }
+      _proStepUp(function(){
       msg('Attaching… this can take a minute.', 'info');
       fetch(MOUNT + '/api/remote/' + HOST + '/pro-attach', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token: token})})
         .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); if(d.success) setTimeout(refresh, 800); })
         .catch(function(){ msg('✗ Request failed', 'danger'); });
+      });
     },
     service: function(name, action){
+      _proStepUp(function(){
       msg(tf(action==='enable' ? 'Enabling {name}… this can take a moment.' : 'Disabling {name}… this can take a moment.', {name: name}), 'info');
       fetch(MOUNT + '/api/remote/' + HOST + '/pro-service', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({service:name, action:action})})
         .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
         .catch(function(){ msg('✗ Request failed', 'danger'); });
+      });
     },
     detach: function(){
       confirmDialog({title:'Detach Ubuntu Pro', icon:'shield-slash', confirmClass:'btn-danger', confirmLabel:'Detach',
         bodyText:'Detach this host from Ubuntu Pro? Security (ESM) updates and Livepatch will stop.',
-        onConfirm:function(){
+        onConfirm:function(){ _proStepUp(function(){
           msg('Detaching…', 'info');
           fetch(MOUNT + '/api/remote/' + HOST + '/pro-detach', {method:'POST'})
             .then(function(r){ return r.json(); }).then(function(d){ msg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'success':'danger'); setTimeout(refresh, 800); })
             .catch(function(){ msg('✗ Request failed', 'danger'); });
-        }});
+        }); }});
     }
   };
 })();
@@ -1036,3 +1048,7 @@ window.backupUpload = function(file, base, onProgress){
     return next();
   });
 };
+
+// Ubuntu Pro changes are root-level, so the server asks for the password again after the step-up
+// window: confirm it in a dialog here first (step_up_form.js's window.stepUpThen) so the page stays put.
+function _proStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }

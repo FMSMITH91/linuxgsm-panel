@@ -276,7 +276,12 @@ function renderAuthKeyForm(remoteId, name) {
     + '<div id="bootstrap-log" class="small mt-2"></div>';
 }
 
-function tailscaleUp(remoteId) {
+// The Tailscale join, its install, the move onto Tailscale SSH and the host bootstrap are step_up_required
+// routes: a sign-in past the confirmation window confirms the password in a dialog first
+// (step_up_form.js's window.stepUpThen); without it the server's 403 sends the tab to the confirm page.
+function _mrStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
+function tailscaleUp(remoteId) { _mrStepUp(function() { _tailscaleUpNow(remoteId); }); }
+function _tailscaleUpNow(remoteId) {
   var ssh = document.getElementById('ts-ssh').checked;
   var routes = document.getElementById('ts-routes').value.trim();
   var el = document.getElementById('ts-up-result');
@@ -359,7 +364,8 @@ function _tsUpWait(remoteId) {
 // double tap sent two installs, two apt runs on the remote at once — one lost the dpkg lock, and
 // whichever answer came last said "Install failed" over an install that worked — and each success
 // added another login form, with ids the first copy already had.
-function installTailscale(remoteId, name, btn) {
+function installTailscale(remoteId, name, btn) { _mrStepUp(function() { _installTailscaleNow(remoteId, name, btn); }); }
+function _installTailscaleNow(remoteId, name, btn) {
   if (btn) {
     if (btn.disabled) return;
     btn.disabled = true;
@@ -389,7 +395,8 @@ function installTailscale(remoteId, name, btn) {
     });
 }
 
-function bootstrapTailscale(remoteId) {
+function bootstrapTailscale(remoteId) { _mrStepUp(function() { _bootstrapTailscaleNow(remoteId); }); }
+function _bootstrapTailscaleNow(remoteId) {
   var key = document.getElementById('ts-auth-key').value.trim();
   var ssh = document.getElementById('ts-ssh').checked;
   var routes = document.getElementById('ts-routes').value.trim();
@@ -435,7 +442,7 @@ function _tsMigrateOffer(remoteId) {
 function migrateToTailscale(remoteId) {
   confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-success', confirmLabel:'Migrate',
     bodyText:'Switch this remote to use Tailscale SSH? The connection will be updated to use the Tailscale IP/DNS name.',
-    onConfirm:function(){ _migrateToTailscale(remoteId); }});
+    onConfirm:function(){ _mrStepUp(function(){ _migrateToTailscale(remoteId); }); }});
 }
 function _migrateToTailscale(remoteId) {
   setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Migrating connection...</div>');
@@ -467,7 +474,11 @@ function _migrateToTailscale(remoteId) {
 function closePort22(remoteId) {
   confirmDialog({title:'Close public SSH', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public SSH',
     bodyText:'Remove the public SSH rules from UFW? This disables public SSH access. Only do this if Tailscale SSH is working.',
-    onConfirm:function(){ _closePort22(remoteId); }});
+    // A step_up_required route: a stale sign-in confirms the password in a dialog first (step_up_form.js).
+    onConfirm:function(){
+      var go = function(){ _closePort22(remoteId); };
+      if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();
+    }});
 }
 function _closePort22(remoteId) {
   setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Removing the public SSH rules...</div>');
@@ -525,7 +536,8 @@ function showBootstrap(remoteId, name) {
 
 var _bootstrapPoll = null;
 
-function runBootstrap(remoteId) {
+function runBootstrap(remoteId) { _mrStepUp(function() { _runBootstrapNow(remoteId); }); }
+function _runBootstrapNow(remoteId) {
   var tz = document.getElementById('bootstrap-tz').value.trim() || 'UTC';
   var username = document.getElementById('bootstrap-user').value.trim();
   var ufw = document.getElementById('bootstrap-ufw').checked;

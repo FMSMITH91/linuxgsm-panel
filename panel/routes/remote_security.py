@@ -24,6 +24,7 @@ from panel.routes._shared import (_r20b_audit_on_raise, _r23a_not_while_panel_ho
 from panel.ops import ssh_manager as _sm
 from panel.ops.ssh_manager import _core as _sm_core
 from panel.security import banlist as _banlist
+from panel.security.account_guard import step_up_required
 import ipaddress as _ipaddress
 
 # Where a panel bound to a SPECIFIC address is still reached through the tailnet rather than the
@@ -249,6 +250,7 @@ def _register_blocking(app):
     @app.route("/api/remote/<int:remote_id>/security/block", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_security_block(remote_id):
         """UFW-block (all ports, permanent) an IP, or a range of them (CIDR), on a remote host."""
         remote = get_host_remote(remote_id)
@@ -279,6 +281,7 @@ def _register_blocking(app):
     @app.route("/api/remote/<int:remote_id>/security/autoblock", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_security_autoblock(remote_id):
         """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for a remote host.
 
@@ -304,6 +307,7 @@ def _register_whitelist_and_log(app):
     @app.route("/api/remote/<int:remote_id>/security/whitelist", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_remote_security_whitelist(remote_id):
         """Add/remove a global security-whitelist entry from a remote host's page.
 
@@ -319,6 +323,7 @@ def _register_whitelist_and_log(app):
     @app.route("/api/remote/<int:remote_id>/security/unban", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_security_unban(remote_id):
         remote = get_host_remote(remote_id)
         d = _json_body()
@@ -363,6 +368,7 @@ def _register_panel_binding(app):
     @login_required
     @superadmin_required
     @_r23a_not_while_panel_host_reboots
+    @step_up_required
     def api_panel_change_port():
         """Change where the panel's web server listens: its bind address and/or port.
 

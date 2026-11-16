@@ -6,6 +6,7 @@ from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (_r39b_off_refusal, remote_ufw_close_port_22)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, log_action, permission_required)
+from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_log_and_generic, _unreachable)
 from panel.routes._shared import (_r20b_audit_on_raise)
@@ -22,6 +23,7 @@ def register(app):
     @app.route("/api/remote/<int:remote_id>/close-port-22", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_close_port_22(remote_id):
         remote = get_host_remote(remote_id)
         try:

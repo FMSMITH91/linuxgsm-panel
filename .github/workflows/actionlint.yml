@@ -26,9 +26,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least-privilege default; the job adds only pull-requests: read, for its scope step.
-permissions:
-  contents: read
+# No scope at all by default (OWASP Top 10 CI/CD Security Risks, CICD-SEC-5 and CICD-SEC-6): each job
+# grants only what it uses, so a job added without its own block gets a token that can do nothing.
+permissions: {}
 
 jobs:
   actionlint:
@@ -42,7 +42,12 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # actionlint reads local files only; no step here needs the job token.

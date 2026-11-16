@@ -14,6 +14,15 @@ compares git commits, not this file.
 
 ### Added
 
+- **Invite links can ask for a second code.** Creating an invite also shows an 8-digit code, once,
+  to send another way. The invite page asks for it before the account form, and five wrong codes
+  stop the link and alert the administrators. Always on for Super Administrator invites, and on by
+  default for the others.
+- **A software bill of materials with each release.** Every GitHub Release carries a CycloneDX file
+  listing each package the release installs, with the hashes it is pinned to.
+- **A threat model.** docs/THREAT-MODEL.md sets out what the panel protects, where its trust
+  boundaries are, and which control answers each threat.
+
 - **Alerts on your phone or browser.** Each user can turn on the panel's alerts for their own browsers
   and phones (Account → Alerts on this device). They arrive with the panel closed and after signing
   out; each user picks which alerts, and only gets alerts about servers and hosts they can access.
@@ -444,6 +453,14 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **Optimize database no longer leaves the WAL file bigger.** The rebuilt database went into the WAL
+  and stayed there until a restart (4 MB grew to 12 MB); the WAL is now trimmed after the rebuild.
+- **A restore from an uploaded dump that fails keeps the earlier dump.** The dump the server's files
+  held is put back, so Restore from dump still offers the one a backup wrote.
+- **A Tailscale join with routes it cannot use says so as a bad request.** Both joins answer with
+  the plain sentence before anything runs on the host, and a failed join no longer shows the host's
+  raw output.
 
 - **Creating a database says when its admin login needs TLS or the server's key.** It said the
   server refused the database.
@@ -1494,6 +1511,36 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **The file browser no longer writes SSH keys or shell start-up files in a game account's home.**
+  Saving, uploading, creating or renaming onto `~/.ssh`, `.bashrc`, `.profile`, `.bash_profile`,
+  `.bash_login`, `.bash_logout`, `.pam_environment`, `.rhosts`, `.shosts` or `.k5login` is refused,
+  also through a link, so file access cannot become a shell as the game account outside the panel.
+- **More root-level actions ask for your password again after the confirmation window.** Firewall
+  and security-card changes, the SSH port and mode, closing port 22, reboots, OS updates, panel
+  updates, branch switches, key rotation, adding or editing a host, Tailscale setup, the panel's
+  port, host-key trust, the database server's admin login, Ubuntu Pro and automatic updates now
+  ask, as the terminal already did, confirmed in place on the page.
+- **Requests from another site are refused even from older browsers.** A change sent without the
+  browser's site header must now carry the panel's own Origin (or Referer); one from another site,
+  or with a blank origin, is refused and logged.
+- **A download that fails part-way no longer shows a Python traceback.** The panel answers an empty
+  error, and the details go to the panel's log.
+- **ntfy alerts go only to a public address unless you say the server is on your own network.** A
+  new switch on the ntfy card allows a self-hosted server on a LAN, VPN or tailnet; existing
+  self-hosted setups keep working.
+- **Injected style blocks no longer apply.** Only the panel's own `<style>` blocks, which carry the
+  page's one-time code, take effect. Inline style attributes are still allowed for now.
+- **The dump upload check catches every way a dump can name another database.** Names without
+  backticks, in capitals, chained after another statement on one line, or after a NUL byte (Ubuntu
+  22.04's awk) are refused before anything is restored.
+- **The SQL audit line hides quoted values after a comment too.** A quote inside a comment, or the
+  end of a MySQL executable comment, no longer lets the next quoted value into the audit log; where
+  the server's reading is uncertain, the rest of the statement is left out.
+- **Push alerts never connect to an IPv4-compatible IPv6 address.** Addresses such as ::127.0.0.1
+  are refused like the other internal ones.
+- **Each CI job's token starts with no permissions.** Every job grants only the scopes it uses, and
+  the pull-request jobs that reach only known hosts refuse every other host.
 
 - **Saving Settings or Notifications asks for your password again.** Like opening a terminal, once
   the last sign-in or confirmation is older than the step-up window: those pages can switch step-up,

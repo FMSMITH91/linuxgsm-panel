@@ -5,6 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.security.auth import (log_action, MANAGE_REMOTES, get_remote, permission_required)
+from panel.security.account_guard import step_up_required
 import time
 from panel.core import i18n
 from panel.core.http import (_json_body, _r12c_json_flag)
@@ -18,6 +19,7 @@ def register(app):
     @app.route("/api/remote/<int:remote_id>/bootstrap", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_bootstrap(remote_id):
         """Kick off a fresh-VPS bootstrap in the background.
 

@@ -247,7 +247,13 @@ function fwToggleEnabled() {
        onConfirm: function() { _fwPostSetting({setting: 'enabled', value: false, confirm: true}); }});
 }
 
-function _fwPostSetting(body) {
+// Every POST on this card is a step_up_required route: a sign-in past the confirmation window confirms
+// the password in a dialog here first (step_up_form.js's window.stepUpThen), so the page and what was
+// typed stay put. Without it the server's 403 still sends the tab to the confirm page and back.
+function _fwStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
+
+function _fwPostSetting(body) { _fwStepUp(function() { _fwPostSettingNow(body); }); }
+function _fwPostSettingNow(body) {
   var out = document.getElementById('fw-settings-msg');
   if (out) out.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> <span>Applying…</span></span>';
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/settings', {
@@ -374,7 +380,8 @@ function blockBadge(c) {
   return c ? '<span class="badge bg-dark" data-no-i18n>' + esc(c) + '</span>' : '<span class="text-secondary">—</span>';
 }
 
-function blockIp() {
+function blockIp(){ _fwStepUp(function(){ _blockIpNow(); }); }
+function _blockIpNow(){
   var ip = document.getElementById('block-ip').value.trim();
   if (!ip) return;
   var resultEl = document.getElementById('block-result');
@@ -401,7 +408,7 @@ function blockIp() {
 function unblockIp(ip, btn) {
   confirmDialog({title: 'Unblock IP', icon: 'shield-check', confirmClass: 'btn-warning', confirmLabel: 'Unblock',
     bodyText: tf('Remove the firewall block on {ip}?', {ip: ip}),
-    onConfirm: function() {
+    onConfirm: function() { _fwStepUp(function() {
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
       fetch(MOUNT + '/api/remote/' + remoteId + '/security/block', {
         method: 'POST',
@@ -411,7 +418,7 @@ function unblockIp(ip, btn) {
       .then(r => r.json())
       .then(function(d) { if (!d.success && window.toast) toast(d.message || 'Failed to unblock', 'danger'); refreshFirewall(); })
       .catch(function() { refreshFirewall(); });
-    }});
+    }); }});
 }
 
 function esc(s){ return window.escapeHtml(s); }
@@ -423,7 +430,8 @@ function protoBadge(p) {
   return '<span class="text-secondary">—</span>';
 }
 
-function openPort() {
+function openPort() { _fwStepUp(_openPortNow); }
+function _openPortNow() {
   var port = document.getElementById('new-port').value.trim();
   var proto = document.getElementById('new-proto').value;
   var comment = document.getElementById('new-comment').value.trim();
@@ -464,7 +472,8 @@ function openPort() {
 // Both post to routes that validate every argument at the privileged boundary (ipaddress for the
 // source, a port/range grammar for the port, a fixed choice for the protocol), so nothing typed
 // here can reach a command line as anything but those three shapes.
-function _restrictPost(path, body, busy) {
+function _restrictPost(path, body, busy) { _fwStepUp(function() { _restrictPostNow(path, body, busy); }); }
+function _restrictPostNow(path, body, busy) {
   var out = document.getElementById('restrict-result');
   out.innerHTML = '<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> ' + esc(busy) + '</span>';  // nosemgrep
   fetch(MOUNT + '/api/remote/' + remoteId + path, {  // nosemgrep - same-origin; path is one of the literals below
@@ -571,7 +580,7 @@ function deleteGroup(nums, btn, warn, reason, key) {
         if (g.protected) { _say(_fwReason(g) || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return null; }
         return g;
       }
-      (function next() {
+      _fwStepUp(function next() {
         fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
           .then(r => r.json())
           .then(function(data) {
@@ -594,7 +603,7 @@ function deleteGroup(nums, btn, warn, reason, key) {
             });
           })
           .catch(function() { _say('Could not remove the rule — the host may be unreachable.'); refreshFirewall(); });
-      })();
+      });
     }});
 }
 

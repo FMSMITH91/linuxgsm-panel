@@ -4,12 +4,12 @@
 function retrustHostKey(){
   confirmDialog({title:'Clear pinned host key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Clear host key',
     bodyText:'Clear the pinned SSH host key for this server?\n\nOnly do this if YOU reinstalled or rebuilt the server. The next connection will trust and pin whatever host key the server presents.',
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
         .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+escapeHtml(d.message||(d.success?'Done — the next connection re-pins the key':'Failed'))+'</span>'; })  // nosemgrep
         .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
-    }});
+    }); }});
 }
 var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
 // What the card says public SSH IS. `mode` is read from UFW's rule list, so it describes the
@@ -102,8 +102,13 @@ function _r26bSshPortNow(d){
     pn.textContent = t('unknown');
   }
 }
+// The POSTs below are step_up_required routes: a sign-in past the confirmation window confirms the
+// password in a dialog here first (step_up_form.js's window.stepUpThen), so the page stays put. Without
+// it the server's 403 still sends the tab to the confirm page and back.
+function _rmhStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 function sshMode(mode){
-  var run = function(){
+  var run = function(){ _rmhStepUp(runNow); };
+  var runNow = function(){
     var el=document.getElementById('ssh-msg'); el.textContent='Applying…'; el.className='small mt-1 text-secondary';
     fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
       .then(r=>r.json()).then(d=>{ el.textContent=(d.success?'✓ ':'✗ ')+(d.message||''); el.className='small mt-1 '+(d.success?'text-success':'text-danger'); loadSshStatus(); })
@@ -135,12 +140,12 @@ function closePanelPort(){
     : 'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.';
   confirmDialog({title:'Close public panel port', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public port',
     bodyText:body,
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
         .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })  // nosemgrep
         .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
-    }});
+    }); }});
 }
 function onBindSelect(){
   var sel=document.getElementById('panel-bind-select');
@@ -166,7 +171,7 @@ function changePanelBinding(){
   confirmDialog({title:'Change panel binding', icon:'hdd-network', confirmClass:'btn-warning', confirmLabel:'Change binding',
     bodyText:tf('Change the panel binding to {bind}?\n\nThe panel will briefly restart to apply it. '
       +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).', {bind: pretty}),
-    onConfirm:function(){ _changePanelBinding(p, bind); }});
+    onConfirm:function(){ _rmhStepUp(function(){ _changePanelBinding(p, bind); }); }});
 }
 function _changePanelBinding(p, bind){
   var m=document.getElementById('panel-port-change-msg');
@@ -209,7 +214,8 @@ function changeSshPort(){
       +'\n\n'+tf('Lockout-safe: the current binding stays in place as a fallback, and the '
       +'firewall and fail2ban are updated to the new port. Once you\'ve confirmed you can reach SSH on '
       +'{port}, close the old port in the firewall rules on the Network tab.', {port: p}),
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(movePort); }});
+  function movePort(){
       var m=document.getElementById('ssh-port-msg');
       // One move at a time: the server refuses an overlapping one (409), and a second click while
       // this runs is how an overlapping one happens.
@@ -225,12 +231,12 @@ function changeSshPort(){
           if(d.success) loadSshStatus();   // the card's live port moved too
         })
         .catch(function(){ busy(false); if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
-    }});
+  }
 }
 function switchToTailscale(){
   confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-primary', confirmLabel:'Migrate',
     bodyText:'Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.',
-    onConfirm:_switchToTailscale});
+    onConfirm:function(){ _rmhStepUp(_switchToTailscale); }});
 }
 function _switchToTailscale(){
   var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
@@ -273,22 +279,23 @@ fetch(MOUNT + '/api/remote/' + REMOTE_ID + '/specs').then(r=>r.json())
 function tsSshEnable(){
   confirmDialog({title:'Enable Tailscale SSH', icon:'shield-check', confirmClass:'btn-primary', confirmLabel:'Enable',
     bodyText:'Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.',
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
         .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to enable Tailscale SSH','danger'); });
-    }});
+    }); }});
 }
 function tsSshDisable(){
   confirmDialog({title:'Disable Tailscale SSH', icon:'shield-slash', confirmClass:'btn-danger', confirmLabel:'Disable',
     bodyText:'Disable Tailscale SSH?',
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
         .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to disable Tailscale SSH','danger'); });
-    }});
+    }); }});
 }
-function ufwAllowTailscale(){
+function ufwAllowTailscale(){ _rmhStepUp(_ufwAllowTailscale); }
+function _ufwAllowTailscale(){
   fetch(MOUNT+'/api/server-management/ufw-allow-tailscale',{method:'POST'}).then(r=>r.json())
     .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
     .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
@@ -458,7 +465,7 @@ function renderPuLog(lines){
 function doPanelUpdate(){
   confirmDialog({title:'Update the panel', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Update now',
     bodyText:'Update the panel to the latest version now?\n\nIt will back up, pull new code, install any new dependencies, and restart — briefly unavailable (a few seconds). Live progress shows below.',
-    onConfirm:_doPanelUpdate});
+    onConfirm:function(){ _rmhStepUp(_doPanelUpdate); }});
 }
 function _doPanelUpdate(){
   var msg=document.getElementById('pu-msg'), btn=document.getElementById('pu-update-btn');
@@ -628,7 +635,7 @@ function switchPanelBranch(){
       +(branch==='main'
         ? t('It installs the newest version of main that has passed its automated checks.')
         : tf('FOR TESTING: this installs the newest commit on "{branch}" if it is a signed release (if not, nothing is switched) — branches other than main are not checked by the panel\'s automated-checks gate.', {branch: branch})),
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       btn.disabled=true; if(logWrap) logWrap.style.display='';
       if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
       msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
@@ -640,7 +647,7 @@ function switchPanelBranch(){
             watchPanelRestart(beforeBoot, msg, tf('Switched to {branch}', {branch: branch}), before, branch);
           }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
       }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
-    }});
+    }); }});
 }
 
 // ── Diagnostics & file integrity (panel host only) ──────────────────
@@ -855,7 +862,7 @@ function _encStatusLine(d){
 function rotateEncKey(){
   confirmDialog({title:'Rotate encryption key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Rotate',
     bodyText:'A new key will encrypt every stored secret, and the existing ones are re-encrypted under it in the background. Older keys are kept until nothing uses them, so nothing stops working meanwhile. Continue?',
-    onConfirm:_rotateEncKey});
+    onConfirm:function(){ _rmhStepUp(_rotateEncKey); }});
 }
 function _rotateEncKey(){
   var btn=document.getElementById('diag-enc-rotate-btn'), msg=document.getElementById('diag-enc-msg');
@@ -910,7 +917,7 @@ function loadAutoUpd(){
 function enableAutoUpdates(){
   confirmDialog({title:'Enable automatic security updates', icon:'shield-check', confirmClass:'btn-primary', confirmLabel:'Enable',
     bodyText:'Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.',
-    onConfirm:_enableAutoUpdates});
+    onConfirm:function(){ _rmhStepUp(_enableAutoUpdates); }});
 }
 function _enableAutoUpdates(){
   var btn=document.getElementById('diag-autoupd-btn'), msg=document.getElementById('diag-autoupd-msg');

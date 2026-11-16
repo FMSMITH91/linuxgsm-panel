@@ -37,7 +37,7 @@ from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after, game_a
 from panel.security.auth import (MANAGE_DATABASES, MANAGE_REMOTES, VIEW_SERVERS, get_game, get_host_remote, get_remote,
                                  has_permission, log_action, server_access_required, superadmin_required)
 from panel.routes import databases_net as _net
-from panel.security.account_guard import step_up_needed, step_up_refusal
+from panel.security.account_guard import step_up_needed, step_up_refusal, step_up_required
 from panel.services import db_snippets as _snip
 
 _SLUG_RE = re.compile(r"[a-z0-9]{1,16}\Z")
@@ -1017,11 +1017,14 @@ def _remote_routes(app):
         """Install MariaDB on this host, listening on this machine only (in the background)."""
         if not (has_permission(current_user, MANAGE_DATABASES) and has_permission(current_user, MANAGE_REMOTES)):
             return _say(403, _DENIED)
+        if step_up_needed():          # a root install on the host: the password again past the window
+            return step_up_refusal()
         return _setup_answer(app, get_host_remote(remote_id))
 
     @app.route("/api/remote/<int:remote_id>/databases/admin-login", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_remote_databases_admin_login(remote_id):
         """An existing database server's admin login, checked and then stored encrypted (or cleared)."""
         remote = get_remote(remote_id)
@@ -1033,6 +1036,7 @@ def _remote_routes(app):
     @app.route("/api/remote/<int:remote_id>/databases/admin-reveal", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_remote_databases_admin_reveal(remote_id):
         """The password of the admin account the panel made on a database server it installed."""
         return _admin_reveal_answer(get_remote(remote_id))

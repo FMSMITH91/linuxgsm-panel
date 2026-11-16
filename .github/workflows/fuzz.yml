@@ -2,9 +2,11 @@ name: Fuzz
 
 # Coverage-guided fuzzing (Atheris / libFuzzer) of the pure parsers that ingest UNTRUSTED external
 # input: a remote game server's `status`/`list` reply, LinuxGSM config / apt / mod-list output,
-# fail2ban log lines, and UFW status. Each harness asserts the parser never raises on ANY input —
-# they are best-effort and must degrade to an empty result, not crash the player-list / firewall /
-# security paths that call them. Time is bounded so PR runs stay short; the nightly schedule soaks
+# fail2ban log lines, UFW status, the Databases manager's answers and typed SQL, a browser's push
+# subscription, and an uploaded dump (through the scan's awk). Each harness asserts the parser never
+# raises on ANY input — they are best-effort and must degrade to an empty result, not crash the
+# player-list / firewall / security paths that call them — and the newer ones also assert what the
+# parser promises (a masked literal stays masked, a refused statement is refused). Time is bounded so PR runs stay short; the nightly schedule soaks
 # longer over the committed seed corpus.
 # NO `push` TRIGGER, deliberately.
 #   Every push to main here is a squash of a PR that already ran this exact matrix over this exact
@@ -23,9 +25,9 @@ on:
     - cron: "0 4 * * *"   # nightly 04:00 UTC — a longer soak
   workflow_dispatch:      # allow manual runs from the Actions tab
 
-# Least-privilege: these jobs only read the repo (crash reproducers are uploaded as artifacts).
-permissions:
-  contents: read
+# No scope at all by default (OWASP Top 10 CI/CD Security Risks, CICD-SEC-5 and CICD-SEC-6): each job
+# grants only what it uses, so a job added without its own block gets a token that can do nothing.
+permissions: {}
 
 # A newer push to the same ref cancels an in-progress run (faster feedback, fewer minutes). The
 # event is part of the group: on main the nightly and a manual run share the ref, and one
@@ -45,12 +47,19 @@ jobs:
     strategy:
       fail-fast: false   # fuzz every target even if one finds a crash, so all findings surface
       matrix:
-        target: [ game_status, firewall, config, fail2ban, console, cron ]
+        target: [ game_status, firewall, config, fail2ban, console, cron, db_data, push, upload_scan ]
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            release-assets.githubusercontent.com:443
 
       # The workflow runs on EVERY pull request, so this job can be a required check: a required
       # check whose workflow did not run holds the pull request forever. A pull request that
@@ -93,6 +102,10 @@ jobs:
               'panel/__init__.py'
               'panel/core/__init__.py'
               'panel/core/stdin_chunks.py'
+              # The push alerts' parsers (fuzz_push).
+              'panel/services/__init__.py'
+              'panel/services/webpush.py'
+              'panel/services/push_alerts.py'
               'tests/fuzz/**'
               '.github/workflows/fuzz.yml'
               'panel/install/requirements.txt'

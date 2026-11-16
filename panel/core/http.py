@@ -97,12 +97,13 @@ def _form_ok(message, endpoint, **values):
     return redirect(url_for(endpoint, **values))
 
 
-def _form_credential(message, endpoint, username, password, kind="password", **values):
+def _form_credential(message, endpoint, username, password, kind="password", code=None, **values):
     """Success for an action that MINTED a credential.
 
     The plaintext rides back in the JSON so the page can show it once, and is never put anywhere it
     would persist. `kind` is what it is — "password" or "invite" (a link, shown once the same way) —
     so the page words it to fit: an invite was shown as a "One-time password", to be "reset" if lost.
+    `code` is an invite's second code, shown once beside the link (None: the invite has none).
 
     Not a flash and not the session — a flash is stored in the signed session cookie, so a generated
     password would sit in the browser's cookie jar (and any proxy log that captured the Set-Cookie)
@@ -111,9 +112,14 @@ def _form_credential(message, endpoint, username, password, kind="password", **v
     never sees is a locked-out user; every page in this panel submits these forms through fetch.
     """
     if _wants_json():
-        return jsonify({"success": True, "message": message,
-                        "credential": {"username": username, "password": password, "kind": kind}})
-    if kind == "invite":
+        cred = {"username": username, "password": password, "kind": kind}
+        if code:
+            cred["code"] = code
+        return jsonify({"success": True, "message": message, "credential": cred})
+    if kind == "invite" and code:
+        flash(i18n.tr("{message} {password} — code {code}. Send the code another way. Copy both now, "
+                      "they are not shown again.", message=message, password=password, code=code), "success")
+    elif kind == "invite":
         flash(i18n.tr("{message} {password} — copy it now, it is not shown again.",
                       message=message, password=password), "success")
     else:

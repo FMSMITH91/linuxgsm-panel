@@ -71,5 +71,6 @@
   "{server} is back online.": "{server} vuelve a estar en línea.",
   "{server} is full.": "{server} está lleno.",
   "{server} set a new player record.": "{server} ha marcado un nuevo récord de jugadores.",
-  "{server} went offline unexpectedly.": "{server} se desconectó de forma inesperada."
+  "{server} went offline unexpectedly.": "{server} se desconectó de forma inesperada.",
+  "This browser's push service refused the subscription. Brave switches it off by default because Chromium browsers deliver web alerts through Google; Firefox delivers them through Mozilla instead. For alerts with no web push at all, use ntfy on the Notifications page.": "El servicio push de este navegador rechazó la suscripción. Brave lo desactiva por defecto porque los navegadores Chromium entregan las alertas web a través de Google; Firefox las entrega a través de Mozilla. Para alertas sin notificaciones push web, usa ntfy en la página Notificaciones."
 }

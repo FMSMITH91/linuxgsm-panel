@@ -16,14 +16,11 @@ on:
   push:
     branches: [ main ]
 
-# NAMED rather than read-all. This is hygiene, not a behaviour change: a job-level `permissions`
-# block REPLACES the top-level one, and the single job below declares its own — so its token is
-# unaffected either way. It matters because read-all grants every read scope in the token to any
-# future job that does not declare its own, and because scorecard's own Token-Permissions check
-# reads these files and scores a top-level read-all as weaker than an explicit list. `actions: read`
-# was listed here too, and nothing used it: the one job replaces this block with its own.
-permissions:
-  contents: read
+# Empty rather than read-all or a named list: a job-level `permissions` block REPLACES the top-level
+# one, and the single job below declares its own, so its token is unaffected. A future job that does
+# not declare its own gets no scope at all, and scorecard's own Token-Permissions check scores an
+# empty top-level block highest.
+permissions: {}
 
 # One group per commit and event. It was one group for the whole repository, and with
 # cancel-in-progress false GitHub still keeps only ONE pending run per group: three quick pushes

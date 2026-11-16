@@ -36,6 +36,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from panel.routes._shared import (_bootstrap_jobs, _bootstrap_lock, _json_int, _r20b_audit_on_raise)
 from panel.core.validation import (NOT_AN_IP)
 from panel.security import privileged as _priv
+from panel.security.account_guard import step_up_required, step_up_required_to_change
 from panel.services import host_reboot as _hr
 from panel.services.monitoring import (host_has_history)
 from app import (_log, _os_update_born, _os_update_current, _os_update_note)
@@ -213,6 +214,7 @@ def _register_firewall_view(app):
     @app.route("/api/remote/<int:remote_id>/retrust-hostkey", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_retrust_hostkey(remote_id):
         # Clear the pinned SSH host key so the next connection re-pins it (TOFU). Use
         # after legitimately reinstalling a server, when its host key has changed and
@@ -326,6 +328,7 @@ def _register_firewall_rules(app):
     @app.route("/api/remote/<int:remote_id>/firewall/open", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_firewall_open(remote_id):
         remote = get_host_remote(remote_id)
         data = _json_body()
@@ -356,6 +359,7 @@ def _register_firewall_rules(app):
     @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_firewall_allow_from(remote_id):
         """Open a port only from one address or network (`allow: false` removes the rule).
 
@@ -390,6 +394,7 @@ def _register_firewall_rules(app):
     @app.route("/api/remote/<int:remote_id>/firewall/limit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_firewall_limit(remote_id):
         """Rate-limit a port, or lift the limit (`limit: false`).
 
@@ -418,6 +423,7 @@ def _register_firewall_rules(app):
     @app.route("/api/remote/<int:remote_id>/firewall/close", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_firewall_close(remote_id):
         remote = get_host_remote(remote_id)
         data = _json_body()
@@ -436,6 +442,7 @@ def _register_firewall_rules(app):
     @app.route("/api/remote/<int:remote_id>/firewall/delete-rule", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_firewall_delete_rule(remote_id):
         """Delete a UFW rule by its number (the reliable way to remove any rule)."""
         remote = get_host_remote(remote_id)
@@ -493,6 +500,7 @@ def _register_firewall_settings(app):
     @app.route("/api/remote/<int:remote_id>/firewall/settings", methods=["GET", "POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required_to_change
     def api_remote_firewall_settings(remote_id):
         """GET: UFW's settings (remote_ufw_settings). POST {setting, value, confirm}: change one."""
         remote = get_host_remote(remote_id)
@@ -521,6 +529,7 @@ def _register_firewall_settings(app):
     @app.route("/api/remote/<int:remote_id>/firewall/block-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_firewall_block_port(remote_id):
         """Deny or reject a port or range {port, protocol, family, action, comment}."""
         remote = get_host_remote(remote_id)
@@ -581,6 +590,7 @@ def _register_ssh_settings(app):
     @app.route("/api/remote/<int:remote_id>/ssh-mode", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_ssh_mode(remote_id):
         """Set public SSH via UFW: allow / limit / off (tailnet-only)."""
         remote = get_host_remote(remote_id)
@@ -648,6 +658,7 @@ def _register_ssh_port(app):
     @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_ssh_port(remote_id):
         """Move this host's sshd to a new port, lockout-safe.
 
@@ -704,6 +715,7 @@ def _register_panel_port(app):
     @app.route("/api/remote/<int:remote_id>/close-panel-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_close_panel_port(remote_id):
         """Close the panel's public web port on the panel host so the UI is reachable only over the tailnet.
 
@@ -933,6 +945,7 @@ def _register_game_ports(app):
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_game_port_open(remote_id, port):
         """Open ONE game server's port in the host firewall.
 
@@ -1190,6 +1203,7 @@ def _register_os_update_checks(app):
     @app.route("/api/remote/<int:remote_id>/run-updates", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_run_updates(remote_id):
         remote = get_host_remote(remote_id)
         if _hr.reboot_busy(remote.id):
@@ -1209,6 +1223,7 @@ def _register_os_update_jobs(app):
     @app.route("/api/remote/<int:remote_id>/os-update/start", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_os_update_start(remote_id):
         """Start a detached, watchable OS update; the popup polls .../os-update/status for live output."""
         remote = get_host_remote(remote_id)
@@ -1317,6 +1332,7 @@ def _register_reboot(app):
     @app.route("/api/remote/<int:remote_id>/reboot", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_reboot(remote_id):
         """Reboot a host cleanly: its game servers are stopped first and brought back as planned.
 

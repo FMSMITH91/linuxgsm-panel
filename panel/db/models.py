@@ -1138,8 +1138,17 @@ class Invite(db.Model):
     grants_superadmin = db.Column(db.Boolean, default=False)
     group_ids = db.Column(db.Text, default="[]")
     note = db.Column(db.String(120), default="")
+    # The second code: shown once beside the link, meant to travel by another channel, so a link
+    # read from a chat log or an inbox is not enough on its own. Argon2id, like a password (it is
+    # short); NULL for an invite made without one. code_failures counts wrong entries; the
+    # CODE_MAX_TRIES-th revokes the invite (see redeem_invite).
+    code_hash = db.Column(db.String(255), nullable=True)
+    code_failures = db.Column(db.Integer, default=0)
 
     INVITE_TTL_HOURS = 48
+    # OWASP Forgot Password Cheat Sheet, "PINs": 6 to 12 digits. Eight, read out in two groups of four.
+    CODE_DIGITS = 8
+    CODE_MAX_TRIES = 5
     # How many redeemable invites may exist at once. The Users page lists every live one, because
     # its Revoke button is rendered nowhere else (review 1016f), so this is what keeps that page
     # bounded: minting has no rate limit and a link lives up to 30 days. Far above any batch of
@@ -1162,6 +1171,21 @@ class Invite(db.Model):
             note=(note or "")[:120],
         )
         return inv, token
+
+    @staticmethod
+    def new_code():
+        """A fresh second code: (code as shown, "1234 5678"; its Argon2id hash). Shown ONCE."""
+        import secrets
+        from panel.security.auth import hash_password
+        digits = "".join(secrets.choice("0123456789") for _ in range(Invite.CODE_DIGITS))
+        return "%s %s" % (digits[:4], digits[4:]), hash_password(digits)
+
+    def code_matches(self, typed):
+        """True if `typed` is this invite's code; spaces and dashes are ignored."""
+        from panel.security.auth import check_password
+        digits = "".join(ch for ch in str(typed or "") if ch not in " -\t")
+        return (bool(self.code_hash) and len(digits) == Invite.CODE_DIGITS
+                and all(ch in "0123456789" for ch in digits) and check_password(digits, self.code_hash))
 
     @staticmethod
     def by_token(token):
@@ -1213,7 +1237,7 @@ class Invite(db.Model):
         if self.used_at is not None:
             return "used"
         if self.revoked_at is not None:
-            return "revoked"
+            return "burned" if (self.code_failures or 0) >= Invite.CODE_MAX_TRIES else "revoked"
         if (self.expires_at or utcnow()) <= utcnow():
             return "expired"
         return "active"
@@ -1805,6 +1829,9 @@ _LIGHT_MIGRATIONS = {
     ("host_sample", "net_tx_kbps"): "ALTER TABLE host_sample ADD COLUMN net_tx_kbps FLOAT",
     ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",
     ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
+    # NULL on upgrade: an invite made before the second code existed keeps working without one.
+    ("invite", "code_hash"): "ALTER TABLE invite ADD COLUMN code_hash VARCHAR(255)",
+    ("invite", "code_failures"): "ALTER TABLE invite ADD COLUMN code_failures INTEGER DEFAULT 0",
     ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
     ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
     ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
@@ -2154,19 +2181,29 @@ def _run_maintenance(path):
         # BECAUSE the database was too busy for VACUUM, i.e. the state in which the checkpoint is
         # most likely to have been refused as well. An operator chasing a growing panel.db was
         # told the cheap half of the job had succeeded while the wal_size beside it never moved.
-        row = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()   # merge + trim the WAL
-        try:
-            wal_trimmed = (int(row[0]) == 0) if row else None
-        except (TypeError, ValueError, IndexError):
-            wal_trimmed = None                           # unreadable is not "it worked"
+        wal_trimmed = _checkpoint_truncate(con)          # merge + trim the WAL (unreadable is not "it worked")
         con.execute("ANALYZE")                           # refresh planner stats
         try:
             con.execute("VACUUM")                        # compact (needs exclusive lock)
-            return wal_trimmed, True
         except sqlite3.OperationalError:
             return wal_trimmed, False   # busy — ANALYZE succeeded; the WAL is whatever it is
+        # In WAL mode VACUUM writes the rebuilt database INTO the WAL, so without a second
+        # checkpoint the -wal file ends up about the size of the whole database: "Optimize" made
+        # it bigger (4 MB -> 12 MB on a real panel), and it stayed that size until a restart.
+        return _checkpoint_truncate(con), True
     finally:
         con.close()
+
+
+def _checkpoint_truncate(con):
+    """PRAGMA wal_checkpoint(TRUNCATE) on `con`: True done, False busy, None unreadable (it never raises)."""
+    row = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    try:
+        return (int(row[0]) == 0) if row else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 
 
 def optimize_database():
@@ -2217,10 +2254,13 @@ def optimize_database():
                 {"before": before, "after": before, "freed": 0, "vacuumed": False})
 
     after = _size()
-    # Word this from what was OBSERVED, not from what was attempted. VACUUM rewrites the whole
-    # file and takes the WAL with it, so when it ran there is nothing left to qualify; when it did
-    # not, the checkpoint is a separate question and the answer is the one the pragma gave.
-    if vacuumed:
+    # Word this from what was OBSERVED, not from what was attempted. In WAL mode VACUUM writes the
+    # rebuilt file into the WAL, so `wal_trimmed` is the checkpoint run AFTER it; when VACUUM did
+    # not run, it is the one before, and the answer is the one the pragma gave either way.
+    if vacuumed and wal_trimmed is False:
+        msg = ("Database optimized — the WAL file could not be trimmed yet because the database "
+               "was busy; it shrinks at the next checkpoint or restart.")
+    elif vacuumed:
         msg = "Database optimized."
     elif wal_trimmed:
         msg = ("Checkpointed the WAL and refreshed stats — VACUUM was deferred because the "

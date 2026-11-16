@@ -182,7 +182,9 @@ _th64 = _node47("global.window = global; let toasts = [], posts = [];\n"
                 "for (const v of ['150000', '100000', '0']) { toasts = []; posts = []; box.value = v;\n"
                 "  saveThreshold(null); out.push([v, posts.length, toasts.map(t => t[0])]); }\n"
                 "console.log(JSON.stringify(out));" % (_cut47(_rmjs64, "function _r15aThresholdOk") + "\n"
-                                                        + _cut47(_rmjs64, "function saveThreshold")))
+                                                        + _cut47(_rmjs64, "function _secStepUp") + "\n"
+                                                        + _cut47(_rmjs64, "function saveThreshold") + "\n"
+                                                        + _cut47(_rmjs64, "function _saveThresholdNow")))
 _THNAME64 = ("threshold: the host page refuses 150000 before posting it (the endpoint clamped it to 100000, "
              "and the toast told a superadmin only a superadmin could change it), sends 100000, refuses 0")
 if _th64 is None:

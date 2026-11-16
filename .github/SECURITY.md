@@ -34,6 +34,14 @@ version only, so please update before reporting.
 | Latest `main` (the newest date) | ✅ |
 | Anything older | ❌ — please update first |
 
+## Threat model
+
+[docs/THREAT-MODEL.md](../docs/THREAT-MODEL.md) is the panel's threat model (OWASP Threat Modeling
+Cheat Sheet): its assets, the trust boundaries (the browser, the panel, root through the helper, game
+accounts, remote hosts, push services and chat bots, database servers, the update path and CI), STRIDE
+against each one with the controls that answer it and the file that holds them, and the risks
+accepted. The sections below are the parts an operator acts on.
+
 ## Deploying securely
 
 The panel manages game-server hosts over SSH, so treat it as sensitive infrastructure:
@@ -114,6 +122,12 @@ What it does not cover:
 - **The test host's deploy** ships the commit's own installer. It runs only when started by hand,
   only from `main`. Its reach is the tailnet ACL's: confirm the ACL lets the CI runner's tag reach
   the test host only.
+
+Each GitHub Release also carries the commit's software bill of materials,
+`linuxgsm-panel-<tag>.cdx.json` (CycloneDX 1.6 JSON): every Python package the panel installs and
+every npm package of gamedig, with the version and the hashes the lockfiles pin them to. It is made
+from the tagged commit's own lockfiles (`tools/sbom.py`), the same bytes every time, so it can be
+made again from the tag and compared, and fed to a scanner (for example `osv-scanner --sbom`).
 
 A lost key is recovered with `PANEL_ALLOW_UNSIGNED_UPDATE=1` on a run by hand over SSH; the panel's
 own update, its terminal and anything it starts through the helper cannot pass it.
@@ -283,7 +297,15 @@ README's "Removing a host" lists it with the commands that remove it.
   network service can become root: keep it off the public internet, keep 2FA on, and keep it
   updated.
 
-## This repository's CI secret
+## This repository's CI
+
+Every workflow's token starts with no permissions (`permissions: {}`), and each job grants only the
+scopes it uses. No workflow runs on `pull_request_target`, and every action is pinned to a full commit
+SHA. Every job but the deploy starts with StepSecurity's Harden-Runner; the pull-request jobs whose
+outbound hosts are few and known run it in block mode, refusing every host not on their list (OWASP
+Top 10 CI/CD Security Risks, CICD-SEC-5 to CICD-SEC-7).
+
+### The CI secret
 
 The one secret credential the workflows use is `CODACY_PROJECT_TOKEN`, a Codacy repository API
 token that sends test coverage to Codacy. It cannot touch the code, GitHub or any host, but it can

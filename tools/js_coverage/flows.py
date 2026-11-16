@@ -725,8 +725,14 @@ if (add) {
   add.requestSubmit(); await J.sleep(1500);
 }
 const inv = document.querySelector('form[action$="/users/invite"]');
-if (inv) { J.type('#inv-note', 'for a friend'); inv.requestSubmit(); await J.sleep(1500); }
+if (inv) {
+  J.type('#inv-note', 'for a friend');
+  // Super Administrator on and off again: the code switch locks on and unlocks (syncInviteCode).
+  J.click('#inv-superadmin'); await J.sleep(100); J.click('#inv-superadmin'); await J.sleep(100);
+  inv.requestSubmit(); await J.sleep(1500);
+}
 J.click('[data-action="copyCredential"]'); await J.sleep(300);
+J.click('[data-action="copyInviteCode"]'); await J.sleep(300);
 return 1;
 """
 

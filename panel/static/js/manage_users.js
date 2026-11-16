@@ -129,6 +129,7 @@ window.showCredential = function(cred){
   });
   who.textContent = cred.username || '';
   pw.value = cred.password;
+  _credShowCode(kind === 'invite' && cred.code ? String(cred.code) : '');
   pw.setAttribute('aria-label', kind === 'invite' ? 'Invite Link' : 'One-time password');
   pw.setAttribute('data-cred-kind-shown', kind);
   new bootstrap.Modal(modal).show();
@@ -141,3 +142,30 @@ window.copyCredential = function(){
   // Best-effort: if the copy is refused, the password is still on screen to copy by hand.
   else if (navigator.clipboard) navigator.clipboard.writeText(pw.value).catch(function(){ /* see above */ });
 };
+
+// An invite's second code, when it has one: its own field, and a note that both are needed.
+function _credShowCode(code){
+  var codeBox = document.getElementById('cred-code');
+  if (codeBox) codeBox.value = code;
+  ['cred-code-block', 'cred-code-note'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.hidden = !code;
+  });
+}
+window.copyInviteCode = function(){
+  var c = document.getElementById('cred-code');
+  if (c && c.value && window.copyText) copyText(c.value, 'Code copied');
+};
+
+// A Super Administrator invite always asks for the code: the switch is shown on and locked while
+// that one is on (the server makes a code for it whatever the form says).
+window.syncInviteCode = function(){
+  var sup = document.getElementById('inv-superadmin'), code = document.getElementById('inv-code');
+  if (!sup || !code) return;
+  if (sup.checked) code.checked = true;
+  code.disabled = sup.checked;
+};
+// form.reset() after a successful create puts the switches back but not `disabled`.
+document.addEventListener('reset', function(e){
+  if (e.target && e.target.id === 'invite-form') setTimeout(window.syncInviteCode, 0);
+}, true);

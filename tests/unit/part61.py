@@ -262,7 +262,7 @@ _sent61 = []
 with _patched():
     _patch(_nt61, "send_telegram", lambda tok, chat, text: (_sent61.append(("tg", chat)), (True, ""))[1])
     _patch(_nt61, "discord_bot_send", lambda tok, chan, text: (_sent61.append(("dc", chan)), (True, ""))[1])
-    _patch(_nt61, "send_ntfy", lambda srv, top, tok, text: (_sent61.append(("nt", top)), (True, ""))[1])
+    _patch(_nt61, "send_ntfy", lambda srv, top, tok, text, *_p: (_sent61.append(("nt", top)), (True, ""))[1])
     _tg61 = _try61(_nt61._test_send_telegram, {"telegram": {"chat_id": 123456789}},
                    "123456:" + "A" * 35, None, "t")
     _dc61 = _try61(_nt61._test_send_discord_bot, {"discord": {"channel_id": 112233445566778899}},
