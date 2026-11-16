@@ -203,7 +203,9 @@ def finish_script(user, uid, size, name):
         'if [ "${c:-0}" -lt 1 ]; then %s echo %s; exit 5; fi' % (rm, _M["NOTSQL"]),
         # A verdict first (awk stopping early ends the reader with SIGPIPE); a scan that read everything
         # also needs the reader to have read it all without an error (a damaged or cut gzip).
-        'v=$(rd 2>/dev/null | %s); r=$?' % scan,
+        # NUL bytes become spaces for the scan only (the stored dump is unchanged): Ubuntu 22.04's mawk ends a
+        # string at a NUL in match/index/split, so the rest of such a line would go unread there.
+        "v=$(rd 2>/dev/null | tr '\\000' ' ' | %s); r=$?" % scan,
         'case "$v" in SCANNED) [ "$r" = 0 ] || { %s echo %s; exit 5; };; BIG|SWITCH|OTHER) %s echo "__DBUP_${v}__"; '
         'exit 5;; *) %s echo %s; exit 5;; esac' % (rm, _M["DAMAGED"], rm, rm, _M["DAMAGED"]),
         'if [ "$m" != 1f8b ]; then gzip -c -n -- "$p" > "$p.gz" && mv -f -- "$p.gz" "$p" || { %s echo %s; exit 6; }; fi'

@@ -873,6 +873,23 @@ check("upload scan: its program lives in a module with no imports (a fuzz harnes
       "the finish runs that same program",
       not [n for n in _ast219.walk(_scan_tree219) if isinstance(n, (_ast219.Import, _ast219.ImportFrom))]
       and _dfr219._SCAN_AWK is __import__("panel.ops.ssh_manager.db_upload_scan", fromlist=["x"]).SCAN_AWK)
+# A NUL byte past the first 64 KB, on a line that holds a chained statement: Ubuntu 22.04's mawk ends a
+# string at a NUL, which a stand-in awk imitates here (it cuts each line at its first NUL, then runs gawk).
+_NULBIN219 = _os219.path.join(_T219, "nulbin")
+_os219.makedirs(_NULBIN219, exist_ok=True)
+with open(_os219.path.join(_NULBIN219, "awk"), "w", encoding="utf-8") as _fh219:
+    _fh219.write("#!/bin/bash\nLC_ALL=C sed 's/\\x00.*//' | exec gawk \"$@\"\n")
+# nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in in this part's temp dir
+_os219.chmod(_os219.path.join(_NULBIN219, "awk"), 0o700)  # nosec B103 - owner-only stand-in program in a temp dir
+_nuldump219 = (_GOOD219.encode() + _LARGE219 + b"INSERT INTO `t` VALUES (0,'a\x00b'); DROP SCHEMA gs9_x;\n")
+_bash219(_dfr219.start_script("gm219", _UID219, 1))
+with open(_os219.path.join(_DD219, ".panel-upload-%s.part" % _UID219), "wb") as _fh219:
+    _fh219.write(_nuldump219)
+_nulout219 = _bash219("export PATH=%s:$PATH\n" % _NULBIN219
+                      + _dfr219.finish_script("gm219", _UID219, len(_nuldump219), "gs12_lp"))
+eq("upload check: a NUL past the first 64 KB does not hide the rest of its line from the scan (an awk that ends "
+   "strings at a NUL, as Ubuntu 22.04's mawk does, still sees the chained DROP SCHEMA)",
+   _dfr219.outcome(_nulout219), ("refused", "SWITCH"))
 # The dump the files held is kept aside until the restore works, and put back when it does not.
 _DEST219 = _os219.path.join(_DD219, "gs12_lp.sql.gz")
 
