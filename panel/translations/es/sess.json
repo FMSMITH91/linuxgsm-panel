@@ -15,5 +15,7 @@
   "Remembered · signs out after {idle} idle or at {when}": "Recordada · se cierra tras {idle} de inactividad o, como muy tarde, {when}",
   "Signs out after {idle} idle or at {when}": "Se cierra tras {idle} de inactividad o, como muy tarde, {when}",
   "With “Remember me”, a sign-in lasts {lasts}, then asks for the password.": "Con «Recordarme», un inicio de sesión dura {lasts} y luego pide la contraseña.",
-  "The password is asked again before a terminal, an uninstall, a backup restore or a user or group change.": "La contraseña se vuelve a pedir antes de un terminal, una desinstalación, una restauración de copia o un cambio de usuarios o grupos."
+  "The password is asked again before a terminal, an uninstall, a backup restore or a user or group change.": "La contraseña se vuelve a pedir antes de un terminal, una desinstalación, una restauración de copia o un cambio de usuarios o grupos.",
+  "This change needs your password again because you signed in a while ago. Nothing you typed is lost.": "Este cambio necesita de nuevo tu contraseña porque iniciaste sesión hace un rato. No se pierde nada de lo que escribiste.",
+  "Confirm and save": "Confirmar y guardar"
 }

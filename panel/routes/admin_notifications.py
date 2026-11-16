@@ -64,6 +64,7 @@ def _register_panel_settings(app):
     @app.route("/settings/save", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # it can switch step-up, 2FA and session binding off, or redirect alerts
     def panel_settings_save():
         f = request.form
         title = _json_str(f, "site_title")[:80] or "LinuxGSM Panel"
@@ -121,6 +122,7 @@ def _register_notifications(app):
     @app.route("/notifications/save", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # it can switch step-up, 2FA and session binding off, or redirect alerts
     def notifications_save():
         f = request.form
         # A blank secret field means "keep the stored one" (None), so the real token/webhook is

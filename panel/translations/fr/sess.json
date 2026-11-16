@@ -15,5 +15,7 @@
   "Remembered · signs out after {idle} idle or at {when}": "Mémorisée · se déconnecte après {idle} d’inactivité, ou au plus tard : {when}",
   "Signs out after {idle} idle or at {when}": "Se déconnecte après {idle} d’inactivité, ou au plus tard : {when}",
   "With “Remember me”, a sign-in lasts {lasts}, then asks for the password.": "Avec « Se souvenir de moi », une connexion dure {lasts}, puis redemande le mot de passe.",
-  "The password is asked again before a terminal, an uninstall, a backup restore or a user or group change.": "Le mot de passe est redemandé avant un terminal, une désinstallation, une restauration de sauvegarde ou une modification d’utilisateurs ou de groupes."
+  "The password is asked again before a terminal, an uninstall, a backup restore or a user or group change.": "Le mot de passe est redemandé avant un terminal, une désinstallation, une restauration de sauvegarde ou une modification d’utilisateurs ou de groupes.",
+  "This change needs your password again because you signed in a while ago. Nothing you typed is lost.": "Cette modification redemande votre mot de passe car vous vous êtes connecté il y a un moment. Rien de ce que vous avez saisi n’est perdu.",
+  "Confirm and save": "Confirmer et enregistrer"
 }

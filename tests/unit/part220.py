@@ -23,11 +23,13 @@ from sqlalchemy import event as _sa_event220
 
 from unit import REPO_ROOT as _ROOT
 from unit.part01 import check, eq, skip
-from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
+from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
+                         _p9_restore_all)
 from panel.core import i18n as _i18n220, session_policy as _sp_pol220
 from panel.core.clock import utcnow as _now220
 from panel.db.models import AuditLog as _AL220, Group as _G220, User as _U220, UserSession as _US220, db as _db220
 from panel.security import auth as _auth220
+from panel.services import notifications as _nt220
 
 _trips220 = len(_P9_TRIPPED)
 _IDS220 = []
@@ -326,10 +328,149 @@ def _s220_remember_text():
        [True] * 6)
 
 
+# ── 4. A stale sign-in cannot save Settings or Notifications (pen test M1) ───────────────────────
+_PT_FORM220 = {"session_idle_minutes": "30", "session_absolute_hours": "8", "remember_days": "3",
+               "step_up_minutes": "0", "session_protection": "basic"}
+_SET220 = {"Referer": "http://localhost/settings"}
+
+
+def _pt_rig220(saved, sent):
+    import panel.routes.admin_notifications as _an220
+    _p9_patch(_an220, "update_config", lambda mutate: mutate(saved))
+    _p9_patch(_an220, "load_config", lambda: dict(saved))
+    _p9_patch(_nt220, "save_settings", lambda **kw: sent.append(kw))
+    _p9.config["STEP_UP_MINUTES"] = 10
+
+
+def _pt_stale220(c, saved, sent):
+    """The pen test's sequence on a session past the window: what each request answered, and what changed."""
+    term = "/terminal/%d" % P9_HOST
+    out = {"term": c.get(term).headers.get("Location", "")}
+    nav = c.post("/settings/save", data=_PT_FORM220, headers=_SET220)
+    xhr = c.post("/settings/save", data=_PT_FORM220, headers=_XHR220)
+    notif = c.post("/notifications/save", data={"telegram_enabled": "on", "telegram_chat_id": "1"},
+                   headers={"Referer": "http://localhost/notifications"})
+    out.update(nav=(nav.status_code, nav.headers.get("Location", "")), xhr=(xhr.status_code, _p9_json(xhr).get("error")),
+               notif=(notif.status_code, notif.headers.get("Location", "")),
+               changed=(dict(saved), list(sent), _p9.config.get("STEP_UP_MINUTES"), _p9.config.get("SESSION_PROTECTION")),
+               term_after=c.get(term).headers.get("Location", ""),
+               ping=(_p9_json(c.get("/api/auth/ping?step_up=1")).get("step_up"), "step_up" in _p9_json(c.get("/api/auth/ping"))))
+    return out
+
+
+def _s220_stale_save():
+    saved, sent, live = {}, [], {k: _p9.config.get(k) for k in _LIFE_KEYS220}
+    _user220("p220_pt", superadmin=True)
+    try:
+        _pt_rig220(saved, sent)
+        c = _login220("p220_pt")
+        _age220(c, 11 * 60)
+        got = _pt_stale220(c, saved, sent)
+        confirmed = c.post("/account/reauth", data={"password": _K220}, headers=_XHR220)
+        ping_after = _p9_json(c.get("/api/auth/ping?step_up=1")).get("step_up")
+        ok = c.post("/settings/save", data=dict(_PT_FORM220, step_up_minutes="25",
+                                                session_protection=live["SESSION_PROTECTION"] or "strong"),
+                    headers=_SET220)
+        _p9.config.update(REQUIRE_2FA=False)
+        stored = (saved.get("step_up_minutes"), _p9.config.get("STEP_UP_MINUTES"))
+        n_ok = c.post("/notifications/save", data={"telegram_chat_id": "1"})
+    finally:
+        _p9.config.update(live)
+        _p9_restore_all()
+    eq("pen test M1: on a session past the step-up window the terminal asks for the password, and a Settings "
+       "save turning step-up off and session binding down is sent to confirm (back to Settings), or refused "
+       "in-page with reauth_required; nothing is written or put in force",
+       (got["term"].endswith("next=%2Fterminal%2F" + str(P9_HOST)), got["nav"], got["xhr"], got["changed"][0],
+        got["changed"][2:]),
+       (True, (302, "/account/reauth?next=%2Fsettings"), (403, "reauth_required"), {},
+        (10, live["SESSION_PROTECTION"])))
+    eq("pen test M1: ...the Notifications save is sent to confirm too and saves nothing, and the terminal still "
+       "asks afterwards",
+       (got["notif"], got["changed"][1], got["term_after"].endswith("next=%2Fterminal%2F" + str(P9_HOST))),
+       ((302, "/account/reauth?next=%2Fnotifications"), [], True))
+    eq("step-up: /api/auth/ping?step_up=1 says a confirm is needed (only when asked); after the password it is "
+       "not, and both saves then go through",
+       (got["ping"], confirmed.status_code, ping_after, ok.status_code, stored, n_ok.status_code, len(sent)),
+       ((True, False), 200, False, 302, (25, 25), 302, 1))
+
+
+def _s220_token_save():
+    """An API token is exempt from step-up here as everywhere: it took the password and code to mint."""
+    saved, sent, live = {}, [], {k: _p9.config.get(k) for k in _LIFE_KEYS220}
+    uid = _user220("p220_tok", superadmin=True)
+    try:
+        _pt_rig220(saved, sent)
+        with _p9.app_context():
+            tok = _db220.session.get(_U220, uid).generate_api_token()
+            _db220.session.commit()
+        r = _p9.test_client().post("/settings/save", data=dict(_PT_FORM220, step_up_minutes="12",
+                                                               session_protection="strong"),
+                                   headers={"Authorization": "Bearer " + tok})
+        stored = saved.get("step_up_minutes")
+    finally:
+        _p9.config.update(live)
+        _p9_restore_all()
+    eq("step-up: a Settings save with an API token is not sent to confirm (tokens are exempt)", (r.status_code, stored),
+       (302, 12))
+
+
+_STEPUP_JS220 = r"""
+const fs = require('fs');
+const sent = [], calls = [], dialogs = [];
+let listener = null, stale = %s, reauthOk = %s;
+global.window = {MOUNT: ''};
+global.t = (s) => s;
+global.document = {addEventListener: (type, fn) => { if (type === 'submit') listener = fn; },
+                   createElement: () => ({appendChild() {}, set textContent(v) {}, className: ''})};
+global.FormData = class { constructor() { this.v = {}; } append(k, v) { this.v[k] = v; } };
+global.fetch = (url, init) => { calls.push([url, init && init.body ? init.body.v : null]);
+  if (url.indexOf('/api/auth/ping?step_up=1') === 0) return Promise.resolve({ok: true, json: () => Promise.resolve({step_up: stale})});
+  return Promise.resolve({ok: reauthOk, json: () => Promise.resolve({success: reauthOk, message: 'Password incorrect.'})}); };
+window.confirmDialog = (o) => { dialogs.push(o.title);
+  o.onConfirm('pw', {close() {}, error(m) { dialogs.push('error:' + m); }}); };
+const attrs = {'data-step-up': '', 'data-step-up-totp': '0'};
+const form = {hasAttribute: (k) => k in attrs, getAttribute: (k) => (k in attrs ? attrs[k] : null),
+              setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: (k) => { delete attrs[k]; },
+              requestSubmit() { const ev = {target: form, prevented: false, preventDefault() { this.prevented = true; }};
+                                listener(ev); if (!ev.prevented) sent.push('sent'); }};
+eval(fs.readFileSync(%r, 'utf8'));
+const first = {target: form, prevented: false, preventDefault() { this.prevented = true; }};
+listener(first);
+setTimeout(() => console.log(JSON.stringify({held: first.prevented, sent, calls, dialogs})), 50);
+"""
+
+
+def _run_stepup_js220(stale, reauth_ok):
+    path = _os220.path.join(str(_ROOT), "panel", "static", "js", "step_up_form.js")
+    r = _sp220.run(["node", "-"], input=_STEPUP_JS220 % ("true" if stale else "false", "true" if reauth_ok else "false", path),
+                   capture_output=True, text=True, timeout=60, check=False)  # nosec B603 B607
+    try:
+        return _json220.loads(r.stdout.strip())
+    except ValueError:
+        return {"error": (r.stdout + r.stderr)[-300:]}
+
+
+def _s220_stepup_js():
+    name = ("step-up form: a fresh sign-in's save goes at once; a stale one is held, confirmed in place with "
+            "/account/reauth, then sent unchanged; a wrong password sends nothing")
+    if not _shutil220.which("node"):
+        skip(name, "no node on this machine")
+        return
+    fresh, stale, wrong = _run_stepup_js220(False, True), _run_stepup_js220(True, True), _run_stepup_js220(True, False)
+    eq(name, [(fresh.get("held"), fresh.get("sent"), fresh.get("dialogs")),
+              (stale.get("sent"), stale.get("dialogs"), [c[0] for c in stale.get("calls", [])],
+               (stale.get("calls") or [[0, 0], [0, {}]])[1][1]),
+              (wrong.get("sent"), wrong.get("dialogs"))],
+       [(True, ["sent"], []),
+        (["sent"], ["Confirm it is you"], ["/api/auth/ping?step_up=1", "/account/reauth"], {"password": "pw"}),
+        ([], ["Confirm it is you", "error:Password incorrect."])])
+
+
 try:
     _p9_arm(who="part220")
     for _fn220 in (_s220_rows, _s220_end_is_the_rule, _s220_queries, _s220_js_sentence, _s220_step_up_values,
-                   _s220_settings, _s220_step_up_in_force, _s220_remember_text):
+                   _s220_settings, _s220_step_up_in_force, _s220_remember_text, _s220_stale_save,
+                   _s220_token_save, _s220_stepup_js):
         _p9_arm(who="part220")
         try:
             _fn220()

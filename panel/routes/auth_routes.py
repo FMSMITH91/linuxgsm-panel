@@ -600,8 +600,16 @@ def _register_session_list(app):
         restored from that cache is a photograph of a signed-in panel and cannot know on its own
         that the cookie died while it was away. When it has, @login_required answers 401 and the
         client's global handler moves the tab to the login screen.
+
+        With ?step_up=1 it also says whether a high-risk request would now be sent to confirm the
+        password (account_guard.step_up_needed): step_up_form.js asks just before a guarded form is
+        sent, so it can confirm in place and lose nothing typed. Only then, because a session from
+        before step-up existed costs a query to answer it.
         """
-        return jsonify({"success": True, "user": current_user.username})
+        out = {"success": True, "user": current_user.username}
+        if request.args.get("step_up") == "1":
+            out["step_up"] = bool(account_guard.step_up_needed())
+        return jsonify(out)
 
     @app.route("/api/account/sessions")
     @login_required

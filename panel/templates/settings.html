@@ -9,7 +9,8 @@
   Panel-wide preferences. Changes take effect immediately — no restart needed.
 </p>
 
-<form method="POST" action="{{ url_for('panel_settings_save') }}">
+<form method="POST" action="{{ url_for('panel_settings_save') }}"
+      data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
   <div class="row">
     <!-- Branding -->
     <div class="col-lg-6 mb-3">
@@ -161,4 +162,6 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/settings.js') }}"></script>
+{# A stale sign-in confirms its password in place before the save (step_up_required on its POST). #}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/step_up_form.js') }}"></script>
 {% endblock %}
