@@ -450,13 +450,13 @@ check("sonar main gate: ...an open issue that is not known fails, named with its
 _sq1_empty = _sq28_drive([], accepted=[])
 check("sonar main gate: ...the Accepted issue missing from main's Accepted list fails, named (an "
       "empty read is not a clean main, even with nothing open)",
-      len(_sq1_empty[0]) == 1 and "AaDejKLMfWz637hiAQny" in _sq1_empty[0][0]
+      len(_sq1_empty[0]) == 1 and "AaHkWUMULZkAFiLSHxwS" in _sq1_empty[0][0]
       and "not in SonarCloud's list of the branch's Accepted issues" in _sq1_empty[0][0],
       repr(_sq1_empty[0]))
 _sq1_reopened = _sq28_drive(list(_SQ28_KNOWN), accepted=[])
 check("sonar main gate: ...an Accepted issue that is open again fails twice: open and not known, and "
       "missing from the Accepted list",
-      len(_sq1_reopened[0]) == 2 and all("AaDejKLMfWz637hiAQny" in _p for _p in _sq1_reopened[0]),
+      len(_sq1_reopened[0]) == 2 and all("AaHkWUMULZkAFiLSHxwS" in _p for _p in _sq1_reopened[0]),
       repr(_sq1_reopened[0]))
 _sq1_short = _sq28_drive([], total=5)
 check("sonar main gate: ...a list shorter than SonarCloud's own total fails",
@@ -465,6 +465,20 @@ _sq1_sched = _sq28_drive([], sha=None)
 check("sonar main gate: ...with no commit given (the schedule) it judges the analysed commit at once",
       _sq1_sched[0] == [] and _sq1_sched[1] == _SHA28 and _sq1_sched[3] == []
       and not any(_c[0] == "project_analyses/search" for _c in _sq1_sched[2]), repr(_sq1_sched))
+# The line SonarCloud's Accepted docker:S6471 sits on. When that line is edited (a new digest too),
+# SonarCloud closes the issue and raises it under a NEW key on main, and main's gate fails after the
+# merge because KNOWN_ACCEPTED names the closed key: no pull request check could see it. So an edit
+# to the line fails here first. Merge it only with the new key: Accept the issue SonarCloud raises on
+# the pull request's analysis, put its key in KNOWN_ACCEPTED, then the new line and key here.
+_SQ28_ACCEPTED_AT = ("AaHkWUMULZkAFiLSHxwS", (".clusterfuzzlite", "Dockerfile"),
+                     "FROM gcr.io/oss-fuzz-base/base-builder-python:latest@sha256:"
+                     "6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23")
+with open(os.path.join(_R28, *_SQ28_ACCEPTED_AT[1]), encoding="utf-8") as _f28:
+    _sq28_lines = _f28.read().splitlines()
+check("sonar main gate: the line holding the Accepted issue is the one its key was raised on (an edit "
+      "re-keys it in SonarCloud and turns main red after the merge: update KNOWN_ACCEPTED's key first)",
+      _SQ28_ACCEPTED_AT[2] in _sq28_lines and _SQ28_ACCEPTED_AT[0] in _sq28.KNOWN_ACCEPTED,
+      repr([_l for _l in _sq28_lines if _l.startswith("FROM ")]))
 _sq28_out = _io28.StringIO()
 with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
@@ -472,9 +486,9 @@ with _ctx28.redirect_stdout(_sq28_out):
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
 check("sonar main gate: ...no issue is known open, the one Accepted is docker:S6471 with its measured "
       "reason, the self-test passes, and a malformed branch or commit is refused",
-      _sq28.KNOWN_OPEN == {} and set(_sq28.KNOWN_ACCEPTED) == {"AaDejKLMfWz637hiAQny"}
-      and "S6471" in _sq28.KNOWN_ACCEPTED["AaDejKLMfWz637hiAQny"]
-      and "libFuzzingEngine.a': Permission denied" in _sq28.KNOWN_ACCEPTED["AaDejKLMfWz637hiAQny"]
+      _sq28.KNOWN_OPEN == {} and set(_sq28.KNOWN_ACCEPTED) == {"AaHkWUMULZkAFiLSHxwS"}
+      and "S6471" in _sq28.KNOWN_ACCEPTED["AaHkWUMULZkAFiLSHxwS"]
+      and "libFuzzingEngine.a': Permission denied" in _sq28.KNOWN_ACCEPTED["AaHkWUMULZkAFiLSHxwS"]
       and _sq28_rcs == (0, 2, 2)
       and "self-test: " in _sq28_out.getvalue() and "SELF-TEST FAIL" not in _sq28_out.getvalue(),
       repr((_sq28_rcs, _sq28_out.getvalue()[-300:])))
