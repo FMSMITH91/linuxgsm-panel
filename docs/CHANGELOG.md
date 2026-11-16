@@ -467,6 +467,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Panel warnings and errors are stored at their real priority in the system journal.** Each line
+  the panel writes now carries its level, so `journalctl -p warning` finds the panel's warnings and
+  errors, and informational events such as startup maintenance results reach the journal too.
+
 - **Optimize database no longer leaves the WAL file bigger.** The rebuilt database went into the WAL
   and stayed there until a restart (4 MB grew to 12 MB); the WAL is now trimmed after the rebuild.
 - **A restore from an uploaded dump that fails keeps the earlier dump.** The dump the server's files
@@ -1524,6 +1528,9 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Log lines cannot forge a journal priority.** Text inside a log message can no longer start a
+  journal line at a priority of its own choosing; every line of a message keeps that message's level.
 
 - **Old audit entries no longer keep full IP addresses in their text.** After the IP-ageing period
   (90 days by default), addresses inside an entry's description and target are reduced to their

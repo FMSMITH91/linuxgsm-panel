@@ -702,3 +702,5 @@ f24b992a Fewer public-IP lookups.
 635652b7 Old audit entries no longer keep full IP addresses in their text.
 763edbaf The chat bots mask players' IP addresses in console replies.
 2c635567 Sending a test notification asks for your password again.
+a7a8e175 Panel warnings and errors are stored at their real priority in the system journal.
+183d92cf Log lines cannot forge a journal priority.
