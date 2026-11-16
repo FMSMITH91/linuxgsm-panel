@@ -121,15 +121,136 @@ def _routes226(c, api):
        (200, 200, 200, True, None, False))
 
 
+# ── 3. an upload whose restore raises puts the earlier dump back ─────────────────────────────────
+def _upload_raises226(c, api, name):
+    cmds = []
+
+    def _cmd(server, cmd, timeout=30, sudo=True, **kw):
+        cmds.append(cmd)
+        if ".piece" in cmd:
+            return "__DBUP_SIZE__ 10", "", 0
+        return ("__DBUP_STORED__" if "awk -v me=" in cmd else "__DBUP_READY__"), "", 0
+
+    def _boom(*a, **k):
+        raise OSError("the transport dropped")
+    _p9_patch_sm("run_command", _cmd)
+    _p9_patch(_dfr226, "game_account_write_refusal", lambda remote, user, **k: None)
+    _p9_patch(_dbs226, "restore", _boom)
+    uid = _p9_json(c.post(api + "/upload", json={"size": 10})).get("id", "")
+    c.post(api + "/upload/%s?offset=0" % uid, data=b"0123456789")
+    n = len(cmds)
+    r = c.post(api + "/upload/%s/finish" % uid, json={"confirm": name})
+    settle = [x for x in cmds[n:] if ".prev" in x and "awk -v me=" not in x]
+    check("upload: a restore that raises still runs the settle step that puts the earlier dump back "
+          "(.prev moved over the upload), and answers a failure",
+          r.status_code >= 500 and len(settle) == 1 and "mv -f -- " in settle[0] and ".prev " in settle[0],
+          repr((r.status_code, cmds[n:])))
+
+
+def _upload_lost226(c, api, name):
+    """A finish whose answer is lost answers retry and keeps the upload; asked again, it restores."""
+    said = {"finish": ["", "__DBUP_STORED__"]}
+    _p9_patch_sm("run_command", lambda server, cmd, timeout=30, sudo=True, **kw: (
+        "__DBUP_SIZE__ 10" if ".piece" in cmd else (said["finish"].pop(0) if "awk -v me=" in cmd else "__DBUP_READY__"),
+        "", 0))
+    _p9_patch(_dbs226, "restore", lambda *a, **k: (True, ""))
+    uid = _p9_json(c.post(api + "/upload", json={"size": 10})).get("id", "")
+    c.post(api + "/upload/%s?offset=0" % uid, data=b"0123456789")
+    first = _p9_json(c.post(api + "/upload/%s/finish" % uid, json={"confirm": name}))
+    again = _p9_json(c.post(api + "/upload/%s/finish" % uid, json={"confirm": name}))
+    eq("upload: a finish whose answer was lost says retry and keeps the upload; asked again it restores",
+       (first.get("retry"), first.get("success"), again.get("success"), again.get("retry")), (True, False, True, None))
+
+
 def _db_routes226():
     sid = None
     try:
         sid, api, name = _db_setup226()
         c = _p9_client(P9_ADMIN)
         _routes226(c, api)
+        _upload_raises226(c, api, name)
+        _upload_lost226(c, api, name)
     finally:
         if sid is not None:
             _db_teardown226(sid)
+
+
+_T226 = _tf226.mkdtemp(prefix="lgsm-unit-p226-")
+_HOME226 = _os226.path.join(_T226, "home", "gm226")
+_DD226 = _os226.path.join(_HOME226, "panel-db-dumps")
+_UID226 = "cd" * 16
+_PART226 = _os226.path.join(_DD226, ".panel-upload-%s.part" % _UID226)
+_DEST226 = _os226.path.join(_DD226, "gs12_lp.sql.gz")
+_EARLIER226 = b"-- the earlier dump\n"
+
+
+def _bash226(script, path=None):
+    """The upload command `script` run by bash on this part's temp home: outcome()."""
+    sh = script.replace("/home/gm226", _HOME226)
+    env = dict(_os226.environ, PATH=path + ":" + _os226.environ.get("PATH", "")) if path else None
+    p = _sp226.run(["bash", "-c", sh], capture_output=True, text=True, timeout=60, check=False, env=env)  # nosec B603 B607
+    return _dfr226.outcome(p.stdout + p.stderr)
+
+
+def _fresh226():
+    """An earlier dump in place and a whole upload on the host, ready for the finish."""
+    _sh226.rmtree(_DD226, ignore_errors=True)
+    _bash226(_dfr226.start_script("gm226", _UID226, 1))
+    with open(_DEST226, "wb") as fh:
+        fh.write(_gz226.compress(_EARLIER226))
+    with open(_PART226, "wb") as fh:
+        fh.write(_GOOD219.encode())
+    return _dfr226.finish_script("gm226", _UID226, len(_GOOD219.encode()), "gs12_lp")
+
+
+def _held226():
+    """(what <name>.sql.gz holds or None, whether a .prev is left, the upload's own files left)."""
+    held = None
+    if _os226.path.exists(_DEST226):
+        with _gz226.open(_DEST226, "rb") as fh:
+            held = fh.read()
+    return held, _os226.path.exists(_DEST226 + ".prev"), sorted(f for f in _os226.listdir(_DD226)
+                                                                 if f.startswith(".panel-upload-"))
+
+
+def _host_upload226():
+    finish = _fresh226()
+    lost = (_bash226(finish), _bash226(finish), _held226())
+    _bash226(_dfr226.settle_script("gm226", "gs12_lp", False, _UID226))
+    eq("upload finish asked again: an upload already put in place answers STORED again (the earlier dump still "
+       "kept aside); the failed restore's settle puts the earlier dump back and leaves no mark; a third ask finds "
+       "no upload", (lost, _held226(), _bash226(finish)),
+       ((("ok", ""), ("ok", ""), (_GOOD219.encode(), True, [".panel-upload-%s.part.stored" % _UID226])),
+        (_EARLIER226, False, []), ("refused", "NOPART")))
+    finish = _fresh226()
+    stored = _bash226(finish)
+    eq("upload cancel: an upload put in place but never restored gives the earlier dump back, and nothing of "
+       "the upload is left", (stored, _bash226(_dfr226.cancel_script("gm226", _UID226, "gs12_lp")), _held226()),
+       (("ok", ""), ("ok", ""), (_EARLIER226, False, [])))
+    # The move into place fails (a stand-in mv refusing the part file): the dump kept aside goes back.
+    shim = _os226.path.join(_T226, "bin")
+    _os226.makedirs(shim, exist_ok=True)
+    with open(_os226.path.join(shim, "mv"), "w", encoding="utf-8") as fh:
+        fh.write('#!/bin/bash\ncase "$3" in *.part) exit 1;; esac\nexec /bin/mv "$@"\n')
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in in this part's temp dir
+    _os226.chmod(_os226.path.join(shim, "mv"), 0o700)  # nosec B103 - owner-only stand-in program in a temp dir
+    eq("upload finish: when the upload cannot be moved into place, the earlier dump is put back",
+       (_bash226(_fresh226(), path=shim), _held226()), (("refused", "FAIL"), (_EARLIER226, False, [])))
+
+
+def _host_lock226():
+    finish = _fresh226()
+    if not _sh226.which("flock"):
+        skip("upload finish: one asked while another still runs gives no answer", "no flock on this machine")
+        return
+    with open(_PART226 + ".lock", "a", encoding="utf-8") as lock:
+        _fcntl226.flock(lock, _fcntl226.LOCK_EX | _fcntl226.LOCK_NB)
+        busy = (_bash226(finish), _held226())
+    eq("upload finish: one asked while another still runs gives no answer (read as ask again) and touches "
+       "nothing; once that one ends, the finish runs and its lock file goes", (busy, _bash226(finish), _held226()[2]),
+       ((("unread", ""), (_EARLIER226, False, [".panel-upload-%s.part" % _UID226,
+                                               ".panel-upload-%s.part.lock" % _UID226])),
+        ("ok", ""), [".panel-upload-%s.part.stored" % _UID226]))
 
 
 # ── 2. addresses in text: mapped IPv6, versions ──────────────────────────────────────────────────
@@ -176,7 +297,7 @@ def _bot_console226():
 
 
 try:
-    for _fn226 in (_parse_run226, _db_routes226, _audit_text226, _bot_console226):
+    for _fn226 in (_parse_run226, _db_routes226, _host_upload226, _host_lock226, _audit_text226, _bot_console226):
         _p9_arm(who="part226")
         try:
             _fn226()
@@ -184,5 +305,6 @@ try:
             _p9_restore_all()
 finally:
     _p9_restore_all()
+    _sh226.rmtree(_T226, ignore_errors=True)
 
 check("part226: nothing reached a real transport", len(_P9_TRIPPED) == _trips226, repr(_P9_TRIPPED[_trips226:]))
