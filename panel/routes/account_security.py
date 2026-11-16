@@ -59,7 +59,7 @@ def fetch_metadata_guard():
     non-safe method is refused; same-origin and none pass. Every other case -- no header (an older
     browser, an API client, the chat bots), "same-site" (another port of the panel's address, or a
     sibling node on the same tailnet) or a value this code does not know -- falls back to "Verifying
-    origin with standard headers", which that section makes mandatory (see _origin_refusal). The
+    origin with standard headers", which that section makes mandatory (see _foreign_origin). The
     panel's own forms and fetches are same-origin, and so is a page reached through Tailscale Serve
     or a proxy (the browser compares the page's origin with the request's, both the front's).
     """
@@ -71,10 +71,11 @@ def fetch_metadata_guard():
                                "That request came from another site and was refused.")
     if site in ("same-origin", "none") or _cookie_less_bearer():
         return None
-    why = _origin_refusal()
-    if why is None:
+    foreign = _foreign_origin()
+    if foreign is None:
         return None
-    return _refuse_foreign(why, "That request did not come from this panel's own page and was refused.")
+    return _refuse_foreign("foreign %s %r on %s" % (foreign[0], foreign[1][:120], request.method),
+                           "That request did not come from this panel's own page and was refused.")
 
 
 def _refuse_foreign(detail, sentence):
@@ -100,8 +101,8 @@ def _cookie_less_bearer():
     return not any(request.cookies.get(n) for n in names)
 
 
-def _origin_refusal():
-    """Why the request's source origin is not the panel's own, or None when it is or is unknown.
+def _foreign_origin():
+    """(header, origin) when the request's source origin is not the panel's own; None when it is or is unknown.
 
     OWASP CSRF Prevention Cheat Sheet, "Using Standard Headers to Verify Origin": the Origin header
     when present, else the origin of the Referer. "null" is never the panel's own (the cheat sheet:
@@ -123,7 +124,7 @@ def _origin_refusal():
             return None
     if origin and _socket_origin_allowed(origin, request.environ):
         return None
-    return "foreign " + which + " " + repr(origin[:120]) + " on " + request.method
+    return which, origin
 
 
 def _referer_origin(referer):
