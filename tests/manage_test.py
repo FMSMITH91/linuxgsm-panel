@@ -195,7 +195,7 @@ def _check_site_domain():
         rows = [(r.username, r.detail) for r in AuditLog.query.filter_by(action="settings_update", target="panel")]
     check("set-site-domain: stores it (no restart), says so, and audits it as a settings change by manage.py",
           not exited and load_config().get("site_domain") == "panel.example.com:8443"
-          and "panel.example.com:8443" in out
+          and out.split()[:4] == ["site_domain", "is", "now", "panel.example.com:8443."]
           and ("manage.py", "site_domain set to panel.example.com:8443 (manage.py)") in rows, repr((msg, out, rows)))
     _said(manage.cmd_set_site_domain, Args(domain=""))
     check("set-site-domain: \"\" clears it", load_config().get("site_domain") == "", repr(load_config().get("site_domain")))
