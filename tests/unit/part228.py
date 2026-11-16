@@ -37,6 +37,11 @@ def _renew228():
           body.get("success") is False and "security token" in (body.get("message") or "")
           and resp.headers.get("X-CSRF-Renewed") == "1" and resp.headers.get("Cache-Control") == "no-store",
           repr((body.get("message"), dict(resp.headers))))
+
+
+def _not_inpage228():
+    from flask_wtf.csrf import CSRFError
+    hook = _p9.error_handler_spec[None][400].get(CSRFError)
     with _p9.test_request_context(_URL228, method="POST", headers={"Accept": "application/json"}):
         presp, pcode = hook(CSRFError("The CSRF token is missing."))
         plain = presp.get_json() or {}
@@ -114,6 +119,7 @@ def _wrapper228():
 
 
 _renew228()
+_not_inpage228()
 _wrapper228()
 check("csrf renew: nothing in this part reached a real transport (part12's tripwire)",
       len(_P9_TRIPPED) == _trips228)
