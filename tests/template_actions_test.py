@@ -3165,9 +3165,9 @@ _rm_src = _with_includes("remote_manage.html")
 _tabbed_hashes = [h for pg, h in _sections if pg in _TABBED]
 _owners = _mtab_owner_of(_rm_src, set(_tabbed_hashes) | {"backups", "sec-bans"})
 # Vacuity guard for the walker itself: two ids whose tabs are known independently — 'backups' sits
-# on Maintenance and 'sec-bans' on Security. If the depth tracking ever desyncs these go wrong
+# on Panel and 'sec-bans' on Security. If the depth tracking ever desyncs these go wrong
 # first, and the gate below would otherwise pass by finding nothing.
-check(_owners.get("backups") == "maintenance" and _owners.get("sec-bans") == "security",
+check(_owners.get("backups") == "panel" and _owners.get("sec-bans") == "security",
       "palette: the data-mtab walker agrees with two independently known cards",
       "backups=%r sec-bans=%r" % (_owners.get("backups"), _owners.get("sec-bans")))
 # ...and reads a card that comes from a partial: the rules list is in _firewall_panel.html, on Network.
