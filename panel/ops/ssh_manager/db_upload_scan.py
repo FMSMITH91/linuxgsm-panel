@@ -12,8 +12,9 @@ name, `from panel.ops.ssh_manager import db_upload_scan`.
 # read. A dump's INSERT lines are most of its bytes and hold the data, so on those it reads only the INSERT's
 # own head (up to " VALUES") and, on a line that holds a system or panel database's name at all, each part
 # after a ";" that starts with an SQL word: split once, so a line is read in one pass (data that merely says
-# "; use /help" or "see mysql.user" in a value is not refused). Names are compared in lower case, so an
-# upper-case spelling is refused too (the safe side: on Linux database names are case-sensitive).
+# "; use /help" or "see mysql.user" in a value is not refused); a plain line's chained parts are read the
+# same way. Each line is compared in lower case, so an upper-case spelling is refused too (the safe side: on
+# Linux database names are case-sensitive).
 # Built from parts (dynamic regexes) so no line of this program is too long to read: LEAD is an optional
 # executable comment, NM a system or panel database's name, QN that name used as a schema (quoted or not,
 # an unquoted one not inside a longer name), SW a statement that switches to one.
@@ -33,14 +34,15 @@ function other(l,   s, n) {
   return 0 }
 function named(l) {
   return l ~ /gs[0-9]/ || index(l, "mysql") || index(l, "_schema") || index(l, "sys") }
+# chained() takes a line already in lower case: a statement's words and a database's name are compared so.
 function chained(l,   n, part, i, w) {
   n = split(l, part, ";")
   for (i = 2; i <= n; i++) {
-    if (!named(part[i]) || !match(part[i], /^[ \t]*(\/\*![0-9]*[ \t]*)?[A-Za-z]+/)) continue
-    w = tolower(substr(part[i], RSTART, RLENGTH)); sub(/^[^a-z]*/, "", w); sub(/^[0-9]*[ \t]*/, "", w)
+    if (!named(part[i]) || !match(part[i], /^[ \t]*(\/\*![0-9]*[ \t]*)?[a-z]+/)) continue
+    w = substr(part[i], RSTART, RLENGTH); sub(/^[^a-z]*/, "", w); sub(/^[0-9]*[ \t]*/, "", w)
     if (!(w in KW)) continue
-    if ((w == "use" || w == "create" || w == "drop" || w == "alter") && tolower(part[i]) ~ SW) return "SWITCH"
-    if (index(part[i], ".") && other(tolower(part[i]))) return "OTHER" }
+    if ((w == "use" || w == "create" || w == "drop" || w == "alter") && part[i] ~ SW) return "SWITCH"
+    if (index(part[i], ".") && other(part[i])) return "OTHER" }
   return "" }
 function verdict(v) { print v; done = 1; exit }
 BEGIN { regexes() }
@@ -48,10 +50,12 @@ BEGIN { regexes() }
   if ($0 ~ /^INSERT INTO /) {
     v = index($0, " VALUES"); h = v ? substr($0, 1, v) : $0
     if (other(tolower(h))) verdict("OTHER")
-    if (named($0) && index($0, ";")) { c = chained($0); if (c != "") verdict(c) }
+    l = tolower($0)
+    if (named(l) && index(l, ";")) { c = chained(l); if (c != "") verdict(c) }
     next }
   if ($0 ~ /^[ \t]*(--|#)/) next
   l = tolower($0)
   if (l ~ /^[ \t]*(\/\*![0-9]*[ \t]*)?(use[ \t`]|use$|connect[ \t]|(create|drop|alter)[ \t]+(database|schema)([ \t`]|$))/) verdict("SWITCH")
-  if (other(l)) verdict("OTHER") }
+  if (other(l)) verdict("OTHER")
+  if (named(l) && index(l, ";")) { c = chained(l); if (c != "") verdict(c) } }
 END { if (!done) print "SCANNED" }'''

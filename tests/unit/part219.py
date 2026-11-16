@@ -799,10 +799,16 @@ _HOSTILE_DUMPS219 = {
     "an unquoted system schema": "-- dump\nSELECT * FROM mysql.user;\n",
     "an unquoted INSERT head": "-- dump\nINSERT INTO gs9_other.t VALUES (1);\n",
     "an unquoted name in an executable comment": "-- dump\n/*!50001 CREATE VIEW v AS SELECT * FROM gs9_x.t */;\n",
+    "a DROP DATABASE chained on a plain line": "-- dump\nSELECT * FROM `gs12_lp`.`t`;\tDROP DATABASE IF EXISTS `gs9_x`;\n",
+    "a USE chained on a SET line": "-- dump\nSET @a = 1; USE mysql;\n",
+    "an upper-case schema chained on an INSERT line":
+        "-- dump\nINSERT INTO `t` VALUES (0,'');\tCREATE \tSCHEMA `INFORMATION_SCHEMA`;\n",
 }
 _INSERT_VERDICT219 = {"an unquoted INSERT into another database chained on an INSERT line": "OTHER",
                       "an unquoted UPDATE of another database": "OTHER", "an unquoted system schema": "OTHER",
                       "an unquoted INSERT head": "OTHER", "an unquoted name in an executable comment": "OTHER",
+                      "a DROP DATABASE chained on a plain line": "SWITCH", "a USE chained on a SET line": "SWITCH",
+                      "an upper-case schema chained on an INSERT line": "SWITCH",
                       "an INSERT into another panel database": "OTHER",
                       "an UPDATE of another database chained on an INSERT line": "OTHER",
                       "a USE chained on an INSERT line": "SWITCH", "a DROP DATABASE chained on an INSERT line": "SWITCH"}
@@ -850,9 +856,9 @@ eq("upload check: a dump that switches to or names another database is refused, 
     "another panel database": (("refused", "OTHER"), None), "a system schema": (("refused", "OTHER"), None),
     **{k: (("refused", v), None) for k, v in _INSERT_VERDICT219.items()}})
 _chat219 = (b"-- dump\n-- see mysql.com and gs9_x.t (a comment)\n"
-            b"INSERT INTO `chat` VALUES (1,'ok; use /help; things; select settings'),"
-            b"(2,'USE gs9_x; then `mysql`.`user`.; drop database x'),(3,'runs on mysql 8; select a kit'),"
-            b"(4,'see mysql.user too');\nINSERT INTO `gs12_lp`.`chat` VALUES (3,'mine'); UPDATE gs12_lp.chat SET a=1;\n")
+            b"INSERT INTO `chat` VALUES (0,'see mysql.user too'),(1,'ok; use /help; things; select settings'),"
+            b"(2,'USE gs9_x; then `mysql`.`user`.; drop database x'),(3,'runs on mysql 8; select a kit');\n"
+            b"INSERT INTO `gs12_lp`.`chat` VALUES (3,'mine'); UPDATE gs12_lp.chat SET a=1;\n")
 eq("upload check: data in an INSERT that only mentions statements or other databases, and an INSERT into the "
    "database's own name, are stored", _finish219(_chat219), (("ok", ""), _chat219))
 eq("upload check: NUL bytes, a file that is not SQL, an empty one and a damaged gzip are refused",
