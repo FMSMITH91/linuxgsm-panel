@@ -376,7 +376,7 @@ def _s218_takeover():
     b = _browser218(160)
     _subscribe218(owner, b)
     since = _last218()
-    forged = {"endpoint": b.sub["endpoint"], "keys": _browser218(161).sub["keys"]}   # the URL, not the keys
+    forged = _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(161).sub["keys"]})   # the URL only
     code, body = _subscribe218(other, forged)
     with _p9.app_context():
         rows = [(r.success, r.detail) for r in _AL218.query.filter(_AL218.action == "push_subscribe",
@@ -393,13 +393,13 @@ def _s218_takeover():
         u = _db218.session.get(_U218, other)
         u.is_active = False
         _db218.session.commit()
-    code3, _b3 = _subscribe218(heir, {"endpoint": b.sub["endpoint"], "keys": _browser218(162).sub["keys"]})
+    code3, _b3 = _subscribe218(heir, _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(162).sub["keys"]}))
     eq("takeover: an endpoint held by a deactivated account may be taken over", (code3, _rows218(heir)), (200, 1))
     with _p9.app_context():           # its holder gone (a row pointing at no account)
         _r = _PS218.query.filter_by(user_id=heir).first()
         _r.user_id = 987654
         _db218.session.commit()
-    code4, _b4 = _subscribe218(owner, {"endpoint": b.sub["endpoint"], "keys": _browser218(163).sub["keys"]})
+    code4, _b4 = _subscribe218(owner, _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(163).sub["keys"]}))
     eq("takeover: ...and so may one whose account no longer exists", (code4, _rows218(owner)), (200, 1))
 
 
