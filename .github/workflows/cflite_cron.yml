@@ -11,8 +11,7 @@ on:
   workflow_dispatch:
   # zizmor: ignore[concurrency-limits] its check lands on main's head, where a cancelled pending run reads as a failure
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   prune:

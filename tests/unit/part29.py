@@ -123,10 +123,10 @@ def _cf1_preload():
     found = _harness_lists()
     lists = set(found.values())
     one = next(iter(lists)) if len(lists) == 1 else ()
-    check("fuzz harnesses: the four ssh_manager harnesses and fuzz_fail2ban (system_ops) pre-load "
+    check("fuzz harnesses: every harness that loads the panel's modules (all but fuzz_console) pre-loads "
           "one list, SQLAlchemy and Flask in it",
           set(found) == {"fuzz_config.py", "fuzz_cron.py", "fuzz_firewall.py", "fuzz_game_status.py",
-                         "fuzz_fail2ban.py"}
+                         "fuzz_fail2ban.py", "fuzz_db_data.py", "fuzz_push.py", "fuzz_upload_scan.py"}
           and len(lists) == 1
           and {"paramiko", "eventlet.tpool", "flask_sqlalchemy", "flask_login",
                "sqlalchemy.dialects.sqlite"} <= set(one)

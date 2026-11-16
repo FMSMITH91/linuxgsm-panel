@@ -47,8 +47,7 @@ on:
   workflow_dispatch:
   # zizmor: ignore[dangerous-triggers] judges main only, reads the API and runs only main's own script
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   # Keyed by WHAT is being judged: the event kind, the repository the head came from, and the

@@ -484,7 +484,8 @@ check("sonar main workflow: push to main and a schedule, never a pull request; n
       "self-test first; a push judges its own commit",
       _re28.search(r"^  push:\n    branches: \[ main \]\n", _smw28_on, _re28.M) is not None
       and "\n  schedule:\n" in _smw28_on and "pull_request" not in _smw28_on
-      and "\nconcurrency:" not in _smw28 and "\npermissions:\n  contents: read\n" in _smw28
+      and "\nconcurrency:" not in _smw28 and "\npermissions: {}\n" in _smw28
+      and "\n    permissions:\n      contents: read   # the checkout; nothing else\n" in _smw28
       and "persist-credentials: false" in _smw28
       and -1 < _smw28.find("sonar_new_issues.py --self-test") < _smw28.find(
           "sonar_new_issues.py --branch main")

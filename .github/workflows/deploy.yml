@@ -50,8 +50,7 @@ on:
         type: string
 
 # Least-privilege GITHUB_TOKEN: deploy reads the repo and SSHes to the host; no write needed.
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: deploy

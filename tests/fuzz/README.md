@@ -14,6 +14,17 @@ input, never raise; any uncaught exception is a finding to fix in the parser, no
 | `fuzz_fail2ban.py` | `_tally_f2b_lines`, `_parse_top_ips` | fail2ban log lines and the tallied rows |
 | `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render_line`, `render`, `render_colour` (`terminal.py`) | game console output, partly player-authored |
 | `fuzz_cron.py` | `_split_cron_line`, `_unwrap_cron_command`, `_cron_role`, `_cron_line_managed`, `_cron_log_text`, `_clean_cron_error` | a host's crontab and the cron wrapper's status blob |
+| `fuzz_db_data.py` | `db_data.parse`, `structure`, `rows`, `rows_statement`, `sql_result`, `sql_kind`, `mask_literals`, `quote_ident`, `databases._parse_probe` | the database client's XML answer (values players and plugins write), SQL typed into the SQL box, the probe's key=value lines |
+| `fuzz_push.py` | `webpush.parse_endpoint`, `b64url_decode`, `address_refused`, `push_alerts.parse_subscription` | a browser's push subscription, and the addresses a push service's name resolves to |
+| `fuzz_upload_scan.py` | `db_upload_scan.SCAN_AWK`, run by every awk on the machine | an uploaded database dump |
+
+The last three also check what the code promises, not only that it does not raise: `sql_kind`
+says "read" only for SELECT/SHOW/DESCRIBE/DESC/EXPLAIN, a marker inside any string literal never
+reaches `mask_literals`' audit line, an endpoint names the same host to urllib's parser, an address
+a push may reach is public (and so is any IPv4 address it carries), and the upload scan refuses
+every dump with a statement that switches to or names another database, and passes every dump
+without one. Atheris sees no coverage inside awk, so `fuzz_upload_scan.py` builds each dump from a
+grammar the bytes drive, and compares mawk's and gawk's verdicts when both are installed.
 
 ## Run locally
 
