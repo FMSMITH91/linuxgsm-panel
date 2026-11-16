@@ -537,10 +537,21 @@ def _cleanup221():
     _shutil221.rmtree(_TREE221, ignore_errors=True)
 
 
+
+def _bearer_header221():
+    """A browser session with an added Bearer header is still the browser session: step-up applies."""
+    _p9.config["STEP_UP_MINUTES"] = 10
+    c = _stale221()
+    r = c.post("/api/panel/update", json={}, headers={"Authorization": "Bearer not-a-real-token"})
+    eq("step-up: a cookie-signed-in request does not skip the confirm by adding an Authorization: Bearer "
+       "header (only a request an API token signed in, with no session cookie, is exempt)",
+       (r.status_code, r.headers.get("X-Reauth-Required")), (403, "1"))
+
+
 try:
     for _fn221 in (_m2_host221, _m2_names221, _m2_routes221, _l1_serve221, _step_up_routes221, _step_up_js221,
                    _step_up_js2_221,
-                   _ntfy_ssrf221, _ntfy_form221, _ts_routes221):
+                   _ntfy_ssrf221, _ntfy_form221, _ts_routes221, _bearer_header221):
         _p9_arm(who="part221")
         try:
             _fn221()

@@ -467,6 +467,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **Every page can ask for the password in place.** The Tailscale pages, the Databases manager
+  and the panel's notices sent a stale sign-in to the full confirm page and lost what was typed;
+  the in-page dialog now loads on every page.
+
 - **Optimize database no longer leaves the WAL file bigger.** The rebuilt database went into the WAL
   and stayed there until a restart (4 MB grew to 12 MB); the WAL is now trimmed after the rebuild.
 - **A restore from an uploaded dump that fails keeps the earlier dump.** The dump the server's files
@@ -1524,6 +1528,11 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **An added API-token header no longer skips the password re-check.** A request signed in by the
+  browser's session cookie must still confirm the password after the step-up window, even if it
+  also carries an "Authorization: Bearer" header; only a request an API token signed in, with no
+  session cookie, is exempt.
 
 - **Old audit entries no longer keep full IP addresses in their text.** After the IP-ageing period
   (90 days by default), addresses inside an entry's description and target are reduced to their
