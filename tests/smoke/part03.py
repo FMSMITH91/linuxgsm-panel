@@ -1073,6 +1073,20 @@ try:
     cr = app.test_client().post("/api/server/1/action", json={"action": "start"})
     check("CSRF: tokenless mutating POST is rejected (400)", cr.status_code == 400,
           "got %d" % cr.status_code)
+    # A page left open across a new session holds the old session's token: an in-page POST is refused,
+    # its reply carries this session's token, and the same POST with it passes the CSRF check (and
+    # then meets login_required: 401, not 400). A POST that is not an in-page one gets no token.
+    _xc = app.test_client()
+    _xs = _xc.post("/api/server/1/action", json={"action": "start"},
+                   headers={"X-Requested-With": "XMLHttpRequest", "X-CSRFToken": "an-old-sessions-token"})
+    _xt = (_xs.get_json(silent=True) or {}).get("csrf_token") or ""
+    _xa = _xc.post("/api/server/1/action", json={"action": "start"},
+                   headers={"X-Requested-With": "XMLHttpRequest", "X-CSRFToken": _xt})
+    check("CSRF: an in-page POST with a stale token is refused (400) with this session's token, and the "
+          "same POST with that token passes the CSRF check (401: not signed in)",
+          (_xs.status_code, bool(_xt), _xs.headers.get("X-CSRF-Renewed"), _xa.status_code) == (400, True, "1", 401)
+          and "csrf_token" not in (cr.get_json(silent=True) or {}),
+          repr((_xs.status_code, _xt[:8], dict(_xs.headers), _xa.status_code)))
 
     # The Bearer exemption is justified by "an API-token request carries no cookie, so there is
     # nothing for a cross-site page to ride". Exempting on the HEADER alone did not test that:

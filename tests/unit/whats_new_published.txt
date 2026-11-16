@@ -715,3 +715,4 @@ c412a31f Old audit entries keep the right network for IPv4 clients of a panel bo
 a2aecde6 The panel host page warns when the install still has the wide sudo grant.
 2a7b4e7f The release key's fingerprint is published for first installs.
 f60b50a1 The panel shows the same release name as GitHub.
+f11c14e5 An expired page token renews itself.

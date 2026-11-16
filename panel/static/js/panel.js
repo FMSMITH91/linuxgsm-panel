@@ -147,6 +147,20 @@ window.addEventListener('pageshow', function(ev){
     var here = location.pathname + location.search;
     location.assign((window.MOUNT || '') + '/account/reauth?next=' + encodeURIComponent(here));
   }
+  // A request fetch can send twice: a URL (not a Request, whose body reads once) with no body,
+  // text, form data or URL parameters (a stream reads once).
+  function _reusable(input, b){
+    if (typeof input !== 'string' && !(typeof URL !== 'undefined' && input instanceof URL)) return false;
+    return b == null || typeof b === 'string' || (typeof FormData !== 'undefined' && b instanceof FormData)
+      || (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams);
+  }
+  // The page's token, everywhere it is kept: window.CSRF and every form's hidden field.
+  function _setCsrf(t){
+    window.CSRF = t;
+    document.querySelectorAll('input[name="csrf_token"]').forEach(function(i){ i.value = t; });
+    var m = document.querySelector('meta[name="csrf-token"]');
+    if (m) m.setAttribute('content', t);
+  }
   window.fetch = function(input, init){
     init = init || {};
     var method = (init.method || 'GET').toUpperCase();
@@ -165,6 +179,19 @@ window.addEventListener('pageshow', function(ev){
     if (Date.now() - _lastInput > _INPUT_GRACE_MS && !h.has('X-Panel-Background')) h.set('X-Panel-Background', '1');
     init.headers = h;
     return _fetch(input, init).then(function(r){
+      // Refused for a stale page token (the session changed while the page was open): the reply
+      // carries this session's token (account_security._csrf_refused). Take it, and send the same
+      // request once more — the refused one ran nothing. Not for a body that can be read only once.
+      if (r.status === 400 && r.headers.get('X-CSRF-Renewed') === '1' && !init._csrfRetried && _reusable(input, init.body)) {
+        return r.clone().json().then(function(j){
+          if (!j || typeof j.csrf_token !== 'string' || !j.csrf_token) return r;
+          _setCsrf(j.csrf_token);
+          h.set('X-CSRFToken', j.csrf_token);
+          if (init.body && typeof init.body.set === 'function' && init.body.has && init.body.has('csrf_token')) init.body.set('csrf_token', j.csrf_token);
+          init._csrfRetried = true;
+          return window.fetch(input, init);
+        }, function(){ return r; });
+      }
       if (r.status === 401 && r.headers.get('X-Auth-Required')) window.sessionExpired();
       // A high-risk action after the confirmation window (account_guard.step_up_required): the
       // whole tab goes to the confirm page, which comes back here; the action is then clicked again.

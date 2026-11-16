@@ -473,6 +473,9 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **An expired page token renews itself.** A page left open while the sign-in was renewed (a remembered
+  sign-in, or signing in again in another tab) answered its next action with "reload the page and
+  try again". The panel now takes the new token and sends the action again by itself.
 - **The panel shows the same release name as GitHub.** When more than one release came out on the same day, the panel
   showed only the date (2026.11.16) while GitHub named the later ones 2026.11.16.2, .3 and so on.
   Releases signed from now on show their full name in the update card; earlier ones keep the date.

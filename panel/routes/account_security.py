@@ -4,9 +4,11 @@ The rules themselves live in panel/security/account_guard.py; this registers the
 size limit). Registered from register_routes, so every hook here runs after create_app's own: the CSRF
 check, the held-body read and the forced password change come first.
 """
+import json
+
 from flask import flash, g, jsonify, redirect, render_template, request
 from flask_login import current_user, login_required
-from flask_wtf.csrf import CSRFError
+from flask_wtf.csrf import CSRFError, generate_csrf
 
 from panel.core import i18n, session_policy
 from panel.core.config import load_config
@@ -162,10 +164,26 @@ def _log_access_denied(resp):
 
 
 def _csrf_refused(e):
-    """A failed CSRF check: audited (Logging Vocabulary's malicious_csrf), then answered as before."""
+    """A failed CSRF check: audited (Logging Vocabulary's malicious_csrf), then answered as before.
+
+    An in-page request (the fetch wrapper's X-Requested-With) also gets this session's token in the
+    JSON reply, and panel.js sends the request once more with it. A page left open across a new
+    session (a remembered sign-in restored, a login in another tab) holds the old session's token,
+    and a new session has a new one (OWASP CSRF Prevention Cheat Sheet, "Synchronizer Token
+    Pattern"); asking the person to reload lost what they were doing. The token goes in a JSON
+    response payload, which that cheat sheet's "Transmitting CSRF Tokens in Synchronized Patterns"
+    names, and only same-origin script can read it: another site can neither set the custom
+    header without a CORS preflight the panel never allows, nor read the reply. The refused request
+    itself ran nothing, so sending it again is safe.
+    """
     account_guard.note_denial("csrf_rejected", detail=str(e.description or "")[:200], user=_signed_in_user())
     if request.path.startswith("/api/") or _wants_json():
-        return _r23c_error_json(i18n.tr(http_error_sentence(e))), 400
+        resp = _r23c_error_json(i18n.tr(http_error_sentence(e)))
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            resp.set_data(json.dumps(dict(resp.get_json(), csrf_token=generate_csrf())))
+            resp.headers["X-CSRF-Renewed"] = "1"
+            resp.headers["Cache-Control"] = "no-store"
+        return resp, 400
     return http_error_page(e)
 
 
