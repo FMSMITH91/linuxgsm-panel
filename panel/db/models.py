@@ -2181,19 +2181,29 @@ def _run_maintenance(path):
         # BECAUSE the database was too busy for VACUUM, i.e. the state in which the checkpoint is
         # most likely to have been refused as well. An operator chasing a growing panel.db was
         # told the cheap half of the job had succeeded while the wal_size beside it never moved.
-        row = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()   # merge + trim the WAL
-        try:
-            wal_trimmed = (int(row[0]) == 0) if row else None
-        except (TypeError, ValueError, IndexError):
-            wal_trimmed = None                           # unreadable is not "it worked"
+        wal_trimmed = _checkpoint_truncate(con)          # merge + trim the WAL (unreadable is not "it worked")
         con.execute("ANALYZE")                           # refresh planner stats
         try:
             con.execute("VACUUM")                        # compact (needs exclusive lock)
-            return wal_trimmed, True
         except sqlite3.OperationalError:
             return wal_trimmed, False   # busy — ANALYZE succeeded; the WAL is whatever it is
+        # In WAL mode VACUUM writes the rebuilt database INTO the WAL, so without a second
+        # checkpoint the -wal file ends up about the size of the whole database: "Optimize" made
+        # it bigger (4 MB -> 12 MB on a real panel), and it stayed that size until a restart.
+        return _checkpoint_truncate(con), True
     finally:
         con.close()
+
+
+def _checkpoint_truncate(con):
+    """PRAGMA wal_checkpoint(TRUNCATE) on `con`: True done, False busy, None unreadable (it never raises)."""
+    row = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    try:
+        return (int(row[0]) == 0) if row else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 
 
 def optimize_database():
@@ -2244,10 +2254,13 @@ def optimize_database():
                 {"before": before, "after": before, "freed": 0, "vacuumed": False})
 
     after = _size()
-    # Word this from what was OBSERVED, not from what was attempted. VACUUM rewrites the whole
-    # file and takes the WAL with it, so when it ran there is nothing left to qualify; when it did
-    # not, the checkpoint is a separate question and the answer is the one the pragma gave.
-    if vacuumed:
+    # Word this from what was OBSERVED, not from what was attempted. In WAL mode VACUUM writes the
+    # rebuilt file into the WAL, so `wal_trimmed` is the checkpoint run AFTER it; when VACUUM did
+    # not run, it is the one before, and the answer is the one the pragma gave either way.
+    if vacuumed and wal_trimmed is False:
+        msg = ("Database optimized — the WAL file could not be trimmed yet because the database "
+               "was busy; it shrinks at the next checkpoint or restart.")
+    elif vacuumed:
         msg = "Database optimized."
     elif wal_trimmed:
         msg = ("Checkpointed the WAL and refreshed stats — VACUUM was deferred because the "
