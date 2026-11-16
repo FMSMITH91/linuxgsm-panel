@@ -48,7 +48,7 @@
   <link rel="stylesheet" href="{{ asset_url('css/panel.css') }}">
   {# The brand accent is per-install, so it stays inline — and AFTER the stylesheet above,
      which is what lets it win the cascade over the defaults in it. #}
-  <style>
+  <style nonce="{{ csp_nonce }}">
     {# Configurable brand accent (Settings → Branding). accent_color is server-validated to a
        strict #rrggbb literal; this :root comes after the defaults so it wins the cascade. #}
     {% if accent_color %}:root {
