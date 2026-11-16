@@ -16,6 +16,7 @@ Run from the panel directory with its venv (or `sudo linuxgsm-panel-recover`):
     ./venv/bin/python panel/install/manage.py activate <username>
     ./venv/bin/python panel/install/manage.py set-owner <username>      # make them the panel owner
     ./venv/bin/python panel/install/manage.py setup-token               # the first-run wizard's link, again
+    ./venv/bin/python panel/install/manage.py set-site-domain panel.example.com   # the address browsers use
 
 Run interactively with no username and you get a numbered menu of users to choose
 from. Passwords are read interactively (never echoed, never in shell history)
@@ -427,6 +428,47 @@ def cmd_set_owner(args):
               % (_tty_safe(u.username), _tty_safe(previous) if previous else "nobody"))
 
 
+def _site_domain_arg(value):
+    """`value` as site_domain stores it (host, or host:port, or [IPv6]:port), or None when it is not one.
+
+    A scheme or a path pasted with it ("https://panel.example.com/") is dropped.
+    """
+    import re
+    from urllib.parse import urlsplit
+    v = (value or "").strip()
+    if "://" in v:
+        v = urlsplit(v).netloc
+    v = v.split("/", 1)[0]
+    if re.fullmatch(r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,62}[A-Za-z0-9])?"
+                    r"(?::[0-9]{1,5})?|\[[0-9A-Fa-f:.]+\](?::[0-9]{1,5})?", v) and len(v) <= 255:
+        return v
+    return None
+
+
+def cmd_set_site_domain(args):
+    """Set site_domain, the address browsers reach the panel at, from the host shell.
+
+    The panel accepts a form only from a page at its own address (OWASP CSRF Prevention Cheat Sheet,
+    "Identifying the Target Origin"). Behind a proxy that passes on neither the browser's Host nor
+    X-Forwarded-Host, that address can only come from here, and an older browser's sign-in is refused
+    until it is set; this is the way in when the web page cannot be used. Empty ("") clears it.
+    """
+    from panel.core.config import update_config
+    if args.domain == "":
+        update_config(lambda c: c.update(site_domain=""))
+        print("site_domain cleared.")
+        return
+    v = _site_domain_arg(args.domain)
+    if v is None:
+        sys.exit("Refusing — '%s' is not a host name, host:port or [IPv6]:port." % _tty_safe(args.domain))
+    update_config(lambda c: c.update(site_domain=v))
+    with app.app_context():
+        auth.log_action(None, "settings_update", target="panel", detail="site_domain set to %s (manage.py)" % v,
+                        actor="manage.py")
+    print("site_domain is now %s. Browsers opening the panel at that address can sign in and save forms. "
+          "No restart is needed." % _tty_safe(v))
+
+
 def main():
     p = argparse.ArgumentParser(description="LinuxGSM Panel admin / recovery CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -454,6 +496,10 @@ def main():
     so = sub.add_parser("set-owner", help="Make an active superadmin the panel owner")
     so.add_argument("username")
     so.set_defaults(func=cmd_set_owner)
+
+    sd = sub.add_parser("set-site-domain", help="Set the address browsers reach the panel at (behind a proxy)")
+    sd.add_argument("domain", help='host, host:port or [IPv6]:port; "" clears it')
+    sd.set_defaults(func=cmd_set_site_domain)
 
     for name, field, val, lbl in [
         ("promote", "is_superadmin", True, "promoted to superadmin"),

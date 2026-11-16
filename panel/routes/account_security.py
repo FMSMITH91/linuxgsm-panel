@@ -76,8 +76,36 @@ def fetch_metadata_guard():
     foreign = _foreign_origin()
     if foreign is None:
         return None
+    _warn_unknown_address()
     return _refuse_foreign("foreign %s %r on %s" % (foreign[0], foreign[1][:120], request.method),
                            "That request did not come from this panel's own page and was refused.")
+
+
+_WARNED_ADDRESS = [False]
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _warn_unknown_address():
+    """Once per process: the journal line that says how to fix a refusal the panel cannot avoid.
+
+    Behind a proxy that rewrites Host to loopback and passes on no X-Forwarded-Host, with no
+    site_domain set, the panel cannot know its own address, so a browser that sends no Sec-Fetch-Site
+    (Safari before 16.4) has every form refused here, sign-in included. The check stays (OWASP CSRF
+    Prevention Cheat Sheet, "Identifying the Target Origin": configure it when it cannot be read);
+    the line names the two ways to give the panel its address.
+    """
+    if _WARNED_ADDRESS[0] or request.headers.get("X-Forwarded-Host") or load_config().get("site_domain"):
+        return
+    host = request.host or ""
+    bare = host[1:host.index("]")] if host.startswith("[") and "]" in host else host.rsplit(":", 1)[0]
+    if bare not in _LOOPBACK_HOSTS:
+        return
+    _WARNED_ADDRESS[0] = True
+    account_guard._log.warning(
+        "A form was refused because this panel cannot tell its own address: the request arrived for %s "
+        "with no X-Forwarded-Host and no site_domain set. Set the panel's address (Settings, Site domain; "
+        "or on the host: manage.py set-site-domain <host[:port]>), or have the proxy pass on the Host header.",
+        "loopback")
 
 
 def _refuse_foreign(detail, sentence):
