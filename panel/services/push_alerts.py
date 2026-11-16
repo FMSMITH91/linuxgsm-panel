@@ -262,7 +262,14 @@ def card(user):
             "devices": [{"id": r.id, "label": r.label or "", "hash": r.endpoint_hash,
                          "created": r.created_at, "last": r.last_success} for r in rows],
             "events": [(k, label, k in chosen) for k, label in available_events(user)],
-            "max": DEVICE_MAX}
+            "max": DEVICE_MAX,
+            "telegram": _telegram_card(user)}
+
+
+def _telegram_card(user):
+    """The Telegram part of the card: whether the panel's bot can link chats, and whether this account has one."""
+    from panel.services import telegram_link
+    return {"available": bool(telegram_link.bot_token()), "linked": bool(user.telegram_chat)}
 
 
 # ── queueing (callers: notifications.notify, auth.log_action, the test route) ─────────────────────
@@ -388,6 +395,10 @@ def _plan(items):
     """{user id: [(title, body, page, urgent, ttl)]} for a batch, each user checked as described above."""
     from panel.db.models import PushSubscription, User
     holders = {u.id: u for u in User.query.join(PushSubscription, PushSubscription.user_id == User.id).all()}
+    # A linked Telegram chat is a device too (telegram_link). The column is ciphertext, which no query
+    # can test, so the accounts are read and checked here; a panel has tens of accounts, not thousands.
+    holders.update({u.id: u for u in User.query.filter(User.id.notin_(list(holders) or [0])).all()
+                    if u.telegram_chat})
     plan = {}
     for item in items:
         for uid, note in _PLANNERS[item[0]](holders, item):
@@ -452,11 +463,26 @@ def deliver(items):
                     _send_one(row, payload, ttl, "high" if urgent else "normal")
                 except Exception:  # noqa: BLE001 - one device must not stop the others
                     _log.warning("push to one device failed", exc_info=True)
+            _send_telegram(holders[uid], title, body)
     try:
         db.session.commit()
     except Exception:  # noqa: BLE001 - a lost "last delivered" time is not a lost alert
         db.session.rollback()
         _log.debug("recording push results failed", exc_info=True)
+
+
+def _send_telegram(user, title, body):
+    """The note to `user`'s linked Telegram chat, by the panel's bot: the same short text as a push."""
+    chat = user.telegram_chat or ""
+    if not chat:
+        return
+    from panel.services import notifications, telegram_link
+    token = telegram_link.bot_token()
+    if not token:
+        return
+    ok, _why = notifications.send_telegram(token, chat, "%s\n%s" % (title, body) if body else title)
+    if not ok:
+        _log.warning("alert to a linked Telegram chat was not delivered")
 
 
 # A push service's answer that means the subscription is gone (RFC 8030 7.3: 404/410), or that the

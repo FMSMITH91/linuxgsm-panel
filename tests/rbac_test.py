@@ -4279,6 +4279,9 @@ _MUT_NO_PERM_OK = {
     # The caller's OWN alert devices (Web Push): each looks its row up by id AND the caller's user id.
     "account_push_subscribe", "account_push_unsubscribe", "account_push_device_remove",
     "account_push_test", "account_push_events",
+    # The caller's OWN Telegram chat for alerts (telegram_link): link, check and unlink act on the
+    # caller's own row only; a code links the account that asked for it, nobody else's.
+    "account_telegram_link", "account_telegram_check", "account_telegram_unlink",
     # The panel owner handing over the panel: the caller's OWN flag is the gate (owner.is_owner,
     # refused with a 403 for anyone else), confirmed with their password and a live 2FA code.
     "account_owner_transfer",
@@ -4419,6 +4422,9 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
+    # A Telegram link code for the caller's own account: a 10-minute, single-use code that changes
+    # nothing by itself. The link it may lead to is audited when a chat claims it (telegram_link.link).
+    "account_telegram_link",
     # The Databases manager: one whole value read for the page (a POST so the row's key is never in a URL;
     # opening the table was audited), one piece of a dump upload (its finish audits what became of it:
     # restored, or refused and why), and a cancel that removes the part file nothing lists.

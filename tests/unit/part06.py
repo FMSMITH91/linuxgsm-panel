@@ -5853,8 +5853,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # are panel/routes/push_devices.py's alert devices (Web Push): subscribe, unsubscribe, remove a device,
 # test alert, alert choices and the sign-out page, all login_required and each acting on the caller's
 # own rows only.
-check("register_routes: every one of the 296 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 296,
+# 299, was 296: three genuinely new views, push_devices.py's Telegram link for an account's own chat:
+# link, check and unlink, all login_required and each acting on the caller's own row only.
+check("register_routes: every one of the 299 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 299,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

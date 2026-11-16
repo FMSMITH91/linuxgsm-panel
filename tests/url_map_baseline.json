@@ -1531,6 +1531,37 @@
       "POST"
     ]
   },
+  "POST /account/telegram/check": {
+    "endpoint": "account_telegram_check",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_telegram_check"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/telegram/link": {
+    "endpoint": "account_telegram_link",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:account_telegram_link"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/telegram/unlink": {
+    "endpoint": "account_telegram_unlink",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_telegram_unlink"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /account/theme": {
     "endpoint": "account_set_theme",
     "guards": [

@@ -14,6 +14,10 @@ compares git commits, not this file.
 
 ### Added
 
+- **Alerts in your own Telegram chat.** Each user can link their own Telegram chat from the Account page
+  ("Link my Telegram"): the panel's bot then sends that user's alerts there, with the same short text
+  as a browser alert and the same choice of which alerts. Linking asks for the password again and
+  works once per code; a linked chat can receive alerts but cannot send the bot commands.
 - **ntfy privacy help.** Without an access token the ntfy card warns that anyone who guesses the
   topic can read the alerts, offers a long random topic, and links a guide to running your own ntfy
   server on your tailnet.

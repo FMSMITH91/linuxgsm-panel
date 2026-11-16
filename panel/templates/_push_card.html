@@ -31,6 +31,29 @@
       <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="push-disable"><i class="bi bi-bell-slash"></i> Turn off on this device</button>
       <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="push-test"><i class="bi bi-send"></i> Send a test alert</button>
     </div>
+    {# Telegram: the account's own chat with the panel's bot (push_devices, telegram_link). Offered when the
+       panel's Telegram channel has a bot; a linked chat gets the same alerts, with the same short text. #}
+    {% if pc.telegram.available %}
+    <div class="border-top pt-2 mb-2" id="tg-link" data-link-url="{{ url_for('account_telegram_link') }}"
+         data-check-url="{{ url_for('account_telegram_check') }}">
+      <div class="small fw-semibold mb-1"><i class="bi bi-telegram"></i> Telegram</div>
+      {% if pc.telegram.linked %}
+      <div class="small mb-1"><span class="badge bg-success">Linked</span> Your alerts also go to your own Telegram chat.</div>
+      <form method="POST" action="{{ url_for('account_telegram_unlink') }}">
+        <button class="btn btn-outline-secondary btn-sm" type="submit"><i class="bi bi-x-circle"></i> Unlink Telegram</button>
+      </form>
+      {% else %}
+      <div class="small text-secondary mb-1">Get your alerts in your own Telegram chat, from the panel's bot.</div>
+      <div class="d-flex gap-2 flex-wrap align-items-center">
+        <button type="button" class="btn btn-outline-primary btn-sm" id="tg-link-btn"><i class="bi bi-telegram"></i> Link my Telegram</button>
+        <a class="btn btn-primary btn-sm d-none" id="tg-link-open" target="_blank" rel="noopener noreferrer"><i class="bi bi-box-arrow-up-right"></i> Open Telegram and press Start</a>
+        <span class="small" id="tg-link-msg"></span>
+        <span class="small text-secondary d-none" data-tg-msg="wait">Waiting for Start in Telegram…</span>
+        <span class="small text-warning d-none" data-tg-msg="gone">The link expired. Ask for a new one.</span>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
     <p class="text-secondary small mb-2" id="push-relay-note">Relayed encrypted by your browser's push service (Google, Microsoft, Apple or Mozilla). ntfy uses none.</p>
     {% call fold('Your devices and which alerts') %}
     {% if pc.devices %}

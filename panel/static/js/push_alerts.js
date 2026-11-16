@@ -205,8 +205,51 @@
     });
   }
 
+  // ── Telegram: link the account's own chat ────────────────────────────────────────────────────────
+  // The link is a button the person taps (an <a>), not a window this script opens: a phone blocks a
+  // window opened after a request finishes. Then this page asks every few seconds whether the chat is
+  // linked, for as long as the code is good.
+  var TG_CHECK_MS = 3000, TG_CHECKS = 200;
+  function tgLink(box, push) {
+    var btn = document.getElementById('tg-link-btn'), open = document.getElementById('tg-link-open');
+    var msg = document.getElementById('tg-link-msg');
+    if (!btn) return;
+    // The status lines are rendered (and translated) in the card; this only picks which one shows.
+    function show(which) {
+      box.querySelectorAll('[data-tg-msg]').forEach(function (s) {
+        s.classList.toggle('d-none', s.getAttribute('data-tg-msg') !== which);
+      });
+    }
+    function check(left) {
+      if (left <= 0) { show('gone'); open.classList.add('d-none'); btn.classList.remove('d-none'); return; }
+      postJson(box.getAttribute('data-check-url'), {}).then(function (res) {
+        if (res.status === 200 && res.d.linked) { window.location.reload(); return; }
+        setTimeout(function () { check(left - 1); }, TG_CHECK_MS);
+      }, function () { setTimeout(function () { check(left - 1); }, TG_CHECK_MS); });
+    }
+    btn.addEventListener('click', function () {
+      if (push && push.getAttribute('data-reauth') === '1') { goSameSite(push.getAttribute('data-reauth-url')); return; }
+      btn.disabled = true;
+      postJson(box.getAttribute('data-link-url'), {}).then(function (res) {
+        btn.disabled = false;
+        if (res.d.error === 'reauth_required' && push) { goSameSite(push.getAttribute('data-reauth-url')); return; }
+        if (res.status !== 200 || !res.d.success || !/^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]{1,64}$/.test(res.d.url || '')) {
+          show(''); msg.textContent = res.d.message || ''; return;
+        }
+        open.href = res.d.url;
+        open.classList.remove('d-none');
+        btn.classList.add('d-none');
+        msg.textContent = '';
+        show('wait');
+        setTimeout(function () { check(TG_CHECKS); }, TG_CHECK_MS);
+      }, function () { btn.disabled = false; });
+    });
+  }
+
   var cardEl = document.getElementById('sec-push');
   if (cardEl) card(cardEl);
+  var tgEl = document.getElementById('tg-link');
+  if (tgEl) tgLink(tgEl, cardEl);
   var formEl = document.getElementById('signout-form');
   if (formEl) signout(formEl);
 })();

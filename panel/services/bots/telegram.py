@@ -4,7 +4,7 @@ Moved out of app.py verbatim — see panel/services/bots/__init__.py.
 """
 from panel.core.config import (decrypt_secret, load_config, update_config)
 from panel.ops import system_ops as so
-from panel.services import (notifications)
+from panel.services import (notifications, telegram_link)
 from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
@@ -170,6 +170,17 @@ def _tg_route_update(app, token, authorized, bot_username, upd):
     _tg_dispatch(app, token, authorized, text, sender)
 
 
+def _tg_handle(app, token, authorized, bot_username, upd):
+    """One polled update: a chat linking itself for alerts, else what _tg_route_update makes of it.
+
+    "/start <code>" from someone linking their own chat (telegram_link) comes from any private chat,
+    since that person is not the authorised one; it links the chat and runs no command.
+    """
+    if telegram_link.handle_update(app, token, upd.get("message") or {}):
+        return
+    _tg_route_update(app, token, authorized, bot_username, upd)
+
+
 def _tg_command_users():
     """The Telegram bot's allowed user ids, read afresh (a revocation bites at the next message)."""
     return notifications.command_users(notifications._cfg().get("telegram") or {})
@@ -234,7 +245,7 @@ def _telegram_command_watch(app):
             failures = 0
             for upd in updates:
                 offset = upd.get("update_id", 0) + 1
-                _tg_route_update(app, token, authorized, bot_username, upd)
+                _tg_handle(app, token, authorized, bot_username, upd)
         except Exception:
             _log.debug("telegram command-watch tick failed", exc_info=True)
             time.sleep(_TG_CMD_BACKOFF)
