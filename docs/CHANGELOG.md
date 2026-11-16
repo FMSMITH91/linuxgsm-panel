@@ -332,6 +332,10 @@ compares git commits, not this file.
 
 ### Changed
 
+- **OS Updates is on Maintenance; the panel's own updates, backups and diagnostics have a Panel tab.** On the panel server's page, Maintenance now holds
+  this machine's upkeep (OS Updates, automatic security updates and Ubuntu Pro), and a new Panel tab
+  holds the panel software's own updates, backups and diagnostics. Host Controls keeps the terminal,
+  power and existing servers.
 - **The fuzz build's base image can be updated by Renovate.** It is pinned as tag and digest, so
   a new digest arrives as a reviewed change instead of by hand.
 - **The installer no longer asks a website for the server's address when the server knows it.**
