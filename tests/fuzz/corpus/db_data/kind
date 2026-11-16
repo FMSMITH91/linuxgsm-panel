@@ -1,0 +1,3 @@
+-- note
+/* it's */ ( SELECT 1 FROM t-- note
+/* it's */ ( SELECT 1 FROM t

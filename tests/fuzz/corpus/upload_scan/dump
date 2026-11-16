@@ -1,0 +1,12 @@
+-- MySQL dump 10.13
+/*!40101 SET NAMES utf8mb4 */;
+INSERT INTO `t` VALUES (1,'a; use /help');
+USE `mysql`;
+-- MySQL dump 10.13
+/*!40101 SET NAMES utf8mb4 */;
+INSERT INTO `t` VALUES (1,'a; use /help');
+USE `mysql`;
+-- MySQL dump 10.13
+/*!40101 SET NAMES utf8mb4 */;
+INSERT INTO `t` VALUES (1,'a; use /help');
+USE `mysql`;

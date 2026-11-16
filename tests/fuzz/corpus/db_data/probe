@@ -1,0 +1,5 @@
+pkg=mariadb-server	1:10.11.6
+listen=127.0.0.1:3306
+active.mariadb=active
+var.bind_address=127.0.0.1
+socket_root=1
