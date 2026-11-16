@@ -118,15 +118,44 @@ target is held, and so, with no pin, is a `main` tip older than the installed co
 What it does not cover:
 
 - **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
-  with no key yet has nothing to check against. After the first update, check that
-  `/usr/local/lib/linuxgsm-panel/release-signers` (root install) or the checkout's
-  `panel/install/release-signers` (per-user) is the release key: `ssh-keygen -lf` on it should print the same fingerprint as the
-  repository's `panel/install/release-signers` on GitHub.
+  with no key yet has nothing to check against. Check it yourself before the first install (below),
+  and after the first update check that `/usr/local/lib/linuxgsm-panel/release-signers` (root
+  install) or the checkout's `panel/install/release-signers` (per-user) is the release key:
+  `ssh-keygen -lf` on it prints the fingerprint below.
 - **A host that has no key yet holds** every update, saying so, until it is updated once by hand
   through its old installer or with `PANEL_ALLOW_UNSIGNED_UPDATE=1` over SSH.
 - **The test host's deploy** ships the commit's own installer. It runs only when started by hand,
   only from `main`. Its reach is the tailnet ACL's: confirm the ACL lets the CI runner's tag reach
   the test host only.
+
+### Checking a first install
+
+The release key's fingerprint is:
+
+```
+256 SHA256:YhAumFmigcV9YJNrtPkaekEm1ed/NSL2Me3fxTjZ82w release (ED25519)
+```
+
+It is printed here and in the README; compare it with a copy you trust from somewhere other than the
+download you are checking (an earlier visit, a colleague's install). Both pages live in this
+repository, so they catch a changed download, mirror or proxy, not a compromised GitHub account.
+Before running the installer, check that the commit you are about to install is signed with it:
+
+```bash
+git clone --quiet https://github.com/FMSMITH91/linuxgsm-panel.git lgsm-check && cd lgsm-check
+ssh-keygen -lf panel/install/release-signers        # must print the fingerprint above
+git fetch --quiet origin release-signatures
+SHA="$(git rev-parse HEAD)"
+git show "origin/release-signatures:main/${SHA}.sig" > ../lgsm-release.sig
+printf 'linuxgsm-panel release\nbranch main\ncommit %s\n' "${SHA}" \
+  | ssh-keygen -Y verify -f panel/install/release-signers -I release -n linuxgsm-panel-release -s ../lgsm-release.sig
+```
+
+`Good "linuxgsm-panel-release" signature for release with ED25519 key SHA256:YhAum…` means that
+commit is a signed release; install from it with `bash install.sh` in that folder (as root:
+`sudo bash install.sh`), which installs the checkout you checked rather than fetching again. A missing
+`.sig` means `main` moved on since the last signed release: wait for it to be signed, or install the
+newest signed commit (`git checkout <sha>` first). Anything else, do not install.
 
 Each GitHub Release also carries the commit's software bill of materials,
 `linuxgsm-panel-<tag>.cdx.json` (CycloneDX 1.6 JSON): every Python package the panel installs and
