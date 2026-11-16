@@ -426,12 +426,16 @@ def sql_kind(text):
     return "read", word
 
 
-def _scan_literal(text, i):
-    """The index just past the quoted literal that starts at text[i] (a quote doubled or escaped stays inside)."""
+def _scan_literal(text, i, escapes=True):
+    """The index just past the quoted literal that starts at text[i] (a doubled quote stays inside).
+
+    escapes: a backslash escapes the next character, as the servers read it by default; without it, as
+    they read it under sql_mode NO_BACKSLASH_ESCAPES.
+    """
     q, j = text[i], i + 1
     while j < len(text):
         ch = text[j]
-        if ch == "\\":
+        if ch == "\\" and escapes:
             j += 2
             continue
         if ch == q:
@@ -446,25 +450,62 @@ def _scan_literal(text, i):
 _HEX_NUM_RE = re.compile(r"0[xXbB][0-9A-Fa-f]+")
 
 
-def _mask_step(text, i, out):
-    """Append what mask_literals keeps of the token at text[i] to `out`; the index after it."""
+def _exec_open(text, i):
+    """The index just past an executable comment's opening at text[i] (/*! or /*M!, its version digits), or None."""
+    if text.startswith("/*!", i):
+        j = i + 3
+    elif text[i:i + 4].upper() == "/*M!":
+        j = i + 4
+    else:
+        return None
+    while j < len(text) and text[j] in "0123456789":
+        j += 1
+    return j
+
+
+def _mask_comment(text, i, out, in_exec):
+    """(index after, still in an executable comment) for a comment or an executable comment's edge at text[i], or None.
+
+    An executable comment's opening is kept and its content read as code; its "*/" is kept whole, so the "/"
+    of it never starts a comment with what follows. A comment (one inside an executable comment included)
+    is one space. A second opening inside one is read as a comment, up to its "*/".
+    """
+    if in_exec and text.startswith("*/", i):
+        out.append("*/")
+        return i + 2, False
+    j = _exec_open(text, i)
+    if j is not None and not in_exec:
+        out.append(text[i:j] + " ")
+        return j, True
     end = _comment_end(text, i)
-    if end is not None:
-        out.append(" ")
-        return end
+    if end is None and j is not None:
+        end = text.find("*/", i + 2)
+        end = len(text) if end < 0 else end + 2
+    if end is None:
+        return None
+    out.append(" ")
+    return end, in_exec
+
+
+def _mask_quoted(text, i, out):
+    """(index after, lost track) for the literal or identifier at text[i], or None when none starts there.
+
+    Lost track: where the literal ends depends on sql_mode (a backslash before its quote); the rest of
+    the text is then masked too (never let text through). An identifier never closed takes the rest.
+    """
     ch = text[i]
     if ch in "'\"":
         out.append(ch + "?" + ch)
-        return _scan_literal(text, i)
+        end = _scan_literal(text, i)
+        return end, end != _scan_literal(text, i, escapes=False)
     if ch == "`":
         j = text.find("`", i + 1)
         if j < 0:
             out.append("`?")
-            return len(text)
+            return len(text), False     # the rest is inside it, and not logged
         out.append(text[i:j + 1])
-        return j + 1
-    out.append(ch)
-    return i + 1
+        return j + 1, False
+    return None
 
 
 def mask_literals(text, limit=300):
@@ -472,12 +513,25 @@ def mask_literals(text, limit=300):
 
     Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, each comment one space
     (a quote inside a comment opens no literal, and what a comment says is not logged), every run of
-    spaces and line breaks one space. Identifiers in backticks are kept; one never closed ends the text
-    as `?. Nothing typed between quotes reaches the log.
+    spaces and line breaks one space. Identifiers in backticks are kept. Where the masking can't be sure
+    what the server reads (a literal whose end depends on sql_mode, an identifier never closed), the rest
+    is not logged: it ends as '?'… or `?. Nothing typed between quotes reaches the log.
     """
-    out, i, text = [], 0, text or ""
+    out, i, text, in_exec = [], 0, text or "", False
     while i < len(text):
-        i = _mask_step(text, i, out)
+        got = _mask_comment(text, i, out, in_exec)
+        if got is not None:
+            i, in_exec = got
+            continue
+        got = _mask_quoted(text, i, out)
+        if got is None:
+            out.append(text[i])
+            i += 1
+        elif got[1]:
+            out.append("…")
+            break
+        else:
+            i = got[0]
     flat = re.sub(r"\s+", " ", _HEX_NUM_RE.sub(lambda m: m.group(0)[:2] + "?", "".join(out))).strip()
     flat = "".join(c if c.isprintable() else "?" for c in flat)
     return flat if len(flat) <= limit else flat[:limit - 1] + "…"

@@ -359,7 +359,7 @@ _SQL_KINDS219 = {
 eq("db_data.sql_kind: SELECT/SHOW/DESCRIBE/EXPLAIN read (comments and brackets skipped); EXPLAIN ANALYZE, an "
    "executable comment, WITH and the rest write", {k: _dd219.sql_kind(k) for k in _SQL_KINDS219}, _SQL_KINDS219)
 eq("db_data.mask_literals: every quoted string, hex and bit literal masked, identifiers kept, one line",
-   _dd219.mask_literals("UPDATE `us'er` SET pw = 'hunter2', n = \"x\\\"y\", b = X'ABCD', h = 0xFF\n WHERE a = 'it''s'"),
+   _dd219.mask_literals("UPDATE `us'er` SET pw = 'hunter2', n = \"x\", b = X'ABCD', h = 0xFF\n WHERE a = 'it''s'"),
    "UPDATE `us'er` SET pw = '?', n = \"?\", b = X'?', h = 0x? WHERE a = '?'")
 _bin219 = _dd219.sql_result(_dd219.parse(_answer219(([(["b"], [["\x00\ufffd"]])], -1))))
 eq("db_data.sql_result: bytes that are not text are said to be binary, with no length guessed from what the "
@@ -376,6 +376,20 @@ eq("db_data.mask_literals: a quote inside a comment opens no literal (the next l
    [_dd219.mask_literals(t) for t in ("-- it's mine\nUPDATE u SET pw='hunter2secret'", "# don't\nSELECT 'tok'",
                                       "/* it's */ SELECT 'tok'", "SELECT `a 'tok'", "/*!50000 UPDATE t SET a='x' */")],
    ["UPDATE u SET pw='?'", "SELECT '?'", "SELECT '?'", "SELECT `?", "/*!50000 UPDATE t SET a='?' */"])
+# The input CI's fuzz target found on PR #557: a hex literal with backslash escapes, executable comments
+# holding comments, and doubled quotes; the old masker read the "/" of an executable comment's "*/" as the
+# start of a comment with what followed, lost its place, and let quoted values through.
+_ci557 = ("X'PDAw=KEEPOUTa\\'\\'b\\' -- do'`❮ੴ圠䕈䕒怠`/*!/*\x00\x00\x00\x00\x00*//*\x00\x00"
+          "\x00\x00\x00*//*挀恤\U00102220\U00104553\U00073d78*/ *//*! */* ' */UPDAT=''a''''b''KEEPOUTⴭ"
+          "\U0010200a\U00055245捠恤\U00102220\U00027922\U00012a2f''KEEPOUT''KEEPOUT''KEEPOUT''KEEPOUT''KEEPOUT"
+          "''KEEPOUT'")
+check("db_data.mask_literals: no quoted value of the input CI's fuzz target found on PR #557 reaches the audit text",
+      "KEEPOUT" not in _dd219.mask_literals(_ci557, limit=1 << 20), _dd219.mask_literals(_ci557, limit=1 << 20))
+eq("db_data.mask_literals: an executable comment's \"*/\" closes it (its \"/\" starts no comment), so the literal after "
+   "it is masked; a literal whose end depends on sql_mode (a backslash before its quote) masks the rest",
+   [_dd219.mask_literals(t) for t in ("/*! SELECT 1 */* 'tok'", "/*!40101 /* c */ SET a=1 */'tok'",
+                                      "UPDATE t SET a='it\\'s', b='secret'", "SELECT 4*/* it's */ 'tok'")],
+   ["/*! SELECT 1 */* '?'", "/*!40101 SET a=1 */'?'", "UPDATE t SET a='?'…", "SELECT 4* '?'"])
 check("db_data.mask_literals: an unterminated literal is masked to the end; long text is cut",
       _dd219.mask_literals("SELECT 'secret") == "SELECT '?'" and len(_dd219.mask_literals("x" * 999)) == 300)
 _got219 = []
