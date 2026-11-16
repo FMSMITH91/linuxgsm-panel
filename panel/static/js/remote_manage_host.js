@@ -102,8 +102,13 @@ function _r26bSshPortNow(d){
     pn.textContent = t('unknown');
   }
 }
+// The POSTs below are step_up_required routes: a sign-in past the confirmation window confirms the
+// password in a dialog here first (step_up_form.js's window.stepUpThen), so the page stays put. Without
+// it the server's 403 still sends the tab to the confirm page and back.
+function _rmhStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 function sshMode(mode){
-  var run = function(){
+  var run = function(){ _rmhStepUp(runNow); };
+  var runNow = function(){
     var el=document.getElementById('ssh-msg'); el.textContent='Applying…'; el.className='small mt-1 text-secondary';
     fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})
       .then(r=>r.json()).then(d=>{ el.textContent=(d.success?'✓ ':'✗ ')+(d.message||''); el.className='small mt-1 '+(d.success?'text-success':'text-danger'); loadSshStatus(); })
@@ -209,7 +214,8 @@ function changeSshPort(){
       +'\n\n'+tf('Lockout-safe: the current binding stays in place as a fallback, and the '
       +'firewall and fail2ban are updated to the new port. Once you\'ve confirmed you can reach SSH on '
       +'{port}, close the old port in the firewall rules on the Network tab.', {port: p}),
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(movePort); }});
+  function movePort(){
       var m=document.getElementById('ssh-port-msg');
       // One move at a time: the server refuses an overlapping one (409), and a second click while
       // this runs is how an overlapping one happens.
@@ -225,7 +231,7 @@ function changeSshPort(){
           if(d.success) loadSshStatus();   // the card's live port moved too
         })
         .catch(function(){ busy(false); if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
-    }});
+  }
 }
 function switchToTailscale(){
   confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-primary', confirmLabel:'Migrate',
@@ -458,7 +464,7 @@ function renderPuLog(lines){
 function doPanelUpdate(){
   confirmDialog({title:'Update the panel', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Update now',
     bodyText:'Update the panel to the latest version now?\n\nIt will back up, pull new code, install any new dependencies, and restart — briefly unavailable (a few seconds). Live progress shows below.',
-    onConfirm:_doPanelUpdate});
+    onConfirm:function(){ _rmhStepUp(_doPanelUpdate); }});
 }
 function _doPanelUpdate(){
   var msg=document.getElementById('pu-msg'), btn=document.getElementById('pu-update-btn');
@@ -628,7 +634,7 @@ function switchPanelBranch(){
       +(branch==='main'
         ? t('It installs the newest version of main that has passed its automated checks.')
         : tf('FOR TESTING: this installs the newest commit on "{branch}" if it is a signed release (if not, nothing is switched) — branches other than main are not checked by the panel\'s automated-checks gate.', {branch: branch})),
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       btn.disabled=true; if(logWrap) logWrap.style.display='';
       if(body) body.innerHTML='<span class="text-secondary">Starting…</span>';
       msg.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Switching…</span>';
@@ -640,7 +646,7 @@ function switchPanelBranch(){
             watchPanelRestart(beforeBoot, msg, tf('Switched to {branch}', {branch: branch}), before, branch);
           }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
       }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
-    }});
+    }); }});
 }
 
 // ── Diagnostics & file integrity (panel host only) ──────────────────
@@ -855,7 +861,7 @@ function _encStatusLine(d){
 function rotateEncKey(){
   confirmDialog({title:'Rotate encryption key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Rotate',
     bodyText:'A new key will encrypt every stored secret, and the existing ones are re-encrypted under it in the background. Older keys are kept until nothing uses them, so nothing stops working meanwhile. Continue?',
-    onConfirm:_rotateEncKey});
+    onConfirm:function(){ _rmhStepUp(_rotateEncKey); }});
 }
 function _rotateEncKey(){
   var btn=document.getElementById('diag-enc-rotate-btn'), msg=document.getElementById('diag-enc-msg');

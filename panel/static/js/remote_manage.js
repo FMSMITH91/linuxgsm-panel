@@ -649,7 +649,8 @@ function runUpdates(){
     bodyText:'Install all available updates on this host? You can watch it live in a popup; it runs '
       + 'unattended and answers prompts safely (keeps your config files, assumes yes), so it never '
       + 'gets stuck waiting.',
-    onConfirm:_startOsUpdate});
+    // A step_up_required route: a stale sign-in confirms the password in a dialog first (step_up_form.js).
+    onConfirm:function(){ if(window.stepUpThen) window.stepUpThen(_startOsUpdate, window.STEP_UP_TOTP === true); else _startOsUpdate(); }});
 }
 function _startOsUpdate(){
   if(_osuTimer){ clearTimeout(_osuTimer); _osuTimer=null; }

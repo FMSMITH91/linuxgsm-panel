@@ -1029,6 +1029,7 @@ def _register_panel_host_os(app):
     @app.route("/api/server-management/os-update-run", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_os_update_run():
         """Run apt upgrade."""
         from panel.services import host_reboot as _hr
@@ -1052,6 +1053,7 @@ def _register_panel_host_os(app):
     @app.route("/api/server-management/reboot", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_server_reboot():
         """Reboot the panel's own host: {delay 0-300 s, mode}. The same clean reboot as its Power card.
 
