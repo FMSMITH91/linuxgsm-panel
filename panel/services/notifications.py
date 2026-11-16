@@ -515,9 +515,10 @@ class _FallbackHTTPS(urllib.request.HTTPSHandler):
     def https_open(self, req):
         # A request _post marked as going to the operator-chosen ntfy server also has the address its
         # name resolves to checked (_NtfyHTTPSConnection); Telegram's and Discord's fixed hosts do not.
-        check = getattr(req, "ntfy_address_check", False)
-        conn = (_FallbackHTTPSConnection if not check
-                else _NtfyHTTPSConnection if check == "private_ok" else _NtfyPublicHTTPSConnection)
+        # ...and only a public one unless the server is marked as on the operator's own network.
+        conn = _FallbackHTTPSConnection
+        if getattr(req, "ntfy_address_check", False):
+            conn = _NtfyHTTPSConnection if getattr(req, "ntfy_private_ok", False) else _NtfyPublicHTTPSConnection
         return self.do_open(conn, req, context=self._context)
 
 
@@ -656,7 +657,8 @@ def _post(url, data, headers, allow_configured_host=False, provider="?", private
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     # The ntfy server's address is checked when the connection opens (_FallbackHTTPS, _connect_ntfy).
-    req.ntfy_address_check = ("private_ok" if private_ok else True) if allow_configured_host else False
+    req.ntfy_address_check = allow_configured_host
+    req.ntfy_private_ok = private_ok
     try:
         # _OPENER, not urlopen: the allow-list above is only worth as much as the request that
         # follows it, and the default opener follows redirects off the allow-listed host.
@@ -889,6 +891,16 @@ def send_discord(webhook, text):
     return False, "Discord rejected it — the webhook URL is wrong or was deleted."
 
 
+# send_ntfy's answer for each reason _post gives for a message it did not send.
+_NTFY_NOT_SENT = {
+    "unreachable": "couldn't reach that ntfy server — check the URL and the host's outbound network.",
+    "blocked": "that ntfy URL was refused before sending — https and a plain topic only.",
+    "refused": NTFY_ADDRESS_REFUSED,
+    "private": NTFY_PRIVATE_REFUSED,
+}
+_NTFY_REJECTED = "ntfy rejected it — the topic may be reserved, or the access token is wrong or missing."
+
+
 def send_ntfy(server, topic, token, text, private_network=None):
     """Publish a message to an ntfy topic. Returns (ok, detail).
 
@@ -923,16 +935,7 @@ def send_ntfy(server, topic, token, text, private_network=None):
                        allow_configured_host=True, provider="ntfy", private_ok=bool(private_network))
     if ok:
         return True, ""
-    if reason == "unreachable":
-        return False, "couldn't reach that ntfy server — check the URL and the host's outbound network."
-    if reason == "blocked":
-        return False, "that ntfy URL was refused before sending — https and a plain topic only."
-    if reason == "refused":
-        return False, NTFY_ADDRESS_REFUSED
-    if reason == "private":
-        return False, NTFY_PRIVATE_REFUSED
-    return False, ("ntfy rejected it — the topic may be reserved, or the access token is wrong "
-                   "or missing.")
+    return False, _NTFY_NOT_SENT.get(reason, _NTFY_REJECTED)
 
 
 # ── Discord command bot (Gateway) ──────────────────────────────

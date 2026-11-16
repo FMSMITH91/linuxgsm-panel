@@ -3113,7 +3113,7 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     # Was a shell one-liner: rm, nohup, a redirect, a background job, a seq loop and a grep. The
     # verb starts `tailscale up` detached and polls its OWN log — whose path is fixed in the verb
     # table and lives in /run rather than /tmp, where any local user could have pre-created it.
-    out, err, rc = _core.run_privileged(server, "tailscale-up-login",
+    out, _err, rc = _core.run_privileged(server, "tailscale-up-login",
                                   ["yes" if enable_ssh else "no", advertise_routes or "-"],
                                   timeout=40)
     line = (out or "").strip().split("\n")[-1].strip() if out else ""
