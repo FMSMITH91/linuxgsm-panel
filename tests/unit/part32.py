@@ -930,13 +930,15 @@ def _p32_uninstall_refusals():
 _INS32 = _script_text("install.sh")
 _HINT_STUBS32 = ('panel_port() { echo 5000; }\npanel_serve_url() { printf "%s" "${TSURL:-}"; }\n'
                  'ufw_port_state() { echo "${UFW:-open}"; }\ncurl() { echo 203.0.113.7; }\n'
+                 # The host's own public IPv4 (OWN), none by default: a host behind NAT.
+                 'host_addr_fallback() { [ "${1:-}" != public4 ] || printf "%s" "${OWN:-}"; }\n'
                  'YELLOW=""; CYAN=""; NC=""\n')
 
 
-def _hint(pre, post, ufw="open", tsurl=""):
+def _hint(pre, post, ufw="open", tsurl="", own=""):
     script = ("set -euo pipefail\n" + _HINT_STUBS32 + _sh_fn(_INS32, "_post_update_scheme_hint")
               + '\n_post_update_scheme_hint "$1" "$2"\n')
-    r = _bash(script, (pre, post), env={"UFW": ufw, "TSURL": tsurl})
+    r = _bash(script, (pre, post), env={"UFW": ufw, "TSURL": tsurl, "OWN": own})
     return r.stdout + r.stderr
 
 
@@ -947,6 +949,9 @@ def _p32_install_hint():
     check("install hint: ...said when it really switched, with the direct address and the advice",
           all(["now serves HTTPS" in out, "https://203.0.113.7:5000" in out,
                "Set up Tailscale Serve" in out]), out)
+    out = _hint("http", "https", own="198.51.100.9")
+    check("install hint: a host with its own public IPv4 prints that address, not an outside lookup's",
+          ("https://198.51.100.9:5000" in out, "203.0.113.7" in out) == (True, False), out)
     check("install hint: ...and said when the panel was not answering before (unknown is not "
           "'unchanged')", "serves HTTPS" in _hint("unknown", "https"), _hint("unknown", "https"))
     out = _hint("http", "https", ufw="closed", tsurl=_HOST32 + "/lgsm")

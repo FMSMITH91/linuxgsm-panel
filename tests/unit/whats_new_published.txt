@@ -706,3 +706,11 @@ a7a8e175 Panel warnings and errors are stored at their real priority in the syst
 183d92cf Log lines cannot forge a journal priority.
 66bcee55 Every page can ask for the password in place.
 12c3e9a9 An added API-token header no longer skips the password re-check.
+d6b7bb2f The fuzz build's base image can be updated by Renovate.
+2f66cfec The installer no longer asks a website for the server's address when the server knows it.
+347b2231 A stored value can no longer make a database look broken.
+c412a31f Old audit entries keep the right network for IPv4 clients of a panel bound to "::".
+98aa529c A dump upload that fails no longer replaces the earlier dump.
+0c558d2c A remote host's SSH key can be checked on the first connection.
+a2aecde6 The panel host page warns when the install still has the wide sudo grant.
+2a7b4e7f The release key's fingerprint is published for first installs.
