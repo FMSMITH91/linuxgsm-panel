@@ -3037,6 +3037,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:notifications_save"
     ],
     "methods": [
@@ -3173,6 +3174,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:panel_settings_save"
     ],
     "methods": [
