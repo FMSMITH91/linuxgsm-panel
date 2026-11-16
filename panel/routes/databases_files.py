@@ -186,18 +186,28 @@ _SCAN_AWK = r'''function other(l,   n) {
     if (n != me) return 1
     l = substr(l, RSTART + RLENGTH) }
   return 0 }
+# Built from parts (dynamic regexes) so no line of this program is too long to read: LEAD is an optional
+# executable comment, SW a statement that switches to a system or panel database, CH a chained statement.
+function regexes() {
+  LEAD = "(/\\*![0-9]*[ \t]*)?"
+  SW = "^[ \t]*" LEAD "(use[ \t]+|(create|drop|alter)[ \t]+(database|schema)[ \t]+(if[ \t]+(not[ \t]+)?exists[ \t]+)?)"
+  SW = SW "`?(mysql|sys|information_schema|performance_schema|gs[0-9]+_)"
+  CH = ";[ \t]*" LEAD "(use|update|delete|insert|replace|select|create|drop|alter|rename|truncate|"
+  CH = CH "call|with|lock|grant|set|do|handler|load)[ \t`(]" }
 function switches(l) {
-  return l ~ /^[ \t]*(\/\*![0-9]*[ \t]*)?(use[ \t]+|(create|drop|alter)[ \t]+(database|schema)[ \t]+(if[ \t]+(not[ \t]+)?exists[ \t]+)?)`?(mysql|sys|information_schema|performance_schema|gs[0-9]+_)/ }
+  return l ~ SW }
 function named(l) {
-  return l ~ /gs[0-9]/ || index(l, "mysql") || index(l, "_schema") || index(l, "`sys`") || index(l, " sys;") || index(l, " sys ") }
+  return l ~ /gs[0-9]/ || index(l, "mysql") || index(l, "_schema") ||
+    index(l, "`sys`") || index(l, " sys;") || index(l, " sys ") }
 function chained(l,   rest, e, st) {
-  while (match(l, /;[ \t]*(\/\*![0-9]*[ \t]*)?(use|update|delete|insert|replace|select|create|drop|alter|rename|truncate|call|with|lock|grant|set|do|handler|load)[ \t`(]/)) {
+  while (match(l, CH)) {
     rest = substr(l, RSTART + 1); e = index(rest, ";"); st = e ? substr(rest, 1, e - 1) : rest
     if (switches(st)) return "SWITCH"
     if (other(st)) return "OTHER"
     l = rest }
   return "" }
 function verdict(v) { print v; done = 1; exit }
+BEGIN { regexes() }
 { t += length($0) + 1; if (t > max) verdict("BIG")
   if ($0 ~ /^INSERT INTO /) {
     v = index($0, " VALUES"); h = v ? substr($0, 1, v) : $0
