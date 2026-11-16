@@ -329,10 +329,15 @@ exit 0
 """
 
 
+# Full paths (Bandit B607): the git and bash on PATH, found once.
+_GIT223 = _shutil223.which("git") or "/usr/bin/git"
+_BASH223 = _shutil223.which("bash") or "/bin/bash"
+
+
 def _git223(*a, cwd=None):
     env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t",
                GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
-    return _sp223.run(["git", *a], cwd=cwd, env=env, capture_output=True, text=True, check=False)  # nosec B603
+    return _sp223.run([_GIT223, *a], cwd=cwd, env=env, capture_output=True, text=True, check=False)  # nosec B603
 
 
 def _release_repo223():
@@ -373,7 +378,7 @@ if _shutil223.which("ssh-keygen") and _shutil223.which("git"):
                    FAKEGH_LOG=_log223, FAKEGH_READ=os.path.join(_SB223, "read_sbom.py"),
                    SIGN_RELEASE_GH="bash %s" % _shlex223.quote(_gh223), GIT_AUTHOR_NAME="t",
                    GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
-    _r223 = _sp223.run(["bash", os.path.join(_root, "tools", "sign-release.sh"), "--yes", _sha223], cwd=_dev223,
+    _r223 = _sp223.run([_BASH223, os.path.join(_root, "tools", "sign-release.sh"), "--yes", _sha223], cwd=_dev223,
                        env=_env223, input="", capture_output=True, text=True, timeout=300, check=False)  # nosec B603
     _ghlog223 = open(_log223, encoding="utf-8").read() if os.path.exists(_log223) else ""
     _sbom_line223 = _re223.search(r"^SBOM: linuxgsm-panel-(\S+)\.cdx\.json (\d+) (\S+)$", _ghlog223, _re223.M)
