@@ -35,6 +35,7 @@ _trips220 = len(_P9_TRIPPED)
 _IDS220 = []
 _K220 = "harbour lantern quietly"       # the fixtures' password (no real credential)
 _XHR220 = {"X-Requested-With": "XMLHttpRequest"}
+_TYPED220 = "pw"                  # what the stand-in dialog types (the harness's onConfirm('pw', ...))
 _LIFE_KEYS220 = ("PERMANENT_SESSION_LIFETIME", "SESSION_ABSOLUTE_SECONDS", "REMEMBER_COOKIE_DURATION",
                  "STEP_UP_MINUTES", "SESSION_PROTECTION", "REQUIRE_2FA")
 
@@ -473,9 +474,9 @@ def _s220_stepup_js():
               (coded.get("sent"), _reauth_body220(coded)),
               (ajax.get("held"), ajax.get("calls"))],
        [(True, ["sent"], []),
-        (["sent"], ["Confirm it is you"], ["/api/auth/ping?step_up=1", "/account/reauth"], {"password": "pw"}),
+        (["sent"], ["Confirm it is you"], ["/api/auth/ping?step_up=1", "/account/reauth"], {"password": _TYPED220}),
         ([], ["Confirm it is you", "error:Password incorrect."]),
-        (["sent"], {"password": "pw", "totp_code": "123456"}),
+        (["sent"], {"password": _TYPED220, "totp_code": "123456"}),
         (False, [])])
 
 
