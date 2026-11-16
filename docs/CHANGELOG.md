@@ -467,6 +467,18 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **A stored value can no longer make a database look broken.** A row value or column default
+  holding a line shaped like the database client's error or the panel's own "timed out" note made
+  Browse, the Tables tab or the SQL box report a failure. The panel now reads those lines only
+  outside the data.
+- **Old audit entries keep the right network for IPv4 clients of a panel bound to "::".** Ageing
+  turned an address like ::ffff:203.0.113.9 into garbled text, and the address column reduced every
+  such client to the same "::/64"; it is now reduced to its IPv4 /24. Version numbers such as
+  v1.2.3.4 are no longer treated as addresses in audit text or in the bots' console replies.
+- **A dump upload that fails no longer replaces the earlier dump.** When the restore after an
+  upload stopped with an error, the upload could not be moved into place, or the host's answer was
+  lost, the earlier dump could be left set aside. The page now asks again when an answer is lost,
+  and every failure puts the earlier dump back.
 - **Panel warnings and errors are stored at their real priority in the system journal.** Each line
   the panel writes now carries its level, so `journalctl -p warning` finds the panel's warnings and
   errors, and informational events such as startup maintenance results reach the journal too.
