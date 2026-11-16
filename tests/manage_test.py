@@ -176,6 +176,32 @@ def _said(fn, *a):
     return exited, msg, out.getvalue()
 
 
+def _check_site_domain():
+    """set-site-domain: the address browsers use, set from the shell, audited; a bad value refused."""
+    from panel.core.config import load_config
+    shapes = {v: manage._site_domain_arg(v) for v in (
+        "panel.example.com", "https://panel.example.com:8443/x", "[2001:db8::5]:5000", "bad host", "a;b", "-x.com")}
+    check("set-site-domain: a host, host:port or [IPv6]:port is taken (a pasted scheme and path dropped); "
+          "anything else is not",
+          shapes == {"panel.example.com": "panel.example.com",
+                     "https://panel.example.com:8443/x": "panel.example.com:8443",
+                     "[2001:db8::5]:5000": "[2001:db8::5]:5000", "bad host": None, "a;b": None, "-x.com": None},
+          repr(shapes))
+    exited, msg, _out = _said(manage.cmd_set_site_domain, Args(domain="bad host"))
+    check("set-site-domain: refuses a value that is no address, and stores nothing",
+          exited and "Refusing" in msg and load_config().get("site_domain", "") != "bad host", msg[:90])
+    exited, msg, out = _said(manage.cmd_set_site_domain, Args(domain="panel.example.com:8443"))
+    with manage.app.app_context():
+        from panel.db.models import AuditLog
+        rows = [(r.username, r.detail) for r in AuditLog.query.filter_by(action="settings_update", target="panel")]
+    check("set-site-domain: stores it (no restart), says so, and audits it as a settings change by manage.py",
+          not exited and load_config().get("site_domain") == "panel.example.com:8443"
+          and "panel.example.com:8443" in out
+          and ("manage.py", "site_domain set to panel.example.com:8443 (manage.py)") in rows, repr((msg, out, rows)))
+    _said(manage.cmd_set_site_domain, Args(domain=""))
+    check("set-site-domain: \"\" clears it", load_config().get("site_domain") == "", repr(load_config().get("site_domain")))
+
+
 def _check_owner():
     """The panel owner: set-owner moves it, and deactivate/demote refuse it until it has moved."""
     _check_owner_refusals()
@@ -508,6 +534,7 @@ try:
         builtins.input = _saved_input
 
     _check_owner()
+    _check_site_domain()
     _check_tty_safe()
 
 except BaseException:

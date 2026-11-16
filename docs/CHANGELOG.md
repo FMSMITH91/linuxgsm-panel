@@ -1567,6 +1567,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **Behind a proxy that hides the panel's address, the fix is one command.** A proxy that passes on neither the browser's address nor
+  X-Forwarded-Host leaves the panel unable to check where a form came from, so an older browser
+  (Safari before 16.4) had every form refused, sign-in included. The check stays; the journal now
+  says how to fix it, and `manage.py set-site-domain <host[:port]>` sets the panel's address from
+  the host's shell when the web page cannot be used.
 - **A remote host's SSH key can be checked on the first connection.** Add host and Edit host
   take an optional host key fingerprint (as `ssh-keygen -lf` prints it); a host presenting another
   key is refused before its password or key is sent. Left empty, the first key is trusted and
