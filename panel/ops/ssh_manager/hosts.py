@@ -3061,6 +3061,15 @@ def _r19a_enable_forwarding(server):
 _R20A_BAD_ROUTES = "Routes must be comma-separated networks, e.g. 192.168.1.0/24,10.0.0.0/24"
 
 
+def tailscale_routes_problem(advertise_routes):
+    """The refusal (an i18n.Sentence) for a route list `tailscale up` would not take, else None.
+
+    For the routes, to answer a 400 before anything is asked of the host: a list the joins refuse is
+    the request's fault, and it was answered 500 (the login-link join) or 200 (the key join).
+    """
+    return i18n.Sentence(_R20A_BAD_ROUTES) if _r20a_routes_or_none(advertise_routes) is None else None
+
+
 def _r20a_routes_or_none(advertise_routes):
     """The route list as the verb will take it ("" for none), or None when it is not one.
 
@@ -3117,7 +3126,10 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     status = remote_check_tailscale(server)
     if status.get("running") or line == "ALREADY_CONNECTED":
         return True, "ALREADY_CONNECTED"
-    return False, (err or out or "Could not get a Tailscale login link — is Tailscale installed on the remote?")
+    # A fixed sentence: the host's own output is not handed to the browser (OWASP Error Handling Cheat
+    # Sheet). Only the exit status is logged, as an int, so no host text reaches the log either.
+    _core._log.warning("tailscale up gave no login link (rc=%d)", rc if isinstance(rc, int) else -1)
+    return False, "Could not get a Tailscale login link — is Tailscale installed on the remote?"
 
 
 def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_routes="", tags=""):
