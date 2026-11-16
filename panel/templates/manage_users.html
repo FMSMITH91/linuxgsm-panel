@@ -137,11 +137,13 @@
               {% elif inv.state == 'active' %}<span class="badge bg-success">Active</span>
               {% elif inv.state == 'used' %}<span class="badge bg-secondary">Used</span>
               {% elif inv.state == 'revoked' %}<span class="badge bg-warning text-dark">Revoked</span>
+              {% elif inv.state == 'burned' %}<span class="badge bg-danger" title="Five wrong codes were entered for it, so it stopped working.">Wrong codes</span>
               {% else %}<span class="badge bg-secondary">Expired</span>{% endif %}
             </td>
             <td class="d-none d-md-table-cell text-secondary small text-nowrap"
                 data-no-i18n>{{ inv.expires_at|datetime if inv.expires_at }}</td>
             <td class="d-none d-lg-table-cell text-secondary small">
+              {% if inv.code_hash %}<i class="bi bi-123 me-1" title="Asks for a code" aria-label="Asks for a code"></i>{% endif %}
               {% if inv.grants_superadmin %}<span class="text-warning">Super Administrator</span>
               {% else %}{{ inv.groups_wanted | length }} {% if inv.groups_wanted | length == 1 %}<span>group</span>{% else %}<span>groups</span>{% endif %}{% endif %}
             </td>
@@ -179,7 +181,7 @@
          credential modal (which has a copy button). A plain submit would put it in a flash — i.e.
          in the signed session cookie — which is the wrong place for a link that creates an
          account. See _form_credential. #}
-      <form method="POST" action="{{ url_for('create_invite') }}"
+      <form method="POST" action="{{ url_for('create_invite') }}" id="invite-form"
             class="ajax-form" data-ajax-refresh="#users-list">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-link-45deg"></i> Create an invite link</h5>
@@ -216,11 +218,21 @@
           <hr class="border-secondary">
           <div class="form-check form-switch">
             <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch"
-                   id="inv-superadmin">
+                   id="inv-superadmin" data-action="syncInviteCode" data-on="change">
             <label class="form-check-label" for="inv-superadmin">Super Administrator</label>
           </div>
           <div class="form-text mt-0">Anyone who opens the link becomes a superadmin. Only send it
             to someone you would grant that to directly.</div>
+          {# The second code. Always on for a superadmin invite (the server makes one whatever this
+             says); on by default for the rest. #}
+          <div class="form-check form-switch mt-2">
+            <input type="checkbox" name="require_code" class="form-check-input" role="switch"
+                   id="inv-code" checked>
+            <label class="form-check-label" for="inv-code">Also ask for a code</label>
+          </div>
+          <div class="form-text mt-0">An 8-digit code shown once next to the link. Send it another
+            way (say it on a call, or use another app), so the link alone is not enough. Five wrong
+            codes stop the link working. Always on for a Super Administrator invite.</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -460,6 +472,16 @@
             <i class="bi bi-clipboard"></i> Copy
           </button>
         </div>
+        {# An invite's second code: shown only when the invite has one (showCredential). #}
+        <div id="cred-code-block" hidden>
+          <label class="form-label small mb-1" for="cred-code">Code — send it another way than the link</label>
+          <div class="input-group mb-2">
+            <input type="text" class="form-control font-monospace fs-5" id="cred-code" readonly>
+            <button class="btn btn-outline-secondary" type="button" data-action="copyInviteCode">
+              <i class="bi bi-clipboard"></i> Copy
+            </button>
+          </div>
+        </div>
         <div class="alert alert-warning py-2 px-3 small mb-0" role="alert" data-cred-kind="password">
           <i class="bi bi-exclamation-triangle"></i> Copy it now — it is not shown again, and the
           panel cannot recover it. If you lose it, reset the password to issue a new one.
@@ -467,6 +489,7 @@
         <div class="alert alert-warning py-2 px-3 small mb-0" role="alert" data-cred-kind="invite" hidden>
           <i class="bi bi-exclamation-triangle"></i> Copy it now — it is not shown again, and the
           panel cannot recover it. If you lose it, revoke this invite and create a new one.
+          <span id="cred-code-note" hidden>The same goes for the code. They need both.</span>
         </div>
       </div>
       <div class="modal-footer">

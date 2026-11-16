@@ -1,0 +1,17 @@
+{
+  "That request did not come from this panel's own page and was refused.": "Cette requête ne venait pas d'une page de ce panneau et a été refusée.",
+  "That code is not right. Tries left: {n}.": "Ce code n'est pas le bon. Essais restants : {n}.",
+  "{message} {password} — code {code}. Send the code another way. Copy both now, they are not shown again.": "{message} {password} — code {code}. Envoyez le code par un autre moyen. Copiez les deux maintenant, ils ne seront plus affichés.",
+  "Too many wrong codes were entered, so this invite has stopped working. Ask whoever sent it for a new one.": "Trop de codes erronés ont été saisis, cette invitation ne fonctionne donc plus. Demandez-en une nouvelle à la personne qui vous l'a envoyée.",
+  "Enter your invite code": "Saisissez votre code d'invitation",
+  "Whoever invited you has an 8-digit code for this link, sent to you separately. Ask them for it if you do not have it.": "La personne qui vous a invité dispose d'un code à 8 chiffres pour ce lien, envoyé séparément. Demandez-le-lui si vous ne l'avez pas.",
+  "Invite code": "Code d'invitation",
+  "Also ask for a code": "Demander aussi un code",
+  "An 8-digit code shown once next to the link. Send it another way (say it on a call, or use another app), so the link alone is not enough. Five wrong codes stop the link working. Always on for a Super Administrator invite.": "Un code à 8 chiffres affiché une seule fois à côté du lien. Envoyez-le par un autre moyen (dites-le lors d'un appel, ou utilisez une autre application), pour que le lien seul ne suffise pas. Cinq codes erronés désactivent le lien. Toujours activé pour une invitation Super Administrateur.",
+  "Code — send it another way than the link": "Code : envoyez-le par un autre moyen que le lien",
+  "The same goes for the code. They need both.": "Il en va de même pour le code. Il leur faut les deux.",
+  "Wrong codes": "Codes erronés",
+  "Five wrong codes were entered for it, so it stopped working.": "Cinq codes erronés ont été saisis, il ne fonctionne donc plus.",
+  "Asks for a code": "Demande un code",
+  "Code copied": "Code copié"
+}
