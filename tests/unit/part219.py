@@ -929,7 +929,7 @@ def _keep219(restored, had_one):
         fh.write(_GOOD219.encode())
     first = _dfr219.outcome(_bash219(_dfr219.finish_script("gm219", _UID219, len(_GOOD219.encode()), "gs12_lp")))
     aside = _os219.path.exists(_DEST219 + ".prev")
-    _bash219(_dfr219.settle_script("gm219", "gs12_lp", restored))
+    _bash219(_dfr219.settle_script("gm219", "gs12_lp", restored, _UID219))
     got = _stored219() if _os219.path.exists(_DEST219) else None
     return first, aside, got, _os219.path.exists(_DEST219 + ".prev")
 

@@ -6,7 +6,8 @@ import time
 from markupsafe import Markup
 from panel.core import i18n
 from panel.core.clock import utcnow
-from panel.core.validation import canonical_host, unzoned_ip_address_or_none, unzoned_ip_or_network
+from panel.core.validation import (canonical_host, replace_text_ips, unzoned_ip_address_or_none,
+                                   unzoned_ip_or_network)
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -1546,25 +1547,21 @@ def _anonymise_ip(ip):
     addr = unzoned_ip_address_or_none(ip)
     if addr is None:
         return ""
+    # ::ffff:203.0.113.77 (an IPv4 client of a server bound to ::) is the IPv4 address: its /24,
+    # where its /64 would be "::/64", the same for every IPv4 client.
+    addr = getattr(addr, "ipv4_mapped", None) or addr
     prefix = 24 if addr.version == 4 else 64
     return str(ipaddress.ip_network("%s/%d" % (addr, prefix), strict=False))
 
 
-# A full address inside an audit entry's text ("User logged in from 203.0.113.7", a ban's target).
-# Not one followed by "/<digits>": that is a network, which is what a reduced address already is.
-_TEXT_IPV4_RE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.]*\d)(?!/\d)")
-_TEXT_IPV6_RE = re.compile(r"(?<![0-9A-Fa-f:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![0-9A-Fa-f:/])")
 # The SQL pre-filter: only text that could hold an address is read back at all.
 _TEXT_IP_LIKES = ("%_._%._%._%", "%:%:%")
 
 
 def _reduce_text_ips(text):
     """`text` with each full IP address in it reduced to its network prefix, as _anonymise_ip does."""
-    def _one(m):
-        reduced = _anonymise_ip(m.group(0))
-        return reduced or m.group(0)
-    text = _TEXT_IPV4_RE.sub(_one, text or "")
-    return _TEXT_IPV6_RE.sub(_one, text) if ":" in text else text
+    # Not an address followed by "/<digits>": that is a network, which is what a reduced address is.
+    return replace_text_ips(text or "", lambda addr: _anonymise_ip(str(addr)), networks=False)
 
 
 def _anonymise_audit_text_ips(cutoff):

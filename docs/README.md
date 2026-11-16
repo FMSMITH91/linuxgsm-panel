@@ -27,6 +27,10 @@ A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game s
 curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh | bash
 ```
 
+To check what you install first, the release key's fingerprint is
+`SHA256:YhAumFmigcV9YJNrtPkaekEm1ed/NSL2Me3fxTjZ82w` (ED25519); [SECURITY.md](../.github/SECURITY.md#checking-a-first-install)
+shows how to check that the commit you install is signed with it before you run the installer.
+
 The installer runs unattended. It:
 
 1. Installs its prerequisites and patches the OS with `apt full-upgrade` (skip with `PANEL_NO_UPGRADE=1`). If the upgrade needs a reboot it reboots at the end, unless game servers are running; `PANEL_NO_REBOOT=1` skips the reboot.

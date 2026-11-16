@@ -15,7 +15,7 @@ from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
-    MIN_PORT, SAFE_LABEL_RE, _port_or, ip_address_or_none)
+    MIN_PORT, SAFE_LABEL_RE, _port_or, host_key_fingerprint_arg, host_key_sha256, ip_address_or_none)
 from panel.core.panel_state import (forget_rows)
 from panel.routes import databases as _dbr
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
@@ -250,6 +250,10 @@ def _register_remote_list(app):
 
         if is_local:
             return _add_local_remote(name, lgsm_user)
+        fingerprint = host_key_fingerprint_arg(request.form.get("host_key_fingerprint"))
+        _bad = _fingerprint_field_error(fingerprint, auth_method)
+        if _bad:
+            return _form_err(_bad, "manage_remotes")
 
         # (host presence + charset already validated above for non-local remotes)
         # ...and not another row's host (the same address AND SSH port): asked before anything
@@ -260,8 +264,9 @@ def _register_remote_list(app):
             # The host key this test sees is PINNED with the row, in the same commit. Left to the next
             # connection, the pin would come from whichever one that is, not from this login.
             _seen_key = []
+            # With a fingerprint, that first key must match it or nothing is sent (RFC 4251 4.1).
             success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
-                                               captured=_seen_key)
+                                               captured=_seen_key, fingerprint=fingerprint)
             if not success:
                 return _form_err(i18n.tr("Connection test failed: {why}", why=msg), "manage_remotes")
 
@@ -797,7 +802,7 @@ def _edited(field, current):
 
 
 def _apply_edited_auth(remote):
-    """Set the edited host's sign-in method and credential; returns the refusal, or None."""
+    """Set the edited host's sign-in method and credential, then check its fingerprint; the refusal, or None."""
     # SECURITY: the one field on this form that was taken raw, while the four above it were
     # each validated. `auth_method` is not a label — it SELECTS THE TRANSPORT, and
     # `_core.is_local_server()` returns True for `auth_method == "local"` (panel/ops/
@@ -823,4 +828,62 @@ def _apply_edited_auth(remote):
     new_cred = request.form.get("credential", "").strip()
     if new_cred:
         remote.auth_credential = encrypt_secret(new_cred)
+    # With the sign-in settled, the optional host key fingerprint is checked against the host.
+    return _edited_fingerprint_refusal(remote)
+
+
+_FP_FORMAT = "Host key fingerprint must be SHA256:… as ssh-keygen -lf prints it."
+_FP_AUTH = "A host key fingerprint applies to SSH key or password sign-in only."
+
+
+def _fingerprint_field_error(fingerprint, auth_method):
+    """Why the Add or Edit form's host key fingerprint cannot be used, or None (also for a blank one)."""
+    if fingerprint is None:
+        return _FP_FORMAT
+    if fingerprint and auth_method not in ("key", "password"):
+        return _FP_AUTH
+    return None
+
+
+def _edited_fingerprint_refusal(remote):
+    """The edit form's host key fingerprint check (_edited_fingerprint_check); a refusal keeps nothing.
+
+    Rolled back on a refusal, so no other field of the refused edit can reach a later commit.
+    """
+    refusal = _edited_fingerprint_check(remote)
+    if refusal:
+        db.session.rollback()
+    return refusal
+
+
+def _edited_fingerprint_check(remote):
+    """Check the edit form's host key fingerprint against the host; the refusal, or None.
+
+    Blank: nothing to check. With a pin, the pin itself must have that fingerprint (a host that was
+    reinstalled is re-trusted from its page first). With no pin (a new address or port clears it,
+    or none was ever stored), the host is asked now: its key must match before anything is sent,
+    and the key it presents becomes the pin.
+    """
+    fingerprint = host_key_fingerprint_arg(request.form.get("host_key_fingerprint"))
+    _bad = None if remote.is_local else _fingerprint_field_error(fingerprint, remote.auth_method)
+    if _bad or not fingerprint or remote.is_local:
+        return _bad
+    from panel.db.models import UnreadableSecret
+    if isinstance(remote.host_key, UnreadableSecret):
+        return ("The stored host key cannot be decrypted on this host, so it cannot be compared. Use "
+                "\"Re-trust host key\" on the server page first.")
+    if remote.host_key:
+        if host_key_sha256(remote.host_key) == fingerprint:
+            return None
+        return i18n.tr("The pinned host key is {pin}, not {entered}. If the server was reinstalled, use "
+                       "\"Re-trust host key\" on its page, then enter the fingerprint again.",
+                       pin=host_key_sha256(remote.host_key), entered=fingerprint)
+    seen = []
+    success, msg = ssh_test_connection(remote.host, remote.port, remote.username, remote.auth_method,
+                                       decrypt_secret(remote.auth_credential), captured=seen,
+                                       fingerprint=fingerprint)
+    if not success:
+        return i18n.tr("Connection test failed: {why}", why=msg)
+    if seen:
+        remote.host_key = seen[0]
     return None

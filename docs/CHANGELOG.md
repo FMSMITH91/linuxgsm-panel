@@ -332,6 +332,12 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The fuzz build's base image can be updated by Renovate.** It is pinned as tag and digest, so
+  a new digest arrives as a reviewed change instead of by hand.
+- **The installer no longer asks a website for the server's address when the server knows it.**
+  It reads the machine's own address first and prints that. Only a server behind a router (NAT),
+  which holds a private address alone, still asks one outside service, and the second fallback
+  service is gone.
 - **Chat alerts no longer name people or addresses by default.** Telegram, Discord and ntfy alerts
   about sign-ins, attacks, bans and account changes say what happened and point to the Audit log.
   Turn on "Include details (IP addresses, usernames) in chat alerts" under Notifications to get the
@@ -467,6 +473,18 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **A stored value can no longer make a database look broken.** A row value or column default
+  holding a line shaped like the database client's error or the panel's own "timed out" note made
+  Browse, the Tables tab or the SQL box report a failure. The panel now reads those lines only
+  outside the data.
+- **Old audit entries keep the right network for IPv4 clients of a panel bound to "::".** Ageing
+  turned an address like ::ffff:203.0.113.9 into garbled text, and the address column reduced every
+  such client to the same "::/64"; it is now reduced to its IPv4 /24. Version numbers such as
+  v1.2.3.4 are no longer treated as addresses in audit text or in the bots' console replies.
+- **A dump upload that fails no longer replaces the earlier dump.** When the restore after an
+  upload stopped with an error, the upload could not be moved into place, or the host's answer was
+  lost, the earlier dump could be left set aside. The page now asks again when an answer is lost,
+  and every failure puts the earlier dump back.
 - **Panel warnings and errors are stored at their real priority in the system journal.** Each line
   the panel writes now carries its level, so `journalctl -p warning` finds the panel's warnings and
   errors, and informational events such as startup maintenance results reach the journal too.
@@ -1532,6 +1550,16 @@ compares git commits, not this file.
 
 ### Security
 
+- **A remote host's SSH key can be checked on the first connection.** Add host and Edit host
+  take an optional host key fingerprint (as `ssh-keygen -lf` prints it); a host presenting another
+  key is refused before its password or key is sent. Left empty, the first key is trusted and
+  pinned as before.
+- **The panel host page warns when the install still has the wide sudo grant.** Superadmins see
+  that the panel's account can run any command as root there, and the installer command that
+  narrows it.
+- **The release key's fingerprint is published for first installs.** The README and SECURITY.md
+  give it, and SECURITY.md shows how to check that the commit you install carries a good release
+  signature.
 - **Log lines cannot forge a journal priority.** Text inside a log message can no longer start a
   journal line at a priority of its own choosing; every line of a message keeps that message's level.
 - **An added API-token header no longer skips the password re-check.** A request signed in by the

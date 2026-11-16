@@ -45,6 +45,17 @@
   <strong>The server the panel runs on.</strong>
   It is managed like any remote host, with panel-only extras below.
 </div>
+{# wide_sudo: the command that narrows the old wide sudo grant, "" without it (system_ops.wide_sudo_grant): the panel's account may run anything as root
+   here, so a compromise of the panel is root on this host. Said to a superadmin, with the fix. #}
+{% if wide_sudo and current_user.is_superadmin %}
+<div class="alert alert-warning py-2 small mb-3" id="wide-sudo-note" role="status">
+  <i class="bi bi-exclamation-triangle"></i>
+  <strong>The panel's account can run any command as root on this host.</strong>
+  The installer gave it passwordless sudo for everything because the root-owned helper is not installed.
+  To narrow it to the helper, run the installer as root over SSH:
+  <code class="text-break">{{ wide_sudo }}</code>
+</div>
+{% endif %}
 {% endif %}
 
 <!-- Section tabs: group the cards so the page isn't one long wall. Cards are tagged with

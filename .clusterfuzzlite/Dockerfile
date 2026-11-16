@@ -3,18 +3,22 @@
 # PINNED by digest, like every `uses:` in .github/workflows is pinned by SHA. Untagged, this
 # resolved to whatever :latest happened to be that morning, so the environment the fuzzers are
 # built in could change with no commit here — and a fuzz build that changes under you is a green
-# tick that means something different each week.
+# tick that means something different each week. Docker pulls by the digest alone; the `:latest`
+# beside it names the tag the digest was read from, so Renovate's dockerfile manager
+# (.github/renovate.json) can look that tag up and propose its new digest as a reviewed commit.
 # What this pins is that build environment, and only it. The ClusterFuzzLite actions that build
 # and run this image are pinned by SHA, but each runs a Docker image it names by TAG
 # (gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers:v1 and clusterfuzzlite-run-fuzzers:v1, in
 # their action.yml at that SHA), and so does scorecard.yml's action (ghcr.io/ossf/scorecard-action
 # :v2.5.0). Those still change with no commit here: trust accepted in Google's and OpenSSF's tags.
-# Pinning them means replacing the actions with `docker run <image>@sha256:...`. Bump this one
-# deliberately:
+# Pinning them means replacing the actions with `docker run <image>@sha256:...`, and Scorecard's
+# cannot be: publish_results is accepted only from a job whose steps are all on its approved list
+# of actions (ossf/scorecard-action README, "Workflow Restrictions"). To check a Renovate proposal,
+# or bump this one by hand:
 #   curl -sSL https://gcr.io/v2/oss-fuzz-base/base-builder-python/manifests/latest \
 #     -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' -D - -o /dev/null \
 #     | grep -i docker-content-digest
-FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23
+FROM gcr.io/oss-fuzz-base/base-builder-python:latest@sha256:6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23
 # No USER line, deliberately: root is the base-builder contract. ClusterFuzzLite's build step runs
 # `cd / && rm -rf /src/linuxgsm-panel/* && cp -r <checkout> /src && cd - && compile` in this image
 # (oss-fuzz infra/cifuzz/continuous_integration.py), with no --user (infra/cifuzz/docker.py). As

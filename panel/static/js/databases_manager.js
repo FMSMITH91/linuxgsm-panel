@@ -519,6 +519,16 @@ function dbmEditorField(c, cell, isNew) {
         return sendPieces(uid, file, chunk, res.d.received);
       });
   }
+  // A finish whose answer was lost ({retry: true}) is asked again: the host knows an upload it already put in
+  // place, and one still being checked answers nothing until it ends. Given up on, the cancel puts the earlier
+  // dump back.
+  var FINISH_TRIES = 30, FINISH_PAUSE_MS = 20000;     // about ten minutes for a check still running
+  function finish(uid, tries) {
+    return postJson(api('/upload/' + uid + '/finish'), {confirm: st.db.name}).then(function (res) {
+      if (!(res.ok && res.d.retry && tries > 1)) return res;
+      return new Promise(function (done) { setTimeout(done, FINISH_PAUSE_MS); }).then(function () { return finish(uid, tries - 1); });
+    });
+  }
   function upload(file) {
     st.busy = true;
     progress(T('Starting the upload…'));
@@ -529,10 +539,11 @@ function dbmEditorField(c, cell, isNew) {
       return sendPieces(uid, file, res.d.chunk, 0);
     }).then(function () {
       progress(T('Checking the dump and restoring the database…'));
-      return postJson(api('/upload/' + uid + '/finish'), {confirm: st.db.name});
+      return finish(uid, FINISH_TRIES);
     }).then(function (res) {
       st.busy = false;
       st.loaded.tables = false;
+      if (res.ok && res.d.retry) void postJson(api('/upload/' + uid + '/cancel'), {});
       if (!res.ok || res.d.success === false) { progress(failText(res), 'text-danger'); return; }
       progress('✓ ' + res.d.message, 'text-success');
     }).catch(function (e) {

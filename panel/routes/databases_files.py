@@ -179,15 +179,25 @@ def piece_script(user, uid, offset):
 # The scan's awk program and what it checks: ssh_manager/db_upload_scan.py.
 
 
+# One finish (or cancel) of an upload at a time: one asked again while the first still runs on the host
+# gives no answer, which reads as "ask again". flock is util-linux's; without it the step runs unlocked.
+# The lock file goes when the holder ends (the trap is set only once the lock is held).
+_FINISH_LOCK = ('exec 9>>"$p.lock" || exit 7; if command -v flock >/dev/null 2>&1; then flock -n 9 || exit 7; fi; '
+                "trap 'rm -f -- \"$p.lock\"' EXIT")
+
 
 def finish_script(user, uid, size, name):
     """Check the whole upload (format, text, SQL, the scan), gzip a plain one, and make it <name>.sql.gz."""
-    rm = 'rm -f -- "$p" "$p.gz";'
+    rm = 'rm -f -- "$p" "$p.gz" "$p.stored";'
+    keep = _sm._quote(name + ".sql.gz")
     scan = "awk -v me=%s -v max=%d %s" % (_sm._quote(name), UPLOAD_PLAIN_MAX, _sm._quote(_SCAN_AWK))
     # Not a route: shell text run as the game account, its parts quoted.
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "\n".join([
-        "set -o pipefail", "export LC_ALL=C", "umask 077", _paths(user, uid),
+        "set -o pipefail", "export LC_ALL=C", "umask 077", _paths(user, uid), _FINISH_LOCK,
+        # Asked again after an answer that was lost: an upload already put in place says so ($p.stored
+        # is written just before the move, and settle or cancel removes it).
+        'if [ ! -e "$p" ] && [ -f "$p.stored" ]; then echo %s; exit 0; fi' % _M["STORED"],
         'if [ ! -f "$p" ] || [ -L "$p" ]; then echo %s; exit 5; fi' % _M["NOPART"],
         's=$(stat -c %s -- "$p")',
         'if [ "$s" != %d ]; then %s echo "%s $s"; exit 5; fi' % (int(size), rm, _M["OFFSET"]),
@@ -212,32 +222,41 @@ def finish_script(user, uid, size, name):
         % (rm, _M["FAIL"]),
         # The dump the server's files held is kept aside (<name>.sql.gz.prev) until the restore has worked:
         # settle_script puts it back if it did not, so an upload that fails never replaces it.
-        'f="$D"/%s; if [ -e "$f" ] && ! mv -f -- "$f" "$f.prev"; then %s echo %s; exit 6; fi'
-        % (_sm._quote(name + ".sql.gz"), rm, _M["FAIL"]),
-        'mv -f -- "$p" "$f" && echo %s && exit 0' % _M["STORED"],
-        rm + " echo " + _M["FAIL"], "exit 6"]) + "\n"
+        'f="$D"/%s; if [ -e "$f" ] && ! mv -f -- "$f" "$f.prev"; then %s echo %s; exit 6; fi' % (keep, rm, _M["FAIL"]),
+        ': > "$p.stored" && mv -f -- "$p" "$f" && echo %s && exit 0' % _M["STORED"],
+        # Not put in place: the dump kept aside goes back.
+        rm + ' if [ -e "$f.prev" ]; then mv -f -- "$f.prev" "$f"; fi; echo ' + _M["FAIL"], "exit 6"]) + "\n"
 
 
-def settle_script(user, name, restored):
+def _settle_body(user, name, restored):
+    f = _sm._quote(_home(user) + "/" + _DUMP_DIR + "/" + name + ".sql.gz")
+    # Not a route: shell text run as the game account, its path quoted.
+    if restored:
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
+        return "rm -f -- %s.prev" % f
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
+    return "if [ -e %s.prev ]; then mv -f -- %s.prev %s; else rm -f -- %s; fi" % (f, f, f, f)
+
+
+def settle_script(user, name, restored, uid):
     """After the restore: drop the dump kept aside (it worked), or put it back in place of the upload (it did not).
 
     With nothing kept aside, a failed upload's dump is removed: it is never left as the one Restore reads.
+    Upload uid's mark that it was put in place ($p.stored) goes too.
     """
-    f = _sm._quote(_home(user) + "/" + _DUMP_DIR + "/" + name + ".sql.gz")
-    if restored:
-        body = "rm -f -- %s.prev" % f
-    else:
-        body = "if [ -e %s.prev ]; then mv -f -- %s.prev %s; else rm -f -- %s; fi" % (f, f, f, f)
+    body = _paths(user, uid) + "\n" + _settle_body(user, name, restored) + ' && rm -f -- "$p.stored"'
     # Not a route: shell text run as the game account, its parts quoted.
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return body + " && echo " + _M["READY"] + "\n"
 
 
-def cancel_script(user, uid):
-    """Remove an upload's part file (and a staged piece)."""
+def cancel_script(user, uid, name=None):
+    """Remove an upload's part file (and a staged piece); one already put in place gives the earlier dump back."""
+    back = ['if [ -f "$p.stored" ]; then %s; fi' % _settle_body(user, name, False)] if name else []
     # Not a route: shell text run as the game account, its parts quoted.
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-    return "\n".join([_paths(user, uid), 'rm -f -- "$p" "$p.piece" "$p.gz"', "echo " + _M["READY"]]) + "\n"
+    return "\n".join([_paths(user, uid), _FINISH_LOCK] + back + [
+                      'rm -f -- "$p" "$p.piece" "$p.gz" "$p.stored"', "echo " + _M["READY"]]) + "\n"
 
 
 def outcome(out):
@@ -392,11 +411,21 @@ def _upload_finish(gs, r, uid):
     return _restore_upload(gs, r, e, hd)
 
 
+def _settle(gs, r, uid, restored):
+    """Forget the database's cached structure and run settle_script: outcome()'s state."""
+    _ddr.forget(r.id)
+    return _upcmd(gs, settle_script(gs.short_name, r.name, restored, uid), 60)[0]
+
+
 def _restore_upload(gs, r, e, hd):
     """Restore the database from the upload now in place; keep it, or put the earlier dump back."""
-    ok, said = _dbs.restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
-    _ddr.forget(r.id)
-    kept, _v = _upcmd(gs, settle_script(gs.short_name, r.name, bool(ok)), 60)
+    try:
+        ok, said = _dbs.restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
+    except Exception:
+        # The earlier dump goes back whatever ended the restore; the caller answers the failure.
+        _settle(gs, r, e["uid"], False)
+        raise
+    kept = _settle(gs, r, e["uid"], bool(ok))
     if not ok:
         said = i18n.Sentences(said or i18n.Sentence("Failed"), i18n.Sentence(
             S_PREV_BACK if kept == "ok" else S_PREV_UNKNOWN))
@@ -412,7 +441,7 @@ def _upload_cancel(gs, r, uid):
     if e is None:
         return _say(404, "No such upload.")
     _drop_upload(e["uid"])
-    state, _v = _upcmd(gs, cancel_script(gs.short_name, e["uid"]), 60)
+    state, _v = _upcmd(gs, cancel_script(gs.short_name, e["uid"], r.name), 60)
     return jsonify({"success": state == "ok"})
 
 

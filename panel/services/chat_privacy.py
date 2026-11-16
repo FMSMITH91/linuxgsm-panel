@@ -11,9 +11,9 @@ The Notifications page has one switch, "Include details (IP addresses, usernames
 stored as notifications.include_details. It is off unless an admin turns it on, and a config saved
 before the switch existed has no such key, so an upgraded panel sends the shorter text too.
 """
-import ipaddress
-import re
 import secrets
+
+from panel.core.validation import replace_text_ips
 
 # The alerts whose text names a person or an address: who signed in and from where, the attacked
 # account and the attacker's address, a banned IP, the account a change was made to or by.
@@ -21,11 +21,6 @@ PERSONAL_EVENTS = frozenset({"admin_login", "admin_bruteforce", "account_locked"
                              "account_change", "credential_change", "twofa_enforced"})
 BRIEF_BODY = "Details are in the panel's Audit log."
 ADDRESS_MASK = "[address]"
-
-# A candidate address; each match is checked with ipaddress before it is replaced, so a version
-# number or a clock time is left alone.
-_IPV4_RE = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}(?![\d.]*\d)")
-_IPV6_RE = re.compile(r"(?<![0-9A-Fa-f:.])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![0-9A-Fa-f:])")
 
 # A suggested ntfy topic: 24 random characters from the topic alphabet (about 143 bits), which no
 # one guesses. ntfy topics are at most 64 characters of [A-Za-z0-9_-].
@@ -45,21 +40,14 @@ def chat_body(cfg, event_key, body):
     return body
 
 
-def _masked(match):
-    text = match.group(0)
-    try:
-        ipaddress.ip_address(text)
-    except ValueError:
-        return text
-    return ADDRESS_MASK
-
-
 def mask_addresses(text):
-    """Return `text` with every IPv4 and IPv6 address in it replaced by ADDRESS_MASK."""
-    text = _IPV4_RE.sub(_masked, str(text or ""))
-    if ":" in text:
-        text = _IPV6_RE.sub(_masked, text)
-    return text
+    """Return `text` with every IPv4 and IPv6 address in it replaced by ADDRESS_MASK.
+
+    Each candidate is parsed first (validation.replace_text_ips), so a clock time is left alone, and
+    so is a version number written after a letter ("v1.2.3.4"); a bare 1.40.2.4 is a valid address
+    and is masked.
+    """
+    return replace_text_ips(str(text or ""), lambda _addr: ADDRESS_MASK)
 
 
 def suggested_topic():

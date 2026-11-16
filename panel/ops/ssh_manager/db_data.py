@@ -47,6 +47,12 @@ _FIELD_RE = re.compile(r'<field name="([^"]*)"(?: xsi:nil="true" />|>(.*?)</fiel
 # What decoding puts in place of bytes that are not UTF-8 (a binary value in the SQL box's answer).
 _REPLACED = chr(0xFFFD)
 _ERROR_RE = re.compile(r"^ERROR (\d{1,5}) \(([0-9A-Z]{5})\)(?: at line \d+)?: (.*)$", re.M)
+# The XML's own text that carries database text: a whole field (its name and value), a resultset's
+# opening tag (its statement). The client escapes & < > " there but not a newline, so a value can hold
+# a line shaped like the client's error or the verb's marker; _outside() takes these out first.
+_DATA_RE = re.compile(r'<field\b[^>]*?(?:/>|>.*?</field>)|<resultset\b[^>]*>', re.S)
+_OPEN_RE = re.compile(r"<(?:field|resultset)\b")
+_MARKS = ("panel-db: output cut", "panel-db: timed out")
 
 
 
@@ -123,6 +129,21 @@ def _error(text):
     return {"code": int(m.group(1)), "state": m.group(2), "text": m.group(3).strip()[:500]} if m else None
 
 
+def _outside(text):
+    """The answer's text that is not database text: where the client's error and the verb's markers are.
+
+    An answer cut or ended mid-tag runs from that tag to the verb's marker, which follows every byte
+    of the data, so the last marker in that tail is kept and nothing before it.
+    """
+    out = _DATA_RE.sub("", text)
+    m = _OPEN_RE.search(out)
+    if not m:
+        return out
+    tail = out[m.start():]
+    at = max(tail.rfind(mark) for mark in _MARKS)
+    return out[:m.start()] + ("\n" + tail[at:] if at >= 0 else "")
+
+
 def _count(n):
     """A row count the server printed (-1 for a statement that returns rows), or None."""
     return int(n) if n and re.fullmatch(r"-?\d{1,19}", n) else None
@@ -145,8 +166,9 @@ def parse(text):
             cur = []
         else:
             cur.append({"columns": columns, "rows": rows})
-    lines = (text or "").splitlines()
-    return {"conn": conn, "statements": done, "pending": cur, "error": _error(text),
+    rest = _outside(text or "")
+    lines = rest.splitlines()
+    return {"conn": conn, "statements": done, "pending": cur, "error": _error(rest),
             "cut": "panel-db: output cut" in lines, "late": "panel-db: timed out" in lines}
 
 
