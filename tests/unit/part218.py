@@ -397,8 +397,9 @@ def _s218_takeover():
     eq("takeover: an endpoint held by a deactivated account may be taken over", (code3, _rows218(heir)), (200, 1))
     with _p9.app_context():           # its holder gone (a row pointing at no account)
         _r = _PS218.query.filter_by(user_id=heir).first()
-        _r.user_id = 987654
-        _db218.session.commit()
+        if _r is not None:            # absent only when an earlier step already failed by name
+            _r.user_id = 987654
+            _db218.session.commit()
     code4, _b4 = _subscribe218(owner, _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(163).sub["keys"]}))
     eq("takeover: ...and so may one whose account no longer exists", (code4, _rows218(owner)), (200, 1))
 
@@ -593,6 +594,25 @@ def _s218_gone_and_failures():
           "followed) keeps it and records no delivery", left == want and last == [None, None], repr((left, want)))
 
 
+def _s218_gone_refused():
+    _rig218()
+    uid = _user218("p218_gone2")
+    b = _browser218(170)
+    _subscribe218(uid, b)
+    _p9_drain()
+    with _p9.app_context():           # a stored endpoint that no longer passes the allow-list
+        _r = _PS218.query.filter_by(user_id=uid).first()
+        if _r is not None:
+            _r.endpoint = "https://push.internal.example/p218-170"
+            _db218.session.commit()
+    gone = _journal218(lambda: (_pa218.queue_test(uid), _p9_drain()))
+    eq("delivery: a stored endpoint that is no push service's is removed with a line that says so (no '?' for a "
+       "service it does not have, and no endpoint)", ([_line218(r, ("push.internal", "p218-")) for r in gone],
+                                                       _rows218(uid)),
+       ([("WARNING", "panel.push_alerts", "push subscription removed: its endpoint is not a push service's", False)],
+        0))
+
+
 def _s218_deactivate_delete():
     pusher = _rig218()
     a, d = _user218("p218_deact", servers=(P9_GS,)), _user218("p218_del")
@@ -666,7 +686,7 @@ def _s218_pages():
 try:
     for _fn218 in (_s218_rfc8291_vector, _s218_vapid, _s218_endpoints, _s218_send_guard, _s218_subscribe_route,
                    _s218_takeover, _s218_device_cap, _s218_remove_and_off, _s218_test_route, _s218_choices_route,
-                   _s218_account_change, _s218_gone_and_failures, _s218_deactivate_delete, _s218_signout,
+                   _s218_account_change, _s218_gone_and_failures, _s218_gone_refused, _s218_deactivate_delete, _s218_signout,
                    _s218_pages):
         _p9_arm(who="part218")
         _rig218()       # every push POST stubbed, whichever check runs: none may leave the machine

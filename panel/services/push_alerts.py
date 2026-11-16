@@ -472,8 +472,11 @@ def _log_gone(label, status):
     """
     if status > 0:
         _log.warning("push subscription removed: %s answered HTTP %d (the browser dropped it)", label, status)
+    elif status == -1:
+        # No service label to name: the stored endpoint no longer passes the allow-list at all.
+        _log.warning("push subscription removed: its endpoint is not a push service's (-1)")
     else:
-        _log.warning("push subscription removed: its %s endpoint or keys can no longer be used (%d)", label, status)
+        _log.warning("push subscription removed: its %s keys can no longer be used (%d)", label, status)
 
 
 def _send_one(row, payload, ttl, urgency):
