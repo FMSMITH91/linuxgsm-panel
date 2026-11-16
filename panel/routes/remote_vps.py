@@ -214,6 +214,7 @@ def _register_firewall_view(app):
     @app.route("/api/remote/<int:remote_id>/retrust-hostkey", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_retrust_hostkey(remote_id):
         # Clear the pinned SSH host key so the next connection re-pins it (TOFU). Use
         # after legitimately reinstalling a server, when its host key has changed and
@@ -714,6 +715,7 @@ def _register_panel_port(app):
     @app.route("/api/remote/<int:remote_id>/close-panel-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_close_panel_port(remote_id):
         """Close the panel's public web port on the panel host so the UI is reachable only over the tailnet.
 
@@ -943,6 +945,7 @@ def _register_game_ports(app):
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_game_port_open(remote_id, port):
         """Open ONE game server's port in the host firewall.
 
@@ -1200,6 +1203,7 @@ def _register_os_update_checks(app):
     @app.route("/api/remote/<int:remote_id>/run-updates", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_run_updates(remote_id):
         remote = get_host_remote(remote_id)
         if _hr.reboot_busy(remote.id):

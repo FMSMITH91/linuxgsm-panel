@@ -110,6 +110,11 @@ function dbDrawGrant(g, st) {
   if (!u.value && !p.value) { u.value = g.user; p.value = st.grantPw; }
 }
 
+// Setting up MariaDB, and storing, clearing or showing its admin login, are step_up_required routes: a
+// sign-in past the confirmation window confirms the password in a dialog first (step_up_form.js's
+// window.stepUpThen); without it the server's 403 still sends the tab to the confirm page and back.
+function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
+
 (function () {
   'use strict';
   var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false, grantPw: ''};
@@ -348,20 +353,22 @@ function dbDrawGrant(g, st) {
 
   window.dbSetup = function (btn) {
     if (st.busy || !st.d) return;
-    st.busy = true;
-    if (btn) btn.disabled = true;
-    postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/setup', {})
-      .then(function (r) { if (btn) btn.disabled = false; return after(r, true); }).catch(failed);
+    _dbStepUp(function () {
+      st.busy = true; if (btn) btn.disabled = true;
+      postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/setup', {})
+        .then(function (r) { if (btn) btn.disabled = false; return after(r, true); }).catch(failed);
+    });
   };
 
   window.dbLogin = function (ev) {
     if (ev) ev.preventDefault();
     if (st.busy || !st.d) return;
-    st.busy = true;
-    var pw = el('db-login-pw');
-    postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login',
-             {user: el('db-login-user').value, password: pw.value})
-      .then(function (r) { pw.value = ''; if (r.ok) st.loginOpen = false; return after(r, true); }).catch(failed);
+    _dbStepUp(function () {
+      st.busy = true; var pw = el('db-login-pw');
+      postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login',
+               {user: el('db-login-user').value, password: pw.value})
+        .then(function (r) { pw.value = ''; if (r.ok) st.loginOpen = false; return after(r, true); }).catch(failed);
+    });
   };
 
   window.dbLoginShow = function () { st.loginOpen = !st.loginOpen; if (st.d) drawLogin(st.d); };
@@ -370,11 +377,12 @@ function dbDrawGrant(g, st) {
   // lets it (the route keeps the login otherwise, and says so).
   window.dbLoginClear = function (btn) {
     if (st.busy || !st.d) return;
-    st.busy = true;
-    if (btn) btn.disabled = true;
-    postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login', {clear: true})
-      .then(function (r) { if (btn) btn.disabled = false; if (r.ok) st.loginOpen = false; return after(r, true); })
-      .catch(failed);
+    _dbStepUp(function () {
+      st.busy = true; if (btn) btn.disabled = true;
+      postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login', {clear: true})
+        .then(function (r) { if (btn) btn.disabled = false; if (r.ok) st.loginOpen = false; return after(r, true); })
+        .catch(failed);
+    });
   };
 
   // The password, fetched from the panel (audited) unless this page already has it.
@@ -477,13 +485,14 @@ function dbDrawGrant(g, st) {
 
   window.dbAdminReveal = function (btn) {
     if (!st.d) return Promise.resolve(false);
-    return postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-reveal', {}).then(function (r) {
+    return new Promise(function (resolve) { _dbStepUp(function () { resolve(
+      postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-reveal', {}).then(function (r) {
       if (!r.ok || !r.d.password) { say('✗ ' + (r.d.message || T('Failed')), 'text-danger'); return false; }
       var c = node('code', 'ms-1', r.d.user + ' / ' + r.d.password);
       c.setAttribute('data-no-i18n', '');
       if (btn && btn.parentNode) btn.parentNode.replaceChild(c, btn);
       return true;
-    }).catch(failed);
+    }).catch(failed)); }); });
   };
 
   // What the remote-server form and Move (below, in their own scope) use of this tab's.

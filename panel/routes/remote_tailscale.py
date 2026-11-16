@@ -10,6 +10,7 @@ from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
     permission_required)
 from panel.security import privileged as _priv
+from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag, _unreachable)
 from panel.core.validation import HOST_RE
@@ -54,6 +55,7 @@ def _register_status_and_link_join(app):
     @app.route("/api/remote/<int:remote_id>/tailscale-up", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_tailscale_up(remote_id):
         """Start `tailscale up` and return a browser login URL (no auth key needed)."""
         remote = get_remote(remote_id)
@@ -146,6 +148,7 @@ def _register_finalize_and_install(app):
     @app.route("/api/remote/<int:remote_id>/tailscale-install", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_tailscale_install(remote_id):
         """Install Tailscale on the remote VPS."""
         remote = get_remote(remote_id)
@@ -237,6 +240,7 @@ def _register_key_join_and_migrate(app):
     @app.route("/api/remote/<int:remote_id>/tailscale-bootstrap", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_tailscale_bootstrap(remote_id):
         """Authenticate and configure Tailscale on the remote VPS.
 
@@ -291,6 +295,7 @@ def _register_key_join_and_migrate(app):
     @app.route("/api/remote/<int:remote_id>/tailscale-migrate", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def api_remote_tailscale_migrate(remote_id):
         """After bootstrapping, migrate the RemoteServer record to use Tailscale SSH."""
         remote = get_remote(remote_id)

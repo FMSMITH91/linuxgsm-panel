@@ -218,7 +218,22 @@ _STEP_UP_POSTS221 = ("/api/remote/{r}/close-port-22", "/api/remote/{r}/ssh-mode"
                      "/api/remote/{r}/firewall/delete-rule", "/api/remote/{r}/firewall/settings",
                      "/api/remote/{r}/firewall/block-port", "/api/panel/update", "/api/panel/switch-branch",
                      "/api/panel/encryption/rotate", "/api/server-management/os-update-run",
-                     "/api/server-management/reboot")
+                     "/api/server-management/reboot",
+                     # The second pass (the test-VPS check of #557): Tailscale, the panel host's own firewall
+                     # and security cards, the panel's port, host-key trust, the host bootstrap, OS updates,
+                     # the panel host's Tailscale page and the database server's admin login.
+                     "/api/server-management/ufw-allow-tailscale", "/api/server-management/ts-ssh-enable",
+                     "/api/server-management/ts-ssh-disable", "/api/panel/security/block",
+                     "/api/panel/security/autoblock", "/api/panel/security/whitelist", "/api/panel/security/unban",
+                     "/api/remote/{r}/tailscale-up", "/api/remote/{r}/tailscale-bootstrap",
+                     "/api/remote/{r}/tailscale-install", "/api/remote/{r}/tailscale-migrate",
+                     "/api/remote/{r}/security/block", "/api/remote/{r}/security/autoblock",
+                     "/api/remote/{r}/security/whitelist", "/api/remote/{r}/security/unban", "/api/panel/change-port",
+                     "/api/remote/{r}/close-panel-port", "/api/remote/{r}/game-port/27015/open",
+                     "/api/remote/{r}/retrust-hostkey", "/api/remote/{r}/run-updates", "/api/remote/{r}/bootstrap",
+                     "/api/tailscale/install", "/api/tailscale/up", "/api/tailscale/serve",
+                     "/api/remote/{r}/databases/setup", "/api/remote/{r}/databases/admin-login",
+                     "/api/remote/{r}/databases/admin-reveal")
 
 
 def _stale221(minutes_ago=60):
@@ -339,6 +354,52 @@ console.log(JSON.stringify({held: held, sent: sent, asked: calls}));
         eq("step-up (node): an ajax form marked data-step-up waits for stepUpThen (its 2FA flag passed on); an "
            "unmarked one is sent at once (control)",
            got, {"held": ["tag"], "sent": ["tag", "host"], "asked": [["stepUp", False], ["stepUp", True]]})
+
+
+_JS_EXTRA221 = r"""
+var IS_LOCAL = false, location = {href: 'https://panel.example/tailscale'}; document.querySelector = function(){ return el(); };
+function setModalBody(){} function toast(){} function _da(){ return ''; } function tfHtml(s){ return s; }
+function secBase(){ return MOUNT + '/api/remote/' + REMOTE_ID + '/security'; }
+"""
+
+
+def _step_up_js2_221():
+    """The second pass's callers (security cards, Tailscale, host key, bootstrap, Serve) confirm in place first."""
+    src = (_js_fns221("remote_manage_host.js", ("_rmhStepUp", "retrustHostKey", "tsSshEnable", "tsSshDisable",
+                                                 "ufwAllowTailscale", "_ufwAllowTailscale", "switchToTailscale",
+                                                 "_switchToTailscale"))
+           + _js_fns221("remote_manage.js", ("_secStepUp", "blockOffender", "unbanIp", "_unbanIpNow",
+                                             "removeWhitelist", "_removeWhitelistNow"))
+           + _js_fns221("remote_firewall.js", ("_fwStepUp", "blockIp", "_blockIpNow"))
+           + _js_fns221("manage_remotes.js", ("_mrStepUp", "installTailscale", "_installTailscaleNow",
+                                              "migrateToTailscale", "_migrateToTailscale", "runBootstrap",
+                                              "_runBootstrapNow"))
+           + _js_fns221("tailscale.js", ("_tsStepUp", "tsEsc", "tsUp", "_tsUpNow", "enableServe", "_enableServeNow",
+                                         "disableServe")))
+    act = r"""
+function act(){
+  retrustHostKey(); tsSshEnable(); tsSshDisable(); ufwAllowTailscale(); switchToTailscale();
+  blockOffender('203.0.113.5', null); unbanIp('sshd', '203.0.113.5', null); removeWhitelist('203.0.113.6'); blockIp();
+  installTailscale(7, 'h', null); migrateToTailscale(7); runBootstrap(7);
+  tsUp(el(), null); enableServe(el()); disableServe(el());
+}
+act(); var held = calls.slice(); calls = []; gate.run = true; act();
+console.log(JSON.stringify({held: held, ran: calls.filter(function(c){ return c[0] === 'fetch'; })
+                                              .map(function(c){ return c[1] + ' ' + c[2]; })}));
+"""
+    got = _node221("step-up js (second pass)", _JS_STUBS221 + _JS_EXTRA221 + src + "\n" + act)
+    if got is None:
+        return
+    eq("step-up (node): the security cards, the Tailscale join, install and move, the host key, the bootstrap "
+       "and the Tailscale page only ask stepUpThen while it holds, then send to their routes once it runs them",
+       got, {"held": [["stepUp", True]] * 15,
+             "ran": ["/api/remote/7/retrust-hostkey POST", "/api/server-management/ts-ssh-enable POST",
+                     "/api/server-management/ts-ssh-disable POST", "/api/server-management/ufw-allow-tailscale POST",
+                     "/api/remote/7/tailscale-migrate POST", "/api/remote/7/security/block POST",
+                     "/api/remote/7/security/unban POST", "/api/remote/7/security/whitelist POST",
+                     "/api/remote/7/security/block POST", "/api/remote/7/tailscale-install POST",
+                     "/api/remote/7/tailscale-migrate POST", "/api/remote/7/bootstrap POST",
+                     "/api/tailscale/up POST", "/api/tailscale/serve POST", "/api/tailscale/serve POST"]})
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -475,6 +536,7 @@ def _cleanup221():
 
 try:
     for _fn221 in (_m2_host221, _m2_names221, _m2_routes221, _l1_serve221, _step_up_routes221, _step_up_js221,
+                   _step_up_js2_221,
                    _ntfy_ssrf221, _ntfy_form221, _ts_routes221):
         _p9_arm(who="part221")
         try:

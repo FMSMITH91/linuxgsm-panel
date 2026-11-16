@@ -109,6 +109,7 @@ def _register_host_tailscale(app):
     @app.route("/api/server-management/ufw-allow-tailscale", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_ufw_allow_tailscale():
         """Allow traffic on the Tailscale interface via UFW."""
         success, msg = so.ufw_allow_tailscale()
@@ -121,6 +122,7 @@ def _register_host_tailscale(app):
     @app.route("/api/server-management/ts-ssh-enable", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_ts_ssh_enable():
         """Enable Tailscale SSH."""
         success, msg = so.tailscale_ssh_enable()
@@ -137,6 +139,7 @@ def _register_host_tailscale(app):
     @app.route("/api/server-management/ts-ssh-disable", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_ts_ssh_disable():
         """Disable Tailscale SSH."""
         success, msg = so.tailscale_ssh_disable()
@@ -487,6 +490,7 @@ def _register_panel_blocking(app):
     @app.route("/api/panel/security/block", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_block():
         """UFW-block (all ports, permanent) an IP on the panel host."""
         ip = _json_str(_json_body(), "ip")
@@ -513,6 +517,7 @@ def _register_panel_blocking(app):
     @app.route("/api/panel/security/autoblock", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_autoblock():
         """Turn the panel host's rolling auto-block on/off, optionally updating the threshold.
 
@@ -536,6 +541,7 @@ def _register_panel_security_misc(app):
     @app.route("/api/panel/security/whitelist", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_whitelist():
         """Add or remove a global security-whitelist entry (IP or CIDR).
 
@@ -547,6 +553,7 @@ def _register_panel_security_misc(app):
     @app.route("/api/panel/security/unban", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_panel_security_unban():
         """Lift a fail2ban ban (jail + IP validated server-side)."""
         d = _json_body()

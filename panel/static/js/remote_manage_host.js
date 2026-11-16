@@ -4,12 +4,12 @@
 function retrustHostKey(){
   confirmDialog({title:'Clear pinned host key', icon:'key', confirmClass:'btn-warning', confirmLabel:'Clear host key',
     bodyText:'Clear the pinned SSH host key for this server?\n\nOnly do this if YOU reinstalled or rebuilt the server. The next connection will trust and pin whatever host key the server presents.',
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       var m=document.getElementById('hostkey-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Clearing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/retrust-hostkey',{method:'POST'}).then(r=>r.json())
         .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+escapeHtml(d.message||(d.success?'Done — the next connection re-pins the key':'Failed'))+'</span>'; })  // nosemgrep
         .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
-    }});
+    }); }});
 }
 var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
 // What the card says public SSH IS. `mode` is read from UFW's rule list, so it describes the
@@ -140,12 +140,12 @@ function closePanelPort(){
     : 'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.';
   confirmDialog({title:'Close public panel port', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public port',
     bodyText:body,
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       var m=document.getElementById('panel-port-msg'); m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Closing…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/close-panel-port',{method:'POST'}).then(r=>r.json())
         .then(d=>{ m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message):(d.message||''))+'</span>'; if(d.success) loadSshStatus(); })  // nosemgrep
         .catch(()=>{ m.innerHTML='<span class="text-danger">Request failed.</span>'; });
-    }});
+    }); }});
 }
 function onBindSelect(){
   var sel=document.getElementById('panel-bind-select');
@@ -171,7 +171,7 @@ function changePanelBinding(){
   confirmDialog({title:'Change panel binding', icon:'hdd-network', confirmClass:'btn-warning', confirmLabel:'Change binding',
     bodyText:tf('Change the panel binding to {bind}?\n\nThe panel will briefly restart to apply it. '
       +'Make sure you can still reach it afterward (over Tailscale, or on the new address/port).', {bind: pretty}),
-    onConfirm:function(){ _changePanelBinding(p, bind); }});
+    onConfirm:function(){ _rmhStepUp(function(){ _changePanelBinding(p, bind); }); }});
 }
 function _changePanelBinding(p, bind){
   var m=document.getElementById('panel-port-change-msg');
@@ -236,7 +236,7 @@ function changeSshPort(){
 function switchToTailscale(){
   confirmDialog({title:'Migrate to Tailscale SSH', icon:'arrow-repeat', confirmClass:'btn-primary', confirmLabel:'Migrate',
     bodyText:'Switch the panel to Tailscale SSH for this server?\n\nThe connection address becomes the Tailscale IP/DNS and auth switches to Tailscale SSH. Requires Tailscale to be running on the remote.',
-    onConfirm:_switchToTailscale});
+    onConfirm:function(){ _rmhStepUp(_switchToTailscale); }});
 }
 function _switchToTailscale(){
   var el=document.getElementById('migrate-msg'); el.textContent='Migrating…'; el.className='small mt-1 text-secondary';
@@ -279,22 +279,23 @@ fetch(MOUNT + '/api/remote/' + REMOTE_ID + '/specs').then(r=>r.json())
 function tsSshEnable(){
   confirmDialog({title:'Enable Tailscale SSH', icon:'shield-check', confirmClass:'btn-primary', confirmLabel:'Enable',
     bodyText:'Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.',
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-enable',{method:'POST'}).then(r=>r.json())
         .then(d=>{ if(window.toast) toast(d.message||(d.success?'Enabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to enable Tailscale SSH','danger'); });
-    }});
+    }); }});
 }
 function tsSshDisable(){
   confirmDialog({title:'Disable Tailscale SSH', icon:'shield-slash', confirmClass:'btn-danger', confirmLabel:'Disable',
     bodyText:'Disable Tailscale SSH?',
-    onConfirm:function(){
+    onConfirm:function(){ _rmhStepUp(function(){
       fetch(MOUNT+'/api/server-management/ts-ssh-disable',{method:'POST'}).then(r=>r.json())
         .then(d=>{ if(window.toast) toast(d.message||(d.success?'Disabled':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
         .catch(()=>{ if(window.toast) toast('Failed to disable Tailscale SSH','danger'); });
-    }});
+    }); }});
 }
-function ufwAllowTailscale(){
+function ufwAllowTailscale(){ _rmhStepUp(_ufwAllowTailscale); }
+function _ufwAllowTailscale(){
   fetch(MOUNT+'/api/server-management/ufw-allow-tailscale',{method:'POST'}).then(r=>r.json())
     .then(d=>{ if(window.toast) toast(d.message||(d.success?'Allowed':'Failed'), d.success?'success':'danger'); if(d.success) setTimeout(function(){window.refreshSection('#conn-ssh-card', 'loadSshStatus');},800); })
     .catch(()=>{ if(window.toast) toast('Failed to configure UFW','danger'); });
