@@ -1827,6 +1827,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_enable_auto_updates"
     ],
     "methods": [
@@ -2155,6 +2156,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_pro_attach"
     ],
     "methods": [
@@ -2166,6 +2168,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_pro_detach"
     ],
     "methods": [
@@ -2177,6 +2180,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_pro_service"
     ],
     "methods": [
