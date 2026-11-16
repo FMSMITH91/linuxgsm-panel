@@ -389,10 +389,10 @@ check("db_data.mask_literals: no quoted value of the input CI's fuzz target foun
       "KEEPOUT" not in _dd219.mask_literals(_ci557, limit=1 << 20), _dd219.mask_literals(_ci557, limit=1 << 20))
 eq("db_data.mask_literals: an executable comment's \"*/\" closes it (its \"/\" starts no comment), so the literal after "
    "it is masked; a literal whose end depends on sql_mode (a backslash before its quote) masks the rest",
-   [_dd219.mask_literals(t) for t in ("/*! SELECT 1 */* 'tok'", "/*!40101 /* c */ SET a=1 */'tok'",
+   [_dd219.mask_literals(t) for t in ("/*! SELECT 1 */ * 'tok'", "/*!40101 /* c */ SET a=1 */'tok'",
                                       "UPDATE t SET a='it\\'s', b='secret'", "SELECT 4*/* it's */ 'tok'",
                                       "/*!VALUES*/* \" */ 'tok' */")],
-   ["/*! SELECT 1 */* '?'", "/*!40101 SET a=1 */'?'", "UPDATE t SET a='?'…", "SELECT 4* '?'", "/*! VALUES*/…"])
+   ["/*! SELECT 1 */ * '?'", "/*!40101 SET a=1 */'?'", "UPDATE t SET a='?'…", "SELECT 4* '?'", "/*! VALUES*/…"])
 check("db_data.mask_literals: an unterminated literal is masked to the end; long text is cut",
       _dd219.mask_literals("SELECT 'secret") == "SELECT '?'" and len(_dd219.mask_literals("x" * 999)) == 300)
 _got219 = []
