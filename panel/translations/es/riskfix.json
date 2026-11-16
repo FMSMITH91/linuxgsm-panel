@@ -1,0 +1,10 @@
+{
+  "Host key fingerprint (optional)": "Huella de la clave del host (opcional)",
+  "From": "Desde",
+  "on the server. Empty: trust the first key seen.": "en el servidor. Vacío: se confía en la primera clave que se vea.",
+  "Checked against the pinned key, or against the host now when nothing is pinned.": "Se compara con la clave fijada o, si no hay ninguna, con el host ahora.",
+  "Host key fingerprint must be SHA256:… as ssh-keygen -lf prints it.": "La huella de la clave del host debe ser SHA256:… tal como la muestra ssh-keygen -lf.",
+  "A host key fingerprint applies to SSH key or password sign-in only.": "Una huella de la clave del host solo se aplica al inicio de sesión con clave SSH o contraseña.",
+  "The stored host key cannot be decrypted on this host, so it cannot be compared. Use \"Re-trust host key\" on the server page first.": "La clave del host guardada no se puede descifrar en este host, así que no se puede comparar. Usa primero \"Volver a confiar en la clave del host\" en la página del servidor.",
+  "The pinned host key is {pin}, not {entered}. If the server was reinstalled, use \"Re-trust host key\" on its page, then enter the fingerprint again.": "La clave del host fijada es {pin}, no {entered}. Si el servidor se reinstaló, usa \"Volver a confiar en la clave del host\" en su página y vuelve a introducir la huella."
+}

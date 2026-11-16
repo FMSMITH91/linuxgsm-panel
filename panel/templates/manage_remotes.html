@@ -60,6 +60,16 @@
         <label class="form-label" for="manage-remotes-lgsm_user">LinuxGSM User</label>
         <input id="manage-remotes-lgsm_user" type="text" name="lgsm_user" class="form-control" placeholder="(optional)">
       </div>
+      {# Optional: the first connection must present a key with this fingerprint, or the host is refused
+         before the credential is sent (remotes._fingerprint_field_error, _core._PinPolicy). Empty
+         keeps trust on first use. #}
+      <div class="col-md-4">
+        <label class="form-label" for="manage-remotes-host_key_fingerprint">Host key fingerprint (optional)</label>
+        <input id="manage-remotes-host_key_fingerprint" type="text" name="host_key_fingerprint" class="form-control"
+               maxlength="512" autocomplete="off" spellcheck="false" placeholder="SHA256:…" data-no-i18n
+               aria-describedby="manage-remotes-fp-help">
+        <div class="form-text" id="manage-remotes-fp-help">From <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the server. Empty: trust the first key seen.</div>
+      </div>
       <div class="col-md-3">
         <label class="form-label" for="setup-type">Setup</label>
         <select name="setup_type" id="setup-type" class="form-select"
@@ -238,6 +248,15 @@
           {# No "LGSM User" box here any more: it wrote a column that nothing reads. The value
              records which account the fresh-server bootstrap was asked to create, and that is
              already shown in the summary line above. #}
+          {% if not remote.is_local %}
+          <div class="col-md-4">
+            <label class="form-label" for="manage-remotes-host_key_fingerprint-{{ remote.id }}">Host key fingerprint (optional)</label>
+            <input id="manage-remotes-host_key_fingerprint-{{ remote.id }}" type="text" name="host_key_fingerprint"
+                   class="form-control" maxlength="512" autocomplete="off" spellcheck="false" placeholder="SHA256:…" data-no-i18n
+                   aria-describedby="manage-remotes-fp-help-{{ remote.id }}">
+            <div class="form-text" id="manage-remotes-fp-help-{{ remote.id }}">Checked against the pinned key, or against the host now when nothing is pinned.</div>
+          </div>
+          {% endif %}
           <div class="col-md-4 d-flex align-items-center">
             <div class="form-check pt-3">
               <input type="checkbox" name="sudo_enabled" class="form-check-input" id="sudo-{{ remote.id }}"

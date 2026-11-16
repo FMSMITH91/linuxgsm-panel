@@ -50,6 +50,11 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
   exposing the panel port to the public internet. See [docs/https.md](../docs/https.md).
 - Keep **two-factor authentication** enabled on admin accounts.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
+- When you add a remote host, give its **host key fingerprint** (Add host's optional field; run
+  `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host, over a channel you already trust).
+  The first connection must then present that key, or the host is refused before its password or
+  key is sent. Left empty, the first key seen is trusted and pinned (trust on first use), and every
+  later connection must match it.
 
 ### First run: the setup token
 
