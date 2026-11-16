@@ -158,6 +158,23 @@ try:
     # commit that touched it.
     check("calver: a file's name is not a revision, so it has no version",
           SO.version_for_commit("VERSION") == "", repr(SO.version_for_commit("VERSION")))
+    # A release's own name, saved by tools/sign-release.sh beside its signature (main/<sha>.name on
+    # release-signatures, fetched into _RELEASE_SIG_REF): the panel shows it, as GitHub does. A
+    # name of another date is not this commit's and is ignored.
+    _cv_idx = os.path.join(_CV_SB, "sig-index")
+    for _cv_sha, _cv_name in ((_cv_first, "2027.1.1.3\n"), (_cv_late, "2099.1.1\n")):
+        with open(os.path.join(_CV_SB, "name"), "w", encoding="utf-8") as _cv_fh:
+            _cv_fh.write(_cv_name)
+        _cv_git(_cv_repo, "update-index", "--add", "--cacheinfo", "100644,%s,main/%s.name" % (
+            _cv_git(_cv_repo, "hash-object", "-w", os.path.join(_CV_SB, "name")), _cv_sha), GIT_INDEX_FILE=_cv_idx)
+    _cv_git(_cv_repo, "update-ref", SO._RELEASE_SIG_REF, _cv_git(
+        _cv_repo, "commit-tree", _cv_git(_cv_repo, "write-tree", GIT_INDEX_FILE=_cv_idx), "-m", "signatures"))
+    _cv_named = (SO.version_for_commit(_cv_first), SO.version_for_commit(_cv_late), SO.version_for_commit())
+    _cv_git(_cv_repo, "update-ref", "-d", SO._RELEASE_SIG_REF)
+    check("calver: a release's saved name is its version (2027.1.1.3, the third that day), HEAD's too; a "
+          "saved name of another date is ignored, and the date shows",
+          _cv_named == ("2027.1.1.3", "2026.9.26", "2027.1.1.3")
+          and SO.version_for_commit(_cv_first) == "2027.1.1", repr(_cv_named))
     _cv_bad = {t: SO._version_from_epoch(t) for t in ("", "12a", "-5", "1.5", "１２",
                                                         "9" * 13, " %d " % _CV_FIRST)}
     check("calver: only a plain run of ASCII digits is an epoch (surrounding space is trimmed)",

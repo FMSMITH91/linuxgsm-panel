@@ -1463,7 +1463,7 @@ def _version_from_epoch(text):
 
 
 def version_for_commit(commit="HEAD"):
-    """The panel's version for one commit: the date it was committed, in UTC, as YYYY.M.D.
+    """The panel's version for one commit: the date it was committed, in UTC, as YYYY.M.D (or its release's name).
 
     Read as the committer time in seconds (%ct), so neither the host's timezone nor the offset the
     commit was made in moves it. Every commit of a day shares the date, which is why the panel
@@ -1475,7 +1475,29 @@ def version_for_commit(commit="HEAD"):
         return ""
     out, _, rc = _git(["log", "-1", "--no-show-signature", "--format=%ct", commit, "--"],
                       timeout=10)
-    return _version_from_epoch(out) if rc == 0 else ""
+    ver = _version_from_epoch(out) if rc == 0 else ""
+    return _release_name(commit, ver) if ver else ""
+
+
+def _release_name(commit, date_ver):
+    """The name `commit`'s release was published under, when its signing saved one; else `date_ver`.
+
+    Several releases can share a day, and the GitHub Release of each later one carries a suffix
+    (2026.11.16.2, .3, ...). tools/sign-release.sh saves that name beside the signature, as
+    main/<sha>.name on release-signatures, which the update check and install.sh fetch into
+    _RELEASE_SIG_REF. Only a name of this commit's own date, with or without the suffix, is taken:
+    a release signed before names were saved, or an unreadable one, shows the date as before.
+    """
+    sha, _, rc = _git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], timeout=10)
+    sha = sha.strip()
+    if rc != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return date_ver
+    name, _, rc = _git(["cat-file", "blob", "%s:%s/%s.name" % (_RELEASE_SIG_REF, _DEFAULT_BRANCH, sha)],
+                       timeout=10)
+    name = name.strip()
+    if rc == 0 and re.fullmatch(re.escape(date_ver) + r"(?:\.[0-9]{1,3})?", name):
+        return name
+    return date_ver
 
 
 def _version_file():

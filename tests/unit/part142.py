@@ -27,6 +27,7 @@ upstream repository and clone in a throwaway directory, with a throwaway ed25519
 real release key); panel functions with their git reads stubbed or pointed at that clone.
 """
 import os
+import time as _time142
 import shutil as _shutil142
 import subprocess as _sp142  # nosec B404 - git, bash and ssh-keygen over this part's own scratch files
 import tempfile as _tf142
@@ -464,6 +465,12 @@ if _HAVE142:
               and _git142("-C", _dev, "rev-parse", "HEAD") == _sl
               and _git142("-C", _dev, "status", "--porcelain") == "",
               "rc=%s %s %s" % (_r1.returncode, _r1.stderr[-200:], _ver.stderr[-200:]))
+        # The release's name beside its signature: the commit's UTC date, as the first release that day.
+        _day142 = _time142.gmtime(int(_git142("-C", _dev, "show", "-s", "--format=%ct", _sa)))
+        _name142 = _git142("--git-dir", _bare, "cat-file", "blob", "release-signatures:main/%s.name" % _sa)
+        check("sign-release.sh: files the release's name as <branch>/<sha>.name beside the signature (the "
+              "commit's UTC date for the first release that day), which a panel shows as its version",
+              _name142 == "%d.%d.%d" % (_day142.tm_year, _day142.tm_mon, _day142.tm_mday), repr(_name142))
         _r2 = _run142(["bash", _tool, _sl], cwd=_dev, env=_senv, input=_sl[:12] + "\n")
         _r3 = _run142(["bash", _tool, _sa[:12]], cwd=_dev, env=_senv, input=_sa[:12] + "\n")
         _r4 = _run142(["bash", _tool, _sa, "release-signatures"], cwd=_dev, env=_senv, input=_sa[:12] + "\n")
