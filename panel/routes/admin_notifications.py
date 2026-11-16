@@ -158,6 +158,7 @@ def _register_notifications(app):
             events={k: bool(f.get("event_" + k)) for k in notifications.EVENTS},
             thresholds={"disk_pct": f.get("threshold_disk"), "load_pct": f.get("threshold_load"),
                         "mem_pct": f.get("threshold_mem"), "load_mins": f.get("threshold_mins")},
+            include_details=bool(f.get("include_details")),
         )
         log_action(current_user, "notifications_update", target="panel")
         flash("Notification settings saved.", "success")

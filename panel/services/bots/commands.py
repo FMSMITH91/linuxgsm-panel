@@ -12,6 +12,7 @@ from panel.ops import system_ops as so
 from panel.ops.ssh_manager import (player_list)
 from panel.security.auth import (log_action)
 from panel.services import (notifications)
+from panel.services import chat_privacy
 from panel.services import console_secrets as _console_secrets
 import collections
 import logging
@@ -182,6 +183,10 @@ def _console_text(app, arg, lines=20, fence=None):
         # The game's secrets masked, as on the web page's console (services/console_secrets): a
         # chat is read by everyone in it. On the text as shown, its escapes gone.
         shown = _console_secrets.mask_for(gs, terminal.strip_escapes(out or ""))
+        # ...and the addresses in it (players' connect lines): the admin asked for the console, not
+        # for players' IPs in a third party's chat, unless "Include details" is on (chat_privacy).
+        if not chat_privacy.include_details(load_config().get("notifications")):
+            shown = chat_privacy.mask_addresses(shown)
         return _console_tail_reply(gs.name, shown, lines, fence)
 
 

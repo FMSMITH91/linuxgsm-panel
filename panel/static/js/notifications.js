@@ -20,3 +20,9 @@ function testChannel(channel, btn) {
   .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } })  // nosemgrep - orig is the markup this button itself had, captured above
   .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
+// Put the page's random topic suggestion into the ntfy Topic field.
+function useSuggestedTopic() {
+  var code = document.getElementById('ntfy-topic-suggestion');
+  var field = document.querySelector('[name="ntfy_topic"]');
+  if (code && field) { field.value = code.textContent.trim(); field.focus(); }
+}
