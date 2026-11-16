@@ -178,7 +178,6 @@ def _said(fn, *a):
 
 def _check_site_domain():
     """set-site-domain: the address browsers use, set from the shell, audited; a bad value refused."""
-    from panel.core.config import load_config
     shapes = {v: manage._site_domain_arg(v) for v in (
         "panel.example.com", "https://panel.example.com:8443/x", "[2001:db8::5]:5000", "bad host", "a;b", "-x.com")}
     check("set-site-domain: a host, host:port or [IPv6]:port is taken (a pasted scheme and path dropped); "

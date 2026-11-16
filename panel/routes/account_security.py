@@ -94,7 +94,6 @@ def _warn_unknown_address():
     Prevention Cheat Sheet, "Identifying the Target Origin": configure it when it cannot be read);
     the line names the two ways to give the panel its address.
     """
-    from panel.core.config import load_config
     if _WARNED_ADDRESS[0] or request.headers.get("X-Forwarded-Host") or load_config().get("site_domain"):
         return
     host = request.host or ""
