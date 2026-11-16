@@ -508,30 +508,42 @@ def _mask_quoted(text, i, out):
     return None
 
 
+def _mask_next(text, i, out, in_exec):
+    """Append what mask_literals keeps of the token at text[i] to `out`: (index after, in an executable comment).
+
+    Where it loses track the index is the text's end, the rest not logged.
+    """
+    if in_exec and text.startswith("*/*", i):
+        # The servers close the executable comment there, but a reader can't tell that from a comment
+        # opening inside it: what follows is not logged.
+        out.append("*/…")
+        return len(text), False
+    got = _mask_comment(text, i, out, in_exec)
+    if got is not None:
+        return got
+    got = _mask_quoted(text, i, out)
+    if got is None:
+        out.append(text[i])
+        return i + 1, in_exec
+    if got[1]:
+        out.append("…")
+        return len(text), in_exec
+    return got[0], in_exec
+
+
 def mask_literals(text, limit=300):
     """The statement for the audit log, its literals masked, on one line, at most `limit` characters.
 
     Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, each comment one space
     (a quote inside a comment opens no literal, and what a comment says is not logged), every run of
     spaces and line breaks one space. Identifiers in backticks are kept. Where the masking can't be sure
-    what the server reads (a literal whose end depends on sql_mode, an identifier never closed), the rest
-    is not logged: it ends as '?'… or `?. Nothing typed between quotes reaches the log.
+    what the server reads (a literal whose end depends on sql_mode, an executable comment's "*/" followed
+    by "*", an identifier never closed), the rest is not logged: it ends as '?'…, */… or `?. Nothing typed
+    between quotes reaches the log.
     """
     out, i, text, in_exec = [], 0, text or "", False
     while i < len(text):
-        got = _mask_comment(text, i, out, in_exec)
-        if got is not None:
-            i, in_exec = got
-            continue
-        got = _mask_quoted(text, i, out)
-        if got is None:
-            out.append(text[i])
-            i += 1
-        elif got[1]:
-            out.append("…")
-            break
-        else:
-            i = got[0]
+        i, in_exec = _mask_next(text, i, out, in_exec)
     flat = re.sub(r"\s+", " ", _HEX_NUM_RE.sub(lambda m: m.group(0)[:2] + "?", "".join(out))).strip()
     flat = "".join(c if c.isprintable() else "?" for c in flat)
     return flat if len(flat) <= limit else flat[:limit - 1] + "…"

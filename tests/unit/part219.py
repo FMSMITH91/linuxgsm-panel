@@ -378,7 +378,9 @@ eq("db_data.mask_literals: a quote inside a comment opens no literal (the next l
    ["UPDATE u SET pw='?'", "SELECT '?'", "SELECT '?'", "SELECT `?", "/*!50000 UPDATE t SET a='?' */"])
 # The input CI's fuzz target found on PR #557: a hex literal with backslash escapes, executable comments
 # holding comments, and doubled quotes; the old masker read the "/" of an executable comment's "*/" as the
-# start of a comment with what followed, lost its place, and let quoted values through.
+# start of a comment with what followed, lost its place, and let quoted values through. A second one, found
+# by the fuzz target on the fix: "*/*" inside an executable comment (the servers close it; the masking now
+# logs nothing after it).
 _ci557 = ("X'PDAw=KEEPOUTa\\'\\'b\\' -- do'`❮ੴ圠䕈䕒怠`/*!/*\x00\x00\x00\x00\x00*//*\x00\x00"
           "\x00\x00\x00*//*挀恤\U00102220\U00104553\U00073d78*/ *//*! */* ' */UPDAT=''a''''b''KEEPOUTⴭ"
           "\U0010200a\U00055245捠恤\U00102220\U00027922\U00012a2f''KEEPOUT''KEEPOUT''KEEPOUT''KEEPOUT''KEEPOUT"
@@ -388,8 +390,9 @@ check("db_data.mask_literals: no quoted value of the input CI's fuzz target foun
 eq("db_data.mask_literals: an executable comment's \"*/\" closes it (its \"/\" starts no comment), so the literal after "
    "it is masked; a literal whose end depends on sql_mode (a backslash before its quote) masks the rest",
    [_dd219.mask_literals(t) for t in ("/*! SELECT 1 */* 'tok'", "/*!40101 /* c */ SET a=1 */'tok'",
-                                      "UPDATE t SET a='it\\'s', b='secret'", "SELECT 4*/* it's */ 'tok'")],
-   ["/*! SELECT 1 */* '?'", "/*!40101 SET a=1 */'?'", "UPDATE t SET a='?'…", "SELECT 4* '?'"])
+                                      "UPDATE t SET a='it\\'s', b='secret'", "SELECT 4*/* it's */ 'tok'",
+                                      "/*!VALUES*/* \" */ 'tok' */")],
+   ["/*! SELECT 1 */* '?'", "/*!40101 SET a=1 */'?'", "UPDATE t SET a='?'…", "SELECT 4* '?'", "/*! VALUES*/…"])
 check("db_data.mask_literals: an unterminated literal is masked to the end; long text is cut",
       _dd219.mask_literals("SELECT 'secret") == "SELECT '?'" and len(_dd219.mask_literals("x" * 999)) == 300)
 _got219 = []
