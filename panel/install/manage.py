@@ -455,13 +455,13 @@ def cmd_set_site_domain(args):
     """
     from panel.core.config import update_config
     if args.domain == "":
-        update_config({"site_domain": ""})
+        update_config(lambda c: c.update(site_domain=""))
         print("site_domain cleared.")
         return
     v = _site_domain_arg(args.domain)
     if v is None:
         sys.exit("Refusing — '%s' is not a host name, host:port or [IPv6]:port." % _tty_safe(args.domain))
-    update_config({"site_domain": v})
+    update_config(lambda c: c.update(site_domain=v))
     with app.app_context():
         auth.log_action(None, "settings_update", target="panel", detail="site_domain set to %s (manage.py)" % v,
                         actor="manage.py")
