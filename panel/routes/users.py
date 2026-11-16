@@ -4,7 +4,6 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (render_template)
 from flask_login import (current_user, login_required)
-from sqlalchemy import (or_)
 from panel.core.clock import (utcnow)
 from panel.db.models import (Group, Invite, User)
 from panel.security.auth import (MANAGE_USERS, can_administer_user, grantable_groups,
@@ -71,13 +70,9 @@ def _invite_listing():
              .filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
                      Invite.expires_at > _now)
              .order_by(Invite.created_at.desc()).all())
-    # ...plus a short tail of finished ones, for context only: they carry no action.
-    _done = (Invite.query
-             .filter(or_(Invite.used_at.isnot(None), Invite.revoked_at.isnot(None),
-                         Invite.expires_at <= _now))
-             .order_by(Invite.created_at.desc()).limit(10).all())
-    invites = sorted(_live + _done,
-                     key=lambda i: (i.created_at or _now), reverse=True)
+    # Only links that still work are listed. A used, revoked or expired one carries no action and
+    # only crowded the card; what became of it (made, redeemed, revoked) is in the audit log.
+    invites = _live
     # An invite whose creator has been offboarded no longer works (see
     # Invite.authority_intact). Showing it as "Active" would be a lie about a link someone
     # may be waiting on, so resolve the creators — ONE extra query for the whole page, not

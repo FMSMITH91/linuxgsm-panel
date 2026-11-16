@@ -336,6 +336,8 @@ compares git commits, not this file.
 
 ### Changed
 
+- **Used, revoked and expired invite links leave the list.** The Users page's Invite links card lists only links that
+  still work. What became of the others (made, redeemed, revoked) is in the Audit log.
 - **OS Updates is on Maintenance; the panel's own updates, backups and diagnostics have a Panel tab.** On the panel server's page, Maintenance now holds
   this machine's upkeep (OS Updates, automatic security updates and Ubuntu Pro), and a new Panel tab
   holds the panel software's own updates, backups and diagnostics. Host Controls keeps the terminal,
