@@ -135,6 +135,18 @@ Every reboot the panel makes goes the same way:
 
 A pending wait shows on the host's Power card with a **Cancel** button and gives up after 24 hours by default (`reboot_wait_max_hours`; 0 waits as long as it takes). Reboots made outside the panel are not changed.
 
+### Alerts on your phone or browser
+
+Each user can have the panel's alerts sent to their own browsers and phones as notifications (Web Push). They arrive when the panel tab is closed and **after you sign out**, so a change to your account (a password change, two-factor turned off, a new API token) still reaches you. The panel never sends e-mail.
+
+- **Turn on:** Account → **Alerts on this device** → **Turn on alerts**, then allow notifications when the browser asks. You confirm your password first if you have not signed in in the last few minutes. Up to 10 devices per account.
+- **HTTPS is required.** Browsers only allow push on a secure page: the panel's HTTPS address (or Tailscale Serve), not plain `http://`. On iPhone and iPad, add the panel to the Home Screen and turn alerts on from there.
+- **Which alerts:** you choose (Account → Which alerts). By default: a server goes offline unexpectedly, a host becomes unreachable, attacks on admin sign-ins, and changes to your own account. You only get alerts about servers and hosts you can access; panel-wide ones (backups, updates, sign-ins, bans) go to super admins only. This is checked when each alert is sent.
+- **What a lock screen shows:** the alert's title and the server's or host's name. Never an IP address, a player, a password or file contents. Tapping it opens the right page (you sign in first if you are signed out). The content is encrypted end to end between the panel and your browser; the push service only carries it.
+- **Stop them:** **Turn off on this device**, **Remove** a device from Account → Your alert devices, or tick **Stop alerts on this device** when you sign out. Deactivating or deleting an account removes its devices.
+
+Push goes through your browser's own push service (Google for Chrome and most Android browsers, Mozilla for Firefox, Apple for Safari, Microsoft for Edge on Windows); the panel sends only to those services, at public addresses.
+
 The API takes a session cookie or an `Authorization: Bearer <token>` (Account → API access), with the same permissions as the page:
 
 | Request | Does |
@@ -174,8 +186,10 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
 | `trusted_proxies` | `["127.0.0.0/8", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
 | `trusted_proxy_users` | `www-data`, `nginx`, `http`, `caddy`, `cloudflared` | With `trust_proxy`, on loopback: the local accounts a proxy may run as (names or uids). Root and the panel's own account always count |
-| `session_lifetime_hours` | 8 | Idle session timeout (sliding) |
-| `remember_days` | 3 | "Remember me" cookie lifetime |
+| `session_idle_minutes` | 30 | A normal sign-in ends after this long without use (older installs: `session_lifetime_hours`) |
+| `session_absolute_hours` | 8 | ...or this long after sign-in, however active |
+| `remember_days` | 3 | A "Remember me" sign-in signs back in by itself until this many days after sign-in, then asks for the password |
+| `step_up_minutes` | 10 | How long a sign-in or password confirmation covers opening a terminal, uninstalling a server, restoring a panel backup, changing users or groups and saving Settings or Notifications (0 = never ask again) |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
@@ -216,7 +230,46 @@ next sign-in. If the owner can no longer sign in, ownership is moved from the pa
 | `download_backup` / `delete_backup` | Download / delete a game server's backup archives (a deleted backup is gone for good). Taking a backup, its schedule and the panel's own backups stay with superadmins |
 | `restore_backup` | Restore a game server from one of its backups: the server is stopped, a backup of its current state is taken first, then its files are replaced with the archive's. The most destructive backup permission. Uploading a backup to restore also needs `edit_files` (an uploaded archive can hold any file, including the scripts the server runs) |
 | `manage_databases` | A server's MariaDB/MySQL databases: add, delete, restore and reset them, and see their passwords. Given to no group by default. Setting up a host's database server also needs `manage_remotes`; the admin login of an existing server is for superadmins |
+| `edit_database_data` | Change the data inside a server's databases on the Databases page: edit rows and run SQL statements, always as that database's own account. Given to no group by default; give it with `manage_databases`, which browsing (and the manager itself) needs |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
+
+### The Databases manager
+
+The **Databases** page (sidebar) lists every database of the servers you can see. With `manage_databases`
+it is also where you manage them: **Add a database** (choose the game server, give a name), and a
+**Manage** button per database that opens it:
+
+- **Connection**: host, port, database, user and password, each with a copy button (revealing or copying
+  the password is audited).
+- **Tables**: each table's approximate row count, size and columns, and its rows 50 at a time. Long values
+  are cut (**Show all** reads the whole one), binary values show their length, and a NUL character inside
+  text shows as ␀ (such a value is changed through the SQL box, not the row editor). With `edit_database_data`,
+  **Add row**, **Edit** and **Delete** change one row at a time, addressed by its primary key; a view or a
+  table without a primary key is read-only here.
+- **SQL** (with `edit_database_data`): one statement per run, for at most 30 seconds, with at most 200 rows
+  shown. SELECT, SHOW, DESCRIBE and EXPLAIN run at once in a read-only transaction; anything else shows
+  the statement and asks you to confirm it first (each confirmation runs it once). MySQL runs each statement as a prepared statement, so
+  a few kinds (DESCRIBE, CREATE TRIGGER/PROCEDURE) are not available there: use SHOW COLUMNS FROM.
+  On MariaDB the 30 seconds stop the statement that is running; a stored procedure whose `SLEEP()` is
+  cut short carries on with its next statement (that is MariaDB's behaviour), so a procedure is better
+  tried on a copy first.
+- **Dump and restore**: download a dump (it is written to the server's files as
+  `panel-db-dumps/<name>.sql.gz` first, the file each backup writes), or upload a `.sql` / `.sql.gz` dump
+  (up to 2 GiB) to replace the database's contents. The upload is checked on the host before anything is
+  restored: a dump that switches to or names another database (`USE`, `CREATE DATABASE`, made with
+  `--databases`) is refused.
+- **Password and delete**: reset the password, restore from the dump in the server's files, delete.
+  These and an upload ask for your password again when you last confirmed it more than a few minutes ago,
+  and delete and restore also ask you to type the database's name.
+
+Everything runs as **that database's own account**, never the server's admin login, so the database
+server itself keeps every statement inside that one database; the panel only ever touches the `gs<id>_…`
+databases it made. Statements and values travel to the database client as hexadecimal and run through
+the server's prepared statements, so nothing typed can run a client command.
+
+**What is logged** (the audit log): opening a table, every row change (the table, the columns and how many
+rows; never a value), every SQL statement (its kind, the database, how many rows, and the statement with
+each quoted value replaced by `?`), each dump download and each upload.
 
 ## Production deployment
 
@@ -246,7 +299,7 @@ location / {
 ## Security
 
 - **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
-- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup and changing users or groups ask for the password again after 10 minutes (`step_up_minutes` in `config.json`; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
+- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup, changing users or groups and saving Settings or Notifications ask for the password again after 10 minutes (Settings > Sessions & Security, 0 to switch it off; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
   - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page (not the panel owner's: only the panel host can), or on the panel host run `linuxgsm-panel-recover disable-2fa <user>` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Encryption at rest** — SSH credentials, database logins, emails, 2FA secrets and bot tokens are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Host → Maintenance → Diagnostics); `data/` is `chmod 700`.

@@ -1873,7 +1873,7 @@ def _expected_window_checks10():
 
 
 _mon10.notifications = NS(
-    notify=lambda key, title, body="": _alerts10.append((key, title, body)),
+    notify=lambda key, title, body="", **_kw: _alerts10.append((key, title, body)),
     alerts_muted=_n10.alerts_muted,
     get_thresholds=lambda: {"disk_pct": 90, "load_pct": 200, "mem_pct": 90, "load_mins": 1})
 _mon_trip_saved10 = _arm10()
@@ -4270,7 +4270,7 @@ try:
             _db10.session.add(_Audit10(username="boss2", action="login_failed"))
         _db10.session.commit()
         _bf10 = []
-        _app10mod.notifications = NS(notify=lambda k, t, b="": _bf10.append((k, b)))
+        _app10mod.notifications = NS(notify=lambda k, t, b="", **_kw: _bf10.append((k, b)))
         _app10mod._ADMIN_BF_NOTIFIED.pop("boss", None)
         for _who10 in ("boss", "boss", "pleb", "boss2", "(blank)", "nobody"):
             _app10mod._maybe_alert_admin_bruteforce(_who10, "203.0.113.66", time.time())

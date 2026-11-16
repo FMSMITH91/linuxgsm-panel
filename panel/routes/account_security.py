@@ -8,7 +8,7 @@ from flask import flash, g, jsonify, redirect, render_template, request
 from flask_login import current_user, login_required
 from flask_wtf.csrf import CSRFError
 
-from panel.core import i18n
+from panel.core import i18n, session_policy
 from panel.core.config import load_config
 from panel.core.http import _r23c_error_json, _wants_json, http_error_page, http_error_sentence
 from panel.db.models import db
@@ -23,7 +23,7 @@ _UNSAFE = frozenset(("POST", "PUT", "PATCH", "DELETE"))
 def register(app):
     cfg = load_config()
     app.config.setdefault("REQUIRE_2FA", bool(cfg.get("require_2fa")))
-    app.config.setdefault("STEP_UP_MINUTES", _step_up_minutes(cfg))
+    app.config.setdefault("STEP_UP_MINUTES", session_policy.step_up_minutes(cfg))
     app.before_request(fetch_metadata_guard)
     app.before_request(account_guard.twofa_gate)
     app.after_request(_log_access_denied)
@@ -31,16 +31,25 @@ def register(app):
     # The Account page's "Recent security changes" (read by the template, so both of the page's
     # renders show it without passing it).
     app.jinja_env.globals["account_changes"] = account_notices.recent_changes
+    # How long a "remember me" sign-in lasts: the login page's hint and the Settings card's sentence.
+    app.jinja_env.globals["remember_for"] = lambda: i18n.tr("for {lasts}", lasts=remember_lasts())
+    app.jinja_env.globals["remember_rule"] = lambda: i18n.tr(
+        "With “Remember me”, a sign-in lasts {lasts}, then asks for the password.", lasts=remember_lasts())
     _register_reauth(app)
 
 
-def _step_up_minutes(cfg):
-    """config.json's step_up_minutes (0 switches step-up off), held to 0..1440; 10 when unset or bad."""
-    try:
-        n = int(float(cfg.get("step_up_minutes", account_guard.STEP_UP_DEFAULT_MINUTES)))
-    except (TypeError, ValueError, OverflowError):
-        return account_guard.STEP_UP_DEFAULT_MINUTES
-    return max(0, min(n, 1440))
+def remember_lasts():
+    """How long a "remember me" sign-in lasts from its sign-in, in the viewer's language ("3 days").
+
+    Read from models.session_absolute_limits, the limit the server ends such a login at, so the hint
+    is the rule in force (Settings' days, or the absolute limit when that is set longer).
+    """
+    from panel.db.models import session_absolute_limits
+    hours = int(round(session_absolute_limits()[1] / 3600.0))
+    if hours % 24:
+        return i18n.tr("{n} hours", n=hours)
+    days = hours // 24
+    return i18n.tr("1 day") if days == 1 else i18n.tr("{n} days", n=days)
 
 
 def fetch_metadata_guard():

@@ -1303,11 +1303,14 @@ def flush(timeout=10.0):
         time.sleep(0.1)
 
 
-def notify(event_key, title, body=""):
+def notify(event_key, title, body="", server=None, remote=None):
     """Queue an alert for `event_key` to every enabled channel; it is sent in the background.
 
     No-op when notifications (or this event) are off, or no channel is configured. Never raises.
+    `server` / `remote`: the GameServer or RemoteServer the alert is about. They decide which users'
+    own devices it is pushed to (push_alerts); the channels' text is `title` and `body` as before.
     """
+    _push(event_key, server, remote)
     try:
         cfg = _cfg()
         if not event_enabled(cfg, event_key):
@@ -1315,6 +1318,23 @@ def notify(event_key, title, body=""):
         _queue_alert((event_key, str(title or ""), str(body or "")))
     except Exception:
         _log.debug("notify failed to dispatch", exc_info=True)
+
+
+def _push(event_key, server, remote):
+    """Hand the alert to push_alerts, which decides per user (its own switches, not the channels')."""
+    try:
+        from panel.services import push_alerts
+        push_alerts.queue_event(event_key, _row_id(server), _row_id(remote))
+    except Exception:  # noqa: BLE001 - an alert must never break the action that raised it
+        _log.debug("push hand-off failed", exc_info=True)
+
+
+def _row_id(obj):
+    """The id of a GameServer/RemoteServer, or None (also when even reading it raises)."""
+    try:
+        return None if obj is None else int(obj.id)
+    except Exception:  # noqa: BLE001 - a replaced or detached row is an alert about nothing
+        return None
 
 
 def _form_or_saved(value, saved, key, default=""):

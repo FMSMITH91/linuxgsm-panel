@@ -16,12 +16,14 @@ Each part names the OWASP cheat sheet section it follows (read 2026-11-15).
   administrative users). With Settings' switch on, a superadmin or anyone allowed the terminal, users
   or groups who has no 2FA is sent to set it up right after the password and can do nothing else.
 * Step-up (Session Management Cheat Sheet, "Reauthentication After Risk Events"; Transaction
-  Authorization Cheat Sheet, 2.9 "Authorization credentials should only be valid during a limited time
-  period"). Opening a terminal, uninstalling a server, restoring a panel backup and changing users or
-  groups ask for the password (and the code, with 2FA) again once the last sign-in or confirmation is
-  older than step_up_minutes (10), then not again for that long. API tokens are exempt: minting one
-  already takes the password and the code, it can be given an expiry, and it is revoked by a password
-  change or "sign out everywhere". The chat bots never reach these routes.
+  Authorization Cheat Sheet, 2.9 "Authorization credentials should only be valid during a limited
+  time period"). Opening a terminal, uninstalling a server, restoring a panel backup, changing users
+  or groups and saving Settings or Notifications (which can switch step-up itself off) ask for the
+  password (and the code, with 2FA) again once the last sign-in or confirmation is older than
+  step_up_minutes (Settings, default 10; panel/core/session_policy.py), then not again for that
+  long. API tokens are exempt: minting one already takes the password and the code, it can be given
+  an expiry, and it is revoked by a password change or "sign out everywhere". The chat bots never
+  reach these routes.
 * Denials are logged (Logging Cheat Sheet, "Which events to log": authorization, session management
   and CSRF failures; Logging Vocabulary: authz_fail, malicious_csrf): one audit row per kind, user or
   address and route every DENIAL_EVERY seconds, at most DENIAL_BURST a minute in all, so a client that
@@ -38,6 +40,8 @@ from urllib.parse import quote, urlsplit
 
 from flask import current_app, g, has_request_context, jsonify, redirect, request, session, url_for
 from flask_login import current_user
+
+from panel.core.session_policy import STEP_UP_DEFAULT_MINUTES
 
 _log = logging.getLogger("panel.app")
 
@@ -150,7 +154,7 @@ def reset_throttle():
 # ── Required 2FA ──────────────────────────────────────────────────────────────────────────────────
 # Reachable while 2FA setup is required: the setup page and the form it posts to, signing out, the
 # page's own language switcher and the session probe.
-TWOFA_GATE_OPEN = frozenset(("account_2fa_enable", "logout", "set_language", "api_i18n_catalog",
+TWOFA_GATE_OPEN = frozenset(("account_2fa_enable", "logout", "account_signout", "set_language", "api_i18n_catalog",
                              "api_auth_ping", "healthz", "static", "force_password_change",
                              "account_change_password"))
 
@@ -201,10 +205,7 @@ def _note_enforced(user):
                          % user.username)
 
 
-# ── Step-up re-authentication ─────────────────────────────────────────────────────────────────────
-STEP_UP_DEFAULT_MINUTES = 10
-
-
+# ── Step-up re-authentication (STEP_UP_DEFAULT_MINUTES: session_policy) ───────────────────────────
 def mark_authenticated(now=None):
     """Record that this session's holder has just proved who they are (sign-in or confirmation)."""
     session["_auth_at"] = time.time() if now is None else now

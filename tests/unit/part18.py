@@ -661,7 +661,7 @@ try:
               lambda force_refresh=False: NS(dns_name=None, installed=False, serve_config={},
                                              serve_unreadable=False))
     _N18 = []
-    _p9_patch(_p9_notif, "notify", lambda key, title, body="": _N18.append((key, title, body)))
+    _p9_patch(_p9_notif, "notify", lambda key, title, body="", **_kw: _N18.append((key, title, body)))
     _p9_patch(_p9.socketio, "emit", lambda event, data=None, **k: None)
     # A long action's console tail reads the host's output file through this.
     _p9_patch_sm("shell_as_game_user", lambda server, user, sh, **k: ("", "", 1))
@@ -1434,7 +1434,7 @@ check("part18: every deferred worker was run (none left to leak into a later che
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _KEYED18 = ("user", "group", "remote_server", "game_server", "custom_command", "server_tag",
             "global_ban", "invite", "user_session", "host_database_server", "game_database",
-            "database_endpoint", "endpoint_client")
+            "database_endpoint", "endpoint_client", "push_subscription")
 check("autoincrement: exactly the keyed tables declare it, and they are the ones the migration "
       "rebuilds",
       sorted(t.name for t in db.metadata.sorted_tables

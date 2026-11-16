@@ -12,7 +12,8 @@
 <div class="small text-secondary">These are the panel's own alerts to you; a game's in-game alerts are still set per server on its Files &amp; Config page (Alerts &amp; Notifications).</div>
 {% endcall %}
 
-<form method="POST" action="{{ url_for('notifications_save') }}">
+<form method="POST" action="{{ url_for('notifications_save') }}"
+      data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
   <div class="row">
     <!-- Telegram -->
     <div class="col-lg-6 col-xl-4 mb-3">
@@ -247,4 +248,6 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/notifications.js') }}"></script>
+{# A stale sign-in confirms its password in place before the save (step_up_required on its POST). #}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/step_up_form.js') }}"></script>
 {% endblock %}

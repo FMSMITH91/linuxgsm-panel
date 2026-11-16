@@ -384,7 +384,7 @@ def _get_page_paths(admin_id, mc_server):
 
     subs = {"<int:server_id>": str(one_server), "<int:remote_id>": str(one_remote),
             "<int:user_id>": str(admin_id), "<int:group_id>": "1", "<int:tag_id>": "1",
-            "<int:cmd_id>": "1", "<int:ban_id>": "1"}
+            "<int:cmd_id>": "1", "<int:ban_id>": "1", "<int:db_id>": "1"}
     with app.app_context():
         paths = []
         for rule in app.url_map.iter_rules():

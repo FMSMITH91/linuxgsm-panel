@@ -23,6 +23,8 @@ _ACCOUNT_ACTIONS = frozenset({
     # the ACCOUNT, and were missing here, so a viewer whose server shared the account's name read
     # the fact, time and actor of someone else's reset (Aikido 745379096).
     "reset_user_password", "2fa_reset",
+    # An account's alert devices (Web Push): turned on, off or removed, and test alerts.
+    "push_subscribe", "push_unsubscribe", "push_test",
 })
 
 

@@ -418,7 +418,7 @@ try:
     # Notifications are recorded, never sent.
     _P9_NOTIFIED = []
     _p9_patch(_p9_notif, "notify",
-              lambda key, title, body="": _P9_NOTIFIED.append((key, title, body)))
+              lambda key, title, body="", **_kw: _P9_NOTIFIED.append((key, title, body)))
     # Socket pushes: recorded on the one SocketIO register_routes built.
     _P9_EMITS = []
     _p9_patch(_p9.socketio, "emit",
@@ -677,7 +677,7 @@ try:
           "is still on the audit log", _bo_ok and _p9_audit("queued_backup").success is False
           and _p9_audit("queued_backup").detail == "disk quota", repr(_p9_audit("queued_backup")))
     _p9_patch(_p9_notif, "notify",
-              lambda key, title, body="": _P9_NOTIFIED.append((key, title, body)))
+              lambda key, title, body="", **_kw: _P9_NOTIFIED.append((key, title, body)))
 
     # ── the two backup sweeps: config gate, lock, skip rules, outcomes ───────────────────────────
     _bk_runs = []

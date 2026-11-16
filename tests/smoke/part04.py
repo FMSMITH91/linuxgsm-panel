@@ -970,6 +970,10 @@ with app.app_context():
     db.session.add(_mon); db.session.commit()
     _mon_id, _r1_id = _mon.id, _r1.id
     _rec = []
+
+    def _rec_notify(key, title, body="", **_kw):
+        """Record the alert's key (stands in for notifications.notify)."""
+        _rec.append(key)
     _saved = {n: getattr(_monmod, n) for n in ("_host_reachable", "_remote_listening_ports",
               "_host_disk_pct", "_host_load_mem", "_server_slots", "_server_max_config",
               "_batched_slots")}
@@ -985,7 +989,7 @@ with app.app_context():
     _saved_peak = dict(_ps._server_peak_notified)
     _saved_pc = dict(_ps._player_counts)
     try:  # noqa: MC0001
-        _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+        _am.notifications.notify = _rec_notify
         _monmod._host_reachable = lambda r: True
         _monmod._host_disk_pct = lambda r: 40
         _monmod._host_load_mem = lambda r: (10, 10)
@@ -1043,7 +1047,7 @@ with app.app_context():
         # Drive the next sweep for real: _rec holds only event KEYS and other fixture servers
         # transition too, so record the BODIES and look for this server by name.
         _exp_bodies = []
-        _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _exp_bodies.append((k, b)))[0]
+        _am.notifications.notify = lambda k, t, b="", **_kw: (_rec.append(k), _exp_bodies.append((k, b)))[0]
         _monmod._remote_listening_ports = lambda r: {27100}
         _rec.clear(); _monmod._monitor_pass()
         check("monitor: ...so coming back from a panel-issued stop is silent",
@@ -1059,7 +1063,7 @@ with app.app_context():
         check("monitor: ...while a recovery the panel did not cause IS announced",
               any(k == "server_up" and "mon-srv" in b for k, b in _exp_bodies),
               str(_exp_bodies)[:140])
-        _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+        _am.notifications.notify = _rec_notify
         _ps._expected_offline.pop(_mon_id, None)
 
         # ── A server a reboot plan holds is not "went offline unexpectedly" ──────────────────
@@ -1090,7 +1094,7 @@ with app.app_context():
 
         try:
             _am.notifications.notify = \
-                lambda k, t, b="": (_rec.append(k), _rw_bodies.append((k, t, b)))[0]
+                lambda k, t, b="", **_kw: (_rec.append(k), _rw_bodies.append((k, t, b)))[0]
             _ps._expected_offline[_mon_id] = float("inf")
             _rw_down = _rw_sweep_later(420)
             check("monitor: a server a reboot plan holds does not report 'offline unexpectedly'",
@@ -1117,7 +1121,7 @@ with app.app_context():
             _monmod.time = _rw_real_time
             _monmod._remote_listening_ports = _rw_saved_ports
             _ps._expected_offline.pop(_mon_id, None)
-            _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+            _am.notifications.notify = _rec_notify
 
         # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
         # It computed `up` from a live port scan every 60s and kept it only in an in-memory
@@ -1427,7 +1431,7 @@ with app.app_context():
         # force-update"). That takes the server down without telling the panel, so the monitor
         # alerted "went offline unexpectedly" every single night at the same minute.
         _saved_maint = _monmod._lgsm_maintenance_running
-        _key_notify = lambda key, title, body="": _rec.append(key)          # noqa: E731
+        _key_notify = lambda key, title, body="", **_kw: _rec.append(key)          # noqa: E731
         _probes = []
         try:
             _reset_mon()
@@ -1446,7 +1450,7 @@ with app.app_context():
             # Record bodies too: _rec holds only event KEYS, and the fixture has other servers
             # whose own transitions would otherwise be read as this one's.
             _bodies = []
-            _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies.append((k, b)))[0]
+            _am.notifications.notify = lambda k, t, b="", **_kw: (_rec.append(k), _bodies.append((k, b)))[0]
             _monmod._remote_listening_ports = lambda r: {27100}
             _monmod._monitor_pass()
             _am.notifications.notify = _key_notify
@@ -2585,7 +2589,7 @@ try:
     _osu = app._maybe_alert_os_updates
 
     _bodies2 = []
-    _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _bodies2.append((k, t, b)))[0]
+    _am.notifications.notify = lambda k, t, b="", **_kw: (_rec.append(k), _bodies2.append((k, t, b)))[0]
     _am._host_reachable = lambda r: True
     _pkgs = {"n": [], "ok": True}
     # A failed check yields no output, which is indistinguishable from a clean host — that is

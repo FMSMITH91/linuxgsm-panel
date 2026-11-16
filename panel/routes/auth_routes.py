@@ -67,6 +67,9 @@ def register(app):
     # Transferring the panel's ownership (panel/security/owner.py).
     from panel.routes import owner_transfer
     owner_transfer.register(app)
+    # An account's alert devices (Web Push) and the sign-out page that keeps or stops them.
+    from panel.routes import push_devices
+    push_devices.register(app)
 
 
 def _flash_signed_out(bye):
@@ -160,14 +163,20 @@ def _register_sign_in(app):
                 db.session.rollback()
                 with suppress(Exception):
                     _log.warning("logout: the auth_epoch fallback failed too", exc_info=True)
+        from panel.routes.push_devices import signout_keeps_alerts
+        keep_alerts = signout_keeps_alerts(current_user._get_current_object(), request.form)
         logout_user()
         # Clear-Site-Data (Session Management Cheat Sheet, "Web Content Caching and Clear-Site-Data"):
         # the browser drops this site's cookies and storage (the console's command history among
         # them). Not "cache": the panel's own pages are no-cache already, and it would also throw
         # away the cached scripts and styles. The message rides the URL, not a flash: the flash is
         # kept in the session cookie this header deletes.
+        # "storage" also unregisters the site's service workers, and with them this device's push
+        # subscription, so a device whose alerts stay on after sign-out (by design; the sign-out page
+        # says so and offers to stop them) gets "cookies" alone: that page clears localStorage and
+        # sessionStorage itself before it posts.
         resp = redirect("/login?signed_out=%d" % (1 if revoked else 2))
-        resp.headers["Clear-Site-Data"] = '"cookies", "storage"'
+        resp.headers["Clear-Site-Data"] = '"cookies"' if keep_alerts else '"cookies", "storage"'
         return resp
 
 
@@ -591,8 +600,16 @@ def _register_session_list(app):
         restored from that cache is a photograph of a signed-in panel and cannot know on its own
         that the cookie died while it was away. When it has, @login_required answers 401 and the
         client's global handler moves the tab to the login screen.
+
+        With ?step_up=1 it also says whether a high-risk request would now be sent to confirm the
+        password (account_guard.step_up_needed): step_up_form.js asks just before a guarded form is
+        sent, so it can confirm in place and lose nothing typed. Only then, because a session from
+        before step-up existed costs a query to answer it.
         """
-        return jsonify({"success": True, "user": current_user.username})
+        out = {"success": True, "user": current_user.username}
+        if request.args.get("step_up") == "1":
+            out["step_up"] = bool(account_guard.step_up_needed())
+        return jsonify(out)
 
     @app.route("/api/account/sessions")
     @login_required
@@ -620,14 +637,7 @@ def _register_session_list(app):
                 cur = getattr(current_user, "_sid", None)
         rows = (UserSession.query.filter_by(user_id=current_user.id)
                 .order_by(UserSession.last_seen.desc()).all())
-        return jsonify({"sessions": [{
-            "id": r.id,
-            "device": _session_label(r.user_agent),
-            "ip": r.ip or "",
-            "created": (r.created_at.isoformat() + "Z") if r.created_at else None,
-            "last_seen": (r.last_seen.isoformat() + "Z") if r.last_seen else None,
-            "current": (r.sid == cur),
-        } for r in rows]})
+        return jsonify({"sessions": [_session_entry(r, cur) for r in rows]})
 
     @app.route("/api/account/sessions/<int:sess_id>/revoke", methods=["POST"])
     @login_required
@@ -649,6 +659,30 @@ def _register_session_list(app):
         if is_current:
             logout_user()
         return jsonify({"success": True, "current": is_current})
+
+
+def _utc_iso(value):
+    """A stored naive-UTC time as ISO text with its Z (the browser reads it as UTC), or None."""
+    return (value.isoformat() + "Z") if value else None
+
+
+def _session_entry(r, cur):
+    """One Active Sessions row: the device, and what kind of sign-in it is and when it ends.
+
+    `ends` and `idle_minutes` come from the row's own signs_out_at / idle_signout_minutes, the
+    rule is_expired and the sweep apply, so the list cannot promise a time the server does not keep.
+    """
+    return {
+        "id": r.id,
+        "device": _session_label(r.user_agent),
+        "ip": r.ip or "",
+        "created": _utc_iso(r.created_at),
+        "last_seen": _utc_iso(r.last_seen),
+        "current": (r.sid == cur),
+        "remember": bool(r.remember),
+        "ends": _utc_iso(r.signs_out_at()),
+        "idle_minutes": r.idle_signout_minutes(),
+    }
 
 
 # One POST to /login: the client address, its throttle bucket (an IPv6 client is counted by its

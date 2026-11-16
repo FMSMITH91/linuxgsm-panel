@@ -169,7 +169,8 @@ group_custom_commands = db.Table(
 #   server_order  {"remote_id": [game_server_id, ...]}   row order inside each host card
 #   panels        {"<region>": ["<panel key>", ...]}     order of the panels in a region
 #   hidden        {"<region>": ["<panel key>", ...]}     panels the user collapsed out of a region
-UI_PREF_KEYS = frozenset({"host_order", "server_order", "panels", "hidden"})
+#   push_events   ["<event key>", ...]        the alerts this user's devices are pushed (push_alerts)
+UI_PREF_KEYS = frozenset({"host_order", "server_order", "panels", "hidden", "push_events"})
 
 # The colour schemes User.theme may hold; "system" is the default and the fallback.
 UI_THEMES = ("system", "dark", "light")
@@ -1085,6 +1086,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "lgsm_postponed", "lgsm_refused", "lgsm_busy", "mc_list_read", "mc_list_change", "plugin_list",
     "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove", "workshop_read", "workshop_save",
     "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
+    "db_browse", "db_row_insert", "db_row_update", "db_row_delete", "db_sql", "db_dump_download", "db_upload",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({
@@ -1342,7 +1344,29 @@ class UserSession(db.Model):
         last = self.last_seen or self.created_at
         if last is not None and (now - last).total_seconds() > self.idle_limit():
             return True
-        return self.created_at is not None and (now - self.created_at).total_seconds() > self.absolute_limit()
+        end = self.signs_out_at()
+        return end is not None and now > end
+
+    def signs_out_at(self):
+        """The moment this login ends however active it is (sign-in + absolute_limit), or None.
+
+        is_expired and the Account page's Active Sessions list both read it, so the time a row
+        shows is the time the server ends it.
+        """
+        if self.created_at is None:
+            return None
+        from datetime import timedelta
+        return self.created_at + timedelta(seconds=self.absolute_limit())
+
+    def idle_signout_minutes(self):
+        """Minutes without use that end this login before signs_out_at, or None when idling cannot.
+
+        The idle limit less the registry's last_seen grace, which is the cookie's own lifetime. A
+        "remember me" login is signed straight back in by its remember cookie, so its idle limit
+        reaches its absolute one and only the absolute end applies.
+        """
+        idle = self.idle_limit() - SESSION_LAST_SEEN_GRACE
+        return int(round(idle / 60.0)) if idle < self.absolute_limit() else None
 
 
 # `last_seen` is only written every ~5 minutes (the throttle in load_user), so it can lag real
@@ -1695,6 +1719,35 @@ class EndpointClient(db.Model):
     checked_at = db.Column(db.DateTime, nullable=True)
 
 
+class PushSubscription(db.Model):
+    """One browser or phone that receives this user's alerts as Web Push notifications.
+
+    Kept when the user signs out (that is the point: an alert reaches them while signed out) and
+    removed when they turn alerts off on that device, remove it from their Account page, stop alerts
+    at sign-out, when the push service answers 404/410 (the browser dropped it), or when the account
+    is deactivated or deleted. `endpoint` is the push service URL, a bearer capability, so it is
+    encrypted with the browser's two keys (EncryptedString, AES-256-GCM under data/cred_key);
+    `endpoint_hash` (SHA-256 of it, unique) is what finds a row by endpoint, since an encrypted
+    column can never match a WHERE clause. An endpoint carries well over 128 random bits, so the
+    digest is not a guessable stand-in for it.
+    """
+
+    __tablename__ = "push_subscription"
+    # AUTOINCREMENT: the Account page removes a device by id; a deleted row's id must never be reused.
+    __table_args__ = {"sqlite_autoincrement": True}
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), index=True, nullable=False)
+    endpoint_hash = db.Column(db.String(64), unique=True, index=True, nullable=False)
+    endpoint = db.Column(EncryptedString, nullable=False)
+    p256dh = db.Column(EncryptedString, nullable=False)
+    auth = db.Column(EncryptedString, nullable=False)
+    label = db.Column(EncryptedString, default="")
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    last_success = db.Column(db.DateTime, nullable=True)
+    user = db.relationship("User", backref=db.backref(
+        "push_subscriptions", lazy="dynamic", cascade="all, delete-orphan"))
+
+
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
 # login cookie, a page's own URLs — and so must never be handed to a new row
 # (panel/db/id_sequence.py). The last three are keyed only by URLs: a Global Bans page left open
@@ -1704,7 +1757,7 @@ class EndpointClient(db.Model):
 # a unit check holds the two lists together.
 _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
                          GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase, DatabaseEndpoint,
-                         EndpointClient)
+                         EndpointClient, PushSubscription)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {

@@ -17,7 +17,6 @@
   "Let {name} sign in from {now} instead of {old}? Its password stays the same.": "Autoriser {name} à se connecter depuis {now} au lieu de {old} ? Son mot de passe reste le même.",
   "Move the account": "Déplacer le compte",
   "Moving the account…": "Déplacement du compte…",
-  "MySQL refused to move the account of {name}: it defines an event or a stored routine in its database (error 4006), which only a login with SET_USER_ID may move. Nothing was changed.": "MySQL a refusé de déplacer le compte de {name} : il définit un événement ou une routine stockée dans sa base de données (erreur 4006), que seul un identifiant ayant SET_USER_ID peut déplacer. Rien n'a été modifié.",
   "New databases go to {server} on {label} ({address}), over Tailscale.": "Les nouvelles bases de données vont sur {server} de {label} ({address}), via Tailscale.",
   "New databases on this host can go to a MariaDB or MySQL server on another machine, reached over Tailscale only. Databases made before stay where they are.": "Les nouvelles bases de données de cet hôte peuvent aller sur un serveur MariaDB ou MySQL d'une autre machine, joint uniquement via Tailscale. Les bases créées avant restent où elles sont.",
   "New databases on this host go to its own server again.": "Les nouvelles bases de données de cet hôte vont à nouveau sur son propre serveur.",
@@ -57,5 +56,6 @@
   "{host} can't reach the database server at {address}, port {port}. Check that it listens on that address and that its firewall lets {host} in over Tailscale; the panel changes neither.": "{host} ne peut pas joindre le serveur de bases de données à {address}, port {port}. Vérifiez qu'il écoute sur cette adresse et que son pare-feu laisse entrer {host} via Tailscale ; le panel ne modifie ni l'un ni l'autre.",
   "{host} has no Tailscale address, so it can't reach a database server on another machine.": "{host} n'a pas d'adresse Tailscale : il ne peut donc pas joindre un serveur de bases de données sur une autre machine.",
   "{host} has no database client.": "{host} n'a pas de client de bases de données.",
-  "{host} has no database server the panel uses. Set up databases on that host first.": "{host} n'a aucun serveur de bases de données utilisé par le panel. Configurez d'abord les bases de données sur cet hôte."
+  "{host} has no database server the panel uses. Set up databases on that host first.": "{host} n'a aucun serveur de bases de données utilisé par le panel. Configurez d'abord les bases de données sur cet hôte.",
+  "MySQL refused to move the account of {name}: it defines an event or a stored routine in its database (error 4006), which only a login with SET_USER_ID may move. Nothing was changed. The server's administrator can move it as root: RENAME USER '{name}'@'{old}' TO '{name}'@'{new}';": "MySQL a refusé de déplacer le compte de {name} : il définit un événement ou une routine stockée dans sa base de données (erreur 4006), que seul un identifiant ayant SET_USER_ID peut déplacer. Rien n'a été modifié. L'administrateur du serveur peut le déplacer en tant que root : RENAME USER '{name}'@'{old}' TO '{name}'@'{new}';"
 }

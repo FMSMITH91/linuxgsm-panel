@@ -6953,7 +6953,7 @@ DB_UNREACHABLE_ERRORS = ("ERROR 2002", "ERROR 2003", "ERROR 2013")
 DB_TLS_ERRORS = ("ERROR 3159", "ERROR 4036")
 # ...and "this password type needs TLS or the server's key" (2061, caching_sha2_password).
 DB_KEY_ERRORS = ("ERROR 2061",)
-DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import"})
+DB_PW_VERBS = frozenset({"db-harden", "db-create", "db-password", "db-import", "db-query"})
 DB_AUTH_ARG = {"db-create": 1, "db-password": 1, "db-sizes": 1, "db-dump": 1, "db-drop": 1,
                "db-admin-check": 1, "db-rehost": 1}
 # A database server on another machine is reached over Tailscale only (this release): its address,
@@ -7793,7 +7793,10 @@ def _db_import_child(pw, client, port, name, secret):
     sess = {"auth": "tcp" + port, "admin": (name, secret), "file": None, "secrets": [secret]}
     try:
         conn = _db_conn_args(sess)
-        argv = [client, conn[0]] + (["--sandbox"] if "--sandbox" in help_text else []) + conn[1:] + ["--batch", name]
+        # --binary-mode: no client command but DELIMITER and \C in the dump (no `system`, `source`,
+        # `\!`...), in both clients; the dump is content a game account or an uploader chose.
+        argv = [client, conn[0]] + (["--sandbox"] if "--sandbox" in help_text else []) + conn[1:] \
+            + ["--binary-mode", "--batch", name]
         return _db_feed(sess, argv, fd, pw)
     finally:
         _db_done(sess)
@@ -7888,6 +7891,226 @@ def do_db_drop(args, content):
     return _db_with("db-drop", args, content, _db_drop)
 
 
+# ── db-query: statements run as a database's own account — see privileged.py, whose copy this is ──
+# The client only ever reads text this module wrote: each statement's text and each value travel as
+# hexadecimal (X'...'), are put in user variables, and run through the server's own PREPARE and
+# EXECUTE ... USING, so a value is a bound parameter and no character of a statement or a value can
+# reach the client's command parser (`system`, `source`, `\!`...) or end a statement early. PREPARE
+# takes ONE statement. The session gets a statement time limit (MariaDB max_statement_time, every
+# statement but those in stored procedures; MySQL max_execution_time, read-only SELECTs only, so the
+# runner also ends a statement that outlives DB_QUERY_SECONDS with KILL QUERY on its connection),
+# short lock waits, and a row cap per statement (sql_select_limit; a LIMIT in the statement wins, so
+# the answer is also cut at DB_QUERY_OUT_MAX bytes). Mode `ro` runs everything in a READ ONLY
+# transaction that is rolled back.
+DB_QUERY_MODES = ("ro", "rw")
+DB_QUERY_SECONDS = 30
+DB_QUERY_LOCK_WAIT = 10
+DB_QUERY_MAX_STATEMENTS = 4
+DB_QUERY_SQL_MAX = 65536
+DB_QUERY_PARAMS_MAX = 512
+DB_QUERY_VALUE_MAX = 65536
+DB_QUERY_CAP_MAX = 10000
+DB_QUERY_BODY_MAX = 1 << 21
+DB_QUERY_OUT_MAX = 2 << 20
+# The marks the runner's answer is read by: the connection id first, then one row count per statement.
+DB_QUERY_CONN_SQL = "SELECT CONNECTION_ID() AS panel_conn"
+DB_QUERY_ROWS_SQL = "SELECT ROW_COUNT() AS panel_rows"
+# The client's options besides the connection's: no client command but DELIMITER and \C in what it
+# reads (--binary-mode, both clients), no LOAD DATA LOCAL, and the sandbox / system-command refusals
+# where the client has them; XML answers (NULL told from the text NULL), rows streamed, each answer
+# written out at once.
+DB_QUERY_OPTS = ("--binary-mode", "--loose-local-infile=0", "--loose-sandbox", "--loose-system-command=OFF", "--batch",
+                 "--xml", "--quick", "--unbuffered", "--default-character-set=utf8mb4")
+
+
+def _db_query_text(v, limit, what):
+    """`v` when it is a str of at most `limit` UTF-8 bytes, else refuse."""
+    if not isinstance(v, str) or len(v.encode("utf-8", "surrogatepass")) > limit:
+        raise ValueError("%s is not text of at most %d bytes" % (what, limit))
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("%s is not UTF-8 text" % what) from None
+    return v
+
+
+def db_query_statements(run):
+    """The statements of a db-query, validated: [(sql, params, cap)].
+
+    1..DB_QUERY_MAX_STATEMENTS of {"sql": text, "params": [None | text, ...], "cap": rows (0: none)}.
+    """
+    if not isinstance(run, list) or not 1 <= len(run) <= DB_QUERY_MAX_STATEMENTS:
+        raise ValueError("not a list of statements")
+    return [_db_query_item(item) for item in run]
+
+
+def _db_query_item(item):
+    """One statement of a db-query, validated: (sql, params, cap)."""
+    if not isinstance(item, dict) or set(item) - {"sql", "params", "cap"}:
+        raise ValueError("not a statement")
+    sql = _db_query_text(item.get("sql"), DB_QUERY_SQL_MAX, "a statement")
+    params = item.get("params") or []
+    if not sql.strip() or not isinstance(params, list) or len(params) > DB_QUERY_PARAMS_MAX:
+        raise ValueError("not a statement")
+    return sql, [None if p is None else _db_query_text(p, DB_QUERY_VALUE_MAX, "a value") for p in params], \
+        _db_query_cap(item.get("cap") or 0)
+
+
+def _db_query_cap(cap):
+    """A statement's row cap, 0 (none) to DB_QUERY_CAP_MAX."""
+    if isinstance(cap, bool) or not isinstance(cap, int) or not 0 <= cap <= DB_QUERY_CAP_MAX:
+        raise ValueError("not a row cap")
+    return cap
+
+
+def db_query_hex(text):
+    """`text` as a hexadecimal literal of its UTF-8 bytes (X'...'): only 0-9 and A-F inside the quotes."""
+    return "X'%s'" % text.encode("utf-8").hex().upper()
+
+
+def _db_query_limits(flavor):
+    """The session's statement time limit and lock waits, in the server's own words."""
+    # MySQL also reads information_schema's row counts and sizes fresh (they are cached a day by default).
+    limit = (["SET SESSION max_statement_time=%d;" % DB_QUERY_SECONDS] if flavor == "mariadb"
+             else ["SET SESSION max_execution_time=%d;" % (DB_QUERY_SECONDS * 1000),
+                   "SET SESSION information_schema_stats_expiry=0;"])
+    return limit + ["SET SESSION innodb_lock_wait_timeout=%d;" % DB_QUERY_LOCK_WAIT,
+                    "SET SESSION lock_wait_timeout=%d;" % DB_QUERY_LOCK_WAIT]
+
+
+def _db_query_one(sql, params, cap):
+    """The lines that run one statement: PREPARE from hex, the values bound, the row count after it."""
+    out = ["SET @panel_q = CONVERT(%s USING utf8mb4);" % db_query_hex(sql), "PREPARE panel_s FROM @panel_q;"]
+    names = ["@panel_p%d" % i for i in range(len(params))]
+    if params:
+        out.append("SET " + ", ".join("%s = %s" % (n, "NULL" if p is None else db_query_hex(p))
+                                      for n, p in zip(names, params)) + ";")
+    if cap:
+        out.append("SET SESSION sql_select_limit = %d;" % cap)
+    out.append("EXECUTE panel_s" + (" USING " + ", ".join(names) if names else "") + ";")
+    out.append(DB_QUERY_ROWS_SQL + ";")
+    if cap:
+        out.append("SET SESSION sql_select_limit = DEFAULT;")
+    out.append("DEALLOCATE PREPARE panel_s;")
+    return out
+
+
+def db_query_script(flavor, mode, run):
+    """What the client reads for a db-query: limits, the connection id, then each statement."""
+    if flavor not in DB_FLAVORS or mode not in DB_QUERY_MODES:
+        raise ValueError("not a query mode")
+    lines = _db_query_limits(flavor) + [DB_QUERY_CONN_SQL + ";"]
+    if mode == "ro":
+        lines.append("START TRANSACTION READ ONLY;")
+    for sql, params, cap in db_query_statements(run):
+        lines += _db_query_one(sql, params, cap)
+    if mode == "ro":
+        lines.append("ROLLBACK;")
+    return "\n".join(lines) + "\n"
+
+
+def db_query_body(run):
+    """The JSON a db-query's helper document carries after its "end" line."""
+    return json.dumps({"run": [{"sql": s, "params": p, "cap": c} for s, p, c in db_query_statements(run)]},
+                      separators=(",", ":"))
+
+
+def _db_query_split(content):
+    """(the sign-in document up to its "end" line, the JSON after it) of db-query's stdin."""
+    at = content.find("\nend\n")
+    if at < 0 or len(content) > DB_DOC_MAX + DB_QUERY_BODY_MAX:
+        raise ValueError("not a query document")
+    return content[:at + 5], content[at + 5:]
+
+
+def _db_query_argv(sess, client, args):
+    """The client's argv: the sign-in file, the connection, DB_QUERY_OPTS and the database.
+
+    --defaults-file: no other option file is read. The database is the session's default.
+    """
+    conn = _db_conn_args(sess)
+    return [client, conn[0].replace("--defaults-extra-file=", "--defaults-file=", 1)] + conn[1:] \
+        + list(DB_QUERY_OPTS) + [args[2]]
+
+
+def _db_query_read(p, deadline):
+    """The client's answer (at most DB_QUERY_OUT_MAX bytes) and how it ended: 'done', 'cut' or 'late'."""
+    buf, fd = bytearray(), p.stdout.fileno()
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return buf, "late"
+        ready, _w, _x = select.select([fd], [], [], left)
+        if not ready:
+            continue
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return buf, "done"
+        buf.extend(chunk[:DB_QUERY_OUT_MAX - len(buf)])
+        if len(buf) >= DB_QUERY_OUT_MAX:
+            return buf, "cut"
+
+
+def _db_query_kill(sess, client, args, text):
+    """End the statement a killed client left running, on its connection (KILL QUERY <id>)."""
+    m = re.search(r'<field name="panel_conn">([0-9]{1,20})<', text)
+    if not m:
+        return
+    conn = _db_conn_args(sess)
+    subprocess.run([client] + conn + ["--batch", "-e", "KILL QUERY %s" % m.group(1)], shell=False,  # nosec B603
+                   stdin=subprocess.DEVNULL, capture_output=True, env=_clean_env(), timeout=15, check=False)
+
+
+def _db_query_run(sess, client, args, script):
+    """Run `script` through the client: its rc. The answer goes to stdout, scrubbed of the password."""
+    with tempfile.TemporaryFile() as sql:
+        sql.write(script.encode("utf-8"))
+        sql.seek(0)
+        p = subprocess.Popen(_db_query_argv(sess, client, args), shell=False, stdin=sql,  # nosec B603
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=_clean_env())
+        try:
+            buf, how = _db_query_read(p, time.monotonic() + DB_QUERY_SECONDS + 5)
+        finally:
+            if p.poll() is None:
+                p.kill()
+            p.stdout.close()
+            rc = p.wait()
+    text = db_scrub(buf.decode("utf-8", "replace"), sess["secrets"])
+    sys.stdout.write(text)
+    if how == "cut":
+        print("\npanel-db: output cut")
+        return 0
+    if how == "late":
+        _db_query_kill(sess, client, args, text)
+        print("panel-db: timed out")
+        return 124
+    return rc
+
+
+def do_db_query(args, content):
+    """Run statements in one database, signed in as its own account: flavor port[@address] name mode.
+
+    The statements arrive as JSON after the sign-in document; the client only reads what
+    db_query_script makes of them (every statement and value as hex, through PREPARE / EXECUTE).
+    """
+    try:
+        doc, body = _db_query_split(content)
+        _admin, pw = db_read_doc(doc, False, True)
+        req = json.loads(body)
+        script = db_query_script(args[0], args[3], req.get("run") if isinstance(req, dict) else None)
+    except ValueError:
+        print("panel-helper: db-query: the request on stdin was rejected", file=sys.stderr)
+        return 2
+    sess = {"auth": "tcp" + args[1], "admin": (args[2], pw), "file": None, "secrets": [pw]}
+    try:
+        return _db_query_run(sess, _db_tool(args[0]), args, script)
+    except FileNotFoundError:
+        print("panel-db: no database client")
+        return 127
+    finally:
+        _db_done(sess)
+
+
 VERBS.update({
     "db-probe": ([], lambda a: [], None),
     "db-harden": ([v_choice(*DB_FLAVORS)], lambda a: [], None),
@@ -7905,6 +8128,7 @@ VERBS.update({
     "db-rehost": ([v_choice(*DB_FLAVORS), v_db_auth, v_db_name, db_client_host, db_client_host],
                   lambda a: [], None),
     "db-admin-check": ([v_choice(*DB_FLAVORS), v_db_auth_tcp], lambda a: [], None),
+    "db-query": ([v_choice(*DB_FLAVORS), v_db_target, v_db_name, v_choice(*DB_QUERY_MODES)], lambda a: [], None),
 })
 
 
@@ -7969,6 +8193,7 @@ ACTIONS = {
     "db-drop": do_db_drop,
     "db-admin-check": do_db_admin_check,
     "db-rehost": do_db_rehost,
+    "db-query": do_db_query,
 }
 
 # The only two ACTIONS verbs that CONSUME their payload. The others take the parameter and
@@ -7982,7 +8207,8 @@ ACTIONS = {
 # that reads stdin without listing it here cannot silently start returning "".
 # The database verbs (but db-probe) read their sign-in document (db_read_doc).
 STDIN_VERBS = frozenset({"write-file", "content-cron-write", "db-harden", "db-create", "db-password",
-                         "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check", "db-rehost"})
+                         "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check", "db-rehost",
+                         "db-query"})
 
 # Verbs whose arguments are fine but which may still be refused by the state of the host, read
 # here as root: {verb: a function answering why not, or ""}. Run after validation and before the

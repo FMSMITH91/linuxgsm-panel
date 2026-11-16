@@ -201,7 +201,7 @@ def _setup33():
         db.create_all()
     _p33(_sh33, "run_game_backup", _runner33)
     _p33(_pb33, "run_game_backup", _runner33)
-    _p33(_notif33, "notify", lambda key, title, body="": _NOTES33.append((key, title, body)))
+    _p33(_notif33, "notify", lambda key, title, body="", **_kw: _NOTES33.append((key, title, body)))
     _p33(_notif33, "alerts_muted", lambda gs: False)
     _restart33()
     return _host33()

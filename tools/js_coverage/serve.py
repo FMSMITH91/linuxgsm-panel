@@ -251,6 +251,21 @@ def _seed_games(hosts, tags):
     return rows
 
 
+def _seed_database(games):
+    """One database on the first installed server's host, so the Databases page has its manager to walk.
+
+    The fake host answers db-query with nothing, so opening it says the answer could not be read.
+    """
+    from panel.core.config import encrypt_secret
+    from panel.db.models import GameDatabase, HostDatabaseServer
+    gs = next(g for g in games if g.installed)
+    db.session.add(HostDatabaseServer(remote_id=gs.remote_id, flavor="mariadb", version="10.11.14", port=3306,
+                                      native_ok=True, auth_mode="socket"))
+    db.session.add(GameDatabase(remote_id=gs.remote_id, game_server_id=gs.id, name="gs%d_luckperms" % gs.id,
+                                secret=encrypt_secret("Walk" + "x" * 28), auth_plugin="mysql_native_password",
+                                max_conn=30, created_by="walk"))
+
+
 def _seed_groups_and_commands(operator, vps):
     """Add a group with a member and a host, a default group, two commands and a ban."""
     grp = Group(name="moderators", description="Start and stop", is_default=False)
@@ -304,6 +319,7 @@ def seed(app):
         games = _seed_games(hosts, tags)
         _seed_groups_and_commands(operator, hosts[1])
         _seed_history(now, games[0], hosts)
+        _seed_database(games)
         db.session.commit()
 
 
@@ -337,6 +353,11 @@ def _installing():
         time.sleep(3)
 
 
+# Step-up off in this throwaway panel's config.json as well (see below): the window is a Settings field
+# now, saved and put in force by /settings/save, and the walk presses that page's Save. With the
+# field showing 0, its save keeps step-up off instead of turning it back on at 10 minutes.
+from panel.core.config import load_config as _jscov_load, save_config as _jscov_save  # noqa: E402
+_jscov_save(dict(_jscov_load(), step_up_minutes=0))
 app = create_app()
 seed(app)
 # The walk signs in once, as a superadmin without 2FA, and runs for longer than the step-up window.

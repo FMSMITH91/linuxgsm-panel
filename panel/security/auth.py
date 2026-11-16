@@ -81,6 +81,10 @@ MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
 # to no group on upgrade (it reveals passwords); setting up a host's database server also needs
 # MANAGE_REMOTES, and the admin login is superadmin-only.
 MANAGE_DATABASES = "manage_databases"
+# ...and the data inside them: change rows and run SQL statements in the Databases manager (always as
+# the database's own account). Granted to no group by default; it is given with MANAGE_DATABASES,
+# which browsing (and the manager itself) takes.
+EDIT_DATABASE_DATA = "edit_database_data"
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
@@ -118,6 +122,8 @@ ALL_PERMISSIONS = {
     MANAGE_REMOTES: "Add/edit/delete remote VPS nodes",
     MANAGE_DATABASES: ("Manage a server's databases: add, delete, restore and reset them, and see "
                        "their passwords"),
+    EDIT_DATABASE_DATA: ("Change the data in a server's databases: edit rows and run SQL statements (give "
+                         "Manage a server's databases with it)"),
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",
@@ -1944,6 +1950,21 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
     )
     db.session.add(entry)
     db.session.commit()
+    _push_account_change(action, target, success)
+
+
+def _push_account_change(action, target, success):
+    """A change to an account's own security is pushed to that account's devices (push_alerts).
+
+    Here, at the one place every such change is recorded, so a new route that changes a password or a
+    second factor cannot forget to tell the account holder. Never raises: the change is already done.
+    """
+    try:
+        from panel.services import push_alerts
+        push_alerts.note_audit(action, target, success)
+    except Exception:  # noqa: BLE001 - telling the user must never undo what was recorded
+        import logging
+        logging.getLogger(__name__).debug("push hand-off for an account change failed", exc_info=True)
 
 
 def _audit_ref(model, obj):

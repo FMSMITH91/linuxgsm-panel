@@ -19,6 +19,16 @@
       "GET"
     ]
   },
+  "GET /account/signout": {
+    "endpoint": "account_signout",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_signout"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/account/sessions": {
     "endpoint": "api_account_sessions",
     "guards": [
@@ -612,6 +622,39 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_browse"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/databases/<int:db_id>/dump/download": {
+    "endpoint": "api_server_database_dump_download",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_dump_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/databases/<int:db_id>/rows": {
+    "endpoint": "api_server_database_rows",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_rows"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/databases/<int:db_id>/tables": {
+    "endpoint": "api_server_database_tables",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_tables"
     ],
     "methods": [
       "GET"
@@ -1421,6 +1464,57 @@
     "guards": [
       "utils.py:decorated_view",
       "view:account_update_profile"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/devices/<int:sub_id>/remove": {
+    "endpoint": "account_push_device_remove",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_device_remove"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/events": {
+    "endpoint": "account_push_events",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_events"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/subscribe": {
+    "endpoint": "account_push_subscribe",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:account_push_subscribe"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/test": {
+    "endpoint": "account_push_test",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_test"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/push/unsubscribe": {
+    "endpoint": "account_push_unsubscribe",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_push_unsubscribe"
     ],
     "methods": [
       "POST"
@@ -2375,12 +2469,34 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/cell": {
+    "endpoint": "api_server_database_cell",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_cell"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/databases/<int:db_id>/delete": {
     "endpoint": "api_server_database_delete",
     "guards": [
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_database_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/dump": {
+    "endpoint": "api_server_database_dump",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_dump"
     ],
     "methods": [
       "POST"
@@ -2425,6 +2541,72 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_database_reveal"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/row": {
+    "endpoint": "api_server_database_row",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_row"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/sql": {
+    "endpoint": "api_server_database_sql",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_sql"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload": {
+    "endpoint": "api_server_database_upload",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload/<uid>": {
+    "endpoint": "api_server_database_upload_piece",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload_piece"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload/<uid>/cancel": {
+    "endpoint": "api_server_database_upload_cancel",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload_cancel"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/databases/<int:db_id>/upload/<uid>/finish": {
+    "endpoint": "api_server_database_upload_finish",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_database_upload_finish"
     ],
     "methods": [
       "POST"
@@ -2855,6 +3037,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:notifications_save"
     ],
     "methods": [
@@ -2991,6 +3174,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:panel_settings_save"
     ],
     "methods": [

@@ -201,7 +201,9 @@
         <span><span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %}</span> · <i class="bi bi-person-circle"></i> Account</span>
       </div>
     </a>
-    <form method="POST" action="{{ url_for('logout') }}" class="d-grid">
+    {# A device with alerts on is sent to the sign-out page first (push_signout.js), which offers to stop them. #}
+    <form method="POST" action="{{ url_for('logout') }}" class="d-grid"
+          data-push-signout="{{ url_for('account_signout') }}" data-push-scope="{{ url_for('static', filename='push/') }}">
       <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
     </form>
     <div class="mt-2 d-flex align-items-center gap-1" title="{{ t('Language') }}">
@@ -364,6 +366,7 @@ window.CSRF = {{ csrf_token()|tojson }};
    no install running, and that answer stops the poll it started. #}
 {% if show_app_chrome %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/install_progress.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/push_signout.js') }}" defer></script>
 {% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/chrome.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/app_shell.js') }}"></script>

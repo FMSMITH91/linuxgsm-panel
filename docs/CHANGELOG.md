@@ -14,6 +14,23 @@ compares git commits, not this file.
 
 ### Added
 
+- **Alerts on your phone or browser.** Each user can turn on the panel's alerts for their own browsers
+  and phones (Account → Alerts on this device). They arrive with the panel closed and after signing
+  out; each user picks which alerts, and only gets alerts about servers and hosts they can access.
+- **A sign-out that can stop this device's alerts.** Signing out from a browser that gets alerts says
+  they will keep arriving and offers "Stop alerts on this device".
+- **A database manager on the Databases page.** Each database has a Manage dialog: its connection
+  settings, its tables and rows, a dump to download and a dump to upload and restore. Everything runs
+  as that database's own account.
+- **Editing rows and running SQL.** With the new permission "Change the data in a server's
+  databases", rows can be added, edited and deleted, and one SQL statement run at a time. A statement
+  that changes data shows itself for confirmation first, and each one is written to the audit log
+  with its quoted values hidden.
+- **Step-up window in Settings.** Settings > Sessions & Security has a field for how long a sign-in or
+  password confirmation covers opening a terminal, uninstalling a server, restoring a panel backup and
+  changing users or groups (default 10 minutes, 0 to switch it off), with NIST's 15-minute
+  recommendation beside it.
+
 - **Releases on GitHub.** Each release is published on the project's Releases page, named by its
   date, with the changes it brings and its release signature attached, which anyone can check
   against the release key in panel/install/release-signers.
@@ -300,6 +317,11 @@ compares git commits, not this file.
 
 ### Changed
 
+- **Active Sessions say when each sign-in ends.** Each device on the Account page says whether it is
+  a "Remember me" sign-in and when it will be signed out, in your own time zone.
+- **Clearer sign-in lengths.** Settings explains how long a normal and a "Remember me" sign-in last,
+  and the login page's "Remember me" says how many days it keeps you signed in.
+
 - **The database exposure warning reads the firewall.** A database server that listens on the
   network is called exposed only when the host's firewall lets other machines reach its port; when
   the firewall cannot be read, the tab says so instead.
@@ -422,6 +444,12 @@ compares git commits, not this file.
   are equivalent, so no command changes.
 
 ### Fixed
+
+- **Creating a database says when its admin login needs TLS or the server's key.** It said the
+  server refused the database.
+- **A database whose account cannot sign in any more can still be deleted.** A copy is kept where its
+  accounts are made first; with no copy, only an empty database is deleted. Moving an account MySQL
+  refuses to move now says the statement its administrator can run.
 
 - **"Remember me" keeps you signed in.** A remembered sign-in ended about one idle timeout after it
   began (30 minutes by default) when session protection was set to Strong; it now lasts the
@@ -1466,6 +1494,22 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Saving Settings or Notifications asks for your password again.** Like opening a terminal, once
+  the last sign-in or confirmation is older than the step-up window: those pages can switch step-up,
+  two-factor and session binding off, or redirect alerts. The page asks in place and keeps what you
+  typed.
+
+- **Account changes reach the account holder's devices.** A password change, two-factor change, new
+  API token or new alert device is pushed to that account's own alert devices, so a change made in a
+  borrowed session is seen at once.
+- **Push alerts show only what a lock screen may.** A notification carries the alert's title and the
+  server's or host's name, never an address, player or password, and is encrypted end to end to the
+  browser.
+- **Deleting, restoring and resetting a database ask for your password again.** As other high-risk
+  actions do when the last confirmation is more than a few minutes old.
+- **A restored dump can no longer run client commands.** The database client reads a dump with client
+  commands turned off, so a `system` or `source` line in it is not run.
 
 - **The panel owner can no longer be removed by another superadmin.** The account that set the
   panel up is its owner: no other administrator can deactivate, demote, rename or delete it, or reset

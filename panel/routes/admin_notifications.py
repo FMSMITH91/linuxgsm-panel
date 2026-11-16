@@ -64,6 +64,7 @@ def _register_panel_settings(app):
     @app.route("/settings/save", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # it can switch step-up, 2FA and session binding off, or redirect alerts
     def panel_settings_save():
         f = request.form
         title = _json_str(f, "site_title")[:80] or "LinuxGSM Panel"
@@ -85,8 +86,10 @@ def _register_panel_settings(app):
         reboot_wait = max(0, min(_int_or(f.get("reboot_wait_max_hours"),
                                          _hr.DEFAULT_WAIT_HOURS), 720))
         reboot_restore = bool(f.get("reboot_restore_no_autostart"))
+        changed = []
 
         def _mut(cfg):
+            changed[:] = [session_policy.change_note(cfg, lifetimes)]   # once, however often it runs
             cfg.update({
                 "site_title": title, "site_domain": domain, "login_tagline": tagline,
                 "accent_color": accent, "default_language": lang, "session_protection": protection,
@@ -101,7 +104,7 @@ def _register_panel_settings(app):
         session_policy.apply(app, lifetimes)
         app.config["SESSION_PROTECTION"] = protection
         app.config["REQUIRE_2FA"] = bool(f.get("require_2fa"))
-        log_action(current_user, "settings_update", target="panel")
+        log_action(current_user, "settings_update", target="panel", detail="".join(changed))
         flash("Settings saved.", "success")
         return redirect(url_for("panel_settings"))
 
@@ -119,6 +122,7 @@ def _register_notifications(app):
     @app.route("/notifications/save", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # it can switch step-up, 2FA and session binding off, or redirect alerts
     def notifications_save():
         f = request.form
         # A blank secret field means "keep the stored one" (None), so the real token/webhook is
@@ -577,6 +581,10 @@ def _apply_profile_fields(user):
         UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         user.auth_epoch = (user.auth_epoch or 0) + 1
         user.revoke_api_token()
+        # Its alert devices too: an offboarded account's phone gets no more alerts (push_alerts also
+        # checks is_active when it sends, for any other way an account is switched off).
+        from panel.services.push_alerts import drop_user
+        drop_user(user.id)
 
 
 def _apply_resets(user, _pending_audit):

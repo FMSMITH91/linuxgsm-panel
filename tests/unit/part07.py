@@ -1458,7 +1458,7 @@ def _bf_hosts(seq):
 
 
 try:
-    with _bf_patched(_bf_mon.notifications, notify=lambda k, t, b="": _bf_alerts.append(k)):
+    with _bf_patched(_bf_mon.notifications, notify=lambda k, t, b="", **_kw: _bf_alerts.append(k)):
         _bf_hosts([True])                                           # baseline
         _bf_one = _bf_hosts([False])
         check("monitor: ONE failed probe of a host is not an alert (it used to page at once)",

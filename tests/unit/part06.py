@@ -5847,8 +5847,14 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (/account/reauth, login_required: any signed-in account confirms its own password).
 # 279, was 278: one genuinely new view, panel/routes/owner_transfer.py's transfer of the panel's
 # ownership (/account/owner/transfer, login_required; the route refuses anyone but the panel owner).
-check("register_routes: every one of the 279 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 279,
+# 296, was 279: seventeen genuinely new views. Eleven are the Databases manager's (MANAGE_DATABASES and
+# server access; rows and SQL also EDIT_DATABASE_DATA): databases_data.py's tables, rows, cell, row and
+# sql, and databases_files.py's dump, its download, and an upload's start, piece, finish and cancel. Six
+# are panel/routes/push_devices.py's alert devices (Web Push): subscribe, unsubscribe, remove a device,
+# test alert, alert choices and the sign-out page, all login_required and each acting on the caller's
+# own rows only.
+check("register_routes: every one of the 296 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 296,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -8577,7 +8583,7 @@ def _outside_single_quotes(cmd):
 _INJ_FILLERS = ["abc", "1", "22", "root", "yes", "no", "prohibit-password", "-", "gmod",
                 "gmodserver", "PermitRootLogin", "PasswordAuthentication", "1720000000", "2",
                 "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05", "hour",
-                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2"]
+                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2", "ro"]
 _inj_bad, _inj_checked, _inj_nofill, _inj_base_exposed = [], 0, [], {}
 for _verb in sorted(_priv._REMOTE_ACTIONS):
     _spec = _priv._ARGV.get(_verb)
@@ -9474,6 +9480,8 @@ _ANCHOR_LINE_PARSERS = {
     "_LATEST_VERSION_RE",
     # One line of a LinuxGSM config (split at \n), another key's plain `key="value"` line.
     "_WWR_OTHER_LINE",
+    # The database client's error line in a db-query answer (re.M): reported, never acted on.
+    "_ERROR_RE",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.

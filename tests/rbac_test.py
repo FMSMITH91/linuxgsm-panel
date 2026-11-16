@@ -1058,6 +1058,36 @@ def _check_limited_user_denied_pages():
           "got %d" % _ov.status_code)
 
 
+def _functions_naming(path, name):
+    """The functions in `path` whose own body uses the name `name`."""
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    return {fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+            and name in {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}}
+
+
+def _check_database_manager_permissions():
+    """The Databases manager's routes: VIEW_SERVERS alone gets none of them.
+
+    EDIT_DATABASE_DATA is a grantable permission of its own, held by no group the panel makes, and
+    the row and SQL routes ask for it by name.
+    """
+    c_lim = client_as(uid)
+    base = "/api/server/%d/databases/1" % accessible_id
+    for method, tail in (("get", "/tables"), ("get", "/rows?table=t"), ("post", "/cell"), ("post", "/row"),
+                         ("post", "/sql"), ("post", "/dump"), ("get", "/dump/download"), ("post", "/upload")):
+        code = getattr(c_lim, method)(base + tail, json={}).status_code
+        check("limited user DENIED the database manager's %s %s" % (method.upper(), tail), code == 403, "got %d" % code)
+    named = _functions_naming(os.path.join(_ROOT, "panel", "routes", "databases_data.py"), "EDIT_DATABASE_DATA")
+    check("the row and SQL routes each check EDIT_DATABASE_DATA in their own body",
+          {"api_server_database_row", "api_server_database_sql"} <= named, repr(sorted(named)))
+    with app.app_context():
+        holders = [g.name for g in Group.query.all() if auth.EDIT_DATABASE_DATA in (g.get_permissions() or [])]
+    check("EDIT_DATABASE_DATA is grantable, labelled, and in no group the panel made",
+          auth.EDIT_DATABASE_DATA in auth.ALL_PERMISSIONS and auth.ALL_PERMISSIONS[auth.EDIT_DATABASE_DATA]
+          and not [h for h in holders if not h.startswith("rbactest_")], repr(holders))
+
+
 def _check_specs_os_slug_for_installers():
     """/specs gives an INSTALL_SERVER user the OS slug, and only MANAGE_REMOTES the hardware."""
     global _obj, _sp_hosts, _sp_rv, _spmu_id, _spu_id
@@ -4061,6 +4091,7 @@ def _check_superadmin_full_access():
 
 try:
     _check_limited_user_denied_pages()
+    _check_database_manager_permissions()
     _check_specs_os_slug_for_installers()
     _check_failed_install_redirects_terminate()
     _check_uninstall_lands_on_openable_page()
@@ -4245,6 +4276,9 @@ _MUT_NO_PERM_OK = {
     "account_set_theme", "account_whats_new_seen",
     # Step-up: re-proves the caller's OWN password (and code) to restore its confirmation window.
     "account_reauth",
+    # The caller's OWN alert devices (Web Push): each looks its row up by id AND the caller's user id.
+    "account_push_subscribe", "account_push_unsubscribe", "account_push_device_remove",
+    "account_push_test", "account_push_events",
     # The panel owner handing over the panel: the caller's OWN flag is the gate (owner.is_owner,
     # refused with a 403 for anyone else), confirmed with their password and a live 2FA code.
     "account_owner_transfer",
@@ -4385,6 +4419,10 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
+    # The Databases manager: one whole value read for the page (a POST so the row's key is never in a URL;
+    # opening the table was audited), one piece of a dump upload (its finish audits what became of it:
+    # restored, or refused and why), and a cancel that removes the part file nothing lists.
+    "api_server_database_cell", "api_server_database_upload_piece", "api_server_database_upload_cancel",
     # One piece of a backup upload, appended to a part file nothing lists: the upload's outcome (the
     # archive kept, or why not) is audited once, by its finish (game_backup_upload / panel_backup_upload).
     "api_panel_backup_game_upload_piece",
@@ -4400,6 +4438,7 @@ _NO_AUDIT_OK = {
     "set_language",                  # the viewer's own UI language; usable pre-login
     "account_set_theme",             # the viewer's own colour scheme — a UI preference
     "account_whats_new_seen",        # the viewer closed "What's new"; dismisses a dialog
+    "account_push_events",           # which alerts the viewer's own devices get — a preference
     # SSH reachability probe. It records is_online / last_seen, and pins the key it met on a host
     # with no pin yet, exactly as that host's next connection from anywhere in the panel would
     # (_persist_host_key), and none of those write a row either.
