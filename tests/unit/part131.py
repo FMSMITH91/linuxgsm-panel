@@ -97,8 +97,11 @@ _NETWORK131 = ("sec-firewall", "fw-rules", "ufw-badge", "ufw-status-note",
 _NETWORK_LOCAL131 = ("ts-ssh-badge", "panel-bind-select", "panel-bind-custom", "panel-port-input",
                      "panel-port-msg", "panel-port-change-msg")
 _NETWORK_REMOTE131 = ("conn-method", "migrate-msg", "hostkey-msg")
-_CONTROLS131 = ("os-updates", "sec-osupdates", "btn-install-updates", "update-info", "sec-terminal",
-                "sec-power", "power-state", "disc-scan-btn", "disc-result")
+_CONTROLS131 = ("sec-terminal", "sec-power", "power-state", "disc-scan-btn", "disc-result")
+# OS Updates is this machine's upkeep: on Maintenance, beside Ubuntu Pro.
+_MAINT131 = ("os-updates", "sec-osupdates", "btn-install-updates", "update-info", "sec-ubuntupro")
+# The panel's own software (panel host, superadmin): its updates, backups and diagnostics.
+_PANEL131 = ("updates", "backups", "diagnostics", "pu-update-btn")
 _NET_ACTIONS131 = {"refreshFirewall", "openPort", "allowFromSource", "removeAllowFromSource", "limitPort",
                    "unlimitPort", "sshMode", "changeSshPort"}
 _NET_ACTIONS_LOCAL131 = {"changePanelBinding", "onBindSelect", "ufwAllowTailscale"}
@@ -157,12 +160,20 @@ for _page131, _extra131, _acts131 in (("local", _NETWORK_LOCAL131, _NET_ACTIONS_
           % _page131, (_NET_ACTIONS131 | _acts131) <= _have131,
           repr(sorted((_NET_ACTIONS131 | _acts131) - _have131)))
     _bad131 = _misplaced131(_page131, "controls", _CONTROLS131)
-    check("network tab (%s host page): OS Updates, Terminal, Power and Existing servers stay on Host "
-          "Controls" % _page131, not _bad131,
+    check("network tab (%s host page): Terminal, Power and Existing servers stay on Host Controls" % _page131,
+          not _bad131,
           repr({i: _P131[_page131].where.get(i, "<absent>") for i in _bad131} if _page131 in _P131 else _bad131))
+    _badm131 = _misplaced131(_page131, "maintenance", _MAINT131)
+    check("host tabs (%s host page): OS Updates is on Maintenance, beside Ubuntu Pro" % _page131, not _badm131,
+          repr({i: _P131[_page131].where.get(i, "<absent>") for i in _badm131} if _page131 in _P131 else _badm131))
     _btns131 = sorted(_P131[_page131].buttons) if _page131 in _P131 else []
-    check("network tab (%s host page): the five tabs are offered" % _page131,
-          _btns131 == ["controls", "maintenance", "network", "overview", "security"], repr(_btns131))
+    _want131 = ["controls", "maintenance", "network", "overview"] + (["panel"] if _page131 == "local" else []) + ["security"]
+    check("host tabs (%s host page): the tabs offered (Panel only on the panel's own host)" % _page131,
+          _btns131 == _want131, repr(_btns131))
+    if _page131 == "local":
+        _badp131 = _misplaced131(_page131, "panel", _PANEL131)
+        check("host tabs (local host page): Panel Updates, the panel's backups and diagnostics are on the Panel tab",
+              not _badp131, repr({i: _P131[_page131].where.get(i, "<absent>") for i in _badp131}))
     _src131 = [s for s in (_P131[_page131].scripts if _page131 in _P131 else []) if "remote_firewall.js" in s]
     check("network tab (%s host page): remote_firewall.js is loaded, whose functions the tab's controls "
           "and its rule rows (deleteGroup, unblockIp) call" % _page131, len(_src131) == 1, repr(_src131))

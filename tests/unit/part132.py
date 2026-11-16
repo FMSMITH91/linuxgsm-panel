@@ -186,12 +186,13 @@ for _page132 in ("local", "remote"):
     _html132 = _pages131.get(_page132, (0, ""))[1]
     _pills132 = dict(_re132.findall(r'data-mtab-btn="(\w+)">(.*?)</button>', _html132))
     check("tab labels (%s host page): Host Controls and Maintenance carry the full label and a short one "
-          "hidden from screen readers; the other three are short already" % _page132,
+          "hidden from screen readers; the others are short already" % _page132,
           '<span class="mtab-full">Host Controls</span><span class="mtab-short" aria-hidden="true">Controls'
           '</span>' in _pills132.get("controls", "")
           and '<span class="mtab-full">Maintenance</span><span class="mtab-short" aria-hidden="true">Maint.'
               '</span>' in _pills132.get("maintenance", "")
-          and sorted(_pills132) == ["controls", "maintenance", "network", "overview", "security"],
+          and sorted(_pills132) == ["controls", "maintenance", "network", "overview"]
+          + (["panel"] if _page132 == "local" else []) + ["security"],
           repr(_pills132))
 _tabs132 = _CSS132[_CSS132.find("#mtab-nav .mtab-short{ display:none; }"):]
 _narrow132 = _re132.search(r"@media \(width <= 767\.98px\)\{(.*?)\n\}", _tabs132, _re132.S)
