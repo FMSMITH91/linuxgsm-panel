@@ -171,16 +171,17 @@ def _free_port221():
 
 
 def _get221(port, path):
-    """GET http://127.0.0.1:port/path -> (status, body bytes); (None, b"") when nothing answered."""
-    import urllib.error as _ue221
-    import urllib.request as _ur221
+    """GET `path` from 127.0.0.1:`port` -> (status, body bytes); (None, b"") when nothing answered."""
+    import http.client as _hc221
+    conn = _hc221.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
-        with _ur221.urlopen("http://127.0.0.1:%d%s" % (port, path), timeout=5) as r:  # nosec B310 - loopback
-            return r.status, r.read()
-    except _ue221.HTTPError as e:
-        return e.code, e.read()
-    except OSError:
+        conn.request("GET", path)
+        r = conn.getresponse()
+        return r.status, r.read()
+    except (OSError, _hc221.HTTPException):
         return None, b""
+    finally:
+        conn.close()
 
 
 def _l1_serve221():
