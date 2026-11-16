@@ -179,7 +179,6 @@ def piece_script(user, uid, offset):
 # The scan's awk program and what it checks: ssh_manager/db_upload_scan.py.
 
 
-
 # One finish (or cancel) of an upload at a time: one asked again while the first still runs on the host
 # gives no answer, which reads as "ask again". flock is util-linux's; without it the step runs unlocked.
 # The lock file goes when the holder ends (the trap is set only once the lock is held).
@@ -231,8 +230,11 @@ def finish_script(user, uid, size, name):
 
 def _settle_body(user, name, restored):
     f = _sm._quote(_home(user) + "/" + _DUMP_DIR + "/" + name + ".sql.gz")
+    # Not a route: shell text run as the game account, its path quoted.
     if restored:
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
         return "rm -f -- %s.prev" % f
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return "if [ -e %s.prev ]; then mv -f -- %s.prev %s; else rm -f -- %s; fi" % (f, f, f, f)
 
 
@@ -250,9 +252,9 @@ def settle_script(user, name, restored, uid):
 
 def cancel_script(user, uid, name=None):
     """Remove an upload's part file (and a staged piece); one already put in place gives the earlier dump back."""
+    back = ['if [ -f "$p.stored" ]; then %s; fi' % _settle_body(user, name, False)] if name else []
     # Not a route: shell text run as the game account, its parts quoted.
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-    back = ['if [ -f "$p.stored" ]; then %s; fi' % _settle_body(user, name, False)] if name else []
     return "\n".join([_paths(user, uid), _FINISH_LOCK] + back + [
                       'rm -f -- "$p" "$p.piece" "$p.gz" "$p.stored"', "echo " + _M["READY"]]) + "\n"
 
