@@ -72,5 +72,5 @@
   "{server} is full.": "{server} est plein.",
   "{server} set a new player record.": "{server} a établi un nouveau record de joueurs.",
   "{server} went offline unexpectedly.": "{server} s'est arrêté de façon inattendue.",
-  "This browser's push service refused the subscription. In Brave, turn on Settings → Privacy and security → “Use Google services for push messaging”, restart Brave, then try again.": "Le service push de ce navigateur a refusé l'abonnement. Dans Brave, activez Paramètres → Confidentialité et sécurité → « Utiliser les services Google pour la messagerie push », redémarrez Brave, puis réessayez."
+  "This browser's push service refused the subscription. Brave switches it off by default because Chromium browsers deliver web alerts through Google; Firefox delivers them through Mozilla instead. For alerts with no web push at all, use ntfy on the Notifications page.": "Le service push de ce navigateur a refusé l'abonnement. Brave le désactive par défaut car les navigateurs Chromium livrent les alertes web via Google ; Firefox les livre via Mozilla. Pour des alertes sans push web, utilisez ntfy sur la page Notifications."
 }
