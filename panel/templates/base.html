@@ -359,6 +359,7 @@ window.CSRF = {{ csrf_token()|tojson }};
   // shows a delegate, so an admin scoped to remotes never saw the banner for the hosts they manage.
   window.OS_NAG = {{ 'true' if show_app_chrome and (current_user.is_superadmin or nav_remotes) else 'false' }};
 </script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/step_up_form.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/nags.js') }}"></script>
 {% if show_app_chrome and current_user.is_superadmin %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/update_badge.js') }}"></script>

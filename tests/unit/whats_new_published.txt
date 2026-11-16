@@ -704,3 +704,5 @@ f24b992a Fewer public-IP lookups.
 2c635567 Sending a test notification asks for your password again.
 a7a8e175 Panel warnings and errors are stored at their real priority in the system journal.
 183d92cf Log lines cannot forge a journal priority.
+66bcee55 Every page can ask for the password in place.
+12c3e9a9 An added API-token header no longer skips the password re-check.
