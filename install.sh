@@ -137,9 +137,15 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 _DIE_SAID=0
 die()   { _DIE_SAID=1; echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
-echo -e "${CYAN}╔═══════════════════════════════════════════╗"
-echo    "║     LinuxGSM Panel — install / update     ║"
-echo -e "╚═══════════════════════════════════════════╝${NC}"
+# The box only on a terminal. Anywhere else (the panel's update log, a deploy log) it is one plain
+# line: drawn with box characters 45 columns wide, the box wrapped into broken lines on a phone.
+if [[ -t 1 ]]; then
+    echo -e "${CYAN}╔═══════════════════════════════════════════╗"
+    echo    "║     LinuxGSM Panel — install / update     ║"
+    echo -e "╚═══════════════════════════════════════════╝${NC}"
+else
+    echo "LinuxGSM Panel — install / update"
+fi
 
 # ── Prerequisites ──
 command -v python3 >/dev/null 2>&1 || die "Python 3 is required."
