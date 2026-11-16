@@ -296,7 +296,7 @@ def _s222_burn():
 
 def _s222_counter_and_migration():
     a = _admin222()
-    _t, _c, (iid, _h) = _mint222(a, require_code="on")
+    iid = _mint222(a, require_code="on")[2][0]
     with _p9.test_request_context("/invite/x", method="POST"):
         inv = _db222.session.get(_Inv222, iid)
         _inv_plain = _Inv222(code_hash=None)

@@ -116,7 +116,7 @@ def _answer(text):
         try:
             _dd.rows_statement(table, 0)
         except _dd.RowRefused:
-            pass
+            continue    # a refusal is a documented answer for a table that does not fit, not a crash
 
 
 def _kind(fdp):
