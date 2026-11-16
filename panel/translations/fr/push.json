@@ -71,5 +71,6 @@
   "{server} is back online.": "{server} est de nouveau en ligne.",
   "{server} is full.": "{server} est plein.",
   "{server} set a new player record.": "{server} a établi un nouveau record de joueurs.",
-  "{server} went offline unexpectedly.": "{server} s'est arrêté de façon inattendue."
+  "{server} went offline unexpectedly.": "{server} s'est arrêté de façon inattendue.",
+  "This browser's push service refused the subscription. In Brave, turn on Settings → Privacy and security → “Use Google services for push messaging”, restart Brave, then try again.": "Le service push de ce navigateur a refusé l'abonnement. Dans Brave, activez Paramètres → Confidentialité et sécurité → « Utiliser les services Google pour la messagerie push », redémarrez Brave, puis réessayez."
 }
