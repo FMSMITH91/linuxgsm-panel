@@ -126,7 +126,7 @@ the file that holds them.
 
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
-| S | Man in the middle on the first or a later connection | Mitigate: host keys pinned on first use and enforced after (`panel/ops/ssh_manager/_core.py` `_PinPolicy`). Accept: the first connection is trust on first use. |
+| S | Man in the middle on the first or a later connection | Mitigate: host keys pinned on first use and enforced after (`panel/ops/ssh_manager/_core.py` `_PinPolicy`); an optional fingerprint on Add host and Edit host makes the first connection verified too, refused before the credential is sent when it does not match (`panel/routes/remotes.py`). Accept: without a fingerprint the first connection is trust on first use. |
 | T | Remote output crafted to mislead the panel's parsers | Mitigate: parsers degrade to empty on bad input and are fuzzed (`tests/fuzz/`: status replies, ufw, cron, configs, fail2ban). An empty read is never taken as a measurement. |
 | I | Stored SSH credentials leak | Mitigate: encrypted at rest with AES-256-GCM key ring; never logged; backups hold them encrypted. |
 | E | Panel's own host reached through a "remote" entry | Mitigate: bootstrap, Tailscale install and join routes refuse the panel's own host. |
@@ -158,7 +158,7 @@ the file that holds them.
 | S | A commit merged by someone holding the GitHub account | Mitigate: panels install only commits signed with the release key, kept off GitHub, verified against the key the host already holds (`tools/sign-release.sh`, `install.sh`). |
 | T | A dependency changed upstream | Mitigate: hashed lockfiles installed `--require-hashes --no-deps`; gamedig from a hash-locked npm lockfile; dependency review, pip-audit and osv-scanner in CI; a CycloneDX SBOM attached to each GitHub Release (`tools/sbom.py`). |
 | R | Which code a release contains | Mitigate: release notes from the CHANGELOG, the signature and the SBOM on the release; the SBOM is reproducible from the tagged commit. |
-| E | First install trusts whatever GitHub serves | Accept, stated: trust on first use; SECURITY.md shows how to check the key's fingerprint. |
+| E | First install trusts whatever GitHub serves | Reduce, then accept: the release key's fingerprint is published in README and SECURITY.md, which shows how to check the commit's release signature before the first install; unchecked, it is trust on first use. |
 
 ### TB8: CI runners
 
@@ -173,9 +173,9 @@ the file that holds them.
 
 | Risk | Response | Why, and who owns it |
 | --- | --- | --- |
-| A superadmin is root on the panel host | Accept | The panel manages the host; SECURITY.md says so and how to drop the local grant. Owner: whoever grants superadmin. |
-| Wide sudo grant on an install missing a root piece | Accept, with a fix path | The installer prints it; re-running install.sh as root narrows it. |
-| First SSH connection to a remote, and the first install, are trust on first use | Accept | No prior key exists to check against; fingerprints can be checked by hand. |
+| A superadmin is root on the panel host | Accept | The panel manages the host, and every superadmin keeps its host-level powers there (firewall, SSH, OS updates, reboot, the panel's port, Tailscale, IP blocking, Ubuntu Pro) by design. The controls are step-up re-authentication before each of those changes and an audit row for each; the panel-host terminal and panel backup restore stay the panel owner's only. SECURITY.md says so and how to drop the local grant. Owner: whoever grants superadmin. |
+| Wide sudo grant on an install missing a root piece | Accept, with a fix path | The installer prints it, and the panel host's page tells superadmins while it lasts (`system_ops.wide_sudo_grant`), with the command; re-running install.sh as root narrows it. |
+| First SSH connection to a remote, and the first install, are trust on first use | Reduce, then accept | Add host takes the host key's SHA256 fingerprint (RFC 4251 section 4.1: a fingerprint checked out of band); left empty, the first key is trusted. The release key's fingerprint is published in README and SECURITY.md, with how to check a commit's signature before the first install. |
 | The upload scan is a text scan, not an SQL parser | Accept | A keyword split over lines, a comment or vertical tab between keywords is not read; the database account's one-database grant refuses those statements. |
 | `mask_literals` follows the server's default escapes | Accept | Under NO_BACKSLASH_ESCAPES a backslash before a quote ends a literal for the server but not for the mask; decimal numbers are kept in the audit line by design. |
 | Push services and chat platforms see alert metadata | Transfer | To the vendor, under its terms; the text is minimal. |

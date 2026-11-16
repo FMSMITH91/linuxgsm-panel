@@ -74,7 +74,8 @@ def _register_server_management(app):
         return render_template("remote_manage.html", remote=local, status=status, config=cfg,
                                funnel_facts=ts.panel_funnel_facts(cfg),
                                panel_bound_port=ts._r13b_bound_port(cfg),
-                               hh_has_history=host_has_history(local.id))
+                               hh_has_history=host_has_history(local.id),
+                               wide_sudo=so.narrow_grant_command() if so.wide_sudo_grant() else "")
 
     @app.route("/api/server-management")
     @login_required

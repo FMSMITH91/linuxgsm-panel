@@ -11,7 +11,7 @@ import time
 from panel.ops.ssh_manager import _lazy
 paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core.config import decrypt_secret
-from panel.core.validation import canonical_ip, ip_address_or_none, ip_network_or_none
+from panel.core.validation import canonical_ip, host_key_sha256, ip_address_or_none, ip_network_or_none
 from panel.security import privileged as _priv
 from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -6559,7 +6559,7 @@ def remote_set_public_ssh(server, mode):
 
 
 def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",
-                        host_key="", captured=None):
+                        host_key="", captured=None, fingerprint=""):
     """Test an SSH connection and return (success, message).
 
     `host_key` is the pin to check against, for the callers that HAVE one. It was not a parameter
@@ -6585,6 +6585,9 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     stored password to whoever answered and reported success. Callers must pass the row's value
     itself, not `host_key or ""`, which drops the type.
 
+    `fingerprint` ("SHA256:...", optional): with no pin, the first contact must present a key with
+    that fingerprint or it is refused before anything is sent (_FingerprintPolicy).
+
     The client is closed on every way out. It used to be closed on success alone, so each refused
     test login and each changed host key left paramiko's Transport thread and socket open, as
     get_connection's refusals did (see _core._open_client)."""
@@ -6600,7 +6603,7 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     client = paramiko.SSHClient()
     # Pinned when the caller has a pin (an existing remote); capture-only on genuine first contact,
     # where there is nothing to compare against. Never AutoAddPolicy either way.
-    policy = _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key))
+    policy = _test_policy(host_key, fingerprint)
     client.set_missing_host_key_policy(policy)
     try:
         refused = _ssh_test_login(client, host, port, username, auth_method, credential)
@@ -6613,6 +6616,39 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     if captured is not None and policy.captured:
         captured.append(policy.captured)
     return True, "Connection successful"
+
+
+def _test_policy(host_key, fingerprint):
+    """The host key policy for ssh_test_connection: the pin, else the fingerprint, else capture only."""
+    if fingerprint and not host_key:
+        return _FingerprintPolicy(fingerprint)
+    return _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key))
+
+
+class _FingerprintPolicy(_core._PinPolicy):
+    """First contact checked against a fingerprint the operator verified out of band (RFC 4251 4.1).
+
+    `fingerprint` is "SHA256:..." as `ssh-keygen -lf` prints it. A key with another fingerprint is
+    refused instead of captured, so that first contact is verified rather than trusted. paramiko asks
+    the policy after the key exchange and BEFORE authentication, so a refused server is never offered
+    the password or key. A key that matches is captured, and the caller pins it, as on any first use.
+    """
+
+    def __init__(self, fingerprint):
+        """Check the first key against `fingerprint`."""
+        super().__init__(expected="", reject_on_change=True)
+        self.fingerprint = fingerprint
+
+    def missing_host_key(self, client, hostname, key):
+        """Refuse a key whose fingerprint differs; otherwise capture it."""
+        seen = host_key_sha256("%s %s" % (key.get_name(), key.get_base64()))
+        if seen != self.fingerprint:
+            raise _core.HostKeyMismatch(
+                'The SSH host key %s presented (%s %s) does not match the fingerprint entered (%s). '
+                'Nothing was sent to it. Check the fingerprint of that key type on the server '
+                '(ssh-keygen -lf on its /etc/ssh/ssh_host_*_key.pub), or leave the field empty to '
+                'trust the key on first use.' % (hostname, key.get_name(), seen, self.fingerprint))
+        super().missing_host_key(client, hostname, key)
 
 
 def _ssh_test_tailscale(host, port, username):
@@ -6665,6 +6701,8 @@ def _ssh_test_login(client, host, port, username, auth_method, credential):
 
 def _ssh_test_failure(exc, host, port):
     """The message ssh_test_connection shows for a connect that raised `exc`."""
+    if isinstance(exc, _core.HostKeyMismatch):
+        return str(exc)   # the panel's own sentence: which key, which pin or fingerprint, what to do
     if isinstance(exc, paramiko.AuthenticationException):
         return "SSH authentication failed. Check your credentials."
     if isinstance(exc, socket.timeout):

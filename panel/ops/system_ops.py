@@ -503,6 +503,37 @@ def _check_sudo(force=False):
     return _SUDO_PROBE["ok"]
 
 
+def wide_sudo_grant():
+    """Whether this root install still gives the panel's account passwordless sudo for EVERY command.
+
+    install.sh writes that wide grant only when the root-owned helper pieces are absent, and the
+    narrow one (the helper alone, plus the game accounts) once they are there (write_sudoers_grant).
+    So: a system service (a root install; a per-user install's sudo is its user's own), no helper,
+    and `sudo -n true` allowed, which the narrow grant refuses. Asked in that order, so a host with
+    the helper never runs the sudo probe, and the probe itself is cached (_check_sudo).
+    """
+    return bool(_is_system_service() and not _helper_present() and _check_sudo())
+
+
+_INSTALL_URL = "https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/install.sh"
+
+
+def narrow_grant_command():
+    """The command that narrows the wide grant: the root-owned installer when it is there, else GitHub's.
+
+    Never the panel's own checkout: root does not run what the panel's account can rewrite
+    (SECURITY.md, "Root never runs or installs from the panel's checkout").
+    """
+    root_copy = os.path.join(os.path.dirname(_priv.HELPER_PATH), "install.sh")
+    try:
+        owned = os.stat(root_copy).st_uid == 0
+    except OSError:
+        owned = False
+    if owned:
+        return "cd / && sudo bash %s" % root_copy
+    return "curl -fsSL %s | sudo bash" % _INSTALL_URL
+
+
 # ─── UFW ──────────────────────────────────────────────────────
 
 # `ufw status` runs through gettext, and its Status line is translated whole: a Dutch host prints

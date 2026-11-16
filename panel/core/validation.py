@@ -45,6 +45,9 @@ LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\Z")     # for linuxgsm_user
 # was handed to ssh and paramiko as typed — neither strips them, so nothing resolved and every
 # command to that host failed. canonical_host drops them before this is asked.
 HOST_RE = re.compile(r"^[A-Za-z0-9._:][A-Za-z0-9._:-]{0,254}\Z")
+# An SSH host key fingerprint as `ssh-keygen -lf` prints it (SHA256 is its default hash): "SHA256:" and the
+# digest in base64, whose 32 bytes are 43 characters without the padding OpenSSH leaves off.
+_HOST_KEY_FP_RE = re.compile(r"(?:^|\s)(SHA256:[A-Za-z0-9+/]{43})=?(?:\s|\Z)")
 # Free-text display labels (e.g. a remote's name): allow spaces/punctuation but reject the
 # characters that would let a stored label break out of HTML or a JS string when it's shown
 # in the UI's client-side rendering. Defense-in-depth alongside output encoding.
@@ -564,3 +567,33 @@ def _valid_hex_color(value):
     if not v.startswith("#"):
         v = "#" + v
     return v.lower() if _HEX_COLOR_RE.match(v) else ""
+
+
+def host_key_fingerprint_arg(text):
+    """The SHA256 host key fingerprint in `text`, "" for a blank field, or None when it holds none.
+
+    Takes the whole line `ssh-keygen -lf <key>.pub` prints ("256 SHA256:... root@host (ED25519)") as
+    well as the fingerprint alone, so it can be pasted as it comes. An MD5 fingerprint, a
+    truncated one or anything over 512 characters is None.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) > 512:
+        return None
+    m = _HOST_KEY_FP_RE.search(text)
+    return m.group(1) if m else None
+
+
+def host_key_sha256(keystr):
+    """The OpenSSH SHA256 fingerprint ("SHA256:...", unpadded) of a "keytype base64" key, or ""."""
+    import base64
+    import hashlib
+    parts = (keystr or "").split()
+    try:
+        raw = base64.b64decode(parts[-1], validate=True) if parts else b""
+    except ValueError:
+        return ""
+    if not raw:
+        return ""
+    return "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")

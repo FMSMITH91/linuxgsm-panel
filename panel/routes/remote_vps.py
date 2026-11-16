@@ -1402,7 +1402,8 @@ def _register_host_pages(app):
         return render_template("remote_manage.html", remote=remote, games=games,
                                status=status, config=cfg, funnel_facts=funnel_facts,
                                panel_bound_port=ts._r13b_bound_port(cfg),
-                               hh_has_history=host_has_history(remote_id))
+                               hh_has_history=host_has_history(remote_id),
+                               wide_sudo=so.narrow_grant_command() if remote.is_local and so.wide_sudo_grant() else "")
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required
