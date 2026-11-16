@@ -40,8 +40,10 @@ KNOWN_OPEN = {}
 # The issues Accepted in SonarCloud on main, by issue key, each with why. They are the --branch
 # check's positive control: each must be in SonarCloud's list of the branch's Accepted issues, or the
 # read returned less than the branch holds. One that is reopened, or fixed, comes out of here.
+# An issue's key changes when SonarCloud closes it and raises it again, as it does when the line it
+# sits on is edited: a change to that line updates the key here in the same change.
 KNOWN_ACCEPTED = {
-    "AaDejKLMfWz637hiAQny": "docker:S6471 in .clusterfuzzlite/Dockerfile: the fuzz build image runs "
+    "AaHkWUMULZkAFiLSHxwS": "docker:S6471 in .clusterfuzzlite/Dockerfile: the fuzz build image runs "
                             "as root. ClusterFuzzLite's build step runs `compile` in it with no "
                             "--user (oss-fuzz infra/cifuzz/docker.py), and as uid 1001 the base "
                             "image's compile stops at its first step: \"cp: cannot create regular "

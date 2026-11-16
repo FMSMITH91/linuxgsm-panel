@@ -450,13 +450,13 @@ check("sonar main gate: ...an open issue that is not known fails, named with its
 _sq1_empty = _sq28_drive([], accepted=[])
 check("sonar main gate: ...the Accepted issue missing from main's Accepted list fails, named (an "
       "empty read is not a clean main, even with nothing open)",
-      len(_sq1_empty[0]) == 1 and "AaDejKLMfWz637hiAQny" in _sq1_empty[0][0]
+      len(_sq1_empty[0]) == 1 and "AaHkWUMULZkAFiLSHxwS" in _sq1_empty[0][0]
       and "not in SonarCloud's list of the branch's Accepted issues" in _sq1_empty[0][0],
       repr(_sq1_empty[0]))
 _sq1_reopened = _sq28_drive(list(_SQ28_KNOWN), accepted=[])
 check("sonar main gate: ...an Accepted issue that is open again fails twice: open and not known, and "
       "missing from the Accepted list",
-      len(_sq1_reopened[0]) == 2 and all("AaDejKLMfWz637hiAQny" in _p for _p in _sq1_reopened[0]),
+      len(_sq1_reopened[0]) == 2 and all("AaHkWUMULZkAFiLSHxwS" in _p for _p in _sq1_reopened[0]),
       repr(_sq1_reopened[0]))
 _sq1_short = _sq28_drive([], total=5)
 check("sonar main gate: ...a list shorter than SonarCloud's own total fails",
@@ -472,9 +472,9 @@ with _ctx28.redirect_stdout(_sq28_out):
                  _sq28.main(["x", "--branch", "main;rm", "--sha", _SHA28]))
 check("sonar main gate: ...no issue is known open, the one Accepted is docker:S6471 with its measured "
       "reason, the self-test passes, and a malformed branch or commit is refused",
-      _sq28.KNOWN_OPEN == {} and set(_sq28.KNOWN_ACCEPTED) == {"AaDejKLMfWz637hiAQny"}
-      and "S6471" in _sq28.KNOWN_ACCEPTED["AaDejKLMfWz637hiAQny"]
-      and "libFuzzingEngine.a': Permission denied" in _sq28.KNOWN_ACCEPTED["AaDejKLMfWz637hiAQny"]
+      _sq28.KNOWN_OPEN == {} and set(_sq28.KNOWN_ACCEPTED) == {"AaHkWUMULZkAFiLSHxwS"}
+      and "S6471" in _sq28.KNOWN_ACCEPTED["AaHkWUMULZkAFiLSHxwS"]
+      and "libFuzzingEngine.a': Permission denied" in _sq28.KNOWN_ACCEPTED["AaHkWUMULZkAFiLSHxwS"]
       and _sq28_rcs == (0, 2, 2)
       and "self-test: " in _sq28_out.getvalue() and "SELF-TEST FAIL" not in _sq28_out.getvalue(),
       repr((_sq28_rcs, _sq28_out.getvalue()[-300:])))
