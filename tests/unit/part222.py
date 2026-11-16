@@ -84,7 +84,7 @@ def _s222_origin_header():
        got, [403, 403, 200, 403, 403, 200, 403])
     rows = _audits222("csrf_rejected", first)
     _all222("origin: each refusal is audited once as csrf_rejected, naming the header and the origin",
-            [len(rows) == 5, "foreign Origin 'https://evil.test' on POST" in rows[0][1],
+            [len(rows) == 5, "foreign Origin 'https://evil.test' on POST" in (rows[0][1] if rows else ""),
              _audits222("access_denied", first) == []], repr(rows))
     r = a.post(_POST222, headers=dict(_XHR222, Origin="https://evil.test"))
     check("origin: the refusal answers JSON in plain words",
@@ -290,7 +290,7 @@ def _s222_burn():
     wrongs, burned = _audits222("invite_code_wrong", first), _audits222("invite_burned", first)
     _all222("invite code: every wrong code is audited, the revocation once, and the administrators are alerted",
             [len(wrongs) == 5, all(w[2] is False for w in wrongs), len(burned) == 1,
-             "revoked after 5 wrong codes" in burned[0][1],
+             "revoked after 5 wrong codes" in (burned[0][1] if burned else ""),
              [n[1] for n in _NOTES222] == ["Invite revoked after wrong codes"]], repr((wrongs, burned, _NOTES222)))
 
 
