@@ -40,6 +40,7 @@ from panel.core.stdin_chunks import StdinChunks
 from panel.db.models import db
 from panel.ops import ssh_manager as _sm
 from panel.ops.ssh_manager import databases as _dbs
+from panel.ops.ssh_manager.db_upload_scan import SCAN_AWK as _SCAN_AWK
 from panel.routes import databases as _dbr, databases_data as _ddr
 from panel.routes._shared import game_account_write_refusal
 from panel.security.account_guard import step_up_needed, step_up_refusal
@@ -175,49 +176,8 @@ def piece_script(user, uid, offset):
         'rm -f -- "$c"; echo "%s $(stat -c %%s -- "$p")"' % _M["SIZE"]]) + "\n"
 
 
-# The scan of the whole SQL (mawk/gawk alike): its size unpacked, and any statement that switches database
-# or names another one as `schema`. Prints one verdict (`exit` still runs END, hence `done`) and stops at
-# the first. A dump's INSERT lines are most of its bytes and hold the data, so on those it reads only the
-# INSERT's own head (up to " VALUES") and, on a line that holds a system or panel database's name at all,
-# each statement chained after a ";" (data that merely says "; use ..." or "`mysql`." is not refused).
-_SCAN_AWK = r'''function other(l,   n) {
-  while (match(l, /`(mysql|sys|information_schema|performance_schema|gs[0-9]+_[a-z0-9]+)`[ \t]*\./)) {
-    n = substr(l, RSTART + 1); n = substr(n, 1, index(n, "`") - 1)
-    if (n != me) return 1
-    l = substr(l, RSTART + RLENGTH) }
-  return 0 }
-# Built from parts (dynamic regexes) so no line of this program is too long to read: LEAD is an optional
-# executable comment, SW a statement that switches to a system or panel database, CH a chained statement.
-function regexes() {
-  LEAD = "(/\\*![0-9]*[ \t]*)?"
-  SW = "^[ \t]*" LEAD "(use[ \t]+|(create|drop|alter)[ \t]+(database|schema)[ \t]+(if[ \t]+(not[ \t]+)?exists[ \t]+)?)"
-  SW = SW "`?(mysql|sys|information_schema|performance_schema|gs[0-9]+_)"
-  CH = ";[ \t]*" LEAD "(use|update|delete|insert|replace|select|create|drop|alter|rename|truncate|"
-  CH = CH "call|with|lock|grant|set|do|handler|load)[ \t`(]" }
-function switches(l) {
-  return l ~ SW }
-function named(l) {
-  return l ~ /gs[0-9]/ || index(l, "mysql") || index(l, "_schema") ||
-    index(l, "`sys`") || index(l, " sys;") || index(l, " sys ") }
-function chained(l,   rest, e, st) {
-  while (match(l, CH)) {
-    rest = substr(l, RSTART + 1); e = index(rest, ";"); st = e ? substr(rest, 1, e - 1) : rest
-    if (switches(st)) return "SWITCH"
-    if (other(st)) return "OTHER"
-    l = rest }
-  return "" }
-function verdict(v) { print v; done = 1; exit }
-BEGIN { regexes() }
-{ t += length($0) + 1; if (t > max) verdict("BIG")
-  if ($0 ~ /^INSERT INTO /) {
-    v = index($0, " VALUES"); h = v ? substr($0, 1, v) : $0
-    if ((index(h, "`.") || index(h, "` .")) && other(tolower(h))) verdict("OTHER")
-    if (named($0) && index($0, ";")) { c = chained(tolower($0)); if (c != "") verdict(c) }
-    next }
-  l = tolower($0)
-  if (l ~ /^[ \t]*(\/\*![0-9]*[ \t]*)?(use[ \t`]|use$|connect[ \t]|(create|drop|alter)[ \t]+(database|schema)([ \t`]|$))/) verdict("SWITCH")
-  if (other(l)) verdict("OTHER") }
-END { if (!done) print "SCANNED" }'''
+# The scan's awk program and what it checks: ssh_manager/db_upload_scan.py.
+
 
 
 def finish_script(user, uid, size, name):
@@ -248,8 +208,27 @@ def finish_script(user, uid, size, name):
         'exit 5;; *) %s echo %s; exit 5;; esac' % (rm, _M["DAMAGED"], rm, rm, _M["DAMAGED"]),
         'if [ "$m" != 1f8b ]; then gzip -c -n -- "$p" > "$p.gz" && mv -f -- "$p.gz" "$p" || { %s echo %s; exit 6; }; fi'
         % (rm, _M["FAIL"]),
-        'mv -f -- "$p" "$D"/%s && echo %s && exit 0' % (_sm._quote(name + ".sql.gz"), _M["STORED"]),
+        # The dump the server's files held is kept aside (<name>.sql.gz.prev) until the restore has worked:
+        # settle_script puts it back if it did not, so an upload that fails never replaces it.
+        'f="$D"/%s; if [ -e "$f" ] && ! mv -f -- "$f" "$f.prev"; then %s echo %s; exit 6; fi'
+        % (_sm._quote(name + ".sql.gz"), rm, _M["FAIL"]),
+        'mv -f -- "$p" "$f" && echo %s && exit 0' % _M["STORED"],
         rm + " echo " + _M["FAIL"], "exit 6"]) + "\n"
+
+
+def settle_script(user, name, restored):
+    """After the restore: drop the dump kept aside (it worked), or put it back in place of the upload (it did not).
+
+    With nothing kept aside, a failed upload's dump is removed: it is never left as the one Restore reads.
+    """
+    f = _sm._quote(_home(user) + "/" + _DUMP_DIR + "/" + name + ".sql.gz")
+    if restored:
+        body = "rm -f -- %s.prev" % f
+    else:
+        body = "if [ -e %s.prev ]; then mv -f -- %s.prev %s; else rm -f -- %s; fi" % (f, f, f, f)
+    # Not a route: shell text run as the game account, its parts quoted.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
+    return body + " && echo " + _M["READY"] + "\n"
 
 
 def cancel_script(user, uid):
@@ -316,6 +295,11 @@ def _get_upload(uid, db_id):
 def _drop_upload(uid):
     with _UPLOADS_LOCK:
         _UPLOADS.pop(uid, None)
+
+
+S_PREV_BACK = "The uploaded dump was not kept: the server's files hold the dump they had before."
+S_PREV_UNKNOWN = ("The host did not answer when the panel put the earlier dump back; check panel-db-dumps in the "
+                  "server's files.")
 
 
 def _refused(key):
@@ -403,8 +387,17 @@ def _upload_finish(gs, r, uid):
         log_action(current_user, "db_upload", target=gs.name, server=gs, success=False,
                    detail="%s: dump of %d bytes refused: %s" % (r.name, e["size"], val))
         return _say(409, why)
+    return _restore_upload(gs, r, e, hd)
+
+
+def _restore_upload(gs, r, e, hd):
+    """Restore the database from the upload now in place; keep it, or put the earlier dump back."""
     ok, said = _dbs.restore(gs.remote, hd, gs.short_name, r.name, decrypt_secret(r.secret))
     _ddr.forget(r.id)
+    kept, _v = _upcmd(gs, settle_script(gs.short_name, r.name, bool(ok)), 60)
+    if not ok:
+        said = i18n.Sentences(said or i18n.Sentence("Failed"), i18n.Sentence(
+            S_PREV_BACK if kept == "ok" else S_PREV_UNKNOWN))
     log_action(current_user, "db_upload", target=gs.name, server=gs, success=bool(ok),
                detail=_dbr._done_or_not(ok, "restored database %s from an uploaded dump of %d bytes" % (r.name, e["size"]),
                                         "database %s not restored from an uploaded dump" % r.name, said))

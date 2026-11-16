@@ -386,15 +386,26 @@ def _skip_comments(text):
         s = rest
 
 
+def _comment_end(text, i):
+    """The index just past the comment that starts at text[i], or None when none starts there.
+
+    MySQL's and MariaDB's comment syntax: # to the end of the line; -- followed by a space or a
+    control character (a tab, a line break) or the end, to the end of the line; /* ... */. An
+    executable comment (/*! ... */, MariaDB's /*M! ... */) is not one: the server runs what it holds.
+    """
+    if text.startswith("#", i) or (text.startswith("--", i) and (i + 2 == len(text) or ord(text[i + 2]) <= 32)):
+        nl = text.find("\n", i)
+        return len(text) if nl < 0 else nl + 1
+    if text.startswith("/*", i) and not text.startswith("/*!", i) and not text[i:i + 4].upper() == "/*M!":
+        end = text.find("*/", i + 2)
+        return len(text) if end < 0 else end + 2
+    return None
+
+
 def _past_comment(s):
     """`s` after the comment it starts with, or None when it starts with none (or an executable one)."""
-    if s.startswith("#") or (s.startswith("--") and (len(s) == 2 or s[2] in " \t\r\n")):
-        nl = s.find("\n")
-        return "" if nl < 0 else s[nl + 1:]
-    if s.startswith("/*") and not s.startswith("/*!") and not s.upper().startswith("/*M!"):
-        end = s.find("*/", 2)
-        return "" if end < 0 else s[end + 2:]
-    return None
+    end = _comment_end(s, 0)
+    return None if end is None else s[end:]
 
 
 def sql_kind(text):
@@ -435,27 +446,38 @@ def _scan_literal(text, i):
 _HEX_NUM_RE = re.compile(r"0[xXbB][0-9A-Fa-f]+")
 
 
+def _mask_step(text, i, out):
+    """Append what mask_literals keeps of the token at text[i] to `out`; the index after it."""
+    end = _comment_end(text, i)
+    if end is not None:
+        out.append(" ")
+        return end
+    ch = text[i]
+    if ch in "'\"":
+        out.append(ch + "?" + ch)
+        return _scan_literal(text, i)
+    if ch == "`":
+        j = text.find("`", i + 1)
+        if j < 0:
+            out.append("`?")
+            return len(text)
+        out.append(text[i:j + 1])
+        return j + 1
+    out.append(ch)
+    return i + 1
+
+
 def mask_literals(text, limit=300):
     """The statement for the audit log, its literals masked, on one line, at most `limit` characters.
 
-    Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, every run of spaces
-    and line breaks one space. Identifiers in backticks are kept; nothing typed between quotes reaches the log.
+    Each string literal ('...', "...", X'...') becomes '?', 0x... numbers 0x?, each comment one space
+    (a quote inside a comment opens no literal, and what a comment says is not logged), every run of
+    spaces and line breaks one space. Identifiers in backticks are kept; one never closed ends the text
+    as `?. Nothing typed between quotes reaches the log.
     """
     out, i, text = [], 0, text or ""
     while i < len(text):
-        ch = text[i]
-        if ch in "'\"":
-            j = _scan_literal(text, i)
-            out.append(ch + "?" + ch)
-            i = j
-        elif ch == "`":
-            j = text.find("`", i + 1)
-            j = len(text) if j < 0 else j + 1
-            out.append(text[i:j])
-            i = j
-        else:
-            out.append(ch)
-            i += 1
+        i = _mask_step(text, i, out)
     flat = re.sub(r"\s+", " ", _HEX_NUM_RE.sub(lambda m: m.group(0)[:2] + "?", "".join(out))).strip()
     flat = "".join(c if c.isprintable() else "?" for c in flat)
     return flat if len(flat) <= limit else flat[:limit - 1] + "…"

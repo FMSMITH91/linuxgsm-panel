@@ -371,6 +371,11 @@ eq("db_data.rows: a text value whose NUL the server marked (U+2400) is flagged, 
 check("manager script: a cell flagged nul is not editable here, and says why",
       "cell.more || cell.nul" in open(_os219.path.join(_root, "panel", "static", "js", "databases_manager.js"),
                                       encoding="utf-8").read())
+eq("db_data.mask_literals: a quote inside a comment opens no literal (the next literal is still masked), a comment "
+   "is not logged, an executable comment's literal is masked, and an unclosed backtick ends the text",
+   [_dd219.mask_literals(t) for t in ("-- it's mine\nUPDATE u SET pw='hunter2secret'", "# don't\nSELECT 'tok'",
+                                      "/* it's */ SELECT 'tok'", "SELECT `a 'tok'", "/*!50000 UPDATE t SET a='x' */")],
+   ["UPDATE u SET pw='?'", "SELECT '?'", "SELECT '?'", "SELECT `?", "/*!50000 UPDATE t SET a='?' */"])
 check("db_data.mask_literals: an unterminated literal is masked to the end; long text is cut",
       _dd219.mask_literals("SELECT 'secret") == "SELECT '?'" and len(_dd219.mask_literals("x" * 999)) == 300)
 _got219 = []
@@ -559,7 +564,8 @@ try:
     # ── 5d. the step-up confirm, and the dumps ───────────────────────────────────────────────────
     for _n5, _fn5 in (("drop", lambda *a: _SVC219.append(("drop",) + a[2:]) or (True, "")),
                       ("dump", lambda *a: _SVC219.append(("dump", a[1], a[2], a[3], a[4])) or (True, "")),
-                      ("restore", lambda *a: _SVC219.append(("restore",) + a[2:]) or (True, "")),
+                      ("restore", lambda *a: _SVC219.append(("restore",) + a[2:]) or (
+                          (False, "The restore did not finish.") if _R5.get("restore_fail") else (True, ""))),
                       ("set_password", lambda *a: _SVC219.append(("password",)) or (True, ""))):
         _p9_patch(_dbs219, _n5, _fn5)
     _p9_patch(_dbr219, "game_account_write_refusal", lambda remote, user, **k: None)
@@ -606,6 +612,17 @@ try:
     _r219 = _M219.post(_api219 + "/upload/%s/finish" % _uid219, json={"confirm": _NAME219})
     _R5["up_switch"] = (_r219.status_code, _p9_json(_r219), _SVC219[_n219:])
     _R5["up_cmds"] = list(_UPC219)
+    # A dump the scan passed whose restore then fails: the dump the files held goes back in place.
+    _R5["switch"], _R5["restore_fail"] = False, True
+    _uid219 = _p9_json(_M219.post(_api219 + "/upload", json={"size": 10})).get("id", "")
+    _c0 = len(_UPC219)
+    _r219 = _M219.post(_api219 + "/upload/%s/finish" % _uid219, json={"confirm": _NAME219})
+    _R5["up_failed"] = (_r219.status_code, _p9_json(_r219).get("message", ""), _UPC219[_c0:])
+    _R5["restore_fail"] = False
+    _c0 = len(_UPC219)
+    _M219.post(_api219 + "/upload/%s/finish" % _p9_json(_M219.post(_api219 + "/upload", json={"size": 10})).get("id", ""),
+               json={"confirm": _NAME219})
+    _R5["up_settled"] = _UPC219[_c0:]
 
     # ── 5f. the Databases page ───────────────────────────────────────────────────────────────────
     _R5["page"] = {k: c.get("/databases").get_data(as_text=True) for k, c in (("view", _V219), ("mgr", _M219),
@@ -732,6 +749,13 @@ check("upload: a dump the host check stored is restored by the import as the gam
       "account", _R5.get("up_finish", {}).get("success") is True
       and [s[:3] for s in _R5.get("up_restore", [])] == [("restore", "p219u", _NAME219)]
       and _R5.get("up_restore", [("",) * 4])[0][3] == _K219, repr(_R5.get("up_restore")))
+_uf219 = _R5.get("up_failed", (0, "", []))
+check("upload: a restore that fails puts the dump the files held back (settle as the game account) and says so",
+      _uf219[0] == 502 and "the dump they had before" in _uf219[1] and len(_uf219[2]) == 2
+      and ".prev" in _uf219[2][1] and "mv -f" in _uf219[2][1], repr(_uf219)[:400])
+check("upload: ...and one that works drops the copy kept aside",
+      len(_R5.get("up_settled", [])) == 3 and "rm -f" in _R5.get("up_settled", ["", "", ""])[2]
+      and ".prev" in _R5.get("up_settled", ["", "", ""])[2], repr(_R5.get("up_settled"))[:300])
 _usw219 = _R5.get("up_switch", (0, {}, ["x"]))
 check("upload: a dump the check refused (it switches database) is not restored, and says why",
       _usw219[0] == 409 and _usw219[2] == [] and "switches to another database" in _usw219[1].get("message", ""),
@@ -769,8 +793,17 @@ _HOSTILE_DUMPS219 = {
         "-- dump\nINSERT INTO `t` VALUES (1); UPDATE `gs9_other`.`t` SET a=1;\n",
     "a USE chained on an INSERT line": "-- dump\nINSERT INTO `t` VALUES (1);USE gs9_other;\n",
     "a DROP DATABASE chained on an INSERT line": "-- dump\nINSERT INTO `t` VALUES (1); DROP DATABASE IF EXISTS `gs9_o`;\n",
+    "an unquoted INSERT into another database chained on an INSERT line":
+        "-- dump\nINSERT INTO `t` VALUES (1); INSERT INTO gs9_other.items VALUES (2);\n",
+    "an unquoted UPDATE of another database": "-- dump\nUPDATE gs9_other.items SET score = -8;\n",
+    "an unquoted system schema": "-- dump\nSELECT * FROM mysql.user;\n",
+    "an unquoted INSERT head": "-- dump\nINSERT INTO gs9_other.t VALUES (1);\n",
+    "an unquoted name in an executable comment": "-- dump\n/*!50001 CREATE VIEW v AS SELECT * FROM gs9_x.t */;\n",
 }
-_INSERT_VERDICT219 = {"an INSERT into another panel database": "OTHER",
+_INSERT_VERDICT219 = {"an unquoted INSERT into another database chained on an INSERT line": "OTHER",
+                      "an unquoted UPDATE of another database": "OTHER", "an unquoted system schema": "OTHER",
+                      "an unquoted INSERT head": "OTHER", "an unquoted name in an executable comment": "OTHER",
+                      "an INSERT into another panel database": "OTHER",
                       "an UPDATE of another database chained on an INSERT line": "OTHER",
                       "a USE chained on an INSERT line": "SWITCH", "a DROP DATABASE chained on an INSERT line": "SWITCH"}
 
@@ -816,14 +849,56 @@ eq("upload check: a dump that switches to or names another database is refused, 
     "executable-comment use": (("refused", "SWITCH"), None), "drop schema": (("refused", "SWITCH"), None),
     "another panel database": (("refused", "OTHER"), None), "a system schema": (("refused", "OTHER"), None),
     **{k: (("refused", v), None) for k, v in _INSERT_VERDICT219.items()}})
-_chat219 = (b"-- dump\nINSERT INTO `chat` VALUES (1,'ok; use /help; things; select settings'),"
-            b"(2,'USE gs9_x; then `mysql`.`user`.; drop database x');\nINSERT INTO `gs12_lp`.`chat` VALUES (3,'mine');\n")
+_chat219 = (b"-- dump\n-- see mysql.com and gs9_x.t (a comment)\n"
+            b"INSERT INTO `chat` VALUES (1,'ok; use /help; things; select settings'),"
+            b"(2,'USE gs9_x; then `mysql`.`user`.; drop database x'),(3,'runs on mysql 8; select a kit'),"
+            b"(4,'see mysql.user too');\nINSERT INTO `gs12_lp`.`chat` VALUES (3,'mine'); UPDATE gs12_lp.chat SET a=1;\n")
 eq("upload check: data in an INSERT that only mentions statements or other databases, and an INSERT into the "
    "database's own name, are stored", _finish219(_chat219), (("ok", ""), _chat219))
 eq("upload check: NUL bytes, a file that is not SQL, an empty one and a damaged gzip are refused",
    [_R6[k] for k in ("nul", "notsql", "empty-gz", "damaged")],
    [(("refused", "NOTTEXT"), None), (("refused", "NOTSQL"), None), (("refused", "FORMAT"), None),
     (("refused", "DAMAGED"), None)])
+import ast as _ast219  # noqa: E402 - beside the check that uses it
+_scan_mod219 = _os219.path.join(_root, "panel", "ops", "ssh_manager", "db_upload_scan.py")
+with open(_scan_mod219, encoding="utf-8") as _fh219:
+    _scan_tree219 = _ast219.parse(_fh219.read())
+check("upload scan: its program lives in a module with no imports (a fuzz harness loads it without the app), and "
+      "the finish runs that same program",
+      not [n for n in _ast219.walk(_scan_tree219) if isinstance(n, (_ast219.Import, _ast219.ImportFrom))]
+      and _dfr219._SCAN_AWK is __import__("panel.ops.ssh_manager.db_upload_scan", fromlist=["x"]).SCAN_AWK)
+# The dump the files held is kept aside until the restore works, and put back when it does not.
+_DEST219 = _os219.path.join(_DD219, "gs12_lp.sql.gz")
+
+
+def _stored219():
+    with open(_DEST219, "rb") as fh:
+        return _gz219.decompress(fh.read())
+
+
+def _keep219(restored, had_one):
+    """(what <name>.sql.gz holds after a stored upload and settle_script, whether a .prev is left)."""
+    for f in (_DEST219, _DEST219 + ".prev"):
+        if _os219.path.exists(f):
+            _os219.unlink(f)
+    if had_one:
+        with open(_DEST219, "wb") as fh:
+            fh.write(_gz219.compress(b"-- the backup's dump\n"))
+    _bash219(_dfr219.start_script("gm219", _UID219, 1))
+    with open(_os219.path.join(_DD219, ".panel-upload-%s.part" % _UID219), "wb") as fh:
+        fh.write(_GOOD219.encode())
+    first = _dfr219.outcome(_bash219(_dfr219.finish_script("gm219", _UID219, len(_GOOD219.encode()), "gs12_lp")))
+    aside = _os219.path.exists(_DEST219 + ".prev")
+    _bash219(_dfr219.settle_script("gm219", "gs12_lp", restored))
+    got = _stored219() if _os219.path.exists(_DEST219) else None
+    return first, aside, got, _os219.path.exists(_DEST219 + ".prev")
+
+
+eq("upload keep: the stored dump is kept aside while the restore runs; a failed restore puts it back, a working "
+   "one drops it, and with none before a failed upload leaves no dump",
+   [_keep219(False, True), _keep219(True, True), _keep219(False, False)],
+   [(("ok", ""), True, b"-- the backup's dump\n", False), (("ok", ""), True, _GOOD219.encode(), False),
+    (("ok", ""), False, None, False)])
 check("upload check: a refused upload's part file is removed",
       not [f for f in _os219.listdir(_DD219) if f.startswith(".panel-upload-")], repr(_os219.listdir(_DD219)))
 _bash219(_dfr219.start_script("gm219", _UID219, 1))
