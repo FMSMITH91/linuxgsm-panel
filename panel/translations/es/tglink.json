@@ -1,0 +1,16 @@
+{
+  "Linked": "Vinculado",
+  "Your alerts also go to your own Telegram chat.": "Tus alertas también llegan a tu propio chat de Telegram.",
+  "Unlink Telegram": "Desvincular Telegram",
+  "Get your alerts in your own Telegram chat, from the panel's bot.": "Recibe tus alertas en tu propio chat de Telegram, desde el bot del panel.",
+  "Link my Telegram": "Vincular mi Telegram",
+  "Open Telegram and press Start": "Abre Telegram y pulsa Iniciar",
+  "Waiting for Start in Telegram…": "Esperando a que pulses Iniciar en Telegram…",
+  "The link expired. Ask for a new one.": "El enlace caducó. Pide uno nuevo.",
+  "Telegram isn't set up on this panel.": "Telegram no está configurado en este panel.",
+  "Couldn't reach Telegram. Try again in a moment.": "No se pudo contactar con Telegram. Inténtalo de nuevo en un momento.",
+  "That's enough link codes for now. Try again in a few minutes.": "Ya has pedido bastantes códigos de enlace. Inténtalo de nuevo en unos minutos.",
+  "Telegram unlinked. It gets no more alerts.": "Telegram desvinculado. Ya no recibe alertas.",
+  "A Telegram chat was linked for alerts": "Se vinculó un chat de Telegram para las alertas",
+  "Since you last signed in: a Telegram chat was linked to get your alerts ({when}, from {ip}).": "Desde tu último inicio de sesión: se vinculó un chat de Telegram para recibir tus alertas ({when}, desde {ip})."
+}

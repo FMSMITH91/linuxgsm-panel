@@ -4,7 +4,7 @@ Moved out of app.py verbatim — see panel/services/bots/__init__.py.
 """
 from panel.core.config import (decrypt_secret, load_config, update_config)
 from panel.ops import system_ops as so
-from panel.services import (notifications)
+from panel.services import (notifications, telegram_link)
 from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
@@ -147,6 +147,10 @@ def _tg_route_update(app, token, authorized, bot_username, upd):
     text = (msg.get("text") or "").strip()
     chat = str((msg.get("chat") or {}).get("id") or "")
     if not text.startswith("/"):
+        return
+    # "/start <code>" from someone linking their own chat for alerts (telegram_link): from any private
+    # chat, since the person is not the authorised one; it links and runs no command.
+    if telegram_link.start_payload(text) and telegram_link.handle_update(app, token, msg):
         return
     if chat != authorized:
         _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])

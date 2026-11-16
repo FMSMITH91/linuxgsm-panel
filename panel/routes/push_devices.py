@@ -12,14 +12,14 @@ sign-out and "Sign out everywhere", so a borrowed session must not be able to le
 change to the account's security, which the account's other devices are pushed and its next sign-in
 shows. Turning off and removing never ask: taking alerts away is not the direction that needs proof.
 """
-from flask import flash, jsonify, redirect, render_template, request, url_for
+from flask import current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 from panel.core import i18n
 from panel.db.models import PushSubscription, db
 from panel.security.account_guard import step_up_required
 from panel.security.auth import log_action
-from panel.services import push_alerts
+from panel.services import notifications, push_alerts, telegram_link
 
 
 def register(app):
@@ -28,6 +28,7 @@ def register(app):
     app.jinja_env.globals["push_card"] = push_alerts.card
     _register_device_routes(app)
     _register_choice_routes(app)
+    _register_telegram_routes(app)
 
 
 def _json(ok, message, status=200, **extra):
@@ -92,7 +93,7 @@ def _register_device_routes(app):
     @login_required
     def account_push_test():
         """Queue a test alert to every device of the signed-in account (rate-limited)."""
-        n = current_user.push_subscriptions.count()
+        n = current_user.push_subscriptions.count() + (1 if current_user.telegram_chat else 0)
         if not n:
             return _json(False, i18n.tr("Turn alerts on for a device first."), 400)
         if not push_alerts.test_allowed(current_user.id):
@@ -100,6 +101,50 @@ def _register_device_routes(app):
         push_alerts.queue_test(current_user.id)
         log_action(current_user, "push_test", target=current_user.username, detail="%d device(s)" % n)
         return _json(True, i18n.tr("Test alert sent to {n} device(s). It should arrive within a minute.", n=n))
+
+
+def _register_telegram_routes(app):
+    """Link the signed-in account's own Telegram chat to the panel's bot, check the link, unlink it.
+
+    Linking asks for a recent password like turning push alerts on (a linked chat outlives sign-out),
+    and is recorded as a change to the account's security. Unlinking never asks.
+    """
+    @app.route("/account/telegram/link", methods=["POST"])
+    @login_required
+    @step_up_required
+    def account_telegram_link():
+        """A one-time https://t.me/<bot>?start=<code> link for the signed-in account."""
+        token = telegram_link.bot_token()
+        if not token:
+            return _json(False, i18n.tr("Telegram isn't set up on this panel."), 400)
+        bot = notifications.telegram_get_me(token)
+        if not bot:
+            return _json(False, i18n.tr("Couldn't reach Telegram. Try again in a moment."), 502)
+        code = telegram_link.new_code(current_user.id)
+        if code is None:
+            return _json(False, i18n.tr("That's enough link codes for now. Try again in a few minutes."), 429)
+        return _json(True, "", url="https://t.me/%s?start=%s" % (bot, code))
+
+    @app.route("/account/telegram/check", methods=["POST"])
+    @login_required
+    def account_telegram_check():
+        """Whether the signed-in account has a linked chat now (reading the bot's messages once if needed)."""
+        if not current_user.telegram_chat:
+            telegram_link.check_pending(current_app._get_current_object())
+            db.session.refresh(current_user)
+        return _json(True, "", linked=bool(current_user.telegram_chat))
+
+    @app.route("/account/telegram/unlink", methods=["POST"])
+    @login_required
+    def account_telegram_unlink():
+        """Forget the signed-in account's Telegram chat: it gets no more alerts."""
+        if current_user.telegram_chat:
+            current_user.telegram_chat = ""
+            db.session.commit()
+            log_action(current_user, "telegram_unlink", target=current_user.username,
+                       detail="Telegram chat unlinked")
+        flash(i18n.tr("Telegram unlinked. It gets no more alerts."), "success")
+        return redirect(url_for("account") + "#sec-push")
 
 
 def _register_choice_routes(app):

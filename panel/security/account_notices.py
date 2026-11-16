@@ -45,6 +45,9 @@ _CHANGES = {
                           "from {ip})."),
     "push_subscribe": ("Alerts turned on for a new device",
                        "Since you last signed in: alerts were turned on for a new device ({when}, from {ip})."),
+    "telegram_link": ("A Telegram chat was linked for alerts",
+                      "Since you last signed in: a Telegram chat was linked to get your alerts ({when}, "
+                      "from {ip})."),
     "login_locked": ("Sign-ins paused after repeated failed attempts",
                      "Since you last signed in: sign-ins to your account were paused after repeated "
                      "failed attempts ({when}, last from {ip})."),

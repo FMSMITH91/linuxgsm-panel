@@ -221,6 +221,10 @@ class User(UserMixin, db.Model):
     totp_enabled = db.Column(db.Boolean, default=False)  # 2FA active for this user
     auth_epoch = db.Column(db.Integer, default=0, nullable=False)  # bump to revoke all sessions
     backup_codes = db.Column(db.Text, default="")   # JSON list of hashed one-time 2FA backup codes
+    # This account's own Telegram chat id, linked from the Account page (services/telegram_link.py):
+    # the panel's bot sends the account's alerts there as well as to its browsers. Encrypted at rest
+    # (a chat id identifies a person on Telegram); "" when none is linked.
+    telegram_chat = db.Column(EncryptedString, default="")
     # The last PASSWORD_HISTORY_LEN passwords this account has finished with, newest first, as
     # password hashes — the same thing stored for the current one, so history reveals nothing the
     # user table did not already hold. Kept so "change your password" cannot be satisfied by
@@ -1880,6 +1884,7 @@ _LIGHT_MIGRATIONS = {
     ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
     ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
     ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
+    ("user", "telegram_chat"): "ALTER TABLE user ADD COLUMN telegram_chat TEXT DEFAULT ''",
     ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
     ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
     ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",

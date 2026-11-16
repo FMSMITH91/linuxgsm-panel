@@ -717,3 +717,4 @@ a2aecde6 The panel host page warns when the install still has the wide sudo gran
 f60b50a1 The panel shows the same release name as GitHub.
 f11c14e5 An expired page token renews itself.
 29fa7fa3 The update log reads cleanly on a phone.
+09fd02f6 Alerts in your own Telegram chat.
