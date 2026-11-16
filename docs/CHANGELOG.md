@@ -473,6 +473,9 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **The update log reads cleanly on a phone.** The installer's welcome box, drawn for a full-width terminal,
+  wrapped into broken lines in the panel's update log on a narrow screen. Outside a terminal it is
+  now one plain line.
 - **An expired page token renews itself.** A page left open while the sign-in was renewed (a remembered
   sign-in, or signing in again in another tab) answered its next action with "reload the page and
   try again". The panel now takes the new token and sends the action again by itself.

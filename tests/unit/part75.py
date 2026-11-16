@@ -13,6 +13,7 @@ import html as _html75
 import inspect as _inspect75
 import json as _json75
 import os
+import shlex as _shlex75
 from types import SimpleNamespace as _NS75
 
 from unit.part01 import check
@@ -386,6 +387,31 @@ check("install.sh: a host with its own public IPv4 prints it and asks no outside
       "(a private IPv4 alone) asks one, once",
       _ask75 == {"public v4": "203.0.113.9 0", "NAT": "198.51.100.77 1", "NAT v6": "198.51.100.77 1"},
       repr(_ask75))
+from unit.part01 import skip as _skip75  # noqa: E402
+
+_BANNER75 = _ins_region75("\n# The box only on a terminal.", "\nfi\n") + "\nfi\n"
+
+
+def _banner75(tty):
+    """The installer's banner as printed to a pipe, or to a terminal (run under script(1))."""
+    body = 'CYAN=""; NC=""\n' + _BANNER75
+    if not tty:
+        r = _sp75.run(["bash", "-c", body], capture_output=True, text=True, timeout=60)  # nosec B603 B607 - bash, fixed script
+        return r.stdout
+    r = _sp75.run(["script", "-qec", "bash -c " + _shlex75.quote(body), "/dev/null"],  # nosec B603 B607 - fixed script
+                  capture_output=True, text=True, timeout=60)
+    return r.stdout.replace("\r", "")
+
+
+check("install.sh: to a pipe (the panel's update log, a deploy log) the banner is one plain line, not "
+      "the 45-column box that wrapped into broken lines on a phone",
+      _banner75(False) == "LinuxGSM Panel — install / update\n", repr(_banner75(False)))
+if _shutil75.which("script"):
+    check("install.sh: ...on a terminal it is still the box",
+          "╔═" in _banner75(True) and "║     LinuxGSM Panel — install / update     ║" in _banner75(True),
+          repr(_banner75(True)))
+else:
+    _skip75("install.sh: ...on a terminal it is still the box", "script(1) is not installed")
 check("install.sh: no `hostname -I` fallback is left outside host_addr_fallback (each site brackets)",
       _INS75.count("hostname -I 2>") == 1 and _INS75.count("|| host_addr_fallback)") == 2,
       repr(_INS75.count("hostname -I 2>")))
@@ -428,7 +454,6 @@ check("install.sh update hint: ...a range that misses the port, a udp range, an 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 6. Page scripts that decided by English words the walker has translated
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-from unit.part01 import skip as _skip75  # noqa: E402
 from unit.part47 import _cut47 as _cut75, _node47 as _node75  # noqa: E402
 
 _JS75 = os.path.join(_root75, "panel", "static", "js")
