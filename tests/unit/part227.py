@@ -6,6 +6,8 @@
   one keeps trust on first use.
 * Edit host with a fingerprint: compared with the pin when there is one (a mismatch changes nothing
   on the row), and checked against the host itself when nothing is pinned, its key then pinned.
+* The fuzz image's base is pinned as tag@sha256, the form Renovate's dockerfile manager tracks, and
+  that manager's file pattern matches that Dockerfile and no workflow; Dependabot has no docker entry.
 
 HOW IT RUNS. Through the real routes on part12's Flask app, with its transport tripwire armed and a
 stand-in SSH client whose connect() asks the real host key policy first and records a credential only
@@ -13,6 +15,9 @@ when that policy let it through, the order paramiko keeps. Nothing reaches a hos
 """
 import base64 as _b64227
 import hashlib as _hash227
+import json as _json227
+import os as _os227
+import re as _re227
 from types import SimpleNamespace as NS
 
 from unit.part01 import check, eq
@@ -161,6 +166,39 @@ def _parse227():
        [_FP227, _FP227, _FP227, "", None, None, None])
 
 
+_ROOT227 = _os227.path.dirname(_os227.path.dirname(_os227.path.dirname(_os227.path.abspath(__file__))))
+# FROM <registry/image>:<tag>@sha256:<64 hex>: Docker pulls by the digest, Renovate looks the tag up.
+_FROM_PIN227 = _re227.compile(r"^FROM [a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}(?: AS \w+)?$")
+
+
+def _unpinned_froms227(text):
+    """The FROM lines of a Dockerfile's text that are not tag@sha256."""
+    return [ln for ln in text.splitlines() if ln.startswith("FROM ") and not _FROM_PIN227.match(ln)]
+
+
+def _read227(*parts):
+    """Read a repository file as text."""
+    with open(_os227.path.join(_ROOT227, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _docker_pins227():
+    """The fuzz image's base pin and the Renovate manager that keeps it current."""
+    froms = _unpinned_froms227(_read227(".clusterfuzzlite", "Dockerfile"))
+    pats = (_json227.loads(_read227(".github", "renovate.json")).get("dockerfile") or {}).get("managerFilePatterns")
+    # Renovate's patterns are JavaScript regexes between slashes; the body reads the same in Python.
+    rx = [_re227.compile(p[1:-1]) for p in pats or []]
+    reads = [f for f in (".clusterfuzzlite/Dockerfile", ".github/workflows/ci.yml", "Dockerfile")
+             if any(r.search(f) for r in rx)]
+    eq("ci images: the fuzz image's FROM is tag@sha256 (Renovate can propose its digest) and Renovate's "
+       "dockerfile manager reads that file alone; Dependabot has no docker entry to propose it twice",
+       (froms, reads, "package-ecosystem: \"docker\"" in _read227(".github", "dependabot.yml")),
+       ([], [".clusterfuzzlite/Dockerfile"], False))
+    eq("ci images: ...and a FROM by digest alone, or by tag alone, is caught (control)",
+       len(_unpinned_froms227("FROM gcr.io/a/b@sha256:%s\nFROM gcr.io/a/b:v1\nFROM gcr.io/a/b:v1@sha256:%s\n"
+                              % ("a" * 64, "b" * 64))), 2)
+
+
 def _cleanup227():
     """Remove this part's rows."""
     with _p9.app_context():
@@ -172,7 +210,7 @@ def _cleanup227():
 
 
 try:
-    for _section227 in (_adds227, _edits227, _parse227):
+    for _section227 in (_adds227, _edits227, _parse227, _docker_pins227):
         _arm227()
         try:
             _section227()

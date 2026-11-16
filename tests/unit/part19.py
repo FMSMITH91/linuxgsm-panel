@@ -646,15 +646,17 @@ _rn_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 with open(os.path.join(_rn_root, ".github", "renovate.json"), encoding="utf-8") as _rn_fh:
     _rn_cfg = _sg_json.load(_rn_fh)
 _rn_mgrs = _rn_cfg.get("customManagers") or [{}]
-check("renovate: one regex manager over the workflows, no other manager, no dashboard, a release "
-      "age floor",
-      _rn_cfg.get("enabledManagers") == ["custom.regex"] and len(_rn_mgrs) == 1
+check("renovate: one regex manager over the workflows, the dockerfile manager on the fuzz image only, no "
+      "other manager, no dashboard, a release age floor",
+      _rn_cfg.get("enabledManagers") == ["custom.regex", "dockerfile"]
+      and _rn_cfg.get("dockerfile") == {"managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]}
+      and len(_rn_mgrs) == 1
       and _rn_mgrs[0].get("customType") == "regex"
       and _rn_mgrs[0].get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"]
       and len(_rn_mgrs[0].get("matchStrings") or []) == 1
       and _rn_cfg.get("dependencyDashboard") is False
       and _sg_re.fullmatch(r"[1-9][0-9]* days", _rn_cfg.get("minimumReleaseAge") or "") is not None,
-      repr({k: _rn_cfg.get(k) for k in ("enabledManagers", "dependencyDashboard", "minimumReleaseAge")}))
+      repr({k: _rn_cfg.get(k) for k in ("enabledManagers", "dockerfile", "dependencyDashboard", "minimumReleaseAge")}))
 # Renovate's matchStrings are JavaScript (RE2) regexes: `(?<name>` is Python's `(?P<name>`.
 _rn_pat = _sg_re.compile(_sg_re.sub(r"\(\?<(?=[A-Za-z])", "(?P<",
                                     (_rn_mgrs[0].get("matchStrings") or ["(?!)"])[0]))

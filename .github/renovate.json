@@ -1,17 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "Renovate keeps ONLY the sha256-pinned release downloads in the workflows current (gitleaks,",
-    "actionlint, osv-scanner, the Codacy coverage reporter), which Dependabot cannot see.",
-    "Everything else stays with Dependabot (.github/dependabot.yml), so the two never propose the",
-    "same update.",
+    "Renovate keeps the sha256-pinned release downloads in the workflows current (gitleaks,",
+    "actionlint, osv-scanner, the Codacy coverage reporter), which Dependabot cannot see, and the",
+    "fuzz image's base (.clusterfuzzlite/Dockerfile, pinned as tag@sha256), whose new digest it",
+    "proposes when the tag moves.",
+    "Everything else stays with Dependabot (.github/dependabot.yml, which has no docker entry), so",
+    "the two never propose the same update.",
     "Each pin is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
     "line directly above the VERSION (the release tag) and SHA256 lines. The",
     "github-release-attachments datasource finds the asset the current sha256 belongs to and",
     "proposes the new tag together with that asset's new sha256. tests/unit/part19.py gates that",
-    "every pinned download is matched."
+    "every pinned download is matched, and that the dockerfile manager reads that one file only."
   ],
-  "enabledManagers": ["custom.regex"],
+  "enabledManagers": ["custom.regex", "dockerfile"],
   "customManagers": [
     {
       "customType": "regex",
@@ -22,6 +24,9 @@
       ]
     }
   ],
+  "dockerfile": {
+    "managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]
+  },
   "dependencyDashboard": false,
   "minimumReleaseAge": "7 days",
   "labels": ["ci"],
