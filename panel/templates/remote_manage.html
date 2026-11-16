@@ -1126,6 +1126,7 @@ var REMOTE_ID = {{ remote.id|int }};
 var IS_LOCAL = {{ 'true' if remote.is_local else 'false' }};
 var REMOTE_NAME = {{ remote.name|tojson }};
 </script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/step_up_form.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_manage.js') }}"></script>
 {% if db_tab().manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/host_databases.js') }}"></script>{% endif %}
 {# Loaded in this order on purpose: together they are the one script this page used to have,
