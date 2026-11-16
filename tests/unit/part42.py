@@ -266,7 +266,7 @@ check("zizmor: the scan job holds only contents: read (and pull-requests: read, 
       and "run:" not in _code29(_zz_up42)
       and _zz_up_uses42 == ["actions/checkout", "actions/download-artifact",
                             "github/codeql-action/upload-sarif", "step-security/harden-runner"]
-      and _block30(_zz42, "permissions", 0) == {"contents": "read"},
+      and _re42.search(r"^permissions: \{\}$", _zz42, _re42.M) is not None,
       repr((_block30(_zz_scan42, "permissions", 4), _block30(_zz_up42, "permissions", 4),
             _zz_up_uses42)))
 

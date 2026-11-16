@@ -140,7 +140,7 @@ check("harden-runner: exactly the listed pull-request jobs run in block mode, ea
 # ── 3. fuzzing: every harness in the matrix, with seeds ─────────────────────────────────────────
 _FZ223 = os.path.join(_root, "tests", "fuzz")
 _targets223 = sorted(os.path.basename(p)[5:-3] for p in _glob223.glob(os.path.join(_FZ223, "fuzz_*.py")))
-_mx223 = _re223.search(r"^        target: \[ ([a-z_, ]+) \]$", _code29(_wf29("fuzz.yml")), _re223.M)
+_mx223 = _re223.search(r"^        target: \[ ([a-z0-9_, ]+) \]$", _code29(_wf29("fuzz.yml")), _re223.M)
 _matrix223 = sorted(t.strip() for t in _mx223.group(1).split(",")) if _mx223 else []
 _seedless223 = [t for t in _targets223 if not _glob223.glob(os.path.join(_FZ223, "corpus", t, "*"))]
 check("fuzz: every harness in tests/fuzz is a target of fuzz.yml's matrix (and the matrix names no other), "
@@ -310,7 +310,7 @@ printf '%s\n' "$*" >> "$FAKEGH_LOG"
 if [ "$1" = release ] && [ "$2" = view ]; then exit 1; fi
 if [ "$1" = release ] && [ "$2" = create ]; then
     for a in "$@"; do
-        case "$a" in *.cdx.json) echo "SBOM: $(basename "$a") $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(len(d["components"]), d["metadata"]["component"]["version"])' "$a")";; esac
+        case "$a" in *.cdx.json) echo "SBOM: $(basename "$a") $(python3 "$FAKEGH_READ" "$a")";; esac
     done >> "$FAKEGH_LOG"
 fi
 exit 0
@@ -338,19 +338,28 @@ def _release_repo223():
         os.makedirs(os.path.dirname(os.path.join(dev, rel)), exist_ok=True)
         with open(os.path.join(dev, rel), "w", encoding="utf-8") as fh:
             fh.write(text)
+    # The signatures branch's commit is signed (git commit-tree -S), here with the release key.
+    _git223("config", "gpg.format", "ssh", cwd=dev)
+    _git223("config", "user.signingkey", key + ".pub", cwd=dev)
     _git223("add", ".", cwd=dev)
     _git223("-c", "commit.gpgsign=false", "commit", "-q", "-m", "first", cwd=dev)
     _git223("push", "-q", "origin", "main", cwd=dev)
     return dev, key, _git223("rev-parse", "HEAD", cwd=dev).stdout.strip()
 
 
+# What the stand-in prints of an attached SBOM: its component count and the release it names.
+_READ223 = "import json, sys\nd = json.load(open(sys.argv[1]))\nprint(len(d['components']), d['metadata']['component']['version'])\n"
+
 if _shutil223.which("ssh-keygen") and _shutil223.which("git"):
     _dev223, _key223, _sha223 = _release_repo223()
     _gh223, _log223 = os.path.join(_SB223, "fakegh.sh"), os.path.join(_SB223, "gh.log")
     with open(_gh223, "w", encoding="utf-8") as _fh223:
         _fh223.write(_FAKEGH223)
+    with open(os.path.join(_SB223, "read_sbom.py"), "w", encoding="utf-8") as _fh223:
+        _fh223.write(_READ223)
     _env223 = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", SIGN_RELEASE_KEY=_key223,
-                   FAKEGH_LOG=_log223, SIGN_RELEASE_GH="bash %s" % _shlex223.quote(_gh223), GIT_AUTHOR_NAME="t",
+                   FAKEGH_LOG=_log223, FAKEGH_READ=os.path.join(_SB223, "read_sbom.py"),
+                   SIGN_RELEASE_GH="bash %s" % _shlex223.quote(_gh223), GIT_AUTHOR_NAME="t",
                    GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
     _r223 = _sp223.run(["bash", os.path.join(_root, "tools", "sign-release.sh"), "--yes", _sha223], cwd=_dev223,
                        env=_env223, input="", capture_output=True, text=True, timeout=300, check=False)  # nosec B603
