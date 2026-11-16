@@ -62,12 +62,12 @@
      data-mtab and filtered client-side (see the mtab script), so every card keeps its exact
      markup, conditionals and JS — only visibility changes. -->
 {# Below 768px the pills are icon-over-label and two labels are shortened (mtab-short, "Controls",
-   "Maint."), so all five fit a 375px phone without the bar scrolling; the full label stays in the
+   "Maint."), so all six fit a 375px phone without the bar scrolling; the full label stays in the
    button for screen readers (mtab-full, visually hidden there) and is the one shown on a desktop.
    panel.css #mtab-nav. A language whose labels do not fit still scrolls sideways. #}
 <ul class="nav nav-pills mb-3 flex-nowrap overflow-auto" id="mtab-nav">
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
-  {# Host Controls holds OS updates and power (_host_ctl), the terminal (superadmin-only on the
+  {# Host Controls holds power (_host_ctl), the terminal (superadmin-only on the
      panel host) and Existing servers (manage_servers): a delegated host admin on the panel host
      with none of those opened it onto a blank page. #}
   {% if _host_ctl or has_permission('manage_servers') %}
@@ -78,14 +78,20 @@
   {% if _host_ctl %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="network"><i class="bi bi-diagram-3"></i> Network</button></li>
   {% endif %}
-  {# Every Maintenance card is gated like this (the panel-only ones on a superadmin, Ubuntu Pro on
-     _host_ctl), so for a delegated host admin on the panel host the tab opened onto a blank page. #}
+  {# Maintenance is this machine's upkeep: OS Updates and Ubuntu Pro (_host_ctl), and on the panel
+     host automatic security updates (superadmin). For a delegated host admin without _host_ctl the
+     tab would open onto a blank page. #}
   {% if _host_ctl %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> <span class="mtab-full">Maintenance</span><span class="mtab-short" aria-hidden="true">Maint.</span></button></li>
   {% endif %}
   {# Same rule as the Connection & SSH card: on the panel host every Security endpoint is
      /api/panel/security/*, all @superadmin_required, and their 403 JSON rendered as "fail2ban isn't
      installed", "No security events yet." and a green "Auto-block on" that wrote nothing. #}
+  {# Panel: the panel's own software, not this machine's: its updates, backups and diagnostics,
+     all panel-host and superadmin only. #}
+  {% if remote.is_local and current_user.is_superadmin %}
+  <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="panel"><i class="bi bi-box-seam"></i> Panel</button></li>
+  {% endif %}
   {% if not remote.is_local or current_user.is_superadmin %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="security"><i class="bi bi-shield-lock"></i> Security</button></li>
   {% endif %}
@@ -166,50 +172,6 @@
 </div>
 
 <div class="row" data-mtab="controls">
-  {% if _host_ctl %}
-  <!-- OS Updates -->
-  <div class="col-md-4 mb-3" id="os-updates">
-    <div class="card h-100">
-      <div class="card-header" id="sec-osupdates"><i class="bi bi-arrow-repeat"></i> OS Updates</div>
-      <div class="card-body">
-        <div class="d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-outline-secondary" data-action="checkUpdates"><i class="bi bi-search"></i> Check</button>
-          {# Starts DISABLED. The card below is filled from the last check, and renderUpdates
-             enables this the moment that check says there is something to install. Rendering it
-             live when the panel already knows the host is up to date offers an action whose only
-             outcome is a progress modal that says "0 upgraded". #}
-          <button class="btn btn-sm btn-outline-primary" id="btn-install-updates" data-action="runUpdates" disabled
-                  title="Checking for updates…"><i class="bi bi-download"></i> Install updates</button>
-        </div>
-        <div class="small mt-2 text-secondary" id="update-info"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- OS update live-watch popup -->
-  <div class="modal fade" id="os-update-modal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title"><i class="bi bi-arrow-repeat"></i> Installing OS updates
-            <span id="osu-spin" class="spinner-border spinner-border-sm ms-2"></span></h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-        </div>
-        <div class="modal-body">
-          <div id="osu-state" class="small mb-2 text-secondary"><i class="bi bi-hourglass-split"></i> Starting…</div>
-          <pre id="osu-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:52vh;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;"></pre>
-          <div class="form-text mt-2">Runs unattended and answers prompts safely — it keeps any config
-            file you've edited and assumes yes to installs, so it never gets stuck waiting. You'll see
-            here if it kept a config file.</div>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Close</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  {% endif %}
 
   <!-- Terminal -->
   {# Gated on the permission, not merely on being logged in: a shell is the most powerful grant
@@ -218,7 +180,7 @@
      shell there is the account that owns panel.db and the keys, so the door is hidden too. #}
   {% if has_permission('use_terminal') and (not (remote.is_local or remote.auth_method == 'local')
                                             or (current_user.is_superadmin and current_user.is_owner)) %}
-  <div class="col-md-4 mb-3">
+  <div class="col-md-6 mb-3">
     <div class="card h-100">
       <div class="card-header" id="sec-terminal"><i class="bi bi-terminal-fill"></i> Terminal</div>
       <div class="card-body">
@@ -243,7 +205,7 @@
 
   {% if _host_ctl %}
   <!-- Power -->
-  <div class="col-md-4 mb-3">
+  <div class="col-md-6 mb-3">
     <div class="card h-100">
       <div class="card-header" id="sec-power"><i class="bi bi-power"></i> Power</div>
       <div class="card-body">
@@ -283,7 +245,7 @@
 
 {% if remote.is_local and current_user.is_superadmin %}
 <!-- Panel Updates (panel host only) -->
-<div class="card mb-3" id="updates" data-mtab="maintenance">
+<div class="card mb-3" id="updates" data-mtab="panel">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-arrow-up-circle"></i> Panel Updates</span>
     <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">{{ panel_version }}{% if panel_commit %} · {{ panel_commit }}{% endif %}</strong></span>
@@ -337,7 +299,7 @@
 </div>
 
 <!-- Backups (panel host only) -->
-<div class="card mb-3" id="backups" data-mtab="maintenance">
+<div class="card mb-3" id="backups" data-mtab="panel">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-archive"></i> Backups</span>
     <span class="d-flex gap-1 flex-wrap justify-content-end">
@@ -467,7 +429,7 @@
 </div>
 
 <!-- Diagnostics & File Integrity (panel host only) -->
-<div class="card mb-3" id="diagnostics" data-mtab="maintenance">
+<div class="card mb-3" id="diagnostics" data-mtab="panel">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-clipboard2-pulse"></i> Diagnostics &amp; File Integrity</span>
     <span id="diag-summary" class="badge bg-secondary">not run</span>
@@ -550,23 +512,6 @@
       </div>
       <div class="small text-secondary mt-1">
         SSH credentials, database logins, 2FA secrets and bot tokens are stored encrypted (AES-256-GCM). Rotating makes a new key and re-encrypts them in the background.
-      </div>
-    </div>
-
-    <!-- Automatic security updates -->
-    <div id="diag-autoupd" class="mt-3">
-      <hr class="my-2">
-      <div class="small text-secondary mb-1"><i class="bi bi-shield-check"></i> Automatic security updates</div>
-      <div id="diag-autoupd-status" class="small text-secondary">—</div>
-      <div class="mt-2 d-flex gap-2 align-items-center">
-        <button class="btn btn-sm btn-outline-secondary" id="diag-autoupd-btn"
-                data-action="enableAutoUpdates" style="display:none;">
-          <i class="bi bi-shield-plus"></i> Enable automatic security updates
-        </button>
-        <span id="diag-autoupd-msg" class="small"></span>
-      </div>
-      <div class="small text-secondary mt-1">
-        Patches the OS on its own (unattended-upgrades). Recommended for an unattended box.
       </div>
     </div>
 
@@ -735,6 +680,70 @@
 {% endif %}
 
 {% if _host_ctl %}
+<!-- OS Updates: keeping this machine current, on Maintenance beside Ubuntu Pro -->
+<div class="mb-3" id="os-updates" data-mtab="maintenance">
+  <div class="card">
+    <div class="card-header" id="sec-osupdates"><i class="bi bi-arrow-repeat"></i> OS Updates</div>
+    <div class="card-body">
+      <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-sm btn-outline-secondary" data-action="checkUpdates"><i class="bi bi-search"></i> Check</button>
+        {# Starts DISABLED. The card below is filled from the last check, and renderUpdates
+           enables this the moment that check says there is something to install. Rendering it
+           live when the panel already knows the host is up to date offers an action whose only
+           outcome is a progress modal that says "0 upgraded". #}
+        <button class="btn btn-sm btn-outline-primary" id="btn-install-updates" data-action="runUpdates" disabled
+                title="Checking for updates…"><i class="bi bi-download"></i> Install updates</button>
+      </div>
+      <div class="small mt-2 text-secondary" id="update-info"></div>
+    </div>
+  </div>
+</div>
+
+<!-- OS update live-watch popup -->
+<div class="modal fade" id="os-update-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-arrow-repeat"></i> Installing OS updates
+          <span id="osu-spin" class="spinner-border spinner-border-sm ms-2"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="osu-state" class="small mb-2 text-secondary"><i class="bi bi-hourglass-split"></i> Starting…</div>
+        <pre id="osu-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:52vh;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;"></pre>
+        <div class="form-text mt-2">Runs unattended and answers prompts safely — it keeps any config
+          file you've edited and assumes yes to installs, so it never gets stuck waiting. You'll see
+          here if it kept a config file.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if remote.is_local and current_user.is_superadmin %}
+<!-- Automatic security updates (panel host): the OS patching itself, beside OS Updates -->
+<div class="card mb-3" data-mtab="maintenance">
+  <div class="card-body">
+    <div id="diag-autoupd">
+      <div class="small text-secondary mb-1"><i class="bi bi-shield-check"></i> Automatic security updates</div>
+      <div id="diag-autoupd-status" class="small text-secondary">—</div>
+      <div class="mt-2 d-flex gap-2 align-items-center">
+        <button class="btn btn-sm btn-outline-secondary" id="diag-autoupd-btn"
+                data-action="enableAutoUpdates" style="display:none;">
+          <i class="bi bi-shield-plus"></i> Enable automatic security updates
+        </button>
+        <span id="diag-autoupd-msg" class="small"></span>
+      </div>
+      <div class="small text-secondary mt-1">
+        Patches the OS on its own (unattended-upgrades). Recommended for an unattended box.
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Ubuntu Pro -->
 <div class="card mb-3" data-mtab="maintenance">
   <div class="card-header" id="sec-ubuntupro"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1" style="font-size:.7rem;font-weight:400;">free security updates (ESM) &amp; Livepatch</span></div>

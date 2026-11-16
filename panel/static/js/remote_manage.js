@@ -332,7 +332,7 @@ function _r21cLogNote(el, key){
 // scrolls to it. ──
 (function(){
   var nav = document.getElementById('mtab-nav'); if(!nav) return;
-  var TABS = ['overview','controls','network','maintenance','security'];
+  var TABS = ['overview','controls','network','maintenance','panel','security'];
   // Which tab holds a given card is read from the DOM, not from a list kept by hand. There WAS a
   // hand-kept map here, naming four ids; every other card on the page — the whole Security tab
   // among them — fell through it to show('overview'), so a link straight to one opened the wrong
