@@ -329,9 +329,10 @@ exit 0
 """
 
 
-# Full paths (Bandit B607): the git and bash on PATH, found once.
-_GIT223 = _shutil223.which("git") or "/usr/bin/git"
-_BASH223 = _shutil223.which("bash") or "/bin/bash"
+# Fixed absolute paths (Bandit B607 refuses a bare name; Semgrep refuses one read from PATH): where
+# Ubuntu (CI) and the other supported systems install them.
+_GIT223 = "/usr/bin/git"
+_BASH223 = "/bin/bash"
 
 
 def _git223(*a, cwd=None):
