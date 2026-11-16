@@ -465,6 +465,20 @@ _sq1_sched = _sq28_drive([], sha=None)
 check("sonar main gate: ...with no commit given (the schedule) it judges the analysed commit at once",
       _sq1_sched[0] == [] and _sq1_sched[1] == _SHA28 and _sq1_sched[3] == []
       and not any(_c[0] == "project_analyses/search" for _c in _sq1_sched[2]), repr(_sq1_sched))
+# The line SonarCloud's Accepted docker:S6471 sits on. When that line is edited (a new digest too),
+# SonarCloud closes the issue and raises it under a NEW key on main, and main's gate fails after the
+# merge because KNOWN_ACCEPTED names the closed key: no pull request check could see it. So an edit
+# to the line fails here first. Merge it only with the new key: Accept the issue SonarCloud raises on
+# the pull request's analysis, put its key in KNOWN_ACCEPTED, then the new line and key here.
+_SQ28_ACCEPTED_AT = ("AaHkWUMULZkAFiLSHxwS", (".clusterfuzzlite", "Dockerfile"),
+                     "FROM gcr.io/oss-fuzz-base/base-builder-python:latest@sha256:"
+                     "6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23")
+with open(os.path.join(_R28, *_SQ28_ACCEPTED_AT[1]), encoding="utf-8") as _f28:
+    _sq28_lines = _f28.read().splitlines()
+check("sonar main gate: the line holding the Accepted issue is the one its key was raised on (an edit "
+      "re-keys it in SonarCloud and turns main red after the merge: update KNOWN_ACCEPTED's key first)",
+      _SQ28_ACCEPTED_AT[2] in _sq28_lines and _SQ28_ACCEPTED_AT[0] in _sq28.KNOWN_ACCEPTED,
+      repr([_l for _l in _sq28_lines if _l.startswith("FROM ")]))
 _sq28_out = _io28.StringIO()
 with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),
