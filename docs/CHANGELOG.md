@@ -1495,6 +1495,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **Saving Settings or Notifications asks for your password again.** Like opening a terminal, once
+  the last sign-in or confirmation is older than the step-up window: those pages can switch step-up,
+  two-factor and session binding off, or redirect alerts. The page asks in place and keeps what you
+  typed.
+
 - **Account changes reach the account holder's devices.** A password change, two-factor change, new
   API token or new alert device is pushed to that account's own alert devices, so a change made in a
   borrowed session is seen at once.

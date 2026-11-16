@@ -678,3 +678,4 @@ f11545c1 A database manager on the Databases page.
 b8b53863 Push alerts show only what a lock screen may.
 cde5533f Deleting, restoring and resetting a database ask for your password again.
 e59be63e A restored dump can no longer run client commands.
+6985f326 Saving Settings or Notifications asks for your password again.
