@@ -132,8 +132,51 @@ def _db_routes226():
             _db_teardown226(sid)
 
 
+# ── 2. addresses in text: mapped IPv6, versions ──────────────────────────────────────────────────
+def _audit_text226():
+    now = _utcnow226()
+    seed = (("from ::ffff:203.0.113.9", "::ffff:198.51.100.7"), ("game v1.2.3.4 build 1.40.2.4 at 12:30:45 via 12:00:203.0.113.5", ""),
+            ("ip:2001:db8:1:2::5, 64:ff9b::192.0.2.33", ""))
+    ids = []
+    with _p9.app_context():
+        for detail, ip in seed:
+            row = _m226.AuditLog(username="p226", action="login", target="", detail=detail, ip_address=ip,
+                                 timestamp=now - _td226(days=200))
+            _m226.db.session.add(row)
+            _m226.db.session.commit()
+            ids.append(row.id)
+        try:
+            _m226.anonymise_audit_ips(90)
+            again = _m226.anonymise_audit_ips(90)
+            got = [(r.detail, r.ip_address) for r in (_m226.db.session.get(_m226.AuditLog, i) for i in ids)]
+        finally:
+            for i in ids:
+                row = _m226.db.session.get(_m226.AuditLog, i)
+                if row is not None:
+                    _m226.db.session.delete(row)
+            _m226.db.session.commit()
+    eq("audit ageing: an IPv4-mapped address (text and column) is reduced to its IPv4 /24; a version after a "
+       "letter and a clock time stay; a bare 1.40.2.4 is an address, and so is one after a clock time; a second run "
+       "changes nothing",
+       (got, again),
+       ([("from 203.0.113.0/24", "198.51.100.0/24"),
+         ("game v1.2.3.4 build 1.40.2.0/24 at 12:30:45 via 12:00:203.0.113.0/24", ""),
+         ("ip:2001:db8:1:2::/64, 64:ff9b::/64", "")], 0))
+
+
+def _bot_console226():
+    line = "Client \"bob\" connected (::ffff:203.0.113.9:27005) from 203.0.113.7 on v1.40.2.4 at 12:34:56"
+    _p9_patch_sm("capture_console", lambda *a, **k: (line, "", 0))
+    _p9_patch(_cs226, "mask_for", lambda gs, text: text)
+    _p9_patch(_cmd226, "load_config", lambda: {"notifications": {}})
+    got = _cmd226._console_text(_p9, "p9-cs")
+    check("bots: a console reply masks a mapped IPv6 address whole and a plain IPv4 one, and keeps a version "
+          "written after a letter and the clock time",
+          "([address]:27005) from [address] on v1.40.2.4 at 12:34:56" in got and "203.0.113" not in got, got)
+
+
 try:
-    for _fn226 in (_parse_run226, _db_routes226):
+    for _fn226 in (_parse_run226, _db_routes226, _audit_text226, _bot_console226):
         _p9_arm(who="part226")
         try:
             _fn226()

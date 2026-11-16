@@ -213,6 +213,36 @@ def unzoned_ip_or_network(value):
     return str(type(net)((int(net.network_address), net.prefixlen)))
 
 
+# A candidate IP address inside free text (an audit entry, a console line): an IPv6 address, whose last
+# 32 bits may be written as IPv4 (::ffff:203.0.113.9 is one address), or an IPv4 one. Not one glued to a
+# word or a dot before it: "v1.2.3.4" and "build7.1.2.3.4" are version numbers. A bare 1.40.2.4 is a valid
+# address and counts as one. Each candidate is parsed before anything is replaced, so a clock time stays.
+_TEXT_V4 = r"\d{1,3}(?:\.\d{1,3}){3}(?![\d.]*\d)"
+_TEXT_IP = (r"(?<![0-9A-Za-z_.])(?:(?:[0-9A-Fa-f]{0,4}:){2,7}(?:(?P<tail>" + _TEXT_V4
+            + r")|[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:]))|" + _TEXT_V4 + ")")
+_TEXT_IP_RE = re.compile(_TEXT_IP)
+_TEXT_IP_NOT_NET_RE = re.compile(_TEXT_IP + r"(?!/\d)")    # not one followed by "/<digits>": a network
+
+
+def replace_text_ips(text, repl, networks=True):
+    """Return `text` with each IP address in it replaced by repl(address), `address` an ipaddress object.
+
+    An IPv4-mapped IPv6 address (::ffff:203.0.113.9) is one address. With networks=False an address
+    followed by "/<digits>" (a network, such as one this already reduced) is left as it is.
+    """
+    pattern = _TEXT_IP_RE if networks else _TEXT_IP_NOT_NET_RE
+
+    def _one(m):
+        cand = m.group(0)
+        addr = ip_address_or_none(cand)
+        if addr is None:
+            tail = m.group("tail")
+            # "12:00:203.0.113.9" is no IPv6 address, but its IPv4 tail still is an address.
+            return cand[:-len(tail)] + replace_text_ips(tail, repl, networks) if tail else cand
+        return repl(addr)
+    return pattern.sub(_one, "" if text is None else str(text))
+
+
 def same_whitelist_entry(stored, requested):
     """Whether a STORED whitelist entry is the one a removal request names.
 
