@@ -271,6 +271,18 @@ def step_up_required(f):
     return wrapped
 
 
+def step_up_required_to_change(f):
+    """Decorator: step_up_required for a route that also answers GET, asked only by its changing methods."""
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        if (request.method not in ("GET", "HEAD") and getattr(current_user, "is_authenticated", False)
+                and step_up_needed()):
+            return step_up_refusal()
+        return f(*args, **kwargs)
+    wrapped._step_up = True
+    return wrapped
+
+
 def rotate_sessions(user):
     """Sign every session of `user` out and re-admit this device with a new identifier. -> bool.
 

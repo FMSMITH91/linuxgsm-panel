@@ -185,7 +185,7 @@ _out103 = _js103(_name103, (
     "  if (d === undefined) return Promise.reject(new Error('x'));\n"
     "  return Promise.resolve({json: () => Promise.resolve(d)}); }; };\n"), _RMH103,
     ("function sshModeLabel(", "function loadSshStatus(", "function _r26bSshPortNow(",
-     "function _r32bPublicPorts(", "function changeSshPort("), (
+     "function _r32bPublicPorts(", "function _rmhStepUp(", "function changeSshPort("), (
     "  const out = {}, pn = document.getElementById('ssh-port-now'); document.getElementById('ssh-mode');\n"
     "  const run = async d => { pn.setAttribute('data-live', '1'); pn.textContent = '\u2026';\n"
     "    reply(d); loadSshStatus(); await settle();\n"

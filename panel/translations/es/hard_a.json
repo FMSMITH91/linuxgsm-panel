@@ -1,0 +1,7 @@
+{
+  "This path controls signing in to the game server's account (SSH keys and shell start-up files), so the file browser does not change it. Nothing was changed.": "Esta ruta controla el inicio de sesión en la cuenta del servidor de juego (claves SSH y archivos de inicio del shell), así que el explorador de archivos no la modifica. No se cambió nada.",
+  "that ntfy server is on a private network (a LAN, VPN or tailnet address). If it is your own ntfy server, tick “My ntfy server is on my own network” and save.": "ese servidor ntfy está en una red privada (una dirección de LAN, VPN o tailnet). Si es tu propio servidor ntfy, marca “Mi servidor ntfy está en mi propia red” y guarda.",
+  "My ntfy server is on my own network (LAN, VPN or tailnet)": "Mi servidor ntfy está en mi propia red (LAN, VPN o tailnet)",
+  "Recommended: off — alerts then go only to public addresses (OWASP SSRF Prevention).": "Recomendado: desactivado; así las alertas solo van a direcciones públicas (OWASP SSRF Prevention).",
+  "On: outside the recommendation — the panel can then reach addresses on your own network.": "Activado: fuera de la recomendación; el panel puede entonces llegar a direcciones de tu propia red."
+}

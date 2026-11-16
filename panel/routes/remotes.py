@@ -11,6 +11,7 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_access_remote,
     get_host_remote, get_remote, log_action, permission_required)
+from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
@@ -227,6 +228,7 @@ def _register_remote_list(app):
     @app.route("/remotes/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def add_remote():
         name = request.form.get("name", "").strip()
         host = canonical_host(request.form.get("host", "").strip())
@@ -306,6 +308,7 @@ def _register_remote_edit(app):
     @app.route("/remotes/<int:remote_id>/edit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required
     def edit_remote(remote_id):
         # get_host_remote, not get_remote: the panel's own row is superadmin-only, as every other
         # host-level action on it is (see get_host_remote). A whole-host grant that includes the

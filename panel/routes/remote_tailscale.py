@@ -6,7 +6,7 @@ from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
-    remote_tailscale_finalize, remote_tailscale_up_url)
+    remote_tailscale_finalize, remote_tailscale_up_url, tailscale_routes_problem)
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
     permission_required)
 from panel.security import privileged as _priv
@@ -74,6 +74,9 @@ def _register_status_and_link_join(app):
         enable_ssh = _r12c_json_flag(data, "enable_ssh", True)
         if enable_ssh is None:
             return jsonify({"success": False, "message": "enable_ssh must be true or false."}), 400
+        bad_routes = tailscale_routes_problem(_json_str(data, "advertise_routes"))
+        if bad_routes:
+            return jsonify({"success": False, "message": i18n.tr(bad_routes)}), 400
         try:
             with _r20b_audit_on_raise("remote_tailscale_up", target=remote.name, remote=remote):
                 ok, result = remote_tailscale_up_url(
@@ -253,6 +256,9 @@ def _register_key_join_and_migrate(app):
 
         if not auth_key:
             return jsonify({"success": False, "message": "Auth key is required. Get one at https://login.tailscale.com/admin/keys"}), 400
+        bad_routes = tailscale_routes_problem(advertise_routes)
+        if bad_routes:
+            return jsonify({"success": False, "message": i18n.tr(bad_routes)}), 400
 
         try:
             # The key is never in the row: a VerbError's text is the boundary's fixed refusal.

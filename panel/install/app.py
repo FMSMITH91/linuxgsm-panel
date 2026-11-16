@@ -107,7 +107,7 @@ from panel.core.clock import utcnow
 import secrets
 from flask import Flask, current_app, g, has_request_context, jsonify, redirect, request, session, url_for
 from markupsafe import Markup
-from panel.core import i18n
+from panel.core import i18n, wsgi_serve
 from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
@@ -3524,4 +3524,4 @@ if __name__ == "__main__":
     except Exception:
         _log.debug("ignored non-fatal error", exc_info=True)
 
-    app.socketio.run(app, app.config["BOOT_BIND"], port, debug=False, allow_unsafe_werkzeug=True, **ssl_args)
+    wsgi_serve.serve(app, app.config["BOOT_BIND"], port, ssl_args)   # debug=False reaches eventlet

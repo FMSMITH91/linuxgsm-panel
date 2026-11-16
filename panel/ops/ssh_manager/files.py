@@ -129,6 +129,43 @@ def _r21b_real_home(hq):
     return f"h=$(cd -P -- {hq} 2>/dev/null && pwd -P && printf x) && h=${{h%?x}} || h={hq}; "
 
 
+# The paths of a game account's home that decide who can sign in to the account, or that run when
+# someone does: sshd's ~/.ssh (authorized_keys, rc, environment), the host-trust files rsh and
+# HostbasedAuthentication read (.rhosts, .shosts) and Kerberos' .k5login, bash's start-up and logout
+# files, and the variables pam_env reads at sign-in. A key or a line put there opens a shell as the
+# account outside the panel, with no audit, that outlives the grant it was made with. The file
+# browser never writes, uploads, creates or renames onto one: a write judged on the path RESOLVED on
+# the host (_login_guard), where the inside-the-home check is made, a create or rename by the name it
+# lands at (those refuse any link on the way). Not listed: crontabs (in /var/spool/cron,
+# outside every home already), ~/.config/autostart (only a desktop session reads it, and a game host
+# has none) and ~/.config/systemd/user (a user manager starts only for a session or with lingering,
+# which game accounts are not given).
+_LOGIN_DIRS = (".ssh",)
+_LOGIN_FILES = (".bashrc", ".profile", ".bash_profile", ".bash_login", ".bash_logout", ".pam_environment",
+                ".rhosts", ".shosts", ".k5login")
+_LOGIN_MARK = "__LOGIN_FILE__"
+LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's account (SSH keys and shell "
+                      "start-up files), so the file browser does not change it. Nothing was changed.")
+
+
+def _is_login_path(rel):
+    """Whether `rel` (relative to the game account's home) names a sign-in path, as written."""
+    r = _pp.normpath(str(rel or "").lstrip("/"))
+    return r.split("/", 1)[0] in _LOGIN_DIRS or r in _LOGIN_FILES
+
+
+def _login_guard(hq, var):
+    """Shell refusing (exit 13, _LOGIN_MARK) when "$var", a path resolved on the host, is a sign-in path.
+
+    Made relative to the literal home `hq` or the real one "$h" (_r21b_real_home sets it), so a link
+    to ~/.ssh, or a home under a linked /home, is judged by where the write really lands.
+    """
+    q = _core._quote
+    pats = "|".join([f"{q(d)}|{q(d)}/*" for d in _LOGIN_DIRS] + [q(f) for f in _LOGIN_FILES])
+    return (f'lr=${{{var}#{hq}/}}; case "${var}" in "$h"/*) lr=${{{var}#"$h"/}} ;; esac; '
+            f'case "$lr" in {pats}) echo {_LOGIN_MARK}; exit 13 ;; esac; ')
+
+
 def _guarded(user, abspath, inner):
     """Prefix `inner` with a check that `abspath` still resolves inside /home/<user> ON THE HOST.
 
@@ -152,6 +189,11 @@ def _guarded(user, abspath, inner):
     return (_r21b_real_home(hq)
             + f"p=$(realpath -m {aq} 2>/dev/null && printf x) && p=${{p%?x}} || p={aq}; "
             f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + inner)
+
+
+def _guarded_write(user, abspath, inner):
+    """_guarded for a command that writes "$p": a sign-in path there is refused too (_login_guard)."""
+    return _guarded(user, abspath, _login_guard(_core._quote(f"/home/{user}"), "p") + inner)
 
 
 # Biggest base64 payload we will put in a single command. The whole `bash -c '<script>'` is ONE
@@ -253,7 +295,7 @@ def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
 def _r34b_write_marks():
     """(mark, fixed text) of each host-side write refusal (_r23b_console_frag), in its order."""
     return ((_RENAME_CONSOLE_MARK, WRITE_CONSOLE), (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
-            (_R32J_RESERVED_MARK, R34B_WRITE_RESERVED))
+            (_R32J_RESERVED_MARK, R34B_WRITE_RESERVED), (_LOGIN_MARK, LOGIN_FILE_REFUSED))
 
 
 def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
@@ -267,8 +309,8 @@ def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
     inner = (f"{mk} && {_R22B_MKDIR} && printf %s {_core._quote(b64)} | base64 -d > {st} "
              f"&& {_keep_mode(t, st)} && {{ mv -f -T {st} {t} "
              f"|| {{ rm -f {st}; false; }}; }}")
-    out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60,
-                                          selfname=selfname)
+    out, e, rc = _core.shell_as_game_user(server, user, _guarded_write(user, abspath, inner),
+                                          timeout=60, selfname=selfname)
     if _r12b_outside_home(out):
         return False, "Invalid path"
     mark = _r31j_console_mark(out)
@@ -292,7 +334,7 @@ def _r23b_send_chunks(server, user, abspath, payload, selfname):
     for i in range(0, max(len(b64), 1), _CHUNK_B64):
         inner = f"printf %s {_core._quote(b64[i:i + _CHUNK_B64])} {op} {_core._quote(tmp)}"
         if op == ">":
-            inner = _guarded(user, abspath, f"{mk} && {inner}")
+            inner = _guarded_write(user, abspath, f"{mk} && {inner}")
         out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60, selfname=selfname)
         if op == ">" and _r12b_outside_home(out):
             return False, "Invalid path"
@@ -320,7 +362,7 @@ def _r23b_chunk_finish(server, user, abspath, tmp, selfname):
            f"&& {{ mv -f -T {new} {t} || {{ rm -f {new}; false; }}; }}; }}; "
            f"r=$?; rm -f {_core._quote(tmp)}; exit $r")
     fin = _r23b_console_frag(user, selfname) + fin
-    o, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, fin), timeout=60,
+    o, e, rc = _core.shell_as_game_user(server, user, _guarded_write(user, abspath, fin), timeout=60,
                                         selfname=selfname)
     if _r12b_outside_home(o) or _r31j_console_mark(o):
         _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30, selfname=selfname)
@@ -1546,6 +1588,8 @@ def write_file(server, user, relpath, content, selfname=None):
         return False, "Invalid path"
     if _CMPC_DEFAULT_CFG_RE.fullmatch(ap):
         return False, CMPC_DEFAULT_CFG_REFUSED
+    if _is_login_path(_pp.relpath(ap, f"/home/{user}")):
+        return False, LOGIN_FILE_REFUSED     # by name here; resolved on the host (_login_guard)
     if not _is_text(content or ""):
         return False, R14B_NOT_TEXT        # a lone surrogate: .encode() below raised, a 500
     refusal = _rawlts_refusal(server, user, ap, content or "")
@@ -1656,6 +1700,8 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True, self
         # As write_file refuses it: an upload over LinuxGSM's _default.cfg said "Uploaded" and was
         # put back at LinuxGSM's next run. (A rename onto it is refused already: the name is taken.)
         return False, CMPC_DEFAULT_CFG_REFUSED
+    if _is_login_path(_pp.relpath(target, f"/home/{user}")):
+        return False, LOGIN_FILE_REFUSED     # by name here; resolved on the host (_login_guard)
     refusal = _r23b_upload_refusal(server, user, target, (data_bytes, overwrite), selfname)
     if refusal:
         return False, refusal
@@ -1913,6 +1959,10 @@ def _rename_ends_refusal(user, relpath, ap, new_name, selfname):
     dest = _pp.relpath(_pp.join(_pp.dirname(ap), new_name), home)
     if _is_protected_path(dest, selfname) or dest in _console_paths(selfname):
         return "That name is reserved for LinuxGSM or the game's account — choose another."
+    if _is_login_path(relpath) or _is_login_path(dest):
+        # Either end. By name only: the host refuses a rename or create whose folder is reached
+        # through a link (_RENAME_LINKED, _CREATE_LINKED), so the name judged is where it lands.
+        return LOGIN_FILE_REFUSED
     return None
 
 
@@ -2029,7 +2079,7 @@ def _r31j_console_live_sh(selfname):
 
 def _r31j_console_mark(out):
     """A write's host-side console mark in `out` (refused while running, unread, or above a console path)."""
-    return next((m for m in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK, _R32J_RESERVED_MARK)
+    return next((m for m in (_RENAME_CONSOLE_MARK, _R31J_CONSOLE_UNREAD_MARK, _R32J_RESERVED_MARK, _LOGIN_MARK)
                  if m in (out or "")), "")
 
 
@@ -2108,6 +2158,7 @@ _RENAME_OUTCOMES = (
     (_OUTSIDE_HOME, RENAME_REFUSED),
     (_PROTECTED_MARK, RENAME_PROTECTED),
     (_R32J_RESERVED_MARK, "That name is reserved for LinuxGSM or the game's account — choose another."),
+    (_LOGIN_MARK, LOGIN_FILE_REFUSED),
     (_RENAME_CONSOLE_MARK, RENAME_CONSOLE),
     (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
     (_RENAME_LINKED, "Refusing to rename through a symbolic link: open the folder it points to "
@@ -2189,6 +2240,8 @@ def create_refusal(user, reldir, name, kind, selfname=None):
         # the log folders on its next start, so the reserved wording, true in every state.
         # CREATE_CONSOLE is the host's answer while the console is attached (_console_guard).
         return CREATE_RESERVED
+    if _is_login_path(rel):
+        return LOGIN_FILE_REFUSED     # by name only, as rename_refusal says why
     return None
 
 
@@ -2245,6 +2298,7 @@ _CREATE_OUTCOMES = (
     (_OUTSIDE_HOME, CREATE_REFUSED),
     (_PROTECTED_MARK, CREATE_RESERVED),
     (_R32J_RESERVED_MARK, CREATE_RESERVED),
+    (_LOGIN_MARK, LOGIN_FILE_REFUSED),
     (_RENAME_CONSOLE_MARK, CREATE_CONSOLE),
     (_R31J_CONSOLE_UNREAD_MARK, R31J_CONSOLE_UNREAD),
     (_CREATE_LINKED, CREATE_LINKED),
@@ -2534,5 +2588,5 @@ _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
     _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
     LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE, R31J_CONSOLE_UNREAD, R34B_WRITE_RESERVED,
-    CMPC_DEFAULT_CFG_REFUSED,
+    CMPC_DEFAULT_CFG_REFUSED, LOGIN_FILE_REFUSED,
 })

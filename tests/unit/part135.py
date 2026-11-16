@@ -938,7 +938,7 @@ const els = {'fw-settings': el('fw-settings'), 'fw-set-incoming': sel('fw-set-in
   'fw-set-enabled': el('b'), 'fw-set-enabled-label': el('l'), 'fw-settings-msg': el('m')};
 global.document = {getElementById: id => els[id] || null, createElement: () => ({value: '', textContent: '',
   remove() { const s = this.parent; s.options.splice(s.options.indexOf(this), 1); }})};
-global.t = s => s; global.esc = s => String(s); global.MOUNT = ''; global.remoteId = 7;
+global.t = s => s; global.esc = s => String(s); global.MOUNT = ''; global.remoteId = 7; global.window = global;
 let dialogs = [], posts = [], reads = 0;
 global.confirmDialog = o => dialogs.push(o);
 global.refreshFirewall = () => {};
@@ -951,7 +951,8 @@ _out135 = _node47(_DOM135 + (
                                                             _FWJS135))
     + "".join(_cut47(_FWJS135, h) + "\n" for h in (
         "function refreshFwSettings(", "function _fwSelectValue(", "function _fwPaintSettings(",
-        "var _FW_SETTING_COPY =", "function fwSettingChange(", "function fwToggleEnabled(", "function _fwPostSetting("))
+        "var _FW_SETTING_COPY =", "function fwSettingChange(", "function fwToggleEnabled(", "function _fwStepUp(",
+        "function _fwPostSetting(", "function _fwPostSettingNow("))
     + "(async () => { const out = {};\n"
     "  _fwPaintSettings({read_ok: true, installed: true, enabled: true, incoming: 'allow', outgoing: 'allow',\n"
     "    routed: 'disabled', logging: null});\n"

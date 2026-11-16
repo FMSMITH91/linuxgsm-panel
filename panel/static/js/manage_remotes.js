@@ -467,7 +467,11 @@ function _migrateToTailscale(remoteId) {
 function closePort22(remoteId) {
   confirmDialog({title:'Close public SSH', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public SSH',
     bodyText:'Remove the public SSH rules from UFW? This disables public SSH access. Only do this if Tailscale SSH is working.',
-    onConfirm:function(){ _closePort22(remoteId); }});
+    // A step_up_required route: a stale sign-in confirms the password in a dialog first (step_up_form.js).
+    onConfirm:function(){
+      var go = function(){ _closePort22(remoteId); };
+      if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();
+    }});
 }
 function _closePort22(remoteId) {
   setModalBody('<div class="text-center py-4"><i class="bi bi-arrow-repeat"></i> Removing the public SSH rules...</div>');

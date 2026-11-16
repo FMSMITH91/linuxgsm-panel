@@ -107,7 +107,27 @@ _NTFY_URL_RE = re.compile(r"^https://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-
 NTFY_DEFAULT_SERVER = "https://ntfy.sh"
 # send_ntfy's answer when the server's name resolves to an address _ntfy_address_refused refuses.
 NTFY_ADDRESS_REFUSED = ("that ntfy server's address is one alerts are never sent to (this host, link-local "
-                        "or cloud metadata, multicast or reserved). An address on your LAN or tailnet is fine.")
+                        "or cloud metadata, multicast or reserved).")
+# ...and when it resolves to a private, tailnet or other non-public address while the server is not
+# marked as being on the operator's own network (ntfy_private_network).
+NTFY_PRIVATE_REFUSED = ("that ntfy server is on a private network (a LAN, VPN or tailnet address). If it is "
+                        "your own ntfy server, tick “My ntfy server is on my own network” and save.")
+
+
+def ntfy_private_network(nt):
+    """Whether the stored ntfy settings `nt` allow a server on a private network (LAN, VPN, tailnet).
+
+    OWASP Server Side Request Forgery Prevention Cheat Sheet, case 2: a request to an address the operator
+    types goes only to a public address, so the Test button cannot be used to find which LAN or tailnet
+    hosts answer HTTPS. A self-hosted ntfy on the operator's own network is a real deployment, so the
+    setting turns that on, and the form says it is outside the recommendation. Settings saved before it
+    existed keep what they had: a server other than ntfy.sh could only work there if private addresses
+    were allowed, as they all were then.
+    """
+    nt = nt if isinstance(nt, dict) else {}
+    if "private_network" in nt:
+        return bool(nt.get("private_network"))
+    return (str(nt.get("server") or "").strip() or NTFY_DEFAULT_SERVER) != NTFY_DEFAULT_SERVER
 
 
 # ── config read/write ──────────────────────────────────────────
@@ -164,7 +184,8 @@ def settings_for_form():
                     "gateway_problem": discord_gateway_problem()},
         "ntfy": {"enabled": bool(nt.get("enabled")),
                  "server": nt.get("server") or NTFY_DEFAULT_SERVER,
-                 "topic": nt.get("topic") or "", "has_token": bool(nt.get("token"))},
+                 "topic": nt.get("topic") or "", "has_token": bool(nt.get("token")),
+                 "private_network": ntfy_private_network(nt)},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
         "thresholds": get_thresholds(),
     }
@@ -264,7 +285,8 @@ def _ntfy_record(form, token):
     """Build the stored ntfy settings from the form and the already-resolved access token."""
     return {"enabled": bool(form.get("enabled")),
             "server": (form.get("server") or "").strip()[:253] or NTFY_DEFAULT_SERVER,
-            "topic": (form.get("topic") or "").strip()[:64], "token": token or ""}
+            "topic": (form.get("topic") or "").strip()[:64], "token": token or "",
+            "private_network": ntfy_private_network(form)}
 
 
 def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
@@ -493,7 +515,10 @@ class _FallbackHTTPS(urllib.request.HTTPSHandler):
     def https_open(self, req):
         # A request _post marked as going to the operator-chosen ntfy server also has the address its
         # name resolves to checked (_NtfyHTTPSConnection); Telegram's and Discord's fixed hosts do not.
-        conn = _NtfyHTTPSConnection if getattr(req, "ntfy_address_check", False) else _FallbackHTTPSConnection
+        # ...and only a public one unless the server is marked as on the operator's own network.
+        conn = _FallbackHTTPSConnection
+        if getattr(req, "ntfy_address_check", False):
+            conn = _NtfyHTTPSConnection if getattr(req, "ntfy_private_ok", False) else _NtfyPublicHTTPSConnection
         return self.do_open(conn, req, context=self._context)
 
 
@@ -537,20 +562,49 @@ def _ntfy_address_refused(ip_text):
             or (addr.version == 4 and addr in _NTFY_THIS_NETWORK))
 
 
+_NTFY_TAILNET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _ntfy_not_public(ip_text):
+    """Whether `ip_text` is not a public unicast address: private, tailnet, ULA, documentation alike.
+
+    The cheat sheet's deny-list and more, as is_global reads it, with the IPv4 forms of IPv6 addresses
+    unwrapped first. Asked after _ntfy_address_refused, which already refuses an IPv4-compatible address
+    (::a.b.c.d, inside the reserved ::/8).
+    """
+    try:
+        addr = _ntfy_unmapped(ipaddress.ip_address(str(ip_text).split("%", 1)[0]))
+    except ValueError:
+        return True
+    return not addr.is_global or addr.is_multicast or (addr.version == 4 and addr in _NTFY_TAILNET)
+
+
 class _RefusedAddress(OSError):
     """The ntfy server's name resolved to an address notifications are never sent to."""
 
 
-def _connect_ntfy(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+class _PrivateAddress(_RefusedAddress):
+    """The ntfy server's name resolved to a non-public address, and private ones are not allowed."""
+
+
+def _connect_ntfy(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, private_ok=True):
     """_connect_each for the ntfy server: refuse when ANY resolved address is refused, else connect.
 
-    One lookup, and the connect goes to the addresses that lookup answered and this checked.
+    One lookup, and the connect goes to the addresses that lookup answered and this checked. Without
+    `private_ok`, a non-public address is refused as well (_PrivateAddress).
     """
     host, port = address
     infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
     if any(_ntfy_address_refused(info[4][0]) for info in infos):
         raise _RefusedAddress("refused address")
+    if not private_ok and any(_ntfy_not_public(info[4][0]) for info in infos):
+        raise _PrivateAddress("private address")
     return _connect_infos(infos, timeout, source_address)
+
+
+def _connect_ntfy_public(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    """_connect_ntfy for a server that must be on a public address."""
+    return _connect_ntfy(address, timeout, source_address, private_ok=False)
 
 
 class _NtfyHTTPSConnection(http.client.HTTPSConnection):
@@ -562,19 +616,28 @@ class _NtfyHTTPSConnection(http.client.HTTPSConnection):
     connect, and the allow-list, https only and the refused redirects still apply to it.
     """
 
+    _ntfy_connect = staticmethod(_connect_ntfy)
+
     def connect(self):
         """Open the socket through _connect_ntfy (or _connect_each to a proxy), then TLS as usual."""
-        self._create_connection = _connect_each if self._tunnel_host else _connect_ntfy
+        self._create_connection = _connect_each if self._tunnel_host else self._ntfy_connect
         super().connect()
 
 
+class _NtfyPublicHTTPSConnection(_NtfyHTTPSConnection):
+    """_NtfyHTTPSConnection for an ntfy server not marked as on a private network: public addresses only."""
 
-def _post(url, data, headers, allow_configured_host=False, provider="?"):
+    _ntfy_connect = staticmethod(_connect_ntfy_public)
+
+
+
+def _post(url, data, headers, allow_configured_host=False, provider="?", private_ok=False):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx.
 
     `reason` is a FIXED word describing the outcome — 'sent' / 'rejected' (the provider answered
     with an error status) / 'unreachable' (couldn't connect) / 'blocked' (host not allow-listed) /
-    'refused' (the ntfy server's name resolved to an address alerts are never sent to).
+    'refused' (the ntfy server's name resolved to an address alerts are never sent to) / 'private' (it
+    resolved to a non-public address and `private_ok` is not set).
     It carries no data read back from the response, so this can never become an SSRF exfiltration
     sink. Never raises.
     """
@@ -595,6 +658,7 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     # The ntfy server's address is checked when the connection opens (_FallbackHTTPS, _connect_ntfy).
     req.ntfy_address_check = allow_configured_host
+    req.ntfy_private_ok = private_ok
     try:
         # _OPENER, not urlopen: the allow-list above is only worth as much as the request that
         # follows it, and the default opener follows redirects off the allow-listed host.
@@ -632,6 +696,10 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
 
 def _not_sent_reason(e, provider):
     """The reason word for a POST that raised before any answer: 'refused' or 'unreachable', logged."""
+    if isinstance(getattr(e, "reason", None), _PrivateAddress):
+        _log.warning("notification to %s refused: its server is on a private network, which is not allowed "
+                     "for it", _PROVIDER_LABELS.get(provider, "?"))
+        return "private"
     if isinstance(getattr(e, "reason", None), _RefusedAddress):
         _log.warning("notification to %s refused: its server resolves to an address alerts are "
                      "never sent to", _PROVIDER_LABELS.get(provider, "?"))
@@ -823,8 +891,21 @@ def send_discord(webhook, text):
     return False, "Discord rejected it — the webhook URL is wrong or was deleted."
 
 
-def send_ntfy(server, topic, token, text):
+# send_ntfy's answer for each reason _post gives for a message it did not send.
+_NTFY_NOT_SENT = {
+    "unreachable": "couldn't reach that ntfy server — check the URL and the host's outbound network.",
+    "blocked": "that ntfy URL was refused before sending — https and a plain topic only.",
+    "refused": NTFY_ADDRESS_REFUSED,
+    "private": NTFY_PRIVATE_REFUSED,
+}
+_NTFY_REJECTED = "ntfy rejected it — the topic may be reserved, or the access token is wrong or missing."
+
+
+def send_ntfy(server, topic, token, text, private_network=None):
     """Publish a message to an ntfy topic. Returns (ok, detail).
+
+    `private_network`: whether the server may be on a private address (ntfy_private_network); None
+    reads the saved setting, as an alert does.
 
     The body is the message; the title goes in an X-Title header because ntfy renders it as the
     notification's heading. An access token is optional — ntfy.sh topics are public by default,
@@ -848,18 +929,13 @@ def send_ntfy(server, topic, token, text):
         if not re.match(r"^[A-Za-z0-9_.\-]{1,256}\Z", token):
             return False, "that access token has characters ntfy tokens don't use."
         headers["Authorization"] = "Bearer %s" % token
+    if private_network is None:
+        private_network = ntfy_private_network(_cfg().get("ntfy"))
     ok, reason = _post(url, text[:3800].encode("utf-8"), headers,
-                       allow_configured_host=True, provider="ntfy")
+                       allow_configured_host=True, provider="ntfy", private_ok=bool(private_network))
     if ok:
         return True, ""
-    if reason == "unreachable":
-        return False, "couldn't reach that ntfy server — check the URL and the host's outbound network."
-    if reason == "blocked":
-        return False, "that ntfy URL was refused before sending — https and a plain topic only."
-    if reason == "refused":
-        return False, NTFY_ADDRESS_REFUSED
-    return False, ("ntfy rejected it — the topic may be reserved, or the access token is wrong "
-                   "or missing.")
+    return False, _NTFY_NOT_SENT.get(reason, _NTFY_REJECTED)
 
 
 # ── Discord command bot (Gateway) ──────────────────────────────
@@ -1403,8 +1479,12 @@ def _test_send_discord_bot(cfg, token, chat_id, text):
     return (True, "Test message sent — check the Discord channel.") if ok else _r16a_test_failed("Discord", detail)
 
 
-def _test_send_ntfy(cfg, token, server, topic, text):
-    """test_send for ntfy: check the topic and server, then publish."""
+def _test_send_ntfy(cfg, token, server, topic, text, private_network=None):
+    """test_send for ntfy: check the topic and server, then publish.
+
+    `private_network` is the form's switch (None: the saved setting), so a Test before Save tries what
+    Save would store.
+    """
     nt = cfg.get("ntfy") or {}
     srv = _form_or_saved(server, nt, "server", NTFY_DEFAULT_SERVER)
     top = _form_or_saved(topic, nt, "topic")
@@ -1416,11 +1496,12 @@ def _test_send_ntfy(cfg, token, server, topic, text):
     if not _valid_ntfy_server(srv):
         return False, ("That server isn't usable — give the base URL only, https and no path "
                        "(for example https://ntfy.sh).")
-    ok, detail = send_ntfy(srv, top, tok, text)
+    private = ntfy_private_network(nt) if private_network is None else bool(private_network)
+    ok, detail = send_ntfy(srv, top, tok, text, private)
     return (True, "Test message sent — check the ntfy app.") if ok else _r16a_test_failed("ntfy", detail)
 
 
-def test_send(kind, token=None, chat_id=None, webhook=None, server=None, topic=None):
+def test_send(kind, token=None, chat_id=None, webhook=None, server=None, topic=None, private_network=None):
     """Synchronously send a test message to one channel. Returns (ok, message).
 
     Uses the values passed from the form when given (so you can test BEFORE saving), else the saved
@@ -1435,7 +1516,7 @@ def test_send(kind, token=None, chat_id=None, webhook=None, server=None, topic=N
     if kind == "discord_bot":
         return _test_send_discord_bot(cfg, token, chat_id, text)
     if kind == "ntfy":
-        return _test_send_ntfy(cfg, token, server, topic, text)
+        return _test_send_ntfy(cfg, token, server, topic, text, private_network)
     return False, "Unknown channel."
 
 

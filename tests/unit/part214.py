@@ -86,8 +86,8 @@ check("tls: HTTPS that starts keeps the configured bind",
 with open(_app214.__file__, encoding="utf-8") as _fh214:
     _main214 = _fh214.read().split('if __name__ == "__main__":', 1)[1]
 check("tls: the run line listens on the recorded bind, not on the configured host",
-      'app.socketio.run(app, app.config["BOOT_BIND"], port,' in _main214
-      and "socketio.run(app, host=host" not in _main214, "")
+      'wsgi_serve.serve(app, app.config["BOOT_BIND"], port,' in _main214
+      and "serve(app, host" not in _main214, "")
 eq("tls: the fallback bind is loopback", _certs214.TLS_FAILED_BIND, "127.0.0.1")
 
 
@@ -137,7 +137,7 @@ class _Sock214:
         return None
 
 
-def _ntfy214(addrs, via_route=False):
+def _ntfy214(addrs, via_route=False, private=None):
     """Send to https://ntfy.p214.example/alerts, whose name resolves to `addrs`.
 
     Returns (answer, getaddrinfo calls, addresses connected to): the answer is send_ntfy's (ok, detail),
@@ -157,7 +157,7 @@ def _ntfy214(addrs, via_route=False):
             r = _p9_client(P9_ADMIN).post("/api/notifications/test", json={
                 "channel": "ntfy", "server": "https://ntfy.p214.example", "topic": "alerts"})
             return _p9_json(r), lookups, connected
-        return _nt214.send_ntfy("https://ntfy.p214.example", "alerts", "", "p214"), lookups, connected
+        return _nt214.send_ntfy("https://ntfy.p214.example", "alerts", "", "p214", private), lookups, connected
     finally:
         _p9_restore_all()
 
@@ -172,9 +172,9 @@ for _addrs214 in (["127.0.0.1"], ["::1"], ["169.254.169.254"], ["::ffff:169.254.
           repr((_ans214, _look214, _conn214)))
 for _addrs214 in (["198.51.100.20"], ["10.1.2.3"], ["192.168.1.9"], ["100.64.5.6"], ["fd12:3456::5"],
                   ["2001:db8::20"], ["64:ff9b::c633:6414"]):
-    _ans214, _look214, _conn214 = _ntfy214(_addrs214)
+    _ans214, _look214, _conn214 = _ntfy214(_addrs214, private=True)
     check("ntfy: a server on %s (public, LAN, tailnet or NAT64 of a public one) is connected to, on the "
-          "one address that was looked up and checked" % _addrs214,
+          "one address that was looked up and checked, when it is marked as on the operator's own network" % _addrs214,
           _conn214 == _addrs214 and len(_look214) == 1 and _ans214[0] is False
           and _ans214[1] != _nt214.NTFY_ADDRESS_REFUSED, repr((_ans214, _look214, _conn214)))
 _seen214 = []
@@ -186,7 +186,7 @@ try:
 finally:
     _p9_restore_all()
 eq("ntfy: only the ntfy request opens the address-checking connection; Telegram keeps its own",
-   _seen214, [("api.telegram.org", "_FallbackHTTPSConnection"), ("ntfy.p214.example", "_NtfyHTTPSConnection")])
+   _seen214, [("api.telegram.org", "_FallbackHTTPSConnection"), ("ntfy.p214.example", "_NtfyPublicHTTPSConnection")])
 _route214, _, _rconn214 = _ntfy214(["169.254.169.254"], via_route=True)
 check("ntfy: the Test button names the refusal, and nothing was connected to",
       _route214.get("success") is False and "never sent to" in (_route214.get("message") or "")

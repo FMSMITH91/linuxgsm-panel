@@ -579,6 +579,14 @@ function _ajaxFormSucceeded(form, res){
     doRefresh();
   }
 }
+// A form posting to a step_up_required route carries data-step-up (and data-step-up-totp="1" when the
+// account has 2FA): a sign-in past the confirmation window confirms the password in a dialog first
+// (step_up_form.js's window.stepUpThen), so what was typed is sent, not lost on the confirm page.
+function _ajaxStepUp(form){
+  var go = function(){ _submitAjaxForm(form); };
+  if (form.hasAttribute('data-step-up') && window.stepUpThen) window.stepUpThen(go, form.getAttribute('data-step-up-totp') === '1');
+  else go();
+}
 window.ajaxForm = function(form){
   var msg = form.getAttribute('data-confirm');
   if (msg){
@@ -588,10 +596,10 @@ window.ajaxForm = function(form){
       confirmClass: form.getAttribute('data-confirm-class') || 'btn-primary',
       confirmLabel: form.getAttribute('data-confirm-label') || 'Confirm',
       bodyText: msg,   // data-confirm rendered via textContent — safe for any name, no HTML sink
-      onConfirm: function(){ _submitAjaxForm(form); }
+      onConfirm: function(){ _ajaxStepUp(form); }
     });
   } else {
-    _submitAjaxForm(form);
+    _ajaxStepUp(form);
   }
   return false;   // always prevent the native submit
 };

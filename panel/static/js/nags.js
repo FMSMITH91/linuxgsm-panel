@@ -225,7 +225,7 @@ function _rbPlanNotes(ctx, plan){
 function _rbRender(dlg, host, players, plan){
   var ctx = {dlg: dlg, host: host, players: players, plan: plan, state: _rbState(players),
              body: dlg.body, actions: _rbEl('div', 'd-grid gap-2 mt-3'),
-             post: function(mode){ _rbPost(dlg, host, mode); }};
+             post: function(mode){ _rbStepUp(function(){ _rbPost(dlg, host, mode); }); }};
   ctx.body.textContent = '';
   (_RB_VIEWS[players ? ctx.state : 'unknown'] || _rbPlayers)(ctx);
   _rbPlanNotes(ctx, plan);
@@ -250,6 +250,9 @@ function _rbAnswer(dlg, host, res){
   if (res.code >= 400) { _rbFailed(dlg, d); return; }
   _rbDone(dlg, host, d);
 }
+// The reboot is a step_up_required route: a sign-in past the confirmation window confirms the password
+// in a dialog first (step_up_form.js's window.stepUpThen); cancelled, the reboot dialog stays as it was.
+function _rbStepUp(go){ if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 function _rbPost(dlg, host, mode){
   dlg.body.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
   fetch(MOUNT+'/api/remote/'+host.id+'/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:mode})})  // nosemgrep
