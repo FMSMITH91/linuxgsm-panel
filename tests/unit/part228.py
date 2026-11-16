@@ -78,12 +78,14 @@ const window = {fetch: stubFetch, CSRF: 'old', addEventListener: noop, location:
 window.window = window;
 const ctx = vm.createContext(Object.assign(window, {document, Headers, Response, FormData, URLSearchParams, URL, Promise, setTimeout, clearTimeout, console,
   navigator: {userAgent: 'node'}, localStorage: {getItem: () => null, setItem: noop}, sessionStorage: {getItem: () => null, setItem: noop},
-  location: window.location, history: {replaceState: noop}, MutationObserver: function(){ this.observe = noop; }, matchMedia: () => ({matches: false, addEventListener: noop})}));
+  location: window.location, history: {replaceState: noop},
+  MutationObserver: function(){ this.observe = noop; }, matchMedia: () => ({matches: false, addEventListener: noop})}));
 try { vm.runInContext(src, ctx); } catch (e) { console.log('load error:', e.message); }
 (async () => {
   const fd = new FormData(); fd.set('csrf_token', 'old');
   const r = await ctx.fetch('/api/x', {method: 'POST', body: fd});
-  console.log(JSON.stringify({status: r.status, calls: calls.map(c => c.tok), formTok: fd.get('csrf_token'), CSRF: ctx.CSRF, inputs: inputs.map(i => i.value)}));
+  console.log(JSON.stringify({status: r.status, calls: calls.map(c => c.tok), formTok: fd.get('csrf_token'),
+    CSRF: ctx.CSRF, inputs: inputs.map(i => i.value)}));
   calls.length = 0;
   const stream = new ReadableStream({start(c){ c.close(); }});
   refuse = 1;
