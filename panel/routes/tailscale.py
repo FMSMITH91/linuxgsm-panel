@@ -11,6 +11,7 @@ from panel.security import privileged as _priv
 from panel.ops import (tailscale_integration as ts)
 from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required,
     superadmin_required)
+from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_json_body, _json_str, _r12c_json_flag)
 from panel.db.models import LOCAL_HOST_LABEL
@@ -392,6 +393,7 @@ def _register_tailscale_setup(app):
     @app.route("/api/tailscale/install", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_tailscale_install():
         """Install Tailscale on the PANEL HOST itself.
 
@@ -405,6 +407,7 @@ def _register_tailscale_setup(app):
     @app.route("/api/tailscale/up", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_tailscale_up():
         """Run `tailscale up` on the panel host and return the browser login URL.
 
@@ -438,6 +441,7 @@ def _register_tailscale_serve(app):
     @app.route("/api/tailscale/serve", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required
     def api_tailscale_serve():
         """Enable/disable Tailscale Serve for the panel."""
         data = _json_body()

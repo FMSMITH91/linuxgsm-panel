@@ -380,7 +380,8 @@ function blockBadge(c) {
   return c ? '<span class="badge bg-dark" data-no-i18n>' + esc(c) + '</span>' : '<span class="text-secondary">—</span>';
 }
 
-function blockIp() {
+function blockIp(){ _fwStepUp(function(){ _blockIpNow(); }); }
+function _blockIpNow(){
   var ip = document.getElementById('block-ip').value.trim();
   if (!ip) return;
   var resultEl = document.getElementById('block-result');
@@ -407,7 +408,7 @@ function blockIp() {
 function unblockIp(ip, btn) {
   confirmDialog({title: 'Unblock IP', icon: 'shield-check', confirmClass: 'btn-warning', confirmLabel: 'Unblock',
     bodyText: tf('Remove the firewall block on {ip}?', {ip: ip}),
-    onConfirm: function() {
+    onConfirm: function() { _fwStepUp(function() {
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
       fetch(MOUNT + '/api/remote/' + remoteId + '/security/block', {
         method: 'POST',
@@ -417,7 +418,7 @@ function unblockIp(ip, btn) {
       .then(r => r.json())
       .then(function(d) { if (!d.success && window.toast) toast(d.message || 'Failed to unblock', 'danger'); refreshFirewall(); })
       .catch(function() { refreshFirewall(); });
-    }});
+    }); }});
 }
 
 function esc(s){ return window.escapeHtml(s); }

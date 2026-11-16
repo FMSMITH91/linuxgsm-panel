@@ -6,7 +6,12 @@ function tsEsc(s){ return window.escapeHtml(s); }
 // install button (not-installed state) and the "Link this machine" button (installed but
 // NeedsLogin/Stopped) so a user who skipped the link step can always get a fresh link.
 var _tsUpPoll = null;   // only one at a time — see the note inside tsUp
-function tsUp(outEl, btn){
+// Every Tailscale change here (install, join, Serve) is a step_up_required route: a sign-in past the
+// confirmation window confirms the password in a dialog first (step_up_form.js's window.stepUpThen);
+// without it the server's 403 still sends the tab to the confirm page and back.
+function _tsStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
+function tsUp(outEl, btn){ _tsStepUp(function(){ _tsUpNow(outEl, btn); }); }
+function _tsUpNow(outEl, btn){
   outEl.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
   fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
     if(!d.success){ outEl.innerHTML = '<span class="text-danger">' + tsEsc(d.message || 'Failed') + '</span>'; if(btn) btn.disabled = false; return; }  // nosemgrep - tsEsc is window.escapeHtml
@@ -64,7 +69,7 @@ function wireTsButtons(){
   var tsInstallBtn = document.getElementById('ts-install-btn');
   if (_r34c_tsOnce(tsInstallBtn)) {
     var tsInstallOut = document.getElementById('ts-install-out');
-    tsInstallBtn.addEventListener('click', function(){
+    tsInstallBtn.addEventListener('click', function(){ _tsStepUp(function(){
       tsInstallBtn.disabled = true;
       tsInstallOut.innerHTML = '<i class="bi bi-arrow-repeat"></i> Installing Tailscale on the panel host… (up to a minute)';
       fetch(MOUNT + '/api/tailscale/install', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
@@ -72,7 +77,7 @@ function wireTsButtons(){
         tsInstallOut.innerHTML = '<span class="text-success">Installed.</span> Starting…';
         tsUp(tsInstallOut, tsInstallBtn);
       }).catch(function(){ tsInstallOut.innerHTML = '<span class="text-danger">Install request failed.</span>'; tsInstallBtn.disabled = false; });
-    });
+    }); });
   }
   // "Link this machine" button: Tailscale already installed but not authorized — just bring it up.
   var tsConnectBtn = document.getElementById('ts-connect-btn');
@@ -147,7 +152,8 @@ function _tsServeEnter(form) {
   if (b && !b.disabled) enableServe(b);
 }
 
-function enableServe(btn) {
+function enableServe(btn) { _tsStepUp(function() { _enableServeNow(btn); }); }
+function _enableServeNow(btn) {
   var mount = document.querySelector('[name="mount"]').value || '/';
   var funnel = document.getElementById('funnel-check').checked;
   // `btn` arrives via data-args "@self". It used to be `event.target` off the implicit global,
@@ -189,7 +195,7 @@ function disableServe(btn) {
     bodyText: viaServe
       ? 'You are using the panel through this Tailscale Serve address. Disabling Serve ends this connection: afterwards open the panel at its direct address.'
       : 'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',
-    onConfirm:function(){
+    onConfirm:function(){ _tsStepUp(function(){
       fetch(MOUNT + '/api/tailscale/serve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -207,7 +213,7 @@ function disableServe(btn) {
       .catch(function() {
         if (window.toast) toast('Error disabling Tailscale Serve', 'danger');
       });
-    }});
+    }); }});
 }
 
 // Move the panel's Serve path in one step. The server publishes the new path, checks Serve shows it,
@@ -225,7 +231,7 @@ function changeServePath(btn) {
   input.setAttribute('autocomplete', 'off'); input.setAttribute('data-no-i18n', '');
   wrap.appendChild(note); wrap.appendChild(label); wrap.appendChild(input);
   confirmDialog({title:'Change the panel\'s Serve path', icon:'signpost-split', confirmLabel:'Change path', bodyNode: wrap,
-    onConfirm:function(){
+    onConfirm:function(){ _tsStepUp(function(){
       fetch(MOUNT + '/api/tailscale/serve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -243,7 +249,7 @@ function changeServePath(btn) {
       .catch(function() {
         if (window.toast) toast('Error changing the Serve path', 'danger');
       });
-    }});
+    }); }});
 }
 
 // One route to the panel that the panel does not manage (a leftover at another mount). Only that
@@ -252,7 +258,7 @@ function removeServeRoute(btn) {
   var mount = btn.dataset.mount, url = btn.dataset.url;
   confirmDialog({title:'Remove this Serve route', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Remove',
     bodyText:'Remove this Tailscale Serve route? It reaches the panel at an address the panel does not manage. The panel\'s own address and settings are not changed.',
-    onConfirm:function(){
+    onConfirm:function(){ _tsStepUp(function(){
       fetch(MOUNT + '/api/tailscale/serve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -270,7 +276,7 @@ function removeServeRoute(btn) {
       .catch(function() {
         if (window.toast) toast('Error removing the Serve route', 'danger');
       });
-    }});
+    }); }});
 }
 
 // (peer-host Enter handler now lives in wireTsButtons so it survives an in-place refresh)
