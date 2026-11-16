@@ -215,9 +215,22 @@ def _audit_text224():
          ("bob", "paused (last from 2001:db8:1:2::/64)"), ("", "User logged in from 203.0.113.8")], True, 0))
 
 
+# The test-send uses the typed (or stored) tokens, so it takes the step-up confirm like the save does.
+def _s224_test_send_step_up():
+    import time as _t224
+    from unit.part12 import _p9_json
+    _p9.config["STEP_UP_MINUTES"] = 10
+    c = _p9_client(P9_ADMIN)
+    with c.session_transaction() as sess:
+        sess["_auth_at"] = _t224.time() - 3600
+    r = c.post("/api/notifications/test", json={"channel": "ntfy"})
+    eq("notifications test-send: from a sign-in past the step-up window it answers the confirm 403",
+       (r.status_code, r.headers.get("X-Reauth-Required"), _p9_json(r).get("error")), (403, "1", "reauth_required"))
+
+
 try:
     for _fn224 in (_chat_alerts224, _details_form224, _bot_console224, _ntfy_warning224, _push_note224, _pubip_sources224,
-                   _pubip_daily224, _audit_text224):
+                   _pubip_daily224, _audit_text224, _s224_test_send_step_up):
         _p9_arm(who="part224")
         try:
             _fn224()

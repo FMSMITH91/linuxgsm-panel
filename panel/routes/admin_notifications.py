@@ -170,6 +170,7 @@ def _register_notifications(app):
     @app.route("/api/notifications/test", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # sends to whatever endpoint and token are typed, the stored ones as fallback
     def notifications_test():
         b = _json_body()
         # Test the values typed into the form (so you don't have to Save first); blank fields fall
