@@ -14,6 +14,12 @@ compares git commits, not this file.
 
 ### Added
 
+- **ntfy privacy help.** Without an access token the ntfy card warns that anyone who guesses the
+  topic can read the alerts, offers a long random topic, and links a guide to running your own ntfy
+  server on your tailnet.
+- **Where browser alerts travel.** The Account alerts card says which company's push service relays
+  them for each browser.
+
 - **Invite links can ask for a second code.** Creating an invite also shows an 8-digit code, once,
   to send another way. The invite page asks for it before the account form, and five wrong codes
   stop the link and alert the administrators. Always on for Super Administrator invites, and on by
@@ -325,6 +331,13 @@ compares git commits, not this file.
   game user, never as root.
 
 ### Changed
+
+- **Chat alerts no longer name people or addresses by default.** Telegram, Discord and ntfy alerts
+  about sign-ins, attacks, bans and account changes say what happened and point to the Audit log.
+  Turn on "Include details (IP addresses, usernames) in chat alerts" under Notifications to get the
+  full text; it is off after this update too.
+- **Fewer public-IP lookups.** A host's own public address is used without asking an outside
+  service, and a lookup that fails is retried once a day instead of every five minutes.
 
 - **Active Sessions say when each sign-in ends.** Each device on the Account page says whether it is
   a "Remember me" sign-in and when it will be signed out, in your own time zone.
@@ -1511,6 +1524,13 @@ compares git commits, not this file.
   Stored timestamps are unchanged.
 
 ### Security
+
+- **Old audit entries no longer keep full IP addresses in their text.** After the IP-ageing period
+  (90 days by default), addresses inside an entry's description and target are reduced to their
+  network, as the IP column already was.
+- **The chat bots mask players' IP addresses in console replies.** Unless "Include details" is on.
+- **Sending a test notification asks for your password again.** Like saving the Notifications page,
+  once the last confirmation is older than the step-up window.
 
 - **The file browser no longer writes SSH keys or shell start-up files in a game account's home.**
   Saving, uploading, creating or renaming onto `~/.ssh`, `.bashrc`, `.profile`, `.bash_profile`,

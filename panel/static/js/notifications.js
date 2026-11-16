@@ -1,6 +1,12 @@
 // Notification settings form.
 function _val(name) { var el = document.querySelector('[name="' + name + '"]'); return el ? el.value.trim() : ''; }
+// The test sends with the typed (or stored) tokens, so the server asks for the password again after the
+// step-up window: confirm it here first (step_up_form.js's window.stepUpThen) so the page stays put.
 function testChannel(channel, btn) {
+  if (window.stepUpThen) { window.stepUpThen(function(){ _testChannelNow(channel, btn); }, window.STEP_UP_TOTP === true); }
+  else { _testChannelNow(channel, btn); }
+}
+function _testChannelNow(channel, btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Sending…'; }
   // Send the values currently typed in the form so you can test BEFORE saving; blank fields fall
@@ -19,4 +25,10 @@ function testChannel(channel, btn) {
   .catch(function(){ toast('Request failed', 'danger'); })
   .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } })  // nosemgrep - orig is the markup this button itself had, captured above
   .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
+}
+// Put the page's random topic suggestion into the ntfy Topic field.
+function useSuggestedTopic() {
+  var code = document.getElementById('ntfy-topic-suggestion');
+  var field = document.querySelector('[name="ntfy_topic"]');
+  if (code && field) { field.value = code.textContent.trim(); field.focus(); }
 }

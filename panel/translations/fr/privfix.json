@@ -1,0 +1,10 @@
+{
+  "No access token: anyone who guesses the topic can read these alerts. Use a long random topic or an access token, or run your own ntfy server.": "Aucun jeton d'accès : quiconque devine le sujet peut lire ces alertes. Utilisez un sujet long et aléatoire ou un jeton d'accès, ou hébergez votre propre serveur ntfy.",
+  "A random topic:": "Un sujet aléatoire :",
+  "Use it": "L'utiliser",
+  "How to run your own ntfy server": "Comment héberger votre propre serveur ntfy",
+  "Include details (IP addresses, usernames) in chat alerts": "Inclure les détails (adresses IP, noms d'utilisateur) dans les alertes de messagerie",
+  "Recommended: off — Telegram, Discord and ntfy then get what happened, not who or from where; the details stay in the Audit log (OWASP Top 10 Privacy Risks).": "Recommandé : désactivé — Telegram, Discord et ntfy reçoivent ce qui s'est passé, pas qui ni d'où ; les détails restent dans le journal d'audit (OWASP Top 10 Privacy Risks).",
+  "On: outside the recommendation — sign-in addresses, usernames and banned IPs are sent to these services, and console replies from the bots keep players' addresses.": "Activé : hors de la recommandation — les adresses de connexion, les noms d'utilisateur et les IP bannies sont envoyés à ces services, et les réponses de console des bots gardent les adresses des joueurs.",
+  "Relayed encrypted by your browser's push service (Google, Microsoft, Apple or Mozilla). ntfy uses none.": "Relayées chiffrées par le service push de votre navigateur (Google, Microsoft, Apple ou Mozilla). ntfy n'en utilise aucun."
+}

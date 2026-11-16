@@ -21,7 +21,7 @@ from panel.ops.ssh_manager import _lazy
 paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
-from panel.core.validation import HOST_RE as _HOST_RE, canonical_host
+from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4
 from panel.security import privileged as _priv
 from panel.ops import netdev as _netdev
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
@@ -2902,9 +2902,17 @@ console_sent = register_remote_cache({})
 
 
 def remote_public_ip(server):
-    """Best-effort public IPv4 of the remote (or the panel host for local)."""
+    """Best-effort public IPv4 of the remote (or the panel host for local).
+
+    The host's own default-route address first (_gamedig_host: `ip route get`, no packet sent, cached
+    an hour): when it is public, that is the answer and no third party is asked. Only behind NAT (a
+    cloud VM's private address) one HTTPS service is asked, then the same question over DNS for a host
+    where curl is missing or outbound HTTPS is blocked. A second HTTPS service covered no failure the
+    first did not, and told one more third party that this host exists (OWASP Top 10 Privacy Risks P10).
+    """
+    if (own := global_ipv4(_gamedig_host(server))):
+        return own
     for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
-                "curl -fsS --max-time 5 https://ifconfig.me",
                 "dig +short myip.opendns.com @resolver1.opendns.com"):
         try:
             out, _, _ = run_command(server, cmd, timeout=8, sudo=False)

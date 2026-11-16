@@ -26,6 +26,7 @@ import urllib.request
 from panel.core import i18n
 from panel.core import runtime_stats
 from panel.core.config import load_config, update_config, encrypt_secret, decrypt_secret
+from panel.services import chat_privacy
 
 _log = logging.getLogger("notifications")
 
@@ -188,6 +189,9 @@ def settings_for_form():
                  "private_network": ntfy_private_network(nt)},
         "events": {k: event_enabled(cfg, k) for k in EVENTS},
         "thresholds": get_thresholds(),
+        "include_details": chat_privacy.include_details(cfg),
+        "ntfy_public": chat_privacy.ntfy_public_warning(nt),
+        "ntfy_topic_suggestion": chat_privacy.suggested_topic(),
     }
 
 
@@ -289,12 +293,12 @@ def _ntfy_record(form, token):
             "private_network": ntfy_private_network(form)}
 
 
-def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
+def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None, include_details=None):
     """Persist settings, encrypting secrets.
 
     `telegram`/`discord` secrets that come in as None mean 'keep the stored value' (the form never
     round-trips the real secret back). There is no global master switch — a channel's own enable
-    toggle is what turns its alerts on/off.
+    toggle is what turns its alerts on/off. `include_details` None keeps the stored choice.
     """
     _discord_saves[0] += 1
     cur = _cfg()
@@ -315,6 +319,8 @@ def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
         "ntfy": _ntfy_record(ntfy, nt_token),
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
         "thresholds": th,
+        "include_details": (chat_privacy.include_details(cur) if include_details is None
+                            else include_details is True),
     }
     # update_config: this can race with the Telegram poller thread's pending-update write.
     update_config(lambda cfg: cfg.update({"notifications": notif}))
@@ -1384,14 +1390,17 @@ def notify(event_key, title, body="", server=None, remote=None):
 
     No-op when notifications (or this event) are off, or no channel is configured. Never raises.
     `server` / `remote`: the GameServer or RemoteServer the alert is about. They decide which users'
-    own devices it is pushed to (push_alerts); the channels' text is `title` and `body` as before.
+    own devices it is pushed to (push_alerts). The channels' text is `title` and `body`, except that
+    an alert about a person or an address carries chat_privacy.BRIEF_BODY instead of `body` unless
+    the admin turned on "Include details" (chat_privacy).
     """
     _push(event_key, server, remote)
     try:
         cfg = _cfg()
         if not event_enabled(cfg, event_key):
             return
-        _queue_alert((event_key, str(title or ""), str(body or "")))
+        # Who and from where stay in the Audit log unless the admin asked for them in chat.
+        _queue_alert((event_key, str(title or ""), chat_privacy.chat_body(cfg, event_key, str(body or ""))))
     except Exception:
         _log.debug("notify failed to dispatch", exc_info=True)
 

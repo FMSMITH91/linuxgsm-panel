@@ -179,11 +179,18 @@
             instance, for example https://ntfy.example.com. Base URL only: https, no path.
           </div>
           {% endcall %}
-          <div class="small text-warning mt-1">
+          {% if settings.ntfy_public %}
+          <div class="small text-warning mt-1" id="ntfy-public-warning">
             <i class="bi bi-exclamation-triangle"></i>
-            On ntfy.sh a topic is a public address — anyone who guesses the name receives your alerts.
-            Pick something long and unguessable, or use a reserved topic with an access token.
+            No access token: anyone who guesses the topic can read these alerts.
+            Use a long random topic or an access token, or run your own ntfy server.
           </div>
+          <div class="small text-secondary">A random topic: <code id="ntfy-topic-suggestion" data-no-i18n>{{ settings.ntfy_topic_suggestion }}</code>
+            <button type="button" class="btn btn-link btn-sm p-0 align-baseline" data-action="useSuggestedTopic">Use it</button></div>
+          {% endif %}
+          {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant #}
+          {% if panel_repo_url %}<a href="{{ panel_repo_url }}/blob/main/docs/NTFY-SELF-HOST.md" target="_blank"
+             rel="noopener noreferrer" class="small d-block">How to run your own ntfy server</a>{% endif %}
           <button type="button" class="btn btn-outline-secondary btn-sm mt-2" data-action="testChannel" data-args='["ntfy", "@self"]'>
             <i class="bi bi-send"></i> Send test
           </button>
@@ -207,6 +214,13 @@
         </div>
         {% endfor %}
       </div>
+      <div class="form-check form-switch mt-2 mb-0">
+        <input type="checkbox" name="include_details" class="form-check-input" role="switch" id="include-details"
+               {% if settings.include_details %}checked{% endif %}>
+        <label class="form-check-label" for="include-details">Include details (IP addresses, usernames) in chat alerts</label>
+      </div>
+      <div class="small text-secondary">Recommended: off — Telegram, Discord and ntfy then get what happened, not who or from where; the details stay in the Audit log (OWASP Top 10 Privacy Risks).</div>
+      {% if settings.include_details %}<div class="small text-warning">On: outside the recommendation — sign-in addresses, usernames and banned IPs are sent to these services, and console replies from the bots keep players' addresses.</div>{% endif %}
       <hr class="my-3">
       {# Two per row on a phone: four stacked number boxes were a screen of their own. #}
       <div class="fw-semibold small mb-2"><i class="bi bi-speedometer2"></i> Host alert thresholds</div>
