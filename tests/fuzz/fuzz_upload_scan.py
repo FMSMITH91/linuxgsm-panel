@@ -49,13 +49,13 @@ with atheris.instrument_imports():
 # as the finish script sets, and no LD_PRELOAD from a sanitizer build reaching the child.
 _AWKS = [p for p in (shutil.which(n) for n in ("mawk", "gawk")) if p] or [shutil.which("awk") or "/usr/bin/awk"]
 _ENV = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
-ME = "gs12_lp"
+ME = "gs12_lp"   # the database the dump is for; _BENIGN names it
 _VERDICTS = {"SCANNED", "SWITCH", "OTHER", "BIG"}
 _OTHERS = ["mysql", "sys", "information_schema", "performance_schema", "gs9_x", "gs12_lq", "gs1_lp"]
 _BENIGN = ["-- MySQL dump 10.13  Distrib 8.0", "/*!40101 SET NAMES utf8mb4 */;", "DROP TABLE IF EXISTS `t`;",
            "CREATE TABLE `t` (`id` int NOT NULL, `name` varchar(64), PRIMARY KEY (`id`)) ENGINE=InnoDB;",
-           "LOCK TABLES `t` WRITE;", "UNLOCK TABLES;", "SET @a = 1;", "SELECT * FROM `%s`.`t`;" % ME,
-           "UPDATE %s.t SET name = 'x';" % ME, "DELIMITER ;;", "", "# a note", "/*!40000 ALTER TABLE `t` DISABLE KEYS */;",
+           "LOCK TABLES `t` WRITE;", "UNLOCK TABLES;", "SET @a = 1;", "SELECT * FROM `gs12_lp`.`t`;",
+           "UPDATE gs12_lp.t SET name = 'x';", "DELIMITER ;;", "", "# a note", "/*!40000 ALTER TABLE `t` DISABLE KEYS */;",
            "COMMIT;", "START TRANSACTION;"]
 _FORBIDDEN = ["USE {db}", "USE `{db}`", "use{sp}`{db}`", "CREATE DATABASE {db}", "create{sp}schema `{db}`",
               "DROP DATABASE IF EXISTS `{db}`", "DROP SCHEMA{sp}{db}", "ALTER DATABASE `{db}` CHARACTER SET utf8mb4",
@@ -80,7 +80,7 @@ def _data(fdp):
 
 def _insert(fdp):
     rows = ",".join("(%d,'%s')" % (i, _data(fdp)) for i in range(fdp.ConsumeIntInRange(1, 3)))
-    return "INSERT INTO `t` VALUES " + rows + ";"
+    return "INSERT INTO `t` VALUES " + rows + ";"  # nosec B608 - a dump line the scan reads as text; nothing runs it
 
 
 def _bad(fdp):
