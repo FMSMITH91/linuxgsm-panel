@@ -17,7 +17,7 @@ The relevant `data/config.json` settings:
 | `trusted_proxies` | Which peers count as that proxy — default all of loopback (`127.0.0.0/8` and `::1`); list yours if it is on another machine |
 | `trusted_proxy_users` | On loopback, the accounts the proxy may run as — default `www-data`, `nginx`, `http`, `caddy`, `cloudflared` (root and the panel's own account always count) |
 | `bind_host` | `127.0.0.1` when behind a proxy, `0.0.0.0` when facing clients directly |
-| `site_domain` | The name the panel is reached at: the self-signed cert's name, and an origin the live console accepts. It does not turn on `Secure` cookies |
+| `site_domain` | The name the panel is reached at: the self-signed cert's name, and the origin the panel accepts forms and the live console from. Set it behind a proxy that rewrites Host and passes on no X-Forwarded-Host (Settings, or `manage.py set-site-domain <host[:port]>` on the host), or older browsers' forms, sign-in included, are refused. It does not turn on `Secure` cookies |
 | `cookie_secure` | Force `Secure` cookies on/off (`true`/`false`). Unset, they are on when the panel is reached over HTTPS: `use_https`, Tailscale Serve, or `trust_proxy` |
 
 ---
@@ -74,7 +74,7 @@ yourname.duckdns.org {
 
 This is **on by default** (`"use_https": true`): a self-signed certificate (ECDSA P-256, 397 days, the
 longest browsers accept; a new one is made at start-up once fewer than 30 days remain) under
-`data/ssl/`, serving `https://<your-ip>:5000` directly, with no renewal and no domain. Set
+`data/ssl/`, serving `https://<your-ip>:5000` directly, renewed at start-up and with no domain. Set
 `"use_https": false` and restart to serve plain HTTP. It stands down behind a reverse proxy
 (`trust_proxy`), and behind Tailscale Serve when the panel is bound to `127.0.0.1`; on any other
 bind it stays on and Serve reaches it with `https+insecure://`.

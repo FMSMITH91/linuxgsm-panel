@@ -74,7 +74,7 @@ Trust boundaries:
 | --- | --- | --- |
 | Root on the panel host | the helper runs as root; the wide grant is root outright | `/usr/local/lib/linuxgsm-panel/panel-helper`, `/etc/sudoers.d/linuxgsm-panel` |
 | Accounts, sessions and 2FA seeds | a superadmin is root-equivalent on the panel host | `panel.db` (`panel/db/models.py`), session cookie |
-| Stored secrets: SSH keys and passwords for remotes, bot tokens, database passwords, VAPID key | each opens another system | `panel.db` and `config.json`, encrypted with the key ring |
+| Stored secrets: SSH passwords and key paths for remotes, bot and channel tokens, database passwords, VAPID key | each opens another system | `panel.db` and `config.json`, encrypted with the key ring; an SSH key file itself stays on disk, protected by its file permissions |
 | The key ring | decrypts every stored secret | `data/cred_key` (mode 0600) |
 | Game servers and their files, worlds and backups | the service the panel exists for | game accounts' homes, local and remote |
 | Databases of game servers | players' data | MariaDB/MySQL, local or on another machine over Tailscale |
@@ -91,7 +91,7 @@ the file that holds them.
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
 | S | Password guessing, credential stuffing | Mitigate: Argon2id hashes, per-account throttle and lockout, breached/common password list, required 2FA for admins (`panel/security/account_guard.py`, `panel/security/auth.py`, `panel/core/common_passwords.py`). |
-| S | Session theft or fixation | Mitigate: `__Host-` cookie, Secure/HttpOnly/SameSite, rotation on sign-in, idle and absolute limits, session bound to its user agent, server-side revocation (`panel/security/session_cookie.py`, `panel/core/session_policy.py`). |
+| S | Session theft or fixation | Mitigate: `__Host-` cookie, Secure/HttpOnly/SameSite, rotation on sign-in, idle and absolute limits, session bound to its client address (IPv6 by /64) and User-Agent under "strong" protection, server-side revocation (`__Host-` prefix in `panel/security/auth.py`; `panel/security/session_cookie.py`, `panel/core/session_policy.py`). |
 | T | Cross-site request forgery | Mitigate: CSRF token on every state-changing request (Flask-WTF `CSRFProtect`, `panel/install/app.py`), Fetch Metadata guard with the Origin/Referer check as its fallback (`panel/routes/account_security.py`), SameSite cookie. A page left open across a new session gets that session's token in the JSON refusal of an in-page request and resends it once (`_csrf_refused`, `panel/static/js/panel.js`); only same-origin script can set the header or read the reply. Behind a proxy that hides the panel's address, the target origin is configured (`site_domain`, `manage.py set-site-domain`) and the journal says so when a form was refused for it. |
 | S | Traffic read or altered in transit | Mitigate: HTTPS through Tailscale Serve, a reverse proxy or the panel's own TLS (ECDSA P-256, SHA-256, 397 days, `panel/services/certs.py`), HSTS. An operator's CA-signed certificate in `data/ssl` is never replaced by a self-signed one; a weak key, SHA-1/MD5 signature, mismatched key or expiry is logged at start-up, and the expiry alert starts 30 days ahead. |
 | T | Injection (SQL, shell, template, path) | Mitigate: SQLAlchemy bound parameters; validation before a value reaches a shell (`panel/core/validation.py`); no shell between the panel and root (TB2); Jinja autoescape; strict CSP (`panel/security/headers.py`). |
@@ -127,9 +127,9 @@ the file that holds them.
 
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
-| S | Man in the middle on the first or a later connection | Mitigate: host keys pinned on first use and enforced after (`panel/ops/ssh_manager/_core.py` `_PinPolicy`); an optional fingerprint on Add host and Edit host makes the first connection verified too, refused before the credential is sent when it does not match (`panel/routes/remotes.py`). Accept: without a fingerprint the first connection is trust on first use. |
+| S | Man in the middle on the first or a later connection | Mitigate: host keys pinned on first use and enforced after (`panel/ops/ssh_manager/_core.py` `_PinPolicy`); an optional fingerprint on the Add Remote Server form and Edit makes the first connection verified too, refused before the credential is sent when it does not match (`panel/routes/remotes.py`). Accept: without a fingerprint the first connection is trust on first use. |
 | T | Remote output crafted to mislead the panel's parsers | Mitigate: parsers degrade to empty on bad input and are fuzzed (`tests/fuzz/`: status replies, ufw, cron, configs, fail2ban). An empty read is never taken as a measurement. |
-| I | Stored SSH credentials leak | Mitigate: encrypted at rest with AES-256-GCM key ring; never logged; backups hold them encrypted. |
+| I | Stored SSH credentials leak | Mitigate: passwords and key paths encrypted at rest with the AES-256-GCM key ring; never logged; backups hold them encrypted. A key file is not copied into the panel: it stays where the operator keeps it, under its file permissions. |
 | E | Panel's own host reached through a "remote" entry | Mitigate: bootstrap, Tailscale install and join routes refuse the panel's own host. |
 
 ### TB5: push services and chat channels
@@ -138,7 +138,7 @@ the file that holds them.
 | --- | --- | --- |
 | S | A browser registers a push endpoint that points at an internal address (SSRF) | Mitigate: allow-list of push service hosts, https:443 only, request rebuilt from the parsed parts, every resolved address must be public (IPv4 carried in IPv6 unwrapped, IPv4-compatible refused), connect to the checked address, no redirects (`panel/services/webpush.py`; fuzzed by `tests/fuzz/fuzz_push.py`). |
 | S | Someone takes over another account's subscription | Mitigate: a subscription moves only with proof of holding it (`panel/services/push_alerts.py`). |
-| S | A stranger in a bot's channel sends commands | Mitigate: commands only from listed user ids (`panel/services/notifications.py` `parse_command_users`, `panel/services/bots/`). |
+| S | A stranger in a bot's channel sends commands | Mitigate: only the configured chat is answered; in it, commands that change anything run only for listed user ids, and the read-only /status, /servers, /hosts, /connect and /help are open (`panel/services/bots/commands.py` `OPEN_COMMANDS`, `command_refusal`; `panel/services/notifications.py` `parse_command_users`). |
 | S | A stranger links their own Telegram chat to someone's account and gets that account's alerts | Mitigate: a link needs a one-time code the signed-in account asks for after a password re-check (128 random bits, SHA-256 at rest, 10 minutes, once, five per account per 10 minutes), claimed only from a private chat; the chat id is encrypted on the account, the link is audited and shown to the account as a change to its security (`panel/services/telegram_link.py`, `panel/routes/push_devices.py`). A linked chat only receives: commands still come from the chat on the Notifications page. |
 | I | Alert text reveals more than a lock screen should | Mitigate: push text is the event and the server's name only; endpoints and keys never logged. |
 | D | A slow push service stalls the panel | Mitigate: one background sender, bounded queue, timeouts. |
@@ -177,7 +177,7 @@ the file that holds them.
 | --- | --- | --- |
 | A superadmin is root on the panel host | Accept | The panel manages the host, and every superadmin keeps its host-level powers there (firewall, SSH, OS updates, reboot, the panel's port, Tailscale, IP blocking, Ubuntu Pro) by design. The controls are step-up re-authentication before each of those changes and an audit row for each; the panel-host terminal and panel backup restore stay the panel owner's only. SECURITY.md says so and how to drop the local grant. Owner: whoever grants superadmin. |
 | Wide sudo grant on an install missing a root piece | Accept, with a fix path | The installer prints it, and the panel host's page tells superadmins while it lasts (`system_ops.wide_sudo_grant`), with the command; re-running install.sh as root narrows it. |
-| First SSH connection to a remote, and the first install, are trust on first use | Reduce, then accept | Add host takes the host key's SHA256 fingerprint (RFC 4251 section 4.1: a fingerprint checked out of band); left empty, the first key is trusted. The release key's fingerprint is published in README and SECURITY.md, with how to check a commit's signature before the first install. |
+| First SSH connection to a remote, and the first install, are trust on first use | Reduce, then accept | The Add Remote Server form (and Edit) takes the host key's SHA256 fingerprint (RFC 4251 section 4.1: a fingerprint checked out of band); left empty, the first key is trusted. The release key's fingerprint is published in README and SECURITY.md, with how to check a commit's signature before the first install. |
 | The upload scan is a text scan, not an SQL parser | Accept | A keyword split over lines, a comment or vertical tab between keywords is not read; the database account's one-database grant refuses those statements. |
 | `mask_literals` follows the server's default escapes | Accept | Under NO_BACKSLASH_ESCAPES a backslash before a quote ends a literal for the server but not for the mask; decimal numbers are kept in the audit line by design. |
 | Push services and chat platforms see alert metadata | Transfer | To the vendor, under its terms; the text is minimal. |
