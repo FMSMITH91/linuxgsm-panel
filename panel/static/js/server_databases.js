@@ -354,8 +354,7 @@ function dbDrawGrant(g, st) {
   window.dbSetup = function (btn) {
     if (st.busy || !st.d) return;
     stepUp(function () {
-      st.busy = true;
-      if (btn) btn.disabled = true;
+      st.busy = true; if (btn) btn.disabled = true;
       postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/setup', {})
         .then(function (r) { if (btn) btn.disabled = false; return after(r, true); }).catch(failed);
     });
@@ -365,8 +364,7 @@ function dbDrawGrant(g, st) {
     if (ev) ev.preventDefault();
     if (st.busy || !st.d) return;
     stepUp(function () {
-      st.busy = true;
-      var pw = el('db-login-pw');
+      st.busy = true; var pw = el('db-login-pw');
       postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login',
                {user: el('db-login-user').value, password: pw.value})
         .then(function (r) { pw.value = ''; if (r.ok) st.loginOpen = false; return after(r, true); }).catch(failed);
@@ -380,8 +378,7 @@ function dbDrawGrant(g, st) {
   window.dbLoginClear = function (btn) {
     if (st.busy || !st.d) return;
     stepUp(function () {
-      st.busy = true;
-      if (btn) btn.disabled = true;
+      st.busy = true; if (btn) btn.disabled = true;
       postJson(MOUNT + '/api/remote/' + st.d.remote_id + '/databases/admin-login', {clear: true})
         .then(function (r) { if (btn) btn.disabled = false; if (r.ok) st.loginOpen = false; return after(r, true); })
         .catch(failed);
