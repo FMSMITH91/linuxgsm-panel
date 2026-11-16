@@ -332,6 +332,8 @@ compares git commits, not this file.
 
 ### Changed
 
+- **The fuzz build's base image can be updated by Renovate.** It is pinned as tag and digest, so
+  a new digest arrives as a reviewed change instead of by hand.
 - **The installer no longer asks a website for the server's address when the server knows it.**
   It reads the machine's own address first and prints that. Only a server behind a router (NAT),
   which holds a private address alone, still asks one outside service, and the second fallback
@@ -1548,6 +1550,16 @@ compares git commits, not this file.
 
 ### Security
 
+- **A remote host's SSH key can be checked on the first connection.** Add host and Edit host
+  take an optional host key fingerprint (as `ssh-keygen -lf` prints it); a host presenting another
+  key is refused before its password or key is sent. Left empty, the first key is trusted and
+  pinned as before.
+- **The panel host page warns when the install still has the wide sudo grant.** Superadmins see
+  that the panel's account can run any command as root there, and the installer command that
+  narrows it.
+- **The release key's fingerprint is published for first installs.** The README and SECURITY.md
+  give it, and SECURITY.md shows how to check that the commit you install carries a good release
+  signature.
 - **Log lines cannot forge a journal priority.** Text inside a log message can no longer start a
   journal line at a priority of its own choosing; every line of a message keeps that message's level.
 - **An added API-token header no longer skips the password re-check.** A request signed in by the
