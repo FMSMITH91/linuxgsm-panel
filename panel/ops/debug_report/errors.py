@@ -295,6 +295,15 @@ def _attach_app_logger(app_logger):
     return added
 
 
+def _restore_flask_default(app_logger):
+    """Give Flask's default handler and the NOTSET level back to a logger _attach_app_logger took it from."""
+    if app_logger is not None and getattr(app_logger, _MARK, None) == "flask-default":
+        from flask.logging import default_handler
+        app_logger.addHandler(default_handler)
+        app_logger.setLevel(logging.NOTSET)
+        delattr(app_logger, _MARK)
+
+
 def detach_log_handlers(app_logger=None):
     """Remove what attach_log_handlers added (tests), and put the levels and Flask's handler back."""
     for lg in [logging.getLogger(n) for n in LOGGERS] + ([app_logger] if app_logger else []):
@@ -302,11 +311,7 @@ def detach_log_handlers(app_logger=None):
             lg.removeHandler(h)
             if getattr(h, _MARK, None) == "debugfile":
                 h.close()
-    if app_logger is not None and getattr(app_logger, _MARK, None) == "flask-default":
-        from flask.logging import default_handler
-        app_logger.addHandler(default_handler)
-        app_logger.setLevel(logging.NOTSET)
-        delattr(app_logger, _MARK)
+    _restore_flask_default(app_logger)
     for name in LOGGERS:
         logging.getLogger(name).setLevel(logging.NOTSET)
 

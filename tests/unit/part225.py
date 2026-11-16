@@ -26,6 +26,35 @@ _CHAINS225 = ("panel", "notifications")
 _FORGED225 = "line one\n<0>forged emergency\x00<1>forged alert"
 
 
+def _set_aside225():
+    """Take the panel's own handlers off its two chains; what was there, to put back."""
+    saved = {n: [h for h in _log225.getLogger(n).handlers if getattr(h, _err225._MARK, None)]
+             for n in _CHAINS225}
+    for name, handlers in saved.items():
+        for handler in handlers:
+            _log225.getLogger(name).removeHandler(handler)
+    return saved, {n: _log225.getLogger(n).level for n in _CHAINS225}
+
+
+def _put_back225(saved, levels):
+    """Drop what a check attached to the two chains and restore what _set_aside225 took off."""
+    for name in _CHAINS225:
+        lg = _log225.getLogger(name)
+        for handler in [h for h in lg.handlers if getattr(h, _err225._MARK, None)]:
+            lg.removeHandler(handler)
+        for handler in saved[name]:
+            lg.addHandler(handler)
+        lg.setLevel(levels[name])
+
+
+def _set_env225(text):
+    """Set JOURNAL_STREAM to `text`, or remove it when `text` is empty or None."""
+    if text:
+        _os225.environ["JOURNAL_STREAM"] = text
+    else:
+        _os225.environ.pop("JOURNAL_STREAM", None)
+
+
 @_cm225
 def _stream225(journal=True, value=None):
     """Make a temporary file the process's stderr, named (or not) by JOURNAL_STREAM; yield a reader.
@@ -33,36 +62,18 @@ def _stream225(journal=True, value=None):
     `value` replaces the variable's text ("" removes it); otherwise it names the file when `journal`
     is true and a different inode when not. The panel's own handlers are set aside for the duration.
     """
-    saved = {n: [h for h in _log225.getLogger(n).handlers if getattr(h, _err225._MARK, None)]
-             for n in _CHAINS225}
-    levels = {n: _log225.getLogger(n).level for n in _CHAINS225}
-    for name, handlers in saved.items():
-        for handler in handlers:
-            _log225.getLogger(name).removeHandler(handler)
+    saved, levels = _set_aside225()
     old_env, old_err = _os225.environ.get("JOURNAL_STREAM"), _sys225.stderr
     with _tf225.TemporaryFile("w+", encoding="utf-8") as tmp:
         st = _os225.fstat(tmp.fileno())
-        text = value if value is not None else "%d:%d" % (st.st_dev, st.st_ino + (0 if journal else 1))
-        if text:
-            _os225.environ["JOURNAL_STREAM"] = text
-        else:
-            _os225.environ.pop("JOURNAL_STREAM", None)
+        _set_env225(value if value is not None else "%d:%d" % (st.st_dev, st.st_ino + (0 if journal else 1)))
         _sys225.stderr = tmp
         try:
             yield lambda: (tmp.flush(), tmp.seek(0), tmp.read())[2]
         finally:
             _sys225.stderr = old_err
-            if old_env is None:
-                _os225.environ.pop("JOURNAL_STREAM", None)
-            else:
-                _os225.environ["JOURNAL_STREAM"] = old_env
-            for name in _CHAINS225:
-                lg = _log225.getLogger(name)
-                for handler in [h for h in lg.handlers if getattr(h, _err225._MARK, None)]:
-                    lg.removeHandler(handler)
-                for handler in saved[name]:
-                    lg.addHandler(handler)
-                lg.setLevel(levels[name])
+            _set_env225(old_env)
+            _put_back225(saved, levels)
 
 
 def _emit225():
