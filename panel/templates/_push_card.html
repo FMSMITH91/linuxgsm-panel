@@ -48,9 +48,9 @@
         <button type="button" class="btn btn-outline-primary btn-sm" id="tg-link-btn"><i class="bi bi-telegram"></i> Link my Telegram</button>
         <a class="btn btn-primary btn-sm d-none" id="tg-link-open" target="_blank" rel="noopener noreferrer"><i class="bi bi-box-arrow-up-right"></i> Open Telegram and press Start</a>
         <span class="small" id="tg-link-msg"></span>
+        <span class="small text-secondary d-none" data-tg-msg="wait">Waiting for Start in Telegram…</span>
+        <span class="small text-warning d-none" data-tg-msg="gone">The link expired. Ask for a new one.</span>
       </div>
-      <span class="d-none" data-tg-msg="wait">Waiting for Start in Telegram…</span>
-      <span class="d-none" data-tg-msg="gone">The link expired. Ask for a new one.</span>
       {% endif %}
     </div>
     {% endif %}

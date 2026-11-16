@@ -214,9 +214,14 @@
     var btn = document.getElementById('tg-link-btn'), open = document.getElementById('tg-link-open');
     var msg = document.getElementById('tg-link-msg');
     if (!btn) return;
-    function said(which) { var s = box.querySelector('[data-tg-msg="' + which + '"]'); return s ? s.textContent : ''; }
+    // The status lines are rendered (and translated) in the card; this only picks which one shows.
+    function show(which) {
+      box.querySelectorAll('[data-tg-msg]').forEach(function (s) {
+        s.classList.toggle('d-none', s.getAttribute('data-tg-msg') !== which);
+      });
+    }
     function check(left) {
-      if (left <= 0) { msg.textContent = said('gone'); open.classList.add('d-none'); btn.classList.remove('d-none'); return; }
+      if (left <= 0) { show('gone'); open.classList.add('d-none'); btn.classList.remove('d-none'); return; }
       postJson(box.getAttribute('data-check-url'), {}).then(function (res) {
         if (res.status === 200 && res.d.linked) { window.location.reload(); return; }
         setTimeout(function () { check(left - 1); }, TG_CHECK_MS);
@@ -229,12 +234,13 @@
         btn.disabled = false;
         if (res.d.error === 'reauth_required' && push) { goSameSite(push.getAttribute('data-reauth-url')); return; }
         if (res.status !== 200 || !res.d.success || !/^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\?start=[A-Za-z0-9_-]{1,64}$/.test(res.d.url || '')) {
-          msg.textContent = res.d.message || ''; return;
+          show(''); msg.textContent = res.d.message || ''; return;
         }
         open.href = res.d.url;
         open.classList.remove('d-none');
         btn.classList.add('d-none');
-        msg.textContent = said('wait');
+        msg.textContent = '';
+        show('wait');
         setTimeout(function () { check(TG_CHECKS); }, TG_CHECK_MS);
       }, function () { btn.disabled = false; });
     });

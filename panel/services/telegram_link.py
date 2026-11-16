@@ -61,7 +61,7 @@ def claim(code, chat_id, chat_type, now=None):
     """
     now = time.time() if now is None else now
     chat_id = str(chat_id or "")
-    if chat_type != "private" or not chat_id.lstrip("-").isdigit() or not code or len(code) > 64:
+    if chat_type != "private" or not (chat_id.isascii() and chat_id.lstrip("-").isdecimal()) or not code or len(code) > 64:
         return None
     with _LOCK:
         hit = _PENDING.pop(_digest(code), None)
