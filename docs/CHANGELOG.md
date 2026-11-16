@@ -1517,8 +1517,10 @@ compares git commits, not this file.
   `.bash_login`, `.bash_logout`, `.pam_environment`, `.rhosts`, `.shosts` or `.k5login` is refused,
   also through a link, so file access cannot become a shell as the game account outside the panel.
 - **More root-level actions ask for your password again after the confirmation window.** Firewall
-  changes, the SSH port and mode, closing port 22, reboots, OS updates, panel updates, branch
-  switches, key rotation, and adding or editing a host now ask, as the terminal already did.
+  and security-card changes, the SSH port and mode, closing port 22, reboots, OS updates, panel
+  updates, branch switches, key rotation, adding or editing a host, Tailscale setup, the panel's
+  port, host-key trust, the database server's admin login, Ubuntu Pro and automatic updates now
+  ask, as the terminal already did, confirmed in place on the page.
 - **Requests from another site are refused even from older browsers.** A change sent without the
   browser's site header must now carry the panel's own Origin (or Referer); one from another site,
   or with a blank origin, is refused and logged.
@@ -1532,8 +1534,9 @@ compares git commits, not this file.
 - **The dump upload check catches every way a dump can name another database.** Names without
   backticks, in capitals, chained after another statement on one line, or after a NUL byte (Ubuntu
   22.04's awk) are refused before anything is restored.
-- **The SQL audit line hides quoted values after a comment too.** A quote inside a comment no longer
-  lets the next quoted value into the audit log.
+- **The SQL audit line hides quoted values after a comment too.** A quote inside a comment, or the
+  end of a MySQL executable comment, no longer lets the next quoted value into the audit log; where
+  the server's reading is uncertain, the rest of the statement is left out.
 - **Push alerts never connect to an IPv4-compatible IPv6 address.** Addresses such as ::127.0.0.1
   are refused like the other internal ones.
 - **Each CI job's token starts with no permissions.** Every job grants only the scopes it uses, and
