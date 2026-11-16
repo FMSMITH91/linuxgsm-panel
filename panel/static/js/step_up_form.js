@@ -67,6 +67,9 @@
   document.addEventListener('submit', function(e){
     var form = e.target;
     if (!form || !form.hasAttribute || !form.hasAttribute('data-step-up')) return;
+    // An .ajax-form is sent by panel.js's window.ajaxForm (its own fetch); handling it here too
+    // would send it twice.
+    if (form.classList && form.classList.contains('ajax-form')) return;
     if (form.getAttribute('data-step-up-ok') === '1') { form.removeAttribute('data-step-up-ok'); return; }
     e.preventDefault();
     window.stepUpThen(function(){ send(form); }, form.getAttribute('data-step-up-totp') === '1');

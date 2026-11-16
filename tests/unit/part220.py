@@ -417,7 +417,7 @@ def _s220_token_save():
 _STEPUP_JS220 = r"""
 const fs = require('fs');
 const sent = [], calls = [], dialogs = [];
-let listener = null, stale = %s, reauthOk = %s, totp = %s;
+let listener = null, stale = %s, reauthOk = %s, totp = %s, ajax = %s;
 global.window = {MOUNT: ''};
 global.t = (s) => s;
 global.document = {addEventListener: (type, fn) => { if (type === 'submit') listener = fn; },
@@ -429,7 +429,7 @@ global.fetch = (url, init) => { calls.push([url, init && init.body ? init.body.v
 window.confirmDialog = (o) => { dialogs.push(o.title);
   o.onConfirm('pw', {close() {}, error(m) { dialogs.push('error:' + m); }}); };
 const attrs = {'data-step-up': '', 'data-step-up-totp': totp ? '1' : '0'};
-const form = {hasAttribute: (k) => k in attrs, getAttribute: (k) => (k in attrs ? attrs[k] : null),
+const form = {classList: {contains: (c) => ajax && c === 'ajax-form'}, hasAttribute: (k) => k in attrs, getAttribute: (k) => (k in attrs ? attrs[k] : null),
               setAttribute: (k, v) => { attrs[k] = v; }, removeAttribute: (k) => { delete attrs[k]; },
               requestSubmit() { const ev = {target: form, prevented: false, preventDefault() { this.prevented = true; }};
                                 listener(ev); if (!ev.prevented) sent.push('sent'); }};
@@ -440,9 +440,9 @@ setTimeout(() => console.log(JSON.stringify({held: first.prevented, sent, calls,
 """
 
 
-def _run_stepup_js220(stale, reauth_ok, totp=False):
+def _run_stepup_js220(stale, reauth_ok, totp=False, ajax=False):
     path = _os220.path.join(str(_ROOT), "panel", "static", "js", "step_up_form.js")
-    flags = tuple("true" if v else "false" for v in (stale, reauth_ok, totp))
+    flags = tuple("true" if v else "false" for v in (stale, reauth_ok, totp, ajax))
     r = _sp220.run(["node", "-"], input=_STEPUP_JS220 % (flags + (path,)),
                    capture_output=True, text=True, timeout=60, check=False)  # nosec B603 B607
     try:
@@ -451,24 +451,32 @@ def _run_stepup_js220(stale, reauth_ok, totp=False):
         return {"error": (r.stdout + r.stderr)[-300:]}
 
 
+def _reauth_body220(res):
+    """The form the harness sent to /account/reauth (the second fetch), or None when there was none."""
+    calls = res.get("calls") or []
+    return calls[1][1] if len(calls) > 1 and len(calls[1]) > 1 else None
+
+
 def _s220_stepup_js():
     name = ("step-up form: a fresh sign-in's save goes at once; a stale one is held, confirmed in place with "
             "/account/reauth (with the code when the account has 2FA), then sent unchanged; a wrong password "
-            "sends nothing")
+            "sends nothing; an .ajax-form is left to panel.js")
     if not _shutil220.which("node"):
         skip(name, "no node on this machine")
         return
     fresh, stale, wrong = _run_stepup_js220(False, True), _run_stepup_js220(True, True), _run_stepup_js220(True, False)
-    coded = _run_stepup_js220(True, True, totp=True)
+    coded, ajax = _run_stepup_js220(True, True, totp=True), _run_stepup_js220(True, True, ajax=True)
     eq(name, [(fresh.get("held"), fresh.get("sent"), fresh.get("dialogs")),
               (stale.get("sent"), stale.get("dialogs"), [c[0] for c in stale.get("calls", [])],
-               (stale.get("calls") or [[0, 0], [0, {}]])[1][1]),
+               _reauth_body220(stale)),
               (wrong.get("sent"), wrong.get("dialogs")),
-              (coded.get("sent"), (coded.get("calls") or [[0, 0], [0, {}]])[1][1])],
+              (coded.get("sent"), _reauth_body220(coded)),
+              (ajax.get("held"), ajax.get("calls"))],
        [(True, ["sent"], []),
         (["sent"], ["Confirm it is you"], ["/api/auth/ping?step_up=1", "/account/reauth"], {"password": "pw"}),
         ([], ["Confirm it is you", "error:Password incorrect."]),
-        (["sent"], {"password": "pw", "totp_code": "123456"})])
+        (["sent"], {"password": "pw", "totp_code": "123456"}),
+        (False, [])])
 
 
 try:
