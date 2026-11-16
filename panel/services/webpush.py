@@ -121,6 +121,10 @@ def parse_endpoint(url):
 
 _NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
 _TAILNET = ipaddress.ip_network("100.64.0.0/10")
+# IPv4-compatible IPv6 (::a.b.c.d, RFC 4291 2.5.5.1, deprecated): ipaddress calls ::7f00:1 "global"
+# and has no unwrapping for it, so ::127.0.0.1 and ::10.0.0.1 passed. No push service resolves into
+# ::/96, so the whole range is refused rather than unwrapped (:: and ::1 are in it and stay refused).
+_V4COMPAT = ipaddress.ip_network("::/96")
 
 
 def _unwrapped(addr):
@@ -137,9 +141,12 @@ def _unwrapped(addr):
 def address_refused(ip_text):
     """Whether a push must not connect to `ip_text`: anything but a public unicast address."""
     try:
-        addr = _unwrapped(ipaddress.ip_address(str(ip_text).split("%", 1)[0]))
+        raw = ipaddress.ip_address(str(ip_text).split("%", 1)[0])
     except ValueError:
         return True
+    if raw.version == 6 and raw in _V4COMPAT:
+        return True
+    addr = _unwrapped(raw)
     # is_global is False for private, loopback, link-local, unspecified, reserved, documentation and
     # shared (100.64.0.0/10, which Tailscale uses) space alike; a multicast address can still be
     # "global", so it is refused by name. The tailnet range is named too, though is_global covers it.

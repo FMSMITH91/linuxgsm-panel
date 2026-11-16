@@ -47,6 +47,11 @@ def _register_device_routes(app):
         row, why = push_alerts.subscribe(current_user, request.get_json(silent=True), label)
         if row is None:
             db.session.rollback()
+            if why == push_alerts.TAKEN:
+                # Audited without the endpoint: only that the device is another account's.
+                log_action(current_user, "push_subscribe", target=current_user.username, success=False,
+                           detail="%s (refused: this browser's subscription is another account's)" % label)
+                return _json(False, i18n.tr(why), 409)
             return _json(False, i18n.tr(why), 400)
         db.session.commit()
         log_action(current_user, "push_subscribe", target=current_user.username, detail=label)

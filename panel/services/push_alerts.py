@@ -164,11 +164,21 @@ def _on_curve(raw):
     return True
 
 
+# subscribe()'s answer when the endpoint is another active account's and the request does not prove it
+# holds that subscription. The route tells it from other refusals by this exact text (409, audited).
+TAKEN = ("This browser's alerts belong to another account. Sign in as that account and turn them off "
+         "there (or remove the device from its Account page), then try again.")
+
+
 def subscribe(user, data, label):
     """Store (or refresh) this browser's subscription for `user`. -> (row, error message).
 
-    An endpoint already stored for another account moves to this one: a browser has one subscription,
-    and the account that last turned alerts on there is the one it shows. Caller commits and audits.
+    An endpoint already stored for another ACTIVE account moves only when the request proves it holds
+    that very subscription: its p256dh key and auth secret match the stored ones (see _holds). A
+    browser re-posting its own subscription always sends the same keys, so a second account turning
+    alerts on in the same browser still can; knowing the endpoint URL alone (a leaked capability)
+    cannot take another account's alerts away. An endpoint left by a deactivated or deleted account
+    is free. Caller commits and audits; a refusal of this kind answers TAKEN.
     """
     from panel.db.models import PushSubscription, db
     parsed, why = parse_subscription(data)
@@ -177,6 +187,8 @@ def subscribe(user, data, label):
     endpoint, p256dh, auth = parsed
     digest = endpoint_hash(endpoint)
     row = PushSubscription.query.filter_by(endpoint_hash=digest).first()
+    if row is not None and row.user_id != user.id and _owner_active(row) and not _holds(row, p256dh, auth):
+        return None, TAKEN
     others = PushSubscription.query.filter(PushSubscription.user_id == user.id,
                                            PushSubscription.endpoint_hash != digest).count()
     if others >= DEVICE_MAX:
@@ -186,6 +198,25 @@ def subscribe(user, data, label):
         db.session.add(row)
     row.user_id, row.p256dh, row.auth, row.label = user.id, p256dh, auth, (label or "")[:80]
     return row, ""
+
+
+def _owner_active(row):
+    """Whether the account holding `row` exists and is active (a deactivated or deleted one's is free)."""
+    from panel.db.models import User, db
+    owner = db.session.get(User, row.user_id)
+    return owner is not None and bool(owner.is_active)
+
+
+def _holds(row, p256dh, auth):
+    """Whether the posted browser keys are the stored ones: proof the request holds that subscription.
+
+    The auth secret is 16 random bytes the browser made and only this panel was given; it is never
+    shown to anyone, so an attacker with the endpoint URL alone cannot produce it. Compared in
+    constant time.
+    """
+    import hmac
+    return (hmac.compare_digest(str(row.p256dh or ""), p256dh)
+            and hmac.compare_digest(str(row.auth or ""), auth))
 
 
 def find(user, endpoint):
@@ -441,8 +472,11 @@ def _log_gone(label, status):
     """
     if status > 0:
         _log.warning("push subscription removed: %s answered HTTP %d (the browser dropped it)", label, status)
+    elif status == -1:
+        # No service label to name: the stored endpoint no longer passes the allow-list at all.
+        _log.warning("push subscription removed: its endpoint is not a push service's (-1)")
     else:
-        _log.warning("push subscription removed: its %s endpoint or keys can no longer be used (%d)", label, status)
+        _log.warning("push subscription removed: its %s keys can no longer be used (%d)", label, status)
 
 
 def _send_one(row, payload, ttl, urgency):
