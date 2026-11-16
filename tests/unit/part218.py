@@ -292,7 +292,7 @@ def _s218_endpoints():
     public = ("142.250.1.1", "2607:f8b0:4004::1")
     refused = ("10.1.2.3", "172.16.0.1", "192.168.1.1", "127.0.0.1", "169.254.169.254", "100.100.100.100",
                "100.64.0.1", "0.0.0.0", "224.0.0.1", "240.0.0.1", "::1", "fe80::1", "fd7a:115c:a1e0::1",  # nosec B104 - addresses the check refuses, no bind
-               "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "ff02::1", "192.0.2.1", "not an address")
+               "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "ff02::1", "192.0.2.1", "::7f00:1", "::a00:1", "::8.8.8.8", "not an address")
     eq("ssrf: a public address may be connected to", [_wp218.address_refused(a) for a in public], [False, False])
     eq("ssrf: private, loopback, link-local/metadata, tailnet, multicast, reserved, and an IPv4 inside an IPv6 "
        "form are refused", [_wp218.address_refused(a) for a in refused], [True] * len(refused))
