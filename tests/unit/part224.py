@@ -114,11 +114,15 @@ def _bot_console224():
        (False, False, True, True, True))
 
 
+# A stored token's stand-in: the page only asks whether one is set (no real credential).
+_SET_TOKEN224 = "stored-value-stand-in"
+
+
 def _ntfy_warning224():
     _p9_patch(_nt224, "_cfg", lambda: {"ntfy": {"enabled": True, "topic": "alerts"}})
     c = _p9_client(P9_ADMIN)
     bare = c.get("/notifications").get_data(as_text=True)
-    _p9_patch(_nt224, "_cfg", lambda: {"ntfy": {"enabled": True, "topic": "alerts", "token": "enc"}})
+    _p9_patch(_nt224, "_cfg", lambda: {"ntfy": {"enabled": True, "topic": "alerts", "token": _SET_TOKEN224}})
     tokened = c.get("/notifications").get_data(as_text=True)
     topic = _cp224.suggested_topic()
     eq("ntfy: without an access token the page warns that a guessed topic is readable and offers a random "
