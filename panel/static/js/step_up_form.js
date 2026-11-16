@@ -12,6 +12,7 @@
   function mp(){ return window.MOUNT || ''; }
   function send(form){
     form.setAttribute('data-step-up-ok', '1');
+    if (window.ensureCsrfFields) window.ensureCsrfFields(form.parentNode || document);   // its token, as panel.js gives every POST form
     // requestSubmit runs the browser's own field checks like a real submit (neither form has a
     // named button to carry); this listener lets it through because of the mark above.
     if (form.requestSubmit) form.requestSubmit(); else form.submit();
