@@ -129,14 +129,7 @@ window.showCredential = function(cred){
   });
   who.textContent = cred.username || '';
   pw.value = cred.password;
-  // An invite's second code, when it has one: its own field, and a note that both are needed.
-  var code = kind === 'invite' && cred.code ? String(cred.code) : '';
-  var codeBox = document.getElementById('cred-code');
-  if (codeBox) codeBox.value = code;
-  ['cred-code-block', 'cred-code-note'].forEach(function(id){
-    var el = document.getElementById(id);
-    if (el) el.hidden = !code;
-  });
+  _credShowCode(kind === 'invite' && cred.code ? String(cred.code) : '');
   pw.setAttribute('aria-label', kind === 'invite' ? 'Invite Link' : 'One-time password');
   pw.setAttribute('data-cred-kind-shown', kind);
   new bootstrap.Modal(modal).show();
@@ -150,6 +143,15 @@ window.copyCredential = function(){
   else if (navigator.clipboard) navigator.clipboard.writeText(pw.value).catch(function(){ /* see above */ });
 };
 
+// An invite's second code, when it has one: its own field, and a note that both are needed.
+function _credShowCode(code){
+  var codeBox = document.getElementById('cred-code');
+  if (codeBox) codeBox.value = code;
+  ['cred-code-block', 'cred-code-note'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.hidden = !code;
+  });
+}
 window.copyInviteCode = function(){
   var c = document.getElementById('cred-code');
   if (c && c.value && window.copyText) copyText(c.value, 'Code copied');
