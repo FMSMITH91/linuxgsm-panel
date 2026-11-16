@@ -9,6 +9,22 @@
 // the gate is the binding one.
 
 var term = null, sock = null, opened = false, hostLabel = '', sawOutput = false;
+// This script's CSP nonce, read while it runs (document.currentScript is null afterwards).
+var STYLE_NONCE = (document.currentScript && document.currentScript.nonce) || '';
+
+// Run fn with every <style> element it creates carrying this page's nonce. xterm's DOM renderer
+// makes two <style> blocks in Terminal.open() (its theme and its cell size), and the page policy's
+// style-src-elem accepts only 'self' and the nonce, so without it the terminal draws unstyled.
+// Scoped to the call: the original createElement is back as soon as fn returns or throws.
+function withStyleNonce(fn) {
+  var make = document.createElement;
+  document.createElement = function (tag) {
+    var el = make.apply(document, arguments);
+    if (STYLE_NONCE && String(tag).toLowerCase() === 'style') el.setAttribute('nonce', STYLE_NONCE);
+    return el;
+  };
+  try { return fn(); } finally { document.createElement = make; }
+}
 
 function _cellSize() {
   // MEASURED, not assumed. This was hardcoded at 9x18 "close enough that a resize lands within a
@@ -83,7 +99,7 @@ function initTerminal() {
     scrollback: 5000,
     theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' }
   });
-  term.open(host);
+  withStyleNonce(function () { term.open(host); });
 
   // The panel has ONE socket connection; io() reuses the same origin and the same authenticated
   // session the console uses. The server's connect handler refuses anonymous ones.

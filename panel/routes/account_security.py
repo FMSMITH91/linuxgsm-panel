@@ -55,21 +55,92 @@ def remember_lasts():
 def fetch_metadata_guard():
     """before_request: refuse a state-changing request a browser says came from another site.
 
-    OWASP CSRF Prevention Cheat Sheet, "Fetch Metadata headers": with Sec-Fetch-Site "cross-site",
-    reject non-safe methods. same-origin, same-site and none pass, and so does a request without the
-    header (an API client, the chat bots, an older browser), for which the CSRF token and the Origin
-    check stay the defence, as that section requires. The panel's own forms and fetches are
-    same-origin, and so is a page reached through Tailscale Serve or a proxy (the browser compares
-    the page's origin with the request's, both the front's).
+    OWASP CSRF Prevention Cheat Sheet, "Fetch Metadata headers": Sec-Fetch-Site "cross-site" on a
+    non-safe method is refused; same-origin and none pass. Every other case -- no header (an older
+    browser, an API client, the chat bots), "same-site" (another port of the panel's address, or a
+    sibling node on the same tailnet) or a value this code does not know -- falls back to "Verifying
+    origin with standard headers", which that section makes mandatory (see _foreign_origin). The
+    panel's own forms and fetches are same-origin, and so is a page reached through Tailscale Serve
+    or a proxy (the browser compares the page's origin with the request's, both the front's).
     """
-    if request.method not in _UNSAFE or request.headers.get("Sec-Fetch-Site") != "cross-site":
+    if request.method not in _UNSAFE:
         return None
-    account_guard.note_denial("csrf_rejected", detail="cross-site %s (Sec-Fetch-Site)" % request.method,
-                              user=_signed_in_user())
+    site = request.headers.get("Sec-Fetch-Site")
+    if site == "cross-site":
+        return _refuse_foreign("cross-site %s (Sec-Fetch-Site)" % request.method,
+                               "That request came from another site and was refused.")
+    if site in ("same-origin", "none") or _cookie_less_bearer():
+        return None
+    foreign = _foreign_origin()
+    if foreign is None:
+        return None
+    return _refuse_foreign("foreign %s %r on %s" % (foreign[0], foreign[1][:120], request.method),
+                           "That request did not come from this panel's own page and was refused.")
+
+
+def _refuse_foreign(detail, sentence):
+    """The 403 for a request from another site, audited once as csrf_rejected."""
+    account_guard.note_denial("csrf_rejected", detail=detail, user=_signed_in_user())
     g._denial_logged = True         # the 403 hook must not write a second row for it
-    resp = _r23c_error_json(i18n.tr("That request came from another site and was refused."))
+    resp = _r23c_error_json(i18n.tr(sentence))
     resp.status_code = 403
     return resp
+
+
+def _cookie_less_bearer():
+    """True for an API-token request that carries no cookie: CSRF cannot apply to it.
+
+    The same condition app.py's CSRF hook exempts on: a Bearer header and neither the session cookie
+    nor the remember cookie, so there is nothing for a page on another site to ride.
+    """
+    from flask import current_app
+    if not request.headers.get("Authorization", "").startswith("Bearer "):
+        return False
+    names = (current_app.config["SESSION_COOKIE_NAME"],
+             current_app.config.get("REMEMBER_COOKIE_NAME", "remember_token"))
+    return not any(request.cookies.get(n) for n in names)
+
+
+def _foreign_origin():
+    """(header, origin) when the request's source origin is not the panel's own; None when it is or is unknown.
+
+    OWASP CSRF Prevention Cheat Sheet, "Using Standard Headers to Verify Origin": the Origin header
+    when present, else the origin of the Referer. "null" is never the panel's own (the cheat sheet:
+    do not allowlist it); the panel's pages never send it, since Referrer-Policy same-origin keeps
+    the real Origin on their own requests. With neither header there is no evidence either way and
+    the synchronizer token, already checked, decides -- as that section allows.
+
+    The target origin is the one the console socket accepts (app._socket_origin_allowed): the exact
+    origins in socketio_cors_origins, else the Host the request arrived with, the X-Forwarded-Host a
+    proxy passed on, or site_domain, port included. A page on another site cannot choose either
+    header for a request it makes: a form cannot set headers, and a fetch that sets one needs a
+    CORS preflight the panel never approves.
+    """
+    from app import _socket_origin_allowed
+    origin, which = request.headers.get("Origin"), "Origin"
+    if origin is None:
+        origin, which = _referer_origin(request.headers.get("Referer")), "Referer"
+        if origin is None:
+            return None
+    if origin and _socket_origin_allowed(origin, request.environ):
+        return None
+    return which, origin
+
+
+def _referer_origin(referer):
+    """The origin (scheme://host[:port]) of a Referer, "" for one that has none, None for no header."""
+    from urllib.parse import urlsplit
+    if not referer:
+        return None
+    try:
+        u = urlsplit(referer)
+        host, port = u.hostname, u.port
+    except ValueError:
+        return ""
+    if u.scheme not in ("http", "https") or not host:
+        return ""
+    netloc = ("[" + host + "]" if ":" in host else host) + (":" + str(port) if port else "")
+    return u.scheme + "://" + netloc
 
 
 def _signed_in_user():

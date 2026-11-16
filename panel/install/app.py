@@ -1874,9 +1874,12 @@ def create_app():
     # <script> blocks carries nonce="{{ csp_nonce }}"; all event handlers are attached via the
     # delegated dispatcher in base.html (data-action), never inline on* attributes. So an injected
     # <script>/handler without the nonce simply won't execute.
-    # style-src keeps 'unsafe-inline': the UI uses inline style="…" attributes throughout, and CSP
-    # can't nonce inline STYLE attributes (only <style> blocks). Style injection is far lower risk
-    # than script injection, so this is the standard, deliberate split.
+    # Styles are split (CSP Level 3): style-src-elem is 'self' + the nonce, so an injected <style>
+    # block (the CSS-injection route that reads a page through attribute selectors) does not apply;
+    # every <style> of ours carries the nonce, and xterm's are given it (host_terminal.js).
+    # style-src-attr keeps 'unsafe-inline' for the style="…" attributes the templates and scripts
+    # still use (a nonce cannot cover an attribute). style-src keeps it only as the fallback for a
+    # browser too old for the split, which would otherwise drop every inline style.
     # Self-hosted assets only; nothing frames a panel page, none has a <base>, every form posts to the panel.
     # worker-src 'self': the one worker is the alerts service worker (static/push/sw.js), same origin.
     def _csp():
@@ -1884,9 +1887,8 @@ def create_app():
         return (
             "default-src 'self'; "
             "script-src 'self' 'nonce-%s'; " % nonce +
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; "
-            "font-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'nonce-%s'; " % nonce +
+            "style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; "
             "connect-src 'self'; worker-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         )

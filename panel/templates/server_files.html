@@ -3,7 +3,7 @@
 {% block title %}{{ t('%s — Files & Config')|format(server.name) }}{% endblock %}
 {% block content %}
 
-<style>
+<style nonce="{{ csp_nonce }}">
   .fb-key { font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: .72rem; color: var(--text-muted); }
   .cfg-acc-header { background: var(--bg-elevated); color: var(--text-heading); cursor: pointer; border: none; }
   .cfg-acc-header:hover { background: var(--border); }

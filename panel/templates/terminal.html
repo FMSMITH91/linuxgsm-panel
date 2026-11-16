@@ -3,7 +3,7 @@
 
 {% block head %}
 <link rel="stylesheet" href="{{ asset_url('vendor/xterm/xterm.min.css') }}">
-<style>
+<style nonce="{{ csp_nonce }}">
   /* The emulator draws its own everything; this is just the box it lives in. 70vh keeps the
      status line and the header visible on a laptop without the page scrolling. */
   #terminal { height: 70vh; min-height: 320px; background: #0d1117; border-radius: .5rem;
