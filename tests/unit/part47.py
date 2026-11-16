@@ -294,6 +294,7 @@ def _cred_dialog47():
             "let shown = 0, copied = [];\n"
             "global.bootstrap = {Modal: function(){ this.show = () => shown++; }};\n"
             "global.copyText = (v, m) => copied.push(m);\n"
+            + _cut47(src, "function _credShowCode(") + "\n"
             + _cut47(src, "window.showCredential = function") + "\n"
             + _cut47(src, "window.copyCredential = function") + "\n"
             "const out = {};\n"

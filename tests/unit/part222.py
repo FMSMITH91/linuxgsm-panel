@@ -15,7 +15,7 @@ import os as _os222
 import re as _re222
 
 from unit import REPO_ROOT
-from unit.part01 import check, eq
+from unit.part01 import check, eq, skip
 from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
                          _p9_restore_all)
 from panel.db.models import (AuditLog as _AL222, Group as _G222, Invite as _Inv222, User as _U222,
@@ -310,10 +310,39 @@ def _s222_counter_and_migration():
              == "ALTER TABLE invite ADD COLUMN code_failures INTEGER DEFAULT 0"], "")
 
 
+def _s222_cred_code_js():
+    from unit.part47 import _cut47, _node47
+    src = _read222("panel", "static", "js", "manage_users.js")
+    prog = ("const mk = k => ({kind: k, hidden: false, getAttribute: () => k});\n"
+            "const modal = {querySelectorAll: () => [mk('password'), mk('invite')]};\n"
+            "const box = {value: 'stale'}, block = {hidden: true}, note = {hidden: true};\n"
+            "const pw = {value: '', setAttribute(){}};\n"
+            "const els = {'cred-user': {textContent: ''}, 'cred-pw': pw, credentialModal: modal,\n"
+            "  'cred-code': box, 'cred-code-block': block, 'cred-code-note': note};\n"
+            "global.window = global; global.document = {getElementById: id => els[id] || null};\n"
+            "global.bootstrap = {Modal: function(){ this.show = () => 0; }};\n"
+            + _cut47(src, "function _credShowCode(") + "\n"
+            + _cut47(src, "window.showCredential = function") + "\n"
+            "const snap = () => [box.value, block.hidden, note.hidden];\n"
+            "showCredential({username: 'Invite link', password: 'https://x/invite/a', kind: 'invite', code: '1234 5678'});\n"
+            "const withCode = snap();\n"
+            "showCredential({username: 'Invite link', password: 'https://x/invite/b', kind: 'invite'});\n"
+            "const without = snap();\n"
+            "showCredential({username: 'alice', password: 'pw-1', code: '9999 9999'});\n"
+            "console.log(JSON.stringify({withCode, without, password: snap()}));\n")
+    out = _node47(prog)
+    if out is None:
+        skip("invite code: the credential dialog shows an invite's code", "node is not installed here")
+        return
+    eq("invite code: the credential dialog shows an invite's code with its note, and clears and hides both for an "
+       "invite without one and for a password", out,
+       {"withCode": ["1234 5678", False, False], "without": ["", True, True], "password": ["", True, True]})
+
+
 try:
     for _fn222 in (_s222_origin_header, _s222_referer_and_none, _s222_proxy_and_bearer, _s222_step_up_round_trip,
                    _s222_style_policy, _s222_terminal_nonce, _s222_mint, _s222_redeem, _s222_bound_and_legacy,
-                   _s222_burn, _s222_counter_and_migration):
+                   _s222_burn, _s222_counter_and_migration, _s222_cred_code_js):
         _p9_arm(who="part222")
         try:
             _fn222()
