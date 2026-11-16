@@ -292,7 +292,7 @@ def _s218_endpoints():
     public = ("142.250.1.1", "2607:f8b0:4004::1")
     refused = ("10.1.2.3", "172.16.0.1", "192.168.1.1", "127.0.0.1", "169.254.169.254", "100.100.100.100",
                "100.64.0.1", "0.0.0.0", "224.0.0.1", "240.0.0.1", "::1", "fe80::1", "fd7a:115c:a1e0::1",  # nosec B104 - addresses the check refuses, no bind
-               "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "ff02::1", "192.0.2.1", "not an address")
+               "::ffff:10.0.0.1", "64:ff9b::a9fe:a9fe", "2002:a00:1::", "ff02::1", "192.0.2.1", "::7f00:1", "::a00:1", "::8.8.8.8", "not an address")
     eq("ssrf: a public address may be connected to", [_wp218.address_refused(a) for a in public], [False, False])
     eq("ssrf: private, loopback, link-local/metadata, tailnet, multicast, reserved, and an IPv4 inside an IPv6 "
        "form are refused", [_wp218.address_refused(a) for a in refused], [True] * len(refused))
@@ -369,6 +369,39 @@ def _s218_subscribe_route():
        [(r[1], "fcm" in r[2] or b.sub["keys"]["auth"] in r[2]) for r in rows], [("p218_sub", False)])
     _subscribe218(uid, b)
     eq("subscribe: the same browser again refreshes its row rather than adding one", _rows218(uid), 1)
+
+
+def _s218_takeover():
+    owner, other, heir = _user218("p218_own_e"), _user218("p218_thief"), _user218("p218_heir")
+    b = _browser218(160)
+    _subscribe218(owner, b)
+    since = _last218()
+    forged = _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(161).sub["keys"]})   # the URL only
+    code, body = _subscribe218(other, forged)
+    with _p9.app_context():
+        rows = [(r.success, r.detail) for r in _AL218.query.filter(_AL218.action == "push_subscribe",
+                                                                     _AL218.id > since).all()]
+    eq("takeover: another account posting an endpoint it knows, with keys it made up, is refused (409, in plain "
+       "words); the owner keeps the device; the refusal is audited without the endpoint",
+       (code, body.get("message", "")[:44], _rows218(owner), _rows218(other),
+        [(ok, "refused" in d, "fcm" in d or "p218-160" in d) for ok, d in rows]),
+       (409, "This browser's alerts belong to another acco", 1, 0, [(False, True, False)]))
+    code2, _b2 = _subscribe218(other, b)
+    eq("takeover: ...the same browser's own subscription (its keys match the stored ones) moves to the account "
+       "turning alerts on there", (code2, _rows218(owner), _rows218(other)), (200, 0, 1))
+    with _p9.app_context():           # its holder deactivated (rows kept, as a direct write could leave them)
+        u = _db218.session.get(_U218, other)
+        u.is_active = False
+        _db218.session.commit()
+    code3, _b3 = _subscribe218(heir, _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(162).sub["keys"]}))
+    eq("takeover: an endpoint held by a deactivated account may be taken over", (code3, _rows218(heir)), (200, 1))
+    with _p9.app_context():           # its holder gone (a row pointing at no account)
+        _r = _PS218.query.filter_by(user_id=heir).first()
+        if _r is not None:            # absent only when an earlier step already failed by name
+            _r.user_id = 987654
+            _db218.session.commit()
+    code4, _b4 = _subscribe218(owner, _NS218(sub={"endpoint": b.sub["endpoint"], "keys": _browser218(163).sub["keys"]}))
+    eq("takeover: ...and so may one whose account no longer exists", (code4, _rows218(owner)), (200, 1))
 
 
 def _s218_device_cap():
@@ -561,6 +594,25 @@ def _s218_gone_and_failures():
           "followed) keeps it and records no delivery", left == want and last == [None, None], repr((left, want)))
 
 
+def _s218_gone_refused():
+    _rig218()
+    uid = _user218("p218_gone2")
+    b = _browser218(170)
+    _subscribe218(uid, b)
+    _p9_drain()
+    with _p9.app_context():           # a stored endpoint that no longer passes the allow-list
+        _r = _PS218.query.filter_by(user_id=uid).first()
+        if _r is not None:
+            _r.endpoint = "https://push.internal.example/p218-170"
+            _db218.session.commit()
+    gone = _journal218(lambda: (_pa218.queue_test(uid), _p9_drain()))
+    eq("delivery: a stored endpoint that is no push service's is removed with a line that says so (no '?' for a "
+       "service it does not have, and no endpoint)", ([_line218(r, ("push.internal", "p218-")) for r in gone],
+                                                       _rows218(uid)),
+       ([("WARNING", "panel.push_alerts", "push subscription removed: its endpoint is not a push service's", False)],
+        0))
+
+
 def _s218_deactivate_delete():
     pusher = _rig218()
     a, d = _user218("p218_deact", servers=(P9_GS,)), _user218("p218_del")
@@ -633,8 +685,8 @@ def _s218_pages():
 
 try:
     for _fn218 in (_s218_rfc8291_vector, _s218_vapid, _s218_endpoints, _s218_send_guard, _s218_subscribe_route,
-                   _s218_device_cap, _s218_remove_and_off, _s218_test_route, _s218_choices_route,
-                   _s218_account_change, _s218_gone_and_failures, _s218_deactivate_delete, _s218_signout,
+                   _s218_takeover, _s218_device_cap, _s218_remove_and_off, _s218_test_route, _s218_choices_route,
+                   _s218_account_change, _s218_gone_and_failures, _s218_gone_refused, _s218_deactivate_delete, _s218_signout,
                    _s218_pages):
         _p9_arm(who="part218")
         _rig218()       # every push POST stubbed, whichever check runs: none may leave the machine
