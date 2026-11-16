@@ -166,6 +166,25 @@ ssh-keygen -Y verify -f "${TMP}/signers" -I release -n "${NS}" -s "${TMP}/msg.si
     < "${TMP}/msg" >/dev/null 2>&1 \
     || die "the signature does not verify against release-signers; is ${KEY} the release key?"
 
+release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when that tag is another commit's
+    local base tag at n=1
+    base="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%-m.%-d "$1")" || return 1
+    tag="${base}"
+    while at="$(git ls-remote --tags "$2" "refs/tags/${tag}" "refs/tags/${tag}^{}" | awk '{print $1}' | tail -n 1)" \
+          && [[ -n "${at}" ]] && [[ "${at}" != "$1" ]]; do
+        n=$(( n + 1 )); tag="${base}.${n}"
+    done
+    printf '%s\n' "${tag}"
+}
+# The release's name (main only), saved beside its signature as <branch>/<sha>.name, so a panel
+# shows the name its GitHub Release carries (2026.11.16.5) and not only the commit's date. A name
+# that cannot be read is left out: the panel then shows the date, and the signing goes on.
+NAME=""
+if [[ "${BRANCH}" = "main" ]]; then
+    NAME="$(release_tag "${SHA}" "${REMOTE}" 2>/dev/null)" || NAME=""
+    [[ "${NAME}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]{1,3})?$ ]] || NAME=""
+fi
+
 # 4. The commit on release-signatures (PARENT, fetched at 1b), through a private index
 #    (GIT_INDEX_FILE): read-tree, update-index, write-tree and commit-tree never look at the
 #    caller's work tree or HEAD.
@@ -182,6 +201,10 @@ fi
 if [[ -z "${PUSHED:-}" ]]; then
     BLOB="$(git hash-object -w "${TMP}/msg.sig")"
     git update-index --add --cacheinfo "100644,${BLOB},${BRANCH}/${SHA}.sig"
+    if [[ -n "${NAME}" ]]; then
+        NBLOB="$(printf '%s\n' "${NAME}" | git hash-object -w --stdin)"
+        git update-index --add --cacheinfo "100644,${NBLOB},${BRANCH}/${SHA}.name"
+    fi
     TREE="$(git write-tree)"
     PARGS=()
     [[ -z "${PARENT}" ]] || PARGS=(-p "${PARENT}")
@@ -199,16 +222,6 @@ unset GIT_INDEX_FILE
 changelog_at() {   # changelog_at <commit>: that commit's CHANGELOG, from docs/ or the root
     git cat-file blob "$1:docs/CHANGELOG.md" 2>/dev/null || git cat-file blob "$1:CHANGELOG.md" 2>/dev/null
 }
-release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when that tag is another commit's
-    local base tag at n=1
-    base="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%-m.%-d "$1")" || return 1
-    tag="${base}"
-    while at="$(git ls-remote --tags "$2" "refs/tags/${tag}" "refs/tags/${tag}^{}" | awk '{print $1}' | tail -n 1)" \
-          && [[ -n "${at}" ]] && [[ "${at}" != "$1" ]]; do
-        n=$(( n + 1 )); tag="${base}.${n}"
-    done
-    printf '%s\n' "${tag}"
-}
 sbom_at() {   # sbom_at <commit> <tag>: the CycloneDX SBOM of that commit's lockfiles, on stdout
     local f
     for f in panel/install/requirements.txt panel/install/requirements.in tools/gamedig/package-lock.json; do
@@ -219,7 +232,10 @@ sbom_at() {   # sbom_at <commit> <tag>: the CycloneDX SBOM of that commit's lock
 }
 publish_release() {   # publish_release <commit> <previous signed commit or ""> <signature file>
     local tag
-    tag="$(release_tag "$1" "${REMOTE}")" || { echo "sign-release: could not name the release." >&2; return 1; }
+    # The name saved beside the signature, so the release and the panel say the same.
+    tag="${NAME}"
+    [[ -n "${tag}" ]] || tag="$(release_tag "$1" "${REMOTE}")" \
+        || { echo "sign-release: could not name the release." >&2; return 1; }
     if "${GH[@]}" release view "${tag}" >/dev/null 2>&1; then
         echo "sign-release: release ${tag} already exists; left as it is."
         return 0
