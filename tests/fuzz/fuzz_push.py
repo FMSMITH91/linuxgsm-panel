@@ -53,6 +53,11 @@ def _b64(raw):
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
+def _is_push_host(host):
+    return host in webpush.PUSH_HOSTS or any(host.endswith(s) and len(host) > len(s)
+                                             for s, _l in webpush.PUSH_HOST_SUFFIXES)
+
+
 def _endpoint(url):
     got = webpush.parse_endpoint(url)
     if got is None:
@@ -63,9 +68,7 @@ def _endpoint(url):
     assert parts.username is None and parts.password is None and not parts.fragment, url
     again = urllib.parse.urlsplit("https://" + host + target)
     assert again.hostname == host and again.port is None, (url, got)
-    assert webpush.service_label(host) == label and label is not None, (url, got)
-    assert host in webpush.PUSH_HOSTS or any(host.endswith(s) and len(host) > len(s)
-                                             for s, _l in webpush.PUSH_HOST_SUFFIXES), (url, got)
+    assert label is not None and webpush.service_label(host) == label and _is_push_host(host), (url, got)
 
 
 def _judged(addr):

@@ -271,23 +271,35 @@ except ValueError:
     _doc223 = {}
 
 
-def _sbom_bad223(doc):
-    """What the SBOM misses of the lockfiles: a pinned package, one of its hashes, or a direct dependency."""
-    comps = {c.get("purl"): c for c in doc.get("components", [])}
+def _py_missing223(comps):
+    """The packages requirements.txt pins that are not components with exactly their hashes."""
     bad = []
     for name, ver, hashes in _re223.findall(r"^([a-z0-9][a-z0-9._-]*)==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}.*\n)+)",
                                            _lock223, _re223.M):
-        c = comps.get("pkg:pypi/%s@%s" % (name, ver))
-        want = set(_re223.findall(r"sha256:([0-9a-f]{64})", hashes))
-        if not c or {h["content"] for h in c.get("hashes", []) if h.get("alg") == "SHA-256"} != want:
-            bad.append(name)
-    npm = [k for k, v in _json223.loads(_npm223)["packages"].items() if k and not v.get("dev")]
-    bad += [k for k in npm if not any(c.get("name") == k.rsplit("node_modules/", 1)[-1] and c.get("purl", "")
-                                      .startswith("pkg:npm/") for c in comps.values())]
-    deps = (doc.get("dependencies") or [{}])[0].get("dependsOn", [])
-    if not {"pkg:npm/gamedig@5.3.3"} <= set(deps) or not any(d.startswith("pkg:pypi/flask@") for d in deps):
-        bad.append("dependsOn %r" % deps[:4])
+        c = comps.get("pkg:pypi/%s@%s" % (name, ver)) or {}
+        got = {h["content"] for h in c.get("hashes", []) if h.get("alg") == "SHA-256"}
+        bad += [name] * (got != set(_re223.findall(r"sha256:([0-9a-f]{64})", hashes)))
     return bad
+
+
+def _npm_missing223(comps):
+    """The packages of gamedig's lockfile (not dev) with no npm component of their name."""
+    have = {c.get("name") for c in comps.values() if c.get("purl", "").startswith("pkg:npm/")}
+    paths = [k for k, v in _json223.loads(_npm223)["packages"].items() if k and not v.get("dev")]
+    return [k for k in paths if k.rsplit("node_modules/", 1)[-1] not in have]
+
+
+def _deps_bad223(doc):
+    """The root's dependsOn when it lacks gamedig or flask."""
+    deps = (doc.get("dependencies") or [{}])[0].get("dependsOn", [])
+    ok = "pkg:npm/gamedig@5.3.3" in deps and any(d.startswith("pkg:pypi/flask@") for d in deps)
+    return [] if ok else ["dependsOn %r" % deps[:4]]
+
+
+def _sbom_bad223(doc):
+    """What the SBOM misses of the lockfiles: a pinned package, one of its hashes, or a direct dependency."""
+    comps = {c.get("purl"): c for c in doc.get("components", [])}
+    return _py_missing223(comps) + _npm_missing223(comps) + _deps_bad223(doc)
 
 
 _meta223 = _doc223.get("metadata", {}).get("component", {})

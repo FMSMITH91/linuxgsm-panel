@@ -73,31 +73,42 @@ def _npm_hashes(integrity):
     return out
 
 
-def npm_components(lock_text):
-    """({bom-ref: component} of every package in an npm lockfile v2/v3, [bom-refs of the root's direct deps])."""
+def _npm_lock(lock_text):
+    """The `packages` map of an npm lockfile v2/v3, or {} when it is not one."""
     try:
         lock = json.loads(lock_text or "{}")
     except ValueError:
-        return {}, []
+        return {}
     packages = lock.get("packages") if isinstance(lock, dict) else None
-    if not isinstance(packages, dict):
-        return {}, []
-    out, by_name = {}, {}
+    return packages if isinstance(packages, dict) else {}
+
+
+def _npm_component(path, pkg):
+    """The component of one lockfile entry, or None for the root, a dev package or one with no version."""
+    if not path or not isinstance(pkg, dict) or pkg.get("dev") or not pkg.get("version"):
+        return None
+    name = pkg.get("name") or path.rsplit("node_modules/", 1)[-1]
+    purl = _npm_purl(name, pkg["version"])
+    comp = {"type": "library", "bom-ref": purl, "name": name, "version": pkg["version"], "purl": purl,
+            "scope": "required", "hashes": _npm_hashes(pkg.get("integrity"))}
+    if isinstance(pkg.get("license"), str) and pkg["license"]:
+        comp["licenses"] = [{"expression": pkg["license"]}]
+    return comp
+
+
+def npm_components(lock_text):
+    """({bom-ref: component} of every package in an npm lockfile v2/v3, [bom-refs of the root's direct deps])."""
+    packages = _npm_lock(lock_text)
+    out, top = {}, {}
     for path, pkg in sorted(packages.items()):
-        if not path or not isinstance(pkg, dict) or pkg.get("dev") or not pkg.get("version"):
+        comp = _npm_component(path, pkg)
+        if comp is None:
             continue
-        name = pkg.get("name") or path.rsplit("node_modules/", 1)[-1]
-        purl = _npm_purl(name, pkg["version"])
-        comp = {"type": "library", "bom-ref": purl, "name": name, "version": pkg["version"], "purl": purl,
-                "scope": "required", "hashes": _npm_hashes(pkg.get("integrity"))}
-        if isinstance(pkg.get("license"), str) and pkg["license"]:
-            comp["licenses"] = [{"expression": pkg["license"]}]
-        out[purl] = comp
-        if path == "node_modules/" + name:
-            by_name[name] = purl
-    root = packages.get("", {}) if isinstance(packages.get(""), dict) else {}
-    direct = sorted(by_name[n] for n in (root.get("dependencies") or {}) if n in by_name)
-    return out, direct
+        out[comp["bom-ref"]] = comp
+        if path == "node_modules/" + comp["name"]:
+            top[comp["name"]] = comp["bom-ref"]
+    root = packages.get("") if isinstance(packages.get(""), dict) else {}
+    return out, sorted(top[n] for n in (root.get("dependencies") or {}) if n in top)
 
 
 def sbom(commit, tag, date, locked, wanted, npm_lock):
