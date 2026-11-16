@@ -1196,16 +1196,16 @@ try:
     _again22 = _err22.attach_log_handlers(_eapp22.logger)
     _pl22h = _log22.getLogger("panel").handlers
     check("R23: attached once: one stderr handler and one counter on 'panel' and 'notifications', "
-          "one counter at WARNING on Flask's logger; a second call adds nothing",
-          len(_added22) == 5 and _again22 == [] and all(
+          "a stderr handler at INFO and a counter at WARNING on Flask's logger; a second call adds nothing",
+          len(_added22) == 6 and _again22 == [] and all(
               sum(1 for h in _log22.getLogger(n).handlers if getattr(h, _err22._MARK, None) == k) == 1
               for n in ("panel", "notifications") for k in ("stderr", "counter"))
           and [h.level for h in _eapp22.logger.handlers if getattr(h, _err22._MARK, None)]
-          == [_log22.WARNING], repr((_added22, _again22)))
-    check("R24: Flask's own default handler is still there (a 500's traceback still prints), and its "
-          "logger's level is not changed", all(h in _eapp22.logger.handlers for h in _flask_default22)
-          and bool(_flask_default22) and _eapp22.logger.level == _log22.NOTSET,
-          repr(_eapp22.logger.handlers))
+          == [_log22.INFO, _log22.WARNING], repr((_added22, _again22)))
+    check("R24: Flask's default handler is replaced by the stderr handler (one priority-aware writer), "
+          "and its logger is set to INFO", bool(_flask_default22)
+          and not any(h in _eapp22.logger.handlers for h in _flask_default22)
+          and _eapp22.logger.level == _log22.INFO, repr(_eapp22.logger.handlers))
     check("R23: panel.auth's file handler and its propagate=False are untouched, and nothing is "
           "added to the root logger",
           (list(_log22.getLogger("panel.auth").handlers), _log22.getLogger("panel.auth").propagate)
@@ -1220,8 +1220,9 @@ try:
         _log22.getLogger("panel.p22").debug("p22 quiet debug")
         _log22.getLogger("panel.p22").debug("p22 swallowed", exc_info=(OSError, OSError("x"), None))
         _log22.getLogger("panel.p22").info(ValueError("secret-host-9 in an exception object"))
-    eq("R23: one WARNING line, '<LEVEL> <logger>: <message>', and no DEBUG in the journal",
-       _buf22.getvalue(), "WARNING panel.p22: p22 host secret-host-9 unreachable\n")
+    eq("R23: the WARNING and the INFO line, '<LEVEL> <logger>: <message>', and no DEBUG in the journal",
+       _buf22.getvalue(), "WARNING panel.p22: p22 host secret-host-9 unreachable\n"
+       "INFO panel.p22: secret-host-9 in an exception object\n")
     _ec22, _el22 = _rs22.snapshot("errors"), _rs22.snapshot("errors_last")
     check("R24: the counter keys by the TEMPLATE (never the formatted message), counts a DEBUG that "
           "carries exc_info with its class, and skips a plain DEBUG and INFO",
@@ -1250,6 +1251,9 @@ finally:
     _err22.detach_log_handlers(_eapp22.logger)
     for _n22, _lv22 in _lvls22.items():
         _log22.getLogger(_n22).setLevel(_lv22)
+check("R24: detaching puts Flask's default handler and its NOTSET level back",
+      _eapp22.logger.handlers == _flask_default22 and _eapp22.logger.level == _log22.NOTSET,
+      repr(_eapp22.logger.handlers))
 _se22n = _err22.section_errors_since_start(_ctx())
 check("R24: with no counter attached the section says there is no capture (unread), never 'none'",
       "no error capture" in _text(_se22n) and _levels(_se22n) == ["unread"], _text(_se22n))
