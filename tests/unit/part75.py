@@ -16,7 +16,7 @@ import os
 import shlex as _shlex75
 from types import SimpleNamespace as _NS75
 
-from unit.part01 import check, skip
+from unit.part01 import check
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _P9Thread, _p9, _p9_arm, _p9_client, _p9_delete_server,
                          _p9_drain, _p9_host_row, _p9_json, _p9_new_server, _p9_patch, _p9_restore_all, _p9_row,
                          _p9_set, _p9_threading)
@@ -387,6 +387,8 @@ check("install.sh: a host with its own public IPv4 prints it and asks no outside
       "(a private IPv4 alone) asks one, once",
       _ask75 == {"public v4": "203.0.113.9 0", "NAT": "198.51.100.77 1", "NAT v6": "198.51.100.77 1"},
       repr(_ask75))
+from unit.part01 import skip as _skip75  # noqa: E402
+
 _BANNER75 = _ins_region75("\n# The box only on a terminal.", "\nfi\n") + "\nfi\n"
 
 
@@ -409,7 +411,7 @@ if _shutil75.which("script"):
           "╔═" in _banner75(True) and "║     LinuxGSM Panel — install / update     ║" in _banner75(True),
           repr(_banner75(True)))
 else:
-    skip("install.sh: ...on a terminal it is still the box", "script(1) is not installed")
+    _skip75("install.sh: ...on a terminal it is still the box", "script(1) is not installed")
 check("install.sh: no `hostname -I` fallback is left outside host_addr_fallback (each site brackets)",
       _INS75.count("hostname -I 2>") == 1 and _INS75.count("|| host_addr_fallback)") == 2,
       repr(_INS75.count("hostname -I 2>")))
@@ -452,7 +454,6 @@ check("install.sh update hint: ...a range that misses the port, a udp range, an 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 6. Page scripts that decided by English words the walker has translated
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-from unit.part01 import skip as _skip75  # noqa: E402
 from unit.part47 import _cut47 as _cut75, _node47 as _node75  # noqa: E402
 
 _JS75 = os.path.join(_root75, "panel", "static", "js")
