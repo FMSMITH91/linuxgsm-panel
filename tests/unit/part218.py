@@ -371,6 +371,38 @@ def _s218_subscribe_route():
     eq("subscribe: the same browser again refreshes its row rather than adding one", _rows218(uid), 1)
 
 
+def _s218_takeover():
+    owner, other, heir = _user218("p218_own_e"), _user218("p218_thief"), _user218("p218_heir")
+    b = _browser218(160)
+    _subscribe218(owner, b)
+    since = _last218()
+    forged = {"endpoint": b.sub["endpoint"], "keys": _browser218(161).sub["keys"]}   # the URL, not the keys
+    code, body = _subscribe218(other, forged)
+    with _p9.app_context():
+        rows = [(r.success, r.detail) for r in _AL218.query.filter(_AL218.action == "push_subscribe",
+                                                                     _AL218.id > since).all()]
+    eq("takeover: another account posting an endpoint it knows, with keys it made up, is refused (409, in plain "
+       "words); the owner keeps the device; the refusal is audited without the endpoint",
+       (code, body.get("message", "")[:44], _rows218(owner), _rows218(other),
+        [(ok, "refused" in d, "fcm" in d or "p218-160" in d) for ok, d in rows]),
+       (409, "This browser's alerts belong to another acco", 1, 0, [(False, True, False)]))
+    code2, _b2 = _subscribe218(other, b)
+    eq("takeover: ...the same browser's own subscription (its keys match the stored ones) moves to the account "
+       "turning alerts on there", (code2, _rows218(owner), _rows218(other)), (200, 0, 1))
+    with _p9.app_context():           # its holder deactivated (rows kept, as a direct write could leave them)
+        u = _db218.session.get(_U218, other)
+        u.is_active = False
+        _db218.session.commit()
+    code3, _b3 = _subscribe218(heir, {"endpoint": b.sub["endpoint"], "keys": _browser218(162).sub["keys"]})
+    eq("takeover: an endpoint held by a deactivated account may be taken over", (code3, _rows218(heir)), (200, 1))
+    with _p9.app_context():           # its holder gone (a row pointing at no account)
+        _r = _PS218.query.filter_by(user_id=heir).first()
+        _r.user_id = 987654
+        _db218.session.commit()
+    code4, _b4 = _subscribe218(owner, {"endpoint": b.sub["endpoint"], "keys": _browser218(163).sub["keys"]})
+    eq("takeover: ...and so may one whose account no longer exists", (code4, _rows218(owner)), (200, 1))
+
+
 def _s218_device_cap():
     uid = _user218("p218_cap")
     codes = [_subscribe218(uid, _browser218(100 + i))[0] for i in range(_pa218.DEVICE_MAX)]
@@ -633,7 +665,7 @@ def _s218_pages():
 
 try:
     for _fn218 in (_s218_rfc8291_vector, _s218_vapid, _s218_endpoints, _s218_send_guard, _s218_subscribe_route,
-                   _s218_device_cap, _s218_remove_and_off, _s218_test_route, _s218_choices_route,
+                   _s218_takeover, _s218_device_cap, _s218_remove_and_off, _s218_test_route, _s218_choices_route,
                    _s218_account_change, _s218_gone_and_failures, _s218_deactivate_delete, _s218_signout,
                    _s218_pages):
         _p9_arm(who="part218")

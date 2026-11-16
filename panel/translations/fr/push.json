@@ -50,6 +50,7 @@
   "That's enough test alerts for now. Try again in a few minutes.": "Assez d'alertes de test pour le moment. Réessayez dans quelques minutes.",
   "This browser cannot receive push alerts.": "Ce navigateur ne peut pas recevoir d'alertes push.",
   "This browser could not turn alerts on. Try again in a moment.": "Ce navigateur n'a pas pu activer les alertes. Réessayez dans un instant.",
+  "This browser's alerts belong to another account. Sign in as that account and turn them off there (or remove the device from its Account page), then try again.": "Les alertes de ce navigateur appartiennent à un autre compte. Connectez-vous avec ce compte et désactivez-les (ou retirez l'appareil de sa page Compte), puis réessayez.",
   "This browser's push keys aren't usable.": "Les clés push de ce navigateur ne sont pas utilisables.",
   "This browser's push service isn't one the panel sends to.": "Le service push de ce navigateur n'est pas un service auquel le panneau envoie.",
   "This device gets no alerts.": "Cet appareil ne reçoit aucune alerte.",
