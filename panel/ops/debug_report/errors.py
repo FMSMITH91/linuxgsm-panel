@@ -1,6 +1,6 @@
 """Debug-report section(s): errors_since_start.
 
-Owner: builder B3. The swallowed-error counter fed by the logging handler app.py attaches (R23, R24),
+The swallowed-error counter fed by the logging handler app.py attaches (R23, R24),
 read from runtime_stats.
 
 THE HANDLERS (attached once, by app.create_app() through attach_log_handlers):
