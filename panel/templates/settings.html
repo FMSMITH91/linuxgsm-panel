@@ -178,9 +178,13 @@
       <dt class="col-sm-3">Valid until</dt>
       <dd class="col-sm-9{% if tls.cert.days <= tls.soon_days %} text-warning{% endif %}">{{ tls.cert.not_after }} · <span>{{ tls.cert.days }}</span> <span>days left</span></dd>
       <dt class="col-sm-3">Key</dt><dd class="col-sm-9">{{ tls.cert.key }}</dd>
-      <dt class="col-sm-3">HSTS</dt><dd class="col-sm-9">{% if tls.hsts %}<span>Sent</span> <code>{{ tls.hsts }}</code>{% else %}Not sent: only a CA-signed certificate gets it.{% endif %}</dd>
+      {% if tls.serving %}<dt class="col-sm-3">HSTS</dt><dd class="col-sm-9">{% if tls.hsts %}<span>Sent</span> <code>{{ tls.hsts }}</code>{% else %}Not sent: only a CA-signed certificate gets it.{% endif %}</dd>{% endif %}
     </dl>
     {% endif %}
+    {# Folded away: the forms are what the card is for only when changing it, and opened they are
+       taller than every other card on the page (about 1,500px at phone width). #}
+    <details id="tls-change"{% if tls.source == 'builtin' and not tls.cert %} open{% endif %}>
+    <summary class="small fw-semibold mb-2">{% if tls.source == 'builtin' %}Use your own certificate{% else %}Change the certificate{% endif %}</summary>
     <div class="small text-secondary mb-3">OWASP: a well-known CA (Let's Encrypt is free), RSA of at least 2048 bits or ECDSA, a SHA-256 signature, the panel's name in the certificate, and the full chain. Saving checks all of these and notes what falls short; it refuses only a key that is not the certificate's, an expired certificate, or files it cannot read. The panel restarts to load a new certificate.</div>
 
     <div class="row g-3">
@@ -228,6 +232,7 @@
       <button type="submit" class="btn btn-sm btn-outline-danger mt-2"><i class="bi bi-arrow-counterclockwise"></i> Use the built-in certificate</button>
     </form>
     {% endif %}
+    </details>
   </div>
 </div>
 

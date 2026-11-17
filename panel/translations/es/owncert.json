@@ -51,5 +51,7 @@
   "Your certificate was removed; the panel makes a new built-in one as it starts.": "Se quitó tu certificado; el panel crea uno integrado nuevo al arrancar.",
   "The private key is protected by a passphrase. The panel needs it without one: openssl pkey -in key.pem -out key-open.pem": "La clave privada está protegida con una frase de contraseña. El panel la necesita sin ella: openssl pkey -in key.pem -out key-open.pem",
   "The private key could not be read. Paste it in PEM form, starting with -----BEGIN PRIVATE KEY-----.": "No se pudo leer la clave privada. Pégala en formato PEM, empezando por -----BEGIN PRIVATE KEY-----.",
-  "The certificate could not be read. Paste it in PEM form, starting with -----BEGIN CERTIFICATE-----.": "No se pudo leer el certificado. Pégalo en formato PEM, empezando por -----BEGIN CERTIFICATE-----."
+  "The certificate could not be read. Paste it in PEM form, starting with -----BEGIN CERTIFICATE-----.": "No se pudo leer el certificado. Pégalo en formato PEM, empezando por -----BEGIN CERTIFICATE-----.",
+  "Use your own certificate": "Usar tu propio certificado",
+  "Change the certificate": "Cambiar el certificado"
 }
