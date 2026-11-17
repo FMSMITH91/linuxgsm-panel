@@ -444,13 +444,15 @@ def _register_tailscale_setup(app):
 
 
 def control_offer(info, cfg):
-    """What the Tailscale page says about the control server: the saved address, the host's, and
-    what that server offers (Serve's HTTPS, Funnel, the MagicDNS suffix). No command of its own:
-    all of it is read from `info`, the page's one Tailscale reading."""
+    """What the Tailscale page says about the control server.
+
+    The saved address, the host's, and what that server offers (Serve's HTTPS, Funnel, the MagicDNS
+    suffix). No command of its own: all of it is read from `info`, the page's one Tailscale reading.
+    """
     saved, _why = ts.parse_control_url(cfg.get("tailscale_control_url"))
     return {"saved": saved, "host_control": "" if ts.control_is_tailscale(info) else info.control_url,
             "self_hosted": not ts.control_is_tailscale(info), "serve": ts.serve_https_offered(info),
-            "funnel": ts.funnel_offered(info), "suffix": info.magic_dns_suffix,
+            "funnel": ts.funnel_offered(info), "suffix": getattr(info, "magic_dns_suffix", ""),
             "plain_http": saved.startswith("http://")}
 
 
@@ -462,8 +464,11 @@ CONTROL_HTTP_NOTE = ("http:// is outside OWASP's recommendation: the login link 
 
 def _control_server_save(data):
     """POST /api/tailscale/control-server: store the control server new joins use, audited old -> new."""
-    raw = _json_str(data, "control_url")
-    url, why = ts.parse_control_url(raw)
+    # A string, and present: a list or a missing field would read as "" and quietly switch new
+    # joins back to Tailscale's own server.
+    if not isinstance(data.get("control_url"), str):
+        return jsonify({"success": False, "message": i18n.tr(ts._CONTROL_URL_BAD)}), 400
+    url, why = ts.parse_control_url(_json_str(data, "control_url"))
     if why is not None:
         return jsonify({"success": False, "message": i18n.tr(why)}), 400
     cfg = load_config()

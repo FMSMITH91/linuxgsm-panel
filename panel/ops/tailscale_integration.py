@@ -387,6 +387,9 @@ def _read_status_text(info):
                 if len(parts) >= 2:
                     name = parts[1].split(".")[0] if "." in parts[1] else parts[1]
                     info.hostname = name
+                    # ...and its MagicDNS suffix, for _detect_magic_dns's lookup of the full name.
+                    info.magic_dns_suffix = parts[1].split(".", 1)[1].strip(".").lower() \
+                        if "." in parts[1] else ""
                 break
 
 
@@ -561,7 +564,11 @@ def control_args(control):
 def tailnet_suffix(info=None):
     """The tailnet's MagicDNS suffix, lower case without dots at either end, or ""."""
     info = get_tailscale_info() if info is None else info
-    return (getattr(info, "magic_dns_suffix", "") or "").lower()
+    suffix = getattr(info, "magic_dns_suffix", "") or ""
+    dns = getattr(info, "dns_name", "") or ""
+    if not suffix and "." in dns:       # a reading with the name but not the suffix: the name's own
+        suffix = dns.split(".", 1)[1]
+    return suffix.strip(".").lower()
 
 
 def is_tailnet_name(host):

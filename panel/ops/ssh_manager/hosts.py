@@ -3036,12 +3036,6 @@ def remote_install_tailscale(server):
     return True, "Tailscale installed successfully", "\n".join(log)
 
 
-# The login URL `tailscale up` prints. Same charset the remote-side grep looks for, re-checked on
-# THIS side because the remote's output is not something we control. Defined in privileged.py so
-# this and tailscale_integration's panel-host twin cannot check it differently — they did.
-_TS_LOGIN_URL_RE = _priv.TS_LOGIN_URL_RE
-
-
 # The one body of /etc/sysctl.d/99-tailscale.conf, for both ways of joining. The login-link flow
 # wrote IPv4 forwarding alone over the file the auth-key flow writes with both families, so an
 # IPv6 route it advertised carried nothing, and re-running it on a host joined by key dropped that
@@ -3125,6 +3119,8 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     # so a compromised host simply ignores it and can return anything after the trusted prefix. This
     # URL is rendered into the panel's HTML, so the whole string has to be pinned here, once, rather
     # than left for each consumer to escape.
+    # The pattern is privileged.ts_login_url_re's, the one tailscale_integration's panel-host twin
+    # checks too, so the two cannot check the link differently (they once did).
     if _priv.ts_login_url_re(control).fullmatch(line):
         return True, line
     status = remote_check_tailscale(server)

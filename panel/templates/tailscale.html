@@ -206,7 +206,7 @@
                 <span class="badge bg-warning text-dark">Enabled</span>
                 <span class="text-secondary fs-r70">public internet</span>
                 {% include "_shared_funnel_note.html" %}
-              {% elif not offer.funnel %}
+              {% elif offer is defined and not offer.funnel %}
                 <span class="badge bg-secondary">Not offered</span>
                 <span class="text-secondary fs-r70">this tailnet's control server has no Funnel</span>
               {% else %}
@@ -281,7 +281,7 @@
           {% endif %}
         </div>
 
-        {% if not config.tailscale_setup_done and info.running and not offer.serve %}
+        {% if not config.tailscale_setup_done and info.running and offer is defined and not offer.serve %}
         <p class="text-secondary small mb-0 mt-2" id="ts-serve-not-offered">
           This tailnet's control server does not issue HTTPS certificates, so Tailscale Serve can't
           publish the panel. Open the panel at its tailnet address above; Settings &gt; HTTPS
@@ -306,7 +306,7 @@
             </button>
             {% endif %}
           </div>
-          {% if offer.funnel %}
+          {% if offer is not defined or offer.funnel %}
           <div class="form-check">
             <input type="checkbox" id="funnel-check" class="form-check-input">
             <label class="form-check-label small" for="funnel-check">Also enable Funnel (advanced)</label>

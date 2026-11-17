@@ -24,5 +24,6 @@
   "Self-hosted control server (Headscale)?": "Serveur de contrôle auto-hébergé (Headscale) ?",
   "Leave it empty for Tailscale. Recommended: an https:// address (OWASP Transport Layer Security Cheat Sheet).": "Laissez-le vide pour Tailscale. Recommandé : une adresse https:// (OWASP Transport Layer Security Cheat Sheet).",
   "This tailnet's control server does not issue HTTPS certificates, so Tailscale Serve isn't available. Finish setup and open the panel at its tailnet address.": "Le serveur de contrôle de ce tailnet ne délivre pas de certificats HTTPS, donc Tailscale Serve n'est pas disponible. Terminez la configuration et ouvrez le panneau à son adresse tailnet.",
-  "Create a pre-auth key on your control server. On Headscale:": "Créez une clé de pré-authentification sur votre serveur de contrôle. Sur Headscale :"
+  "Create a pre-auth key on your control server. On Headscale:": "Créez une clé de pré-authentification sur votre serveur de contrôle. Sur Headscale :",
+  "https://headscale.example.com": "https://headscale.example.com"
 }

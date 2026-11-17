@@ -265,6 +265,13 @@ function _mrStartHidden() {
 }
 
 function renderAuthKeyForm(remoteId, name) {
+  // Where the auth key comes from: Tailscale's admin console, or (#ts-self-hosted: a self-hosted
+  // control server such as Headscale) that server's own `headscale preauthkeys create`. Literals only.
+  var selfHosted = !!document.getElementById('ts-self-hosted');
+  var keyLabel = selfHosted
+    ? '<label class="form-label small" for="ts-auth-key"><span>Auth Key</span></label>'
+      + '<div class="small text-secondary mb-1"><span>Create a pre-auth key on your control server. On Headscale:</span> <code data-no-i18n>headscale preauthkeys create --user &lt;USER_ID&gt;</code></div>'
+    : '<label class="form-label small"><span>Auth Key</span> (<a href="https://login.tailscale.com/admin/keys" target="_blank" rel="noopener noreferrer">Tailscale admin</a>)</label>';
   return '<hr>'
     + '<div class="form-check mb-2">'
     + '<input type="checkbox" id="ts-ssh" class="form-check-input" checked>'
@@ -280,22 +287,11 @@ function renderAuthKeyForm(remoteId, name) {
     // Fallback: pre-auth key
     + '<div class="mt-3"><a href="#" class="small text-secondary"' + _da('_showTsKeyAdv') + '>Advanced: use a pre-auth key instead</a></div>'
     + '<div id="ts-key-adv" class="mt-2">'
-    + _tsAuthKeyLabel()
-    + '<input type="text" id="ts-auth-key" class="form-control form-control-sm mb-2" placeholder="' + (_tsSelfHosted() ? 'hskey-auth-...' : 'tskey-auth-...') + '">'
+    + keyLabel
+    + '<input type="text" id="ts-auth-key" class="form-control form-control-sm mb-2" placeholder="' + (selfHosted ? 'hskey-auth-...' : 'tskey-auth-...') + '">'
     + '<button class="btn btn-outline-success btn-sm"' + _da('bootstrapTailscale', [remoteId]) + '><i class="bi bi-key"></i> Connect with key</button>'
     + '</div>'
     + '<div id="bootstrap-log" class="small mt-2"></div>';
-}
-
-// Where the auth key comes from: Tailscale's admin console, or (#ts-self-hosted, a self-hosted control
-// server such as Headscale) that server's own `headscale preauthkeys create`. Literals only.
-function _tsSelfHosted() { return !!document.getElementById('ts-self-hosted'); }
-function _tsAuthKeyLabel() {
-  if (_tsSelfHosted()) {
-    return '<label class="form-label small" for="ts-auth-key"><span>Auth Key</span></label>'
-      + '<div class="small text-secondary mb-1"><span>Create a pre-auth key on your control server. On Headscale:</span> <code data-no-i18n>headscale preauthkeys create --user &lt;USER_ID&gt;</code></div>';
-  }
-  return '<label class="form-label small"><span>Auth Key</span> (<a href="https://login.tailscale.com/admin/keys" target="_blank" rel="noopener noreferrer">Tailscale admin</a>)</label>';
 }
 
 // The Tailscale join, its install, the move onto Tailscale SSH and the host bootstrap are step_up_required
