@@ -71,7 +71,7 @@ def register(app):
     @step_up_required       # the key and certificate the panel's HTTPS serves
     def tls_cert_letsencrypt():
         name = (request.form.get("le_name") or "").strip().lower()
-        autorenew = bool(request.form.get("le_autorenew"))
+        autorenew = "le_autorenew" in request.form     # a ticked checkbox is sent, an unticked one is not
         update_config(lambda cfg: cfg.update({"tls_le_autorenew": autorenew}))
         chain, key, why = tls_own.fetch_letsencrypt(name)
         if why:

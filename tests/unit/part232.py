@@ -105,11 +105,21 @@ def _refusals232():
 
 
 def _notes232():
-    rsa_key = _rsa232.generate_private_key(public_exponent=65537, key_size=1024)
-    weak = _cert232("panel.example.com", rsa_key, _CA_KEY232, _CA232.subject)
-    c_weak = _own232.check(_pem232(weak, _CA232), _key232(rsa_key), _NAMES232)
-    eq("own cert: RSA under 2048 bits is noted, not refused", (c_weak.refusal, [n.split(".")[0] for n in c_weak.notes]),
-       ("", ["The key is RSA 1024 bits"]))
+    # A short RSA key is described, not generated (the scanners rightly flag making one).
+    class _ShortRsa232:
+        key_size = 1024
+    real = _own232._x509()
+    _p9_patch(_own232, "_x509", lambda: real[:3] + (_NS232(RSAPublicKey=_ShortRsa232),))
+    try:
+        short = _own232._key_notes(_NS232(public_key=_ShortRsa232))
+    finally:
+        _p9_restore_all()
+    eq("own cert: RSA under 2048 bits is noted (OWASP: at least 2048)", [n.split(".")[0] for n in short],
+       ["The key is RSA 1024 bits"])
+    rsa_key = _rsa232.generate_private_key(public_exponent=65537, key_size=2048)
+    c_rsa = _own232.check(_pem232(_cert232("panel.example.com", rsa_key, _CA_KEY232, _CA232.subject), _CA232),
+                          _key232(rsa_key), _NAMES232)
+    eq("own cert: an RSA-2048 certificate with its chain is put in with no notes", (c_rsa.refusal, c_rsa.notes), ("", []))
     # cryptography no longer signs with SHA-1, so the signature is described rather than made.
     sha1 = _own232._hash_notes(_NS232(signature_hash_algorithm=_NS232(name="sha1")))
     eq("own cert: a SHA-1 signature is noted (OWASP: SHA-256 or stronger)", [n.split(".")[0] for n in sha1],
