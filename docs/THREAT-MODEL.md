@@ -160,7 +160,7 @@ the file that holds them.
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
 | S | A commit merged by someone holding the GitHub account | Mitigate: panels install only commits signed with the release key, kept off GitHub, verified against the key the host already holds (`tools/sign-release.sh`, `install.sh`). |
-| T | A dependency changed upstream | Mitigate: hashed lockfiles installed `--require-hashes --no-deps`; gamedig from a hash-locked npm lockfile; dependency review, pip-audit and osv-scanner in CI; a CycloneDX SBOM attached to each GitHub Release (`tools/sbom.py`). |
+| T | A dependency changed upstream | Mitigate: hashed lockfiles, installed in pip's hash-checking mode (pip itself `--require-hashes`, the panel's packages `--no-deps`, every line hashed) (`install.sh`); gamedig from a hash-locked npm lockfile; dependency review, pip-audit and osv-scanner in CI; a CycloneDX SBOM attached to each GitHub Release (`tools/sbom.py`). |
 | T | The downloaded breached-password list is altered | Mitigate: fetched from a fixed SecLists commit and saved only when it hashes to the SHA-256 pinned in `install.sh`; the panel re-hashes it on every read and skips it on a mismatch (`panel/core/breached_passwords.py`). |
 | R | Which code a release contains | Mitigate: release notes from the CHANGELOG, the signature and the SBOM on the release; the SBOM is reproducible from the tagged commit. |
 | E | First install trusts whatever GitHub serves | Reduce, then accept: the release key's fingerprint is published in README and SECURITY.md, which shows how to check the commit's release signature before the first install; unchecked, it is trust on first use. |
