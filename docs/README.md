@@ -310,7 +310,7 @@ location / {
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Privacy:** no telemetry, no analytics, no third-party scripts, and no e-mail. What the panel keeps, for how long, and what leaves your server: [PRIVACY.md](PRIVACY.md).
 - **Encryption at rest** — SSH credentials and remote host addresses, database logins, emails, 2FA secrets, bot and channel tokens, linked Telegram chats, alert-device subscriptions and session addresses are encrypted with AES-256-GCM in `data/panel.db` and `config.json` (key ring in `data/cred_key`, rotated from Panel Server → Panel → Diagnostics); `data/` is `chmod 700`. Passwords (Argon2id), API tokens, 2FA backup codes and invite links are stored only as hashes.
-- **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a strict Content Security Policy (scripts and `<style>` blocks by nonce only, no inline style attributes) and security headers, and input validation on anything that becomes an OS operation.
+- **SSH host-key pinning**, **signed updates** (see [Updating](#updating)), CSRF protection, a Content Security Policy (scripts by nonce only; inline styles are still allowed while they are moved out) and security headers, and input validation on anything that becomes an OS operation.
 
 > Prefer Tailscale over exposing the panel to the internet, and never commit `data/` (already in `.gitignore`). The security model, including what the panel can do as root on its own host, is in [SECURITY.md](../.github/SECURITY.md).
 
