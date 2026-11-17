@@ -302,7 +302,7 @@ def install(checked, source, le_name=""):
     os.makedirs(ssl_dir, mode=0o700, exist_ok=True)
     key_new, cert_new = ssl_dir / "key.pem.new", ssl_dir / "cert.pem.new"
     _write_new(key_new, checked.key_pem(), 0o600)
-    _write_new(cert_new, checked.cert_pem(), 0o640)   # public, but only the panel reads it
+    _write_new(cert_new, checked.cert_pem(), 0o600)   # public, but only the panel reads it
     os.replace(key_new, ssl_dir / "key.pem")
     os.replace(cert_new, ssl_dir / "cert.pem")
 
