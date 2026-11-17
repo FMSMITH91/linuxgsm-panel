@@ -1,8 +1,9 @@
 """Refuse a common, breached or easily guessed password, offline.
 
 OWASP Authentication Cheat Sheet, "Implement Proper Password Strength Controls" > "Block common and
-previously breached passwords" (read 2026-11-15). The panel makes no network call for this: the
-screen is a bundled list of the roots most breach-list entries are built from
+previously breached passwords" (read 2026-11-15). This screen makes no network call; the downloaded
+list and Pwned Passwords come after it (breached_passwords.py), only for a password it passes. It is
+a bundled list of the roots most breach-list entries are built from
 (common_passwords.txt, ~350 lines, under 4 KB) plus the shapes those lists are full of — one
 character repeated, a run (12345678, abcdefgh), a keyboard walk (qwertyuiop, 1qaz2wsx), a root with
 leetspeak and digits or symbols around it (P@ssw0rd2026!), a root said twice (dragondragon) or two

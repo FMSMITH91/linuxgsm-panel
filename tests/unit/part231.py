@@ -16,6 +16,7 @@ from shlex import quote as _shq231
 import subprocess as _sub231
 import tempfile as _tf231
 import urllib.error as _ue231
+import urllib.request as _ur231
 from types import SimpleNamespace as _NS231
 
 from unit.part01 import _r21d_urlopen_of, _root, check
@@ -114,14 +115,14 @@ def _s231_request_shape():
         seen.append((req.full_url, dict(req.header_items()), timeout))
         return _Resp(_range_for231(_PWNED231).encode())
 
+    handlers = []
     _p9_patch(_bp231, "_fetch_range", _REAL_FETCH231)
     _uo = _r21d_urlopen_of(_bp231)
-    _real = _uo.urlopen
-    _uo.urlopen = _open
+    _uo.build_opener = lambda *h: handlers.extend(h) or _NS231(open=_open)
     try:
         body = _bp231._fetch_range(_bp231.sha1_parts(_PWNED231)[0])
     finally:
-        _uo.urlopen = _real
+        del _uo.build_opener
     digest = _hl231.sha1(_PWNED231.encode()).hexdigest().upper()
     url, headers, timeout = seen[0] if seen else ("", {}, None)
     check("breach check: the request names only the hash's first five hex characters",
@@ -134,6 +135,10 @@ def _s231_request_shape():
     check("breach check: sha1_parts splits the upper-case SHA-1 into 5 + 35 characters",
           _bp231.sha1_parts("password") == ("5BAA6", "1E4C9B93F3F0682250B6CF8331B7EE68FD8"),
           repr(_bp231.sha1_parts("password")))
+    refusers = [h for h in handlers if isinstance(h, type) and issubclass(h, _ur231.HTTPRedirectHandler)]
+    check("breach check: the request refuses every redirect",
+          len(refusers) == 1 and refusers[0]().redirect_request(None, None, 302, "", {}, "https://elsewhere.test/") is None,
+          repr(handlers))
     check("breach check: the answer is returned as text", body is not None and _bp231.sha1_parts(_PWNED231)[1] in body,
           repr(body)[:80])
 
@@ -152,15 +157,16 @@ def _s231_padding_and_failure():
 
     _p9_patch(_bp231, "_fetch_range", _REAL_FETCH231)
     _uo = _r21d_urlopen_of(_bp231)
-    _real = _uo.urlopen
-    _uo.urlopen = _down
+    _uo.build_opener = lambda *h: _NS231(open=_down)
     try:
         with _Online231():
             _setting231(None)
-            got = _bp231.pwned_count(_PWNED231)
-            verdict = _pp231(_PWNED231)
+            try:
+                got, verdict = _bp231.pwned_count(_PWNED231), _pp231(_PWNED231)
+            except Exception as e:      # recorded, so the checks below fail by name
+                got = verdict = e
     finally:
-        _uo.urlopen = _real
+        del _uo.build_opener
     check("breach check: the network function is the module's own, not a stand-in left by another part",
           _REAL_FETCH231.__module__ == _bp231.__name__ and _REAL_FETCH231.__name__ == "_fetch_range",
           repr(_REAL_FETCH231))
@@ -248,6 +254,12 @@ def _s231_suites_offline():
                if not _re231.search(r"^(import suite_deadline|.*import_module\(\"suite_deadline\"\))", open(r).read(), _re231.M)]
     with open(_os231.path.join(_root, "tests", "suite_deadline.py")) as fh:
         sd = fh.read()
+    before = len(_P9_TRIPPED)
+    answer = _bp231._fetch_range("00000")       # part12's tripwire, armed by the loop below
+    tripped = _P9_TRIPPED[before:]
+    del _P9_TRIPPED[before:]                    # an expected trip, not a leak: the last check counts
+    check("breach check: part12's tripwire stands in for the one network call and records it",
+          answer is None and [t[0] for t in tripped] == ["breached_passwords._fetch_range"], repr(tripped))
     check("breach check: every suite runner imports suite_deadline", len(runners) >= 9 and not missing,
           repr((len(runners), missing)))
     check("breach check: ...which sets LGSM_PANEL_OFFLINE for the run and what it starts",

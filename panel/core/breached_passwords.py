@@ -85,12 +85,23 @@ def sha1_parts(password):
     return digest[:PREFIX_LEN], digest[PREFIX_LEN:]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: the request goes to RANGE_URL's host and nowhere it points next."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return None, which makes urllib raise the 3xx as an HTTPError."""
+        return None
+
+
 def _fetch_range(prefix):
     """The range API's answer for a five-character `prefix`, or None. The only network call here."""
+    opener = urllib.request.build_opener(_NoRedirect)
     req = urllib.request.Request(RANGE_URL + prefix,
                                  headers={"Add-Padding": "true", "User-Agent": "linuxgsm-panel"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 - fixed https host
+        with opener.open(req, timeout=TIMEOUT) as resp:  # nosec B310 - fixed https host
+            if getattr(resp, "status", 200) != 200:
+                return None
             return resp.read(_MAX_RANGE_BYTES).decode("ascii", errors="replace")
     except (OSError, ValueError, urllib.error.URLError) as e:
         _log.info("Pwned Passwords did not answer (%s); the local checks stand", e.__class__.__name__)
