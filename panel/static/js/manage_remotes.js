@@ -255,7 +255,7 @@ function renderTailscaleStatus(remoteId, name, status) {
 }
 
 // An element of markup built here that starts hidden: hidden through the CSSOM once it is in the page,
-// as a style="display:none" attribute did before the page policy refused style attributes. The
+// as an inline display:none attribute did before the page policy refused style attributes. The
 // handlers that show one set an explicit display, so they work unchanged.
 function _mrStartHidden() {
   for (var i = 0; i < arguments.length; i++) {
