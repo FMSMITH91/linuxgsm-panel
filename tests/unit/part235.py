@@ -90,6 +90,9 @@ def _pages235():
     _p9_arm(who="part235")
     _p9_patch(_so235, "get_server_status", lambda *a, **k: {})
     _p9_patch(_ts235, "panel_funnel_facts", lambda cfg: {})
+    # /remotes and /tailscale read the node's whole Tailscale state: installed and running, no peers.
+    _p9_patch(_ts235, "get_tailscale_info", lambda force_refresh=False: _ts235.TailscaleInfo(
+        installed=True, running=True, backend_state="Running"))
     try:
         c = _p9_client(P9_ADMIN)
         out = {}

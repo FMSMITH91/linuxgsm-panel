@@ -182,7 +182,7 @@ def _creds47():
     grp = _re47.search(r'<div class="col-md-2" id="edit-cred-group-\{\{ remote\.id \}\}"[^>]*>', tpl)
     check("Edit remote: the Credential box of a host already on Tailscale SSH is hidden from the start "
           "(only a change of the select hid it, and a preselected option is never changed)",
-          grp is not None and "{% if remote.auth_method == 'tailscale' %} style=\"display:none\"{% endif %}"
+          grp is not None and "{% if remote.auth_method == 'tailscale' %} data-start-hidden{% endif %}"
           in grp.group(0), grp.group(0) if grp else "no edit-cred-group div")
 
 
@@ -197,6 +197,7 @@ def _ts_install47():
             "global.fetch = () => { posts++; return new Promise(res => pending.push(res)); };\n"
             "function renderAuthKeyForm(){ return '<form>'; }\n"
             + "global.window = global;\n" + _cut47(src, "function _mrStepUp(") + "\n"
+            + _cut47(src, "function _mrStartHidden(") + "\n"
             + _cut47(src, "function installTailscale(") + "\n" + _cut47(src, "function _installTailscaleNow(") + "\n"
             "const answer = async body => { pending.shift()({json: () => Promise.resolve(body)}); await settle(); };\n"
             "(async () => {\n"

@@ -350,7 +350,8 @@ def _hh_state177(resp):
         return resp.status_code
     html = resp.get_data(as_text=True)
     tag = lambda i: html[html.find(i):html.find(">", html.find(i))]  # noqa: E731
-    return ("display:none" not in tag('id="hh-charts"'), "display:none" not in tag('id="hh-empty"'))
+    # Hidden from the start by data-start-hidden (start_hidden.js makes it an inline display:none).
+    return ("data-start-hidden" not in tag('id="hh-charts"'), "data-start-hidden" not in tag('id="hh-empty"'))
 
 
 eq("host page: the card arrives in the state the reply will confirm: the chart area for a host with samples "
