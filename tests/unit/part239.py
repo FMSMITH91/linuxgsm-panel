@@ -195,6 +195,7 @@ def _fake_crontab239(d, current):
     path = os.path.join(d, "crontab")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(script)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in bash runs
     os.chmod(path, 0o700)  # nosec B103
     return path
 
