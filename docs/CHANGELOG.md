@@ -14,6 +14,11 @@ compares git commits, not this file.
 
 ### Added
 
+- **Settings → Outside services: one switch for each outside service.** The panel's update check,
+  LinuxGSM's game list and release notes, game icons, Steam Workshop titles, Modrinth, the
+  public-address lookup and the breached-password check can each be turned off. Each switch says what
+  stops working while it is off, and is enforced where the request is made. Turning off the update
+  check or the breached-password check asks first and shows OWASP's recommended setting.
 - **A plain privacy statement.** [PRIVACY.md](PRIVACY.md) says what the panel stores and how
   it is protected, how long each kind of data is kept, every outside service it can contact (when,
   what is sent, and whether it can be turned off), and that it sends no telemetry, analytics or
@@ -1580,6 +1585,14 @@ compares git commits, not this file.
 
 ### Security
 
+- **New passwords are checked against known breaches.** After the built-in common-password rules, a
+  new password is checked against a list of 100,000 breached passwords that the installer downloads
+  (pinned by SHA-256), then against Have I Been Pwned's Pwned Passwords, which receives only the
+  first five characters of the password's SHA-1 hash. If the service does not answer within 3
+  seconds the local checks stand. Settings → Outside services can turn the online check off.
+- **More CI jobs may reach only the hosts they need.** The coverage and JavaScript coverage jobs run
+  Harden-Runner in block mode, limited to GitHub and PyPI, and the test suites no longer fetch
+  LinuxGSM's files from GitHub during a run.
 - **Your own TLS certificate on the panel is kept.** A certificate from a real certificate authority placed in
   `data/ssl/` is no longer replaced by a self-signed one (an RSA certificate used to be). The panel
   logs a weak key, an old signature, a key that does not match, or an expired certificate, and warns
