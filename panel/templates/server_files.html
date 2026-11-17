@@ -541,7 +541,7 @@
     {% endcall %}
     <!-- Live explainer (crontab.guru style) -->
     <div id="cron-explain" class="mb-2 px-2 py-1 rounded cron-explain-box">
-      <div id="cron-desc" class="text-secondary fs-r80"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
+      <div id="cron-desc" class="text-secondary"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
       <div id="cron-next" class="text-secondary mt-1 fs-r66"></div>
     </div>
     {# WHOSE CLOCK. cron runs on the host, so every time on this page — the presets above
@@ -777,7 +777,7 @@
     <p class="small text-secondary mb-2">
       The datapacks in this server's world. The server loads them when it loads the world, so a change applies at the next restart.
     </p>
-    <div id="gm-mc-world" class="small text-secondary mb-1 text-break minh-15em"></div>
+    <div id="gm-mc-world" class="small text-secondary mb-1 text-break"></div>
     <div class="border rounded small mb-2 hs-r7"><ul class="list-unstyled mb-0" id="gm-mc-list" data-no-i18n></ul></div>
     <form class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="gmMcSearch" data-args='["@event"]' data-on="submit">
       <label for="gm-mc-q" class="visually-hidden">Search Modrinth's datapacks</label>
@@ -806,7 +806,7 @@
     <p class="small text-secondary mb-2">
       The behavior and resource packs in this server's shared packs folders. Turn one on to apply it to the server's world; a change applies at the next restart.
     </p>
-    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break minh-15em"></div>
+    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break"></div>
     <div class="border rounded small mb-2 hs-r13"><ul class="list-unstyled mb-0" id="gm-mcb-list" data-no-i18n></ul></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles/behavior_packs","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}

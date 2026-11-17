@@ -307,7 +307,7 @@ function saveConfig(ev){
           i.setAttribute('data-orig', i.value);
           if(settings.hasOwnProperty(i.getAttribute('data-key'))){
             var b=i.parentElement.querySelector('.cfg-set-badge');
-            if(b){ b.textContent=inst; b.className='badge cfg-set-badge bg-info text-dark'; }
+            if(b){ b.textContent=inst; b.className='badge cfg-set-badge fs-r55 bg-info text-dark'; }
           }
         });
         // The settings write changed the instance .cfg — refresh the Raw tab so it isn't stale.

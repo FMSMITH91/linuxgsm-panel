@@ -23,6 +23,7 @@ Everything drives part12's app with its transport tripwire armed and every host 
 """
 import json as _json205
 import os as _os205
+import re as _re205
 import time as _time205
 
 from unit.part01 import check
@@ -342,8 +343,11 @@ check("lgsm_update.js: nothing from the release notes reaches markup (no innerHT
       "innerHTML" not in _code205 and "insertAdjacentHTML" not in _code205 and "textContent" in _code205)
 check("lgsm_update.js: links open GitHub's release pages only, with rel=noopener",
       "a.rel = 'noopener noreferrer';" in _code205 and "url.indexOf(RELEASES) === 0" in _code205)
-check("lgsm_update.js: the dialog scrolls inside and stays on screen",
-      "max-height:85vh" in _code205 and "overflow-y:auto" in _code205)
+_css205 = _read205("panel", "static", "css", "panel.css")
+check("lgsm_update.js: the dialog scrolls inside and stays on screen (its card and body classes, from panel.css)",
+      "el('div', 'card sv-card-760')" in _code205 and "el('div', 'card-body sv-card-scroll')" in _code205
+      and _re205.search(r"\.sv-card-760\s*\{[^}]*max-height:\s*85vh", _css205) is not None
+      and _re205.search(r"\.sv-card-scroll\s*\{[^}]*overflow-y:\s*auto", _css205) is not None)
 check("lgsm_update.js: 'Update LinuxGSM' runs update-lgsm through the control bar's action",
       "_doServerAction('update-lgsm', btn, true)" in _code205
       and "getAttribute('data-can-update') === '1'" in _code205)
