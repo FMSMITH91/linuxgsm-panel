@@ -65,7 +65,8 @@ the request. Nothing in them names you or your players. The web requests the pan
 | **Your browser's push service** (Mozilla, Apple, Google, Microsoft) | Sending an alert to a device you turned alerts on for | The alert, encrypted end to end between the panel and your browser; the push service sees only its size and time | Yes: per device (Account → Alerts on this device) |
 | **Your own Telegram chat** | Alerts, once you link it (Account → Link my Telegram) | The same short text as a browser alert | Yes: Unlink Telegram |
 | **Tailscale** | If you use Tailscale, its client on your server talks to Tailscale's coordination server | Tailscale's own traffic, under Tailscale's terms | Yes: don't use it, or log the host out |
-| **Ubuntu package mirrors** | OS updates you start, and the daily check for them | Which packages are available | The check: by not using OS Updates; the mirrors are your system's |
+| **Ubuntu package mirrors** | OS updates you start, and the daily check for them (an `apt update` on every host the panel manages, as Ubuntu's own daily apt timer also does) | Which packages are available | No switch: the check runs on every reachable host. The mirrors are the ones your system is set to use |
+| **Software you install through the panel** | Installing or updating a game server (LinuxGSM from `linuxgsm.sh` and GitHub, then the game from Steam or its own source), preparing a host (gamedig from the npm registry, and Node.js from NodeSource's repository when the host has no recent one), installing Tailscale (`tailscale.com`), attaching Ubuntu Pro (Canonical) | The usual download requests of that software; Ubuntu Pro also gets the token you give it | Yes: they happen only when you start them |
 
 Every switch is on by default and is checked where the request is made, so nothing in the panel
 reaches a service while its switch is off. Turning off the update check or the breached-password check
