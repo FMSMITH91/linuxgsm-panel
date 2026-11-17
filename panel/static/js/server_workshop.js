@@ -170,7 +170,8 @@
       .then(function (d) {
         var got = (d && d.titles) || {};
         Object.keys(got).forEach(function (k) { if (ID_RE.test(k)) state.titles[k] = got[k]; });
-        if (!d || !d.complete) msg(t('Titles are unavailable: Steam did not answer. The ids can still be edited.'), 'text-secondary');
+        if (d && d.off) msg(t('Titles are off: the Steam Web API is turned off in Settings → Outside services. The ids can still be edited.'), 'text-secondary');
+        else if (!d || !d.complete) msg(t('Titles are unavailable: Steam did not answer. The ids can still be edited.'), 'text-secondary');
         drawAll();
       })
       .catch(function () {

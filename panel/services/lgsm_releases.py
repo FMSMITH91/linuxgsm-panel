@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.request
 
+from panel.core import outside_services as _outside
 from panel.services import lgsm_data
 
 _log = logging.getLogger(__name__)
@@ -127,7 +128,12 @@ def _open(req):
 
 
 def _fetch():
-    """Read LinuxGSM's releases from GitHub: the parsed list, or None. Never raises."""
+    """Read LinuxGSM's releases from GitHub: the parsed list, or None. Never raises.
+
+    None without asking while Settings -> Outside services has the LinuxGSM switch off.
+    """
+    if not _outside.enabled(_outside.LGSM_GITHUB):
+        return None
     req = urllib.request.Request(_API_URL, headers={"Accept": "application/vnd.github+json",
                                                     "User-Agent": "linuxgsm-panel"})
     try:
@@ -165,8 +171,11 @@ def releases(newest=None):
     `newest`: the latest release the panel knows of (lgsm_data.latest_release); a copy without it
     starts a re-read, at most once an hour.
     """
+    # Switched off, no read starts (and no failed read is recorded): the copy held is served, and
+    # the first call after the switch is turned back on reads at once.
+    on = _outside.enabled(_outside.LGSM_GITHUB)
     with _lock:
-        held, due = _cache["releases"], _due(newest)
+        held, due = _cache["releases"], on and _due(newest)
         if due:
             _cache["running"] = True
     if due:

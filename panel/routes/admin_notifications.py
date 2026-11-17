@@ -23,7 +23,7 @@ from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, 
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
 from app import (_new_user_language)
-from panel.core import session_policy
+from panel.core import outside_services, session_policy
 from panel.routes.groups import _posted_ids
 
 
@@ -59,7 +59,8 @@ def _register_panel_settings(app):
             "reboot_wait_max_hours": _hr.wait_max_hours(),
             "reboot_restore_no_autostart": _hr.restore_no_autostart(),
             "require_2fa": bool(cfg.get("require_2fa")),
-        }))
+        }),
+            outside=outside_services.form_rows(cfg))
 
     @app.route("/settings/save", methods=["POST"])
     @login_required
@@ -86,10 +87,14 @@ def _register_panel_settings(app):
         reboot_wait = max(0, min(_int_or(f.get("reboot_wait_max_hours"),
                                          _hr.DEFAULT_WAIT_HOURS), 720))
         reboot_restore = bool(f.get("reboot_restore_no_autostart"))
+        outside = outside_services.parse_form(f)      # {} when the post has no switches block
+        update_check_was = outside_services.enabled(outside_services.UPDATE_CHECK)
         changed = []
 
         def _mut(cfg):
-            changed[:] = [session_policy.change_note(cfg, lifetimes)]   # once, however often it runs
+            changed[:] = [session_policy.change_note(cfg, lifetimes),   # once, however often it runs
+                          outside_services.change_note(cfg, outside)]
+            cfg.update(outside)
             cfg.update({
                 "site_title": title, "site_domain": domain, "login_tagline": tagline,
                 "accent_color": accent, "default_language": lang, "session_protection": protection,
@@ -104,9 +109,17 @@ def _register_panel_settings(app):
         session_policy.apply(app, lifetimes)
         app.config["SESSION_PROTECTION"] = protection
         app.config["REQUIRE_2FA"] = bool(f.get("require_2fa"))
-        log_action(current_user, "settings_update", target="panel", detail="".join(changed))
+        log_action(current_user, "settings_update", target="panel", detail="; ".join(c for c in changed if c))
+        if outside.get(outside_services.UPDATE_CHECK, update_check_was) != update_check_was:
+            _forget_update_status()
         flash("Settings saved.", "success")
         return redirect(url_for("panel_settings"))
+
+
+def _forget_update_status():
+    """Drop the cached update status, so a bot's !update reads the update check's new setting at once."""
+    from panel.ops import system_ops as _so
+    _so._update_cache.update(ts=0.0, data=None)
 
 
 def _register_notifications(app):

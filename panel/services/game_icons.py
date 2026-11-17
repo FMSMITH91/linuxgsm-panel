@@ -31,6 +31,7 @@ import urllib.parse
 import urllib.request
 
 from panel import REPO_ROOT as _ROOT
+from panel.core import outside_services as _outside
 
 _log = logging.getLogger(__name__)
 
@@ -82,8 +83,11 @@ def _cmpd_allowed_url(url, uploads_only=False):
 def _cmpd_http_get(url, cap):
     """GET `url` (allowlisted by the caller): (body, content_type, None) or (None, None, why).
 
-    Never raises. The one place this module touches the network, so tests replace it.
+    Never raises. The one place this module touches the network, so tests replace it. Nothing is
+    asked while Settings -> Outside services has the game icons switch off.
     """
+    if not _outside.enabled(_outside.GAME_ICONS):
+        return None, None, "turned off in Settings"
     if not _cmpd_allowed_url(url):
         return None, None, "not an allowed URL"
     opener = urllib.request.build_opener(_NoRedirect)
@@ -255,7 +259,9 @@ def icon(script, known):
     hit = _cmpd_cached(script)
     if hit is not None and hit[2] < _ICON_MAX_AGE:
         return hit[0], hit[1]
-    if time.time() < _failed.get(script, 0):
+    # Switched off: the cached icon, however old, or none (the page draws the initials). Not
+    # counted as a failure, so turning the switch back on fetches at once.
+    if time.time() < _failed.get(script, 0) or not _outside.enabled(_outside.GAME_ICONS):
         return (hit[0], hit[1]) if hit else None
     with _lock:
         fresh = _cmpd_fetch_icon(script)

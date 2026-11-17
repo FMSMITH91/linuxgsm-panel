@@ -47,7 +47,7 @@ Then open **the link the installer prints at the end** — `https://your-server:
 
 ### Updating
 
-- **In the panel:** *Panel Server → Panel → Panel Updates → Update now* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
+- **In the panel:** *Panel Server → Panel → Panel Updates → Update now* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart. With the update check turned off (Settings → Outside services), the panel asks GitHub nothing and offers no update: use the installer.
 - **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate (or first a release it may not skip, below).
 
 Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
@@ -200,7 +200,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
 
-Branding, the default language, session settings and the two reboot settings are also editable at **Administration → Settings** (superadmin). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
+Branding, the default language, session settings, the two reboot settings and the **Outside services** switches (one per service the panel calls, each saying what stops working when it is off; see [PRIVACY.md](PRIVACY.md)) are also editable at **Administration → Settings** (superadmin). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 

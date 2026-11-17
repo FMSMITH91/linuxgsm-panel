@@ -357,10 +357,20 @@ jobs:
     # slower, and the gate above should stay the fast answer. Codacy has a 60% coverage goal that
     # has always read as "not reported" because nothing ever produced a report.
     steps:
+      # Block mode: the hosts below are every one this job's Harden-Runner log recorded over ten runs
+      # (pull requests and pushes) beyond the Actions service names the agent allows by itself. The
+      # suites' TEST-NET hosts are refused at once, as tools/smoke-local.sh refuses them locally.
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            release-assets.githubusercontent.com:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -540,10 +550,19 @@ jobs:
       actions: read   # the reuse step reads the pull request run's jobs, and downloads its report
       checks: read    # ...and the check runs on the pull request's head
     steps:
+      # Block mode, the same hosts as coverage: Chrome's own calls to Google services are refused,
+      # which changes nothing the walk measures (the panel's JavaScript, served from loopback).
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            release-assets.githubusercontent.com:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

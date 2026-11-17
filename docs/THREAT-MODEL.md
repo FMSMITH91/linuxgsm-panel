@@ -63,7 +63,7 @@ Trust boundaries:
 | TB2 | Panel to root (the helper) | the panel's own account, which a web compromise would hold |
 | TB3 | Panel to game accounts | game server processes, mods and plugins, players' data |
 | TB4 | Panel to remote hosts | the remote's sshd and its game accounts |
-| TB5 | Panel to push services and chat channels | third-party services; anyone in a bot's channel |
+| TB5 | Panel to push services, chat channels and other outside services | third-party services; anyone in a bot's channel |
 | TB6 | Panel to database servers | database contents written by players and plugins |
 | TB7 | GitHub to an installed panel (updates) | anyone holding the GitHub account or a CI token |
 | TB8 | CI runners (pull-request code) | anyone who opens a pull request |
@@ -133,7 +133,7 @@ the file that holds them.
 | I | Stored SSH credentials leak | Mitigate: passwords and key paths encrypted at rest with the AES-256-GCM key ring; never logged; backups hold them encrypted. A key file is not copied into the panel: it stays where the operator keeps it, under its file permissions. |
 | E | Panel's own host reached through a "remote" entry | Mitigate: bootstrap, Tailscale install and join routes refuse the panel's own host. |
 
-### TB5: push services and chat channels
+### TB5: push services, chat channels and other outside services
 
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
@@ -143,6 +143,7 @@ the file that holds them.
 | S | A stranger links their own Telegram chat to someone's account and gets that account's alerts | Mitigate: a link needs a one-time code the signed-in account asks for after a password re-check (128 random bits, SHA-256 at rest, 10 minutes, once, five per account per 10 minutes), claimed only from a private chat; the chat id is encrypted on the account, the link is audited and shown to the account as a change to its security (`panel/services/telegram_link.py`, `panel/routes/push_devices.py`). A linked chat only receives: commands still come from the chat on the Notifications page. |
 | I | Alert text reveals more than a lock screen should | Mitigate: push text is the event and the server's name only; endpoints and keys never logged. |
 | D | A slow push service stalls the panel | Mitigate: one background sender, bounded queue, timeouts. |
+| I | An outside service learns that this server exists and what it asks (update checks, LinuxGSM's files, game icons, Workshop titles, Modrinth, the public address, the breached-password check) | Mitigate: local first, the minimum sent (k-anonymity for the password check), and one switch per service in Settings → Outside services, enforced where each request is made (`panel/core/outside_services.py`); docs/PRIVACY.md lists each service and what it is sent (OWASP User Privacy Protection Cheat Sheet, "Prevent IP Address Leakage"). |
 
 ### TB6: database servers
 
@@ -171,7 +172,7 @@ the file that holds them.
 | T | Poisoned pipeline execution from a pull request | Mitigate: no `pull_request_target`; `workflow_run` jobs run main's copy and treat artifacts as untrusted; actions pinned by full SHA; required checks and signed commits on `main` (OWASP Top 10 CI/CD Security Risks, CICD-SEC-1 and CICD-SEC-4). |
 | I | A secret reaches pull-request code | Mitigate: the only secrets live in environments only `main` can use; pull-request jobs hold the job token alone (CICD-SEC-6). |
 | E | A job's token can do more than the job needs | Mitigate: every workflow starts with `permissions: {}` and each job grants only what it uses (CICD-SEC-5). |
-| I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list; the rest audit (CICD-SEC-7, CICD-SEC-10). |
+| I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list (the unit suites' coverage and JavaScript coverage jobs among them); the rest audit (CICD-SEC-7, CICD-SEC-10). |
 
 ## Residual risks
 
@@ -184,7 +185,7 @@ the file that holds them.
 | The SQL box's audit line keeps numbers | Accept | String and hex literals are masked under either escape mode (a literal whose end depends on sql_mode masks the rest of the line), but decimal numbers stay in the audit line by design, so an id or amount typed into a statement is recorded. Owner: whoever grants EDIT_DATABASE_DATA. |
 | Push services and chat platforms see alert metadata | Transfer | To the vendor, under its terms; the text is minimal. |
 | An operator's own TLS certificate expires | Accept, with warning | With HSTS, browsers refuse an expired trusted certificate with no way past it, so the web page is unreachable until it is renewed; the panel and the host's shell keep working. The expiry alert warns from 30 days, and docs/https.md gives a certbot deploy hook that renews it in place. Owner: the operator who installed the certificate. |
-| Harden-Runner audit-only jobs (unit suites, Lighthouse, ClusterFuzzLite, main-only jobs) | Accept for now | Their endpoints include test addresses, Chrome's own calls or Docker networking, or they cannot be checked by a pull request before main; their observed endpoints are recorded so they can move to block later. |
+| Harden-Runner audit-only jobs (the unit suites' `checks` matrix, Lighthouse, ClusterFuzzLite, main-only jobs) | Accept for now | `checks` installs packages from an apt mirror whose host name depends on the runner's region, so one pull request cannot show its list is complete; Lighthouse's score includes Chrome's own calls; ClusterFuzzLite runs in Docker images with their own networking; a main-only job cannot be checked by a pull request before it holds every panel's update. Their observed endpoints are recorded (tests/unit/part223.py) so they can move to block later. |
 | ClusterFuzzLite's and Scorecard's runner images are named by tag inside their actions | Accept | Trust in Google's and OpenSSF's tags; noted in `.clusterfuzzlite/Dockerfile`. |
 
 ## Review and validation
