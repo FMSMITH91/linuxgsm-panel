@@ -105,9 +105,10 @@ def _read_line(got, parts):
     body = _b64(parts[2]) if len(parts) == 3 else ("" if len(parts) == 2 else None)
     if body is None:
         return
-    if parts[0] == "root-crontab" and parts[1] == "none" and len(parts) == 2:
+    head = tuple(parts[:2])
+    if head == ("root-crontab", "none") and len(parts) == 2:
         got["state"] = "none"
-    elif parts[0] == "root-crontab" and parts[1] == "ok":
+    elif head == ("root-crontab", "ok"):
         got.update(state="ok", text=body)
     elif parts[0] == "crond" and re.fullmatch(_priv.ROOT_CRON_DIR_FILE_RE, parts[1]):
         got["crond"].append({"name": parts[1], "text": body, "panel": is_panel_file(parts[1])})
