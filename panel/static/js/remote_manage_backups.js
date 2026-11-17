@@ -134,7 +134,7 @@ function bkRenderGames(fg, d){
     // how many there are and how new the newest is. Open, a block with its whole table was ~320px,
     // and the list grew by that much for every server added, with no cap.
     var table = rows
-      ? _uis_bkFold(g, open[g.id], '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0 table-pin-actions u-fs-80">'
+      ? _uis_bkFold(g, open[g.id], '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0 table-pin-actions fs-r80">'
         + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
         + '<tbody>'+rows+'</tbody></table></div>')
       // "no backups yet" and "the host did not answer" are different facts, and only one of
@@ -314,8 +314,8 @@ function bkGameRows(g){
     .filter(function(b){ return !b.in_progress; })
     .map(function(b){
     return '<tr>'
-      + '<td><div class="u-ff-mono u-fs-72 u-wb-all" data-no-i18n>'+escapeHtml(b.name)+'</div>'
-      +   '<div class="text-secondary u-fs-68">'+escapeHtml(bkAgo(b.created))+'</div></td>'
+      + '<td><div class="ff-mono fs-r72 wb-all" data-no-i18n>'+escapeHtml(b.name)+'</div>'
+      +   '<div class="text-secondary fs-r68">'+escapeHtml(bkAgo(b.created))+'</div></td>'
       + '<td>'+bkFmtBytes(b.size)+'</td>'
       + '<td class="text-end text-nowrap">'
       + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
@@ -517,8 +517,8 @@ function fbPlayersDialog(busy){
   function el(tag, cls, text){ var e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
   function data(tag, text){ var e=el(tag, null, text); e.setAttribute('data-no-i18n',''); return e; }
   var ov=document.createElement('div');
-  ov.className='rm-overlay';
-  var card=el('div','card rm-overlay-card');
+  ov.className='sv-overlay';
+  var card=el('div','card sv-card-540');
   var head=el('div','card-header'); head.appendChild(el('i','bi bi-people-fill')); head.appendChild(document.createTextNode(' '));
   head.appendChild(el('span', null, _discT('Players are online'))); card.appendChild(head);
   var body=el('div','card-body');
@@ -611,7 +611,7 @@ function gameSchedule(g){
   // labelled "Default" option; a number box says it by being EMPTY, so the placeholder has to
   // carry that meaning and the endpoint has to read "" as "inherit".
   var kpLim=(window._bkLimits&&window._bkLimits.full_keep)||{min:1,max:30};
-  var kpSel='<input type="number" class="form-control form-control-sm py-0 d-inline-block u-w-55r"'
+  var kpSel='<input type="number" class="form-control form-control-sm py-0 d-inline-block w-r55"'
     +' min="'+kpLim.min+'" max="'+kpLim.max+'" step="1" inputmode="numeric"'
     +' placeholder="Default" title="'+tfHtml('Blank = use the default above. Between {min} and {max}.', {min: kpLim.min, max: kpLim.max})+'"'
     +' value="'+(sc.keep_set?escapeHtml(String(sc.keep)):'')+'" id="gsk-'+g.id+'"'
@@ -876,7 +876,7 @@ function scanExisting(){
       return '<tr>'
         +'<td><input type="checkbox" class="form-check-input disc-chk" checked data-user="'+escapeHtml(g.user)+'"'
         +' data-game="'+escapeHtml(g.game_type)+'" data-autostart="'+(g.autostart?1:0)+'"></td>'
-        +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success u-fs-58">'+escapeHtml(_discT('autostart'))+'</span>':'')+'</td>'
+        +'<td class="font-monospace">'+escapeHtml(g.user)+(g.autostart?' <span class="badge bg-success fs-r58">'+escapeHtml(_discT('autostart'))+'</span>':'')+'</td>'
         +'<td>'+escapeHtml(g.game_name||g.game_type)+'</td>'
         +(g.port ? '<td>'+Number(g.port)+'</td>'
                  : '<td title="'+escapeHtml(_discT('Not in its LinuxGSM config: read from LinuxGSM when imported'))+'">—</td>')
@@ -885,7 +885,7 @@ function scanExisting(){
         +'<td>'+(g.cron||0)+'</td></tr>';
     }).join('');
     out.innerHTML='<div class="table-responsive"><table class="table table-sm align-middle mb-2">'  // nosemgrep
-      +'<thead><tr><th class="u-w-1pct"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self'])
+      +'<thead><tr><th class="w-1p"><input type="checkbox" class="form-check-input" checked' + _da('discToggleAll', ['@self'])
       +' aria-label="'+escapeHtml(_discT('Select all'))+'"></th>'
       +'<th>'+escapeHtml(_discT('User'))+'</th><th>'+escapeHtml(_discT('Game'))+'</th><th>'+escapeHtml(_discT('Port'))+'</th>'
       +'<th title="'+escapeHtml(_discT('LinuxGSM backups on disk'))+'">'+escapeHtml(_discT('Backups'))+'</th>'

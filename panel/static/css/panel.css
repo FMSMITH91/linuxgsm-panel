@@ -2567,97 +2567,97 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 
 /* ── Strict CSP (B2): classes that replace inline style attributes ── */
 
-/* Single-declaration helpers named by their value (u-fs-70 = font-size .7rem, u-mh-200 = max-height
+/* Single-declaration helpers named by their value (fs-r70 = font-size .7rem, mh-200px = max-height
    200px), used by the Hosts list, the host page, Tailscale and the firewall card. */
-.u-fs-46em { font-size: .46em; }
+.fs-em46 { font-size: .46em; }
 
-.u-fs-65em { font-size: .65em; }
+.fs-em65 { font-size: .65em; }
 
-.u-fs-58 { font-size: .58rem; }
+.fs-r58 { font-size: .58rem; }
 
-.u-fs-60 { font-size: .6rem; }
+.fs-r60 { font-size: .6rem; }
 
-.u-fs-65 { font-size: .65rem; }
+.fs-r65 { font-size: .65rem; }
 
-.u-fs-68 { font-size: .68rem; }
+.fs-r68 { font-size: .68rem; }
 
-.u-fs-70 { font-size: .7rem; }
+.fs-r70 { font-size: .7rem; }
 
-.u-fs-72 { font-size: .72rem; }
+.fs-r72 { font-size: .72rem; }
 
-.u-fs-78 { font-size: .78rem; }
+.fs-r78 { font-size: .78rem; }
 
-.u-fs-80 { font-size: .8rem; }
+.fs-r80 { font-size: .8rem; }
 
-.u-fs-2r { font-size: 2rem; }
+.fs-r200 { font-size: 2rem; }
 
-.u-fs-3r { font-size: 3rem; }
+.fs-r300 { font-size: 3rem; }
 
-.u-tnum { font-variant-numeric: tabular-nums; }
+.tnum { font-variant-numeric: tabular-nums; }
 
-.u-ff-mono { font-family: monospace; }
+.ff-mono { font-family: monospace; }
 
-.u-ff-uimono { font-family: ui-monospace, monospace; }
+.ff-uimono { font-family: ui-monospace, monospace; }
 
-.u-lh-15 { line-height: 1.5; }
+.lh-15 { line-height: 1.5; }
 
-.u-ls-0 { letter-spacing: 0; }
+.ls-0 { letter-spacing: 0; }
 
-.u-wb-all { word-break: break-all; }
+.wb-all { word-break: break-all; }
 
-.u-op-80 { opacity: .8; }
+.op-80 { opacity: .8; }
 
-.u-cursor-pointer { cursor: pointer; }
+.cursor-pointer { cursor: pointer; }
 
-.u-mt-15r { margin-top: .15rem; }
+.mt-r015 { margin-top: .15rem; }
 
 /* A progress bar's starting width: page scripts then set el.style.width through the CSSOM. */
-.u-w-0 { width: 0%; }
+.w-0p { width: 0%; }
 
-.u-w-1pct { width: 1%; }
+.w-1p { width: 1%; }
 
-.u-w-55r { width: 5.5rem; }
+.w-r55 { width: 5.5rem; }
 
-.u-w-110 { width: 110px; }
+.w-110px { width: 110px; }
 
-.u-w-120 { width: 120px; }
+.w-120px { width: 120px; }
 
-.u-w-150 { width: 150px; }
+.w-150px { width: 150px; }
 
-.u-h-12 { height: 12px; }
+.h-12px { height: 12px; }
 
-.u-h-14 { height: 14px; }
+.h-14px { height: 14px; }
 
-.u-h-18 { height: 18px; }
+.h-18px { height: 18px; }
 
-.u-minw-260 { min-width: 260px; }
+.minw-260px { min-width: 260px; }
 
-.u-minh-1r { min-height: 1rem; }
+.minh-r1 { min-height: 1rem; }
 
-.u-maxw-22r { max-width: 22rem; }
+.mw-r22 { max-width: 22rem; }
 
-.u-maxw-230 { max-width: 230px; }
+.mw-230px { max-width: 230px; }
 
-.u-maxw-280 { max-width: 280px; }
+.mw-280px { max-width: 280px; }
 
-.u-maxw-340 { max-width: 340px; }
+.mw-340px { max-width: 340px; }
 
-.u-maxw-640 { max-width: 640px; }
+.mw-640px { max-width: 640px; }
 
-.u-mh-120 { max-height: 120px; }
+.mh-120px { max-height: 120px; }
 
-.u-mh-200 { max-height: 200px; }
+.mh-200px { max-height: 200px; }
 
-.u-mh-340 { max-height: 340px; }
+.mh-340px { max-height: 340px; }
 
-.u-mh-400 { max-height: 400px; }
+.mh-400px { max-height: 400px; }
 
-.u-mh-500 { max-height: 500px; }
+.mh-500px { max-height: 500px; }
 
-.u-mh-52vh { max-height: 52vh; }
+.mh-52vh { max-height: 52vh; }
 
 /* The Tailscale page's larger status dots. */
-.u-dot-12 {
+.dot-12px {
   width: 12px;
   height: 12px;
 }
@@ -2722,7 +2722,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 }
 
 /* Host page: the "players are online" dialog before a full backup. */
-.rm-overlay {
+.sv-overlay {
   position: fixed;
   inset: 0;
   background: rgb(0 0 0 / 60%);
@@ -2733,7 +2733,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   padding: 1rem;
 }
 
-.rm-overlay-card {
+.sv-card-540 {
   max-width: 540px;
   width: 100%;
 }

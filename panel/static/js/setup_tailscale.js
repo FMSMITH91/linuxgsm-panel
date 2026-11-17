@@ -12,7 +12,7 @@ function tsRender(s){
   if(s.running && s.dns_name){
     if(s.serve_url){
       tsBox.innerHTML='<div class="alert alert-success py-2 small mb-2"><i class="bi bi-check-circle-fill"></i> '  // nosemgrep - literals plus a tsEsc-wrapped dns_name
-        + 'Connected and serving over HTTPS at<br><a href="'+tsEsc(s.https_url)+'" target="_blank" rel="noopener noreferrer" class="u-wb-all">'+tsEsc(s.https_url)+'</a></div>'
+        + 'Connected and serving over HTTPS at<br><a href="'+tsEsc(s.https_url)+'" target="_blank" rel="noopener noreferrer" class="wb-all">'+tsEsc(s.https_url)+'</a></div>'
         + '<div class="text-secondary small">Finish setup, then reach the panel at that private HTTPS URL.</div>';
       tsCont.innerHTML='<i class="bi bi-arrow-right"></i> Continue';
       tsCont.className='btn btn-primary w-100';
@@ -71,7 +71,7 @@ function tsDoUp(){
     if(d.connected){ tsOut().innerHTML='<span class="text-success">Connected!</span>'; setTimeout(tsRefresh,800); return; }
     tsOut().innerHTML='<div class="alert alert-info py-2 small mb-0">'  // nosemgrep - literals plus auth_url, tsEsc-wrapped in both text places and _da()-encoded in the button
       + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
-      + '<a href="'+tsEsc(d.auth_url)+'" target="_blank" rel="noopener noreferrer" class="u-wb-all">'+tsEsc(d.auth_url)+'</a>'
+      + '<a href="'+tsEsc(d.auth_url)+'" target="_blank" rel="noopener noreferrer" class="wb-all">'+tsEsc(d.auth_url)+'</a>'
       + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.auth_url]) + '><i class="bi bi-clipboard"></i></button><br>'
       + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
     // Deadline + a single live poll, and a .catch so a failed status read does not leave an

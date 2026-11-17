@@ -132,7 +132,7 @@
         </span>
         <!-- Live stats: last-known values rendered now, refreshed in place by JS -->
         {% set st = remote.cached_stats %}
-        <div id="live-stats-{{ remote.id }}" class="small text-secondary mt-1 u-fs-72"
+        <div id="live-stats-{{ remote.id }}" class="small text-secondary mt-1 fs-r72"
              {% if st %}data-loaded="1"{% endif %}>
           {% if st %}
             <i class="bi bi-cpu"></i> <span>CPU:</span> {{ st.cpu_percent }}%
@@ -144,16 +144,16 @@
           {% endif %}
         </div>
         <!-- Bootstrap progress (persists across page loads while a job is active) -->
-        <div id="bootstrap-card-{{ remote.id }}" class="mt-2 u-maxw-640" data-start-hidden>
+        <div id="bootstrap-card-{{ remote.id }}" class="mt-2 mw-640px" data-start-hidden>
           <div class="d-flex justify-content-between small mb-1">
             <span class="text-info"><i class="bi bi-shield-lock-fill"></i> <span id="bs-step-{{ remote.id }}">Preparing…</span></span>
             <span class="text-secondary" id="bs-pct-{{ remote.id }}"></span>
           </div>
-          <div class="progress u-h-14">
-            <div class="progress-bar progress-bar-striped progress-bar-animated u-w-0" id="bs-bar-{{ remote.id }}"></div>
+          <div class="progress h-14px">
+            <div class="progress-bar progress-bar-striped progress-bar-animated w-0p" id="bs-bar-{{ remote.id }}"></div>
           </div>
-          <a href="#" class="small text-secondary u-fs-70" data-action="toggleBsLog" data-args='[{{ remote.id }}]' data-prevent>show log</a>
-          <a href="#" class="small text-secondary ms-2 u-fs-70" data-start-hidden id="bs-dismiss-{{ remote.id }}" data-action="dismissBootstrap" data-args='[{{ remote.id }}]' data-prevent>dismiss</a>
+          <a href="#" class="small text-secondary fs-r70" data-action="toggleBsLog" data-args='[{{ remote.id }}]' data-prevent>show log</a>
+          <a href="#" class="small text-secondary ms-2 fs-r70" data-start-hidden id="bs-dismiss-{{ remote.id }}" data-action="dismissBootstrap" data-args='[{{ remote.id }}]' data-prevent>dismiss</a>
           <pre id="bs-log-{{ remote.id }}" class="small mt-1 mr-bs-log" data-start-hidden></pre>
         </div>
       </div>
@@ -278,7 +278,7 @@
 {% else %}
 <div class="card">
   <div class="card-body text-center py-4">
-    <span class="u-fs-2r">🌐</span>
+    <span class="fs-r200">🌐</span>
     <p class="text-secondary mt-2">No remote servers added yet. Add one to install game servers on another machine.</p>
   </div>
 </div>

@@ -298,7 +298,7 @@ function _tailscaleUpNow(remoteId) {
     if (d.connected) { el.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Already connected to your tailnet.</span>'; return; }
     el.innerHTML = '<div class="alert alert-info py-2 small mb-2">'  // nosemgrep
       + '<strong>1.</strong> Open this link in your browser and approve the machine:<br>'
-      + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer" class="d-inline-block my-1 u-wb-all">' + escapeHtml(d.url) + '</a>'
+      + '<a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer" class="d-inline-block my-1 wb-all">' + escapeHtml(d.url) + '</a>'
       + ' <button class="btn btn-sm btn-outline-secondary py-0"' + _da('copyText', [d.url]) + '><i class="bi bi-clipboard"></i></button>'
       + '<br><strong>2.</strong> <span id="ts-wait-' + remoteId + '"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
     _tsUpWait(remoteId);
@@ -386,7 +386,7 @@ function _installTailscaleNow(remoteId, name, btn) {
       } else {
         if (btn) btn.disabled = false;
         logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
-          + (data.log ? '<pre class="text-secondary small mt-1 u-mh-200 overflow-y-auto">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
+          + (data.log ? '<pre class="text-secondary small mt-1 mh-200px overflow-y-auto">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
       }
     })
     .catch(function() {
@@ -420,7 +420,7 @@ function _bootstrapTailscaleNow(remoteId) {
         + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
     } else {
       logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
-        + (data.log ? '<pre class="text-secondary small mt-1 u-mh-200 overflow-y-auto">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
+        + (data.log ? '<pre class="text-secondary small mt-1 mh-200px overflow-y-auto">' + escapeHtml(data.log.slice(-2000)) + '</pre>' : '');
     }
   })
   .catch(function() {
@@ -526,8 +526,8 @@ function showBootstrap(remoteId, name) {
         + '<button class="btn btn-primary btn-sm" id="bootstrap-run-btn"' + _da('runBootstrap', [remoteId]) + '><i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server</button>'
     + '<div id="bootstrap-progress-wrap" class="mt-3" data-start-hidden>'
         + '<div class="d-flex justify-content-between small mb-1"><span id="bootstrap-step" class="text-info" data-remote="' + escapeHtml(String(remoteId)) + '">Starting…</span><span id="bootstrap-pct" class="text-secondary"></span></div>'
-        + '<div class="progress u-h-18"><div id="bootstrap-bar" class="progress-bar progress-bar-striped progress-bar-animated u-w-0"></div></div>'
-        + '<div id="bootstrap-elapsed" class="text-secondary u-fs-70 mt-1"></div>'
+        + '<div class="progress h-18px"><div id="bootstrap-bar" class="progress-bar progress-bar-striped progress-bar-animated w-0p"></div></div>'
+        + '<div id="bootstrap-elapsed" class="text-secondary fs-r70 mt-1"></div>'
       + '</div>'
     + '<pre id="bootstrap-log" class="small mt-2 mr-bootstrap-log" data-start-hidden></pre>';
 

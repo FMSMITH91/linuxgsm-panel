@@ -22,7 +22,7 @@
     {% endif %}
     <h1 class="page-title mb-0 mt-1">
       <i class="bi {% if remote.is_local %}bi-gear-wide-connected{% else %}bi-hdd-network-fill{% endif %}"></i> {{ host_label(remote) }}
-      {% if remote.is_local %}<span class="badge bg-secondary ms-1 u-fs-60 align-middle fw-semibold">this panel</span>{% endif %}
+      {% if remote.is_local %}<span class="badge bg-secondary ms-1 fs-r60 align-middle fw-semibold">this panel</span>{% endif %}
     </h1>
     <span class="text-secondary small">
       {% if remote.is_local %}{{ remote.display_host or t('this host') }}{% else %}{{ remote.login_address }} &middot; <span>Auth:</span> {{ remote.auth_method }}{% endif %}
@@ -111,7 +111,7 @@
 <div class="card mb-3 live-res" data-mtab="overview">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-cpu-fill"></i> Live Resources</span>
-    <span class="text-secondary d-flex align-items-center u-fs-72"><span class="rt-dot"></span>realtime</span>
+    <span class="text-secondary d-flex align-items-center fs-r72"><span class="rt-dot"></span>realtime</span>
   </div>
   <div class="card-body">
     {# Shown only when a live read fails. Without it the card keeps the last good numbers on
@@ -122,10 +122,10 @@
     <div class="mb-4">
       <div class="d-flex justify-content-between align-items-baseline mb-1">
         <span class="small text-secondary"><i class="bi bi-cpu"></i> CPU · <span id="cpu-cores-label">…</span></span>
-        <span class="mb-0 fw-semibold rm-cpu-big"><span id="cpu-overall-val">–</span><small class="text-secondary u-fs-46em fw-normal u-ls-0"> % overall</small></span>
+        <span class="mb-0 fw-semibold rm-cpu-big"><span id="cpu-overall-val">–</span><small class="text-secondary fs-em46 fw-normal ls-0"> % overall</small></span>
       </div>
-      <div class="progress mb-3 u-h-12">
-        <div class="progress-bar bg-success u-w-0" id="cpu-overall-bar" role="progressbar"></div>
+      <div class="progress mb-3 h-12px">
+        <div class="progress-bar bg-success w-0p" id="cpu-overall-bar" role="progressbar"></div>
       </div>
       <div id="cpu-cores" class="cpu-cores-grid"></div>
     </div>
@@ -135,36 +135,36 @@
         <div class="res-tile">
           <div class="d-flex justify-content-between align-items-baseline mb-2">
             <span class="small text-secondary"><i class="bi bi-memory"></i> Memory</span>
-            <span class="h4 mb-0 u-tnum"><span id="ram-val">–</span><small class="text-secondary u-fs-46em fw-normal"> %</small></span>
+            <span class="h4 mb-0 tnum"><span id="ram-val">–</span><small class="text-secondary fs-em46 fw-normal"> %</small></span>
           </div>
-          <div class="progress mb-2 u-h-12">
-            <div class="progress-bar bg-info u-w-0" id="ram-bar" role="progressbar"></div>
+          <div class="progress mb-2 h-12px">
+            <div class="progress-bar bg-info w-0p" id="ram-bar" role="progressbar"></div>
           </div>
-          <div class="small text-secondary u-tnum" id="ram-detail">…</div>
+          <div class="small text-secondary tnum" id="ram-detail">…</div>
         </div>
       </div>
       <div class="col-md-4">
         <div class="res-tile">
           <div class="d-flex justify-content-between align-items-baseline mb-2">
             <span class="small text-secondary"><i class="bi bi-arrow-down-up"></i> Swap</span>
-            <span class="h4 mb-0 u-tnum"><span id="swap-val">–</span><small class="text-secondary u-fs-46em fw-normal"> %</small></span>
+            <span class="h4 mb-0 tnum"><span id="swap-val">–</span><small class="text-secondary fs-em46 fw-normal"> %</small></span>
           </div>
-          <div class="progress mb-2 u-h-12">
-            <div class="progress-bar bg-secondary u-w-0" id="swap-bar" role="progressbar"></div>
+          <div class="progress mb-2 h-12px">
+            <div class="progress-bar bg-secondary w-0p" id="swap-bar" role="progressbar"></div>
           </div>
-          <div class="small text-secondary u-tnum" id="swap-detail"></div>
+          <div class="small text-secondary tnum" id="swap-detail"></div>
         </div>
       </div>
       <div class="col-md-4">
         <div class="res-tile">
           <div class="d-flex justify-content-between align-items-baseline mb-2">
             <span class="small text-secondary"><i class="bi bi-hdd-fill"></i> Disk</span>
-            <span class="h4 mb-0 u-tnum"><span id="disk-val">–</span><small class="text-secondary u-fs-46em fw-normal"> %</small></span>
+            <span class="h4 mb-0 tnum"><span id="disk-val">–</span><small class="text-secondary fs-em46 fw-normal"> %</small></span>
           </div>
-          <div class="progress mb-2 u-h-12">
-            <div class="progress-bar bg-primary u-w-0" id="disk-bar" role="progressbar"></div>
+          <div class="progress mb-2 h-12px">
+            <div class="progress-bar bg-primary w-0p" id="disk-bar" role="progressbar"></div>
           </div>
-          <div class="small text-secondary u-tnum" id="disk-detail">…</div>
+          <div class="small text-secondary tnum" id="disk-detail">…</div>
         </div>
       </div>
     </div>
@@ -266,7 +266,7 @@
           </div>
           <details id="pu-commits">
             <summary class="text-secondary">Changes since your version:</summary>
-            <ul id="pu-changes-list" class="mb-0 u-fs-80"></ul>
+            <ul id="pu-changes-list" class="mb-0 fs-r80"></ul>
           </details>
         </div>
         {# flex-wrap: an update's outcome can be two sentences (the installer's own reason), and
@@ -284,7 +284,7 @@
           <i class="bi bi-diagram-2"></i> Tracking branch: <strong id="pu-branch-current">…</strong>
         </div>
         <div class="d-flex gap-2 align-items-center flex-wrap">
-          <select id="pu-branch-select" class="form-select form-select-sm w-auto u-maxw-280" aria-label="Panel branch"></select>
+          <select id="pu-branch-select" class="form-select form-select-sm w-auto mw-280px" aria-label="Panel branch"></select>
           <button class="btn btn-sm btn-outline-warning" id="pu-branch-switch" data-action="switchPanelBranch"><i class="bi bi-shuffle"></i> Switch</button>
           <span id="pu-branch-msg" class="small"></span>
         </div>
@@ -324,7 +324,7 @@
         <!-- Typed, not picked. A fixed list of 7/14/30 could not express the number an operator
              actually wants. min/max match the server's own clamp and are re-applied from
              /api/panel/backups on load, so the two cannot drift. -->
-        <input type="number" id="bk-keep" class="form-control form-control-sm u-w-55r"
+        <input type="number" id="bk-keep" class="form-control form-control-sm w-r55"
                min="1" max="365" step="1" inputmode="numeric"
                data-action="saveBackupSettings" data-on="change">
         <span class="form-label small mb-0 text-secondary">days</span>
@@ -351,7 +351,7 @@
       </p>
       {% endcall %}
       <div class="d-flex gap-2 flex-wrap align-items-center">
-        <input type="password" id="bk-pass" class="form-control form-control-sm u-maxw-22r"
+        <input type="password" id="bk-pass" class="form-control form-control-sm mw-r22"
                autocomplete="new-password" aria-label="Backup passphrase"
                placeholder="Passphrase — at least 12 characters">
         <button class="btn btn-primary btn-sm" data-action="saveBackupPassphrase" data-args='["@self"]'>
@@ -372,7 +372,7 @@
     <div id="bk-list-wrap">
       <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
       <div class="table-responsive" id="bk-table-wrap" data-start-hidden>
-        <table class="table table-sm align-middle mb-0 table-pin-actions u-fs-80">
+        <table class="table table-sm align-middle mb-0 table-pin-actions fs-r80">
           <thead><tr><th>When</th><th>Type</th><th>Size</th><th class="text-end">Actions</th></tr></thead>
           <tbody id="bk-tbody"></tbody>
         </table>
@@ -414,7 +414,7 @@
         <label class="form-label small mb-0" for="fb-keep">Keep per server</label>
         <!-- Typed, not picked — see the note on bk-keep above. The ceiling is much lower here
              because each of these is a whole game directory, often several GB. -->
-        <input type="number" id="fb-keep" class="form-control form-control-sm u-w-55r"
+        <input type="number" id="fb-keep" class="form-control form-control-sm w-r55"
                min="1" max="30" step="1" inputmode="numeric"
                data-action="saveBackupSettings" data-on="change">
       </div>
@@ -465,7 +465,7 @@
           <i class="bi bi-exclamation-triangle-fill"></i>
           <span id="diag-bad-count"></span> panel file(s) differ from the installed version:
         </div>
-        <ul id="diag-bad-list" class="mb-2 u-fs-78 u-ff-uimono"></ul>
+        <ul id="diag-bad-list" class="mb-2 fs-r78 ff-uimono"></ul>
         <button class="btn btn-sm btn-warning" id="diag-repair-btn" data-action="repairPanel">
           <i class="bi bi-arrow-counterclockwise"></i> Restore all from installed version
         </button>
@@ -536,14 +536,14 @@
         <span id="diag-report-msg" class="small"></span>
       </div>
       <span class="visually-hidden" id="diag-report-name">Debug report</span>
-      <textarea id="diag-report-text" class="form-control u-ff-uimono u-fs-72" rows="8" readonly aria-labelledby="diag-report-name"
+      <textarea id="diag-report-text" class="form-control ff-uimono fs-r72" rows="8" readonly aria-labelledby="diag-report-name"
                 data-start-hidden></textarea>
       <!-- Security posture (2FA, invites, ways in, fail2ban): this page only, never the file. -->
       <div id="diag-report-posture-wrap" class="mt-2" data-start-hidden>
         <div class="small text-secondary mb-1" id="diag-report-posture-name">
           <i class="bi bi-shield-lock"></i> Security posture — shown here only, not in the download or the GitHub issue
         </div>
-        <textarea id="diag-report-posture" class="form-control u-ff-uimono u-fs-72" rows="6" readonly aria-labelledby="diag-report-posture-name"
+        <textarea id="diag-report-posture" class="form-control ff-uimono fs-r72" rows="6" readonly aria-labelledby="diag-report-posture-name"
                  ></textarea>
       </div>
     </div>
@@ -579,7 +579,7 @@
 <!-- Top offending IPs (aggregated from the fail2ban log) -->
 <div class="card mb-3" data-mtab="security">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-    <span><i class="bi bi-graph-up-arrow"></i> Top offenders <span class="text-secondary u-fs-70 fw-normal">last 7 days</span></span>
+    <span><i class="bi bi-graph-up-arrow"></i> Top offenders <span class="text-secondary fs-r70 fw-normal">last 7 days</span></span>
     <div class="d-flex align-items-center gap-3">
       <div class="form-check form-switch mb-0" title="UFW-block every IP whose failed-login count over the last 7 days reaches the threshold; each is released once its count falls back below it">
         <input class="form-check-input" type="checkbox" id="sec-autoblock" data-action="toggleAutoblock" data-args='["@self"]'>
@@ -615,7 +615,7 @@
     <div class="d-flex flex-wrap align-items-start gap-4 mb-3">
       <div>
         <label class="form-label small mb-1" for="sec-threshold">Auto-block at <span class="text-secondary">(failed attempts / 7 days)</span></label>
-        <div class="input-group input-group-sm u-maxw-230">
+        <div class="input-group input-group-sm mw-230px">
           {# The threshold and the whitelist are INSTALL-WIDE, and only a superadmin can change
              either: the endpoint ignores anyone else's threshold, and the whitelist route is
              @superadmin_required. Offered to a host operator, Save toasted "Threshold saved" over
@@ -630,10 +630,10 @@
           {% endif %}
         </div>
       </div>
-      <div class="flex-grow-1 u-minw-260">
+      <div class="flex-grow-1 minw-260px">
         {% if current_user.is_superadmin %}
         <label class="form-label small mb-1" for="sec-wl-input">Whitelist <span class="text-secondary">(never banned or blocked, IP or CIDR)</span></label>
-        <div class="input-group input-group-sm mb-1 u-maxw-340">
+        <div class="input-group input-group-sm mb-1 mw-340px">
           <input type="text" class="form-control" id="sec-wl-input" placeholder="e.g. 1.2.3.4 or 10.0.0.0/8">
           <button class="btn btn-outline-primary" data-action="addWhitelist" data-args='["@self"]'><i class="bi bi-plus-lg"></i> Add</button>
         </div>
@@ -670,11 +670,11 @@
       <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["fail2ban"]'><i class="bi bi-shield"></i> fail2ban log (all jails)</button>
       <button class="btn btn-sm btn-outline-secondary" data-action="loadSecurityLog" data-args='["ssh"]'><i class="bi bi-terminal"></i> SSH auth log</button>
     </div>
-    <div id="sec-log-title" class="small text-secondary mb-1 u-minh-1r"></div>
+    <div id="sec-log-title" class="small text-secondary mb-1 minh-r1"></div>
     {# Translated here and in loadSecurityLog: the page's translator skips a <pre>, so its
        placeholder and status lines were English in every language. data-i18n-text: a live
        language switch renders the placeholder again (setLang), until a log replaces it. #}
-    <pre id="sec-log" class="rm-log-box u-mh-340" data-i18n-text="Pick a log above, or &quot;view log&quot; on a jail above, to see its recent lines.">{{ t('Pick a log above, or "view log" on a jail above, to see its recent lines.') }}</pre>
+    <pre id="sec-log" class="rm-log-box mh-340px" data-i18n-text="Pick a log above, or &quot;view log&quot; on a jail above, to see its recent lines.">{{ t('Pick a log above, or "view log" on a jail above, to see its recent lines.') }}</pre>
   </div>
 </details>
 {% endif %}
@@ -710,7 +710,7 @@
       </div>
       <div class="modal-body">
         <div id="osu-state" class="small mb-2 text-secondary"><i class="bi bi-hourglass-split"></i> Starting…</div>
-        <pre id="osu-log" class="rm-log-box u-mh-52vh"></pre>
+        <pre id="osu-log" class="rm-log-box mh-52vh"></pre>
         <div class="form-text mt-2">Runs unattended and answers prompts safely — it keeps any config
           file you've edited and assumes yes to installs, so it never gets stuck waiting. You'll see
           here if it kept a config file.</div>
@@ -746,7 +746,7 @@
 
 <!-- Ubuntu Pro -->
 <div class="card mb-3" data-mtab="maintenance">
-  <div class="card-header" id="sec-ubuntupro"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1 u-fs-70 fw-normal">free security updates (ESM) &amp; Livepatch</span></div>
+  <div class="card-header" id="sec-ubuntupro"><i class="bi bi-shield-shaded"></i> Ubuntu Pro <span class="text-secondary ms-1 fs-r70 fw-normal">free security updates (ESM) &amp; Livepatch</span></div>
   <div class="card-body">
     <div id="ubuntu-pro-body"><div class="text-secondary small">Checking Ubuntu Pro…</div></div>
   </div>
@@ -780,12 +780,12 @@
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>
             <label class="form-label small mb-1" for="ssh-port-input">New SSH port</label>
-            <input type="number" id="ssh-port-input" class="form-control form-control-sm u-w-120" min="1" max="65535"
+            <input type="number" id="ssh-port-input" class="form-control form-control-sm w-120px" min="1" max="65535"
                    placeholder="e.g. 2222" aria-label="New SSH port">
           </div>
           <div>
             <label class="form-label small mb-1" for="ssh-bind-input">Bind address <span class="text-secondary">(optional)</span></label>
-            <input type="text" id="ssh-bind-input" class="form-control form-control-sm u-w-150"
+            <input type="text" id="ssh-bind-input" class="form-control form-control-sm w-150px"
                    placeholder="All interfaces" aria-label="SSH bind IP address"
                    title="Leave blank to listen on all interfaces. If this host has several IPs, enter the one sshd should bind to — it must be the address the panel connects to, or the change is rolled back.">
           </div>
@@ -938,12 +938,12 @@
           </div>
           <div id="panel-bind-custom-wrap"{% if _bind in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') %} data-start-hidden{% endif %}>
             <label class="form-label small mb-1" for="panel-bind-custom">IP address</label>
-            <input type="text" id="panel-bind-custom" class="form-control form-control-sm u-w-150"
+            <input type="text" id="panel-bind-custom" class="form-control form-control-sm w-150px"
                    placeholder="100.x.x.x" data-no-i18n value="{{ _bind if _bind not in ('0.0.0.0', '::', '127.0.0.1', '::1', 'localhost') else '' }}">
           </div>
           <div>
             <label class="form-label small mb-1" for="panel-port-input">Port</label>
-            <input type="number" id="panel-port-input" class="form-control form-control-sm u-w-110" min="1024" max="65535"
+            <input type="number" id="panel-port-input" class="form-control form-control-sm w-110px" min="1024" max="65535"
                    value="{{ config.port if config else 5000 }}" aria-label="Panel web port">
           </div>
           <button class="btn btn-sm btn-outline-primary" type="button" data-action="changePanelBinding">Apply &amp; restart</button>
@@ -1085,11 +1085,11 @@
             {# connect_address brackets an IPv6 host, as the dashboard and the Join link do:
                `2001:db8::5:27015` gives no way to tell where the address ends. #}
             {% set shown = gs.connect_address(addr) %}
-            <code class="text-info copy-addr u-cursor-pointer u-fs-80" title="{{ t('Click to copy') }}" data-i18n-title="Click to copy"
+            <code class="text-info copy-addr cursor-pointer fs-r80" title="{{ t('Click to copy') }}" data-i18n-title="Click to copy"
                   data-copy="{{ shown }}">{{ shown }}</code>
             {% set join_url = gs.connect_uri(addr) %}
             {% if join_url %}
-            <a class="btn btn-success btn-sm py-0 px-1 ms-1 join-link u-fs-70" rel="noopener"
+            <a class="btn btn-success btn-sm py-0 px-1 ms-1 join-link fs-r70" rel="noopener"
                {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- connect_uri: a fixed steam://connect/ prefix, or empty #}
                href="{{ join_url }}" data-addr="{{ shown }}"
                title="Launch the game and join (on phones, taps to copy the address)"><i class="bi bi-box-arrow-in-right"></i> Join</a>

@@ -828,7 +828,7 @@ function checkDbHealth(){
       if(rbtn) rbtn.style.display='none';
     } else if(d.healthy===false){
       out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> '+tfHtml('Integrity check flagged a problem: {detail}.', {detail: d.detail||''})+'</span>'+  // nosemgrep
-        '<div class="text-secondary u-fs-70">'+tfHtml('Click {button} — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.', {button: {html: '<strong>'+escapeHtml(t('Repair database'))+'</strong>'}})+'</div>';
+        '<div class="text-secondary fs-r70">'+tfHtml('Click {button} — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.', {button: {html: '<strong>'+escapeHtml(t('Repair database'))+'</strong>'}})+'</div>';
       if(rbtn) rbtn.style.display='';
     } else {
       out.innerHTML='<span class="text-warning">Could not run the health check right now.</span>';
