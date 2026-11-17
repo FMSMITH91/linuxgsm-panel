@@ -62,10 +62,12 @@ eq("plugins: enable needs a .jar.disabled, disable a .jar; remove takes either; 
        ("disable", "Foo-1.0.jar"), ("enable", "Foo-1.0.jar.disabled"), ("remove", "Foo-1.0.jar"),
        ("remove", "Foo.jar.disabled"), ("enable", "Foo.jar"), ("disable", "Foo.jar.disabled"),
        ("remove", "../server.properties.jar"), ("remove", "sub/Foo.jar"), ("remove", "Foo.txt"),
-       ("remove", ".hidden.jar"), ("remove", "Foo bar.jar"), ("delete", "Foo.jar"), ("remove", ""))],
+       ("remove", ".hidden.jar"), ("remove", "Foo\nbar.jar"), ("delete", "Foo.jar"), ("remove", ""),
+       ("remove", "LevelledMobs-4.5.3.2 b159.jar"), ("disable", "plugin (1).jar"))],
    [("Foo-1.0.jar.disabled", None), ("Foo-1.0.jar", None), (None, None), (None, None),
     (None, _mp171._MDR_BAD_ACTION), (None, _mp171._MDR_BAD_ACTION)] + [(None, _mp171._MDR_BAD_FILE)] * 5
-   + [(None, _mp171._MDR_BAD_ACTION), (None, _mp171._MDR_BAD_FILE)])
+   + [(None, _mp171._MDR_BAD_ACTION), (None, _mp171._MDR_BAD_FILE),
+      (None, None), ("plugin (1).jar.disabled", None)])
 eq("plugins: only https on the allowlisted host, default port, no credentials, is fetched",
    [_mr171._mdr_allowed(u, _mr171._MDR_CDN_HOSTS) for u in (
        "https://cdn.modrinth.com/data/AABBCC12/versions/x/a.jar", "http://cdn.modrinth.com/a.jar",

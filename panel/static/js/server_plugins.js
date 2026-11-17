@@ -3,7 +3,7 @@
 // talks to Modrinth, and the panel host downloads and checks each file before it reaches the server.
 // Rows are built with textContent only: titles, descriptions and file names come from elsewhere.
 (function () {
-  var NAME_RE = /^[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,127}\.jar(\.disabled)?$/;
+  var NAME_RE = /^[A-Za-z0-9_+-][A-Za-z0-9._+() -]{0,127}\.jar(\.disabled)?$/;   // as modrinth_plugins._MDR_FILE
   var ID_RE = /^[0-9A-Za-z]{8}$/;
   var state = {mc: null, seq: 0, busy: false};
 
@@ -57,6 +57,12 @@
       li.appendChild(p.enabled ? button(t('Disable plugin'), 'btn-outline-secondary', 'mdrChange', ['disable', p.name])
                                : button(t('Enable plugin'), 'btn-outline-success', 'mdrChange', ['enable', p.name]));
       li.appendChild(button(t('Remove plugin'), 'btn-outline-danger', 'mdrChange', ['remove', p.name]));
+    } else {
+      // Said, not left blank: a row with no buttons read as a bug.
+      var why = document.createElement('span');
+      why.className = 'small text-secondary w-100';
+      why.textContent = t('This file\'s name has characters the panel does not change plugins by. Rename it on the Files page to manage it here.');
+      li.appendChild(why);
     }
     return li;
   }

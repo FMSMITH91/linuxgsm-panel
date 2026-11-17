@@ -39,7 +39,10 @@ _MDR_DIR = "serverfiles/plugins"
 _MDR_VERSION_FILE = "serverfiles/version_history.json"
 _MDR_DISABLED = ".disabled"
 # A plugin file the card can act on: the names an install writes, enabled or disabled.
-_MDR_FILE = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,127}\.jar(?:\.disabled)?")
+# A plugin file the page may enable, disable or remove. Spaces and brackets are allowed inside the name
+# ("LevelledMobs-4.5.3.2 b159.jar", "plugin (1).jar" from a browser download): the change goes through
+# files.rename_path / delete_path, which quote any name; never a leading dot, slash or other path part.
+_MDR_FILE = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+() -]{0,127}\.jar(?:\.disabled)?")
 _MDR_LIST_MAX = 500
 _MDR_ACTIONS = ("enable", "disable", "remove")
 
