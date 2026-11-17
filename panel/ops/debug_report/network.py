@@ -1,6 +1,6 @@
 """Debug-report section(s): network, access.
 
-Owner: builder B3. network: Tailscale/Serve/Funnel (R36), proxy trust (R37), this request (R38),
+network: Tailscale/Serve/Funnel (R36), proxy trust (R37), this request (R38),
 cookies (R39), UFW (R40), fail2ban (R41). access: sign-ins/auth.log (R43), throttle and ban gate
 (R44), accounts/2FA counts (R45).
 

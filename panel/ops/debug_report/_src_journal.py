@@ -1,4 +1,4 @@
-"""The ONE journal read per report (R68, R69, R71's source). Owner: builder B1.
+"""The ONE journal read per report (R68, R69, R71's source).
 
 read(max_lines=5000, timeout=10) -> dict
     {"source": "user-journal"|"user-unit"|"helper"|"root"|None, "lines": [str, ...],

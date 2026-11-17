@@ -1,6 +1,6 @@
 """The ONE `systemctl [--user] show linuxgsm-panel` per report.
 
-Shared by R8 (Diagnostics' Service check), R15 (Panel process) and R21 (unit drift). Owner: builder B3.
+Shared by R8 (Diagnostics' Service check), R15 (Panel process) and R21 (unit drift).
 
 unit_show(timeout=5) -> dict
     {"scope": "user"|"system"|None, "props": {Name: value, ...}, "error": None|"<fixed reason>"}
