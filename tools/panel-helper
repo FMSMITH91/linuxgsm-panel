@@ -993,6 +993,20 @@ def v_r25j_panel_port(s):
     return s
 
 
+# A Let's Encrypt certificate's name: certbot's directory under /etc/letsencrypt/live, which is the
+# first domain name on the certificate ("example.com", "panel.example.com-0001"). Domain labels and
+# dots only, so it can never be "..", hold a "/" or start with "-".
+TLS_LE_NAME_RE = (r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                  r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+
+
+def v_tls_le_name(s):
+    """A Let's Encrypt certificate name (TLS_LE_NAME_RE): domain labels and dots, nothing else."""
+    if not re.fullmatch(TLS_LE_NAME_RE, s):
+        raise ValueError("not a certificate name")
+    return s
+
+
 def v_ts_mount(s):
     """A Tailscale Serve mount point: "/" or "/name" with a couple of safe segments. Not a general
     path — no traversal, no scheme, no host."""
@@ -2650,6 +2664,9 @@ VERBS = {
     "os-update-run": ([], lambda a: [], None),
     "panel-db-repair": ([], lambda a: [], None),
     "panel-restore": ([], lambda a: [], None),
+    # Copy one Let's Encrypt certificate (fullchain.pem + privkey.pem) into data/ssl for the panel to
+    # check and load. The name is the only argument; both paths are fixed here (do_tls_le_copy).
+    "tls-le-copy": ([v_tls_le_name], lambda a: [], None),
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
     "game-backup-read": ([v_game_account, v_backup_name], lambda a: [], None),
@@ -4085,6 +4102,130 @@ def do_panel_restore(args, content):
     if rc == 0:
         sys.stdout.write("RESTORE_STARTED")
     return rc
+
+
+# "Use my own certificate" from Let's Encrypt. certbot keeps the current files as links in
+# live/<name>/ to numbered files in archive/<name>/, all root's and the private key root-only, so
+# the panel's account cannot read them. Root copies exactly these two, for a validated name, into
+# data/ssl under staging names; the panel checks them (key matches, dates, names) and only then
+# puts them in place. Neither path comes from the caller, and what is copied must be a PEM
+# certificate chain or a single PEM private key that root owns, so the verb cannot be pointed at
+# any other file. OWASP Transport Layer Security Cheat Sheet, "Use Strong Keys and Protect Them":
+# the private key lands 0600 and owned by the panel's account, the only one that serves it.
+TLS_LE_ROOT = "/etc/letsencrypt"
+TLS_LE_MAX = 65536
+TLS_LE_OWNER = 0
+# (certbot's file, the staging name in data/ssl, its mode, the PEM blocks it may hold)
+TLS_LE_FILES = (("fullchain.pem", "le-fullchain.pem", 0o644, ("CERTIFICATE",)),
+                ("privkey.pem", "le-privkey.pem", 0o600, ("PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY")))
+_TLS_LE_BLOCK = re.compile(r"-----BEGIN ([A-Z ]+)-----\r?\n[A-Za-z0-9+/=\r\n]+-----END \1-----")
+
+
+def _tls_le_pem(data, kinds):
+    """Whether `data` is nothing but PEM blocks of `kinds` (one block for a key, one or more for a chain)."""
+    try:
+        text = data.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    blocks = list(_TLS_LE_BLOCK.finditer(text))
+    if not blocks or (kinds[0] != "CERTIFICATE" and len(blocks) != 1):
+        return False
+    if any(m.group(1) not in kinds for m in blocks):
+        return False
+    return not _TLS_LE_BLOCK.sub("", text).strip()
+
+
+def _tls_le_read(name, fname, kinds):
+    """The bytes of live/<name>/<fname>: a root-owned regular file under live/ or archive/<name>/.
+
+    Raises FileNotFoundError when there is no such certificate, ValueError for anything else.
+    """
+    root = os.path.realpath(TLS_LE_ROOT)
+    real = os.path.realpath(os.path.join(TLS_LE_ROOT, "live", name, fname))
+    allowed = (os.path.join(root, "archive", name) + "/", os.path.join(root, "live", name) + "/")
+    if not real.startswith(allowed):
+        raise ValueError("outside the certificate's own directories")
+    fd = os.open(real, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != TLS_LE_OWNER or st.st_size > TLS_LE_MAX:
+            raise ValueError("not certbot's file")
+        data = os.read(fd, TLS_LE_MAX + 1)
+    finally:
+        os.close(fd)
+    if not _tls_le_pem(data, kinds):
+        raise ValueError("not PEM of the expected kind")
+    return data
+
+
+def _tls_le_ssl_dir():
+    """A descriptor on panel.conf's data_dir/ssl, opened without following a link; None (and why) if unusable."""
+    data_dir = panel_conf().get("data_dir", "")
+    if not data_dir or not os.path.isabs(data_dir):
+        sys.stderr.write("tls-le-copy: panel.conf has no usable data_dir\n")
+        return None
+    if _refuse_conf_path_link(data_dir, "data directory"):
+        return None
+    data_dir = _r25a_resolved_dir(data_dir, "data directory")
+    if data_dir is None:
+        return None
+    dfd = _r26a_open_pinned_dir(data_dir)
+    try:
+        owner = os.fstat(dfd).st_uid
+        sfd = os.open("ssl", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+    finally:
+        os.close(dfd)
+    if os.fstat(sfd).st_uid != owner:
+        os.close(sfd)
+        sys.stderr.write("tls-le-copy: data/ssl is not the panel account's\n")
+        return None
+    return sfd
+
+
+def _tls_le_write(sfd, name, data, mode):
+    """Create `name` afresh in the ssl directory (never through a link), owned like the directory."""
+    owner = os.fstat(sfd)
+    try:
+        os.unlink(name, dir_fd=sfd)
+    except FileNotFoundError:
+        pass    # no copy left from an earlier run: the O_EXCL create below is all there is to do
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode, dir_fd=sfd)
+    try:
+        try:
+            os.fchown(fd, owner.st_uid, owner.st_gid)
+        except PermissionError:
+            if os.geteuid() == 0:
+                raise
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def do_tls_le_copy(args, content):
+    """Copy Let's Encrypt certificate `args[0]` (its full chain and private key) into data/ssl.
+
+    The panel then checks the copies and puts them in place; this verb only moves bytes root can
+    read and the panel's account cannot. Prints COPIED on success.
+    """
+    name = args[0]
+    try:
+        blobs = [(_tls_le_read(name, src, kinds), dst, mode) for src, dst, mode, kinds in TLS_LE_FILES]
+    except FileNotFoundError:
+        sys.stderr.write("tls-le-copy: no such certificate\n")
+        return 1
+    except (OSError, ValueError):
+        sys.stderr.write("tls-le-copy: not a Let's Encrypt certificate this verb copies\n")
+        return 1
+    sfd = _tls_le_ssl_dir()
+    if sfd is None:
+        return 1
+    try:
+        for data, dst, mode in blobs:
+            _tls_le_write(sfd, dst, data, mode)
+    finally:
+        os.close(sfd)
+    sys.stdout.write("COPIED")
+    return 0
 
 
 SELF_UPDATE_LOG = "self-update.log"
@@ -8165,6 +8306,7 @@ ACTIONS = {
     "os-update-run": do_os_update_run,
     "panel-db-repair": do_panel_db_repair,
     "panel-restore": do_panel_restore,
+    "tls-le-copy": do_tls_le_copy,
     "panel-self-update": do_panel_self_update,
     "tailscale-install": do_tailscale_install,
     "game-backup-read": do_game_backup_read,

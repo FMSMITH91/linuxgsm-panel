@@ -41,6 +41,12 @@ ENV = "LGSM_SUITE_DEADLINE"
 
 _state = {}
 
+# No suite may reach an outside service. panel.core.breached_passwords reads this before its one
+# network call (Pwned Passwords) and the suites set passwords by the hundred. Set on import, before
+# any check runs, so a process a suite starts (manage.py, an installer step) inherits it too.
+OFFLINE_ENV = "LGSM_PANEL_OFFLINE"
+os.environ[OFFLINE_ENV] = "1"
+
 
 def limit_for(suite, environ=None):
     """The limit in seconds for `suite` (0 = off), from LGSM_SUITE_DEADLINE or LIMITS."""

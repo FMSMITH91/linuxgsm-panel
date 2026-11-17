@@ -64,9 +64,13 @@ paths-ignore:
 #                                      GetPublishedFileDetails/v1/ or GetCollectionDetails/v1/ (the method
 #                                      from a fixed pair), a form of at most 100 ids of 1-20 digits. A
 #                                      size cap, a timeout, and an opener that refuses every redirect.
-# The three HTTP requests in notifications and the ones in game_icons, modrinth and steam_workshop
-# refuse every redirect. The three others use urlopen, which follows one, but only from GitHub's own fixed
-# hosts. None of the ten
+#   breached_passwords._fetch_range    GET on the fixed https://api.pwnedpasswords.com/range/ plus the
+#                                      first five hex characters of a SHA-1 (sha1_parts), never more.
+#                                      Only when breach_check_online is not off. A size cap, a 3 s
+#                                      timeout, and an opener that refuses every redirect.
+# The three HTTP requests in notifications and the ones in game_icons, modrinth, steam_workshop and
+# breached_passwords refuse every redirect. The three others use urlopen, which follows one, but only
+# from GitHub's own fixed hosts. None of the eleven
 # takes a host or a path from a request. The ntfy server is the one host anyone chooses: it is stored in
 # config.json and read back later, a flow neither SSRF query traces, so _NTFY_URL_RE bounds it.
 query-filters:

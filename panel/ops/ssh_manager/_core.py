@@ -19,6 +19,7 @@ import threading
 import time
 from panel.ops.ssh_manager import _lazy
 paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
+from panel.core import outside_services as _outside
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4
@@ -2912,8 +2913,9 @@ def remote_public_ip(server):
     """
     if (own := global_ipv4(_gamedig_host(server))):
         return own
-    for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
-                "dig +short myip.opendns.com @resolver1.opendns.com"):
+    # With Settings -> Outside services' public address switch off the tuple is empty: no service is
+    # asked and the answer is "" (the caller shows the host's own address).
+    for cmd in ("curl -fsS --max-time 5 https://api.ipify.org", "dig +short myip.opendns.com @resolver1.opendns.com") * _outside.enabled(_outside.PUBLIC_IP):
         try:
             out, _, _ = run_command(server, cmd, timeout=8, sudo=False)
             ip = (out or "").strip().split("\n")[0].strip()

@@ -35,7 +35,7 @@ import re
 
 from flask import jsonify, request
 from flask_login import current_user, login_required
-from panel.core import i18n
+from panel.core import i18n, outside_services as _outside
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.ops import ssh_manager as _sm
 from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after
@@ -389,7 +389,10 @@ def _wsc_titles_answer(gs):
         return bad
     ids = [i for i in (request.args.get("ids") or "").split(",") if _ws.valid_id(i)][:_ws.MAX_IDS]
     found, complete = _ws.details(ids)
-    return jsonify({"success": True, "titles": found, "complete": complete})
+    # `off`: the card says the titles are switched off (Settings -> Outside services), not that
+    # Steam did not answer.
+    return jsonify({"success": True, "titles": found, "complete": complete,
+                    "off": not _outside.enabled(_outside.STEAM_WORKSHOP)})
 
 
 def _wsc_pz_gate(gs):

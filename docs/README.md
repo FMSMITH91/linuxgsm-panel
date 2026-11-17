@@ -47,7 +47,7 @@ Then open **the link the installer prints at the end** — `https://your-server:
 
 ### Updating
 
-- **In the panel:** *Panel Server → Panel → Panel Updates → Update now* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart.
+- **In the panel:** *Panel Server → Panel → Panel Updates → Update now* (or the Telegram/Discord `/update` command). It moves only to a commit whose CI checks all passed, and survives its own restart. With the update check turned off (Settings → Outside services), the panel asks GitHub nothing and offers no update: use the installer.
 - **From the shell:** run the installer already on the host: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh` (root install) or `bash ~/linuxgsm-panel/install.sh` (per-user). This takes the branch tip directly, without the CI gate (or first a release it may not skip, below).
 
 Either way the updater snapshots the code and database (keeping the last 3), installs dependencies only when they changed, restarts the panel and health-checks it. If the panel does not come back it **rolls back the code and database automatically**. On a root install it also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel`.
@@ -200,7 +200,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
 
-Branding, the default language, session settings and the two reboot settings are also editable at **Administration → Settings** (superadmin). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
+Branding, the default language, session settings, the two reboot settings and the **Outside services** switches (one per service the panel calls, each saying what stops working when it is off; see [PRIVACY.md](PRIVACY.md)) are also editable at **Administration → Settings** (superadmin). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 
@@ -304,8 +304,8 @@ location / {
 
 ## Security
 
-- **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
-- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup, changing users or groups and saving Settings or Notifications ask for the password again after 10 minutes (Settings > Sessions & Security, 0 to switch it off; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
+- **HTTPS by default** (self-signed out of the box; your own or a Let's Encrypt certificate in Settings, or Tailscale Serve or a proxy, for a trusted cert).
+- **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common passwords, then a downloaded list of 100,000 breached ones (fetched by the installer, SHA-256 pinned), then Have I Been Pwned's Pwned Passwords (only the first five characters of the password's SHA-1 hash are sent; Settings can switch it off); there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup, changing users or groups and saving Settings or Notifications ask for the password again after 10 minutes (Settings > Sessions & Security, 0 to switch it off; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
   - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page (not the panel owner's: only the panel host can), or on the panel host run `linuxgsm-panel-recover disable-2fa <user>` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.
 - **Privacy:** no telemetry, no analytics, no third-party scripts, and no e-mail. What the panel keeps, for how long, and what leaves your server: [PRIVACY.md](PRIVACY.md).

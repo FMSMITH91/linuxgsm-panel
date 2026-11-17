@@ -3372,3 +3372,8 @@ with app.app_context():
                            {"a": _gh_ids["bad"], "b": _gh_ids["ctl"], "c": _gh_ids["type"],
                             "d": _gh_ids["port"]})
     db.session.commit()
+
+# ── outside services: the suite asks GitHub for none of LinuxGSM's files ─────────────────────────
+from smoke.part01 import _SMOKE_URLS  # noqa: E402
+check("outside services: with the LinuxGSM switch off, no page asked raw.githubusercontent.com for a LinuxGSM file",
+      not _SMOKE_URLS, repr(_SMOKE_URLS[:3]))

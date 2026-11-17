@@ -608,6 +608,19 @@ def _r25j_panel_port(s):
     return str(s)
 
 
+# A Let's Encrypt certificate's name, certbot's directory under /etc/letsencrypt/live (the helper's
+# TLS_LE_NAME_RE): domain labels and dots only, never "..", a "/" or a leading "-".
+TLS_LE_NAME_RE = (r"(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                  r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*")
+
+
+def _tls_le_name(s):
+    """A Let's Encrypt certificate name (TLS_LE_NAME_RE)."""
+    if not re.fullmatch(TLS_LE_NAME_RE, str(s)):
+        raise VerbError("not a certificate name")
+    return str(s)
+
+
 def _port(s):
     """A single TCP port number, 1..65535.
 
@@ -1211,6 +1224,9 @@ _ARGV = {
     # destinations come from the root-owned panel.conf, so a caller picks neither the source nor
     # the target of a root-run copy. See tools/panel-helper.
     "panel-restore": ([], lambda a: [], None),
+    # Copy one Let's Encrypt certificate into data/ssl for the panel to check and load. The name is
+    # the only argument; both paths are fixed in the helper (do_tls_le_copy).
+    "tls-le-copy": ([_tls_le_name], lambda a: [], None),
     # Panel self-update. Two validated arguments — a commit sha and a branch, each of which may be
     # "-" for none — exported into the environment of a ROOT-OWNED installer. See tools/panel-helper
     # for what this deliberately does not claim to make safe.
@@ -1378,6 +1394,7 @@ LOCAL_ONLY_VERBS = frozenset({
     "lgsm-discover",     # called through _exec_local_argv directly, never via run_privileged
     "panel-db-repair",   # the panel's own database, which only exists on the panel's own host
     "panel-restore",     # likewise — restoring the panel onto another machine is not a thing
+    "tls-le-copy",       # the panel's own HTTPS certificate, in the panel's own data/ssl
     "panel-self-update", # the panel's own checkout
     "tailscale-install", # bootstrapping a remote's tailscale goes through its own SSH flow
     # Tailscale on the panel's OWN host, which goes through the helper so it can refuse what it

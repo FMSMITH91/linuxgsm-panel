@@ -385,6 +385,10 @@ def _p9_arm(patch=None, who="part12"):
     # drives it.
     from panel.services import lgsm_players as _p9_lgp
     patch(_p9_lgp, "settings", lambda *a, **k: {"minutes": 0, "stop_only": False})
+    # The breached-password check's one outside call (Pwned Passwords), refused and recorded like
+    # a transport: every suite sets LGSM_PANEL_OFFLINE, and this names a check that unset it.
+    from panel.core import breached_passwords as _p9_bp
+    patch(_p9_bp, "_fetch_range", _p9_trip("breached_passwords._fetch_range", result=None))
     # Rendering reads Tailscale state for the nav; that is a host command, answered here.
     patch(_p9_ts, "get_tailscale_info",
           lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))

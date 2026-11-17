@@ -15,12 +15,15 @@ from datetime import datetime, timezone
 
 from panel.services import notifications
 from panel.core.clock import aware_utcnow
-from panel.core.config import DATA_DIR
+from panel.core.config import DATA_DIR, load_config
 from panel.core.validation import ip_address_or_none
 
 _log = logging.getLogger("panel.certs")
 
 _CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly dedup)
+# What config.json's tls_cert_source names when the operator put in a certificate of their own
+# through Settings (panel/services/tls_own.py): pasted, or copied from Let's Encrypt.
+OPERATOR_SOURCES = ("own", "letsencrypt")
 
 
 def _maybe_alert_cert_expiring(boot=None):
@@ -38,35 +41,49 @@ def _maybe_alert_cert_expiring(boot=None):
     if boot is not None and boot.get("BOOT_TLS") is False and not boot.get("BOOT_TLS_ERROR"):
         return
     try:
-        from cryptography import x509
-        cert_path = DATA_DIR / "ssl" / "cert.pem"
-        if not cert_path.exists():
+        cert = _cert_on_disk()
+        if cert is None:
             return
-        with open(cert_path, "rb") as f:
-            cert = x509.load_pem_x509_certificate(f.read())
-        try:
-            not_after = cert.not_valid_after_utc              # cryptography >= 42
-        except AttributeError:
-            not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
-        days = (not_after - datetime.now(timezone.utc)).days
-        own = _operator_cert(cert)
+        days = (cert.not_valid_after_utc - datetime.now(timezone.utc)).days
+        source = _operator_source(cert)
+        own = _operator_cert(cert) or bool(source)
         # The operator's certificate is warned from 30 days (renewing it is their job, and with HSTS an
         # expired one locks browsers out); the panel's own from 14, since a restart makes a new one.
         if days <= (30 if own else 14) and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
             _CERT_ALERTED["at"] = time.time()
-            notifications.notify("cert_expiring", "TLS certificate expiring", _expiry_text(days, own))
+            notifications.notify("cert_expiring", "TLS certificate expiring", _expiry_text(days, own, source))
     except Exception:
         _log.debug("cert-expiry check failed", exc_info=True)
 
 
-def _expiry_text(days, own):
+def ssl_dir():
+    """Where the panel's own HTTPS certificate and key live (data/ssl: cert.pem, key.pem)."""
+    return DATA_DIR / "ssl"
+
+
+def _cert_on_disk():
+    """The certificate in data/ssl/cert.pem, or None when there is no such file."""
+    from cryptography import x509
+    cert_path = ssl_dir() / "cert.pem"
+    if not cert_path.exists():
+        return None
+    with open(cert_path, "rb") as f:
+        return x509.load_pem_x509_certificate(f.read())
+
+
+def _expiry_text(days, own, source=""):
     """The expiry alert's text: what to do depends on whose certificate it is.
 
     A certificate already past its date said "expires in 0 day(s)" (max(days, 0)): one that has
-    stopped working read as one with a day left.
+    stopped working read as one with a day left. A Let's Encrypt one is copied again every day
+    once certbot has renewed it, so the step that is missing is certbot's.
     """
     if own:
-        fix = "renew it, copy the new files to data/ssl (cert.pem and key.pem) and restart the panel"
+        fix = ("renew it and put the new one in under Settings > HTTPS certificate (the panel restarts "
+               "to load it)")
+        if source == "letsencrypt":
+            fix = ("check that certbot renews it (sudo certbot renew --dry-run); the panel copies a renewed "
+                   "certificate every day and restarts to load it")
         return ("Your TLS certificate has expired — %s." % fix if days < 0
                 else "Your TLS certificate expires in %d day(s) — %s." % (days, fix))
     return ("The panel's built-in TLS certificate has expired — restart the panel and it makes a new one."
@@ -79,6 +96,33 @@ def _expiry_text(days, own):
 # that do not live for years. 397 days is the longest validity browsers accept for any certificate;
 # a new one is made at start-up once fewer than 30 days remain (the expiry notice warns before that).
 _CERT_DAYS = 397
+
+
+def _operator_source(cert=None):
+    """config.json's tls_cert_source when it names an operator certificate ("own"/"letsencrypt"), else "".
+
+    Set when a certificate is put in through Settings, which a self-signed certificate of the
+    operator's own can be too: issuer == subject alone would read that as the panel's and replace it.
+    With `cert`, only while it is the certificate that was put in (tls_cert_sha256): a config.json
+    restored onto a host without that certificate must not stop the built-in one being renewed.
+    """
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001 - an unreadable config is "not marked"; the issuer test still runs
+        _log.debug("tls_cert_source unreadable", exc_info=True)
+        return ""
+    source = cfg.get("tls_cert_source")
+    if source not in OPERATOR_SOURCES:
+        return ""
+    if cert is not None and cfg.get("tls_cert_sha256") != fingerprint(cert):
+        return ""
+    return source
+
+
+def fingerprint(cert):
+    """The certificate's SHA-256 fingerprint as lower-case hex."""
+    from cryptography.hazmat.primitives import hashes
+    return cert.fingerprint(hashes.SHA256()).hex()
 
 
 def _operator_cert(cert):
@@ -119,6 +163,19 @@ def _note_operator_cert(cert, key_path):
         _log.warning("TLS: data/ssl/key.pem could not be read as an unencrypted PEM private key")
 
 
+def _keep_operator_cert(existing, key_path):
+    """Whether `existing` is the operator's (a CA signed it, or it was put in through Settings).
+
+    Such a certificate is never replaced by a self-signed one, whatever its key or dates: with HSTS
+    a self-signed one would be refused as well, and silently swapping it would undo the operator's
+    setup. What is wrong with it is logged instead.
+    """
+    if _operator_cert(existing) or _operator_source(existing):
+        _note_operator_cert(existing, key_path)
+        return True
+    return False
+
+
 def _ensure_self_signed_cert(cert_path, key_path, hostname):
     """Create a self-signed ECDSA P-256 cert/key (397 days) unless a current one is already present.
 
@@ -136,11 +193,7 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
         try:
             with open(cert_path, "rb") as f:
                 existing = x509.load_pem_x509_certificate(f.read())
-            if _operator_cert(existing):
-                # The operator's own certificate (a CA signed it): never replaced by a self-signed one,
-                # whatever its key or dates. With HSTS a self-signed one would be refused as well, and
-                # silently swapping it would undo the operator's setup. What is wrong is said instead.
-                _note_operator_cert(existing, key_path)
+            if _keep_operator_cert(existing, key_path):
                 return cert_path, key_path
             if (existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30)
                     and isinstance(existing.public_key(), ec.EllipticCurvePublicKey)):
@@ -176,6 +229,54 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
     with open(cert_path, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
     return cert_path, key_path
+
+
+# HSTS on the panel's own TLS, for an operator's CA-signed certificate only (never a self-signed one:
+# HSTS removes the browser's "continue anyway", which would lock everyone out of a self-signed panel).
+# OWASP HTTP Strict Transport Security Cheat Sheet, "Examples": a very short max-age while rolling it
+# out, then headers.HSTS (two years). The first 30 days after the certificate was put in through
+# Settings get one day, so going back to the built-in certificate in that time locks a browser out
+# for a day at most, not two years.
+HSTS_ROLLOUT = "max-age=86400; includeSubDomains"
+HSTS_ROLLOUT_DAYS = 30
+
+
+def own_cert_until(paths):
+    """What HSTS needs to know about the certificate the boot will serve: {"until", "since"}, or None.
+
+    `paths` is _ensure_self_signed_cert's (cert_path, key_path). None unless cert_path holds a
+    CA-signed certificate (an operator's): "until" is its notAfter, "since" config.json's
+    tls_installed_at (0 when it was put in by hand). Read once, at boot.
+    """
+    try:
+        from cryptography import x509
+        with open(paths[0], "rb") as f:
+            cert = x509.load_pem_x509_certificate(f.read())
+        if not _operator_cert(cert):
+            return None
+        since = load_config().get("tls_installed_at")
+        return {"until": cert.not_valid_after_utc, "since": since if isinstance(since, int) else 0}
+    except Exception:  # noqa: BLE001 - no record means no HSTS on the panel's own TLS, as before
+        _log.debug("own_cert_until: no record", exc_info=True)
+        return None
+
+
+def own_tls_hsts(record, now=None):
+    """The Strict-Transport-Security value for the panel's own TLS with `record` (own_cert_until), or "".
+
+    "" for no record or a certificate past its date; HSTS_ROLLOUT for the first HSTS_ROLLOUT_DAYS
+    after it was put in (and always for one put in by hand); headers.HSTS after that.
+    """
+    from panel.security import headers
+    if not record:
+        return ""
+    now = now or time.time()
+    if record["until"].timestamp() <= now:
+        return ""
+    since = record.get("since") or 0
+    if not since or now - since < HSTS_ROLLOUT_DAYS * 86400:
+        return HSTS_ROLLOUT
+    return headers.HSTS
 
 
 # Where a panel listens when its own HTTPS was configured and could not start (OWASP Transport Layer

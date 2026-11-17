@@ -27,3 +27,21 @@
     sync();
   });
 })();
+
+// Outside services: a switch with data-confirm-off (the update check, the breached-password check)
+// asks before it goes off. It is put back on at once and turned off only on Confirm, so Cancel, the
+// Escape key or a click outside the dialog all leave it on. Turning a switch on never asks. Its
+// "outside OWASP's recommendation" note (#s-<name>-owasp) follows the switch: a note, never a refusal.
+(function(){
+  document.querySelectorAll('#sec-outside input[data-confirm-off]').forEach(function(box){
+    var note = document.getElementById(box.id + '-owasp');
+    function sync(){ if (note) note.classList.toggle('d-none', box.checked); }
+    box.addEventListener('change', function(){
+      if (box.checked || !window.confirmDialog) { sync(); return; }
+      box.checked = true;
+      window.confirmDialog({title: t('Outside services'), icon: 'exclamation-triangle', confirmClass: 'btn-warning',
+        confirmLabel: t('Turn this service off'), bodyText: box.getAttribute('data-confirm-off'),
+        onConfirm: function(){ box.checked = false; sync(); }});
+    });
+  });
+})();

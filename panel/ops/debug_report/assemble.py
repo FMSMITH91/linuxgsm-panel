@@ -1,7 +1,7 @@
 """Assemble the sections' results into the report, the public summary and the issue body.
 
-Owner: builder B1 (R1 At a glance + Verdicts, R2 issue-body sizing, R3 timing in headings, R7 a
-section that could not be read says so, R72 the privacy pass over everything).
+It covers R1 At a glance + Verdicts, R2 issue-body sizing, R3 timing in headings, R7 a
+section that could not be read says so, R72 the privacy pass over everything.
 
 R7 is enforced here for every section, whoever wrote it: a section that raised, timed out, or
 returned nothing at all (or only '(none)') prints '(could not be read: ...)' in its heading and an

@@ -3262,6 +3262,42 @@
       "POST"
     ]
   },
+  "POST /settings/tls/letsencrypt": {
+    "endpoint": "tls_cert_letsencrypt",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:tls_cert_letsencrypt"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /settings/tls/paste": {
+    "endpoint": "tls_cert_paste",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:tls_cert_paste"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /settings/tls/remove": {
+    "endpoint": "tls_cert_remove",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:tls_cert_remove"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /setup/restart": {
     "endpoint": "setup_restart",
     "guards": [

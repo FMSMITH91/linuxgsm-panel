@@ -25,6 +25,8 @@ import re
 import urllib.parse
 import urllib.request
 
+from panel.core import outside_services as _outside
+
 API = "https://api.modrinth.com/v2"
 _MDR_API_HOST = "api.modrinth.com"
 _MDR_CDN_HOSTS = frozenset({"cdn.modrinth.com"})
@@ -46,6 +48,7 @@ _MDR_TEXT_MAX = 300
 
 BAD_ID = "That is not a Modrinth project id."
 BAD_QUERY = "A search is at most 80 characters, on one line, with no control characters."
+OFF = "Modrinth is turned off in Settings \u2192 Outside services."
 UNAVAILABLE = "Modrinth could not be reached, or gave an answer that could not be read. Try again later."
 NO_VERSION = "Modrinth lists no build of this plugin for Paper, Spigot or Bukkit on this Minecraft version."
 NO_FILE = "This plugin's build on Modrinth has no file the panel can install (it must be a .jar file)."
@@ -82,7 +85,12 @@ def _mdr_allowed(url, hosts):
 
 
 def _mdr_http_get(url, cap, hosts, timeout=_MDR_TIMEOUT):
-    """GET `url`: (body bytes, None) or (None, why). Never raises; refuses a URL off `hosts`."""
+    """GET `url`: (body bytes, None) or (None, why). Never raises; refuses a URL off `hosts`.
+
+    Nothing is asked while Settings -> Outside services has the Modrinth switch off.
+    """
+    if not _outside.enabled(_outside.MODRINTH):
+        return None, "turned off in Settings"
     if not _mdr_allowed(url, hosts):
         return None, "not an allowed URL"
     opener = urllib.request.build_opener(_MdrNoRedirect)
@@ -110,6 +118,16 @@ def _mdr_api(path, params=None):
         return json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return None
+
+
+def _mdr_off():
+    """OFF while Settings -> Outside services has the Modrinth switch off, else None."""
+    return None if _outside.enabled(_outside.MODRINTH) else OFF
+
+
+def _mdr_search_refusal(query):
+    """Why a search is refused before Modrinth is asked (the query's shape, or the switch), else None."""
+    return query_problem(query) or _mdr_off()
 
 
 def valid_id(value):
@@ -163,7 +181,7 @@ def _mdr_hit(hit):
 
 def search(query, mc_version=None, kind="plugin"):
     """(hits, None) for a checked query, or (None, why). With no version, every version is searched."""
-    why = query_problem(query)
+    why = _mdr_search_refusal(query)
     if why:
         return None, why
     facets = [list(f) for f in KINDS[kind]["facets"]]
@@ -242,6 +260,8 @@ def resolve(project_id, mc_version=None, kind="plugin"):
     """
     if not valid_id(project_id):
         return None, BAD_ID
+    if _mdr_off():
+        return None, OFF
     params = {"loaders": json.dumps(list(KINDS[kind]["loaders"])), "include_changelog": "false"}
     if mc_version:
         params["game_versions"] = json.dumps([mc_version])
@@ -264,6 +284,8 @@ def resolve(project_id, mc_version=None, kind="plugin"):
 
 def download(plan, kind="plugin"):
     """(bytes, None) for the plan's file once its sha512 matches, or (None, why). Nothing is kept else."""
+    if _mdr_off():
+        return None, OFF
     body, _why = _mdr_http_get(plan["url"], FILE_CAP, _MDR_CDN_HOSTS, timeout=_MDR_FILE_TIMEOUT)
     if body is None:
         return None, KINDS[kind]["too_large"] if _why == "too large" else UNAVAILABLE
