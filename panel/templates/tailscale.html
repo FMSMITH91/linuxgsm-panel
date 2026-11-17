@@ -14,7 +14,7 @@
 {% if not info.installed %}
 <div class="card mb-3">
   <div class="card-body text-center py-5">
-    <span style="font-size: 3rem;">📡</span>
+    <span class="u-fs-3r">📡</span>
     <h5 class="mt-3">Tailscale Not Installed</h5>
     <p class="text-secondary">
       Install Tailscale on this panel host to reach the panel securely over your private
@@ -40,10 +40,10 @@
 
 {% if not info.running %}
 <!-- Installed but not connected (NeedsLogin / Stopped): let the user link this machine -->
-<div class="card mb-3" style="border-color: var(--bs-warning, #f0ad4e);">
+<div class="card mb-3 ts-warn-card">
   <div class="card-body">
     <div class="d-flex align-items-start gap-3">
-      <span style="font-size:2rem;line-height:1;">🔗</span>
+      <span class="u-fs-2r lh-1">🔗</span>
       <div class="flex-grow-1">
         <h2 class="h5 mb-1">
           {% if info.backend_state == 'NeedsLogin' %}
@@ -80,11 +80,11 @@
     <div class="card text-center p-3">
       <div class="h4 mb-1">
         {% if info.running %}
-          <span class="status-dot status-online" style="width:12px;height:12px;"></span> Online
+          <span class="status-dot status-online u-dot-12"></span> Online
         {% elif info.backend_state == 'NeedsLogin' %}
-          <span class="status-dot status-offline" style="width:12px;height:12px;"></span> Needs Login
+          <span class="status-dot status-offline u-dot-12"></span> Needs Login
         {% else %}
-          <span class="status-dot status-offline" style="width:12px;height:12px;"></span> Offline
+          <span class="status-dot status-offline u-dot-12"></span> Offline
         {% endif %}
       </div>
       <div class="text-secondary small">Daemon Status</div>
@@ -120,7 +120,7 @@
         <table class="table table-borderless table-sm mb-0">
           {% if ts_detail %}
           <tr>
-            <th scope="row" class="text-secondary ps-3 fw-normal" style="width:120px;">Hostname</th>
+            <th scope="row" class="text-secondary ps-3 fw-normal u-w-120">Hostname</th>
             <td><code>{{ info.hostname }}</code></td>
           </tr>
           {% endif %}
@@ -161,11 +161,11 @@
             <td>
               {% if info.funnel_enabled %}
                 <span class="badge bg-warning text-dark">Enabled</span>
-                <span class="text-secondary" style="font-size:.7rem;">public internet</span>
+                <span class="text-secondary u-fs-70">public internet</span>
                 {% include "_shared_funnel_note.html" %}
               {% else %}
                 <span class="badge bg-secondary">Disabled</span>
-                <span class="text-secondary" style="font-size:.7rem;">private — tailnet only (recommended)</span>
+                <span class="text-secondary u-fs-70">private — tailnet only (recommended)</span>
               {% endif %}
             </td>
           </tr>
@@ -250,14 +250,14 @@
             </div>
             {% if current_user.is_superadmin %}
             <button type="button" class="btn btn-success btn-sm" data-action="enableServe" data-args='["@self"]'>
-              <i class="bi bi-wifi"></i> Enable Serve <span class="text-uppercase" style="font-size:.65em;opacity:.8;">(private)</span>
+              <i class="bi bi-wifi"></i> Enable Serve <span class="text-uppercase u-fs-65em u-op-80">(private)</span>
             </button>
             {% endif %}
           </div>
           <div class="form-check">
             <input type="checkbox" id="funnel-check" class="form-check-input">
             <label class="form-check-label small" for="funnel-check">Also enable Funnel (advanced)</label>
-            <div class="form-text text-warning" style="margin-top:.15rem;">
+            <div class="form-text text-warning u-mt-15r">
               <i class="bi bi-exclamation-triangle-fill"></i>
               Funnel publishes the panel to the public internet — anyone with the URL reaches the login
               page. Not recommended for an admin panel, and it may require a paid Tailscale plan. Leave
@@ -400,7 +400,7 @@
               <tr>
                 <td>
                   <strong data-no-i18n>{{ peer.hostname }}</strong>
-                  <span class="d-block text-secondary" style="font-size:.7rem;">{{ peer.dns_name }}</span>
+                  <span class="d-block text-secondary u-fs-70">{{ peer.dns_name }}</span>
                 </td>
                 <td><code class="small">{{ peer.ips[0] if peer.ips else '—' }}</code></td>
                 <td><span class="small">{{ peer.os }}</span></td>
@@ -411,7 +411,7 @@
                     <span class="status-dot status-offline"></span> Offline
                   {% endif %}
                 </td>
-                <td class="text-secondary small" style="font-size:.65rem;">
+                <td class="text-secondary small u-fs-65">
                   {% if peer.last_seen %}
                     {# An ISO-8601 STRING from the Tailscale API, not a datetime column, so
                        the |datetime filter cannot take it — but localizeTimes only needs a

@@ -254,7 +254,7 @@ function renderSpecs(d, el){
   function tile(label, val, cls){
     if(!val) return '';
     return '<div class="'+(cls||'col-6 col-md-3')+'"><div class="stat-tile h-100"><div class="stat-label">'+label+'</div>'
-      +'<div style="font-size:.9rem;font-weight:600;color:var(--text-heading);word-break:break-word;line-height:1.3;">'+specEsc(val)+'</div></div></div>';
+      +'<div class="rm-spec-val">'+specEsc(val)+'</div></div></div>';
   }
   var cpu = d.cpu + (d.cpu_speed ? '  ·  ' + d.cpu_speed : '');
   var html = tile('Operating System', d.os, 'col-12 col-md-6')
@@ -828,7 +828,7 @@ function checkDbHealth(){
       if(rbtn) rbtn.style.display='none';
     } else if(d.healthy===false){
       out.innerHTML='<span class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> '+tfHtml('Integrity check flagged a problem: {detail}.', {detail: d.detail||''})+'</span>'+  // nosemgrep
-        '<div class="text-secondary" style="font-size:.7rem;">'+tfHtml('Click {button} — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.', {button: {html: '<strong>'+escapeHtml(t('Repair database'))+'</strong>'}})+'</div>';
+        '<div class="text-secondary u-fs-70">'+tfHtml('Click {button} — it rebuilds the readable data, or restores the last healthy backup; your data is copied aside first, never deleted. The panel briefly restarts.', {button: {html: '<strong>'+escapeHtml(t('Repair database'))+'</strong>'}})+'</div>';
       if(rbtn) rbtn.style.display='';
     } else {
       out.innerHTML='<span class="text-warning">Could not run the health check right now.</span>';
