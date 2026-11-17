@@ -66,8 +66,9 @@
          switch with data-confirm-off asks before it goes off (settings.js). In the left column, which
          is the shorter one on a desktop. OWASP User Privacy Protection Cheat Sheet, "Prevent IP
          Address Leakage". #}
-      <div class="card mt-3" id="sec-outside">
-        <div class="card-header"><i class="bi bi-globe2"></i> Outside services</div>
+      {# Folded: seven switches most people never change, and the page must not grow to hold them. #}
+      <details class="card mt-3" id="sec-outside">
+        <summary class="card-header uid-summary-card"><i class="bi bi-globe2"></i> Outside services</summary>
         <div class="card-body">
           <div class="small text-secondary mb-2">Each service sees your server's address. Turn off any you do not want.</div>
           <input type="hidden" name="outside_services_form" value="1">
@@ -85,7 +86,7 @@
           {% endif %}
           {% endfor %}
         </div>
-      </div>
+      </details>
 
     </div>
 
