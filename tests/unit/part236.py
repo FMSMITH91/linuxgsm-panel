@@ -51,6 +51,9 @@ def _read236(path):
 # ── 1. The gate ──────────────────────────────────────────────────────────────────────────────────
 _REGEX_BEFORE236 = set("(,=:[!&|?{};+-*%<>~^")
 _LIT236, _RX236 = "\x00", "\x01"      # what a string literal and a regex literal become in the code
+# A regex literal: a slash, then escapes, [classes] (where a slash is literal) or any other character up
+# to the closing slash on the same line, then its flags.
+_REGEX_LIT236 = _re236.compile(r"/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\[\n])+/[A-Za-z]*")
 _REGEX_WORDS236 = ("return", "typeof", "case", "in", "of", "delete", "void", "throw", "new", "else", "do")
 
 
@@ -64,23 +67,8 @@ def _skip_quoted236(src, i):
 
 def _skip_regex236(src, i):
     """Return the index just past the regex literal that starts at src[i] (a slash), flags included."""
-    n, i, in_class = len(src), i + 1, False
-    while i < n and src[i] != "\n":
-        c = src[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c == "[":
-            in_class = True
-        elif c == "]":
-            in_class = False
-        elif c == "/" and not in_class:
-            break
-        i += 1
-    i += 1
-    while i < n and (src[i].isalnum() or src[i] == "_"):
-        i += 1
-    return i
+    m = _REGEX_LIT236.match(src, i)
+    return m.end() if m else i + 1
 
 
 def _regex_starts236(code):
@@ -100,27 +88,29 @@ def _js_split236(src):
     """
     code, strings, i, n = [], [], 0, len(src)
     while i < n:
-        c, nxt = src[i], src[i + 1:i + 2]
+        c, two = src[i], src[i:i + 2]
         if c in "'\"`":
             j = _skip_quoted236(src, i)
             strings.append((src.count("\n", 0, i) + 1, src[i:j]))
             code.append(_LIT236)
-            i = j
-        elif c == "/" and nxt == "/":
-            j = src.find("\n", i)
-            i = n if j < 0 else j
-        elif c == "/" and nxt == "*":
-            j = src.find("*/", i + 2)
-            code.append("\n" * src.count("\n", i, n if j < 0 else j))
-            i = n if j < 0 else j + 2
+        elif two in ("//", "/*"):
+            j = _skip_comment236(src, i)
+            code.append("\n" * src.count("\n", i, j))
         elif c == "/" and _regex_starts236("".join(code[-40:])):
             j = _skip_regex236(src, i)
             code.append(_RX236)
-            i = j
         else:
+            j = i + 1
             code.append(c)
-            i += 1
+        i = j
     return "".join(code), strings
+
+
+def _skip_comment236(src, i):
+    """Return the index just past the // or /* comment that starts at src[i] (a // stops at its newline)."""
+    end = "\n" if src[i + 1] == "/" else "*/"
+    j = src.find(end, i + 2)
+    return len(src) if j < 0 else (j if end == "\n" else j + 2)
 
 
 _ATTR_IN_STRING236 = _re236.compile(r"(?<![\w.:-])style\s*=")
@@ -244,7 +234,8 @@ def _between236(text, start, end):
 
 def _s236_refresh_converts():
     panel = _read236(_os236.path.join(_JS236, "panel.js"))
-    fn = _between236(panel, "window.refreshSection = function(sel, afterName){", "\n};")
+    fn = (_between236(panel, "function _sectionSwapped(cur){", "\n}") + "\n"
+          + _between236(panel, "window.refreshSection = function(sel, afterName){", "\n};"))
     hidden = _read236(_os236.path.join(_JS236, "start_hidden.js"))
     prog = r"""
 var calls = [];

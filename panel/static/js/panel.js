@@ -500,6 +500,20 @@ window.confirmDialog = function(opts){
 // just that container — so page scripts/delegated listeners keep working and nothing reloads.
 // Optional attributes: data-confirm (+ -title/-icon/-class/-label) shows the styled confirm first;
 // data-ajax-after names a window function to run after the section refreshes (e.g. re-arm pollers).
+// What a section swapped in from the server needs before its after-hook runs (refreshSection).
+function _sectionSwapped(cur){
+  // The swapped-in markup is what the SERVER rendered, so any POST form in it arrives without
+  // the hidden token — see ensureCsrfFields.
+  if (window.ensureCsrfFields) window.ensureCsrfFields(cur);
+  // ...and its timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
+  // after an in-place refresh (saving a user) the whole Last login column switched to UTC.
+  if (window.localizeTimes) window.localizeTimes(cur);
+  // ...and an element marked data-start-hidden arrives with the mark, which start_hidden.js
+  // converts to an inline display on load only: convert the swapped-in region the same way,
+  // before the after-hook shows or hides one (#srv-none in the dashboard's cards, the GMod
+  // content option). Left as the mark, CSS keeps it hidden and display '' cannot show it.
+  if (window.applyStartHidden) window.applyStartHidden(cur);
+}
 window.refreshSection = function(sel, afterName){
   fetch(location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' }, cache: 'no-store' })
     .then(function(r){ return r.text(); })
@@ -509,17 +523,7 @@ window.refreshSection = function(sel, afterName){
       // nosemgrep - a fragment of THIS panel's own server-rendered page (Jinja autoescapes),
       // re-parsed same-origin to refresh one region in place.
       if (fresh && cur) cur.innerHTML = fresh.innerHTML;  // nosemgrep
-      // The swapped-in markup is what the SERVER rendered, so any POST form in it arrives without
-      // the hidden token — see ensureCsrfFields.
-      if (cur && window.ensureCsrfFields) window.ensureCsrfFields(cur);
-      // ...and its timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
-      // after an in-place refresh (saving a user) the whole Last login column switched to UTC.
-      if (cur && window.localizeTimes) window.localizeTimes(cur);
-      // ...and an element marked data-start-hidden arrives with the mark, which start_hidden.js
-      // converts to an inline display on load only: convert the swapped-in region the same way,
-      // before the after-hook shows or hides one (#srv-none in the dashboard's cards, the GMod
-      // content option). Left as the mark, CSS keeps it hidden and display '' cannot show it.
-      if (cur && window.applyStartHidden) window.applyStartHidden(cur);
+      if (cur) _sectionSwapped(cur);
       // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
       // data- attribute in our own template, and _actionFn is the contract.
       var afterFn = afterName ? _actionFn(afterName) : null;
