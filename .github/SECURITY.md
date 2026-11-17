@@ -222,7 +222,7 @@ The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `ssh.socket`, `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). The panel's own unit is
-  not in it; `panel-restart` restarts it and takes nothing else.
+  not in it; `panel-restart` restarts it and takes only a delay of 1 to 300 seconds.
 - `tls-le-copy` takes one **certificate name** (domain labels and dots) and copies only
   `/etc/letsencrypt/live/<name>/fullchain.pem` and `privkey.pem`, each a root-owned regular file under
   that certificate's own `live/` or `archive/` directory and nothing but PEM of its kind, into the
