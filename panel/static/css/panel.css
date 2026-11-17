@@ -2568,198 +2568,197 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 /* ── Strict CSP (B2): classes that replace inline style attributes ── */
 
 /* Single-declaration helpers named by their value (fs-r70 = font-size .7rem, mh-200px = max-height
-   200px), used by the Hosts list, the host page, Tailscale and the firewall card. */
-.fs-em46 { font-size: .46em; }
+   200px), used by the Hosts list, the host page, Tailscale and the firewall card. Each is !important,
+   as the style attribute it replaces outranked every stylesheet rule (`.table td` sets a font size at
+   a higher specificity than one class); w-0p is not, since the scripts set that width afterwards. */
+.fs-em46 { font-size: .46em !important; }
 
-.fs-em65 { font-size: .65em; }
+.fs-em65 { font-size: .65em !important; }
 
-.fs-r58 { font-size: .58rem; }
+.fs-r58 { font-size: .58rem !important; }
 
-.fs-r60 { font-size: .6rem; }
+.fs-r60 { font-size: .6rem !important; }
 
-.fs-r65 { font-size: .65rem; }
+.fs-r65 { font-size: .65rem !important; }
 
-/* The Tailscale page's Last Seen cell: panel.css's `.table td` size outranks a single class. */
-.table td.fs-r65 { font-size: .65rem; }
+.fs-r68 { font-size: .68rem !important; }
 
-.fs-r68 { font-size: .68rem; }
+.fs-r70 { font-size: .7rem !important; }
 
-.fs-r70 { font-size: .7rem; }
+.fs-r72 { font-size: .72rem !important; }
 
-.fs-r72 { font-size: .72rem; }
+.fs-r78 { font-size: .78rem !important; }
 
-.fs-r78 { font-size: .78rem; }
+.fs-r80 { font-size: .8rem !important; }
 
-.fs-r80 { font-size: .8rem; }
+.fs-r200 { font-size: 2rem !important; }
 
-.fs-r200 { font-size: 2rem; }
+.fs-r300 { font-size: 3rem !important; }
 
-.fs-r300 { font-size: 3rem; }
+.tnum { font-variant-numeric: tabular-nums !important; }
 
-.tnum { font-variant-numeric: tabular-nums; }
+.ff-mono { font-family: monospace !important; }
 
-.ff-mono { font-family: monospace; }
+.ff-uimono { font-family: ui-monospace, monospace !important; }
 
-.ff-uimono { font-family: ui-monospace, monospace; }
+.lh-15 { line-height: 1.5 !important; }
 
-.lh-15 { line-height: 1.5; }
+.ls-0 { letter-spacing: 0 !important; }
 
-.ls-0 { letter-spacing: 0; }
+.wb-all { word-break: break-all !important; }
 
-.wb-all { word-break: break-all; }
+.op-80 { opacity: .8 !important; }
 
-.op-80 { opacity: .8; }
+.cursor-pointer { cursor: pointer !important; }
 
-.cursor-pointer { cursor: pointer; }
-
-.mt-r015 { margin-top: .15rem; }
+.mt-r015 { margin-top: .15rem !important; }
 
 /* A progress bar's starting width: page scripts then set el.style.width through the CSSOM. */
 .w-0p { width: 0%; }
 
-.w-1p { width: 1%; }
+.w-1p { width: 1% !important; }
 
-.w-r55 { width: 5.5rem; }
+.w-r55 { width: 5.5rem !important; }
 
-.w-110px { width: 110px; }
+.w-110px { width: 110px !important; }
 
-.w-120px { width: 120px; }
+.w-120px { width: 120px !important; }
 
-.w-150px { width: 150px; }
+.w-150px { width: 150px !important; }
 
-.h-12px { height: 12px; }
+.h-12px { height: 12px !important; }
 
-.h-14px { height: 14px; }
+.h-14px { height: 14px !important; }
 
-.h-18px { height: 18px; }
+.h-18px { height: 18px !important; }
 
-.minw-260px { min-width: 260px; }
+.minw-260px { min-width: 260px !important; }
 
-.minh-r1 { min-height: 1rem; }
+.minh-r1 { min-height: 1rem !important; }
 
-.mw-r22 { max-width: 22rem; }
+.mw-r22 { max-width: 22rem !important; }
 
-.mw-230px { max-width: 230px; }
+.mw-230px { max-width: 230px !important; }
 
-.mw-280px { max-width: 280px; }
+.mw-280px { max-width: 280px !important; }
 
-.mw-340px { max-width: 340px; }
+.mw-340px { max-width: 340px !important; }
 
-.mw-640px { max-width: 640px; }
+.mw-640px { max-width: 640px !important; }
 
-.mh-120px { max-height: 120px; }
+.mh-120px { max-height: 120px !important; }
 
-.mh-200px { max-height: 200px; }
+.mh-200px { max-height: 200px !important; }
 
-.mh-340px { max-height: 340px; }
+.mh-340px { max-height: 340px !important; }
 
-.mh-400px { max-height: 400px; }
+.mh-400px { max-height: 400px !important; }
 
-.mh-500px { max-height: 500px; }
+.mh-500px { max-height: 500px !important; }
 
-.mh-52vh { max-height: 52vh; }
+.mh-52vh { max-height: 52vh !important; }
 
 /* The Tailscale page's larger status dots. */
 .dot-12px {
-  width: 12px;
-  height: 12px;
+  width: 12px !important;
+  height: 12px !important;
 }
 
 /* Host page: the overall CPU figure. */
 .rm-cpu-big {
-  font-size: 1.7rem;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -.01em;
+  font-size: 1.7rem !important;
+  line-height: 1 !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: -.01em !important;
 }
 
 /* Host page: the "this is the panel's own host" note. */
 .rm-local-note {
-  background: rgb(16 185 129 / 8%);
-  border-color: var(--accent);
+  background: rgb(16 185 129 / 8%) !important;
+  border-color: var(--accent) !important;
 }
 
 /* Host page: the fail2ban explainer, set off by a rule on its left. */
 .rm-quote {
-  border-left: 2px solid var(--border, #1f2937);
-  padding-left: .65rem;
-  color: var(--text-muted);
+  border-left: 2px solid var(--border, #1f2937) !important;
+  padding-left: .65rem !important;
+  color: var(--text-muted) !important;
 }
 
 /* Host page: the security log and the OS update log (each adds its own max-height). */
 .rm-log-box {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: .5rem .7rem;
-  overflow: auto;
-  font-size: .72rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  padding: .5rem .7rem !important;
+  overflow: auto !important;
+  font-size: .72rem !important;
+  line-height: 1.5 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  margin: 0 !important;
 }
 
 /* Host page: the panel self-update log. */
 .rm-pu-log {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: .5rem .7rem;
-  max-height: 280px;
-  overflow-y: auto;
-  font-family: ui-monospace, "JetBrains Mono", monospace;
-  font-size: .72rem;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  padding: .5rem .7rem !important;
+  max-height: 280px !important;
+  overflow-y: auto !important;
+  font-family: ui-monospace, "JetBrains Mono", monospace !important;
+  font-size: .72rem !important;
+  line-height: 1.55 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
 }
 
 /* Host page: one value in the hardware summary. */
 .rm-spec-val {
-  font-size: .9rem;
-  font-weight: 600;
-  color: var(--text-heading);
-  word-break: break-word;
-  line-height: 1.3;
+  font-size: .9rem !important;
+  font-weight: 600 !important;
+  color: var(--text-heading) !important;
+  word-break: break-word !important;
+  line-height: 1.3 !important;
 }
 
 /* Host page: the "players are online" dialog before a full backup. */
 .sv-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgb(0 0 0 / 60%);
-  z-index: 1080;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgb(0 0 0 / 60%) !important;
+  z-index: 1080 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 1rem !important;
 }
 
 .sv-card-540 {
-  max-width: 540px;
-  width: 100%;
+  max-width: 540px !important;
+  width: 100% !important;
 }
 
 /* Hosts list: a host's bootstrap log under its card. */
 .mr-bs-log {
-  max-height: 180px;
-  overflow: auto;
-  font-size: .68rem;
-  background: var(--bg);
-  padding: 6px;
-  border-radius: 4px;
+  max-height: 180px !important;
+  overflow: auto !important;
+  font-size: .68rem !important;
+  background: var(--bg) !important;
+  padding: 6px !important;
+  border-radius: 4px !important;
 }
 
 /* Hosts list: the Prepare & Secure dialog's log. */
 .mr-bootstrap-log {
-  max-height: 260px;
-  overflow-y: auto;
-  font-size: .7rem;
-  background: var(--bg);
-  padding: 8px;
-  border-radius: 4px;
+  max-height: 260px !important;
+  overflow-y: auto !important;
+  font-size: .7rem !important;
+  background: var(--bg) !important;
+  padding: 8px !important;
+  border-radius: 4px !important;
 }
 
 /* Tailscale page: the card that warns about a public Funnel. */
-.ts-warn-card { border-color: var(--bs-warning, #f0ad4e); }
+.ts-warn-card { border-color: var(--bs-warning, #f0ad4e) !important; }
