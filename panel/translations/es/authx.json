@@ -21,6 +21,7 @@
   "Password must be at least 15 characters, or 8 with two-factor authentication on.": "La contraseña debe tener al menos 15 caracteres, u 8 con la autenticación de dos factores activada.",
   "Password must not contain your username.": "La contraseña no debe contener tu nombre de usuario.",
   "That password is too common or too easy to guess. A few unrelated words make a long password that is easy to remember.": "Esa contraseña es demasiado común o fácil de adivinar. Unas cuantas palabras sin relación forman una contraseña larga y fácil de recordar.",
+  "That password has appeared in a data breach, so attackers try it first. Choose one you have not used anywhere else.": "Esa contraseña ha aparecido en una filtración de datos, así que los atacantes la prueban primero. Elige una que no hayas usado en ningún otro sitio.",
   "Set up two-factor authentication before using the panel.": "Configura la autenticación de dos factores antes de usar el panel.",
   "Confirm your password to continue.": "Confirma tu contraseña para continuar.",
   "That request came from another site and was refused.": "Esa solicitud venía de otro sitio y se ha rechazado.",
