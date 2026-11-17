@@ -17,8 +17,8 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **The changelog lists changes by the day they were released.** Each day's releases have their own
   section, newest first, with what they added, changed, fixed and secured.
 - **Settings says which actions ask for the password again.** The note under the step-up time now
-  lists them: a terminal, users and groups, hosts, the firewall, updates, certificates, databases,
-  backups, Settings and Notifications.
+  names the kinds of change that do (users, hosts, the firewall, updates, backups), not only a few
+  of them; the README lists every one.
 
 ### Fixed
 
