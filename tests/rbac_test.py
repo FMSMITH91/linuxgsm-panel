@@ -1697,7 +1697,7 @@ def _check_file_permission_split():
           _pg.status_code == 200 and 'data-sfsub-btn="files"' in _html
           and 'data-sfsub-btn="schedule"' not in _html, "got %d" % _pg.status_code)
     check("VIEW_FILES without EDIT_FILES: the file browser is drawn read-only (its write controls hidden)",
-          'id="file-browser" data-sfsub="files" style="display:none;" data-fpm-ro' in _html, "")
+          'id="file-browser" data-sfsub="files" data-start-hidden data-fpm-ro' in _html, "")
     _r = _fm.get(_base + "/file?path=server.cfg")
     check("MANAGE_SERVERS without VIEW_FILES: read file -> 403", _r.status_code == 403,
           "got %d" % _r.status_code)

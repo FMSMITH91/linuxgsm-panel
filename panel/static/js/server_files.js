@@ -102,14 +102,14 @@ function fieldHtml(s){
   var docs = _cmpcDocsOk(s.docs) ? '<a class="cmpc-docs ms-auto" href="'+esc(s.docs)+'" target="_blank" rel="noopener noreferrer">'
     + '<i class="bi bi-book"></i> <span>Docs</span></a>' : '';
   return '<div class="col-12 col-sm-6 col-lg-4 col-xl-3 mb-1" data-cmpc-field data-cmpc-text="'+esc((s.key+' '+(s.heading||'')).toLowerCase())+'">'
-    + '<label class="form-label mb-1 d-flex align-items-center gap-1 w-100" style="font-size:.7rem;">'
+    + '<label class="form-label mb-1 d-flex align-items-center gap-1 w-100 fs-r70">'
     + '<span class="fb-key" data-no-i18n>'+esc(s.key)+'</span>'
-    + '<span class="badge cfg-set-badge '+lc+'" data-no-i18n style="font-size:.55rem;">'+esc(s.layer_file||'')+'</span>'
+    + '<span class="badge cfg-set-badge fs-r55 '+lc+'" data-no-i18n>'+esc(s.layer_file||'')+'</span>'
     + docs + '</label>'
     + '<input type="text" class="form-control form-control-sm" data-no-i18n data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
     + (def!==''?' placeholder="'+esc(def)+'"':'') + (s.masked?' readonly':'') + '>'
-    + (def!==''?'<div class="text-secondary text-truncate" style="font-size:.62rem;">default: '
-        + '<code class="cfg-copy-default" data-copy="'+esc(def)+'" style="cursor:pointer;" '
+    + (def!==''?'<div class="text-secondary text-truncate fs-r62">default: '
+        + '<code class="cfg-copy-default cursor-pointer" data-copy="'+esc(def)+'" '
         + 'title="default: '+esc(def)+' — click to copy">'+esc(def)+'</code></div>':'')
     + _cmpcHelpHtml(s)
     + '</div>';
@@ -198,18 +198,18 @@ function _lg264PlayersHtml(p){
   var html = '<div class="mb-2 border rounded px-3 py-2" id="cfg-players">'
     + '<div class="fw-semibold small mb-1"><i class="bi bi-people"></i> <span>Players online</span></div>'
     + '<div class="row g-2">'
-    + '<div class="col-6 col-md-4 col-xl-3"><label class="form-label mb-1" for="lg264-stop" style="font-size:.7rem;">Only stop when empty</label>'+sel+'</div>';
+    + '<div class="col-6 col-md-4 col-xl-3"><label class="form-label mb-1 fs-r70" for="lg264-stop">Only stop when empty</label>'+sel+'</div>';
   if(p.warn_supported){
-    html += '<div class="col-6 col-md-4 col-xl-3"><label class="form-label mb-1" for="lg264-warn" style="font-size:.7rem;">Warn players first (minutes, 0 = off)</label>'
+    html += '<div class="col-6 col-md-4 col-xl-3"><label class="form-label mb-1 fs-r70" for="lg264-warn">Warn players first (minutes, 0 = off)</label>'
       + '<input type="number" class="form-control form-control-sm" id="lg264-warn" data-no-i18n data-key="warnplayerstimer" min="0" max="'+esc(p.warn_max)+'" step="1" data-orig="'+esc(min)+'" value="'+esc(min)+'"></div>';
   }
-  html += '</div><div class="text-secondary mt-1" style="font-size:.7rem;">'
+  html += '</div><div class="text-secondary mt-1 fs-r70">'
     + (p.warn_supported ? 'With players on, LinuxGSM puts off a stop, restart, update or backup until the server is empty, and counts down in-game before each stop.'
                         : 'With players on, LinuxGSM puts off a stop, restart, update or backup until the server is empty. This game’s console can’t show LinuxGSM’s in-game warnings.')
     + '</div>';
-  if(!p.can_count) html += '<div class="text-warning mt-1" style="font-size:.7rem;">LinuxGSM can’t count players on this server (its querymode), so it stops it anyway.</div>';
+  if(!p.can_count) html += '<div class="text-warning mt-1 fs-r70">LinuxGSM can’t count players on this server (its querymode), so it stops it anyway.</div>';
   // LinuxGSM counts the player LIST, which this game can send empty with players on (lgsm_players.LIST_UNRELIABLE_GAMES).
-  else if(p.list_unreliable) html += '<div class="text-warning mt-1" style="font-size:.7rem;">LinuxGSM counts this game’s players from a list the server can leave empty: then it stops it anyway, with no warning.</div>';
+  else if(p.list_unreliable) html += '<div class="text-warning mt-1 fs-r70">LinuxGSM counts this game’s players from a list the server can leave empty: then it stops it anyway, with no warning.</div>';
   return html + '</div>';
 }
 function _lg264Tf2Html(d){
@@ -238,7 +238,10 @@ function loadConfig(){
         + '<button type="button" class="cfg-acc-header btn btn-sm w-100 text-start d-flex justify-content-between align-items-center px-3 py-2" data-acc="'+idx+'">'
         + '<span class="fw-semibold"><i class="bi bi-caret-'+(open?'down':'right')+'-fill me-1"></i>'+esc(grp.section)+'</span>'
         + '<span class="badge bg-secondary">'+grp.settings.length+'</span></button>'
-        + '<div class="p-3" data-accbody="'+idx+'" style="'+(open?'':'display:none;')+'">'+body+'</div></div>');
+        + '<div class="p-3" data-accbody="'+idx+'">'+body+'</div></div>');
+      // A closed group is hidden through the CSSOM (no style attribute under the page policy); the
+      // toggle reads and flips the same el.style.display.
+      if(!open) g.lastElementChild.querySelector('[data-accbody]').style.display='none';
     });
     if(!(d.groups||[]).length && !(d.players && d.players.supported)) g.innerHTML='<div class="text-secondary small">No settings detected. Use the raw editor.</div>';
     document.getElementById('cfg-form').style.display='';
@@ -555,7 +558,7 @@ function mkRow(opts){
   var left=document.createElement('span'); left.style.flex='1'; left.style.minWidth='0'; left.style.overflow='hidden'; left.style.textOverflow='ellipsis'; left.style.whiteSpace='nowrap';
   // white-space:pre: the name as it is, so "a  b.txt" does not read as "a b.txt" nor " lead.txt" as
   // "lead.txt" beside it. The row is one line anyway (nowrap, with an ellipsis).
-  left.innerHTML=opts.icon+' <span style="font-size:.85rem;white-space:pre;" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
+  left.innerHTML=opts.icon+' <span class="fb-row-name" data-no-i18n>'+esc(opts.name)+'</span>';  // nosemgrep
   var right=document.createElement('span'); right.className='d-flex align-items-center gap-2 flex-shrink-0';
   if(opts.size!=null){ var s=document.createElement('span'); s.className='text-secondary'; s.style.fontSize='.68rem'; s.textContent=fmtSize(opts.size); right.appendChild(s); }
   // A real <a href>, not a button: the browser downloads it natively, "Save link as" and
@@ -1029,8 +1032,7 @@ function _cmpLine(label, sizeText, whenText, muted){
   var row=document.createElement('div');
   row.className='d-flex align-items-baseline gap-2'+(muted?' text-secondary':'');
   var l=document.createElement('span');
-  l.className='text-secondary flex-shrink-0 text-uppercase';
-  l.style.cssText='font-size:.62rem;letter-spacing:.04em;min-width:4.2rem;';
+  l.className='text-secondary flex-shrink-0 text-uppercase cmp-line-label';
   l.textContent=label;
   var v=document.createElement('span');
   v.style.fontSize='.78rem';
@@ -1504,7 +1506,7 @@ function cronLastRun(j){
   else if(j.ok === false){ badge = '<span class="badge bg-danger" title="Failed at '+escA(when)+'">Failed</span>'; }
   else { badge = '<span class="badge bg-secondary" title="Ran at '+escA(when)+' — cron doesn\'t record exit status for panel-managed jobs">ran</span>'; }
   var out = badge + ' <span class="text-secondary" title="'+escA(when)+'">'+esc(timeAgo(j.last_run))+'</span>';
-  if(j.ok === false && j.error){ out += '<div class="text-danger" style="font-size:.66rem;word-break:break-all;white-space:normal;max-width:22rem;">'+esc(j.error)+'</div>'; }
+  if(j.ok === false && j.error){ out += '<div class="text-danger cron-err">'+esc(j.error)+'</div>'; }
   return out;
 }
 // A chain the panel composed (Warn players first) reads as its action and warnings, with the
@@ -1535,14 +1537,14 @@ function loadCron(){
         + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>';
       // Non-blocking label so you can tell what a panel-installed line is (still fully editable).
       var roleTag = j.role
-        ? ' <span class="badge bg-secondary align-middle" style="font-weight:normal;font-size:.6rem;" title="Panel-installed: this is your '+esc(j.role)+' line (also on the server-page toggle). You can still reschedule or delete it here.">'+esc(j.role)+'</span>'
+        ? ' <span class="badge bg-secondary align-middle fw-normal fs-r60" title="Panel-installed: this is your '+esc(j.role)+' line (also on the server-page toggle). You can still reschedule or delete it here.">'+esc(j.role)+'</span>'
         : '';
       rows += '<tr data-raw="'+escA(j.raw)+'" data-sched="'+escA(j.schedule)+'" data-cmd="'+escA(j.command)+'"'
         + (j.chain ? ' data-chain="'+escA(JSON.stringify(j.chain))+'"' : '')+'>'
-        + '<td data-label="Schedule" class="font-monospace" style="white-space:nowrap;">'+esc(j.schedule)+'</td>'
+        + '<td data-label="Schedule" class="font-monospace text-nowrap">'+esc(j.schedule)+'</td>'
         + cronCmdCell(j)+roleTag+'</td>'
-        + '<td data-label="Last run" style="white-space:nowrap;">'+cronLastRun(j)+'</td>'
-        + '<td class="text-end" style="white-space:nowrap;">'+actions+'</td></tr>';
+        + '<td data-label="Last run" class="text-nowrap">'+cronLastRun(j)+'</td>'
+        + '<td class="text-end text-nowrap">'+actions+'</td></tr>';
     });
     if(!(d.jobs||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No scheduled tasks yet.</td></tr>';
     // Only swap in the new list once it has arrived (keep the old rows until then).
@@ -2049,9 +2051,9 @@ function _bkRenderRows(d){
   var restoring=(d.restore && d.restore.running) ? ' disabled' : '', rows=(d.backups||[]).map(function(b){
     var ip=b.in_progress;
     return '<tr>'
-      + '<td><span class="font-monospace" style="font-size:.72rem;word-break:break-all;">'+esc(b.name)+'</span>'+(ip?' <span class="badge bg-info">in progress</span>':'')+'</td>'
+      + '<td><span class="font-monospace fs-r72 wb-all">'+esc(b.name)+'</span>'+(ip?' <span class="badge bg-info">in progress</span>':'')+'</td>'
       + '<td class="text-nowrap">'+bkFmt(b.size)+'</td>'
-      + '<td class="text-nowrap" style="font-size:.72rem;">'+esc(bkWhen(b.created))+'</td>'
+      + '<td class="text-nowrap fs-r72">'+esc(bkWhen(b.created))+'</td>'
       + '<td class="text-nowrap">'
       // .fpm-dl / .fpm-del / .fpm-rs: hidden without DOWNLOAD_BACKUP / DELETE_BACKUP / RESTORE_BACKUP (#backup-card,
       // panel.css); Restore is disabled while a restore of this server runs.

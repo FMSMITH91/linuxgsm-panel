@@ -2564,3 +2564,262 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 /* An element that starts hidden: what style="display:none" did before the page policy refused style
    attributes. js/start_hidden.js turns the mark into an inline display set through the CSSOM. */
 [data-start-hidden] { display: none; }
+
+/* ── Strict CSP (B1): classes that replace inline style attributes ── */
+
+/* Server page, Files & Config and Databases. Each class carries what one style="" attribute did, so
+   the page draws the same with style-src-attr 'none'. Small text sizes, named by rem x 100. */
+.fs-r55 { font-size: .55rem; }
+
+.fs-r60 { font-size: .6rem; }
+
+.fs-r62 { font-size: .62rem; }
+
+.fs-r66 { font-size: .66rem; }
+
+.fs-r68 { font-size: .68rem; }
+
+.fs-r70 { font-size: .7rem; }
+
+.fs-r72 { font-size: .72rem; }
+
+.fs-r78 { font-size: .78rem; }
+
+.fs-r80 { font-size: .8rem; }
+
+.fs-r85 { font-size: .85rem; }
+
+.fs-r140 { font-size: 1.4rem; }
+
+.fs-r200 { font-size: 2rem; }
+
+.cursor-pointer { cursor: pointer; }
+
+.minw-0 { min-width: 0; }
+
+.minh-15em { min-height: 1.5em; }
+
+.minh-32em { min-height: 3.2em; }
+
+.w-1p { width: 1%; }
+
+.w-r75 { width: 7.5rem; }
+
+.mw-r22 { max-width: 22rem; }
+
+.mw-180px { max-width: 180px; }
+
+.mw-260px { max-width: 260px; }
+
+.wb-all { word-break: break-all; }
+
+.pre-wrap-all {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* A field in a wrapping row: grows from its basis and may shrink below its content. */
+.fx-9 {
+  flex: 1 1 9rem;
+  min-width: 0;
+}
+
+.fx-10 {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.fx-12 {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.fx-14 {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.fx-16 {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.fx2-12 {
+  flex: 2 1 12rem;
+  min-width: 0;
+}
+
+.fx0-6 {
+  flex: 0 1 6rem;
+  min-width: 0;
+}
+
+/* A fixed-height list that scrolls (mod lists, Workshop boxes, Minecraft lists). */
+.hs-r35 {
+  height: 3.5rem;
+  overflow-y: auto;
+}
+
+.hs-r425 {
+  height: 4.25rem;
+  overflow-y: auto;
+}
+
+.hs-r65 {
+  height: 6.5rem;
+  overflow-y: auto;
+}
+
+.hs-r7 {
+  height: 7rem;
+  overflow-y: auto;
+}
+
+.hs-r8 {
+  height: 8rem;
+  overflow-y: auto;
+}
+
+.hs-r10 {
+  height: 10rem;
+  overflow-y: auto;
+}
+
+.hs-r11 {
+  height: 11rem;
+  overflow-y: auto;
+}
+
+.hs-r12 {
+  height: 12rem;
+  overflow-y: auto;
+}
+
+.hs-r13 {
+  height: 13rem;
+  overflow-y: auto;
+}
+
+.hs-r14 {
+  height: 14rem;
+  overflow-y: auto;
+}
+
+/* Chart.js canvases: a positioned box of a fixed height the chart fills. */
+.chart-box-140 {
+  position: relative;
+  height: 140px;
+}
+
+.chart-box-150 {
+  position: relative;
+  height: 150px;
+}
+
+/* The server page's status badge, coloured by the status it was drawn with; server_detail.js
+   recolours it live through el.style.background. */
+.status-badge-online,
+.status-badge-offline,
+.status-badge-other { color: #0a0f1a; }
+
+.status-badge-online { background: #3fb950; }
+
+.status-badge-offline { background: #f85149; }
+
+.status-badge-other { background: #d29922; }
+
+/* The cron explainer under the schedule field. */
+.cron-explain-box {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+/* A cron line's error under its command. */
+.cron-err {
+  font-size: .66rem;
+  word-break: break-all;
+  white-space: normal;
+  max-width: 22rem;
+}
+
+/* A file browser row's name: as typed, spaces kept. */
+.fb-row-name {
+  font-size: .85rem;
+  white-space: pre;
+}
+
+/* The label column of an upload's "on server / uploading" comparison. */
+.cmp-line-label {
+  font-size: .62rem;
+  letter-spacing: .04em;
+  min-width: 4.2rem;
+}
+
+/* A GMod content row's label: takes the room left and truncates. */
+.gmc-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The dimmed full-screen layer behind the server page's own dialogs (action output, players
+   online, ban scope) and the cards in it. */
+.sv-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 60%);
+  z-index: 1080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.sv-overlay-top { z-index: 1090; }
+
+.sv-card-440 {
+  max-width: 440px;
+  width: 100%;
+}
+
+.sv-card-540 {
+  max-width: 540px;
+  width: 100%;
+}
+
+.sv-card-760 {
+  max-width: 760px;
+  width: 100%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.sv-card-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sv-output-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-size: .8rem;
+}
+
+/* The Databases page's read-only views in a dialog: a whole cell, and a statement to confirm. */
+.dbm-pre-cell {
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.dbm-pre-sql {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: auto;
+}

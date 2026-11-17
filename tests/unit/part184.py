@@ -278,7 +278,7 @@ eq("page: Files & Config shows each viewer the tabs their permissions cover, and
     "dl": (200, ["backups"]), "viewer": (302, [])})
 _vb184 = _html184["view"].get_data(as_text=True)
 check("page: without EDIT_FILES the config editor and the file browser are drawn read-only",
-      'data-sfsub="config" data-fpm-ro' in _vb184 and 'data-sfsub="files" style="display:none;" data-fpm-ro' in _vb184,
+      'data-sfsub="config" data-fpm-ro' in _vb184 and 'data-sfsub="files" data-start-hidden data-fpm-ro' in _vb184,
       "")
 _db184 = _html184["dl"].get_data(as_text=True)
 check("page: a download-only viewer's Backups card hides the schedule, Back up now and delete",

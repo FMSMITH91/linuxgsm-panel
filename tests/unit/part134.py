@@ -180,7 +180,7 @@ check("files & config: the tabs and the sections are the same seven, in the same
       _a134 is not None and _a134.buttons == _a134.sections
       == ["config", "files", "backups", "schedule", "alerts", "mods", "databases"],
       repr((_a134.buttons, _a134.sections) if _a134 else None))
-_first134 = {m.group(1): "display:none" in m.group(0)
+_first134 = {m.group(1): "data-start-hidden" in m.group(0)
              for m in _re134.finditer(r'<div [^>]*data-sfsub="([a-z]+)"[^>]*>', _files134.get("admin", (0, ""))[1])}
 check("files & config: Config shows from the first paint and every other section is hidden until opened "
       "(no section shifts the page in after load)",

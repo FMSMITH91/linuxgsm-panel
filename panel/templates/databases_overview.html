@@ -37,11 +37,11 @@
       <summary class="small">Add a database</summary>
       <form class="d-flex flex-wrap gap-2 mt-2" data-action="dbmAdd" data-args='["@event"]' data-on="submit">
         <label for="dbm-add-server" class="visually-hidden">Game server</label>
-        <select id="dbm-add-server" class="form-select form-select-sm" style="flex:1 1 12rem;min-width:0;" data-no-i18n
+        <select id="dbm-add-server" class="form-select form-select-sm fx-12" data-no-i18n
                 data-action="dbmAddPrefix" data-on="change">
           {% for s in servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
         </select>
-        <div class="input-group input-group-sm" style="flex:1 1 12rem;min-width:0;">
+        <div class="input-group input-group-sm fx-12">
           <span class="input-group-text" id="dbm-add-prefix" data-no-i18n>gs{{ servers[0].id }}_</span>
           <input type="text" id="dbm-add-name" class="form-control" maxlength="16" autocomplete="off" spellcheck="false"
                  pattern="[a-z0-9]{1,16}" required aria-describedby="dbm-add-prefix" aria-label="Database name">
@@ -55,7 +55,7 @@
     {% if databases %}
     <ul class="list-unstyled mb-0">
       {% for d in databases %}
-      <li class="py-1 border-bottom" style="min-width:0;">
+      <li class="py-1 border-bottom minw-0">
         <div class="d-flex flex-wrap gap-2 align-items-baseline justify-content-between">
           <a class="text-break fw-semibold" data-no-i18n
              href="{{ url_for('server_files', server_id=d.server_id) }}#databases">{{ d.name }}</a>
@@ -104,7 +104,7 @@
         <section data-dbm-pane="tables" hidden>
           <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
             <label for="dbm-table" class="visually-hidden">Table</label>
-            <select id="dbm-table" class="form-select form-select-sm" style="flex:1 1 14rem;min-width:0;" data-no-i18n data-action="dbmPickTable" data-on="change"></select>
+            <select id="dbm-table" class="form-select form-select-sm fx-14" data-no-i18n data-action="dbmPickTable" data-on="change"></select>
             <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbmLoadTables"><i class="bi bi-arrow-repeat"></i> Refresh</button>
           </div>
           <div id="dbm-table-info" class="small text-secondary mb-2"></div>
@@ -144,7 +144,7 @@
           <hr>
           <label for="dbm-upload-file" class="form-label small mb-1">Restore from a dump file (.sql or .sql.gz, at most 2 GiB)</label>
           <div class="d-flex flex-wrap gap-2">
-            <input type="file" id="dbm-upload-file" class="form-control form-control-sm" style="flex:1 1 14rem;min-width:0;" accept=".sql,.gz,application/sql,application/gzip">
+            <input type="file" id="dbm-upload-file" class="form-control form-control-sm fx-14" accept=".sql,.gz,application/sql,application/gzip">
             <button type="button" class="btn btn-sm btn-warning" data-action="dbmUpload"><i class="bi bi-upload"></i> Upload and restore</button>
           </div>
           <div class="form-text">The file replaces this database's contents. It must be a dump of one database (made without --databases): the panel refuses one that switches to or names another database.</div>

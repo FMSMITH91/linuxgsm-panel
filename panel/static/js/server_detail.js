@@ -96,7 +96,7 @@ function renderPlayers(d){
     // data-no-i18n: a player's name is theirs. The catalog walker swaps any text node that
     // exactly matches a key, so a player called "Admin" was listed — and offered for banning — as
     // "Administrador", while the kick/ban itself still targeted "Admin".
-    return '<tr><td class="text-truncate" style="max-width:260px;" data-no-i18n>'+escapeHtml(p.name)+'</td>'
+    return '<tr><td class="text-truncate mw-260px" data-no-i18n>'+escapeHtml(p.name)+'</td>'
       +'<td class="text-nowrap">'+(p.score!=null?escapeHtml(String(p.score)):'—')+'</td>'
       +'<td class="text-nowrap">'+(p.time!=null?escapeHtml(plTime(p.time)):'—')+'</td>'
       +(_CAN_MODERATE?('<td class="text-nowrap">'+acts+'</td>'):'')+'</tr>';
@@ -176,8 +176,8 @@ function banScopeDialog(btn, name, steamid, num){
     return;
   }
   var ov=document.createElement('div');
-  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML='<div class="card" style="max-width:440px;width:100%;">'  // nosemgrep
+  ov.className='sv-overlay';
+  ov.innerHTML='<div class="card sv-card-440">'  // nosemgrep
     +'<div class="card-header"><i class="bi bi-slash-circle"></i> '+tfHtml('Ban {name}', {name: {html: '<span data-no-i18n>'+escapeHtml(name)+'</span>'}})+'</div>'
     +'<div class="card-body"><p class="small text-secondary mb-2">'
     +escapeHtml(t('Ban just on this server, or on all your servers that can match this player (same SteamID / name)?'))+'</p>'
@@ -2169,7 +2169,7 @@ function loadGmodContent(){
         if (g.present) {
           status = '<span class="text-success">on host</span>';
           // Any content on the host can be removed to free disk — including owned/mount-only games.
-          act = '<button class="btn btn-link btn-sm p-0 text-danger" style="font-size:.72rem;" type="button" '
+          act = '<button class="btn btn-link btn-sm p-0 text-danger fs-r72" type="button" '
             + 'data-gmc-uninstall="'+_esc(g.key)+'" data-gmc-label="'+_esc(g.label)+'"'+(running?' disabled':'')+'>Uninstall</button>';
         } else if (g.downloadable) {
           status = '<span class="text-secondary">'+tfHtml('installs {size}', {size: g.size||''})+'</span>';
@@ -2181,7 +2181,7 @@ function loadGmodContent(){
         return '<div class="d-flex align-items-center gap-2">'
           + '<input class="form-check-input gmc-box flex-shrink-0 mt-0" type="checkbox" value="'+_esc(g.key)+'" id="gmc-'+_esc(g.key)+'"'
           + (g.mounted?' checked':'') + (running?' disabled':'') + '>'
-          + '<label class="small text-truncate" style="flex:1 1 auto;min-width:0;margin:0;cursor:pointer;" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)+'</label>'
+          + '<label class="small text-truncate gmc-label" for="gmc-'+_esc(g.key)+'">'+_esc(g.label)+'</label>'
           + '<span class="small text-nowrap flex-shrink-0">'+status+'</span>'
           + (act ? '<span class="flex-shrink-0">'+act+'</span>' : '')
           + '</div>';
@@ -2195,7 +2195,7 @@ function loadGmodContent(){
           + '</div>'
         : '';
       el.innerHTML =  // nosemgrep
-        '<div class="mb-2 text-secondary" style="font-size:.78rem;">'
+        '<div class="mb-2 text-secondary fs-r78">'
         // One catalog sentence, without the bold words that split it into fragments.
         + escapeHtml(t('Tick a game to mount it on this server (enable/disable per server) — a game not '
         + 'yet on the host is installed via LinuxGSM when you Apply, and kept current by a weekly update. '
