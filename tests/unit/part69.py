@@ -709,9 +709,10 @@ _got_r16u = _node69(_name_r16u, _TOAST_r16u)
 
 def _css_rule_r16u(cls):
     """The declarations of panel.css's `.cls { ... }` rule, spaces, newlines and !important taken out."""
-    import re
-    m = re.search(r"\n\.%s \{([^}]*)\}" % re.escape(cls), _read69(_root, "panel", "static", "css", "panel.css"))
-    return m.group(1).replace(" ", "").replace("!important", "").replace("\n", "") if m else ""
+    css = _read69(_root, "panel", "static", "css", "panel.css")
+    at = css.find("\n.%s {" % cls) if cls else -1
+    body = css[css.index("{", at) + 1:css.index("}", at)] if at >= 0 else ""
+    return body.replace(" ", "").replace("!important", "").replace("\n", "")
 
 
 # The toast's look is each class's rule in panel.css: the page policy refuses a style attribute.
