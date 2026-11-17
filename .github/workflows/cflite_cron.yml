@@ -76,7 +76,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EXPECT: >-
             cifuzz-corpus-fuzz_config cifuzz-corpus-fuzz_console cifuzz-corpus-fuzz_cron
-            cifuzz-corpus-fuzz_fail2ban cifuzz-corpus-fuzz_firewall cifuzz-corpus-fuzz_game_status
+            cifuzz-corpus-fuzz_db_data cifuzz-corpus-fuzz_fail2ban cifuzz-corpus-fuzz_firewall
+            cifuzz-corpus-fuzz_game_status cifuzz-corpus-fuzz_push cifuzz-corpus-fuzz_upload_scan
         run: |
           set -euo pipefail
           read -ra want <<< "${EXPECT}"

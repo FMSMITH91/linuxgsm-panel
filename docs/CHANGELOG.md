@@ -2690,7 +2690,6 @@ so this re-baselines it and starts the changelog. Notable changes since then:
   id/token).
 - The Telegram `/update` completion check compares the **git commit**, not the static VERSION.
 
-[Since 0.10.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/compare/v0.10.0-alpha...main
-[0.10.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.10.0-alpha
-[0.9.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.9.0-alpha
-[0.8.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/releases/tag/v0.8.0-alpha
+[0.10.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/commit/645923bbaa5fc7ca4444314355a3becfb23923b0
+[0.9.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/commit/45cccb02725a903ae23ebb478cfd8e474d173358
+[0.8.0-alpha]: https://github.com/FMSMITH91/linuxgsm-panel/commit/d3915889fec095fe19599b2e493eef8763320062
