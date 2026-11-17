@@ -185,14 +185,15 @@ the file that holds them.
 | The SQL box's audit line keeps numbers | Accept | String and hex literals are masked under either escape mode (a literal whose end depends on sql_mode masks the rest of the line), but decimal numbers stay in the audit line by design, so an id or amount typed into a statement is recorded. Owner: whoever grants EDIT_DATABASE_DATA. |
 | Push services and chat platforms see alert metadata | Transfer | To the vendor, under its terms; the text is minimal. |
 | An operator's own TLS certificate expires | Accept, with warning | With HSTS, browsers refuse an expired trusted certificate with no way past it, so the web page is unreachable until it is renewed; the panel and the host's shell keep working. The expiry alert warns from 30 days, and a Let's Encrypt certificate put in through Settings is reloaded daily once certbot renews it (docs/https.md section 5). Owner: the operator who installed the certificate. |
-| Harden-Runner audit-only jobs (the unit suites' `checks` matrix, Lighthouse, ClusterFuzzLite, main-only jobs) | Accept for now | `checks` installs packages from an apt mirror whose host name depends on the runner's region, so one pull request cannot show its list is complete; Lighthouse's score includes Chrome's own calls; ClusterFuzzLite runs in Docker images with their own networking; a main-only job cannot be checked by a pull request before it holds every panel's update. Their observed endpoints are recorded (tests/unit/part223.py) so they can move to block later. |
+| Harden-Runner audit-only jobs (the unit suites' `checks` matrix, Lighthouse, ClusterFuzzLite, main-only jobs) | Accept for now | `checks` installs packages from an apt mirror whose host name depends on the runner's region, and its suites dial TEST-NET addresses on purpose, so one pull request cannot show its list is complete; Lighthouse's score includes Chrome's own calls; ClusterFuzzLite runs in Docker images with their own networking; a main-only job cannot be checked by a pull request before it holds every panel's update. tests/unit/part223.py lists each audit-only job with its reason, and each block-mode job's allowed hosts, and fails when a job's mode changes without that list. |
 | ClusterFuzzLite's and Scorecard's runner images are named by tag inside their actions | Accept | Trust in Google's and OpenSSF's tags; noted in `.clusterfuzzlite/Dockerfile`. |
 
 ## Review and validation
 
-- **Tests.** Nine suites run on every pull request (unit, smoke, rbac, template actions, input
-  validation, URL map, manage, setup wizard, performance budget); every security check is proved by
-  breaking the code it guards.
+- **Tests.** Nine suites run on every pull request that changes code (unit, smoke, rbac, template
+  actions, input validation, URL map, manage, setup wizard, performance budget; a
+  documentation-only one runs the unit suite alone, which reads the docs); every security check is
+  proved by breaking the code it guards.
 - **Fuzzing.** `tests/fuzz/` holds Atheris targets for the parsers of untrusted input, run 60 s each
   on pull requests that touch them, 600 s nightly, and by ClusterFuzzLite.
 - **Scanners.** CodeQL, Bandit, Semgrep, zizmor, Gitleaks, pip-audit, osv-scanner, Dependency Review,
