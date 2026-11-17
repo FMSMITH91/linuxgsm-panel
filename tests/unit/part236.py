@@ -177,15 +177,15 @@ def _s236_gate():
 
 # ── 2. The header ────────────────────────────────────────────────────────────────────────────────
 def _s236_header():
-    """The policy _csp builds, run from app.py's own text with a stand-in for the request's nonce."""
-    import textwrap
-    from types import SimpleNamespace as _NS
+    """The policy _csp builds, read from app.py's own source: its string literals in order, nonce filled in."""
+    import ast
     src = _read236(_os236.path.join(_ROOT236, "panel", "install", "app.py"))
-    body = textwrap.dedent(src[src.index("    def _csp():"):src.index("    @app.after_request")])
-    scope = {"g": _NS(csp_nonce="n236")}
-    # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- app.py's own _csp, read from the repo
-    exec(compile(body, "app.py:_csp", "exec"), scope)  # nosec B102 - the panel's own function, read from the repo
-    csp = scope["_csp"]()
+    body = src[src.index("    def _csp():"):src.index("    @app.after_request")]
+    tree = ast.parse("if True:\n" + body)
+    consts = [n for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+              and n.value not in ("csp_nonce", "")]
+    parts = [n.value for n in sorted(consts, key=lambda n: (n.lineno, n.col_offset))]
+    csp = "".join(parts).replace("%s", "n236")
     eq("header: a page's policy allows styles from the panel and this request's nonce only, and no style "
        "attribute at all (no 'unsafe-inline' or 'unsafe-hashes' anywhere)",
        ["style-src 'self' 'nonce-n236'; " in csp, "style-src-elem 'self' 'nonce-n236'; " in csp,

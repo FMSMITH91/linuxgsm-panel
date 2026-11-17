@@ -17,38 +17,51 @@ _DAY237 = _re237.compile(r"\[(\d{4})\.(\d{1,2})\.(\d{1,2})\] — (\d{4})-(\d{2})
 _CATS237 = ("Added", "Changed", "Fixed", "Security")
 
 
+def _heading_problems237(title, today, last):
+    """(problems, day) for one section heading; day is None when it is not a release day."""
+    m = _DAY237.fullmatch(title.strip())
+    if not m:
+        return ["not a release-day heading: %r" % title[:60]], None
+    y, mo, d, y2, mo2, d2 = (int(g) for g in m.groups())
+    try:
+        day = _dt237.date(y2, mo2, d2)
+    except ValueError:
+        return ["not a date: %r" % title[:60]], None
+    problems = []
+    if (y, mo, d) != (y2, mo2, d2):
+        problems.append("name and date differ: %r" % title[:60])
+    if day > today:
+        problems.append("dated in the future: %r" % title[:60])
+    if last is not None and day >= last:
+        problems.append("not newest first: %r" % title[:60])
+    return problems, day
+
+
+def _category_problems237(title, body):
+    """[] when the section's ### headings are Keep a Changelog's, each once, in order."""
+    cats = _re237.findall(r"(?m)^### (.+)$", body)
+    ok = (cats and all(c in _CATS237 for c in cats) and len(set(cats)) == len(cats)
+          and cats == sorted(cats, key=_CATS237.index))
+    return [] if ok else ["categories %r under %r" % (cats, title[:30])]
+
+
 def _day_problems237(text, today):
     """Every way `text`'s release-day sections break the layout above; [] when none."""
     head, sep, _old = text.partition("\n## [0.10.0-alpha]")
     if not sep:
         return ["no 0.10.0-alpha section"]
-    problems, last = [], None
     sections = head.split("\n## ")[1:]
     if not sections:
         return ["no release-day section"]
+    problems, last = [], None
     for sec in sections:
         title, _nl, body = sec.partition("\n")
-        m = _DAY237.fullmatch(title.strip())
-        if not m:
-            problems.append("not a release-day heading: %r" % title[:60])
+        found, day = _heading_problems237(title, today, last)
+        problems += found
+        if day is None:
             continue
-        y, mo, d, y2, mo2, d2 = (int(g) for g in m.groups())
-        try:
-            day = _dt237.date(y2, mo2, d2)
-        except ValueError:
-            problems.append("not a date: %r" % title[:60])
-            continue
-        if (y, mo, d) != (y2, mo2, d2):
-            problems.append("name and date differ: %r" % title[:60])
-        if day > today:
-            problems.append("dated in the future: %r" % title[:60])
-        if last is not None and day >= last:
-            problems.append("not newest first: %r" % title[:60])
         last = day
-        cats = _re237.findall(r"(?m)^### (.+)$", body)
-        if not cats or any(c not in _CATS237 for c in cats) \
-                or cats != sorted(cats, key=_CATS237.index) or len(set(cats)) != len(cats):
-            problems.append("categories %r under %r" % (cats, title[:30]))
+        problems += _category_problems237(title, body)
     return problems
 
 

@@ -2832,6 +2832,7 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 #gm-mc-world,
 #gm-mcb-world,
 #wsc-msg { min-height: 1.5em !important; }
+
 /* ── Strict CSP (B2): classes that replace inline style attributes ── */
 
 /* Single-declaration helpers named by their value (fs-r70 = font-size .7rem, mh-200px = max-height
@@ -2979,7 +2980,6 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   line-height: 1.3 !important;
 }
 
-/* Host page: the "players are online" dialog before a full backup. */
 /* Hosts list: a host's bootstrap log under its card. */
 .mr-bs-log {
   max-height: 180px !important;
