@@ -14,6 +14,10 @@ them automatically.
 | xterm.js (JS) | 5.5.0 | `xterm/xterm.min.js` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
 | xterm.js (CSS) | 5.5.0 | `xterm/xterm.min.css` | https://cdn.jsdelivr.net/npm/@xterm/xterm/ |
 
+The Bootstrap Icons stylesheet loads its two fonts, `bootstrap-icons/fonts/bootstrap-icons.woff2`
+and `bootstrap-icons/fonts/bootstrap-icons.woff`, which come from the same package and release
+(`font/fonts/` in its tarball).
+
 This table is the manifest for people. `package.json` and `package-lock.json` beside it are the
 manifest for scanners: Dependabot alerts and the dependency audit (osv-scanner in
 `security-code.yml`) read the lockfile, since no scanner can read a minified bundle.
@@ -36,9 +40,10 @@ the lockfile resolves it, Bootstrap's JS and CSS are the same release, and the S
 carries socket.io-parser's fixes for GHSA-677m-j7p3-52f9 and GHSA-2m8v-j782-fhvr. The two JSON
 manifests are scanner input, so `.github/update-paths.txt` names them `noise`.
 
-Templates load every file here through `asset_url(...)`, which puts a hash of the bytes in the URL,
-because `/static` is served with a week-long `Cache-Control`. The bootstrap-icons font preload is
-the one exception: its URL must match the one the stylesheet requests.
+Templates load every script and stylesheet here through `asset_url(...)`, which puts a hash of the
+bytes in the URL, because `/static` is served with a week-long `Cache-Control`. The fonts are
+requested by the Bootstrap Icons stylesheet, with the query string it carries; the font preload in
+`base.html` uses that same URL, because a preload is only reused when its URL matches the request.
 
 xterm.js comes from jsDelivr (the `@xterm/xterm` package) because cdnjs serves it with no banner,
 which would leave the version check nothing to read.
