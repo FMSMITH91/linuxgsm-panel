@@ -122,19 +122,19 @@ _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
     "all,bc,binutils,curl\nsteamcmd,lib32gcc-s1,steamcmd\ncsgo,lib32tinfo6\n", encoding="utf-8")
 _lgsm_data._mem.clear()
 
-# Every URL lgsm_data hands urllib in this suite, recorded (and then opened as before): part06 checks
-# that there is none, which outside_lgsm_github=False above keeps the panel from asking for. The
-# module's own `urllib` name is replaced, never urllib.request's attribute (that would stand in for
-# every module and thread).
+# Every URL lgsm_data hands urllib in this suite is recorded and refused (an OSError, which lgsm_data
+# reads as a failed fetch): part06 checks that there is none, which outside_lgsm_github=False above
+# keeps the panel from asking for. The module's own `urllib` name is replaced, never urllib.request's
+# attribute (that would stand in for every module and thread).
 import types as _smoke_types
 import urllib.request as _smoke_urlreq
 _SMOKE_URLS = []
 
 
 def _smoke_recording_urlopen(url, *a, **kw):
-    """Record the URL asked for, then open it as urllib.request.urlopen would."""
+    """Record the URL asked for and refuse it: this suite reaches no network."""
     _SMOKE_URLS.append(getattr(url, "full_url", url))
-    return _smoke_urlreq.urlopen(url, *a, **kw)
+    raise OSError("smoke: no network")
 
 
 _lgsm_data.urllib = _smoke_types.SimpleNamespace(request=_smoke_types.SimpleNamespace(
