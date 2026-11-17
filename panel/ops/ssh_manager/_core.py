@@ -2910,15 +2910,13 @@ def remote_public_ip(server):
     cloud VM's private address) one HTTPS service is asked, then the same question over DNS for a host
     where curl is missing or outbound HTTPS is blocked. A second HTTPS service covered no failure the
     first did not, and told one more third party that this host exists (OWASP Top 10 Privacy Risks P10).
-    With Settings -> Outside services' public address switch off, no service is asked: "" (the caller
-    shows the host's own address).
     """
     if (own := global_ipv4(_gamedig_host(server))):
         return own
-    if not _outside.enabled(_outside.PUBLIC_IP):
-        return ""
+    # With Settings -> Outside services' public address switch off the tuple is empty: no service is
+    # asked and the answer is "" (the caller shows the host's own address).
     for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
-                "dig +short myip.opendns.com @resolver1.opendns.com"):
+                "dig +short myip.opendns.com @resolver1.opendns.com") * _outside.enabled(_outside.PUBLIC_IP):
         try:
             out, _, _ = run_command(server, cmd, timeout=8, sudo=False)
             ip = (out or "").strip().split("\n")[0].strip()

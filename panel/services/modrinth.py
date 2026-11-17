@@ -125,6 +125,11 @@ def _mdr_off():
     return None if _outside.enabled(_outside.MODRINTH) else OFF
 
 
+def _mdr_search_refusal(query):
+    """Why a search is refused before Modrinth is asked (the query's shape, or the switch), else None."""
+    return query_problem(query) or _mdr_off()
+
+
 def valid_id(value):
     """Whether `value` is a Modrinth project or version id: eight base62 characters."""
     return isinstance(value, str) and bool(_MDR_ID.fullmatch(value))
@@ -176,7 +181,7 @@ def _mdr_hit(hit):
 
 def search(query, mc_version=None, kind="plugin"):
     """(hits, None) for a checked query, or (None, why). With no version, every version is searched."""
-    why = query_problem(query) or _mdr_off()
+    why = _mdr_search_refusal(query)
     if why:
         return None, why
     facets = [list(f) for f in KINDS[kind]["facets"]]

@@ -398,12 +398,15 @@ def _read233(*parts):
 
 
 def _text233():
-    keys = [s[f] for s in _osv233.SERVICES for f in ("label", "note", "confirm") if f in s]
+    keys = [s[f] for s in _osv233.SERVICES for f in ("label", "note", "confirm", "owasp") if f in s]
     keys += ["Outside services", _mr233.OFF, _so233.UPDATE_CHECK_OFF, _osv233.OFF_MESSAGE,
              "Titles are off: the Steam Web API is turned off in Settings → Outside services. "
              "The ids can still be edited."]
     eq("outside services: every row, note, confirm and refusal is in the Spanish and French catalogs",
        {lang: [k for k in keys if k not in _i18n233.catalog(lang)] for lang in ("es", "fr")}, {"es": [], "fr": []})
+
+
+def _js_docs233():
     js = _read233("panel", "static", "js", "settings.js")
     hook = js[js.find("#sec-outside input[data-confirm-off]"):]
     check("settings.js: a switch that asks puts itself back on and goes off only from the dialog's Confirm, and "
@@ -435,6 +438,7 @@ try:
     _steam_modrinth233()
     _pubip_checks233()
     _text233()
+    _js_docs233()
 finally:
     _p9_restore_all()
 check("part233: no check reached a real host", len(_P9_TRIPPED) == _trips233, repr(_P9_TRIPPED[_trips233:][:4]))
