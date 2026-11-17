@@ -246,7 +246,7 @@ check("headers: the page CSP sends frame-ancestors 'none', base-uri 'none' and f
       "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'" in _csp214
       and "frame-ancestors 'self'" not in _csp214, _csp214[-200:])
 check("headers: HSTS in app.py is the module's value",
-      'setdefault("Strict-Transport-Security", _sec_headers.HSTS)' in _appsrc214
+      'setdefault("Strict-Transport-Security", own or _sec_headers.HSTS)' in _appsrc214
       and "max-age=31536000" not in _appsrc214, "")
 _tfa214 = _p9_client(P9_ADMIN).get("/account/2fa/enable")
 check("headers: the 2FA enrolment page (its secret and QR code) is no-store, through its route",

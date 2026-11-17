@@ -176,8 +176,9 @@
       <dt class="col-sm-3">Name</dt><dd class="col-sm-9 text-break">{{ tls.cert.subject }}{% if tls.cert.names %} ({{ tls.cert.names|join(', ') }}){% endif %}</dd>
       <dt class="col-sm-3">Issued by</dt><dd class="col-sm-9 text-break">{{ tls.cert.issuer }}</dd>
       <dt class="col-sm-3">Valid until</dt>
-      <dd class="col-sm-9{% if tls.cert.days <= tls.soon_days %} text-warning{% endif %}">{{ tls.cert.not_after }} ({{ tls.cert.days }} days)</dd>
+      <dd class="col-sm-9{% if tls.cert.days <= tls.soon_days %} text-warning{% endif %}">{{ tls.cert.not_after }} · <span>{{ tls.cert.days }}</span> <span>days left</span></dd>
       <dt class="col-sm-3">Key</dt><dd class="col-sm-9">{{ tls.cert.key }}</dd>
+      <dt class="col-sm-3">HSTS</dt><dd class="col-sm-9">{% if tls.hsts %}<span>Sent</span> <code>{{ tls.hsts }}</code>{% else %}Not sent: only a CA-signed certificate gets it.{% endif %}</dd>
     </dl>
     {% endif %}
     <div class="small text-secondary mb-3">OWASP: a well-known CA (Let's Encrypt is free), RSA of at least 2048 bits or ECDSA, a SHA-256 signature, the panel's name in the certificate, and the full chain. Saving checks all of these and notes what falls short; it refuses only a key that is not the certificate's, an expired certificate, or files it cannot read. The panel restarts to load a new certificate.</div>
@@ -187,11 +188,12 @@
         <form method="POST" action="{{ url_for('tls_cert_letsencrypt') }}"
               data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
           <div class="fw-semibold small mb-1">Let's Encrypt on this host</div>
-          <label class="form-label small mb-1" for="tls-le-name">Certificate name (as <code>sudo certbot certificates</code> shows it)</label>
+          <label class="form-label small mb-1" for="tls-le-name">Certificate name</label>
           <input type="text" id="tls-le-name" name="le_name" class="form-control form-control-sm" required
                  maxlength="253" pattern="[A-Za-z0-9][A-Za-z0-9.\-]*" autocomplete="off" spellcheck="false"
                  placeholder="panel.example.com" value="{{ tls.le_name }}">
-          <div class="small text-secondary mt-1">Copies <code>/etc/letsencrypt/live/&lt;name&gt;/fullchain.pem</code> and <code>privkey.pem</code>.</div>
+          <div class="small text-secondary mt-1"><span>To list them:</span> <code>sudo certbot certificates</code></div>
+          <div class="small text-secondary">The panel copies fullchain.pem and privkey.pem from /etc/letsencrypt/live for that name.</div>
           <div class="form-check mt-2">
             <input class="form-check-input" type="checkbox" id="tls-le-renew" name="le_autorenew" {% if tls.autorenew %}checked{% endif %}>
             <label class="form-check-label small" for="tls-le-renew">Load a renewed certificate automatically (checked daily)</label>
@@ -221,7 +223,7 @@
           data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
       <div class="form-check">
         <input class="form-check-input" type="checkbox" id="tls-remove-ok" name="confirm" required>
-        <label class="form-check-label small" for="tls-remove-ok">Go back to the built-in self-signed certificate. Browsers will warn about it again.</label>
+        <label class="form-check-label small" for="tls-remove-ok">Go back to the built-in self-signed certificate. Browsers will warn about it again, and one that opened the panel over your certificate refuses its address until HSTS runs out: a day if it was put in under 30 days ago, up to two years after that. Replace it with another trusted certificate instead if you can.</label>
       </div>
       <button type="submit" class="btn btn-sm btn-outline-danger mt-2"><i class="bi bi-arrow-counterclockwise"></i> Use the built-in certificate</button>
     </form>

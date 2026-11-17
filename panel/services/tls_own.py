@@ -203,12 +203,7 @@ def summary(chain, now=None):
             "names": san_names(leaf), "not_after": leaf.not_valid_after_utc.strftime("%Y-%m-%d"),
             "days": (leaf.not_valid_after_utc - now).days, "key": _key_label(leaf),
             "self_signed": leaf.issuer == leaf.subject, "chain": len(chain),
-            "fingerprint": leaf.fingerprint(_sha256()).hex()}
-
-
-def _sha256():
-    from cryptography.hazmat.primitives import hashes
-    return hashes.SHA256()
+            "fingerprint": certs.fingerprint(leaf)}
 
 
 class Checked:
@@ -300,8 +295,13 @@ def install(checked, source, le_name=""):
     os.replace(cert_new, ssl_dir / "cert.pem")
 
     def _mut(cfg):
+        # The time HSTS's rollout counts from (certs.own_tls_hsts): when an operator certificate was first
+        # put in, kept through renewals and replacements, since HSTS is about the name staying on
+        # trusted TLS, not about one certificate.
+        if cfg.get("tls_cert_source") not in certs.OPERATOR_SOURCES or not cfg.get("tls_installed_at"):
+            cfg["tls_installed_at"] = int(time.time())
         cfg.update({"tls_cert_source": source, "tls_le_name": le_name if source == "letsencrypt" else "",
-                    "tls_installed_at": int(time.time())})
+                    "tls_cert_sha256": certs.fingerprint(checked.chain[0])})
     update_config(_mut)
 
 
@@ -314,7 +314,7 @@ def remove():
             pass    # already gone: the start makes a new pair either way
 
     def _mut(cfg):
-        for key in ("tls_cert_source", "tls_le_name", "tls_installed_at"):
+        for key in ("tls_cert_source", "tls_le_name", "tls_installed_at", "tls_cert_sha256"):
             cfg.pop(key, None)
     update_config(_mut)
 
@@ -376,7 +376,8 @@ def settings_view(cfg, boot):
         info = None
     return {"source": source, "le_name": cfg.get("tls_le_name") or "",
             "autorenew": cfg.get("tls_le_autorenew", True) is not False,
-            "serving": bool((boot or {}).get("BOOT_TLS")), "cert": info, "soon_days": SOON_DAYS}
+            "serving": bool((boot or {}).get("BOOT_TLS")), "cert": info, "soon_days": SOON_DAYS,
+            "hsts": certs.own_tls_hsts((boot or {}).get("BOOT_TLS_OWN"))}
 
 
 def _renew_due(cfg, boot, now):

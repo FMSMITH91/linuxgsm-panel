@@ -304,7 +304,7 @@ location / {
 
 ## Security
 
-- **HTTPS by default** (self-signed out of the box; Tailscale Serve or a proxy for a trusted cert).
+- **HTTPS by default** (self-signed out of the box; your own or a Let's Encrypt certificate in Settings, or Tailscale Serve or a proxy, for a trusted cert).
 - **Passwords** hashed with Argon2id (older bcrypt hashes are upgraded at the next sign-in). A new password needs 15 characters (8 with 2FA on), any characters, and is checked against a bundled list of common and breached passwords; there are no composition rules. Sign-ins are rate-limited per address and per account name (an increasing pause, never a permanent lock). **TOTP 2FA** with backup codes, which Settings can require of superadmins and of anyone allowed the terminal, users or groups. Opening a terminal, uninstalling a server, restoring a panel backup, changing users or groups and saving Settings or Notifications ask for the password again after 10 minutes (Settings > Sessions & Security, 0 to switch it off; API tokens are exempt, and can be given an expiry). Users are told in the panel about changes to their password, 2FA and API token.
   - Locked out by required 2FA (lost phone and backup codes)? Another superadmin can turn your 2FA off on the Users page (not the panel owner's: only the panel host can), or on the panel host run `linuxgsm-panel-recover disable-2fa <user>` (or `manage.py disable-2fa <user>`), sign in, and set 2FA up again. The 2FA setup page always stays reachable, so the last superadmin can never be shut out by the switch.
 - **Sessions** in `HttpOnly`, `SameSite=Lax` cookies, `Secure` over HTTPS; "Sign out everywhere" revokes every session.

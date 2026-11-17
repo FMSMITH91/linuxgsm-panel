@@ -1553,6 +1553,7 @@ _VERB_SAMPLES = {
     "service-restart": ["ssh"],
     "panel-restart": ["2"],
     "panel-port-record": ["5055"],
+    "tls-le-copy": ["panel.example.com"],
     "tailscale-release-operator": ["ubuntu"],
     "tailscale-ssh": ["on"],
     "tailscale-serve": ["serve", "modern", "/", "http", "5000"],
@@ -4579,6 +4580,8 @@ _BAD = {
     "panel-restart": ["0", "301", "-1", "2; reboot", "", "abc", "1e3"],
     # The port the helper's Serve may publish: one the panel itself may listen on, nothing below 1024.
     "panel-port-record": ["80", "1023", "0", "65536", "5055; id", "", "-1", "5055 "],
+    # The certbot name becomes a path component under /etc/letsencrypt/live as root.
+    "tls-le-copy": ["..", "a/b", "-x", "", "x; id", ".example.com", "a..b", "a" * 254, "../../etc"],
     # These two are exported into a ROOT-run installer's environment.
     "panel-self-update": ["--upload-pack=x", "main; id", "a/../b", "HEAD~1", "'"],
     # The operator is a Linux user name; anything shaped like a flag or a shell fragment is out.

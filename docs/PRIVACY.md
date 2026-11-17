@@ -27,6 +27,7 @@ run yourself: there is no service behind it, no account to make, and nothing is 
 | Alert devices (browser push subscriptions) and linked Telegram chats | Sending you your alerts | Encrypted; removed when you remove the device, unlink, or the account is deleted |
 | Alert channel tokens (Telegram, Discord, ntfy) | Sending alerts | Encrypted |
 | API tokens, 2FA backup codes, invite links | Signing in, inviting people | Stored only as hashes |
+| The HTTPS certificate and its private key (`data/ssl`), your own or a Let's Encrypt one if you put one in | Serving HTTPS | The key is readable by the panel's account only (mode 0600); it never leaves the server and is not in the audit log, which records the certificate's name, issuer, expiry and fingerprint |
 | Panel backups | Restoring the panel | Kept 14 days by default (1–365, Panel Server → Panel → Backups); can be encrypted with a passphrase |
 
 The encryption key ring is `data/cred_key`, on the same host so the panel can start unattended. It
