@@ -49,21 +49,74 @@ def _maybe_alert_cert_expiring(boot=None):
         except AttributeError:
             not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
         days = (not_after - datetime.now(timezone.utc)).days
-        if days <= 14 and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
+        own = _operator_cert(cert)
+        # The operator's certificate is warned from 30 days (renewing it is their job, and with HSTS an
+        # expired one locks browsers out); the panel's own from 14, since a restart makes a new one.
+        if days <= (30 if own else 14) and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
             _CERT_ALERTED["at"] = time.time()
-            # A certificate already past its date said "expires in 0 day(s)" (max(days, 0)): one
-            # that has stopped working read as one with a day left.
-            notifications.notify("cert_expiring", "TLS certificate expiring",
-                                 "The panel's TLS certificate has expired — renew it." if days < 0
-                                 else "The panel's TLS certificate expires in %d day(s) — renew it." % days)
+            notifications.notify("cert_expiring", "TLS certificate expiring", _expiry_text(days, own))
     except Exception:
         _log.debug("cert-expiry check failed", exc_info=True)
+
+
+def _expiry_text(days, own):
+    """The expiry alert's text: what to do depends on whose certificate it is.
+
+    A certificate already past its date said "expires in 0 day(s)" (max(days, 0)): one that has
+    stopped working read as one with a day left.
+    """
+    if own:
+        fix = "renew it, copy the new files to data/ssl (cert.pem and key.pem) and restart the panel"
+        return ("Your TLS certificate has expired — %s." % fix if days < 0
+                else "Your TLS certificate expires in %d day(s) — %s." % (days, fix))
+    return ("The panel's built-in TLS certificate has expired — restart the panel and it makes a new one."
+            if days < 0 else
+            "The panel's built-in TLS certificate expires in %d day(s) — restart the panel and it makes a "
+            "new one." % days)
 
 
 # OWASP Transport Layer Security Cheat Sheet: ECDSA P-256 keys, SHA-256 signatures, and certificates
 # that do not live for years. 397 days is the longest validity browsers accept for any certificate;
 # a new one is made at start-up once fewer than 30 days remain (the expiry notice warns before that).
 _CERT_DAYS = 397
+
+
+def _operator_cert(cert):
+    """Whether `cert` is one the operator put in data/ssl: signed by another issuer (a CA), not self-signed.
+
+    The panel's own certificates are self-signed (issuer == subject). OWASP Transport Layer Security
+    Cheat Sheet, "Use an Appropriate Certification Authority": a CA-signed certificate is the one to
+    keep.
+    """
+    return cert.issuer != cert.subject
+
+
+def _note_operator_cert(cert, key_path):
+    """Log what the TLS Cheat Sheet would flag in the operator's certificate; nothing is refused.
+
+    "Use Strong Keys": RSA of at least 2048 bits. "Use Strong Cryptographic Hashing Algorithms":
+    SHA-256 or stronger, not MD5 or SHA-1. Also a key file that does not match the certificate (TLS
+    would then fail to start) and a certificate already past its date.
+    """
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    key = cert.public_key()
+    if isinstance(key, rsa.RSAPublicKey) and key.key_size < 2048:
+        _log.warning("TLS: your certificate's RSA key is %d bits; OWASP recommends at least 2048", key.key_size)
+    algo = getattr(cert.signature_hash_algorithm, "name", "")
+    if algo in ("md5", "sha1"):
+        _log.warning("TLS: your certificate is signed with %s; OWASP recommends SHA-256 or stronger", algo)
+    if cert.not_valid_after_utc <= aware_utcnow():
+        _log.warning("TLS: your certificate in data/ssl has expired; renew it and restart the panel")
+    try:
+        with open(key_path, "rb") as f:
+            priv = serialization.load_pem_private_key(f.read(), password=None)
+        pub = serialization.PublicFormat.SubjectPublicKeyInfo
+        if (priv.public_key().public_bytes(serialization.Encoding.PEM, pub)
+                != key.public_bytes(serialization.Encoding.PEM, pub)):
+            _log.warning("TLS: data/ssl/key.pem is not the key of data/ssl/cert.pem; HTTPS cannot start with them")
+    except Exception:  # noqa: BLE001 - an unreadable key is reported by the TLS start itself
+        _log.warning("TLS: data/ssl/key.pem could not be read as an unencrypted PEM private key")
 
 
 def _ensure_self_signed_cert(cert_path, key_path, hostname):
@@ -83,6 +136,12 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
         try:
             with open(cert_path, "rb") as f:
                 existing = x509.load_pem_x509_certificate(f.read())
+            if _operator_cert(existing):
+                # The operator's own certificate (a CA signed it): never replaced by a self-signed one,
+                # whatever its key or dates. With HSTS a self-signed one would be refused as well, and
+                # silently swapping it would undo the operator's setup. What is wrong is said instead.
+                _note_operator_cert(existing, key_path)
+                return cert_path, key_path
             if (existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30)
                     and isinstance(existing.public_key(), ec.EllipticCurvePublicKey)):
                 return cert_path, key_path

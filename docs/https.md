@@ -17,7 +17,7 @@ The relevant `data/config.json` settings:
 | `trusted_proxies` | Which peers count as that proxy — default all of loopback (`127.0.0.0/8` and `::1`); list yours if it is on another machine |
 | `trusted_proxy_users` | On loopback, the accounts the proxy may run as — default `www-data`, `nginx`, `http`, `caddy`, `cloudflared` (root and the panel's own account always count) |
 | `bind_host` | `127.0.0.1` when behind a proxy, `0.0.0.0` when facing clients directly |
-| `site_domain` | The name the panel is reached at: the self-signed cert's name, and an origin the live console accepts. It does not turn on `Secure` cookies |
+| `site_domain` | The name the panel is reached at: the self-signed cert's name, and the origin the panel accepts forms and the live console from. Set it behind a proxy that rewrites Host and passes on no X-Forwarded-Host (Settings, or `manage.py set-site-domain <host[:port]>` on the host), or older browsers' forms, sign-in included, are refused. It does not turn on `Secure` cookies |
 | `cookie_secure` | Force `Secure` cookies on/off (`true`/`false`). Unset, they are on when the panel is reached over HTTPS: `use_https`, Tailscale Serve, or `trust_proxy` |
 
 ---
@@ -72,14 +72,39 @@ yourname.duckdns.org {
 
 ## 4. Built-in self-signed HTTPS — the default (no domain, no proxy)
 
-This is **on by default** (`"use_https": true`): a **10-year** self-signed cert under
-`data/ssl/`, serving `https://<your-ip>:5000` directly, with no renewal and no domain. Set
+This is **on by default** (`"use_https": true`): a self-signed certificate (ECDSA P-256, 397 days, the
+longest browsers accept; a new one is made at start-up once fewer than 30 days remain) under
+`data/ssl/`, serving `https://<your-ip>:5000` directly, renewed at start-up and with no domain. Set
 `"use_https": false` and restart to serve plain HTTP. It stands down behind a reverse proxy
 (`trust_proxy`), and behind Tailscale Serve when the panel is bound to `127.0.0.1`; on any other
 bind it stays on and Serve reaches it with `https+insecure://`.
 
 **Caveat:** browsers warn that the cert isn't from a trusted CA, and it protects against passive
 eavesdropping but not a determined man-in-the-middle. For serious public use prefer options 1–3.
+
+## 5. Your own certificate on the panel itself (no proxy)
+
+Put a certificate from a real certificate authority (Let's Encrypt, or your organisation's CA) in
+`data/ssl/` as `cert.pem` (the full chain) and `key.pem` (its unencrypted private key), owned by the
+panel's account with `key.pem` at mode 0600, then restart the panel. The panel keeps a certificate a CA
+signed whatever its key type or dates: it never replaces yours with a self-signed one. At start-up it
+logs a warning when the key does not match the certificate, the RSA key is under 2048 bits, the
+signature is SHA-1 or MD5, or the certificate has expired (OWASP Transport Layer Security Cheat Sheet).
+The "TLS certificate expiring" alert warns from 30 days before it ends.
+
+**Renewing a Let's Encrypt certificate.** certbot renews into `/etc/letsencrypt/live/<domain>/`, which
+the panel's account cannot read. A deploy hook copies the renewed files in and restarts the panel:
+
+```bash
+# /etc/letsencrypt/renewal-hooks/deploy/linuxgsm-panel.sh  (chmod 755; runs as root after each renewal)
+install -m 0644 -o <panel-user> "$RENEWED_LINEAGE/fullchain.pem" /home/<panel-user>/linuxgsm-panel/data/ssl/cert.pem
+install -m 0600 -o <panel-user> "$RENEWED_LINEAGE/privkey.pem"   /home/<panel-user>/linuxgsm-panel/data/ssl/key.pem
+systemctl restart linuxgsm-panel
+```
+
+**Do not let it expire.** The panel sends HSTS, so once browsers have trusted your certificate they
+refuse an expired one outright, with no "continue anyway". The panel still runs and the host's shell
+still works; renew the certificate and restart the panel.
 
 ## Bans and blocks behind a proxy or tunnel
 

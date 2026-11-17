@@ -252,8 +252,10 @@ def _cert_notice77():
     _certs77._CERT_ALERTED["at"] = _at77    # as found, not 0 (review 1022c lead)
     check("TLS expiry notice: a certificate already past its date says it has expired (it said "
           "\"expires in 0 day(s)\"); one with days left still counts them",
-          said.get("expired") == "The panel's TLS certificate has expired — renew it."
-          and said.get("soon") == "The panel's TLS certificate expires in 10 day(s) — renew it.",
+          said.get("expired") == ("The panel's built-in TLS certificate has expired — restart the panel and it "
+                                  "makes a new one.")
+          and said.get("soon") == ("The panel's built-in TLS certificate expires in 10 day(s) — restart the "
+                                   "panel and it makes a new one."),
           repr(said))
 
 

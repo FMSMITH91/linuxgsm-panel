@@ -1313,15 +1313,12 @@ try:
     check("invite list: a still-redeemable invite is not crowded out by newer finished ones",
           ("/users/invite/%d/revoke" % _iv_live_id) in _iv_page,
           "the only Revoke button a live link ever gets was pushed off the page")
-    # Positive control: finished invites are still shown for context, so the fix is a
-    # re-bounding of the list and not a filter that emptied it.
-    check("invite list: finished invites are still listed for context",
-          "smoke-dead-29" in _iv_page,
-          "the page now shows nothing but live invites")
-    check("invite list: an expired invite is listed once, as finished, with no Revoke",
-          _iv_page.count(">smoke-expired-invite<") == 1
-          and ("/users/invite/%d/revoke" % _iv_made[-1]) not in _iv_page,
-          "listed %d time(s)" % _iv_page.count(">smoke-expired-invite<"))
+    # Only links that still work are listed: a used, revoked or expired one carries no action and
+    # its history is in the audit log. The live one above is the positive control.
+    check("invite list: used and expired invites are not listed, the live one is",
+          "smoke-dead-29" not in _iv_page and ">smoke-expired-invite<" not in _iv_page
+          and ("/users/invite/%d/revoke" % _iv_live_id) in _iv_page,
+          "dead listed=%r expired listed=%r" % ("smoke-dead-29" in _iv_page, ">smoke-expired-invite<" in _iv_page))
 finally:
     with app.app_context():
         if _iv_made:

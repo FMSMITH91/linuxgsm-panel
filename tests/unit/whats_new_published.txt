@@ -720,3 +720,5 @@ f11c14e5 An expired page token renews itself.
 09fd02f6 Alerts in your own Telegram chat.
 89e4592a OS Updates is on Maintenance; the panel's own updates, backups and diagnostics have a Panel tab.
 b50efc80 Behind a proxy that hides the panel's address, the fix is one command.
+0ef4982b Used, revoked and expired invite links leave the list.
+5706732d Your own TLS certificate on the panel is kept.

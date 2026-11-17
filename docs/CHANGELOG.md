@@ -336,6 +336,8 @@ compares git commits, not this file.
 
 ### Changed
 
+- **Used, revoked and expired invite links leave the list.** The Users page's Invite links card lists only links that
+  still work. What became of the others (made, redeemed, revoked) is in the Audit log.
 - **OS Updates is on Maintenance; the panel's own updates, backups and diagnostics have a Panel tab.** On the panel server's page, Maintenance now holds
   this machine's upkeep (OS Updates, automatic security updates and Ubuntu Pro), and a new Panel tab
   holds the panel software's own updates, backups and diagnostics. Host Controls keeps the terminal,
@@ -1567,6 +1569,11 @@ compares git commits, not this file.
 
 ### Security
 
+- **Your own TLS certificate on the panel is kept.** A certificate from a real certificate authority placed in
+  `data/ssl/` is no longer replaced by a self-signed one (an RSA certificate used to be). The panel
+  logs a weak key, an old signature, a key that does not match, or an expired certificate, and warns
+  from 30 days before it ends. The built-in certificate's warning now says to restart the panel,
+  which makes a new one. The HTTPS guide explains both, with a Let's Encrypt renewal hook.
 - **Behind a proxy that hides the panel's address, the fix is one command.** A proxy that passes on neither the browser's address nor
   X-Forwarded-Host leaves the panel unable to check where a form came from, so an older browser
   (Safari before 16.4) had every form refused, sign-in included. The check stays; the journal now

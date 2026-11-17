@@ -298,7 +298,7 @@ try:
     _users53 = _A53.get("/users").get_data(as_text=True)
     check("users page: a superadmin with no invites still has the Invite links card the palette lands "
           "on, saying there are none",
-          'id="sec-invites"' in _users53 and "No invite links yet." in _users53,
+          'id="sec-invites"' in _users53 and "No invite links are waiting to be used." in _users53,
           repr('id="sec-invites"' in _users53))
 
     from panel.routes import manage_servers as _ms53

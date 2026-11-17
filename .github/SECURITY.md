@@ -50,7 +50,7 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
   exposing the panel port to the public internet. See [docs/https.md](../docs/https.md).
 - Keep **two-factor authentication** enabled on admin accounts.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
-- When you add a remote host, give its **host key fingerprint** (Add host's optional field; run
+- When you add a remote host, give its **host key fingerprint** (the Add Remote Server form's "Host key fingerprint (optional)" field, also on Edit; run
   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host, over a channel you already trust).
   The first connection must then present that key, or the host is refused before its password or
   key is sent. Left empty, the first key seen is trusted and pinned (trust on first use), and every
@@ -323,7 +323,7 @@ README's "Removing a host" lists it with the commands that remove it.
   `/etc/sudoers.d/linuxgsm-panel` and `/etc/sudoers.d/00-linuxgsm-panel-terminal`, and records the
   choice in the root-owned `panel.conf`, so later updates keep it. The panel keeps working for
   remotes. Local-host management stops, and so do the panel's own root jobs: **Panel Server →
-  Update** (and the bot's `/update`), restoring a panel backup, and the database repair. Then
+  Panel → Panel Updates → Update now** (and the bot's `/update`), restoring a panel backup, and the database repair. Then
   update by hand over SSH: `cd / && sudo bash /usr/local/lib/linuxgsm-panel/install.sh`.
   `PANEL_LOCAL_GRANT=1` puts the grant back. If you deleted the file by hand before this setting
   existed, the next update records that and leaves it deleted.
