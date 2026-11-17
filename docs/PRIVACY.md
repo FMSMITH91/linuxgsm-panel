@@ -83,8 +83,8 @@ and that list is skipped until it is there.
 ## Your controls
 
 - **Alert text:** Notifications → *Include details (IP addresses, usernames)*, off by default.
-- **IP ageing:** `audit_ip_retention_days` (90 by default).
-- **Audit log length:** `audit_log_retention_days`.
+- **IP ageing:** `audit_ip_retention_days` in `data/config.json` (90 by default).
+- **Audit log length:** `audit_log_retention_days` in `data/config.json`.
 - **Backups:** how many days to keep, and a passphrase to encrypt them.
 - **Alert devices and Telegram:** remove a device, unlink Telegram, or tick *Stop alerts on this device*
   when you sign out.
