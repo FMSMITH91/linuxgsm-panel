@@ -6,10 +6,19 @@
 // the policy allows) and drops the attribute. The element then ends up exactly as the old attribute
 // left it, so every page script that shows it with el.style.display = '' or tests
 // el.style.display === 'none' keeps working unchanged.
+//
+// window.applyStartHidden(root) does the same for markup put in after load (a section re-rendered
+// from a fresh copy of the page): every mark under root, root included.
 (function(){
-  var marked = document.querySelectorAll('[data-start-hidden]');
-  for (var i = 0; i < marked.length; i++) {
-    marked[i].style.display = 'none';
-    marked[i].removeAttribute('data-start-hidden');
+  function applyStartHidden(root){
+    if (!root) return;
+    var marked = Array.prototype.slice.call(root.querySelectorAll('[data-start-hidden]'));
+    if (root.hasAttribute && root.hasAttribute('data-start-hidden')) marked.unshift(root);
+    for (var i = 0; i < marked.length; i++) {
+      marked[i].style.display = 'none';
+      marked[i].removeAttribute('data-start-hidden');
+    }
   }
+  window.applyStartHidden = applyStartHidden;
+  applyStartHidden(document);
 })();
