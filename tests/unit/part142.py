@@ -555,6 +555,19 @@ if _HAVE142:
               _rd.returncode == 0 and _signed142(_sd) and "GH-CALLED" not in _rd.stdout
               and "no deploy was started" in _rd.stdout,
               "rc=%s %s %s" % (_rd.returncode, _rd.stdout[-300:], _rd.stderr[-200:]))
+        # A release PAGE only for a commit panels are offered: by the panel's own rule, read from the
+        # commit's .github/update-paths.txt. A docs-only commit is still signed, with no page and no name.
+        _rules142 = "runtime app.py\nruntime install.sh\nnoise docs/\nnoise *.md\nnoise .github/\n"
+        os.makedirs(os.path.join(_dev, ".github"), exist_ok=True)
+        _deploy142({".github/update-paths.txt": _rules142}, "rules")
+        _sp, _rp = _deploy142({"docs/guide.md": "even more words\n"}, "docs only, with rules")
+        _sq, _rq = _deploy142({"app.py": "x = 2\n"}, "code, with rules")
+        check("sign-release.sh: a commit that changes only what no panel runs is signed with no release page and "
+              "no saved name; one that changes a file panels run gets its page (the panel's own rule)",
+              _signed142(_sp) and "signed, no release page" in _rp.stdout and "published GitHub release" not in _rp.stdout
+              and _run142(["git", "--git-dir", _bare, "cat-file", "-e", "release-signatures:main/%s.name" % _sp]).returncode != 0
+              and _signed142(_sq) and "no release page" not in _rq.stdout,
+              "docs: %s | code: %s" % (_rp.stdout[-250:], _rq.stdout[-250:]))
         _sm, _rm = _deploy142({"README.md": "words again\n", "app.py": "x = 1\n"}, "docs and code")
         _sk, _rk = _deploy142({"install.sh": "#!/bin/bash\n# changed\n"}, "code only")
         check("sign-release.sh: a commit that changes code, alone or beside documentation, starts the "
