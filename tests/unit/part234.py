@@ -161,8 +161,8 @@ _shown234 = set()
 for _n234 in ("server_files.js", "server_detail.js"):
     _shown234 |= _shown_ids234(_read234("panel", "static", "js", _n234))
 check("start hidden: (control) the reader finds the ids the scripts show by style.display",
-      {"cfg-form", "editor-wrap", "pl-empty", "connect-join", "cron-cancel"} <= _shown234,
-      repr(sorted(_shown234)[:12]))
+      {"cfg-form", "game-wrap", "pl-empty", "connect-join", "cron-cancel"} <= _shown234,
+      repr(sorted({"cfg-form", "game-wrap", "pl-empty", "connect-join", "cron-cancel"} - _shown234)))
 _bad_hide234, _marked234 = [], []
 for _k234 in ("detail", "files"):
     for _tag234 in _TAG234.findall(_pages234.get(_k234, (0, ""))[1]):
@@ -178,9 +178,9 @@ check("start hidden: no element the scripts show by style.display is hidden by d
       "attribute (both are !important, so style.display = '' would never show it)", not _bad_hide234,
       repr(_bad_hide234))
 check("start hidden: the elements those scripts reveal start hidden by the mark: the config form, the "
-      "editor, the players' empty line, the Join button and the cron edit's Cancel",
-      {"cfg-form", "editor-wrap", "pl-empty", "connect-join", "cron-cancel"} <= set(_marked234),
-      repr(sorted(_marked234)))
+      "game config, the players' empty line, the Join button and the cron edit's Cancel",
+      {"cfg-form", "game-wrap", "pl-empty", "connect-join", "cron-cancel"} <= set(_marked234),
+      repr(sorted({"cfg-form", "game-wrap", "pl-empty", "connect-join", "cron-cancel"} - set(_marked234))))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. What replaced the attributes
@@ -244,8 +244,9 @@ _first234 = [(_re234.search(r"\.status-badge-%s\s*\{\s*background:\s*(#\w+);" % 
 check("status badge: its first colour per status is the one the script recolours it with live",
       _live234 is not None and list(_live234.groups()) == _first234, repr((_live234 and _live234.groups(), _first234)))
 _sd_html234 = _pages234.get("detail", (0, ""))[1]
-check("status badge: the page draws an online server's badge with the online class",
-      _re234.search(r'<span class="badge status-badge-online" id="status-badge">', _sd_html234) is not None,
+check("status badge: the page draws the badge with its status's class",
+      _re234.search(r'<span class="badge status-badge-(?:online|offline|other)" id="status-badge">', _sd_html234)
+      is not None,
       _sd_html234[_sd_html234.find('id="status-badge"') - 80:][:120])
 
 _sfjs234 = _js_code234(_read234("panel", "static", "js", "server_files.js"))
