@@ -40,7 +40,7 @@
       if (box.checked || !window.confirmDialog) { sync(); return; }
       box.checked = true;
       window.confirmDialog({title: t('Outside services'), icon: 'exclamation-triangle', confirmClass: 'btn-warning',
-        confirmLabel: t('Turn off'), bodyText: box.getAttribute('data-confirm-off'),
+        confirmLabel: t('Turn this service off'), bodyText: box.getAttribute('data-confirm-off'),
         onConfirm: function(){ box.checked = false; sync(); }});
     });
   });

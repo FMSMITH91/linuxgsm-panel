@@ -23,5 +23,6 @@
   "Off: a host behind a router shows its own address, not the public one.": "Desactivado: un host detrás de un router muestra su propia dirección, no la pública.",
   "OWASP recommends on (Top 10:2025 A03, patch management).": "OWASP recomienda activado (Top 10:2025 A03, gestión de parches).",
   "OWASP recommends on (Authentication Cheat Sheet, password strength controls).": "OWASP recomienda activado (Authentication Cheat Sheet, controles de robustez de contraseñas).",
-  "Off: outside OWASP's recommendation.": "Desactivado: fuera de la recomendación de OWASP."
+  "Off: outside OWASP's recommendation.": "Desactivado: fuera de la recomendación de OWASP.",
+  "Turn this service off": "Desactivar este servicio"
 }

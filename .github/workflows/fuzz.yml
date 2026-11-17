@@ -102,6 +102,8 @@ jobs:
               'panel/__init__.py'
               'panel/core/__init__.py'
               'panel/core/stdin_chunks.py'
+              # The outside-services switches (ssh_manager/_core imports them).
+              'panel/core/outside_services.py'
               # The push alerts' parsers (fuzz_push).
               'panel/services/__init__.py'
               'panel/services/webpush.py'
