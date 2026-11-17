@@ -1057,6 +1057,148 @@ def _cron_b64(s):
     return s
 
 
+# ── root's own crontab (root-crontab-read / root-crontab-write) ─────────────────────────────────
+# The one place the panel reads and writes root's crontab, for the owner's root cron page
+# (panel/routes/root_cron.py). The command in a job runs as root by design, so what is checked is
+# the SHAPE of every line, never what a command does: each line is blank, a comment, a variable
+# (NAME=value) or a job whose five schedule fields (or one @keyword) are cron's own grammar, with
+# no control character, so no line can smuggle in a second one. tools/panel-helper holds the same
+# rules (ROOT_CRON_* and root_crontab_problem); a unit test runs both over one corpus.
+#
+# On the panel's own host both verbs are refused unless the operator opened them at install
+# (PANEL_ROOT_CRON=1, recorded root-owned in panel.conf as root_cron=yes): without that, a write
+# verb would hand anyone controlling the panel's account root on this host, which the narrow
+# grant exists to prevent. A remote host is root to the panel by design (sudo over SSH), so there
+# the owner's switch in the panel is the gate.
+ROOT_CRON_MAX_BYTES = 65536
+ROOT_CRON_MAX_LINES = 1000
+ROOT_CRON_LINE_MAX = 4096
+ROOT_CRON_SPECIALS = ("@reboot", "@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight",
+                      "@hourly")
+ROOT_CRON_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+ROOT_CRON_DAYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+# (lowest, highest, names) of minute, hour, day of month, month, day of week (0 and 7 are Sunday).
+ROOT_CRON_FIELDS = ((0, 59, ()), (0, 23, ()), (1, 31, ()), (1, 12, ROOT_CRON_MONTHS), (0, 7, ROOT_CRON_DAYS))
+ROOT_CRON_TEXT_RE = r"[^\x00-\x08\x0a-\x1f\x7f]*"
+ROOT_CRON_ENV_RE = r"[A-Za-z_][A-Za-z0-9_]*[ \t]*=.*"
+ROOT_CRON_ITEM_RE = r"(\*|([0-9]{1,2})(?:-([0-9]{1,2}))?)(?:/([0-9]{1,2}))?"
+# The panel's conf file the helper reads it from, and the key.
+ROOT_CRON_CONF_KEY = "root_cron"
+ROOT_CRON_DIR = "/etc/cron.d"
+ROOT_CRON_DIR_FILE_RE = r"[A-Za-z0-9_-]{1,64}"
+ROOT_CRON_DIR_MAX_FILES = 100
+ROOT_CRON_DIR_FILE_MAX = 65536
+
+
+def root_cron_field_ok(text, index):
+    """Whether `text` is cron's grammar for schedule field `index` (0 minute .. 4 day of week).
+
+    `*`, a number, a range, each with an optional step (`*/5`, `1-10/2`), or a comma list of
+    those; a month or day name only on its own (crontab(5): "ranges or lists of names are not
+    allowed"). Every number within the field's range, a range's start at most its end.
+    """
+    low, high, names = ROOT_CRON_FIELDS[index]
+    if names and text.lower() in names:
+        return True
+    for part in text.split(","):
+        m = re.fullmatch(ROOT_CRON_ITEM_RE, part)
+        if not m:
+            return False
+        if m.group(2) is not None:
+            a = int(m.group(2))
+            b = int(m.group(3)) if m.group(3) is not None else a
+            if not low <= a <= b <= high or (m.group(4) is not None and m.group(3) is None):
+                return False
+        if m.group(4) is not None and not 1 <= int(m.group(4)) <= high:
+            return False
+    return True
+
+
+def root_cron_line_kind(line):
+    """'blank', 'comment', 'env' or 'job' for one crontab line; '' when it is none of them."""
+    if len(line) > ROOT_CRON_LINE_MAX or not re.fullmatch(ROOT_CRON_TEXT_RE, line):
+        return ""
+    s = line.strip(" \t")
+    if not s:
+        return "blank"
+    if s.startswith("#"):
+        return "comment"
+    if s.startswith("@"):
+        word, _sep, rest = s.replace("\t", " ").partition(" ")
+        return "job" if word in ROOT_CRON_SPECIALS and rest.strip(" \t") else ""
+    if re.fullmatch(ROOT_CRON_ENV_RE, s):
+        return "env"
+    fields = s.split(None, 5)
+    if len(fields) < 6 or not fields[5].strip():
+        return ""
+    return "job" if all(root_cron_field_ok(fields[i], i) for i in range(5)) else ""
+
+
+def root_crontab_problem(text):
+    """Why `text` may not be installed as root's crontab, in fixed words; "" when it may.
+
+    Bounded in size and lines, ending in a newline (cron ignores a last line without one), and
+    every line one root_cron_line_kind knows. Only a line NUMBER is named, never its text.
+    """
+    if not isinstance(text, str):
+        return "not text"
+    if len(text.encode("utf-8", "surrogateescape")) > ROOT_CRON_MAX_BYTES:
+        return "too long"
+    if text and not text.endswith("\n"):
+        return "the last line has no newline"
+    lines = text.split("\n")[:-1] if text else []
+    if len(lines) > ROOT_CRON_MAX_LINES:
+        return "too many lines"
+    for n, line in enumerate(lines, 1):
+        if not root_cron_line_kind(line):
+            return "line %d is not a job, a variable, a comment or blank" % n
+    return ""
+
+
+def _sha256_hex(s):
+    """A SHA-256 digest in hex: what root-crontab-write expects root's crontab to hash to now."""
+    s = str(s)
+    if not re.fullmatch(r"[0-9a-f]{64}", s):
+        raise VerbError("not a sha256 digest")
+    return s
+
+
+# The remote form of root-crontab-read: the helper's output format, from a shell. One line
+# `root-crontab ok <base64>` (or `root-crontab none` when root has no crontab), then one line
+# `crond <name> <base64>` per regular file in /etc/cron.d that cron reads (a name of letters,
+# digits, `_` and `-`), at most ROOT_CRON_DIR_MAX_FILES of them and the first
+# ROOT_CRON_DIR_FILE_MAX bytes of each. A link is skipped, as the helper skips it.
+_ROOT_CRON_READ_REMOTE = (
+    "b=$(crontab -u root -l 2>/dev/null | base64 -w0; exit \"${PIPESTATUS[0]}\"); "
+    "if [ $? -eq 0 ]; then echo \"root-crontab ok $b\"; else echo 'root-crontab none'; fi; "
+    "i=0; for f in %(dir)s/*; do n=${f##*/}; "
+    "case \"$n\" in ''|*[!A-Za-z0-9_-]*) continue ;; esac; "
+    "[ ${#n} -le 64 ] && [ -f \"$f\" ] && [ ! -L \"$f\" ] || continue; "
+    "i=$((i+1)); [ \"$i\" -le %(max)d ] || break; "
+    "echo \"crond $n $(head -c %(size)d -- \"$f\" | base64 -w0)\"; done"
+    % {"dir": ROOT_CRON_DIR, "max": ROOT_CRON_DIR_MAX_FILES, "size": ROOT_CRON_DIR_FILE_MAX})
+
+
+def remote_root_crontab_write_command(content, expected):
+    """The shell that installs `content` as root's crontab on a REMOTE host, if it still hashes to `expected`.
+
+    The remote half of root-crontab-write (write_root_crontab picks the transport). The content is
+    checked here with root_crontab_problem first, as the helper checks it, and travels base64 so
+    every byte stays inert through the shell. Root's crontab is read and hashed on the host just
+    before the install; when it is not what the page was showing (someone changed it meanwhile)
+    nothing is written and the command exits 3.
+    """
+    why = root_crontab_problem(content)
+    if why:
+        raise VerbError(why)
+    expected = _sha256_hex(expected)
+    b64 = base64.b64encode(content.encode("utf-8", "surrogateescape")).decode()
+    return ("cur=$(crontab -u root -l 2>/dev/null | sha256sum | cut -d' ' -f1); "
+            "if [ \"$cur\" != %s ]; then echo \"root's crontab changed since it was read\"; exit 3; fi; "
+            "echo %s | base64 -d | crontab -u root - 2>&1"
+            % (shlex.quote(expected), shlex.quote(b64)))
+
+
 # apt-upgrade-running's pgrep pattern: is an OS update already running? Its three ways of being one:
 #   * apt-get upgrading, OPTIONS ANYWHERE before the subcommand. It needed `upgrade` straight after
 #     `apt-get `, which the old foreground verb wrote; the panel's own os-update-run job puts its
@@ -1290,6 +1432,11 @@ _ARGV = {
     # Copy one Let's Encrypt certificate into data/ssl for the panel to check and load. The name is
     # the only argument; both paths are fixed in the helper (do_tls_le_copy).
     "tls-le-copy": ([_tls_le_name], lambda a: [], None),
+    # Root's own crontab, for the owner's root cron page: read it (with /etc/cron.d, read-only),
+    # and install a new one, given on stdin, only while the current one still hashes to the digest
+    # passed. Both are refused on the panel's host unless opened at install. See ROOT_CRON_*.
+    "root-crontab-read": ([], lambda a: [], None),
+    "root-crontab-write": ([_sha256_hex], lambda a: [], None),
     # Panel self-update. Two validated arguments — a commit sha and a branch, each of which may be
     # "-" for none — exported into the environment of a ROOT-OWNED installer. See tools/panel-helper
     # for what this deliberately does not claim to make safe.
@@ -1470,6 +1617,7 @@ LOCAL_ONLY_VERBS = frozenset({
     # Two-sided callers: the remote half is a dedicated builder, not this table.
     "write-file",        # write_root_file() -> remote_write_command() when not local
     "content-cron-write",# write_content_cron() -> remote_content_cron_command() when not local
+    "root-crontab-write",# write_root_crontab() -> remote_root_crontab_write_command() when not local
     "game-file-read",    # the file browser's download: is_local_server() branch in files.py
     "game-dir-tar",      # same call site as game-file-read
     "game-backup-read",  # the backup download: is_local_server() branch in cron.py
@@ -2076,6 +2224,7 @@ _REMOTE_ACTIONS = {
     "ufw-delete-num-if": _ufw_delete_num_if_remote,
     "ufw-stored-rules": _fwa_ufw_stored_remote,
     "journal-cron-account": _cron_journal_account_remote,
+    "root-crontab-read": lambda a: _ROOT_CRON_READ_REMOTE,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,
 }

@@ -9,6 +9,7 @@ from panel.ops import (system_ops as so)
 from panel.services import (notifications)
 from panel.services.certs import (_maybe_alert_cert_expiring)
 from panel.services import tls_own
+from panel.services import schedules as _schedules
 from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
@@ -17,9 +18,30 @@ from panel.core.config import (load_config, update_config)
 from app import (_is_security_pkg, _log, _os_update_born, _os_update_note, _os_updates_for)
 
 _OS_UPDATE_EVERY = 24 * 3600
+# When this process last fetched the panel's own update status (the ticker's throttle, and what
+# Settings > Schedules shows as its last run).
+_UPDATE_RAN = {"at": 0.0}
 # When this process started, as the stored created_at columns are (naive UTC). A host that existed
 # before it may already have been told about what it has waiting; one added since cannot have been.
 _PROCESS_STARTED = utcnow()
+
+
+def _os_check_due(now):
+    """Whether the daily OS-update sweep is due (Settings > Schedules: off, a time of day, or 24 h).
+
+    The first pass in a process always runs when the check is on, whatever the time of day: it
+    seeds what is already waiting (see _maybe_alert_os_updates), and waiting for the set time to
+    seed would hold every alert back a further day after each restart.
+    """
+    if not _schedules.os_check_on():
+        return False
+    last = _os_update_state["last_run"]
+    if not last:
+        return True
+    at = _schedules.os_check_at()
+    if at is None:
+        return now - last >= _OS_UPDATE_EVERY
+    return _schedules.due_at_slot(at, last, now)
 
 
 def _os_update_seeds(remote, seeding, first_read):
@@ -48,7 +70,7 @@ def register(app, supervise):
         """
         try:
             now = time.time()
-            if not force and now - _os_update_state["last_run"] < _OS_UPDATE_EVERY:
+            if not force and not _os_check_due(now):
                 return
             # The first pass after a restart SEEDS; it does not announce. `hosts` is a plain
             # in-memory dict (panel_state.py) and nothing persists it, so after a restart
@@ -98,8 +120,13 @@ def register(app, supervise):
         while True:
             try:
                 _t0 = time.time()
-                last_logged_sha = _update_tick(app, so.panel_update_status(force=True),
-                                               last_logged_sha)
+                # How often is Settings > Schedules' (30 minutes to a day); this loop passes every
+                # 30 minutes for the jobs below, so the fetch is skipped until it is due. A minute's
+                # slack: a pass that started 1,799 s after the last is the same half-hour.
+                if _t0 - _UPDATE_RAN["at"] >= _schedules.update_every() - 60:
+                    _UPDATE_RAN["at"] = _t0
+                    last_logged_sha = _update_tick(app, so.panel_update_status(force=True),
+                                                   last_logged_sha)
                 runtime_stats.beat("update-check", 1800, time.time() - _t0)
             except Exception:
                 runtime_stats.bump("loopfail", "update-check")

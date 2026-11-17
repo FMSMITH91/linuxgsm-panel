@@ -203,6 +203,20 @@
   </div>
   {% endif %}
 
+  {# Root's crontab (panel/routes/root_cron.py): the panel owner's only, and only once turned on in
+     Settings > Schedules; the route checks both again. #}
+  {% if current_user.is_superadmin and current_user.is_owner and root_cron_on() %}
+  <div class="col-md-6 mb-3">
+    <div class="card h-100">
+      <div class="card-header" id="sec-root-cron"><i class="bi bi-clock"></i> Root's crontab</div>
+      <div class="card-body">
+        <p class="small text-secondary">Root's cron jobs on this host. Only you can see this.</p>
+        <a href="{{ url_for('root_cron_page', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Open</a>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if _host_ctl %}
   <!-- Power -->
   <div class="col-md-6 mb-3">

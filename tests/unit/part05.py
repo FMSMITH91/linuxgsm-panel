@@ -1586,6 +1586,8 @@ _VERB_SAMPLES = {
     "user-kill-processes": ["codserver"],
     "user-remove-home": ["codserver"],
     "write-file": ["fail2ban-jail-local"],
+    "root-crontab-read": [],
+    "root-crontab-write": ["0" * 64],
     "sysctl-reload": ["tailscale"],
     "sshd-backup-dropin": [],
     "sshd-restore-dropin": [],
