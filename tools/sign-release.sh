@@ -179,8 +179,34 @@ release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when 
 # The release's name (main only), saved beside its signature as <branch>/<sha>.name, so a panel
 # shows the name its GitHub Release carries (2026.11.16.5) and not only the commit's date. A name
 # that cannot be read is left out: the panel then shows the date, and the signing goes on.
+# Whether a panel would be offered this commit as an update: it changes a file a panel runs, by the
+# panel's own rule (system_ops._path_class with the commit's .github/update-paths.txt). Only such a
+# commit gets a GitHub Release page; one that changes only docs, tests or tooling is still signed
+# (panels install only signed commits) but publishes none. Fails safe: anything that cannot be
+# judged -- no venv, no rules file, an error -- counts as reaching panels, so a release is published.
+reaches_panels() {
+    local py="${TOOLS_DIR}/../.venv/bin/python" rules files
+    [[ -x "${py}" ]] || py="$(command -v python3)" || return 0
+    rules="$(git show "$1:.github/update-paths.txt" 2>/dev/null)" || return 0
+    files="$(git diff --no-renames --name-only "$1^1" "$1" -- 2>/dev/null)" || return 0
+    [[ -n "${files}" ]] || return 1
+    printf '%s\n' "${files}" | (cd "${TOOLS_DIR}/.." && "${py}" -c '
+import sys
+sys.path.insert(0, ".")
+try:
+    from panel.ops.system_ops import _parse_update_paths, _path_class
+    rules = _parse_update_paths(sys.argv[1]) or None
+    sys.exit(0 if any(_path_class(f, rules) != "noise" for f in sys.stdin.read().split() if f) else 1)
+except SystemExit:
+    raise
+except Exception:
+    sys.exit(0)
+' "${rules}" 2>/dev/null)
+}
 NAME=""
-if [[ "${BRANCH}" = "main" ]]; then
+# Only a commit panels are offered gets a name: no release page means no tag, so a name saved for a
+# docs-only commit would be taken again by the next release of that day.
+if [[ "${BRANCH}" = "main" ]] && reaches_panels "${SHA}"; then
     NAME="$(release_tag "${SHA}" "${REMOTE}" 2>/dev/null)" || NAME=""
     [[ "${NAME}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]{1,3})?$ ]] || NAME=""
 fi
@@ -260,6 +286,9 @@ publish_release() {   # publish_release <commit> <previous signed commit or ""> 
     echo "sign-release: published GitHub release ${tag}."
 }
 if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
+   && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]] && ! reaches_panels "${SHA}"; then
+    echo "sign-release: ${SHA:0:12} changes nothing a panel runs (docs, tests or tooling): signed, no release page."
+elif [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
    && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]]; then
     if command -v "${GH[0]}" >/dev/null 2>&1; then
         publish_release "${SHA}" "${BASE}" "${TMP}/msg.sig" \
