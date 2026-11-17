@@ -5970,7 +5970,7 @@ if _node:
           "Save cannot write the old path back", repr((_rnd.get("cur"), _rn.get("folder_follow"))))
     _fbn_css = (ROOT / "panel" / "static" / "css" / "panel.css").read_text(encoding="utf-8")
     check('class="fb-row-name"' in (_rn.get("name_pre") or "") and "notes.txt</span>" in (_rn.get("name_pre") or "")
-          and re.search(r"\.fb-row-name\s*\{[^}]*white-space:\s*pre;", _fbn_css) is not None,
+          and re.search(r"\.fb-row-name\s*\{[^}]*white-space:\s*pre\s*(?:!important)?;", _fbn_css) is not None,
           "js (node): a row's name keeps its spaces (white-space: pre) — 'a  b.txt' does not read as "
           "'a b.txt', nor ' lead.txt' as 'lead.txt'", repr(_rn.get("name_pre")))
     check(_rn.get("i18n") == {"field": "Nuevo nombre", "value": "a.txt ",
