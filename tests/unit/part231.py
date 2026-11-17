@@ -13,7 +13,7 @@ import hashlib as _hl231
 import os as _os231
 import re as _re231
 from shlex import quote as _shq231
-import subprocess as _sub231
+import subprocess as _sub231  # nosec B404 - bash over the repo's own install.sh function text
 import tempfile as _tf231
 import urllib.error as _ue231
 import urllib.request as _ur231
@@ -344,7 +344,7 @@ def _run_list231(panel_dir, url, pin):
                         _inst_shfn("_r42i_tree_owner"), _inst_shfn("ensure_password_list"),
                         "PW_LIST_URL=%s" % _shq231(url), "PW_LIST_SHA256=%s" % _shq231(pin),
                         "ensure_password_list; echo RC=$?"])
-    p = _sub231.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+    p = _sub231.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)  # nosec B603 B607
     return p.stdout + p.stderr
 
 
