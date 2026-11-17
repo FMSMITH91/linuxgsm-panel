@@ -85,8 +85,8 @@
                them gets the button. #}
             {% if may_admin and user.id != current_user.id and not user.is_owner
                   and not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
-            <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;"
-                  class="ajax-form" data-ajax-refresh="#users-list"
+            <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}"
+                  class="ajax-form d-inline" data-ajax-refresh="#users-list"
                   data-confirm="{{ t('Delete user “%s”? This can\'t be undone.')|format(user.username) }}"
                   data-confirm-title="Delete User" data-confirm-class="btn-danger"
                   data-confirm-label="Delete" data-confirm-icon="trash">
@@ -154,7 +154,7 @@
                  whose refusal tells the admin to revoke the links they no longer need. #}
               {% if inv.state == 'active' %}
               <form method="POST" action="{{ url_for('revoke_invite', invite_id=inv.id) }}"
-                    class="ajax-form" data-ajax-refresh="#users-list" style="display:inline;">
+                    class="ajax-form d-inline" data-ajax-refresh="#users-list">
                 <button type="submit" class="btn btn-sm btn-outline-warning"
                         title="Stop this link working">
                   <i class="bi bi-x-circle"></i> Revoke

@@ -5,7 +5,7 @@
 {# Bulk-action bar, rendered both above and below the server list so it's reachable from either
    end. Uses classes (not ids) so both instances stay in sync via JS. #}
 {% macro bulk_bar(pos) %}
-<div class="bulk-bar card shadow-lg" style="display:none; position:sticky; {{ 'top' if pos == 'top' else 'bottom' }}:1rem; z-index:1020; border:1px solid var(--bs-border-color);">
+<div class="bulk-bar bulk-bar-{{ 'top' if pos == 'top' else 'bottom' }} card shadow-lg" data-start-hidden>
   <div class="card-body py-2 d-flex align-items-center gap-2 flex-wrap">
     <span class="fw-bold me-1"><i class="bi bi-check2-square"></i> <span class="bulk-count">0</span> selected</span>
     {# One button per PERMISSION, like the Update button below already is. A user holding only
@@ -35,7 +35,7 @@
      reachable only by scrolling the whole page sideways. #}
   <div class="d-flex align-items-center gap-3 flex-wrap">
     {% if servers and servers|length > 6 %}
-    <div class="input-group input-group-sm" style="width:220px; max-width:100%;">
+    <div class="input-group input-group-sm dash-search-group">
       <span class="input-group-text"><i class="bi bi-search"></i></span>
       <input type="text" id="srv-search" class="form-control" placeholder="Filter servers…" aria-label="Filter servers…"
              autocomplete="off" data-action="filterServers" data-on="input">
@@ -75,7 +75,7 @@
 {% if not servers %}
 <div class="card">
   <div class="card-body text-center py-5">
-    <span style="font-size: 3rem;">📡</span>
+    <span class="auth-emoji">📡</span>
     <h5 class="mt-3">No Game Servers Found</h5>
     <p class="text-secondary">
       {# `servers` is what THIS user may see, not what the install has: a non-superadmin whose
@@ -201,7 +201,7 @@
   <div class="card-header d-flex justify-content-between align-items-center">
     <span>
       <i class="bi bi-hdd-network-fill"></i> {{ host_label(remote) }}
-      {% if remote.is_local %}<span class="badge bg-secondary ms-2" style="font-weight:600;">this panel</span>{% endif %}
+      {% if remote.is_local %}<span class="badge bg-secondary ms-2 fw-semibold">this panel</span>{% endif %}
       <span class="text-secondary small ms-2">{{ remote.display_host }}</span>
     </span>
     <span class="d-flex align-items-center gap-2">
@@ -300,14 +300,14 @@
       <table class="table table-hover mb-0 dash-srv-table">
         <thead>
           <tr>
-            {% if can_bulk %}<th class="dash-th-check" style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" id="srv-check-all-{{ remote.id }}" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host">
+            {% if can_bulk %}<th class="dash-th-check w-1p"><input type="checkbox" class="form-check-input srv-check-all" id="srv-check-all-{{ remote.id }}" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host">
               {#- A phone shows no column headers (each server is a card there), so this box would sit
                   alone with nothing saying what it ticks. d-lg-none: never rendered on a wider screen. -#}
               <label class="d-lg-none dash-m-selall" for="srv-check-all-{{ remote.id }}">Select all on this host</label></th>{% endif %}
-            <th class="dash-sort dash-col-name" data-sortkey="name" style="cursor:pointer;" data-action="sortDashCol" data-args='["name","@self"]' title="Sort this host's servers by name">Server<span class="dash-caret"></span></th>
-            <th class="d-none d-md-table-cell dash-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
-            <th class="dash-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
-            <th class="dash-sort" data-sortkey="players" style="cursor:pointer;" data-action="sortDashCol" data-args='["players","@self"]'>Players<span class="dash-caret"></span></th>
+            <th class="dash-sort dash-col-name cursor-pointer" data-sortkey="name" data-action="sortDashCol" data-args='["name","@self"]' title="Sort this host's servers by name">Server<span class="dash-caret"></span></th>
+            <th class="d-none d-md-table-cell dash-sort cursor-pointer" data-sortkey="type" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
+            <th class="dash-sort cursor-pointer" data-sortkey="status" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
+            <th class="dash-sort cursor-pointer" data-sortkey="players" data-action="sortDashCol" data-args='["players","@self"]'>Players<span class="dash-caret"></span></th>
             <th class="d-none d-lg-table-cell">Resources</th>
             <th>Connect</th>
             <th class="text-end col-actions">Actions</th>
@@ -331,13 +331,14 @@
               <span class="dash-srv-title"><strong data-no-i18n>{{ srv.name }}</strong><span class="d-lg-none dash-m-game" data-no-i18n>{{ srv.game_display or srv.game_type }}</span></span>
               {# The guard on the NAME only: on the outer span it kept the tooltip English for es/fr
                  viewers too (the walker returns at a guarded element before its attributes). #}
-              <span class="game-name text-info d-block text-truncate"
-                    style="font-size:.72rem;max-width:22ch;" title="In-game server name (what players see)"><span id="game-name-{{ srv.id }}" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span></span>
+              <span class="game-name game-name-line text-info d-block text-truncate"
+                    title="In-game server name (what players see)"><span id="game-name-{{ srv.id }}" data-no-i18n>{{ server_names.get(srv.id) or '' }}</span></span>
               {# dash-short-dup: the phone card leaves out an account name that only repeats the name above it. #}
-              <span class="text-secondary d-block dash-short{% if srv.short_name == srv.name %} dash-short-dup{% endif %}" style="font-size: .75rem;" data-no-i18n>{{ srv.short_name }}</span>
+              <span class="text-secondary d-block dash-short{% if srv.short_name == srv.name %} dash-short-dup{% endif %} fs-r75" data-no-i18n>{{ srv.short_name }}</span>
               {# data-no-i18n: tag names are user-authored, and the translation walker would happily
                  "translate" one that collides with a catalog key ("Online", "Status", …). The colour
-                 is stored only after passing _valid_hex_color, so it is safe in a style attribute.
+                 is stored only after passing _valid_hex_color; dashboard.js paints it from
+                 data-tag-color through the CSSOM, since the page policy refuses style attributes.
 
                  Rendered even when the server has no tags, and carrying an id: server_tags.js
                  repaints THIS element after a save, and the tag filter in dashboard.js reads the
@@ -347,11 +348,11 @@
               <span id="srv-tags-{{ srv.id }}" class="d-block srv-tags" data-no-i18n>
                 {% for tag in srv.tags|sort(attribute='name') %}
                 <span class="badge tag-chip" data-tag-id="{{ tag.id }}" data-no-i18n
-                      {% if tag.color %}style="background-color: {{ tag.color }};"{% endif %}
+                      {% if tag.color %}data-tag-color="{{ tag.color }}"{% endif %}
                       {% if not tag.notify %}title="{{ t('Alerts are muted for this tag') }}" data-i18n-title="Alerts are muted for this tag"{% endif %}>{{ tag.name }}{% if not tag.notify %} <i class="bi bi-bell-slash"></i>{% endif %}</span>
                 {% endfor %}
               </span>
-              <span class="text-secondary d-none dash-map" id="map-{{ srv.id }}" style="font-size:.72rem;" title="Current map"></span>
+              <span class="text-secondary d-none dash-map fs-r72" id="map-{{ srv.id }}" title="Current map"></span>
             </td>
             <td class="d-none d-md-table-cell" data-no-i18n>{{ srv.game_display or srv.game_type }}</td>
             <td id="status-{{ srv.id }}" class="dash-td-status" data-status="{{ srv.status }}">
@@ -365,10 +366,10 @@
                   dashboard.js's _dashPlayersCell writes the same shape on every poll. #}
               {% if pc is not none %}<i class="bi bi-people-fill text-secondary"></i> {{ pc }}{% if mx %} / {{ mx }}{% endif %} <span class="d-lg-none dash-m-unit">{{ 'player' if pc == 1 and not mx else 'players' }}</span>{% else %}<span class="text-secondary">—</span>{% endif %}
             </td>
-            <td id="res-{{ srv.id }}" class="d-none d-lg-table-cell text-nowrap text-secondary" style="font-size:.8rem;">—</td>
+            <td id="res-{{ srv.id }}" class="d-none d-lg-table-cell text-nowrap text-secondary fs-r80">—</td>
             <td class="dash-td-connect">
               <span class="connect-cell" id="connect-{{ srv.id }}" data-addr="">
-                <code class="text-info" style="font-size:.78rem;">:{{ srv.port }}</code>
+                <code class="text-info fs-r78">:{{ srv.port }}</code>
               </span>
             </td>
             {% set busy = (not srv.installed) or srv.status in ('installing', 'configuring') %}
@@ -452,7 +453,7 @@
 </div>
 {% endif %}
 {% endfor %}
-<div id="srv-none" class="card" style="display:none;"><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
+<div id="srv-none" class="card" data-start-hidden><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
 </div>
 
 {% if can_bulk %}{{ bulk_bar('bottom') }}{% endif %}
@@ -465,7 +466,7 @@
    and it sat below the fold on /servers/manage anyway. The dashboard already filters
    by tag, so both halves of tagging now live in one place. #}
 <details class="card mb-3" id="sec-tags">
-  <summary class="card-header" style="cursor:pointer; list-style:none;">
+  <summary class="card-header summary-plain">
     <i class="bi bi-tags-fill"></i> Tags
     <span class="text-secondary small ms-auto">tap to open</span>
   </summary>
@@ -474,7 +475,7 @@
     <div class="d-flex gap-2 flex-wrap align-items-end mb-3">
       <div>
         <label class="form-label small mb-1" for="tag-name">Name</label>
-        <input type="text" id="tag-name" class="form-control form-control-sm" style="width:190px;"
+        <input type="text" id="tag-name" class="form-control form-control-sm w-190px"
                maxlength="32" placeholder="production" autocomplete="off">
       </div>
       <div>

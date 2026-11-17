@@ -5,7 +5,8 @@
   Origin (or, without one, its Referer) is not the panel's own, "null" included; same-origin, a
   cookie-less API token and a request with neither header pass; the step-up round trip still works.
 * Styles (OWASP CSP Cheat Sheet; CSP Level 3 style-src-elem / style-src-attr): <style> blocks need
-  the nonce, every template's <style> carries it, and the terminal gives xterm's blocks the nonce.
+  the nonce, every template's <style> carries it, and the terminal gives xterm's blocks the nonce
+  (part236 holds the templates and scripts to no style attribute at all).
 * Invite code (OWASP Authentication "Account Lockout", Forgot Password "PINs"; NIST SP 800-63B
   out-of-band): shown once at creation, stored as Argon2id, asked before the account form, bound to
   its invite, and the fifth wrong code revokes the invite with an audit row and an alert.
@@ -149,10 +150,10 @@ def _read222(*rel):
 def _s222_style_policy():
     src = _read222("panel", "install", "app.py")
     csp = src[src.index("    def _csp():"):src.index("    @app.after_request")]
-    _all222("csp: <style> blocks need 'self' or the nonce (style-src-elem), attributes are allowed on their own "
-            "directive, and style-src keeps 'unsafe-inline' only as the fallback for older browsers",
-            [csp.count("style-src-elem 'self' 'nonce-%s'; ") == 1, csp.count("style-src-attr 'unsafe-inline'; ") == 1,
-             "style-src 'self' 'unsafe-inline'; " in csp, csp.count("'nonce-%s'") == 2], csp[-500:])
+    _all222("csp: <style> blocks need 'self' or the nonce (style-src-elem), no style attribute is allowed "
+            "(style-src-attr 'none'), and style-src, the fallback for older browsers, is the same 'self' + nonce",
+            [csp.count("style-src-elem 'self' 'nonce-%s'; ") == 1, csp.count("style-src-attr 'none'; ") == 1,
+             "style-src 'self' 'nonce-%s'; " in csp, csp.count("'nonce-%s'") == 3, "unsafe-inline" not in csp], csp[-500:])
     tdir = _os222.path.join(REPO_ROOT, "panel", "templates")
     bare, seen = [], 0
     for name in sorted(_os222.listdir(tdir)):

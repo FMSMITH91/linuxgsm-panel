@@ -4,7 +4,7 @@
 
 <h1 class="page-title mb-3"><i class="bi bi-shield-plus"></i> Enable Two-Factor Authentication</h1>
 
-<div class="card" style="max-width: 560px;">
+<div class="card maxw-560">
   <div class="card-body">
     <ol class="small text-secondary ps-3 mb-3">
       <li>Scan this QR code with your authenticator app.</li>
@@ -13,7 +13,7 @@
 
     <div class="text-center mb-3">
       {# nosemgrep: python.flask.security.xss.audit.template-unescaped-with-safe.template-unescaped-with-safe -- SvgPathImage emits path geometry only; see the |safe gate in tests/template_actions_test.py #}
-      <span style="display:inline-block; background:#fff; padding:12px; border-radius:8px; line-height:0;">{{ qr_svg | safe }}</span>
+      <span class="qr-tile">{{ qr_svg | safe }}</span>
     </div>
 
     <div class="small text-secondary mb-3">
@@ -26,10 +26,10 @@
        sitting in front of an unlocked one could lock the owner out of their own account. #}
     <form method="POST" action="{{ url_for('account_2fa_enable') }}">
       <span class="form-label d-inline-block" id="tfa-on-label">Confirm your password and the code from your app</span>
-      <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;" role="group" aria-labelledby="tfa-on-label">
-        <input type="password" name="password" class="form-control" style="min-width:12rem;flex:1 1 12rem;"
+      <div class="d-flex gap-2 flex-wrap maxw-560" role="group" aria-labelledby="tfa-on-label">
+        <input type="password" name="password" class="form-control field-grow-12"
                autocomplete="current-password" placeholder="Password" aria-label="Password" required>
-        <input type="text" name="totp_code" class="form-control" style="min-width:9rem;flex:0 1 9rem;"
+        <input type="text" name="totp_code" class="form-control field-fixed-9"
                inputmode="numeric" autocomplete="one-time-code" placeholder="000000" maxlength="6"
                aria-label="Authentication code" required>
         <button class="btn btn-primary text-nowrap" type="submit">Confirm &amp; enable</button>

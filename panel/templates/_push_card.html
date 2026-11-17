@@ -14,7 +14,7 @@
      data-test-url="{{ url_for('account_push_test') }}">
   <div class="card-header"><i class="bi bi-bell-fill"></i> Alerts on this device</div>
   <div class="card-body">
-    <div class="small mb-2" style="min-height:1.5em;" id="push-status">
+    <div class="small mb-2 minh-15em" id="push-status">
       <span data-push-msg="checking">Checking this browser…</span>
       <span data-push-msg="on" class="d-none"><span class="badge bg-success">On</span> Alerts reach this device, even when you are signed out.</span>
       <span data-push-msg="off" class="d-none"><span class="badge bg-secondary">Off</span> This device gets no alerts.</span>
@@ -60,10 +60,10 @@
     <ul class="list-unstyled small mb-2" id="push-devices">
       {% for d in pc.devices %}
       <li class="d-flex justify-content-between align-items-center gap-2 border rounded px-2 py-1 mb-1" data-push-hash="{{ d.hash }}">
-        <div style="min-width:0;">
+        <div class="minw-0">
           <strong data-no-i18n>{{ d.label or 'Unknown device' }}</strong>
           <span class="badge bg-success ms-1 d-none" data-push-this>This device</span>
-          <div class="text-secondary" style="font-size:.72rem;"><span>Added</span> <span>{{ d.created|datetime }}</span>{% if d.last %} · <span>Last alert delivered</span> <span>{{ d.last|datetime }}</span>{% endif %}</div>
+          <div class="text-secondary fs-r72"><span>Added</span> <span>{{ d.created|datetime }}</span>{% if d.last %} · <span>Last alert delivered</span> <span>{{ d.last|datetime }}</span>{% endif %}</div>
         </div>
         <form method="POST" action="{{ url_for('account_push_device_remove', sub_id=d.id) }}">
           <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Remove</button>

@@ -37,9 +37,8 @@ function _rbRow(name, word){       // "<name> — <word>", the word translatable
 }
 function _rbOpen(label){
   var ov = _rbEl('div');
-  ov.className = 'rb-overlay';
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  var card = _rbEl('div', 'card'); card.style.cssText = 'max-width:480px;width:100%;max-height:90vh;overflow:auto;';
+  ov.className = 'rb-overlay dialog-overlay';
+  var card = _rbEl('div', 'card dialog-card-scroll');
   card.setAttribute('role', 'dialog'); card.setAttribute('aria-modal', 'true');
   var head = _rbEl('div', 'card-header');
   head.appendChild(_rbEl('i', 'bi bi-power'));
@@ -534,7 +533,7 @@ window.osUpdatesNagCheck = function(){
         // data-no-i18n: a remote's link text is the host's NAME (a host called "Server" read
         // "Servidor"). The panel host's is the fixed label, left to the translator in English: the
         // server's translation behind the guard kept the old language after a live switch.
-        return '<span class="uis-nag-item"><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
+        return '<span class="uis-nag-item"><a class="alert-link uis-nag-link"'
              + (h.local ? '' : ' data-no-i18n')
              + ' href="' + escapeHtml(h.url) + '#os-updates">'
              // Each word in its own span, apart from its count: "12 updates" as one node matched
@@ -544,7 +543,7 @@ window.osUpdatesNagCheck = function(){
              // heading already says these are updates, and the words made a line per host there.
              // (panel.css .uis-nag-item hides the item's plain spans below `sm`, the badge apart.)
              + '</a><span> —</span> ' + n + ' <span>' + (n===1?'update':'updates') + '</span>'
-             + (s ? ' <span class="badge bg-danger" style="font-weight:normal;" title="security">'
+             + (s ? ' <span class="badge bg-danger fw-normal" title="security">'
                   + '<i class="bi bi-shield-exclamation d-sm-none"></i> '
                   + s + ' <span>security</span></span>' : '') + '</span>';
       }).join('');

@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ t('Login') }}{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-center align-items-start align-items-md-center"
-     style="min-height: calc(100vh - 4rem); min-height: calc(100dvh - 4rem);">
-  <div class="w-100 mt-3 mt-md-0" style="max-width: 400px;">
+<div class="d-flex justify-content-center align-items-start align-items-md-center auth-page">
+  <div class="w-100 mt-3 mt-md-0 maxw-400">
     <div class="card">
       <div class="card-body p-4">
         <div class="text-center mb-4">
-          <span style="font-size: 3rem;">🎮</span>
+          <span class="auth-emoji">🎮</span>
           <h3 class="mt-2" data-no-i18n>{{ site_title }}</h3>
           <p class="text-secondary small">
             {# An admin's own title and tagline are shown as written; only the default is translated. #}
@@ -18,9 +17,9 @@
         <form method="POST">
           <div class="mb-3">
             <label class="form-label" for="totp_code"><i class="bi bi-shield-lock"></i> Authentication code</label>
-            <input type="text" name="totp_code" id="totp_code" class="form-control text-center"
-                   autocomplete="one-time-code" placeholder="000000" maxlength="14" required
-                   style="letter-spacing:.2em; font-size:1.2rem;">
+            <input type="text" name="totp_code" id="totp_code" class="form-control text-center otp-input"
+                   autocomplete="one-time-code" placeholder="000000" maxlength="14" required>
+
             <div class="form-text small">Lost your authenticator? Enter one of your backup codes instead.</div>
           </div>
           <button type="submit" class="btn btn-primary w-100">Verify</button>
@@ -50,7 +49,7 @@
     {% if languages and languages|length > 1 %}
     <div class="d-flex justify-content-center align-items-center gap-1 mt-3" title="{{ t('Language') }}">
       <i class="bi bi-translate text-secondary"></i>
-      <select class="form-select form-select-sm py-0" style="width:auto;" aria-label="{{ t('Language') }}"
+      <select class="form-select form-select-sm py-0 w-auto" aria-label="{{ t('Language') }}"
               data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
         {% for code, name in languages.items() %}
         <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>

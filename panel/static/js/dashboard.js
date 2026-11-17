@@ -267,8 +267,7 @@ function _dashConnectCell(s) {
     // hostile connect address can't inject HTML/script into the dashboard.
     conn.textContent = '';
     var code = document.createElement('code');
-    code.className = 'text-info';
-    code.style.cssText = 'font-size:.78rem;cursor:pointer;';
+    code.className = 'text-info dash-connect-code';
     code.title = t('Click to copy');   // through t(): the translator skips a <code>, its title too
     code.setAttribute('data-i18n-title', 'Click to copy');   // ...and setLang renders it again
     code.textContent = s.connect;
@@ -446,6 +445,7 @@ window.afterDashRefresh = function(){
   // one, while both bulk bars live OUTSIDE #server-cards and kept their "N selected" and their
   // buttons — which then found nothing checked and did nothing, with no message at all.
   restoreBulkSelection();
+  paintTagChips();   // the new chips carry their colour only as data-tag-color
   // The swap took every install-progress row with the old tbody. A live one comes back on the next
   // poll; an ending ("Installed, with a warning", shown nowhere else) has no poll to bring it back,
   // so install_progress.js puts it back now — before the filter, which hides it with its server.
@@ -834,6 +834,18 @@ function _bulkPlayersNote(action, checks) {
 document.addEventListener('change', function (e) {
   if (e.target && e.target.classList && e.target.classList.contains('srv-check')) updateBulkBar();
 });
+
+// Each tag chip's colour, from data-tag-color: the page policy refuses a style attribute, and a
+// property set through the CSSOM is allowed (server_tags.js paints a repainted chip the same way).
+// Setting it also writes the style attribute, which panel.css's .tag-chip[style*="background-color"]
+// reads for the dark text a coloured chip needs.
+// Run on load and after every refresh of the server cards (afterDashRefresh).
+function paintTagChips() {
+  document.querySelectorAll('.tag-chip[data-tag-color]').forEach(function (c) {
+    c.style.backgroundColor = c.getAttribute('data-tag-color');
+  });
+}
+paintTagChips();
 
 // makeSortable lives in base.html, whose footer script runs after this block is parsed — so wait.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindDragRegions);

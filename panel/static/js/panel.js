@@ -362,10 +362,7 @@ window.toast = function(msg, kind){
   // and a translated lockout refusal stood 257px tall over the header for seven seconds. The
   // area itself lets clicks through (it is now as wide as the cap, wider than a short toast);
   // each toast takes them back.
-  if(!c){ c = document.createElement('div'); c.id = 'toast-area';
-    c.style.cssText = 'position:fixed;top:1rem;left:0;right:0;margin:0 auto;z-index:11000;'
-      + 'display:flex;flex-direction:column;align-items:center;gap:.5rem;width:min(92vw,520px);'
-      + 'pointer-events:none;';
+  if(!c){ c = document.createElement('div'); c.id = 'toast-area'; c.className = 'toast-area';
     document.body.appendChild(c); }
   // 'warning' is honoured: six call sites already passed it and silently got a blue info toast,
   // so a "this only half-worked" message looked like routine information.
@@ -374,9 +371,7 @@ window.toast = function(msg, kind){
   if (!KINDS[kind]) kind = 'info';
   var icon = KINDS[kind];
   var t = document.createElement('div');
-  t.className = 'alert alert-' + kind + ' py-2 px-3 mb-0';
-  t.style.cssText = 'font-size:.85rem;box-shadow:0 6px 24px rgba(0,0,0,.55);text-align:center;'
-    + 'pointer-events:auto;max-width:100%;overflow-wrap:anywhere;';
+  t.className = 'alert alert-' + kind + ' py-2 px-3 mb-0 panel-toast';
   // nosemgrep - icon is one of four literals from KINDS above; msg goes through escapeHtml.
   t.innerHTML = '<i class="bi bi-' + icon + '"></i> ' + escapeHtml(msg);
   c.appendChild(t);
@@ -413,7 +408,7 @@ function _cdInputHtml(opts){
       + (opts.requireLabel ? '<label class="form-label small" for="cd-input">' + escapeHtml(opts.requireLabel) + '</label>' : '')
       + '<input type="' + (opts.requirePassword ? 'password' : 'text') + '" class="form-control" id="cd-input"'
       + (opts.requirePassword ? ' autocomplete="current-password" placeholder="' + escapeHtml(opts.requirePlaceholder || 'Your account password') + '"' : ' autocomplete="off" autocapitalize="off" spellcheck="false"') + '>'
-      + '<div class="small text-danger mt-1" id="cd-err" style="display:none;"></div>'
+      + '<div class="small text-danger mt-1" id="cd-err"></div>'
       + '</div>';
   }
   return inputHtml;
@@ -433,7 +428,8 @@ function _cdFillBody(ov, opts){
       _cn.textContent = '';
       // Cap and scroll it: the overlay is a centred fixed flex box, so content taller than the
       // viewport overflows BOTH edges with no scrollbar — putting Confirm out of reach entirely.
-      _cn.style.cssText = 'white-space:normal;max-height:50vh;overflow-y:auto;';
+      _cn.classList.remove('pre-line');
+      _cn.classList.add('cd-body-node');
       _cn.appendChild(opts.bodyNode);
     }
   }
@@ -453,13 +449,13 @@ window.confirmDialog = function(opts){
   opts = opts || {};
   var inputHtml = _cdInputHtml(opts);
   var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  ov.className = 'dialog-overlay';
   // nosemgrep - static markup; every interpolation is escapeHtml'd, and opts.body is documented
   // as trusted markup (both callers escape their one dynamic value; a test now enforces that).
-  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'  // nosemgrep
+  ov.innerHTML = '<div class="card dialog-card">'  // nosemgrep
     + '<div class="card-header"><i class="bi bi-' + escapeHtml(opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
     + '<div class="card-body">'
-    + '<p class="mb-3" data-cd-body style="white-space:pre-line;">' + (opts.body || '') + '</p>'
+    + '<p class="mb-3 pre-line" data-cd-body>' + (opts.body || '') + '</p>'
     + inputHtml
     + '<div class="d-flex justify-content-end gap-2">'
     + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
@@ -469,6 +465,9 @@ window.confirmDialog = function(opts){
   _cdFillBody(ov, opts);
   var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
       errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
+  // Hidden until api.error shows it (display ''): set through the CSSOM, as a style attribute in
+  // the markup above would be refused by the page policy.
+  if (errEl) errEl.style.display = 'none';
   function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
   function onKey(e){ if(e.key === 'Escape') close(); }
   document.addEventListener('keydown', onKey);
@@ -516,6 +515,11 @@ window.refreshSection = function(sel, afterName){
       // ...and its timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
       // after an in-place refresh (saving a user) the whole Last login column switched to UTC.
       if (cur && window.localizeTimes) window.localizeTimes(cur);
+      // ...and an element marked data-start-hidden arrives with the mark, which start_hidden.js
+      // converts to an inline display on load only: convert the swapped-in region the same way,
+      // before the after-hook shows or hides one (#srv-none in the dashboard's cards, the GMod
+      // content option). Left as the mark, CSS keeps it hidden and display '' cannot show it.
+      if (cur && window.applyStartHidden) window.applyStartHidden(cur);
       // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
       // data- attribute in our own template, and _actionFn is the contract.
       var afterFn = afterName ? _actionFn(afterName) : null;
@@ -719,11 +723,11 @@ window.cursorFlash = function(msg, kind){
   var bg = kind === 'danger' ? '#f85149' : (kind === 'info' ? '#58a6ff' : '#3fb950');
   var el = document.createElement('div');
   el.textContent = msg;
-  el.style.cssText = 'position:fixed;z-index:12000;pointer-events:none;white-space:nowrap;'
-    + 'left:' + (window._cursor.x + 12) + 'px;top:' + (window._cursor.y - 10) + 'px;'
-    + 'background:' + bg + ';color:#0b0f17;font-size:.72rem;font-weight:700;'
-    + 'padding:2px 8px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.45);'
-    + 'opacity:1;transform:translateY(0);transition:transform .6s ease, opacity .6s ease;';
+  el.className = 'cursor-flash';
+  // The position and colour vary, so they go through the CSSOM (the page policy refuses a style attribute).
+  el.style.left = (window._cursor.x + 12) + 'px';
+  el.style.top = (window._cursor.y - 10) + 'px';
+  el.style.background = bg;
   document.body.appendChild(el);
   // Hold it fully visible for a beat, THEN float up and fade — so it's not missed.
   setTimeout(function(){ el.style.transform = 'translateY(-18px)'; el.style.opacity = '0'; }, 850);
@@ -873,7 +877,7 @@ window.makeSortable = function(container, opts){
 
 window.copyText = function(text, label){
   function done(){ window.cursorFlash('✓ ' + (label || 'Copied'), 'success'); }
-  function fallback(){ try { var ta=document.createElement('textarea'); ta.value=text; ta.style.cssText='position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch(e){} }
+  function fallback(){ try { var ta=document.createElement('textarea'); ta.value=text; ta.className='copy-offscreen'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch(e){} }
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(done).catch(function(){ fallback(); done(); });
   } else { fallback(); done(); }
@@ -908,7 +912,7 @@ window.UPro = (function(){
   function e(s){ return String(s==null?'':s).replace(/[&<>\x22\x27]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function msg(t, kind){ var m=document.getElementById('upro-msg'); if(m){ m.textContent=t; m.className='small mt-2 '+(kind==='success'?'text-success':(kind==='danger'?'text-danger':'text-secondary')); } }
   function attachForm(){
-    return '<div class="input-group input-group-sm" style="max-width:540px;">'
+    return '<div class="input-group input-group-sm maxw-540">'
       + '<input type="text" id="upro-token" class="form-control" placeholder="Ubuntu Pro token (e.g. C1a…)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">'
       + '<button class="btn btn-success"' + _da('_uproAttach') + '><i class="bi bi-shield-check"></i> Attach</button></div>';
   }
@@ -974,7 +978,7 @@ window.UPro = (function(){
       var btn = !canToggle ? '<span class="small text-secondary">not entitled</span>'
         : (en ? '<button class="btn btn-outline-secondary btn-sm py-0"' + _da('_uproService', [s.name, 'disable']) + '>Disable</button>'
               : '<button class="btn btn-outline-success btn-sm py-0"' + _da('_uproService', [s.name, 'enable']) + '>Enable</button>');
-      rows += '<tr><td class="small"><code>'+e(s.name)+'</code><div class="text-secondary" style="font-size:.68rem;">'+e(s.description||'')+'</div></td><td>'+badge+'</td><td class="text-end">'+btn+'</td></tr>';
+      rows += '<tr><td class="small"><code>'+e(s.name)+'</code><div class="text-secondary fs-r68">'+e(s.description||'')+'</div></td><td>'+badge+'</td><td class="text-end">'+btn+'</td></tr>';
     });
     // nosemgrep - head/rows/btn are built above with e() on every value from the server.
     EL.innerHTML = head

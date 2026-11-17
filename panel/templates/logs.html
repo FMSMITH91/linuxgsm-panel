@@ -12,7 +12,7 @@
     <a class="text-reset text-decoration-none d-inline-flex align-items-center gap-1"
        href="{{ url_for('view_logs', sort=col, dir=next_dir, q=filters.q, action=filters.action, user=filters.user, status=filters.status) }}">
       {{ label }}
-      {% if is_active %}<i class="bi bi-caret-{{ 'up' if filters.dir == 'asc' else 'down' }}-fill" style="font-size:.6rem;"></i>{% endif %}
+      {% if is_active %}<i class="bi bi-caret-{{ 'up' if filters.dir == 'asc' else 'down' }}-fill fs-r60"></i>{% endif %}
     </a>
   </th>
 {% endmacro %}
@@ -36,26 +36,26 @@
   <div class="card-body py-2">
     <form method="get" class="row g-2 align-items-end">
       <div class="col-12 col-md">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="logs-q">Search</label>
+        <label class="form-label mb-1 fs-r70" for="logs-q">Search</label>
         <input id="logs-q" type="text" name="q" value="{{ filters.q }}" class="form-control form-control-sm"
                placeholder="user, target or detail…">
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="filter-action">Action</label>
+        <label class="form-label mb-1 fs-r70" for="filter-action">Action</label>
         <select name="action" id="filter-action" class="form-select form-select-sm">
           <option value="">All actions</option>
           {% for a in actions %}<option value="{{ a }}" {% if a == filters.action %}selected{% endif %}>{{ a }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="filter-user">User</label>
+        <label class="form-label mb-1 fs-r70" for="filter-user">User</label>
         <select name="user" id="filter-user" class="form-select form-select-sm">
           <option value="">All users</option>
           {% for u in users %}<option value="{{ u }}" {% if u == filters.user %}selected{% endif %} data-no-i18n>{{ u }}</option>{% endfor %}
         </select>
       </div>
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="filter-status">Status</label>
+        <label class="form-label mb-1 fs-r70" for="filter-status">Status</label>
         <select name="status" id="filter-status" class="form-select form-select-sm">
           <option value="" {% if not filters.status %}selected{% endif %}>All</option>
           <option value="ok" {% if filters.status == 'ok' %}selected{% endif %}>Success</option>
@@ -101,7 +101,7 @@
                a global ban lists the servers it missed at the end) — so the part kept on purpose was the part
                no page ever showed. data-no-i18n: this is logged output, not panel copy. #}
             {% set detail = entry.detail or "" %}
-            <td class="small text-secondary audit-detail" data-no-i18n>{% if detail|length > 100 %}<details><summary>{{ detail[:100] }}…</summary><span style="white-space:pre-wrap;word-break:break-word;">{{ detail[100:] }}</span></details>{% else %}{{ detail }}{% endif %}</td>
+            <td class="small text-secondary audit-detail" data-no-i18n>{% if detail|length > 100 %}<details><summary>{{ detail[:100] }}…</summary><span class="pre-wrap-word">{{ detail[100:] }}</span></details>{% else %}{{ detail }}{% endif %}</td>
             <td class="small text-secondary">{% if show_all_ips or entry.user_id == current_user.id %}{{ entry.ip_address }}{% endif %}</td>
             <td>
               {% if entry.success %}
