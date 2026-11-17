@@ -1,6 +1,6 @@
 """Part 148 of the unit suite: the local and Tailscale transports keep a bare CR.
 
-Owner report (2026-11-06): a command typed into a Paper server on the panel's own host showed in
+The bug: a command typed into a Paper server on the panel's own host showed in
 the console as "> s", "> st", "> sta" ... one line per letter. Paper's JLine console rewrites its
 input line with a CR after each keystroke, all on ONE line of the log; terminal.render applies those
 CRs as overwrites. The local and Tailscale transports turned each bare CR into a line break before
