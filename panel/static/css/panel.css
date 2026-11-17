@@ -2558,3 +2558,9 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   letter-spacing:.02em;
   caret-color:transparent;
 }
+
+/* ── Strict CSP: data-start-hidden (shared) ── */
+
+/* An element that starts hidden: what style="display:none" did before the page policy refused style
+   attributes. js/start_hidden.js turns the mark into an inline display set through the CSSOM. */
+[data-start-hidden] { display: none; }
