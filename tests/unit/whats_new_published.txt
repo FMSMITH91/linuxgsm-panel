@@ -722,3 +722,4 @@ f11c14e5 An expired page token renews itself.
 b50efc80 Behind a proxy that hides the panel's address, the fix is one command.
 0ef4982b Used, revoked and expired invite links leave the list.
 5706732d Your own TLS certificate on the panel is kept.
+d3df41ea The invite and password boxes line up with their Copy buttons.

@@ -483,6 +483,10 @@ compares git commits, not this file.
 
 ### Fixed
 
+- **The invite and password boxes line up with their Copy buttons.** The new link, code and one-time password were drawn in
+  larger text than the rest of the dialog, showed a typing cursor in a box nobody types in, and the
+  warning sat tight against the code. They are now the same size as their buttons, a click selects
+  the whole value, and the warning has room above it.
 - **The update log reads cleanly on a phone.** The installer's welcome box, drawn for a full-width terminal,
   wrapped into broken lines in the panel's update log on a narrow screen. Outside a terminal it is
   now one plain line.
