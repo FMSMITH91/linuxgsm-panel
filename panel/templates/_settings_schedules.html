@@ -66,10 +66,10 @@
       <div class="small text-secondary mt-1">These run on fixed timings other parts of the panel rely on, so they are shown, not changed.</div>
       <div class="table-responsive">
         <table class="table table-sm small mb-0">
-          <thead><tr><th>Job</th><th>What it does</th><th>How often</th><th>Last</th><th>Next</th></tr></thead>
+          <thead><tr><th>Job</th><th class="d-none d-md-table-cell">What it does</th><th>How often</th><th>Last</th><th>Next</th></tr></thead>
           <tbody>
             {% for w in sc.workers %}
-            <tr><td>{{ t(w.name) }}</td><td>{{ t(w.what) }}</td><td>{{ w.often }}</td>
+            <tr><td>{{ t(w.name) }}</td><td class="d-none d-md-table-cell">{{ t(w.what) }}</td><td>{{ w.often }}</td>
                 <td>{{ w.last|datetime }}</td><td>{% if w.next %}{{ w.next|datetime }}{% else %}—{% endif %}</td></tr>
             {% endfor %}
           </tbody>
