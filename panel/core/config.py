@@ -64,6 +64,12 @@ DEFAULT_CONFIG = {
     # many connections each database's user may hold at once (a plugin's pool is about 10).
     "db_max_per_server": 5,
     "db_max_user_connections": 30,
+    # Settings > HTTPS certificate (panel/services/tls_own.py): whose certificate data/ssl holds
+    # ("" = the panel's built-in one, "own" = pasted, "letsencrypt" = copied from certbot), the
+    # certbot name, and whether a renewed Let's Encrypt certificate is loaded by itself each day.
+    "tls_cert_source": "",
+    "tls_le_name": "",
+    "tls_le_autorenew": True,
 }
 
 

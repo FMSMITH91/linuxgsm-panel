@@ -217,11 +217,16 @@ argument vector: no shell, and only the programs its verbs name. Its shebang is
 It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management, the sshd port
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
-a game server's MariaDB/MySQL databases, and more — 132 verbs. The narrowing is in the argument types:
+a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, and more — 133 verbs.
+The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `ssh.socket`, `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). The panel's own unit is
   not in it; `panel-restart` restarts it and takes nothing else.
+- `tls-le-copy` takes one **certificate name** (domain labels and dots) and copies only
+  `/etc/letsencrypt/live/<name>/fullchain.pem` and `privkey.pem`, each a root-owned regular file under
+  that certificate's own `live/` or `archive/` directory and nothing but PEM of its kind, into the
+  panel's `data/ssl` (opened without following a link), owned by the panel's account, the key 0600.
 - The write verb takes a **destination name** and the content on stdin, so `write-file /etc/shadow`
   fails on the name. The log verbs take a **source name** (`log-tail auth`), never a path.
 - **The sshd port change** is all verbs: snapshot, write, `sshd -t`, restart, confirm the port

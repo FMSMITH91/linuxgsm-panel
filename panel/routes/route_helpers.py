@@ -423,10 +423,10 @@ def _setup_admin_user(state, data):
     # username_problem, not a length test: the first admin is created here and nowhere else, and
     # every other create/rename path refuses a tab or interior space (an account the login box
     # cannot reproduce), a control or bidi character, and a name longer than the column.
-    if username_problem(username):
-        flash(username_problem(username), "danger")
-    elif password_problem(password, avoid=(username,)):
-        flash(password_problem(password, avoid=(username,)), "danger")
+    # Each check once: password_problem may ask Pwned Passwords, and asking twice sends twice.
+    problem = username_problem(username) or password_problem(password, avoid=(username,))
+    if problem:
+        flash(problem, "danger")
     elif password != confirm:
         flash("Passwords do not match.", "danger")
     else:

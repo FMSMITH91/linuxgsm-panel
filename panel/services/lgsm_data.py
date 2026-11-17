@@ -24,6 +24,8 @@ import threading
 import time
 import urllib.request
 
+from panel.core import outside_services as _outside
+
 # LinuxGSM's canonical copies. Fixed host, fixed paths — nothing here is caller-supplied.
 _BASE = "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/master/lgsm/data/"
 SERVERLIST = "serverlist.csv"
@@ -170,7 +172,13 @@ def _looks_like(name, text):
 
 
 def _download(url, name):
-    """GET one of LinuxGSM's files: (text, None), or (None, why). Never raises."""
+    """GET one of LinuxGSM's files: (text, None), or (None, why). Never raises.
+
+    Nothing is asked while Settings -> Outside services has the LinuxGSM switch off: the copy
+    already under data/ answers (see _text), and status() says why there is no fresher one.
+    """
+    if not _outside.enabled(_outside.LGSM_GITHUB):
+        return None, _outside.OFF_MESSAGE
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
         # `url` is _BASE or _RELEASE_BASE, fixed https://raw.githubusercontent.com URLs, with a
@@ -567,8 +575,9 @@ def latest_release():
     Never waits on GitHub: a stale or missing answer starts one background read and the call returns
     what it has, so the page asking is not held up by a fetch with a 10-second timeout.
     """
+    on = _outside.enabled(_outside.LGSM_GITHUB)   # off: the tag held is served, nothing is read
     with _lock:
-        tag, due = _latest["tag"], time.time() >= _latest["until"] and not _latest["running"]
+        tag, due = _latest["tag"], on and time.time() >= _latest["until"] and not _latest["running"]
         if due:
             _latest["running"] = True
     if due:

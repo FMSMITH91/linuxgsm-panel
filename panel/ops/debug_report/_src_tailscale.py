@@ -1,4 +1,4 @@
-"""The ONE Tailscale read per report, shared by R36, R49 and R72's name list. Owner: builder B3.
+"""The ONE Tailscale read per report, shared by R36, R49 and R72's name list.
 
 info() -> dict or None
     From panel.ops.tailscale_integration.get_tailscale_info() WITHOUT force_refresh (its 15 s

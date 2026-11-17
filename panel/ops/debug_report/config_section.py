@@ -1,6 +1,6 @@
 """Debug-report section: config (R65, R66, R67), with R37's proxy trust and R39's session cookie.
 
-Owner: builder B1. A request-mode section: the running values come from the Flask app's config.
+A request-mode section: the running values come from the Flask app's config.
 
 - Only DEBUG_CONFIG_KEYS (below) are shown, and never as typed where the value names something:
   bind_host as loopback / all interfaces / auto / [ip:class] / hostname; site_domain as set

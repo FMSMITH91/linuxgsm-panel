@@ -83,6 +83,8 @@ _HTTP_REVIEWED37 = {
     ("panel/services/modrinth.py", "_mdr_http_get", "opener.open"),
     ("panel/services/steam_workshop.py", "_wsc_http_post", "build_opener"),
     ("panel/services/steam_workshop.py", "_wsc_http_post", "opener.open"),
+    ("panel/core/breached_passwords.py", "_fetch_range", "build_opener"),
+    ("panel/core/breached_passwords.py", "_fetch_range", "opener.open"),
 }
 
 

@@ -63,7 +63,7 @@ Trust boundaries:
 | TB2 | Panel to root (the helper) | the panel's own account, which a web compromise would hold |
 | TB3 | Panel to game accounts | game server processes, mods and plugins, players' data |
 | TB4 | Panel to remote hosts | the remote's sshd and its game accounts |
-| TB5 | Panel to push services and chat channels | third-party services; anyone in a bot's channel |
+| TB5 | Panel to push services, chat channels and other outside services | third-party services; anyone in a bot's channel |
 | TB6 | Panel to database servers | database contents written by players and plugins |
 | TB7 | GitHub to an installed panel (updates) | anyone holding the GitHub account or a CI token |
 | TB8 | CI runners (pull-request code) | anyone who opens a pull request |
@@ -90,10 +90,11 @@ the file that holds them.
 
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
-| S | Password guessing, credential stuffing | Mitigate: Argon2id hashes, per-account throttle and lockout, breached/common password list, required 2FA for admins (`panel/security/account_guard.py`, `panel/security/auth.py`, `panel/core/common_passwords.py`). |
+| S | Password guessing, credential stuffing | Mitigate: Argon2id hashes, per-account throttle and lockout, a new password screened against the bundled common-password rules, a downloaded list of 100,000 breached passwords and (when the setting is on) Pwned Passwords, required 2FA for admins (`panel/security/account_guard.py`, `panel/security/auth.py`, `panel/core/common_passwords.py`, `panel/core/breached_passwords.py`). |
+| I | A new password leaves the panel for the breach check | Mitigate: k-anonymity: only the first five hex characters of its SHA-1 go to `api.pwnedpasswords.com`, the answer is padded, the match is made locally; nothing else is sent. Only after the local checks pass; Settings switches it off; no answer within 3 s keeps the local result (`panel/core/breached_passwords.py`). |
 | S | Session theft or fixation | Mitigate: `__Host-` cookie, Secure/HttpOnly/SameSite, rotation on sign-in, idle and absolute limits, session bound to its client address (IPv6 by /64) and User-Agent under "strong" protection, server-side revocation (`__Host-` prefix in `panel/security/auth.py`; `panel/security/session_cookie.py`, `panel/core/session_policy.py`). |
 | T | Cross-site request forgery | Mitigate: CSRF token on every state-changing request (Flask-WTF `CSRFProtect`, `panel/install/app.py`), Fetch Metadata guard with the Origin/Referer check as its fallback (`panel/routes/account_security.py`), SameSite cookie. A page left open across a new session gets that session's token in the JSON refusal of an in-page request and resends it once (`_csrf_refused`, `panel/static/js/panel.js`); only same-origin script can set the header or read the reply. Behind a proxy that hides the panel's address, the target origin is configured (`site_domain`, `manage.py set-site-domain`) and the journal says so when a form was refused for it. |
-| S | Traffic read or altered in transit | Mitigate: HTTPS through Tailscale Serve, a reverse proxy or the panel's own TLS (ECDSA P-256, SHA-256, 397 days, `panel/services/certs.py`), HSTS. An operator's CA-signed certificate in `data/ssl` is never replaced by a self-signed one; a weak key, SHA-1/MD5 signature, mismatched key or expiry is logged at start-up, and the expiry alert starts 30 days ahead. |
+| S | Traffic read or altered in transit | Mitigate: HTTPS through Tailscale Serve, a reverse proxy or the panel's own TLS (ECDSA P-256, SHA-256, 397 days, `panel/services/certs.py`), HSTS. The operator's own certificate goes in through Settings (pasted, or a Let's Encrypt one copied by the helper's `tls-le-copy` verb: one validated name, fixed paths, root-owned PEM only; `panel/services/tls_own.py`): a mismatched key, passphrase key, unreadable file or expired certificate is refused, a weak key, SHA-1/MD5 signature, uncovered panel address, self-signed certificate or missing chain is noted. It is never replaced by a self-signed one, a renewed Let's Encrypt certificate is loaded daily, HSTS is sent with a CA-signed one (one day for its first 30 days, then two years), and the expiry alert starts 30 days ahead. |
 | T | Injection (SQL, shell, template, path) | Mitigate: SQLAlchemy bound parameters; validation before a value reaches a shell (`panel/core/validation.py`); no shell between the panel and root (TB2); Jinja autoescape; strict CSP (`panel/security/headers.py`). |
 | R | A user denies a change | Mitigate: audit row for every change with actor and address (`log_action`); denials logged (`account_guard.py`). |
 | I | Secrets shown to a role that should not see them | Mitigate: permission per route (`panel/security/auth.py`), server access per group, LinuxGSM `details` masked for roles without MANAGE_SERVERS, debug report scrubbing (`panel/ops/debug_report/privacy.py`). |
@@ -132,7 +133,7 @@ the file that holds them.
 | I | Stored SSH credentials leak | Mitigate: passwords and key paths encrypted at rest with the AES-256-GCM key ring; never logged; backups hold them encrypted. A key file is not copied into the panel: it stays where the operator keeps it, under its file permissions. |
 | E | Panel's own host reached through a "remote" entry | Mitigate: bootstrap, Tailscale install and join routes refuse the panel's own host. |
 
-### TB5: push services and chat channels
+### TB5: push services, chat channels and other outside services
 
 | STRIDE | Threat | Response and controls |
 | --- | --- | --- |
@@ -142,6 +143,7 @@ the file that holds them.
 | S | A stranger links their own Telegram chat to someone's account and gets that account's alerts | Mitigate: a link needs a one-time code the signed-in account asks for after a password re-check (128 random bits, SHA-256 at rest, 10 minutes, once, five per account per 10 minutes), claimed only from a private chat; the chat id is encrypted on the account, the link is audited and shown to the account as a change to its security (`panel/services/telegram_link.py`, `panel/routes/push_devices.py`). A linked chat only receives: commands still come from the chat on the Notifications page. |
 | I | Alert text reveals more than a lock screen should | Mitigate: push text is the event and the server's name only; endpoints and keys never logged. |
 | D | A slow push service stalls the panel | Mitigate: one background sender, bounded queue, timeouts. |
+| I | An outside service learns that this server exists and what it asks (update checks, LinuxGSM's files, game icons, Workshop titles, Modrinth, the public address, the breached-password check) | Mitigate: local first, the minimum sent (k-anonymity for the password check), and one switch per service in Settings → Outside services, enforced where each request is made (`panel/core/outside_services.py`); docs/PRIVACY.md lists each service and what it is sent (OWASP User Privacy Protection Cheat Sheet, "Prevent IP Address Leakage"). |
 
 ### TB6: database servers
 
@@ -159,6 +161,7 @@ the file that holds them.
 | --- | --- | --- |
 | S | A commit merged by someone holding the GitHub account | Mitigate: panels install only commits signed with the release key, kept off GitHub, verified against the key the host already holds (`tools/sign-release.sh`, `install.sh`). |
 | T | A dependency changed upstream | Mitigate: hashed lockfiles installed `--require-hashes --no-deps`; gamedig from a hash-locked npm lockfile; dependency review, pip-audit and osv-scanner in CI; a CycloneDX SBOM attached to each GitHub Release (`tools/sbom.py`). |
+| T | The downloaded breached-password list is altered | Mitigate: fetched from a fixed SecLists commit and saved only when it hashes to the SHA-256 pinned in `install.sh`; the panel re-hashes it on every read and skips it on a mismatch (`panel/core/breached_passwords.py`). |
 | R | Which code a release contains | Mitigate: release notes from the CHANGELOG, the signature and the SBOM on the release; the SBOM is reproducible from the tagged commit. |
 | E | First install trusts whatever GitHub serves | Reduce, then accept: the release key's fingerprint is published in README and SECURITY.md, which shows how to check the commit's release signature before the first install; unchecked, it is trust on first use. |
 
@@ -169,7 +172,7 @@ the file that holds them.
 | T | Poisoned pipeline execution from a pull request | Mitigate: no `pull_request_target`; `workflow_run` jobs run main's copy and treat artifacts as untrusted; actions pinned by full SHA; required checks and signed commits on `main` (OWASP Top 10 CI/CD Security Risks, CICD-SEC-1 and CICD-SEC-4). |
 | I | A secret reaches pull-request code | Mitigate: the only secrets live in environments only `main` can use; pull-request jobs hold the job token alone (CICD-SEC-6). |
 | E | A job's token can do more than the job needs | Mitigate: every workflow starts with `permissions: {}` and each job grants only what it uses (CICD-SEC-5). |
-| I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list; the rest audit (CICD-SEC-7, CICD-SEC-10). |
+| I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list (the unit suites' coverage and JavaScript coverage jobs among them); the rest audit (CICD-SEC-7, CICD-SEC-10). |
 
 ## Residual risks
 
@@ -181,8 +184,8 @@ the file that holds them.
 | The upload scan is a text scan, not an SQL parser | Accept | A keyword split over lines, a comment or vertical tab between keywords is not read; the database account's one-database grant refuses those statements. |
 | The SQL box's audit line keeps numbers | Accept | String and hex literals are masked under either escape mode (a literal whose end depends on sql_mode masks the rest of the line), but decimal numbers stay in the audit line by design, so an id or amount typed into a statement is recorded. Owner: whoever grants EDIT_DATABASE_DATA. |
 | Push services and chat platforms see alert metadata | Transfer | To the vendor, under its terms; the text is minimal. |
-| An operator's own TLS certificate expires | Accept, with warning | With HSTS, browsers refuse an expired trusted certificate with no way past it, so the web page is unreachable until it is renewed; the panel and the host's shell keep working. The expiry alert warns from 30 days, and docs/https.md gives a certbot deploy hook that renews it in place. Owner: the operator who installed the certificate. |
-| Harden-Runner audit-only jobs (unit suites, Lighthouse, ClusterFuzzLite, main-only jobs) | Accept for now | Their endpoints include test addresses, Chrome's own calls or Docker networking, or they cannot be checked by a pull request before main; their observed endpoints are recorded so they can move to block later. |
+| An operator's own TLS certificate expires | Accept, with warning | With HSTS, browsers refuse an expired trusted certificate with no way past it, so the web page is unreachable until it is renewed; the panel and the host's shell keep working. The expiry alert warns from 30 days, and a Let's Encrypt certificate put in through Settings is reloaded daily once certbot renews it (docs/https.md section 5). Owner: the operator who installed the certificate. |
+| Harden-Runner audit-only jobs (the unit suites' `checks` matrix, Lighthouse, ClusterFuzzLite, main-only jobs) | Accept for now | `checks` installs packages from an apt mirror whose host name depends on the runner's region, so one pull request cannot show its list is complete; Lighthouse's score includes Chrome's own calls; ClusterFuzzLite runs in Docker images with their own networking; a main-only job cannot be checked by a pull request before it holds every panel's update. Their observed endpoints are recorded (tests/unit/part223.py) so they can move to block later. |
 | ClusterFuzzLite's and Scorecard's runner images are named by tag inside their actions | Accept | Trust in Google's and OpenSSF's tags; noted in `.clusterfuzzlite/Dockerfile`. |
 
 ## Review and validation

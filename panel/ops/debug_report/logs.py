@@ -1,6 +1,6 @@
 """Debug-report sections: journal_digest (R71) and recent_log (R68, R69, R70, R73).
 
-Owner: builder B1. Both read the report's ONE journal read (_src_journal, up to 5000 lines): the
+Both read the report's ONE journal read (_src_journal, up to 5000 lines): the
 digest summarises all of it, the recent log prints the newest 400 lines within a budget. That read
 is the panel's own output where journald can filter it (the sudo/pam lines every privileged call
 writes are left out BEFORE the line limit, so the window is not spent on them); the sudo lines come

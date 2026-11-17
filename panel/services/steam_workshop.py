@@ -21,6 +21,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from panel.core import outside_services as _outside
+
 _WSC_BASE = "https://api.steampowered.com/ISteamRemoteStorage/"
 _WSC_METHODS = ("GetPublishedFileDetails", "GetCollectionDetails")
 _WSC_TIMEOUT = 10
@@ -112,7 +114,12 @@ def split_ids(text):
 
 
 def _wsc_http_post(method, form):
-    """POST `form` to one ISteamRemoteStorage method: (body bytes, None) or (None, why). Never raises."""
+    """POST `form` to one ISteamRemoteStorage method: (body bytes, None) or (None, why). Never raises.
+
+    Nothing is sent while Settings -> Outside services has the Steam Workshop switch off.
+    """
+    if not _outside.enabled(_outside.STEAM_WORKSHOP):
+        return None, "turned off in Settings"
     if method not in _WSC_METHODS:
         return None, "not an allowed method"
     url = _WSC_BASE + method + "/v1/"

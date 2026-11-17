@@ -3100,6 +3100,72 @@ install_gamedig() {
     return 0
 }
 
+# The breached-password list new passwords are screened against (panel/core/breached_passwords.py,
+# which pins the same URL and SHA-256): SecLists' 100k-most-used-passwords-NCSC.txt (MIT), at a
+# fixed commit, into data/. Fetched only when the file there is missing or not the pinned one, so a
+# current host downloads nothing. A download that fails, or that does not hash to the pin, is
+# reported and changes nothing: the panel skips that step while the file is missing, and the next
+# update tries again. Never a reason to stop an install or an update.
+#
+# AS THE OWNER of PANEL_DIR when that is not root, for choose_and_record_port's reasons: data/ is
+# the panel user's, and root writing a fixed name there follows a link the panel user planted. The
+# script also refuses links itself and writes through an O_EXCL temp file renamed into place.
+PW_LIST_COMMIT="1a7bb9127eca9e6ff2fc0301c597fe6e16a0cb56"
+PW_LIST_URL="https://raw.githubusercontent.com/danielmiessler/SecLists/${PW_LIST_COMMIT}/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt"
+PW_LIST_SHA256="c2e5696882c603b76bb67a47ee970897e5a76fc4c3f5547abe3d0ca340c576e0"
+ensure_password_list() {
+    local as_owner="" owner="" rc=0
+    if [[ "$(id -u)" -eq 0 ]]; then
+        owner="$(_r42i_tree_owner)"
+        [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner}"
+    fi
+    (cd / && ${as_owner} python3 -I - "${PANEL_DIR}/data" "${PW_LIST_URL}" "${PW_LIST_SHA256}" <<'PWLIST_PY') || rc=$?
+import hashlib, os, sys, tempfile, urllib.request
+data, url, pin = sys.argv[1:4]
+dest, cap = os.path.join(data, "common-passwords-100k.txt"), 2 * 1024 * 1024
+
+
+def digest_of(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as fh:
+        return hashlib.sha256(fh.read(cap + 1)).hexdigest()
+
+
+if digest_of(dest) == pin:
+    sys.exit(0)
+try:
+    req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
+    with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 - fixed https URL
+        raw = resp.read(cap + 1)
+except Exception:
+    sys.exit(3)
+if hashlib.sha256(raw).hexdigest() != pin:
+    sys.exit(4)
+os.makedirs(data, mode=0o700, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=data, prefix=".pwlist.")
+try:
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(raw)
+    os.replace(tmp, dest)
+except BaseException:
+    os.unlink(tmp)
+    raise
+sys.exit(2)
+PWLIST_PY
+    case "${rc}" in
+        0) ;;
+        2) ok "Breached-password list downloaded (SHA-256 verified)" ;;
+        4) warn "The breached-password list did not match its pinned SHA-256 and was not saved."
+           warn "New passwords are still checked against the built-in list." ;;
+        *) warn "Could not download the breached-password list. New passwords are still checked"
+           warn "against the built-in list; the next update tries again." ;;
+    esac
+    return 0
+}
+
 # ── The sudoers grant ──────────────────────────────────────────────────────────────────────
 # NARROW when every root-owned piece is in place, because only then does the panel have a way to
 # do its privileged work without a general shell: the helper for the verb table, the root-owned
@@ -3644,6 +3710,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         # gamedig is the same kind of piece: root-owned, outside the checkout, and a no-op when
         # its lockfile's tree is already in place.
         install_gamedig
+        # The breached-password list is the same: data/ keeps it, fetched only when missing or changed.
+        ensure_password_list
         # And the unit, like every other piece an install puts on the host. Not restarted for it:
         # this branch changes nothing that is running, so a new unit applies at the next restart.
         ensure_service_unit
@@ -3797,7 +3865,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     trap _update_window_abort ERR EXIT
 
     if [[ -d "${PANEL_DIR}/data" ]]; then
-        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/data.tgz" >/dev/null || true
+        # Not the breached-password list: ensure_password_list fetches it again by its pin.
+        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups --exclude=./common-passwords-100k.txt -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/data.tgz" >/dev/null || true
         # The service is stopped by now, so this die must put it back — the message promises the
         # panel is unchanged, and a panel that is down is not unchanged.
         if ! snapshot_ok "${BACKUP}/data.tgz"; then
@@ -3873,6 +3942,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_deps
         ok "Dependencies installed"
     fi
+    ensure_password_list   # a no-op while data/ holds the pinned list
     [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
 
     # Refresh the ROOT-OWNED copies to match the code we just fetched, BEFORE the service comes
@@ -4071,6 +4141,7 @@ fetch_code
 info "[2/4] Creating virtual environment & installing dependencies…"
 install_deps
 ok "Dependencies installed"
+ensure_password_list   # the breached-password list (data/, before the chown below)
 ensure_nodejs    # Node.js + npm, for gamedig (install_gamedig, after install_root_tools below)
 ensure_fail2ban  # brute-force protection for the panel login (jail is configured by the panel itself)
 

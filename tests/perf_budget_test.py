@@ -76,6 +76,7 @@ from panel.core.config import load_config, save_config  # noqa: E402
 _cfg = load_config()
 _cfg["setup_complete"] = True
 _cfg["ssh_timeout"] = 1
+_cfg["outside_lgsm_github"] = False   # no LinuxGSM file from GitHub: the suite reads its seeded cache
 save_config(_cfg)
 
 from panel.ops import system_ops as _so  # noqa: E402

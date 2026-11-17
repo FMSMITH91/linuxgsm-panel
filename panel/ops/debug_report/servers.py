@@ -1,6 +1,6 @@
 """Debug-report section(s): servers, console.
 
-Owner: builder B4. servers: per game server DB vs monitor vs port scan vs players, install jobs,
+servers: per game server DB vs monitor vs port scan vs players, install jobs,
 LinuxGSM data (R52, R54, R55). console: console feed state per watched server (R56).
 
 Ids, game types (LinuxGSM shortnames), ports, statuses, counts, ages and fixed tokens only. Never

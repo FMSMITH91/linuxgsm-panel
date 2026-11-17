@@ -12,7 +12,8 @@ The relevant `data/config.json` settings:
 
 | Setting | Meaning |
 |---------|---------|
-| `use_https` | Serve HTTPS directly with a built-in self-signed cert |
+| `use_https` | Serve HTTPS directly: the built-in self-signed cert, or your own (Settings → HTTPS certificate) |
+| `tls_cert_source`, `tls_le_name`, `tls_le_autorenew` | Set by Settings → HTTPS certificate: whose certificate `data/ssl` holds (`own`, `letsencrypt`, or empty for the built-in one), the certbot name, and the daily reload of a renewed one |
 | `trust_proxy` | You're behind a reverse proxy — trust its `X-Forwarded-*` headers |
 | `trusted_proxies` | Which peers count as that proxy — default all of loopback (`127.0.0.0/8` and `::1`); list yours if it is on another machine |
 | `trusted_proxy_users` | On loopback, the accounts the proxy may run as — default `www-data`, `nginx`, `http`, `caddy`, `cloudflared` (root and the panel's own account always count) |
@@ -84,27 +85,44 @@ eavesdropping but not a determined man-in-the-middle. For serious public use pre
 
 ## 5. Your own certificate on the panel itself (no proxy)
 
-Put a certificate from a real certificate authority (Let's Encrypt, or your organisation's CA) in
-`data/ssl/` as `cert.pem` (the full chain) and `key.pem` (its unencrypted private key), owned by the
-panel's account with `key.pem` at mode 0600, then restart the panel. The panel keeps a certificate a CA
-signed whatever its key type or dates: it never replaces yours with a self-signed one. At start-up it
-logs a warning when the key does not match the certificate, the RSA key is under 2048 bits, the
-signature is SHA-1 or MD5, or the certificate has expired (OWASP Transport Layer Security Cheat Sheet).
-The "TLS certificate expiring" alert warns from 30 days before it ends.
+**Settings → HTTPS certificate** (superadmin; the password is asked again for a stale sign-in) puts a
+certificate from a real certificate authority into the panel's built-in HTTPS, in one of two ways:
 
-**Renewing a Let's Encrypt certificate.** certbot renews into `/etc/letsencrypt/live/<domain>/`, which
-the panel's account cannot read. A deploy hook copies the renewed files in and restarts the panel:
+- **Let's Encrypt on this host.** Get the certificate with certbot as usual (`sudo certbot certonly
+  --standalone -d panel.example.com`, or with your web server), then type its name as
+  `sudo certbot certificates` shows it. certbot's files are root's, so the panel's privileged helper
+  copies exactly `/etc/letsencrypt/live/<name>/fullchain.pem` and `privkey.pem` (the `tls-le-copy`
+  verb: one validated name, both paths fixed, root-owned PEM files only) into `data/ssl/`. With
+  "Load a renewed certificate automatically" on (the default), the panel copies the files again once
+  a day and, when certbot has renewed the certificate (a later expiry date), loads it and restarts.
+  This needs the helper, so install.sh must have been run as root.
+- **Paste a certificate.** The certificate with its full chain, and its private key without a
+  passphrase, both PEM.
 
-```bash
-# /etc/letsencrypt/renewal-hooks/deploy/linuxgsm-panel.sh  (chmod 755; runs as root after each renewal)
-install -m 0644 -o <panel-user> "$RENEWED_LINEAGE/fullchain.pem" /home/<panel-user>/linuxgsm-panel/data/ssl/cert.pem
-install -m 0600 -o <panel-user> "$RENEWED_LINEAGE/privkey.pem"   /home/<panel-user>/linuxgsm-panel/data/ssl/key.pem
-systemctl restart linuxgsm-panel
-```
+Either way the panel checks the pair before using it (OWASP Transport Layer Security Cheat Sheet,
+"Certificates"). It **refuses** files it cannot read, a key with a passphrase, a key that is not the
+certificate's, and an expired certificate. It **notes**, and still uses: an RSA key under 2048 bits
+or a curve browsers do not accept, an MD5 or SHA-1 signature, a panel address (`site_domain`, or the
+name the page was opened by) missing from the certificate's subjectAltName, a self-signed
+certificate, a chain with no intermediate certificate or out of order, and fewer than 30 days left.
+The key is written to `data/ssl/key.pem` at mode 0600 from the moment it exists, the chain to
+`cert.pem` leaf first, and the panel restarts to load them. `config.json`'s `tls_cert_source`
+records that the certificate is yours, so the panel never replaces it with a self-signed one.
+**Use the built-in certificate** on the same card goes back.
 
-**Do not let it expire.** The panel sends HSTS, so once browsers have trusted your certificate they
-refuse an expired one outright, with no "continue anyway". The panel still runs and the host's shell
-still works; renew the certificate and restart the panel.
+You can still place `cert.pem` (the full chain) and `key.pem` (0600, owned by the panel's account) in
+`data/ssl/` by hand and restart: a certificate a CA signed is never replaced, and the same problems
+are logged at start-up instead of shown.
+
+**HSTS.** With a CA-signed certificate the panel's own HTTPS sends `Strict-Transport-Security`
+(OWASP HTTP Strict Transport Security Cheat Sheet): `max-age=86400; includeSubDomains` for the
+first 30 days after the certificate was put in through Settings (and always for one placed by
+hand), then two years. A self-signed certificate never gets it.
+
+**Do not let it expire.** With HSTS, browsers refuse an expired certificate outright, with no
+"continue anyway"; the same goes for going back to the built-in certificate after HSTS was sent.
+The panel and the host's shell keep working. The "TLS certificate expiring" alert warns from 30
+days before the end; for Let's Encrypt it points at `sudo certbot renew --dry-run`.
 
 ## Bans and blocks behind a proxy or tunnel
 

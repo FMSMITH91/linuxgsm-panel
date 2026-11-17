@@ -1,6 +1,6 @@
 """The report's privacy pass: pseudonymise known names, classify IPs, normalise paths (R72, R73).
 
-Owner: builder B1. Sections are written never to print identifying values (see _base.py); this runs
+Sections are written never to print identifying values (see _base.py); this runs
 over the finished text anyway, because log lines, installer output and other sections' detail are
 free text.
 

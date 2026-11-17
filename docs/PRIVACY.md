@@ -27,6 +27,7 @@ run yourself: there is no service behind it, no account to make, and nothing is 
 | Alert devices (browser push subscriptions) and linked Telegram chats | Sending you your alerts | Encrypted; removed when you remove the device, unlink, or the account is deleted |
 | Alert channel tokens (Telegram, Discord, ntfy) | Sending alerts | Encrypted |
 | API tokens, 2FA backup codes, invite links | Signing in, inviting people | Stored only as hashes |
+| The HTTPS certificate and its private key (`data/ssl`), your own or a Let's Encrypt one if you put one in | Serving HTTPS | The key is readable by the panel's account only (mode 0600); it never leaves the server and is not in the audit log, which records the certificate's name, issuer, expiry and fingerprint |
 | Panel backups | Restoring the panel | Kept 14 days by default (1–365, Panel Server → Panel → Backups); can be encrypted with a passphrase |
 
 The encryption key ring is `data/cred_key`, on the same host so the panel can start unattended. It
@@ -52,22 +53,30 @@ the request. Nothing in them names you or your players. The panel identifies its
 
 | Service | When | What it is sent | Can it be turned off? |
 | --- | --- | --- | --- |
-| **GitHub** (`api.github.com`, `github.com`, `raw.githubusercontent.com`) | Checking for panel updates (at most every 5 minutes while a page shows the badge, and every 30 minutes in the background); LinuxGSM release notes; the list of games LinuxGSM supports | Which commit is newest; which release notes or list to fetch | Not yet: a switch is planned |
-| **linuxgsm.com** | Game icons on the install page | Which icon | Not yet: a switch is planned |
-| **Steam Web API** | Opening a server's Workshop card | The Workshop item and collection ids shown | Not yet: a switch is planned (it is only used when you open the card) |
-| **Modrinth** | Searching for or installing a Minecraft plugin or datapack | The search words and your Minecraft version | Not yet: a switch is planned (only used when you search) |
-| **api.ipify.org**, then OpenDNS | Finding a host's public address for players' connect line, **only** when the host has no public address of its own (behind a router) | Nothing but the request | Not yet: a switch is planned |
+| **GitHub** (`api.github.com`, `github.com`, `raw.githubusercontent.com`) | Checking for panel updates (at most every 5 minutes while a page shows the badge, and every 30 minutes in the background), listing and switching branches | Which commit is newest | Yes: Settings → Outside services → *Panel update check*. Off: no "Update available"; update from the shell with `install.sh` |
+| **GitHub** (`raw.githubusercontent.com`, `api.github.com`) | LinuxGSM's list of supported games and their package lists (re-read weekly), its newest version (daily) and its release notes (daily) | Which list or release notes to fetch | Yes: Settings → Outside services → *LinuxGSM game list and release notes*. Off: the copy already downloaded is used (a new install has none) |
+| **linuxgsm.com** | Game icons on the install page | Which icon | Yes: Settings → Outside services → *Game icons*. Off: icons already downloaded, initials for the rest |
+| **Steam Web API** | Opening a server's Workshop card | The Workshop item and collection ids shown | Yes: Settings → Outside services → *Steam Workshop titles*. Off: the ids are shown without titles |
+| **Modrinth** | Searching for or installing a Minecraft plugin or datapack | The search words and your Minecraft version | Yes: Settings → Outside services → *Minecraft plugins and datapacks*. Off: no search or install from Modrinth |
+| **api.ipify.org**, then OpenDNS | Finding a host's public address for players' connect line, **only** when the host has no public address of its own (behind a router) | Nothing but the request | Yes: Settings → Outside services → *Public address lookup*. Off: the host's own address is shown |
+| **Have I Been Pwned** (`api.pwnedpasswords.com`) | Setting or changing a password (setup, Account, Users, `manage.py`), **only** after the panel's own lists have passed it | The first 5 characters of the password's SHA-1 hash, never the password or the rest of its hash (k-anonymity), with padding so the answer's size says nothing; only to `api.pwnedpasswords.com/range/`, redirects refused | Yes: Settings → Outside services → *Have I Been Pwned password check*. Off: only the panel's own lists are checked; no answer within 3 seconds keeps their result |
 | **Telegram, Discord, ntfy** | Sending an alert, when you set the channel up | The alert's short text. By default it names no person and no address (Notifications → *Include details* adds them) | Yes: each channel's on/off switch. ntfy can be [your own server](NTFY-SELF-HOST.md) |
 | **Your browser's push service** (Mozilla, Apple, Google, Microsoft) | Sending an alert to a device you turned alerts on for | The alert, encrypted end to end between the panel and your browser; the push service sees only its size and time | Yes: per device (Account → Alerts on this device) |
 | **Your own Telegram chat** | Alerts, once you link it (Account → Link my Telegram) | The same short text as a browser alert | Yes: Unlink Telegram |
 | **Tailscale** | If you use Tailscale, its client on your server talks to Tailscale's coordination server | Tailscale's own traffic, under Tailscale's terms | Yes: don't use it, or log the host out |
 | **Ubuntu package mirrors** | OS updates you start, and the daily check for them | Which packages are available | The check: by not using OS Updates; the mirrors are your system's |
 
-The installer, run by you, also downloads the panel from GitHub and its dependencies from their usual
-sources, and asks one service for the host's public address only when the host is behind a router.
+Every switch is on by default and is checked where the request is made, so nothing in the panel
+reaches a service while its switch is off. Turning off the update check or the breached-password check
+asks first, because each is a security control.
 
-**Switches for every outside service are planned:** an "Outside services" card in Settings, with one
-switch per service and a plain note of what stops working when it is off.
+The installer, run by you, also downloads the panel from GitHub and its dependencies from their usual
+sources, and asks one service for the host's public address only when the host is behind a router. A
+fresh install and every update also download the list of 100,000 common passwords the breached-password
+check uses (`data/common-passwords-100k.txt`, from the SecLists project on `raw.githubusercontent.com`,
+pinned to one commit and checked against its SHA-256), but only when the file is missing or does not
+match: a host that has it downloads nothing. If the download fails, the install or update carries on
+and that list is skipped until it is there.
 
 ## Your controls
 
@@ -77,6 +86,8 @@ switch per service and a plain note of what stops working when it is off.
 - **Backups:** how many days to keep, and a passphrase to encrypt them.
 - **Alert devices and Telegram:** remove a device, unlink Telegram, or tick *Stop alerts on this device*
   when you sign out.
+- **Outside services:** Settings → Outside services has one switch per service above, each with a
+  note of what stops working when it is off.
 - **Accounts:** deleting an account removes its devices, sessions and linked chat.
 
 ## Changes

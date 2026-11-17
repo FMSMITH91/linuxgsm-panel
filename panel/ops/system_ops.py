@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 import subprocess
-from panel.core import i18n, terminal, whats_new
+from panel.core import i18n, outside_services as _outside, terminal, whats_new
 from panel.core.validation import canonical_ip, canonical_ip_or_network, ip_address_or_none
 import threading
 import time
@@ -2664,6 +2664,21 @@ def _update_running_status():
             "message": "An update is being installed right now — check again once it has finished."}
 
 
+# What every update question answers while Settings -> Outside services has the update check
+# off. Shaped as the not-a-git-checkout status: no in-panel update mechanism, so the card shows
+# this one line, the badge clears, the bots and the Update button refuse with it.
+UPDATE_CHECK_OFF = ("The update check is turned off (Settings \u2192 Outside services), so the "
+                    "panel does not ask GitHub for updates. Update from the shell with install.sh.")
+
+
+def _update_check_off_status():
+    """The update status while the update check is off: computed with no git fetch and no GitHub."""
+    sha, _, _ = _git(["rev-parse", "--short", "HEAD"], timeout=10)
+    return {"git": False, "update_check_off": True, "update_available": False,
+            "current_version": panel_version(), "current_sha": sha.strip(),
+            "branch": _tracked_branch(), "message": UPDATE_CHECK_OFF}
+
+
 def panel_update_status(force=False):
     """Whether the panel is behind its GitHub remote. Cached ~5 min (each check does
     a network `git fetch`) unless `force` is set.
@@ -2671,9 +2686,12 @@ def panel_update_status(force=False):
     Single-flight (_update_lock): a caller that arrives while another computation is running waits
     for it and returns ITS answer — with force too, since a status computed while this caller
     waited is as fresh as the one it would compute. And while an update is running nothing is
-    computed at all (see _update_running_status)."""
+    computed at all (see _update_running_status). With the update check switched off nothing is
+    fetched or cached (_update_check_off_status)."""
     if _update_in_progress():
         return _update_running_status()
+    if not _outside.enabled(_outside.UPDATE_CHECK):
+        return _update_check_off_status()
     if not force and _update_cache["data"] is not None and \
             (time.time() - _update_cache["ts"]) < _UPDATE_TTL:
         return _update_cache["data"]
@@ -2959,7 +2977,7 @@ def list_panel_branches():
     """Remote branches available to switch to, most-recently-updated first, plus the currently
     tracked branch. Returns (branches, current). Best-effort: ([current], current) on failure."""
     branch = _tracked_branch()
-    if not _is_git_checkout():
+    if not _is_git_checkout() or not _outside.enabled(_outside.UPDATE_CHECK):
         return [branch], branch
     # The fetch moves refs/remotes/origin/<tracked branch>, the ref a status check and the
     # installer fetch too, and the page fires this beside its status check. Unserialised, two
@@ -3142,6 +3160,8 @@ def panel_switch_branch(branch):
         return False, "Invalid branch name."
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't switch branches."
+    if not _outside.enabled(_outside.UPDATE_CHECK):
+        return False, UPDATE_CHECK_OFF
     # Confirm the branch exists on the remote before committing the config to it. By EXACT name:
     # ls-remote matches a pattern against the TAIL of each ref, so `dev` was confirmed by a branch
     # `feature/dev` alone, and the panel then tracked a branch that does not exist.
