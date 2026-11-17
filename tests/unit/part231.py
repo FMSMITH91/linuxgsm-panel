@@ -95,34 +95,42 @@ def _fixture_list231(words=("123456", "password", _LISTED231.lower(), "sunflower
 
 
 # ── 1. k-anonymity: what is sent ────────────────────────────────────────────────────────────────
-def _s231_request_shape():
-    seen = []
+class _Resp231:
+    """A urlopen response holding `body`."""
 
-    class _Resp:
-        def __init__(self, body):
-            self.body = body
+    def __init__(self, body):
+        self.body = body
 
-        def __enter__(self):
-            return self
+    def __enter__(self):
+        return self
 
-        def __exit__(self, *_a):
-            return False
+    def __exit__(self, *_a):
+        return False
 
-        def read(self, n=-1):
-            return self.body[:n] if n and n > 0 else self.body
+    def read(self, n=-1):
+        """The body, at most `n` bytes."""
+        return self.body[:n] if n and n > 0 else self.body
+
+
+def _capture231():
+    """Run the real _fetch_range against a stand-in opener; (requests seen, handlers given, body)."""
+    seen, handlers = [], []
 
     def _open(req, timeout=None):
         seen.append((req.full_url, dict(req.header_items()), timeout))
-        return _Resp(_range_for231(_PWNED231).encode())
+        return _Resp231(_range_for231(_PWNED231).encode())
 
-    handlers = []
     _p9_patch(_bp231, "_fetch_range", _REAL_FETCH231)
     _uo = _r21d_urlopen_of(_bp231)
     _uo.build_opener = lambda *h: handlers.extend(h) or _NS231(open=_open)
     try:
-        body = _bp231._fetch_range(_bp231.sha1_parts(_PWNED231)[0])
+        return seen, handlers, _bp231._fetch_range(_bp231.sha1_parts(_PWNED231)[0])
     finally:
         del _uo.build_opener
+
+
+def _s231_request_shape():
+    seen, handlers, body = _capture231()
     digest = _hl231.sha1(_PWNED231.encode()).hexdigest().upper()
     url, headers, timeout = seen[0] if seen else ("", {}, None)
     check("breach check: the request names only the hash's first five hex characters",
@@ -135,6 +143,10 @@ def _s231_request_shape():
     check("breach check: sha1_parts splits the upper-case SHA-1 into 5 + 35 characters",
           _bp231.sha1_parts("password") == ("5BAA6", "1E4C9B93F3F0682250B6CF8331B7EE68FD8"),
           repr(_bp231.sha1_parts("password")))
+    _request_rest231(handlers, body)
+
+
+def _request_rest231(handlers, body):
     refusers = [h for h in handlers if isinstance(h, type) and issubclass(h, _ur231.HTTPRedirectHandler)]
     check("breach check: the request refuses every redirect",
           len(refusers) == 1 and refusers[0]().redirect_request(None, None, 302, "", {}, "https://elsewhere.test/") is None,
@@ -335,38 +347,59 @@ def _run_list231(panel_dir, url, pin):
     return p.stdout + p.stderr
 
 
-def _s231_installer():
+_LIST_BYTES231 = b"123456\npassword\n"
+
+
+def _list_src231():
+    """A scratch list file and its SHA-256: (file:// URL, pin, panel dir, the list's place in it)."""
     src = _os231.path.join(_DIR231, "src-list.txt")
     with open(src, "wb") as fh:
-        fh.write(b"123456\npassword\n")
-    pin = _hl231.sha256(b"123456\npassword\n").hexdigest()
+        fh.write(_LIST_BYTES231)
     pd = _tf231.mkdtemp(prefix="p231-pd-", dir=_DIR231)
-    dest = _os231.path.join(pd, "data", _bp231.LIST_NAME)
-    first = _run_list231(pd, "file://" + src, pin)
-    got = open(dest, "rb").read() if _os231.path.exists(dest) else b""
+    return "file://" + src, _hl231.sha256(_LIST_BYTES231).hexdigest(), pd, _os231.path.join(pd, "data", _bp231.LIST_NAME)
+
+
+def _read_or231(path):
+    """The file's bytes, or b"" when it is not there."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return b""
+
+
+def _s231_installer():
+    url, pin, pd, dest = _list_src231()
+    first = _run_list231(pd, url, pin)
+    got = _read_or231(dest)
     mtime = _os231.stat(dest).st_mtime_ns if got else None
     again = _run_list231(pd, "file:///nonexistent-p231", pin)
-    kept = _os231.path.exists(dest) and _os231.stat(dest).st_mtime_ns == mtime
-    _os231.unlink(dest)
-    wrong = _run_list231(pd, "file://" + src, "0" * 64)
-    absent_after_wrong = not _os231.path.lexists(dest)
+    kept = bool(got) and _os231.stat(dest).st_mtime_ns == mtime
+    if got:
+        _os231.unlink(dest)
+    wrong = _run_list231(pd, url, "0" * 64)
+    check("install.sh: ensure_password_list saves the pinned list into data/ and says so",
+          got == _LIST_BYTES231 and "OK Breached-password list downloaded" in first and "RC=0" in first, first)
+    check("install.sh: ...a host that has the pinned list downloads nothing and prints nothing",
+          kept and again.strip() == "RC=0", again)
+    check("install.sh: ...a download that does not hash to the pin is refused and not saved, the run goes on",
+          not _os231.path.lexists(dest) and "did not match its pinned SHA-256" in wrong and "RC=0" in wrong, wrong)
+
+
+def _s231_installer_failures():
+    url, pin, pd, dest = _list_src231()
     down = _run_list231(pd, "file:///nonexistent-p231", pin)
     target = _os231.path.join(_DIR231, "not-the-list.txt")
     with open(target, "wb") as fh:
         fh.write(b"keep me\n")
+    _os231.makedirs(_os231.path.dirname(dest), exist_ok=True)
     _os231.symlink(target, dest)
-    linked = _run_list231(pd, "file://" + src, pin)
-    check("install.sh: ensure_password_list saves the pinned list into data/ and says so",
-          got == b"123456\npassword\n" and "OK Breached-password list downloaded" in first and "RC=0" in first, first)
-    check("install.sh: ...a host that has the pinned list downloads nothing and prints nothing",
-          kept and again.strip() == "RC=0", again)
-    check("install.sh: ...a download that does not hash to the pin is refused and not saved, the run goes on",
-          absent_after_wrong and "did not match its pinned SHA-256" in wrong and "RC=0" in wrong, wrong)
+    linked = _run_list231(pd, url, pin)
     check("install.sh: ...a failed download warns and the run goes on",
           "Could not download the breached-password list" in down and "RC=0" in down, down)
     check("install.sh: ...a link planted at the list's name is replaced, not written through",
-          open(target, "rb").read() == b"keep me\n" and not _os231.path.islink(dest)
-          and open(dest, "rb").read() == b"123456\npassword\n" and "RC=0" in linked, linked)
+          _read_or231(target) == b"keep me\n" and not _os231.path.islink(dest)
+          and _read_or231(dest) == _LIST_BYTES231 and "RC=0" in linked, linked)
 
 
 def _s231_installer_calls():
@@ -383,7 +416,7 @@ def _s231_installer_calls():
 try:
     for _fn231 in (_s231_request_shape, _s231_padding_and_failure, _s231_order, _s231_list_trust,
                    _s231_switch, _s231_suites_offline, _s231_account_route, _s231_setup_step,
-                   _s231_installer, _s231_installer_calls):
+                   _s231_installer, _s231_installer_failures, _s231_installer_calls):
         _p9_arm(who="part231")
         try:
             _fn231()

@@ -449,8 +449,6 @@ def password_problem(pw, has_mfa=False, avoid=()):
     (breached_passwords: the downloaded list, then Pwned Passwords when that setting is on). No
     composition rules. Applied when a password is set or changed: a password set before keeps working.
     """
-    from panel.core.breached_passwords import is_breached
-    from panel.core.common_passwords import is_common
     floor = MIN_PASSWORD_LEN_MFA if has_mfa else MIN_PASSWORD_LEN
     if not pw or len(pw) < floor:
         if has_mfa:
@@ -459,6 +457,13 @@ def password_problem(pw, has_mfa=False, avoid=()):
     folded = pw.casefold()
     if any(len(w.strip()) >= 3 and w.strip().casefold() in folded for w in avoid if isinstance(w, str)):
         return "Password must not contain your username."
+    return _listed_problem(pw)
+
+
+def _listed_problem(pw):
+    """The message for a common password, then for a breached one (asked only if it is not common), or None."""
+    from panel.core.breached_passwords import is_breached
+    from panel.core.common_passwords import is_common
     if is_common(pw):
         return ("That password is too common or too easy to guess. A few unrelated words make a long "
                 "password that is easy to remember.")
