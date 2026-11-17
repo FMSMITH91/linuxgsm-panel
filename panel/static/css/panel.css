@@ -2579,6 +2579,9 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 
 .fs-r65 { font-size: .65rem; }
 
+/* The Tailscale page's Last Seen cell: panel.css's `.table td` size outranks a single class. */
+.table td.fs-r65 { font-size: .65rem; }
+
 .fs-r68 { font-size: .68rem; }
 
 .fs-r70 { font-size: .7rem; }
