@@ -36,5 +36,20 @@
   "Only the server certificate was given. Paste the full chain (fullchain.pem), or some browsers and apps cannot trust it.": "Seul le certificat du serveur a été fourni. Collez la chaîne complète (fullchain.pem), sinon certains navigateurs et applications ne peuvent pas lui faire confiance.",
   "The certificate is self-signed, so browsers warn. OWASP recommends a well-known CA (Let's Encrypt is free).": "Le certificat est autosigné, donc les navigateurs avertissent. OWASP recommande une AC reconnue (Let's Encrypt est gratuite).",
   "The chain is not in order: each certificate should be followed by the one that signed it.": "La chaîne n'est pas dans l'ordre : chaque certificat doit être suivi de celui qui l'a signé.",
-  "That is not a certificate name: use the name certbot shows, e.g. panel.example.com.": "Ce n'est pas un nom de certificat : utilisez le nom affiché par certbot, par ex. panel.example.com."
+  "That is not a certificate name: use the name certbot shows, e.g. panel.example.com.": "Ce n'est pas un nom de certificat : utilisez le nom affiché par certbot, par ex. panel.example.com.",
+  "There is no Let's Encrypt certificate called {name} on this host (sudo certbot certificates lists them).": "Aucun certificat Let's Encrypt nommé {name} sur cet hôte (sudo certbot certificates les liste).",
+  "The key is RSA {bits} bits. OWASP recommends at least 2048.": "La clé est RSA {bits} bits. OWASP recommande au moins 2048.",
+  "The key is on the {curve} curve. Browsers accept P-256 and P-384.": "La clé utilise la courbe {curve}. Les navigateurs acceptent P-256 et P-384.",
+  "The certificate is signed with {algo}. OWASP recommends SHA-256 or stronger.": "Le certificat est signé avec {algo}. OWASP recommande SHA-256 ou plus fort.",
+  "The certificate does not cover {names}, so a browser opening the panel by that name warns.": "Le certificat ne couvre pas {names}, donc un navigateur qui ouvre le panneau sous ce nom avertit.",
+  "The certificate is not valid until {date}.": "Le certificat n'est pas valide avant le {date}.",
+  "The certificate expires in {days} day(s).": "Le certificat expire dans {days} jour(s).",
+  "The certificate expired on {date}.": "Le certificat a expiré le {date}.",
+  "Certificate for {name} saved.": "Certificat pour {name} enregistré.",
+  "The panel is restarting to load it; reload this page in a few seconds.": "Le panneau redémarre pour le charger ; rechargez cette page dans quelques secondes.",
+  "Restart the panel to load it (the restart could not be started here).": "Redémarrez le panneau pour le charger (le redémarrage n'a pas pu être lancé ici).",
+  "Your certificate was removed; the panel makes a new built-in one as it starts.": "Votre certificat a été retiré ; le panneau en crée un nouveau intégré au démarrage.",
+  "The private key is protected by a passphrase. The panel needs it without one: openssl pkey -in key.pem -out key-open.pem": "La clé privée est protégée par une phrase secrète. Le panneau en a besoin sans : openssl pkey -in key.pem -out key-open.pem",
+  "The private key could not be read. Paste it in PEM form, starting with -----BEGIN PRIVATE KEY-----.": "La clé privée n'a pas pu être lue. Collez-la au format PEM, en commençant par -----BEGIN PRIVATE KEY-----.",
+  "The certificate could not be read. Paste it in PEM form, starting with -----BEGIN CERTIFICATE-----.": "Le certificat n'a pas pu être lu. Collez-le au format PEM, en commençant par -----BEGIN CERTIFICATE-----."
 }

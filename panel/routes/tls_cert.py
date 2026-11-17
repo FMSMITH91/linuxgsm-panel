@@ -8,6 +8,7 @@ panel/services/tls_own.py; the restart that loads a new pair is system_ops.resta
 from flask import flash, redirect, request, url_for
 from flask_login import current_user, login_required
 
+from panel.core import i18n
 from panel.core.config import load_config, update_config
 from panel.security.account_guard import step_up_required
 from panel.security.auth import log_action, superadmin_required
@@ -26,20 +27,22 @@ def _restart_and_say(what):
     from panel.ops import system_ops as so
     ok, _msg = so.restart_panel(delay_seconds=2)
     if ok:
-        flash("%s The panel is restarting to load it; reload this page in a few seconds." % what, "success")
+        flash(i18n.tr(i18n.Sentences(what, "The panel is restarting to load it; reload this page in a few seconds.")),
+              "success")
     else:
-        flash("%s Restart the panel to load it (the restart could not be started here)." % what, "warning")
+        flash(i18n.tr(i18n.Sentences(what, "Restart the panel to load it (the restart could not be started here).")),
+              "warning")
 
 
 def _flash_notes(notes):
     for note in notes:
-        flash(note, "warning")
+        flash(i18n.tr(note), "warning")
 
 
 def _install_checked(checked, source, le_name=""):
     """Put a checked pair in, audit it and restart; the refusal is flashed instead when there is one."""
     if checked.refusal:
-        flash(checked.refusal, "danger")
+        flash(i18n.tr(checked.refusal), "danger")
         log_action(current_user, "tls_cert_refused", target="panel", detail=checked.refusal[:120], success=False)
         return _back()
     tls_own.install(checked, source, le_name)
@@ -48,7 +51,7 @@ def _install_checked(checked, source, le_name=""):
                detail="%s: %s, issuer %s, until %s, sha256 %s" % (
                    source, info["subject"], info["issuer"], info["not_after"], info["fingerprint"][:16]))
     _flash_notes(checked.notes)
-    _restart_and_say("Certificate for %s saved." % info["subject"])
+    _restart_and_say(i18n.Sentence("Certificate for {name} saved.", name=info["subject"]))
     return _back()
 
 
@@ -75,7 +78,7 @@ def register(app):
         update_config(lambda cfg: cfg.update({"tls_le_autorenew": autorenew}))
         chain, key, why = tls_own.fetch_letsencrypt(name)
         if why:
-            flash(why, "danger")
+            flash(i18n.tr(why), "danger")
             return _back()
         return _install_checked(tls_own.check(chain, key, tls_own.panel_names(load_config(), request.host)),
                                 "letsencrypt", name)

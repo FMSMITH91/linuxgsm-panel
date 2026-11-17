@@ -26,6 +26,7 @@ import re
 import time
 from urllib.parse import urlsplit
 
+from panel.core import i18n
 from panel.core.clock import aware_utcnow
 from panel.core.config import load_config, update_config
 from panel.core.validation import ip_address_or_none
@@ -48,8 +49,7 @@ _RENEW = {"at": 0.0}
 # The days left below which a certificate is noted, as certs.py warns from for an operator's.
 SOON_DAYS = 30
 
-PEM_HINT = "Paste it in PEM form, starting with -----BEGIN"
-LE_NOT_FOUND = "There is no Let's Encrypt certificate called %s on this host (sudo certbot certificates lists them)."
+LE_NOT_FOUND = "There is no Let's Encrypt certificate called {name} on this host (sudo certbot certificates lists them)."
 LE_FAILED = "The Let's Encrypt files could not be copied. Check the panel log."
 
 
@@ -84,7 +84,7 @@ def _load_key(key_pem):
         return None, ("The private key is protected by a passphrase. The panel needs it without one: "
                       "openssl pkey -in key.pem -out key-open.pem")
     except Exception:  # noqa: BLE001 - ValueError, UnsupportedAlgorithm: either way it is unusable
-        return None, "The private key could not be read. " + PEM_HINT + " PRIVATE KEY-----."
+        return None, "The private key could not be read. Paste it in PEM form, starting with -----BEGIN PRIVATE KEY-----."
 
 
 def _with_leaf_first(chain, key):
@@ -102,10 +102,10 @@ def _key_notes(leaf):
     key = leaf.public_key()
     if isinstance(key, rsa.RSAPublicKey):
         return [] if key.key_size >= 2048 else [
-            "The key is RSA %d bits. OWASP recommends at least 2048." % key.key_size]
+            i18n.Sentence("The key is RSA {bits} bits. OWASP recommends at least 2048.", bits=key.key_size)]
     if isinstance(key, ec.EllipticCurvePublicKey):
         return [] if key.curve.name in ("secp256r1", "secp384r1") else [
-            "The key is on the %s curve. Browsers accept P-256 and P-384." % key.curve.name]
+            i18n.Sentence("The key is on the {curve} curve. Browsers accept P-256 and P-384.", curve=key.curve.name)]
     return ["The key is neither RSA nor ECDSA. Browsers may refuse it."]
 
 
@@ -113,7 +113,8 @@ def _hash_notes(leaf):
     """OWASP "Use Strong Cryptographic Hashing Algorithms": SHA-256 or stronger."""
     algo = getattr(leaf.signature_hash_algorithm, "name", "") or ""
     if algo in ("md5", "sha1"):
-        return ["The certificate is signed with %s. OWASP recommends SHA-256 or stronger." % algo.upper()]
+        return [i18n.Sentence("The certificate is signed with {algo}. OWASP recommends SHA-256 or stronger.",
+                              algo=algo.upper())]
     return []
 
 
@@ -150,8 +151,8 @@ def _name_notes(leaf, names):
         return ["The certificate has no subjectAltName. Browsers check names only there."]
     missing = [n for n in names if n and not covers(leaf, n)]
     if missing:
-        return ["The certificate does not cover %s, so a browser opening the panel by that name warns."
-                % ", ".join(missing)]
+        return [i18n.Sentence("The certificate does not cover {names}, so a browser opening the panel by that name "
+                              "warns.", names=", ".join(missing))]
     return []
 
 
@@ -171,10 +172,11 @@ def _chain_notes(chain):
 
 def _date_notes(leaf, now):
     if leaf.not_valid_before_utc > now:
-        return ["The certificate is not valid until %s." % leaf.not_valid_before_utc.strftime("%Y-%m-%d")]
+        return [i18n.Sentence("The certificate is not valid until {date}.",
+                              date=leaf.not_valid_before_utc.strftime("%Y-%m-%d"))]
     days = (leaf.not_valid_after_utc - now).days
     if days <= SOON_DAYS:
-        return ["The certificate expires in %d day(s)." % days]
+        return [i18n.Sentence("The certificate expires in {days} day(s).", days=days)]
     return []
 
 
@@ -234,7 +236,8 @@ def _parse(cert_pem, key_pem):
         return "Paste both the certificate and its private key (at most 64 KB each).", [], None, False
     chain = _load_chain(cert_pem)
     if not chain:
-        return "The certificate could not be read. " + PEM_HINT + " CERTIFICATE-----.", [], None, False
+        return ("The certificate could not be read. Paste it in PEM form, starting with -----BEGIN CERTIFICATE-----.",
+                [], None, False)
     key, why = _load_key(key_pem)
     if key is None:
         return why, [], None, False
@@ -257,7 +260,8 @@ def check(cert_pem, key_pem, names=(), now=None):
         return Checked(refusal)
     leaf = chain[0]
     if leaf.not_valid_after_utc <= now:
-        return Checked("The certificate expired on %s." % leaf.not_valid_after_utc.strftime("%Y-%m-%d"))
+        return Checked(i18n.Sentence("The certificate expired on {date}.",
+                                     date=leaf.not_valid_after_utc.strftime("%Y-%m-%d")))
     notes = ["The server certificate was not first in the file; it has been put first."] if moved else []
     notes += (_key_notes(leaf) + _hash_notes(leaf) + _name_notes(leaf, names) + _chain_notes(chain)
               + _date_notes(leaf, now))
@@ -294,7 +298,7 @@ def install(checked, source, le_name=""):
     both are written under new names first and then renamed over the old ones, so a reader sees the
     old pair or the new one. The panel must restart to serve it.
     """
-    ssl_dir = certs.SSL_DIR
+    ssl_dir = certs.ssl_dir()
     os.makedirs(ssl_dir, mode=0o700, exist_ok=True)
     key_new, cert_new = ssl_dir / "key.pem.new", ssl_dir / "cert.pem.new"
     _write_new(key_new, checked.key_pem(), 0o600)
@@ -317,7 +321,7 @@ def remove():
     """Go back to the built-in certificate: drop the operator's pair; the next start makes a self-signed one."""
     for name in ("cert.pem", "key.pem"):
         try:
-            os.unlink(certs.SSL_DIR / name)
+            os.unlink(certs.ssl_dir() / name)
         except FileNotFoundError:
             pass    # already gone: the start makes a new pair either way
 
@@ -331,7 +335,7 @@ def _read_staged():
     """(chain bytes, key bytes) the helper copied, removing both copies; (b"", b"") if they are missing."""
     out = []
     for name in LE_STAGED:
-        path = certs.SSL_DIR / name
+        path = certs.ssl_dir() / name
         try:
             with open(path, "rb") as f:
                 out.append(f.read(PEM_MAX + 1))
@@ -348,7 +352,7 @@ def _read_staged():
 def _le_failure(name, rc, err):
     """What to tell the operator when the helper did not copy certificate `name`."""
     if "no such certificate" in err:
-        return LE_NOT_FOUND % name
+        return i18n.Sentence(LE_NOT_FOUND, name=name)
     if "privileged helper" in err:
         return "This needs the panel's privileged helper: re-run install.sh as root."
     _log.warning("tls-le-copy failed: rc=%s %s", rc, err[:200])
@@ -360,7 +364,7 @@ def fetch_letsencrypt(name):
     from panel.ops import system_ops as so
     if not LE_NAME_RE.fullmatch(name or ""):
         return b"", b"", "That is not a certificate name: use the name certbot shows, e.g. panel.example.com."
-    os.makedirs(certs.SSL_DIR, mode=0o700, exist_ok=True)
+    os.makedirs(certs.ssl_dir(), mode=0o700, exist_ok=True)
     out, err, rc = so._run_verb("tls-le-copy", [name], timeout=30, merge_stderr=False)
     if rc != 0 or "COPIED" not in (out or ""):
         _read_staged()
@@ -372,7 +376,7 @@ def fetch_letsencrypt(name):
 def current_chain():
     """The certificates in data/ssl/cert.pem now ([] when there is none or it cannot be read)."""
     try:
-        with open(certs.SSL_DIR / "cert.pem", "rb") as f:
+        with open(certs.ssl_dir() / "cert.pem", "rb") as f:
             return _load_chain(f.read(PEM_MAX + 1))
     except OSError:
         return []

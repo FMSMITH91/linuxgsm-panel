@@ -151,7 +151,7 @@ def _arm232():
         _p9_patch(mod, "load_config", lambda: dict(_CFG232))
         _p9_patch(mod, "update_config", lambda mutate: mutate(_CFG232))
     _p9_patch(_certs232, "load_config", lambda: dict(_CFG232))
-    _p9_patch(_certs232, "SSL_DIR", _SSL232)
+    _p9_patch(_certs232, "DATA_DIR", _TMP232 / "data")
     _p9_patch(_so232, "restart_panel", lambda delay_seconds=2: (_RESTARTS232.append(delay_seconds), (True, "ok"))[1])
 
 
@@ -283,7 +283,7 @@ def _le_route232():
             said = [m for _c, m in s.get("_flashes", [])]
     eq("own cert: an unknown Let's Encrypt name says so and changes nothing",
        (said[:1], _RESTARTS232, _CFG232.get("tls_le_name")),
-       ([_own232.LE_NOT_FOUND % "missing.example.com"], [], "panel.example.com"))
+       ([_own232.LE_NOT_FOUND.replace("{name}", "missing.example.com")], [], "panel.example.com"))
 
 
 def _helper_refusals232():

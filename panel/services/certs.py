@@ -21,9 +21,6 @@ from panel.core.validation import ip_address_or_none
 _log = logging.getLogger("panel.certs")
 
 _CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly dedup)
-# Where the panel's own HTTPS certificate and key live (cert.pem, key.pem). A name of its own so the
-# tests can point it at a scratch directory.
-SSL_DIR = DATA_DIR / "ssl"
 # What config.json's tls_cert_source names when the operator put in a certificate of their own
 # through Settings (panel/services/tls_own.py): pasted, or copied from Let's Encrypt.
 OPERATOR_SOURCES = ("own", "letsencrypt")
@@ -59,10 +56,15 @@ def _maybe_alert_cert_expiring(boot=None):
         _log.debug("cert-expiry check failed", exc_info=True)
 
 
+def ssl_dir():
+    """Where the panel's own HTTPS certificate and key live (data/ssl: cert.pem, key.pem)."""
+    return DATA_DIR / "ssl"
+
+
 def _cert_on_disk():
     """The certificate in data/ssl/cert.pem, or None when there is no such file."""
     from cryptography import x509
-    cert_path = SSL_DIR / "cert.pem"
+    cert_path = ssl_dir() / "cert.pem"
     if not cert_path.exists():
         return None
     with open(cert_path, "rb") as f:
