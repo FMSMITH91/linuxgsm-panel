@@ -225,6 +225,7 @@ def _classes235():
     """Every helper class used is defined in panel.css, and every class of the section is used."""
     css = _read235("panel", "static", "css", "panel.css")
     section = css[css.index(_SECTION235):] if _SECTION235 in css else ""
+    section = section[:section.find("/* ── Strict CSP", 1)] if section.find("/* ── Strict CSP", 1) > 0 else section
     defined = set(_re235.findall(r"^\.([a-z0-9-]+)\s*\{", css, _re235.M))
     mine = set(_re235.findall(r"^\.([a-z0-9-]+)\s*\{", section, _re235.M))
     text = "".join(_read235("panel", "templates", n) for n in _TPL235)
