@@ -228,6 +228,22 @@ class Checked:
                                       serialization.NoEncryption())
 
 
+def _parse(cert_pem, key_pem):
+    """(refusal or "", chain with the key's certificate first, key, whether it was moved first)."""
+    if not cert_pem or len(cert_pem) > PEM_MAX or not key_pem or len(key_pem) > PEM_MAX:
+        return "Paste both the certificate and its private key (at most 64 KB each).", [], None, False
+    chain = _load_chain(cert_pem)
+    if not chain:
+        return "The certificate could not be read. " + PEM_HINT + " CERTIFICATE-----.", [], None, False
+    key, why = _load_key(key_pem)
+    if key is None:
+        return why, [], None, False
+    chain, moved = _with_leaf_first(chain, key)
+    if chain is None:
+        return "The private key does not belong to this certificate.", [], None, False
+    return "", chain, key, moved
+
+
 def check(cert_pem, key_pem, names=(), now=None):
     """Check a certificate chain and its private key (bytes, PEM) for the panel's HTTPS. -> Checked.
 
@@ -236,17 +252,9 @@ def check(cert_pem, key_pem, names=(), now=None):
     browser would reject it; everything else is a note.
     """
     now = now or aware_utcnow()
-    if not cert_pem or len(cert_pem) > PEM_MAX or not key_pem or len(key_pem) > PEM_MAX:
-        return Checked("Paste both the certificate and its private key (at most 64 KB each).")
-    chain = _load_chain(cert_pem)
-    if not chain:
-        return Checked("The certificate could not be read. " + PEM_HINT + " CERTIFICATE-----.")
-    key, why = _load_key(key_pem)
-    if key is None:
-        return Checked(why)
-    chain, moved = _with_leaf_first(chain, key)
-    if chain is None:
-        return Checked("The private key does not belong to this certificate.")
+    refusal, chain, key, moved = _parse(cert_pem, key_pem)
+    if refusal:
+        return Checked(refusal)
     leaf = chain[0]
     if leaf.not_valid_after_utc <= now:
         return Checked("The certificate expired on %s." % leaf.not_valid_after_utc.strftime("%Y-%m-%d"))
@@ -337,6 +345,16 @@ def _read_staged():
     return out[0], out[1]
 
 
+def _le_failure(name, rc, err):
+    """What to tell the operator when the helper did not copy certificate `name`."""
+    if "no such certificate" in err:
+        return LE_NOT_FOUND % name
+    if "privileged helper" in err:
+        return "This needs the panel's privileged helper: re-run install.sh as root."
+    _log.warning("tls-le-copy failed: rc=%s %s", rc, err[:200])
+    return LE_FAILED
+
+
 def fetch_letsencrypt(name):
     """Copy Let's Encrypt certificate `name` through the helper. -> (chain bytes, key bytes, why it failed)."""
     from panel.ops import system_ops as so
@@ -346,12 +364,7 @@ def fetch_letsencrypt(name):
     out, err, rc = so._run_verb("tls-le-copy", [name], timeout=30, merge_stderr=False)
     if rc != 0 or "COPIED" not in (out or ""):
         _read_staged()
-        if "no such certificate" in (err or ""):
-            return b"", b"", LE_NOT_FOUND % name
-        if "privileged helper" in (err or ""):
-            return b"", b"", "This needs the panel's privileged helper: re-run install.sh as root."
-        _log.warning("tls-le-copy failed: rc=%s %s", rc, (err or "")[:200])
-        return b"", b"", LE_FAILED
+        return b"", b"", _le_failure(name, rc, err or "")
     chain, key = _read_staged()
     return chain, key, ""
 

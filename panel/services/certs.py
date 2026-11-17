@@ -44,17 +44,10 @@ def _maybe_alert_cert_expiring(boot=None):
     if boot is not None and boot.get("BOOT_TLS") is False and not boot.get("BOOT_TLS_ERROR"):
         return
     try:
-        from cryptography import x509
-        cert_path = SSL_DIR / "cert.pem"
-        if not cert_path.exists():
+        cert = _cert_on_disk()
+        if cert is None:
             return
-        with open(cert_path, "rb") as f:
-            cert = x509.load_pem_x509_certificate(f.read())
-        try:
-            not_after = cert.not_valid_after_utc              # cryptography >= 42
-        except AttributeError:
-            not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
-        days = (not_after - datetime.now(timezone.utc)).days
+        days = (cert.not_valid_after_utc - datetime.now(timezone.utc)).days
         source = _operator_source(cert)
         own = _operator_cert(cert) or bool(source)
         # The operator's certificate is warned from 30 days (renewing it is their job, and with HSTS an
@@ -64,6 +57,16 @@ def _maybe_alert_cert_expiring(boot=None):
             notifications.notify("cert_expiring", "TLS certificate expiring", _expiry_text(days, own, source))
     except Exception:
         _log.debug("cert-expiry check failed", exc_info=True)
+
+
+def _cert_on_disk():
+    """The certificate in data/ssl/cert.pem, or None when there is no such file."""
+    from cryptography import x509
+    cert_path = SSL_DIR / "cert.pem"
+    if not cert_path.exists():
+        return None
+    with open(cert_path, "rb") as f:
+        return x509.load_pem_x509_certificate(f.read())
 
 
 def _expiry_text(days, own, source=""):
@@ -158,6 +161,19 @@ def _note_operator_cert(cert, key_path):
         _log.warning("TLS: data/ssl/key.pem could not be read as an unencrypted PEM private key")
 
 
+def _keep_operator_cert(existing, key_path):
+    """Whether `existing` is the operator's (a CA signed it, or it was put in through Settings).
+
+    Such a certificate is never replaced by a self-signed one, whatever its key or dates: with HSTS
+    a self-signed one would be refused as well, and silently swapping it would undo the operator's
+    setup. What is wrong with it is logged instead.
+    """
+    if _operator_cert(existing) or _operator_source(existing):
+        _note_operator_cert(existing, key_path)
+        return True
+    return False
+
+
 def _ensure_self_signed_cert(cert_path, key_path, hostname):
     """Create a self-signed ECDSA P-256 cert/key (397 days) unless a current one is already present.
 
@@ -175,11 +191,7 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
         try:
             with open(cert_path, "rb") as f:
                 existing = x509.load_pem_x509_certificate(f.read())
-            if _operator_cert(existing) or _operator_source(existing):
-                # The operator's own certificate (a CA signed it, or it was put in through Settings):
-                # never replaced by a self-signed one, whatever its key or dates. With HSTS a self-signed one would be refused as well, and
-                # silently swapping it would undo the operator's setup. What is wrong is said instead.
-                _note_operator_cert(existing, key_path)
+            if _keep_operator_cert(existing, key_path):
                 return cert_path, key_path
             if (existing.not_valid_after_utc > aware_utcnow() + _dt.timedelta(days=30)
                     and isinstance(existing.public_key(), ec.EllipticCurvePublicKey)):
