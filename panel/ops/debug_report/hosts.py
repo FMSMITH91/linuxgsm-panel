@@ -1,6 +1,6 @@
 """Debug-report section(s): hosts_brief, hosts.
 
-hosts_brief: the compact public block (R6, R53 conflicts). hosts: per-host
+Owner: builder B4. hosts_brief: the compact public block (R6, R53 conflicts). hosts: per-host
 transport/address class/flags, reachability, last probe error, tailscale peer, cached OS/specs, SSH
 internals (R46-R51).
 

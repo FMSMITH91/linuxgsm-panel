@@ -1,6 +1,6 @@
 """Debug-report section(s): root_pieces.
 
-helper fresh check + privileged-call counters (R25), root-owned pieces vs the commit
+Owner: builder B2. helper fresh check + privileged-call counters (R25), root-owned pieces vs the commit
 they belong to (R27), origin category (R28), host prerequisites (R29).
 
 Nothing here runs anything as root, executes a root-owned file, or writes: the installed pieces

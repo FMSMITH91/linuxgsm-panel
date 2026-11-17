@@ -1,6 +1,6 @@
 """Debug-report section(s): workers.
 
-heartbeats and respawns from runtime_stats (R22).
+Owner: builder B4. heartbeats and respawns from runtime_stats (R22).
 
 Each background loop calls runtime_stats.beat(name, cadence, took) when a pass COMPLETES, and
 bump("loopfail", name) when a pass raises; the supervisor bumps ("respawn", name) when a worker it

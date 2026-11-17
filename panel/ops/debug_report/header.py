@@ -1,5 +1,6 @@
 """Debug-report header (a worker section) and the Dependencies section.
 
+Owner: builder B1.
 section_header: generated time (R3), panel version, the commit this PROCESS runs vs the checkout's
 HEAD with RESTART PENDING and the tracked branch (R4, R32's one header token), OS / kernel /
 Python, host clock zone + NTP + locale (R5). The assembler puts its lines at the top of the report

@@ -1,6 +1,6 @@
 """Debug-report section(s): notifications.
 
-channels as booleans, delivery counters, command-bot polling (R63).
+Owner: builder B3. channels as booleans, delivery counters, command-bot polling (R63).
 
 settings_for_form() is read for its booleans and counts only. It also returns the Telegram chat id,
 the Discord channel id, the command users' ids, the ntfy server URL and the ntfy TOPIC (a capability

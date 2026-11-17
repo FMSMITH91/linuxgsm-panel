@@ -1,4 +1,4 @@
-"""Off-hub, read-only SQLite access for the report (R57, R58, R59, R60, R61, R43).
+"""Off-hub, read-only SQLite access for the report (R57, R58, R59, R60, R61, R43). Owner: builder B2.
 
 integrity(timeout=20) -> {"state": "ok"|"damaged"|"not_checked", "detail_class": str|None,
                           "backup": None|"ok"|"damaged"|"missing"|"not_checked",

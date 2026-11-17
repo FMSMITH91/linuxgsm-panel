@@ -1,6 +1,6 @@
 """Debug-report section(s): database, backups.
 
-database: one integrity check off-hub, not-checked vs damaged, pragmas/backup/
+Owner: builder B2. database: one integrity check off-hub, not-checked vs damaged, pragmas/backup/
 moved-aside/schema, table census and retention, audit digest (R57-R61). backups: panel backups and
 update snapshots (R62).
 

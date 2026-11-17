@@ -1,6 +1,6 @@
 """Debug-report section(s): install.
 
-install model and privilege verdict (R16), which sudo (R26).
+Owner: builder B3. install model and privilege verdict (R16), which sudo (R26).
 
 Accounts are printed as ROLES with a uid (the installer's service account, a login account, root),
 never by name; paths as yes/no or '<panel>/...'; groups only from a fixed list. Passwordless sudo is
