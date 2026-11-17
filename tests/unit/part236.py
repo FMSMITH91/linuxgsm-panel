@@ -9,15 +9,15 @@ is not governed by CSP and stays.
 1. The gate: no template holds a style attribute, and no script under panel/static/js puts one in a
    string, calls setAttribute('style'), assigns .cssText or the whole .style. Comments are not code
    and are not read. The scanner is held to known samples both ways.
-2. The header: a page's policy carries the strict style directives with this request's nonce, and no
-   'unsafe-inline' at all.
+2. The header: the policy app.py's _csp builds carries the strict style directives with the request's
+   nonce, and no 'unsafe-inline' at all (smoke reads it off a real response).
 3. The readers of what moved: a data-start-hidden element in a section refreshSection re-renders is
    converted before the after-hook runs; the dashboard paints each tag chip's colour on load and after
    every refresh; the confirm dialog's error line starts hidden and api.error shows it; the terminal
    gives xterm's 24-bit cell colours to the CSSOM, and the vendored bundle still has that shape.
 
 HOW IT RUNS. Files are read as text; the scripts' functions run in node against small stand-ins; the
-header comes from one GET on part12's app with its transport tripwire armed. Nothing reaches a host.
+policy is app.py's own _csp, run from its text. Nothing reaches a host.
 """
 import os as _os236
 import re as _re236
@@ -196,18 +196,20 @@ def _s236_gate():
 
 # ── 2. The header ────────────────────────────────────────────────────────────────────────────────
 def _s236_header():
-    from unit.part12 import _p9_client
-    r = _p9_client().get("/login")
-    csp = r.headers.get("Content-Security-Policy", "")
-    nonce = _re236.search(r"script-src 'self' 'nonce-([^']+)'", csp)
-    n = nonce.group(1) if nonce else "?"
-    body = r.get_data(as_text=True)
+    """The policy _csp builds, run from app.py's own text with a stand-in for the request's nonce."""
+    import textwrap
+    from types import SimpleNamespace as _NS
+    src = _read236(_os236.path.join(_ROOT236, "panel", "install", "app.py"))
+    body = textwrap.dedent(src[src.index("    def _csp():"):src.index("    @app.after_request")])
+    scope = {"g": _NS(csp_nonce="n236")}
+    # nosemgrep: python.lang.security.audit.exec-detected.exec-detected -- app.py's own _csp, read from the repo
+    exec(compile(body, "app.py:_csp", "exec"), scope)  # nosec B102 - the panel's own function, read from the repo
+    csp = scope["_csp"]()
     eq("header: a page's policy allows styles from the panel and this request's nonce only, and no style "
-       "attribute at all (no 'unsafe-inline' anywhere)",
-       ["style-src 'self' 'nonce-%s'; " % n in csp, "style-src-elem 'self' 'nonce-%s'; " % n in csp,
-        "style-src-attr 'none'; " in csp, "unsafe-inline" in csp, "unsafe-hashes" in csp,
-        '<style nonce="%s">' % n in body],
-       [True, True, True, False, False, True])
+       "attribute at all (no 'unsafe-inline' or 'unsafe-hashes' anywhere)",
+       ["style-src 'self' 'nonce-n236'; " in csp, "style-src-elem 'self' 'nonce-n236'; " in csp,
+        "style-src-attr 'none'; " in csp, "script-src 'self' 'nonce-n236'; " in csp, "unsafe-inline" in csp,
+        "unsafe-hashes" in csp], [True, True, True, True, False, False])
 
 
 # ── 3. The readers of what moved ─────────────────────────────────────────────────────────────────
@@ -259,7 +261,7 @@ setTimeout(function(){ console.log(JSON.stringify({calls: calls, display: kid.st
         return
     eq("readers: refreshSection converts a data-start-hidden element in the swapped-in section to an inline "
        "display:none (the mark dropped) before the after-hook shows or hides it",
-       got, {"calls": ["convert", "after:none:False"], "display": "none", "mark": False})
+       got, {"calls": ["convert", "after:none:false"], "display": "none", "mark": False})
 
 
 def _s236_tag_chips():
@@ -315,8 +317,9 @@ confirmDialog({title: 'x', requirePassword: true, onConfirm: function(v, a){ api
 var start = parts['#cd-err'].style.display, html = ov.innerHTML;
 parts['#cd-input'].value = 'pw'; parts['#cd-input'].listeners.input(); parts['[data-cd="ok"]'].onclick();
 api.error('Wrong password');
+var shown = parts['#cd-err'].style.display, text = parts['#cd-err'].textContent;
 confirmDialog({title: 'y', bodyNode: {}});
-console.log(JSON.stringify({start: start, shown: parts['#cd-err'].style.display, text: parts['#cd-err'].textContent,
+console.log(JSON.stringify({start: start, shown: shown, text: text,
   attr: /style=/.test(html), overlay: ov.className, body: parts['[data-cd-body]'].classList.list}));
 """
     got = _node236("confirm error line", prog)
