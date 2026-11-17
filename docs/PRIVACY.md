@@ -48,7 +48,7 @@ a stolen disk.
 ## What leaves your server
 
 Each of these connects from your server to the service named, which sees your server's IP address and
-the request. Nothing in them names you or your players. The web requests the panel makes itself say
+the request. Nothing in them names you or your players. The web requests the panel makes itself name
 `linuxgsm-panel` as their user agent; the update check's `git fetch` and the public-address lookup
 (`curl`, then `dig`) are those tools' own requests and say what they always do.
 
@@ -61,7 +61,7 @@ the request. Nothing in them names you or your players. The web requests the pan
 | **Modrinth** | Searching for or installing a Minecraft plugin or datapack | The search words and your Minecraft version | Yes: Settings → Outside services → *Minecraft plugins and datapacks*. Off: no search or install from Modrinth |
 | **api.ipify.org**, then OpenDNS | Finding a host's public address for players' connect line, **only** when the host has no public address of its own (behind a router) | Nothing but the request | Yes: Settings → Outside services → *Public address lookup*. Off: the host's own address is shown |
 | **Have I Been Pwned** (`api.pwnedpasswords.com`) | Setting or changing a password (setup, Account, Users, `manage.py`), **only** after the panel's own lists have passed it | The first 5 characters of the password's SHA-1 hash, never the password or the rest of its hash (k-anonymity), with padding so the answer's size says nothing; only to `api.pwnedpasswords.com/range/`, redirects refused | Yes: Settings → Outside services → *Have I Been Pwned password check*. Off: only the panel's own lists are checked; no answer within 3 seconds keeps their result |
-| **Telegram, Discord, ntfy** | Sending an alert, when you set the channel up | The alert's short text. By default it names no person and no address (Notifications → *Include details* adds them) | Yes: each channel's on/off switch. ntfy can be [your own server](NTFY-SELF-HOST.md) |
+| **Telegram, Discord, ntfy** | Sending an alert, when you set the channel up. With a command bot on (Notifications → *Commands from Telegram*, *Two-way command bot* for Discord), the panel also keeps a connection open to Telegram or Discord to receive commands | The alert's short text. By default it names no person and no address (Notifications → *Include details* adds them). A command bot's answers go to the chat they were asked in | Yes: each channel's on/off switch, and the command bot's own. ntfy can be [your own server](NTFY-SELF-HOST.md) |
 | **Your browser's push service** (Mozilla, Apple, Google, Microsoft) | Sending an alert to a device you turned alerts on for | The alert, encrypted end to end between the panel and your browser; the push service sees only its size and time | Yes: per device (Account → Alerts on this device) |
 | **Your own Telegram chat** | Alerts, once you link it (Account → Link my Telegram) | The same short text as a browser alert | Yes: Unlink Telegram |
 | **Tailscale** | If you use Tailscale, its client on your server talks to Tailscale's coordination server | Tailscale's own traffic, under Tailscale's terms | Yes: don't use it, or log the host out |
