@@ -14,6 +14,10 @@ compares git commits, not this file.
 
 ### Added
 
+- **A plain privacy statement.** [PRIVACY.md](PRIVACY.md) says what the panel stores and how
+  it is protected, how long each kind of data is kept, every outside service it can contact (when,
+  what is sent, and whether it can be turned off), and that it sends no telemetry, analytics or
+  e-mail.
 - **Alerts in your own Telegram chat.** Each user can link their own Telegram chat from the Account page
   ("Link my Telegram"): the panel's bot then sends that user's alerts there, with the same short text
   as a browser alert and the same choice of which alerts. Linking asks for the password again and

@@ -724,3 +724,4 @@ b50efc80 Behind a proxy that hides the panel's address, the fix is one command.
 5706732d Your own TLS certificate on the panel is kept.
 d3df41ea The invite and password boxes line up with their Copy buttons.
 c5567f0f A plugin whose file name has a space can be disabled and removed.
+02e72977 A plain privacy statement.
