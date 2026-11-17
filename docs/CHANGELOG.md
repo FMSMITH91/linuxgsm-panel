@@ -1590,9 +1590,6 @@ compares git commits, not this file.
   (pinned by SHA-256), then against Have I Been Pwned's Pwned Passwords, which receives only the
   first five characters of the password's SHA-1 hash. If the service does not answer within 3
   seconds the local checks stand. Settings → Outside services can turn the online check off.
-- **More CI jobs may reach only the hosts they need.** The coverage and JavaScript coverage jobs run
-  Harden-Runner in block mode, limited to GitHub and PyPI, and the test suites no longer fetch
-  LinuxGSM's files from GitHub during a run.
 - **Your own TLS certificate on the panel is kept.** A certificate from a real certificate authority placed in
   `data/ssl/` is no longer replaced by a self-signed one (an RSA certificate used to be). The panel
   logs a weak key, an old signature, a key that does not match, or an expired certificate, and warns
