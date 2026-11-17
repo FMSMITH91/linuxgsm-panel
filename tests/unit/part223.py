@@ -82,7 +82,8 @@ check("CI secrets: no workflow runs on pull_request_target, and none a pull requ
 _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "objects.githubusercontent.com:443",
              "release-assets.githubusercontent.com:443", "pypi.org:443", "files.pythonhosted.org:443",
              "registry.npmjs.org:443", "api.osv.dev:443", "semgrep.dev:443", "sonarcloud.io:443"}
-_BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("codeql.yml", "analyze"),
+_BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("ci.yml", "coverage"),
+             ("ci.yml", "js-coverage"), ("codeql.yml", "analyze"),
              ("codeql.yml", "pr-alerts"), ("complexity.yml", "complexity"),
              ("dependency-review.yml", "dependency-review"), ("fuzz.yml", "fuzz"),
              ("security-code.yml", "dependency-audit"), ("security-code.yml", "sast-bandit"),
@@ -92,8 +93,6 @@ _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no p
                 "is complete before it holds every panel's update"
 _AUDIT223 = {
     ("ci.yml", "checks"): "the suites dial TEST-NET addresses on purpose, and apt's mirror host varies by region",
-    ("ci.yml", "coverage"): "the same suites as checks",
-    ("ci.yml", "js-coverage"): "Chrome's own calls to Google services and the page's own fetches are what is measured",
     ("lighthouse.yml", "lighthouse"): "Chrome's own calls and the page's fetches change the score it measures",
     ("cflite_pr.yml", "code-change"): "ClusterFuzzLite builds and fuzzes inside Docker images it pulls by tag",
     ("cflite_batch.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
