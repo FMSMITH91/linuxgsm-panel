@@ -48,7 +48,9 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
 
 - Keep it behind **Tailscale** (or a reverse proxy with a real certificate) rather than
   exposing the panel port to the public internet. See [docs/https.md](../docs/https.md).
-- Keep **two-factor authentication** enabled on admin accounts.
+- Keep **two-factor authentication** enabled on admin accounts. Settings → Sessions & Security →
+  *Require two-factor authentication for administrators* (off by default) makes superadmins and
+  anyone with terminal, user or group rights set it up before anything else.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
 - When you add a remote host, give its **host key fingerprint** (the Add Remote Server form's "Host key fingerprint (optional)" field, also on Edit; run
   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host, over a channel you already trust).
