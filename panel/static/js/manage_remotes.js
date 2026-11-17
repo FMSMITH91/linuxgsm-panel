@@ -251,6 +251,17 @@ function renderTailscaleStatus(remoteId, name, status) {
   }
 
   setModalBody(html);
+  _mrStartHidden('ts-key-adv');
+}
+
+// An element of markup built here that starts hidden: hidden through the CSSOM once it is in the page,
+// as a style="display:none" attribute did before the page policy refused style attributes. The
+// handlers that show one set an explicit display, so they work unchanged.
+function _mrStartHidden() {
+  for (var i = 0; i < arguments.length; i++) {
+    var el = document.getElementById(arguments[i]);
+    if (el) el.style.display = 'none';
+  }
 }
 
 function renderAuthKeyForm(remoteId, name) {
@@ -268,7 +279,7 @@ function renderAuthKeyForm(remoteId, name) {
     + '<div id="ts-up-result" class="small mt-2"></div>'
     // Fallback: pre-auth key
     + '<div class="mt-3"><a href="#" class="small text-secondary"' + _da('_showTsKeyAdv') + '>Advanced: use a pre-auth key instead</a></div>'
-    + '<div id="ts-key-adv" data-start-hidden class="mt-2">'
+    + '<div id="ts-key-adv" class="mt-2">'
     + '<label class="form-label small"><span>Auth Key</span> (<a href="https://login.tailscale.com/admin/keys" target="_blank" rel="noopener noreferrer">Tailscale admin</a>)</label>'
     + '<input type="text" id="ts-auth-key" class="form-control form-control-sm mb-2" placeholder="tskey-auth-...">'
     + '<button class="btn btn-outline-success btn-sm"' + _da('bootstrapTailscale', [remoteId]) + '><i class="bi bi-key"></i> Connect with key</button>'
@@ -383,6 +394,7 @@ function _installTailscaleNow(remoteId, name, btn) {
         if (shown) shown.remove();
         var extra = '<div id="ts-install-auth">' + renderAuthKeyForm(remoteId, name) + '</div>';
         logEl.insertAdjacentHTML('afterend', extra);  // nosemgrep
+        _mrStartHidden('ts-key-adv');
       } else {
         if (btn) btn.disabled = false;
         logEl.innerHTML = '<span class="text-danger"><i class="bi bi-x-circle"></i> ' + escapeHtml(data.message) + '</span>'  // nosemgrep
@@ -524,14 +536,15 @@ function showBootstrap(remoteId, name) {
         + '</div>'
         + '<div class="alert alert-warning small py-2 mb-2"><i class="bi bi-exclamation-triangle"></i> Runs a full apt upgrade and (if enabled) reboots the server. This can take 5-15 minutes — you can watch progress live below.</div>'
         + '<button class="btn btn-primary btn-sm" id="bootstrap-run-btn"' + _da('runBootstrap', [remoteId]) + '><i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server</button>'
-    + '<div id="bootstrap-progress-wrap" class="mt-3" data-start-hidden>'
+    + '<div id="bootstrap-progress-wrap" class="mt-3">'
         + '<div class="d-flex justify-content-between small mb-1"><span id="bootstrap-step" class="text-info" data-remote="' + escapeHtml(String(remoteId)) + '">Starting…</span><span id="bootstrap-pct" class="text-secondary"></span></div>'
         + '<div class="progress h-18px"><div id="bootstrap-bar" class="progress-bar progress-bar-striped progress-bar-animated w-0p"></div></div>'
         + '<div id="bootstrap-elapsed" class="text-secondary fs-r70 mt-1"></div>'
       + '</div>'
-    + '<pre id="bootstrap-log" class="small mt-2 mr-bootstrap-log" data-start-hidden></pre>';
+    + '<pre id="bootstrap-log" class="small mt-2 mr-bootstrap-log"></pre>';
 
   showModal(tfHtml('Prepare & Secure: {name}', {name: name}), html);   // name from a data-attribute, escaped by tfHtml
+  _mrStartHidden('bootstrap-progress-wrap', 'bootstrap-log');
 }
 
 var _bootstrapPoll = null;
