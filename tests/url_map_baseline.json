@@ -2963,6 +2963,18 @@
       "POST"
     ]
   },
+  "POST /api/tailscale/control-server": {
+    "endpoint": "api_tailscale_control_server",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:api_tailscale_control_server"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/tailscale/install": {
     "endpoint": "api_tailscale_install",
     "guards": [
