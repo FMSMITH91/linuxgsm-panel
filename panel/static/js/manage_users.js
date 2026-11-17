@@ -143,6 +143,11 @@ window.copyCredential = function(){
   else if (navigator.clipboard) navigator.clipboard.writeText(pw.value).catch(function(){ /* see above */ });
 };
 
+// A click in the password, link or code field selects all of it, ready to copy by hand.
+(document.querySelectorAll ? document.querySelectorAll('.cred-field') : []).forEach(function(el){
+  el.addEventListener('focus', function(){ el.select(); });
+});
+
 // An invite's second code, when it has one: its own field, and a note that both are needed.
 function _credShowCode(code){
   var codeBox = document.getElementById('cred-code');

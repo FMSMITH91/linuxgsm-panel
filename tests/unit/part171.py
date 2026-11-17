@@ -62,10 +62,12 @@ eq("plugins: enable needs a .jar.disabled, disable a .jar; remove takes either; 
        ("disable", "Foo-1.0.jar"), ("enable", "Foo-1.0.jar.disabled"), ("remove", "Foo-1.0.jar"),
        ("remove", "Foo.jar.disabled"), ("enable", "Foo.jar"), ("disable", "Foo.jar.disabled"),
        ("remove", "../server.properties.jar"), ("remove", "sub/Foo.jar"), ("remove", "Foo.txt"),
-       ("remove", ".hidden.jar"), ("remove", "Foo bar.jar"), ("delete", "Foo.jar"), ("remove", ""))],
+       ("remove", ".hidden.jar"), ("remove", "Foo\nbar.jar"), ("delete", "Foo.jar"), ("remove", ""),
+       ("remove", "LevelledMobs-4.5.3.2 b159.jar"), ("disable", "plugin (1).jar"))],
    [("Foo-1.0.jar.disabled", None), ("Foo-1.0.jar", None), (None, None), (None, None),
     (None, _mp171._MDR_BAD_ACTION), (None, _mp171._MDR_BAD_ACTION)] + [(None, _mp171._MDR_BAD_FILE)] * 5
-   + [(None, _mp171._MDR_BAD_ACTION), (None, _mp171._MDR_BAD_FILE)])
+   + [(None, _mp171._MDR_BAD_ACTION), (None, _mp171._MDR_BAD_FILE),
+      (None, None), ("plugin (1).jar.disabled", None)])
 eq("plugins: only https on the allowlisted host, default port, no credentials, is fetched",
    [_mr171._mdr_allowed(u, _mr171._MDR_CDN_HOSTS) for u in (
        "https://cdn.modrinth.com/data/AABBCC12/versions/x/a.jar", "http://cdn.modrinth.com/a.jar",
@@ -210,7 +212,7 @@ _mc171 = _p9_new_server(P9_HOST, "p171mc", "mc", 25566, name="p171-mc", status="
 _listing171 = {"serverfiles/plugins": {"path": "serverfiles/plugins", "entries": [
     {"name": "cache", "is_dir": True, "size": 0}, {"name": "LuckPerms-5.4.jar", "is_dir": False, "size": 2048},
     {"name": "Old-1.0.jar.disabled", "is_dir": False, "size": 10}, {"name": "config.yml", "is_dir": False},
-    {"name": "Odd name.jar", "is_dir": False, "size": 5}]}}
+    {"name": "Odd;name.jar", "is_dir": False, "size": 5}]}}
 _files171 = {"serverfiles/version_history.json": ('{"currentVersion": "1.21.4-212-abc (MC: 1.21.4)"}', None)}
 _uploads171, _renames171, _deletes171 = [], [], []
 _upload_answer171 = {"v": (True, "Uploaded")}
@@ -342,7 +344,7 @@ check("plugins list: the .jar and .jar.disabled files of serverfiles/plugins, wi
       "version; folders and other files are left out, an odd name listed but not managed",
       _jl171.get("success") is True and _jl171.get("mc_version") == "1.21.4"
       and [(p["name"], p["enabled"], p["managed"]) for p in _jl171.get("plugins", [])]
-      == [("LuckPerms-5.4.jar", True, True), ("Old-1.0.jar.disabled", False, True), ("Odd name.jar", True, False)],
+      == [("LuckPerms-5.4.jar", True, True), ("Old-1.0.jar.disabled", False, True), ("Odd;name.jar", True, False)],
       repr(_jl171))
 check("plugins list: the file manager's permission reads it; a console viewer is refused; a vanilla server "
       "is refused",
@@ -479,6 +481,7 @@ _out171 = _run_js75(_name_js171, (
     "(async () => { await settle(); const out = {};\n"
     "  const inst = els['mdr-installed'].children;\n"
     "  out.installed = inst.map(li => li.children.length); out.firstName = inst[0].children[0].textContent;\n"
+    "  out.oddWhy = inst[0].children[2] ? inst[0].children[2].textContent : '';\n"
     "  out.version = els['mdr-version'].textContent;\n"
     "  mk('mdr-q').value = 'a\\u0007b'; window.mdrSearch({preventDefault() {}}); await settle();\n"
     "  out.badQueryGets = gets.length; out.badQueryMsg = els['mdr-msg'].textContent;\n"
@@ -495,8 +498,10 @@ _out171 = _run_js75(_name_js171, (
     "  window.mdrChange('remove', 'Good-1.0.jar'); await settle();\n"
     "  out.posts = posts; out.confirms = confirms; console.log(JSON.stringify(out)); })();\n"))
 if _out171 is not None:
-    check("plugins card: installed names are text; an odd name gets no buttons, a managed one Disable and Remove",
-          _out171.get("installed") == [2, 4] and _out171.get("firstName") == "<b>x</b>.jar"
+    check("plugins card: installed names are text; an odd name gets no buttons but says why (rename it on the "
+          "Files page), a managed one Disable and Remove",
+          _out171.get("installed") == [3, 4] and _out171.get("firstName") == "<b>x</b>.jar"
+          and "Rename it on the Files page" in _out171.get("oddWhy", "")
           and _out171.get("version", "").startswith("Minecraft 1.21.4"), repr(_out171))
     check("plugins card: a query with a control character asks nothing and says the rule; a good one is trimmed "
           "and sent with the server's version",

@@ -466,8 +466,8 @@
           expires.
         </p>
         <div class="input-group mb-2">
-          <input type="text" class="form-control font-monospace" id="cred-pw" readonly
-                 aria-label="One-time password" style="font-size:1.05rem; letter-spacing:.02em;">
+          <input type="text" class="form-control font-monospace cred-field" id="cred-pw" readonly
+                 aria-label="One-time password">
           <button class="btn btn-outline-secondary" type="button" data-action="copyCredential">
             <i class="bi bi-clipboard"></i> Copy
           </button>
@@ -475,8 +475,8 @@
         {# An invite's second code: shown only when the invite has one (showCredential). #}
         <div id="cred-code-block" hidden>
           <label class="form-label small mb-1" for="cred-code">Code — send it another way than the link</label>
-          <div class="input-group mb-2">
-            <input type="text" class="form-control font-monospace fs-5" id="cred-code" readonly>
+          <div class="input-group mb-3">
+            <input type="text" class="form-control font-monospace cred-field" id="cred-code" readonly>
             <button class="btn btn-outline-secondary" type="button" data-action="copyInviteCode">
               <i class="bi bi-clipboard"></i> Copy
             </button>

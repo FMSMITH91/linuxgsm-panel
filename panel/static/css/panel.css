@@ -2549,3 +2549,12 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 }
 .auth-card-narrow { max-width: 460px; }
 .auth-emoji { font-size: 3rem; }
+
+/* The one-time password, invite link and invite code (manage_users.html's credential modal). The same
+   size as any field, so each sits level with its Copy button; read-only, so no text cursor to suggest
+   typing; the whole value is selected on a click, ready to copy by hand. */
+.cred-field{
+  font-size:1rem;
+  letter-spacing:.02em;
+  caret-color:transparent;
+}
