@@ -352,7 +352,9 @@ The one secret credential the workflows use is `CODACY_PROJECT_TOKEN`, a Codacy 
 token that sends test coverage to Codacy. It cannot touch the code, GitHub or any host, but it can
 change which Codacy patterns run. It lives in a `codacy` environment that only `main` can use, and
 only `codacy-coverage.yml` (a `workflow_run` job running `main`'s copy) reads it; the CI job that
-runs pull-request code never holds it. The test host's deploy logs in to Tailscale with OIDC, not a
+runs pull-request code never holds it. `codacy-alerts.yml` (scheduled, on `main`) would read a
+`CODACY_API_TOKEN` from the same environment if one were set; none is, because Codacy answers it
+without one for this public repository. The test host's deploy logs in to Tailscale with OIDC, not a
 stored credential.
 
 Thank you for helping keep the project and its users safe.
