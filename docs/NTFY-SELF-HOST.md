@@ -10,7 +10,7 @@ tailnet with Tailscale Serve. No port is opened to the internet.
 
 Checked against the ntfy docs ([install](https://docs.ntfy.sh/install/),
 [config](https://docs.ntfy.sh/config/), [phone](https://docs.ntfy.sh/subscribe/phone/)) and the
-[Tailscale Serve docs](https://tailscale.com/kb/1242/tailscale-serve) on 2026-11-16. If a step
+[Tailscale Serve docs](https://tailscale.com/kb/1242/tailscale-serve) on 2026-11-17. If a step
 does not match what you see, those pages are the reference.
 
 ## 1. Install ntfy (Ubuntu, official apt repository)
@@ -25,7 +25,7 @@ sudo apt update && sudo apt install ntfy
 sudo systemctl enable ntfy && sudo systemctl start ntfy
 ```
 
-On an ARM machine, write `arch=arm64` instead of `arch=amd64`.
+On a 64-bit ARM machine, write `arch=arm64` instead of `arch=amd64`; on 32-bit ARM, `arch=armhf`.
 
 ## 2. Configure it
 

@@ -56,6 +56,10 @@ root, as the panel's own account, or as an account listed in `"trusted_proxy_use
 panel believes a loopback proxy's `X-Forwarded-For` only from those, since any local account can
 connect to 127.0.0.1.
 
+On an ARM machine download `cloudflared-linux-arm64` instead. A binary downloaded this way is not
+updated by itself: Cloudflare's package repository (pkg.cloudflare.com) installs `cloudflared`
+through apt instead, so it is updated with the rest of the system.
+
 ## 3. Reverse proxy with a free domain + Caddy — real cert, auto-renewed
 
 Get a free hostname (e.g. [DuckDNS](https://www.duckdns.org)) pointed at your IP,
@@ -102,9 +106,10 @@ certificate from a real certificate authority into the panel's built-in HTTPS, i
 Either way the panel checks the pair before using it (OWASP Transport Layer Security Cheat Sheet,
 "Certificates"). It **refuses** files it cannot read, a key with a passphrase, a key that is not the
 certificate's, and an expired certificate. It **notes**, and still uses: an RSA key under 2048 bits
-or a curve browsers do not accept, an MD5 or SHA-1 signature, a panel address (`site_domain`, or the
-name the page was opened by) missing from the certificate's subjectAltName, a self-signed
-certificate, a chain with no intermediate certificate or out of order, and fewer than 30 days left.
+or a key type or curve browsers do not accept, an MD5 or SHA-1 signature, a panel address
+(`site_domain`, or the name the page was opened by) missing from the certificate's subjectAltName, a
+self-signed certificate, a chain with no intermediate certificate or out of order, a certificate not
+valid yet, and 30 days or fewer left.
 The key is written to `data/ssl/key.pem` at mode 0600 from the moment it exists, the chain to
 `cert.pem` leaf first, and the panel restarts to load them. `config.json`'s `tls_cert_source`
 records that the certificate is yours, so the panel never replaces it with a self-signed one.
