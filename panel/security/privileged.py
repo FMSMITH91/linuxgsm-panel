@@ -187,6 +187,53 @@ TS_UP_POLL_SECONDS = 20
 # panel's HTML. Whoever checks it must FULLMATCH — a prefix test accepts anything after the trusted
 # part, and the far side's grep is running on a host whose output is exactly what is in question.
 TS_LOGIN_URL_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# A self-hosted control server (Headscale and the like), as `tailscale up --login-server=` takes it:
+# http(s), a lower-case DNS name or IPv4 address, an optional port, and nothing after it (no path,
+# query, userinfo or fragment). The panel stores it in this one spelling (control_url in
+# tailscale_integration), and tools/panel-helper checks the same pattern (a unit test ties the two).
+# "-" means Tailscale's own coordination server: no --login-server at all.
+CONTROL_URL_RE = (r"https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+                  r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[1-9][0-9]{0,4})?")
+CONTROL_URL_MAX = 255
+
+
+def ts_login_url_re(control="-"):
+    """The login link `tailscale up` prints, for the control server it was pointed at.
+
+    Tailscale's own: TS_LOGIN_URL_RE. A self-hosted one prints a link on ITSELF (Headscale:
+    `<server_url>/register/<auth id>`, the id being URL-safe base64), so the pattern is that
+    server's own address and a path in the same narrow charset, with "-" and "_" added. A default
+    port may be spelled or left out by the server's own config, so `:443` (https) or `:80` (http)
+    is optional when the stored address has none.
+    """
+    if control in (None, "", "-"):
+        return TS_LOGIN_URL_RE
+    m = re.fullmatch(r"(https?)://([^:/]+)(?::(\d+))?", control)
+    if m is None:
+        return TS_LOGIN_URL_RE
+    port = (r"(?::%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None \
+        else ":" + m.group(3)
+    return re.compile(r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), re.escape(m.group(2)), port))
+
+
+def _r40_control(args, i):
+    """The control-server argument at `args[i]` (validated by the table), or "-" when none was given."""
+    return args[i] if len(args) > i else "-"
+
+
+def _r40_login_ere(control):
+    """ts_login_url_re(control) as the POSIX ERE a remote's `grep -oE` takes (no helper there).
+
+    Built from the same validated pieces, so the two cannot disagree; the panel re-checks what comes
+    back with ts_login_url_re(...).fullmatch, because the remote's grep is not something it controls.
+    """
+    if control in (None, "", "-"):
+        return r"https://login\.tailscale\.com/[A-Za-z0-9/]+"
+    m = re.fullmatch(r"(https?)://([^:/]+)(?::(\d+))?", control)
+    if m is None:
+        return r"https://login\.tailscale\.com/[A-Za-z0-9/]+"
+    port = ("(:%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None else ":" + m.group(3)
+    return r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), m.group(2).replace(".", r"\."), port)
 # `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes (tools/panel-helper's twin).
 R24T_SSH_PREF = {"on": "true", "off": "false"}
 
@@ -451,6 +498,15 @@ def _authkey(s):
     return str(s)
 
 
+def _control_url(s):
+    """A control server for `tailscale up --login-server`, or "-" for Tailscale's own (CONTROL_URL_RE)."""
+    s = str(s)
+    if s != "-" and (len(s) > CONTROL_URL_MAX or not re.fullmatch(CONTROL_URL_RE, s)
+                     or int(s.rsplit(":", 1)[1] if s.count(":") == 2 else "1") > 65535):
+        raise VerbError("not a control server address")
+    return s
+
+
 def ts_serve_argv(verb, grammar, mount, scheme, port):
     """`tailscale serve|funnel` argv for both CLI grammars — see tools/panel-helper.
 
@@ -484,9 +540,11 @@ def ts_serve_argv(verb, grammar, mount, scheme, port):
     return ["tailscale", verb, "--bg", "--https", "443", mount, upstream]
 
 
-def ts_up_argv(ssh, routes, tags=None, auth_key=None):
+def ts_up_argv(ssh, routes, tags=None, auth_key=None, control="-"):
     """The `tailscale up` argument vector — see tools/panel-helper."""
     argv = ["tailscale", "up", "--accept-routes"]
+    if control not in (None, "-"):
+        argv.append("--login-server=%s" % control)
     if auth_key is not None:
         argv += ["--auth-key", auth_key]
     if ssh == "yes":
@@ -1146,9 +1204,12 @@ _ARGV = {
 
     # ── tailscale ──
     # The auth key is read from stdin (`file:/dev/stdin`), never passed as a value: SECRET_STDIN.
-    "tailscale-up-key": ([_authkey, _yesno, _routes, _tags],
-                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key="file:/dev/stdin"), None),
-    "tailscale-up-login": ([_yesno, _routes], lambda a: [], None),
+    # The control server is an optional last argument (Rest, 0..1), so a caller that names none
+    # joins Tailscale's own exactly as before.
+    "tailscale-up-key": ([_authkey, _yesno, _routes, _tags, Rest(_control_url, 0, 1)],
+                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key="file:/dev/stdin",
+                                              control=_r40_control(a, 4)), None),
+    "tailscale-up-login": ([_yesno, _routes, Rest(_control_url, 0, 1)], lambda a: [], None),
 
     # ── host hardening ──
     "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
@@ -1710,7 +1771,7 @@ def _r22a_content_cron_path(user):
 
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
-    "tailscale-up-key": lambda a: (shlex.join(ts_up_argv(a[1], a[2], a[3]))
+    "tailscale-up-key": lambda a: (shlex.join(ts_up_argv(a[1], a[2], a[3], control=_r40_control(a, 4)))
                                    + " --auth-key \"file:$f\""),
 }
 
@@ -1874,12 +1935,12 @@ _REMOTE_ACTIONS = {
     "tailscale-up-login": lambda a: (
         "rm -f %s ; nohup %s > %s 2>&1 & "
         "for i in $(seq 1 %d); do "
-        "u=$(grep -oE 'https://login\\.tailscale\\.com/[A-Za-z0-9/]+' %s | head -1) ; "
+        "u=$(grep -oE %s %s | head -1) ; "
         "[ -n \"$u\" ] && { echo \"$u\" ; break ; } ; "
         "grep -qi 'success' %s && { echo ALREADY_CONNECTED ; break ; } ; "
         "sleep 1 ; done"
-        % (TS_UP_LOG, shlex.join(ts_up_argv(a[0], a[1])), TS_UP_LOG, TS_UP_POLL_SECONDS,
-           TS_UP_LOG, TS_UP_LOG)),
+        % (TS_UP_LOG, shlex.join(ts_up_argv(a[0], a[1], control=_r40_control(a, 2))), TS_UP_LOG,
+           TS_UP_POLL_SECONDS, shlex.quote(_r40_login_ere(_r40_control(a, 2))), TS_UP_LOG, TS_UP_LOG)),
     "os-update-run": lambda a: (
         "setsid bash -c %s </dev/null >/dev/null 2>&1 & echo %s"
         % (shlex.quote((

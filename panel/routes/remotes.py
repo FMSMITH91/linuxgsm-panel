@@ -222,8 +222,12 @@ def _register_remote_list(app):
         if not current_user.is_superadmin:
             allowed = accessible_remote_ids(current_user)
             remotes = [r for r in remotes if r.id in allowed]
+        info = ts.get_tailscale_info()
+        # ts_self_hosted: the join dialog's auth-key help names the self-hosted control server
+        # instead of linking to Tailscale's admin console. From the same cached reading.
         return render_template("manage_remotes.html", remotes=remotes,
-                               tailscale_installed=ts.get_tailscale_info().installed)
+                               tailscale_installed=info.installed,
+                               ts_self_hosted=ts.control_url(info=info) != "-")
 
     @app.route("/remotes/add", methods=["POST"])
     @login_required

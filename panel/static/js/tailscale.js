@@ -49,6 +49,24 @@ function _tsUpNow(outEl, btn){
   }).catch(function(){ outEl.innerHTML = '<span class="text-danger">Request failed.</span>'; if(btn) btn.disabled = false; });
 }
 
+// Save the control server new joins use (POST /api/tailscale/control-server, step-up first). The
+// answer says what joins use now, plus OWASP's note for an http:// address; the page then refreshes.
+function saveControlServer(form) { _tsStepUp(function(){ _saveControlServerNow(form); }); }
+function _saveControlServerNow(form) {
+  var out = document.getElementById('ts-control-out');
+  var url = (form.querySelector('[name="control_url"]').value || '').trim();
+  out.innerHTML = '<i class="bi bi-arrow-repeat"></i> Saving…';
+  fetch(MOUNT + '/api/tailscale/control-server', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({control_url: url}),
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (!d.success) { out.innerHTML = '<span class="text-danger">' + tsEsc(d.message || 'Failed') + '</span>'; return; }  // nosemgrep - tsEsc is window.escapeHtml
+    if (window.toast) toast(d.message, 'success');
+    if (d.note && window.toast) toast(d.note, 'warning');
+    window.refreshSection('#ts-page', 'wireTsButtons');
+  }).catch(function(){ out.innerHTML = '<span class="text-danger">Request failed.</span>'; });
+}
+
 // "Check again" after the link flow stopped waiting: re-render the page from the host's state.
 function tsCheckAgain(){ window.refreshSection('#ts-page','wireTsButtons'); }
 
@@ -155,7 +173,9 @@ function _tsServeEnter(form) {
 function enableServe(btn) { _tsStepUp(function() { _enableServeNow(btn); }); }
 function _enableServeNow(btn) {
   var mount = document.querySelector('[name="mount"]').value || '/';
-  var funnel = document.getElementById('funnel-check').checked;
+  // No checkbox where the tailnet's control server offers no Funnel (the page leaves it out).
+  var fc = document.getElementById('funnel-check');
+  var funnel = !!(fc && fc.checked);
   // `btn` arrives via data-args "@self". It used to be `event.target` off the implicit global,
   // which is the element actually clicked — the <i> icon inside the button as often as the button
   // itself, so `btn.disabled = true` did nothing and the label rewrite ate the icon instead.

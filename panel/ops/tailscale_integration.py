@@ -15,6 +15,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urlsplit
 
 from panel.core import i18n
 from panel.core.validation import canonical_host, ip_address_or_none
@@ -60,6 +61,17 @@ class TailscaleInfo:
     # The tailscale binary this reading's version came from, (path, inode, mtime, size): see
     # _same_binary. None when there was none on PATH.
     binary_id: Optional[tuple] = None
+    # What the control server offers this node, read from the same two reads (no extra command).
+    # control_url: prefs' ControlURL ("" when the prefs were not read): Tailscale's own coordination
+    # server or a self-hosted one such as Headscale. magic_dns_suffix: the tailnet's MagicDNS suffix,
+    # "<tailnet>.ts.net" on Tailscale's own and the server's base domain on Headscale. cert_domains:
+    # status CertDomains, the names the control server will get a certificate for (Serve's HTTPS
+    # needs one). node_caps: the keys of Self.CapMap ("https", "funnel", ...), the same capabilities
+    # the tailscale CLI itself checks before Serve and Funnel.
+    control_url: str = ""
+    magic_dns_suffix: str = ""
+    cert_domains: list = field(default_factory=list)
+    node_caps: list = field(default_factory=list)
 
 
 # Cache results to avoid hammering `tailscale` CLI on every page load
@@ -307,6 +319,7 @@ def _read_status_json(info, status):
     info.prefs_json = _read_prefs_json()
     info.accept_routes = _route_all_of(info.prefs_json)
     info.magic_dns_enabled = bool(info.dns_name)
+    _r40_read_offer(info, status, self_data)
 
     # Collect peers. Trust Tailscale's own `Online` field — it is authoritative.
     # (Do NOT downgrade based on LastSeen: for an online peer the last handshake
@@ -315,6 +328,23 @@ def _read_status_json(info, status):
     peer_data = status.get("Peer") or {}
     for peer_id, peer in peer_data.items():
         info.peers.append(_peer_entry(peer_id, peer))
+
+
+def _r40_read_offer(info, status, self_data):
+    """Fill what the control server offers this node (see TailscaleInfo.control_url)."""
+    prefs = info.prefs_json if isinstance(info.prefs_json, dict) else {}
+    url = prefs.get("ControlURL")
+    info.control_url = url.strip() if isinstance(url, str) else ""
+    tailnet = status.get("CurrentTailnet")
+    suffix = (tailnet.get("MagicDNSSuffix") if isinstance(tailnet, dict) else None) \
+        or status.get("MagicDNSSuffix")
+    if not suffix and "." in info.dns_name:
+        suffix = info.dns_name.split(".", 1)[1]
+    info.magic_dns_suffix = suffix.strip().strip(".").lower() if isinstance(suffix, str) else ""
+    certs = status.get("CertDomains")
+    info.cert_domains = [d for d in certs if isinstance(d, str) and d] if isinstance(certs, list) else []
+    caps = self_data.get("CapMap") if isinstance(self_data, dict) else None
+    info.node_caps = sorted(k for k in caps if isinstance(k, str)) if isinstance(caps, dict) else []
 
 
 def _peer_entry(peer_id, peer):
@@ -387,17 +417,169 @@ def _read_serve_status(info):
 
 
 def _detect_magic_dns(info):
-    """Set info.magic_dns_enabled when the status did not, but the node's name resolves."""
-    # Detect MagicDNS from resolveconf or tailscale
-    if not info.magic_dns_enabled:
-        try:
-            # Check if .ts.net resolves
-            if info.hostname:
-                test_name = f"{info.hostname}.tailscale.net"
-                socket.getaddrinfo(test_name, 80, socket.AF_INET)
-                info.magic_dns_enabled = True
-        except OSError:
-            _log.debug("name doesn't resolve → MagicDNS simply stays disabled", exc_info=True)
+    """Set info.magic_dns_enabled when the status did not, but the node's name resolves.
+
+    The name is the node's under the tailnet's own suffix (magic_dns_suffix: ts.net or a
+    self-hosted server's base domain). It was `<host>.tailscale.net`, a name no tailnet uses, so
+    this lookup never answered and cost a DNS query each reading; with no suffix known there is
+    no name to try, and none is asked.
+    """
+    if info.magic_dns_enabled or not (info.hostname and info.magic_dns_suffix):
+        return
+    try:
+        socket.getaddrinfo(f"{info.hostname}.{info.magic_dns_suffix}", 80, socket.AF_INET)
+        info.magic_dns_enabled = True
+    except OSError:
+        _log.debug("name doesn't resolve → MagicDNS simply stays disabled", exc_info=True)
+
+
+# Tailscale's own coordination server answers at both names (the CLI's ipn.IsLoginServerSynonym).
+TS_CONTROL_HOSTS = frozenset(("controlplane.tailscale.com", "login.tailscale.com"))
+
+
+def _control_host(url):
+    """The lower-case host of a control server address, or "" for none or one that is not a URL."""
+    try:
+        return (urlsplit(str(url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def control_is_tailscale(info):
+    """Whether this node's control server is Tailscale's own, or could not be read.
+
+    Unread counts as Tailscale's: the panel then behaves as it always has, and the tailscale CLI
+    still refuses what the server does not allow.
+    """
+    host = _control_host(getattr(info, "control_url", ""))
+    return not host or host in TS_CONTROL_HOSTS
+
+
+def serve_https_offered(info):
+    """Whether Tailscale Serve's HTTPS (a certificate the control server helps issue) is on offer.
+
+    On Tailscale's own server, yes, as before: a tailnet with HTTPS off is asked to turn it on by
+    the CLI itself. On a self-hosted one only when it says so, the way the tailscale CLI reads it:
+    the node's "https" capability and a name in CertDomains. Headscale releases up to 0.29 issue
+    neither, so Serve cannot publish the panel there.
+    """
+    if control_is_tailscale(info):
+        return True
+    return "https" in (info.node_caps or []) and bool(info.cert_domains)
+
+
+def funnel_offered(info):
+    """Whether Tailscale Funnel is on offer: the "https" and "funnel" capabilities (ipn.NodeCanFunnel).
+
+    Tailscale's own server: yes, as before (the CLI asks for the policy change itself). Headscale
+    does not implement Funnel and refuses the attribute in its policy.
+    """
+    if control_is_tailscale(info):
+        return True
+    caps = info.node_caps or []
+    return "https" in caps and "funnel" in caps
+
+
+# Said instead of publishing, when the tailnet's control server does not offer what was asked.
+SERVE_NOT_OFFERED = ("This tailnet's control server does not issue HTTPS certificates, so Tailscale "
+                     "Serve can't publish the panel. Nothing was changed. Open the panel at its "
+                     "tailnet address, with the panel's own HTTPS certificate.")
+FUNNEL_NOT_OFFERED = ("This tailnet's control server does not offer Funnel, so the panel can't be "
+                      "published to the internet through Tailscale. Nothing was changed.")
+
+
+def offer_refusal(info, funnel=False):
+    """SERVE_NOT_OFFERED or FUNNEL_NOT_OFFERED when the control server lacks what is asked, else ""."""
+    if not serve_https_offered(info):
+        return SERVE_NOT_OFFERED
+    if funnel and not funnel_offered(info):
+        return FUNNEL_NOT_OFFERED
+    return ""
+
+
+def parse_control_url(text):
+    """(the address in its one stored spelling, None) or ("", a Sentence saying why it is not one).
+
+    "" (Tailscale's own) for an empty value and for Tailscale's own server under either name. A
+    value is scheme://host[:port] and nothing after it; the case of the scheme and host and a
+    trailing "/" are forgiven, and a default port (:443 for https, :80 for http) is dropped.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return "", None
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        parts, port = None, None
+    if (parts is None or parts.scheme.lower() not in ("https", "http") or parts.username is not None
+            or parts.password is not None or parts.path not in ("", "/") or parts.query
+            or parts.fragment or not parts.hostname or raw.endswith("?") or raw.endswith("#")):
+        return "", i18n.Sentence(_CONTROL_URL_BAD)
+    scheme, host = parts.scheme.lower(), parts.hostname.lower()
+    if host in TS_CONTROL_HOSTS:
+        return "", None
+    if port is not None and port != (443 if scheme == "https" else 80):
+        host = "%s:%d" % (host, port)
+    url = "%s://%s" % (scheme, host)
+    try:
+        return _priv._control_url(url), None
+    except _priv.VerbError:
+        return "", i18n.Sentence(_CONTROL_URL_BAD)
+
+
+_CONTROL_URL_BAD = ("That isn't a control server address. Enter its address like "
+                    "https://headscale.example.com (a port is allowed; no path).")
+
+
+def control_url(cfg=None, info=None):
+    """The control server new nodes join: "-" for Tailscale's own, else its address.
+
+    The saved tailscale_control_url when there is one. When there is none, the panel host's own
+    control server when that is a self-hosted one: remotes join the tailnet the panel host is in,
+    and on a node already registered with a self-hosted server an `up` that does not name it again
+    is refused by the tailscale CLI (its "mention all non-default flags" check).
+    """
+    if cfg is None:
+        from panel.core.config import load_config
+        cfg = load_config()
+    saved, _why = parse_control_url(cfg.get("tailscale_control_url"))
+    if saved:
+        return saved
+    info = get_tailscale_info() if info is None else info
+    if control_is_tailscale(info):
+        return "-"
+    own, _why = parse_control_url(info.control_url)
+    return own or "-"
+
+
+def control_args(control):
+    """The optional last argument of the tailscale-up verbs: none for Tailscale's own server."""
+    return [] if control in (None, "", "-") else [control]
+
+
+def tailnet_suffix(info=None):
+    """The tailnet's MagicDNS suffix, lower case without dots at either end, or ""."""
+    info = get_tailscale_info() if info is None else info
+    return (getattr(info, "magic_dns_suffix", "") or "").lower()
+
+
+def is_tailnet_name(host):
+    """Whether `host` is a MagicDNS name: under ts.net, or under this tailnet's own suffix.
+
+    A self-hosted control server (Headscale) names nodes under its own base domain, which is any
+    domain its operator chose, so ".ts.net" alone missed every one of them. The Tailscale reading
+    is asked only for a dotted name that is neither an address nor under ts.net.
+    """
+    h = str(host or "").strip().lower().rstrip(".")
+    if not h or ":" in h or "." not in h:
+        return False
+    if h.endswith(".ts.net"):
+        return True
+    if ip_address_or_none(h) is not None:
+        return False
+    suffix = tailnet_suffix()
+    return bool(suffix) and h.endswith("." + suffix)
 
 
 _SERVE_URL_RE = re.compile(r"https?://\S+")
@@ -614,7 +796,7 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
 
     `backend_scheme` is how to reach the panel on loopback — "http" (default) or "https+insecure"
     when the panel is terminating its own self-signed TLS. Tailscale re-terminates TLS with the
-    real ts.net cert either way; this just has to match how the panel is actually listening or the
+    tailnet's own certificate either way; this just has to match how the panel is actually listening or the
     proxy 502s.
     """
     mount = mount or "/"
@@ -675,6 +857,11 @@ def _r12a_serve_verb(port, mount, funnel, keep_shared_funnel):
     """
     want = "funnel" if funnel else "serve"
     info = get_tailscale_info(force_refresh=True)
+    # What the control server does not offer is refused before anything is written, except on the
+    # boot re-point, which only keeps a route that is already there.
+    refusal = "" if keep_shared_funnel else offer_refusal(info, funnel)
+    if refusal:
+        return None, refusal
     if info.serve_unreadable:
         return want, ""
     shared, others = _r12a_listener_funnel(info.serve_config, port)
@@ -881,8 +1068,10 @@ def tailscale_up_local(enable_ssh=True):
     # SSH only where the operator chose it at install (system_ops.tailscale_ssh_allowed): the helper
     # refuses `--ssh` otherwise, and Connect must still join, so it asks without it.
     enable_ssh = enable_ssh and _so.tailscale_ssh_allowed()
+    # --login-server when the tailnet is on a self-hosted control server (control_url).
+    control = control_url()
     out, err, rc = _so._run_verb("tailscale-up-login",
-                                 ["yes" if enable_ssh else "no", "-"],
+                                 ["yes" if enable_ssh else "no", "-"] + control_args(control),
                                  timeout=40, merge_stderr=False)
     r = _SimpleResult(stdout=out, stderr=err, returncode=rc)
     line = (r.stdout or "").strip().split("\n")[-1].strip()
@@ -891,7 +1080,7 @@ def tailscale_up_local(enable_ssh=True):
     # by a grep running on the host being joined — so a prefix test accepts anything at all after
     # "https://login.tailscale.com/". The REMOTE twin in ssh_manager has pinned the whole string for
     # a while and says why; this panel-host copy was never switched over. Same regex, one definition.
-    if _priv.TS_LOGIN_URL_RE.fullmatch(line):
+    if _priv.ts_login_url_re(control).fullmatch(line):
         with _cache_lock:
             _cache["info"] = None
         return True, line
@@ -1309,7 +1498,8 @@ def _remove_serve_mappings(routes, port):
     return True, ""
 
 
-# A tailnet's MagicDNS name is <host>.<tailnet>.ts.net, and Tailscale's own IPv4 range is the
+# A tailnet's MagicDNS name is <host>.<tailnet>.ts.net (a self-hosted control server's own base
+# domain is matched by is_tailnet_name), and Tailscale's own IPv4 range is the
 # CGNAT block 100.64.0.0/10 (its IPv6 is fd7a:115c:a1e0::/48): system_ops._TAILNET_RANGES, the one
 # copy the firewall and fail2ban code read, rather than a second one here.
 _TS_DNS_RE = re.compile(r"\.ts\.net\Z", re.IGNORECASE)
@@ -1331,7 +1521,7 @@ def is_tailscale_ip(host):
     host = canonical_host((host or "").strip())
     if not host:
         return False
-    if _TS_DNS_RE.search(host):
+    if _TS_DNS_RE.search(host) or is_tailnet_name(host):
         return True
     addr = ip_address_or_none(host)
     if addr is None:
@@ -1363,7 +1553,7 @@ def suggest_best_bind(port=5000, scheme="http", mount=None):
     ours = panel_serve_routes(info.serve_config, port)
 
     if info.running and info.dns_name and ours:
-        # Serve is ACTUALLY proxying the panel — bind to localhost and reach it via the ts.net cert.
+        # Serve is ACTUALLY proxying the panel — bind to localhost and reach it via the tailnet's cert.
         # (We must confirm Serve is configured, not just that Tailscale is up with a MagicDNS name —
         # otherwise a fresh Tailscale-enabled install would bind loopback with nothing proxying to it
         # and be unreachable.) And "configured" means a route to THIS panel's port: any mapping used

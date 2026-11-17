@@ -288,6 +288,8 @@
    route is superadmin-only (it moves the host onto the panel's own tailnet identity). Outside the
    refreshed list, so an AJAX refresh never drops it. #}
 {% if current_user.is_superadmin %}<span id="ts-migrate-allowed" hidden></span>{% endif %}
+{# The tailnet is on a self-hosted control server (Headscale): auth keys come from that server. #}
+{% if ts_self_hosted %}<span id="ts-self-hosted" hidden></span>{% endif %}
 
 {% endblock %}
 

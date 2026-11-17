@@ -11,6 +11,49 @@
   </a>
 </div>
 
+{# The control server new joins use: Tailscale's own, or a self-hosted one (Headscale). Superadmin,
+   like /api/tailscale/control-server behind it. Folded: set once, and the page's cards come first. #}
+{% if current_user.is_superadmin %}
+<div class="card mb-3" id="ts-control-card">
+  <div class="card-body py-2">
+  {% call fold('Control server', id='ts-control-fold', icon='hdd-network') %}
+    <p class="text-secondary small mb-2">
+      The coordination server this panel's hosts join: Tailscale's own, or a self-hosted one such
+      as Headscale. Connecting this host, and a remote's login link or auth key, use it. Leave it
+      empty for Tailscale.
+    </p>
+    {% if offer.host_control %}
+    <p class="small mb-2"><span>This host is joined to:</span> <code data-no-i18n>{{ offer.host_control }}</code></p>
+    {% endif %}
+    <form id="ts-control-form" data-action="saveControlServer" data-args='["@self"]' data-on="submit" data-prevent>
+      <label class="form-label small" for="ts-control-url">Control server address</label>
+      <div class="input-group input-group-sm">
+        <input id="ts-control-url" name="control_url" type="url" class="form-control" maxlength="255"
+               placeholder="https://headscale.example.com" value="{{ offer.saved }}"
+               autocomplete="off" spellcheck="false">
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+      <div class="small text-secondary mt-1">Recommended: an https:// address (OWASP Transport Layer Security Cheat Sheet).</div>
+      {% if offer.plain_http %}
+      <div class="small text-warning mt-1">http:// is outside OWASP's recommendation: the login link opens in your browser unencrypted. Use the server's https:// address if it has one.</div>
+      {% endif %}
+      <div id="ts-control-out" class="small mt-1"></div>
+    </form>
+    {% if offer.self_hosted %}
+    <ul class="small mb-0 mt-2 ps-3" id="ts-control-offer">
+      <li><span>Tailscale Serve (private HTTPS):</span>
+        {% if offer.serve %}<span class="text-success">offered</span>{% else %}<span class="text-warning">not offered: this server issues no HTTPS certificates</span>{% endif %}</li>
+      <li><span>Funnel:</span>
+        {% if offer.funnel %}<span class="text-success">offered</span>{% else %}<span class="text-secondary">not offered by this server</span>{% endif %}</li>
+      {% if offer.suffix %}<li><span>MagicDNS names end in</span> <code data-no-i18n>{{ offer.suffix }}</code></li>{% endif %}
+      <li>Tailscale SSH follows the SSH rules in the server's own policy.</li>
+    </ul>
+    {% endif %}
+  {% endcall %}
+  </div>
+</div>
+{% endif %}
+
 {% if not info.installed %}
 <div class="card mb-3">
   <div class="card-body text-center py-5">
@@ -163,6 +206,9 @@
                 <span class="badge bg-warning text-dark">Enabled</span>
                 <span class="text-secondary fs-r70">public internet</span>
                 {% include "_shared_funnel_note.html" %}
+              {% elif not offer.funnel %}
+                <span class="badge bg-secondary">Not offered</span>
+                <span class="text-secondary fs-r70">this tailnet's control server has no Funnel</span>
               {% else %}
                 <span class="badge bg-secondary">Disabled</span>
                 <span class="text-secondary fs-r70">private — tailnet only (recommended)</span>
@@ -235,7 +281,13 @@
           {% endif %}
         </div>
 
-        {% if not config.tailscale_setup_done and info.running %}
+        {% if not config.tailscale_setup_done and info.running and not offer.serve %}
+        <p class="text-secondary small mb-0 mt-2" id="ts-serve-not-offered">
+          This tailnet's control server does not issue HTTPS certificates, so Tailscale Serve can't
+          publish the panel. Open the panel at its tailnet address above; Settings &gt; HTTPS
+          certificate can give it your own certificate.
+        </p>
+        {% elif not config.tailscale_setup_done and info.running %}
         <form id="serve-form" class="mt-2" data-action="_tsServeEnter" data-args='["@self"]' data-on="submit" data-prevent>
           <p class="text-secondary small mb-2">
             Tailscale Serve exposes the panel privately on your tailnet — free on the Personal plan, and
@@ -254,6 +306,7 @@
             </button>
             {% endif %}
           </div>
+          {% if offer.funnel %}
           <div class="form-check">
             <input type="checkbox" id="funnel-check" class="form-check-input">
             <label class="form-check-label small" for="funnel-check">Also enable Funnel (advanced)</label>
@@ -264,6 +317,7 @@
               this off to keep access tailnet-only.
             </div>
           </div>
+          {% endif %}
         </form>
         {% endif %}
         {% endset %}

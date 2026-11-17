@@ -34,6 +34,10 @@ yourself: it picks the scheme it is really serving, records the mount, re-points
 route at every start, and removes its own routes at any other mount. A route written by
 hand is not managed, so it answers 502 once the panel's scheme changes.
 
+On a [Headscale](README.md#headscale-a-self-hosted-control-server) tailnet the name ends in Headscale's
+base domain, and Serve works only where that Headscale issues certificates; the panel says so on
+the `/tailscale` page. Without them, use your own certificate (section 3).
+
 ## 2. Cloudflare Tunnel — best for *public* access (no domain of your own, no open port)
 
 A free tunnel that gives a real trusted HTTPS URL, no inbound port, auto-renewed.

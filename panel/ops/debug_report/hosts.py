@@ -349,7 +349,7 @@ def addr_class(host):
     low = h.lower().rstrip(".")
     if low == "localhost":
         return "loopback name"
-    if low.endswith(".ts.net"):
+    if low.endswith(".ts.net") or mod("panel.ops.tailscale_integration").is_tailnet_name(low):
         return "MagicDNS name"
     return "bare name (no dot)" if "." not in low else "DNS name"
 

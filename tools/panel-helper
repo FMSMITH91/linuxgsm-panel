@@ -390,6 +390,27 @@ def panel_conf():
 
 
 TS_LOGIN_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# A self-hosted control server for `tailscale up --login-server=` (privileged.CONTROL_URL_RE, the
+# same pattern; a unit test ties the two): http(s), a lower-case DNS name or IPv4 address, an
+# optional port, nothing after it. "-" is Tailscale's own, and adds no flag.
+CONTROL_URL_RE = (r"https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+                  r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[1-9][0-9]{0,4})?")
+
+
+def ts_login_re(control):
+    """The login link `tailscale up` prints for `control` (privileged.ts_login_url_re's twin).
+
+    A self-hosted server prints a link on itself (Headscale: <server_url>/register/<id>), so the
+    pattern is its own address, the default port optional, and a path in a narrow charset.
+    """
+    if control in (None, "", "-"):
+        return TS_LOGIN_RE
+    m = re.fullmatch(r"(https?)://([^:/]+)(?::(\d+))?", control)
+    if m is None:
+        return TS_LOGIN_RE
+    port = (r"(?::%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None \
+        else ":" + m.group(3)
+    return re.compile(r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), re.escape(m.group(2)), port))
 # `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes.
 R24T_SSH_PREF = {"on": "true", "off": "false"}
 # The BackendStates of a node that has joined a tailnet and is in it (or on its way back in with
@@ -868,6 +889,14 @@ def v_authkey(s):
     return s
 
 
+def v_control_url(s):
+    """A control server for --login-server (CONTROL_URL_RE), or "-" for Tailscale's own."""
+    if s != "-" and (len(s) > 255 or not re.fullmatch(CONTROL_URL_RE, s)
+                     or int(s.rsplit(":", 1)[1] if s.count(":") == 2 else "1") > 65535):
+        raise ValueError("not a control server address")
+    return s
+
+
 def ts_serve_argv(verb, grammar, mount, scheme, port):
     """`tailscale serve|funnel` argv for both CLI grammars — see tools/panel-helper.
 
@@ -883,9 +912,11 @@ def ts_serve_argv(verb, grammar, mount, scheme, port):
     return ["tailscale", verb, "--bg", "--https", "443", mount, upstream]
 
 
-def ts_up_argv(ssh, routes, tags=None, auth_key=None):
+def ts_up_argv(ssh, routes, tags=None, auth_key=None, control="-"):
     """The `tailscale up` argument vector, assembled from validated pieces."""
     argv = ["tailscale", "up", "--accept-routes"]
+    if control not in (None, "-"):
+        argv.append("--login-server=%s" % control)
     if auth_key is not None:
         argv += ["--auth-key", auth_key]
     if ssh == "yes":
@@ -2574,9 +2605,11 @@ VERBS = {
     # from a validated piece — routes are PARSED as networks, tags must be `tag:name`, and the auth
     # key is charset-checked and never echoed back, not even in a rejection.
     # The auth key is not an argument either: stdin in, `--auth-key file:/dev/stdin` out.
-    "tailscale-up-key": ([v_yesno, v_routes, v_tags],
-                         lambda a: ts_up_argv(a[0], a[1], a[2], auth_key="file:/dev/stdin"), None),
-    "tailscale-up-login": ([v_yesno, v_routes], lambda a: [], None),
+    # The control server is an optional last argument: none joins Tailscale's own, as before.
+    "tailscale-up-key": ([v_yesno, v_routes, v_tags, Rest(v_control_url, 0, 1)],
+                         lambda a: ts_up_argv(a[0], a[1], a[2], auth_key="file:/dev/stdin",
+                                              control=a[3] if len(a) > 3 else "-"), None),
+    "tailscale-up-login": ([v_yesno, v_routes, Rest(v_control_url, 0, 1)], lambda a: [], None),
 
     # ── host hardening ──
     # The value is checked against the key's own allowed set, so a directive can only be set to
@@ -6359,6 +6392,7 @@ def do_tailscale_up_login(args, content):
     `yes` (with --ssh) has already been refused by PRECHECKS unless the operator chose Tailscale SSH at
     install (_r25a_ssh_refusal): that link lets whoever opens it pick the tailnet that gets SSH."""
     ssh, routes = args[0], args[1]
+    control = args[2] if len(args) > 2 else "-"
     early = _r24t_up_login_early(_r24t_ts_json("status", "--json"))
     if early is not None:
         return early
@@ -6366,7 +6400,7 @@ def do_tailscale_up_login(args, content):
         os.unlink(TS_UP_LOG)
     except FileNotFoundError:
         pass                      # first run on this host, or /run was cleared by a reboot
-    argv = ts_up_argv(ssh, routes)
+    argv = ts_up_argv(ssh, routes, control=control)
     argv[0] = resolve("tailscale")
     # O_EXCL | O_NOFOLLOW, after the unlink above, as tailscale-install does. This was O_CREAT |
     # O_TRUNC, which opens whatever already sits at the name: a symlink there made root truncate
@@ -6388,7 +6422,7 @@ def do_tailscale_up_login(args, content):
                 text = fh.read()
         except OSError:
             continue
-        m = TS_LOGIN_RE.search(text)
+        m = ts_login_re(control).search(text)
         if m:
             sys.stdout.write(m.group(0))
             return 0

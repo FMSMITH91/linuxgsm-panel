@@ -5,7 +5,8 @@ A request-mode section: the running values come from the Flask app's config.
 - Only DEBUG_CONFIG_KEYS (below) are shown, and never as typed where the value names something:
   bind_host as loopback / all interfaces / auto / [ip:class] / hostname; site_domain as set
   (a .ts.net name) / set / unset; site_title as custom / default; tailscale_mount as / or a short
-  plain path, else custom; list-valued keys as counts.
+  plain path, else custom; tailscale_control_url as Tailscale / self-hosted and its scheme (never
+  the address); list-valued keys as counts.
 - A key read once at startup shows the file AND the running value, with RESTART PENDING when they
   differ (port, bind, trust_proxy, the session values, the cookie's Secure flag).
 - An unreadable config.json prints no values at all: load_config hands back the defaults then, and
@@ -27,7 +28,7 @@ from panel.ops.debug_report._base import Result
 DEBUG_CONFIG_KEYS = (
     "port", "bind_host", "use_https", "trust_proxy", "cookie_secure",
     "tailscale_setup_done", "tailscale_auto_setup", "tailscale_mount", "tailscale_use_funnel",
-    "setup_complete", "remember_days", "session_lifetime_hours", "session_idle_minutes",
+    "tailscale_control_url", "setup_complete", "remember_days", "session_lifetime_hours", "session_idle_minutes",
     "session_absolute_hours",
     "session_protection", "audit_log_retention_days", "audit_ip_retention_days",
     "ssh_timeout", "site_title", "site_domain",
@@ -78,7 +79,19 @@ def _domain_class(value):
     text = str(value or "").strip().lower().rstrip(".")
     if not text:
         return "unset"
-    return "set (a .ts.net name)" if text.endswith(".ts.net") else "set"
+    if text.endswith(".ts.net"):
+        return "set (a .ts.net name)"
+    from panel.ops import tailscale_integration as ts
+    return "set (a MagicDNS name)" if ts.is_tailnet_name(text) else "set"
+
+
+def _control(cfg):
+    """tailscale_control_url as a class: Tailscale's own, or self-hosted and its scheme."""
+    text = str(cfg.get("tailscale_control_url") or "").strip().lower()
+    if not text:
+        return "Tailscale (default)"
+    return "self-hosted (%s)" % ("https" if text.startswith("https://") else
+                                 "http" if text.startswith("http://") else "unreadable")
 
 
 def _mount_class(value):
@@ -341,7 +354,7 @@ def _counted(key):
 
 _CLASSIFY = {"ssh_timeout": _ssh_timeout, "site_title": _site_title, "tailscale_mount": _mount,
              "site_domain": _domain, "security_whitelist": _counted("security_whitelist"),
-             "autoblock_hosts": _counted("autoblock_hosts")}
+             "autoblock_hosts": _counted("autoblock_hosts"), "tailscale_control_url": _control}
 
 
 def _other_lines(cfg, res):

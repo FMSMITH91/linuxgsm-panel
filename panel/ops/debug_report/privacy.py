@@ -129,6 +129,7 @@ class _State(object):
         self.pattern_error = None  # exception class when the generic pass itself failed
         self.cred_key_missing = False
         self.ts_done = False
+        self.ts_suffix = ""        # the tailnet's own MagicDNS suffix when it is not ts.net
         self.lock = threading.Lock()
 
     def add(self, name, kind, ident=None):
@@ -473,6 +474,8 @@ def _names_tailscale_value(info, st, key):
     """Map one identity-looking string of the tailscale data, and the parts of it that print alone."""
     value = info.strip().rstrip(".")
     st.add(value, "tailnet-name")
+    if key == "magic_dns_suffix" and "." in value and not value.lower().endswith("ts.net"):
+        st.ts_suffix = value.lower()
     if key in _TS_WHOLE_KEYS:
         return
     # A name of several words ("Jane Q Doe", a DisplayName) is mapped by its leading words too:
@@ -800,7 +803,7 @@ def scrub(ctx, text):
         st.pattern_error = type(exc).__name__
         return _withhold(text)
     try:
-        text = _r16b_named_tokens(text, st)
+        text = _r16b_named_tokens(_r40_tailnet_names(text, st), st)
     except Exception as exc:  # noqa: BLE001 - withhold rather than print a token in fragments
         st.pattern_error = type(exc).__name__
         return _withhold(text)
@@ -817,6 +820,24 @@ def scrub(ctx, text):
         # so an address or a long token holding the name is still redacted whole.
         text = _names_pass(text, st, only=found)
     return text
+
+
+def _r40_tailnet_names(text, st):
+    """Every name under the tailnet's own MagicDNS suffix as [ts-name], as *.ts.net is (_GENERIC).
+
+    A self-hosted control server (Headscale) names nodes under its own base domain, which no fixed
+    rule knows. Run before the names pass: that pass maps the suffix alone to a token, and a node's
+    own label was left printed in front of it ("peer1.[tailnet-name-2]").
+    """
+    suffix = st.ts_suffix
+    if not suffix or suffix not in text.lower():
+        return text
+    rx = re.compile(r"(?<![\w.-])[\w-]{1,63}(?:\.[\w-]{1,63}){0,8}\.%s(?![\w-])" % re.escape(suffix), re.I)
+
+    def _sub(m):
+        st.hit("ts-name", m.group(0))
+        return "[ts-name]"
+    return rx.sub(_sub, text)
 
 
 def _r16b_named_tokens(text, st):

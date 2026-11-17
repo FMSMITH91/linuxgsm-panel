@@ -249,7 +249,9 @@ The narrowing is in the argument types:
 - `apt-install` checks every package name and bounds the list; dpkg's conflict answers are fixed in
   the helper, so an unattended upgrade never overwrites a config file you edited.
 - **Tailscale on the panel's host** changes only through verbs; the panel's account is not
-  tailscaled's operator. The helper will not move a joined host to another tailnet. Tailscale SSH
+  tailscaled's operator. The helper will not move a joined host to another tailnet. A join may name
+  a self-hosted control server (`--login-server`), checked as an http(s) address with no path, and
+  the login link it prints must be on that server. Tailscale SSH
   there is your choice at install (`PANEL_TAILSCALE_SSH=1`/`0`, recorded root-owned in `panel.conf`).
   Serve and Funnel publish only the panel's own recorded port, and Funnel is refused while another
   app is served on the same listener, unless Funnel is already on there.
