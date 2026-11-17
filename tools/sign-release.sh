@@ -186,7 +186,9 @@ release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when 
 # judged -- no venv, no rules file, an error -- counts as reaching panels, so a release is published.
 reaches_panels() {
     local py="${TOOLS_DIR}/../.venv/bin/python" rules files
-    [[ -x "${py}" ]] || py="$(command -v python3)" || return 0
+    # The checkout's venv, else the interpreter named by PYTHON (the suites run with it), else python3.
+    [[ -x "${py}" ]] || py="${PYTHON:-$(command -v python3)}"
+    [[ -n "${py}" ]] || return 0
     rules="$(git show "$1:.github/update-paths.txt" 2>/dev/null)" || return 0
     files="$(git diff --no-renames --name-only "$1^1" "$1" -- 2>/dev/null)" || return 0
     [[ -n "${files}" ]] || return 1
