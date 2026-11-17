@@ -1585,6 +1585,12 @@ compares git commits, not this file.
 
 ### Security
 
+- **Use your own HTTPS certificate.** Settings → HTTPS certificate puts a pasted certificate, or a
+  Let's Encrypt certificate already on this host, into the panel's built-in HTTPS. It is checked
+  against OWASP's TLS recommendations first; the panel then restarts to use it, and each day loads a
+  Let's Encrypt certificate that certbot has renewed. Superadmins only, with the password asked again.
+- **HSTS with a CA-signed certificate on the panel's own HTTPS.** Browsers are told to use HTTPS only:
+  one day at a time for the first 30 days, then two years. A self-signed certificate never gets it.
 - **New passwords are checked against known breaches.** After the built-in common-password rules, a
   new password is checked against a list of 100,000 breached passwords that the installer downloads
   (pinned by SHA-256), then against Have I Been Pwned's Pwned Passwords, which receives only the
