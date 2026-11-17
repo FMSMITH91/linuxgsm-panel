@@ -10,6 +10,30 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.18] — 2026-11-18
+
+### Changed
+
+- **The changelog lists changes by the day they were released.** Each day's releases have their own
+  section, newest first, with what they added, changed, fixed and secured.
+- **Settings says which actions ask for the password again.** The note under the step-up time now
+  lists them: a terminal, users and groups, hosts, the firewall, updates, certificates, databases,
+  backups, Settings and Notifications.
+
+### Fixed
+
+- **The guides match what the panel does.** The README, HTTPS and ntfy guides, the security policy,
+  the threat model and the privacy statement were checked line by line against the code and
+  corrected: every action that asks for the password again, the real default group and roles, the
+  outside services, the certificate checks, ARM downloads and what the panel downloads when you ask.
+
+### Security
+
+- **Pages refuse inline style attributes.** The panel's Content Security Policy now takes styles only
+  from its own stylesheets and the page's nonce, and refuses every inline style attribute
+  (`style-src-attr 'none'`; no `'unsafe-inline'` anywhere). Injected markup can no longer restyle a
+  page, and nothing on the pages looks different.
+
 ## [2026.11.17] — 2026-11-17
 
 ### Added

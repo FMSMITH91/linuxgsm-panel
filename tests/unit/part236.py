@@ -32,17 +32,6 @@ _trips236 = len(_P9_TRIPPED)
 _TPL236 = _os236.path.join(_ROOT236, "panel", "templates")
 _JS236 = _os236.path.join(_ROOT236, "panel", "static", "js")
 
-# Files the other two halves of this change convert on their own branches. Each is held to the gate
-# as soon as it is clean: the last check below fails while a file listed here holds no style attribute
-# any more, so once all three branches are merged this set is emptied and the gate covers every file.
-_PENDING236 = frozenset((
-    "server_files.html", "_server_databases.html", "databases_overview.html", "server_detail.html",
-    "server_files.js", "server_detail.js", "server_actions.js", "lgsm_update.js", "databases_manager.js",
-    "remote_manage.html", "manage_remotes.html", "tailscale.html", "_firewall_panel.html",
-    "_firewall_blocks.html", "remote_manage.js", "remote_manage_backups.js", "remote_manage_host.js",
-    "manage_remotes.js", "tailscale.js", "setup_tailscale.js", "remote_firewall.js"))
-
-
 def _read236(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
@@ -182,16 +171,8 @@ def _s236_scanner_controls():
 
 def _s236_gate():
     found = _scan236()
-    held = {k: v[:3] for k, v in found.items() if k not in _PENDING236}
     check("gate: no template and no script of ours writes a style attribute (the page policy refuses every "
-          "one: style-src-attr 'none')", not held, repr(held)[:1500])
-    cleaned = sorted(name for name in _PENDING236 if name not in found)
-    check("gate: every file still waiting on another branch's conversion still holds a style attribute (one "
-          "that holds none leaves _PENDING236, so the gate covers it)", not cleaned, repr(cleaned))
-    missing = sorted(name for name in _PENDING236 if not _os236.path.exists(_os236.path.join(
-        _TPL236 if name.endswith(".html") else _JS236, name)))
-    check("gate: every name in _PENDING236 is a file that exists (a rename would hide it)", not missing,
-          repr(missing))
+          "one: style-src-attr 'none')", not found, repr({k: v[:3] for k, v in found.items()})[:1500])
 
 
 # ── 2. The header ────────────────────────────────────────────────────────────────────────────────

@@ -8,8 +8,9 @@ only advises non-persistent cookies where a login need not outlive the browser. 
 editable: the Settings page shows these ranges beside the fields and notes a value past them.
 
 Step-up (`step_up_minutes`, default 10, 0 = off): how long a sign-in or password confirmation lets the
-holder open a terminal, uninstall a server, restore a backup or change users and groups before the
-password is asked for again (panel/security/account_guard.py). No OWASP page gives a number: the
+holder open a terminal or make another high-risk change (users and groups, hosts, the firewall,
+updates, certificates, databases, backups, Settings, Notifications) before the password is asked for
+again (panel/security/account_guard.py, step_up_required). No OWASP page gives a number: the
 Session Management and Authentication Cheat Sheets ("Reauthentication After Risk Events") and the
 Transaction Authorization Cheat Sheet (2.9, "a limited time period") name none, and ASVS 5.0 V7.1.1
 points at NIST SP 800-63B for re-authentication. NIST SP 800-63B-4, 2.3.3 (AAL3, read 2026-11-15):
