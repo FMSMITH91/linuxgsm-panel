@@ -19,6 +19,7 @@ import threading
 import time
 from panel.ops.ssh_manager import _lazy
 paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
+from panel.core import outside_services as _outside
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4
@@ -2909,9 +2910,13 @@ def remote_public_ip(server):
     cloud VM's private address) one HTTPS service is asked, then the same question over DNS for a host
     where curl is missing or outbound HTTPS is blocked. A second HTTPS service covered no failure the
     first did not, and told one more third party that this host exists (OWASP Top 10 Privacy Risks P10).
+    With Settings -> Outside services' public address switch off, no service is asked: "" (the caller
+    shows the host's own address).
     """
     if (own := global_ipv4(_gamedig_host(server))):
         return own
+    if not _outside.enabled(_outside.PUBLIC_IP):
+        return ""
     for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
                 "dig +short myip.opendns.com @resolver1.opendns.com"):
         try:

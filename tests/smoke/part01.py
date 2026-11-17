@@ -88,6 +88,10 @@ _cfg["setup_complete"] = True
 # _SMOKE_NO_TICKERS) read it. The monitor and player-count watchers start only under
 # app.py's __main__ (review 1022c: this said every background watcher starts inside create_app()).
 _cfg["ssh_timeout"] = 1
+# LinuxGSM's files from GitHub (Settings -> Outside services): off, so the suite reads only the cache
+# seeded below. On CI, where nothing refuses the connection, a page asked raw.githubusercontent.com
+# for a file the seed does not hold (Harden-Runner's log of the coverage job, 2026-11-17).
+_cfg["outside_lgsm_github"] = False
 save_config(_cfg)
 
 # LinuxGSM's serverlist is fetched at runtime rather than committed (see lgsm_data), and this
@@ -117,6 +121,24 @@ _lgsm_data._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 (_lgsm_data._CACHE_DIR / _lgsm_data.DEPS).write_text(
     "all,bc,binutils,curl\nsteamcmd,lib32gcc-s1,steamcmd\ncsgo,lib32tinfo6\n", encoding="utf-8")
 _lgsm_data._mem.clear()
+
+# Every URL lgsm_data hands urllib in this suite, recorded (and then opened as before): part06 checks
+# that there is none, which outside_lgsm_github=False above keeps the panel from asking for. The
+# module's own `urllib` name is replaced, never urllib.request's attribute (that would stand in for
+# every module and thread).
+import types as _smoke_types
+import urllib.request as _smoke_urlreq
+_SMOKE_URLS = []
+
+
+def _smoke_recording_urlopen(url, *a, **kw):
+    """Record the URL asked for, then open it as urllib.request.urlopen would."""
+    _SMOKE_URLS.append(getattr(url, "full_url", url))
+    return _smoke_urlreq.urlopen(url, *a, **kw)
+
+
+_lgsm_data.urllib = _smoke_types.SimpleNamespace(request=_smoke_types.SimpleNamespace(
+    Request=_smoke_urlreq.Request, urlopen=_smoke_recording_urlopen))
 
 from app import create_app
 from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, CustomCommand  # noqa: F401  # pylint: disable=unused-import

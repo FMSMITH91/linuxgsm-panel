@@ -61,6 +61,31 @@
           <div class="small text-secondary mt-1">The UI language a newly-created account starts in. Each user can change their own afterwards on their Account page.</div>
         </div>
       </div>
+      {# One switch per service outside this server that the panel calls (panel/core/outside_services.py,
+         docs/PRIVACY.md "What leaves your server"). Each is enforced where its request is made. A
+         switch with data-confirm-off asks before it goes off (settings.js). In the left column, which
+         is the shorter one on a desktop. OWASP User Privacy Protection Cheat Sheet, "Prevent IP
+         Address Leakage". #}
+      <div class="card mt-3" id="sec-outside">
+        <div class="card-header"><i class="bi bi-globe2"></i> Outside services</div>
+        <div class="card-body">
+          <div class="small text-secondary mb-2">Each service sees your server's address. Turn off any you do not want.</div>
+          <input type="hidden" name="outside_services_form" value="1">
+          {% for row in outside %}
+          <div class="form-check form-switch{% if not loop.first %} mt-2{% endif %} mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="s-{{ row.key }}" name="{{ row.key }}"
+                   {% if row.on %}checked{% endif %}
+                   {% if row.confirm %}data-confirm-off="{{ t(row.confirm) }}"{% endif %}>
+            <label class="form-check-label small" for="s-{{ row.key }}">{{ t(row.label) }}</label>
+          </div>
+          <div class="small text-secondary">{{ t(row.note) }}</div>
+          {% if row.owasp %}
+          <div class="small text-secondary">{{ t(row.owasp) }}</div>
+          <div class="small text-warning{% if row.on %} d-none{% endif %}" id="s-{{ row.key }}-owasp">Off: outside OWASP's recommendation.</div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
 
     </div>
 
