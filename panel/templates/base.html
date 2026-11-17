@@ -342,6 +342,7 @@ window.PALETTE_CAN = {
 //   • every mutating fetch() gets an X-CSRFToken header via a wrapper.
 window.CSRF = {{ csrf_token()|tojson }};
 </script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/start_hidden.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/panel.js') }}"></script>
 {# After panel.js: the palette calls t() and reads window.MOUNT, both set above it. #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/palette.js') }}"></script>
