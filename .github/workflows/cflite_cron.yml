@@ -80,11 +80,18 @@ jobs:
         run: |
           set -euo pipefail
           read -ra want <<< "${EXPECT}"
-          stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-                      --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
-          missing=()
-          for name in "${want[@]}"; do
-            grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+          # Asked up to 6 times, 10 s apart: the run's artifact list can lag an upload that finished a
+          # moment before (the last corpus was listed 0.3 s after "Done uploading" on 2026-11-17 and
+          # was missing; it was there a minute later). A file that never appears still fails.
+          for attempt in 1 2 3 4 5 6; do
+            stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                        --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
+            missing=()
+            for name in "${want[@]}"; do
+              grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+            done
+            [ "${#missing[@]}" -eq 0 ] && break
+            [ "${attempt}" -lt 6 ] && sleep 10
           done
           echo "this run stored $(grep -c . <<< "${stored}" || true) artifact(s); expected ${#want[@]}, missing ${#missing[@]}"
           if [ "${#want[@]}" -eq 0 ] || [ "${#missing[@]}" -gt 0 ]; then
@@ -157,11 +164,18 @@ jobs:
         run: |
           set -euo pipefail
           read -ra want <<< "${EXPECT}"
-          stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-                      --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
-          missing=()
-          for name in "${want[@]}"; do
-            grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+          # Asked up to 6 times, 10 s apart: the run's artifact list can lag an upload that finished a
+          # moment before (the last corpus was listed 0.3 s after "Done uploading" on 2026-11-17 and
+          # was missing; it was there a minute later). A file that never appears still fails.
+          for attempt in 1 2 3 4 5 6; do
+            stored="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+                        --paginate --jq '.artifacts[] | select(.expired | not) | .name')"
+            missing=()
+            for name in "${want[@]}"; do
+              grep -qxF -- "${name}" <<< "${stored}" || missing+=("${name}")
+            done
+            [ "${#missing[@]}" -eq 0 ] && break
+            [ "${attempt}" -lt 6 ] && sleep 10
           done
           echo "this run stored $(grep -c . <<< "${stored}" || true) artifact(s); expected ${#want[@]}, missing ${#missing[@]}"
           if [ "${#want[@]}" -eq 0 ] || [ "${#missing[@]}" -gt 0 ]; then
