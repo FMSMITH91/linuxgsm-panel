@@ -81,6 +81,8 @@ def online_enabled():
 
 def sha1_parts(password):
     """The (prefix sent, suffix kept) halves of the password's upper-case SHA-1 hex digest."""
+    # The range API is keyed by SHA-1 (it names the bucket of breached hashes); it protects nothing here.
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- the API's own key
     digest = hashlib.sha1((password or "").encode("utf-8"), usedforsecurity=False).hexdigest().upper()
     return digest[:PREFIX_LEN], digest[PREFIX_LEN:]
 

@@ -131,7 +131,8 @@ def _capture231():
 
 def _s231_request_shape():
     seen, handlers, body = _capture231()
-    digest = _hl231.sha1(_PWNED231.encode()).hexdigest().upper()
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- the range API's key
+    digest = _hl231.sha1(_PWNED231.encode(), usedforsecurity=False).hexdigest().upper()
     url, headers, timeout = seen[0] if seen else ("", {}, None)
     check("breach check: the request names only the hash's first five hex characters",
           url == "https://api.pwnedpasswords.com/range/" + digest[:5], url)
