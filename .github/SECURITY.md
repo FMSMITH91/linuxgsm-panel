@@ -318,8 +318,10 @@ and refuses the restore naming the bad row.
 
 Deleting a host from the panel never connects to it, so what the panel installed there stays: the
 gamedig tree, its two links and the weekly root cron that re-runs `install-gamedig.sh`. That job
-fetches nothing while the tree is in place, so what is left is root-owned, hash-locked and inert.
-README's "Removing a host" lists it with the commands that remove it.
+fetches nothing while the tree is in place, so that part is root-owned, hash-locked and inert.
+**Tailscale, if the panel set it up there, is not inert:** the host stays in your tailnet until you
+log it out. The fail2ban whitelist file and the auto-block firewall rules stay too.
+README's [Removing a host](../docs/README.md#removing-a-host) lists each with the commands that remove it.
 
 ### What you can do today
 
