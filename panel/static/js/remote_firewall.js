@@ -291,7 +291,7 @@ function _fwRenderRules(listEl, openGroups) {
         + '<td>' + protoBadge(g.proto_label) + '</td>'
         + '<td class="small" data-no-i18n>' + esc(g.comment || '—') + '</td>'
         + '<td class="small text-secondary">' + scope + '</td>'
-        + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
+        + '<td><span class="text-secondary fs-r68">' + esc(g.family_label) + '</span></td>'
         + '<td>' + (g.protected
             ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(_fwReason(g)) + '"><i class="bi bi-lock-fill"></i></button>'
             : '<button class="btn btn-outline-danger btn-sm py-0 px-1" title="' + esc(_fwDelTitle(g.nums || [])) + '"'
@@ -335,7 +335,7 @@ function _fwRenderBlocks(blockGroups) {
       blockGroups.forEach(function(g) {
         bh += '<tr><td><code class="text-break">' + esc(g.block_ip) + '</code></td>'
           + '<td>' + blockBadge(g.comment) + '</td>'
-          + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
+          + '<td><span class="text-secondary fs-r68">' + esc(g.family_label) + '</span></td>'
           + '<td><button class="btn btn-outline-warning btn-sm py-0 px-1" title="' + esc(tf('Unblock {ip}', {ip: g.block_ip})) + '"'
           + _da('unblockIp', [g.block_ip, '@self']) + '><i class="bi bi-x"></i></button></td></tr>';
       });

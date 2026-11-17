@@ -13,7 +13,7 @@
 </div>
 
 <!-- Add remote form (initially hidden) -->
-<div class="card mb-3" id="add-remote-form" style="display:none;">
+<div class="card mb-3" id="add-remote-form" data-start-hidden>
   <div class="card-header">
     <i class="bi bi-plus-circle"></i> Add Remote Server
   </div>
@@ -132,7 +132,7 @@
         </span>
         <!-- Live stats: last-known values rendered now, refreshed in place by JS -->
         {% set st = remote.cached_stats %}
-        <div id="live-stats-{{ remote.id }}" class="small text-secondary mt-1" style="font-size:.72rem;"
+        <div id="live-stats-{{ remote.id }}" class="small text-secondary mt-1 fs-r72"
              {% if st %}data-loaded="1"{% endif %}>
           {% if st %}
             <i class="bi bi-cpu"></i> <span>CPU:</span> {{ st.cpu_percent }}%
@@ -144,17 +144,17 @@
           {% endif %}
         </div>
         <!-- Bootstrap progress (persists across page loads while a job is active) -->
-        <div id="bootstrap-card-{{ remote.id }}" class="mt-2" style="display:none;max-width:640px;">
+        <div id="bootstrap-card-{{ remote.id }}" class="mt-2 mw-640px" data-start-hidden>
           <div class="d-flex justify-content-between small mb-1">
             <span class="text-info"><i class="bi bi-shield-lock-fill"></i> <span id="bs-step-{{ remote.id }}">Preparing…</span></span>
             <span class="text-secondary" id="bs-pct-{{ remote.id }}"></span>
           </div>
-          <div class="progress" style="height:14px;">
-            <div class="progress-bar progress-bar-striped progress-bar-animated" id="bs-bar-{{ remote.id }}" style="width:0%"></div>
+          <div class="progress h-14px">
+            <div class="progress-bar progress-bar-striped progress-bar-animated w-0p" id="bs-bar-{{ remote.id }}"></div>
           </div>
-          <a href="#" class="small text-secondary" style="font-size:.7rem;" data-action="toggleBsLog" data-args='[{{ remote.id }}]' data-prevent>show log</a>
-          <a href="#" class="small text-secondary ms-2" style="font-size:.7rem;display:none;" id="bs-dismiss-{{ remote.id }}" data-action="dismissBootstrap" data-args='[{{ remote.id }}]' data-prevent>dismiss</a>
-          <pre id="bs-log-{{ remote.id }}" class="small mt-1" style="display:none;max-height:180px;overflow:auto;font-size:.68rem;background:var(--bg);padding:6px;border-radius:4px;"></pre>
+          <a href="#" class="small text-secondary fs-r70" data-action="toggleBsLog" data-args='[{{ remote.id }}]' data-prevent>show log</a>
+          <a href="#" class="small text-secondary ms-2 fs-r70" data-start-hidden id="bs-dismiss-{{ remote.id }}" data-action="dismissBootstrap" data-args='[{{ remote.id }}]' data-prevent>dismiss</a>
+          <pre id="bs-log-{{ remote.id }}" class="small mt-1 mr-bs-log" data-start-hidden></pre>
         </div>
       </div>
       {# ms-auto matters only once the row WRAPS: alone on its own line, justify-content-between
@@ -164,8 +164,8 @@
         <a href="{{ url_for('remote_manage', remote_id=remote.id) }}" class="btn btn-primary btn-sm" title="Manage — live resources, updates, reboot">
           <i class="bi bi-sliders2"></i> Manage
         </a>
-        <form method="POST" action="{{ url_for('test_remote', remote_id=remote.id) }}" style="display:inline;"
-              class="ajax-form" data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
+        <form method="POST" action="{{ url_for('test_remote', remote_id=remote.id) }}"
+              class="ajax-form d-inline" data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
           <button type="submit" class="btn btn-outline-secondary btn-sm" title="Test Connection">
             <i class="bi bi-plug"></i> Test
           </button>
@@ -240,7 +240,7 @@
           {# Hidden from the start for a host already on Tailscale SSH, which uses no credential:
              toggleEditCreds runs only on a CHANGE of the select, so the preselected option never
              hid it, and anything typed there was stored for a transport that never reads it. #}
-          <div class="col-md-2" id="edit-cred-group-{{ remote.id }}"{% if remote.auth_method == 'tailscale' %} style="display:none"{% endif %}>
+          <div class="col-md-2" id="edit-cred-group-{{ remote.id }}"{% if remote.auth_method == 'tailscale' %} data-start-hidden{% endif %}>
             <label class="form-label" for="manage-remotes-credential-{{ remote.id }}">Credential</label>
             <input id="manage-remotes-credential-{{ remote.id }}" type="password" name="credential" class="form-control" value=""
                    autocomplete="off" placeholder="Leave blank to keep current">
@@ -278,7 +278,7 @@
 {% else %}
 <div class="card">
   <div class="card-body text-center py-4">
-    <span style="font-size: 2rem;">🌐</span>
+    <span class="fs-r200">🌐</span>
     <p class="text-secondary mt-2">No remote servers added yet. Add one to install game servers on another machine.</p>
   </div>
 </div>
