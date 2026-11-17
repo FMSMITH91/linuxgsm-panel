@@ -48,8 +48,9 @@ a stolen disk.
 ## What leaves your server
 
 Each of these connects from your server to the service named, which sees your server's IP address and
-the request. Nothing in them names you or your players. The panel identifies itself as
-`linuxgsm-panel`.
+the request. Nothing in them names you or your players. The web requests the panel makes itself say
+`linuxgsm-panel` as their user agent; the update check's `git fetch` and the public-address lookup
+(`curl`, then `dig`) are those tools' own requests and say what they always do.
 
 | Service | When | What it is sent | Can it be turned off? |
 | --- | --- | --- | --- |
