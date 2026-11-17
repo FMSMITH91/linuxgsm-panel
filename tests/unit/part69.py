@@ -702,12 +702,23 @@ _TOAST_r16u = (
     + _cut47(_PJS_r16u, "window.toast = function(") + "\n"
     "toast('El puerto 22 es el puerto SSH que se usa para llegar a este host.', 'danger');\n"
     "const area = made[0];\n"
-    "console.log(JSON.stringify({area: area.style.cssText, toast: area.children[0].style.cssText}));\n")
+    "console.log(JSON.stringify({area: area.className, toast: area.children[0].className}));\n")
 _name_r16u = "toast: the area spans the capped width, centred by margin"
 _got_r16u = _node69(_name_r16u, _TOAST_r16u)
+
+
+def _css_rule_r16u(cls):
+    """The declarations of panel.css's `.cls { ... }` rule, spaces, newlines and !important taken out."""
+    css = _read69(_root, "panel", "static", "css", "panel.css")
+    at = css.find("\n.%s {" % cls) if cls else -1
+    body = css[css.index("{", at) + 1:css.index("}", at)] if at >= 0 else ""
+    return body.replace(" ", "").replace("!important", "").replace("\n", "")
+
+
+# The toast's look is each class's rule in panel.css: the page policy refuses a style attribute.
 if _got_r16u is not None:
-    _a_r16u = (_got_r16u.get("area") or "").replace(" ", "")
-    _t_r16u = (_got_r16u.get("toast") or "").replace(" ", "")
+    _a_r16u = _css_rule_r16u(_got_r16u.get("area")) if _got_r16u.get("area") == "toast-area" else ""
+    _t_r16u = _css_rule_r16u("panel-toast") if "panel-toast" in (_got_r16u.get("toast") or "").split() else ""
     check("toast: the area is centred by left:0/right:0/margin:auto with a width of its own, not placed "
           "at left:50% (where a fixed box shrink-wraps to the right half: 188px of a 375px phone)",
           "left:50%" not in _a_r16u and "translateX" not in _a_r16u and "left:0;" in _a_r16u

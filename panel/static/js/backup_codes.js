@@ -21,7 +21,7 @@ function copyCodes(){
     try {
       var ta = document.createElement('textarea');
       ta.value = text;
-      ta.style.cssText = 'position:fixed;opacity:0';
+      ta.className = 'copy-offscreen';
       document.body.appendChild(ta);
       ta.select();
       ok = document.execCommand('copy');

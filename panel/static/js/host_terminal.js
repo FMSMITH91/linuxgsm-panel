@@ -26,6 +26,25 @@ function withStyleNonce(fn) {
   try { return fn(); } finally { document.createElement = make; }
 }
 
+// Cell colours through the CSSOM. xterm's DOM renderer gives a 24-bit colour cell (and a cell its
+// minimum-contrast option recolours) its colour with setAttribute('style', ...), in the row
+// factory's _addStyle(element, "color:#rrggbb"). The page policy's style-src-attr is 'none', which
+// refuses that attribute, so such text would draw in the default colours. Replacing _addStyle on
+// this terminal's own row factory sets the same declaration through the CSSOM, which the policy
+// allows. Reached through xterm's internals (5.5.0, pinned in vendor/VERSIONS.md; a unit check holds
+// the vendored bundle to this shape); if the path is not there the terminal still works, without
+// 24-bit colours.
+function cssomCellColours(t) {
+  var factory = null;
+  try { factory = t._core._renderService._renderer.value._rowFactory; } catch (e) { factory = null; }
+  if (!factory || typeof factory._addStyle !== 'function') return false;
+  factory._addStyle = function (el, decl) {
+    var at = String(decl).indexOf(':');
+    if (at > 0) el.style.setProperty(decl.slice(0, at).trim(), decl.slice(at + 1).trim());
+  };
+  return true;
+}
+
 function _cellSize() {
   // MEASURED, not assumed. This was hardcoded at 9x18 "close enough that a resize lands within a
   // row either way"; the real cell for this font stack is 8.4x19, so the guess was out by nearly
@@ -100,6 +119,7 @@ function initTerminal() {
     theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' }
   });
   withStyleNonce(function () { term.open(host); });
+  cssomCellColours(term);
 
   // The panel has ONE socket connection; io() reuses the same origin and the same authenticated
   // session the console uses. The server's connect handler refuses anonymous ones.

@@ -74,7 +74,7 @@
 <!-- Setup wizard language picker (no sidebar/login switcher available here yet) -->
 <div class="setup-lang" title="{{ t('Language') }}">
   <i class="bi bi-translate"></i>
-  <select class="form-select form-select-sm py-0" style="width:auto;" aria-label="{{ t('Language') }}"
+  <select class="form-select form-select-sm py-0 w-auto" aria-label="{{ t('Language') }}"
           data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
     {% for code, name in languages.items() %}
     <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
@@ -156,7 +156,7 @@
       <i class="bi bi-hdd-network"></i> Remote Servers</a></li>
     {% endif %}
     {% for r in nav_remotes %}
-    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.endpoint == 'remote_manage' and request.view_args and request.view_args.get('remote_id') == r.id %}active{% endif %}" style="padding-left:1.6rem;">
+    <li><a href="{{ url_for('remote_manage', remote_id=r.id) }}" class="{% if request.endpoint == 'remote_manage' and request.view_args and request.view_args.get('remote_id') == r.id %}active{% endif %} sidebar-sub">
       {# The host's name is whatever its owner typed. Without this the i18n walker translates any
          text node matching a catalog key, so a remote called "Settings" or "Online" would be
          renamed in the nav — see the same marker on tag and server names elsewhere. #}
@@ -194,7 +194,7 @@
   </ul>
 
   <div class="sidebar-footer">
-    <a href="{{ url_for('account') }}" class="sidebar-user text-decoration-none" title="Account &amp; two-factor auth" style="color:inherit;">
+    <a href="{{ url_for('account') }}" class="sidebar-user text-decoration-none text-reset" title="Account &amp; two-factor auth">
       <div class="sidebar-user-avatar"><i class="bi bi-person"></i></div>
       <div class="sidebar-user-info">
         <strong data-no-i18n>{{ current_user.display_name or current_user.username }}</strong>
@@ -215,17 +215,17 @@
         {% endfor %}
       </select>
     </div>
-    <div class="text-center mt-2" style="font-size:.66rem;color:var(--text-muted,#6b7684);">
+    <div class="text-center mt-2 sidebar-meta">
       {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant #}
       {% if panel_repo_url %}<a href="{{ panel_repo_url }}" target="_blank" rel="noopener noreferrer"
-         class="text-decoration-none" style="color:inherit;"
+         class="text-decoration-none text-reset"
          title="LinuxGSM Panel on GitHub">LinuxGSM Panel <i class="bi bi-github"></i></a>{% else %}LinuxGSM Panel{% endif %}
       <span id="panel-version">{{ panel_version }}</span>{% if panel_commit %}
       {# The SHA links to the exact commit this process is running, so "what is actually deployed"
          is one click rather than a copy-paste into a URL bar. #}
       {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant, and a git commit id #}
       {% if panel_repo_url %}<a id="panel-commit" href="{{ panel_repo_url }}/commit/{{ panel_commit }}"
-         target="_blank" rel="noopener noreferrer" class="text-decoration-none" style="color:inherit;"
+         target="_blank" rel="noopener noreferrer" class="text-decoration-none text-reset"
          title="{{ t('Running git commit (%s) — open it on GitHub')|format(panel_commit) }}">· {{ panel_commit }}</a>{% else %}
       <span id="panel-commit" title="{{ t('Running git commit (%s)')|format(panel_commit) }}">· {{ panel_commit }}</span>{% endif %}{% endif %}
       <span id="update-badge"></span>
@@ -266,7 +266,7 @@
       {% for category, message in messages %}
       <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
         {{ message }}
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" style="font-size: .7rem;" aria-label="Dismiss this message"></button>
+        <button type="button" class="btn-close btn-close-white fs-r70" data-bs-dismiss="alert" aria-label="Dismiss this message"></button>
       </div>
       {% endfor %}
     {% endif %}

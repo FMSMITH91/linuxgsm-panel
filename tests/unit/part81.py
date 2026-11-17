@@ -316,7 +316,7 @@ _dash_prog81 = (
     "window.refreshSection = (sel, after) => { swaps++; if (!landing) return;\n"
     "  rendered = live.map(String); window[after](); };\n"
     "function _dashShowCounts(){} function _dashResyncFailedBanners(){} function _dashSyncServer(){}\n"
-    "function restoreBulkSelection(){} function bindDragRegions(){}\n"
+    "function restoreBulkSelection(){} function bindDragRegions(){} function paintTagChips(){}\n"
     "%s\n%s\n%s\n%s\n%s\n%s\n%s\n"
     "const poll = async () => { refreshStatus(); await settle(); clock += 8000; };\n"
     "(async () => {\n"

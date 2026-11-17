@@ -3002,3 +3002,250 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 
 /* Tailscale page: the card that warns about a public Funnel. */
 .ts-warn-card { border-color: var(--bs-warning, #f0ad4e) !important; }
+
+/* ── Strict CSP (B3): classes that replace inline style attributes ── */
+
+/* The page policy's style-src-attr is 'none', so no element may carry a style attribute. Each class
+   below holds exactly what one or more of those attributes held; a value that comes from data (a
+   tag's colour, a cursor position) is set from script through the CSSOM instead, which the policy
+   allows. !important, as on Bootstrap's utilities: an attribute outranked every rule, and one class
+   does not (.table td's font size beat .fs-r80), so without it the element would change. The only
+   declarations without it are the ones a script then changes through the CSSOM (.cursor-flash's
+   opacity, transform and transition), which an !important rule would freeze. */
+.maxw-400 { max-width: 400px !important; }
+
+.maxw-420 { max-width: 420px !important; }
+
+.maxw-440 { max-width: 440px !important; }
+
+.maxw-540 { max-width: 540px !important; }
+
+.maxw-560 { max-width: 560px !important; }
+
+.maxw-640 { max-width: 640px !important; }
+
+.maxw-8rem { max-width: 8rem !important; }
+
+.maxw-70ch { max-width: 70ch !important; }
+
+.maxw-75ch { max-width: 75ch !important; }
+
+.minh-1em { min-height: 1em !important; }
+
+.w-190px { width: 190px !important; }
+
+.fs-r75 { font-size: .75rem !important; }
+
+.fs-r100 { font-size: 1rem !important; }
+
+.fs-r400 { font-size: 4rem !important; }
+
+.pre-line { white-space: pre-line !important; }
+
+.pre-wrap-word {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
+/* A list that scrolls once it is taller than its cap (permission and server pickers). */
+.scroll-120 {
+  max-height: 120px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-160 {
+  max-height: 160px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-180 {
+  max-height: 180px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-300 {
+  max-height: 300px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-350 {
+  max-height: 350px !important;
+  overflow-y: auto !important;
+}
+
+/* The panel's own border colour over Bootstrap's .border / .border-top (both !important). */
+.border-panel { border-color: var(--border) !important; }
+
+/* A password or code field beside another in a wrapping row: grows from 12rem / 10rem, or holds 9rem. */
+.field-grow-12 {
+  min-width: 12rem !important;
+  flex: 1 1 12rem !important;
+}
+
+.field-grow-10 {
+  min-width: 10rem !important;
+  flex: 1 1 10rem !important;
+}
+
+.field-fixed-9 {
+  min-width: 9rem !important;
+  flex: 0 1 9rem !important;
+}
+
+/* The sign-in code field, and the backup codes. */
+.otp-input {
+  letter-spacing: .2em !important;
+  font-size: 1.2rem !important;
+}
+
+.code-tracking { letter-spacing: .1em !important; }
+
+/* The 2FA QR code on a white tile, so it scans in the dark theme. */
+.qr-tile {
+  display: inline-block !important;
+  background: #fff !important;
+  padding: 12px !important;
+  border-radius: 8px !important;
+  line-height: 0 !important;
+}
+
+/* A new API token, shown once. */
+.token-code {
+  word-break: break-all !important;
+  background: rgb(0 0 0 / 20%) !important;
+  border-radius: 6px !important;
+}
+
+/* Sidebar: a host's link indented under its section, and the version line. */
+.sidebar-nav a.sidebar-sub { padding-left: 1.6rem !important; }
+
+.sidebar-meta {
+  font-size: .66rem !important;
+  color: var(--text-muted, #6b7684) !important;
+}
+
+/* Dashboard: the bulk-action bar (sticks to the top or the bottom of the view), the search box,
+   the in-game name under a server's title, and the accent colour picker on Settings. */
+.card.bulk-bar {
+  position: sticky !important;
+  z-index: 1020 !important;
+  border: 1px solid var(--bs-border-color) !important;
+}
+
+.bulk-bar-top { top: 1rem !important; }
+
+.bulk-bar-bottom { bottom: 1rem !important; }
+
+.dash-search-group {
+  width: 220px !important;
+  max-width: 100% !important;
+}
+
+.game-name-line {
+  font-size: .72rem !important;
+  max-width: 22ch !important;
+}
+
+.summary-plain {
+  cursor: pointer !important;
+  list-style: none !important;
+}
+
+.accent-picker {
+  max-width: 3rem !important;
+  padding: .15rem !important;
+}
+
+/* Built by panel.js: the toast stack and each toast, the "Copied" label at the cursor, a confirm
+   dialog's overlay and card, and its body when it holds a node (capped, so Confirm stays on screen). */
+.toast-area {
+  position: fixed !important;
+  top: 1rem !important;
+  left: 0 !important;
+  right: 0 !important;
+  margin: 0 auto !important;
+  z-index: 11000 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: .5rem !important;
+  width: min(92vw, 520px) !important;
+  pointer-events: none !important;
+}
+
+.panel-toast {
+  font-size: .85rem !important;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 55%) !important;
+  text-align: center !important;
+  pointer-events: auto !important;
+  max-width: 100% !important;
+  overflow-wrap: anywhere !important;
+}
+
+.cursor-flash {
+  position: fixed !important;
+  z-index: 12000 !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+  color: #0b0f17 !important;
+  font-size: .72rem !important;
+  font-weight: 700 !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 45%) !important;
+  opacity: 1;
+  transform: translateY(0);
+  transition: transform .6s ease, opacity .6s ease;
+}
+
+.dialog-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgb(0 0 0 / 60%) !important;
+  z-index: 11050 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 1rem !important;
+}
+
+.dialog-card {
+  max-width: 480px !important;
+  width: 100% !important;
+}
+
+.dialog-card-scroll {
+  max-width: 480px !important;
+  width: 100% !important;
+  max-height: 90vh !important;
+  overflow: auto !important;
+}
+
+.cd-body-node {
+  white-space: normal !important;
+  max-height: 50vh !important;
+  overflow-y: auto !important;
+}
+
+/* A copy-to-clipboard fallback's textarea: in the page, never seen. */
+.copy-offscreen {
+  position: fixed !important;
+  opacity: 0 !important;
+}
+
+/* The panel update link in the sidebar, and a host's link in the OS updates banner. */
+.update-link {
+  color: var(--warning-ink, #d29922) !important;
+  text-decoration: none !important;
+  font-weight: 600 !important;
+}
+
+.uis-nag-link {
+  display: inline-block !important;
+  padding: .25rem 0 !important;
+}
+
+.dash-connect-code {
+  font-size: .78rem !important;
+  cursor: pointer !important;
+}
