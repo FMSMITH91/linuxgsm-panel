@@ -15,12 +15,18 @@ from datetime import datetime, timezone
 
 from panel.services import notifications
 from panel.core.clock import aware_utcnow
-from panel.core.config import DATA_DIR
+from panel.core.config import DATA_DIR, load_config
 from panel.core.validation import ip_address_or_none
 
 _log = logging.getLogger("panel.certs")
 
 _CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly dedup)
+# Where the panel's own HTTPS certificate and key live (cert.pem, key.pem). A name of its own so the
+# tests can point it at a scratch directory.
+SSL_DIR = DATA_DIR / "ssl"
+# What config.json's tls_cert_source names when the operator put in a certificate of their own
+# through Settings (panel/services/tls_own.py): pasted, or copied from Let's Encrypt.
+OPERATOR_SOURCES = ("own", "letsencrypt")
 
 
 def _maybe_alert_cert_expiring(boot=None):
@@ -39,7 +45,7 @@ def _maybe_alert_cert_expiring(boot=None):
         return
     try:
         from cryptography import x509
-        cert_path = DATA_DIR / "ssl" / "cert.pem"
+        cert_path = SSL_DIR / "cert.pem"
         if not cert_path.exists():
             return
         with open(cert_path, "rb") as f:
@@ -49,24 +55,30 @@ def _maybe_alert_cert_expiring(boot=None):
         except AttributeError:
             not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
         days = (not_after - datetime.now(timezone.utc)).days
-        own = _operator_cert(cert)
+        source = _operator_source()
+        own = _operator_cert(cert) or bool(source)
         # The operator's certificate is warned from 30 days (renewing it is their job, and with HSTS an
         # expired one locks browsers out); the panel's own from 14, since a restart makes a new one.
         if days <= (30 if own else 14) and (time.time() - _CERT_ALERTED["at"]) > 7 * 86400:
             _CERT_ALERTED["at"] = time.time()
-            notifications.notify("cert_expiring", "TLS certificate expiring", _expiry_text(days, own))
+            notifications.notify("cert_expiring", "TLS certificate expiring", _expiry_text(days, own, source))
     except Exception:
         _log.debug("cert-expiry check failed", exc_info=True)
 
 
-def _expiry_text(days, own):
+def _expiry_text(days, own, source=""):
     """The expiry alert's text: what to do depends on whose certificate it is.
 
     A certificate already past its date said "expires in 0 day(s)" (max(days, 0)): one that has
-    stopped working read as one with a day left.
+    stopped working read as one with a day left. A Let's Encrypt one is copied again every day
+    once certbot has renewed it, so the step that is missing is certbot's.
     """
     if own:
-        fix = "renew it, copy the new files to data/ssl (cert.pem and key.pem) and restart the panel"
+        fix = ("renew it and put the new one in under Settings > HTTPS certificate (the panel restarts "
+               "to load it)")
+        if source == "letsencrypt":
+            fix = ("check that certbot renews it (sudo certbot renew --dry-run); the panel copies a renewed "
+                   "certificate every day and restarts to load it")
         return ("Your TLS certificate has expired — %s." % fix if days < 0
                 else "Your TLS certificate expires in %d day(s) — %s." % (days, fix))
     return ("The panel's built-in TLS certificate has expired — restart the panel and it makes a new one."
@@ -79,6 +91,20 @@ def _expiry_text(days, own):
 # that do not live for years. 397 days is the longest validity browsers accept for any certificate;
 # a new one is made at start-up once fewer than 30 days remain (the expiry notice warns before that).
 _CERT_DAYS = 397
+
+
+def _operator_source():
+    """config.json's tls_cert_source when it names an operator certificate ("own"/"letsencrypt"), else "".
+
+    Set when a certificate is put in through Settings, which a self-signed certificate of the
+    operator's own can be too: issuer == subject alone would read that as the panel's and replace it.
+    """
+    try:
+        source = load_config().get("tls_cert_source")
+    except Exception:  # noqa: BLE001 - an unreadable config is "not marked"; the issuer test still runs
+        _log.debug("tls_cert_source unreadable", exc_info=True)
+        return ""
+    return source if source in OPERATOR_SOURCES else ""
 
 
 def _operator_cert(cert):
@@ -136,9 +162,9 @@ def _ensure_self_signed_cert(cert_path, key_path, hostname):
         try:
             with open(cert_path, "rb") as f:
                 existing = x509.load_pem_x509_certificate(f.read())
-            if _operator_cert(existing):
-                # The operator's own certificate (a CA signed it): never replaced by a self-signed one,
-                # whatever its key or dates. With HSTS a self-signed one would be refused as well, and
+            if _operator_cert(existing) or _operator_source():
+                # The operator's own certificate (a CA signed it, or it was put in through Settings):
+                # never replaced by a self-signed one, whatever its key or dates. With HSTS a self-signed one would be refused as well, and
                 # silently swapping it would undo the operator's setup. What is wrong is said instead.
                 _note_operator_cert(existing, key_path)
                 return cert_path, key_path

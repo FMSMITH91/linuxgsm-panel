@@ -25,6 +25,8 @@ from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
 from app import (_new_user_language)
 from panel.core import session_policy
 from panel.routes.groups import _posted_ids
+from panel.routes import tls_cert as _tls_cert
+from panel.services import tls_own as _tls_own
 
 
 def register(app):
@@ -33,6 +35,7 @@ def register(app):
     _register_user_edits(app)
     _register_invites(app)
     _register_user_delete(app)
+    _tls_cert.register(app)   # the HTTPS certificate card on the Settings page
 
 
 def _register_panel_settings(app):
@@ -45,7 +48,8 @@ def _register_panel_settings(app):
         # The values in force, read as the boot reads them (session_policy: coerced and held to
         # the form's ranges). A bare int() here raised on a hand-edited `Infinity` or "abc", and the
         # Settings page answered 500.
-        return render_template("settings.html", languages=i18n.LANGUAGES, settings=dict(
+        return render_template("settings.html", languages=i18n.LANGUAGES, tls=_tls_own.settings_view(cfg, app.config),
+                               settings=dict(
             session_policy.form_values(cfg), **{
             "site_title": cfg.get("site_title", "LinuxGSM Panel"),
             "site_domain": cfg.get("site_domain", ""),
