@@ -2915,8 +2915,7 @@ def remote_public_ip(server):
         return own
     # With Settings -> Outside services' public address switch off the tuple is empty: no service is
     # asked and the answer is "" (the caller shows the host's own address).
-    for cmd in ("curl -fsS --max-time 5 https://api.ipify.org",
-                "dig +short myip.opendns.com @resolver1.opendns.com") * _outside.enabled(_outside.PUBLIC_IP):
+    for cmd in ("curl -fsS --max-time 5 https://api.ipify.org", "dig +short myip.opendns.com @resolver1.opendns.com") * _outside.enabled(_outside.PUBLIC_IP):
         try:
             out, _, _ = run_command(server, cmd, timeout=8, sudo=False)
             ip = (out or "").strip().split("\n")[0].strip()
