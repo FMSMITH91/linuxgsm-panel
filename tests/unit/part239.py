@@ -39,6 +39,7 @@ from panel.core import config as _cfg239
 from panel.db.models import User as _U239, db as _db239
 from panel.ops import backup as _bk239
 from panel.ops.ssh_manager import _core as _core239
+from panel.ops.ssh_manager import cron as _cron239
 from panel.routes import account_security as _as239
 from panel.routes import os_updates as _osu239
 from panel.security import privileged as _pv239
@@ -269,7 +270,7 @@ def _stubs239(current, opened=True, writes=None):
         writes.append((server.id, content, expected))
         return "", "", 0
     _p9_patch(_core239, "run_privileged", _rp)
-    _p9_patch(_core239, "write_root_crontab", _wr)
+    _p9_patch(_cron239, "write_root_crontab", _wr)
     _p9_patch(_core239, "helper_present", lambda recheck=False: True)
     _p9_patch(_rc239, "host_opened", lambda is_local, helper: opened)
     _p9_patch(_as239, "_reauth_refusal", lambda u, pw, code: None if pw == _GOOD239 else "wrong password")
@@ -380,6 +381,7 @@ def _host_opened239():
 
 # ── 4. Schedules ──────────────────────────────────────────────────────────────────────────────────
 def _schedules239():
+    """The form parsing and the save; then the OS check, the backup tick and the card (_os_check239)."""
     from panel.core import clock as _clk239
     want = _sc239.utc_hhmm(_clk239.convert_wall_time(5, 30, "America/Los_Angeles", "UTC"))
     new, why = _sc239.parse_form({"tz": "America/Los_Angeles", "backup_at": "05:30", "os_check_at": "",
@@ -403,6 +405,11 @@ def _schedules239():
     eq("schedules: the stored values are what the jobs read",
        (_sc239.backup_at(), _sc239.os_check_at(), _sc239.update_every(), _sc239.os_check_on()),
        ((3, 15), (4, 0), 720 * 60, False))
+    _os_check239(a)
+
+
+def _os_check239(a):
+    """The OS check and the backup tick follow what was saved; the card renders; then the keys are cleared."""
     now = _time239.time()
     eq("OS update check: off means never; on, the first pass in a process runs at once, then at the set time",
        (_osu239._os_check_due(now),), (False,))

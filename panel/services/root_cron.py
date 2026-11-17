@@ -96,18 +96,21 @@ def parse_read(out):
     """
     got = {"state": "", "text": "", "crond": []}
     for line in (out or "").splitlines():
-        parts = line.split(" ")
-        if parts[:2] == ["root-crontab", "none"] and len(parts) == 2:
-            got["state"] = "none"
-        elif parts[:2] == ["root-crontab", "ok"] and len(parts) in (2, 3):
-            text = _b64(parts[2]) if len(parts) == 3 else ""
-            if text is not None:
-                got.update(state="ok", text=text)
-        elif parts[0] == "crond" and len(parts) in (2, 3) and re.fullmatch(_priv.ROOT_CRON_DIR_FILE_RE, parts[1]):
-            text = _b64(parts[2]) if len(parts) == 3 else ""
-            if text is not None:
-                got["crond"].append({"name": parts[1], "text": text, "panel": is_panel_file(parts[1])})
+        _read_line(got, line.split(" "))
     return got
+
+
+def _read_line(got, parts):
+    """Fold one line of root-crontab-read's output, split on spaces, into `got`."""
+    body = _b64(parts[2]) if len(parts) == 3 else ("" if len(parts) == 2 else None)
+    if body is None:
+        return
+    if parts[0] == "root-crontab" and parts[1] == "none" and len(parts) == 2:
+        got["state"] = "none"
+    elif parts[0] == "root-crontab" and parts[1] == "ok":
+        got.update(state="ok", text=body)
+    elif parts[0] == "crond" and re.fullmatch(_priv.ROOT_CRON_DIR_FILE_RE, parts[1]):
+        got["crond"].append({"name": parts[1], "text": body, "panel": is_panel_file(parts[1])})
 
 
 def is_panel_file(name):
@@ -152,6 +155,14 @@ def rows(text):
     return out
 
 
+def schedule_ok(schedule):
+    """Whether `schedule` (spaces collapsed) is five cron fields or one @keyword."""
+    if schedule.startswith("@"):
+        return schedule in _priv.ROOT_CRON_SPECIALS
+    fields = schedule.split(" ")
+    return len(fields) == 5 and all(_priv.root_cron_field_ok(f, i) for i, f in enumerate(fields))
+
+
 def job_line(schedule, command):
     """(the crontab line for `schedule` and `command`, "") or (None, why in fixed words)."""
     schedule = " ".join((schedule or "").split())
@@ -160,12 +171,7 @@ def job_line(schedule, command):
         return None, "Enter the command to run."
     if len(command) > COMMAND_MAX or not re.fullmatch(_priv.ROOT_CRON_TEXT_RE, command):
         return None, "The command must be one line of at most 1,000 characters, with no control characters."
-    if schedule.startswith("@"):
-        ok = schedule in _priv.ROOT_CRON_SPECIALS
-    else:
-        fields = schedule.split(" ")
-        ok = len(fields) == 5 and all(_priv.root_cron_field_ok(f, i) for i, f in enumerate(fields))
-    if not ok:
+    if not schedule_ok(schedule):
         return None, ("The schedule must be five cron fields (minute hour day month weekday, such as "
                       "\"30 4 * * *\") or one of @reboot, @hourly, @daily, @weekly, @monthly, @yearly.")
     line = "%s %s" % (schedule, stored_command(command))
@@ -181,21 +187,30 @@ def changed_text(text, op, n, was, line):
     line still reads `was` (the page's copy), so a line that moved is never the one changed.
     """
     lines = (text or "").split("\n")[:-1] if text else []
+    why = _edit(lines, op, n, was, line)
+    if why:
+        return None, why
+    new = "\n".join(lines) + "\n" if lines else ""
+    return (new, "") if not _priv.root_crontab_problem(new) else (None, _invalid(new))
+
+
+def _edit(lines, op, n, was, line):
+    """Apply `op` to `lines` in place; "" when done, else why not."""
     if op == "add":
         lines.append(line)
-    elif op in ("save", "delete"):
-        if not 1 <= n <= len(lines) or lines[n - 1] != was:
-            return None, CHANGED
-        if op == "save":
-            lines[n - 1] = line
-        else:
-            del lines[n - 1]
+        return ""
+    if op not in ("save", "delete"):
+        return UNKNOWN
+    if not 1 <= n <= len(lines) or lines[n - 1] != was:
+        return CHANGED
+    if op == "save":
+        lines[n - 1] = line
     else:
-        return None, UNKNOWN
-    new = "\n".join(lines) + "\n" if lines else ""
-    if not _priv.root_crontab_problem(new):
-        return new, ""
+        del lines[n - 1]
+    return ""
+
+
+def _invalid(new):
+    """Why `new` is not a crontab the panel will install: the first bad line, or its size."""
     bad = next((r["n"] for r in rows(new) if r["kind"] == "other"), None)
-    if bad is None:
-        return None, TOO_BIG
-    return None, i18n.Sentence(BAD_LINE, n=bad)
+    return TOO_BIG if bad is None else i18n.Sentence(BAD_LINE, n=bad)

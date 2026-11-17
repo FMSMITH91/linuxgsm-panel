@@ -2447,18 +2447,20 @@ def root_cron_field_ok(text, index):
     low, high, names = ROOT_CRON_FIELDS[index]
     if names and text.lower() in names:
         return True
-    for part in text.split(","):
-        m = re.fullmatch(ROOT_CRON_ITEM_RE, part)
-        if not m:
+    return all(_root_cron_item_ok(re.fullmatch(ROOT_CRON_ITEM_RE, part), low, high) for part in text.split(","))
+
+
+def _root_cron_item_ok(m, low, high):
+    """One comma-separated item of a schedule field (its ROOT_CRON_ITEM_RE match, or None)."""
+    if not m:
+        return False
+    step = int(m.group(4)) if m.group(4) is not None else None
+    if m.group(2) is not None:
+        a = int(m.group(2))
+        b = int(m.group(3)) if m.group(3) is not None else a
+        if not low <= a <= b <= high or (step is not None and m.group(3) is None):
             return False
-        if m.group(2) is not None:
-            a = int(m.group(2))
-            b = int(m.group(3)) if m.group(3) is not None else a
-            if not low <= a <= b <= high or (m.group(4) is not None and m.group(3) is None):
-                return False
-        if m.group(4) is not None and not 1 <= int(m.group(4)) <= high:
-            return False
-    return True
+    return step is None or 1 <= step <= high
 
 
 def root_cron_line_kind(line):
@@ -2470,15 +2472,18 @@ def root_cron_line_kind(line):
         return "blank"
     if s.startswith("#"):
         return "comment"
-    if s.startswith("@"):
-        word, _sep, rest = s.replace("\t", " ").partition(" ")
-        return "job" if word in ROOT_CRON_SPECIALS and rest.strip(" \t") else ""
     if re.fullmatch(ROOT_CRON_ENV_RE, s):
         return "env"
+    return "job" if _root_cron_job_ok(s) else ""
+
+
+def _root_cron_job_ok(s):
+    """Whether `s` (a stripped line) is a job: an @keyword or five schedule fields, then a command."""
+    if s.startswith("@"):
+        word, _sep, rest = s.replace("\t", " ").partition(" ")
+        return word in ROOT_CRON_SPECIALS and bool(rest.strip(" \t"))
     fields = s.split(None, 5)
-    if len(fields) < 6 or not fields[5].strip():
-        return ""
-    return "job" if all(root_cron_field_ok(fields[i], i) for i in range(5)) else ""
+    return len(fields) == 6 and bool(fields[5].strip()) and all(root_cron_field_ok(fields[i], i) for i in range(5))
 
 
 def root_crontab_problem(text):

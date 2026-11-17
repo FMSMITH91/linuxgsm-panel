@@ -1019,23 +1019,6 @@ def write_content_cron(server, content_user, body, timeout=15):
                       timeout=timeout, sudo=True)
 
 
-def write_root_crontab(server, content, expected, timeout=30):
-    """Install `content` as root's crontab on `server`, only while the current one hashes to `expected`.
-
-    Two-sided like write_root_file: locally the helper's root-crontab-write takes the content on
-    stdin (never a command line) and checks every line itself; remotely the same check runs here
-    and the content travels base64 (privileged.remote_root_crontab_write_command). rc 3 on either
-    side means root's crontab changed since it was read, and nothing was written.
-    """
-    if not is_local_server(server):
-        return run_command(server, _R19A_C_LOCALE + _priv.remote_root_crontab_write_command(content, expected),
-                           timeout=timeout, sudo=True)
-    if helper_present():
-        return _exec_local_argv(_priv.helper_argv("root-crontab-write", [expected]), timeout=timeout,
-                                stdin_text=content)
-    return _run_local(_priv.remote_root_crontab_write_command(content, expected), timeout=timeout, sudo=True)
-
-
 def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=True, secrets=None):
     """Run a privileged VERB (see privileged.py) against `server`.
 
