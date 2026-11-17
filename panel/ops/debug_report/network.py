@@ -1008,9 +1008,12 @@ def _self_tls(conf):
     return bool(conf.get("BOOT_TLS"))
 
 
-def hsts_expected(forwarded_proto, is_secure, self_tls):
-    """app.py's HSTS rule: HTTPS from a proxy or Tailscale, never the panel's own self-signed TLS."""
-    return forwarded_proto == "https" or (bool(is_secure) and not self_tls)
+def hsts_expected(forwarded_proto, is_secure, self_tls, own=False):
+    """app.py's HSTS rule: HTTPS from a proxy or Tailscale, or own TLS with an operator's CA-signed `own` cert.
+
+    Never the panel's own self-signed TLS (`own` is certs.own_tls_hsts's answer for the boot's certificate).
+    """
+    return forwarded_proto == "https" or (bool(is_secure) and (not self_tls or bool(own)))
 
 
 def _believed_text(believed, conf):
@@ -1045,8 +1048,10 @@ def _request_lines(res, conf):
     client = _src_net.addr_class(auth.client_ip())
     res.add("- **Client address as the panel keys it**: %s · forwarded headers believed: %s" % (
         client, _believed_text(auth._request_came_through_proxy(peer), conf)))
+    from panel.services.certs import own_tls_hsts
     res.add("- **HSTS on this response**: %s" % _yn(hsts_expected(
-        env.get("HTTP_X_FORWARDED_PROTO", ""), request.is_secure, _self_tls(conf))))
+        env.get("HTTP_X_FORWARDED_PROTO", ""), request.is_secure, _self_tls(conf),
+        own_tls_hsts(conf.get("BOOT_TLS_OWN")))))
     # Posture, page-only: it says brute-force protection (the throttle and fail2ban) does not work
     # for any proxied client, which is what the downloadable file never tells a public reader.
     if client == "loopback" and env.get("HTTP_X_FORWARDED_FOR"):

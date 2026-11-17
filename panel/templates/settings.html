@@ -184,6 +184,84 @@
   <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>
 </form>
 
+{# The panel's own HTTPS certificate (panel/routes/tls_cert.py, panel/services/tls_own.py). Its own
+   forms, outside the Settings form: each change is checked, saved and loaded by a restart. OWASP
+   Transport Layer Security Cheat Sheet, "Certificates": the recommended values are shown beside the
+   fields, and what falls short of them is a note after saving, never a refusal. #}
+<div class="card mt-3" id="sec-tls">
+  <div class="card-header"><i class="bi bi-file-earmark-lock"></i> HTTPS certificate</div>
+  <div class="card-body">
+    <div class="small mb-2">
+      {% if tls.source == 'letsencrypt' %}In use: your Let's Encrypt certificate <code>{{ tls.le_name }}</code>.
+      {% elif tls.source == 'own' %}In use: your own certificate.
+      {% else %}In use: the panel's built-in self-signed certificate (browsers warn about it).{% endif %}
+      {% if not tls.serving %}<span class="text-secondary">The panel is not serving HTTPS itself right now (Tailscale Serve or a reverse proxy does), so a certificate here is used only when it does.</span>{% endif %}
+    </div>
+    {% if tls.cert %}
+    <dl class="row small mb-2" id="tls-current">
+      <dt class="col-sm-3">Name</dt><dd class="col-sm-9 text-break">{{ tls.cert.subject }}{% if tls.cert.names %} ({{ tls.cert.names|join(', ') }}){% endif %}</dd>
+      <dt class="col-sm-3">Issued by</dt><dd class="col-sm-9 text-break">{{ tls.cert.issuer }}</dd>
+      <dt class="col-sm-3">Valid until</dt>
+      <dd class="col-sm-9{% if tls.cert.days <= tls.soon_days %} text-warning{% endif %}">{{ tls.cert.not_after }} · <span>{{ tls.cert.days }}</span> <span>days left</span></dd>
+      <dt class="col-sm-3">Key</dt><dd class="col-sm-9">{{ tls.cert.key }}</dd>
+      {% if tls.serving %}<dt class="col-sm-3">HSTS</dt><dd class="col-sm-9">{% if tls.hsts %}<span>Sent</span> <code>{{ tls.hsts }}</code>{% else %}Not sent: only a CA-signed certificate gets it.{% endif %}</dd>{% endif %}
+    </dl>
+    {% endif %}
+    {# Folded away: the forms are what the card is for only when changing it, and opened they are
+       taller than every other card on the page (about 1,500px at phone width). #}
+    <details id="tls-change"{% if tls.source == 'builtin' and not tls.cert %} open{% endif %}>
+    <summary class="small fw-semibold mb-2">{% if tls.source == 'builtin' %}Use your own certificate{% else %}Change the certificate{% endif %}</summary>
+    <div class="small text-secondary mb-3">OWASP: a well-known CA (Let's Encrypt is free), RSA of at least 2048 bits or ECDSA, a SHA-256 signature, the panel's name in the certificate, and the full chain. Saving checks all of these and notes what falls short; it refuses only a key that is not the certificate's, an expired certificate, or files it cannot read. The panel restarts to load a new certificate.</div>
+
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <form method="POST" action="{{ url_for('tls_cert_letsencrypt') }}"
+              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+          <div class="fw-semibold small mb-1">Let's Encrypt on this host</div>
+          <label class="form-label small mb-1" for="tls-le-name">Certificate name</label>
+          <input type="text" id="tls-le-name" name="le_name" class="form-control form-control-sm" required
+                 maxlength="253" pattern="[A-Za-z0-9][A-Za-z0-9.\-]*" autocomplete="off" spellcheck="false"
+                 placeholder="panel.example.com" value="{{ tls.le_name }}">
+          <div class="small text-secondary mt-1"><span>To list them:</span> <code>sudo certbot certificates</code></div>
+          <div class="small text-secondary">The panel copies fullchain.pem and privkey.pem from /etc/letsencrypt/live for that name.</div>
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="tls-le-renew" name="le_autorenew" {% if tls.autorenew %}checked{% endif %}>
+            <label class="form-check-label small" for="tls-le-renew">Load a renewed certificate automatically (checked daily)</label>
+          </div>
+          <div class="small text-secondary mt-1">Off: when certbot renews it, come back here and press Use again, or the old one expires.</div>
+          <button type="submit" class="btn btn-sm btn-primary mt-2"><i class="bi bi-check2-circle"></i> Use this certificate</button>
+        </form>
+      </div>
+      <div class="col-lg-6">
+        <form method="POST" action="{{ url_for('tls_cert_paste') }}"
+              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+          <div class="fw-semibold small mb-1">Paste a certificate</div>
+          <label class="form-label small mb-1" for="tls-cert">Certificate with its full chain (PEM)</label>
+          <textarea id="tls-cert" name="cert_pem" rows="3" class="form-control form-control-sm font-monospace" required
+                    maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+          <label class="form-label small mb-1 mt-2" for="tls-key">Private key (PEM, no passphrase)</label>
+          <textarea id="tls-key" name="key_pem" rows="3" class="form-control form-control-sm font-monospace" required
+                    maxlength="65536" spellcheck="false" autocomplete="off" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+          <div class="small text-secondary mt-1">The key is stored readable by the panel's account only. Renew it yourself before it expires; you are alerted 30 days ahead.</div>
+          <button type="submit" class="btn btn-sm btn-primary mt-2"><i class="bi bi-upload"></i> Use this certificate</button>
+        </form>
+      </div>
+    </div>
+
+    {% if tls.source != 'builtin' %}
+    <form method="POST" action="{{ url_for('tls_cert_remove') }}" class="mt-3"
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="tls-remove-ok" name="confirm" required>
+        <label class="form-check-label small" for="tls-remove-ok">Go back to the built-in self-signed certificate. Browsers will warn about it again, and one that opened the panel over your certificate refuses its address until HSTS runs out: a day if it was put in under 30 days ago, up to two years after that. Replace it with another trusted certificate instead if you can.</label>
+      </div>
+      <button type="submit" class="btn btn-sm btn-outline-danger mt-2"><i class="bi bi-arrow-counterclockwise"></i> Use the built-in certificate</button>
+    </form>
+    {% endif %}
+    </details>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}

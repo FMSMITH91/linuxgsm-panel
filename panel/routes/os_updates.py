@@ -8,6 +8,7 @@ from panel.db.models import (RemoteServer, db, rows_still_held)
 from panel.ops import (system_ops as so)
 from panel.services import (notifications)
 from panel.services.certs import (_maybe_alert_cert_expiring)
+from panel.services import tls_own
 from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
@@ -109,6 +110,7 @@ def register(app, supervise):
             # only TimeoutExpired, so a checkout on a host with no `git` binary raises straight
             # through). A persistent failure there would have silently disabled both alerts, which
             # is the exact way the OS-update alert was dead before. Each swallows its own errors.
+            tls_own.maybe_renew(app.config)          # a renewed Let's Encrypt certificate, once a day
             _maybe_alert_cert_expiring(app.config)   # periodic TLS-cert expiry check
             _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             time.sleep(1800)

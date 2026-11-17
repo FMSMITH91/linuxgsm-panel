@@ -125,7 +125,7 @@ from panel.services import notifications
 # the module that owns it — so unlike panel.routes.* this needs no lazy import to break a cycle.
 from panel.services.bots.discord import (_discord_command_watch, _report_dc_pending_update)
 from panel.services.bots.telegram import (_report_tg_pending_update, _telegram_command_watch)
-from panel.services.certs import (_ensure_self_signed_cert, tls_failed_bind)
+from panel.services.certs import (_ensure_self_signed_cert, own_cert_until, own_tls_hsts, tls_failed_bind)
 from panel.db.prefs import (_effective_prefs, _panel_layout)
 from panel.core.middleware import PrefixMiddleware, ProxiedBanGate
 from panel.security import banlist as _banlist
@@ -1908,17 +1908,17 @@ def create_app():
         # Don't advertise the framework/version to scanners/fingerprinters (the WSGI
         # server would otherwise send "Werkzeug/x Python/y"). Override, not setdefault.
         resp.headers["Server"] = "LinuxGSM Panel"
-        # Advertise HSTS only for HTTPS backed by a TRUSTED cert — via a proxy that sets
-        # X-Forwarded-Proto, or Tailscale. NOT for our own self-signed TLS: HSTS turns the
-        # one-time "not private" warning into a hard, un-clickable-through block on a named
-        # host, which would lock the user out of their own panel.
+        # Advertise HSTS only for HTTPS backed by a TRUSTED cert — via a proxy that sets X-Forwarded-Proto,
+        # Tailscale, or the operator's CA-signed certificate on our own TLS (certs.own_tls_hsts: one day for
+        # its first 30 days). NOT for our own self-signed TLS: HSTS turns the one-time "not private" warning
+        # into a hard, un-clickable-through block on a named host, locking the user out of their own panel.
         # Recorded as this header decided it, for the debug report's HSTS line (network._self_tls):
         # `cfg` is the config this process started from, and the report's own read of config.json
         # is the next start's once a bind or TLS change is saved.
         self_tls = app.config["_R32A_SELF_TLS"] = _effective_https(cfg)
-        if (request.headers.get("X-Forwarded-Proto", "") == "https"
-                or (request.is_secure and not self_tls)):
-            resp.headers.setdefault("Strict-Transport-Security", _sec_headers.HSTS)
+        own = request.is_secure and self_tls and own_tls_hsts(app.config.get("BOOT_TLS_OWN"))
+        if own or request.headers.get("X-Forwarded-Proto", "") == "https" or (request.is_secure and not self_tls):
+            resp.headers.setdefault("Strict-Transport-Security", own or _sec_headers.HSTS)
         return resp
 
     # Compressible content types worth gzipping (skip already-compressed images/fonts/archives).
@@ -3298,10 +3298,10 @@ def _boot_ssl_args(app, cfg, host, port):
         cert_path = str(DATA_DIR / "ssl" / "cert.pem")
         key_path = str(DATA_DIR / "ssl" / "key.pem")
         try:
-            _ensure_self_signed_cert(cert_path, key_path, _r13a_cfg_text(cfg, "site_domain") or host)
+            app.config["BOOT_TLS_OWN"] = own_cert_until(_ensure_self_signed_cert(cert_path, key_path, _r13a_cfg_text(cfg, "site_domain") or host))
             ssl_args = {"certfile": cert_path, "keyfile": key_path}
-            print(f"  🔒 HTTPS enabled (self-signed) — https://{_r17a_url_host(host)}:{port}")
-            print("     Browsers will show a certificate warning; click through to proceed.")
+            print(f"  🔒 HTTPS enabled ({'your certificate' if app.config['BOOT_TLS_OWN'] else 'self-signed'}) — https://{_r17a_url_host(host)}:{port}")
+            print("     A CA signed it." if app.config["BOOT_TLS_OWN"] else "     Browsers will show a certificate warning; click through to proceed.")
         except Exception as e:
             app.config["BOOT_TLS_ERROR"] = type(e).__name__
             tls_failed_bind(app.config, host, port, e)   # never plain HTTP off this host
