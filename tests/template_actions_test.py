@@ -4616,10 +4616,12 @@ check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
 # login column switched to UTC until a full reload.
 _pj_rs = _pj_src[_pj_src.index("window.refreshSection = function"):]
 _pj_rs = _pj_rs[:_pj_rs.index("\n};")]
+_pj_sw = _pj_src[_pj_src.index("function _sectionSwapped(cur){"):]   # the steps run on the swapped-in section
+_pj_sw = _pj_sw[:_pj_sw.index("\n}")]
 check("cur.innerHTML = fresh.innerHTML" in _pj_rs,
       "refresh: (control) the refreshSection slice holds the swap", "sliced the wrong text")
-check("window.localizeTimes(cur)" in _pj_rs
-      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("window.localizeTimes(cur)"),
+check("window.localizeTimes(cur)" in _pj_sw and "_sectionSwapped(cur)" in _pj_rs
+      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("_sectionSwapped(cur)"),
       "refresh: refreshSection re-localizes the timestamps it swaps in",
       "swapped-in times stay in UTC")
 

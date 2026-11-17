@@ -197,7 +197,7 @@ _name121 = "dashboard: the after-swap hook puts install endings back"
 _out121 = _node121(_name121, (
     "global.window = global; const calls = [];\n"
     "for (const f of ['restoreBulkSelection', 'filterServers', '_r20cIdsLanded', 'refreshStatus',\n"
-    "                 'bindDragRegions', '_r34c_ipRedraw']) global[f] = () => calls.push(f);\n"
+    "                 'bindDragRegions', '_r34c_ipRedraw', 'paintTagChips']) global[f] = () => calls.push(f);\n"
     + (_cut47(_DB121, _head121) if _head121 in _DB121 else "/* MISSING afterDashRefresh */") + "\n"
     "window.afterDashRefresh(); console.log(JSON.stringify(calls));\n"))
 if _out121 is not None:

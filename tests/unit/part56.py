@@ -582,7 +582,7 @@ check("templates: the audit log's User filter lists each user under data-no-i18n
       _re56.search(r"<option [^>]*data-no-i18n>\{\{ u \}\}</option>", _logs56) is not None, "unguarded")
 
 # nags.js: a remote's name is guarded; the panel host's fixed label is not (review 1015c, part87).
-_JSNAMES56 = (("nags.js", r'class="alert-link"[^\']*\'\s*\+\s*\(h\.local \? \'\' : \' data-no-i18n\'\)\s*\+\s*'
+_JSNAMES56 = (("nags.js", r'class="alert-link[^"]*"[^\']*\'\s*\+\s*\(h\.local \? \'\' : \' data-no-i18n\'\)\s*\+\s*'
                           r'\' href="\'\s*\+\s*escapeHtml\(h\.url\)'),
               ("remote_manage.js", r"<td class=\"small\" data-no-i18n>'\+escapeHtml\(e\.user"),
               ("remote_firewall.js", r"data-no-i18n>' \+ esc\(g\.comment"),
