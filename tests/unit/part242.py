@@ -142,6 +142,14 @@ check("cflite workflows: all nine ClusterFuzzLite steps, in five jobs, run a cop
       _cfl_all242 == ([], 5) and len(_cfl_found242) == 9 and all(_cfl_ctl242.values()),
       repr((_cfl_all242, _cfl_found242, _cfl_ctl242)))
 
+# actionlint v1.7.12 does not know `$/` yet; its config ignores exactly that message for exactly those steps.
+_al242 = _read242(".github", "actionlint.yaml")
+_al_ign242 = _re242.findall(r"^      - '(.*)'$", _al242[_al242.find("\npaths:\n"):], _re242.M)
+check("actionlint: its one ignore is the `$/` cflite copies' 'ref is missing' message, on the cflite workflows only",
+      "\npaths:\n  .github/workflows/cflite_*.yml:\n    ignore:\n" in _al242
+      and _al_ign242 == [r'specifying action "\$/\.github/actions/cflite-(build|run)-fuzzers" in invalid format '
+                         r'because ref is missing'], repr(_al_ign242))
+
 
 # ── 4. Scorecard: the recorded digest, before the analysis and in its own pull ─────────────────────
 _SC242 = _wf29("scorecard.yml")
