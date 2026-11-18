@@ -525,6 +525,28 @@ def _b3_pieces255():
         _ad255.parse_probe("uid=x\ngid=1\n")["ids"]], [(1004, 1005), None, None])
 
 
+def _probe_run255():
+    """probe_sh for a World at War account under bash, in a throwaway home: what parse_probe reads."""
+    home = os.path.join(_TMP255, "probe-home")
+    for d in ("serverfiles/main", ".codwaw/main"):
+        os.makedirs(os.path.join(home, d), exist_ok=True)
+    with open(os.path.join(home, "serverfiles", "main", "cwp255.cfg"), "w", encoding="utf-8") as fh:
+        fh.write('set sv_hostname "x"\nset rconpassword "pw-a"\nset rcon_password "pw-b"\nset rcon_passwordx "no"\n')
+    open(os.path.join(home, ".codwaw", "main", "games_mp.log"), "w").close()
+    sh = _ad255.probe_sh(_ad255.IW4MADMIN, "cwp255", 7, "codwaw", 0).replace('cd "$HOME"', "cd %s" % home)
+    r = _sp255.run(["bash", "-c", sh], capture_output=True, text=True, timeout=30, check=False,  # nosec B603 B607
+                   env={"PATH": "/usr/bin:/bin"})
+    return _ad255.parse_probe(r.stdout)
+
+
+def _probe_bash255():
+    p = _probe_run255()
+    eq("probe (bash): finds ~/.codwaw's log, and hands over both RCON lines but no look-alike; WaW takes rcon_password",
+       [p["logdir"], _ad255.rcon_password(p["rcon_lines"], "rconpassword"), _ad255.rcon_password(p["rcon_lines"]),
+        "rcon_passwordx" in p["rcon_lines"], _ad255.game_rcon("codwaw", p["rcon_lines"])],
+       [".codwaw/main", "pw-a", "pw-b", False, ("pw-b", "")])
+
+
 def _b3_build255():
     here = os.path.join(os.path.dirname(_ad255.__file__), "..", "addon_images", "b3")
     cf = open(os.path.join(here, "Containerfile"), encoding="utf-8").read()
@@ -548,12 +570,15 @@ def _b3_build255():
 
 
 def _b3_remove255(ids):
-    _host255(_probe255())
+    calls = _host255(_probe255())
     r = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/remove" % ids["cod"]).get_json(silent=True) or {}
     r2 = _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/remove" % ids["cod4"]).get_json(silent=True) or {}
     eq("remove: B3's database is kept; IW4MAdmin's data goes with it (and says so)",
        (r.get("message"), r2.get("message")), (_ra255._REMOVED[True], _ra255._REMOVED[False]))
     check("remove: the add-on's relays go too", "lgsm-addon-b3-*" in _ad255.remove_sh("u", _ad255.B3))
+    eq("remove: the last add-on's release keeps the account's journal (keep, never forget)",
+       [c[2] for c in calls if c[0] == "verb" and c[1] == "addon-account-release"],
+       [["codp255", "keep"], ["cod4p255", "keep"]])
 
 
 def _run_remove255(other):
@@ -584,8 +609,9 @@ def _purge255():
     eq("remove: the last add-on takes the account's Podman storage, cache and folders with it; a link is not followed",
        [rc, "others=0" in out, "podman system reset -f" in tools,
         [d for d in (".cache/containers", ".config/containers", ".config/systemd", ".local/share/containers")
-         if os.path.exists(os.path.join(home, d))], os.path.isdir(os.path.join(home, "elsewhere", "keep"))],
-       [0, True, True, [], True])
+         if os.path.exists(os.path.join(home, d))], os.path.isdir(os.path.join(home, "elsewhere", "keep")),
+        os.path.islink(os.path.join(home, ".config", "cni"))],
+       [0, True, True, [], True, True])
 
 
 def _b3_logs255(ids):
@@ -632,6 +658,7 @@ try:
     _settle255()
     _release255()
     _b3_pieces255()
+    _probe_bash255()
     _b3_build255()
     _purge255()
     _ids255 = _fixture255()

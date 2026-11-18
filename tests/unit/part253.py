@@ -340,12 +340,12 @@ def _guard_and_logs253(ids):
 
 def _uninstall253():
     calls = []
-    _p9_patch_sm("run_privileged", lambda server, verb, args=(), **k: calls.append(verb) or ("", "", 0))
+    _p9_patch_sm("run_privileged", lambda server, verb, args=(), **k: calls.append([verb] + list(args)) or ("", "", 0))
     _p9_patch(_ms253, "_lgp", _NS253(stop_now=lambda *a, **k: None))
     _p9_patch(_ms253, "time", _NS253(sleep=lambda s: None))
     _ms253._stop_game_processes(_NS253(id=1), "cod4server", "cod4server")
-    eq("uninstall: lingering is released (and the manager stopped) before the account's processes are killed", calls,
-       ["addon-account-release", "user-kill-processes"])
+    eq("uninstall: lingering is released, the account's journal forgotten, before its processes are killed",
+       [c[:3] for c in calls], [["addon-account-release", "cod4server", "forget"], ["user-kill-processes", "cod4server"]])
 
 
 # ── 4. the tab and its text ───────────────────────────────────────────────────────────────────────
