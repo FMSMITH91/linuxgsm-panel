@@ -378,7 +378,7 @@ _sent244.clear()
 _p9_patch(_core244, "run_command", _rc244(_game244))
 _p9_patch(_core244, "time", _fake_time244)
 _core244._live_metrics_cache.clear()
-_online244 = _stats_runs244(P9_GS, (0, 3, 6.9, 8, 16))
+_online244 = _stats_runs244(P9_GS, (0, 3, 6.9, 7.5, 15.5))
 _sent244.clear()
 _core244._live_metrics_cache.clear()
 _offline244 = _stats_runs244(P9_GM, (0, 10, 18.9, 20))
@@ -392,7 +392,8 @@ with _p9.app_context():
 _p9_restore_all()
 _core244._live_metrics_cache.clear()
 eq("/stats: an online server's viewers share one sample for 7 s, and one viewer polling every 8 s gets "
-   "a fresh sample on each poll", _online244, [1, 1, 1, 2, 3])
+   "a fresh sample on each poll, also when its request arrives half a second early",
+   _online244, [1, 1, 1, 2, 3])
 eq("/stats: a stopped server's viewers share one sample for 19 s (its page polls every 20 s)",
    _offline244, [1, 1, 1, 2])
 check("/stats: the running check that refuses a power action still reads a sample at most 2 s old",
@@ -430,7 +431,9 @@ eq("/stats: two viewers whose polls arrive together run one sample between them,
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _JS244 = _read244(os.path.join(_root, "panel", "static", "js", "remote_manage_backups.js"))
 _HEAD244 = "var _liveOnScreen"
-_block244 = _JS244[_JS244.index(_HEAD244):_JS244.index("\n", _JS244.index("pollWhenVisible(function(){ if(_liveSeen())"))]
+_at244 = _JS244.find(_HEAD244)
+_end244 = _JS244.find("pollWhenVisible(", max(_at244, 0))
+_block244 = _JS244[_at244:_JS244.find("\n", _end244)] if _at244 >= 0 and _end244 >= 0 else ""
 _prog244 = """
 var polls = 0, tick = null, now = 0, obs = null;
 function pollLive(){ polls++; }
