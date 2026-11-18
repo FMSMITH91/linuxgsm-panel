@@ -3352,7 +3352,7 @@ def _remote_live_read(server):
     acc = _live.parse_sections(out)
     if steady:
         acc["A"] = prev[1]
-    if _live.keep_read(rid, rc, acc, age):
+    if _live.keep_read(rid, acc, age):
         _remote_cpu_prev[rid] = (now, acc["B"])
     return acc, rc
 

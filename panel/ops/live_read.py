@@ -54,13 +54,13 @@ def steady(age):
     return age is not None and STEADY_MIN <= age < STEADY_MAX
 
 
-def keep_read(rid, rc, acc, age):
+def keep_read(rid, acc, age):
     """Whether this read's /proc/stat is kept as the next poll's A side.
 
-    A read that answered, for a host with an id, and not a second caller's within STEADY_MIN of the
-    last kept one (that would chain a tiny interval into the next poll's figure).
+    One that holds a CPU line, for a host with an id, and not a second caller's within STEADY_MIN of
+    the last kept one (that would chain a tiny interval into the next poll's figure).
     """
-    return rid is not None and rc == 0 and "cpu" in acc["B"] and (age is None or age >= STEADY_MIN)
+    return rid is not None and "cpu" in acc["B"] and (age is None or age >= STEADY_MIN)
 
 
 def parse_sections(out):
