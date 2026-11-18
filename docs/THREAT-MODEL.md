@@ -108,6 +108,7 @@ the file that holds them.
 | --- | --- | --- |
 | S | Another local process poses as the panel | Mitigate: sudoers grants the helper to the panel's account only; the helper is root-owned outside the checkout. |
 | T | The panel (if compromised) hands root a crafted command | Mitigate: verbs, not shell text: the helper re-validates every argument against its own table and execs a fixed argv (`tools/panel-helper`, mirrored by `panel/security/privileged.py`); destinations and log sources are names, not paths. |
+| T | Root runs bytecode that is not the installed helper's code | Mitigate: the file sudo runs is a small entry (`tools/panel_helper_entry.py`) that loads the helper's bytecode only when every directory from `/` down and both files are root-owned with no group or other write bit and no symbolic link, checked through file descriptors, and the pyc is a checked-hash pyc (PEP 552) of the installed code; otherwise it compiles the code as before. The hash catches a stale pyc, the ownership test a planted one; root compiles it at install from the same signed source. |
 | T | Root runs code from the panel-owned checkout | Eliminate: root stages its pieces from its own clone, at or above a source floor, and only signed commits (see SECURITY.md, "Root never runs or installs from the panel's checkout"). |
 | R | Root actions without a trace | Mitigate: each root-equivalent action is audited by the route that starts it (`log_action`). |
 | I | Secrets on a command line | Mitigate: secrets travel on stdin (`run_privileged(..., secrets=...)`), never argv. |

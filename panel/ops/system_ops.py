@@ -5540,11 +5540,14 @@ def panel_diagnostics(db_check=None, unit=None):
 
 
 # ─── Root-owned pieces vs the commit they belong to (R9, R27) ──────────
-# install.sh installs these three ROOT-OWNED, outside the checkout, and only install.sh run as
-# root refreshes them. Compared by git blob id, computed here in Python (the files are read, never
+# install.sh installs these ROOT-OWNED, outside the checkout, and only install.sh run as root
+# refreshes them. Compared by git blob id, computed here in Python (the files are read, never
 # executed), against one `git ls-tree HEAD`.
 _ROOT_PIECES = (("panel-helper", "tools/panel-helper"), ("install.sh", "install.sh"),
-                ("db_maintenance.py", INSTALL_REL + "/db_maintenance.py"))
+                ("db_maintenance.py", INSTALL_REL + "/db_maintenance.py"),
+                ("panel-helper entry", "tools/panel_helper_entry.py"))
+# install.sh's HELPER_CODE (and its two readers' literal): the helper's code beside the entry sudo runs.
+_HELPER_CODE = "panel-helper-code.py"
 _ROOT_PIECE_MAX = 16 * 1024 * 1024
 _root_pieces_cache = {"at": 0.0, "res": None}
 _ROOT_PIECES_TTL = 60
@@ -5552,6 +5555,23 @@ _ROOT_PIECES_TTL = 60
 
 def _root_dir():
     return os.path.dirname(_priv.HELPER_PATH)
+
+
+def _piece_file(name):
+    """The installed file compared for piece `name`, or None where this install has no such file.
+
+    install.sh places the helper as an entry at panel-helper with its code in panel-helper-code.py,
+    or (where that could not be done, or by an installer from before the entry) whole at
+    panel-helper. The code file's presence says which: install.sh removes it when it places the
+    helper whole.
+    """
+    root = _root_dir()
+    split = os.path.lexists(os.path.join(root, _HELPER_CODE))
+    if name == "panel-helper":
+        return os.path.join(root, _HELPER_CODE if split else "panel-helper")
+    if name == "panel-helper entry":
+        return os.path.join(root, "panel-helper") if split else None
+    return os.path.join(root, name)
 
 
 def _git_blob_id(path):
@@ -5578,7 +5598,7 @@ def _installed_blob(path):
 
 
 def _head_blobs():
-    """{repo path: blob id} at HEAD for the three pieces, from ONE `git ls-tree`; None if it failed."""
+    """{repo path: blob id} at HEAD for every piece, from ONE `git ls-tree`; None if it failed."""
     out, _, rc = _git(["ls-tree", "HEAD", "--"] + [rel for _n, rel in _ROOT_PIECES], timeout=5)
     if rc != 0:
         return None
@@ -5601,7 +5621,7 @@ def _piece_state(installed, head_blob):
 
 
 def root_piece_state(force=False):
-    """{name: {"state": same|differs|missing|unreadable|unknown, "blob", "head_blob", "rel"}}.
+    """{name: {"state": same|differs|missing|unreadable|unknown|unused, "blob", "head_blob", "rel"}}.
 
     'unreadable' is a file the panel account may not read: never reported as 'differs'. Cached
     for _ROOT_PIECES_TTL so the Diagnostics check and the report's Install section share one
@@ -5613,7 +5633,8 @@ def root_piece_state(force=False):
     head = _head_blobs()
     res = {}
     for name, rel in _ROOT_PIECES:
-        installed = _installed_blob(os.path.join(_root_dir(), name))
+        path = _piece_file(name)
+        installed = _installed_blob(path) if path else ("unused", None)
         head_blob = (head or {}).get(rel)
         res[name] = {"state": _piece_state(installed, head_blob), "blob": installed[1],
                      "head_blob": head_blob, "rel": rel}

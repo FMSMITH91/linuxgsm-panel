@@ -34,7 +34,7 @@ OS_CHECK_EVERY = 24 * 3600
 WORKERS = (
     ("monitor", "Monitor", "Checks each game server and host is up, and sends the alerts you set."),
     ("console-poller", "Console", "Reads new console lines for the consoles that are open."),
-    ("player-counts", "Player counts", "Asks each running game server how many players are on."),
+    ("player-counts", "Player counts", "Asks each running game server how many players are on; every 90 s when no page or alert needs them."),
     ("metrics-history", "Usage history", "Records CPU, memory and disk use for the charts."),
     ("due-actions", "Restart or stop when empty", "Restarts or stops a server you queued, once its players leave."),
     ("backup-ticker", "Backups", "Takes the daily panel backup, scheduled game backups and queued ones."),

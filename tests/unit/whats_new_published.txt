@@ -751,3 +751,8 @@ c6919738 Signed-in pages are not kept in the browser's cache.
 07c3c04a The database upload check reads SQL the way the database client does.
 9d8ab71a Dumps the check cannot read safely are refused.
 1d2278e2 A database restore never reads files from the host.
+3bb00199 The panel asks game servers for their player counts less often when nobody needs them.
+10ec01a0 Live figures cost the host less.
+f977af9d Privileged calls use about half the CPU.
+20d8b650 The ban watcher reads fail2ban only when something changed.
+f87ad562 The helper's bytecode is checked before root runs it.

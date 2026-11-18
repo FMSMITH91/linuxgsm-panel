@@ -141,7 +141,7 @@ from panel.core.validation import (MAX_PORT, MIN_PORT, _port_or, _valid_hex_colo
 from panel.core.origins import _host_port, _origin_candidates, _origin_key
 from panel.core.http import _r23c_error_json, _wants_json, http_error_page, http_error_sentence, unreachable_error
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
-    _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
+    _MONITOR_SECONDS, _player_poll_cadence, _player_poll_wait, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
 from panel.services import host_reboot as _host_reboot
 from panel.core.panel_state import (_install_jobs, _install_lock,
@@ -592,14 +592,14 @@ def _player_count_watch(app):
     """Keep _player_counts fresh in the background so the dashboard and Game Servers page can show
     live per-server counts (and a total) without a query on the request path."""
     while True:
+        _t0 = time.time()
         try:
-            _t0 = time.time()
             _refresh_player_counts(app)
-            runtime_stats.beat("player-counts", _PLAYER_POLL_SECONDS, time.time() - _t0)
+            runtime_stats.beat("player-counts", _player_poll_cadence(app, time.time()), time.time() - _t0)
         except Exception:
             runtime_stats.bump("loopfail", "player-counts")
             _log.debug("player-count poller pass failed", exc_info=True)
-        time.sleep(_PLAYER_POLL_SECONDS)
+        _player_poll_wait(app, _t0, time)
 
 
 def _prune_metric_samples(app):
@@ -3253,14 +3253,14 @@ def _ban_watch_tick(app, state):
     tick itself; the loop that calls it only sleeps and counts failures.
     """
     _taken = _t0 = time.monotonic()
-    reading = so.panel_fail2ban_banned_ips()
+    reading = _banlist.watch_f2b(so.panel_fail2ban_banned_ips, state.get("seen"))   # None: skipped
     state["seen"], new_bans, unbans = _f2b_ban_events(state.get("seen"), reading)
     _f2b_record_events(app, new_bans, unbans)
     # The same reading feeds the panel's own ban gate, for traffic the firewall rule never sees
     # (Tailscale Funnel, which can also be switched on outside the panel, so this does not ask),
     # with the UFW denies and the whitelist. Each reading carries when it was TAKEN, so a slower
-    # read cannot overwrite a newer refresh. fail2ban is read every tick, always: its bans come
-    # and go on their own clock.
+    # read cannot overwrite a newer refresh. fail2ban is read when its files changed, while anything
+    # is banned, and every banlist.F2B_FORCED_READ seconds (banlist.watch_f2b).
     _banlist.set_f2b(reading, _taken)
     _banlist.set_whitelist(load_config().get("security_whitelist") or [])
     # UFW only when its rule files changed (or every banlist.UFW_FORCED_READ seconds): the rules

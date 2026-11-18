@@ -23,6 +23,18 @@ from panel.ops.ssh_manager import (_core)  # noqa: E402,F401  (module objects: t
 _port_scan_cache = _core.register_remote_cache({})
 _PORT_SCAN_TTL = 5
 
+
+def fresh_ports(rid, now):
+    """A copy of the ports a scan of host `rid` read within _PORT_SCAN_TTL seconds, or None."""
+    hit = _port_scan_cache.get(rid) if rid is not None else None
+    return set(hit[1]) if hit and hit[0] > now else None
+
+
+def note_ports(rid, now, ports):
+    """Keep the ports another read of host `rid` (the host sample's `ss`) took at `now`, as a scan."""
+    if rid is not None:
+        _port_scan_cache[rid] = (now + _PORT_SCAN_TTL, set(ports))
+
 def _remote_listening_ports(remote):
     """Set of ports currently listening on `remote`, or NONE when the scan could not be read.
 

@@ -746,7 +746,8 @@ def _e_root_pieces():
     states = {k: v["state"] for k, v in _so21.root_piece_state(force=True).items()}
     eq("root pieces: the installed copy = HEAD's / DIFFERS / unreadable, never 'differs' for one "
        "it could not read", states,
-       {"install.sh": "same", "db_maintenance.py": "differs", "panel-helper": "unreadable"})
+       {"install.sh": "same", "db_maintenance.py": "differs", "panel-helper": "unreadable",
+        "panel-helper entry": "unused"})
     os.rmdir(os.path.join(rdir, "panel-helper"))
     check("root pieces: a missing piece is 'missing'",
           _so21.root_piece_state(force=True)["panel-helper"]["state"] == "missing", "")

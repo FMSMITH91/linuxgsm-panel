@@ -2895,6 +2895,40 @@ sys.exit(1)
 PYEOF
 }
 
+# ── The helper, run from root's bytecode ────────────────────────────────────────────────────────
+# Python compiles the script it is handed on every run and never caches it, and compiling the
+# helper's 400+ KB was more than half of every privileged call's CPU. So the path the sudoers rule
+# names holds tools/panel_helper_entry.py, a small root-owned entry, and the helper's code sits
+# beside it with bytecode root compiled here (a checked-hash pyc, PEP 552). The entry uses that
+# bytecode only when the directory chain and both files are root-owned and writable by nobody else
+# and the pyc's source hash matches the code file; otherwise it compiles the code file, as before.
+# The grant does not change: sudo still runs one command, ${HELPER_DST}.
+#
+# Order: the code, then its bytecode, then the entry. Until the last step the old helper at
+# ${HELPER_DST} is untouched, and a call that meets new code with an old pyc compiles the code.
+# $1 = staged tools/panel-helper, $2 = staged tools/panel_helper_entry.py. Fails when any step does,
+# and the caller then places tools/panel-helper at ${HELPER_DST} whole, as before the entry.
+HELPER_CODE="${HELPER_DIR}/panel-helper-code.py"
+install_helper_code() {
+    local pyc_stage="${HELPER_DIR}/.stage-panel-helper-code.pyc" rc=0
+    ${H_SUDO} rm -f "${pyc_stage}" 2>/dev/null || true
+    # The system interpreter the entry runs under, isolated and from /, writing no cache of its own.
+    # py_compile reads the staged file and runs none of it; dfile names the installed path, which is
+    # what a traceback shows.
+    (cd / && ${H_SUDO} /usr/bin/python3 -I -B -c '
+import py_compile, sys
+py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile=sys.argv[3], doraise=True, optimize=0,
+                   invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)
+' "$1" "${pyc_stage}" "${HELPER_CODE}") >/dev/null 2>&1 || rc=1
+    if [[ "${rc}" -eq 0 ]]; then
+        ${H_SUDO} install -o root -g root -m 0644 "$1" "${HELPER_CODE}" 2>/dev/null \
+            && ${H_SUDO} install -o root -g root -m 0644 "${pyc_stage}" "${HELPER_CODE}c" 2>/dev/null \
+            && ${H_SUDO} install -o root -g root -m 0755 "$2" "${HELPER_DST}" 2>/dev/null || rc=1
+    fi
+    ${H_SUDO} rm -f "${pyc_stage}" 2>/dev/null || true
+    return "${rc}"
+}
+
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
     # The operator's choice on the host's own root grant, read FIRST: before the early returns below
@@ -2919,7 +2953,7 @@ install_root_tools() {
     PANEL_CONF="${HELPER_DIR}/panel.conf"
     H_SUDO=""; [[ "$(id -u)" -ne 0 ]] && H_SUDO="sudo"
 
-    local _stage="" _istage=""
+    local _stage="" _istage="" _estage=""
 
     # Root-owned and 0755 BEFORE anything is staged into it: stage_root_source depends on the panel
     # user being unable to write here.
@@ -2931,7 +2965,14 @@ install_root_tools() {
     _prepare_root_source
 
     if _stage="$(stage_root_source tools/panel-helper panel-helper)"; then
-        if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${HELPER_DST}" 2>/dev/null; then
+        if _estage="$(stage_root_source tools/panel_helper_entry.py panel-helper-entry)" \
+           && install_helper_code "${_stage}" "${_estage}"; then
+            HELPER_OK=1
+            ok "Privileged helper installed at ${HELPER_DST} (run from root's bytecode)"
+        elif ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${HELPER_DST}" 2>/dev/null; then
+            # The whole helper at the path sudo runs, as before the entry existed. Its code file
+            # goes too: the code file's presence is what says "the entry runs this" to every reader.
+            ${H_SUDO} rm -f "${HELPER_CODE}" "${HELPER_CODE}c" 2>/dev/null || true
             HELPER_OK=1
             ok "Privileged helper installed at ${HELPER_DST}"
         else
@@ -2941,7 +2982,7 @@ install_root_tools() {
             warn "Could not install/refresh the privileged helper (needs root). The panel still"
             warn "works; re-run this installer as root to place the current one."
         fi
-        ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
+        ${H_SUDO} rm -f "${_stage}" ${_estage:+"${_estage}"} 2>/dev/null || true
     else
         warn "Could not read tools/panel-helper from the repository — the helper was NOT refreshed."
     fi
@@ -3278,7 +3319,10 @@ can_already_sudo() {
         # -I (isolated): no cwd on sys.path and no PYTHON* variables. A self-update runs this from
         # the panel's own checkout, and `python3 -` puts that directory first on the import path,
         # so a glob.py planted there ran as root the moment the helper imported glob.
-        case "$(python3 -I - "${HELPER_DIR}/panel-helper" "${_cas_user}" 2>/dev/null <<'CAS_PY' || true
+        # The helper's code: beside the entry when split (install_helper_code), else the file itself.
+        local _cas_code="${HELPER_DIR}/panel-helper"
+        [[ -f "${HELPER_DIR}/panel-helper-code.py" ]] && _cas_code="${HELPER_DIR}/panel-helper-code.py"
+        case "$(python3 -I - "${_cas_code}" "${_cas_user}" 2>/dev/null <<'CAS_PY' || true
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("panel_helper", sys.argv[1])
 helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("panel_helper", loader))
@@ -3322,7 +3366,9 @@ enrolment_refusal() {
     # terminal, so only printable characters of it are. The `cd` is in a subshell of its own:
     # bash (5.2) will not parse `$(cd / && cmd <<EOF || ...` — the here-document and the `||`
     # after an `&&` list inside a command substitution is a syntax error there.
-    out="$( (cd / && python3 -I - "${HELPER_DIR}/panel-helper" "$1" 2>/dev/null) <<'ER_PY' || echo "?"
+    local code="${HELPER_DIR}/panel-helper"     # the helper's code, as can_already_sudo reads it
+    [[ -f "${HELPER_DIR}/panel-helper-code.py" ]] && code="${HELPER_DIR}/panel-helper-code.py"
+    out="$( (cd / && python3 -I - "${code}" "$1" 2>/dev/null) <<'ER_PY' || echo "?"
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("panel_helper", sys.argv[1])
 helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("panel_helper", loader))

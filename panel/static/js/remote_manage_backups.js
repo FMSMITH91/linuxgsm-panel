@@ -857,8 +857,25 @@ function clearBackupPassphrase(btn){
 
 loadSshStatus();                     // public-SSH controls now exist on both local + remote (no-ops if absent)
 if(IS_LOCAL){ checkPanelUpdate(false); loadPanelBranches(); loadIntegrity(); loadDbStats(); loadEncStatus(); loadAutoUpd(); loadBackups(); } // panel-only cards
-pollLive();
-pollWhenVisible(pollLive, 2000);
+// The live read runs every 2 s only while something it paints is on screen: the Live Resources
+// card, or the header's Reachable badge. On another tab (the card is hidden) or scrolled past both,
+// it costs a request, a read of the host and ~1.6 KB of traffic every 2 s for nothing anyone sees.
+// When either comes back into view, it reads at once if the last read is a poll old.
+var _liveOnScreen = new Set(), _liveWatched = false, _liveAt = 0;
+function _livePoll(){ _liveAt = Date.now(); pollLive(); }
+function _liveSeen(){ return !_liveWatched || _liveOnScreen.size > 0; }
+if('IntersectionObserver' in window){
+  var _liveIO = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting) _liveOnScreen.add(e.target); else _liveOnScreen.delete(e.target); });
+    if(_liveSeen() && !document.hidden && Date.now() - _liveAt >= 2000) _livePoll();
+  });
+  ['.live-res', '#remote-status'].forEach(function(sel){
+    var el = document.querySelector(sel);
+    if(el){ _liveIO.observe(el); _liveWatched = true; }
+  });
+}
+_livePoll();
+pollWhenVisible(function(){ if(_liveSeen()) _livePoll(); }, 2000);
 
 // ── Discover + import existing LinuxGSM servers on this host ──────────
 function scanExisting(){

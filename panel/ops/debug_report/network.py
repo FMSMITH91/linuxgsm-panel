@@ -1299,12 +1299,25 @@ def _ufw_checked(banlist):
     set that was never read with something that did not happen.
     """
     state = banlist.ufw_gate_state() if hasattr(banlist, "ufw_gate_state") else {}
+    return _skip_note(state, "rule files unchanged")
+
+
+def _f2b_checked(banlist):
+    """' (fail2ban's files unchanged, checked X ago)' when the last fail2ban check SKIPPED a read.
+
+    As _ufw_checked, for banlist.watch_f2b.
+    """
+    state = banlist.f2b_gate_state() if hasattr(banlist, "f2b_gate_state") else {}
+    return _skip_note(state, "fail2ban's files unchanged")
+
+
+def _skip_note(state, why):
     if state.get("last_skipped") is not True:
         return ""
     checked = state.get("checked_at")
     if not isinstance(checked, float) or checked == float("-inf"):
         return ""
-    return " (rule files unchanged, checked %s ago)" % ago(time.monotonic() - checked)
+    return " (%s, checked %s ago)" % (why, ago(time.monotonic() - checked))
 
 
 def _bangate_line(res):
@@ -1318,9 +1331,9 @@ def _bangate_line(res):
     taken = dict(getattr(banlist, "_taken", {}) or {})
     gate = runtime_stats.snapshot("bangate")
     last = gate.get("last")
-    res.posture("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s · UFW set %d, "
+    res.posture("- **Ban gate (Funnel / remote proxy)**: fail2ban set %d networks, %s%s · UFW set %d, "
                 "%s%s · whitelist %d · refusals since boot %d%s" % (
-                    len(getattr(banlist, "_f2b", ()) or ()), _age(taken.get("f2b")),
+                    len(getattr(banlist, "_f2b", ()) or ()), _age(taken.get("f2b")), _f2b_checked(banlist),
                     len(getattr(banlist, "_ufw", ()) or ()), _age(taken.get("ufw")),
                     _ufw_checked(banlist), len(getattr(banlist, "_allow", ()) or ()),
                     int(gate.get("refused", 0) or 0),

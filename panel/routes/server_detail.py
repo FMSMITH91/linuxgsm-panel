@@ -25,7 +25,7 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     _r17c_row_id, can_access_server, can_moderate_action, can_run_custom_command, get_game,
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window as _mon_end_offline_window,
-                                       _mark_expected_offline)
+                                       _mark_expected_offline, want_fresh_player_counts)
 from panel.services import lgsm_players as _lgp
 from panel.services import port_check as _pck
 from panel.routes import _lgsm_update as _lgu
@@ -1855,6 +1855,8 @@ def _register_schedules(app):
         enabled = _r13b_json_flag(_json_body(), "enabled", None)     # bool("false") is True
         gs.notify_when_empty = enabled
         db.session.commit()
+        if enabled:
+            want_fresh_player_counts()           # the alert now needs the 45 s poll; no idle wait
         log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled),
                    server=gs)
         return jsonify({"success": True, "enabled": enabled})

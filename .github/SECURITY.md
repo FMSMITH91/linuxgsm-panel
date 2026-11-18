@@ -216,6 +216,19 @@ argument vector: no shell, and only the programs its verbs name. Its shebang is
 `#!/usr/bin/python3 -I`, and it replaces its environment with a fixed minimal one
 (`PATH=/usr/sbin:/usr/bin:/sbin:/bin`, a C.UTF-8 locale, root's `HOME`) before any verb runs.
 
+Python compiles the script it is given on every run, and compiling the helper was more than half of
+each call's CPU. So install.sh places three root-owned files: `panel-helper` (the path the sudoers
+rule names, unchanged) holds `tools/panel_helper_entry.py`, a small entry under the same
+`#!/usr/bin/python3 -I`; `panel-helper-code.py` holds `tools/panel-helper` byte for byte; and
+`panel-helper-code.pyc` holds that code's bytecode, compiled by root at install time as a
+checked-hash pyc (PEP 552). The entry reads nothing from its environment or arguments. It uses the
+bytecode only when every directory from `/` down and both files are owned by root with no group or
+other write bit and are not symbolic links (checked through open file descriptors), and the pyc's
+magic number is this Python's and its source hash matches the code file; in every other case it
+compiles the code file, as the helper ran before. The hash only tells a stale pyc from a current one;
+the ownership test is what keeps out a planted one, as it keeps out a changed helper. Where the split
+cannot be placed, install.sh puts the helper whole at `panel-helper` as before.
+
 It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management, the sshd port
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
