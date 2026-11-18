@@ -5880,8 +5880,9 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # its change and its switch (panel owner only, the password confirmed in each change request; root_cron.py).
 # 312, was 307: panel/routes/addons.py's Add-ons tab: its status, install, start/stop, remove and log
 # (MANAGE_ADDONS and server access; install and remove with step-up).
-check("register_routes: every one of the 312 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 312,
+# 314, was 312: panel/routes/addons.py's update and B3 settings (MANAGE_ADDONS and server access, step-up).
+check("register_routes: every one of the 314 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 314,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

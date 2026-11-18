@@ -333,7 +333,7 @@ def _guard_and_logs253(ids):
     check("logs: the server's database passwords are masked", _DBV253 not in log.get("log", "x")
           and "Password=" in log.get("log", ""), repr(log)[:200])
     st = _p9_client(P9_ADMIN).get("/api/server/%d/addons" % sid).get_json(silent=True) or {}
-    a = (st.get("addons") or [{}])[0]
+    a = next((x for x in st.get("addons") or [] if x.get("id") == "iw4madmin"), {})
     eq("status: the installed add-on, its state and port, read in one call", (a.get("installed"), a.get("state"), a.get("port")),
        (True, "active", 21001))
 
