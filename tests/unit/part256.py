@@ -12,20 +12,39 @@
    accounts that are gone are deleted too, and nothing else is.
 5. The update card for a checkout that is not on the branch it follows (a branch install): nothing is
    offered when the checkout already holds the branch's tip.
+7. An add-on install on the panel's own host: the account is put in the game group (gameuser-group,
+   with its own refusals) before addon-account-prepare, which readies only a member; the helper's,
+   apt's and systemctl's own words follow the sentence of a step that failed, in the row and the audit.
+8. A line added to a game's config whose last line has no newline (LinuxGSM's own cod2 cfg ends that way)
+   starts on a line of its own: the instance cfg's startparameters, an ini key, and the persistent-bans
+   exec lines (that one's shell run under bash).
+6. The Add-ons tab when an add-on needs a database and the server has none free: the list route says
+   whether the host has a database server (from what the panel stored, no host call), and the tab's
+   script, run whole in node over a small DOM, shows Install disabled with the reason beside it and a
+   button that opens the Databases tab as the section nav does.
 
 HOW IT RUNS. Host calls go through part12's seams with its transport tripwire armed; the shells run
 under bash in a throwaway folder. The update card runs the real code over a scratch git history.
 """
+import json as _json256
 import os
 import shlex as _shlex256
 import shutil as _shutil256
 import subprocess as _sp256  # nosec B404 - bash and git on this part's own throwaway files
 import tempfile as _tf256
+import time as _time256
 from types import SimpleNamespace as _NS256
 
-from unit.part01 import check, eq
+from unit.part01 import _root, check, eq
 from unit.part05 import _helper as _h256
-from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_ms, _p9_patch_sm, _p9_restore_all, _p9_sh
+from unit.part12 import (P9_ADMIN, P9_HOST, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
+                         _p9_delete_server, _p9_drain, _p9_ms, _p9_new_server, _p9_patch, _p9_patch_sm,
+                         _p9_restore_all, _p9_sh)
+from unit.part255 import _host255, _probe255
+from panel.db.models import GameDatabase as _GD256, db as _db256
+from panel.ops.ssh_manager import files as _files256, game as _game256
+from panel.routes import addons as _ra256, databases as _rdb256, workshop as _ws256
+from panel.services import cod_mods as _codm256
 from panel.core import i18n as _i18n256
 from panel.ops import system_ops as _so256
 from panel.ops.ssh_manager import hosts as _hosts256
@@ -78,8 +97,14 @@ def _home256(tag):
         fh.write('#!/bin/bash\ngameservername="%s"\nH=%s\n'
                  'if [ "$1" = details ]; then echo "Status: STOPPED"; echo "Server IP: 0.0.0.0:28960"; exit 0; fi\n'
                  'n=$(cat "$H/count" 2>/dev/null || echo 0); echo $((n + 1)) > "$H/count"\n'
+                 # LinuxGSM downloads only a missing file and re-checks one it has (fn_fetch_file).
+                 'if [ -e "$H/lgsm/tmp/%s" ]; then cat "$H/sumfail"; exit 1; fi\n'
                  'cat "$H/out.$n" 2>/dev/null; if [ -f "$H/exe.$n" ]; then : > "$H/serverfiles/codwaw_lnxded"; fi\n'
-                 'exit "$(cat "$H/rc.$n" 2>/dev/null || echo 0)"\n' % (_SELF256, _shlex256.quote(home)))
+                 'if [ -f "$H/cut.$n" ]; then echo part > "$H/lgsm/tmp/%s"; fi\n'
+                 'exit "$(cat "$H/rc.$n" 2>/dev/null || echo 0)"\n'
+                 % (_SELF256, _shlex256.quote(home), _ARCHIVE256, _ARCHIVE256))
+    with open(os.path.join(home, "sumfail"), "w", encoding="utf-8") as fh:
+        fh.write(_SUM_OUT256)
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
     os.chmod(os.path.join(home, _SELF256), 0o700)  # nosec B103 - the stand-in script, owner only
     _cfg256(home, 'systemdir="${serverfiles}"\nexecutabledir="${systemdir}"\nexecutable="./codwaw_lnxded"\n')
@@ -137,8 +162,13 @@ def _installed256():
 
 # ── 3. step 4 of the install ────────────────────────────────────────────────────────────────────
 def _scenario256(home, steps):
-    """Write the stand-in's answers: steps = [(output, exit status, makes the executable)] per download."""
-    for n, (out, rc, exe) in enumerate(steps):
+    """Write the stand-in's answers: steps = [(output, exit status, makes the executable[, cut off])] per download.
+
+    A download cut off leaves its partial archive in lgsm/tmp, as LinuxGSM's curl -o does.
+    """
+    for n, (out, rc, exe, *cut) in enumerate(steps):
+        if cut and cut[0]:
+            open(os.path.join(home, "cut.%d" % n), "w").close()
         with open(os.path.join(home, "out.%d" % n), "w", encoding="utf-8") as fh:
             fh.write(out)
         with open(os.path.join(home, "rc.%d" % n), "w", encoding="utf-8") as fh:
@@ -147,10 +177,15 @@ def _scenario256(home, steps):
             open(os.path.join(home, "exe.%d" % n), "w").close()
 
 
-def _step4_256(tag, steps):
-    """Run _install_game_files over the scenario -> (result, fails, downloads, wipes)."""
+def _step4_256(tag, steps, before=None):
+    """Run _install_game_files over the scenario -> (result, fails, downloads, wipes after a failure).
+
+    `before(home)` changes the home first (a partial archive left by an earlier try, a linked folder).
+    """
     home = _home256(tag)
     _scenario256(home, steps)
+    if before:
+        before(home)
     fails, cmds, shells = [], [], []
 
     def run_command(remote, cmd, timeout=30, sudo=False, **_k):
@@ -168,17 +203,38 @@ def _step4_256(tag, steps):
     return ok, fails, sum("auto-install" in c for c in cmds), sum("lgsm/tmp" in s for s in shells)
 
 
+def _linked256(home):
+    """Make lgsm/tmp a link to a folder outside it holding a file, and leave a file beside lgsm/tmp."""
+    outside = os.path.join(_TMP256, "linked-outside")
+    _shutil256.rmtree(outside, ignore_errors=True)
+    os.makedirs(outside)
+    open(os.path.join(outside, "precious"), "w").close()
+    open(os.path.join(home, "lgsm", "keep"), "w").close()
+    os.rmdir(os.path.join(home, "lgsm", "tmp"))
+    os.symlink(outside, os.path.join(home, "lgsm", "tmp"))
+
+
 def _step4_256_checks():
     ok, fails, downloads, wipes = _step4_256("sum2", [(_SUM_OUT256, 1, False)] * 3)
     check("install step 4: a download that fails LinuxGSM's checksum twice ends as a failed install with "
           "LinuxGSM's reason (file, its checksum, the expected one), retryable",
           ok is False and len(fails) == 1 and _WANT256 in fails[0][0] and _GOT256 in fails[0][0]
           and fails[0][2:] == (True, True), repr(fails))
-    eq("install step 4: ...after one more download, with LinuxGSM's cached file wiped before it",
+    eq("install step 4: ...after one more download (and LinuxGSM's download folder is emptied once it fails)",
        (downloads, wipes), (2, 1))
-    ok, fails, downloads, wipes = _step4_256("sum1", [(_SUM_OUT256, 1, False), ("Install Complete!\n", 0, True)])
-    eq("install step 4: a checksum failure the second download gets past installs", (ok, fails, downloads, wipes),
-       (True, [], 2, 1))
+    ok, fails, downloads, wipes = _step4_256("sum1", [("downloading file ... FAIL\n__x\n", 1, False, True),
+                                                      ("Install Complete!\n", 0, True)])
+    eq("install step 4: a download cut off part way (its partial archive left in lgsm/tmp) installs on the next "
+       "download, which starts with lgsm/tmp emptied", (ok, fails, downloads, wipes), (True, [], 2, 0))
+    ok, fails, downloads, _w = _step4_256("stale", [("Install Complete!\n", 0, True)],
+                                          lambda h: open(os.path.join(h, "lgsm", "tmp", _ARCHIVE256), "w").close())
+    eq("install step 4: a Retry over a partial archive an earlier install left installs at its first download",
+       (ok, fails, downloads), (True, [], 1))
+    ok, _f, _d, _w = _step4_256("linked", [("", 0, False)] * 3, _linked256)
+    eq("install step 4: nothing outside lgsm/tmp is deleted, not through a linked lgsm/tmp either (the folder's "
+       "files, and what a link points at, stay)",
+       (ok, sorted(os.listdir(os.path.join(_TMP256, "linked-outside"))),
+        os.path.exists(os.path.join(_TMP256, "linked", "lgsm", "keep"))), (False, ["precious"], True))
     ok, fails, downloads, _w = _step4_256("cfgfail", [(_CFG_FAIL256, 1, False)] * 3)
     check("install step 4: another LinuxGSM failure is reported with LinuxGSM's own FAIL line, after three tries",
           ok is False and downloads == 3 and len(fails) == 1 and "LinuxGSM stopped with this failure" in fails[0][0]
@@ -316,6 +372,231 @@ def _update256():
        (newer.get("update_available"), newer.get("target_sha") == rel["R8"]), (True, True))
 
 
+# ── 6. the Add-ons tab with no free database ────────────────────────────────────────────────────
+def _db_host_route256():
+    sid = _p9_new_server(P9_HOST, "cod2p256", "cod2", 28966, name="p256-cod2")
+    _p9_patch_sm("shell_as_game_user", lambda *a, **k: ("os=24.04\npodman=podman version 4.9.3\n", "", 0))
+    _p9_patch(_ra256, "game_account_write_refusal", lambda remote, user, reading=False: None)
+    saved = _rdb256._PROBES.pop(P9_HOST, None)
+    got = []
+    try:
+        a = _p9_client(P9_ADMIN)
+        got.append(a.get("/api/server/%d/addons" % sid).get_json().get("db_host"))
+        _rdb256._PROBES[P9_HOST] = (_time256.monotonic(), {"state": "none"})
+        got.append(a.get("/api/server/%d/addons" % sid).get_json().get("db_host"))
+        with _p9.app_context():
+            row = _GD256(remote_id=P9_HOST, game_server_id=sid, name="gs%d_b3" % sid, secret="")
+            _db256.session.add(row)
+            _db256.session.commit()
+        got.append(a.get("/api/server/%d/addons" % sid).get_json().get("db_host"))
+    finally:
+        _rdb256._PROBES.pop(P9_HOST, None)
+        if saved is not None:
+            _rdb256._PROBES[P9_HOST] = saved
+        with _p9.app_context():
+            _GD256.query.filter_by(game_server_id=sid).delete()
+            _db256.session.commit()
+        _p9_delete_server(sid)
+    eq("add-ons list: 'none' only when the Databases tab's last look found no database server on the host; not "
+       "when it has not looked, nor once the server has a free database", got, ["", "none", ""])
+
+
+_HARNESS256 = r"""'use strict';
+const fs = require('fs'), vm = require('vm');
+const cfg = JSON.parse(fs.readFileSync(0, 'utf8'));
+const clicks = [];
+function El(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.className = '';
+  this._text = ''; this.style = {}; this.disabled = false; this.id = ''; }
+El.prototype.appendChild = function (c) { this.children.push(c); return c; };
+Object.defineProperty(El.prototype, 'textContent', {
+  get() { return this._text + this.children.map(function (c) { return c.textContent; }).join(''); },
+  set(v) { this._text = String(v); this.children = []; }});
+El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); if (k === 'id') this.id = String(v); };
+El.prototype.getAttribute = function (k) { return k in this.attrs ? this.attrs[k] : null; };
+El.prototype.click = function () { clicks.push(this.getAttribute('data-sfsub-btn')); };
+function walk(e, out) { out.push(e); (e.children || []).forEach(function (c) { if (c instanceof El) walk(c, out); }); return out; }
+const fixed = {};
+['ad-card', 'ad-list', 'ad-loading', 'ad-runtime', 'ad-msg'].forEach(function (id) { fixed[id] = new El('div'); fixed[id].id = id; });
+const nav = new El('button'); nav.setAttribute('data-sfsub-btn', 'databases');
+const document = {
+  createElement: function (t) { return new El(t); },
+  createTextNode: function (t) { return {textContent: String(t)}; },
+  getElementById: function (id) { return fixed[id] || walk(fixed['ad-list'], []).filter(function (e) { return e.id === id; })[0] || null; },
+  querySelector: function (sel) { return sel === '[data-sfsub-btn="databases"]' && cfg.tab ? nav : null; },
+  addEventListener: function () {}};
+const timers = [], gets = (cfg.gets || [cfg.data]).slice();
+function answer(d) { return Promise.resolve({ok: true, json: function () { return Promise.resolve(d); }}); }
+const ctx = {document: document, location: {hash: ''}, MOUNT: '', serverId: 7, JSON: JSON, Promise: Promise, Number: Number,
+  setInterval: function (fn) { timers.push(fn); return timers.length; }, clearInterval: function () {}, Date: Date,
+  confirmDialog: function (o) { o.onConfirm(); },
+  fetch: function (url, opts) { return (opts && opts.method === 'POST') ? answer(cfg.post) : answer(gets.length > 1 ? gets.shift() : gets[0]); }};
+ctx.window = ctx; ctx.addEventListener = function () {};
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(cfg.src, 'utf8'), ctx);
+const ticks = function () { return new Promise(function (r) { setTimeout(r, 20); }); };
+const msg = function () { return {text: fixed['ad-msg'].textContent, cls: fixed['ad-msg'].className}; };
+if (cfg.flow === 'install') {
+  ctx.window.adLoad(true).then(function () { ctx.window.adInstall(cfg.install); return ticks(); }).then(function () {
+    const started = msg();
+    timers[0]();
+    return ticks().then(function () {
+      const errs = walk(fixed['ad-list'], []).filter(function (e) { return /text-danger/.test(e.className); });
+      process.stdout.write(JSON.stringify({started: started, ended: msg(), polls: timers.length,
+        row_error: errs.map(function (e) { return e.textContent; })}));
+    });
+  }).catch(function (e) { process.stdout.write(JSON.stringify({error: String(e && e.stack || e)})); });
+} else ctx.window.adLoad(true).then(function () {
+  const all = walk(fixed['ad-list'], []);
+  const act = function (name) { return all.filter(function (e) { return e.getAttribute('data-action') === name; })[0]; };
+  const inst = act('adInstall'), open = act('adOpenDatabases');
+  const why = inst && all.filter(function (e) { return e.id === inst.getAttribute('aria-describedby'); })[0];
+  const opened = open ? ctx.window.adOpenDatabases() : null;
+  process.stdout.write(JSON.stringify({install: !!inst, disabled: !!(inst && inst.disabled), why: why ? why.textContent : null,
+    open: !!open, opened: opened, clicks: clicks, select: all.some(function (e) { return e.tagName === 'SELECT'; })}));
+}).catch(function (e) { process.stdout.write(JSON.stringify({error: String(e && e.stack || e)})); });
+"""
+
+
+def _tab_js256(db_host, tab, databases=()):
+    """The add-ons tab's script, run whole in node over a B3 row -> what the row shows."""
+    node = _shutil256.which("node")
+    if not node:
+        return {"error": "node is not installed"}
+    path = os.path.join(_TMP256, "harness.js")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(_HARNESS256)
+    row = {"id": "b3", "name": "B3", "version": "1.12", "needs_database": True, "installed": False,
+           "installing": False, "legacy": False, "geolocation_option": False}
+    cfg = {"src": os.path.join(_root, "panel", "static", "js", "server_addons.js"), "tab": tab,
+           "data": {"success": True, "addons": [row], "databases": list(databases), "db_host": db_host}}
+    r = _sp256.run([node, path], input=_json256.dumps(cfg),  # nosec B603 - node on this part's harness
+                   capture_output=True, text=True, timeout=120, check=False)
+    try:
+        return _json256.loads(r.stdout)
+    except ValueError:
+        return {"error": (r.stdout + r.stderr)[-800:]}
+
+
+def _install_msg_js256():
+    """The tab's script over an install that starts and then fails -> its message line before and after."""
+    node = _shutil256.which("node")
+    if not node:
+        return {"error": "node is not installed"}
+    path = os.path.join(_TMP256, "harness.js")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(_HARNESS256)
+    row = {"id": "iw4madmin", "name": "IW4MAdmin", "version": "2026.1", "needs_database": False, "installed": False,
+           "legacy": False, "geolocation_option": False}
+    busy, failed = dict(row, installing=True), dict(row, installing=False, error="Couldn't ready the account.")
+    cfg = {"src": os.path.join(_root, "panel", "static", "js", "server_addons.js"), "tab": True, "flow": "install",
+           "install": "iw4madmin", "post": {"success": True, "started": True, "message": "Installing the add-on."},
+           "gets": [{"success": True, "addons": [row], "databases": []},
+                    {"success": True, "addons": [busy], "databases": []},
+                    {"success": True, "addons": [failed], "databases": []}]}
+    r = _sp256.run([node, path], input=_json256.dumps(cfg),  # nosec B603 - node on this part's harness
+                   capture_output=True, text=True, timeout=120, check=False)
+    try:
+        return _json256.loads(r.stdout)
+    except ValueError:
+        return {"error": (r.stdout + r.stderr)[-800:]}
+
+
+def _tab256():
+    none = _tab_js256("none", True)
+    check("add-ons tab: with no free database, Install still shows, disabled, with the reason beside it (named by "
+          "aria-describedby), and a host with no database server says so",
+          none.get("install") and none.get("disabled") and "no database server yet" in (none.get("why") or ""),
+          repr(none))
+    eq("add-ons tab: ...an Open Databases button opens the Databases tab by its own section button",
+       (none.get("open"), none.get("opened"), none.get("clicks")), (True, True, ["databases"]))
+    plain = _tab_js256("", False)
+    eq("add-ons tab: ...otherwise the reason asks for a database, and a viewer without the Databases tab gets no button",
+       (plain.get("disabled"), (plain.get("why") or "").startswith("Add a database in the Databases tab first"),
+        plain.get("open")), (True, True, False))
+    free = _tab_js256("", True, [{"id": 1, "name": "gs7_b3", "used_by": ""}])
+    eq("add-ons tab: ...with a free database Install is enabled, with the database select and no reason (control)",
+       (free.get("install"), free.get("disabled"), free.get("why"), free.get("open"), free.get("select")),
+       (True, False, None, False, True))
+    flow = _install_msg_js256()
+    check("add-ons tab: the green 'Installing the add-on' line is cleared once the install ends in a failure, which "
+          "the row shows in red",
+          "text-success" in (flow.get("started") or {}).get("cls", "") and (flow.get("ended") or {}).get("text") == ""
+          and flow.get("row_error") == ["Couldn't ready the account."], repr(flow))
+
+
+# ── 7. an add-on install on the panel's own host: enrolled, then readied ────────────────────────
+def _install_verbs256(sid, answers, podman=True):
+    """Install IW4MAdmin through the route with `answers` {verb: (out, err, rc)} -> (verbs run, audit, row error)."""
+    probe = _probe255(extra="ports= 21004\n")
+    calls = _host255(probe if podman else probe.replace("podman=podman version 4.9.3", "podman="))
+    _p9_patch_sm("run_privileged", lambda server, verb, args=(), **_k: calls.append(("verb", verb, list(args)))
+                 or answers.get(verb, ("", "", 0)))
+    a = _p9_client(P9_ADMIN)
+    a.post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
+    _p9_drain()
+    row = next((r for r in a.get("/api/server/%d/addons" % sid).get_json().get("addons") or []
+                if r.get("id") == "iw4madmin"), {})
+    with _ra256._JOBS_LOCK:
+        _ra256._JOBS.pop((sid, "iw4madmin"), None)
+    return [c[1] for c in calls if c[0] == "verb"], _p9_audit("addon_install").detail, row.get("error") or ""
+
+
+def _enrol256():
+    sid = _p9_new_server(P9_LOCAL, "cod4p256", "cod4", 28967, name="p256-cod4")
+    try:
+        verbs, _detail, _err = _install_verbs256(sid, {})
+        pre = [v for v in verbs if v in ("gameuser-group", "addon-account-prepare")]
+        eq("add-on install (panel host): the account is enrolled in the game group, then readied, in that order",
+           pre, ["gameuser-group", "addon-account-prepare"])
+        refusal = "refusing to enrol cod4p256 in lgsmpanel-games: it can reach root"
+        verbs, detail, err = _install_verbs256(sid, {"gameuser-group": ("", refusal + "\n", 1)})
+        check("add-on install (panel host): an enrolment the helper refuses stops before the account is readied, "
+              "and its words follow the sentence in the audit row and on the row",
+              "addon-account-prepare" not in verbs and refusal in detail and refusal in err, repr((verbs, detail, err)))
+        linger = "Could not enable linger: Access denied"
+        _v, detail, err = _install_verbs256(sid, {"addon-account-prepare": ("subids=present\n", "\x1b[31m%s\x1b[0m\n"
+                                                                            % linger, 1)})
+        check("add-on install: a prepare that fails shows the helper's own reason (colours stripped) after the "
+              "sentence, in the audit row and on the row",
+              "subordinate ids and lingering). The host said: " + linger in detail and linger in err, repr((detail, err)))
+        _v, detail, err = _install_verbs256(sid, {"apt-install": ("", "E: Unable to locate package podman\n", 100)},
+                                              podman=False)
+        check("add-on install: apt's own reason follows 'Couldn't install Podman'",
+              "Couldn't install Podman on this host. The host said: E: Unable to locate package podman" in detail
+              and "Unable to locate package podman" in err, repr((detail, err)))
+    finally:
+        _p9_delete_server(sid)
+
+
+# ── 8. lines added to a config file with no newline at its end ──────────────────────────────────
+def _bans_cfg256():
+    """Run ensure_persistent_bans' shell over a Source cfg that ends without a newline -> the file after."""
+    home = os.path.join(_TMP256, "bans")
+    cfgdir = os.path.join(home, "serverfiles", "csgo", "cfg")
+    os.makedirs(cfgdir, exist_ok=True)
+    path = os.path.join(cfgdir, "csgoserver.cfg")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('hostname "p256"')
+    _p9_patch(_files256, "lgsm_get_values", lambda server, user, selfname, keys: {"servercfg": "${selfname}.cfg"})
+    _p9_patch_sm("shell_as_game_user", lambda server, user, sh, timeout=30, selfname=None, **_k: _sp256.run(
+        ["bash", "-c", sh.replace("/home/" + user, home)], capture_output=True, text=True, timeout=30,  # nosec B603 B607
+        check=False) and ("", "", 0))
+    ok = _game256.ensure_persistent_bans(_NS256(), "csp256", "csgoserver")
+    with open(path, encoding="utf-8") as fh:
+        return ok, fh.read()
+
+
+def _newlines256():
+    eq("config appends: the instance cfg's startparameters line is added on a line of its own",
+       _codm256._with_line('fn_parms="x"', "+set fs_game mods/x"), 'fn_parms="x"\nstartparameters=+set fs_game mods/x\n')
+    eq("config appends: ...as is a key added to an ini that ends without a newline",
+       _ws256.ini_set("[s]\na=1", {"b": "2"}), "[s]\na=1\nb=2\n")
+    ok, text = _bans_cfg256()
+    eq("config appends: ...and the persistent-bans exec lines (the shell, run under bash), leaving the last line whole",
+       (ok, text.splitlines()), (True, ['hostname "p256"', "// panel: load persistent bans on every (re)start",
+                                       "exec banned_user.cfg", "exec banned_ip.cfg"]))
+
+
 try:
     _outcome256()
     _p9_arm(who="part256")
@@ -323,8 +604,18 @@ try:
     _p9_restore_all()
     _p9_arm(who="part256")
     _step4_256_checks()
+    _p9_restore_all()
+    _p9_arm(who="part256")
+    _db_host_route256()
+    _p9_restore_all()
+    _p9_arm(who="part256")
+    _enrol256()
+    _p9_restore_all()
+    _p9_arm(who="part256")
+    _newlines256()
 finally:
     _p9_restore_all()
+_tab256()
 _journal256()
 _update256()
 check("part256: no check reached a real host", len(_P9_TRIPPED) == _trips256, repr(_P9_TRIPPED[_trips256:][:4]))
