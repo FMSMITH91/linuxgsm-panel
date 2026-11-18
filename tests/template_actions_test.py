@@ -4900,7 +4900,8 @@ check("t(nums.length > 1 ? 'Remove this rule (rules %s)' : 'Remove this rule (ru
 _fw_del = re.sub(r"//[^\n]*", "", _between(_fw_js, "function deleteGroup(", "\nfunction "))
 check(bool(_fw_del),
       "firewall delete: deleteGroup is where these checks think it is", "not found")
-_fw_next = _between(_fw_del, "(function next() {", "/firewall/delete-rule")
+# `next` is a declaration the step-up callback calls (the spinner goes up once the step-up passes).
+_fw_next = _between(_fw_del, "function next() {", "/firewall/delete-rule")
 check("'/api/remote/' + remoteId + '/firewall')" in _fw_next and "/firewall/delete-rule" in _fw_del,
       "firewall delete: the rules are re-read before EVERY delete, not once",
       "no fresh read between the recursion point and the POST: %r" % _fw_next[:160])
