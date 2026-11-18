@@ -1,0 +1,4 @@
+{
+  "LinuxGSM's download of {file} failed its {kind} check twice: the file it got has the checksum {got}, and LinuxGSM expects {want}. LinuxGSM stopped before installing any game files. Try again later; if it keeps failing, the file on LinuxGSM's download server or the checksum in LinuxGSM needs a fix from LinuxGSM.": "La descarga de {file} por LinuxGSM falló dos veces su comprobación {kind}: el archivo recibido tiene la suma de comprobación {got} y LinuxGSM espera {want}. LinuxGSM se detuvo antes de instalar ningún archivo del juego. Inténtalo de nuevo más tarde; si sigue fallando, el archivo del servidor de descargas de LinuxGSM o la suma de comprobación de LinuxGSM necesita una corrección de LinuxGSM.",
+  "Game files didn't install — LinuxGSM stopped with this failure": "Los archivos del juego no se instalaron — LinuxGSM se detuvo con este fallo"
+}

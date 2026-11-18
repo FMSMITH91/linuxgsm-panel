@@ -1608,11 +1608,36 @@ _R30_NOT_INSTALLED = re.compile(r"not installed|please run (?:(?!please run )[^\
 _R30_FILES_MISSING = re.compile(r"serverfiles(?:(?!serverfiles)[^\n])*(missing|not found)|no such file")
 
 
+# Whether the server's executable is where LinuxGSM's start looks for it (check_executable.sh:
+# "${executabledir}/$(basename "${executable}")"), printed as the game account after `details`. The
+# two values come from the instance's config files, sourced in LinuxGSM's order in a subshell, as
+# LinuxGSM itself sources them on every command (executable can be a $(...) and executabledir is
+# usually "${systemdir}/..."); the config folder is the script's own gameservername (linuxgsm.sh).
+_EXE_MARK = "__LGSM_EXE__="
+_EXE_MARK_RE = re.compile(r"__LGSM_EXE__=(yes|no|unknown)")
+
+
+def _exe_check_sh(short_name, lgsm_name):
+    """Shell printing _EXE_MARK and yes / no / unknown for the server's executable (see above)."""
+    home = f"/home/{short_name}"
+    cfgs = " ".join(f"{name}.cfg" for name in ("_default", "common", "secrets-common", lgsm_name,
+                                                 f"secrets-{lgsm_name}"))
+    return (f"( g=$(sed -n 's/^gameservername=\"\\([A-Za-z0-9_-]*\\)\"$/\\1/p' {home}/{lgsm_name} | head -n 1); "
+            f"d={home}/lgsm/config-lgsm/$g; "
+            f"if [ -z \"$g\" ] || [ ! -f \"$d/_default.cfg\" ]; then echo {_EXE_MARK}unknown; exit 0; fi; "
+            f"rootdir={home}; selfname={lgsm_name}; lgsmdir={home}/lgsm; serverfiles={home}/serverfiles; "
+            f"for f in {cfgs}; do if [ -f \"$d/$f\" ]; then . \"$d/$f\"; fi; done >/dev/null 2>&1 </dev/null; "
+            f"if [ -z \"$executable\" ] || [ -z \"$executabledir\" ]; then echo {_EXE_MARK}unknown; "
+            f"elif [ -f \"$executabledir/${{executable##*/}}\" ]; then echo {_EXE_MARK}yes; "
+            f"else echo {_EXE_MARK}no; fi )")
+
+
 def _looks_installed(app, remote, short_name, lgsm_name):
     """Best-effort check of whether a game server is actually installed on the remote.
 
     Used to reconcile an install whose live progress was lost (e.g. the panel restarted
-    mid-install). Returns True (installed), False (clearly not), or None (couldn't tell).
+    mid-install), and by the install's own step 4. Returns True (installed), False (clearly
+    not), or None (couldn't tell).
     """
     # Both names, before either read: the second read names only the account, so a bad SCRIPT name
     # would otherwise still send it. And a refusal is "couldn't tell", never "not installed" —
@@ -1622,24 +1647,38 @@ def _looks_installed(app, remote, short_name, lgsm_name):
         return None
     try:
         out, err, _ = _sm.shell_as_game_user(
-            remote, short_name, f"cd /home/{short_name} && ./{lgsm_name} details 2>&1",
+            remote, short_name,
+            f"cd /home/{short_name} && ./{lgsm_name} details 2>&1; {_exe_check_sh(short_name, lgsm_name)}",
             timeout=30, selfname=lgsm_name)
-        low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
-        if re.search(_R30_NOT_INSTALLED, low):
-            return False
-        # The positive answer before the WEAK negatives: `details` that printed its Status / Server
-        # IP block ran past LinuxGSM's own install checks, and a game whose config does not exist
-        # until its first start can print "No such file" in the same output. Tested first, that
-        # line read as "not installed", and the install's step 4 wiped lgsm/tmp and re-downloaded.
-        if "status:" in low or "server ip:" in low:
-            return True
-        if re.search(_R30_FILES_MISSING, low):
-            return False
-        # Fallback: real content in serverfiles means the download completed.
-        return _serverfiles_verdict(remote, short_name)
+        return _installed_verdict(remote, short_name, out, err)
     except Exception:
         app.logger.debug("install reconcile check failed", exc_info=True)
         return None
+
+
+def _installed_verdict(remote, short_name, out, err):
+    """_looks_installed's answer from what its read printed (`details`, then the executable's mark)."""
+    exe = _EXE_MARK_RE.findall(out or "")
+    low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
+    if re.search(_R30_NOT_INSTALLED, low):
+        return False
+    # The executable LinuxGSM starts decides when it was read. `details` skips LinuxGSM's own
+    # serverfiles and executable checks (check.sh runs neither for DETAILS), so it prints its
+    # Status block for an account whose download failed: a codwaw install whose archive failed
+    # LinuxGSM's MD5 check had only the serverfiles/Logs folder LinuxGSM makes first, and was
+    # reported installed. LinuxGSM's own start refuses that server ("executable was not found").
+    if exe and exe[-1] != "unknown":
+        return exe[-1] == "yes"
+    # The positive answer before the WEAK negatives: `details` that printed its Status / Server
+    # IP block ran past LinuxGSM's own install checks, and a game whose config does not exist
+    # until its first start can print "No such file" in the same output. Tested first, that
+    # line read as "not installed", and the install's step 4 wiped lgsm/tmp and re-downloaded.
+    if "status:" in low or "server ip:" in low:
+        return True
+    if re.search(_R30_FILES_MISSING, low):
+        return False
+    # Fallback: real content in serverfiles means the download completed.
+    return _serverfiles_verdict(remote, short_name)
 
 
 def _notify_servers_changed(app):
