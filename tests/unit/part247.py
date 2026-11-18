@@ -674,11 +674,12 @@ def _s247_debug_labels():
 def _s247_world_reset_lines():
     texts = ['executabledir="/srv/a"\nother="%s"\n' % v for v in
              ("${y:executabledir=2:1}", "$[executabledir=2]", "${A[executabledir=1]}", "executabledir=2",
+              "${A[++executabledir]}", "$[--executabledir]",
               "-executabledir ${executabledir}", "$executabledir/x")]
     got = [_wr247.cfg_values([t], ["executabledir"])[0] for t in texts]
     eq("world reset: a line that can set the key by arithmetic (an offset, $[ ], a subscript) or holds `key=` text "
        "is refused; one that only names or expands it is read (control)", got,
-       [None, None, None, None, {"executabledir": "/srv/a"}, {"executabledir": "/srv/a"}])
+       [None] * 6 + [{"executabledir": "/srv/a"}] * 2)
 
 
 def _cleanup247():
