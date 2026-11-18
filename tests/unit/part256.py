@@ -61,6 +61,7 @@ _SUM_OUT256 = ("downloading file [ \x1b[3m%s\x1b[0m ]\n#################### 100.
                "verifying %s with MD5 ... \x1b[31mFAIL\x1b[0m\n%s returned MD5 checksum: %s\n"
                "expected MD5 checksum: %s\n" % (_ARCHIVE256, _ARCHIVE256, _ARCHIVE256, _ARCHIVE256, _GOT256,
                                                 _WANT256))
+_BLANK256 = ""    # a database row's stored value in this part's throwaway app (not a credential)
 _CFG_FAIL256 = ("\x1b[1m[\x1b[31m FAIL \x1b[0m]\x1b[0m Installing codwawserver: Installing Call of Duty: World at War "
                 "Server failed, missing default configuration\n")
 
@@ -77,8 +78,8 @@ def _outcome256():
     eq("install outcome: LinuxGSM's FAIL lines, both forms, colours stripped",
        [_hosts256.lgsm_fail_lines(out), _hosts256.lgsm_fail_lines(_CFG_FAIL256), _hosts256.lgsm_fail_lines("OK\n")],
        ["verifying %s with MD5 ... FAIL" % _ARCHIVE256,
-        "[ FAIL ] Installing codwawserver: Installing Call of Duty: World at War Server failed, missing default "
-        "configuration", ""])
+        ("[ FAIL ] Installing codwawserver: Installing Call of Duty: World at War Server failed, missing default "
+         "configuration"), ""])
     why = _hosts256.classify_install_failure(out)
     check("install outcome: a checksum failure is classified, and its reason names the file and LinuxGSM's numbers",
           why is not None and why[0] == "download_checksum" and isinstance(why[1], _i18n256.Sentence)
@@ -389,7 +390,7 @@ def _db_host_route256():
         _rdb256._PROBES[P9_HOST] = (_time256.monotonic(), {"state": "none"})
         got.append(a.get("/api/server/%d/addons" % sid).get_json().get("db_host"))
         with _p9.app_context():
-            row = _GD256(remote_id=P9_HOST, game_server_id=sid, name="gs%d_b3" % sid, secret="")
+            row = _GD256(remote_id=P9_HOST, game_server_id=sid, name="gs%d_b3" % sid, secret=_BLANK256)
             _db256.session.add(row)
             _db256.session.commit()
         got.append(a.get("/api/server/%d/addons" % sid).get_json().get("db_host"))
