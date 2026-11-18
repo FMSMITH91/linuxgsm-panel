@@ -5797,6 +5797,11 @@ ADDON_MANAGER_STOP_TIMEOUT = 75
 ADDON_FORGET_MIN_UID = 1000
 JOURNAL_ROOTS = ("/var/log/journal", "/run/log/journal")
 ADDON_TMP_DIRS = ("/tmp/podman-run-%d", "/tmp/containers-user-%d")  # nosec B108 - Podman's own paths, only deleted
+# What every game account leaves in /tmp, removed when it is uninstalled: tmux's socket folder (by uid:
+# LinuxGSM runs each server in tmux) and the JVM's perf-data folder (by name: Minecraft, Project
+# Zomboid). useradd hands a deleted account's uid to the next one, and tmux trusts a socket folder its
+# uid owns, so the next account would inherit the old one.
+ACCOUNT_TMP_DIRS = ("/tmp/tmux-%(uid)d", "/tmp/hsperfdata_%(user)s")  # nosec B108 - only deleted, checked first
 _USER_JOURNAL_RE = re.compile(r"user-(\d+)(?:@[0-9a-f]+(?:-[0-9a-f]+){1,2})?\.journal~?")
 
 
@@ -5810,7 +5815,8 @@ def do_addon_account_release(args, content):
     `systemctl reset-failed` clears a failure either way. Last, Podman's /tmp folders go, and with
     `forget` (an uninstall: the account itself is about to go) its user journal too
     (_addon_forget_account); with `keep` (its last add-on was removed, the account stays) the
-    journal is left alone, since it holds the account's own history too. The account is validated
+    journal is left alone, since it holds the account's own history too; `forget` also removes its
+    tmux and JVM folders in /tmp (_forget_account_tmp). The account is validated
     as for the other destroy verbs (never the panel's own account). Prints linger=off,
     manager=stopped or manager=stop-failed, then forgotten=<count>; exits with disable-linger's
     status.
@@ -5837,7 +5843,8 @@ def do_addon_account_release(args, content):
     subprocess.run([resolve("systemctl"), "reset-failed", unit],         # nosec B603 - fixed argv
                    shell=False, capture_output=True, timeout=30, env=_clean_env())
     sys.stdout.write("manager=%s\n" % ("stopped" if rc == 0 else "stop-failed"))
-    sys.stdout.write("forgotten=%d\n" % _addon_forget_account(uid, forget))
+    sys.stdout.write("forgotten=%d\n" % (_addon_forget_account(uid, forget)
+                                         + (_forget_account_tmp(user, uid) if forget else 0)))
     return 0
 
 
@@ -5953,6 +5960,26 @@ def _forget_podman_tmp(uid):
     """Delete Podman's /tmp folders of the uid, when each is a real folder it owns; how many went."""
     gone = 0
     for path in (t % uid for t in ADDON_TMP_DIRS):
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(st.st_mode) and st.st_uid == uid:
+            shutil.rmtree(path, ignore_errors=True)
+            gone += 1
+    return gone
+
+
+def _forget_account_tmp(user, uid):
+    """Delete the account's tmux and JVM folders in /tmp (ACCOUNT_TMP_DIRS); how many went.
+
+    Each only when it is a real folder (lstat: never a link followed) owned by the uid, and nothing
+    for a uid below ADDON_FORGET_MIN_UID. shutil.rmtree does not follow links inside it.
+    """
+    if not isinstance(uid, int) or uid < ADDON_FORGET_MIN_UID:
+        return 0
+    gone = 0
+    for path in (t % {"uid": uid, "user": user} for t in ACCOUNT_TMP_DIRS):
         try:
             st = os.lstat(path)
         except FileNotFoundError:
