@@ -52,6 +52,7 @@ import re
 import shlex
 
 from panel import REPO_ROOT
+from panel.security.journal_forget_sh import orphan_journals_sh
 
 # Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
 # rewritten by `git pull` on every self-update, so a helper living there would be panel-writable
@@ -1860,24 +1861,6 @@ ADDON_MANAGER_STOP_TIMEOUT = 75
 ADDON_FORGET_MIN_UID = 1000
 
 
-# After a rotation, the active user journals journald re-created for accounts that are gone (the helper's
-# _orphan_user_journals, as shell): a file named user-<uid>.journal, never an archived one, for a uid of at
-# least ADDON_FORGET_MIN_UID with no passwd entry and no process (real, effective, saved or fs uid), whose
-# header holds journald's signature and counts no entries (n_entries, the 8 bytes at offset 152, all zero:
-# systemd.io JOURNAL_FILE_FORMAT). journald keeps every user journal it opened until it restarts and re-creates
-# it, empty, at each rotation (journald-manager.c manager_rotate), so a later uninstall's rotation brought
-# back an empty file for an account forgotten before.
-_ORPHAN_JOURNALS_REMOTE = (
-    "if [ -n \"$j\" ]; then for f in /var/log/journal/*/user-*.journal /run/log/journal/*/user-*.journal; do "
-    "{ [ -f \"$f\" ] && [ ! -L \"$f\" ]; } || continue; o=${f##*/user-}; o=${o%.journal}; "
-    "case \"$o\" in ''|*[!0-9]*) continue ;; esac; [ \"$o\" -ge " + str(ADDON_FORGET_MIN_UID) + " ] || continue; "
-    "getent passwd \"$o\" >/dev/null && continue; [ \"$(head -c 8 -- \"$f\")\" = LPKSHHRH ] || continue; "
-    "[ \"$(head -c 160 -- \"$f\" | wc -c)\" -eq 160 ] || continue; "
-    "[ \"$(head -c 160 -- \"$f\" | tail -c 8 | tr -d '\\000' | wc -c)\" -eq 0 ] || continue; "
-    "awk -v u=\"$o\" '$1 == \"Uid:\" { for (i = 2; i <= 5; i++) if ($i == u) f = 1 } END { exit !f }' "
-    "/proc/[0-9]*/status 2>/dev/null && continue; rm -f -- \"$f\" && n=$((n + 1)); done; fi; ")
-
-
 def _addon_release_remote(a):
     """The remote form of addon-account-release: the helper's do_addon_account_release, as shell.
 
@@ -1893,7 +1876,7 @@ def _addon_release_remote(a):
               "for f in /var/log/journal/*/user-\"$uid\".journal /var/log/journal/*/user-\"$uid\"@*.journal* "
               "/run/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\"@*.journal*; do "
               "if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then rm -f -- \"$f\" && n=$((n + 1)); fi; done; "
-              + _ORPHAN_JOURNALS_REMOTE if a[1] == "forget" else "")
+              + orphan_journals_sh(ADDON_FORGET_MIN_UID) if a[1] == "forget" else "")
     return ("u=%s; uid=$(id -u \"$u\") || exit 1; loginctl disable-linger \"$u\" || exit 1; echo linger=off; "
             "if timeout %d systemctl stop \"user@$uid.service\"; then m=stopped; else m=stop-failed; fi; "
             "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\"; n=0; "

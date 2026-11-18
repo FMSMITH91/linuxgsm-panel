@@ -97,6 +97,8 @@ jobs:
               # ...and the key ring config.py imports.
               'panel/core/cred_keyring.py'
               'panel/security/privileged.py'
+              # ...and the remote journal clean-up shell privileged.py imports.
+              'panel/security/journal_forget_sh.py'
               'panel/db/models.py'
               'panel/ops/__init__.py'
               'panel/security/__init__.py'
