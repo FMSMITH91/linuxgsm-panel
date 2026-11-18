@@ -937,13 +937,20 @@ _post_update_scheme_hint() {
 # root/system-service install, this script runs as root but the checkout is owned
 # by the service user — git refuses that ("detected dubious ownership") unless we
 # operate as the owner. As root we can sudo -u <owner> without a password.
+#
+# gc.autoDetach=false: a command that leaves many loose objects starts `git gc --auto`, which by
+# default forks into the background and keeps deleting loose objects after git returns. The update's
+# next step (_chown_panel_tree's find -execdir chown) then walked .git/objects while gc removed what
+# it had listed, find exited non-zero on "No such file or directory", and the update rolled back
+# (deploy of 9b455f4b, 2026-11-18). In the foreground, gc finishes before this function returns.
+# Newer git runs `git maintenance run --auto` instead, which reads maintenance.autoDetach first.
 _gitc() {
     local owner=""
     [[ -d "${PANEL_DIR}/.git" ]] && owner="$(stat -c '%U' "${PANEL_DIR}/.git" 2>/dev/null || echo)"
     if [[ "$(id -u)" -eq 0 ]] && [[ -n "${owner}" ]] && [[ "${owner}" != "root" ]]; then
-        sudo -u "${owner}" git -C "${PANEL_DIR}" "$@"
+        sudo -u "${owner}" git -c gc.autoDetach=false -c maintenance.autoDetach=false -C "${PANEL_DIR}" "$@"
     else
-        git -C "${PANEL_DIR}" "$@"
+        git -c gc.autoDetach=false -c maintenance.autoDetach=false -C "${PANEL_DIR}" "$@"
     fi
 }
 
