@@ -67,7 +67,6 @@ def _broken():
 app.add_url_rule("/broken", "broken", lambda: app.response_class(_broken()))
 wsgi_serve.serve(app, "127.0.0.1", int(sys.argv[1]))
 """
-_OK252 = b"GET /ok HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
 
 
 def _free_port252():
@@ -88,7 +87,7 @@ def _get252(port, path):
                     break
                 got += part
     except OSError:
-        pass
+        pass                # a refused or reset connection reads as what arrived before it (b"" when nothing)
     return got
 
 
