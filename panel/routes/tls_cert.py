@@ -69,6 +69,19 @@ def _install_checked(checked, source, le_name=""):
     return _back()
 
 
+def _le_refused(name, why):
+    """Flash and audit a Let's Encrypt copy the panel did not get, as a refused certificate is.
+
+    A name not opened at install, one with no certificate, or a copy that failed. Only a valid
+    certificate name is written into the audit row, never other text from the form.
+    """
+    flash(i18n.tr(why), "danger")
+    shown = name if tls_own.LE_NAME_RE.fullmatch(name) else "(not a certificate name)"
+    log_action(current_user, "tls_cert_refused", target="panel", detail="letsencrypt %s: %s" % (shown, why),
+               success=False)
+    return _back()
+
+
 def register(app):
     """The HTTPS certificate card's three changes: paste, Let's Encrypt, back to the built-in one."""
     @app.route("/settings/tls/paste", methods=["POST"])
@@ -98,8 +111,7 @@ def register(app):
         update_config(lambda cfg: cfg.update({"tls_le_autorenew": autorenew}))
         chain, key, why = tls_own.fetch_letsencrypt(name)
         if why:
-            flash(i18n.tr(why), "danger")
-            return _back()
+            return _le_refused(name, why)
         return _install_checked(tls_own.check(chain, key, tls_own.panel_names(load_config(), request.host)),
                                 "letsencrypt", name)
 
