@@ -40,7 +40,7 @@ An installed B3 has a folded **B3 settings** section on its row: **Apply and res
   feed), censor, punkbuster, translator (Google's service), banlist and the ftpytail plugins (they fetch from other
   machines, which the container can't reach), and other games' plugins.
 
-IP Geolocation by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
+IP Geolocation by DB-IP (<https://db-ip.com>), licensed under CC BY 4.0.
 
 ### Updates
 

@@ -274,7 +274,7 @@ def _install_texts(gs, plan, p, who):
 
 
 def record(addon_id, geolocation, plugins, geoip=""):
-    """The fields of the add-on's record (addon.json) that say what is installed and how it is set.
+    """The addon.json fields that say what is installed and how it is set.
 
     image and version: what the catalog pinned at the time (an update compares them); B3's commit, its
     geolocation mode, the plugins the card turned on, and the month of the country database it was given.

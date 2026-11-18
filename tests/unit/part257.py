@@ -267,7 +267,7 @@ def _install_offline257(ids):
 
 
 def _install_wet257(ids):
-    """vanilla ET: the port it really listens on, read from its own socket; refused while it is stopped."""
+    """Vanilla ET: the port it really listens on, read from its own socket; refused while it is stopped."""
     code, _push, inst, _puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "")
     refused = _p9_audit("addon_install").detail
     code2, _push, inst2, puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "27960")

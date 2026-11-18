@@ -59,7 +59,7 @@ BAD_FILE = "The DB-IP country database didn't match its published checksum, so i
 
 
 def month_now():
-    """This month in UTC as YYYY-MM: the release a current file carries."""
+    """The current month in UTC as YYYY-MM: the release a current file carries."""
     return time.strftime("%Y-%m", time.gmtime())
 
 
