@@ -942,6 +942,9 @@ def _remembered_session_is_permanent(_sender, **_kw):
 
 
 def init_auth(app):
+    # Registered BEFORE flask-login's own after-request step, so it runs after it (Flask runs them in
+    # reverse): it replaces the remember cookie's deletion that step writes (session_cookie).
+    app.after_request(_session_cookie.remember_deletion_with_attributes)
     login_manager.init_app(app)
     app.session_interface = _session_cookie.ThrottledCookieSessions()   # see that module
     _host_prefix_cookies(app)

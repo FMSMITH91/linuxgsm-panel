@@ -92,3 +92,39 @@ class ThrottledCookieSessions(SecureCookieSessionInterface):
         if not session.modified and has_request_context() and request.endpoint == "static":
             return
         super().save_session(app, session, response)
+
+
+def _deletes(header, name):
+    """Whether the Set-Cookie value `header` deletes the cookie called `name` (Max-Age=0)."""
+    head, _, rest = header.partition(";")
+    return head.split("=", 1)[0].strip() == name and "max-age=0" in rest.lower().replace(" ", "")
+
+
+def remember_deletion_with_attributes(response):
+    """Re-send flask-login's deletion of the remember cookie with the cookie's own attributes.
+
+    flask-login 0.6.3 clears the "remember me" cookie (at sign-out, and when a stale one comes back)
+    with delete_cookie(name, domain, path) alone: no Secure, HttpOnly or SameSite. Over HTTPS the
+    cookie is `__Host-remember_token`, and a browser ignores a `__Host-` Set-Cookie without Secure
+    (the cookie prefix rules), so the old remember cookie stayed in the jar after sign-out. The server
+    no longer accepted it, but the sign-out's own deletion did nothing. OWASP Session Management Cheat
+    Sheet, "Cookies" (`__Host-` needs Secure, Path=/ and no Domain) and "Session Expiration" (sign-out
+    overwrites the cookie with an empty, already expired one). Registered as an after-request step
+    that runs after flask-login's own (auth.init_auth), so the deletion it wrote is replaced here.
+    """
+    from flask import current_app
+    cfg = current_app.config
+    name = cfg.get("REMEMBER_COOKIE_NAME", "remember_token")
+    sent = response.headers.getlist("Set-Cookie")
+    if not any(_deletes(h, name) for h in sent):
+        return response
+    response.headers.remove("Set-Cookie")
+    for h in sent:
+        if not _deletes(h, name):
+            response.headers.add("Set-Cookie", h)
+    response.delete_cookie(name, path=cfg.get("REMEMBER_COOKIE_PATH") or "/",
+                           domain=cfg.get("REMEMBER_COOKIE_DOMAIN"),
+                           secure=bool(cfg.get("REMEMBER_COOKIE_SECURE")),
+                           httponly=bool(cfg.get("REMEMBER_COOKIE_HTTPONLY", True)),
+                           samesite=cfg.get("REMEMBER_COOKIE_SAMESITE"))
+    return response
