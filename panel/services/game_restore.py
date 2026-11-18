@@ -33,7 +33,9 @@ KEEP is what is never cleared nor extracted: LinuxGSM's own backup, lock and tmp
 archive's copies of the last two are stale run-time state), and the account's own state that is not
 the game's and lives outside the archive's world: ~/.ssh (an old authorized_keys would bring back a
 key removed since), the panel's cron wrapper folder ~/.lgsm-cron (the crontab that runs it is not
-in the archive) and its restart flag.
+in the archive) and its restart flag. And every other sign-in path the file browser refuses to write
+(ssh_manager files._LOGIN_DIRS and _LOGIN_FILES: the shell start-up files, .rhosts, .k5login, ...):
+a restore, of an uploaded archive too, would otherwise put there what the file browser keeps out.
 """
 import re
 
@@ -41,8 +43,11 @@ from panel.core import i18n, terminal
 from panel.ops import ssh_manager as _sm
 from panel.services import world_reset as _wwr
 
+# The sign-in paths besides ~/.ssh: kept as the account has them, never taken from the archive.
+_GRS_LOGIN = tuple(p for p in _sm._LOGIN_DIRS + _sm._LOGIN_FILES if p != ".ssh")
 # Relative to the home. Never cleared, never extracted.
-KEEP = ("lgsm/backup", "lgsm/lock", "lgsm/tmp", ".ssh", ".lgsm-cron", ".restart-pending", ".panel-restore")
+KEEP = ("lgsm/backup", "lgsm/lock", "lgsm/tmp", ".ssh", ".lgsm-cron", ".restart-pending",
+        ".panel-restore") + _GRS_LOGIN
 # The restore's own working folder (staging, the aside copy, its state, the saved crontab, its lock): in the
 # home, OUTSIDE lgsm/, so no LinuxGSM cleanup reaches it (an update that finds a new build ends with
 # fn_clear_tmp, `rm -rf "${tmpdir:?}/"*` on lgsm/tmp; core_exit and the update modules clear only lgsm/tmp
@@ -147,7 +152,10 @@ def _q(s):
 _GRS_KEEP_FIND = " -o ".join("-path ./%s" % k for k in KEEP)
 _GRS_KEEP_REAL = " ".join('"$HR/%s"' % k for k in KEEP)
 # Every KEEP path and every folder above one (lgsm for lgsm/backup): none may be a symlink (_grs_walks).
-_GRS_KEEP_CHAIN = " ".join(sorted({"/".join(k.split("/")[:i + 1]) for k in KEEP for i in range(k.count("/") + 1)}))
+# Not the sign-in paths: the restore neither clears, moves nor writes through them, so one that is a
+# link (a dotfile kept elsewhere) is left as it is rather than refusing the restore.
+_GRS_KEEP_CHAIN = " ".join(sorted({"/".join(k.split("/")[:i + 1]) for k in KEEP if k not in _GRS_LOGIN
+                                   for i in range(k.count("/") + 1)}))
 # Inodes left over once the archive is unpacked, as MARGIN is for bytes.
 INODE_MARGIN = 1000
 # A line every HEARTBEAT seconds while a long step runs (a read of the whole archive, the extraction), so a

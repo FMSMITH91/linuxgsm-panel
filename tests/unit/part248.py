@@ -204,3 +204,38 @@ finally:
     _p9_delete_server(_pb_sid248)
 eq("pending port r30: a port saved back to the stored one during a Start: the stored port follows the port the "
    "game bound, the save waits for the next start, and nothing reached a host", _pb248, (42491, 42490, []))
+
+# ── 4. the sign-in paths ─────────────────────────────────────────────────────────────────────────
+eq("sign-in paths r30: ~/.bash_aliases, a file in ~/.bashrc.d and ~/.k5users are sign-in paths to the file browser",
+   [_files248._is_login_path(n) for n in (".bash_aliases", ".bashrc.d/x.sh", ".bashrc.d", ".k5users")], [True] * 4)
+eq("sign-in paths r30: the restore keeps every sign-in path the file browser refuses (never cleared, never "
+   "extracted)", sorted(set(_files248._LOGIN_DIRS + _files248._LOGIN_FILES) - set(_grs248.KEEP)), [])
+_SIGNIN248 = (".bashrc", ".bash_aliases", ".k5login", ".rhosts", ".profile")
+
+
+def _signin_restore248():
+    """Restore an archive holding planted sign-in files over a home with its own .bashrc. -> what is left."""
+    sb = _Sb190()
+    try:
+        sb.put(".bashrc", "own bashrc\n")
+        name = _crafted190(sb, [("././" + n, _tf248.REGTYPE, "") for n in _SIGNIN248]
+                           + [("././.bashrc.d/", _tf248.DIRTYPE, ""), ("././.bashrc.d/x.sh", _tf248.REGTYPE, ""),
+                              ("././serverfiles/", _tf248.DIRTYPE, ""), ("././serverfiles/new.cfg", _tf248.REGTYPE, "")])
+        ready = sb.vet(name)[1][1]
+        with open(_os248.path.join(sb.bdir, _UNDO190), "wb") as f:
+            f.write(b"undo")
+        out, rc = sb.run(_grs248.restore_script(_U190, _U190, name, ready["t0"], ready["need"], _UNDO190,
+                                                busy_polls=1, members=ready["members"]))
+        return (_grs248.restore_outcome(out, rc)[0], sb.read(".bashrc"),
+                [n for n in _SIGNIN248[1:] + (".bashrc.d",) if _os248.path.lexists(_os248.path.join(sb.home, n))],
+                sb.read("serverfiles/new.cfg"))
+    finally:
+        sb.gone()
+
+
+if _missing190:
+    skip("sign-in paths r30: a restore keeps the account's own sign-in files", "missing tools: %s" % _missing190)
+else:
+    eq("sign-in paths r30: a restore of an archive that holds .bashrc, .bash_aliases, .k5login, .rhosts, .profile "
+       "and .bashrc.d restores the game files but keeps the account's own .bashrc and brings in none of the others",
+       _signin_restore248(), ("done", "own bashrc\n", [], ""))

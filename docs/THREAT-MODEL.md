@@ -122,7 +122,7 @@ the file that holds them.
 | --- | --- | --- |
 | S | An account name that is really root or another user | Mitigate: `game_user_cmd` / `game_user_exec_cmd` refuse anything but a plain identifier, never `root`; Runas is `%lgsmpanel-games` only. |
 | T | A game account that can escalate is enrolled, then driven by the panel | Mitigate: enrollment refuses accounts in root-equivalent groups or named by sudoers/doas/polkit; every write path calls `game_account_write_refusal` first (`panel/routes/_shared.py`). |
-| T | Files the panel writes for a game account start code later (shell start-up files, `~/.ssh`) | Mitigate: the file tools refuse such targets (resolved host-side). |
+| T | Files the panel writes for a game account start code later (shell start-up files and what the distribution's `~/.bashrc` sources, `~/.ssh`, `.rhosts`, `.k5login`) | Mitigate: the file tools refuse such targets (resolved host-side), and a game restore, of an uploaded archive too, keeps the account's own copies and never takes the archive's (`_LOGIN_FILES` in `panel/ops/ssh_manager/files.py`, `KEEP` in `panel/services/game_restore.py`). |
 | I | Game output (console, logs, player names) carries escapes or markup | Mitigate: terminal rendering strips control sequences (`panel/core/terminal.py`, fuzzed by `tests/fuzz/fuzz_console.py`); templates escape. |
 | D | A game's output floods the panel | Mitigate: bounded reads and rings for console feeds. |
 | E | A mod or plugin uses the panel to reach root | Mitigate: game accounts cannot write `/etc`, the helper or sudoers; the panel never runs game-authored text as a command. |
