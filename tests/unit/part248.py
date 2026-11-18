@@ -418,3 +418,60 @@ eq("panel host reboot r30: no game-restore blocker with no restore running, one 
 eq("panel host reboot r30: the no-host-row reboot route answers 409 naming the restore and sends no reboot",
    _hb248.get("route"), (409, ["game_restore"], True, 0))
 check("panel host reboot r30: ...and nothing reached a host", _hb248.get("trips") == [], repr(_hb248.get("trips")))
+
+
+# ── 9. a panel backup restore's shape check ──────────────────────────────────────────────────────
+_PHRASE248 = "unit-r30-phrase-for-a-test-archive"
+
+
+def _ptar248(members):
+    """A gzip'd tar of `members` [(name, declared size)] whose data is never there: only the last may declare any."""
+    raw = b""
+    for name, size in members:
+        ti = _tf248.TarInfo(name)
+        ti.size = size
+        raw += ti.tobuf(format=_tf248.GNU_FORMAT)
+    return _gz248.compress(raw + b"\0" * 1024)
+
+
+def _prestore248(bdir, name, data, phrase=None):
+    """Write archive `name` into the stand-in backup dir (encrypted with `phrase` when given) and restore it."""
+    plain = _os248.path.join(bdir, "plain.tmp")
+    with open(plain, "wb") as f:
+        f.write(data)
+    if phrase:
+        _bk248._encrypt_archive(plain, _os248.path.join(bdir, name), phrase)
+        _os248.remove(plain)
+    else:
+        _os248.replace(plain, _os248.path.join(bdir, name))
+    return _bk248.restore_backup(name, passphrase=phrase)
+
+
+_pr248 = {}
+_pr_dir248 = _tmp248.mkdtemp(prefix="p248-pr-")
+try:
+    _p9_patch(_bk248, "BACKUP_DIR", _pl248.Path(_pr_dir248))
+    _pr_seen248 = []
+    _p9_patch(_bk248, "_archive_members_refusal", lambda src: _pr_seen248.append(src) or "members read")
+    _pr248["enc_huge"] = _prestore248(_pr_dir248, "panel-backup-20261118-000000-upload.tar.gz.enc",
+                                      _ptar248([("panel.db", 2 ** 60)]), _PHRASE248)
+    _pr248["plain_huge"] = _prestore248(_pr_dir248, "panel-backup-20261118-000001-manual.tar.gz",
+                                        _ptar248([("config.json", 0), ("panel.db", 2 ** 60)]))
+    _pr248["fifth"] = _prestore248(_pr_dir248, "panel-backup-20261118-000002-manual.tar.gz",
+                                   _ptar248([(n, 0) for n in _bk248._MEMBERS + ("panel.db",)]))
+    _pr248["foreign"] = _prestore248(_pr_dir248, "panel-backup-20261118-000003-manual.tar.gz",
+                                     _ptar248([("evil.sh", 0)]))
+    _pr248["seen"] = len(_pr_seen248)
+    _pr248["fits"] = _prestore248(_pr_dir248, "panel-backup-20261118-000004-manual.tar.gz",
+                                  _ptar248([("config.json", 0), ("panel.db", 300 * 1024 ** 2)]))
+    _pr248["fits_seen"] = len(_pr_seen248)
+finally:
+    _p9_restore_all()
+    _shutil248.rmtree(_pr_dir248, ignore_errors=True)
+eq("panel restore r30: an encrypted archive whose plaintext declares a panel.db past the free disk, and a plain "
+   "one, are refused before the members are read whole; a fifth member and a foreign name likewise",
+   [_pr248[k] for k in ("enc_huge", "plain_huge", "fifth", "foreign")] + [_pr248["seen"]],
+   [(False, _bk248._R30_PAST_FREE)] * 2 + [(False, "Backup archive looks invalid.")] * 2 + [0])
+eq("panel restore r30: a backup whose panel.db packs far tighter than an upload may (300 MB of zeros) still passes "
+   "the shape check on to the member check (control)", (_pr248["fits"], _pr248["fits_seen"]),
+   ((False, "members read"), 1))

@@ -662,8 +662,10 @@ def _restore_backup_locked(name, passphrase=None, skip_safety_backup=False):
             return False, refusal
 
     try:
-        # Validate the archive up front (members only, no path escapes) before we touch anything.
-        refusal = _archive_members_refusal(src)
+        # Validate the archive up front (members only, no path escapes) before we touch anything:
+        # its shape header by header first (_upload_bomb_refusal), which bounds what the reads
+        # after it unpack, for a decrypted archive as for a plain one.
+        refusal = _upload_bomb_refusal(src, _restore_unpack_bound()) or _archive_members_refusal(src)
         if refusal:
             return False, refusal
 
@@ -809,18 +811,51 @@ def upload_discard(uid):
         _log.debug("no upload part file to remove: %s", type(e).__name__)
 
 
-def _upload_bomb_refusal(path):
-    """Why the plain archive at `path` declares more than a panel backup unpacks to, or ""."""
+_R30_PAST_FREE = ("The archive says it unpacks to more than the free disk space the restore unpacks into, so "
+                  "it was not restored. Nothing on this panel was changed.")
+
+
+def _upload_bomb_refusal(path, bound=None):
+    """Why the plain tar.gz at `path` is not shaped like a panel backup, read one header at a time, or "".
+
+    Before anything reads the archive whole (getmembers, the database copy, the staging): it stops at
+    the first header that names anything but one of _MEMBERS, or is one member too many, or brings
+    what the members declare past `bound` bytes. So a member of a few hundred GB of zeros is never
+    unpacked, and a tar of millions of empty headers is not held in memory header by header.
+
+    `bound` None is an upload's: _UPLOAD_RATIO times the archive's size plus _UPLOAD_SLACK. A restore
+    passes the free space it unpacks into (_restore_unpack_bound) instead: a panel's own backup copies
+    panel.db page for page, free pages too, and must never be refused for packing well.
+    """
+    past = _R30_PAST_FREE
+    if bound is None:
+        bound = os.path.getsize(path) * _UPLOAD_RATIO + _UPLOAD_SLACK
+        past = "The archive says it unpacks to far more than a panel backup does, so it was not read further."
     try:
         with tarfile.open(str(path), "r:gz") as tar:
-            declared = 0
+            declared = seen = 0
             for member in tar:
                 declared += max(0, member.size)
-                if declared > os.path.getsize(path) * _UPLOAD_RATIO + _UPLOAD_SLACK:
-                    return "The archive says it unpacks to far more than a panel backup does, so it was not read further."
+                seen += 1
+                if declared > bound:
+                    return past
+                if seen > len(_MEMBERS) or member.name not in _MEMBERS:
+                    return "Backup archive looks invalid."
     except Exception:
         return "Could not read the backup archive."
     return ""
+
+
+def _restore_unpack_bound():
+    """The bytes a restore may unpack: the free space where it copies the database and stages the files.
+
+    The smaller of the temp dir's (_restore_db_refusal's copy) and DATA_DIR's (.restore-stage). When
+    either cannot be read, no size bound: the member count and names still hold.
+    """
+    try:
+        return min(shutil.disk_usage(tempfile.gettempdir()).free, shutil.disk_usage(str(DATA_DIR)).free)
+    except OSError:
+        return float("inf")
 
 
 def upload_refusal(path):

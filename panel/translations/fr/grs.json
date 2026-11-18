@@ -106,5 +106,6 @@
   "Its switch-over was undone: nothing was changed.": "Son basculement a été annulé : rien n'a été modifié.",
   "It had not changed any file: nothing was changed.": "Elle n'avait modifié aucun fichier : rien n'a été modifié.",
   "Its switch-over failed and undoing it failed.": "Son basculement a échoué et son annulation a échoué.",
-  "The restore's answer was lost ({why}) and it could not be settled; the recovery sweep goes on trying.": "La réponse de la restauration a été perdue ({why}) et n'a pas pu être réglée ; la reprise automatique continue d'essayer."
+  "The restore's answer was lost ({why}) and it could not be settled; the recovery sweep goes on trying.": "La réponse de la restauration a été perdue ({why}) et n'a pas pu être réglée ; la reprise automatique continue d'essayer.",
+  "The archive says it unpacks to more than the free disk space the restore unpacks into, so it was not restored. Nothing on this panel was changed.": "L'archive annonce qu'elle se décompresse en plus que l'espace disque libre où la restauration la décompresse : elle n'a pas été restaurée. Rien n'a été modifié sur ce panneau."
 }
