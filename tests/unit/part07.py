@@ -21,7 +21,7 @@
 import ast as _gh_ast
 import string as _gh_string
 
-from unit.part01 import check, os, re  # noqa: E402
+from unit.part01 import check, eq, os, re  # noqa: E402
 from unit import REPO_ROOT as _gh_root  # noqa: E402
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -1457,8 +1457,12 @@ def _bf_hosts(seq):
     return list(_bf_alerts)
 
 
+# Who each alert is routed by: push_alerts sends a server event only to those who can see `server=`
+# and a host event only to those who can see `remote=`; an alert without its row reaches nobody.
+_bf_routes = []
 try:
-    with _bf_patched(_bf_mon.notifications, notify=lambda k, t, b="", **_kw: _bf_alerts.append(k)):
+    with _bf_patched(_bf_mon.notifications, notify=lambda k, t, b="", **_kw: (
+            _bf_alerts.append(k), _bf_routes.append((k, _kw.get("server"), _kw.get("remote"))))):
         _bf_hosts([True])                                           # baseline
         _bf_one = _bf_hosts([False])
         check("monitor: ONE failed probe of a host is not an alert (it used to page at once)",
@@ -1503,6 +1507,10 @@ try:
                   _bf_rec is False and _bf_a == ["server_down"], repr((_bf_rec, _bf_a)))
             _bf_rec, _bf_a = _bf_srv([True], prev=_bf_rec)
             check("monitor: ...and its recovery is announced", _bf_a == ["server_up"], repr(_bf_a))
+        eq("monitor: each alert names the row that decides who gets the push (a host's the host, a server's "
+           "the server)", [(k, s is _bf_gs, r is _bf_host) for k, s, r in _bf_routes],
+           [("remote_unreachable", False, True), ("remote_recovered", False, True),
+            ("server_down", True, False), ("server_up", True, False)])
 finally:
     for _bf_k, _bf_v in _bf_saved_state.items():
         _bf_ps._monitor_state[_bf_k].clear()

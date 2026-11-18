@@ -4563,11 +4563,26 @@ try:
     # this installer prints as THE lockout remedy — so the operator re-running the installer to
     # repair a lockout was the one person guaranteed to reach this branch, and got "Already up to
     # date", exit 0, and `command not found` on the very next line they were told to type.
-    _uptodate = _su_between("# Nothing to FETCH is not nothing to DO.", "Already up to date")
+    # The branch to its own `exit 0`, comments dropped, each name a call on a line of its own (a
+    # `[[ … ]] &&` guard in front allowed): the slice used to end at a comment, and a comment naming
+    # install_recovery_command passed the check with the call itself deleted (review 1118 T4).
+    import re as _re_utd
+    _uptodate = "\n".join(_l for _l in _su_between("# Nothing to FETCH is not nothing to DO.",
+                                                    "\n        exit 0\n").splitlines()
+                          if not _l.lstrip().startswith("#"))
+
+    def _utd_calls(text, name):
+        return _re_utd.search(r"^\s*(?:\[\[[^\n]*\]\]\s*&&\s*)?%s(?:\s|$)" % _re_utd.escape(name), text,
+                              _re_utd.M) is not None
     for _fn in ("check_origin_trusted", "install_root_tools", "write_sudoers_grant",
                 "write_terminal_sudo_grant", "install_recovery_command"):
         check("install.sh: the 'already up to date' branch still runs %s" % _fn,
-              _fn in _uptodate, _uptodate[-400:])
+              _utd_calls(_uptodate, _fn), _uptodate[-400:])
+    eq("install.sh: ...a name read only in a comment or inside another word is not a call (control)",
+       [_utd_calls(t, "install_recovery_command") for t in (
+           "        # predates install_recovery_command", "        x_install_recovery_command",
+           "        install_recovery_command", '        [[ "${A}" -eq 1 ]] && install_recovery_command\n')],
+       [False, False, True, True])
 
     # ── the firewall probe has to use the SUDO computed beside it ────────────────────────────
     # `ufw status` requires uid 0 — as an ordinary user it errors to stderr (discarded) and exits
@@ -7533,14 +7548,19 @@ _inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 check("install.sh: the root-owned tools are installed by a FUNCTION, callable from both paths",
       "install_root_tools() {" in _inst and "write_sudoers_grant() {" in _inst)
 _upd = _inst[_inst.index("if [[ \"${IS_UPDATE}\" -eq 1 ]]; then"):]
-_upd_body = _upd[:_upd.index("    # ── Health check FAILED")]
+# The FULL update path only: from its fetch to the rollback. The already-up-to-date branch comes first
+# in the IS_UPDATE block and runs install_root_tools and write_sudoers_grant too, and its 8-space
+# `exit 0` held a 4-space one as a substring, so a cut from the top of the block passed all three
+# with the full path's own lines gone (review 1118 T4).
+_upd_body = _upd[_upd.index("\n    fetch_code\n    _CODE_FETCHED=1"):_upd.index("    # ── Health check FAILED")]
 check("install.sh: the UPDATE path refreshes the root-owned helper before restarting the service",
-      "install_root_tools" in _upd_body
+      re.search(r"^    install_root_tools$", _upd_body, re.M) is not None
       and _upd_body.index("install_root_tools") < _upd_body.index('info "[5/6] Starting the service'))
 check("install.sh: the UPDATE path also re-evaluates the sudoers grant",
-      "write_sudoers_grant" in _upd_body)
-check("install.sh: the update path still exits before the fresh-install steps",
-      "    exit 0\n" in _upd_body)
+      re.search(r"^\s*(?:\[\[[^\n]*\]\]\s*&&\s*)?write_sudoers_grant$", _upd_body, re.M) is not None)
+_upd_ok = _upd_body[_upd_body.index("    if health_check; then\n"):]
+check("install.sh: the update path still exits before the fresh-install steps (its health-passed branch "
+      "ends in `exit 0`)", re.search(r"^        exit 0$", _upd_ok, re.M) is not None, _upd_ok[-300:])
 # The root-owned installer copy must come from the COMMIT, not from the working tree (which the
 # panel user owns) and not from "$0" (the documented quick install is `curl … | bash`, where "$0"
 # is the shell — an older form copied /usr/bin/bash into place). SCRIPT_PATH survives only as the
@@ -8650,7 +8670,11 @@ for _verb in sorted(_priv._REMOTE_ACTIONS):
         _inj_nofill.append(_verb)
         continue
     for _pos in range(_arity):
-        for _pay in _INJ_PAYLOADS:
+        # ...and the position's own filler with each seed and bare character after it: a validator
+        # that demands another prefix (`gs…` for a database name, `tcp…`, a date, `https://`) refused
+        # every "x…"/"1…" payload on its shape, so its charset was never probed (review 1118 T4).
+        _own = [_fill[_pos] + _s for _s in _INJ_SEEDS] + [_fill[_pos] + _c for _c in _INJ_BARE]
+        for _pay in _INJ_PAYLOADS + _own:
             _args = list(_fill)
             _args[_pos] = _pay
             _inj_checked += 1
@@ -9397,8 +9421,23 @@ check("notifications: a provider that REJECTS a message says so in the log",
 # answered True with every network fetch failing, and the route turned that into
 # {"success": true, "message": "Loaded 30 games."} plus an audit row saying it worked.
 from panel.services import lgsm_data as _lg                                        # noqa: E402
-_lg_o_fetch = _lg._fetch
+import shutil as _lg_shutil                                                         # noqa: E402
+import tempfile as _lg_tempfile                                                     # noqa: E402
+
+
+def _lg_cache_state(d):
+    """{file name: bytes} of the lgsm_data cache dir `d` (what later parts read)."""
+    if not d.is_dir():
+        return {}
+    return {f.name: f.read_bytes() for f in sorted(d.iterdir()) if f.is_file()}
+
+
+_lg_o_fetch, _lg_o_cache = _lg._fetch, _lg._CACHE_DIR
+_lg_shared_before = _lg_cache_state(_lg_o_cache)
 try:
+    # Its own cache dir: a refresh writes what it fetched (here a one-game stub list) into the cache,
+    # and the shared one (part04's fixture) is what every later part's lookups read (review 1118 T4).
+    _lg._CACHE_DIR = __import__("pathlib").Path(_lg_tempfile.mkdtemp(prefix="unit-p06-lgsm-"))
     _lg._fetch = lambda name: None                       # every fetch fails
     _lg_bad = _lg.refresh(force=True)
     _lg._fetch = lambda name: ("shortname,gameservername,gamename,os\n"
@@ -9406,8 +9445,11 @@ try:
                                else "all,bc\n")
     _lg_good = _lg.refresh(force=True)
 finally:
-    _lg._fetch = _lg_o_fetch
+    _lg_shutil.rmtree(str(_lg._CACHE_DIR), ignore_errors=True)
+    _lg._fetch, _lg._CACHE_DIR = _lg_o_fetch, _lg_o_cache
     _lg._mem.clear()
+check("lgsm_data: the refresh checks leave the shared cache (part04's fixture) exactly as they found it",
+      _lg_cache_state(_lg_o_cache) == _lg_shared_before, repr(sorted(_lg_shared_before)))
 check("lgsm_data: refresh() reports the FETCH, not the cache it read back",
       _lg_bad is False, "returned %r with every fetch failing" % (_lg_bad,))
 check("lgsm_data: ...and still reports success when the fetch works", _lg_good is True,
@@ -9495,6 +9537,11 @@ _ANCHOR_LINE_PARSERS = {
     "_WWR_OTHER_LINE",
     # The database client's error line in a db-query answer (re.M): reported, never acted on.
     "_ERROR_RE",
+    # A cron schedule, built with `+`: _validate_cron refuses CR, LF and NUL and rejoins the fields on
+    # single spaces before it is matched, so no newline can reach it and $ and \Z agree.
+    "_CRON_SCHED_RE",
+    # world_reset's other-key reader, built with `%`: one line of a LinuxGSM config (split at \n).
+    "plain",
 }
 # Validators: the value goes somewhere a newline would matter. Each maps to a sample that must be
 # ACCEPTED, so the gate cannot be satisfied by a pattern that refuses everything.
@@ -9590,6 +9637,28 @@ def _r19d_re_call(call, re_names, any_receiver=False):
     return getattr(call.func, "attr", None) if any_receiver or _recv in _mods else None
 
 
+def _r30t_pat_tail(node):
+    """The literal text a pattern expression ENDS in, which is all the `$` question reads.
+
+    A literal is itself; an f-string is its literal parts; `a + b` ends as `b` does and `t % v` as its
+    template `t` does. Anything else reads as "". A pattern built with `+` or `%` used to read as ""
+    and was skipped (cron.py's _CRON_SCHED_RE, review 1118 T4).
+    """
+    if isinstance(node, _anc_ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, _anc_ast.JoinedStr):
+        return "".join(v.value for v in node.values if isinstance(v, _anc_ast.Constant) and isinstance(v.value, str))
+    if isinstance(node, _anc_ast.BinOp) and isinstance(node.op, _anc_ast.Add):
+        return _r30t_pat_tail(node.right)
+    if isinstance(node, _anc_ast.BinOp) and isinstance(node.op, _anc_ast.Mod):
+        return _r30t_pat_tail(node.left)
+    return ""
+
+
+eq("regex anchors: a pattern's tail is read through `+`, `%` and f-strings, and a call reads as nothing (control)",
+   [_r30t_pat_tail(_anc_ast.parse(_x, mode="eval").body) for _x in (
+       'r"^(" + r"\\s+".join(x) + r")$"', 'r"\\s*%s\\s*$" % k', 'f"^{k}=(.*)$"', '"^a" + b', 'build()')],
+   [")$", "\\s*%s\\s*$", "^=(.*)$", "", ""])
 _anc_unclassified, _anc_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
     try:
@@ -9602,9 +9671,7 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         if not (isinstance(_n, _anc_ast.Assign) and isinstance(_n.value, _anc_ast.Call)
                 and _r19d_re_call(_n.value, _r19d_rn, any_receiver=True) == "compile" and _n.value.args):
             continue
-        _parts = [a.value for a in _n.value.args[:1] + getattr(_n.value.args[0], "values", [])
-                  if isinstance(a, _anc_ast.Constant) and isinstance(a.value, str)]
-        _pat = "".join(_parts) if _parts else ""
+        _pat = _r30t_pat_tail(_n.value.args[0])
         if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
         _anc_seen |= {_t.id for _t in _n.targets if isinstance(_t, _anc_ast.Name)}
@@ -9639,6 +9706,9 @@ check("regex anchors: every line-parser entry still names a $-anchored pattern i
 _INLINE_DOLLAR_OK = {
     r"^(.*)/(tcp|udp)$",                                            # a ufw port column
     r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
+    # Built patterns, keyed on the literal they end in (`+`) or their template (`%`):
+    r"(/\S*?)/?$",                     # files.py: the `pwd -P` line after its mark, matched per line (re.M)
+    r"\s*%s\s*=\s*(\S+)\s*$",          # system_ops: one line of the panel's fail2ban jail file
 }
 _inline_bad, _inline_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
@@ -9650,11 +9720,9 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
     _r19d_rn = _r19d_re_names(_tree)
     for _n in _anc_ast.walk(_tree):
         if not (isinstance(_n, _anc_ast.Call)
-                and _r19d_re_call(_n, _r19d_rn) in ("match", "fullmatch", "search")
-                and _n.args and isinstance(_n.args[0], _anc_ast.Constant)
-                and isinstance(_n.args[0].value, str)):
+                and _r19d_re_call(_n, _r19d_rn) in ("match", "fullmatch", "search") and _n.args):
             continue
-        _pat = _n.args[0].value
+        _pat = _r30t_pat_tail(_n.args[0])
         if not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
         _inline_seen.add(_pat)
@@ -11104,11 +11172,18 @@ try:
         inst = os.path.join(pd, "root-owned-install.sh")
         with open(inst, "w", encoding="utf-8") as _uc_fh:
             _uc_fh.write("#!/bin/bash\nset -euo pipefail\nSRC=''\nFROM_VER=9.9.9\nDEFAULT_BRANCH=main\n"
-                         + _uc_out + _uc_fns + body)
+                         "printf '%%s %%s' \"${GIT_CONFIG_GLOBAL:-unset}\" \"${GIT_CONFIG_NOSYSTEM:-unset}\" > %s\n"
+                         % _shlex_q(os.path.join(pd, "git-env")) + _uc_out + _uc_fns + body)
         probe = ("import importlib.util as u, importlib.machinery as m\n"
                  "s = u.spec_from_loader('ph', m.SourceFileLoader('ph', %r))\n"
                  "mod = u.module_from_spec(s); s.loader.exec_module(mod)\n"
                  "mod.INSTALLER_PATH = %r\n"
+                 # The helper builds the installer's environment fresh (_clean_env), dropping the
+                 # part's no-global-git-config pair: put it back, so the installer's git reads no
+                 # /etc/gitconfig or root's ~/.gitconfig either (review 1118 T4).
+                 "_env = mod._self_update_env\n"
+                 "mod._self_update_env = lambda *a: dict(_env(*a), GIT_CONFIG_GLOBAL='/dev/null', "
+                 "GIT_CONFIG_NOSYSTEM='1')\n"
                  "mod._self_update_detached(%r, %r, %r, '-')\n"
                  % (_helper_path, inst, pd, os.path.join(pd, "data"), ref))
         _sh_sub.run([sys.executable, "-c", probe], capture_output=True, text=True, env=_tsh_env,
@@ -11131,6 +11206,13 @@ try:
     _uc_off = _fp_clone("uc-offline", _fp_a)
     _fp_git("-C", _uc_off, "remote", "set-url", "origin", "file://" + os.path.join(_fp_sb, "gone"))
     _uc = _uc_helper_run("uc-failed", "PANEL_DIR=%s\n%supdate_noop_line\n" % (_shlex_q(_uc_off), _fp_ci_blk), "-")
+    try:
+        with open(os.path.join(_fp_sb, "uc-failed", "git-env"), encoding="utf-8") as _uc_fh:
+            _uc_genv = _uc_fh.read()
+    except OSError as _uc_e:
+        _uc_genv = repr(_uc_e)
+    eq("self-update card: the helper route's installer runs git with no global or system config, as the rest "
+       "of this part does", _uc_genv, "/dev/null 1")
     check("self-update card: an update that STOPS before the panel restarts is read as failed, with "
           "install.sh's own [ERROR] as the reason (helper route)",
           _uc.get("finished") is True and _uc.get("exit_code") == 1 and _uc.get("outcome") == "failed"
@@ -11405,9 +11487,16 @@ check("install.sh: ...while a fetch that failed still says it couldn't reach the
 # comment above that div explains the old behaviour and would satisfy a looser search. Same trap
 # the deploy gate hit.
 _mu_html = open(os.path.join(_root, "panel", "templates", "manage_users.html"), encoding="utf-8").read()
+# Every way a tag starts hidden: strict CSP forbids style="display:none", so the panel hides a tag at
+# render time with data-start-hidden (panel.css), the hidden attribute or Bootstrap's d-none.
+_R30T_HIDDEN = r'id="eu-2fa-block"[^>]*(?:data-start-hidden|\bhidden\b|\bd-none\b|display\s*:\s*none)'
 check("users page: the 2FA reset control is not hidden at render time",
-      not re.search(r'id="eu-2fa-block"[^>]*display\s*:\s*none', _mu_html),
-      "the block is display:none again — an admin looking for the 2FA reset finds nothing")
+      not re.search(_R30T_HIDDEN, _mu_html),
+      "the block starts hidden again — an admin looking for the 2FA reset finds nothing")
+eq("users page: ...the test reads data-start-hidden, hidden, d-none and display:none, and not a plain tag (control)",
+   [bool(re.search(_R30T_HIDDEN, '<div id="eu-2fa-block" %s>' % _a)) for _a in
+    ("data-start-hidden", "hidden", 'class="d-none"', 'style="display: none"', 'role="group"')],
+   [True, True, True, True, False])
 _mu_js = open(os.path.join(_root, "panel", "static", "js", "manage_users.js"), encoding="utf-8").read()
 check("users page: ...and the script disables it rather than hiding it",
       "box.disabled = !u.totp_enabled" in _mu_js,
