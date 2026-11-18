@@ -3488,8 +3488,8 @@ check("auth: ...and answers a dead one with the flagged 401",
       _ping_anon.status_code == 401 and _ping_anon.headers.get("X-Auth-Required") == "1",
       "status=%d" % _ping_anon.status_code)
 _page = s1.get("/account")
-check("auth: a signed-in page is never served from the browser cache unrevalidated",
-      "no-cache" in (_page.headers.get("Cache-Control") or ""),
+check("auth: a signed-in page is never kept in the browser cache (no-store)",
+      "no-store" in (_page.headers.get("Cache-Control") or ""),
       "Cache-Control: %s" % (_page.headers.get("Cache-Control") or "(none)"))
 
 # A legacy cookie (client_as injects a _user_id with no sid, like a pre-feature login) is

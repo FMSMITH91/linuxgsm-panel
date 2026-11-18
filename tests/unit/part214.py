@@ -228,8 +228,8 @@ check("headers: a JSON answer is no-store, with the inert CSP and CORP",
       and "X-Frame-Options" not in _api214.headers, repr(dict(_api214.headers)))
 eq("headers: ...a JSON answer that chose its own caching keeps it", _own214.headers.get("Cache-Control"),
    "public, max-age=300")
-check("headers: a stylesheet keeps its caching and gets CORP",
-      _css214.headers.get("Cache-Control") == "no-cache, private"
+check("headers: a stylesheet keeps the cache step's no-store and gets CORP",
+      _css214.headers.get("Cache-Control") == "no-store"
       and _css214.headers.get("Cross-Origin-Resource-Policy") == "same-origin", repr(dict(_css214.headers)))
 eq("headers: no_store() makes a page that shows a secret no-store", _sec214.headers.get("Cache-Control"), "no-store")
 eq("headers: HSTS is two years with includeSubDomains, and no preload", _hdr214.HSTS,
