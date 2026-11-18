@@ -536,7 +536,7 @@ def _console_tick(app, socketio, gs, server_id):
     # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
     # to what the file holds), and this line is reached only past the frame check above.
     state["pos"] = pos + diff
-    _feed_tick(server_id)
+    return _feed_tick(server_id) or False      # the log grew: not "exactly where the offsets say"
 
 
 def _console_first_sight(remote, gs, log_path, server_id):
