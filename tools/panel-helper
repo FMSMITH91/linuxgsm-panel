@@ -2835,7 +2835,7 @@ VERBS = {
     # A game account's rootless add-on containers: subordinate ids and lingering, and lingering off
     # again -- see do_addon_account_prepare. Never the panel's own account.
     "addon-account-prepare": ([v_destroyable_user], lambda a: [], None),
-    "addon-account-release": ([v_destroyable_user], lambda a: [], None),
+    "addon-account-release": ([v_destroyable_user, v_choice("keep", "forget")], lambda a: [], None),
     # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
     # once its rollout reaches this host; the OS Updates card lists it apart until then.
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
@@ -5807,12 +5807,15 @@ def do_addon_account_release(args, content):
     background; an uninstall's `user-kill-processes` straight after it SIGKILLs it, and systemd
     keeps it "failed" until someone resets it. So this stops the manager and waits for it (within
     the manager's own stop timeout: 5 s on Ubuntu, then systemd kills what is left), then
-    `systemctl reset-failed` clears a failure either way. Last, the account's user journal and
-    Podman's /tmp folders are removed (_addon_forget_account). The account is validated as for the
-    other destroy verbs (never the panel's own account). Prints linger=off, manager=stopped or
-    manager=stop-failed, then forgotten=<count>; exits with disable-linger's status.
+    `systemctl reset-failed` clears a failure either way. Last, Podman's /tmp folders go, and with
+    `forget` (an uninstall: the account itself is about to go) its user journal too
+    (_addon_forget_account); with `keep` (its last add-on was removed, the account stays) the
+    journal is left alone, since it holds the account's own history too. The account is validated
+    as for the other destroy verbs (never the panel's own account). Prints linger=off,
+    manager=stopped or manager=stop-failed, then forgotten=<count>; exits with disable-linger's
+    status.
     """
-    user = args[0]
+    user, forget = args[0], args[1] == "forget"
     try:
         uid = pwd.getpwnam(user).pw_uid
     except KeyError:
@@ -5834,35 +5837,48 @@ def do_addon_account_release(args, content):
     subprocess.run([resolve("systemctl"), "reset-failed", unit],         # nosec B603 - fixed argv
                    shell=False, capture_output=True, timeout=30, env=_clean_env())
     sys.stdout.write("manager=%s\n" % ("stopped" if rc == 0 else "stop-failed"))
-    sys.stdout.write("forgotten=%d\n" % _addon_forget_account(uid))
+    sys.stdout.write("forgotten=%d\n" % _addon_forget_account(uid, forget))
     return 0
 
 
-def _addon_forget_account(uid):
-    """Remove the account's user journal files and Podman's /tmp folders; returns how many went.
+def _addon_forget_account(uid, forget):
+    """Remove Podman's /tmp folders and, with `forget`, the account's user journal; how many went.
 
-    The journal is rotated first, so journald lets go of the account's active file. Only files
-    named user-<uid>.journal (or a rotated user-<uid>@....journal) directly in a machine-id folder
-    of the two journal roots, and only the two /tmp folders that are real folders owned by the
-    uid, are removed; nothing for a uid below ADDON_FORGET_MIN_UID.
+    Only files named user-<uid>.journal (or a rotated user-<uid>@....journal) directly in a
+    machine-id folder of the two journal roots, and only the two /tmp folders that are real folders
+    owned by the uid, are removed; nothing for a uid below ADDON_FORGET_MIN_UID.
     """
     if not isinstance(uid, int) or uid < ADDON_FORGET_MIN_UID:
         return 0
-    return _forget_journal(uid) + _forget_podman_tmp(uid)
+    return (_forget_journal(uid) if forget else 0) + _forget_podman_tmp(uid)
 
 
-def _forget_journal(uid):
-    """Rotate the journal, then delete the uid's user journal files (exact names only); how many went."""
-    subprocess.run([resolve("journalctl"), "--rotate"],                 # nosec B603 - fixed argv
-                   shell=False, capture_output=True, timeout=60, env=_clean_env())
-    gone = 0
+def _user_journal_files(uid):
+    """The uid's user journal files in the journal roots: [(path, active)], exact names only."""
+    found = []
     for root in JOURNAL_ROOTS:
         for path in glob.glob(os.path.join(root, "[0-9a-f]" * 32, "user-%d*.journal*" % uid)):
             m = _USER_JOURNAL_RE.fullmatch(os.path.basename(path))
             if m and int(m.group(1)) == uid and not os.path.islink(path):
-                os.unlink(path)
-                gone += 1
-    return gone
+                found.append((path, os.path.basename(path) == "user-%d.journal" % uid))
+    return found
+
+
+def _forget_journal(uid):
+    """Delete the uid's user journal files; how many went.
+
+    journalctl --rotate is system-wide (journalctl(1) has no per-user or per-file rotation), so it
+    runs only when the uid still has an ACTIVE file (user-<uid>.journal), which journald may hold
+    open; archived files are deleted without it.
+    """
+    files = _user_journal_files(uid)
+    if any(active for _p, active in files):
+        subprocess.run([resolve("journalctl"), "--rotate"],             # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=60, env=_clean_env())
+        files = _user_journal_files(uid)
+    for path, _active in files:
+        os.unlink(path)
+    return len(files)
 
 
 def _forget_podman_tmp(uid):

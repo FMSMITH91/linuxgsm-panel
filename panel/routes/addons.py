@@ -34,7 +34,7 @@ _DB_TAKEN = "Another add-on already uses that database. Each add-on needs its ow
 _BUSY = "The add-on is already being installed. Wait for it to finish."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
-_NO_RCON = "The server's config has no RCON password (rcon_password or rconpassword). Set one, then install again."
+_NO_RCON = "The server's config sets no RCON password. Set one, then install again."
 _NO_PORT = "No free port was found on this host for the add-on's page or relays."
 _NO_IDS = "Couldn't read the server account's user and group ids on the host."
 _BAD_DB_HOST = "The database's server address can't be used for the add-on's relay."
@@ -132,7 +132,7 @@ def _host_refusal(gs, p, need_ports):
     if not _ad.log_dir(gs.short_name, p["logdir"]):
         return _NO_LOG
     if not p["rcon"]:
-        return _NO_RCON
+        return p["rcon_why"] or _NO_RCON
     if p["ids"] is None:
         return _NO_IDS
     return "" if len(p["ports"]) >= need_ports else _NO_PORT
@@ -226,6 +226,7 @@ def _install_steps(gs, plan, who):
     if rc != 0:
         return "Couldn't read the server's account on the host: it did not answer.", ""
     p = dict(_ad.parse_probe(out), addons=_ad.parse_status(out)["addons"])
+    p["rcon"], p["rcon_why"] = _ad.game_rcon(gs.game_type, p["rcon_lines"])
     why = _install_refusal(gs, plan, p) or _runtime(gs, p)
     if why:
         return why, ""
@@ -306,7 +307,7 @@ def _remove_answer(gs, addon_id):
     removed, others = _ad.remove_outcome(out, rc)
     if removed and not others:
         # The account runs no add-on any more: its user manager need not linger. Best-effort.
-        _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name], timeout=90)
+        _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name, "keep"], timeout=90)
     log_action(current_user, "addon_remove", target=gs.name, server=gs, success=removed,
                detail="%s %s" % (addon_id, "removed" if removed else "not removed (rc %s)" % rc))
     if not removed:

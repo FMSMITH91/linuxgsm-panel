@@ -1492,7 +1492,7 @@ _ARGV = {
     # stay, as useradd would have left them. Neither takes the panel's own account. See
     # tools/panel-helper (do_addon_account_prepare, do_addon_account_release).
     "addon-account-prepare": ([_destroyable_user], lambda a: [], None),
-    "addon-account-release": ([_destroyable_user], lambda a: [], None),
+    "addon-account-release": ([_destroyable_user, _choice("keep", "forget")], lambda a: [], None),
     # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
@@ -1865,21 +1865,25 @@ def _addon_release_remote(a):
 
     Lingering off, then the account's user manager stopped (waited for, at most
     ADDON_MANAGER_STOP_TIMEOUT seconds) and its failed state cleared; then, for a uid of at least
-    ADDON_FORGET_MIN_UID, its user journal files (after a rotation) and Podman's two /tmp folders
-    when they are real folders it owns. Prints linger=off, manager=stopped or manager=stop-failed,
-    then forgotten=<count>.
+    ADDON_FORGET_MIN_UID, Podman's two /tmp folders when they are real folders it owns and, with
+    `forget` (an uninstall), its user journal files: rotated first only when an active
+    user-<uid>.journal is there (rotation is system-wide). Prints linger=off, manager=stopped or
+    manager=stop-failed, then forgotten=<count>.
     """
+    forget = ("j=''; for f in /var/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\".journal; do "
+              "[ -f \"$f\" ] && [ ! -L \"$f\" ] && j=1; done; [ -n \"$j\" ] && journalctl --rotate >/dev/null 2>&1; "
+              "for f in /var/log/journal/*/user-\"$uid\".journal /var/log/journal/*/user-\"$uid\"@*.journal* "
+              "/run/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\"@*.journal*; do "
+              "if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then rm -f -- \"$f\" && n=$((n + 1)); fi; done; "
+              if a[1] == "forget" else "")
     return ("u=%s; uid=$(id -u \"$u\") || exit 1; loginctl disable-linger \"$u\" || exit 1; echo linger=off; "
             "if timeout %d systemctl stop \"user@$uid.service\"; then m=stopped; else m=stop-failed; fi; "
             "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\"; n=0; "
-            "if [ \"$uid\" -ge %d ] 2>/dev/null; then journalctl --rotate >/dev/null 2>&1; "
-            "for f in /var/log/journal/*/user-\"$uid\".journal /var/log/journal/*/user-\"$uid\"@*.journal* "
-            "/run/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\"@*.journal*; do "
-            "if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then rm -f -- \"$f\" && n=$((n + 1)); fi; done; "
+            "if [ \"$uid\" -ge %d ] 2>/dev/null; then %s"
             "for d in /tmp/podman-run-\"$uid\" /tmp/containers-user-\"$uid\"; do "
             "if [ -d \"$d\" ] && [ ! -L \"$d\" ] && [ \"$(stat -c %%u \"$d\")\" = \"$uid\" ]; then "
             "rm -rf --one-file-system -- \"$d\" && n=$((n + 1)); fi; done; fi; echo \"forgotten=$n\""
-            % (shlex.quote(a[0]), ADDON_MANAGER_STOP_TIMEOUT, ADDON_FORGET_MIN_UID))
+            % (shlex.quote(a[0]), ADDON_MANAGER_STOP_TIMEOUT, ADDON_FORGET_MIN_UID, forget))
 
 
 def _f2b_log_lines_remote(a):

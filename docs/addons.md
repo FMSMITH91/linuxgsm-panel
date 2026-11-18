@@ -44,9 +44,15 @@ remove ask for the password when the sign-in is older than the confirmation wind
 remove is audited.
 
 Removing an add-on deletes its container, image, unit and files. Its database is kept. Removing the last one also
-removes the account's Podman storage (its base images and Podman's own files), turns lingering off and deletes the
-account's add-on log lines from the system journal; uninstalling the server does the same. The add-on's folder is
-in the game account's home, so the server's backups include it.
+removes the account's Podman storage (its base images and Podman's own folders) and turns lingering off; the
+account's own journal is kept. Uninstalling the server also deletes the account's user journal, so an account
+later given the same user id can't read the old add-ons' lines. The add-on's folder is in the game account's home,
+so the server's backups include it.
+
+The add-on reads the RCON password the game itself reads: `rconpassword` for Call of Duty and United Offensive,
+`rcon_password` for Call of Duty 2, 4 and World at War. LinuxGSM's default World at War config sets
+`rconpassword`, which that game ignores; the install then asks you to rename it to `rcon_password` and restart
+the server.
 
 The game's log is found where the game writes it: `serverfiles` for Call of Duty 4 (LinuxGSM sets its home path
 there), `~/.callofduty` for Call of Duty and United Offensive, `~/.callofduty2` for Call of Duty 2 and `~/.codwaw`

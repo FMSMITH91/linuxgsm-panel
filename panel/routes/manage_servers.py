@@ -2856,7 +2856,8 @@ def _stop_game_processes(remote, short_name, selfname):
         # that off and stop the manager first (its add-ons stop cleanly, within their own stop
         # timeout), or the manager and its containers outlive the kill and hold the account, and a
         # manager killed by it is left "failed". Next to nothing for every other account.
-        _sm.run_privileged(remote, "addon-account-release", [short_name], timeout=90, merge_stderr=False)
+        _sm.run_privileged(remote, "addon-account-release", [short_name, "forget"], timeout=90,
+                           merge_stderr=False)
     except Exception:
         _log.debug("uninstall: linger release failed", exc_info=True)
     try:

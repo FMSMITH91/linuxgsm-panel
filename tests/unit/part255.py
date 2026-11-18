@@ -257,7 +257,7 @@ def _iw4m255(ids):
 
 
 # ── 4. releasing an account ─────────────────────────────────────────────────────────────────────
-def _release_helper255(stop_rc):
+def _release_helper255(stop_rc, mode="keep"):
     ran = []
 
     def run(argv, **_k):
@@ -272,7 +272,7 @@ def _release_helper255(stop_rc):
         _h255.pwd = _NS255(getpwnam=lambda n: _NS255(pw_name=n, pw_uid=4321))
         _h255.subprocess = _NS255(run=run, TimeoutExpired=saved["subprocess"].TimeoutExpired)
         _h255.resolve = lambda prog: prog
-        rc = _h255.do_addon_account_release(["cod4server"], None)
+        rc = _h255.do_addon_account_release(["cod4server", mode], None)
     finally:
         for k, v in saved.items():
             setattr(_h255, k, v)
@@ -281,55 +281,89 @@ def _release_helper255(stop_rc):
 
 def _release255():
     want = [["loginctl", "disable-linger", "cod4server"], ["systemctl", "stop", "user@4321.service"],
-            ["systemctl", "reset-failed", "user@4321.service"], ["journalctl", "--rotate"]]
-    eq("release (helper): lingering off, the user manager stopped, its failed state cleared",
-       _release_helper255(0), (0, want))
+            ["systemctl", "reset-failed", "user@4321.service"]]
+    eq("release (helper): lingering off, the user manager stopped, its failed state cleared; no journal file, no rotation",
+       [_release_helper255(0), _release_helper255(0, "forget")], [(0, want), (0, want)])
     eq("release (helper): a manager that does not stop in time is still cleared", _release_helper255(None), (0, want))
+    eq("release: the remove route keeps the journal, an uninstall forgets it (both sides take only keep/forget)",
+       [_arity255("keep"), _arity255("forget"), _arity255("keep", "x"), _arity255(), _arity255("purge")],
+       [False, False, True, True, True])
+    _release_remote255()
+    _forget255()
+
+
+def _arity255(*extra):
+    """True when the panel's side refuses addon-account-release with these arguments after the account."""
+    try:
+        _pv255.check_args("addon-account-release", ["cod4server"] + list(extra))
+    except ValueError:
+        return True
+    return False
+
+
+def _remote_release_run255(tag, mode, archived_only=False):
+    """The remote form under bash, its paths moved into a throwaway tree: (rc, stdout, files left, tools' log)."""
     bindir = os.path.join(_TMP255, "rbin")
+    log = os.path.join(_TMP255, "rbin-%s.log" % tag)
     os.makedirs(bindir, exist_ok=True)
     for tool in ("loginctl", "systemctl", "journalctl"):
         path = os.path.join(bindir, tool)
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write('#!/bin/sh\necho "%s $*"\n' % tool)
+            fh.write('#!/bin/sh\necho "%s $*"\necho "%s $*" >> "$R255_LOG"\n' % (tool, tool))
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         os.chmod(path, 0o700)  # nosec B103 - a stand-in tool in the part's own temp dir
     uid = _pv255.pwd.getpwnam("nobody").pw_uid
-    roots = _fake_journal255("rremote", uid)
-    cmd = _pv255.remote_command("addon-account-release", ["nobody"])
+    roots = _fake_journal255(tag, uid, archived_only)
+    cmd = _pv255.remote_command("addon-account-release", ["nobody", mode])
     tmp_dirs = ("/tmp/podman-run-", "/tmp/containers-user-")  # nosec B108 - the remote form's paths, redirected below
     for real, fake in (("/var/log/journal", roots[0]), ("/run/log/journal", roots[1]),
                        (tmp_dirs[0], roots[2] + "/podman-run-"), (tmp_dirs[1], roots[2] + "/containers-user-")):
         cmd = cmd.replace(real, fake)
     r = _sp255.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30,  # nosec B603 B607
-                   env={"PATH": bindir + ":/usr/bin:/bin"}, check=False)
-    eq("release (remote form): the same steps, then the uid's journal files go (a folder it doesn't own stays)",
-       (r.returncode, r.stdout, sorted(_left255(roots))),
-       (0, "loginctl disable-linger nobody\nlinger=off\nsystemctl stop user@%d.service\n"
-           "systemctl reset-failed user@%d.service\nmanager=stopped\nforgotten=3\n" % (uid, uid),
-        sorted(_KEPT255 + ["podman-run-%d" % uid, "containers-user-%d" % uid])))
-    _forget255()
+                   env={"PATH": bindir + ":/usr/bin:/bin", "R255_LOG": log}, check=False)
+    return r.returncode, r.stdout, sorted(_left255(roots)), open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+
+
+def _release_remote255():
+    uid = _pv255.pwd.getpwnam("nobody").pw_uid
+    head = ("loginctl disable-linger nobody\nlinger=off\nsystemctl stop user@%d.service\n"
+            "systemctl reset-failed user@%d.service\nmanager=stopped\n" % (uid, uid))
+    rc, out, left, tools = _remote_release_run255("rkeep", "keep")
+    eq("release (remote form, keep): the journal stays whole and nothing rotates (a folder the uid doesn't own stays)",
+       (rc, out, left, "--rotate" in tools),
+       (0, head + "forgotten=0\n", sorted(_ALL255 + ["podman-run-%d" % uid, "containers-user-%d" % uid]), False))
+    rc, out, left, tools = _remote_release_run255("rforget", "forget")
+    eq("release (remote form, forget): rotated once (an active file), then the uid's journal files go, nothing else",
+       (rc, out, left, tools.count("journalctl --rotate")),
+       (0, head + "forgotten=3\n", sorted(_KEPT255 + ["podman-run-%d" % uid, "containers-user-%d" % uid]), 1))
+    rc, out, left, tools = _remote_release_run255("rarch", "forget", archived_only=True)
+    eq("release (remote form, forget): only archived files left: they go, and nothing rotates",
+       (out.endswith("forgotten=1\n"), "--rotate" in tools), (True, False))
 
 
 # What must survive a forget: another uid's journal (a longer number), the system journal, a link.
 _KEPT255 = ["user-%s0.journal", "system.journal", "user-link.journal"]
+_ALL255 = []
 
 
-def _fake_journal255(tag, uid):
+def _fake_journal255(tag, uid, archived_only=False):
     """Two journal roots and a /tmp stand-in, holding the uid's files and ones that must stay."""
     base = os.path.join(_TMP255, tag)
     roots = [os.path.join(base, "var"), os.path.join(base, "run"), os.path.join(base, "tmp")]
     mid = os.path.join(roots[0], "0123456789abcdef0123456789abcdef")
     os.makedirs(mid, exist_ok=True)
     os.makedirs(os.path.join(roots[1], "fedcba9876543210fedcba9876543210"), exist_ok=True)
-    for name in ("user-%d.journal" % uid, "user-%d@00ab-0000000000000001-0005f3a1b2c3d4e5.journal" % uid,
-                 "user-%d0.journal" % uid, "system.journal"):
+    names = ["user-%d@00ab-0000000000000001-0005f3a1b2c3d4e5.journal" % uid, "user-%d0.journal" % uid, "system.journal"]
+    for name in names + ([] if archived_only else ["user-%d.journal" % uid]):
         open(os.path.join(mid, name), "w").close()
-    open(os.path.join(roots[1], "fedcba9876543210fedcba9876543210", "user-%d.journal" % uid), "w").close()
+    if not archived_only:
+        open(os.path.join(roots[1], "fedcba9876543210fedcba9876543210", "user-%d.journal" % uid), "w").close()
     os.symlink(os.path.join(mid, "system.journal"), os.path.join(mid, "user-link.journal"))
     for d in ("podman-run-%d" % uid, "containers-user-%d" % uid):
         os.makedirs(os.path.join(roots[2], d, "sub"), exist_ok=True)
-    global _KEPT255
+    global _KEPT255, _ALL255
     _KEPT255 = [k % uid if "%s" in k else k for k in ("user-%s0.journal", "system.journal", "user-link.journal")]
+    _ALL255 = _KEPT255 + names[:1] + ([] if archived_only else ["user-%d.journal" % uid] * 2)
     return roots
 
 
@@ -338,12 +372,8 @@ def _left255(roots):
             and not _re255.fullmatch(r"[0-9a-f]{32}", n)]
 
 
-def _forget255():
-    uid = os.getuid()
-    if uid < _h255.ADDON_FORGET_MIN_UID:
-        skip("release (helper): the uid's journal files and its own /tmp folders go", "runs as a uid below 1000 (root)")
-        return
-    roots = _fake_journal255("rhelper", uid)
+def _forget_run255(tag, uid, forget, archived_only=False):
+    roots = _fake_journal255(tag, uid, archived_only)
     saved = {k: getattr(_h255, k) for k in ("subprocess", "resolve", "JOURNAL_ROOTS", "ADDON_TMP_DIRS")}
     ran = []
     try:
@@ -351,13 +381,26 @@ def _forget255():
         _h255.resolve = lambda prog: prog
         _h255.JOURNAL_ROOTS = tuple(roots[:2])
         _h255.ADDON_TMP_DIRS = (roots[2] + "/podman-run-%d", roots[2] + "/containers-user-%d")
-        got = (_h255._addon_forget_account(uid), _h255._addon_forget_account(999))
+        got = (_h255._addon_forget_account(uid, forget), _h255._addon_forget_account(999, forget))
     finally:
         for k, v in saved.items():
             setattr(_h255, k, v)
-    eq("release (helper): after a rotation, the uid's journal files and its own /tmp folders go, nothing else; "
-       "nothing at all for a uid below 1000",
-       (got, ran, sorted(_left255(roots))), ((5, 0), [["journalctl", "--rotate"]], sorted(_KEPT255)))
+    return got, ran, sorted(_left255(roots))
+
+
+def _forget255():
+    uid = os.getuid()
+    if uid < _h255.ADDON_FORGET_MIN_UID:
+        skip("release (helper): the uid's journal files and its own /tmp folders go", "runs as a uid below 1000 (root)")
+        return
+    eq("release (helper, forget): rotated once for the active file, then the uid's journal files and its own /tmp "
+       "folders go, nothing else; nothing at all for a uid below 1000",
+       _forget_run255("hforget", uid, True), ((5, 0), [["journalctl", "--rotate"]], sorted(_KEPT255)))
+    got = _forget_run255("hkeep", uid, False)
+    eq("release (helper, keep): only its /tmp folders go; the journal stays whole and nothing rotates",
+       got, ((2, 0), [], sorted(_ALL255)))
+    got = _forget_run255("harch", uid, True, archived_only=True)
+    eq("release (helper, forget): only archived files: they go without a rotation", (got[0], got[1]), ((3, 0), []))
 
 
 # ── 5. B3 ───────────────────────────────────────────────────────────────────────────────────────
@@ -432,6 +475,25 @@ def _b3_geo255(ids):
         "Requires=lgsm-addon-b3-db.socket" in unit], [True, True, True])
 
 
+def _waw255(ids):
+    sid = ids["waw"]
+    calls = _host255(_probe255(".codwaw/main", 'set rconpassword "%s"' % _RC255, "ports= 21004\n"))
+    _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
+    _p9_drain()
+    row = _p9_audit("addon_install")
+    eq("World at War (route): only rconpassword set: refused with the rename sentence, nothing installed",
+       [row.success, _ad255._RCON_RENAME in row.detail, bool(_installed255(calls)[0])], [False, True, False])
+    lines = 'set rconpassword "ignored"\nset rcon_password "%s"\n' % _RC255
+    calls = _host255(_probe255(".codwaw/main", lines, "ports= 21004\n"))
+    _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
+    _p9_drain()
+    sh, stdin, puts = _installed255(calls)
+    srv = (_json255.loads(stdin or "{}").get("Servers") or [{}])[0]
+    eq("World at War (route): its rcon_password is the one IW4MAdmin gets, with WaW's parser and ~/.codwaw's log",
+       [srv.get("Password"), srv.get("RConParserVersion"), "Volume=/home/cwp255/.codwaw/main:/gamelog:ro"
+        in _unit_of255(puts)], [_RC255, "Call of Duty 5: World at War Parser", True])
+
+
 def _audit_started255():
     from panel.db.models import AuditLog
     with _p9.app_context():
@@ -441,8 +503,14 @@ def _audit_started255():
 
 
 def _b3_pieces255():
-    eq("RCON: CoD1's rconpassword is read as well as rcon_password",
-       [_ad255.rcon_password('set rconpassword "abc"'), _ad255.rcon_password("seta rcon_password xyz")], ["abc", "xyz"])
+    both = 'set rconpassword "old"\nset rcon_password "new"\n'
+    eq("RCON: each game reads only its own setting: CoD1 and UO rconpassword, CoD2, CoD4 and WaW rcon_password",
+       [_ad255.game_rcon(g, both) for g in ("cod", "coduo", "cod2", "cod4", "codwaw")],
+       [("old", ""), ("old", ""), ("new", ""), ("new", ""), ("new", "")])
+    eq("RCON: World at War with only rconpassword set (LinuxGSM's default) is told to rename it; none set says nothing",
+       [_ad255.game_rcon("codwaw", 'set rconpassword "x"'), _ad255.game_rcon("codwaw", ""),
+        _ad255.game_rcon("cod", 'set rcon_password "x"')],
+       [("", _ad255._RCON_RENAME), ("", ""), ("", "")])
     check("RCON: United Offensive's config is read from serverfiles/uo",
           "serverfiles/uo/coduoserver.cfg" in _ad255.probe_sh(_ad255.B3, "coduoserver", 4, "coduo", 0))
     eq("log dir: one leading dot is allowed (~/.callofduty/main), ./ and .. are not",
@@ -491,8 +559,11 @@ def _b3_remove255(ids):
 def _run_remove255(other):
     """remove_sh for B3 under bash with stand-ins, in a throwaway home: (rc, stdout, tools' log, home)."""
     home = os.path.join(_TMP255, "rm-%s" % other)
-    for d in ("panel-addons/b3/Data", ".cache/containers/x", ".config/containers/systemd", ".config/systemd/user"):
+    for d in ("panel-addons/b3/Data", ".cache/containers/x", ".config/containers/systemd", ".config/systemd/user",
+              ".config/containers/podman", ".local/share/containers/storage/overlay", "elsewhere/keep"):
         os.makedirs(os.path.join(home, d), exist_ok=True)
+    if not os.path.lexists(os.path.join(home, ".config", "cni")):
+        os.symlink(os.path.join(home, "elsewhere"), os.path.join(home, ".config", "cni"))
     if other:
         os.makedirs(os.path.join(home, "panel-addons", "iw4madmin"), exist_ok=True)
     log = os.path.join(home, "tools.log")
@@ -510,10 +581,11 @@ def _purge255():
        [rc, "others=1" in out, "system reset" in tools, os.path.isdir(os.path.join(home, ".cache", "containers"))],
        [0, True, False, True])
     rc, out, tools, home = _run_remove255(False)
-    eq("remove: the last add-on takes the account's Podman storage, cache and empty folders with it",
+    eq("remove: the last add-on takes the account's Podman storage, cache and folders with it; a link is not followed",
        [rc, "others=0" in out, "podman system reset -f" in tools,
-        [d for d in (".cache/containers", ".config/containers", ".config/systemd") if os.path.exists(os.path.join(home, d))]],
-       [0, True, True, []])
+        [d for d in (".cache/containers", ".config/containers", ".config/systemd", ".local/share/containers")
+         if os.path.exists(os.path.join(home, d))], os.path.isdir(os.path.join(home, "elsewhere", "keep"))],
+       [0, True, True, [], True])
 
 
 def _b3_logs255(ids):
@@ -526,7 +598,8 @@ def _b3_logs255(ids):
 def _fixture255():
     ids = {"cod4": _p9_new_server(P9_HOST, "cod4p255", "cod4", 28960, name="p255-cod4"),
            "cod": _p9_new_server(P9_HOST, "codp255", "cod", 28960, name="p255-cod"),
-           "other": _p9_new_server(P9_HOST, "cod2p255", "cod2", 28961, name="p255-cod2")}
+           "other": _p9_new_server(P9_HOST, "cod2p255", "cod2", 28961, name="p255-cod2"),
+           "waw": _p9_new_server(P9_HOST, "cwp255", "codwaw", 28962, name="p255-waw")}
     with _p9.app_context():
         mine = _GD255(remote_id=P9_HOST, game_server_id=ids["cod"], name="gs%d_b3" % ids["cod"], secret=_enc255(_DBV255))
         theirs = _GD255(remote_id=P9_HOST, game_server_id=ids["other"], name="gs%d_x" % ids["other"], secret=_enc255("x"))
@@ -543,12 +616,12 @@ def _drop255(ids):
             if r is not None:
                 _db255.session.delete(r)
         _db255.session.commit()
-    for k in ("cod4", "cod", "other"):
+    for k in ("cod4", "cod", "other", "waw"):
         _p9_delete_server(ids[k])
 
 
 def _routes255(ids):
-    for step in (_died_route255, _iw4m255, _b3_refusals255, _b3_local255, _b3_geo255, _b3_remove255, _b3_logs255):
+    for step in (_died_route255, _iw4m255, _waw255, _b3_refusals255, _b3_local255, _b3_geo255, _b3_remove255, _b3_logs255):
         _p9_restore_all()
         _p9_arm(who="part255")
         step(ids)

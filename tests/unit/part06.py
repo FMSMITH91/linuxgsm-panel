@@ -8619,7 +8619,7 @@ def _outside_single_quotes(cmd):
 _INJ_FILLERS = ["abc", "1", "22", "root", "yes", "no", "prohibit-password", "-", "gmod",
                 "gmodserver", "PermitRootLogin", "PasswordAuthentication", "1720000000", "2",
                 "ssh-ed25519 AAAA", "0", "10", "2026-01-02", "2026-01-02 03:04:05", "hour",
-                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2", "ro"]
+                "mariadb", "socket", "tcp3306", "gs1_a", "native", "game", "100.70.1.2", "ro", "keep"]
 _inj_bad, _inj_checked, _inj_nofill, _inj_base_exposed = [], 0, [], {}
 for _verb in sorted(_priv._REMOTE_ACTIONS):
     _spec = _priv._ARGV.get(_verb)

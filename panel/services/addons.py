@@ -167,7 +167,17 @@ _FAIL_MARKS = {
 }
 _B3_RCON_REFUSAL = ("B3 can't use this RCON password: it has a space at either end, or a space before a ';'. "
                     "Change it, then install again.")
-_RCON_RE = re.compile(r'^[ \t]*seta?[ \t]+rcon_?password[ \t]+(?:"([^"\r\n]*)"|(\S+))', re.I | re.M)
+_RCON_RE = {name: re.compile(r'^[ \t]*seta?[ \t]+%s[ \t]+(?:"([^"\r\n]*)"|(\S+))' % name, re.I | re.M)
+            for name in ("rcon_password", "rconpassword")}
+# The RCON password setting each game reads. CoD4 and World at War read rcon_password only: World at
+# War answers "The server must set 'rcon_password'" when only rconpassword is set (test box,
+# 2026-11-18), though LinuxGSM's own codwaw config sets rconpassword. CoD1 reads rconpassword (B3's
+# RCON test passed on LinuxGSM's codserver config, which sets only that) and United Offensive is
+# CoD1's engine; CoD2 is taken as rcon_password like the later engines (not yet seen on a box).
+RCON_SETTING = {"cod": "rconpassword", "coduo": "rconpassword", "cod2": "rcon_password", "cod4": "rcon_password",
+                "codwaw": "rcon_password"}
+_RCON_RENAME = ("This game ignores rconpassword. In the server's config, rename it to rcon_password, restart the "
+                "server, then install again.")
 _KV_RE = re.compile(r"([a-z][a-z0-9_.]{0,40})=(.*)")
 _VERSION_RE = re.compile(r"(?<!\d)(\d{1,9})\.(\d{1,9})")
 _STATES = ("active", "activating", "deactivating", "inactive", "failed", "reloading")
@@ -225,10 +235,10 @@ def kv_lines(out):
     return got
 
 
-def rcon_password(cfg_text):
-    """The last RCON password a CoD server config sets (rcon_password or rconpassword), or ""."""
+def rcon_password(cfg_text, name="rcon_password"):
+    """The last value a CoD server config sets for `name` (rcon_password or rconpassword), or ""."""
     found = ""
-    for m in _RCON_RE.finditer(cfg_text or ""):
+    for m in _RCON_RE[name].finditer(cfg_text or ""):
         found = m.group(1) if m.group(1) is not None else m.group(2)
     return found
 
@@ -257,9 +267,9 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     unit's User= and Group=), logdir= (the folder of the newest games_mp.log under serverfiles, or
     the game's own folder in the home: LinuxGSM sets fs_homepath only for cod4server, so CoD1 and
     United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and World at War under
-    ~/.codwaw), rcon.b64= (the config's RCON password line,
-    base64), ports= (the first `nports` free host ports from PORT_BASE + the server id) and
-    installed=1 when the add-on is already there.
+    ~/.codwaw), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
+    game_rcon picks the game's own), ports= (the first `nports` free host ports from PORT_BASE + the
+    server id) and installed=1 when the add-on is already there.
     """
     cfg = "serverfiles/%s/%s.cfg" % (_CFG_DIR.get(game_type, "main"), selfname)
     ports = " ".join(str(PORT_BASE + int(server_id) + i) for i in range(_PORT_TRIES))
@@ -268,8 +278,8 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
             'l=$(find serverfiles .callofduty* .cod* -maxdepth 3 -type f -name games_mp.log -printf "%%T@ %%h\\n" '
             '2>/dev/null | sort -nr | head -n 1 | cut -d" " -f2-); echo "logdir=$l"; '
-            'echo "rcon.b64=$(grep -iE "^[[:space:]]*seta?[[:space:]]+rcon_?password" %s 2>/dev/null '
-            '| tail -n 1 | head -c 400 | base64 -w0)"; '
+            'echo "rcon.b64=$(grep -iE "^[[:space:]]*seta?[[:space:]]+rcon_?password[[:space:]]" %s 2>/dev/null '
+            '| head -c 4000 | base64 -w0)"; '
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
             'echo "ports=$f"; [ -f %s ] && echo installed=1; true'
@@ -298,7 +308,7 @@ def parse_probe(out):
     ids = (kv.get("uid", ""), kv.get("gid", ""))
     ids = (int(ids[0]), int(ids[1])) if all(x.isdecimal() and 0 < int(x) < 2 ** 31 for x in ids) else None
     return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "splice": kv.get("splice") == "1", "ids": ids,
-            "logdir": kv.get("logdir", ""), "rcon": rcon_password(_unb64(kv.get("rcon.b64", ""))),
+            "logdir": kv.get("logdir", ""), "rcon_lines": _unb64(kv.get("rcon.b64", "")),
             "ports": [int(p) for p in kv.get("ports", "").split() if p.isdecimal()],
             "installed": kv.get("installed") == "1"}
 
@@ -373,6 +383,19 @@ def iw4madmin_files():
                  "KickOnInfringingName": False}
     return {"Configuration/StatsPluginSettings.json": json.dumps(stats, indent=2) + "\n",
             "Configuration/ProfanityDetermentSettings.json": json.dumps(profanity, indent=2) + "\n"}
+
+
+def game_rcon(game_type, rcon_lines):
+    """(the RCON password the game reads, or "", and why not: _RCON_RENAME or "") from the config's lines.
+
+    Only the game's own setting (RCON_SETTING) counts. A config that sets only the other name, which
+    the game ignores, gets the sentence that says to rename it.
+    """
+    name = RCON_SETTING.get(game_type, "rcon_password")
+    value = rcon_password(rcon_lines, name)
+    if value or name != "rcon_password":
+        return value, ""
+    return "", _RCON_RENAME if rcon_password(rcon_lines, "rconpassword") else ""
 
 
 def b3_ini_refusal(rcon):
@@ -664,7 +687,7 @@ def remove_sh(user, addon_id):
     The folder goes through `podman unshare`, so a file the container made as one of its own users
     (a subordinate id) goes too. A built image's leftover build layers go with `podman image prune`.
     When it was the account's last add-on, Podman's own storage and files go too (`podman system
-    reset`: base images, layers, its state; then its cache and the folders it made, when empty).
+    reset`, then what it leaves: see _podman_purge_sh).
     Prints ADDON_REMOVED and others=0/1 (whether another add-on is left).
     """
     unit = unit_name(addon_id)
@@ -683,14 +706,20 @@ def remove_sh(user, addon_id):
 
 
 def _podman_purge_sh(user):
-    """Shell removing the account's Podman storage and files once it runs no add-on (best effort)."""
+    """Shell removing the account's Podman storage and files once it runs no add-on (best effort).
+
+    `podman system reset` removes images, layers and state but leaves a skeleton (a lock, empty
+    store folders, a cache database) and its config folders: those, and its cache, then go whole,
+    each only when it is a real folder (not a link) owned by the account, and rm never crosses into
+    another file system. The unit folders go when empty.
+    """
     h = "/home/%s" % user
-    return ("podman system reset -f >/dev/null 2>&1; rm -rf -- %s; rm -f -- %s; "
-            "rmdir -- %s %s %s %s %s %s 2>/dev/null; "
-            % (shlex.quote(h + "/.cache/containers"), shlex.quote(h + "/.config/cni/net.d/87-podman-bridge.conflist"),
-               shlex.quote(h + "/" + QUADLET_DIR), shlex.quote(h + "/.config/containers"),
-               shlex.quote(h + "/" + USER_UNIT_DIR), shlex.quote(h + "/.config/systemd"),
-               shlex.quote(h + "/.config/cni/net.d"), shlex.quote(h + "/.config/cni")))
+    owned = " ".join(shlex.quote(h + "/" + d) for d in (".local/share/containers", ".config/containers", ".config/cni",
+                                                         ".cache/containers"))
+    return ("podman system reset -f >/dev/null 2>&1; "
+            "for p in %s; do if [ -d \"$p\" ] && [ ! -L \"$p\" ] && [ \"$(stat -c %%u \"$p\")\" = \"$(id -u)\" ]; "
+            "then rm -rf --one-file-system -- \"$p\"; fi; done; rmdir -- %s %s 2>/dev/null; "
+            % (owned, shlex.quote(h + "/" + USER_UNIT_DIR), shlex.quote(h + "/.config/systemd")))
 
 
 def remove_outcome(out, rc):

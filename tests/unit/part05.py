@@ -1648,7 +1648,7 @@ _VERB_SAMPLES = {
     "restart-flags": [],
     "gameuser-group": ["gmodserver"],
     "addon-account-prepare": ["cod4server"],
-    "addon-account-release": ["cod4server"],
+    "addon-account-release": ["cod4server", "forget"],
     "steam-dumps-sweep": ["gmodserver"],
     "apt-install-minimal": ["libc6:i386", "curl"],
     "steamcmd-install": [],

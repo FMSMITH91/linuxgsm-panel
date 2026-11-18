@@ -49,7 +49,7 @@ _DBV253 = "Dbv253" + "abcdefghijklmnopqrstu"   # a database's password in these 
 # ── 1. the verbs ────────────────────────────────────────────────────────────────────────────────
 def _refuses253(verb, user):
     try:
-        _pv253.check_args(verb, [user])
+        _pv253.check_args(verb, [user] + (["keep"] if verb == "addon-account-release" else []))
     except ValueError:
         return True
     return False
@@ -60,7 +60,7 @@ def _verbs253():
     for verb in ("addon-account-prepare", "addon-account-release"):
         check("addon verbs: %s refuses root on the panel's side" % verb, _refuses253(verb, "root"))
         try:
-            _h253.validate(verb, ["root"])
+            _h253.validate(verb, ["root"] + (["keep"] if verb == "addon-account-release" else []))
             helper_refused = False
         except ValueError:
             helper_refused = True
@@ -69,8 +69,8 @@ def _verbs253():
         check("addon verbs: release refuses the panel's own account (it would end a per-user install's boot start)",
               _refuses253("addon-account-release", panel_user))
     eq("addon verbs: release is the helper's own function on both sides (no fixed argv)",
-       (_pv253.tool_argv("addon-account-release", ["cod4server"]),
-        _h253.VERBS["addon-account-release"][1](["cod4server"]),
+       (_pv253.tool_argv("addon-account-release", ["cod4server", "keep"]),
+        _h253.VERBS["addon-account-release"][1](["cod4server", "keep"]),
         _h253.ACTIONS.get("addon-account-release") is _h253.do_addon_account_release),
        ([], [], True))
     eq("addon verbs: the two copies of the id range agree",
