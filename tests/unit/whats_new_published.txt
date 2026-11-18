@@ -789,3 +789,5 @@ ccc91396 Panel backup restores check the archive before unpacking it.
 46e54505 A second dump upload waits for the first one's restore.
 c6ab4344 A failed dump upload says whether an earlier dump was put back.
 6a4b40a9 A refused Let's Encrypt certificate is recorded in the audit log.
+7f487832 Add-ons in containers: IW4MAdmin and B3.
+2973d843 Add-ons run locked down, and only for those you allow.
