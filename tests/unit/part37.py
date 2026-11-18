@@ -556,7 +556,7 @@ def _wrapper_refs37(tree):
 # text privileged.py builds from validated arguments. A new caller fails until it is reviewed.
 _LOCAL_SHELL_CALLERS37 = {("_run_local", "_exec_local_shell"), ("run_command", "_run_local"),
                           ("_run_privileged", "_run_local"), ("write_content_cron", "_run_local"),
-                          ("write_root_file", "_run_local"), ("write_root_crontab", "_run_local")}
+                          ("write_root_file", "_run_local")}
 
 
 def _local_shell_callers37():

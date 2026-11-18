@@ -1070,8 +1070,8 @@ check("escalation census: it reads every panel module and root script",
 # So count what it excludes and pin that: there are exactly four transports (run_privileged and
 # write_root_file in ssh_manager, twice each for the helper-present and no-helper paths, plus
 # _run_verb in system_ops), plus two for write_content_cron, whose destination is per-user and so
-# cannot live in WRITE_TARGETS, and two for write_root_crontab, whose content is checked line by line
-# (privileged.root_crontab_problem) and installed by `crontab -u root -`. Raise this only when the
+# cannot live in WRITE_TARGETS, and one for write_root_crontab (ssh_manager/cron.py), whose content is
+# checked line by line (privileged.root_crontab_problem) and installed by `crontab -u root -`. Raise this only when the
 # verb layer genuinely gains another one.
 _excluded = 0
 for _f in _ESCALATION_PATHS:
@@ -1084,8 +1084,8 @@ for _f in _ESCALATION_PATHS:
             if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
                     and _k.value.value is True and _is_dispatch(_n)):
                 _excluded += 1
-check("escalation census: the exclusion covers exactly the 8 known transports",
-      _excluded == 8, "excluded %d" % _excluded)
+check("escalation census: the exclusion covers exactly the 7 known transports",
+      _excluded == 7, "excluded %d" % _excluded)
 
 for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
