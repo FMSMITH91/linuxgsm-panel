@@ -166,17 +166,20 @@ def _register_sign_in(app):
         from panel.routes.push_devices import signout_keeps_alerts
         keep_alerts = signout_keeps_alerts(current_user._get_current_object(), request.form)
         logout_user()
-        # Clear-Site-Data (Session Management Cheat Sheet, "Web Content Caching and Clear-Site-Data"):
-        # the browser drops this site's cookies and storage (the console's command history among
-        # them). Not "cache": the panel's own pages are no-cache already, and it would also throw
-        # away the cached scripts and styles. The message rides the URL, not a flash: the flash is
-        # kept in the session cookie this header deletes.
+        # Clear-Site-Data (Session Management Cheat Sheet, "Web Content Caching and Clear-Site-Data":
+        # "cache", "cookies", "storage" at logout): the browser drops this site's cookies, storage
+        # (the console's command history among them) and its HTTP cache. The signed-in pages are
+        # `no-cache, private` (app.py: no-store would keep them out of the back/forward cache), which
+        # lets the browser keep a copy on disk; "cache" removes those copies (the dashboard, the
+        # audit log, host addresses) at sign-out. The cost is one fresh download of the scripts and
+        # styles at the next sign-in. The message rides the URL, not a flash: the flash is kept in
+        # the session cookie this header deletes.
         # "storage" also unregisters the site's service workers, and with them this device's push
         # subscription, so a device whose alerts stay on after sign-out (by design; the sign-out page
-        # says so and offers to stop them) gets "cookies" alone: that page clears localStorage and
+        # says so and offers to stop them) gets "cache" and "cookies" only: that page clears localStorage and
         # sessionStorage itself before it posts.
         resp = redirect("/login?signed_out=%d" % (1 if revoked else 2))
-        resp.headers["Clear-Site-Data"] = '"cookies"' if keep_alerts else '"cookies", "storage"'
+        resp.headers["Clear-Site-Data"] = '"cache", "cookies"' if keep_alerts else '"cache", "cookies", "storage"'
         return resp
 
 

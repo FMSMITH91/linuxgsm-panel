@@ -196,8 +196,9 @@
       });
     }).catch(function () { return null; });
     form.addEventListener('submit', function () {
-      // Alerts kept: the server then clears only cookies (Clear-Site-Data "storage" would remove the
-      // service worker and its subscription), so this page clears the rest of the site's storage.
+      // Alerts kept: the server then clears only the cache and cookies (Clear-Site-Data "storage"
+      // would remove the service worker and its subscription), so this page clears the rest of the
+      // site's storage.
       if (input.value && !stop.checked) {
         try { window.localStorage.clear(); window.sessionStorage.clear(); } catch (e) { /* private mode */ }
       }
