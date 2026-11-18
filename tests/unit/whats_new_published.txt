@@ -741,3 +741,13 @@ b16195bb MagicDNS check asked a name no tailnet uses.
 adbf52b7 Root's crontab stays closed on the panel host unless opened at install.
 3fe2b860 The login link must come from the chosen control server.
 cc33e4ec An open console costs the server less when it is quiet.
+4a4a42a8 A malformed request no longer fills the panel's log.
+50ebd894 Wrong values in a few requests answer "invalid" instead of a server error.
+ea601a1e A host command that fails answers 502, not 500.
+c6919738 Signed-in pages are not kept in the browser's cache.
+9c2cad7c Signing out removes the "Remember me" cookie in the browser.
+5c0e7259 The panel's own HTTPS offers only modern encryption.
+8e8d5194 Pages refuse resources from other sites (Cross-Origin-Embedder-Policy).
+07c3c04a The database upload check reads SQL the way the database client does.
+9d8ab71a Dumps the check cannot read safely are refused.
+1d2278e2 A database restore never reads files from the host.
