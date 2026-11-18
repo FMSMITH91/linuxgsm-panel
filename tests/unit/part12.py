@@ -3990,7 +3990,7 @@ check("docs: SECURITY.md shows the helper's Defaults! line exactly as install.sh
 # starting it, names the part that asked for it (part250 checks the list is empty), and forgets the
 # rate limit, so the next render that misses its stub is named too. A part that tests the resolvers
 # themselves (part18) swaps _shared.threading for part12's queue first, and is not recorded.
-_p9_Over = __import__("unit.part10", fromlist=["_Over"])._Over   # (part10's module-object stand-in)
+_p9_over_cls = __import__("unit.part10", fromlist=["_Over"])._Over   # (part10's module-object stand-in)
 P9_RESOLVER_THREADS = []
 
 
@@ -4028,7 +4028,7 @@ def _p9_resolver_thread(*a, **k):
     return _p9_real_threading.Thread(*a, **k)
 
 
-_p9_sh.threading = _p9_Over(_p9_real_threading, Thread=_p9_resolver_thread)
+_p9_sh.threading = _p9_over_cls(_p9_real_threading, Thread=_p9_resolver_thread)
 
 
 # ── which request ran with the transport tripwire off (review 1118 T13/T14) ───────────────────────
