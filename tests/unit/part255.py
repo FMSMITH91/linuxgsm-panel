@@ -487,7 +487,7 @@ def _waw255(ids):
     calls = _host255(_probe255(".codwaw/main", lines, "ports= 21004\n"))
     _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
     _p9_drain()
-    sh, stdin, puts = _installed255(calls)
+    _sh, stdin, puts = _installed255(calls)
     srv = (_json255.loads(stdin or "{}").get("Servers") or [{}])[0]
     eq("World at War (route): its rcon_password is the one IW4MAdmin gets, with WaW's parser and ~/.codwaw's log",
        [srv.get("Password"), srv.get("RConParserVersion"), "Volume=/home/cwp255/.codwaw/main:/gamelog:ro"
