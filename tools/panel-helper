@@ -5796,7 +5796,7 @@ ADDON_MANAGER_STOP_TIMEOUT = 75
 # are removed for is useradd's UID_MIN: a game account is never below it.
 ADDON_FORGET_MIN_UID = 1000
 JOURNAL_ROOTS = ("/var/log/journal", "/run/log/journal")
-ADDON_TMP_DIRS = ("/tmp/podman-run-%d", "/tmp/containers-user-%d")
+ADDON_TMP_DIRS = ("/tmp/podman-run-%d", "/tmp/containers-user-%d")  # nosec B108 - Podman's own paths, only deleted
 _USER_JOURNAL_RE = re.compile(r"user-(\d+)(?:@[0-9a-f]+(?:-[0-9a-f]+){1,2})?\.journal~?")
 
 

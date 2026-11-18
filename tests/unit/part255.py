@@ -296,8 +296,9 @@ def _release255():
     uid = _pv255.pwd.getpwnam("nobody").pw_uid
     roots = _fake_journal255("rremote", uid)
     cmd = _pv255.remote_command("addon-account-release", ["nobody"])
+    tmp_dirs = ("/tmp/podman-run-", "/tmp/containers-user-")  # nosec B108 - the remote form's paths, redirected below
     for real, fake in (("/var/log/journal", roots[0]), ("/run/log/journal", roots[1]),
-                       ("/tmp/podman-run-", roots[2] + "/podman-run-"), ("/tmp/containers-user-", roots[2] + "/containers-user-")):
+                       (tmp_dirs[0], roots[2] + "/podman-run-"), (tmp_dirs[1], roots[2] + "/containers-user-")):
         cmd = cmd.replace(real, fake)
     r = _sp255.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30,  # nosec B603 B607
                    env={"PATH": bindir + ":/usr/bin:/bin"}, check=False)
