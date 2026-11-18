@@ -166,7 +166,7 @@ _B3_RCON_REFUSAL = ("B3 can't use this RCON password: it has a space at either e
                     "Change it, then install again.")
 _RCON_RE = re.compile(r'^[ \t]*seta?[ \t]+rcon_?password[ \t]+(?:"([^"\r\n]*)"|(\S+))', re.I | re.M)
 _KV_RE = re.compile(r"([a-z][a-z0-9_.]{0,40})=(.*)")
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)")
+_VERSION_RE = re.compile(r"(?<!\d)(\d{1,9})\.(\d{1,9})")
 _STATES = ("active", "activating", "deactivating", "inactive", "failed", "reloading")
 
 
