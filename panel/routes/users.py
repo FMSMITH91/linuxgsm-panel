@@ -52,7 +52,7 @@ def register(app):
 
 
 def _invite_listing():
-    """Outstanding invites for the superadmin's list: every redeemable one, and a few finished ones."""
+    """Outstanding invites for the superadmin's list: every redeemable one (finished ones are in the audit log)."""
     # The bound has to be a bound over REDEEMABLE invites. It used to be `.limit(25)` over
     # every row whatever its state, so 25 newer used/expired/revoked links pushed a live
     # one off the page — and this list is the only place the Revoke button is rendered

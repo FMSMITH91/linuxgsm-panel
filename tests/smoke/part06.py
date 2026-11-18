@@ -1292,8 +1292,8 @@ try:
             db.session.add(_iv_dead)
             db.session.flush()
             _iv_made.append(_iv_dead.id)
-        # One that EXPIRED without being used or revoked: finished, shown once for context,
-        # and not live. Counting it live (in _invite_listing since manage_users was split) left
+        # One that EXPIRED without being used or revoked: finished, so not listed at all, and
+        # not live. Counting it live (in _invite_listing since manage_users was split) left
         # every suite green — the dead rows above are all used — and listed it twice.
         _iv_exp, _ = _IvR.mint(_iv_admin3, hours=1, note="smoke-expired-invite")
         _iv_exp.expires_at = _iv_now() - _iv_td(minutes=5)

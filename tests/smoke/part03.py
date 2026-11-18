@@ -1351,10 +1351,15 @@ with app.app_context():
     # In WAL mode VACUUM writes the rebuilt database into the -wal file; without a checkpoint after
     # it, "Optimize" left the WAL about the size of the whole database (4 MB -> 12.4 MB on a real
     # panel) until the next restart. After a VACUUM that ran, the TRUNCATE checkpoint leaves it empty.
+    # This is the one check that reaches the real VACUUM (optimize commits this session first, so
+    # nothing here holds a lock it waits on): a VACUUM that never runs fails here by name, not
+    # silently skipping the checkpoint check below.
     _wal = str(DB_PATH) + "-wal"
     _wal_size = os.path.getsize(_wal) if os.path.exists(_wal) else 0
+    check("optimize: (premise) the VACUUM really ran here, so the checkpoint after it is what is read",
+          _info.get("vacuumed") is True, repr(_info))
     check("optimize: after a VACUUM the WAL file is trimmed, not left the size of the database",
-          not _info.get("vacuumed") or _wal_size == 0,
+          _wal_size == 0,
           "vacuumed=%r wal=%d bytes db=%d bytes" % (_info.get("vacuumed"), _wal_size, _info.get("after", 0)))
 
     # ── the message must not assert a checkpoint nobody read ────────────────────────────────
