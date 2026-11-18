@@ -18,6 +18,10 @@ database's own account (whose grant is that one database), the client in --binar
 command in the dump but DELIMITER). The database server is what keeps a statement in that database;
 the check is what refuses a dump made for another one before anything runs.
 
+One upload per database at a time, from its start until its restore has ended: a second start for the
+same database while one is restoring is refused ("already running"), so two restores never overlap and
+the earlier dump kept aside (<name>.sql.gz.prev) is never replaced by the first upload's.
+
 PERMISSION. MANAGE_DATABASES and access to the server, as the rest of the tab. An upload to restore
 also takes the step-up confirm (account_guard) when it starts, and the database's name typed at the
 finish, as Restore and Delete do.
@@ -65,7 +69,8 @@ _UID_RE = re.compile(r"[0-9a-f]{32}\Z")
 _DUMP_DIR = _dbs._priv.DB_DUMP_DIR
 _DENIED = "Permission denied"
 
-# upload id -> {"uid", "db", "user", "size", "ts"}: one upload per database at a time.
+# upload id -> {"uid", "db", "user", "size", "ts", "busy", "restoring"}: one upload per database at a time,
+# from its start until its restore has ended (a second start, cancel or finish meanwhile is refused).
 _UPLOADS = {}
 _UPLOADS_LOCK = threading.Lock()
 
@@ -252,12 +257,15 @@ def settle_script(user, name, restored, uid):
     """After the restore: drop the dump kept aside (it worked), or put it back in place of the upload (it did not).
 
     With nothing kept aside, a failed upload's dump is removed: it is never left as the one Restore reads.
-    Upload uid's mark that it was put in place ($p.stored) goes too.
+    Upload uid's mark that it was put in place ($p.stored) goes too. The READY line says whether an
+    earlier dump was kept aside ("prev") or there was none ("none").
     """
-    body = _paths(user, uid) + "\n" + _settle_body(user, name, restored) + ' && rm -f -- "$p.stored"'
+    f = _sm._quote(_home(user) + "/" + _DUMP_DIR + "/" + name + ".sql.gz")
+    had = "k=none; if [ -e %s.prev ]; then k=prev; fi" % f
+    body = _paths(user, uid) + "\n" + had + "\n" + _settle_body(user, name, restored) + ' && rm -f -- "$p.stored"'
     # Not a route: shell text run as the game account, its parts quoted.
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-    return body + " && echo " + _M["READY"] + "\n"
+    return body + " && echo " + _M["READY"] + ' "$k"\n'
 
 
 def cancel_script(user, uid, name=None):
@@ -305,6 +313,12 @@ def _stalled(e, now):
     return e["user"] == current_user.id and not e.get("busy") and now - e["ts"] > UPLOAD_STALLED
 
 
+def _sweep_idle(now):
+    """Forget the uploads with no request running and none for UPLOAD_IDLE (the caller holds _UPLOADS_LOCK)."""
+    for uid in [u for u, e in _UPLOADS.items() if now - e["ts"] > UPLOAD_IDLE and not e.get("busy")]:
+        _UPLOADS.pop(uid, None)
+
+
 def _new_upload(db_id, size):
     """Register an upload: (its id or None, the user's stalled upload it replaces or None).
 
@@ -312,8 +326,7 @@ def _new_upload(db_id, size):
     """
     now = time.time()
     with _UPLOADS_LOCK:
-        for uid in [u for u, e in _UPLOADS.items() if now - e["ts"] > UPLOAD_IDLE]:
-            _UPLOADS.pop(uid, None)
+        _sweep_idle(now)
         same = [e for e in _UPLOADS.values() if e["db"] == db_id]
         if any(not _stalled(e, now) for e in same):
             return None, None
@@ -368,6 +381,8 @@ def _drop_upload(uid):
 
 
 S_PREV_BACK = "The uploaded dump was not kept: the server's files hold the dump they had before."
+S_NO_PREV = ("The uploaded dump was not kept, and there was no earlier dump to put back: the server's files hold "
+             "no dump of this database now.")
 S_PREV_UNKNOWN = ("The host did not answer when the panel put the earlier dump back; check panel-db-dumps in the "
                   "server's files.")
 
@@ -389,6 +404,18 @@ def _start_refusal(gs, r, size):
     return None
 
 
+S_RUNNING = "An upload to this database is already running."
+
+
+def _claim_restore(e):
+    """Mark upload `e` as being restored: True, or False when a restore of it is already running."""
+    with _UPLOADS_LOCK:
+        if e.get("restoring"):
+            return False
+        e["restoring"] = True
+        return True
+
+
 def _upload_start(gs, r):
     """Start an upload: the size checked, the account guard asked, the part file made."""
     size = _json_body().get("size")
@@ -397,7 +424,7 @@ def _upload_start(gs, r):
         return refused
     uid, old = _new_upload(r.id, size)
     if uid is None or (old is not None and not _replace_stalled(gs, r, uid, old)):
-        return _say(409, "An upload to this database is already running.")
+        return _say(409, S_RUNNING)
     state, val = _upcmd(gs, start_script(gs.short_name, uid, size), 60)
     if state != "ok":
         _drop_upload(uid)
@@ -457,23 +484,42 @@ def _upload_finish(gs, r, uid):
     hd = _dbr._restore_target(gs, r)
     if hd is None:
         return _say(409, _dbr._NOT_READY)
+    # The upload stays listed, and busy, until its restore has ended: a second upload to the same database
+    # (or a cancel or another finish of this one) started meanwhile is refused, never run alongside it.
     with _working(e):
         state, val = _upcmd(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
-    if state == "unread":
-        return jsonify({"success": False, "retry": True, "message": i18n.tr(_dbr._UNREAD)}), 200
-    _drop_upload(e["uid"])
-    if state != "ok":
-        why = _refused(val) if state == "refused" else i18n.Sentence("The upload is not all on the host.")
-        log_action(current_user, "db_upload", target=gs.name, server=gs, success=False,
-                   detail="%s: dump of %d bytes refused: %s" % (r.name, e["size"], val))
-        return _say(409, why)
-    return _restore_upload(gs, r, e, hd)
+        if state == "unread":
+            return jsonify({"success": False, "retry": True, "message": i18n.tr(_dbr._UNREAD)}), 200
+        if state != "ok":
+            _drop_upload(e["uid"])
+            return _finish_refused(gs, r, e, state, val)
+        if not _claim_restore(e):
+            return _say(409, S_RUNNING)
+        try:
+            return _restore_upload(gs, r, e, hd)
+        finally:
+            _drop_upload(e["uid"])
+
+
+def _finish_refused(gs, r, e, state, val):
+    """The answer to a finish the host refused (the check failed) or that found the upload incomplete."""
+    why = _refused(val) if state == "refused" else i18n.Sentence("The upload is not all on the host.")
+    log_action(current_user, "db_upload", target=gs.name, server=gs, success=False,
+               detail="%s: dump of %d bytes refused: %s" % (r.name, e["size"], val))
+    return _say(409, why)
 
 
 def _settle(gs, r, uid, restored):
-    """Forget the database's cached structure and run settle_script: outcome()'s state."""
+    """Forget the database's cached structure and run settle_script: outcome() (its value "prev" or "none")."""
     _ddr.forget(r.id)
-    return _upcmd(gs, settle_script(gs.short_name, r.name, restored, uid), 60)[0]
+    return _upcmd(gs, settle_script(gs.short_name, r.name, restored, uid), 60)
+
+
+def _not_kept(kept):
+    """What the answer adds when a restore failed, from the settle's outcome(): the earlier dump's fate."""
+    if kept[0] != "ok":
+        return S_PREV_UNKNOWN
+    return S_NO_PREV if kept[1] == "none" else S_PREV_BACK
 
 
 def _restore_upload(gs, r, e, hd):
@@ -486,8 +532,7 @@ def _restore_upload(gs, r, e, hd):
         raise
     kept = _settle(gs, r, e["uid"], bool(ok))
     if not ok:
-        said = i18n.Sentences(said or i18n.Sentence("Failed"), i18n.Sentence(
-            S_PREV_BACK if kept == "ok" else S_PREV_UNKNOWN))
+        said = i18n.Sentences(said or i18n.Sentence("Failed"), i18n.Sentence(_not_kept(kept)))
     log_action(current_user, "db_upload", target=gs.name, server=gs, success=bool(ok),
                detail=_dbr._done_or_not(ok, "restored database %s from an uploaded dump of %d bytes" % (r.name, e["size"]),
                                         "database %s not restored from an uploaded dump" % r.name, said))
@@ -499,7 +544,12 @@ def _upload_cancel(gs, r, uid):
     e = _get_upload(uid, r.id)
     if e is None:
         return _say(404, "No such upload.")
-    _drop_upload(e["uid"])
+    with _UPLOADS_LOCK:
+        restoring = bool(e.get("restoring"))
+        if not restoring:
+            _UPLOADS.pop(e["uid"], None)
+    if restoring:
+        return _say(409, S_RUNNING)
     state, _v = _upcmd(gs, cancel_script(gs.short_name, e["uid"], r.name), 60)
     return jsonify({"success": state == "ok"})
 

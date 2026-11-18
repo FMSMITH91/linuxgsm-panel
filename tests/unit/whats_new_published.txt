@@ -785,3 +785,7 @@ ba5d3aed Firewall lock-out guards check a self-hosted tailnet name.
 4304ceb9 Long LinuxGSM output can no longer stall the panel.
 023116d8 A game restore keeps the account's sign-in files.
 ccc91396 Panel backup restores check the archive before unpacking it.
+46e39a41 A visitor who hangs up mid-download no longer adds errors to the log.
+46e54505 A second dump upload waits for the first one's restore.
+c6ab4344 A failed dump upload says whether an earlier dump was put back.
+6a4b40a9 A refused Let's Encrypt certificate is recorded in the audit log.

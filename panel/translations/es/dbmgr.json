@@ -69,6 +69,7 @@
   "The panel makes the database's own user and password. A name is 1 to 16 lower-case letters and digits.": "El panel crea el usuario y la contraseña propios de la base de datos. Un nombre tiene de 1 a 16 letras minúsculas y dígitos.",
   "The statement ran longer than {s} seconds and was stopped.": "La sentencia tardó más de {s} segundos y se detuvo.",
   "The upload is not all on the host.": "La subida no está completa en el host.",
+  "The uploaded dump was not kept, and there was no earlier dump to put back: the server's files hold no dump of this database now.": "El volcado subido no se conservó y no había un volcado anterior que restituir: los archivos del servidor no tienen ahora ningún volcado de esta base de datos.",
   "The uploaded dump was not kept: the server's files hold the dump they had before.": "El volcado subido no se conservó: los archivos del servidor tienen el volcado que tenían antes.",
   "There is no dump of this database in the server's files yet. Make one first.": "Todavía no hay un volcado de esta base de datos en los archivos del servidor. Haga uno primero.",
   "There is no table by that name in this database.": "No hay ninguna tabla con ese nombre en esta base de datos.",

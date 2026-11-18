@@ -101,6 +101,16 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Database column headers and yes/no are translated in Spanish and French.**
 - **A malformed request no longer fills the panel's log.** A request with no HTTP version is answered
   with a plain "Bad Request" instead of writing about 35 lines of error to the log each time.
+- **A visitor who hangs up mid-download no longer adds errors to the log.** Closing or resetting the
+  connection while a page or file is still being sent was logged as an error with a full traceback,
+  about 1 KB each time, by anyone. It is a normal client action and is no longer logged; a response
+  that fails for any other reason still is.
+- **A second dump upload waits for the first one's restore.** A new upload to the same database, or a
+  cancel of the running one, is refused as "already running" until the restore has finished, so two
+  restores never run at once and the earlier dump kept aside is never lost.
+- **A failed dump upload says whether an earlier dump was put back.** When the restore fails and the
+  server's files held no dump of that database before, the answer now says so, instead of claiming the
+  earlier dump is back.
 - **Wrong values in a few requests answer "invalid" instead of a server error.** Deleting a file with
   a path that is not text, a firewall rule number that is too large, or a database server id that is
   too large.
@@ -121,6 +131,9 @@ dated section below lists what that day's releases changed, newest first; the nu
   certificate only when the installer was run with `PANEL_TLS_LE_NAMES=<name>`, so another service's
   certificate on the same host keeps its private key root's. If you already load one through Settings,
   run `sudo PANEL_TLS_LE_NAMES=<name> bash install.sh` once so the daily refresh keeps working.
+- **A refused Let's Encrypt certificate is recorded in the audit log.** A name not opened to the panel
+  at install, one with no certificate, or a copy that failed now writes a failed "certificate refused"
+  entry, as a certificate that fails the checks already did.
 - **Turning 2FA off needs a 15-character password.** A password of 8 to 14 characters is allowed only
   with 2FA on; turn it off after changing to a longer one. An admin's 2FA reset now also issues a new
   password.

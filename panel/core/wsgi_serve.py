@@ -14,6 +14,14 @@ connection when part of the body already was (so a truncated download never read
 The traceback goes to the panel's log instead (_TracebacksOnly): eventlet writes it through the same
 `info` as its access log, which stays off as it was.
 
+A client that hangs up mid-response (it closes or resets the connection while the body is still being
+sent) is not a fault of the panel's, and its traceback is not logged (_client_hung_up): eventlet reports
+the BrokenPipeError / ConnectionResetError of that write through the same `info`, and anyone could
+request a static file, read one byte and reset, adding ~1 KB of ERROR to the log each time with no
+account and no rate limit. OWASP Logging Cheat Sheet, "Attacks on Logs" (availability: an attacker
+floods the log) and "Verification" (logging cannot be used to deplete resources). A traceback whose
+chain holds any other exception (a real failure the hang-up interrupted) is still logged in full.
+
 A request line with no HTTP version (HTTP/0.9, `GET /` and nothing else) is refused with a bare 400
 before eventlet builds its environ (_protocol): eventlet's get_environ reads `self.headers` as a
 header Message, and for HTTP/0.9 the standard library leaves it a plain dict, so every such line
@@ -30,8 +38,10 @@ default server list also offered two TLS 1.2 ECDHE-ECDSA CBC suites.
 eventlet is imported inside serve(), never at module level: importing panel must not import eventlet
 (EVENTLET_NO_GREENDNS has to be set first).
 """
+import errno
 import logging
 import ssl
+import sys
 
 _log = logging.getLogger("panel.wsgi")
 
@@ -44,17 +54,41 @@ def _text(msg, args):
         return str(msg)
 
 
+# The errors of a write to a client that has gone away: it closed (EPIPE), reset (ECONNRESET) or
+# aborted (ECONNABORTED) the connection, or shut its side down (ESHUTDOWN). eventlet's own BROKEN_SOCK.
+_HANGUP_ERRNOS = frozenset({errno.EPIPE, errno.ECONNRESET, errno.ECONNABORTED, errno.ESHUTDOWN})
+
+
+def _client_hung_up(exc):
+    """Whether `exc` and every exception in its chain is a write to a client that went away.
+
+    False for no exception, and for a chain that also holds any other one (a real failure, then the
+    hang-up while it was handled). The walk is bounded, as a chain may be built by hand.
+    """
+    found = False
+    for _ in range(8):
+        if exc is None:
+            return found
+        if not isinstance(exc, OSError) or exc.errno not in _HANGUP_ERRNOS:
+            return False
+        found = True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 class _TracebacksOnly:
     """The log given to eventlet.wsgi.server: a failed response's traceback, logged; nothing else.
 
     eventlet sends its access log, its start-up line and a response's traceback all to `info`. Only the
-    traceback starts with "Traceback", and that one goes to the panel's log as an error.
+    traceback starts with "Traceback", and that one goes to the panel's log as an error, unless the
+    exception being handled is the client hanging up (_client_hung_up): eventlet calls `info` inside its
+    `except` block, so sys.exc_info() is the exception the traceback was formatted from.
     """
 
     def info(self, msg, *args, **_kwargs):
-        """Log `msg` when it is a traceback; drop the access-log and start-up lines."""
+        """Log `msg` when it is a traceback of a real failure; drop the rest (access log, start-up, hang-ups)."""
         text = _text(msg, args)
-        if text.startswith("Traceback"):
+        if text.startswith("Traceback") and not _client_hung_up(sys.exc_info()[1]):
             _log.error("A response failed while it was being sent:\n%s", text)
 
     def debug(self, *_args, **_kwargs):
