@@ -651,10 +651,12 @@ _name53 = "js coverage: settleDialogs never presses a reboot"
 _out53 = _node53(_name53, (
     "let pressed = [], backdrop = 0, buttons = [];\n"
     "global.MouseEvent = class { constructor(t){ this.type = t; } };\n"
-    "const ov = {style: {position: 'fixed', inset: '0px'}, querySelector: () => null,\n"
+    "const fixed = {position: 'fixed', top: '0px', left: '0px', right: '0px', bottom: '0px'};\n"
+    "const ov = {style: {}, cs: fixed, querySelector: () => null,\n"
     "  querySelectorAll: () => buttons, dispatchEvent: () => backdrop++};\n"
     "global.document = {querySelectorAll: s => s === 'body > div' ? [ov] : [], getElementById: () => null};\n"
     "global.window = global;\n"
+    "global.getComputedStyle = el => el.cs;\n"
     "const b = t => ({id: '', getAttribute: () => null, hasAttribute: () => false, textContent: t,\n"
     "  click: () => pressed.push(t)});\n"
     + _cut47(_HJ53, "function settleDialogs(") + "\n"
@@ -662,13 +664,38 @@ _out53 = _node53(_name53, (
     "  return [pressed, backdrop]; };\n"
     "console.log(JSON.stringify({\n"
     "  reboot: run(['Wait: reboot when everyone has left', 'Reboot now: disconnect them', 'Cancel']),\n"
-    "  other: run(['Ban everywhere', 'Cancel'])}));\n"))
+    "  other: run(['Ban everywhere', 'Cancel']),\n"
+    "  page: (ov.cs = {position: 'static', top: 'auto', left: 'auto', right: 'auto', bottom: 'auto'},\n"
+    "         run(['Ban everywhere']))}));\n"))
 if _out53 is not None:
     check("js coverage: the confirming pass closes a host's reboot dialog by its backdrop and presses no "
           "reboot button (it put the panel into a reboot plan for every page after)",
           _out53.get("reboot") == [[], 1], repr(_out53))
     check("js coverage: ...and still accepts any other overlay by its first button (control)",
           _out53.get("other") == [["Ban everywhere"], 0], repr(_out53))
+    check("js coverage: ...an overlay is told by its computed style (the panel's are classes, with no inline "
+          "style), and a div that is not fixed over the page is left alone",
+          _out53.get("page") == [[], 0], repr(_out53))
+# ...and every overlay the panel's scripts build is one that computed style finds: each class list
+# assigned to an `ov` holds a class panel.css makes `position: fixed` with `inset: 0`.
+_CSS53 = _read53(_root, "panel", "static", "css", "panel.css")
+_ovcls53 = {}
+for _fn53 in sorted(os.listdir(os.path.join(_root, "panel", "static", "js"))):
+    if _fn53.endswith(".js"):
+        for _m53 in _re53.finditer(r"\bov\.className\s*=\s*'([^']*overlay[^']*)'", _read53(_root, "panel", "static", "js", _fn53)):
+            _ovcls53.setdefault(_m53.group(1), _fn53)
+
+
+def _covers53(cls):
+    """Whether panel.css gives `.cls` both position: fixed and inset: 0 in one rule."""
+    return any(_re53.search(r"position:\s*fixed", _b) and _re53.search(r"inset:\s*0\b", _b)
+               for _b in _re53.findall(r"(?:^|\})\s*\.%s\s*\{([^}]*)\}" % _re53.escape(cls), _CSS53, _re53.M))
+
+
+_ovbad53 = sorted("%s in %s" % (c, f) for c, f in _ovcls53.items() if not any(_covers53(x) for x in c.split()))
+check("js coverage: every overlay class list the panel's scripts build has a class panel.css fixes over the "
+      "whole page, so settleDialogs' computed-style test finds it",
+      len(_ovcls53) >= 3 and not _ovbad53, repr((_ovbad53, sorted(_ovcls53))))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
