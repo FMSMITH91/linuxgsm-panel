@@ -119,6 +119,7 @@ def _s247_tls_routes():
         free = _tls_posts247()
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
     eq("tls restart: paste, Let's Encrypt and remove are each refused with panel_host_busy's sentence while the "
        "panel must not restart", busy, [(302, [_BUSY247])] * 3)
     eq("tls restart: ...nothing was fetched, installed, removed or restarted, and auto-renew was not written",
@@ -141,6 +142,7 @@ def _s247_tls_renew():
         free = _own247.maybe_renew({"BOOT_TLS": True}, now=10 * 86400.0)
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
         _own247._RENEW["at"] = 0.0
     eq("tls renew: the daily refresh answers 'busy' while the panel must not restart, fetches nothing, and is "
        "not marked as done (the next tick tries again)", (busy, busy_at, busy_calls), ("busy", 0.0, []))
@@ -162,6 +164,7 @@ def _s247_tls_renew():
         _osu247._renew_tls(fake)
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
     eq("tls renew: the update-check ticker's refresh runs inside an app context (its busy check reads the host "
        "rows)", seen, ["in", "renew", "out"])
 
@@ -257,6 +260,7 @@ def _s247_settings_audit():
     finally:
         _p9.config.update(live)
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
     details = [d for d, _s in _audit247("settings_update", since)]
     eq("settings audit: turning Require 2FA off and session binding strong -> basic are named; turning 2FA on "
        "again is named, and an unchanged binding is not", [[p for p in d.split("; ") if "2FA" in p or "protection"
@@ -330,6 +334,7 @@ def _s247_le_names():
             said = _p9_flashes(c)
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
     eq("le names: the helper refuses a certificate panel.conf does not list, copying nothing; a listed one is copied",
        (refused[1:], refused_files, copied[0], copied_files),
        (("tls-le-copy: certificate not opened to the panel at install\n", 1), [], "COPIED",
@@ -391,6 +396,7 @@ def _s247_headscale():
         refusal = _hosts247._r28b_panel_way_in_refusal(server)
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
     eq("headscale: a name under the self-hosted suffix is tailnet for the lock-out guards only when it resolves to "
        "tailnet addresses; unresolved is public; ts.net is still taken from the name; the display check is unchanged",
        got, {"host public": False, "host tailnet": True, "host unresolved": False, "host ts.net": True,
@@ -452,6 +458,7 @@ def _s247_scan_columns():
         cols = set((t, c) for t, _pk, c in _ar247._text_columns())
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
         _cfg247._cfg_cache["key"] = None
     eq("at rest: a display name shaped like ciphertext is not read as a stored secret: nothing unreadable, and the "
        "Fernet key is pruned after two passes", ([t.unreadable for t in tallies], ring.fernet), ([0, 0], []))
@@ -534,6 +541,7 @@ def _s247_backup_keeps_key():
         gone = _cfg247._cred_keyring().fernet
     finally:
         _p9_restore_all()
+        _p9_arm(who="part247")   # re-armed: later checks here drive the app too
         _cfg247._cfg_cache["key"] = None
     eq("at rest: the prune keeps a key panel.db.backup still uses, and one an unreadable backup might; with no "
        "backup it goes (two passes)", ([t.rewritten for t in kept], held == [fkey.decode()],
