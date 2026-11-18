@@ -7,14 +7,22 @@
 * A database upload stays listed until its restore has ended: a second upload to the same database,
   a cancel or another finish of it, sent while the restore runs, is refused ("already running"), and
   the next upload starts once it is over. An upload with a request running is never swept as idle.
+* A failed upload restore says what the server's files hold now: the earlier dump put back, or no
+  dump at all when there was none before (settle_script reports which).
+* Let's Encrypt: the helper says "no such certificate" for a name panel.conf lists that has no
+  certificate and "not opened" for a name it does not list (and never looks for that one); the route
+  shows the matching sentence and writes a tls_cert_refused audit row, with the name only when it is
+  a valid certificate name.
 
 HOW IT RUNS. The server check starts wsgi_serve in a child process on a free loopback port and
 resets its connections with SO_LINGER 0. The upload checks drive part12's Flask app with its
 transport tripwire armed and the host's commands stubbed; every stub is undone in the finally.
 Nothing reaches a host, sudo or the checkout's data/.
 """
+import io as _io252
 import logging as _logging252
 import os as _os252
+import pathlib as _pl252
 import shutil as _shutil252
 import socket as _socket252
 import struct as _struct252
@@ -22,14 +30,20 @@ import subprocess as _sp252  # nosec B404 - starts this part's own loopback serv
 import sys as _sys252
 import tempfile as _tempfile252
 import time as _time252
+from importlib import machinery as _mach252, util as _ilu252
 
 from unit import REPO_ROOT as _ROOT252
 from unit.part01 import check, eq
-from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_patch_sm, _p9_restore_all
+from unit.part05 import _helper_path
+from unit.part12 import (P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_flashes, _p9_json, _p9_patch,
+                         _p9_patch_sm, _p9_restore_all)
 from unit.part226 import _db_setup226, _db_teardown226
 from panel.core import wsgi_serve as _ws252
+from panel.db.models import AuditLog as _AL252
+from panel.ops import system_ops as _so252
 from panel.ops.ssh_manager import databases as _dbs252
-from panel.routes import databases_files as _dfr252
+from panel.routes import databases_files as _dfr252, tls_cert as _tlsr252
+from panel.services import certs as _certs252, host_reboot as _hr252, tls_own as _own252
 
 _trips252 = len(_P9_TRIPPED)
 _TMP252 = _tempfile252.mkdtemp(prefix="lgsm-unit-p252-")
@@ -228,12 +242,138 @@ def _uploads252():
        "answer: a new start is refused and it stays listed", idle, (409, True))
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. A failed upload restore says what the server's files hold now
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _settle_bash252(had_earlier):
+    """Settle a failed restore with bash on a temp home: (outcome(), what <name>.sql.gz holds, a .prev left)."""
+    home = _os252.path.join(_TMP252, "home", "gm252")
+    dumps = _os252.path.join(home, "panel-db-dumps")
+    _shutil252.rmtree(home, ignore_errors=True)
+    _os252.makedirs(dumps)
+    dest = _os252.path.join(dumps, "gs1_lp.sql.gz")
+    for path, data in [(dest, b"the upload")] + ([(dest + ".prev", b"the earlier dump")] if had_earlier else []):
+        with open(path, "wb") as fh:
+            fh.write(data)
+    script = _dfr252.settle_script("gm252", "gs1_lp", False, "e" * 32).replace("/home/gm252", home)
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    p = _sp252.run(["bash", "-c", script], capture_output=True, text=True, timeout=60, check=False)  # nosec B603 B607
+    held = None
+    if _os252.path.exists(dest):
+        with open(dest, "rb") as fh:
+            held = fh.read()
+    return _dfr252.outcome(p.stdout + p.stderr), held, _os252.path.exists(dest + ".prev")
+
+
+def _settle_said252(c, api, name, settle_out):
+    """A failed restore whose settle answers `settle_out`: the answer's message."""
+    def _cmd(server, cmd, timeout=30, sudo=True, **kw):
+        if "k=none" in cmd:
+            return settle_out, "", 0
+        return _cmd252(server, cmd, timeout, sudo, **kw)
+    _p9_patch_sm("run_command", _cmd)
+    _p9_patch(_dbs252, "restore", lambda *a, **k: (False, "The import failed (part252)."))
+    uid = _p9_json(c.post(api + "/upload", json={"size": 10})).get("id", "")
+    c.post(api + "/upload/%s?offset=0" % uid, data=b"0123456789")
+    return _p9_json(c.post(api + "/upload/%s/finish" % uid, json={"confirm": name})).get("message", "")
+
+
+def _settle_copy252():
+    eq("upload settle: after a failed restore, an earlier dump kept aside is put back and reported as 'prev'; "
+       "with none before, the upload is removed and 'none' is reported",
+       [_settle_bash252(True), _settle_bash252(False)],
+       [(("ok", "prev"), b"the earlier dump", False), (("ok", "none"), None, False)])
+    sid = None
+    try:
+        sid, api, name = _db_setup226()
+        _p9_patch(_dfr252, "game_account_write_refusal", lambda remote, user, **k: None)
+        c = _p9_client(P9_ADMIN)
+        said = [_settle_said252(c, api, name, out) for out in ("__DBUP_READY__ prev", "__DBUP_READY__ none", "")]
+    finally:
+        if sid is not None:
+            _db_teardown226(sid)
+    eq("upload restore failed: the answer says the earlier dump is back only when there was one; with none it "
+       "says the files hold no dump of this database; an unanswered settle says to check the folder",
+       [(m.startswith("The import failed (part252)."), m.endswith(s)) for m, s in
+        zip(said, (_dfr252.S_PREV_BACK, _dfr252.S_NO_PREV, _dfr252.S_PREV_UNKNOWN))],
+       [(True, True)] * 3)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. Let's Encrypt: no such certificate, not opened, and the audit row
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_spec252 = _ilu252.spec_from_loader("ph_le252", _mach252.SourceFileLoader("ph_le252", _helper_path))
+_ph252 = _ilu252.module_from_spec(_spec252)
+_spec252.loader.exec_module(_ph252)
+_LISTED252, _UNLISTED252 = "listed.example.com", "absent.example.org"
+
+
+def _helper252(verb, args, timeout=30, merge_stderr=True):
+    """system_ops._run_verb as the helper answers it, in this process: (stdout, stderr, rc)."""
+    saved = (_sys252.stdout, _sys252.stderr, _sys252.stdin)
+    _sys252.stdout, _sys252.stderr, _sys252.stdin = _io252.StringIO(), _io252.StringIO(), _io252.StringIO("")
+    try:
+        rc = _ph252.main(["panel-helper", verb] + list(args))
+        return _sys252.stdout.getvalue(), _sys252.stderr.getvalue(), rc
+    finally:
+        _sys252.stdout, _sys252.stderr, _sys252.stdin = saved
+
+
+def _audit252(since):
+    with _p9.app_context():
+        return [(r.detail, r.success) for r in _AL252.query.filter(
+            _AL252.action == "tls_cert_refused", _AL252.id > since).order_by(_AL252.id).all()]
+
+
+def _last_audit252():
+    with _p9.app_context():
+        row = _AL252.query.order_by(_AL252.id.desc()).first()
+        return row.id if row else 0
+
+
+def _le252():
+    le_root = _os252.path.join(_TMP252, "letsencrypt")
+    _os252.makedirs(_os252.path.join(le_root, "live"), exist_ok=True)
+    _os252.makedirs(_os252.path.join(_TMP252, "data", "ssl"), mode=0o700, exist_ok=True)
+    cfg = {}
+    _p9_patch(_ph252, "TLS_LE_ROOT", le_root)
+    _p9_patch(_ph252, "panel_conf", lambda: {"data_dir": _os252.path.join(_TMP252, "data"),
+                                             "tls_le_names": _LISTED252})
+    _p9_patch(_certs252, "DATA_DIR", _pl252.Path(_TMP252) / "data")
+    for mod in (_own252, _tlsr252):
+        _p9_patch(mod, "load_config", lambda: dict(cfg))
+        _p9_patch(mod, "update_config", lambda mutate: mutate(cfg))
+    _p9_patch(_hr252, "panel_host_busy", lambda: None)
+    _p9_patch(_so252, "restart_panel", lambda delay_seconds=2: (False, "part252 never restarts"))
+    helper = [_helper252("tls-le-copy", [n])[1:] for n in (_LISTED252, _UNLISTED252)]
+    _p9_patch(_so252, "_run_verb", _helper252)
+    since, c, flashed = _last_audit252(), _p9_client(P9_ADMIN), []
+    for name in (_LISTED252, _UNLISTED252, "bad name\ninjected"):
+        c.post("/settings/tls/letsencrypt", data={"le_name": name})
+        flashed.append(_p9_flashes(c))
+    rows = _audit252(since)
+    eq("le copy: the helper says 'no such certificate' for a listed name with no certificate, and 'not opened' for "
+       "an unlisted one", helper,
+       [("tls-le-copy: no such certificate\n", 1), ("tls-le-copy: certificate not opened to the panel at install\n", 1)])
+    eq("le copy: through the route, the listed name with no certificate gets the 'no such certificate' sentence and "
+       "the unlisted one the 'not opened' sentence",
+       [f[:1] for f in flashed[:2]],
+       [[_own252.LE_NOT_FOUND.replace("{name}", _LISTED252)], [_own252.LE_NOT_OPENED.replace("{name}", _UNLISTED252)]])
+    eq("le copy: each refusal writes a failed tls_cert_refused audit row naming the certificate; a value that is not "
+       "a certificate name is not written into the row",
+       [(d.split(":")[0], ok) for d, ok in rows] + [any("injected" in d for d, _ok in rows)],
+       [("letsencrypt " + _LISTED252, False), ("letsencrypt " + _UNLISTED252, False),
+        ("letsencrypt (not a certificate name)", False), False])
+
+
 try:
     _filter252()
     _resets252()
     _p9_arm(who="part252")
     try:
         _uploads252()
+        _settle_copy252()
+        _le252()
     finally:
         _p9_restore_all()
         _dfr252._UPLOADS.clear()
