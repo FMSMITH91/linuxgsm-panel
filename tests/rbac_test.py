@@ -4331,7 +4331,9 @@ def _mut_scanned():
 
 _GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
                 "can_moderate_action", "can_run_custom_command", "_can_manage_files",
-                "_can_edit_tags", "_required_perms", "_fpm_can_edit")
+                "_can_edit_tags", "_required_perms", "_fpm_can_edit",
+                # server_detail's daily-restart refusal: RESTART_SERVER, then the restore gate.
+                "_daily_restart_refusal")
 
 
 def _r21d_reads_caller_superadmin(tree):

@@ -267,6 +267,7 @@ def _s247_settings_audit():
                                                             in p] for d in details],
        [["require 2FA on -> off", "session protection strong -> basic"], ["require 2FA off -> on"]])
 
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 4. tls-le-copy copies only a certificate the operator opened at install
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -449,7 +450,7 @@ def _s247_scan_columns():
     try:
         app, _fkey, _dbf = _rig247("cols")
         with app.app_context():
-            _db247.session.add(_U247(username="p247cols", password_hash="x", display_name="plain"))
+            _db247.session.add(_U247(username="p247cols", password_hash="x", display_name="plain"))  # nosec B106 - a test row's placeholder
             _db247.session.commit()
         # A display name anyone may type, shaped like a Fernet value no key opens.
         _exec247(app, "UPDATE user SET display_name = :d", d=_v1_247(_Fernet247.generate_key(), "p247"))
@@ -526,7 +527,7 @@ def _s247_backup_keeps_key():
     try:
         app, fkey, dbf = _rig247("bkp")
         with app.app_context():
-            _db247.session.add(_U247(username="p247bkp", password_hash="x"))
+            _db247.session.add(_U247(username="p247bkp", password_hash="x"))  # nosec B106 - a test row's placeholder
             _db247.session.commit()
         _exec247(app, "UPDATE user SET email = :e", e=_v1_247(fkey, "p247@example.invalid"))
         _sh247.copyfile(dbf, dbf + ".backup")       # the rolling copy, taken before the re-encryption

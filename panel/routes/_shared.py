@@ -668,7 +668,8 @@ def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
     from panel.routes import databases as _dbr
     notes = []
     if len(args) >= 2:
-        kwargs["before"] = lambda: notes.append(_dbr.dump_for_backup(sid, *args[:2]))
+        remote, account = args[0], args[1]
+        kwargs["before"] = lambda: notes.append(_dbr.dump_for_backup(sid, remote, account))
     try:
         result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:

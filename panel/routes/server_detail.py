@@ -1717,11 +1717,13 @@ def _autostart_restore_gate(gs):
 
 
 def _daily_restart_refusal(gs):
-    """The daily-restart switch's refusal while a restore runs (409, as Autostart's), else None.
+    """The daily-restart switch's refusal: no permission (403), or a restore running (409, as Autostart's).
 
     A restore sets the account's crontab aside and puts it back, so a line written meanwhile is lost.
-    The permission check stays in the view, where the route audit reads it.
+    rbac_test's route audit counts this helper as the view's permission gate (_GATE_TOKENS).
     """
+    if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
+        return jsonify({"success": False, "message": "Permission denied"}), 403
     return _autostart_restore_gate(gs)
 
 
@@ -1814,8 +1816,6 @@ def _register_schedules(app):
         can say "05:00 your time — 11:00 on that host" rather than printing a number whose
         meaning depends on a box the operator never looks at.
         """
-        if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
-            return jsonify({"success": False, "message": "Permission denied"}), 403
         gs = get_game(server_id)
         refused = _daily_restart_refusal(gs)
         if refused is not None:
