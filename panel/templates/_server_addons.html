@@ -1,0 +1,29 @@
+{% from "_fold.html" import fold %}
+{# The Add-ons tab (routes/addons.py, js/server_addons.js). Its body loads when the tab is first opened,
+   so the page itself asks nothing of the host. Every route takes Manage add-ons; install and remove
+   confirm the password first when the sign-in is older than the confirmation window. #}
+<div class="card" id="ad-card" data-sfsub="addons" data-start-hidden>
+  <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <span><i class="bi bi-boxes"></i> Add-ons</span>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="adLoad" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
+  </div>
+  <div class="card-body">
+    <p class="small text-secondary mb-2">Admin tools that run beside this game server, each in its own container as the server's account. Nothing is installed until you install one.</p>
+    <div id="ad-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading add-ons…</div>
+    <div id="ad-runtime" class="small text-warning mb-2" role="status" data-start-hidden></div>
+    <div id="ad-list"></div>
+    <div id="ad-msg" class="small mt-1" role="status"></div>
+    <pre id="ad-log" class="small border rounded p-2 mt-2 mb-0 ad-log" data-start-hidden data-no-i18n></pre>
+    {% call fold("How add-ons run", id="ad-help", cls="mt-2") %}
+      <ul class="small mb-0">
+        <li>Each add-on runs in a rootless Podman container as this server's account: no root daemon, no added privileges, a read-only system and capped memory.</li>
+        <li>Installing the first add-on on a host installs Podman from Ubuntu and lets the account's services run while nobody is signed in, so add-ons start again after a reboot.</li>
+        <li>An add-on's network is locked to what it needs: the game's RCON port and its database. On Ubuntu 26.04 it reaches nothing else. On Ubuntu 24.04 it can't reach the internet or other machines either, but a service listening on one of this host's own addresses (its Tailscale address, say) stays reachable.</li>
+        <li>B3 uses one of this server's databases from the Databases tab, and no other add-on may use the same one. IW4MAdmin keeps its own database (SQLite) in its folder.</li>
+        <li>An add-on's folder is in the server's home folder, so the server's backups include it.</li>
+        <li>An add-on's web page listens on this host's own address only (127.0.0.1). Reach it through an SSH tunnel or Tailscale.</li>
+        <li>Removing an add-on deletes its container, image and files. A database from the Databases tab is kept; an add-on's own data goes with it.</li>
+      </ul>
+    {% endcall %}
+  </div>
+</div>

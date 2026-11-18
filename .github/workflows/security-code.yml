@@ -181,7 +181,8 @@ jobs:
         run: |
           set -uo pipefail
           lockfiles=(tools/gamedig/package-lock.json panel/static/vendor/package-lock.json
-                     panel/install/requirements.txt panel/install/requirements-bootstrap.txt .github/ci-requirements*/*.txt)
+                     panel/install/requirements.txt panel/install/requirements-bootstrap.txt
+                     panel/addon_images/b3/requirements.txt .github/ci-requirements*/*.txt)
           args=()
           for f in "${lockfiles[@]}"; do
             if [ ! -f "${f}" ]; then

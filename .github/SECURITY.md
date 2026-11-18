@@ -97,7 +97,7 @@ account.
 
 ### The panel owner
 
-The panel owner ([docs/README.md](../docs/README.md#the-panel-owner)) is one account that the web UI
+The panel owner ([docs/permissions.md](../docs/permissions.md#the-panel-owner)) is one account that the web UI
 never lets another administrator deactivate, demote, rename, delete or reset, and that alone may open a
 terminal on the panel's host or restore or download a panel backup (the ways in to `panel.db` and
 the panel's keys from the UI).
@@ -233,7 +233,7 @@ It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management,
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
 a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, root's crontab for the
-owner's root cron page, and more — 135 verbs.
+owner's root cron page, readying a game account for add-on containers, and more — 137 verbs.
 The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
@@ -262,6 +262,21 @@ The narrowing is in the argument types:
   travels on stdin, never in the command.
 - **Secrets** (the Tailscale auth key, the Ubuntu Pro token) never appear on a command line; they
   travel on stdin.
+- **Add-ons in containers** need root for two things only: Podman's packages (the existing `apt-install`
+  verb, with the fixed list `podman uidmap passt`) and `addon-account-prepare <account>`, which gives a game
+  account a range of subordinate uids and gids (only where it has none, starting after every range already
+  in `/etc/subuid` and `/etc/subgid`) and turns on lingering for it. The helper refuses an account that is
+  not in `lgsmpanel-games` (one the panel may already become) and the panel's own account;
+  `addon-account-release` (lingering off, then the account's user manager stopped and its failed state
+  cleared with `systemctl reset-failed`; then, for a uid of 1000 or more, Podman's two `/tmp` folders when they
+  are real folders the uid owns and, with `forget` (an uninstall; `keep` after the last add-on's removal), its user
+  journal files, after a `journalctl --rotate` only when an active file is there, so an account later given the
+  same uid can't read the old add-ons' logs) refuses the same accounts. The containers themselves run rootless,
+  as the game account, from its own user manager: no root daemon and no Docker socket (OWASP Docker
+  Security Cheat Sheet, rules 1 and 11). A container's network reaches only what is forwarded to the host's
+  loopback (the game's RCON port, its database, the relays it needs): on Ubuntu 26.04 nothing else at all
+  (pasta `--splice-only`); on 24.04 not the internet or other machines (`-o 127.0.0.1`, `-4`), though a
+  service listening on one of the host's own other addresses stays reachable.
 - **Root's crontab** (`root-crontab-read`, `root-crontab-write`) is closed unless you open it at install
   (`PANEL_ROOT_CRON=1`/`0`, recorded root-owned in `panel.conf`; the default is closed). The write takes the
   new crontab on stdin, refuses any line that is not blank, a comment, a `NAME=value` variable or a job with
@@ -347,7 +362,7 @@ gamedig tree, its two links and the weekly root cron that re-runs `install-gamed
 fetches nothing while the tree is in place, so that part is root-owned, hash-locked and inert.
 **Tailscale, if the panel set it up there, is not inert:** the host stays in your tailnet until you
 log it out. The fail2ban whitelist file and the auto-block firewall rules stay too.
-README's [Removing a host](../docs/README.md#removing-a-host) lists each with the commands that remove it.
+The install guide's [Removing a host](../docs/install.md#removing-a-host) lists each with the commands that remove it.
 
 ### What you can do today
 

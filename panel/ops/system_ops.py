@@ -1836,21 +1836,65 @@ def _remote_ci_state_read(sha, seen):
     if isinstance(runs, str):
         return runs          # GitHub did not hand over the checks: 'pending' or 'unknown'
     runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
+    runs = _ci_drop_scheduled_running(slug, sha, runs, seen)
     seen["runs"] = runs
     return _ci_judge(sha, runs)
 
 
-def _ci_fetch_page(slug, sha, page, seen):
-    url = ("https://api.github.com/repos/%s/commits/%s/check-runs?per_page=100&page=%d"
-           % (slug, sha, page))
-    req = urllib.request.Request(url, headers={
+def _ci_suite_id(run):
+    suite = run.get("check_suite")
+    return suite.get("id") if isinstance(suite, dict) else None
+
+
+def _ci_drop_scheduled_running(slug, sha, runs, seen):
+    """`runs` less the ones still RUNNING that a timer started (a scheduled workflow run).
+
+    A daily job (the long fuzz pass) checks out main's newest commit, so its run lands on whatever
+    was released last, and GitHub can start it hours late. Held as 'pending', it kept a release
+    from being offered for its whole run while GitHub's own green tick, which does not count it,
+    already showed the commit as done. A scheduled run that FAILED is kept, and still blocks.
+    Asked only when something is running (one more anonymous request); when the scheduled runs
+    cannot be read, nothing is dropped and the commit stays held.
+    """
+    if not any(_ci_running(r) for r in runs):
+        return runs
+    suites = _ci_scheduled_suites(slug, sha, seen)
+    return [r for r in runs if not (_ci_running(r) and _ci_suite_id(r) in suites)]
+
+
+def _ci_scheduled_suites(slug, sha, seen):
+    """Check-suite ids of the workflow runs a schedule started on `sha`; empty when unreadable."""
+    try:
+        body = _ci_get_json("repos/%s/actions/runs?head_sha=%s&event=schedule&per_page=100"
+                            % (slug, sha), seen)
+    except urllib.error.HTTPError as e:
+        _ci_note_rate(e, seen)
+        return frozenset()
+    except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException):
+        _log.debug("CI-gate: couldn't read scheduled runs for %s", sha, exc_info=True)
+        return frozenset()
+    wruns = body.get("workflow_runs") if isinstance(body, dict) else None
+    if not isinstance(wruns, list):
+        return frozenset()
+    return frozenset(r["check_suite_id"] for r in wruns
+                     if isinstance(r, dict) and r.get("event") == "schedule"
+                     and isinstance(r.get("check_suite_id"), int))
+
+
+def _ci_get_json(path, seen):
+    """The anonymous JSON answer of api.github.com/<path>; its rate-limit headers go in `seen`."""
+    req = urllib.request.Request("https://api.github.com/" + path, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "linuxgsm-panel-update-check",
     })
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- a fixed https://api.github.com URL
     with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
         _ci_note_rate(resp, seen)
-        body = json.loads(resp.read().decode("utf-8"))
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _ci_fetch_page(slug, sha, page, seen):
+    body = _ci_get_json("repos/%s/commits/%s/check-runs?per_page=100&page=%d" % (slug, sha, page), seen)
     # Not GitHub's shape (a JSON list or string, a run that is not an object, a name or state that
     # is not text): ValueError, which _ci_fetch_runs answers "unknown". `.get`, `.startswith` and
     # set membership on them raised AttributeError/TypeError, which nothing there caught, and the

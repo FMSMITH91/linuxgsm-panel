@@ -1485,6 +1485,14 @@ _ARGV = {
     # Put a game account in the group the local sudoers grant names. Local-only: on a remote host
     # the panel's rights are the operator's sudoers to arrange, and this group means nothing there.
     "gameuser-group": ([_managed_user], lambda a: [], None),
+    # A game account's add-ons in rootless containers (panel/services/addons.py): a range of
+    # subordinate uids and gids for the container's user namespace, and lingering so the account's
+    # user manager runs (and starts its add-ons at boot) with nobody signed in. Release turns the
+    # lingering off again, stops the account's user manager and clears its failed state; the ranges
+    # stay, as useradd would have left them. Neither takes the panel's own account. See
+    # tools/panel-helper (do_addon_account_prepare, do_addon_account_release).
+    "addon-account-prepare": ([_destroyable_user], lambda a: [], None),
+    "addon-account-release": ([_destroyable_user, _choice("keep", "forget")], lambda a: [], None),
     # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
@@ -1815,6 +1823,67 @@ def _cron_journal_account_remote(a):
             "k = substr($0, i); if (!(k in s)) { s[k] = 1; print } if (++c >= n) exit }'"
             % (CRON_JOURNAL_BUDGET, shlex.join(cron_journal_account_argv(a[1])),
                shlex.quote("(%s) CMD " % a[0]), CRON_JOURNAL_MATCHES, CRON_JOURNAL_LINE_MAX))
+
+
+# A rootless container's user namespace: each account that runs add-ons holds a range this size of
+# subordinate uids and gids, the size Podman's rootless tutorial and useradd's SUB_UID_COUNT give.
+# A new range starts after every range either file already holds, and never below ADDON_SUBID_MIN
+# (useradd's SUB_UID_MIN), so two accounts never share an id. The helper holds the same constants.
+ADDON_SUBID_COUNT = 65536
+ADDON_SUBID_MIN = 100000
+ADDON_SUBID_LAST = 4294967294
+
+
+def _addon_prepare_remote(a):
+    """The remote form of addon-account-prepare: the helper's do_addon_account_prepare, as shell.
+
+    A range is added only to the file that lacks one for the account (by name or by uid, holding at
+    least ADDON_SUBID_COUNT ids); the new range starts after every range in either file. Then the
+    account lingers. Prints subids=added or subids=present, then linger=on.
+    """
+    return ("u=%s; n=%d; uid=$(id -u \"$u\") || exit 1; "
+            "has() { awk -F: -v u=\"$u\" -v i=\"$uid\" -v n=\"$n\" "
+            "'($1 == u || $1 == i) && $3 ~ /^[0-9]+$/ && $3 + 0 >= n { f = 1 } END { exit !f }' "
+            "\"$1\" 2>/dev/null; }; "
+            "s=$(cat /etc/subuid /etc/subgid 2>/dev/null | awk -F: -v m=%d "
+            "'$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { e = $2 + $3; if (e > m) m = e } END { printf \"%%.0f\", m }'); "
+            "e=$((s + n - 1)); [ \"$e\" -le %d ] || { echo 'no free subordinate id range' >&2; exit 1; }; "
+            "f=''; has /etc/subuid || f=\"$f --add-subuids $s-$e\"; has /etc/subgid || f=\"$f --add-subgids $s-$e\"; "
+            "if [ -n \"$f\" ]; then usermod $f \"$u\" || exit 1; echo subids=added; else echo subids=present; fi; "
+            "loginctl enable-linger \"$u\" && echo linger=on"
+            % (shlex.quote(a[0]), ADDON_SUBID_COUNT, ADDON_SUBID_MIN, ADDON_SUBID_LAST))
+
+
+# How long addon-account-release waits for the account's user manager to stop, and the lowest uid it
+# removes a user journal and Podman's /tmp folders for (the helper's same constants).
+ADDON_MANAGER_STOP_TIMEOUT = 75
+ADDON_FORGET_MIN_UID = 1000
+
+
+def _addon_release_remote(a):
+    """The remote form of addon-account-release: the helper's do_addon_account_release, as shell.
+
+    Lingering off, then the account's user manager stopped (waited for, at most
+    ADDON_MANAGER_STOP_TIMEOUT seconds) and its failed state cleared; then, for a uid of at least
+    ADDON_FORGET_MIN_UID, Podman's two /tmp folders when they are real folders it owns and, with
+    `forget` (an uninstall), its user journal files: rotated first only when an active
+    user-<uid>.journal is there (rotation is system-wide). Prints linger=off, manager=stopped or
+    manager=stop-failed, then forgotten=<count>.
+    """
+    forget = ("j=''; for f in /var/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\".journal; do "
+              "[ -f \"$f\" ] && [ ! -L \"$f\" ] && j=1; done; [ -n \"$j\" ] && journalctl --rotate >/dev/null 2>&1; "
+              "for f in /var/log/journal/*/user-\"$uid\".journal /var/log/journal/*/user-\"$uid\"@*.journal* "
+              "/run/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\"@*.journal*; do "
+              "if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then rm -f -- \"$f\" && n=$((n + 1)); fi; done; "
+              if a[1] == "forget" else "")
+    return ("u=%s; uid=$(id -u \"$u\") || exit 1; loginctl disable-linger \"$u\" || exit 1; echo linger=off; "
+            "if timeout %d systemctl stop \"user@$uid.service\"; then m=stopped; else m=stop-failed; fi; "
+            "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\"; n=0; "
+            "if [ \"$uid\" -ge %d ] 2>/dev/null; then %s"
+            "for d in /tmp/podman-run-\"$uid\" /tmp/containers-user-\"$uid\"; do "
+            "if [ -d \"$d\" ] && [ ! -L \"$d\" ] && [ \"$(stat -c %%u \"$d\")\" = \"$uid\" ]; then "
+            "rm -rf --one-file-system -- \"$d\" && n=$((n + 1)); fi; done; fi; echo \"forgotten=$n\""
+            % (shlex.quote(a[0]), ADDON_MANAGER_STOP_TIMEOUT, ADDON_FORGET_MIN_UID, forget))
 
 
 def _f2b_log_lines_remote(a):
@@ -2232,6 +2301,8 @@ _REMOTE_ACTIONS = {
     "ufw-delete-num-if": _ufw_delete_num_if_remote,
     "ufw-stored-rules": _fwa_ufw_stored_remote,
     "journal-cron-account": _cron_journal_account_remote,
+    "addon-account-prepare": _addon_prepare_remote,
+    "addon-account-release": _addon_release_remote,
     "root-crontab-read": lambda a: _ROOT_CRON_READ_REMOTE,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,

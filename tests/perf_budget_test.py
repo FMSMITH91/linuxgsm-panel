@@ -385,7 +385,9 @@ def _get_page_paths(admin_id, mc_server):
 
     subs = {"<int:server_id>": str(one_server), "<int:remote_id>": str(one_remote),
             "<int:user_id>": str(admin_id), "<int:group_id>": "1", "<int:tag_id>": "1",
-            "<int:cmd_id>": "1", "<int:ban_id>": "1", "<int:db_id>": "1"}
+            "<int:cmd_id>": "1", "<int:ban_id>": "1", "<int:db_id>": "1",
+            # An add-on id is a catalog name, not a row: the first one stands in for the add-on routes.
+            "<addon_id>": "b3"}
     with app.app_context():
         paths = []
         for rule in app.url_map.iter_rules():

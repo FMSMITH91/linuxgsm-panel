@@ -1,0 +1,46 @@
+# B3 (Big Brother Bot) for linuxgsm-panel's Add-ons tab, built on the game's host, as the game
+# server's account, by rootless Podman (panel/services/addons.py writes this folder and runs
+# `podman build` with the two build arguments below, the same values as these defaults).
+#
+# What the build trusts, and how each piece is checked:
+#   - the base image, by its digest (python:3.12-slim, Debian 13);
+#   - B3's source, fetched from GitHub at ONE commit: the build fails unless the checkout's commit
+#     id is exactly B3_COMMIT (git checks every object against its id as it fetches);
+#   - B3's Python dependencies, each pinned with its hash (requirements.txt, pip --require-hashes),
+#     from wheels only.
+# git and the fetched history stay in the first stage; the image keeps B3's code and its packages.
+ARG BASE_IMAGE=docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+ARG B3_COMMIT=b8e98400c51bb329e026f5b1c5e6f3b50f65518c
+
+FROM ${BASE_IMAGE} AS source
+ARG B3_COMMIT
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init -q . \
+    && git fetch -q --depth 1 https://github.com/FMSMITH91/big-brother-bot.git "${B3_COMMIT}" \
+    && git checkout -q FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${B3_COMMIT}" \
+    && rm -rf .git
+
+FROM ${BASE_IMAGE}
+ARG B3_COMMIT
+LABEL org.opencontainers.image.title="B3 (Big Brother Bot) for linuxgsm-panel" \
+      org.opencontainers.image.source="https://github.com/FMSMITH91/big-brother-bot" \
+      org.opencontainers.image.revision="${B3_COMMIT}"
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/data
+COPY requirements.txt /opt/b3-requirements.txt
+RUN python -m pip install --no-cache-dir --root-user-action=ignore --disable-pip-version-check \
+        --require-hashes --only-binary :all: --no-deps -r /opt/b3-requirements.txt
+COPY --from=source /src/b3 /opt/b3/b3
+COPY --from=source /src/b3_run.py /opt/b3/b3_run.py
+COPY entrypoint.sh /opt/b3/entrypoint.sh
+# The panel writes this folder 0600 and COPY keeps a file's mode: the start script must be readable
+# by the account the add-on runs as.
+RUN chmod 0755 /opt/b3/entrypoint.sh && chmod 0644 /opt/b3-requirements.txt
+WORKDIR /opt/b3
+# Not root inside: the panel runs it with UserNS=keep-id and User=/Group= set to the game
+# account's ids; this is the fallback for any other runtime.
+USER 65534:65534
+ENTRYPOINT ["/bin/sh", "/opt/b3/entrypoint.sh"]

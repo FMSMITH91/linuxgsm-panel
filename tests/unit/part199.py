@@ -2,7 +2,7 @@
 
 Held here:
 * The login-throttle numbers the section states (8 failed attempts in 5 minutes) are the ones the
-  panel enforces (LOGIN_MAX_FAILS, LOGIN_WINDOW), and the README's link lands on the section.
+  panel enforces (LOGIN_MAX_FAILS, LOGIN_WINDOW), and the features page's link lands on the section.
 * ProxiedBanGate, given X-Forwarded-For as Cloudflare's edge writes it (the address that connected
   to Cloudflare appended LAST, after whatever the visitor sent), refuses a banned visitor who
   forged a first hop, and lets through a visitor who named a banned address in a forged first hop.
@@ -34,7 +34,7 @@ def _slug199(heading):
 
 
 _https199 = _doc199("https.md")
-_readme199 = _doc199("README.md")
+_readme199 = _doc199("features.md")
 _m199 = _re199.search(r"(\d+) failed attempts in (\d+) minutes per address", _https199)
 _said199 = (int(_m199.group(1)), int(_m199.group(2)) * 60) if _m199 else None
 check("docs/https.md: the bans section states the login throttle the panel enforces "
@@ -43,7 +43,7 @@ check("docs/https.md: the bans section states the login throttle the panel enfor
 
 _anchors199 = {_slug199(h) for h in _re199.findall(r"^#+ (.+)$", _https199, _re199.M)}
 _links199 = _re199.findall(r"\(https\.md#([^)\s]+)\)", _readme199)
-check("docs/README.md: its link to the bans section of https.md lands on a heading there",
+check("docs/features.md: its link to the bans section of https.md lands on a heading there",
       "bans-and-blocks-behind-a-proxy-or-tunnel" in _links199
       and set(_links199) <= _anchors199, repr((_links199, sorted(_anchors199))))
 

@@ -26,6 +26,14 @@ dated section below lists what that day's releases changed, newest first; the nu
   step) takes the address of a self-hosted control server such as Headscale, and every join the
   panel runs, on this host or a remote, then uses it. Serve and Funnel are offered only where that
   server supports them, and the page says what it offers.
+- **Add-ons in containers: IW4MAdmin and B3.** A Call of Duty server's Files & Config page has an
+  Add-ons tab that installs an admin tool in a rootless Podman container run as the server's own
+  account, with its RCON password and game log filled in, and starts, stops, shows the log of and
+  removes it. IW4MAdmin (Call of Duty 4, World at War) keeps its own database; B3 (Call of Duty,
+  United Offensive, Call of Duty 2) is legacy and opt-in, is built on the host from one pinned
+  version of its source and uses one of the server's databases. An add-on that stops again right
+  after its first start is reported with its own last log lines. Nothing is installed until you
+  install an add-on; it needs Ubuntu 24.04 or newer.
 
 ### Changed
 
@@ -55,7 +63,11 @@ dated section below lists what that day's releases changed, newest first; the nu
   section, newest first, with what they added, changed, fixed and secured.
 - **Settings says which actions ask for the password again.** The note under the step-up time now
   names the kinds of change that do (users, hosts, the firewall, updates, backups), not only a few
-  of them; the README lists every one.
+  of them; docs/security-features.md lists every one.
+- **A shorter README.** The README is now a front page: what the panel is, its key features, how to
+  install and update, and links. Its detailed sections moved unchanged to new pages under `docs/`
+  (install, features, configuration, permissions, security features, development), and deleting a
+  host now points to the install guide's "Removing a host" section.
 
 ### Fixed
 
@@ -191,6 +203,15 @@ dated section below lists what that day's releases changed, newest first; the nu
   from its own stylesheets and the page's nonce, and refuses every inline style attribute
   (`style-src-attr 'none'`; no `'unsafe-inline'` anywhere). Injected markup can no longer restyle a
   page, and nothing on the pages looks different.
+- **Add-ons run locked down, and only for those you allow.** The container has no added capability,
+  no new privileges, a read-only system and memory and process caps. Its network reaches only the
+  game's RCON port and its database: on Ubuntu 26.04 nothing else at all, on 24.04 not the internet
+  or other machines. Its page is on 127.0.0.1 only, and it runs as the server's account inside too,
+  not as root there. B3's geolocation, which sends players' IP addresses to ipwho.is, is off unless
+  you tick it. Removing the last add-on removes Podman's files too, and uninstalling the server
+  deletes the account's logs, so an account later given the same user id can't read them. A new
+  permission, Manage add-ons, is given to no group; install and remove ask for your password when you signed in a while ago, and every
+  action is in the audit log.
 
 ## [2026.11.17] — 2026-11-17
 

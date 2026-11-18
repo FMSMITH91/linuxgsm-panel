@@ -97,6 +97,9 @@ TOOLS = {
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
     "debconf-set-selections": ("/usr/bin/debconf-set-selections",),
     "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
+    # Lingering for a game account that runs add-ons in rootless containers, and its removal
+    # (addon-account-prepare / addon-account-release). Nothing else.
+    "loginctl": ("/usr/bin/loginctl", "/bin/loginctl"),
     # `sudo -l -U <account>` and nothing else: sudo's own answer when the policy has non-file
     # sources (_sudo_lists_rules). Named for that one use, like bash_installer, so plain `sudo`
     # stays unresolvable and no verb can build a command around it. EVERY one present is asked:
@@ -2829,6 +2832,10 @@ VERBS = {
     "terminal-scope": ([v_pid], lambda a: [], None),
     # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
     "gameuser-group": ([v_managed_user], lambda a: [], None),
+    # A game account's rootless add-on containers: subordinate ids and lingering, and lingering off
+    # again -- see do_addon_account_prepare. Never the panel's own account.
+    "addon-account-prepare": ([v_destroyable_user], lambda a: [], None),
+    "addon-account-release": ([v_destroyable_user, v_choice("keep", "forget")], lambda a: [], None),
     # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
     # once its rollout reaches this host; the OS Updates card lists it apart until then.
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
@@ -5687,6 +5694,205 @@ def do_gameuser_group(args, content):
         sys.stderr.write("refusing to enrol %s in %s: %s\n" % (user, GAME_GROUP, reason))
         return 1
     return _enrol(user)
+
+
+# A rootless container's user namespace (addon-account-prepare): the range each account holds, in
+# /etc/subuid and /etc/subgid, the size Podman's rootless tutorial and useradd's SUB_UID_COUNT give.
+# A new range starts after every range either file already holds and never below useradd's
+# SUB_UID_MIN, so two accounts never share an id. privileged.py holds the same constants.
+ADDON_SUBID_COUNT = 65536
+ADDON_SUBID_MIN = 100000
+ADDON_SUBID_LAST = 4294967294
+SUBID_FILES = ("/etc/subuid", "/etc/subgid")
+
+
+def _subid_rows(path):
+    """The (name, start, count) rows of one subordinate id file; a malformed line is skipped."""
+    rows = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.strip().split(":")
+                if len(parts) == 3 and parts[1].isdecimal() and parts[2].isdecimal():
+                    rows.append((parts[0], int(parts[1]), int(parts[2])))
+    except FileNotFoundError:
+        pass  # no file yet means no ranges given: the prepare verb creates it with the first one
+    return rows
+
+
+def _subid_held(rows, pw):
+    """True when `rows` give the account (by name or uid) a range of at least ADDON_SUBID_COUNT."""
+    return any(name in (pw.pw_name, str(pw.pw_uid)) and count >= ADDON_SUBID_COUNT
+               for name, _start, count in rows)
+
+
+def _subid_flags(pw):
+    """The usermod flags that give the account the ranges it lacks ([] when it holds both), or None.
+
+    None: no free range is left below ADDON_SUBID_LAST.
+    """
+    rows = [_subid_rows(path) for path in SUBID_FILES]
+    start = max([ADDON_SUBID_MIN] + [s + c for r in rows for _n, s, c in r])
+    end = start + ADDON_SUBID_COUNT - 1
+    if end > ADDON_SUBID_LAST:
+        return None
+    flags = []
+    for flag, r in zip(("--add-subuids", "--add-subgids"), rows):
+        if not _subid_held(r, pw):
+            flags += [flag, "%d-%d" % (start, end)]
+    return flags
+
+
+def do_addon_account_prepare(args, content):
+    """Ready a game account for rootless add-on containers: subordinate ids, then lingering.
+
+    Podman's rootless mode maps the container's users onto a range of subordinate uids and gids
+    the account holds in /etc/subuid and /etc/subgid (useradd usually gives one; an account made
+    before that, or by hand, may have none). A range is added only to the file that lacks one, with
+    `usermod --add-subuids/--add-subgids`, starting after every range already there. Lingering
+    (`loginctl enable-linger`) keeps the account's user manager running with nobody signed in, so
+    the add-on runs and starts again at boot as that account -- no root daemon anywhere.
+
+    Only an account in GAME_GROUP: one the panel already may become, so this gives the panel
+    nothing over an account it could not already reach. Prints subids=added or subids=present,
+    then linger=on.
+    """
+    user = args[0]
+    try:
+        pw = pwd.getpwnam(user)
+        member = GAME_GROUP in _groups_of(user)
+    except Exception:
+        pw, member = None, False
+    if pw is None or not member:
+        sys.stderr.write("refusing %s: not a game account of the panel's (%s)\n" % (user, GAME_GROUP))
+        return 1
+    flags = _subid_flags(pw)
+    if flags is None:
+        sys.stderr.write("no free subordinate id range\n")
+        return 1
+    if flags:
+        r = subprocess.run([resolve("usermod")] + flags + [user],      # nosec B603 - fixed argv
+                           shell=False, capture_output=True, timeout=30, env=_clean_env())
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+            return r.returncode
+    sys.stdout.write("subids=%s\n" % ("added" if flags else "present"))
+    r = subprocess.run([resolve("loginctl"), "enable-linger", user],   # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30, env=_clean_env())
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+        return r.returncode
+    sys.stdout.write("linger=on\n")
+    return 0
+
+
+# How long addon-account-release waits for the account's user manager to stop. Ubuntu's own
+# user@.service.d/timeout.conf gives the manager 5 s, after which systemd kills it; this is the
+# outer bound for a host without that drop-in.
+ADDON_MANAGER_STOP_TIMEOUT = 75
+# What an account's user manager and Podman leave outside its home: its user journal (the add-ons'
+# log lines; journald names it by uid, so a later account given the same uid would read it) and
+# Podman's runtime folders in /tmp (made when it ran with no user manager). The lowest uid they
+# are removed for is useradd's UID_MIN: a game account is never below it.
+ADDON_FORGET_MIN_UID = 1000
+JOURNAL_ROOTS = ("/var/log/journal", "/run/log/journal")
+ADDON_TMP_DIRS = ("/tmp/podman-run-%d", "/tmp/containers-user-%d")  # nosec B108 - Podman's own paths, only deleted
+_USER_JOURNAL_RE = re.compile(r"user-(\d+)(?:@[0-9a-f]+(?:-[0-9a-f]+){1,2})?\.journal~?")
+
+
+def do_addon_account_release(args, content):
+    """Release a game account's add-on runtime: lingering off, its user manager stopped and cleared.
+
+    `loginctl disable-linger` alone leaves the manager (user@<uid>.service) stopping in the
+    background; an uninstall's `user-kill-processes` straight after it SIGKILLs it, and systemd
+    keeps it "failed" until someone resets it. So this stops the manager and waits for it (within
+    the manager's own stop timeout: 5 s on Ubuntu, then systemd kills what is left), then
+    `systemctl reset-failed` clears a failure either way. Last, Podman's /tmp folders go, and with
+    `forget` (an uninstall: the account itself is about to go) its user journal too
+    (_addon_forget_account); with `keep` (its last add-on was removed, the account stays) the
+    journal is left alone, since it holds the account's own history too. The account is validated
+    as for the other destroy verbs (never the panel's own account). Prints linger=off,
+    manager=stopped or manager=stop-failed, then forgotten=<count>; exits with disable-linger's
+    status.
+    """
+    user, forget = args[0], args[1] == "forget"
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        sys.stderr.write("refusing %s: no such account\n" % user)
+        return 1
+    r = subprocess.run([resolve("loginctl"), "disable-linger", user],   # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30, env=_clean_env())
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+        return r.returncode
+    sys.stdout.write("linger=off\n")
+    unit = "user@%d.service" % uid
+    try:
+        rc = subprocess.run([resolve("systemctl"), "stop", unit],        # nosec B603 - fixed argv
+                            shell=False, capture_output=True, timeout=ADDON_MANAGER_STOP_TIMEOUT,
+                            env=_clean_env()).returncode
+    except subprocess.TimeoutExpired:
+        rc = -1
+    subprocess.run([resolve("systemctl"), "reset-failed", unit],         # nosec B603 - fixed argv
+                   shell=False, capture_output=True, timeout=30, env=_clean_env())
+    sys.stdout.write("manager=%s\n" % ("stopped" if rc == 0 else "stop-failed"))
+    sys.stdout.write("forgotten=%d\n" % _addon_forget_account(uid, forget))
+    return 0
+
+
+def _addon_forget_account(uid, forget):
+    """Remove Podman's /tmp folders and, with `forget`, the account's user journal; how many went.
+
+    Only files named user-<uid>.journal (or a rotated user-<uid>@....journal) directly in a
+    machine-id folder of the two journal roots, and only the two /tmp folders that are real folders
+    owned by the uid, are removed; nothing for a uid below ADDON_FORGET_MIN_UID.
+    """
+    if not isinstance(uid, int) or uid < ADDON_FORGET_MIN_UID:
+        return 0
+    return (_forget_journal(uid) if forget else 0) + _forget_podman_tmp(uid)
+
+
+def _user_journal_files(uid):
+    """The uid's user journal files in the journal roots: [(path, active)], exact names only."""
+    found = []
+    for root in JOURNAL_ROOTS:
+        for path in glob.glob(os.path.join(root, "[0-9a-f]" * 32, "user-%d*.journal*" % uid)):
+            m = _USER_JOURNAL_RE.fullmatch(os.path.basename(path))
+            if m and int(m.group(1)) == uid and not os.path.islink(path):
+                found.append((path, os.path.basename(path) == "user-%d.journal" % uid))
+    return found
+
+
+def _forget_journal(uid):
+    """Delete the uid's user journal files; how many went.
+
+    journalctl --rotate is system-wide (journalctl(1) has no per-user or per-file rotation), so it
+    runs only when the uid still has an ACTIVE file (user-<uid>.journal), which journald may hold
+    open; archived files are deleted without it.
+    """
+    files = _user_journal_files(uid)
+    if any(active for _p, active in files):
+        subprocess.run([resolve("journalctl"), "--rotate"],             # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=60, env=_clean_env())
+        files = _user_journal_files(uid)
+    for path, _active in files:
+        os.unlink(path)
+    return len(files)
+
+
+def _forget_podman_tmp(uid):
+    """Delete Podman's /tmp folders of the uid, when each is a real folder it owns; how many went."""
+    gone = 0
+    for path in (t % uid for t in ADDON_TMP_DIRS):
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(st.st_mode) and st.st_uid == uid:
+            shutil.rmtree(path, ignore_errors=True)
+            gone += 1
+    return gone
 
 
 def _enrol(user):
@@ -8574,6 +8780,8 @@ ACTIONS = {
     "steamcmd-install": do_steamcmd_install,
     "steam-dumps-sweep": do_steam_dumps_sweep,
     "gameuser-group": do_gameuser_group,
+    "addon-account-prepare": do_addon_account_prepare,
+    "addon-account-release": do_addon_account_release,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
     "nodesource-setup": do_nodesource_setup,
