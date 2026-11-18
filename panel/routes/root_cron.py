@@ -122,7 +122,7 @@ def _what(op, n, was, line):
     if op == "save":
         return "edit line %d: %s -> %s" % (n, was, line or "")
     if op == "delete":
-        return "delete line %d: %s" % (n, was)
+        return "removed line %d: %s" % (n, was)
     return "unknown change"
 
 

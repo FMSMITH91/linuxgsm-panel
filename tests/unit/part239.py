@@ -333,13 +333,15 @@ def _changes239():
                                                         schedule="@daily", command="/new"))
     edit_row = _p9_audit("root_cron_change")
     a.post("/root-cron/%d/change" % P9_HOST, data=dict(base, op="delete", n="2", was="0 1 * * * /old"))
+    del_row = _p9_audit("root_cron_change")
     eq("root cron: add, edit and delete each write the whole crontab with the page's digest, a % escaped",
        [(w[0], w[1], w[2]) for w in writes],
        [(P9_HOST, cur + "30 4 * * * date +\\%F\n", sha), (P9_HOST, "MAILTO=root\n@daily /new\n", sha),
         (P9_HOST, "MAILTO=root\n", sha)])
     eq("root cron: each change is audited with the host and the old and new line",
-       (add_row.target, add_row.detail, edit_row.detail, edit_row.success),
-       ("p9-host", "add: 30 4 * * * date +\\%F", "edit line 2: 0 1 * * * /old -> @daily /new", True))
+       (add_row.target, add_row.detail, edit_row.detail, edit_row.success, del_row.detail),
+       ("p9-host", "add: 30 4 * * * date +\\%F", "edit line 2: 0 1 * * * /old -> @daily /new", True,
+        "removed line 2: 0 1 * * * /old"))
     del writes[:]
     refused = [a.post("/root-cron/%d/change" % P9_HOST, data=dict(base, **d)) for d in (
         {"op": "add", "schedule": "61 * * * *", "command": "x"},
