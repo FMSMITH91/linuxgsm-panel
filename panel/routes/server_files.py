@@ -2054,13 +2054,10 @@ def _register_file_removal(app):
         if refused is not None:
             return refused
         try:
-            with _r20b_audit_on_raise("delete_file", detail=_audit_safe(_audit_name(rel)),
-                                      target=gs.name, server=gs):
+            with _r20b_audit_on_raise("delete_file", detail=_audit_safe(_audit_name(rel)), target=gs.name, server=gs):
                 ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
-            log_action(current_user, "delete_file", target=gs.name,
-                       detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
-                                             _sm.delete_failure_reason(msg)),
-                       success=ok, server=gs)
+            log_action(current_user, "delete_file", target=gs.name, success=ok, server=gs,
+                       detail=_failed_detail(_audit_safe(_audit_name(rel)), ok, _sm.delete_failure_reason(msg)))
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
