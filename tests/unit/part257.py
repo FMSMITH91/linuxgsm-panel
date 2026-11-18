@@ -1,7 +1,7 @@
 """Part 257 of the unit suite: B3's games and settings, DB-IP's country database, add-on updates, Renovate's pins.
 
-1. The catalog: B3 at its fork commit (with maxminddb hashed in its lock) for cod, coduo, cod2, cod4, codwaw
-   and sof2, each with its parser, RCON setting and game log; wet built in behind B3_ET.
+1. The catalog: B3 at its fork commit (with maxminddb hashed in its lock) for cod, coduo, cod2, cod4, codwaw,
+   sof2 and wet, each with its parser, RCON setting and game log; the port the game really listens on.
    The probe under bash finds SoF2's log, ~/.sof2/base/date.
 2. b3.ini: the game log per game, geolocation off / offline / online, the plugins; a settings change
    rewrites only the panel's [plugins] lines and the two keys of plugin_geolocation.ini.
@@ -55,10 +55,15 @@ def _read257(*parts):
 # ── 1. the catalog ──────────────────────────────────────────────────────────────────────────────
 def _catalog257():
     games = _ad257.CATALOG[_ad257.B3]["games"]
-    eq("B3: offered for cod, coduo, cod2, cod4 (CoD4x), codwaw and sof2 with their parsers; ET waits behind its switch",
-       (games, _ad257.B3_ET, _ad257.offered("cod4"), _ad257.offered("wet")),
-       ({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2"}, False,
-        ["b3", "iw4madmin"], []))
+    eq("B3: offered for cod, coduo, cod2, cod4 (CoD4x), codwaw, sof2 and wet (vanilla ET) with their parsers",
+       (games, _ad257.offered("cod4"), _ad257.offered("wet")),
+       ({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2", "wet": "et"},
+        ["b3", "iw4madmin"], ["b3"]))
+    eq("game port: where the game listens, else its config's; ET (its start sets no port) needs to be running",
+       [_ad257.game_port("wet", 27970, [27960]), _ad257.game_port("wet", 27970, [])[0],
+        _ad257.game_port("cod2", 28960, []), _ad257.game_port("cod2", 28960, [28960, 28961]),
+        _ad257.game_port("cod2", 28960, [1, 2]), _ad257.parse_probe("udp= 27960 0 70000 x\n")["udp"]],
+       [(27960, ""), None, (28960, ""), (28960, ""), (28960, ""), [27960]])
     eq("B3: SoF2 and ET read rconpassword; their logs are ~/.sof2/base/date and etmain/etserver.log; CoD's games_mp.log",
        ([_ad257.RCON_SETTING[g] for g in ("sof2", "wet", "codwaw")],
         [_ad257.game_log_name(g) for g in ("sof2", "wet", "cod2")]),
@@ -66,10 +71,11 @@ def _catalog257():
     req, cf = _read257("panel", "addon_images", "b3", "requirements.txt"), _read257("panel", "addon_images", "b3",
                                                                                    "Containerfile")
     m = _re257.search(r"^maxminddb==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", req, _re257.M)
-    eq("B3: built from the fork commit (addons.py and the Containerfile agree), maxminddb in its hashed lock",
-       (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), bool(m),
-        "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
-       (_PIN257, [_PIN257], True, True))
+    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.0 with its short "
+       "commit, maxminddb in its hashed lock",
+       (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
+        bool(m), "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
+       (_PIN257, [_PIN257], "2.0.0 (7e734849)", True, True))
 
 
 def _probe_sof2_257():
@@ -170,6 +176,10 @@ _PROBE257 = ("os=24.04\npodman=podman version 4.9.3\nuid=1004\ngid=1005\nlogdir=
              "rcon.b64=%s\nports= 21030 21031 21032\n" % _ad257._b64('set rcon_password "%s"' % _RC257))
 
 
+_WETPROBE257 = ("os=24.04\npodman=podman version 4.9.3\nuid=1004\ngid=1005\nlogdir=serverfiles/etmain\n"
+                "rcon.b64=%s\nports= 21040 21041 21042\nudp=%%s\n" % _ad257._b64('set rconpassword "%s"' % _RC257))
+
+
 def _status257(meta, b3ini=""):
     return _PROBE257 + "installed=1\nmeta.b3=%s\nstate.b3=active\nb3ini.b64=%s\ngeoini.b64=\n" % (
         _ad257._b64(_json257.dumps(meta)), _ad257._b64(b3ini))
@@ -201,7 +211,7 @@ def _geo_file257():
     _p9_patch(_geo257, "month_now", lambda: _MONTH257)
 
 
-def _answer257(meta, b3ini=""):
+def _answer257(meta, b3ini="", probe=None):
     """The host's stdout for each shell: the change's read, the database push, an install or restart, the probe, a status."""
     def answer(sh):
         if "b3ini.b64" in sh:
@@ -211,31 +221,61 @@ def _answer257(meta, b3ini=""):
         if "restart lgsm-addon-b3" in sh or "podman build" in sh:
             return "ADDON_INSTALLED\n"
         if "-maxdepth 3 -type f -name" in sh:
-            return _PROBE257
+            return probe or _PROBE257
         return "os=24.04\npodman=podman version 4.9.3\nmeta.b3=%s\nstate.b3=active\n" % _ad257._b64(_json257.dumps(meta))
     return answer
 
 
-def _install_offline257(ids):
-    calls = _host257(_answer257({}))
+def _first257(calls, mark):
+    """The first recorded shell call holding `mark`, or None."""
+    return next((c for c in calls if c[0] == "sh" and mark in c[1]), None)
+
+
+def _puts257(call):
+    """The files an install or change shell writes, {path: text} (from its base64 lines)."""
+    return {path: _ad257._unb64(b64) for b64, path in _re257.findall(r"printf %s (\S+) \| base64 -d > (\S+)\.new",
+                                                                         call[1] if call else "")}
+
+
+def _put257(puts, end):
+    return next((t for p, t in puts.items() if p.endswith(end)), "")
+
+
+def _install257(sid, db_id, geolocation, probe=None):
+    """POST a B3 install and run it -> (status, push call, install call, its files, all calls)."""
+    calls = _host257(_answer257({}, probe=probe))
     _geo_file257()
-    r = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/install" % ids["cod2"],
-                                  json={"database_id": ids["db"], "geolocation": "offline"})
+    r = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/install" % sid,
+                                  json={"database_id": db_id, "geolocation": geolocation})
     _p9_drain()
-    push = [c for c in calls if c[0] == "sh" and "GEOIP_PUT" in c[1]]
-    inst = [c for c in calls if c[0] == "sh" and "podman build" in c[1]]
-    puts = {path: _ad257._unb64(b64) for b64, path in _re257.findall(r"printf %s (\S+) \| base64 -d > (\S+)\.new",
-                                                                         inst[0][1] if inst else "")}
-    unit = next((t for p, t in puts.items() if p.endswith(".container")), "")
-    meta = next((_json257.loads(t) for p, t in puts.items() if p.endswith("addon.json")), {})
-    geoini = next((t for p, t in puts.items() if p.endswith("plugin_geolocation.ini")), "")
+    inst = _first257(calls, "podman build")
+    return r.status_code, _first257(calls, "GEOIP_PUT"), inst, _puts257(inst), calls
+
+
+def _install_offline257(ids):
+    code, push, inst, puts, calls = _install257(ids["cod2"], ids["db"], "offline")
+    unit, meta = _put257(puts, ".container"), _json257.loads(_put257(puts, "addon.json") or "{}")
     eq("install (offline geolocation): the database goes to the add-on's geoip folder on stdin, mounted read-only; "
        "no relay; plugin_geolocation.ini asks only it; the record says offline, the month and the commit",
-       (r.status_code, len(push), push[0][2] == _b64m257.b64encode(_DB257).decode() if push else None,
+       (code, (push or [0, 0, ""])[2] == _b64m257.b64encode(_DB257).decode(),
         "Volume=/home/cod2p257/panel-addons/b3/geoip:/geoip:ro" in unit, "-T,443:" in unit,
-        "geolocators: mmdb" in geoini, meta.get("geolocation"), meta.get("geoip"), meta.get("commit"),
-        bool(inst) and push and calls.index(push[0]) < calls.index(inst[0])),
-       (202, 1, True, True, False, True, "offline", _MONTH257, _PIN257, True))
+        "geolocators: mmdb" in _put257(puts, "plugin_geolocation.ini"), meta.get("geolocation"), meta.get("geoip"),
+        meta.get("commit"), None not in (push, inst) and calls.index(push) < calls.index(inst)),
+       (202, True, True, False, True, "offline", _MONTH257, _PIN257, True))
+
+
+def _install_wet257(ids):
+    """vanilla ET: the port it really listens on, read from its own socket; refused while it is stopped."""
+    code, _push, inst, _puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "")
+    refused = _p9_audit("addon_install").detail
+    code2, _push, inst2, puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "27960")
+    unit = _put257(puts, ".container")
+    stdin = inst2[2] if inst2 else ""
+    eq("install (ET): stopped, it is refused (its start passes no port, so only a running server says it); running "
+       "on 27960 while its config says 27970, B3 and the unit use 27960; its log is etmain/etserver.log",
+       (code, inst, "Start the game server first" in refused, code2, ",-U,27960" in unit, "port: 27960\n" in stdin,
+        "game_log: /gamelog/etserver.log\n" in stdin, "parser: et\n" in stdin),
+       (202, None, True, 202, True, True, True, True))
 
 
 _B3INI257 = ("[b3]\nparser: cod2\n\n[server]\nrcon_password: %s\n\n[plugins]\nadmin: @conf/conf/plugin_admin.ini\n"
@@ -249,9 +289,7 @@ def _meta257(**kw):
     return rec
 
 
-def _settings257(ids):
-    meta = _meta257(database="gs%d_b3" % ids["cod2"])
-    calls = _host257(_answer257(meta, _B3INI257))
+def _settings_refused257(ids, calls):
     _p9_patch(_ra257, "step_up_needed", lambda: True)
     refused = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/settings" % ids["cod2"],
                                         json={"geolocation": "off", "plugins": ["afk"]}, headers={"Accept": "application/json"})
@@ -260,16 +298,22 @@ def _settings257(ids):
                                     json={"geolocation": "off", "plugins": ["translator"]})
     eq("settings: step-up first, as for install; a plugin the card doesn't offer is refused; nothing runs",
        (refused.status_code, bad.status_code, [c for c in calls if c[0] == "sh"]), (403, 400, []))
+
+
+def _settings257(ids):
+    meta = _meta257(database="gs%d_b3" % ids["cod2"])
+    calls = _host257(_answer257(meta, _B3INI257))
+    _settings_refused257(ids, calls)
     ok = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/settings" % ids["cod2"],
                                    json={"geolocation": "off", "plugins": ["afk", "tk"]})
     _p9_drain()
-    re_ = [c for c in calls if c[0] == "sh" and "restart lgsm-addon-b3" in c[1]]
-    stdin = re_[0][2] if re_ else ""
+    re_ = _first257(calls, "restart lgsm-addon-b3") or ["sh", "podman build " + _RC257, ""]
+    stdin = re_[2] or ""
     eq("settings: b3.ini goes back on stdin with only the panel's plugin lines changed (the operator's plugin and the "
        "password kept), no rebuild, a restart watched, audited",
-       (ok.status_code, _ad257.b3_ini_plugins(stdin or ""), "myext: @conf/myext.ini" in (stdin or ""),
-        "rcon_password: %s" % _RC257 in (stdin or ""), bool(re_) and "podman build" in re_[0][1],
-        bool(re_) and _RC257 in re_[0][1], _p9_audit("addon_settings").success),
+       (ok.status_code, _ad257.b3_ini_plugins(stdin), "myext: @conf/myext.ini" in stdin,
+        "rcon_password: %s" % _RC257 in stdin, "podman build" in re_[1], _RC257 in re_[1],
+        _p9_audit("addon_settings").success),
        (202, ["admin", "afk", "tk"], True, True, False, False, True))
 
 
@@ -297,21 +341,24 @@ def _update257(ids):
 
 
 def _fixture257():
-    ids = {"cod2": _p9_new_server(P9_HOST, "cod2p257", "cod2", 28965, name="p257-cod2")}
+    ids = {"cod2": _p9_new_server(P9_HOST, "cod2p257", "cod2", 28965, name="p257-cod2"),
+           "wet": _p9_new_server(P9_HOST, "wetp257", "wet", 27970, name="p257-wet")}
     with _p9.app_context():
-        row = _GD257(remote_id=P9_HOST, game_server_id=ids["cod2"], name="gs%d_b3" % ids["cod2"],
-                     secret=_enc257(_DBV257))
-        _db257.session.add(row)
-        _db257.session.commit()
-        ids["db"] = row.id
+        for key, db_key in (("cod2", "db"), ("wet", "wetdb")):
+            row = _GD257(remote_id=P9_HOST, game_server_id=ids[key], name="gs%d_b3" % ids[key], secret=_enc257(_DBV257))
+            _db257.session.add(row)
+            _db257.session.commit()
+            ids[db_key] = row.id
     return ids
 
 
 def _drop257(ids):
     with _p9.app_context():
-        _GD257.query.filter_by(game_server_id=ids["cod2"]).delete()
+        for key in ("cod2", "wet"):
+            _GD257.query.filter_by(game_server_id=ids[key]).delete()
         _db257.session.commit()
-    _p9_delete_server(ids["cod2"])
+    for key in ("cod2", "wet"):
+        _p9_delete_server(ids[key])
 
 
 # ── 5. the card ─────────────────────────────────────────────────────────────────────────────────
@@ -407,16 +454,21 @@ def _card_checks257():
 
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────
+def _manager_hits257(m):
+    """[(file, digest)] a Renovate regex manager matches in the panel's own files (its JS regex read as Python's)."""
+    pat = _re257.compile(_re257.sub(r"\(\?<(?=[A-Za-z])", "(?P<", m["matchStrings"][0]))
+    paths = [f.strip("/").lstrip("^").rstrip("$").replace("\\.", ".") for f in m.get("managerFilePatterns") or []]
+    return [(path, x.groupdict().get("currentDigest")) for path in paths if path.startswith("panel/")
+            for x in pat.finditer(_read257(*path.split("/")))]
+
+
 def _renovate257():
     cfg = _json257.loads(_read257(".github", "renovate.json"))
     found = {}
     for m in cfg.get("customManagers") or []:
-        pat = _re257.compile(_re257.sub(r"\(\?<(?=[A-Za-z])", "(?P<", m["matchStrings"][0]))
-        for f in m.get("managerFilePatterns") or []:
-            path = f.strip("/").lstrip("^").rstrip("$").replace("\\.", ".")
-            if path.startswith("panel/"):
-                found.setdefault(m.get("datasourceTemplate"), []).extend(
-                    (path, x.groupdict().get("currentDigest")) for x in pat.finditer(_read257(*path.split("/"))))
+        hits = _manager_hits257(m)
+        if hits:
+            found.setdefault(m.get("datasourceTemplate"), []).extend(hits)
     daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
     eq("Renovate: B3's commit in addons.py and the Containerfile (git-refs, master) and IW4MAdmin's digest (docker, "
        "latest), each matched once, checked daily",
@@ -472,7 +524,7 @@ try:
     _remote_forget257()
     _ids257 = _fixture257()
     try:
-        for _step257 in (_install_offline257, _settings257, _update257):
+        for _step257 in (_install_offline257, _install_wet257, _settings257, _update257):
             _p9_restore_all()
             _p9_arm(who="part257")
             _step257(_ids257)
