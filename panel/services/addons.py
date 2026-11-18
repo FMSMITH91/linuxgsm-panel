@@ -34,7 +34,7 @@ THE ADD-ONS
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
     two plugin questions its first start would ask are answered in their own files.
-    B3 (cod, coduo, cod2, cod4, codwaw, sof2; wet behind B3_ET): legacy, opt-in. Built on
+    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet): legacy, opt-in. Built on
     the host from addon_images/b3 (a Containerfile: FMSMITH91/big-brother-bot at one commit, its
     dependencies by hash), with one of this server's databases from the Databases tab (never one
     another add-on uses). Its geolocation is off unless chosen: offline (a country, from DB-IP's
@@ -53,16 +53,19 @@ import shlex
 # ── the catalog ─────────────────────────────────────────────────────────────────────────────────
 IW4MADMIN = "iw4madmin"
 B3 = "b3"
-# Wolfenstein: Enemy Territory (vanilla 2.60b) for B3: built in, and offered once a box test passes at the
-# pinned commit. The re-test at edc945b2 found that an unauthenticated player could run !iamgod on vanilla
-# ET; 7e734849 refuses commands to unauthenticated players, and ET waits for its box re-test at that commit.
-# (CoD4x passed the edc945b2 re-test and is offered.)
-B3_ET = False
+# Games whose LinuxGSM start command passes no port, so the port in the game's config may not be the one
+# it listens on (Wolfenstein: Enemy Territory binds 0.0.0.0:27960 unless the instance's startparameters set
+# net_port: vps-b3 round 3). An add-on for one needs the server running at install, to read the real port.
+LIVE_PORT_GAMES = ("wet",)
 # FMSMITH91/big-brother-bot master on 2026-11-18 (the merge of its PR #23: commands refused to a player B3
 # has not authenticated, and a guard on group changes; #22 and #21 CoD4x and vanilla ET; #19 the geolocation
 # services, #20 the offline .mmdb lookup): the B3 the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
 # Containerfile's ARG together.
 B3_COMMIT = "7e73484988c11d61563fd4a4ab6f92733964fbf8"
+# The fork's release that commit is: its annotated tag v2.0.0 is on it. The build checks the commit, not the
+# tag; the source tree says 2.0.0dev because the release workflow stamps the version into its wheel only.
+# A newer pin that is not a release keeps this number beside its own short commit.
+B3_RELEASE = "2.0.0"
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
 IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
@@ -96,12 +99,12 @@ CATALOG = {
     B3: {
         "name": "B3 (Big Brother Bot)",
         "image": "localhost/lgsm-addon-b3:" + B3_COMMIT[:12],
-        "version": "2.0.0dev " + B3_COMMIT[:8],
+        "version": "%s (%s)" % (B3_RELEASE, B3_COMMIT[:8]),
         "source": "https://github.com/FMSMITH91/big-brother-bot",
         # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
         # and 3b). United Offensive is CoD1's engine and log: B3's cod parser. World at War is cod5.
-        "games": dict({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2"},
-                      **({"wet": "et"} if B3_ET else {})),
+        "games": {"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2",
+                  "wet": "et"},
         # geoip: DB-IP's country database, put there by the panel (services/geoip.py), read-only inside.
         "mounts": (("Data", "/data"), ("geoip", "/geoip:ro")),
         "env": ("TZ=Etc/UTC", "HOME=/data"),
@@ -214,6 +217,8 @@ _RCON_RE = {name: re.compile(r'^[ \t]*seta?[ \t]+%s[ \t]+(?:"([^"\r\n]*)"|(\S+))
 # CoD1's engine; CoD2 is taken as rcon_password like the later engines (not yet seen on a box).
 RCON_SETTING = {"cod": "rconpassword", "coduo": "rconpassword", "cod2": "rcon_password", "cod4": "rcon_password",
                 "codwaw": "rcon_password", "sof2": "rconpassword", "wet": "rconpassword"}
+_START_FIRST = ("Start the game server first: its start command sets no port, so the add-on reads the port it really "
+                "listens on, then install again.")
 _RCON_RENAME = ("This game ignores rconpassword. In the server's config, rename it to rcon_password, restart the "
                 "server, then install again.")
 _KV_RE = re.compile(r"([a-z][a-z0-9_.]{0,40})=(.*)")
@@ -224,6 +229,21 @@ _STATES = ("active", "activating", "deactivating", "inactive", "failed", "reload
 def game_log_name(game_type):
     """The game log's file name B3 or IW4MAdmin reads, by game type (games_mp.log unless _GAME_LOG says)."""
     return _GAME_LOG.get(game_type, _LOG_DEFAULT)[1]
+
+
+def game_port(game_type, configured, udp):
+    """(the port the add-on reaches the game on, or None, and why not) from the UDP ports the account listens on.
+
+    `udp` is what probe_sh read (the account's own listening sockets). The configured port when the game
+    listens there, or when nothing of the account's is listening (a game that is stopped). When the game
+    listens elsewhere on exactly one port, that one: LinuxGSM's ET start passes no port, so its config's
+    port can be ignored. A LIVE_PORT_GAMES game must be running, since nothing else says its real port.
+    """
+    if configured in udp or (not udp and game_type not in LIVE_PORT_GAMES):
+        return configured, ""
+    if len(udp) == 1:
+        return udp[0], ""
+    return (configured, "") if udp else (None, _START_FIRST)
 
 
 def geo_mode(value):
@@ -314,7 +334,8 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     """The install's first read, as the account: the host, the game's log folder, RCON, free ports.
 
     Prints os=, podman=, splice=1 (pasta has --splice-only), uid= and gid= (the account's, for the
-    unit's User= and Group=), logdir= (the folder of the newest game log, game_log_name: games_mp.log
+    unit's User= and Group=), udp= (the UDP ports the account's own processes listen on: game_port),
+    logdir= (the folder of the newest game log, game_log_name: games_mp.log
     under serverfiles, or the game's own folder in the home: LinuxGSM sets fs_homepath only for
     cod4server, so CoD1 and United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and
     World at War under ~/.codwaw; SoF2's under ~/.sof2, ET's under serverfiles), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
@@ -333,7 +354,8 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
             '| head -c 4000 | base64 -w0)"; '
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
-            'echo "ports=$f"; [ -f %s ] && echo installed=1; true'
+            'echo "ports=$f"; echo "udp=$(ss -Hulnp 2>/dev/null | grep -F "users:((" | awk \'{print $4}\' '
+            '| sed "s/.*://" | sort -un | tr "\\n" " ")"; [ -f %s ] && echo installed=1; true'
             % (where, shlex.quote(name), shlex.quote(cfg), ports, int(nports),
                shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE))))
 
@@ -362,6 +384,7 @@ def parse_probe(out):
     return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "splice": kv.get("splice") == "1", "ids": ids,
             "logdir": kv.get("logdir", ""), "rcon_lines": _unb64(kv.get("rcon.b64", "")),
             "ports": [int(p) for p in kv.get("ports", "").split() if p.isdecimal()],
+            "udp": [int(p) for p in kv.get("udp", "").split() if p.isdecimal() and 0 < int(p) < 65536],
             "installed": kv.get("installed") == "1"}
 
 
@@ -837,15 +860,16 @@ def _relays_gone_sh(user, addon_id):
             "2>/dev/null; rm -f \"$f\"; done; " % (user, USER_UNIT_DIR, UNIT_PREFIX, addon_id))
 
 
-def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None, rebuild=False, settings=False,
-                   old_image=""):
+def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None, how=None):
     """A settings change or an update, as the account: rewrite, restart, watch. Ends like install_sh.
 
-    Writes the record, `files` and, with `settings`, the settings file from stdin (b3.ini holds the
-    passwords); with `rebuild`, pulls or builds the image again. The relay units are replaced by
+    Writes the record, `files` and, with how["settings"], the settings file from stdin (b3.ini holds the
+    passwords); with how["rebuild"], pulls or builds the image again. The relay units are replaced by
     `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
-    Its data, settings and database stay. `old_image`, when the update moved it, is removed afterwards.
+    Its data, settings and database stay. how["old_image"], when the update moved it, is removed afterwards.
     """
+    how = how or {}
+    rebuild, settings, old_image = how.get("rebuild", False), how.get("settings", False), how.get("old_image", "")
     a = CATALOG[addon_id]
     d = addon_dir(user, addon_id)
     unit = unit_name(addon_id)

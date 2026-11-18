@@ -36,6 +36,7 @@ _DB_TAKEN = "Another add-on already uses that database. Each add-on needs its ow
 _BUSY = "The add-on is already being installed. Wait for it to finish."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
+_NO_LOG_NAMED = "Couldn't find the game's log ({log}). Start the server once so it writes one, then install again."
 _NO_RCON = "The server's config sets no RCON password. Set one, then install again."
 _NO_PORT = "No free port was found on this host for the add-on's page or relays."
 _NO_IDS = "Couldn't read the server account's user and group ids on the host."
@@ -115,8 +116,11 @@ def _addon_rows(gs, found):
     return rows
 
 
-# SoF2's B3 parser has no private message: every reply is said to the whole server (vps-b3 round 3).
-_PUBLIC_REPLIES = "On Soldier of Fortune 2, B3 has no private messages: every reply is said in public chat."
+# SoF2's and vanilla ET's B3 parsers have no private message: every reply is said to the whole server
+# (vps-b3 rounds 3 and 3d).
+_PUBLIC_REPLIES = {"sof2": "On Soldier of Fortune 2, B3 has no private messages: every reply is said in public chat.",
+                   "wet": "On Wolfenstein: Enemy Territory, B3 has no private messages: every reply is said in public "
+                          "chat."}
 
 
 def _b3_fields(gs, meta):
@@ -127,7 +131,7 @@ def _b3_fields(gs, meta):
             "switchable": list(_ad.B3_SWITCHABLE), "geo_switchable": list(_ad.B3_GEO_SWITCHABLE),
             "geoip": meta.get("geoip", "") if geo == _ad.GEO_OFFLINE else "",
             "credit": _geoip.CREDIT,
-            "note": i18n.tr(_PUBLIC_REPLIES) if gs.game_type == "sof2" else ""}
+            "note": i18n.tr(_PUBLIC_REPLIES[gs.game_type]) if gs.game_type in _PUBLIC_REPLIES else ""}
 
 
 def _db_host_state(gs, rows, dbs):
@@ -176,9 +180,16 @@ def _taken(p, addon_id):
 
 
 def _host_refusal(gs, p, need_ports):
-    """Why the host or the game stops the install: no game log, no RCON, not enough free ports."""
+    """Why the host or the game stops the install: no game log, no RCON, no port to reach the game, no free ports.
+
+    Sets p["game_port"]: the port the game really listens on (services/addons.game_port).
+    """
+    p["game_port"], why = _ad.game_port(gs.game_type, gs.port, p.get("udp") or [])
+    if why:
+        return why
     if not _ad.log_dir(gs.short_name, p["logdir"]):
-        return _NO_LOG
+        name = _ad.game_log_name(gs.game_type)
+        return _NO_LOG if name == "games_mp.log" else i18n.Sentence(_NO_LOG_NAMED, log=name)
     if not p["rcon"]:
         return p["rcon_why"] or _NO_RCON
     if p["ids"] is None:
@@ -233,10 +244,10 @@ def _plan(gs, addon_id, db_id, geolocation):
 def _settings(gs, plan, p):
     """(the secret settings file's text, the other files, the secrets to scrub) for this add-on."""
     if plan["id"] == _ad.IW4MADMIN:
-        return _ad.iw4madmin_settings(gs.game_type, gs.port, p["rcon"]), _ad.iw4madmin_files(), (p["rcon"],)
+        return _ad.iw4madmin_settings(gs.game_type, p["game_port"], p["rcon"]), _ad.iw4madmin_files(), (p["rcon"],)
     r = plan["db"]
     secret = decrypt_secret(r.secret) or ""
-    ini = _ad.b3_ini(gs.game_type, gs.port, p["rcon"], r.name, secret, plan["geolocation"])
+    ini = _ad.b3_ini(gs.game_type, p["game_port"], p["rcon"], r.name, secret, plan["geolocation"])
     files = _ad.build_files(plan["id"])
     if _ad.geo_mode(plan["geolocation"]) != _ad.GEO_OFF:
         files[_ad.B3_GEO_INI] = _ad.geolocation_ini("", plan["geolocation"])
@@ -250,12 +261,13 @@ def _install_texts(gs, plan, p, who):
     relay_list = _ad.relays(addon_id, plan["db_host"], plan["db_port"], plan["geolocation"],
                             p["ports"][1 if web else 0:])
     local_db = plan["db_port"] if plan["db"] is not None and plan["db_host"] == "127.0.0.1" else None
-    net = _ad.network(gs.port, local_db, relay_list, p["splice"])
+    net = _ad.network(p["game_port"], local_db, relay_list, p["splice"])
     unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
                        p["ids"])
     settings, files, secrets = _settings(gs, plan, p)
     meta = json.dumps(dict(record(addon_id, plan["geolocation"], list(_ad.B3_PLUGINS), plan.get("geoip", "")),
                            database=plan["db"].name if plan["db"] is not None else "", port=web, network=net,
+                           game_port=p["game_port"],
                            installed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                            installed_by=who)) + "\n"
     return settings, files, unit, _ad.relay_units(addon_id, relay_list), meta, secrets

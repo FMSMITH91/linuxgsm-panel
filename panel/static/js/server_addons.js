@@ -170,11 +170,16 @@
     box.appendChild(bar);
   }
 
-  function installRow(a, d, box) {
+  // What a row says before Install: the legacy warning and the game's own note.
+  function installNotes(a, box) {
     if (a.legacy) {
-      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4, World at War and Soldier of Fortune 2. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
+      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4, World at War, Soldier of Fortune 2 and Wolfenstein: Enemy Territory. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
     }
     if (a.note) box.appendChild(node('div', 'small text-secondary', a.note));
+  }
+
+  function installRow(a, d, box) {
+    installNotes(a, box);
     var free = (d.databases || []).filter(function (x) { return !x.used_by; });
     if (a.needs_database && !free.length) { noDatabaseRow(a, d, box); return; }
     if (a.geolocation_option) box.appendChild(geoSelect(a, 'ad-geo-' + a.id, 'off'));
@@ -186,16 +191,23 @@
     box.appendChild(bar);
   }
 
-  function addonRow(a, d) {
-    var box = node('div', 'ad-row');
+  function stateWord(a) {
+    if (a.installing) return T(JOB[a.job] || JOB.install);
+    return a.installed ? T(STATE[a.state] || STATE.unknown) : T('Not installed');
+  }
+
+  function rowHead(a) {
     var head = node('div', 'd-flex flex-wrap gap-2 align-items-center');
     var name = node('strong', null, a.name + ' ' + a.version);
     name.setAttribute('data-no-i18n', '');
     head.appendChild(name);
-    var state = a.installing ? T(JOB[a.job] || JOB.install) : (a.installed ? T(STATE[a.state] || STATE.unknown) : T('Not installed'));
-    var badge = a.state === 'active' ? 'badge text-bg-success' : 'badge text-bg-secondary';
-    head.appendChild(node('span', badge, state));
-    box.appendChild(head);
+    head.appendChild(node('span', a.state === 'active' ? 'badge text-bg-success' : 'badge text-bg-secondary', stateWord(a)));
+    return head;
+  }
+
+  function addonRow(a, d) {
+    var box = node('div', 'ad-row');
+    box.appendChild(rowHead(a));
     if (a.error) box.appendChild(node('div', 'small text-danger', a.error));
     if (a.tail) {
       var pre = node('pre', 'small border rounded p-2 mt-1 mb-0 ad-log', a.tail);

@@ -34,9 +34,11 @@ dated section below lists what that day's releases changed, newest first; the nu
   version of its source and uses one of the server's databases. An add-on that stops again right
   after its first start is reported with its own last log lines. Nothing is installed until you
   install an add-on; it needs Ubuntu 24.04 or newer.
-- **B3 for Call of Duty 4, World at War and Soldier of Fortune 2.** The B3 add-on is now offered for
-  Call of Duty 4 (CoD4x), World at War and Soldier of Fortune 2 as well, each tested against the
-  server LinuxGSM installs. On Soldier of Fortune 2 B3 has no private messages, and the card says so.
+- **B3 for Call of Duty 4, World at War, Soldier of Fortune 2 and Enemy Territory.** The add-on now
+  builds B3 v2.0.0, which refuses commands to players it has not authenticated, and is offered for Call of Duty 4 (CoD4x), World at War, Soldier of Fortune 2 and Wolfenstein: Enemy
+  Territory as well, each tested against the server LinuxGSM installs, and it uses the port the game
+  really listens on. On Soldier of Fortune 2 and Enemy Territory B3 has no private messages, and the
+  card says so.
 - **B3's settings on its card.** An installed B3 has a folded settings section: geolocation off,
   offline (a player's country, from DB-IP's free database on the host, so no player address leaves
   it) or online (a city, from ipwho.is), and B3's own plugins, each switched on or off. Applying them

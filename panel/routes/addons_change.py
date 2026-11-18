@@ -85,16 +85,31 @@ def _db_of(gs, meta):
     return r, host, port
 
 
+def _web_and_free(addon_id, meta, ports):
+    """(the add-on page's port, the free ports left for relays): the recorded page port is kept."""
+    if not _ad.CATALOG[addon_id]["web_port"]:
+        return None, list(ports)
+    web = meta.get("port")
+    free = [x for x in ports if x != web]
+    if web:
+        return web, free
+    return (free[0], free[1:]) if free else (None, [])
+
+
+def _reach_port(gs, meta, p):
+    """The port the add-on reaches the game on: where it really listens, else what the record says."""
+    known = meta.get("game_port") or gs.port
+    port, _why = _ad.game_port(gs.game_type, known, p.get("udp") or [])
+    return port or known
+
+
 def _unit(gs, addon_id, p, meta, geo):
     """(unit text, relay units, Network=, the page's port) for the add-on as it is set now."""
     r, host, port = _db_of(gs, meta)
-    web = meta.get("port") if _ad.CATALOG[addon_id]["web_port"] else None
-    free = [x for x in p["ports"] if x != web]
-    if _ad.CATALOG[addon_id]["web_port"] and not web:
-        web, free = (free[0], free[1:]) if free else (None, [])
+    web, free = _web_and_free(addon_id, meta, p["ports"])
     relay_list = _ad.relays(addon_id, host, port, geo, free)
     local_db = port if r is not None and host == "127.0.0.1" else None
-    net = _ad.network(gs.port, local_db, relay_list, p["splice"])
+    net = _ad.network(_reach_port(gs, meta, p), local_db, relay_list, p["splice"])
     unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
                        p["ids"])
     return unit, _ad.relay_units(addon_id, relay_list), net, web
@@ -164,7 +179,8 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
     unit, units, net, web = _unit(gs, addon_id, p, meta, geo)
     rec.update(network=net, port=web, changed_by=who)
     sh = _ad.reconfigure_sh(gs.short_name, addon_id, unit, json.dumps(rec) + "\n", files, units,
-                            rebuild=kind == "update", settings=new_ini is not None, old_image=meta.get("image", ""))
+                            {"rebuild": kind == "update", "settings": new_ini is not None,
+                             "old_image": meta.get("image", "")})
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=_ad.INSTALL_TIMEOUT,
                                            selfname=gs.lgsm_name, stdin_text=new_ini)
     secrets = _secrets(gs, addon_id, meta, p)

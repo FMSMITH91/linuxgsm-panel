@@ -17,11 +17,11 @@ has:
   (`ghcr.io/raidmax/iw4madmin`), pinned by digest. Before the first start the panel writes its settings: this server
   on `127.0.0.1`, the RCON password from the server's config, and the game log. It keeps its own SQLite database in
   its folder, so it needs no Databases-tab database. Its anti-cheat and profanity plugins start off.
-- **B3** (Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4 / CoD4x, World at War and Soldier of
-  Fortune 2): **legacy and opt-in.** It's built on the host from one pinned commit of FMSMITH91/big-brother-bot, with
-  hash-pinned dependencies, and it needs one of the server's own databases from the Databases tab. On Soldier of
-  Fortune 2 B3 has no private messages: every reply is said in public chat. Wolfenstein: Enemy Territory is built in
-  but not offered yet.
+- **B3** (Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4 / CoD4x, World at War, Soldier of Fortune 2
+  and Wolfenstein: Enemy Territory): **legacy and opt-in.** It's built on the host from one pinned commit of
+  FMSMITH91/big-brother-bot, with hash-pinned dependencies, and it needs one of the server's own databases from the
+  Databases tab. On Soldier of Fortune 2 and Enemy Territory B3 has no private messages: every reply is said in
+  public chat.
 
 ### B3's settings
 
@@ -85,12 +85,16 @@ account's own journal is kept. Uninstalling the server also deletes the account'
 later given the same user id can't read the old add-ons' lines. The add-on's folder is in the game account's home,
 so the server's backups include it.
 
-The add-on reads the RCON password the game itself reads: `rconpassword` for Call of Duty, United Offensive and
-Soldier of Fortune 2, `rcon_password` for Call of Duty 2, 4 and World at War. LinuxGSM's default World at War config sets
+The add-on reads the RCON password the game itself reads: `rconpassword` for Call of Duty, United Offensive,
+Soldier of Fortune 2 and Enemy Territory, `rcon_password` for Call of Duty 2, 4 and World at War.
+
+The add-on reaches the game on the port the game really listens on, read from the server account's own listening
+sockets at install, not only from the config. LinuxGSM's Enemy Territory start command passes no port, so the port
+in its config may not apply (the server then listens on 27960): an ET server must be running when B3 is installed. LinuxGSM's default World at War config sets
 `rconpassword`, which that game ignores; the install then asks you to rename it to `rcon_password` and restart
 the server.
 
 The game's log is found where the game writes it: `serverfiles` for Call of Duty 4 (LinuxGSM sets its home path
 there), `~/.callofduty` for Call of Duty and United Offensive, `~/.callofduty2` for Call of Duty 2, `~/.codwaw`
-for World at War, and `~/.sof2/base/date` for Soldier of Fortune 2 (LinuxGSM's `g_log "date"`, which the game
-takes as a file name).
+for World at War, `~/.sof2/base/date` for Soldier of Fortune 2 (LinuxGSM's `g_log "date"`, which the game takes as
+a file name) and `serverfiles/etmain/etserver.log` for Enemy Territory.
