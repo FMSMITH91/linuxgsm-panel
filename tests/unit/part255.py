@@ -310,7 +310,7 @@ def _b3_local255(ids):
 
 
 def _b3_geo255(ids):
-    code, sh, ini, puts = _b3_install255(ids, True, "ports= 21010 21011\n")
+    code, _sh, ini, puts = _b3_install255(ids, True, "ports= 21010 21011\n")
     unit = _unit_of255(puts)
     services = [t for p, t in sorted(puts.items()) if p.endswith(".service")]
     eq("B3 geolocation on: the plugins listed, each service through its own relay, nothing else reachable",
@@ -321,7 +321,7 @@ def _b3_geo255(ids):
        [202, True, True, True, True, True, 2, ["ipwho.is:443", "ipapi.co:443"], True])
     check("B3 geolocation on: the audit says so", "geolocation on" in _audit_started255(), _audit_started255())
     _p9_patch(_ra255, "_db_target", lambda r: ("100.70.1.2", 3307))
-    code, sh, ini, puts = _b3_install255(ids, False, "ports= 21012\n")
+    code, _sh, ini, puts = _b3_install255(ids, False, "ports= 21012\n")
     unit = _unit_of255(puts)
     db_relay = next((t for p, t in puts.items() if p.endswith("lgsm-addon-b3-db.service")), "")
     eq("B3 with a database on another machine: a relay on this host to that one address, at 3306 inside",

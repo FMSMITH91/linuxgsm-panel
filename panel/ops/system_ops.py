@@ -1854,7 +1854,8 @@ def _ci_drop_scheduled_running(slug, sha, runs, seen):
     from being offered for its whole run while GitHub's own green tick, which does not count it,
     already showed the commit as done. A scheduled run that FAILED is kept, and still blocks.
     Asked only when something is running (one more anonymous request); when the scheduled runs
-    cannot be read, nothing is dropped and the commit stays held."""
+    cannot be read, nothing is dropped and the commit stays held.
+    """
     if not any(_ci_running(r) for r in runs):
         return runs
     suites = _ci_scheduled_suites(slug, sha, seen)
@@ -1881,7 +1882,7 @@ def _ci_scheduled_suites(slug, sha, seen):
 
 
 def _ci_get_json(path, seen):
-    """GitHub's anonymous JSON answer for api.github.com/<path>; its rate-limit headers go in `seen`."""
+    """The anonymous JSON answer of api.github.com/<path>; its rate-limit headers go in `seen`."""
     req = urllib.request.Request("https://api.github.com/" + path, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "linuxgsm-panel-update-check",
