@@ -74,21 +74,41 @@ def tick(tick_fn, pending, app, socketio, gs, server_id):
     """Run the console poller's tick_fn for this console unless it is resting.
 
     `pending` is the poller's map of catch-ups pages have asked for. Whether the read found anything
-    is told by where the poller stands in the log before and after it (inode and offset), so the
-    tick itself is unchanged.
+    is told by where the poller stands in the log before and after it (inode and offset). The tick
+    returns True when its read found the log exactly where the offsets say (seen), and a new chain
+    after it is a rotated or truncated log (forget_window).
     """
     state = _console_offsets.get(server_id)
     if _resting(state, gs, server_id, pending):
         return
     if state is not None:
         state["read_at"] = time.time()
-    before = (state or {}).get("ino"), (state or {}).get("pos")
-    tick_fn(app, socketio, gs, server_id)
+    was, began = _place(state), clock()
+    if tick_fn(app, socketio, gs, server_id) is True:
+        seen(server_id, began)
+    _after_tick(server_id, state, was)
+
+
+def _place(state):
+    """(inode, offset, chain) of the poller's offsets for a console, all None when it has none."""
+    s = state or {}
+    return s.get("ino"), s.get("pos"), s.get("chain")
+
+
+def _after_tick(server_id, state, was):
+    """Count a read that found nothing new toward the rest, and drop a kept window of a rotated log.
+
+    `state` is the offsets before the tick (the tick changes them in place) and `was` their place then.
+    """
     after = _console_offsets.get(server_id)
-    if after is not None and after is state and (after.get("ino"), after.get("pos")) == before:
+    if after is None:
+        return
+    if after is state and _place(after)[:2] == was[:2]:
         after["idle"] = after.get("idle", 0) + 1
-    elif after is not None:
+    else:
         after["idle"] = 0
+    if state is not None and after.get("chain") != was[2]:
+        forget_window(server_id)    # rotated or truncated: a kept window read is not of this log
 
 
 def clock():
@@ -117,8 +137,28 @@ def keep_window(server_id, want, place, reply):
 
 
 def forget_window(server_id):
-    """Drop the kept window read: the poller found the log rotated or truncated, so it is not this log."""
+    """Drop the kept window read: the poller found the log rotated or truncated, so it is not this log.
+
+    Truncated and written back to the same size, the inode and size would match it again.
+    """
     _windows.pop(server_id, None)
+
+
+def window_read(gs, want, keep, place, read):
+    """/api/console's window read of `want` lines: (out, rc), the kept one while cached_window vouches for it.
+
+    `read()` reads it from the host as (out, err, rc); `place(out)` is _shared._console_window_place.
+    `keep`: whether a good read is kept for the next poll (only the page's 30 s size is).
+    """
+    sid = getattr(gs, "id", None)
+    hit = cached_window(sid, want) if sid is not None else None
+    if hit is not None:
+        return hit
+    out, _err, rc = read()
+    at, rest, _newlines = place(out)
+    if keep and sid is not None and rc == 0 and at is not None and rest.startswith("B") and rest.endswith("E"):
+        keep_window(sid, want, at[1:], (out, rc))
+    return out, rc
 
 
 def cached_window(server_id, want):
