@@ -133,8 +133,11 @@ _DTL_MASK = "********"
 # fn_info_messages_password_strip masks them for every command BUT details. The labels it prints
 # a secret under (v26.5.0): Server/RCON/Admin/Stats/Beta/Web Interface/Telnet password, Auth Token,
 # Salt. column -t then pads the label, which _clean_action_output collapses to one space.
-_DTL_SECRET_LINE = re.compile(r"^(?P<label>[^:\n]*(?:password|passwd|token|salt|secret|api ?key|gslt)"
-                              r"[^:\n]*):[ \t]*(?P<value>\S[^\n]*)$", re.I | re.M)
+# The word is found by a lookahead that stops at the first one, and the label is then taken to the
+# colon once: a label with the word repeated many times and no colon (a game account's own output)
+# is read in time linear in its length, where trying each word in turn took its square.
+_DTL_SECRET_LINE = re.compile(r"^(?=[^:\n]*?(?:password|passwd|token|salt|secret|api ?key|gslt))"
+                              r"(?P<label>[^:\n]*):[ \t]*(?P<value>\S[^\n]*)$", re.I | re.M)
 # Values that are not secrets: what LinuxGSM prints for an unset or already-masked field.
 _DTL_NOT_SECRET = {"NOT SET", _DTL_MASK, "true", "false", "on", "off", "yes", "no"}
 _DTL_CMDLINE_HEAD = "Command-line Parameters"

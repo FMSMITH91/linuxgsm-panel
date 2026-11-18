@@ -41,8 +41,11 @@ _HEAD_RE = re.compile(r"^#{1,6}\s+")
 _ITEM_RE = re.compile(r"^(?:[-*+]|\d{1,3}[.)])\s+")
 # A link target may hold one level of parentheses ("(https://x/a_(b))"): taken whole, not cut at ")".
 _TARGET = r"\((?:[^()]|\([^()]*\))*\)"
-_IMAGE_RE = re.compile(r"!\[[^\]]*\]" + _TARGET)
-_LINK_RE = re.compile(r"\[([^\]]*)\]" + _TARGET)
+# A link's words stop at the next "[": from each unclosed "[" the scan ends at the next one, where
+# `[^\]]*` ran to the line's end from every one of them (time growing with the square of a line of
+# "[" in a release note). Link words that hold a "[" themselves are taken from the last one.
+_IMAGE_RE = re.compile(r"!\[[^\[\]]*\]" + _TARGET)
+_LINK_RE = re.compile(r"\[([^\[\]]*)\]" + _TARGET)
 _TAG_RE = re.compile(r"<[^>]*>")
 _MARK_RE = re.compile(r"\*\*|__|`")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")

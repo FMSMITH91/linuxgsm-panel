@@ -1585,6 +1585,13 @@ def _serverfiles_verdict(remote, short_name):
         return None
 
 
+# `details` lines that say the install is missing. Each gap stops at the next occurrence of its own
+# opening words, so the same lines match and a line of them repeated (the output is the game
+# account's) is read in time linear in its length, not its square.
+_R30_NOT_INSTALLED = re.compile(r"not installed|please run (?:(?!please run )[^\n])*install")
+_R30_FILES_MISSING = re.compile(r"serverfiles(?:(?!serverfiles)[^\n])*(missing|not found)|no such file")
+
+
 def _looks_installed(app, remote, short_name, lgsm_name):
     """Best-effort check of whether a game server is actually installed on the remote.
 
@@ -1602,7 +1609,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
             remote, short_name, f"cd /home/{short_name} && ./{lgsm_name} details 2>&1",
             timeout=30, selfname=lgsm_name)
         low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
-        if re.search(r"not installed|please run .*install", low):
+        if re.search(_R30_NOT_INSTALLED, low):
             return False
         # The positive answer before the WEAK negatives: `details` that printed its Status / Server
         # IP block ran past LinuxGSM's own install checks, and a game whose config does not exist
@@ -1610,7 +1617,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
         # line read as "not installed", and the install's step 4 wiped lgsm/tmp and re-downloaded.
         if "status:" in low or "server ip:" in low:
             return True
-        if re.search(r"serverfiles.*(missing|not found)|no such file", low):
+        if re.search(_R30_FILES_MISSING, low):
             return False
         # Fallback: real content in serverfiles means the download completed.
         return _serverfiles_verdict(remote, short_name)

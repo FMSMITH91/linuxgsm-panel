@@ -243,12 +243,25 @@ def due(entry, now=None):
 
 # ── judging LinuxGSM's output ───────────────────────────────────────────────────────────────────
 _WIPED_RE = re.compile(r"Success!\s+(Full|Map) wipe\b")
-_NOT_REQUIRED_RE = re.compile(r"\[\s*OK\s*\][^\n\r]*\bWipe not required\b")
+
+
+def _tagged(tag, phrase):
+    """A pattern for `phrase` after LinuxGSM's `[ TAG ]` on the same line, in time linear in the text.
+
+    The gap stops at the next `[ TAG ]`: a match from an earlier tag is also one from the last tag
+    before the phrase, so the same lines match, and no tag's scan runs on past the next one (a scan to
+    the line's end from every tag took time growing with the square of a line of tags).
+    """
+    head = r"\[\s*%s\s*\]" % tag
+    return re.compile(head + r"(?:(?!" + head + r")[^\n\r])*" + phrase)
+
+
+_NOT_REQUIRED_RE = _tagged("OK", r"\bWipe not required\b")
 _FAIL_RE = re.compile(r"\[\s*FAIL\s*\]|\.\.\.\s*FAIL\b|\bFailure!")
 # The wipe's own start line (command_wipe.sh fn_wipe_files: fn_print_start_nl "${wipetype}"), and the
 # stop's last word when even the tmux kill left the server running (command_stop.sh fn_stop_tmux).
-_R39A_START_RE = re.compile(r"\[\s*START\s*\][^\n\r]*\b(?:Full|Map) wipe\b")
-_R39A_UNSTOPPED_RE = re.compile(r"\[\s*FAIL\s*\][^\n\r]*\bUnable to stop\b")
+_R39A_START_RE = _tagged("START", r"\b(?:Full|Map) wipe\b")
+_R39A_UNSTOPPED_RE = _tagged("FAIL", r"\bUnable to stop\b")
 
 
 def judge(out, rc, command):

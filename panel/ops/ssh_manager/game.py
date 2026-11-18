@@ -1786,7 +1786,11 @@ def _r32b_bkpart_note(server, user, name, started):
 # nothing is pruned. The read is the size of the archive: it runs as the game user, niced, under a
 # host-side `timeout` of _BKVERIFY_TIMEOUT seconds inside a transport timeout a little longer, so it
 # is bounded the way the 3600 s backup itself is, and over the same transport (no hub-blocking call).
-_BKVERIFY_FAIL_RE = re.compile(r"\[\s*FAIL\s*\]\s*Backup\b|\bin progress\b[^\n]*\bFAIL\b")
+# The gap after "in progress" stops at the next "in progress": the same lines match (a FAIL after an
+# earlier one also follows the last one before it), and no scan runs past the next one, so a line of
+# them repeated is read in time linear in its length, not its square.
+_BKVERIFY_FAIL_RE = re.compile(r"\[\s*FAIL\s*\]\s*Backup\b"
+                               r"|\bin progress\b(?:(?!\bin progress\b)[^\n])*\bFAIL\b")
 _BKVERIFY_NAME_RE = re.compile(r"Completed:\s*([A-Za-z0-9._-]+)")
 # LinuxGSM v26.5.0 (#5117) prints nothing in place when its output is not a terminal, and the panel
 # never gives it one: "Completed: <name>" is HELD and then replaced by whatever in-place message
