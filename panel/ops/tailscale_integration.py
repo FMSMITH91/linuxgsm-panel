@@ -336,10 +336,14 @@ def _r40_read_offer(info, status, self_data):
     url = prefs.get("ControlURL")
     info.control_url = url.strip() if isinstance(url, str) else ""
     info.magic_dns_suffix = _r40_suffix(status, info.dns_name)
-    certs = status.get("CertDomains")
-    info.cert_domains = [d for d in certs if isinstance(d, str) and d] if isinstance(certs, list) else []
+    info.cert_domains = _r40_strings(status.get("CertDomains"))
     caps = self_data.get("CapMap") if isinstance(self_data, dict) else None
-    info.node_caps = sorted(k for k in caps if isinstance(k, str)) if isinstance(caps, dict) else []
+    info.node_caps = sorted(_r40_strings(list(caps) if isinstance(caps, dict) else None))
+
+
+def _r40_strings(items):
+    """The non-empty strings of a JSON list (CertDomains, CapMap's keys); [] for anything else."""
+    return [d for d in items if isinstance(d, str) and d] if isinstance(items, list) else []
 
 
 def _r40_suffix(status, dns_name):
