@@ -5708,8 +5708,13 @@ def _redact_emails(text, hit=None):
 # `passphrase` too (review 1015d): the backup encryption passphrase is the panel's own secret, and a
 # `passphrase=…` under the long-token rule's 28 characters printed. Not `pass` or `pwd` alone: those
 # name a test count ("passed: 3") and sudo's PWD= working directory, which the report reads.
-_SECRET_KV_RE = re.compile(r"(?i)\b([\w-]*(?:password|passwd|passphrase|secret|token|api[_-]?key|auth[_-]?key|"
-                           r"cred(?:ential)?|cookie|bearer)[\w-]*)(\\?[\"']?\s*[=:]\s*)"
+# The key is a whole run of word characters and hyphens, from its start, holding one of the words (a
+# lookahead that stops at the first); the run is then taken once. `\b[\w-]*(?:words)[\w-]*` tried every
+# split of the run around every word and every hyphen in it, which took time growing with the cube of
+# a long hyphenated run of them with no `=` (8 KB of `password-` took 52 s). The key keeps whatever it
+# held before: the replacement writes it back unchanged.
+_SECRET_KV_RE = re.compile(r"(?i)(?<![\w-])(?=[\w-]*?(?:password|passwd|passphrase|secret|token|api[_-]?key|"
+                           r"auth[_-]?key|cred(?:ential)?|cookie|bearer))([\w-]+)(\\?[\"']?\s*[=:]\s*)"
                            r"(\"(?:[^\"\\\n]|\\.){0,1024}\"|'(?:[^'\\\n]|\\.){0,1024}'"
                            r"|\\\"(?:[^\\\n]|\\[^\"\n]){0,1024}\\\"|\\'(?:[^\\\n]|\\[^'\n]){0,1024}\\'"
                            r"|\\?[\"'][^\n]*|\S+)")

@@ -79,7 +79,7 @@ function _euFillSwitches(u) {
   box.disabled = !u.totp_enabled;
   if (help) {
     help.textContent = u.totp_enabled
-      ? "Use this if they've lost their authenticator. They can re-enable it from their Account page."
+      ? "Use this if they've lost their authenticator. It also gives them a new password, which they change at their next sign-in. They can turn 2FA on again from their Account page."
       : "This account doesn't have two-factor authentication enabled, so there's nothing to reset.";
   }
 

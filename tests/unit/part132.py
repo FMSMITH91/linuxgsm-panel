@@ -51,9 +51,20 @@ def _read132(*parts):
 _saved132 = {}
 _uit_th = {}
 # A Settings save applies its session keys to the app live: "strong" protection would sign this part's
-# later clients out (their sessions carry no identifier) and every later part's too. Put back after.
-_UIT_LIVE = ("PERMANENT_SESSION_LIFETIME", "REMEMBER_COOKIE_DURATION", "SESSION_PROTECTION")
-_uit_live_was = {k: _p9.config.get(k) for k in _UIT_LIVE}
+# later clients out (their sessions carry no identifier) and every later part's too. The WHOLE config is
+# put back after each save, so a key the save learns to set later is put back too. The absolute limit
+# starts 132 s past the default, a value a save never writes, so a restore that misses it is read below.
+_uit_real_was = dict(_p9.config)
+_p9.config.update(SESSION_ABSOLUTE_SECONDS=_p9.config.get("SESSION_ABSOLUTE_SECONDS", 28800) + 132)
+_uit_live_was = dict(_p9.config)
+
+
+def _uit_config_back132(was):
+    """Put _p9.config back to exactly `was` (keys a save added are dropped)."""
+    _p9.config.clear()
+    _p9.config.update(was)
+
+
 try:
     _p9_arm(who="part132")
     _p9_patch(_an132, "update_config", lambda mutate: mutate(_saved132))
@@ -66,7 +77,9 @@ try:
         _saved132.clear()
         _r132 = _p9_client(P9_ADMIN).post("/settings/save", data=_form132)
         _uit_th[_k132] = (_r132.status_code, dict(_saved132))
-        _p9.config.update(_uit_live_was)
+        _uit_th["changed_" + _k132] = sorted(k for k in set(_p9.config) | set(_uit_live_was)
+                                             if _p9.config.get(k) != _uit_live_was.get(k))
+        _uit_config_back132(_uit_live_was)
     # Who may change it: the Settings save and the panel host's switch are superadmin-only, as before.
     _saved132.clear()
     _uit_th["viewer_settings"] = _p9_client(P9_VIEWER).post(
@@ -75,8 +88,10 @@ try:
         "/api/panel/security/autoblock", json={"enabled": True, "threshold": 3}).status_code
     _uit_th["viewer_saved"] = dict(_saved132)
 finally:
-    _p9.config.update(_uit_live_was)
+    _uit_config_back132(_uit_live_was)
     _p9_restore_all()
+_uit_th["after"] = dict(_p9.config)
+_uit_config_back132(_uit_real_was)
 
 _pg132 = _uit_th.get("page", "")
 check("auto-block threshold: Settings shows the value in force, with no field of its own to edit",
@@ -91,6 +106,10 @@ for _k132 in ("now", "stale"):
           "threshold alone (read with a default, it put every install back to 20)" % _k132,
           _st132 == 302 and _sv132.get("site_title") == "Unit 132" and "autoblock_threshold" not in _sv132,
           repr((_st132, _sv132)))
+check("auto-block threshold: the Settings saves change the session keys live (premise), and the part puts "
+      "every key back, the absolute session limit included",
+      "SESSION_ABSOLUTE_SECONDS" in _uit_th.get("changed_now", ())
+      and _uit_th.get("after") == _uit_live_was, repr(_uit_th.get("changed_now")))
 check("auto-block threshold: who may change it is unchanged — a non-superadmin is refused by the "
       "Settings save and the panel host's switch, and nothing is written",
       _uit_th.get("viewer_settings") in (302, 401, 403) and _uit_th.get("viewer_panel") in (401, 403)

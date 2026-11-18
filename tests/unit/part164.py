@@ -32,7 +32,7 @@ from panel.ops.ssh_manager import cron as _cron164
 from panel.ops.ssh_manager import files as _files164
 from panel.ops.ssh_manager import game as _game164
 from panel.routes import server_files as _sf164
-from unit.part01 import check, skip
+from unit.part01 import check, eq, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_patch_sm,
                          _p9_restore_all)
@@ -161,9 +161,96 @@ check("eslint r39c: every global .eslintrc.json declares is defined by a script 
 # Read bare by a script that does not define them (ESLint 8 no-undef over panel/static/js, 2026-11-08).
 _NEEDED164 = ("tf", "tfHtml", "tfNodes", "tfn", "serverId", "REMOTE_ID", "SERVER_NAME", "IS_LOCAL", "Terminal",
               "_cmpaHistEnd", "refreshFirewall", "_esc", "CODES")
+
+
+# ...and every name found the same way now, not a list written once: a name one script (or a template's
+# inline script) defines at top level and another reads bare without defining it. The fixed list above
+# could not see the nine added after it (review 1118 A12a: _tr, SF_CAN, browse, loadBackups, …).
+def _r30t_code164(src):
+    """JS source with comments and string literals blanked (a template literal's ${…} kept)."""
+    out, i, n = [], 0, len(src)
+    while i < n:
+        if src.startswith(("//", "/*"), i):
+            j = src.find("\n" if src[i + 1] == "/" else "*/", i + 2)
+            i = n if j < 0 else j + (0 if src[i + 1] == "/" else 2)
+            continue
+        if src[i] in "'\"`":
+            i = _r30t_skip_str164(src, i, out)
+            continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
+
+
+def _r30t_skip_str164(src, i, out):
+    """Past the string literal opening at `i`; a template literal's ${…} expressions go to `out`."""
+    q, j, n = src[i], i + 1, len(src)
+    while j < n and src[j] != q:
+        if q == "`" and src.startswith("${", j):
+            k = src.find("}", j)
+            k = n if k < 0 else k
+            out.append(" " + src[j + 2:k] + " ")
+            j = k + 1
+        else:
+            j += 2 if src[j] == "\\" else 1
+    out.append(" ")
+    return j + 1
+
+
+_TOP164 = _re164.compile(r"^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|^(?:var|let|const)\s+([A-Za-z_$][\w$]*)", _re164.M)
+_TPLTOP164 = _re164.compile(r"^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|^\s*(?:var|let|const)\s+([A-Za-z_$][\w$]*)"
+                            r"|^\s*window\.([A-Za-z_$][\w$]*)\s*=[^=]", _re164.M)
+
+
+def _r30t_defines164(code, name):
+    """Whether `code` defines `name` itself: a function, a var/let/const, a parameter, a catch."""
+    e = _re164.escape(name)
+    return _re164.search(r"\bfunction\s+%s\b|\b(?:var|let|const)\s+%s\b|\bfunction\b[^(]*\([^)]*(?<![\w$])%s(?![\w$])[^)]*\)"
+                         r"|\(([^()]*[^\w$()])?%s(?![\w$])[^()]*\)\s*=>|(?<![\w$.])%s\s*=>|\bcatch\s*\(\s*%s\s*\)"
+                         % ((e,) * 6), code) is not None
+
+
+def _r30t_reads_bare164(code, name):
+    """Whether `code` reads `name` bare (not as a property, nor a key) without defining it itself."""
+    return (not _r30t_defines164(code, name)
+            and _re164.search(r"(?<![\w$.])%s(?![\w$])(?!\s*:)" % _re164.escape(name), code) is not None)
+
+
+def _r30t_tops164(code, inline):
+    """[(file, name)] of every top-level definition in the scripts and the templates' inline blocks."""
+    tops = [(f, a or b) for f, c in code.items() for a, b in _TOP164.findall(c)]
+    return tops + [("template " + f, a or b or c) for f, blocks in inline.items() for blk in blocks
+                   for a, b, c in _TPLTOP164.findall(blk)]
+
+
+def _r30t_cross_reads164(scripts, inline):
+    """{name: [files]}: top-level names of one script or inline block read bare by another script."""
+    code = {f: _r30t_code164(t) for f, t in scripts.items()}
+    out = {}
+    for owner, name in _r30t_tops164(code, inline):
+        for f in (f for f, c in code.items() if f != owner and _r30t_reads_bare164(c, name)):
+            out.setdefault(name, set()).add(f)
+    return {k: sorted(v) for k, v in out.items()}
+
+
+_JS164 = {f: _read164("panel", "static", "js", f) for f in sorted(_os164.listdir(_os164.path.join(_root, "panel", "static", "js")))
+          if f.endswith(".js")}
+_INL164 = {f: _re164.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script[^>]*>", _read164("panel", "templates", f),
+                              _re164.S | _re164.I)
+           for f in sorted(_os164.listdir(_os164.path.join(_root, "panel", "templates"))) if f.endswith(".html")}
+_cross164 = _r30t_cross_reads164(_JS164, _INL164)
+_undecl164 = {n: fs for n, fs in _cross164.items() if n not in _ESL164}
 check("eslint r39c: ...and the names the scripts read from another file or a template are declared (no-undef "
-      "flagged every call of tf, tfHtml, serverId…)", all(n in _ESL164 for n in _NEEDED164),
-      repr([n for n in _NEEDED164 if n not in _ESL164]))
+      "flagged every call of tf, tfHtml, serverId…), found from the sources, not a fixed list",
+      all(n in _ESL164 for n in _NEEDED164) and len(_cross164) >= 20 and not _undecl164,
+      repr(([n for n in _NEEDED164 if n not in _ESL164], _undecl164)))
+eq("eslint r39c: ...the scan names a bare read of another file's or a template's name, and not a read the file "
+   "defines itself, a parameter, a property, or a name inside a string (control)",
+   _r30t_cross_reads164({"a.js": "function shared(){}\nvar ALSO = 1;\n",
+                         "b.js": "shared(); x.ALSO; var o = {ALSO: 1}; f('shared'); TPL();\n",
+                         "c.js": "function g(shared){ return shared; }\nvar ALSO = 2; ALSO++;\n"},
+                        {"t.html": ["\n  var TPL = 1;\n"]}),
+   {"shared": ["b.js"], "TPL": ["b.js"]})
 _TERM164 = _read164("panel", "templates", "terminal.html")
 check("terminal r39c: the Back-to-host comment no longer says remote_manage renders the panel host with no "
       "status, and remote_manage does pass it",

@@ -38,13 +38,13 @@ SERVICES = (
      "note": "Off: no \u201cUpdate available\u201d and no Update button. Update from the shell with install.sh.",
      "confirm": "Turn off the update check? The panel will no longer tell you about new releases, "
                 "including security fixes. You can still update from the shell with install.sh.",
-     "owasp": "OWASP recommends on (Top 10:2025 A03, patch management)."},
+     "owasp": "OWASP recommends on."},
     {"key": BREACH_CHECK, "label": "Have I Been Pwned password check (api.pwnedpasswords.com)",
      "note": "Off: new passwords are checked only against the panel's own lists. On: only the first 5 "
              "characters of the password's SHA-1 hash are sent.",
      "confirm": "Turn off the breached-password check? Passwords that appear in public breaches but "
                 "not on the panel's own lists will be accepted.",
-     "owasp": "OWASP recommends on (Authentication Cheat Sheet, password strength controls)."},
+     "owasp": "OWASP recommends on."},
     {"key": LGSM_GITHUB, "label": "LinuxGSM game list and release notes (GitHub)",
      "note": "Off: the game list comes from the copy already downloaded (a new install has none); no "
              "LinuxGSM release notes."},

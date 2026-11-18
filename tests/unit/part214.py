@@ -35,7 +35,8 @@ from flask import Flask as _Flask214, jsonify as _jsonify214
 
 from unit import REPO_ROOT as _ROOT214
 from unit.part01 import check, eq, skip
-from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9, _p9_client, _p9_json, _p9_patch, _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch,
+                         _p9_restore_all)
 from panel.ops.ssh_manager import files as _files214
 from panel.routes import server_files as _sf214
 from panel.security import headers as _hdr214
@@ -48,6 +49,7 @@ _trips214 = len(_P9_TRIPPED)
 # ── 1. TLS that failed to start never serves plain HTTP off this host ───────────────────────────
 def _tls_boot214(host, fail=True):
     """Run _boot_ssl_args with the cert step failing (or not); return (args, config, console text)."""
+    _p9_arm(who="part214")
     fake = type("A", (), {"config": {"BOOT_BIND": host, "_BOOT_BIND": host}})()
 
     def _cert(*_a):
@@ -95,6 +97,7 @@ eq("tls: the fallback bind is loopback", _certs214.TLS_FAILED_BIND, "127.0.0.1")
 def _upload214(name):
     """POST one file named `name` through the upload route; return (json, names written)."""
     wrote = []
+    _p9_arm(who="part214")
     _p9_patch(_sf214, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_files214, "_write_file_as_user",
               lambda server, user, ap, data, selfname=None: wrote.append(ap) or (True, ""))
@@ -144,6 +147,7 @@ def _ntfy214(addrs, via_route=False, private=None):
     or the Test route's JSON when `via_route`.
     """
     lookups, connected = [], []
+    _p9_arm(who="part214")
 
     def _gai(host, port, *_a, **_k):
         lookups.append((host, port))
@@ -178,6 +182,7 @@ for _addrs214 in (["198.51.100.20"], ["10.1.2.3"], ["192.168.1.9"], ["100.64.5.6
           _conn214 == _addrs214 and len(_look214) == 1 and _ans214[0] is False
           and _ans214[1] != _nt214.NTFY_ADDRESS_REFUSED, repr((_ans214, _look214, _conn214)))
 _seen214 = []
+_p9_arm(who="part214")
 _p9_patch(_nt214._FallbackHTTPS, "do_open", lambda self, conn, req, **k: _seen214.append(
     (req.full_url.split("/")[2], conn.__name__)) or (_ for _ in ()).throw(OSError("p214 stand-in")))
 try:
@@ -248,7 +253,11 @@ check("headers: the page CSP sends frame-ancestors 'none', base-uri 'none' and f
 check("headers: HSTS in app.py is the module's value",
       'setdefault("Strict-Transport-Security", own or _sec_headers.HSTS)' in _appsrc214
       and "max-age=31536000" not in _appsrc214, "")
-_tfa214 = _p9_client(P9_ADMIN).get("/account/2fa/enable")
+_p9_arm(who="part214")
+try:
+    _tfa214 = _p9_client(P9_ADMIN).get("/account/2fa/enable")
+finally:
+    _p9_restore_all()
 check("headers: the 2FA enrolment page (its secret and QR code) is no-store, through its route",
       _tfa214.status_code == 200 and _tfa214.headers.get("Cache-Control") == "no-store",
       "%d %r" % (_tfa214.status_code, _tfa214.headers.get("Cache-Control")))

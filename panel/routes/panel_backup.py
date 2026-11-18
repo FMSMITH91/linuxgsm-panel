@@ -351,13 +351,14 @@ def _back_up_one_now(app, server_id, gname, opts, born):
         return {"running": False, "ok": False, "msg": "server is no longer available",
                 "ts": time.time()}
     # The server's databases are dumped into its files first, as on every other backup path
-    # (_shared._marked_backup); a dump that fails is said in the outcome and never stops the backup.
+    # (_shared._marked_backup), once the backup is going ahead (not for one skipped for players
+    # online); a dump that fails is said in the outcome and never stops the backup.
     from panel.routes import databases as _dbr
-    db_note = _dbr.dump_for_backup(server_id, g.remote, g.short_name)
-    ok, reason, was_skipped = _dbr.with_note(run_game_backup(
-        g.remote, g.short_name, g.lgsm_name, keep,
-        game_type=g.game_type, port=g.port, force=force,
-        query_type=g.query_type), db_note)
+    notes = []
+    result = run_game_backup(g.remote, g.short_name, g.lgsm_name, keep, game_type=g.game_type, port=g.port,
+                             force=force, query_type=g.query_type,
+                             before=lambda: notes.append(_dbr.dump_for_backup(server_id, g.remote, g.short_name)))
+    ok, reason, was_skipped = _dbr.with_note(result, notes[0] if notes else None)
     if ok and not was_skipped and still_held(g):
         # Move this server's schedule clock, exactly as the scheduled path does.
         # record_game_backup is what game_backup_due measures against, and it was

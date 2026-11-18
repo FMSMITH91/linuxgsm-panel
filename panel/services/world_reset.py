@@ -221,17 +221,30 @@ _WWR_RELOADED = ("startparameters", "preexecutable")
 _WWR_OTHER_LINE = re.compile(r'^ *([A-Za-z_][A-Za-z0-9_]*)="([^"\\`]*)"(?:[ \t]+#.*)?$')
 
 
+# Where bash evaluates arithmetic inside double quotes, and so sets any variable an expression there
+# names (`key=2`, `key+=1`, `key++`), or whose value is such an expression: $((…)), $[…], an array
+# subscript ${a[…]} and a substring offset or length ${a:off:len}.
+_WWR_ARITH = re.compile(r"\$\(\(|\$\[|\$\{[^}]*\[|\$\{[^}:]*:(?![-=+?])")
+
+
 def _wwr_names_only(line, key):
     """Whether `line` is another key's plain line in which `key` is only named or expanded, never set.
 
-    Inside double quotes bash sets a variable only through `${key:=…}` / `${key=…}` or arithmetic
-    (`$((key=1))`); a command substitution runs in a subshell and sets nothing here.
+    Inside double quotes bash sets a variable through `${key:=…}` / `${key=…}` and through anything
+    evaluated as arithmetic (_WWR_ARITH), where `key=2`, `key+=1` or `key++` sets it; a command
+    substitution runs in a subshell and sets nothing here. So the line counts only with neither,
+    no `${!ref…}` (a variable reached through another's value), and no assignment-shaped `key=`
+    text: such a value, evaluated as arithmetic by another line, would set the key there.
+    A plain mention (`-port ${port}`, the option named like its key) is only text.
     """
     m = _WWR_OTHER_LINE.match(line)
     if m is None or m.group(1) == key:
         return False
     value = m.group(2)
-    return not re.search(r"\$\{%s:?=" % key, value) and "$((" not in value
+    if _WWR_ARITH.search(value) or "${!" in value or re.search(r"\$\{%s:?=" % key, value):
+        return False
+    return not re.search(r"(?<![A-Za-z0-9_])(?:\+\+|--)?%s[ \t]*(?:\+\+|--|(?:[-+*/%%&|^]|<<|>>|\*\*)?=(?!=))"
+                         % key, value)
 
 
 def _wwr_cfg_key(texts, key):
@@ -248,7 +261,8 @@ def _wwr_cfg_key(texts, key):
 
     Two forms are not counted as setting the key, since bash cannot set it through them: another
     key's plain line (`other="..."`, no backslash or backtick) whose value only names the key or
-    expands it (`-port ${port}`), but not `${key:=…}`, `${key=…}` or arithmetic there; and, for a key
+    expands it (`-port ${port}`; _wwr_names_only), with no `${key:=…}`, `${key=…}`, arithmetic or
+    `key=` text; and, for a key
     the reload does not re-read, a `# comment` after the closing quote (LinuxGSM's own
     `serverpassword="" # Minimum password length is 5.`).
     """

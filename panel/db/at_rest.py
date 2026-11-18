@@ -11,8 +11,13 @@ Three jobs, all idempotent:
   key forever.
 * start_reencrypt: that pass on a background thread, so start-up and the rotate action never wait.
 
-The pass finds values by their shape ("enc:v..." in any text column of any table, and any string
-in config.json), so a column added later is covered without being listed here. It works in
+The pass reads only the columns that hold ciphertext: every EncryptedString column, found by its
+type (so one added later is covered), and the Text columns written with encrypt_secret
+(SECRET_COLUMNS, held against every encrypt_secret( assignment by a unit check). A column of text
+someone types (a display name, an audit row's username) is never read: a value there shaped like
+ciphertext would count as one no key opens and keep a retired key for good. config.json is walked
+whole (any string in it). The prune also keeps every key the rolling backup (panel.db.backup)
+still names: that copy is put back when panel.db is found corrupt. It works in
 batches with a commit after each, and each row is written only if it still holds the value that
 was read (compare-and-swap), so a save that lands meanwhile is never overwritten and an
 interrupted pass simply finds less to do next time. A value no key opens is left exactly as it is
@@ -53,16 +58,41 @@ def encrypt_legacy_plaintext():
         db.session.commit()
 
 
+# The Text columns the panel writes with encrypt_secret (not EncryptedString columns, which are found
+# by their type): {table: (column, ...)}.
+SECRET_COLUMNS = {
+    "remote_server": ("auth_credential",),
+    "user": ("email", "totp_secret"),
+    "game_database": ("secret",),
+    "host_database_server": ("admin_secret", "panel_admin_secret"),
+    "database_endpoint": ("admin_secret",),
+}
+
+
+def encrypt_legacy_at_start(log):
+    """encrypt_legacy_plaintext at start-up: a failure is rolled back and logged on `log`, never raised.
+
+    The values it would have encrypted stay in the clear until a later start succeeds, so the
+    failure must be in the log (OWASP Logging Cheat Sheet, "Which events to log").
+    """
+    from panel.db.models import db
+    try:
+        encrypt_legacy_plaintext()
+    except Exception:
+        db.session.rollback()
+        log.exception("legacy secret encryption failed; those values stay in the clear until a start succeeds")
+
+
 def _text_columns():
-    """(table name, primary-key column name, column name) for every text column of every table."""
-    from sqlalchemy import String
+    """(table name, primary-key column name, column name) for every column that holds ciphertext."""
     from panel.db.models import EncryptedString, db
     for tbl in db.metadata.sorted_tables:
         pk = list(tbl.primary_key.columns)
         if len(pk) != 1:
             continue
+        named = SECRET_COLUMNS.get(tbl.name, ())
         for col in tbl.columns:
-            if col is not pk[0] and isinstance(col.type, (String, EncryptedString)):
+            if col is not pk[0] and (isinstance(col.type, EncryptedString) or col.name in named):
                 yield tbl.name, pk[0].name, col.name
 
 
@@ -159,7 +189,11 @@ def _reencrypt_config(ring, tally):
 
 
 def _stored_refs(ring):
-    """The keys every stored value not under the current key still names (panel.db and config.json)."""
+    """The keys every stored value not under the current key still names.
+
+    In panel.db, its rolling backup (panel.db.backup) and config.json. An unreadable backup or
+    config.json keeps every key.
+    """
     from sqlalchemy import column, select, table
     from panel.core.config import is_unreadable, load_config
     from panel.db.models import db
@@ -168,12 +202,63 @@ def _stored_refs(ring):
         col = table(tname, column(cname)).c[cname]
         stmt = select(col).where(col.like("enc:v%"), ~col.like(_kr.V2_PREFIX + ring.current + ":%"))
         refs.update(_kr.key_ref(v) for (v,) in db.session.execute(stmt))
+    if not _backup_refs(db.engine.url.database, ring, refs):
+        return refs | ring.retired()         # the rolling backup unreadable: keep every key
     cfg = load_config()
     if is_unreadable(cfg):
         return refs | ring.retired()         # config.json unreadable: keep every key
     _config_refs(cfg, ring, refs)
     refs.discard(None)
     return refs
+
+
+def _backup_refs(db_file, ring, refs):
+    """Add the keys panel.db.backup's values not under the current key name. -> False when unreadable.
+
+    The rolling known-good copy (models._ensure_db_healthy) is restored when panel.db is found
+    corrupt, and it is not always the database this pass just re-encrypted: a refresh that failed
+    keeps the older copy, a start that restored it does not refresh it, and an update's rollback
+    puts one back. A key it still uses must not be pruned. Read-only (mode=ro), the same columns as
+    panel.db; a table or column it does not have (an older schema) holds nothing. No backup: True.
+    """
+    import os
+    from urllib.parse import quote
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.pool import NullPool
+    if not db_file or db_file == ":memory:":
+        return True
+    path = os.path.abspath(db_file + ".backup")
+    if not os.path.exists(path):
+        return True
+    eng = create_engine("sqlite:///file:%s?mode=ro&uri=true" % quote(path), poolclass=NullPool)
+    try:
+        with eng.connect() as conn:
+            return all(_backup_column_refs(conn, ring, refs, tname, cname) for tname, _pk, cname in _text_columns())
+    except SQLAlchemyError:
+        return False
+    finally:
+        eng.dispose()
+
+
+def _backup_column_refs(conn, ring, refs, tname, cname):
+    """Add one backup column's key references to `refs`. -> False when it could not be read.
+
+    A table or column the backup does not have (an older schema) holds nothing: True.
+    """
+    from sqlalchemy import column, select, table
+    from sqlalchemy.exc import OperationalError
+    col = table(tname, column(cname)).c[cname]
+    stmt = select(col).where(col.like("enc:v%"), ~col.like(_kr.V2_PREFIX + ring.current + ":%"))
+    try:
+        rows = conn.execute(stmt).fetchall()
+    except OperationalError as exc:
+        if "no such" not in str(exc.orig):
+            return False
+        conn.rollback()
+        return True
+    refs.update(_kr.key_ref(v) for (v,) in rows if isinstance(v, str))
+    return True
 
 
 def _config_refs(obj, ring, refs):

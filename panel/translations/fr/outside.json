@@ -21,8 +21,7 @@
   "Off: Workshop items are listed by id, without titles.": "Désactivé : les éléments du Workshop sont listés par identifiant, sans titre.",
   "Off: no search or install from Modrinth; your own uploads still work.": "Désactivé : ni recherche ni installation depuis Modrinth ; vos propres envois fonctionnent toujours.",
   "Off: a host behind a router shows its own address, not the public one.": "Désactivé : un hôte derrière un routeur affiche sa propre adresse, pas l'adresse publique.",
-  "OWASP recommends on (Top 10:2025 A03, patch management).": "OWASP recommande activé (Top 10:2025 A03, gestion des correctifs).",
-  "OWASP recommends on (Authentication Cheat Sheet, password strength controls).": "OWASP recommande activé (Authentication Cheat Sheet, contrôles de robustesse des mots de passe).",
+  "OWASP recommends on.": "OWASP recommande activé.",
   "Off: outside OWASP's recommendation.": "Désactivé : en dehors de la recommandation de l'OWASP.",
   "Turn this service off": "Désactiver ce service"
 }

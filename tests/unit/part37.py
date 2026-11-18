@@ -85,6 +85,7 @@ _HTTP_REVIEWED37 = {
     ("panel/services/steam_workshop.py", "_wsc_http_post", "opener.open"),
     ("panel/core/breached_passwords.py", "_fetch_range", "build_opener"),
     ("panel/core/breached_passwords.py", "_fetch_range", "opener.open"),
+    ("panel/services/webpush.py", "_post", "_PushConnection"),
 }
 
 
@@ -116,7 +117,24 @@ def _opener_names37(tree):
             for t in n.targets if isinstance(t, _ast37.Name)}
 
 
-def _http_kind37(call, aliases, openers):
+def _http_classes37(tree):
+    """Names of the module's classes that are an http.client connection, at any depth of subclassing.
+
+    web push's `class _PushConnection(http.client.HTTPSConnection)` made its POST through a call to
+    `_PushConnection(host)`, which matched no rule, so the site went unreviewed (review 1118 T78).
+    """
+    found, classes = {"HTTPConnection", "HTTPSConnection"}, [n for n in _ast37.walk(tree) if isinstance(n, _ast37.ClassDef)]
+    grew = True
+    while grew:
+        grew = False
+        for c in classes:
+            if c.name not in found and any(_callee37(b).split(".")[-1] in found for b in c.bases):
+                found.add(c.name)
+                grew = True
+    return found
+
+
+def _http_kind37(call, aliases, openers, classes=("HTTPConnection", "HTTPSConnection")):
     """What outbound-HTTP thing a call does ('urlopen', '<opener>.open', ...), or None."""
     name = _callee37(call.func)
     last = name.split(".")[-1]
@@ -126,17 +144,17 @@ def _http_kind37(call, aliases, openers):
         return aliases[name]
     if last == "open" and name.split(".")[0] in openers:
         return name
-    if last in ("HTTPConnection", "HTTPSConnection"):
+    if last in classes:
         return last
     if name.endswith("websocket.create_connection"):
         return "websocket.create_connection"
     return None
 
 
-def _node_kinds37(node, aliases, openers):
+def _node_kinds37(node, aliases, openers, classes=("HTTPConnection", "HTTPSConnection")):
     """The outbound-HTTP kinds one AST node is: a request call, or a client library's import."""
     if isinstance(node, _ast37.Call):
-        kind = _http_kind37(node, aliases, openers)
+        kind = _http_kind37(node, aliases, openers, classes)
         return [kind] if kind else []
     if isinstance(node, _ast37.Import):
         mods = [a.name for a in node.names]
@@ -150,13 +168,13 @@ def _node_kinds37(node, aliases, openers):
 def _http_sites37(source, rel):
     """(rel, enclosing function, kind) for every outbound-HTTP call or client import in source."""
     tree = _ast37.parse(source)
-    aliases, openers = _urlopen_aliases37(tree), _opener_names37(tree)
+    aliases, openers, classes = _urlopen_aliases37(tree), _opener_names37(tree), _http_classes37(tree)
     sites = set()
     todo = [(tree, "<module>")]
     while todo:
         node, func = todo.pop()
         for child in _ast37.iter_child_nodes(node):
-            sites.update((rel, func, k) for k in _node_kinds37(child, aliases, openers))
+            sites.update((rel, func, k) for k in _node_kinds37(child, aliases, openers, classes))
             is_def = isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef))
             todo.append((child, child.name if is_def else func))
     return sites
@@ -185,6 +203,8 @@ def _f5_controls():
         "client": "import http.client\ndef k(h):\n    return http.client.HTTPSConnection(h)\n",
         "library": "def m(u):\n    import requests\n    return requests.get(u)\n",
         "socket": "import websocket\ndef w(u):\n    return websocket.create_connection(u)\n",
+        "subclass": ("import http.client\nclass _C(http.client.HTTPSConnection):\n    pass\nclass _D(_C):\n    pass\n"
+                     "def p(h):\n    return _D(h)\n"),
     }
     got = {k: _http_sites37(v, "probe.py") for k, v in probes.items()}
     want = {"urlopen": {("probe.py", "f", "urlopen")},
@@ -193,9 +213,11 @@ def _f5_controls():
             "client": {("probe.py", "k", "HTTPSConnection")},
             "library": {("probe.py", "m", "import requests")},
             "socket": {("probe.py", "<module>", "import websocket"),
-                       ("probe.py", "w", "websocket.create_connection")}}
+                       ("probe.py", "w", "websocket.create_connection")},
+            "subclass": {("probe.py", "p", "_D")}}
     check("outbound HTTP: (control) the scanner finds urlopen, an alias of it, an opener's open, "
-          "http.client, a third-party client and a WebSocket", got == want, repr(got))
+          "http.client, a subclass of an http.client connection, a third-party client and a WebSocket",
+          got == want, repr(got))
 
 
 def _f5_named():

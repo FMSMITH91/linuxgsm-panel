@@ -1170,6 +1170,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_remote_databases_endpoint"
     ],
     "methods": [
@@ -2366,6 +2367,7 @@
     "guards": [
       "utils.py:decorated_view(manage_remotes)",
       "auth.py:decorated_function(manage_remotes)",
+      "account_guard.py:wrapped",
       "view:api_remote_tailscale_finalize"
     ],
     "methods": [
@@ -2846,6 +2848,7 @@
     "endpoint": "api_server_sync_ports",
     "guards": [
       "utils.py:decorated_view[server_access]",
+      "account_guard.py:wrapped[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_sync_ports"
     ],

@@ -604,6 +604,16 @@ def grs_restore_running(sid):
     return GRS_KIND in r36j_route_jobs(sid)
 
 
+def grs_or_account_refusal(gs, account_refusal):
+    """Why `gs`'s game account may not be written now: its restore running, else `account_refusal`'s answer; or None.
+
+    `account_refusal` is the caller's own game_account_write_refusal (the name its tests stub).
+    """
+    if grs_restore_running(gs.id):
+        return grs_or_wipe_sentence(gs.id, gs.name)
+    return account_refusal(gs.remote, gs.short_name)
+
+
 def grs_or_wipe_sentence(sid, name):
     """Why a write is refused on server `sid` (shown as `name`) while its restore or its scheduled wipe runs."""
     if grs_restore_running(sid):
@@ -652,9 +662,14 @@ def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
             _game_backup_status.pop(sid, None)
         return False, _R39A_BACKUP_HELD, True
     # The server's databases go into the archive as a dump in its files (routes/databases.py); a
-    # dump that fails is said in the outcome and never stops the backup.
+    # dump that fails is said in the outcome and never stops the backup. Dumped only once the
+    # backup is going ahead (run_game_backup's `before`): one skipped for players online, every
+    # hour while they are on, dumped every database each time for nothing.
     from panel.routes import databases as _dbr
-    db_note = _dbr.dump_for_backup(sid, *args[:2]) if len(args) >= 2 else None
+    notes = []
+    if len(args) >= 2:
+        remote, account = args[0], args[1]
+        kwargs["before"] = lambda: notes.append(_dbr.dump_for_backup(sid, remote, account))
     try:
         result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:
@@ -672,7 +687,7 @@ def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
     # It RETURNED, so the host answered: a streak of raises (_backup_raise_streak) is over, and
     # the next raise is news worth an alert again.
     _backup_raise_streak.pop(sid, None)
-    return _dbr.with_note(result, db_note)
+    return _dbr.with_note(result, notes[0] if notes else None)
 
 
 def _r25b_mark_orphaned(sid, mark, held):
@@ -1492,8 +1507,9 @@ def lg265_schedule_gained(gs, old, cmds):
     """
     gained = {c.get("cmd") for c in cmds} - {c.get("cmd") for c in (old or [])}
     added = (gained & set(_sm.LGC_CRON_CMDS)) - {"monitor"} if old else set()
-    # A crontab write asks what every cron write asks (the account may be the host's sudo login).
-    if not added or game_account_write_refusal(gs.remote, gs.short_name) is not None:
+    # A crontab write asks what every cron write asks (the account may be the host's sudo login), and
+    # waits out a restore, which sets the crontab aside and puts it back (the next refresh gains it).
+    if not added or grs_restore_running(gs.id) or game_account_write_refusal(gs.remote, gs.short_name) is not None:
         return set()
     ok, why = _sm.add_maintenance_cron(gs.remote, gs.short_name, gs.lgsm_name, added)
     if not ok:
@@ -1585,6 +1601,13 @@ def _serverfiles_verdict(remote, short_name):
         return None
 
 
+# `details` lines that say the install is missing. Each gap stops at the next occurrence of its own
+# opening words, so the same lines match and a line of them repeated (the output is the game
+# account's) is read in time linear in its length, not its square.
+_R30_NOT_INSTALLED = re.compile(r"not installed|please run (?:(?!please run )[^\n])*install")
+_R30_FILES_MISSING = re.compile(r"serverfiles(?:(?!serverfiles)[^\n])*(missing|not found)|no such file")
+
+
 def _looks_installed(app, remote, short_name, lgsm_name):
     """Best-effort check of whether a game server is actually installed on the remote.
 
@@ -1602,7 +1625,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
             remote, short_name, f"cd /home/{short_name} && ./{lgsm_name} details 2>&1",
             timeout=30, selfname=lgsm_name)
         low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
-        if re.search(r"not installed|please run .*install", low):
+        if re.search(_R30_NOT_INSTALLED, low):
             return False
         # The positive answer before the WEAK negatives: `details` that printed its Status / Server
         # IP block ran past LinuxGSM's own install checks, and a game whose config does not exist
@@ -1610,7 +1633,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
         # line read as "not installed", and the install's step 4 wiped lgsm/tmp and re-downloaded.
         if "status:" in low or "server ip:" in low:
             return True
-        if re.search(r"serverfiles.*(missing|not found)|no such file", low):
+        if re.search(_R30_FILES_MISSING, low):
             return False
         # Fallback: real content in serverfiles means the download completed.
         return _serverfiles_verdict(remote, short_name)

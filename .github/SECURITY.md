@@ -243,6 +243,8 @@ The narrowing is in the argument types:
   `/etc/letsencrypt/live/<name>/fullchain.pem` and `privkey.pem`, each a root-owned regular file under
   that certificate's own `live/` or `archive/` directory and nothing but PEM of its kind, into the
   panel's `data/ssl` (opened without following a link), owned by the panel's account, the key 0600.
+  It copies only a name the operator opened at install (`PANEL_TLS_LE_NAMES`, recorded root-owned in
+  `panel.conf` as `tls_le_names=`), so another service's certificate on the host stays root's.
 - The write verb takes a **destination name** and the content on stdin, so `write-file /etc/shadow`
   fails on the name. The log verbs take a **source name** (`log-tail auth`), never a path.
 - **The sshd port change** is all verbs: snapshot, write, `sshd -t`, restart, confirm the port

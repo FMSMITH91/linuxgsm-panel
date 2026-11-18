@@ -14,7 +14,7 @@
   "Let's Encrypt on this host": "Let's Encrypt en este host",
   "Certificate name": "Nombre del certificado",
   "To list them:": "Para listarlos:",
-  "The panel copies fullchain.pem and privkey.pem from /etc/letsencrypt/live for that name.": "El panel copia fullchain.pem y privkey.pem de /etc/letsencrypt/live para ese nombre.",
+  "The panel copies fullchain.pem and privkey.pem from /etc/letsencrypt/live for that name, if the installer allowed it (PANEL_TLS_LE_NAMES).": "El panel copia fullchain.pem y privkey.pem de /etc/letsencrypt/live para ese nombre, si el instalador lo permitió (PANEL_TLS_LE_NAMES).",
   "Load a renewed certificate automatically (checked daily)": "Cargar automáticamente un certificado renovado (se comprueba a diario)",
   "Off: when certbot renews it, come back here and press Use again, or the old one expires.": "Desactivado: cuando certbot lo renueve, vuelve aquí y pulsa Usar de nuevo, o el antiguo caducará.",
   "Use this certificate": "Usar este certificado",

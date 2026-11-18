@@ -11,7 +11,7 @@ from panel.db.prefs import (_clean_panel_map)
 from panel.security.auth import (_can_edit_tags, _r17c_row_id, get_game, get_user_servers,
     hash_password, log_action, server_access_required, verify_totp_step)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json_flag)
-from panel.core.validation import (_valid_hex_color, password_problem)
+from panel.core.validation import (MIN_PASSWORD_LEN, _valid_hex_color, password_problem)
 from app import (_has_remember_cookie, _log, _register_session, _tag_json)
 from panel.security import account_guard, account_notices
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _json_int, reauth_password, reauth_release,
@@ -515,6 +515,22 @@ def _pw_sign_back_in(u, remember, was_forced, back):
     return redirect(back)
 
 
+def _short_password_refusal(u, typed):
+    """The refusal redirect when turning 2FA off would leave a password under MIN_PASSWORD_LEN, or None.
+
+    A password of 8 to 14 characters is allowed only while 2FA is on (password_problem). Without the
+    second factor it is a weak one (OWASP Authentication Cheat Sheet, "Implement Proper Password
+    Strength Controls"), so the account first sets a longer one, then turns 2FA off.
+    """
+    if not u.totp_enabled or len(typed) >= MIN_PASSWORD_LEN:
+        return None
+    log_action(u, "2fa_disabled", target=u.username, success=False,
+               detail="refused: password shorter than %d characters" % MIN_PASSWORD_LEN)
+    flash("Your password is shorter than 15 characters, which is too weak without two-factor "
+          "authentication. Change it to one of at least 15 characters first, then turn 2FA off.", "danger")
+    return redirect(url_for("account"))
+
+
 def _register_account_routes(app):
     """Account security: disable 2FA, change the password, dismiss the 2FA nag."""
     @app.route("/account/2fa/disable", methods=["POST"])
@@ -543,6 +559,9 @@ def _register_account_routes(app):
             flash(REAUTH_BLOCKED_MSG if _pw == "throttled" else
                   "Password incorrect — two-factor authentication was not changed.", "danger")
             return redirect(url_for("account"))
+        short = _short_password_refusal(u, request.form.get("password", ""))
+        if short is not None:      # before the code below, so no backup code is spent on it
+            return short
         # Checked LAST, and in this order, for the same reasons the password change gives: a
         # one-time backup code must never be spent on an otherwise-invalid request, and a TOTP
         # code stays valid for ~90s, so accepting it on validity alone lets an observed code be

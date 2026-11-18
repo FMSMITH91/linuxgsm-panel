@@ -133,8 +133,11 @@ _DTL_MASK = "********"
 # fn_info_messages_password_strip masks them for every command BUT details. The labels it prints
 # a secret under (v26.5.0): Server/RCON/Admin/Stats/Beta/Web Interface/Telnet password, Auth Token,
 # Salt. column -t then pads the label, which _clean_action_output collapses to one space.
-_DTL_SECRET_LINE = re.compile(r"^(?P<label>[^:\n]*(?:password|passwd|token|salt|secret|api ?key|gslt)"
-                              r"[^:\n]*):[ \t]*(?P<value>\S[^\n]*)$", re.I | re.M)
+# The word is found by a lookahead that stops at the first one, and the label is then taken to the
+# colon once: a label with the word repeated many times and no colon (a game account's own output)
+# is read in time linear in its length, where trying each word in turn took its square.
+_DTL_SECRET_LINE = re.compile(r"^(?=[^:\n]*?(?:password|passwd|token|salt|secret|api ?key|gslt))"
+                              r"(?P<label>[^:\n]*):[ \t]*(?P<value>\S[^\n]*)$", re.I | re.M)
 # Values that are not secrets: what LinuxGSM prints for an unset or already-masked field.
 _DTL_NOT_SECRET = {"NOT SET", _DTL_MASK, "true", "false", "on", "off", "yes", "no"}
 _DTL_CMDLINE_HEAD = "Command-line Parameters"
@@ -278,7 +281,7 @@ def _pck_gate(gs, remote, action, actor, port_gate):
         log_action(actor, f"force_{action}_server", target=gs.name, server=gs,
                    detail="started with the port check skipped")
         return None
-    return _pck.start_refusal(gs, remote)
+    return _pck.start_refusal(gs, remote, action)
 
 
 def _pck_power_refusal(gs, remote, action, actor, port_gate):
@@ -295,9 +298,11 @@ def _pck_after_power(gs, remote, action, rc, bound):
     keeps waiting (port_check.follow_pending). `bound` is the port the start was issued on
     (port_check.start_port, read before the run): a port saved DURING the run, which the game did not
     bind, is not followed and waits for the next start. The stored port still moves to `bound` when
-    that is a port saved before the run, since the old stored port is the one the game left.
+    that is a port saved before the run, since the old stored port is the one the game left. That
+    holds when the later save put the port BACK to the stored one too (it cleared pending_port): the
+    game still bound `bound`, so the stored port follows it and the save waits for the next start.
     """
-    if rc != 0 or action not in ("start", "restart") or not gs.pending_port:
+    if rc != 0 or action not in ("start", "restart"):
         return
     later = _pck.start_port(gs)
     if later == bound:
@@ -1506,10 +1511,11 @@ def _r16b_retype_restart_check(gs):
     is none, and the daily heal only runs once a day: until then the line kept the old type, and a
     game queryable only through the new override was still restarted at the daily time whoever was
     playing. The in-place upgrade rewrites a recognised check to what set_daily_restart writes now.
-    It rewrites the crontab, so it asks what every cron write asks, silently, as _cron_listing does.
-    Best-effort: the override is stored either way, and the daily pass rewrites the line.
+    It rewrites the crontab, so it asks what every cron write asks, silently, as _cron_listing does,
+    and skips while a restore has the crontab set aside (a line written then is lost when it is put
+    back). Best-effort: the override is stored either way, and the daily pass rewrites the line.
     """
-    if not gs.daily_restart:
+    if not gs.daily_restart or grs_restore_running(gs.id):
         return
     try:
         if game_account_write_refusal(gs.remote, gs.short_name) is None:
@@ -1710,6 +1716,17 @@ def _autostart_restore_gate(gs):
     return None
 
 
+def _daily_restart_refusal(gs):
+    """The daily-restart switch's refusal: no permission (403), or a restore running (409, as Autostart's).
+
+    A restore sets the account's crontab aside and puts it back, so a line written meanwhile is lost.
+    rbac_test's route audit counts this helper as the view's permission gate (_GATE_TOKENS).
+    """
+    if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
+        return jsonify({"success": False, "message": "Permission denied"}), 403
+    return _autostart_restore_gate(gs)
+
+
 def _autostart_reboot_gate(gs, enabled):
     """The Autostart switch while its host is being rebooted: a 409 to return, or None to go on.
 
@@ -1800,8 +1817,9 @@ def _register_schedules(app):
         meaning depends on a box the operator never looks at.
         """
         gs = get_game(server_id)
-        if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
-            return jsonify({"success": False, "message": "Permission denied"}), 403
+        refused = _daily_restart_refusal(gs)
+        if refused is not None:
+            return refused
         body = _json_body()
         # A JSON boolean or a 400, as Autostart: bool("false") is True, so `{"enabled": "false"}`
         # wrote the restart-when-empty cron line it asked to remove.

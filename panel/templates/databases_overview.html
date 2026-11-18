@@ -52,13 +52,17 @@
       <div id="dbm-add-msg" class="small mt-1" role="status"></div>
     </details>
     {% endif %}
+    {% set files_ok = can_open_files() %}
     {% if databases %}
     <ul class="list-unstyled mb-0">
       {% for d in databases %}
       <li class="py-1 border-bottom minw-0">
         <div class="d-flex flex-wrap gap-2 align-items-baseline justify-content-between">
-          <a class="text-break fw-semibold" data-no-i18n
+          {# A link only for a viewer who may open Files & Config (a call: the bare name is the
+             function, always true); the page itself is open to View servers as well. #}
+          {% if files_ok %}<a class="text-break fw-semibold" data-no-i18n
              href="{{ url_for('server_files', server_id=d.server_id) }}#databases">{{ d.name }}</a>
+          {% else %}<span class="text-break fw-semibold" data-no-i18n>{{ d.name }}</span>{% endif %}
           <span class="d-flex gap-2 align-items-baseline">
             <span class="small text-secondary text-nowrap" data-no-i18n>{{ d.size_text }}</span>
             {% if manage %}<button type="button" class="btn btn-sm btn-outline-secondary py-0" data-action="dbmOpen"
@@ -72,7 +76,11 @@
       {% endfor %}
     </ul>
     {% else %}
+    {% if files_ok %}
     <p class="small text-secondary mb-0">No databases yet. Add one on a server's Databases tab, under Files &amp; Config.</p>
+    {% else %}
+    <p class="small text-secondary mb-0">No databases yet.</p>
+    {% endif %}
     {% endif %}
   </div>
 </div>

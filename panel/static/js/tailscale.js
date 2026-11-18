@@ -10,7 +10,9 @@ var _tsUpPoll = null;   // only one at a time — see the note inside tsUp
 // confirmation window confirms the password in a dialog first (step_up_form.js's window.stepUpThen);
 // without it the server's 403 still sends the tab to the confirm page and back.
 function _tsStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
-function tsUp(outEl, btn){ _tsStepUp(function(){ _tsUpNow(outEl, btn); }); }
+// The button is disabled once the step-up has passed: disabled before it, a cancelled password
+// dialog left "Link this machine" dead until a reload.
+function tsUp(outEl, btn){ _tsStepUp(function(){ if(btn) btn.disabled = true; _tsUpNow(outEl, btn); }); }
 function _tsUpNow(outEl, btn){
   outEl.innerHTML = '<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
   fetch(MOUNT + '/api/tailscale/up', {method:'POST'}).then(function(r){return r.json();}).then(function(d){
@@ -102,7 +104,7 @@ function wireTsButtons(){
   if (_r34c_tsOnce(tsConnectBtn)) {
     var tsConnectOut = document.getElementById('ts-connect-out');
     tsConnectBtn.addEventListener('click', function(){
-      tsConnectBtn.disabled = true;
+      if (tsConnectBtn.disabled) return;
       tsUp(tsConnectOut, tsConnectBtn);
     });
   }

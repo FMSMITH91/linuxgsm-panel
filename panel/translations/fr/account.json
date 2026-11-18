@@ -130,7 +130,7 @@
   "Two-Factor Authentication": "Authentification à deux facteurs",
   "Uncheck to block this user from logging in, without deleting the account.": "Décochez pour empêcher cet utilisateur de se connecter, sans supprimer le compte.",
   "Unknown device": "Appareil inconnu",
-  "Use this if they've lost their authenticator. They can re-enable it from their Account page.": "Utilisez ceci s'ils ont perdu leur authentificateur. Ils pourront la réactiver depuis leur page Compte.",
+  "Use this if they've lost their authenticator. It also gives them a new password, which they change at their next sign-in. They can turn 2FA on again from their Account page.": "Utilisez ceci s'ils ont perdu leur authentificateur. Cela leur donne aussi un nouveau mot de passe, qu'ils changeront à leur prochaine connexion. Ils pourront réactiver la 2FA depuis leur page Compte.",
   "Used": "Utilisé",
   "Valid for (hours)": "Valable (heures)",
   "What you sign in with. Ask an administrator to change it — it is what your audit history is filed under.": "C'est avec cela que tu te connectes. Demande à un administrateur de le changer — c'est sous ce nom qu'est classé ton historique d'audit.",

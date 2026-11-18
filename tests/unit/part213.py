@@ -110,6 +110,15 @@ def _s213_format():
 
 
 # ── 2. the legacy key file ───────────────────────────────────────────────────────────────────────
+def _gate213(gates, n):
+    """Wait at barrier `n` (the first two reads of a racer); one that times out or broke lets it go on."""
+    if n < len(gates):
+        try:
+            gates[n].wait()
+        except _th213.BrokenBarrierError:
+            pass   # the lock held the others back (or they are past it): this racer goes on alone
+
+
 def _s213_legacy():
     keyf = _use_files213("legacy")
     fkey = _Fernet213.generate_key()
@@ -118,13 +127,34 @@ def _s213_legacy():
     read = _cfg213.decrypt_secret(old)
     check("legacy: a bare Fernet cred_key still decrypts enc:v1, and reading does not rewrite the file",
           all((read == _S213_OLD, keyf.read_bytes() == fkey + b"\n")), repr(read))
-    seen = []
-    workers = [_th213.Thread(target=lambda: seen.append(_cfg213._cred_keyring_for_write().current))
-               for _ in range(4)]
-    for w in workers:
-        w.start()
-    for w in workers:
-        w.join(30)
+    seen, bare = [], []
+    # The workers are green threads, and left alone each ran to the end before the next began, so a
+    # missing lock passed (review 1118 T13). Two barriers make them race: every caller reads "no
+    # current key" before any goes on (the first read), and every add_key's own read waits for the
+    # others too (the second). Under add_key's lock only one gets there; the barrier times out for it
+    # and the rest, let in after it, read its key. Without the lock all four add one.
+    real_read, gates, mine = _kr213.read_ring, [_th213.Barrier(4, timeout=2), _th213.Barrier(4, timeout=2)], _th213.local()
+
+    def _read_and_wait(path):
+        ring = real_read(path)
+        n = getattr(mine, "n", 0)
+        mine.n = n + 1
+        if ring.current is None:
+            bare.append(n)
+            _gate213(gates, n)
+        return ring
+    _kr213.read_ring = _read_and_wait
+    try:
+        workers = [_th213.Thread(target=lambda: seen.append(_cfg213._cred_keyring_for_write().current))
+                   for _ in range(4)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(30)
+    finally:
+        _kr213.read_ring = real_read
+    check("legacy: (premise) the four callers really raced: each read the ring with no current key before any "
+          "went on to add one", bare.count(0) == 4 and len(seen) == 4, repr((bare, seen)))
     again = {_kr213.add_key(keyf, only_if_none=True).current for _ in range(3)}
     ring = _cfg213._cred_keyring()
     check("legacy: the first encryption adds ONE AES key however many callers race to it, and keeps "

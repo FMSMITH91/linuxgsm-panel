@@ -276,7 +276,7 @@ console.log(JSON.stringify({load: onLoad, refresh: chips.map(function(x){ return
 def _s236_confirm_error_line():
     panel = _read236(_os236.path.join(_JS236, "panel.js"))
     fns = "\n".join(_between236(panel, "function %s(" % f, "\n}") for f in ("_cdInputHtml", "_cdFillBody",
-                                                                            "_cdGateConfirm"))
+                                                                            "_cdGateConfirm", "_cdHost"))
     dialog = _between236(panel, "window.confirmDialog = function(opts){", "\n};")
     prog = r"""
 function El(id){ this.id = id; this.style = {}; this.classList = {list: [], add: function(c){ this.list.push(c); },
@@ -290,6 +290,7 @@ var parts = {'#cd-input': new El('cd-input'), '[data-cd="ok"]': new El('ok'), '#
 var ov = new El('ov'); ov.querySelector = function(s){ return parts[s] || null; };
 global.window = global; global.setTimeout = function(){};
 global.document = {createElement: function(){ return ov; }, body: {appendChild: function(){}},
+                   querySelectorAll: function(){ return []; },
                    addEventListener: function(){}, removeEventListener: function(){}};
 global.escapeHtml = function(s){ return String(s); }; global.t = function(s){ return s; };
 """ + fns + "\n" + dialog + r"""

@@ -59,6 +59,46 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **No restart in the middle of a restore.** Installing, renewing or removing the HTTPS certificate
+  waits while a game server is restored or the panel's host is being rebooted.
+- **A rolled-back update keeps the breached-password list.**
+- **Encryption key clean-up.** The re-encryption reads only columns that hold secrets, and an old key
+  the database's rolling backup still uses is kept. A failed encryption of old plain-text secrets at
+  start is now logged.
+- **Debug report and world reset.** Game-account commands are no longer all counted as LinuxGSM
+  actions; the world reset refuses config lines that could set a folder through arithmetic.
+- **Restart works on a server whose status is behind.** A Restart is no longer refused for a port the
+  server is itself using. A Start in that state says the server may already be up.
+- **A port saved back during a start is followed.** Saving the old port again while a start runs no
+  longer leaves the panel watching the wrong port.
+- **Changes during a game restore are refused instead of lost.** The daily restart, turning LinuxGSM
+  log timestamps off and GMod content changes now wait for the restore. Before, they were reported
+  done and then undone.
+- **The console catches up at once when you come back to it.** A quiet console now wakes as soon as a
+  page returns to it.
+- **Databases are dumped only for backups that run.** A busy server no longer has its databases dumped
+  every hour for a backup that is skipped because players are online.
+- **The panel's host does not reboot under a game restore.** Rebooting the panel's own host now waits
+  while any game server is being restored.
+- **Long uploads no longer sign you out part way.** A backup, database dump or folder upload counts as
+  using the panel for as long as it runs, so one that takes longer than the idle timeout finishes.
+- **A dropped upload no longer blocks the next one for two hours.** When a piece never gets an answer,
+  the upload is cancelled. If even that cannot get through, starting the upload again replaces your
+  own upload once it has been quiet for a minute.
+- **Confirm dialogs over the Databases manager and Tailscale setup take typing again.** The typed-name
+  confirm and the password dialog opened over these windows could not be filled in; Escape now closes
+  only the dialog.
+- **The Databases manager no longer shows one table's rows under another's name.** A slow reply for a
+  table you had moved away from is dropped, so Edit and Delete always act on the table shown.
+- **Cancelling the password dialog leaves things as they were.** The Auto-block switch shows the
+  host's real setting again, and "Link this machine" and a firewall rule's Remove stay usable.
+- **Changing users, groups or invites, or uninstalling a server, asks for your password in place.**
+  After the confirmation window it no longer sends you to the confirm page and loses what you typed.
+- **Backup codes can be typed on a phone in every password confirmation.** The code fields no longer
+  open a numbers-only keypad.
+- **The Databases page no longer links to a page you cannot open.** Without access to Files & Config,
+  a database's name is shown as text.
+- **Database column headers and yes/no are translated in Spanish and French.**
 - **A malformed request no longer fills the panel's log.** A request with no HTTP version is answered
   with a plain "Bad Request" instead of writing about 35 lines of error to the log each time.
 - **Wrong values in a few requests answer "invalid" instead of a server error.** Deleting a file with
@@ -77,6 +117,29 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **Let's Encrypt certificates must be opened to the panel at install.** The panel copies a certbot
+  certificate only when the installer was run with `PANEL_TLS_LE_NAMES=<name>`, so another service's
+  certificate on the same host keeps its private key root's. If you already load one through Settings,
+  run `sudo PANEL_TLS_LE_NAMES=<name> bash install.sh` once so the daily refresh keeps working.
+- **Turning 2FA off needs a 15-character password.** A password of 8 to 14 characters is allowed only
+  with 2FA on; turn it off after changing to a longer one. An admin's 2FA reset now also issues a new
+  password.
+- **More changes ask for your password again.** Deleting a kept database, choosing a database server,
+  finishing a host's Tailscale join and syncing a server's ports into the firewall.
+- **Firewall lock-out guards check a self-hosted tailnet name.** A name under a Headscale base domain
+  is treated as reached over the tailnet only when it resolves to a tailnet address.
+- **Settings audit names 2FA and session binding.** Turning Require 2FA off or on, and session
+  protection between strong and basic, are named in the audit row.
+- **Long LinuxGSM output can no longer stall the panel.** A line of one tag repeated in a server's
+  output could hold the panel for seconds or minutes while its outcome was read. The patterns that
+  read LinuxGSM's output, the details masking and the debug report's secret scrub now run in time
+  linear in the text.
+- **A game restore keeps the account's sign-in files.** Restoring a backup, including an uploaded one,
+  no longer writes SSH keys, shell start-up files, `.rhosts` or `.k5login` from the archive. The file
+  browser also refuses `~/.bash_aliases`, `~/.bashrc.d` and `~/.k5users` now.
+- **Panel backup restores check the archive before unpacking it.** Every restore, encrypted ones
+  included, now reads the archive header by header and refuses extra or unknown members, or more data
+  than the disk can take.
 - **Required two-factor setup also holds consoles and terminals.** With Settings requiring 2FA, an
   account that had not set it up could still open a live console or a terminal over the panel's live
   connection with its password alone; that connection is now refused, and a console or terminal

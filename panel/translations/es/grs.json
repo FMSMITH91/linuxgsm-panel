@@ -106,5 +106,6 @@
   "Its switch-over was undone: nothing was changed.": "Su cambio se deshizo: no se cambió nada.",
   "It had not changed any file: nothing was changed.": "No había cambiado ningún archivo: no se cambió nada.",
   "Its switch-over failed and undoing it failed.": "Su cambio falló y deshacerlo falló.",
-  "The restore's answer was lost ({why}) and it could not be settled; the recovery sweep goes on trying.": "La respuesta de la restauración se perdió ({why}) y no se pudo resolver; la revisión de recuperación sigue intentándolo."
+  "The restore's answer was lost ({why}) and it could not be settled; the recovery sweep goes on trying.": "La respuesta de la restauración se perdió ({why}) y no se pudo resolver; la revisión de recuperación sigue intentándolo.",
+  "The archive says it unpacks to more than the free disk space the restore unpacks into, so it was not restored. Nothing on this panel was changed.": "El archivo dice que se descomprime en más que el espacio libre en disco donde la restauración lo descomprime, así que no se restauró. No se cambió nada en este panel."
 }

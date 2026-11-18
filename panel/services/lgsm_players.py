@@ -165,7 +165,12 @@ def timeout_for(server, user, selfname, action, base):
 # ── LinuxGSM's outcome lines ────────────────────────────────────────────────────────────────────
 # Each is an INFO line ("[ INFO ] Stopping codserver: 2 players are on the server: stop prevented");
 # the bracket keeps a game's own text, which never comes through these commands, from matching.
-_LG264_INFO = r"\[\s*INFO\s*\][^\n\r]*?"
+# The gap after the tag stops at the next tag on the line: a match from an earlier tag is also one
+# from the last tag before the phrase, so nothing that matched before is missed, and each tag's scan
+# ends where the next begins. Running to the line's end from every tag instead took time growing
+# with the square of a line of tags (output a game account's own scripts can print).
+_LG264_TAG = r"\[\s*INFO\s*\]"
+_LG264_INFO = _LG264_TAG + r"(?:(?!" + _LG264_TAG + r")[^\n\r])*?"
 _LG264_PLAYERS_RE = re.compile(_LG264_INFO + r"\b(\d{1,6}) players are on the server: "
                                r"(stop prevented|restart postponed)\b")
 _LG264_REQUEST_RE = re.compile(_LG264_INFO + r"\b(Update|Backup) postponed until the server is empty\b")

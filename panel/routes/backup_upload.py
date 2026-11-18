@@ -22,6 +22,7 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 
 from flask import jsonify, request
 from flask_login import current_user, login_required
@@ -42,23 +43,68 @@ from panel.services import game_restore as grs
 _uploads = {}
 _uploads_lock = threading.Lock()
 _UPLOAD_IDLE = 2 * 3600
+# An upload of this user's to the same target with no request running and none for this long is one
+# the page has stopped sending (the connection dropped, the tab closed, the sign-in ended): a new start
+# by the same user replaces it instead of being refused for _UPLOAD_IDLE. The page sends each piece as
+# soon as the last one answers, so a live upload is never this quiet between requests.
+_UPLOAD_STALLED = 60
 _GAME_PIECE_TIMEOUT = 300
 _GAME_FINISH_TIMEOUT = 4 * 3600     # a large archive read to its end (the command prints a heartbeat)
 _BUP_UID = re.compile(r"[0-9a-f]{32}")
 
 
+def _bup_stalled(e, now):
+    """Whether upload `e` is the signed-in user's and has gone quiet (_UPLOAD_STALLED)."""
+    return e["user"] == current_user.id and not e.get("busy") and now - e["ts"] > _UPLOAD_STALLED
+
+
+def _bup_prune(now):
+    """Under the lock: forget every upload untouched for _UPLOAD_IDLE."""
+    for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
+        _uploads.pop(uid, None)
+
+
+def _bup_take_target(kind, sid, now):
+    """Under the lock: whether the target is free, and the id of the stalled upload taken out for it.
+
+    (True, id or None) when free; (False, None) when a live upload, or another user's, holds it.
+    """
+    _bup_prune(now)
+    same = [e for e in _uploads.values() if e["kind"] == kind and e["sid"] == sid]
+    if any(not _bup_stalled(e, now) for e in same):
+        return False, None
+    for e in same:
+        _uploads.pop(e["uid"], None)
+    return True, (same[0]["uid"] if same else None)
+
+
 def _bup_new(kind, sid, size):
-    """Register a new upload; its id. One upload per server (or for the panel) at a time."""
+    """Register a new upload: (its id or None, the id of this user's stalled upload it replaced or None).
+
+    One upload per server (or for the panel) at a time; the caller removes a replaced one's part file.
+    """
     now = time.time()
     with _uploads_lock:
-        for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
-            _uploads.pop(uid, None)
-        if any(e["kind"] == kind and e["sid"] == sid for e in _uploads.values()):
-            return None
+        free, old = _bup_take_target(kind, sid, now)
+        if not free:
+            return None, None
         uid = secrets.token_hex(16)
         _uploads[uid] = {"uid": uid, "kind": kind, "sid": sid, "user": current_user.id, "size": size, "got": 0,
                          "ts": now}
-        return uid
+        return uid, old
+
+
+@contextmanager
+def _bup_working(e):
+    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends."""
+    with _uploads_lock:
+        e["busy"] = e.get("busy", 0) + 1
+    try:
+        yield
+    finally:
+        with _uploads_lock:
+            e["busy"] -= 1
+            e["ts"] = time.time()
 
 
 def _bup_get(uid, kind, sid):
@@ -235,9 +281,11 @@ def _bup_game_start(server_id):
     size = _bup_size(grs.UPLOAD_MAX)
     if size is None:
         return _bup_too_big(grs.UPLOAD_MAX)
-    uid = _bup_new("game", gs.id, size)
+    uid, old = _bup_new("game", gs.id, size)
     if uid is None:
         return jsonify({"success": False, "message": i18n.tr("An upload to this server is already running.")}), 409
+    if old:
+        _bup_game_run(gs, grs.upload_cancel_script(gs.short_name, old), 60)
     state, val = _bup_game_run(gs, grs.upload_start_script(gs.short_name, uid, size), 60)
     if state != "ok":
         _bup_drop(uid)
@@ -256,8 +304,9 @@ def _bup_game_piece(server_id, uid):
     refused = _bup_piece_refusal(entry, grs.UPLOAD_CHUNK)
     if refused is not None:
         return refused
-    state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, entry["uid"], _bup_offset()), _GAME_PIECE_TIMEOUT,
-                               stdin=_bup_b64_chunks(request.get_data(cache=True)))
+    with _bup_working(entry):
+        state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, entry["uid"], _bup_offset()),
+                                   _GAME_PIECE_TIMEOUT, stdin=_bup_b64_chunks(request.get_data(cache=True)))
     if state == "ok" and str(val).isdecimal():
         entry["got"] = int(val)
         return jsonify({"success": True, "received": entry["got"]})
@@ -277,8 +326,10 @@ def _bup_game_finish(server_id, uid):
     entry = None if _bup_no_edit() else _bup_get(uid, "game", gs.id)
     if entry is None:
         return jsonify({"success": False, "message": i18n.tr("No such upload.")}), 404
-    state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name, entry["uid"],
-                                                            entry["size"], time.time()), _GAME_FINISH_TIMEOUT)
+    with _bup_working(entry):
+        state, val = _bup_game_run(gs, grs.upload_finish_script(gs.short_name, gs.lgsm_name or gs.short_name,
+                                                                entry["uid"], entry["size"], time.time()),
+                                   _GAME_FINISH_TIMEOUT)
     if state == "unread":
         return jsonify({"success": False, "retry": True, "message": i18n.tr(val)}), 200
     _bup_drop(entry["uid"])
@@ -309,9 +360,11 @@ def _bup_panel_start():
     size = _bup_size(bk.UPLOAD_MAX)
     if size is None:
         return _bup_too_big(bk.UPLOAD_MAX)
-    uid = _bup_new("panel", 0, size)
+    uid, old = _bup_new("panel", 0, size)
     if uid is None:
         return jsonify({"success": False, "message": i18n.tr("A panel backup upload is already running.")}), 409
+    if old:
+        bk.upload_discard(old)
     refusal = bk.upload_begin(uid, size)
     if refusal:
         _bup_drop(uid)
@@ -327,7 +380,8 @@ def _bup_panel_piece(uid):
     refused = _bup_piece_refusal(entry, bk.UPLOAD_CHUNK)
     if refused is not None:
         return refused
-    ok, now = bk.upload_append(entry["uid"], _bup_offset(), request.get_data(cache=True))
+    with _bup_working(entry):
+        ok, now = bk.upload_append(entry["uid"], _bup_offset(), request.get_data(cache=True))
     entry["got"] = max(now, 0)
     if ok:
         return jsonify({"success": True, "received": now})

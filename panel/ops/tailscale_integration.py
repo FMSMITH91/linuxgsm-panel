@@ -587,12 +587,17 @@ def tailnet_suffix(info=None):
     return suffix.strip(".").lower()
 
 
-def is_tailnet_name(host):
+def is_tailnet_name(host, resolve=False):
     """Whether `host` is a MagicDNS name: under ts.net, or under this tailnet's own suffix.
 
     A self-hosted control server (Headscale) names nodes under its own base domain, which is any
     domain its operator chose, so ".ts.net" alone missed every one of them. The Tailscale reading
     is asked only for a dotted name that is neither an address nor under ts.net.
+
+    With `resolve` (for the firewall's lock-out guards), a name under the self-hosted suffix counts
+    only when it resolves here and every address is a tailnet one (resolves_to_tailnet): unlike
+    ts.net, that base domain may also be in public DNS, so the name alone does not say the panel
+    reaches the host over the tailnet, and a lock-out guard answers no when in doubt.
     """
     h = str(host or "").strip().lower().rstrip(".")
     if not h or ":" in h or "." not in h:
@@ -602,7 +607,19 @@ def is_tailnet_name(host):
     if ip_address_or_none(h) is not None:
         return False
     suffix = tailnet_suffix()
-    return bool(suffix) and h.endswith("." + suffix)
+    if not (suffix and h.endswith("." + suffix)):
+        return False
+    return not resolve or resolves_to_tailnet(h)
+
+
+def resolves_to_tailnet(host):
+    """Whether `host` resolves on this machine, every address in a Tailscale range; False if it does not resolve."""
+    try:
+        addrs = {info[4][0] for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)}
+    except (OSError, UnicodeError):
+        return False
+    ips = [ip_address_or_none(str(a).split("%", 1)[0]) for a in addrs]
+    return bool(ips) and all(ip is not None and any(ip in n for n in _TS_NETS) for ip in ips)
 
 
 _SERVE_URL_RE = re.compile(r"https?://\S+")

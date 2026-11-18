@@ -746,6 +746,7 @@ def _s215_serve_path():
             results[label] = (r.status_code, _p9_json(r), list(log), dict(cfg))
         finally:
             _p9_restore_all()
+            _p9_arm(who="part215")
     st, body, log, cfg = results["ok"]
     _all215("serve path: the new mount is published, then confirmed, and only then the old one removed; the config "
           "follows and the answer names the new address",
@@ -781,6 +782,7 @@ def _s215_serve_disable_warning():
             out[label] = (r.status_code, _p9_json(r), [e[0] for e in log])
         finally:
             _p9_restore_all()
+            _p9_arm(who="part215")
     check("serve disable: from a page that came through Serve, an unconfirmed disable is refused with the plain warning",
           out["via-serve"][0] == 409 and out["via-serve"][1].get("needs_confirm") is True
           and "ends this connection" in out["via-serve"][1].get("message", "") and out["via-serve"][2] == [],
@@ -793,6 +795,7 @@ def _s215_serve_disable_warning():
         page = _pr215.get_data(as_text=True)
     finally:
         _p9_restore_all()
+        _p9_arm(who="part215")
     check("serve disable: the page marks its Disable as reached through Serve, and offers Change path",
           'data-via-serve="1"' in page and 'data-action="changeServePath"' in page,
           repr((_pr215.status_code, page[:200])))

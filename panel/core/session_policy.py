@@ -132,6 +132,23 @@ _AUDITED = (("session_idle_minutes", "idle timeout %s min"), ("session_absolute_
             ("remember_days", "remember me %s d"), ("step_up_minutes", "step-up %s min"))
 
 
+def switch_note(cfg, require_2fa, protection):
+    """The audit detail for Settings' two security switches: each one this save changes, old -> new.
+
+    "Require 2FA" and session binding (strong or basic) sit on the same form as the lifetimes, and a
+    change to either is a change of security configuration the audit trail must name (OWASP Logging
+    Cheat Sheet, "Which events to log"). "" when neither changes.
+    """
+    was_2fa = bool(cfg.get("require_2fa"))
+    was_bind = cfg.get("session_protection", "strong")
+    notes = []
+    if bool(require_2fa) != was_2fa:
+        notes.append("require 2FA %s -> %s" % ("on" if was_2fa else "off", "on" if require_2fa else "off"))
+    if protection != was_bind:
+        notes.append("session protection %s -> %s" % (was_bind, protection))
+    return "; ".join(notes)
+
+
 def change_note(cfg, saved):
     """The audit detail for a save: each session value `saved` changes, old -> new ("" if none)."""
     before = form_values(cfg)

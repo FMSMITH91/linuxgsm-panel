@@ -3980,3 +3980,75 @@ check("docs: SECURITY.md shows the helper's Defaults! line exactly as install.sh
       'Defaults!/usr/local/lib/linuxgsm-panel/panel-helper env_reset, secure_path="%s"'
       % _pbh.CHILD_PATH in _pb_secdoc and "#!/usr/bin/python3 -I" in _pb_secdoc
       and "after copying its own" not in _pb_secdoc)
+
+
+# ── page renders and the background host lookups (review 1118 T13) ────────────────────────────────
+# A server page asks _host_timezone_cached / _maybe_resolve_public_ip, which start a thread that
+# reads the host over SSH. A part that renders the page without stubbing them left that thread to run
+# at the next hub switch, after its own stubs were gone: against the fixture address for real, or
+# into a later part's tripwire. From here on _shared's Thread records such a thread instead of
+# starting it, names the part that asked for it (part250 checks the list is empty), and forgets the
+# rate limit, so the next render that misses its stub is named too. A part that tests the resolvers
+# themselves (part18) swaps _shared.threading for part12's queue first, and is not recorded.
+_p9_over_cls = __import__("unit.part10", fromlist=["_Over"])._Over   # (part10's module-object stand-in)
+P9_RESOLVER_THREADS = []
+
+
+def _p9_quiet_lookups():
+    """Answer a server page's two background host lookups with nothing, until _p9_restore_all.
+
+    The timezone one is reached through _shared's own name (every page's _host_timezone_cached calls
+    it there); the public-IP one is imported by name into the pages and the API polls that start it.
+    """
+    from panel.routes import api as _p9_api
+    for _m in (_p9_sh, _p9_sd, _p9_api):
+        if hasattr(_m, "_maybe_resolve_public_ip"):
+            _p9_patch(_m, "_maybe_resolve_public_ip", lambda *a, **k: None)
+    _p9_patch(_p9_sh, "_maybe_resolve_host_timezone", lambda *a, **k: None)
+
+
+def _p9_asking_part():
+    """The innermost tests/unit/partN.py on the stack that is not this file's helpers."""
+    import inspect as _p9_inspect
+    for _fr in _p9_inspect.stack(0)[2:]:
+        _name = os.path.basename(_fr.filename)
+        if _name.startswith("part") and _name.endswith(".py") and _name != "part12.py":
+            return _name[:-3]
+    return "part12"
+
+
+def _p9_resolver_thread(*a, **k):
+    """A threading.Thread for _shared: a host-lookup thread is recorded, never started."""
+    target = k.get("target", a[1] if len(a) > 1 else None)
+    if "_maybe_resolve" in getattr(target, "__qualname__", ""):
+        P9_RESOLVER_THREADS.append((_p9_asking_part(), target.__qualname__.split(".")[0]))
+        _p9_sh._tz_resolve_attempts.clear()
+        _p9_sh._pubip_resolve_attempts.clear()
+        return NS(start=lambda: None, join=lambda timeout=None: None, daemon=True)
+    return _p9_real_threading.Thread(*a, **k)
+
+
+_p9_sh.threading = _p9_over_cls(_p9_real_threading, Thread=_p9_resolver_thread)
+
+
+# ── which request ran with the transport tripwire off (review 1118 T13/T14) ───────────────────────
+# A part that ends on "nothing reached a real transport" proves it only for what ran ARMED: a route
+# driven after a bare _p9_restore_all() records no trip whatever it reaches. Every request on this
+# app notes the part that sent it when the real get_connection is in place; part250 checks that no part
+# holding such a check sent one.
+P9_UNARMED_REQUESTS = []
+
+
+def _p9_note_unarmed():
+    """Before every request: note (part, path) when the real SSH transport is in place.
+
+    Off means the real get_connection: a part's own stand-in for it (part40 drives the transports
+    through a stand-in ssh client on purpose) reaches no host either.
+    """
+    _gc = _p9_core.get_connection
+    if getattr(_gc, "__qualname__", "") == "get_connection" and getattr(_gc, "__module__", "") == _p9_core.__name__:
+        from flask import request as _p9_req
+        P9_UNARMED_REQUESTS.append((_p9_asking_part(), _p9_req.path))
+
+
+_p9.before_request_funcs.setdefault(None, []).insert(0, _p9_note_unarmed)

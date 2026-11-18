@@ -1,5 +1,6 @@
 {
   "an update of the panel": "une mise à jour du panneau",
   "a restore of the panel": "une restauration du panneau",
-  "a full backup of the panel": "une sauvegarde complète du panneau"
+  "a full backup of the panel": "une sauvegarde complète du panneau",
+  "a restore of a game server from its backup": "une restauration d'un serveur de jeu depuis sa sauvegarde"
 }

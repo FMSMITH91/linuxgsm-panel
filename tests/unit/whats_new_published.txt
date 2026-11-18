@@ -758,3 +758,30 @@ f977af9d Privileged calls use about half the CPU.
 f87ad562 The helper's bytecode is checked before root runs it.
 a2674832 Required two-factor setup also holds consoles and terminals.
 4d0986f0 Wrong passwords sent from elsewhere no longer lock you out.
+b4999608 No restart in the middle of a restore.
+4c459e4d A rolled-back update keeps the breached-password list.
+20b4a3ec Encryption key clean-up.
+6cb7c334 Debug report and world reset.
+0386cc6a Restart works on a server whose status is behind.
+ad634b1c A port saved back during a start is followed.
+58127f8c Changes during a game restore are refused instead of lost.
+62584f7a The console catches up at once when you come back to it.
+b880aef5 Databases are dumped only for backups that run.
+e800cf3d The panel's host does not reboot under a game restore.
+38304c9a Long uploads no longer sign you out part way.
+6f4deca0 A dropped upload no longer blocks the next one for two hours.
+8e9424e0 Confirm dialogs over the Databases manager and Tailscale setup take typing again.
+b3847aeb The Databases manager no longer shows one table's rows under another's name.
+4517c178 Cancelling the password dialog leaves things as they were.
+48a54a70 Changing users, groups or invites, or uninstalling a server, asks for your password in place.
+93bc6ced Backup codes can be typed on a phone in every password confirmation.
+fab1493a The Databases page no longer links to a page you cannot open.
+7fd847e3 Database column headers and yes/no are translated in Spanish and French.
+32dd3b33 Let's Encrypt certificates must be opened to the panel at install.
+a8510545 Turning 2FA off needs a 15-character password.
+b54c3409 More changes ask for your password again.
+ba5d3aed Firewall lock-out guards check a self-hosted tailnet name.
+3147b6b4 Settings audit names 2FA and session binding.
+4304ceb9 Long LinuxGSM output can no longer stall the panel.
+023116d8 A game restore keeps the account's sign-in files.
+ccc91396 Panel backup restores check the archive before unpacking it.

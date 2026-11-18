@@ -1572,7 +1572,7 @@ def _fwa_is_tailnet_host(host):
     from panel.ops import system_ops as _so
     from panel.ops import tailscale_integration as _ts
     h = str(host or "").strip().lower().rstrip(".")
-    if _ts.is_tailnet_name(h):
+    if _ts.is_tailnet_name(h, resolve=True):     # a self-hosted suffix only when it resolves to the tailnet
         return True
     try:
         addr = ipaddress.ip_address(h)

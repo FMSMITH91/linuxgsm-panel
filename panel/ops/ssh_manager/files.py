@@ -131,8 +131,10 @@ def _r21b_real_home(hq):
 
 # The paths of a game account's home that decide who can sign in to the account, or that run when
 # someone does: sshd's ~/.ssh (authorized_keys, rc, environment), the host-trust files rsh and
-# HostbasedAuthentication read (.rhosts, .shosts) and Kerberos' .k5login, bash's start-up and logout
-# files, and the variables pam_env reads at sign-in. A key or a line put there opens a shell as the
+# HostbasedAuthentication read (.rhosts, .shosts), Kerberos' .k5login and the .k5users ksu reads,
+# bash's start-up and logout files with what the distributions' own ~/.bashrc sources (Debian and
+# Ubuntu: ~/.bash_aliases; Fedora and RHEL: every file in ~/.bashrc.d), and the variables pam_env
+# reads at sign-in. A key or a line put there opens a shell as the
 # account outside the panel, with no audit, that outlives the grant it was made with. The file
 # browser never writes, uploads, creates or renames onto one: a write judged on the path RESOLVED on
 # the host (_login_guard), where the inside-the-home check is made, a create or rename by the name it
@@ -140,9 +142,9 @@ def _r21b_real_home(hq):
 # outside every home already), ~/.config/autostart (only a desktop session reads it, and a game host
 # has none) and ~/.config/systemd/user (a user manager starts only for a session or with lingering,
 # which game accounts are not given).
-_LOGIN_DIRS = (".ssh",)
-_LOGIN_FILES = (".bashrc", ".profile", ".bash_profile", ".bash_login", ".bash_logout", ".pam_environment",
-                ".rhosts", ".shosts", ".k5login")
+_LOGIN_DIRS = (".ssh", ".bashrc.d")
+_LOGIN_FILES = (".bashrc", ".profile", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases",
+                ".pam_environment", ".rhosts", ".shosts", ".k5login", ".k5users")
 _LOGIN_MARK = "__LOGIN_FILE__"
 LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's account (SSH keys and shell "
                       "start-up files), so the file browser does not change it. Nothing was changed.")

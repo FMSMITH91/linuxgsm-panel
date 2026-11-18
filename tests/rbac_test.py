@@ -1049,13 +1049,31 @@ def _check_limited_user_denied_pages():
         check("limited user DENIED %s" % p, code != 200 and code < 500, "got %d" % code)
     # The Databases overview is a viewer's page, scoped to the servers they can see: the limited user
     # (VIEW_SERVERS, one host) opens it, and it lists no database of a host they were not given.
-    _ov = c.get("/databases")
+    # One database on the host they were given and one on a host they were not: nothing else in this
+    # suite makes a database, so the far half of the check read an empty list and could never fail.
+    from panel.core.config import encrypt_secret as _enc_db
+    from panel.db.models import GameDatabase as _GDb
+    _near, _far = "gs%d_rbacnear" % accessible_id, "gs%d_rbacfar" % (other_id or 0)
     with app.app_context():
-        from panel.db.models import GameDatabase as _GDb
-        _far = [r.name for r in _GDb.query.filter(_GDb.remote_id != granted_remote).all()]
-    check("limited user CAN open /databases, and sees no other host's database",
-          _ov.status_code == 200 and not any(n in _ov.get_data(as_text=True) for n in _far),
-          "got %d" % _ov.status_code)
+        _seeded = [_GDb(remote_id=granted_remote, game_server_id=accessible_id, name=_near,
+                        secret=_enc_db(secrets.token_hex(8)))]
+        if other_remote:
+            _seeded.append(_GDb(remote_id=other_remote, game_server_id=other_id, name=_far,
+                                secret=_enc_db(secrets.token_hex(8))))
+        db.session.add_all(_seeded)
+        db.session.commit()
+        _seeded_ids = [r.id for r in _seeded]
+    try:
+        _ov = c.get("/databases")
+        _ov_page = _ov.get_data(as_text=True)
+    finally:
+        with app.app_context():
+            _GDb.query.filter(_GDb.id.in_(_seeded_ids)).delete(synchronize_session=False)
+            db.session.commit()
+    check("limited user CAN open /databases, and sees no other host's database (and does see the one on "
+          "the host they were given)",
+          _ov.status_code == 200 and other_remote is not None and _far not in _ov_page and _near in _ov_page,
+          "got %d; far listed %r, near listed %r" % (_ov.status_code, _far in _ov_page, _near in _ov_page))
 
 
 def _functions_naming(path, name):
@@ -4313,7 +4331,9 @@ def _mut_scanned():
 
 _GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
                 "can_moderate_action", "can_run_custom_command", "_can_manage_files",
-                "_can_edit_tags", "_required_perms", "_fpm_can_edit")
+                "_can_edit_tags", "_required_perms", "_fpm_can_edit",
+                # server_detail's daily-restart refusal: RESTART_SERVER, then the restore gate.
+                "_daily_restart_refusal")
 
 
 def _r21d_reads_caller_superadmin(tree):

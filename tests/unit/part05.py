@@ -3660,11 +3660,25 @@ _GD_NPM_RE = _re_ntc.compile(
 _gd_npm_seen = []
 # Hidden directories too (review 1015c): glob's `**` skips them, so .clusterfuzzlite/build.sh went
 # unread. A second pattern rooted at the hidden top-level directories, since include_hidden needs 3.11.
+# Judged on the path INSIDE the checkout: a checkout that itself lives under .claude/worktrees/ (where
+# worktrees are made) had every script left out by an absolute "/.claude/" test (review 1118 T3).
+_GD_NPM_SKIP = (".venv", "node_modules", ".git", ".claude")   # .claude: other worktrees (review 1015d)
+
+
+def _gd_npm_keep(path, root):
+    """Whether the npm scan reads `path`: no directory of it below `root` is a skipped one."""
+    return not set(os.path.relpath(path, root).split(os.sep)[:-1]) & set(_GD_NPM_SKIP)
+
+
 _gd_npm_files = sorted(_f for _p in (os.path.join(_UNIT_ROOT, "**", "*.sh"), os.path.join(_UNIT_ROOT, ".*", "**", "*.sh"))
-                       for _f in _gdl_glob.glob(_p, recursive=True)
-                       if "/.venv/" not in _f and "/node_modules/" not in _f and "/.git/" not in _f
-                       # Other worktrees are other branches' scripts (review 1015d).
-                       and "/.claude/" not in _f)
+                       for _f in _gdl_glob.glob(_p, recursive=True) if _gd_npm_keep(_f, _UNIT_ROOT))
+_gd_wt = os.path.join(os.sep, "home", "x", "repo", ".claude", "worktrees", "w1")
+eq("npm: the scan's skip is judged inside the checkout, so a checkout under .claude/worktrees/ still reads its "
+   "own scripts and skips its own .claude, .venv and node_modules (control)",
+   [_gd_npm_keep(os.path.join(_gd_wt, *_rel.split("/")), _gd_wt) for _rel in
+    ("install.sh", ".clusterfuzzlite/build.sh", ".claude/worktrees/w2/install.sh", ".venv/bin/a.sh",
+     "panel/node_modules/x/b.sh", "tools/sub/c.sh")],
+   [True, True, False, False, False, True])
 _gd_npm_files.append(os.path.join(_UNIT_ROOT, "tools", "panel-helper"))
 for _f in _gd_npm_files:
     with open(_f, encoding="utf-8") as _fh:

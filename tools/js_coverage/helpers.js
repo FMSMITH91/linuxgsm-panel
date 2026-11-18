@@ -239,10 +239,14 @@
     // accepting presses its first button that is not a way out — and never one that reboots: a
     // host's reboot dialog is one of these overlays ("Wait: reboot when everyone has left",
     // "Reboot now…"), and pressing it put the panel into a host-reboot plan that every page after
-    // it was measured in (walk.py's SKIP_CONFIRMING relies on this).
+    // it was measured in (walk.py's SKIP_CONFIRMING relies on this). An overlay is recognised by its
+    // COMPUTED style (fixed, covering the viewport): the panel sets it with a class (dialog-overlay,
+    // rb-overlay, sv-overlay), not an inline style, since strict CSP forbids those, and a test of
+    // ov.style matched none of them.
     Array.prototype.slice.call(document.querySelectorAll('body > div')).forEach(function (ov) {
-      if (ov.style.position !== 'fixed' || ov.style.inset !== '0px'
-          || ov.querySelector('[data-cd]')) return;
+      var cs = window.getComputedStyle(ov);
+      if (cs.position !== 'fixed' || cs.top !== '0px' || cs.left !== '0px' || cs.right !== '0px'
+          || cs.bottom !== '0px' || ov.querySelector('[data-cd]')) return;
       var go = accept && Array.prototype.filter.call(ov.querySelectorAll('button'), function (b) {
         var what = [b.id, b.getAttribute('data-scope'), b.hasAttribute('data-close') ? 'close' : '',
                     b.textContent].join(' ');

@@ -127,8 +127,8 @@ def _r16d_remove_paths(paths):
 import unit as _unit_pkg  # noqa: E402
 from panel.core import config as _cfg_live  # noqa: E402
 
-_WATCHED = {"CONFIG_FILE": ("load_config", "save_config", "update_config", "config_unreadable"),
-            "SECRET_FILE": ("get_secret_key",), "CRED_KEY_FILE": ("_cred_keyring",)}
+_WATCHED = {"CONFIG_FILE": ("load_config", "_cfg_current", "save_config", "update_config", "config_unreadable", "harden_data_permissions"),
+            "SECRET_FILE": ("get_secret_key",), "CRED_KEY_FILE": ("_cred_keyring", "_cred_keyring_for_write", "cred_key_lock", "rotate_cred_key")}
 # The checkout's own paths, for the one part01 check that asserts where they resolve.
 _unit_pkg.LIVE_PATHS = {_n: getattr(_cfg_live, _n) for _n in _WATCHED}
 _LIVE_REAL = {_n: os.path.realpath(str(_p)) for _n, _p in _unit_pkg.LIVE_PATHS.items()}
@@ -2078,7 +2078,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part208", "part209", "part210", "part211", "part212", "part213", "part214", "part215", "part216", "part217", "part218", "part219", "part220",
     "part221", "part222", "part223", "part224", "part225", "part226", "part227", "part228", "part229", "part230", "part231", "part232", "part233", "part234",
     "part235", "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244",
-    "part245", "part246",
+    "part245", "part246", "part247", "part248", "part249", "part250",
     "part15")
 
 
@@ -2439,10 +2439,10 @@ def _r16d_parts_reached(module, seen=None):
     return out
 
 
-_r15d_backward = sorted("%s imports %s, which runs after it" % (_p, _i)
+_r15d_backward = sorted("%s imports %s, which runs after it or is not in _PARTS" % (_p, _i)
                         for _p in _PARTS for _i in _r16d_parts_reached("unit." + _p)
-                        if ("part" + _i) in _PARTS
-                        and _PARTS.index("part" + _i) >= _PARTS.index(_p))
+                        if ("part" + _i) not in _PARTS
+                        or _PARTS.index("part" + _i) >= _PARTS.index(_p))
 check("unit suite: ...the order check follows imports through shared modules: unit.reboot41_d names "
       "no part, and reaches part01 and part20 through unit.reboot41_fixtures (control)",
       {"01", "20"} <= _r16d_parts_reached("unit.reboot41_d"),
@@ -3289,9 +3289,9 @@ check("unit suite: no check reached sudo or the network through part05's no-sudo
 # its ~5,000 checks — and the gate — with it, and the tally still exited 0.
 _parts_on_disk = sorted(os.path.basename(p)[:-3]
                         for p in glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
-check("unit suite: every tests/unit/part*.py was imported and ran",
-      bool(_parts_on_disk) and all("unit." + p in sys.modules for p in _parts_on_disk),
-      "never ran: %s" % [p for p in _parts_on_disk if "unit." + p not in sys.modules])
+check("unit suite: every tests/unit/part*.py was imported and ran, each from its own place in _PARTS",
+      bool(_parts_on_disk) and all("unit." + p in sys.modules for p in _parts_on_disk) and set(_parts_on_disk) == set(_PARTS),
+      "never ran: %s; not in _PARTS: %s" % ([p for p in _parts_on_disk if "unit." + p not in sys.modules], sorted(set(_parts_on_disk) ^ set(_PARTS))))
 
 
 # ok is True (pass), False (fail) or None (skipped — the check did not run; see part01.skip).

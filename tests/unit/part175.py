@@ -105,6 +105,9 @@ try:
     _p9_arm(who="part175")
     _trips175 = len(_P9_TRIPPED)
     _p9_patch_sm("_remote_listening_ports", _listening175)
+    # None of the target's own game account's processes runs, so a listener is someone else's (part248
+    # holds the own-process case).
+    _p9_patch_sm("server_live_metrics", lambda remote, user, port: {"ram_total": 1, "game_procs": 0})
     _p9_patch_sm("protected_host_ports", lambda remote: {22})
     _p9_patch_sm("upgrade_managed_cron_tracking", lambda remote, user, lgsm, **k: _crons175.append((user, k)) or True)
     _p9_patch_sm("remote_ufw_close_game_port", lambda remote, port, user: _ufw175.append((port, user)) or (1, ""))

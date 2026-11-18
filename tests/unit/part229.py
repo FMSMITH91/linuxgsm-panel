@@ -14,7 +14,7 @@ Telegram's API stubbed at notifications (getMe, getUpdates, sendMessage): nothin
 import time as _time229
 
 from unit.part01 import check, eq
-from unit.part12 import _P9_TRIPPED, _p9, _p9_client, _p9_drain, _p9_json, _p9_patch, _p9_restore_all
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_drain, _p9_json, _p9_patch, _p9_restore_all
 from panel.db.models import AuditLog as _AL229, User as _U229, db as _db229
 from panel.security import auth as _auth229
 from panel.services import notifications as _nt229, push_alerts as _pa229, telegram_link as _tl229
@@ -127,6 +127,7 @@ def _bot229():
 try:
     for _sec229 in (_codes229, _routes229, _bot229):
         try:
+            _p9_arm(who="part229")
             _sec229()
         finally:
             _p9_drain()

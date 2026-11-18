@@ -1978,11 +1978,8 @@ def create_app():
     # One-time: encrypt any legacy plaintext secrets/PII already in the DB
     # (remote SSH credentials, and user email addresses).
     with app.app_context():
-        try:
-            from panel.db.at_rest import encrypt_legacy_plaintext
-            encrypt_legacy_plaintext()
-        except Exception:
-            db.session.rollback()
+        from panel.db.at_rest import encrypt_legacy_at_start
+        encrypt_legacy_at_start(app.logger)     # never raises; a failure is logged
 
     # One-time (idempotent): encrypt the columns that became EncryptedString — hostnames, SSH
     # usernames, public IPs, pinned host keys, and per-session IP/user-agent — so an existing

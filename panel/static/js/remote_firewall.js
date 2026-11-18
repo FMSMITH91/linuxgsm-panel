@@ -562,7 +562,6 @@ function deleteGroup(nums, btn, warn, reason, key) {
   confirmDialog({title:'Remove firewall rule', icon:'shield-exclamation',
     confirmClass: warn ? 'btn-danger' : 'btn-warning', confirmLabel:'Remove', bodyText: msg,
     onConfirm: function(){
-      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
       if (!key) { _say('This page is out of date — reload it and try again.'); refreshFirewall(); return; }
       var budget = nums.length + 2, first = true;   // bounded: never loops on a rule that will not go
       // The clicked group, found again by its identity in a fresh read — or null, once it has said
@@ -580,7 +579,13 @@ function deleteGroup(nums, btn, warn, reason, key) {
         if (g.protected) { _say(_fwReason(g) || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return null; }
         return g;
       }
-      _fwStepUp(function next() {
+      // The spinner once the step-up has passed: put up before it, a cancelled password dialog left
+      // the row with a dead spinner until the rules were drawn again.
+      _fwStepUp(function() {
+        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+        next();
+      });
+      function next() {
         fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
           .then(r => r.json())
           .then(function(data) {
@@ -603,7 +608,7 @@ function deleteGroup(nums, btn, warn, reason, key) {
             });
           })
           .catch(function() { _say('Could not remove the rule — the host may be unreachable.'); refreshFirewall(); });
-      });
+      }
     }});
 }
 

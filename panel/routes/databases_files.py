@@ -27,6 +27,7 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from flask import Response, jsonify, request
@@ -52,6 +53,12 @@ UPLOAD_PLAIN_MAX = 16 * 1024 * 1024 * 1024    # the SQL inside, unpacked (a deco
 UPLOAD_MARGIN = 256 * 1024 * 1024
 UPLOAD_STALE_MIN = 120
 UPLOAD_IDLE = 2 * 3600
+# An upload of this user's to the same database with no request running and none for this long is one
+# the page has stopped sending (the connection dropped, the tab closed): a new start by the same user
+# cancels it on the host and replaces it, instead of being refused for UPLOAD_IDLE. The page sends each
+# piece as soon as the last one answers and asks a lost finish again every 20 s, so a live upload is
+# never this quiet.
+UPLOAD_STALLED = 60
 _PIECE_TIMEOUT = 300
 _FINISH_TIMEOUT = 3600
 _UID_RE = re.compile(r"[0-9a-f]{32}\Z")
@@ -293,16 +300,55 @@ def _upcmd(gs, script, timeout, stdin=None):
 
 
 # ── upload: the requests ─────────────────────────────────────────────────────────────────────────
+def _stalled(e, now):
+    """Whether upload `e` is the signed-in user's and has gone quiet (UPLOAD_STALLED)."""
+    return e["user"] == current_user.id and not e.get("busy") and now - e["ts"] > UPLOAD_STALLED
+
+
 def _new_upload(db_id, size):
+    """Register an upload: (its id or None, the user's stalled upload it replaces or None).
+
+    A replaced upload is taken out of the list; the caller cancels it on the host (_replace_stalled).
+    """
     now = time.time()
     with _UPLOADS_LOCK:
         for uid in [u for u, e in _UPLOADS.items() if now - e["ts"] > UPLOAD_IDLE]:
             _UPLOADS.pop(uid, None)
-        if any(e["db"] == db_id for e in _UPLOADS.values()):
-            return None
+        same = [e for e in _UPLOADS.values() if e["db"] == db_id]
+        if any(not _stalled(e, now) for e in same):
+            return None, None
+        for e in same:
+            _UPLOADS.pop(e["uid"], None)
         uid = secrets.token_hex(16)
         _UPLOADS[uid] = {"uid": uid, "db": db_id, "user": current_user.id, "size": size, "ts": now}
-        return uid
+        return uid, (same[0] if same else None)
+
+
+@contextmanager
+def _working(e):
+    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends."""
+    with _UPLOADS_LOCK:
+        e["busy"] = e.get("busy", 0) + 1
+    try:
+        yield
+    finally:
+        with _UPLOADS_LOCK:
+            e["busy"] -= 1
+            e["ts"] = time.time()
+
+
+def _replace_stalled(gs, r, uid, old):
+    """Cancel the stalled upload `old` on the host for the new `uid`. -> True, or False with `old` kept.
+
+    Its cancel puts the earlier dump back when it had been put in place; while its finish still holds
+    the host's lock the cancel does not answer, and the new upload is refused as before.
+    """
+    if _upcmd(gs, cancel_script(gs.short_name, old["uid"], r.name), 60)[0] == "ok":
+        return True
+    with _UPLOADS_LOCK:
+        _UPLOADS.pop(uid, None)
+        _UPLOADS[old["uid"]] = old
+    return False
 
 
 def _get_upload(uid, db_id):
@@ -330,9 +376,8 @@ def _refused(key):
     return i18n.Sentence("The dump was not restored: {why}.", why=i18n.Sentence(_REFUSALS[key]))
 
 
-def _upload_start(gs, r):
-    """Start an upload: the size checked, the account guard asked, the part file made."""
-    size = _json_body().get("size")
+def _start_refusal(gs, r, size):
+    """The refusal for an upload start (a size out of range, an account the guard refuses), or None."""
     if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= UPLOAD_MAX:
         return _say(400, i18n.Sentence("Give the dump's size: a whole number of bytes, at most {limit}.",
                                        limit="2 GiB"))
@@ -341,8 +386,17 @@ def _upload_start(gs, r):
         log_action(current_user, "db_upload", target=gs.name, server=gs, success=False,
                    detail="%s: refused: %s" % (r.name, i18n.tr(why)))
         return _say(409, why)
-    uid = _new_upload(r.id, size)
-    if uid is None:
+    return None
+
+
+def _upload_start(gs, r):
+    """Start an upload: the size checked, the account guard asked, the part file made."""
+    size = _json_body().get("size")
+    refused = _start_refusal(gs, r, size)
+    if refused is not None:
+        return refused
+    uid, old = _new_upload(r.id, size)
+    if uid is None or (old is not None and not _replace_stalled(gs, r, uid, old)):
         return _say(409, "An upload to this database is already running.")
     state, val = _upcmd(gs, start_script(gs.short_name, uid, size), 60)
     if state != "ok":
@@ -384,7 +438,8 @@ def _upload_piece(gs, r, uid):
     refused = _piece_refusal(e, data, off)
     if refused:
         return refused
-    state, val = _upcmd(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
+    with _working(e):
+        state, val = _upcmd(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
     if state == "ok" and str(val).isdecimal():
         return jsonify({"success": True, "received": int(val)})
     if state == "offset":
@@ -402,7 +457,8 @@ def _upload_finish(gs, r, uid):
     hd = _dbr._restore_target(gs, r)
     if hd is None:
         return _say(409, _dbr._NOT_READY)
-    state, val = _upcmd(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
+    with _working(e):
+        state, val = _upcmd(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
     if state == "unread":
         return jsonify({"success": False, "retry": True, "message": i18n.tr(_dbr._UNREAD)}), 200
     _drop_upload(e["uid"])

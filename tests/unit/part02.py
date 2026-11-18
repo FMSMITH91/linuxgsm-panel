@@ -1007,10 +1007,12 @@ def _kdf_blob(n=2 ** 15, r=8, p=1, salt_len=16):
 check("backup/enc: an absurd scrypt n is refused before any memory is allocated",
       _bk._decrypt_archive(_kdf_blob(n=2 ** 30), _kdf_out, "pw")
       == (False, "The encrypted backup's header asks for parameters this panel will not use."))
-check("backup/enc: ...and so is an absurd r, an absurd p, and an oversized salt",
-      not _bk._decrypt_archive(_kdf_blob(r=4096), _kdf_out, "pw")[0]
-      and not _bk._decrypt_archive(_kdf_blob(p=9999), _kdf_out, "pw")[0]
-      and not _bk._decrypt_archive(_kdf_blob(salt_len=8192), _kdf_out, "pw")[0])
+# The exact refusal, not just "it failed": every probe's token is junk, so each would fail at decrypt
+# anyway; only the refusal text says the header bound fired before any derivation.
+_KDF_REFUSED = (False, "The encrypted backup's header asks for parameters this panel will not use.")
+eq("backup/enc: ...and so is an absurd r, an absurd p, and an oversized salt",
+   [_bk._decrypt_archive(_kdf_blob(**_kw), _kdf_out, "pw") for _kw in ({"r": 4096}, {"p": 9999}, {"salt_len": 8192})],
+   [_KDF_REFUSED] * 3)
 
 
 def _kdf_header_ok(path):

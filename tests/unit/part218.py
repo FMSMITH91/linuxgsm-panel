@@ -452,12 +452,13 @@ def _s218_test_route():
     _p9_drain()
     pusher.sent.clear()
     first = _p9_client(uid).post("/account/push/test")
+    at_return = list(pusher.sent)
     _p9_drain()
     got = (pusher.to(b1), pusher.to(b2), pusher.to(bb))
     check("test alert: refused with no device; otherwise sent to each of this account's devices only, and the "
           "route returned before any push was sent", none.status_code == 400 and first.status_code == 200
-          and len(got[0]) == 1 and len(got[1]) == 1 and got[2] == [] and got[0][0].get("url") == "account",
-          repr((none.status_code, first.status_code, got)))
+          and at_return == [] and len(got[0]) == 1 and len(got[1]) == 1 and got[2] == []
+          and got[0][0].get("url") == "account", repr((none.status_code, first.status_code, at_return, got)))
     more = [_p9_client(uid).post("/account/push/test").status_code for _ in range(_pa218.TEST_MAX)]
     _p9_drain()
     eq("test alert: rate-limited (%d per %d s); the next one is answered 429"

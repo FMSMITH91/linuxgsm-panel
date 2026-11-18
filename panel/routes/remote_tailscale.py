@@ -106,6 +106,7 @@ def _register_finalize_and_install(app):
     @app.route("/api/remote/<int:remote_id>/tailscale-finalize", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
+    @step_up_required       # a firewall change: allows tailscale0 in the host's UFW
     def api_remote_tailscale_finalize(remote_id):
         """After a node joins the tailnet, allow tailscale0 in UFW and report status."""
         remote = get_remote(remote_id)

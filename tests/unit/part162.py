@@ -96,12 +96,12 @@ def _save162(body, extra=None):
     sid = _new_rust162("p162-save")
     got = {"sid": sid, "cmds": [], "backups": [], "alerts": []}
     try:
+        _p9_arm(who="part162")   # before the route's save too, not only the sweep (review 1118)
         _pending162(sid, **(extra or {}))
         resp = _p9_client(P9_ADMIN).post("/api/server/%d/wipe-schedule" % sid, json=body)
         got["status"] = resp.status_code
         got["saved"] = dict(_ws162.get(sid) or {})
         got["dropped"] = _p9_audit("wipe_server")
-        _p9_arm(who="part162")
         _wipe_stubs162(got)
         _sweep162(sid, got)
         return got

@@ -1786,7 +1786,11 @@ def _r32b_bkpart_note(server, user, name, started):
 # nothing is pruned. The read is the size of the archive: it runs as the game user, niced, under a
 # host-side `timeout` of _BKVERIFY_TIMEOUT seconds inside a transport timeout a little longer, so it
 # is bounded the way the 3600 s backup itself is, and over the same transport (no hub-blocking call).
-_BKVERIFY_FAIL_RE = re.compile(r"\[\s*FAIL\s*\]\s*Backup\b|\bin progress\b[^\n]*\bFAIL\b")
+# The gap after "in progress" stops at the next "in progress": the same lines match (a FAIL after an
+# earlier one also follows the last one before it), and no scan runs past the next one, so a line of
+# them repeated is read in time linear in its length, not its square.
+_BKVERIFY_FAIL_RE = re.compile(r"\[\s*FAIL\s*\]\s*Backup\b"
+                               r"|\bin progress\b(?:(?!\bin progress\b)[^\n])*\bFAIL\b")
 _BKVERIFY_NAME_RE = re.compile(r"Completed:\s*([A-Za-z0-9._-]+)")
 # LinuxGSM v26.5.0 (#5117) prints nothing in place when its output is not a terminal, and the panel
 # never gives it one: "Completed: <name>" is HELD and then replaced by whatever in-place message
@@ -2099,8 +2103,7 @@ def last_backup_made(server, user):
     return _LAST_MADE.get((getattr(server, "id", None), user))
 
 
-def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
-                    query_type=None):
+def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False, **opts):
     """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
 
     The backup archives serverfiles into ~/lgsm/backup/. Runs AS THE GAME USER, non-interactively
@@ -2117,7 +2120,16 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     which is exactly why `query_type` has to be threaded in (see below).
 
     The name of the archive it proved it wrote is kept for last_backup_made.
+
+    `opts`: `query_type` (above), and `before` (no arguments), called once the backup is going ahead:
+    after LinuxGSM's postponed check and the player check, before anything is archived. The panel
+    dumps the server's databases into its files there, so a backup skipped for players online dumps
+    nothing. Any other keyword is a TypeError, as it was before they moved here.
     """
+    unknown = set(opts) - {"query_type", "before"}
+    if unknown:
+        raise TypeError("run_game_backup() got unexpected keyword(s): %s" % ", ".join(sorted(unknown)))
+    query_type, before = opts.get("query_type"), opts.get("before")
     selfname = selfname or user
     _LAST_MADE.pop((getattr(server, "id", None), user), None)
     # Refused before the player query, the headroom prune and the listing, which would otherwise
@@ -2134,6 +2146,8 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         skip = _backup_players_online(server, user, game_type, port, query_type, selfname)
         if skip:
             return False, skip, True
+    if before is not None:
+        before()
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". See
     # _stale_backup_lock_sweep for when a lock counts as orphaned. It runs BEFORE the headroom

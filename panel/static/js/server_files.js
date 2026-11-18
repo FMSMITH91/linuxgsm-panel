@@ -1347,7 +1347,9 @@ function _doUpload(entries, ovw, base, checked){
         var dest = e.dir ? (base ? base+'/'+e.dir : e.dir) : base;
         var fd=new FormData(); fd.append('file', e.file); fd.append('path', dest);
         if(all || _ownKey(ovw, e.file.name)) fd.append('overwrite','1');
-        fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json())
+        // The person's own upload however long the tree takes: not marked as a timer's request, so
+        // the sign-in's idle clock moves with each file (panel.js's fetch wrapper).
+        fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd,headers:{'X-Panel-Background':'0'}}).then(r=>r.json())
           .then(d=>{ if(d.conflict) clashed++; else if(!d.success) failed++; })
           .catch(()=>{failed++;})
           .finally(function(){

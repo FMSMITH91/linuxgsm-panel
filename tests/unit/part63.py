@@ -23,7 +23,7 @@ import sys as _sys63
 import tempfile as _tf63
 from types import SimpleNamespace as _NS63
 
-from unit.part01 import check, skip
+from unit.part01 import check, eq, skip
 from unit.part05 import _root
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
                          _p9_patch, _p9_restore_all)
@@ -258,8 +258,22 @@ check("lhci_serve: the throwaway panel's backups are off before it boots (its da
       "published superadmin and the keys, was left in data/backups)",
       _lh63_off in _lh63_order and "save_config(cfg)" in _lh63_order
       and _lh63_order.index(_lh63_off) < _lh63_order.index("save_config(cfg)"), repr(_lh63_order[:12]))
+
+
+def _r30t_backups_guards(fn):
+    """The test of every `if` in `fn` whose body removes BACKUP_DIR (rmtree), as source text.
+
+    The condition itself, not the names in it: `if _BACKUPS_PREEXISTED and …` or a dropped `not`
+    held both names and removed a developer's existing data/backups (review 1118 T8b).
+    """
+    return [_ast63.unparse(n.test) for n in _ast63.walk(fn) if isinstance(n, _ast63.If)
+            and any(isinstance(c, _ast63.Call) and _ast63.unparse(c).startswith(("shutil.rmtree(BACKUP_DIR", "rmtree(BACKUP_DIR"))
+                    for b in n.body for c in _ast63.walk(b))]
+
+
+_R30T_GUARD = "not _BACKUPS_PREEXISTED and BACKUP_DIR.is_dir()"
 check("lhci_serve: ...and its cleanup removes a backups directory this run created, only that",
-      "_BACKUPS_PREEXISTED" in _ast63.unparse(_lh63_clean) and "rmtree(BACKUP_DIR" in _ast63.unparse(_lh63_clean)
+      _r30t_backups_guards(_lh63_clean) == [_R30T_GUARD]
       and "_BACKUPS_PREEXISTED = BACKUP_DIR.exists()" in _lh63_src, _ast63.unparse(_lh63_clean)[-300:])
 _lh63_rs = [n for n in _ast63.walk(_lh63) if isinstance(n, _ast63.Call)
             and _ast63.unparse(n.func) == "RemoteServer"]
@@ -270,8 +284,14 @@ _pb63 = _ast63.parse(_read63(_root, "tools", "perf_bench.py"))
 _pb63_fn = {n.name: _ast63.unparse(n) for n in _pb63.body if isinstance(n, _ast63.FunctionDef)}
 check("perf_bench: every size's config has backups off, and cleanup removes a backups directory the "
       "run created", "cfg['backup_enabled'] = False" in _pb63_fn.get("mark_setup_complete", "")
-      and "rmtree(BACKUP_DIR" in _pb63_fn.get("cleanup", "")
-      and "_BACKUPS_PREEXISTED" in _pb63_fn.get("cleanup", ""), repr(sorted(_pb63_fn)))
+      and _r30t_backups_guards(next(n for n in _pb63.body if isinstance(n, _ast63.FunctionDef)
+                                    and n.name == "cleanup")) == [_R30T_GUARD]
+      and "_BACKUPS_PREEXISTED = BACKUP_DIR.exists()" in _read63(_root, "tools", "perf_bench.py"),
+      repr(sorted(_pb63_fn)))
+eq("harness cleanup: the guard read is the `if` around the rmtree, whatever it says (control)",
+   _r30t_backups_guards(_ast63.parse("def c():\n    if _BACKUPS_PREEXISTED and BACKUP_DIR.is_dir():\n"
+                                      "        shutil.rmtree(BACKUP_DIR, ignore_errors=True)\n    if x:\n        y()\n")),
+   ["_BACKUPS_PREEXISTED and BACKUP_DIR.is_dir()"])
 _rc63 = _ast63.parse(_read63(_root, "tools", "route_coverage.py"))
 _rc63_rep = _ast63.unparse(next(n for n in _rc63.body if isinstance(n, _ast63.FunctionDef)
                                 and n.name == "_report"))

@@ -157,11 +157,15 @@ for _r28d_mod in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"):
 # 120 s (which writes a real panel backup into DATA_DIR), the wipe sweep at 150 s. Each then worked on this
 # suite's rows through whatever stub a check had in place at that moment: an extra queued-action attempt,
 # extra queries in a counted block, a pool checkout, the backup lock a check waits on. A check that needs
-# one of those passes drives it by hand. The console poller and the terminal sweepers still start: a check reads a
-# running action's output from the poller's own ticks (part05).
+# one of those passes drives it by hand. restore-recover too (game_restore.start_recovery, 60 s then every 600 s):
+# it settles a held restore through shell_as_game_user with whatever stub a check has in place then. The
+# console poller and the terminal sweepers still start: a check reads a running action's output from the
+# poller's own ticks (part05). Every worker that starts is named in _SMOKE_STARTED, so a new periodic ticker
+# fails the check below by name until it is held or listed.
 _smoke_app_mod = sys.modules["app"]   # the module create_app came from (one import form; part37)
 _SMOKE_NO_TICKERS = frozenset(("install-reconcile", "update-check", "due-actions", "priority-keeper",
-                               "backup-ticker", "wipe-schedule"))
+                               "backup-ticker", "wipe-schedule", "restore-recover"))
+_SMOKE_STARTED = frozenset(("console-poller", "terminal-idle-sweeper", "terminal-revocation-sweeper"))
 _smoke_real_supervisor = _smoke_app_mod._make_supervisor
 _smoke_supervised = []     # (name, started) for every worker create_app() handed the supervisor
 
@@ -212,9 +216,10 @@ def check(name, cond, detail=""):
 
 
 check("smoke: create_app's periodic tickers (install reconcile, the update check, due actions, priority "
-      "keeper, the backup ticker, the wipe sweep) are not started in this suite; the console poller is",
+      "keeper, the backup ticker, the wipe sweep, the restore recovery) are not started in this suite; only "
+      "the console poller and the terminal sweepers are",
       sorted(_n for _n, _on in _smoke_supervised if not _on) == sorted(_SMOKE_NO_TICKERS)
-      and ("console-poller", True) in _smoke_supervised, repr(_smoke_supervised))
+      and sorted(_n for _n, _on in _smoke_supervised if _on) == sorted(_SMOKE_STARTED), repr(_smoke_supervised))
 
 
 def join_for(thread, seconds):

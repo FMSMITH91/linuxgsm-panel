@@ -20,7 +20,7 @@
           {% if current_user.totp_enabled %}
           <div class="mb-3">
             <label class="form-label" for="ra-totp">Authentication code</label>
-            <input type="text" name="totp_code" id="ra-totp" class="form-control" inputmode="numeric"
+            <input type="text" name="totp_code" id="ra-totp" class="form-control"
                    autocomplete="one-time-code" placeholder="000000" maxlength="14" required>
             <div class="form-text small">From your authenticator app, or one of your backup codes.</div>
           </div>

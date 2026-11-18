@@ -48,7 +48,7 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
     _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running, grs_or_wipe_sentence, grs_restore_running,
-    game_account_write_refusal)
+    game_account_write_refusal, grs_or_account_refusal)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -743,10 +743,15 @@ def _serve_console_catchups(app, socketio, gs, server_id):
     tick of this console is half done, and nothing else moves its offset. The answer goes to the
     asking socket alone, on the connection the pushes use, so it arrives after every push made
     before it and before every push made after it. See _console_catchup.
+
+    A catch-up answered here wakes a resting console (console_rest): the page has just come back and
+    the lines written next are wanted within a pass, not a rest. The request is gone from the map by
+    the time the tick asks it, so the wake is said here.
     """
     with _viewers_lock:
         reqs = _console_catchups.pop(server_id, None) or {}
         watching = set(_console_viewers.get(server_id) or ())
+    _crest.wake_for_catchups(server_id, reqs, watching)
     for sid, req in reqs.items():
         if sid not in watching:
             continue          # left again, or its socket dropped: there is no one to answer
@@ -1472,7 +1477,8 @@ def _gmod_uninstall_request(app, gs, remote, sel):
     # Asked again here, where nothing yields before the job is marked running: the content scan
     # above is SSH, and a reboot that registered during it runs its census after this point, so it
     # either is refused or sees the job (host_reboot._content_running).
-    refused = _r36c_reboot_refused(gs, "gmod_content_uninstall")
+    # And while the server is being restored (or wiped): the restore replaces the mount.cfg this rewrites.
+    refused = _r36c_reboot_refused(gs, "gmod_content_uninstall") or _r39a_wipe_refused(gs, "gmod_content_uninstall")
     if refused is not None:
         return refused
     if not _claim_gmod_content_host(remote.id):
@@ -1496,7 +1502,7 @@ def _gmod_apply_request(app, gs, remote, sel):
             "Couldn't read this server's current mounts, so the panel won't rewrite them — "
             "applying now could unmount content the server already has. Check the host is "
             "reachable and reload this card.")}), 409
-    refused = _r36c_reboot_refused(gs, "gmod_content")     # as in _gmod_uninstall_request
+    refused = _r36c_reboot_refused(gs, "gmod_content") or _r39a_wipe_refused(gs, "gmod_content")  # as uninstall
     if refused is not None:
         return refused
     if not _claim_gmod_content_host(remote.id):
@@ -1526,8 +1532,7 @@ def _write_refused(gs, action, detail=""):
     Refused too while the server is being restored from a backup: the restore replaces the files and
     sets the account's crontab aside for its switch-over, so a cron line written meanwhile would be lost.
     """
-    why = grs_or_wipe_sentence(gs.id, gs.name) if grs_restore_running(gs.id) else \
-        game_account_write_refusal(gs.remote, gs.short_name)
+    why = grs_or_account_refusal(gs, game_account_write_refusal)
     if why is None:
         return None
     log_action(current_user, action, target=gs.name, detail=_r14b_refused(_audit_name(detail), why),
@@ -2682,8 +2687,8 @@ def _register_gmod_content(app):
                 "names.")}), 400
         # Content is HOST-wide: removing it, or fetching what is not on the host yet, needs the
         # host (see _sf_gmod_host_refusal).
-        refused = (_r36c_reboot_refused(gs, "gmod_content_uninstall" if action == "uninstall" else "gmod_content")
-                   or _sf_gmod_host_refusal(gs, remote, action, sel))
+        kind = "gmod_content_uninstall" if action == "uninstall" else "gmod_content"
+        refused = _r36c_reboot_refused(gs, kind) or _r39a_wipe_refused(gs, kind) or _sf_gmod_host_refusal(gs, remote, action, sel)
         if refused is not None:
             return refused
         if action == "uninstall":
@@ -2773,8 +2778,9 @@ def _fpm_logts_off(gs):
     want = "off"
     # The instance cfg the settings form writes: the same refusal, said as `error`,
     # which is what the page reads here. Its row keeps the reason whole, as every
-    # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
-    why = game_account_write_refusal(gs.remote, gs.short_name)
+    # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence. Refused
+    # while a restore runs too, as _write_refused is: the restore replaces that cfg.
+    why = grs_or_account_refusal(gs, game_account_write_refusal)
     if why is not None:
         log_action(current_user, "set_log_timestamps", target=gs.name,
                    detail=_r14b_refused("", why), success=False, server=gs)

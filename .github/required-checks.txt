@@ -57,6 +57,9 @@ github-actions | fuzz (config)
 github-actions | fuzz (fail2ban)
 github-actions | fuzz (console)
 github-actions | fuzz (cron)
+github-actions | fuzz (db_data)
+github-actions | fuzz (push)
+github-actions | fuzz (upload_scan)
 github-actions | fuzz the diff (address)
 codacy-production | Codacy Static Code Analysis
 sonarqubecloud | SonarCloud Code Analysis

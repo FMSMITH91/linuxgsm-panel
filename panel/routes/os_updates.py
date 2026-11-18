@@ -61,6 +61,19 @@ def _os_update_seeds(remote, seeding, first_read):
     return created is None or created < _PROCESS_STARTED
 
 
+def _renew_tls(app):
+    """The daily Let's Encrypt refresh (tls_own.maybe_renew), in an app context. Never raises.
+
+    Its busy check (host_reboot.panel_host_busy) reads the panel host's row, and the update-check
+    ticker runs in a bare thread with no context of its own.
+    """
+    try:
+        with app.app_context():
+            tls_own.maybe_renew(app.config)
+    except Exception:
+        app.logger.debug("Let's Encrypt refresh tick failed", exc_info=True)
+
+
 def register(app, supervise):
     def _maybe_alert_os_updates(force=False):
         """Check every reachable host once a day and alert when updates appear. Never raises.
@@ -137,7 +150,7 @@ def register(app, supervise):
             # only TimeoutExpired, so a checkout on a host with no `git` binary raises straight
             # through). A persistent failure there would have silently disabled both alerts, which
             # is the exact way the OS-update alert was dead before. Each swallows its own errors.
-            tls_own.maybe_renew(app.config)          # a renewed Let's Encrypt certificate, once a day
+            _renew_tls(app)                          # a renewed Let's Encrypt certificate, once a day
             _maybe_alert_cert_expiring(app.config)   # periodic TLS-cert expiry check
             _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             time.sleep(1800)

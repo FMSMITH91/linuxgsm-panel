@@ -6413,8 +6413,9 @@ def _r32b_panel_dials_public(server):
 
 def _r28b_host_on_tailnet(host):
     """True when `host` (an address or a name) is reached over the tailnet; an unresolved name is not."""
-    from panel.ops import tailscale_integration as _ts
-    if _ts.is_tailnet_name(host):
+    # Only ts.net, a name Tailscale alone assigns, is taken from the name: a self-hosted control
+    # server's base domain may be in public DNS too, so such a name is resolved below like any other.
+    if str(host or "").strip().lower().rstrip(".").endswith(".ts.net"):
         return True
     addrs = [host] if ip_address_or_none(host) is not None else _r28b_resolve(host)
     return bool(addrs) and all(_r28b_tailnet_addr(a) for a in addrs)

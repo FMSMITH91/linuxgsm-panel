@@ -308,10 +308,27 @@ def _repair110(client):
           [b["kind"] for b in blockers] == ["db_repair"], repr(blockers))
     what = _rw110.blocked_sentence(blockers)
     words = [_i18n110.translate(lang, "a database repair of the panel") for lang in ("es", "fr")]
+    # What the viewer READS: the refusal rendered with i18n.tr under an es and an fr session, holding
+    # the catalog's phrase and not the English one. Checking the catalog alone passed with the product
+    # handing a plain English string to the slot, which i18n.tr puts in untranslated (review 1118 T8b).
+    _repair_words110(what, words)
+
+
+def _repair_words110(what, words):
+    """The repair refusal names the panel's own work, in the catalog and as each viewer reads it."""
+    shown = [_shown_in110(lang, what) for lang in ("es", "fr")]
+    english = "a database repair of the panel"
     check("panel-host reboot: ...and that refusal names the repair as the panel's own work, in the viewer's "
           "language (not 'work on the panel')",
-          "a database repair of the panel" in str(what) and all(w != "a database repair of the panel" for w in words),
-          repr((str(what), words)))
+          english in str(what) and english not in words
+          and all(w in t and english not in t for w, t in zip(words, shown)), repr((str(what), words, shown)))
+
+
+def _shown_in110(lang, sentence):
+    """The sentence as i18n.tr renders it for a viewer whose session language is `lang`."""
+    with _p9.test_request_context("/"):
+        __import__("flask").session["lang"] = lang
+        return _i18n110.tr(sentence)
 
 
 # ── 4. the helper never blocks opening a fifo ────────────────────────────────────────────────────
