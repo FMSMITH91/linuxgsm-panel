@@ -3254,3 +3254,8 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 .sch-select { max-width: 12rem !important; }
 .rc-command { word-break: break-all !important; }
 .rc-schedule { white-space: nowrap !important; }
+
+/* ── Add-ons tab ── */
+.ad-log { max-height: 20rem; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.ad-row { border-top: 1px solid var(--bs-border-color); padding: .5rem 0; }
+.ad-row:first-child { border-top: 0; }

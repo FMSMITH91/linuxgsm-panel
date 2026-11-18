@@ -1092,6 +1092,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "plugin_install", "plugin_enable", "plugin_disable", "plugin_remove", "workshop_read", "workshop_save",
     "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
     "db_browse", "db_row_insert", "db_row_update", "db_row_delete", "db_sql", "db_dump_download", "db_upload",
+    "addon_install", "addon_start", "addon_stop", "addon_remove", "addon_refused",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
 AUDIT_HOST_ACTIONS = frozenset({

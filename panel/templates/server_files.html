@@ -179,6 +179,7 @@
    and Mods, a backup permission for Backups), have no tab either. Each route asks again. #}
 {% set _uis_backups = fpm.bk and not install_failed %}
 {% set _db = db_tab() %}
+{% set _ad = addons_tab(server) %}
 <ul class="nav nav-tabs mb-3 uis-subtabs" id="sfsub-nav" role="tablist" aria-label="Sections of this page">
   {% if fpm.view %}<li class="nav-item" role="presentation"><button type="button" class="nav-link active" role="tab" data-sfsub-btn="config"><i class="bi bi-sliders"></i> Config</button></li>{% endif %}
   {% if fpm.view and not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="files"><i class="bi bi-hdd"></i> Files</button></li>{% endif %}
@@ -190,6 +191,7 @@
   {% if fpm.manage and not install_failed and mods_kind(server.game_type) %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="mods"><i class="bi bi-puzzle"></i> Mods</button></li>{% endif %}
   {# Databases for the game's plugins (routes/databases.py): the server's view permission to see them, Manage databases to change them. #}
   {% if _db.view and not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="databases"><i class="bi bi-database"></i> Databases</button></li>{% endif %}
+  {% if _ad.view and not install_failed %}<li class="nav-item" role="presentation"><button type="button" class="nav-link" role="tab" data-sfsub-btn="addons"><i class="bi bi-boxes"></i> Add-ons</button></li>{% endif %}
 </ul>
 
 <!-- Config editor (tabbed) -->
@@ -818,6 +820,7 @@
 {% endif %}
 
 {% if _db.view and not install_failed %}{% include "_server_databases.html" %}{% endif %}
+{% if _ad.view and not install_failed %}{% include "_server_addons.html" %}{% endif %}
 
 {% endblock %}
 {% block scripts %}
@@ -837,4 +840,5 @@ var SF_CAN = {{ fpm|tojson }};
 {% if mods_kind(server.game_type) in ("arma", "fctr", "mc", "mcb") and not install_failed %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_game_mods.js') }}"></script>{% endif %}
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% if not install_failed and db_tab().view %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_databases.js') }}"></script>{% endif %}
+{% if not install_failed and addons_tab(server).view %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_addons.js') }}"></script>{% endif %}
 {% endblock %}

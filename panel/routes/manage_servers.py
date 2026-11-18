@@ -2852,6 +2852,13 @@ def _stop_game_processes(remote, short_name, selfname):
     except Exception:
         _log.debug("uninstall: graceful stop failed; force-killing next", exc_info=True)
     try:
+        # An account that ran add-ons lingers (its user manager runs with nobody signed in); turn
+        # that off first, or the manager and its containers outlive the kill and hold the account.
+        # A no-op for every other account.
+        _sm.run_privileged(remote, "addon-account-release", [short_name], timeout=20, merge_stderr=False)
+    except Exception:
+        _log.debug("uninstall: linger release failed", exc_info=True)
+    try:
         _sm.run_privileged(remote, "user-kill-processes", [short_name], timeout=20,
                        merge_stderr=False)
         time.sleep(1)   # the `; sleep 1` that used to ride along inside the root shell
