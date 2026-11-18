@@ -1,0 +1,4 @@
+#scan
+-- dump
+SELECT * FROM `mysql`
+  /* c */ .`user`;

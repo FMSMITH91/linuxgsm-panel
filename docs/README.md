@@ -263,7 +263,11 @@ it is also where you manage them: **Add a database** (choose the game server, gi
   `panel-db-dumps/<name>.sql.gz` first, the file each backup writes), or upload a `.sql` / `.sql.gz` dump
   (up to 2 GiB) to replace the database's contents. The upload is checked on the host before anything is
   restored: a dump that switches to or names another database (`USE`, `CREATE DATABASE`, made with
-  `--databases`) is refused.
+  `--databases`) is refused, and so is one holding SQL the check cannot read safely (an `sql_mode` or
+  character set that changes how quotes are read, `PREPARE`/`EXECUTE`, `LOAD DATA`, or a client
+  command such as `\C`). The check reads the SQL as the database client does, so data that only
+  mentions a statement is restored as it is. A plain `mysqldump` or `mariadb-dump` of the one database
+  passes.
 - **Password and delete**: reset the password, restore from the dump in the server's files, delete.
   These and an upload ask for your password again when you last confirmed it more than a few minutes ago,
   and delete and restore also ask you to type the database's name.

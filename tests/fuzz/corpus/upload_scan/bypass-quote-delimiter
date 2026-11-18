@@ -1,0 +1,4 @@
+#scan
+-- dump
+DELIMITER '
+SELECT 1'USE mysql'

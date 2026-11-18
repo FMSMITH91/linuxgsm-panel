@@ -22,9 +22,14 @@ The last three also check what the code promises, not only that it does not rais
 says "read" only for SELECT/SHOW/DESCRIBE/DESC/EXPLAIN, a marker inside any string literal never
 reaches `mask_literals`' audit line, an endpoint names the same host to urllib's parser, an address
 a push may reach is public (and so is any IPv4 address it carries), and the upload scan refuses
-every dump with a statement that switches to or names another database, and passes every dump
-without one. Atheris sees no coverage inside awk, so `fuzz_upload_scan.py` builds each dump from a
-grammar the bytes drive, and compares mawk's and gawk's verdicts when both are installed.
+every dump with a statement that switches to or names another database (its words apart by any
+blank, comment or line break) or that it cannot read safely, and passes every dump without one
+(data that only mentions such a statement included). Atheris sees no coverage inside awk, so
+`fuzz_upload_scan.py` builds each dump from a grammar the bytes drive, and compares mawk's and
+gawk's verdicts when both are installed. An input starting with `#scan` and a line break is a dump
+as it is: in `corpus/upload_scan/`, `bypass-*` are such dumps, each a statement a line-by-line text
+scan missed, `refuse-*` other dumps to refuse, and `clean-*` a real mysqldump that passes;
+tests/unit/part243.py checks each verdict.
 
 ## Run locally
 

@@ -1,0 +1,4 @@
+#scan
+-- dump
+PREPARE s FROM CONCAT('SELECT * FROM my', 'sql.user');
+EXECUTE s;

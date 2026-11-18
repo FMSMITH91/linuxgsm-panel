@@ -1,0 +1,6 @@
+#scan
+-- dump
+CREATE
+OR
+REPLACE
+DATABASE gs9_x;
