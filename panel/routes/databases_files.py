@@ -257,12 +257,15 @@ def settle_script(user, name, restored, uid):
     """After the restore: drop the dump kept aside (it worked), or put it back in place of the upload (it did not).
 
     With nothing kept aside, a failed upload's dump is removed: it is never left as the one Restore reads.
-    Upload uid's mark that it was put in place ($p.stored) goes too.
+    Upload uid's mark that it was put in place ($p.stored) goes too. The READY line says whether an
+    earlier dump was kept aside ("prev") or there was none ("none").
     """
-    body = _paths(user, uid) + "\n" + _settle_body(user, name, restored) + ' && rm -f -- "$p.stored"'
+    f = _sm._quote(_home(user) + "/" + _DUMP_DIR + "/" + name + ".sql.gz")
+    had = "k=none; if [ -e %s.prev ]; then k=prev; fi" % f
+    body = _paths(user, uid) + "\n" + had + "\n" + _settle_body(user, name, restored) + ' && rm -f -- "$p.stored"'
     # Not a route: shell text run as the game account, its parts quoted.
     # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
-    return body + " && echo " + _M["READY"] + "\n"
+    return body + " && echo " + _M["READY"] + ' "$k"\n'
 
 
 def cancel_script(user, uid, name=None):
@@ -310,6 +313,12 @@ def _stalled(e, now):
     return e["user"] == current_user.id and not e.get("busy") and now - e["ts"] > UPLOAD_STALLED
 
 
+def _sweep_idle(now):
+    """Forget the uploads with no request running and none for UPLOAD_IDLE (the caller holds _UPLOADS_LOCK)."""
+    for uid in [u for u, e in _UPLOADS.items() if now - e["ts"] > UPLOAD_IDLE and not e.get("busy")]:
+        _UPLOADS.pop(uid, None)
+
+
 def _new_upload(db_id, size):
     """Register an upload: (its id or None, the user's stalled upload it replaces or None).
 
@@ -317,8 +326,7 @@ def _new_upload(db_id, size):
     """
     now = time.time()
     with _UPLOADS_LOCK:
-        for uid in [u for u, e in _UPLOADS.items() if now - e["ts"] > UPLOAD_IDLE and not e.get("busy")]:
-            _UPLOADS.pop(uid, None)
+        _sweep_idle(now)
         same = [e for e in _UPLOADS.values() if e["db"] == db_id]
         if any(not _stalled(e, now) for e in same):
             return None, None
@@ -373,6 +381,8 @@ def _drop_upload(uid):
 
 
 S_PREV_BACK = "The uploaded dump was not kept: the server's files hold the dump they had before."
+S_NO_PREV = ("The uploaded dump was not kept, and there was no earlier dump to put back: the server's files hold "
+             "no dump of this database now.")
 S_PREV_UNKNOWN = ("The host did not answer when the panel put the earlier dump back; check panel-db-dumps in the "
                   "server's files.")
 
@@ -500,9 +510,16 @@ def _finish_refused(gs, r, e, state, val):
 
 
 def _settle(gs, r, uid, restored):
-    """Forget the database's cached structure and run settle_script: outcome()'s state."""
+    """Forget the database's cached structure and run settle_script: outcome() (its value "prev" or "none")."""
     _ddr.forget(r.id)
-    return _upcmd(gs, settle_script(gs.short_name, r.name, restored, uid), 60)[0]
+    return _upcmd(gs, settle_script(gs.short_name, r.name, restored, uid), 60)
+
+
+def _not_kept(kept):
+    """What the answer adds when a restore failed, from the settle's outcome(): the earlier dump's fate."""
+    if kept[0] != "ok":
+        return S_PREV_UNKNOWN
+    return S_NO_PREV if kept[1] == "none" else S_PREV_BACK
 
 
 def _restore_upload(gs, r, e, hd):
@@ -515,8 +532,7 @@ def _restore_upload(gs, r, e, hd):
         raise
     kept = _settle(gs, r, e["uid"], bool(ok))
     if not ok:
-        said = i18n.Sentences(said or i18n.Sentence("Failed"), i18n.Sentence(
-            S_PREV_BACK if kept == "ok" else S_PREV_UNKNOWN))
+        said = i18n.Sentences(said or i18n.Sentence("Failed"), i18n.Sentence(_not_kept(kept)))
     log_action(current_user, "db_upload", target=gs.name, server=gs, success=bool(ok),
                detail=_dbr._done_or_not(ok, "restored database %s from an uploaded dump of %d bytes" % (r.name, e["size"]),
                                         "database %s not restored from an uploaded dump" % r.name, said))
