@@ -66,6 +66,8 @@ jobs:
               'panel/core/terminal.py'
               # The host read's interface rule (ssh_manager/_core imports it).
               'panel/ops/netdev.py'
+              # The live reads' /proc text and parsers (ssh_manager/_core imports it).
+              'panel/ops/live_read.py'
               # ...and the panel modules those targets import, which Atheris instruments and the
               # harnesses run through (part29 holds this list to what they load).
               'panel/core/validation.py'
