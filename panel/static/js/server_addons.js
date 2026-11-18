@@ -348,9 +348,12 @@
     return !!b;
   };
 
-  // Load when the tab is first opened (or the page opens on it).
+  // Load when the tab is first opened (or the page opens on it). A visit to the Databases tab can add a
+  // database or a database server, so the card asks again the next time it is opened.
   document.addEventListener('click', function (e) {
-    if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="addons"]')) void window.adLoad(false); });
+    var t = e.target && e.target.closest ? e.target : null;
+    if (t && t.closest('[data-sfsub-btn="databases"]')) st.loaded = false;
+    if (t && t.closest('[data-sfsub-btn="addons"]')) void window.adLoad(false); });
   window.addEventListener('hashchange', function () { if (location.hash === '#addons') void window.adLoad(false); });
   if (location.hash === '#addons') void window.adLoad(false);
 })();

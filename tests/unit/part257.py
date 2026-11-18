@@ -454,6 +454,10 @@ def _card_checks257():
           any("plugin settings you edited" in d and "database is kept" in d for d in got.get("dialogs") or []),
           repr(got.get("dialogs")))
     eq("card: no Update button when none is available", _card257("").get("update"), 0)
+    _src = _read257("panel", "static", "js", "server_addons.js")
+    _hook = _src[_src.find("document.addEventListener('click'"):]
+    check("card: a visit to the Databases tab makes the card ask again when it is next opened",
+          "closest('[data-sfsub-btn=\"databases\"]')) st.loaded = false;" in _hook[:400], _hook[:400])
 
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────
