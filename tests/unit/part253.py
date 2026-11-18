@@ -262,9 +262,14 @@ def _install_calls253(calls, ok):
        ["podman", "uidmap", "passt"])
 
 
+def _install_stdin253(calls):
+    """The settings the install sent on stdin, parsed ({} when it sent none)."""
+    inst = [c[2] for c in calls if c[0] == "sh" and "podman pull" in c[1]]
+    return _json253.loads(inst[0]) if inst and inst[0] else {}
+
+
 def _install_secrets253(calls):
-    inst = [c for c in calls if c[0] == "sh" and "podman pull" in c[1]]
-    settings = _json253.loads(inst[0][2]) if inst and inst[0][2] else {}
+    settings = _install_stdin253(calls)
     srv = (settings.get("Servers") or [{}])[0]
     check("install: the settings travel on stdin with the RCON and database passwords",
           srv.get("Password") == _RC253 and _DBV253 in settings.get("ConnectionString", ""), repr(settings)[:200])

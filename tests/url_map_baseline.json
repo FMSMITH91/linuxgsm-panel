@@ -616,6 +616,28 @@
       "GET"
     ]
   },
+  "GET /api/server/<int:server_id>/addons": {
+    "endpoint": "api_server_addons",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addons"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/server/<int:server_id>/addons/<addon_id>/logs": {
+    "endpoint": "api_server_addon_logs",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_logs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/server/<int:server_id>/browse": {
     "endpoint": "api_server_browse",
     "guards": [
@@ -2476,6 +2498,39 @@
       "utils.py:decorated_view[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_server_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/<addon_id>/<action>": {
+    "endpoint": "api_server_addon_action",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/<addon_id>/install": {
+    "endpoint": "api_server_addon_install",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_install"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/<addon_id>/remove": {
+    "endpoint": "api_server_addon_remove",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_remove"
     ],
     "methods": [
       "POST"
