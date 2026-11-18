@@ -82,6 +82,7 @@ _said69 = {}
 try:
     _arm69()
     _p9_patch(_bk69, "_safe_path", lambda name: _pl69.Path("/nonexistent-r16c") / str(name))
+    _p9_patch(_bk69, "_upload_bomb_refusal", lambda src, bound=None: "")      # the shape check, header by header
     _p9_patch(_bk69, "_archive_members_refusal", lambda src: "")
     _p9_patch(_bk69, "_restore_db_refusal", lambda src: "")
     _p9_patch(_bk69, "_take_safety_copy", lambda pp: (False, "No space left on device", False))
