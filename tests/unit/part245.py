@@ -114,7 +114,7 @@ def _run_entry245(lib, top, *argv):
 
 def _section_install_and_run245():
     top, lib = _tree245("good")
-    rc, out = _install245(lib)
+    _rc, out = _install245(lib)
     code, pyc, dst = (os.path.join(lib, n) for n in ("panel-helper-code.py", "panel-helper-code.pyc", "panel-helper"))
     eq("helper code: install_helper_code places the code 0644, its bytecode 0644 and the entry 0755 at the "
        "path sudo runs, and leaves no staged pyc", (out.strip().splitlines()[-1:],
@@ -238,13 +238,13 @@ def _section_constants245():
 
 
 def _section_failed_install245():
-    top, lib = _tree245("bad")
+    _top, lib = _tree245("bad")
     bad = os.path.join(_T245, "broken-helper")
     with open(bad, "w", encoding="utf-8") as fh:
         fh.write("def broken(:\n")
     with open(os.path.join(lib, "panel-helper"), "w", encoding="utf-8") as fh:
         fh.write("OLD HELPER\n")
-    rc, out = _install245(lib, bad)
+    _rc, out = _install245(lib, bad)
     with open(os.path.join(lib, "panel-helper"), encoding="utf-8") as fh:
         kept = fh.read()
     eq("helper code: a code file that does not compile fails install_helper_code before anything is placed: "
@@ -373,29 +373,34 @@ def _section_banwatch245():
            by_hand, True)
         eq("ban-watch: each ban and its expiry was recorded exactly once, on the tick it was read",
            rig.events, [(("203.0.113.45",), ()), ((), ("203.0.113.45",)), (("198.51.100.45",), ())])
-        rig.answer = set()
-        for _ in range(4):
-            rig.tick()
-        skipped = rig.tick()
-        forced = rig.tick(_bl245.F2B_FORCED_READ)
-        eq("ban-watch: an unchanged, empty jail is still read every F2B_FORCED_READ seconds",
-           (skipped, forced), (False, True))
-        line = _bangate245_after_skip(rig)
-        check("ban-watch: the report's ban-gate line says fail2ban's files were checked after a skip",
-              "fail2ban's files unchanged, checked" in line, line)
-        rig.touch(rig.log)
-        rig.answer = None
-        failed = [rig.tick(), rig.tick(), rig.tick()]
-        rig.answer = set()
-        _bl245.F2B_STATE_FILES = (rig.log, os.path.join(rig.log, "not-a-dir"))
-        unstat = [rig.tick(), rig.tick(), rig.tick()]
-        eq("ban-watch: a failed read (None) reads again every tick until one succeeds, and so does a stat "
-           "that fails", (failed, unstat), ([True, True, True], [True, True, True]))
+        _banwatch_rest245(rig)
     finally:
         for o, n, v in saved:
             setattr(o, n, v)
         _bl245._f2b_gate.clear()
         _bl245._f2b_gate.update(saved_gate)
+
+
+def _banwatch_rest245(rig):
+    """The forced read, the report line, and the reads after a failed read or stat."""
+    rig.answer = set()
+    for _ in range(4):
+        rig.tick()
+    skipped = rig.tick()
+    forced = rig.tick(_bl245.F2B_FORCED_READ)
+    eq("ban-watch: an unchanged, empty jail is still read every F2B_FORCED_READ seconds",
+       (skipped, forced), (False, True))
+    line = _bangate245_after_skip(rig)
+    check("ban-watch: the report's ban-gate line says fail2ban's files were checked after a skip",
+          "fail2ban's files unchanged, checked" in line, line)
+    rig.touch(rig.log)
+    rig.answer = None
+    failed = [rig.tick(), rig.tick(), rig.tick()]
+    rig.answer = set()
+    _bl245.F2B_STATE_FILES = (rig.log, os.path.join(rig.log, "not-a-dir"))
+    unstat = [rig.tick(), rig.tick(), rig.tick()]
+    eq("ban-watch: a failed read (None) reads again every tick until one succeeds, and so does a stat "
+       "that fails", (failed, unstat), ([True, True, True], [True, True, True]))
 
 
 def _bangate245():
