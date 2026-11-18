@@ -89,7 +89,15 @@ function _uninstallDialog(form, name, short, names){
     // field is the only token there is — and this list is re-rendered by refreshSection after an
     // import, which brings back the server's markup without it. Belt as well as braces: panel.js
     // re-arms after every swap, and this re-arms the one form about to be submitted.
-    onConfirm:function(){ if (window.ensureCsrfFields) window.ensureCsrfFields(form); form.submit(); }
+    //
+    // Uninstall is a step_up_required route (the form carries data-step-up): a sign-in past the
+    // confirmation window confirms the password in a dialog here first, as the ajax forms do, rather
+    // than being sent to the confirm page and having to start again.
+    onConfirm:function(){
+      var go = function(){ if (window.ensureCsrfFields) window.ensureCsrfFields(form); form.submit(); };
+      if (form.hasAttribute('data-step-up') && window.stepUpThen) window.stepUpThen(go, form.getAttribute('data-step-up-totp') === '1');
+      else go();
+    }
   });
 }
 
