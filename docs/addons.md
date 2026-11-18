@@ -20,8 +20,7 @@ has:
 - **B3** (Call of Duty, United Offensive, Call of Duty 2): **legacy and opt-in.** It's built on the host from one
   pinned commit of FMSMITH91/big-brother-bot, with hash-pinned dependencies, and it needs one of the server's own
   databases from the Databases tab. Geolocation is off by default. When it's on, players' IP addresses go to
-  ipwho.is (only that one of B3's two services can be relayed). A stop that finds B3 still waiting on a
-  player lookup ends it after 10 seconds, which counts as a clean stop.
+  ipwho.is (only that one of B3's two services can be relayed).
 
 ## Network
 

@@ -407,8 +407,9 @@ def _b3_local255(ids):
         "Pull=never" in unit], [False, True, True, True])
     eq("B3 unit: runs as the account's own uid and gid (keep-id plus User=/Group=: the image's USER wins otherwise)",
        [x in unit.splitlines() for x in ("UserNS=keep-id", "User=1004", "Group=1005")], [True, True, True])
-    eq("B3 unit: a stop waits 10 s, and the kill after B3's own clean exit counts as a stop",
-       ["--stop-timeout=10" in unit, "SuccessExitStatus=137" in unit.splitlines()], [True, True])
+    eq("B3 unit: a stop waits 30 s and a kill is not excused (the pinned fork commit exits on its own)",
+       ["--stop-timeout=30" in unit, any(x.startswith("SuccessExitStatus=") for x in unit.splitlines())],
+       [True, False])
 
 
 def _b3_geo255(ids):

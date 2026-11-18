@@ -52,7 +52,7 @@ import shlex
 IW4MADMIN = "iw4madmin"
 B3 = "b3"
 # FMSMITH91/big-brother-bot master on 2026-11-15 (the merge of its PR #17): the B3 the add-on builds.
-B3_COMMIT = "4ef524d9e991d94a685290d6b6c6a5cf023e3218"
+B3_COMMIT = "b8e98400c51bb329e026f5b1c5e6f3b50f65518c"
 # python:3.12-slim (Debian 13) on 2026-11-18, by its multi-arch index digest: the build's base.
 B3_BASE = "docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
 CATALOG = {
@@ -92,13 +92,10 @@ CATALOG = {
         "env": ("TZ=Etc/UTC", "HOME=/data"),
         "settings": "Data/b3.ini",
         "web_port": None,
-        # B3 shuts down on SIGTERM and logs "EXITING: 0" at once (b3/__init__.py term_signal_handler),
-        # but at the pinned commit its process then waits for any pending player-authentication
-        # retry timer (b3/parsers/cod.py newPlayer: threading.Timer, not daemon, re-armed up to 10
-        # times), so a stop after it has read a join or chat line outlasted any wait and Podman
-        # killed it (137). Nothing is open by then (its database is closed before EXITING), so the
-        # wait is 10 s and that kill counts as a clean stop for B3 only.
-        "stop_signal": "SIGTERM", "stop_timeout": 10, "success_exit": "137",
+        # B3 shuts down on SIGTERM and exits 0. Before b8e98400 its player-authentication retry
+        # timers were not daemon threads and held the exit after it had read a log line, so Podman
+        # killed it (137); that fork commit made them daemon, so no exit status is excused here.
+        "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": None,
         "database": True, "build": "b3", "legacy": True, "log_file": "Data/b3.log",
         "data_kept": True,
     },
