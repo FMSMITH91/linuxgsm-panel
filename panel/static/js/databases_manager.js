@@ -87,8 +87,13 @@ function dbmEditorField(c, cell, isNew) {
 (function () {
   'use strict';
   var MOUNT_ = window.MOUNT || '';
-  var st = {db: null, tab: 'conn', tables: null, table: null, page: 0, rows: null, editing: null,
+  // st.rows is the rows on screen and st.rowsOf the table they are rows OF: Edit, Delete and Show all
+  // act on that pair, never on rows drawn for one table with another table's name.
+  var st = {db: null, tab: 'conn', tables: null, table: null, page: 0, rows: null, rowsOf: null, editing: null,
             pw: null, busy: false, loaded: {}};
+  // The latest tables and rows request: a reply to an earlier one (another database, table or page
+  // picked before it came back, over a slow host) is dropped, not drawn over the current one.
+  var asked = {tables: 0, rows: 0};
   var T = dbmT, node = dbmNode, raw = dbmRaw, button = dbmButton, readJson = dbmReadJson, sizeText = dbmSizeText,
       failText = dbmFailText;
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
@@ -101,16 +106,22 @@ function dbmEditorField(c, cell, isNew) {
   }
   function api(tail) { return MOUNT_ + '/api/server/' + st.db.sid + '/databases/' + st.db.id + (tail || ''); }
   function getJson(url) { return fetch(url, {cache: 'no-store'}).then(readJson); }
-  function postJson(url, body) {
-    return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})})
-      .then(readJson);
+  // `mine`: a request that belongs to the person's own action however long after the click it is
+  // sent (an upload's pieces): not marked as a timer's, so the sign-in's idle clock moves with it.
+  function postJson(url, body, mine) {
+    var h = {'Content-Type': 'application/json'};
+    if (mine) h['X-Panel-Background'] = '0';
+    return fetch(url, {method: 'POST', headers: h, body: JSON.stringify(body || {})}).then(readJson);
   }
+  function forgetRows() { asked.rows++; st.rows = null; st.rowsOf = null; }
   function failed() { st.busy = false; say('✗ ' + T('Could not reach the panel. Try again.'), 'text-danger'); }
 
   // ── the dialog ──────────────────────────────────────────────────────────────────────────────────
   window.dbmOpen = function (sid, id, name, address, port) {
     st.db = {sid: sid, id: id, name: name, address: address, port: port};
     st.tables = null; st.table = null; st.page = 0; st.pw = null; st.loaded = {}; st.editing = null;
+    asked.tables++;
+    forgetRows();
     el('dbm-title').textContent = name;
     say('');
     drawConn();
@@ -210,8 +221,10 @@ function dbmEditorField(c, cell, isNew) {
 
   // ── Tables ──────────────────────────────────────────────────────────────────────────────────────
   window.dbmLoadTables = function () {
+    var n = ++asked.tables;
     say(T('Opening the database…'));
     return getJson(api('/tables')).then(function (res) {
+      if (n !== asked.tables) return;
       if (!res.ok) { say(failText(res), 'text-danger'); return; }
       say('');
       st.loaded.tables = true;
@@ -229,12 +242,13 @@ function dbmEditorField(c, cell, isNew) {
       var keep = st.table && st.tables.filter(function (t) { return t.name === st.table.name; })[0];
       sel.value = keep ? keep.name : st.tables[0].name;
       window.dbmPickTable();
-    }).catch(failed);
+    }).catch(function () { if (n === asked.tables) failed(); });
   };
 
   function tableByName(name) { return (st.tables || []).filter(function (t) { return t.name === name; })[0] || null; }
 
   window.dbmPickTable = function () {
+    forgetRows();
     st.table = tableByName(el('dbm-table').value);
     st.page = 0;
     st.editing = null;
@@ -276,13 +290,17 @@ function dbmEditorField(c, cell, isNew) {
 
   function loadRows() {
     var t = st.table;
+    forgetRows();
+    var n = asked.rows;
     say(T('Reading rows…'));
     return getJson(api('/rows?table=' + encodeURIComponent(t.name) + '&page=' + st.page)).then(function (res) {
+      if (n !== asked.rows) return;
       if (!res.ok) { say(failText(res), 'text-danger'); return; }
       say('');
       st.rows = res.d;
+      st.rowsOf = t;
       drawRows(t, res.d);
-    }).catch(failed);
+    }).catch(function () { if (n === asked.rows) failed(); });
   }
 
   function cellNode(c, cell, ri, ci) {
@@ -328,7 +346,7 @@ function dbmEditorField(c, cell, isNew) {
   window.dbmPage = function (step) { st.page = Math.max(0, st.page + step); void loadRows(); };
 
   window.dbmShowAll = function (ri, ci) {
-    var t = st.table, r = st.rows && st.rows.rows[ri];
+    var t = st.rowsOf, r = st.rows && st.rows.rows[ri];
     if (!t || !r || !r.key) return;
     postJson(api('/cell'), {table: t.name, column: t.columns[ci].name, key: r.key}).then(function (res) {
       if (!res.ok) { say(failText(res), 'text-danger'); return; }
@@ -343,11 +361,12 @@ function dbmEditorField(c, cell, isNew) {
 
   // ── editing a row ───────────────────────────────────────────────────────────────────────────────
   window.dbmEditRow = function (ri) {
-    var t = st.table;
-    if (!t) return;
     // !(x >= 0), not x < 0: a bare "<" is read as the start of a type list by some complexity tools.
     var isNew = !(ri >= 0);
+    var t = isNew ? st.table : st.rowsOf;
+    if (!t || t !== st.table) return;
     var cells = !isNew && st.rows ? st.rows.rows[ri] : null;
+    if (!isNew && !cells) return;
     st.editing = {ri: ri, key: cells ? cells.key : null};
     var box = el('dbm-editor-fields');
     box.textContent = '';
@@ -391,8 +410,8 @@ function dbmEditorField(c, cell, isNew) {
   };
 
   window.dbmDeleteRow = function (ri) {
-    var t = st.table, r = st.rows && st.rows.rows[ri];
-    if (!t || !r || !r.key) return;
+    var t = st.rowsOf, r = st.rows && st.rows.rows[ri];
+    if (!t || t !== st.table || !r || !r.key) return;
     var keyText = Object.keys(r.key).map(function (k) { return k + ' = ' + r.key[k]; }).join(', ');
     var body = raw(node('pre', 'small mb-0', t.name + ': ' + keyText));
     body.style.whiteSpace = 'pre-wrap';
@@ -506,48 +525,51 @@ function dbmEditorField(c, cell, isNew) {
     p.className = 'small mt-1 ' + (cls || 'text-secondary');
     p.textContent = text;
   }
-  function sendPieces(uid, file, chunk, from) {
+  // An upload keeps the database it was started for (`up`: its URL and name), whatever the dialog is
+  // opened on meanwhile; each request is marked as the person's own (postJson's `mine`).
+  function sendPieces(up, uid, file, chunk, from) {
     if (from >= file.size) return Promise.resolve(true);
     var piece = file.slice(from, Math.min(file.size, from + chunk));
-    return fetch(api('/upload/' + uid + '?offset=' + from), {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: piece})
+    return fetch(up.base + '/upload/' + uid + '?offset=' + from,
+                 {method: 'POST', headers: {'Content-Type': 'application/octet-stream', 'X-Panel-Background': '0'}, body: piece})
       .then(readJson).then(function (res) {
-        if (res.status === 409 && res.d.resume) return sendPieces(uid, file, chunk, res.d.received);
+        if (res.status === 409 && res.d.resume) return sendPieces(up, uid, file, chunk, res.d.received);
         if (!res.ok) throw new Error(failText(res));
         progress(TF('Uploaded {p}%', {p: Math.floor(100 * res.d.received / file.size)}));
-        return sendPieces(uid, file, chunk, res.d.received);
+        return sendPieces(up, uid, file, chunk, res.d.received);
       });
   }
   // A finish whose answer was lost ({retry: true}) is asked again: the host knows an upload it already put in
   // place, and one still being checked answers nothing until it ends. Given up on, the cancel puts the earlier
   // dump back.
   var FINISH_TRIES = 30, FINISH_PAUSE_MS = 20000;     // about ten minutes for a check still running
-  function finish(uid, tries) {
-    return postJson(api('/upload/' + uid + '/finish'), {confirm: st.db.name}).then(function (res) {
+  function finish(up, uid, tries) {
+    return postJson(up.base + '/upload/' + uid + '/finish', {confirm: up.name}, true).then(function (res) {
       if (!(res.ok && res.d.retry && tries > 1)) return res;
-      return new Promise(function (done) { setTimeout(done, FINISH_PAUSE_MS); }).then(function () { return finish(uid, tries - 1); });
+      return new Promise(function (done) { setTimeout(done, FINISH_PAUSE_MS); }).then(function () { return finish(up, uid, tries - 1); });
     });
   }
   function upload(file) {
     st.busy = true;
     progress(T('Starting the upload…'));
-    var uid = null;
-    postJson(api('/upload'), {size: file.size}).then(function (res) {
+    var uid = null, up = {base: api(''), name: st.db.name};
+    postJson(up.base + '/upload', {size: file.size}, true).then(function (res) {
       if (!res.ok) throw new Error(failText(res));
       uid = res.d.id;
-      return sendPieces(uid, file, res.d.chunk, 0);
+      return sendPieces(up, uid, file, res.d.chunk, 0);
     }).then(function () {
       progress(T('Checking the dump and restoring the database…'));
-      return finish(uid, FINISH_TRIES);
+      return finish(up, uid, FINISH_TRIES);
     }).then(function (res) {
       st.busy = false;
       st.loaded.tables = false;
-      if (res.ok && res.d.retry) void postJson(api('/upload/' + uid + '/cancel'), {});
+      if (res.ok && res.d.retry) void postJson(up.base + '/upload/' + uid + '/cancel', {}, true);
       if (!res.ok || res.d.success === false) { progress(failText(res), 'text-danger'); return; }
       progress('✓ ' + res.d.message, 'text-success');
     }).catch(function (e) {
       st.busy = false;
       progress((e && e.message) || ('✗ ' + T('Failed')), 'text-danger');
-      if (uid) void postJson(api('/upload/' + uid + '/cancel'), {});
+      if (uid) void postJson(up.base + '/upload/' + uid + '/cancel', {}, true);
     });
   }
   window.dbmUpload = function () {
