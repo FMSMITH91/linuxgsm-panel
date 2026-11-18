@@ -86,7 +86,12 @@ def open_dir(path, uid=ROOT_UID, top=TOP):
 def read_file(dir_fd, name, uid=ROOT_UID):
     """The bytes of regular file `name` in `dir_fd`, after the same ownership test as a directory."""
     fd = os.open(name, _FILE_OPEN, dir_fd=dir_fd)
-    with open(fd, "rb") as fh:
+    try:
+        fh = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)        # the descriptor is not wrapped yet, so nothing else closes it
+        raise
+    with fh:
         st = os.fstat(fh.fileno())
         if not stat.S_ISREG(st.st_mode) or not _safe(st, uid):
             raise Untrusted("%s is not a root-owned file only root can write" % name)

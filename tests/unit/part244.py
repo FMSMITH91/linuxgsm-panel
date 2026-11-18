@@ -73,7 +73,7 @@ def _loop244(stop_after=3, on_sleep=None, t0=10_000.0):
     try:
         _app244._player_count_watch(_p9)
     except _Stop244:
-        pass
+        pass                # the stand-in clock ends the loop this way once it has run enough passes
     finally:
         _p9_restore_all()
     return [round(p - t0, 1) for p in passes], clock
