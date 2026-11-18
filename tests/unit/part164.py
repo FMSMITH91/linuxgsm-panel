@@ -235,7 +235,8 @@ def _r30t_cross_reads164(scripts, inline):
 
 _JS164 = {f: _read164("panel", "static", "js", f) for f in sorted(_os164.listdir(_os164.path.join(_root, "panel", "static", "js")))
           if f.endswith(".js")}
-_INL164 = {f: _re164.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", _read164("panel", "templates", f), _re164.S)
+_INL164 = {f: _re164.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>", _read164("panel", "templates", f),
+                              _re164.S | _re164.I)
            for f in sorted(_os164.listdir(_os164.path.join(_root, "panel", "templates"))) if f.endswith(".html")}
 _cross164 = _r30t_cross_reads164(_JS164, _INL164)
 _undecl164 = {n: fs for n, fs in _cross164.items() if n not in _ESL164}

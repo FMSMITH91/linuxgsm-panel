@@ -36,7 +36,6 @@ from panel.security import auth as _auth249
 from panel.services import game_restore as _grs249
 
 _TRIP249 = len(_P9_TRIPPED)
-_JS249 = os.path.join(_root, "panel", "static", "js")
 _TPL249 = os.path.join(_root, "panel", "templates")
 
 
