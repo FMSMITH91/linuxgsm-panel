@@ -18,21 +18,22 @@
 #   2b. builds the message every host builds for itself, and signs it with ssh-keygen -Y sign
 #      (namespace linuxgsm-panel-release) using SIGN_RELEASE_KEY (default ~/.ssh/id_ed25519_signing);
 #   3. verifies that signature against the repository's release-signers, as a host would;
-#   4. commits <branch>/<sha>.sig to the branch release-signatures (created, with no history, when
-#      it does not exist yet), through a private index: your checkout, its index and HEAD are not
-#      touched. The commit is signed like any other (git commit-tree -S);
-#   5. pushes that branch, and for main starts the deploy of <sha> (gh workflow run deploy.yml),
+#   4. for main, publishes a GitHub Release of <sha>: tag YYYY.M.D (the commit's date in UTC; .2, .3
+#      for a later release the same day), the CHANGELOG entries it added as the notes (the same
+#      entries a panel's "What's new" shows), and the signature and an SBOM attached (CycloneDX JSON
+#      of the packages the commit's lockfiles pin, tools/sbom.py). A release that already exists is
+#      left alone. A failure here is reported, never fatal: the signing goes on, without a name;
+#   5. commits <branch>/<sha>.sig to the branch release-signatures (created, with no history, when
+#      it does not exist yet), with <branch>/<sha>.name (the release's tag, which panels show) only
+#      when step 4's release exists, through a private index: your checkout, its index and HEAD are
+#      not touched. The commit is signed like any other (git commit-tree -S). A re-run after a
+#      failed release publishes it and adds the name;
+#   6. pushes that branch, and for main starts the deploy of <sha> (gh workflow run deploy.yml),
 #      unless <sha> itself changes only paths CI does not run for (ci.yml's paths-ignore): its
 #      deploy would wait 20 minutes for checks that never come, and then fail.
 #
-#   6. for main, publishes a GitHub Release of <sha>: tag YYYY.M.D (the commit's date in UTC; .2, .3
-#      for a later release the same day), the CHANGELOG entries it added as the notes (the same
-#      entries a panel's "What's new" shows), and the signature and an SBOM attached (CycloneDX JSON
-#      of the packages the commit's lockfiles pin, tools/sbom.py). A release that already
-#      exists is left alone. A failure here is reported, never fatal: the signature is already pushed.
-#
 # Environment: SIGN_RELEASE_REMOTE (default origin), SIGN_RELEASE_KEY, SIGN_RELEASE_NO_DEPLOY=1 to
-# skip step 5's deploy and step 6's release, SIGN_RELEASE_NO_RELEASE=1 to skip only the release,
+# skip step 6's deploy and step 4's release, SIGN_RELEASE_NO_RELEASE=1 to skip only the release,
 # SIGN_RELEASE_GH (default gh) for the GitHub CLI command.
 set -euo pipefail
 export LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE=
@@ -205,48 +206,11 @@ except Exception:
     sys.exit(0)
 ' "${rules}" 2>/dev/null)
 }
-NAME=""
-# Only a commit panels are offered gets a name: no release page means no tag, so a name saved for a
-# docs-only commit would be taken again by the next release of that day.
-if [[ "${BRANCH}" = "main" ]] && reaches_panels "${SHA}"; then
-    NAME="$(release_tag "${SHA}" "${REMOTE}" 2>/dev/null)" || NAME=""
-    [[ "${NAME}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]{1,3})?$ ]] || NAME=""
-fi
-
-# 4. The commit on release-signatures (PARENT, fetched at 1b), through a private index
-#    (GIT_INDEX_FILE): read-tree, update-index, write-tree and commit-tree never look at the
-#    caller's work tree or HEAD.
-export GIT_INDEX_FILE="${TMP}/index"
-if [[ -n "${PARENT}" ]]; then
-    git read-tree "${PARENT}"
-    if git cat-file -e "${PARENT}:${BRANCH}/${SHA}.sig" 2>/dev/null; then
-        echo "sign-release: ${BRANCH}/${SHA}.sig is already on ${SIG_BRANCH}; nothing to commit."
-        PUSHED=0
-    fi
-else
-    git read-tree --empty
-fi
-if [[ -z "${PUSHED:-}" ]]; then
-    BLOB="$(git hash-object -w "${TMP}/msg.sig")"
-    git update-index --add --cacheinfo "100644,${BLOB},${BRANCH}/${SHA}.sig"
-    if [[ -n "${NAME}" ]]; then
-        NBLOB="$(printf '%s\n' "${NAME}" | git hash-object -w --stdin)"
-        git update-index --add --cacheinfo "100644,${NBLOB},${BRANCH}/${SHA}.name"
-    fi
-    TREE="$(git write-tree)"
-    PARGS=()
-    [[ -z "${PARENT}" ]] || PARGS=(-p "${PARENT}")
-    COMMIT="$(git commit-tree -S "${PARGS[@]}" -m "Release signature: ${BRANCH} ${SHA}" "${TREE}")"
-    unset GIT_INDEX_FILE
-    # 5. Not forced: with a parent this is a fast-forward, and a push that lost a race is refused
-    #    rather than dropping someone else's signature. Re-run to retry.
-    git push --quiet "${REMOTE}" "${COMMIT}:refs/heads/${SIG_BRANCH}" \
-        || die "could not push ${SIG_BRANCH} (it may have moved: re-run)."
-    echo "sign-release: signed ${BRANCH} ${SHA} and pushed ${SIG_BRANCH} (${COMMIT:0:10})."
-fi
-unset GIT_INDEX_FILE
-
-# 6. The GitHub Release.
+# 4. The GitHub Release (main, a commit panels are offered), BEFORE the signature commit: its tag
+#    is the release's name, and that name is saved beside the signature (<branch>/<sha>.name) only
+#    once the release and its tag exist. A name saved for a release that was not published (no gh,
+#    SIGN_RELEASE_NO_RELEASE, a create that failed) would be given again to the next release of
+#    that day, so two commits would show the same name on every panel.
 changelog_at() {   # changelog_at <commit>: that commit's CHANGELOG, from docs/ or the root
     git cat-file blob "$1:docs/CHANGELOG.md" 2>/dev/null || git cat-file blob "$1:CHANGELOG.md" 2>/dev/null
 }
@@ -259,13 +223,13 @@ sbom_at() {   # sbom_at <commit> <tag>: the CycloneDX SBOM of that commit's lock
         "$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ "$1")"
 }
 publish_release() {   # publish_release <commit> <previous signed commit or ""> <signature file>
+    # Sets RELEASED to the release's tag once that release exists (made now, or already there).
     local tag
-    # The name saved beside the signature, so the release and the panel say the same.
-    tag="${NAME}"
-    [[ -n "${tag}" ]] || tag="$(release_tag "$1" "${REMOTE}")" \
+    tag="$(release_tag "$1" "${REMOTE}")" \
         || { echo "sign-release: could not name the release." >&2; return 1; }
     if "${GH[@]}" release view "${tag}" >/dev/null 2>&1; then
         echo "sign-release: release ${tag} already exists; left as it is."
+        RELEASED="${tag}"
         return 0
     fi
     # The two changelogs go in on stdin, the previous release's first, split by a NUL (which no
@@ -286,7 +250,9 @@ publish_release() {   # publish_release <commit> <previous signed commit or ""> 
         "${assets[@]}" >/dev/null \
         || { echo "sign-release: could not create the GitHub release ${tag}." >&2; return 1; }
     echo "sign-release: published GitHub release ${tag}."
+    RELEASED="${tag}"
 }
+RELEASED=""
 if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
    && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]] && ! reaches_panels "${SHA}"; then
     echo "sign-release: ${SHA:0:12} changes nothing a panel runs (docs, tests or tooling): signed, no release page."
@@ -294,11 +260,54 @@ elif [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
    && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]]; then
     if command -v "${GH[0]}" >/dev/null 2>&1; then
         publish_release "${SHA}" "${BASE}" "${TMP}/msg.sig" \
-            || echo "sign-release: the signature is pushed; publish the release later by re-running this." >&2
+            || echo "sign-release: no GitHub release and no release name; re-run this to publish them." >&2
     else
         echo "sign-release: ${GH[0]} is not installed; no GitHub release was published." >&2
     fi
 fi
+NAME="${RELEASED}"
+[[ "${NAME}" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]{1,3})?$ ]] || NAME=""
+
+# 5. The commit on release-signatures (PARENT, fetched at 1b), through a private index
+#    (GIT_INDEX_FILE): read-tree, update-index, write-tree and commit-tree never look at the
+#    caller's work tree or HEAD. It adds the signature, and the release's name when the release
+#    exists: each only when it is not there yet, so a re-run after a failed release adds the name.
+export GIT_INDEX_FILE="${TMP}/index"
+HAVE_SIG=0
+HAVE_NAME=0
+if [[ -n "${PARENT}" ]]; then
+    git read-tree "${PARENT}"
+    git cat-file -e "${PARENT}:${BRANCH}/${SHA}.sig" 2>/dev/null && HAVE_SIG=1
+    git cat-file -e "${PARENT}:${BRANCH}/${SHA}.name" 2>/dev/null && HAVE_NAME=1
+else
+    git read-tree --empty
+fi
+ADDED=""
+if [[ "${HAVE_SIG}" -eq 0 ]]; then
+    BLOB="$(git hash-object -w "${TMP}/msg.sig")"
+    git update-index --add --cacheinfo "100644,${BLOB},${BRANCH}/${SHA}.sig"
+    ADDED="signed"
+fi
+if [[ -n "${NAME}" ]] && [[ "${HAVE_NAME}" -eq 0 ]]; then
+    NBLOB="$(printf '%s\n' "${NAME}" | git hash-object -w --stdin)"
+    git update-index --add --cacheinfo "100644,${NBLOB},${BRANCH}/${SHA}.name"
+    ADDED="${ADDED:+${ADDED} and }named (${NAME})"
+fi
+if [[ -z "${ADDED}" ]]; then
+    echo "sign-release: ${BRANCH}/${SHA}.sig is already on ${SIG_BRANCH}; nothing to commit."
+else
+    TREE="$(git write-tree)"
+    PARGS=()
+    [[ -z "${PARENT}" ]] || PARGS=(-p "${PARENT}")
+    COMMIT="$(git commit-tree -S "${PARGS[@]}" -m "Release signature: ${BRANCH} ${SHA}" "${TREE}")"
+    unset GIT_INDEX_FILE
+    # 6. Not forced: with a parent this is a fast-forward, and a push that lost a race is refused
+    #    rather than dropping someone else's signature. Re-run to retry.
+    git push --quiet "${REMOTE}" "${COMMIT}:refs/heads/${SIG_BRANCH}" \
+        || die "could not push ${SIG_BRANCH} (it may have moved: re-run)."
+    echo "sign-release: ${ADDED} ${BRANCH} ${SHA} and pushed ${SIG_BRANCH} (${COMMIT:0:10})."
+fi
+unset GIT_INDEX_FILE
 
 # A commit that changes only what ci.yml's paths-ignore lists ('**/*.md', 'docs/**', LICENSE,
 # .gitignore, .editorconfig; system_ops._ci_path_ignored reads the same list) gets no CI or CodeQL
