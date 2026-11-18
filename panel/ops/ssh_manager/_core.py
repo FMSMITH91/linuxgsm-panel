@@ -3239,8 +3239,7 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False, ma
     if not force:
         _hit = _live_metrics_cache.get(_ck)
         # The entry holds its expiry; it was taken _LIVE_METRICS_TTL before that.
-        _until = _hit[0] if not (_hit and max_age) else _hit[0] - _LIVE_METRICS_TTL + max_age
-        if _hit and _until > _now:
+        if _hit and _hit[0] + ((max_age or _LIVE_METRICS_TTL) - _LIVE_METRICS_TTL) > _now:
             return _hit[1]
     # Re-validated HERE, like run_as_game_user, send_console_command and _rewrite_crontab: both
     # values below are interpolated into the shell command unquoted, and GameServer's @validates
