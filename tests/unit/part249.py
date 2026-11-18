@@ -377,15 +377,17 @@ def _form_ep249(tag, ep):
     return _ACTION_BY_ID249.get(m.group(1)) if m else None
 
 
+# The attribute itself (step_up_form.js and panel.js ask hasAttribute('data-step-up')), not the -totp one.
+_HAS_SU249 = _re249.compile(r"\sdata-step-up(?=[\s>])")
 _su_forms249 = [(f, _form_ep249(tag, ep), tag) for f, ep, tag, _b in _FORMS249 if _form_ep249(tag, ep) in _SU249]
-_missing249 = [(f, ep) for f, ep, tag in _su_forms249 if "data-step-up" not in tag]
+_missing249 = [(f, ep) for f, ep, tag in _su_forms249 if not _HAS_SU249.search(tag)]
 check("templates: every POST form whose route is step_up_required carries data-step-up (the user, group and "
       "invite forms and Uninstall did not: a stale sign-in lost what was typed on the confirm page)",
       len(_su_forms249) >= 18 and not _missing249
       and {"add_user", "edit_user", "delete_user", "create_invite", "revoke_invite", "add_group", "edit_group",
            "delete_group", "uninstall_server"} <= {ep for _f, ep, _t in _su_forms249},
       repr(_missing249 or len(_su_forms249)))
-_totp_tag249 = [(f, tag) for f, _ep, tag, _b in _FORMS249 if "data-step-up" in tag
+_totp_tag249 = [(f, tag) for f, _ep, tag, _b in _FORMS249 if _HAS_SU249.search(tag)
                 and "data-step-up-totp=\"{{ '1' if current_user.totp_enabled else '0' }}\"" not in tag]
 check("templates: ...each says whether the account has 2FA (data-step-up-totp), so the dialog asks for the code",
       not _totp_tag249, repr(_totp_tag249))
@@ -502,6 +504,7 @@ def _piece_busy249():
 
     def _run(*a, **k):
         seen.append(entry.get("busy"))
+        entry["ts"] = _time249.time() - 600     # a command that ran ten minutes after the request began
         return _MARKS249.game["UPSIZE"] + " 4", "", 0
     _p9_patch(_bu249, "_sm", _NS249(game_user_cmd=lambda user, inner: inner, _fmt_size=str,
                                     run_command=_run))
@@ -571,7 +574,7 @@ eq("game upload: ...so does one with a request still running, however long ago i
    _gs249["busy"][:2], (409, True))
 eq("game upload: ...and another user's quiet upload is never replaced", _gs249["other user"][:2], (409, True))
 eq("game upload: a piece's command runs with its upload marked busy; after it the upload is not busy and its "
-   "quiet time starts from the answer", _pb249, (200, [1], 0, True))
+   "quiet time starts from the answer, not from when a long command began", _pb249, (200, [1], 0, True))
 eq("panel backup upload: the admin's quiet upload is replaced and its part file discarded", _ps249,
    (200, [_OLD249]))
 eq("database upload: the user's quiet upload is cancelled on the host (the earlier dump put back) and replaced",
