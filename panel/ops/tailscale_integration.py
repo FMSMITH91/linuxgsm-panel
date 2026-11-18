@@ -335,16 +335,21 @@ def _r40_read_offer(info, status, self_data):
     prefs = info.prefs_json if isinstance(info.prefs_json, dict) else {}
     url = prefs.get("ControlURL")
     info.control_url = url.strip() if isinstance(url, str) else ""
-    tailnet = status.get("CurrentTailnet")
-    suffix = (tailnet.get("MagicDNSSuffix") if isinstance(tailnet, dict) else None) \
-        or status.get("MagicDNSSuffix")
-    if not suffix and "." in info.dns_name:
-        suffix = info.dns_name.split(".", 1)[1]
-    info.magic_dns_suffix = suffix.strip().strip(".").lower() if isinstance(suffix, str) else ""
+    info.magic_dns_suffix = _r40_suffix(status, info.dns_name)
     certs = status.get("CertDomains")
     info.cert_domains = [d for d in certs if isinstance(d, str) and d] if isinstance(certs, list) else []
     caps = self_data.get("CapMap") if isinstance(self_data, dict) else None
     info.node_caps = sorted(k for k in caps if isinstance(k, str)) if isinstance(caps, dict) else []
+
+
+def _r40_suffix(status, dns_name):
+    """The tailnet's MagicDNS suffix: CurrentTailnet's, the legacy top-level one, else the node name's."""
+    tailnet = status.get("CurrentTailnet")
+    suffix = (tailnet.get("MagicDNSSuffix") if isinstance(tailnet, dict) else None) \
+        or status.get("MagicDNSSuffix")
+    if not suffix and "." in dns_name:
+        suffix = dns_name.split(".", 1)[1]
+    return suffix.strip().strip(".").lower() if isinstance(suffix, str) else ""
 
 
 def _peer_entry(peer_id, peer):
@@ -510,25 +515,32 @@ def parse_control_url(text):
     raw = str(text or "").strip()
     if not raw:
         return "", None
-    try:
-        parts = urlsplit(raw)
-        port = parts.port
-    except ValueError:
-        parts, port = None, None
-    if (parts is None or parts.scheme.lower() not in ("https", "http") or parts.username is not None
-            or parts.password is not None or parts.path not in ("", "/") or parts.query
-            or parts.fragment or not parts.hostname or raw.endswith("?") or raw.endswith("#")):
+    split = _r40_split_url(raw)
+    if split is None:
         return "", i18n.Sentence(_CONTROL_URL_BAD)
-    scheme, host = parts.scheme.lower(), parts.hostname.lower()
+    scheme, host, port = split
     if host in TS_CONTROL_HOSTS:
         return "", None
     if port is not None and port != (443 if scheme == "https" else 80):
         host = "%s:%d" % (host, port)
-    url = "%s://%s" % (scheme, host)
     try:
-        return _priv._control_url(url), None
+        return _priv._control_url("%s://%s" % (scheme, host)), None
     except _priv.VerbError:
         return "", i18n.Sentence(_CONTROL_URL_BAD)
+
+
+def _r40_split_url(raw):
+    """(scheme, host, port or None) of an http(s) address with nothing after it, else None."""
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return None
+    extra = (parts.username, parts.password, parts.query or None, parts.fragment or None)
+    if (parts.scheme.lower() not in ("https", "http") or any(x is not None for x in extra)
+            or parts.path not in ("", "/") or not parts.hostname or raw[-1] in "?#"):
+        return None
+    return parts.scheme.lower(), parts.hostname.lower(), port
 
 
 _CONTROL_URL_BAD = ("That isn't a control server address. Enter its address like "

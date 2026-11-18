@@ -650,6 +650,9 @@ def _check_tailscale_mount():
     check("tailscale serve: ...and it reaches Serve with that mount, recorded and not run",
           [k.get("mount") for k in _ts_calls] == ["/lgsm"], repr(_ts_calls))
 
+
+def _check_tailscale_control_server(c):
+    """POST /api/tailscale/control-server: an address and nothing else, refused with a 400, never stored."""
     # The control server for new joins (a self-hosted one such as Headscale): an address and nothing
     # else, refused with a 400 and never stored. It ends up in `tailscale up --login-server=` as
     # root, and in the href of the login link the page shows.
@@ -815,6 +818,7 @@ try:
     _check_free_port()
     _check_data_layer_ports()
     _check_tailscale_mount()
+    _check_tailscale_control_server(c)
     _check_no_port_parsed_with_int_or()
 
 except Exception as exc:                      # a crash in the harness is a failure, not a pass

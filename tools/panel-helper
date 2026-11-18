@@ -411,6 +411,8 @@ def ts_login_re(control):
     port = (r"(?::%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None \
         else ":" + m.group(3)
     return re.compile(r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), re.escape(m.group(2)), port))
+
+
 # `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes.
 R24T_SSH_PREF = {"on": "true", "off": "false"}
 # The BackendStates of a node that has joined a tailnet and is in it (or on its way back in with

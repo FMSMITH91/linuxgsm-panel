@@ -234,6 +234,8 @@ def _r40_login_ere(control):
         return r"https://login\.tailscale\.com/[A-Za-z0-9/]+"
     port = ("(:%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None else ":" + m.group(3)
     return r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), m.group(2).replace(".", r"\."), port)
+
+
 # `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes (tools/panel-helper's twin).
 R24T_SSH_PREF = {"on": "true", "off": "false"}
 
