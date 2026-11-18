@@ -158,7 +158,8 @@ def _geoip257():
        (first[1:], first[0] is not None and first[0].read_bytes() == _DB257, again[1:], asked),
        ((_MONTH257, ""), True, (_MONTH257, ""), [_geo257.PAGE, url]))
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.replace(_SHA_GZ257, "1" * 40).encode(), None), url: (_GZ257, None)})
-    eq("DB-IP: a file that doesn't match its SHA1 is not kept", _geo257.latest(), (None, "", _geo257.BAD_FILE))
+    eq("DB-IP: a file that doesn't match its SHA1 is not kept (the page and the file were both asked for)",
+       (_geo257.latest(), asked), ((None, "", _geo257.BAD_FILE), [_geo257.PAGE, url]))
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.encode(), None)}, switch=False)
     eq("DB-IP: turned off in Outside services, nothing is asked", (_geo257.latest(), asked),
        ((None, "", _geo257.OFF), []))

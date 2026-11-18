@@ -149,7 +149,7 @@ def _cached():
         if isinstance(rec, dict) and re.fullmatch(r"\d{4}-\d{2}", str(rec.get("month", ""))) and path.is_file():
             return path, rec["month"]
     except (OSError, ValueError):
-        pass
+        pass  # no record yet, or an unreadable one: treated as no file kept, so the month is downloaded again
     return None, ""
 
 
