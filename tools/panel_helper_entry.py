@@ -145,7 +145,9 @@ def run_code(code, entry_file):
     main.__file__ = entry_file
     sys.modules["__main__"] = main
     # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
-    exec(code, main.__dict__)  # nosec B102 - root's own helper code, see the module docstring
+    # Running a module's code object needs exec (it is what `python file.py` does); the code is root's
+    # own helper, read only from root-owned files (module docstring).
+    exec(code, main.__dict__)  # nosec B102  # pylint: disable=exec-used
 
 
 if __name__ == "__main__":
