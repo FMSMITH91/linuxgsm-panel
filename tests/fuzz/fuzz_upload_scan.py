@@ -113,16 +113,19 @@ def _name(fdp):
     return "`%s`" % db if fdp.ConsumeBool() else db
 
 
-def _bad(fdp):
+def _forbidden(fdp):
+    """A statement to refuse: one of _OPAQUE, or one of _FORBIDDEN with fuzzed blanks, case and lead."""
     if fdp.ConsumeIntInRange(0, 3) == 0:
-        stmt = fdp.PickValueInList(_OPAQUE)
-    else:
-        q = _name(fdp)
-        words = [q if w == "{q}" else _case(fdp, w) for w in fdp.PickValueInList(_FORBIDDEN)]
-        stmt = words[0] + "".join(fdp.PickValueInList(_BLANKS) + w for w in words[1:])
-        lead = fdp.PickValueInList(["", "", "/*!40101 ", "/*!", "/*M!100100 ", "  ", "\t"])
-        stmt = lead + stmt + (" */" if lead.startswith("/*") else "")
-    stmt += ";"
+        return fdp.PickValueInList(_OPAQUE)
+    q = _name(fdp)
+    words = [q if w == "{q}" else _case(fdp, w) for w in fdp.PickValueInList(_FORBIDDEN)]
+    stmt = words[0] + "".join(fdp.PickValueInList(_BLANKS) + w for w in words[1:])
+    lead = fdp.PickValueInList(["", "", "/*!40101 ", "/*!", "/*M!100100 ", "  ", "\t"])
+    return lead + stmt + (" */" if lead.startswith("/*") else "")
+
+
+def _bad(fdp):
+    stmt = _forbidden(fdp) + ";"
     # DELIMITER is the client's command only at the start of a line (later on a line it is SQL text).
     where = 0 if stmt.startswith("DELIMITER") else fdp.ConsumeIntInRange(0, 2)
     if where == 1:
