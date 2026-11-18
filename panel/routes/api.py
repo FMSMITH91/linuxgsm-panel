@@ -25,7 +25,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
 # confirmation flow on the page that owns them.
 PALETTE_ACTIONS = ("start", "restart", "stop")
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count,
-    _host_metrics_work, _query_host_metrics)
+    _host_metrics_work, _query_host_metrics, want_fresh_player_counts)
 import concurrent.futures
 import itertools
 import re
@@ -253,6 +253,7 @@ def _register_server_status(app):
         # agreed with it and had nothing to write, so the N+1 never fired. The budget was being met
         # by a bug, not by the loop being cheap.
         flip, flipped = _status_flips(app, scanned)
+        want_fresh_player_counts()       # this page shows the counts: keep the 45 s player poll
         data = [_server_row(gs, flipped) for gs in servers]
         # The status writes land HERE, after the response is built. Two statements, not one per
         # server — and, more importantly, AFTER every attribute the loop above reads.
@@ -310,6 +311,7 @@ def _register_server_status(app):
         # round trip that `cat`s the whole console log across the network on each call. None (not 0)
         # is what "we could not read it" means everywhere else in the API, so it is what this
         # answers now too.
+        want_fresh_player_counts()
         player_count = _cached_player_count(gs.id)
         max_players = _cached_player_max(gs.id)
 

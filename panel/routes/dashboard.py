@@ -8,7 +8,7 @@ from panel.db.models import (RemoteServer, db)
 from panel.db.prefs import (_apply_user_order, _apply_user_server_order, _effective_prefs)
 from panel.security.auth import (INSTALL_SERVER, MANAGE_SERVERS, RESTART_SERVER, START_SERVER,
     STOP_SERVER, UNINSTALL_SERVER, files_access, get_user_permissions, get_user_servers, has_permission)
-from panel.services.monitoring import (_cached_player_count)
+from panel.services.monitoring import (_cached_player_count, want_fresh_player_counts)
 from sqlalchemy import (text)
 from app import (_cached_player_max, _cached_player_name, is_setup_complete)
 
@@ -89,6 +89,7 @@ def _row_controls(uperms):
 
 def _player_figures(servers):
     """Each server's cached player count, cap and name, and the totals across them."""
+    want_fresh_player_counts()           # a page shows them: keep the 45 s player poll
     player_counts = {gs.id: _cached_player_count(gs.id) for gs in servers}
     player_max = {gs.id: _cached_player_max(gs.id) for gs in servers}
     server_names = {gs.id: _cached_player_name(gs.id) for gs in servers}

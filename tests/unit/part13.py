@@ -4049,7 +4049,7 @@ try:
     check("app loops: each background pass runs, survives its own failure, and sleeps its "
           "interval", all(r == ("RAISED", repr(_Stop10())) for r in (_pw10, _mw10, _nw10, _monw10))
           and _loop_calls10 == [("players", _dbapp10), "record", "prune", "node-tools"]
-          and _slept10 == [_app10mod._PLAYER_POLL_SECONDS, _app10mod._METRIC_SAMPLE_SECONDS, 86400],
+          and _slept10 == [_mon10._PLAYER_POLL_SECONDS, _app10mod._METRIC_SAMPLE_SECONDS, 86400],
           repr((_loop_calls10, _slept10)))
     check("app loops: the monitor sleeps FIRST, then sweeps inside an app context",
           _mon_slept10 == [_app10mod._MONITOR_SECONDS] * 2 and _in_ctx10 == [True],

@@ -74,6 +74,9 @@ __all__ = [
     "_record_metric_samples",
     "_refresh_player_counts",
     "_whitelisted",
+    "_player_poll_cadence",
+    "_player_poll_wait",
+    "want_fresh_player_counts",
 ]
 
 
@@ -217,6 +220,79 @@ def _note_probe(remote, ok, token, rc):
 
 
 _PLAYER_POLL_SECONDS = 45
+
+
+# ── How often the player poll runs ──────────────────────────────────────────────────────────
+# One pass runs gamedig over every running server (a node process of about 85 MB and half a second
+# of CPU on a host with eight games), so at rest it was most of what the panel cost: 76 passes an
+# hour with nobody looking. It keeps the 45 s cadence while anything needs a count that fresh: a
+# page that shows the counts (dashboard, Game Servers) asked for them within the last
+# _PLAYER_VIEW_WINDOW seconds, or an alert this poll raises itself could fire (a server's one-shot
+# "notify when empty", or "server full" / "new player record" on for a channel or for anyone's
+# devices). Otherwise every _PLAYER_POLL_IDLE_SECONDS. Reboot-when-empty and "restart/stop when
+# empty" ask the games themselves when they decide and never read this cache.
+_PLAYER_POLL_IDLE_SECONDS = 90
+_PLAYER_VIEW_WINDOW = 60
+_PLAYER_POLL_STEP = 5            # how often an idle wait looks for a page that wants the counts
+_PLAYER_ALERTS_RECHECK = 30      # how long the "could a player alert fire" answer is reused
+_PLAYER_ALERT_EVENTS = ("server_full", "server_peak")
+_player_poll_state = {"viewed": 0.0, "armed_at": None, "armed": True}
+
+
+def want_fresh_player_counts(now=None):
+    """Note that a page shows the player counts now, so the poll keeps its 45 s cadence.
+
+    Called by the routes that answer a page with the counts, and when "notify when empty" is armed.
+    An idle wait wakes within _PLAYER_POLL_STEP seconds once the last pass is 45 s old.
+    """
+    _player_poll_state["viewed"] = time.time() if now is None else now
+
+
+def _player_alerts_armed(app):
+    """Whether an alert the player poll raises could fire now; True when that cannot be read."""
+    try:
+        with app.app_context():
+            if GameServer.query.filter_by(notify_when_empty=True).first() is not None:
+                return True
+            cfg = load_config().get("notifications") or {}
+            if any(notifications.event_enabled(cfg, k) for k in _PLAYER_ALERT_EVENTS):
+                return True
+            from panel.db.models import User
+            from panel.services import push_alerts
+            return any(set(_PLAYER_ALERT_EVENTS) & push_alerts.chosen_events(u)
+                       for u in User.query.filter_by(is_active=True).all())
+    except Exception:  # noqa: BLE001 - unknown means keep the quick cadence
+        _log.debug("player poll: alert check failed", exc_info=True)
+        return True
+
+
+def _player_poll_cadence(app, now=None):
+    """Seconds between player-count passes: _PLAYER_POLL_SECONDS or _PLAYER_POLL_IDLE_SECONDS."""
+    st = _player_poll_state
+    now = time.time() if now is None else now
+    if now - st["viewed"] < _PLAYER_VIEW_WINDOW:
+        return _PLAYER_POLL_SECONDS
+    if st["armed_at"] is None or not 0 <= now - st["armed_at"] < _PLAYER_ALERTS_RECHECK:
+        st["armed"], st["armed_at"] = _player_alerts_armed(app), now
+    return _PLAYER_POLL_SECONDS if st["armed"] else _PLAYER_POLL_IDLE_SECONDS
+
+
+def _player_poll_wait(app, started, clock):
+    """Sleep until the next player-count pass is due: `started` plus the current cadence.
+
+    `clock` is the caller's `time` module (its time() and sleep()). The first sleep runs to the
+    45 s mark; past it, the wait looks again every _PLAYER_POLL_STEP seconds, so a page opened
+    during an idle wait gets a pass within that.
+    """
+    left = started + _PLAYER_POLL_SECONDS - clock.time()
+    if left > 0:
+        clock.sleep(left)
+    while True:
+        now = clock.time()
+        left = started + _player_poll_cadence(app, now) - now
+        if left <= 0:
+            return
+        clock.sleep(min(left, _PLAYER_POLL_STEP))
 
 
 _PEAK_NOTIFY_INTERVAL = 3600  # at most one "new record" alert per server per hour
