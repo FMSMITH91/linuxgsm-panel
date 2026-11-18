@@ -258,11 +258,17 @@ eq("host sample: its answered ss is the port scan's answer for 5 s (the scan run
    "sample within those 5 s takes the scan's ports and runs no ss",
    (_s1_244["ports"], _scan244, _n2_244 - _n1_244, "ss -H" in _sent244[-1], _s2_244["ports"]),
    ({27015, 22}, {27015, 22}, 0, False, {27015, 22}))
-_p9_patch(_core244, "run_command", _rc244(_SAMPLE244 + "PORT 27015\n"))
-_ps244._port_scan_cache.pop(244002, None)
-_core244.host_live_metrics(NS(id=244002), force=True)
-check("host sample: an ss that printed nothing is not shared as 'no ports listening'",
-      244002 not in _ps244._port_scan_cache, repr(_ps244._port_scan_cache.get(244002)))
+_empty_ss244 = _sp244.run(["bash", "-c", _core244._HOST_SS.replace("ss -H -ltnu 2>/dev/null", "true", 1)],  # nosec B603 B607
+                          capture_output=True, text=True, timeout=10, check=False).stdout
+_unshared244 = []
+for _out244 in ("PORT 27015\n", "PORTS 0\n", _empty_ss244):
+    _p9_patch(_core244, "run_command", _rc244(_SAMPLE244 + _out244))
+    _ps244._port_scan_cache.pop(244002, None)
+    _core244.host_live_metrics(NS(id=244002), force=True)
+    _unshared244.append(244002 in _ps244._port_scan_cache)
+check("host sample: an ss that printed nothing says so (no PORTS line), and is not shared as 'no ports "
+      "listening', nor is a PORTS 0", _unshared244 == [False, False, False] and _empty_ss244 == "",
+      repr((_unshared244, _empty_ss244)))
 _p9_restore_all()
 _ps244._port_scan_cache.pop(244001, None)
 
