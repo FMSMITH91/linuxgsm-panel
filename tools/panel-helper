@@ -5870,15 +5870,83 @@ def _forget_journal(uid):
     journalctl --rotate is system-wide (journalctl(1) has no per-user or per-file rotation), so it
     runs only when the uid still has an ACTIVE file (user-<uid>.journal), which journald may hold
     open; archived files are deleted without it.
+
+    journald keeps a user journal it has opened in its table until it restarts, and a rotation
+    archives every file in that table and opens a new, empty one in its place, ignoring a file that
+    was already deleted (journald-manager.c manager_rotate, journal-file.c journal_file_archive). So
+    each later rotation re-created an empty user-<uid>.journal for an account forgotten earlier.
+    The rotation's re-created files of accounts that are gone (_orphan_user_journals) go with it.
     """
     files = _user_journal_files(uid)
     if any(active for _p, active in files):
         subprocess.run([resolve("journalctl"), "--rotate"],             # nosec B603 - fixed argv
                        shell=False, capture_output=True, timeout=60, env=_clean_env())
-        files = _user_journal_files(uid)
+        files = _user_journal_files(uid) + _orphan_user_journals()
+    gone = 0
     for path, _active in files:
-        os.unlink(path)
-    return len(files)
+        try:
+            os.unlink(path)
+            gone += 1
+        except FileNotFoundError:
+            continue
+    return gone
+
+
+# The journal file header (systemd.io/JOURNAL_FILE_FORMAT): the signature, and n_entries, a
+# little-endian 64-bit count at byte 152.
+JOURNAL_SIGNATURE = b"LPKSHHRH"
+JOURNAL_N_ENTRIES_AT = 152
+PROC_DIR = "/proc"
+
+
+def _orphan_user_journals():
+    """Active user journals holding no entries, of uids with no passwd entry and no process: [(path, True)].
+
+    Only user-<uid>.journal itself (never an archived file, whose entries are an account's history),
+    a uid of at least ADDON_FORGET_MIN_UID, and a file whose header says it holds no entries: what a
+    rotation creates. A uid that still has a process (a container's mapped uid has no passwd entry)
+    keeps its file, since journald would go on writing into a deleted one.
+    """
+    found = []
+    for root in JOURNAL_ROOTS:
+        for path in glob.glob(os.path.join(root, "[0-9a-f]" * 32, "user-*.journal")):
+            m = _USER_JOURNAL_RE.fullmatch(os.path.basename(path))
+            if not m or os.path.islink(path) or os.path.basename(path) != "user-%s.journal" % m.group(1):
+                continue
+            uid = int(m.group(1))
+            if uid >= ADDON_FORGET_MIN_UID and _journal_empty(path) and _uid_gone(uid):
+                found.append((path, True))
+    return found
+
+
+def _journal_empty(path):
+    """True when `path` is a journal file whose header counts no entries (anything unreadable: False)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(JOURNAL_N_ENTRIES_AT + 8)
+    except OSError:
+        return False
+    return (len(head) == JOURNAL_N_ENTRIES_AT + 8 and head[:8] == JOURNAL_SIGNATURE
+            and int.from_bytes(head[JOURNAL_N_ENTRIES_AT:], "little") == 0)
+
+
+def _uid_gone(uid):
+    """True when the uid has no passwd entry and no process runs as it (real, effective, saved or fs uid)."""
+    try:
+        pwd.getpwuid(uid)
+        return False
+    except KeyError:
+        pass
+    want = str(uid)
+    for pid in (p for p in os.listdir(PROC_DIR) if p.isdecimal()):
+        try:
+            with open(os.path.join(PROC_DIR, pid, "status"), encoding="ascii", errors="replace") as f:
+                ids = next((ln.split()[1:5] for ln in f if ln.startswith("Uid:")), [])
+        except OSError:
+            continue
+        if want in ids:
+            return False
+    return True
 
 
 def _forget_podman_tmp(uid):
