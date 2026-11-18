@@ -34,7 +34,7 @@ from html.parser import HTMLParser as _HTMLParser134
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch,
+from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_GS, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch,
                          _p9_restore_all, _p9_set)
 from unit.part47 import _cut47, _node47
 from panel.db.models import GameServer as _GS134, User as _User134, db as _db134
@@ -138,6 +138,7 @@ except ImportError:
     _FILE_USER134 = None
 try:
     _p9_arm(who="part134")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch(_smc134, "run_command", lambda *a, **k: ("", "", 1))
     _files134["admin"] = _get134(P9_ADMIN, "/server/%d/files" % P9_GS)
     if _FILE_USER134 is not None:

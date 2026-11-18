@@ -11,7 +11,7 @@ HOW IT RUNS. Through the real route and the real Fetch Metadata guard on part12'
 import logging as _logging230
 
 from unit.part01 import check, eq
-from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_client, _p9_patch, _p9_restore_all
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from panel.routes import account_security as _as230
 from panel.security import account_guard as _ag230
 
@@ -54,6 +54,7 @@ def _address230():
 
 
 try:
+    _p9_arm(who="part230")
     _address230()
 finally:
     _as230._WARNED_ADDRESS[0] = False

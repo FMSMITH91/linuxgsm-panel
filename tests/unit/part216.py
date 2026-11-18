@@ -234,7 +234,10 @@ def _s216_others_refused():
        [(r[0], r[1], r[2], r[3]) for r in rows],
        [("p216-other", "p216-own", "refused: an edit of the panel owner's account", False)] * 6
        + [("p216-other", "p216-own", "refused: deletion of the panel owner's account", False)])
-    _edit216(other, other)                       # positive control: a non-owner peer is still editable
+    r = _edit216(other, other, display_name="p216 peer control")
+    check("untouchable: a superadmin who is not the owner can still be edited (control: the refusals above "
+          "are about the owner, not every superadmin)",
+          r.status_code == 200 and _row216(other)[1] == "p216 peer control", repr((r.status_code, _p9_json(r))))
     r = _edit216(own, other, is_active=None)
     check("untouchable: the panel owner can still deactivate another superadmin (control)",
           r.status_code == 200 and _row216(other)[2] is False, repr((r.status_code, _p9_json(r))))

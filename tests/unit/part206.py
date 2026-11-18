@@ -23,7 +23,7 @@ import zipfile as _zf206
 from unit.part01 import check, eq
 from unit.part05 import _root
 from unit.part99 import _js99, _read99
-from unit.part12 import (P9_ADMIN, P9_HOST, _P9_NO_AUDIT, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
+from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_HOST, _P9_NO_AUDIT, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
                          _p9_delete_server, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.db.models import Group as _G206, RemoteServer as _RS206, User as _U206, db as _db206
 from panel.routes import server_files as _sf206, workshop as _wsr206
@@ -198,6 +198,7 @@ try:
     _touch206(_arma_cfg206(_home206), _ARMA_INST206)
     _sid206 = _p9_new_server(P9_HOST, _U, "arma3", 2302)
     _p9_arm(who="part206")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
@@ -384,6 +385,7 @@ try:
     _home206f = _fctr_home206(_tmp206f)
     _sid206f = _p9_new_server(P9_HOST, _U, "fctr", 34197)
     _p9_arm(who="part206")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206f))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
@@ -526,6 +528,7 @@ try:
     _home206m = _mc_home206(_tmp206m)
     _sid206m = _p9_new_server(P9_HOST, _U, "mc", 25565)
     _p9_arm(who="part206")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206m))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)
@@ -637,6 +640,7 @@ try:
     _home206b = _mcb_home206(_tmp206b)
     _sid206b = _p9_new_server(P9_HOST, _U, "mcb", 19132)
     _p9_arm(who="part206")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch_sm("list_server_commands", lambda *a, **k: [])   # the files page's background read
     _p9_patch_sm("shell_as_game_user", _shell206(_home206b))
     _p9_patch(_sf206, "game_account_write_refusal", lambda *a, **k: None)

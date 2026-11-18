@@ -12,7 +12,7 @@ CSRF off), the cross-site POST through its real routes, and panel.js in node aga
 server. The whole round trip with CSRF on, on the real app, is in tests/smoke/part03.py.
 """
 from unit.part01 import check, eq
-from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_client
+from unit.part12 import P9_ADMIN, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_restore_all
 
 _trips228 = len(_P9_TRIPPED)
 _XHR228 = {"X-Requested-With": "XMLHttpRequest"}
@@ -120,8 +120,12 @@ def _wrapper228():
           and once[1:2] == ['{"streamStatus":400,"streamCalls":1}'], repr((always, once, err2)))
 
 
-_renew228()
-_not_inpage228()
+_p9_arm(who="part228")
+try:
+    _renew228()
+    _not_inpage228()
+finally:
+    _p9_restore_all()
 _wrapper228()
 check("csrf renew: nothing in this part reached a real transport (part12's tripwire)",
       len(_P9_TRIPPED) == _trips228)

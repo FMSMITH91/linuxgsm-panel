@@ -26,7 +26,7 @@ import tempfile as _tf204
 
 from unit.part01 import check, eq
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_NO_AUDIT, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
+from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_GS, P9_HOST, _P9_NO_AUDIT, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
                          _p9_delete_server, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part99 import _js99, _read99
 from panel.db.models import Group as _G204, RemoteServer as _RS204, User as _U204, db as _db204
@@ -245,6 +245,7 @@ try:
     _touch204(_os204.path.join(_cfgdir204(_home204v), "codserver.cfg"), _INST204)
     _sid204 = _p9_new_server(P9_HOST, _U, "cod", 28960)
     _p9_arm(who="part204")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch_sm("shell_as_game_user", _shell204(_home204v))
     _p9_patch(_sf204, "game_account_write_refusal", lambda *a, **k: None)
     _admin204 = _p9_client(P9_ADMIN)

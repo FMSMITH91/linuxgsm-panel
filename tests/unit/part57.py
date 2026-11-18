@@ -15,7 +15,7 @@ import types as _types57
 
 from unit.part01 import check
 from unit.part10 import _Over as _p9_Over
-from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_cfg, _p9_cfg_put, _p9_trip
+from unit.part12 import _P9_CFG_PATH, _P9_TRIPPED, _p9, _p9_arm, _p9_cfg, _p9_cfg_put, _p9_trip
 from unit.part20 import _patch, _patched
 
 import app as _app57  # noqa: E402
@@ -60,6 +60,7 @@ try:
     from panel.ops import tailscale_integration as _ts57   # noqa: E402
     _trip57_start = len(_P9_TRIPPED)
     with _patched():
+        _p9_arm(_patch, who="part57")   # every transport, not only the tailscale CLI below
         _patch(_ts57, "get_tailscale_info",
                lambda force_refresh=False: _types57.SimpleNamespace(
                    dns_name=None, serve_config={}, serve_unreadable=False))
@@ -74,6 +75,7 @@ try:
           repr(_r57.status_code))
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), accent_color="#123abc", login_tagline="  Hi there "))
     with _patched():
+        _p9_arm(_patch, who="part57")   # every transport, not only the tailscale CLI below
         _patch(_ts57, "get_tailscale_info",
                lambda force_refresh=False: _types57.SimpleNamespace(
                    dns_name=None, serve_config={}, serve_unreadable=False))

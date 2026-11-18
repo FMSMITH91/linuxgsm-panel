@@ -33,13 +33,16 @@ import types as _ty207
 
 from unit.part01 import check, eq
 from unit.part05 import _helper, _root
-from unit.part12 import _P9_TRIPPED, _p9
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_restore_all
 from panel.db.models import (GameDatabase as _GD207, GameServer as _GS207, HostDatabaseServer as _HD207,
                              RemoteServer as _RS207, db as _db207)
 from panel.ops.ssh_manager import _core as _smc207, databases as _dbs207
 from panel.security import auth as _auth207, privileged as _priv207
 
 _trips207 = len(_P9_TRIPPED)
+# Armed for the whole part (restored before its closing check): the helper and databases.py run here
+# with stand-ins, and a host call one of them gains is recorded by part12's tripwire, not made.
+_p9_arm(who="part207")
 _PW = "Sentinelpw7Xq-ab.cd_ef012345"          # a database password of the generator's shape
 _APW = 'Adm in#"\\pw\\b x'                    # an admin password with every option-file hazard
 _ADMIN = ("rootadmin", _APW)
@@ -976,6 +979,7 @@ check("permission: no group is given it by default (the seeded Everyone group ho
       "manage_databases" not in open(_os207.path.join(_root, "panel", "db", "models.py"), encoding="utf-8").read())
 
 _sh207.rmtree(_T, ignore_errors=True)
+_p9_restore_all()
 check("part207: nothing reached a host (the transport tripwire is untouched)",
       len(_P9_TRIPPED) == _trips207, repr(_P9_TRIPPED[_trips207:][:4]))
 

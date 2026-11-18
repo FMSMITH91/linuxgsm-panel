@@ -38,7 +38,7 @@ import time as _time190
 from urllib.parse import quote as _urlq190
 
 from unit.part01 import check, eq, skip
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
+from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
                          _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.core import i18n as _i18n190
 from panel.core.panel_state import r36j_route_job as _job190
@@ -759,6 +759,7 @@ _started190 = []
 _rt190 = {}
 try:
     _p9_arm(who="part190")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch(_gr190, "list_game_backups", lambda *a, **k: list(_LIST190))
     _p9_patch(_gr190, "_grs_worker", lambda *a, **k: _started190.append(a[4]))
     _p9_patch(_gr190, "_grs_other_work", lambda gs: None)
@@ -1047,9 +1048,18 @@ def _upload190(client, data, chunk=None, start_extra=None):
     return out
 
 
+class _ToolsMissing190(Exception):
+    """The machine lacks a tool the block drives: its checks are skipped, by name.
+
+    Its own class: an `except RuntimeError` here also caught a real RuntimeError from the routes (an
+    app-context error, a StopIteration through a generator) and turned every check after it into
+    one SKIP, which does not fail the run (review 1118 T13).
+    """
+
+
 try:
     if _missing190:
-        raise RuntimeError("tools missing")
+        raise _ToolsMissing190("tools missing")
     from types import SimpleNamespace as _NSU
     from panel.routes import backup_upload as _bu190
     from panel.ops import ssh_manager as _sm190
@@ -1130,7 +1140,7 @@ try:
                                                content_type="application/octet-stream").status_code
     _up190["big_piece"] = _CU190["rsedit"].post("%s/%s?offset=4096" % (_base, _uid), data=b"x" * (_grs190.UPLOAD_CHUNK + 1),
                                             content_type="application/octet-stream").status_code
-except RuntimeError as _e:
+except _ToolsMissing190 as _e:
     skip("game backup upload: driven onto a stand-in host", str(_e))
 finally:
     _p9_restore_all()
@@ -1239,6 +1249,8 @@ _CRAFT190 = ("../x", "/etc/passwd", "z" * 32, "a" * 33, "A" * 32, "..", "")
 _craft190 = {}
 _cbdir190 = _tmp190.mkdtemp(prefix="p190-cu-")
 try:
+    if _missing190:   # it drives §6's backup_upload, imported only when its tools are here
+        raise _ToolsMissing190("tools missing")
     _p9_arm(who="part190")
     _cb = _os190.path.join(_cbdir190, "b")
     _os190.makedirs(_os190.path.join(_cb, ".upload-.."))      # so "../../x" would name a real place
@@ -1299,7 +1311,7 @@ try:
         _routes[_u] = (sorted(set(_codes)), _got)
         _bu190._uploads.pop(_u, None)
     _craft190["routes"] = (_routes, len(_seen), _ctree190() == _t0)
-except RuntimeError as _e:
+except _ToolsMissing190 as _e:
     skip("crafted upload ids", str(_e))
 finally:
     _p9_restore_all()

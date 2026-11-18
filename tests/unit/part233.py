@@ -84,6 +84,7 @@ def _basics233():
         _switches233(stored)
         got[label] = _osv233.enabled(_osv233.GAME_ICONS)
         _p9_restore_all()
+        _p9_arm(who="part233")
     eq("outside services: a switch is off only when config.json holds exactly false (missing, true, 0, "
        "\"false\" and null are on)", got,
        {"missing": True, "false": False, "true": True, "0": True, "text": True, "none": True})
@@ -297,6 +298,7 @@ def _icons233(stored):
     backoff = "p233server" in _gi233._failed
     _gi233._failed.pop("p233server", None)
     _p9_restore_all()
+    _p9_arm(who="part233")
     return got, len(fetched), backoff, http[2], len(built)
 
 
@@ -331,6 +333,7 @@ def _mdr_http233(stored):
         return _mr233._mdr_http_get(_mr233.API + "/search", 10, frozenset({"api.modrinth.com"}))[1], len(built)
     finally:
         _p9_restore_all()
+        _p9_arm(who="part233")
 
 
 def _modrinth233(stored):
@@ -380,6 +383,7 @@ def _pubip233(stored, route_src):
     finally:
         _core233._gamedig_host_cache.pop(srv.id, None)
         _p9_restore_all()
+        _p9_arm(who="part233")
 
 
 def _pubip_checks233():

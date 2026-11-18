@@ -25,7 +25,7 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check, eq
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GM, P9_GS, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
+from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_GM, P9_GS, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
                          _p9_patch, _p9_restore_all, _p9_set)
 from unit.part47 import _node47
 from panel.db.models import GameServer as _GS244, User as _U244, db as _db244
@@ -165,6 +165,7 @@ eq("player poll: the heartbeat records 90 s at rest and 45 s while a page shows 
 
 # The routes that show the counts, and the switch that arms "notify when empty", keep it quick.
 _p9_arm()
+_p9_quiet_lookups()   # the page's background timezone / public-IP reads
 _p9_patch(_core244, "run_command", lambda *a, **k: ("", "no host in this check", 1))
 _A244 = _p9_client(P9_ADMIN)
 _marks244 = {}
@@ -274,6 +275,7 @@ _ps244._port_scan_cache.pop(244001, None)
 
 # The callers: an open dashboard's metrics poll, then its status poll, run ONE ss between them.
 _p9_arm()
+_p9_quiet_lookups()   # the page's background timezone / public-IP reads
 _sent244.clear()
 _sent_ids244.clear()
 _p9_patch(_core244, "run_command", _rc244(lambda c: (_SAMPLE244 + "PORT 27015\nPORTS 1\n") if "ps -eo" in c else ""))
@@ -334,6 +336,7 @@ eq("remote live read: a cold start takes the 0.25 s window; a poll 2 s later dif
 
 # Through the host page's route.
 _p9_arm()
+_p9_quiet_lookups()   # the page's background timezone / public-IP reads
 _sent244.clear()
 _p9_patch(_core244, "run_command", _rc244(_live244))
 _p9_patch(_core244, "time", _fake_time244)
@@ -374,6 +377,7 @@ def _stats_runs244(sid, offsets):
 
 
 _p9_arm()
+_p9_quiet_lookups()   # the page's background timezone / public-IP reads
 _sent244.clear()
 _p9_patch(_core244, "run_command", _rc244(_game244))
 _p9_patch(_core244, "time", _fake_time244)

@@ -24,7 +24,7 @@ import shutil as _shutil184
 from types import SimpleNamespace as _NS184
 
 from unit.part01 import check, eq
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_VIEWER, _p9, _p9_arm, _p9_audit_count, _p9_client,
+from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_GS, P9_HOST, P9_VIEWER, _p9, _p9_arm, _p9_audit_count, _p9_client,
                          _p9_patch, _p9_restore_all)
 from unit.part18 import _app18
 from unit.part47 import _SETTLE47, _cut47
@@ -164,6 +164,7 @@ _url184 = "/api/server/%d" % P9_GS
 _r184 = {}
 try:
     _p9_arm(who="part184")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch(_sf184, "_read_refused", lambda *a, **k: None)
     _p9_patch(_sf184, "_write_refused", lambda *a, **k: None)
     _p9_patch(_sf184, "read_file", _rec184("read_file", ("hostname x\n", None)))

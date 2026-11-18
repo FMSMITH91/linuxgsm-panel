@@ -117,7 +117,26 @@ check("world reset fctr: a non-default executable is refused (the new save could
 
 
 # ── 3. the host command, run by bash against a scratch tree ─────────────────────────────────────
-_MC_PLAN183 = {"dir": "", "remove": ["world", "world_nether", "world_the_end"], "globs": [], "create": None}
+# The plan production makes for Minecraft (_wwr_java_plan): "world": True, so each folder must hold a
+# level.dat before it is deleted. Without it these checks ran a script Minecraft never runs (review 1118 T13).
+_MC_PLAN183 = {"dir": "", "remove": ["world", "world_nether", "world_the_end"], "globs": [], "create": None,
+               "world": True}
+
+
+def _java_plan183():
+    """The plan _wwr_java_plan makes for a server whose level-name is `world`, its host reads stubbed."""
+    saved = {k: getattr(_wwr183, k) for k in ("_wwr_values", "_wwr_props")}
+    _wwr183._wwr_values = lambda gs, keys: ({"preexecutable": "java -Xmx1024M -jar"}, None)
+    _wwr183._wwr_props = lambda gs: ("level-name=world\n", None)
+    try:
+        return _wwr183._wwr_java_plan(object(), lambda values: None)
+    finally:
+        for k, v in saved.items():
+            setattr(_wwr183, k, v)
+
+
+eq("world reset host: the Minecraft plan these checks run is the one production makes for a world named world",
+   _java_plan183(), (_MC_PLAN183, None))
 _FCTR_PLAN183 = _layout183(_LATEST183)
 _FCTR_OLD_PLAN183 = _layout183(_OLD183)
 
@@ -232,7 +251,8 @@ def _lock183(home, lock):
 
 
 _MC_FILES183 = ("serverfiles/world/level.dat", "serverfiles/world/region/r.0.0.mca", "serverfiles/world_nether/x",
-                "serverfiles/world_the_end/x", "serverfiles/server.properties", "serverfiles/ops.json",
+                "serverfiles/world_nether/level.dat", "serverfiles/world_the_end/x",
+                "serverfiles/world_the_end/level.dat", "serverfiles/server.properties", "serverfiles/ops.json",
                 "serverfiles/whitelist.json", "serverfiles/banned-players.json", "serverfiles/banned-ips.json",
                 "serverfiles/usercache.json", "serverfiles/worldedit/x", "serverfiles/minecraft_server.jar")
 _KEPT183 = ["serverfiles/banned-ips.json", "serverfiles/banned-players.json", "serverfiles/minecraft_server.jar",
@@ -245,6 +265,11 @@ eq("world reset host: ...the run reports three removed and done", _wwr183.outcom
    ("done", "world deleted (3 removed)"))
 check("world reset host: the running test is LinuxGSM's own (tmux on the script's uid socket)",
       _mc183[3].split()[:2] == ["-L", "p183s-u7"] and "list-sessions" in _mc183[3], repr(_mc183[3]))
+
+_nolevel183 = _host183(_MC_PLAN183, [f for f in _MC_FILES183 if f != "serverfiles/world_nether/level.dat"])
+check("world reset host: ...a folder of the plan with no level.dat is not a world: refused, nothing deleted",
+      "__WWR_NOTWORLD__" in _nolevel183[1] and "serverfiles/world/level.dat" in _nolevel183[0]
+      and "serverfiles/world_nether/x" in _nolevel183[0], repr(_nolevel183[:3]))
 
 _up183 = _host183(_MC_PLAN183, _MC_FILES183, up=True)
 check("world reset host: a server still running by LinuxGSM's test is refused and nothing is deleted",

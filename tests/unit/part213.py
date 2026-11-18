@@ -118,13 +118,33 @@ def _s213_legacy():
     read = _cfg213.decrypt_secret(old)
     check("legacy: a bare Fernet cred_key still decrypts enc:v1, and reading does not rewrite the file",
           all((read == _S213_OLD, keyf.read_bytes() == fkey + b"\n")), repr(read))
-    seen = []
-    workers = [_th213.Thread(target=lambda: seen.append(_cfg213._cred_keyring_for_write().current))
-               for _ in range(4)]
-    for w in workers:
-        w.start()
-    for w in workers:
-        w.join(30)
+    seen, bare = [], []
+    # The workers are green threads and nothing on this path yields, so each ran to the end before the
+    # next began, and a missing lock passed (review 1118 T13). Each read now yields after it reads, so
+    # every caller has read "no current key" before any of them adds one: only the lock and add_key's
+    # re-read under it keep that to one key.
+    import eventlet as _ev213
+    real_read = _kr213.read_ring
+
+    def _read_then_yield(path):
+        ring = real_read(path)
+        if ring.current is None:
+            bare.append(1)
+        _ev213.sleep(0)
+        return ring
+    _kr213.read_ring = _read_then_yield
+    try:
+        workers = [_th213.Thread(target=lambda: seen.append(_cfg213._cred_keyring_for_write().current))
+                   for _ in range(4)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join(30)
+    finally:
+        _kr213.read_ring = real_read
+    check("legacy: (premise) the callers really raced: more than one read the ring with no current key before "
+          "one was added (two are enough for an unlocked add to make two keys)", len(bare) >= 2 and len(seen) == 4,
+          repr((len(bare), seen)))
     again = {_kr213.add_key(keyf, only_if_none=True).current for _ in range(3)}
     ring = _cfg213._cred_keyring()
     check("legacy: the first encryption adds ONE AES key however many callers race to it, and keeps "

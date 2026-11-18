@@ -25,7 +25,7 @@ import re as _re234
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from unit.part12 import _p9_quiet_lookups, P9_ADMIN, P9_GS, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from unit.part47 import _cut47, _node47
 from panel.ops.ssh_manager import _core as _core234
 
@@ -90,6 +90,7 @@ def _styled234(html):
 _pages234 = {}
 try:
     _p9_arm(who="part234")
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads
     _p9_patch(_core234, "run_command", lambda *a, **k: ("", "", 1))
     _cl234 = _p9_client(P9_ADMIN)
     for _k234, _u234 in (("chrome", "/account"), ("detail", "/server/%d" % P9_GS),
