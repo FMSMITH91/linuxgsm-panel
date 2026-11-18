@@ -48,7 +48,9 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
 
 - Keep it behind **Tailscale** (or a reverse proxy with a real certificate) rather than
   exposing the panel port to the public internet. See [docs/https.md](../docs/https.md).
-- Keep **two-factor authentication** enabled on admin accounts.
+- Keep **two-factor authentication** enabled on admin accounts. Settings → Sessions & Security →
+  *Require two-factor authentication for administrators* (off by default) makes superadmins and
+  anyone with terminal, user or group rights set it up before anything else.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
 - When you add a remote host, give its **host key fingerprint** (the Add Remote Server form's "Host key fingerprint (optional)" field, also on Edit; run
   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host, over a channel you already trust).
@@ -222,7 +224,7 @@ The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
   `ssh.socket`, `whoopsie`, `cups`, `modemmanager`, `unattended-upgrades`). The panel's own unit is
-  not in it; `panel-restart` restarts it and takes nothing else.
+  not in it; `panel-restart` restarts it and takes only a delay of 1 to 300 seconds.
 - `tls-le-copy` takes one **certificate name** (domain labels and dots) and copies only
   `/etc/letsencrypt/live/<name>/fullchain.pem` and `privkey.pem`, each a root-owned regular file under
   that certificate's own `live/` or `archive/` directory and nothing but PEM of its kind, into the
@@ -318,8 +320,10 @@ and refuses the restore naming the bad row.
 
 Deleting a host from the panel never connects to it, so what the panel installed there stays: the
 gamedig tree, its two links and the weekly root cron that re-runs `install-gamedig.sh`. That job
-fetches nothing while the tree is in place, so what is left is root-owned, hash-locked and inert.
-README's "Removing a host" lists it with the commands that remove it.
+fetches nothing while the tree is in place, so that part is root-owned, hash-locked and inert.
+**Tailscale, if the panel set it up there, is not inert:** the host stays in your tailnet until you
+log it out. The fail2ban whitelist file and the auto-block firewall rules stay too.
+README's [Removing a host](../docs/README.md#removing-a-host) lists each with the commands that remove it.
 
 ### What you can do today
 
@@ -350,7 +354,9 @@ The one secret credential the workflows use is `CODACY_PROJECT_TOKEN`, a Codacy 
 token that sends test coverage to Codacy. It cannot touch the code, GitHub or any host, but it can
 change which Codacy patterns run. It lives in a `codacy` environment that only `main` can use, and
 only `codacy-coverage.yml` (a `workflow_run` job running `main`'s copy) reads it; the CI job that
-runs pull-request code never holds it. The test host's deploy logs in to Tailscale with OIDC, not a
+runs pull-request code never holds it. `codacy-alerts.yml` (scheduled, on `main`) would read a
+`CODACY_API_TOKEN` from the same environment if one were set; none is, because Codacy answers it
+without one for this public repository. The test host's deploy logs in to Tailscale with OIDC, not a
 stored credential.
 
 Thank you for helping keep the project and its users safe.

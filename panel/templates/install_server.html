@@ -104,11 +104,11 @@
           {% else %}
           <span>Ask a superadmin to retry fetching it.</span>
           {% endif %}
-          <span class="d-block text-secondary" style="font-size:.72rem;">The panel fetches it from LinuxGSM's repository; this host may have no outbound access to GitHub.</span>
+          <span class="d-block text-secondary fs-r72">The panel fetches it from LinuxGSM's repository; this host may have no outbound access to GitHub.</span>
           {% if lgsm_status and lgsm_status.reason %}
           {# The actual failure, not a guess at one: a DNS error, an HTTP 403, a response that was
              not a CSV and a read-only data/ all end up here looking nothing alike. #}
-          <span class="d-block font-monospace text-secondary" style="font-size:.7rem;" data-no-i18n>{{ lgsm_status.reason }}</span>
+          <span class="d-block font-monospace text-secondary fs-r70" data-no-i18n>{{ lgsm_status.reason }}</span>
           {% endif %}
         </div>
         {% endif %}
@@ -126,7 +126,7 @@
       <div class="col-12 order-md-last" id="game-picker"{% if not games %} hidden{% endif %}>
       {% if games %}
         <div class="d-flex align-items-center gap-2 mb-2">
-          <input type="search" id="game-search" class="form-control form-control-sm" style="max-width:22rem;"
+          <input type="search" id="game-search" class="form-control form-control-sm mw-r22"
                  placeholder="Search games" aria-label="Search games by name or script name" autocomplete="off"
                  data-action="filterGameTiles" data-args='["@self"]' data-on="input">
           <span class="small text-secondary" id="game-search-none" hidden>No game matches that search.</span>
@@ -153,7 +153,7 @@
       <div class="col-md-1">
         <label class="form-label" for="port-input">Port</label>
         <input type="number" name="port" class="form-control" id="port-input" value="27015">
-        <div class="form-text text-info" id="port-hint" style="min-height:1em;"></div>
+        <div class="form-text text-info minh-1em" id="port-hint"></div>
       </div>
       <div class="col-md-2">
         <div class="form-label d-none d-md-block" aria-hidden="true">&nbsp;</div>
@@ -161,8 +161,8 @@
           <i class="bi bi-download"></i> Install
         </button>
       </div>
-      <div class="col-12 mt-1" id="gmod-content-opt" style="display:none;">
-        <div class="border rounded p-2" style="border-color:var(--border)!important;">
+      <div class="col-12 mt-1" id="gmod-content-opt" data-start-hidden>
+        <div class="border rounded p-2 border-panel">
           <div class="small mb-1"><strong><i class="bi bi-hdd-stack"></i> Mount game content</strong></div>
           <div class="small mb-1">GMod needs another game's content to draw its maps and props — without
             it you get missing-texture ERROR signs. The panel reuses a copy already on the host that no

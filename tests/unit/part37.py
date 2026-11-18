@@ -1050,13 +1050,14 @@ def _v5_verdict(text, gone, pinned):
     as well, so dropping or rewording that bullet, or moving the section's entries into another, would
     have failed main over a prose edit with nothing stale in it.
     """
-    # The newest section, whatever its heading says (review 1107: split on "[Since 0.10.0-alpha]" alone,
-    # a renamed heading read the preamble above the first section, and passed having read no entry).
+    # Every section above 0.10.0-alpha's, whatever their headings say: one per release day now, so the
+    # newest alone would miss a stale entry a day older (review 1107: split on "[Since 0.10.0-alpha]"
+    # alone, a renamed heading read the preamble above the first section, and passed having read no entry).
     sections = text.split("\n## [")
     if len(sections) < 2:
         return False, ["no '## [' section heading"]
-    unreleased = sections[1]
-    entries = [e for e in _re37.split(r"\n(?=- )", unreleased) if "PyJWT" in e]
+    recent = _re37.split(r"\n## \[0\.10\.0-alpha\]", "\n## [".join(sections[1:]))[0]
+    entries = [e for e in _re37.split(r"\n(?=- )", recent) if "PyJWT" in e]
     stale = [e.strip()[:70] for e in entries if _re37.search(r"pinned apart|--no-deps|semgrep-pyjwt", e)]
     return gone and pinned and not stale, stale
 
@@ -1066,11 +1067,13 @@ def _v5_changelog():
     gone = not os.path.exists(os.path.join(_root, ".github", "ci-requirements", "semgrep-pyjwt.txt"))
     pinned = "\npyjwt==" in _read29(".github", "ci-requirements", "semgrep.txt").lower()
     ok, stale = _v5_verdict(_read29("docs", "CHANGELOG.md"), gone, pinned)
-    check("changelog: [Since 0.10.0-alpha] describes Semgrep's PyJWT as CI installs it now (one hash "
+    check("changelog: no release since 0.10.0-alpha describes Semgrep's PyJWT as CI installs it now (one hash "
           "lockfile, no split), not the split #391 removed", ok, "stale: %r" % stale)
     head = "# Changelog\n\n## [Since 0.10.0-alpha]\n\n### Security\n\n"
     probes = {
-        "no entry": head + "- **Other.** Text.\n\n## [2026.9.1]\n\n- PyJWT is now pinned apart.\n",
+        "no entry": head + "- **Other.** Text.\n\n## [0.10.0-alpha]\n\n- PyJWT is now pinned apart.\n",
+        "an older day": head + "- **Other.** Text.\n\n## [2026.9.30]\n\n### Security\n\n"
+                               "- **PyJWT.** PyJWT is now pinned apart from semgrep's lockfile.\n",
         "a current entry": head + "- **PyJWT 2.15.** One hash lockfile.\n",
         "the stale entry": head + "- **PyJWT.** PyJWT is now pinned apart from semgrep's lockfile, "
                                   "and both install with `--no-deps`.\n",
@@ -1078,10 +1081,11 @@ def _v5_changelog():
         "no heading": "# Changelog\n\n- **PyJWT.** One hash lockfile.\n",
     }
     got = {k: _v5_verdict(v, True, True)[0] for k, v in probes.items()}
-    check("changelog: (control) the PyJWT gate passes a [Since 0.10.0-alpha] with no PyJWT entry (one in an "
-          "older release does not count) or a current one, and fails the stale text, under a renamed "
+    check("changelog: (control) the PyJWT gate passes a newest section with no PyJWT entry (one in "
+          "0.10.0-alpha or before does not count) or a current one, and fails the stale text, in an older "
+          "release day too, under a renamed "
           "newest heading too, and a changelog with no section",
-          got == {"no entry": True, "a current entry": True, "the stale entry": False,
+          got == {"no entry": True, "an older day": False, "a current entry": True, "the stale entry": False,
                   "renamed heading": False, "no heading": False}, repr(got))
 
 

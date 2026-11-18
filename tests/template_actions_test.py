@@ -935,7 +935,7 @@ check("tag.server_count" in _rtl_fn and "(tag.server_ids || []).length + ' serve
 _sf_src = (ROOT / "panel" / "static" / "js" / "server_files.js").read_text(encoding="utf-8")
 _sf_missing = []
 for _label, _needle in (
-        ("the row's name span", "white-space:pre;\" data-no-i18n>'+esc(opts.name)"),
+        ("the row's name span", "class=\"fb-row-name\" data-no-i18n>'+esc(opts.name)"),
         ("each breadcrumb segment", "'+esc(acc)+'\" data-no-i18n>'+esc(p)+'"),
         ("the upload destination", "dest.setAttribute('data-no-i18n','')"),
         ("the editor header", "_ep.setAttribute('data-no-i18n','')")):
@@ -4616,10 +4616,12 @@ check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
 # login column switched to UTC until a full reload.
 _pj_rs = _pj_src[_pj_src.index("window.refreshSection = function"):]
 _pj_rs = _pj_rs[:_pj_rs.index("\n};")]
+_pj_sw = _pj_src[_pj_src.index("function _sectionSwapped(cur){"):]   # the steps run on the swapped-in section
+_pj_sw = _pj_sw[:_pj_sw.index("\n}")]
 check("cur.innerHTML = fresh.innerHTML" in _pj_rs,
       "refresh: (control) the refreshSection slice holds the swap", "sliced the wrong text")
-check("window.localizeTimes(cur)" in _pj_rs
-      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("window.localizeTimes(cur)"),
+check("window.localizeTimes(cur)" in _pj_sw and "_sectionSwapped(cur)" in _pj_rs
+      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("_sectionSwapped(cur)"),
       "refresh: refreshSection re-localizes the timestamps it swaps in",
       "swapped-in times stay in UTC")
 
@@ -5968,7 +5970,9 @@ if _node:
           and _rn.get("folder_follow") == "maps2/server.cfg",
           "js (node): the file open in the editor follows its new name — and its folder's — so "
           "Save cannot write the old path back", repr((_rnd.get("cur"), _rn.get("folder_follow"))))
-    check("white-space:pre;" in (_rn.get("name_pre") or "") and "notes.txt</span>" in (_rn.get("name_pre") or ""),
+    _fbn_css = (ROOT / "panel" / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+    check('class="fb-row-name"' in (_rn.get("name_pre") or "") and "notes.txt</span>" in (_rn.get("name_pre") or "")
+          and re.search(r"\.fb-row-name\s*\{[^}]*white-space:\s*pre\s*(?:!important)?;", _fbn_css) is not None,
           "js (node): a row's name keeps its spaces (white-space: pre) — 'a  b.txt' does not read as "
           "'a b.txt', nor ' lead.txt' as 'lead.txt'", repr(_rn.get("name_pre")))
     check(_rn.get("i18n") == {"field": "Nuevo nombre", "value": "a.txt ",

@@ -59,11 +59,8 @@
 
   // A dialog that never grows past the screen: the body scrolls, the header and footer stay.
   function dialog(title, ok, bodyNodes, footNodes) {
-    var ov = el('div');
-    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1090;display:flex;'
-      + 'align-items:center;justify-content:center;padding:1rem;';
-    var card = el('div', 'card');
-    card.style.cssText = 'max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;';
+    var ov = el('div', 'sv-overlay sv-overlay-top');
+    var card = el('div', 'card sv-card-760');
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-modal', 'true');
     var head = el('div', 'card-header d-flex justify-content-between align-items-center gap-2');
@@ -74,8 +71,7 @@
     var close = el('button', 'btn btn-sm btn-outline-secondary py-0 px-2', t('Close'));
     close.type = 'button';
     head.appendChild(close);
-    var body = el('div', 'card-body');
-    body.style.cssText = 'flex:1 1 auto;min-height:0;overflow-y:auto;';
+    var body = el('div', 'card-body sv-card-scroll');
     bodyNodes.forEach(function (n) { body.appendChild(n); });
     card.appendChild(head);
     card.appendChild(body);

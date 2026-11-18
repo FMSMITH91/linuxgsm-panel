@@ -1,27 +1,27 @@
 {# The Databases tab (routes/databases.py, js/server_databases.js). Its body loads when the tab is first
    opened, so the page itself asks nothing of the host. [data-fpm-ro] hides the controls that change
    anything from a viewer without Manage databases; the routes refuse them anyway. #}
-<div class="card" id="db-card" data-sfsub="databases" style="display:none;"{% if not _db.manage %} data-fpm-ro{% endif %}>
+<div class="card" id="db-card" data-sfsub="databases" data-start-hidden{% if not _db.manage %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-database"></i> Databases</span>
     <button type="button" class="btn btn-sm btn-outline-secondary" data-action="dbLoad" data-args='[true, true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
   </div>
   <div class="card-body">
     <div id="db-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading databases…</div>
-    <div id="db-host" class="small mb-2 text-break" role="status" style="display:none;"></div>
-    <div id="db-setup" class="border rounded p-2 mb-2" style="display:none;">
+    <div id="db-host" class="small mb-2 text-break" role="status" data-start-hidden></div>
+    <div id="db-setup" class="border rounded p-2 mb-2" data-start-hidden>
       <p class="small mb-2">Databases need a database server on this host.</p>
       <div id="db-setup-can" class="fpm-edit">
         <button type="button" class="btn btn-sm btn-primary" data-action="dbSetup" data-args='["@self"]'><i class="bi bi-database-add"></i> Set up databases on this host</button>
         <div class="form-text">Installs MariaDB from Ubuntu, listening on this machine only. It is kept up to date by OS updates.</div>
       </div>
-      <p id="db-setup-ask" class="small text-secondary mb-0" style="display:none;">Ask an administrator to set up databases on this host.</p>
+      <p id="db-setup-ask" class="small text-secondary mb-0" data-start-hidden>Ask an administrator to set up databases on this host.</p>
     </div>
-    <form id="db-login" class="border rounded p-2 mb-2" style="display:none;" data-action="dbLogin" data-args='["@event"]' data-on="submit">
+    <form id="db-login" class="border rounded p-2 mb-2" data-start-hidden data-action="dbLogin" data-args='["@event"]' data-on="submit">
       <p id="db-login-new" class="small mb-2">A database server is already running here, but the panel can't sign in to it yet. Enter an admin login that can create users and grant them rights. The panel keeps it encrypted.</p>
-      <p id="db-login-old" class="small mb-2" style="display:none;">Enter an admin login to replace the stored one, or clear it to have the panel sign in as root over the socket again.</p>
+      <p id="db-login-old" class="small mb-2" data-start-hidden>Enter an admin login to replace the stored one, or clear it to have the panel sign in as root over the socket again.</p>
       <p class="small mb-2">This login is saved once for this whole machine: every game server on it uses it for its databases.</p>
-      <details id="db-grant-box" class="small mb-2" style="display:none;">
+      <details id="db-grant-box" class="small mb-2" data-start-hidden>
         <summary>Recommended: a login of the panel's own instead of the server's root or master login</summary>
         <p class="mb-1 mt-1">Run these statements on the database server as its administrator (in phpMyAdmin or the mysql client, for example), then save the login below: the form is already filled in with it. The panel never runs them itself.</p>
         <pre id="db-grant" class="db-snip small border rounded p-2 mb-1" data-no-i18n></pre>
@@ -30,39 +30,39 @@
       </details>
       <div class="d-flex flex-wrap gap-2">
         <label for="db-login-user" class="visually-hidden">Admin user</label>
-        <input type="text" id="db-login-user" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
+        <input type="text" id="db-login-user" class="form-control form-control-sm fx-9" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
         <label for="db-login-pw" class="visually-hidden">Admin password</label>
-        <input type="password" id="db-login-pw" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
+        <input type="password" id="db-login-pw" class="form-control form-control-sm fx-9" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
         <button type="submit" class="btn btn-sm btn-primary">Save</button>
-        <button type="button" id="db-login-clear" class="btn btn-sm btn-outline-secondary" style="display:none;" data-action="dbLoginClear" data-args='["@self"]'>Clear the stored login</button>
+        <button type="button" id="db-login-clear" class="btn btn-sm btn-outline-secondary" data-start-hidden data-action="dbLoginClear" data-args='["@self"]'>Clear the stored login</button>
       </div>
     </form>
-    <form id="db-remote" class="border rounded p-2 mb-2" style="display:none;" data-action="dbRemoteSave" data-args='["@event"]' data-on="submit">
+    <form id="db-remote" class="border rounded p-2 mb-2" data-start-hidden data-action="dbRemoteSave" data-args='["@event"]' data-on="submit">
       <p class="small mb-2">New databases on this host can go to a MariaDB or MySQL server on another machine, reached over Tailscale only. Databases made before stay where they are.</p>
       <label for="db-remote-kind" class="form-label small mb-1">Database server</label>
       <select id="db-remote-kind" class="form-select form-select-sm mb-2" data-no-i18n data-action="dbRemoteKind" data-on="change"></select>
-      <div id="db-remote-ext" style="display:none;">
+      <div id="db-remote-ext" data-start-hidden>
         <div class="d-flex flex-wrap gap-2 mb-1">
           <label for="db-remote-addr" class="visually-hidden">Tailscale address</label>
-          <input type="text" id="db-remote-addr" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="15" autocomplete="off" spellcheck="false" placeholder="Tailscale address (100.x.y.z)" aria-label="Tailscale address">
+          <input type="text" id="db-remote-addr" class="form-control form-control-sm fx-9" maxlength="15" autocomplete="off" spellcheck="false" placeholder="Tailscale address (100.x.y.z)" aria-label="Tailscale address">
           <label for="db-remote-port" class="visually-hidden">Port</label>
-          <input type="number" id="db-remote-port" class="form-control form-control-sm" style="flex:0 1 6rem;min-width:0;" min="1" max="65535" value="3306" aria-label="Port">
+          <input type="number" id="db-remote-port" class="form-control form-control-sm fx0-6" min="1" max="65535" value="3306" aria-label="Port">
           <label for="db-remote-user" class="visually-hidden">Admin user</label>
-          <input type="text" id="db-remote-user" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
+          <input type="text" id="db-remote-user" class="form-control form-control-sm fx-9" maxlength="32" autocomplete="off" spellcheck="false" placeholder="Admin user" aria-label="Admin user">
           <label for="db-remote-pw" class="visually-hidden">Admin password</label>
-          <input type="password" id="db-remote-pw" class="form-control form-control-sm" style="flex:1 1 9rem;min-width:0;" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
+          <input type="password" id="db-remote-pw" class="form-control form-control-sm fx-9" autocomplete="new-password" placeholder="Admin password" aria-label="Admin password">
         </div>
         <div class="form-text">The panel signs in from this host to check the login, and keeps it encrypted. The server must let it sign in from this host's Tailscale address.</div>
       </div>
       <div class="d-flex flex-wrap gap-2 mt-2">
         <button type="submit" class="btn btn-sm btn-primary">Save</button>
-        <button type="button" id="db-remote-clear" class="btn btn-sm btn-outline-secondary" style="display:none;" data-action="dbRemoteClear">Use this host's own server again</button>
+        <button type="button" id="db-remote-clear" class="btn btn-sm btn-outline-secondary" data-start-hidden data-action="dbRemoteClear">Use this host's own server again</button>
       </div>
     </form>
-    <form id="db-add" class="mb-2 fpm-edit" style="display:none;" data-action="dbAdd" data-args='["@event"]' data-on="submit">
+    <form id="db-add" class="mb-2 fpm-edit" data-start-hidden data-action="dbAdd" data-args='["@event"]' data-on="submit">
       <label for="db-name" class="form-label small mb-1">Add database</label>
       <div class="d-flex flex-wrap gap-2">
-        <div class="input-group input-group-sm" style="flex:1 1 12rem;min-width:0;">
+        <div class="input-group input-group-sm fx-12">
           <span class="input-group-text" id="db-prefix" data-no-i18n></span>
           <input type="text" id="db-name" class="form-control" maxlength="16" autocomplete="off" spellcheck="false" pattern="[a-z0-9]{1,16}" aria-describedby="db-prefix db-count" aria-label="Database name" data-action="dbEdited" data-on="input">
         </div>

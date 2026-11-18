@@ -40,10 +40,10 @@
 
           <label class="form-label small mb-1 mt-3" for="s-accent">Accent colour</label>
           <div class="d-flex align-items-center gap-2">
-            <input type="color" id="s-accent-picker" class="form-control form-control-sm" aria-label="Accent colour"
-                   style="max-width:3rem; padding:.15rem;" value="{{ settings.accent_color or '#10b981' }}">
+            <input type="color" id="s-accent-picker" class="form-control form-control-sm accent-picker" aria-label="Accent colour"
+                   value="{{ settings.accent_color or '#10b981' }}">
             <input type="text" id="s-accent" name="accent_color" maxlength="7"
-                   class="form-control form-control-sm" style="max-width:8rem;"
+                   class="form-control form-control-sm maxw-8rem"
                    value="{{ settings.accent_color }}" placeholder="#10b981" data-no-i18n>
           </div>
           <div class="small text-secondary mt-1">Buttons, links and highlights. Blank = built-in green.</div>
@@ -136,7 +136,7 @@
           </div>
           <div class="small text-secondary mt-1">A normal sign-in ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.</div>
           <div class="small text-secondary" id="s-remember-rule">{{ remember_rule() }}</div>
-          <div class="small text-secondary">The password is asked again before a terminal, an uninstall, a backup restore, a user or group change, or a Settings or Notifications save.</div>
+          <div class="small text-secondary">The password is asked again before a terminal and other high-risk changes: users and groups, hosts, the firewall, updates, certificates, databases, backups, Settings and Notifications.</div>
 
           <div class="form-check mt-3">
             <input class="form-check-input" type="checkbox" id="s-require-2fa" name="require_2fa"

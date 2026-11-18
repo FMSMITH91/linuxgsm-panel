@@ -331,7 +331,7 @@ check("host page: with Serve unread, the Panel Server card has its own branch â€
       "branch at %d, unknown marker at %d" % (_unr59, _unk59))
 _ACC59 = _read59(_TPL59, "account.html")
 _SDT59 = _read59(_TPL59, "server_detail.html")
-_ccarg59 = _SDT59[_SDT59.index('class="form-control cc-arg"'):]
+_ccarg59 = _SDT59[_SDT59.index('class="form-control cc-arg'):]
 check("templates: user-authored text in a translated attribute is guarded â€” the display-name "
       "placeholder (a user named Admin read \"Administrador\") and a custom command's argument box",
       'placeholder="{{ current_user.username }}" data-no-i18n>' in _ACC59

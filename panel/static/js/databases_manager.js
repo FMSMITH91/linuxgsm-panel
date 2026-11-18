@@ -332,8 +332,7 @@ function dbmEditorField(c, cell, isNew) {
     if (!t || !r || !r.key) return;
     postJson(api('/cell'), {table: t.name, column: t.columns[ci].name, key: r.key}).then(function (res) {
       if (!res.ok) { say(failText(res), 'text-danger'); return; }
-      var pre = raw(node('pre', 'small border rounded p-2 mb-0', res.d.null ? 'NULL' : res.d.text));
-      pre.style.cssText = 'white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto;';
+      var pre = raw(node('pre', 'small border rounded p-2 mb-0 dbm-pre-cell', res.d.null ? 'NULL' : res.d.text));
       var wrap = node('div');
       wrap.appendChild(pre);
       if (res.d.more) wrap.appendChild(node('div', 'form-text', T('Only the first 262,144 characters are shown.')));
@@ -460,8 +459,7 @@ function dbmEditorField(c, cell, isNew) {
   function confirmSql(d) {
     var wrap = node('div');
     wrap.appendChild(node('p', 'small mb-1', TF('Run this statement in {name}? It can change or delete data.', {name: d.database})));
-    var pre = raw(node('pre', 'small border rounded p-2 mb-0', d.sql));
-    pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;';
+    var pre = raw(node('pre', 'small border rounded p-2 mb-0 dbm-pre-sql', d.sql));
     wrap.appendChild(pre);
     window.confirmDialog({title: T('Confirm the statement'), icon: 'exclamation-triangle', confirmClass: 'btn-warning',
                           confirmLabel: T('Run'), bodyNode: wrap, onConfirm: function () { void sendSql(d.sql, d.confirm); }});

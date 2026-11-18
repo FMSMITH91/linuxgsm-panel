@@ -1256,7 +1256,7 @@ for _inst140, _want140, _why140 in _csgo_cases140:
 check("csgo: the note is hidden until the config read says it applies",
       'id="lgc-csgo-appid"' in _sfhtml140 and "csw.style.display = d.lgc_csgo_appid_note ? '' : 'none';"
       in _read140("panel", "static", "js", "server_files.js")
-      and _re140.search(r'id="lgc-csgo-appid"[^>]*style="display:none;"', _sfhtml140) is not None)
+      and _re140.search(r'id="lgc-csgo-appid"[^>]*data-start-hidden', _sfhtml140) is not None)
 
 
 # ── 21. L10: every game whose LinuxGSM config sets another port gets it, not 27015 ───────────────

@@ -1,7 +1,7 @@
 """The "What's new" card: which CHANGELOG entries a user has not seen yet.
 
-The changelog has no per-release sections to diff — each commit on main is a release named by its
-date, and every change lands as a bullet under `## [Since 0.10.0-alpha]`. So "what changed since
+Each commit on main is a release named by its date, and the changelog groups entries by release DAY
+(`## [YYYY.M.D] — YYYY-MM-DD`), not by release, so a section is no version to diff. "What changed since
 you last looked" is answered by CONTENT, not by version: each top-level bullet is keyed by a short
 hash of its bold title, and a user row remembers the keys that were in the file the last time they
 dismissed the card (User.whats_new_seen). An entry whose key is not in that set is new to them.

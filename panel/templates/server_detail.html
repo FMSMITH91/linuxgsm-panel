@@ -40,8 +40,7 @@
     </div>
   </div>
   <div class="d-flex align-items-center gap-2">
-    <span class="badge" id="status-badge"
-          style="color:#0a0f1a; background: {% if server.status == 'online' %}#3fb950{% elif server.status == 'offline' %}#f85149{% else %}#d29922{% endif %};">
+    <span class="badge status-badge-{% if server.status == 'online' %}online{% elif server.status == 'offline' %}offline{% else %}other{% endif %}" id="status-badge">
       <span id="status-text">{{ server.status|title }}</span>
     </span>
   </div>
@@ -124,25 +123,25 @@
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
       <div class="d-flex flex-wrap align-items-center gap-2">
         <span class="text-secondary small">Connect:</span>
-        <span class="connect-pill" data-action="copyConnect" style="cursor:pointer;" title="Click to copy address">
+        <span class="connect-pill cursor-pointer" data-action="copyConnect" title="Click to copy address">
           <i class="bi bi-controller text-info"></i>
           <span id="connect-addr" class="text-info">resolving…</span>
           <i class="bi bi-clipboard text-secondary"></i>
         </span>
-        <a id="connect-join" class="btn btn-sm btn-success" style="display:none;" rel="noopener"
+        <a id="connect-join" class="btn btn-sm btn-success" data-start-hidden rel="noopener"
            title="Launch the game and join this server">
           <i class="bi bi-box-arrow-in-right"></i> Join
         </a>
       </div>
-      <span class="text-secondary" style="font-size:.7rem;"><i class="bi bi-broadcast"></i> live · updates every few seconds</span>
+      <span class="text-secondary fs-r70"><i class="bi bi-broadcast"></i> live · updates every few seconds</span>
     </div>
     <div class="row g-2">
-      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">CPU <span class="text-muted" style="font-size:.62rem;">this game</span></div><div class="stat-val" id="stat-gcpu">–</div><div class="stat-sub" id="stat-gcpu-sub"></div></div></div>
-      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Memory <span class="text-muted" style="font-size:.62rem;">this game</span></div><div class="stat-val" id="stat-gram">–</div><div class="stat-sub" id="stat-gram-sub"></div></div></div>
-      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Uptime <span class="text-muted" style="font-size:.62rem;">this game</span></div><div class="stat-val" id="stat-gup">–</div><div class="stat-sub" id="stat-gup-sub"></div></div></div>
-      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Server <span class="text-muted" style="font-size:.62rem;">whole host</span></div><div class="stat-val" id="stat-scpu">–</div><div class="stat-sub" id="stat-server-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">CPU <span class="text-muted fs-r62">this game</span></div><div class="stat-val" id="stat-gcpu">–</div><div class="stat-sub" id="stat-gcpu-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Memory <span class="text-muted fs-r62">this game</span></div><div class="stat-val" id="stat-gram">–</div><div class="stat-sub" id="stat-gram-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Uptime <span class="text-muted fs-r62">this game</span></div><div class="stat-val" id="stat-gup">–</div><div class="stat-sub" id="stat-gup-sub"></div></div></div>
+      <div class="col-6 col-md-3"><div class="stat-tile"><div class="stat-label">Server <span class="text-muted fs-r62">whole host</span></div><div class="stat-val" id="stat-scpu">–</div><div class="stat-sub" id="stat-server-sub"></div></div></div>
     </div>
-    <div class="mt-3" style="position:relative;height:150px;"><canvas id="stats-chart"></canvas></div>
+    <div class="mt-3 chart-box-150"><canvas id="stats-chart"></canvas></div>
   </div>
 </div>
 {% endmacro %}
@@ -171,8 +170,7 @@
         {# LinuxGSM's other two logs, read-only, in place of the live console while one is chosen.
            The same permission as the Log download beside it and the file browser it comes from. #}
         {% if can_download_log %}
-        <select class="form-select form-select-sm w-auto py-1" id="cmpa-log-select" aria-label="Which log to show"
-                style="font-size:.8rem;"
+        <select class="form-select form-select-sm w-auto py-1 fs-r80" id="cmpa-log-select" aria-label="Which log to show"
                 data-action="cmpaShowLog" data-args='["@self"]' data-on="change">
           <option value="console">Live Console</option>
           <option value="script">Script log</option>
@@ -209,7 +207,7 @@
          a window of a log file that, for most games, carries no per-line time — so every line is
          correctly unstamped and the column looks like a feature that does not work. Say why
          instead; it vanishes the moment a line arrives with a time. #}
-      <div class="px-3 pt-2 text-secondary cmpa-console-only" style="font-size:.7rem;" id="console-ts-notice" hidden>
+      <div class="px-3 pt-2 text-secondary cmpa-console-only fs-r70" id="console-ts-notice" hidden>
         <i class="bi bi-info-circle"></i>
         <span>Times appear on lines as they arrive — the panel cannot know when older lines were written.</span>
         {# NO offer to turn LinuxGSM's logtimestamp on. It works — the log really is stamped at
@@ -225,11 +223,11 @@
       </div>
       {# Only when the log really is stamped: the way back for anyone who turned it on before the
          buffering above was measured. #}
-      <div class="px-3 pt-2 text-warning cmpa-console-only" style="font-size:.7rem;" id="console-ts-off" hidden>
+      <div class="px-3 pt-2 text-warning cmpa-console-only fs-r70" id="console-ts-off" hidden>
         <i class="bi bi-exclamation-triangle"></i>
         <span>LinuxGSM is stamping this log, which delays live console output until 4KB has built up.</span>
         {% if can_edit_files %}{# it writes the instance cfg: EDIT_FILES #}
-        <button type="button" class="btn btn-link p-0 align-baseline" style="font-size:.7rem;"
+        <button type="button" class="btn btn-link p-0 align-baseline fs-r70"
                 data-action="disableLogTimestamps" data-args='["@self"]'>
           <span>Turn it off</span>
         </button>
@@ -251,16 +249,14 @@
             <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-action="cmpaLoadLog"
                     title="Read the log again"><i class="bi bi-arrow-clockwise"></i> <span>Refresh</span></button>
           </div>
-          <pre class="console-output mb-0" id="cmpa-log-output" data-no-i18n
-               style="white-space:pre-wrap;word-break:break-all;"></pre>
+          <pre class="console-output mb-0 pre-wrap-all" id="cmpa-log-output" data-no-i18n></pre>
         </div>
         {% endif %}
       </div>
       {% if can_send_command %}
       {# One row on a wide screen (the quick commands beside the box), two on a phone. #}
       <div class="card-footer d-flex flex-wrap align-items-center gap-2">
-        <form class="d-flex gap-2" id="command-form" data-action="sendCommand" data-args='["@event"]' data-on="submit"
-              style="flex:1 1 16rem;min-width:0;">
+        <form class="d-flex gap-2 fx-16" id="command-form" data-action="sendCommand" data-args='["@event"]' data-on="submit">
           <input type="text" name="command" class="form-control form-control-sm flex-grow-1"
                  placeholder="Enter game server command…" id="command-input"
                  aria-label="Game server command" autocomplete="off">
@@ -287,7 +283,7 @@
 
 <!-- Players + in-game moderation (Console tab) -->
 {% macro panel_players() %}
-<div class="card mb-3 panel-movable" data-panel="players" data-mtab="console" id="players-card" style="display:none;">
+<div class="card mb-3 panel-movable" data-panel="players" data-mtab="console" id="players-card" data-start-hidden>
   <span class="panel-tools btn-group btn-group-sm" role="group" aria-label="Move or hide this panel">
     <span class="btn btn-outline-secondary sort-handle" data-drag-handle aria-hidden="true"
           title="Drag to reorder"><i class="bi bi-grip-vertical"></i></span>
@@ -303,12 +299,12 @@
     <button class="btn btn-sm btn-outline-secondary py-0 px-1" data-action="refreshPlayers" title="Refresh from the game console (runs one status)"><i class="bi bi-arrow-repeat"></i></button>
   </div>
   <div class="card-body">
-    <div id="pl-unsupported" class="text-secondary small" style="display:none;"><i class="bi bi-info-circle"></i> A live player list isn't available for this game.</div>
-    <div id="pl-netonly" class="text-secondary small" style="display:none;"><i class="bi bi-wifi-off"></i> Couldn't read players over the network — the server may be offline or still starting. The panel doesn't query the console automatically; use the refresh button above to load the list once from the console.</div>
-    <div id="pl-empty" class="text-secondary small" style="display:none;">No players connected.</div>
-    <div class="table-responsive" id="pl-table-wrap" style="display:none;">
+    <div id="pl-unsupported" class="text-secondary small" data-start-hidden><i class="bi bi-info-circle"></i> A live player list isn't available for this game.</div>
+    <div id="pl-netonly" class="text-secondary small" data-start-hidden><i class="bi bi-wifi-off"></i> Couldn't read players over the network — the server may be offline or still starting. The panel doesn't query the console automatically; use the refresh button above to load the list once from the console.</div>
+    <div id="pl-empty" class="text-secondary small" data-start-hidden>No players connected.</div>
+    <div class="table-responsive" id="pl-table-wrap" data-start-hidden>
       <table class="table table-sm align-middle mb-0">
-        <thead><tr><th>Player</th><th style="width:1%;" class="text-nowrap">Score</th><th style="width:1%;" class="text-nowrap">Time</th>{% if can_moderate %}<th style="width:1%;"></th>{% endif %}</tr></thead>
+        <thead><tr><th>Player</th><th class="text-nowrap w-1p">Score</th><th class="text-nowrap w-1p">Time</th>{% if can_moderate %}<th class="w-1p"></th>{% endif %}</tr></thead>
         <tbody id="pl-rows"></tbody>
       </table>
     </div>
@@ -317,7 +313,7 @@
        display:none AND renderPlayers' ann.style.display = 'none' — so the Say box showed on every
        game, including ones with no console moderation, where Say answers "not supported". The
        JS sets display:flex when the game supports it. #}
-    <div id="pl-announce" class="gap-2 mt-3" style="display:none;">
+    <div id="pl-announce" class="gap-2 mt-3" data-start-hidden>
       <input type="text" id="pl-say" class="form-control form-control-sm" placeholder="Announce a message to everyone in-game…" maxlength="200" aria-label="Announce message" data-action="_sayOnEnter" data-args='["@event"]' data-on="keydown">
       <button class="btn btn-sm btn-outline-primary text-nowrap" data-action="announceSay"><i class="bi bi-megaphone"></i> Say</button>
     </div>
@@ -346,12 +342,12 @@
       {% for c in custom_commands %}
       <div class="custom-cmd" data-cmd-id="{{ c.id }}" data-has-arg="{{ '1' if c.has_argument else '0' }}">
         {% if c.has_argument %}
-        <div class="input-group input-group-sm" style="width:auto;">
+        <div class="input-group input-group-sm w-auto">
           <span class="input-group-text" data-no-i18n>{{ c.name }}</span>
           {# data-no-i18n: the label and name are the command author's text (one labelled "Map"
              read "Mapa"); the panel's own fallback is translated here instead, and named in
              data-i18n-placeholder so a live language switch renders it again. #}
-          <input type="text" class="form-control cc-arg" style="max-width:180px;" maxlength="64" data-no-i18n
+          <input type="text" class="form-control cc-arg mw-180px" maxlength="64" data-no-i18n
                  placeholder="{{ c.argument_label or t('value') }}" aria-label="{{ c.argument_label or c.name }}"{% if not c.argument_label %} data-i18n-placeholder="value"{% endif %}>
           <button class="btn btn-outline-primary cc-run" type="button">Run</button>
         </div>
@@ -426,7 +422,7 @@
                data-action="mclWhitelistSwitch" data-args='["@self"]' data-on="change">
         <label class="form-check-label" for="mcl-wl-on">Whitelist on: only players on this list can join</label>
       </div>
-      <div class="border rounded small" style="height:12rem; overflow-y:auto;" id="mcl-box" aria-live="polite">
+      <div class="border rounded small hs-r12" id="mcl-box" aria-live="polite">
         <div class="text-secondary p-2" id="mcl-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
         <table class="table table-sm mb-0 align-middle" id="mcl-table" hidden>
           <thead class="visually-hidden"><tr><th scope="col">Player or address</th><th scope="col">Details</th>
@@ -436,10 +432,10 @@
       </div>
       {% if can_send_command %}
       <form id="mcl-form" class="d-flex flex-wrap gap-2 mt-2" data-action="mclAdd" data-args='["@event"]' data-on="submit">
-        <input type="text" id="mcl-value" class="form-control form-control-sm" style="flex:1 1 9rem; min-width:0;"
+        <input type="text" id="mcl-value" class="form-control form-control-sm fx-9"
                maxlength="16" autocomplete="off" spellcheck="false" placeholder="Player name"
                aria-label="Player name" disabled>
-        <input type="text" id="mcl-reason" class="form-control form-control-sm" style="flex:2 1 12rem; min-width:0;"
+        <input type="text" id="mcl-reason" class="form-control form-control-sm fx2-12"
                maxlength="100" autocomplete="off" placeholder="Reason (optional)" aria-label="Reason (optional)" hidden disabled>
         <button type="submit" class="btn btn-sm btn-primary" id="mcl-add" disabled><i class="bi bi-plus-lg"></i> <span id="mcl-add-label">Add</span></button>
       </form>
@@ -477,19 +473,19 @@
     <div class="small text-secondary mb-2" id="mdr-version">&nbsp;</div>
     <form id="mdr-form" class="d-flex flex-wrap gap-2 mb-2" role="search" data-action="mdrSearch"
           data-args='["@event"]' data-on="submit">
-      <input type="search" id="mdr-q" class="form-control form-control-sm" style="flex:1 1 10rem; min-width:0;"
+      <input type="search" id="mdr-q" class="form-control form-control-sm fx-10"
              maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search Modrinth plugins"
              aria-label="Search Modrinth plugins">
       <button type="submit" class="btn btn-sm btn-primary" id="mdr-search"><i class="bi bi-search"></i>
         <span>Search</span></button>
     </form>
-    <div class="border rounded small mb-2" style="height:12rem; overflow-y:auto;" id="mdr-results-box"
+    <div class="border rounded small mb-2 hs-r12" id="mdr-results-box"
          aria-live="polite">
       <div class="text-secondary p-2" id="mdr-results-note">Search for a plugin, or leave the box empty to see the most downloaded.</div>
       <ul class="list-unstyled mb-0" id="mdr-results" data-no-i18n></ul>
     </div>
     <div class="small fw-semibold mb-1">Installed</div>
-    <div class="border rounded small" style="height:10rem; overflow-y:auto;" id="mdr-installed-box"
+    <div class="border rounded small hs-r10" id="mdr-installed-box"
          aria-live="polite">
       <div class="text-secondary p-2" id="mdr-installed-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
       <ul class="list-unstyled mb-0" id="mdr-installed" data-no-i18n></ul>
@@ -527,23 +523,23 @@
     {% if _wsc_kind == 'collection' %}
     <form id="wsc-coll-form" class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="wscSaveCollection"
           data-args='["@event"]' data-on="submit">
-      <input type="text" id="wsc-coll" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+      <input type="text" id="wsc-coll" class="form-control form-control-sm fx-12"
              maxlength="300" autocomplete="off" spellcheck="false" placeholder="Collection id or Workshop link"
              aria-label="Workshop collection id or link">
       <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-save"></i>
         <span>Save collection</span></button>
     </form>
-    <div class="small text-secondary text-break" style="min-height:3.2em;" id="wsc-coll-info">
+    <div class="small text-secondary text-break minh-32em" id="wsc-coll-info">
       <i class="bi bi-hourglass-split"></i></div>
     <div class="form-text">The game downloads this collection when it starts: a change applies at the next restart.</div>
     {% else %}
     <div class="small fw-semibold mb-1">{% if _wsc_kind == 'pz' %}Workshop items{% elif _wsc_kind == 'ns2' %}Workshop items, in load order{% else %}Workshop items and collections, in load order{% endif %}</div>
-    <div class="border rounded small mb-1" style="height:11rem; overflow-y:auto;" aria-live="polite">
+    <div class="border rounded small mb-1 hs-r11" aria-live="polite">
       <div class="text-secondary p-2" id="wsc-items-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
       <ul class="list-unstyled mb-0" id="wsc-items" data-no-i18n></ul>
     </div>
     <form class="d-flex flex-wrap gap-2 mb-2 fpm-edit" data-action="wscAdd" data-args='["items","@event"]' data-on="submit">
-      <input type="text" id="wsc-items-add" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+      <input type="text" id="wsc-items-add" class="form-control form-control-sm fx-12"
              maxlength="300" autocomplete="off" spellcheck="false" placeholder="Workshop id or link"
              aria-label="Add a Workshop id or link">
       <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i>
@@ -551,19 +547,19 @@
     </form>
     {% if _wsc_kind == 'pz' %}
     <div class="small fw-semibold mb-1">Mod IDs to load</div>
-    <div class="border rounded small mb-1" style="height:8rem; overflow-y:auto;" aria-live="polite">
+    <div class="border rounded small mb-1 hs-r8" aria-live="polite">
       <div class="text-secondary p-2" id="wsc-mods-note"><i class="bi bi-hourglass-split"></i> Loading…</div>
       <ul class="list-unstyled mb-0" id="wsc-mods" data-no-i18n></ul>
     </div>
     <form class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="wscAdd" data-args='["mods","@event"]' data-on="submit">
-      <input type="text" id="wsc-mods-add" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+      <input type="text" id="wsc-mods-add" class="form-control form-control-sm fx-12"
              maxlength="101" autocomplete="off" spellcheck="false" placeholder="Mod ID"
              aria-label="Add a Mod ID">
       <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-lg"></i>
         <span>Add to list</span></button>
     </form>
     <div class="small text-secondary mb-1">Mod IDs found in downloaded items:</div>
-    <div class="d-flex flex-wrap gap-1 mb-2 small" style="height:3.5rem; overflow-y:auto;" id="wsc-found"
+    <div class="d-flex flex-wrap gap-1 mb-2 small hs-r35" id="wsc-found"
          aria-live="polite" data-no-i18n></div>
     {% endif %}
     <div class="d-flex flex-wrap gap-2 align-items-center">
@@ -583,7 +579,7 @@
     <div class="form-text">Saving writes workshopmods in this server's LinuxGSM config. LinuxGSM's workshop-update downloads the list and expands each collection into its items.</div>
     {% endif %}
     {% endif %}
-    <div class="small mt-1" style="min-height:1.5em;" id="wsc-msg" role="status"></div>
+    <div class="small mt-1" id="wsc-msg" role="status"></div>
   </div>
 </div>
 {% endmacro %}
@@ -644,10 +640,10 @@
 {% endif %}
 
 <!-- History: persisted CPU/RAM/player trends (sampled ~1/min) -->
-<div class="card mb-3" data-mtab="history" style="display:none;">
+<div class="card mb-3" data-mtab="history" data-start-hidden>
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-graph-up"></i> History
-      <span class="ms-1 text-success" style="font-size:.72rem; font-weight:normal;" title="Updates automatically (a sample is recorded every minute)">● Live</span>
+      <span class="ms-1 text-success fs-r72 fw-normal" title="Updates automatically (a sample is recorded every minute)">● Live</span>
     </span>
     <div class="btn-group btn-group-sm" role="group" aria-label="History range">
       <button type="button" class="btn btn-outline-secondary active" data-hist-range="24h">24h</button>
@@ -655,18 +651,18 @@
     </div>
   </div>
   <div class="card-body">
-    <div id="hist-empty" class="text-secondary small text-center py-4" style="display:none;">
+    <div id="hist-empty" class="text-secondary small text-center py-4" data-start-hidden>
       <i class="bi bi-hourglass-split"></i> No history yet — a sample is recorded every minute. Check back shortly.
     </div>
     <div id="hist-charts">
       <div class="small text-secondary mb-1"><i class="bi bi-people-fill"></i> Players</div>
-      <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-players"></canvas></div>
+      <div class="mb-3 chart-box-140"><canvas id="hist-players"></canvas></div>
       <div class="small text-secondary mb-1"><i class="bi bi-cpu"></i> Game CPU % · RAM (MB)</div>
-      <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-server"></canvas></div>
+      <div class="mb-3 chart-box-140"><canvas id="hist-server"></canvas></div>
       <div class="small text-secondary mb-1"><i class="bi bi-hdd"></i> Host CPU % · RAM % · Disk %</div>
-      <div style="position:relative;height:140px;" class="mb-3"><canvas id="hist-host"></canvas></div>
+      <div class="mb-3 chart-box-140"><canvas id="hist-host"></canvas></div>
       <div class="small text-secondary mb-1"><i class="bi bi-arrow-down-up"></i> Host network · received and sent</div>
-      <div style="position:relative;height:140px;"><canvas id="hist-net"></canvas></div>
+      <div class="chart-box-140"><canvas id="hist-net"></canvas></div>
     </div>
   </div>
 </div>
@@ -686,13 +682,13 @@
           {% if server.short_name != server.name %}
           <tr>
             <th scope="row" class="text-secondary fw-normal">Short Name
-              <span class="text-muted" style="font-size:.7rem;">(the Linux user)</span></th>
+              <span class="text-muted fs-r70">(the Linux user)</span></th>
             <td class="text-end"><code>{{ server.short_name }}</code></td>
           </tr>
           {% endif %}
           <tr>
             <th scope="row" class="text-secondary fw-normal">Auto-start &amp; recover
-              <span class="text-muted" style="font-size:.7rem;">(monitor, every 5 min)</span></th>
+              <span class="text-muted fs-r70">(monitor, every 5 min)</span></th>
             <td class="text-end">
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
@@ -707,7 +703,7 @@
             </td>
           </tr>
           <tr>
-            <th scope="row" class="text-secondary fw-normal">Daily restart <span class="text-muted" style="font-size:.7rem;">(when empty)</span></th>
+            <th scope="row" class="text-secondary fw-normal">Daily restart <span class="text-muted fs-r70">(when empty)</span></th>
             <td class="text-end">
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
@@ -727,11 +723,10 @@
              on the host underneath. #}
           <tr>
             <th scope="row" class="text-secondary fw-normal">Restart at
-              <span class="text-muted" style="font-size:.7rem;">(your time)</span></th>
+              <span class="text-muted fs-r70">(your time)</span></th>
             <td class="text-end">
               {% if can_autostart %}
-              <input type="time" class="form-control form-control-sm d-inline-block"
-                     style="width:7.5rem;" id="dailyrestart-time"
+              <input type="time" class="form-control form-control-sm d-inline-block w-r75" id="dailyrestart-time"
                      aria-label="Time of day the daily restart runs, in your timezone"
                      data-host-time="{{ server.daily_restart_at or '05:00' }}"
                      data-host-tz="{{ host_timezone }}"
@@ -744,7 +739,7 @@
                  sentence stitched together in JavaScript from three dynamic pieces could never
                  match a catalog entry — the same reason the header's Port/Type/Version row is
                  built this way. JS fills only the two values. #}
-              <div class="text-muted" style="font-size:.68rem;" id="dailyrestart-hosthint"
+              <div class="text-muted fs-r68" id="dailyrestart-hosthint"
                    hidden><span>Runs at</span>
                 <span id="drh-time" data-no-i18n></span>
                 {# Both phrasings live here and JS only toggles which is shown; writing the
@@ -757,7 +752,7 @@
           {% if can_autostart %}
           <tr>
             <th scope="row" class="text-secondary fw-normal">Notify when empty
-              <span class="text-muted" style="font-size:.7rem;">(one-off; needs notifications set up)</span></th>
+              <span class="text-muted fs-r70">(one-off; needs notifications set up)</span></th>
             <td class="text-end">
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="notify-empty-toggle"
@@ -778,7 +773,7 @@
         <table class="table table-borderless table-sm mb-0">
           <tr>
             <th scope="row" class="text-secondary fw-normal">Machine</th>
-            <td class="text-end">{{ host_label(remote) }}{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
+            <td class="text-end">{{ host_label(remote) }}{% if remote.is_local %} <span class="badge bg-secondary fs-r60">this panel</span>{% endif %}</td>
           </tr>
           {# Only while there is nothing to connect to yet. Once resolved, the Connect row below is
              the same address plus the port — and it is the one you can click to copy. #}
@@ -794,7 +789,7 @@
                page and the live address above do: spliced as host ~ ':' ~ port, an IPv6-only host's
                row read "2001:db8::5:27015", and click-to-copy put that on the clipboard. #}
             <td class="text-end">{% set caddr = server.connect_address(public_host) if public_host else (':' ~ server.port) %}
-              <code class="text-info{% if public_host %} copy-addr{% endif %}"{% if public_host %} style="cursor:pointer;" title="{{ t('Click to copy') }}" data-i18n-title="Click to copy" data-copy="{{ caddr }}"{% endif %}>{{ caddr }}</code></td>
+              <code class="text-info{% if public_host %} copy-addr cursor-pointer{% endif %}"{% if public_host %} title="{{ t('Click to copy') }}" data-i18n-title="Click to copy" data-copy="{{ caddr }}"{% endif %}>{{ caddr }}</code></td>
           </tr>
         </table>
       </div>
@@ -809,7 +804,7 @@
         {% set _can_refresh_cmds = current_user.is_superadmin or has_permission('moderate_server')
              or has_permission('send_command') or has_permission('manage_servers') %}
         {% if _can_refresh_cmds %}
-        <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" style="display:inline;">
+        <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" class="d-inline">
           <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Reload command list from the server">
             <i class="bi bi-arrow-repeat"></i>
           </button>
@@ -823,7 +818,7 @@
         <table class="table table-sm table-borderless mb-0 small">
           {% for c in rows %}
           <tr>
-            <th scope="row" class="ps-3 fw-normal" style="white-space:nowrap;vertical-align:top;"><code class="text-info">{{ c.cmd }}</code></th>
+            <th scope="row" class="ps-3 fw-normal text-nowrap align-top"><code class="text-info">{{ c.cmd }}</code></th>
             <td class="text-secondary pe-3">{{ c.desc }}</td>
           </tr>
           {% endfor %}

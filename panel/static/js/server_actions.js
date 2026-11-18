@@ -64,13 +64,13 @@ function _doServerAction(action, btn, showOutput, force) {
 
 function showActionOutput(title, text, ok) {
   var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1090;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  ov.innerHTML = '<div class="card" style="max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;">'  // nosemgrep
+  ov.className = 'sv-overlay sv-overlay-top';
+  ov.innerHTML = '<div class="card sv-card-760">'  // nosemgrep
     + '<div class="card-header d-flex justify-content-between align-items-center">'
     + '<span><i class="bi bi-' + (ok ? 'info-circle' : 'x-circle') + '"></i> ' + escapeHtml(title) + '</span>'
     + '<button class="btn btn-sm btn-outline-secondary py-0 px-2" data-close="1">Close</button></div>'
-    + '<div class="card-body" style="flex:1 1 auto;min-height:0;overflow-y:auto;">'
-    + '<pre style="white-space:pre-wrap;word-break:break-word;margin:0;font-size:.8rem;">' + escapeHtml(text) + '</pre>'
+    + '<div class="card-body sv-card-scroll">'
+    + '<pre class="sv-output-pre">' + escapeHtml(text) + '</pre>'
     + '</div></div>';
   function close(){ ov.remove(); document.removeEventListener('keydown', onEsc); }
   function onEsc(e){ if (e.key === 'Escape') close(); }
@@ -156,9 +156,8 @@ function actionPlayersDialog(action, n, btn) {
   var endpoint = stop ? 'stop-when-empty' : 'restart-when-empty';
   var one = n === 1;
   var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1080;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  var card = _r12c_el('div', 'card');
-  card.style.cssText = 'max-width:540px;width:100%;';
+  ov.className = 'sv-overlay';
+  var card = _r12c_el('div', 'card sv-card-540');
   var head = _r12c_el('div', 'card-header');
   head.appendChild(_r12c_el('i', 'bi bi-people-fill'));
   head.appendChild(document.createTextNode(' '));

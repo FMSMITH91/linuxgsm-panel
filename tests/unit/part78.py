@@ -236,7 +236,7 @@ try:
 finally:
     _p9_restore_all()
     _p9_set_host(P9_HOST, host=_host_was78.host, public_ip=_host_was78.public_ip)
-_conn78 = _re78.search(r'<code class="text-info copy-addr"[^>]*data-copy="([^"]*)"[^>]*>([^<]*)</code>', _page78)
+_conn78 = _re78.search(r'<code class="text-info copy-addr[^"]*"[^>]*data-copy="([^"]*)"[^>]*>([^<]*)</code>', _page78)
 check("server page: an IPv6 host's Connect row (and what click-to-copy copies) is [2001:db8::5]:port",
       bool(_conn78) and _conn78.groups() == ("[2001:db8::5]:27015", "[2001:db8::5]:27015"),
       repr(_conn78.groups() if _conn78 else _page78[:300]))

@@ -6,7 +6,7 @@
    fills push_endpoint and shows the choice only when this browser's subscription is one of this
    account's (compared by SHA-256, so no endpoint is ever written into the page). #}
 <h1 class="page-title mb-3"><i class="bi bi-box-arrow-right"></i> Sign out</h1>
-<div class="card" style="max-width:560px;">
+<div class="card maxw-560">
   <div class="card-body">
     <form method="POST" action="{{ url_for('logout') }}" id="signout-form"
           data-hashes="{{ current_user.push_subscriptions|map(attribute='endpoint_hash')|join(',') }}"

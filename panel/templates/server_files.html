@@ -195,7 +195,7 @@
 <!-- Config editor (tabbed) -->
 {# Read-only without EDIT_FILES: [data-fpm-ro] hides every .fpm-edit control (panel.css). Hidden
    from the first paint without VIEW_FILES, as the other sections are, so it never flashes. #}
-<div class="card mb-3" data-sfsub="config"{% if not fpm.view %} style="display:none;"{% endif %}{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card mb-3" data-sfsub="config"{% if not fpm.view %} data-start-hidden{% endif %}{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header p-0">
     <ul class="nav nav-tabs card-header-tabs mx-2 mt-2 border-0" id="cfg-tabs">
       <li class="nav-item"><button class="nav-link active" data-tab="lgsm"><i class="bi bi-sliders"></i> LinuxGSM Settings</button></li>
@@ -211,7 +211,7 @@
          with it, so a server still on it has an admin account anyone who has read LinuxGSM's config
          can use. Shown by loadConfig when the read says so (lgc_pz_default_admin). #}
       {% if server.game_type == 'pz' %}
-      <div id="lgc-pz-admin" class="alert alert-warning py-2 px-3 mb-2 small" role="alert" style="display:none;">
+      <div id="lgc-pz-admin" class="alert alert-warning py-2 px-3 mb-2 small" role="alert" data-start-hidden>
         <i class="bi bi-shield-exclamation"></i>
         <span>This server's admin password is still LinuxGSM's default, CHANGE_ME, so anyone who knows LinuxGSM can log in as its admin.</span>
         <button type="button" class="btn btn-sm btn-warning py-0 ms-1 fpm-edit" id="lgc-pz-admin-btn" data-action="lgcPzAdminFix">Set a random admin password</button>
@@ -222,7 +222,7 @@
          made for one App ID. Shown by loadConfig only when it applies (lgc_csgo_appid_note: a gslt
          set, clientappid neither 730 nor unset). #}
       {% if server.game_type == 'csgo' %}
-      <div id="lgc-csgo-appid" class="alert alert-info py-2 px-3 mb-2 small" role="note" style="display:none;">
+      <div id="lgc-csgo-appid" class="alert alert-info py-2 px-3 mb-2 small" role="note" data-start-hidden>
         <i class="bi bi-info-circle"></i>
         <span>Since LinuxGSM v26.3.0, CS:GO runs as App ID 4465480: a gslt made for App ID 730 stops working after the switch. Make one for 4465480, or set clientappid to 730 to stay on CS2's csgo_legacy.</span>
       </div>
@@ -235,15 +235,15 @@
       </div>
       {% endif %}
       <div id="cfg-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading config…</div>
-      <form id="cfg-form" style="display:none;" data-action="saveConfig" data-args='["@event"]' data-on="submit" data-cmpc-inst="{{ server.lgsm_name }}.cfg">
+      <form id="cfg-form" data-start-hidden data-action="saveConfig" data-args='["@event"]' data-on="submit" data-cmpc-inst="{{ server.lgsm_name }}.cfg">
         {# Shown by loadConfig when the read kept this server's passwords and tokens from the viewer
            (lgsm_cfg_form.form_view). #}
-        <div id="cmpc-masked" class="alert alert-secondary small py-1 px-2 mb-2" role="note" style="display:none;">Passwords, tokens and keys are hidden, and can't be changed here.</div>
+        <div id="cmpc-masked" class="alert alert-secondary small py-1 px-2 mb-2" role="note" data-start-hidden>Passwords, tokens and keys are hidden, and can't be changed here.</div>
         <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-          <input type="search" id="cmpc-filter" class="form-control form-control-sm" style="max-width:22rem;" placeholder="Find a setting" aria-label="Find a setting" autocomplete="off">
+          <input type="search" id="cmpc-filter" class="form-control form-control-sm mw-r22" placeholder="Find a setting" aria-label="Find a setting" autocomplete="off">
           <span class="small text-secondary">The badge names the file each value comes from.</span>
         </div>
-        <div id="cmpc-filter-none" class="text-secondary small mb-2" style="display:none;">No setting matches.</div>
+        <div id="cmpc-filter-none" class="text-secondary small mb-2" data-start-hidden>No setting matches.</div>
         <div id="cfg-groups"></div>
         <div class="cmpc-savebar fpm-edit">
           <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-save"></i> Save settings</button>
@@ -252,38 +252,38 @@
       </form>
     </div>
     <!-- Game config file -->
-    <div id="tab-game" class="cfg-tab" style="display:none;">
+    <div id="tab-game" class="cfg-tab" data-start-hidden>
       <div id="game-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Locating game config file…</div>
-      <div id="game-wrap" style="display:none;">
+      <div id="game-wrap" data-start-hidden>
         <p class="small text-secondary mb-1" id="game-cfg-desc">Game's own config file — where this game's in-game settings, such as the player limit, actually live.</p>
         <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
           <code id="game-path" class="small text-break"></code>
           {# The Form | Raw switch: shown only when the file is a format the form reads
              (panel/services/game_config_form.py). Both panes are the same height, so switching
              moves nothing below them. #}
-          <div id="gcf-switch" class="btn-group btn-group-sm ms-auto" role="group" aria-label="Game config view" style="display:none;">
+          <div id="gcf-switch" class="btn-group btn-group-sm ms-auto" role="group" aria-label="Game config view" data-start-hidden>
             <button type="button" class="btn btn-outline-secondary" id="gcf-btn-form" aria-pressed="false" data-action="gcfView" data-args='["form"]'><i class="bi bi-ui-checks"></i> Form</button>
             <button type="button" class="btn btn-outline-secondary" id="gcf-btn-raw" aria-pressed="true" data-action="gcfView" data-args='["raw"]'><i class="bi bi-code"></i> Raw</button>
           </div>
         </div>
-        <div id="gcf-form-pane" style="display:none;">
-          <div id="gcf-note" class="small text-warning mb-1" style="display:none;"></div>
+        <div id="gcf-form-pane" data-start-hidden>
+          <div id="gcf-note" class="small text-warning mb-1" data-start-hidden></div>
           <div id="gcf-form" class="gcf-scroll"></div>
           <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveGameForm"><i class="bi bi-save"></i> Save changes</button>
           <span id="gcf-msg" class="small ms-2"></span>
         </div>
         <div id="gcf-raw-pane">
-          <textarea id="game-cfg" aria-labelledby="game-cfg-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace gcf-raw" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+          <textarea id="game-cfg" aria-labelledby="game-cfg-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace gcf-raw fs-r80" rows="14" spellcheck="false"></textarea>
           <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
           <span id="game-msg" class="small ms-2"></span>
         </div>
       </div>
-      <div id="game-none" class="text-secondary small" style="display:none;"></div>
+      <div id="game-none" class="text-secondary small" data-start-hidden></div>
     </div>
     <!-- Raw instance cfg -->
-    <div id="tab-raw" class="cfg-tab" style="display:none;">
+    <div id="tab-raw" class="cfg-tab" data-start-hidden>
       <p class="small text-secondary mb-1" id="cfg-raw-desc">Raw instance config <code>{{ server.lgsm_name }}.cfg</code>.</p>
-      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc"{% if not fpm.edit %} readonly{% endif %} class="form-control font-monospace fs-r80" rows="14" spellcheck="false"></textarea>
       <button class="btn btn-primary btn-sm mt-2 fpm-edit" data-action="saveRaw"><i class="bi bi-save"></i> Save raw config</button>
       <span id="cfg-raw-msg" class="small ms-2"></span>
     </div>
@@ -294,7 +294,7 @@
 {# No serverfiles directory to browse when the download never happened — the config tabs above are
    the whole point of the page in that state. #}
 {% if not install_failed %}
-<div class="card" id="file-browser" data-sfsub="files" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card" id="file-browser" data-sfsub="files" data-start-hidden{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-hdd"></i> File Browser</span>
     {# flex-wrap + the min-width rule above: see the comment on .fb-toolbar. The two buttons are
@@ -312,7 +312,7 @@
         <button class="btn btn-sm btn-outline-secondary" data-action="_clickUpload">
           <i class="bi bi-upload"></i> Upload
         </button>
-        <input type="file" id="upload-input" aria-label="Upload" multiple style="display:none;" data-action="doUpload" data-args='["@event"]' data-on="change">
+        <input type="file" id="upload-input" aria-label="Upload" multiple data-start-hidden data-action="doUpload" data-args='["@event"]' data-on="change">
         {# The click path for a whole folder. Dragging between the desktop and the browser is not
            always reliable (notably on Linux/Wayland), so the picker is the dependable route. #}
         <button class="btn btn-sm btn-outline-secondary" data-action="_clickUploadDir"
@@ -320,7 +320,7 @@
           <i class="bi bi-folder-plus"></i> Upload folder
         </button>
         <input type="file" id="upload-dir-input" aria-label="Upload folder" webkitdirectory directory multiple
-               style="display:none;" data-action="doUploadDir" data-args='["@event"]' data-on="change">
+               data-start-hidden data-action="doUploadDir" data-args='["@event"]' data-on="change">
         {# New file / New folder open a name field at the top of the list (server_files.js
            startCreate), in the folder the list shows. #}
         <button class="btn btn-sm btn-outline-secondary" data-action="startCreate" data-args='["file", "@self"]'>
@@ -333,14 +333,14 @@
     </div>
   </div>
   <div class="card-body">
-    <div id="drop-overlay"><span><i class="bi bi-cloud-upload" style="font-size:1.4rem;"></i><br>Drop files or folders to upload to <code id="upload-dest">home</code></span></div>
+    <div id="drop-overlay"><span><i class="bi bi-cloud-upload fs-r140"></i><br>Drop files or folders to upload to <code id="upload-dest">home</code></span></div>
     <div class="row g-3">
       <div class="col-lg-5">
         <div id="drop-zone" class="fb-panel">
           <div id="file-list" class="list-group list-group-flush"></div>
         </div>
         <div id="upload-status" class="small mt-2"></div>
-        <div class="text-secondary mt-1" style="font-size:.66rem;">
+        <div class="text-secondary mt-1 fs-r66">
           <i class="bi bi-info-circle"></i>
           <span class="fpm-edit">Tip: drag files or folders anywhere onto this card to upload (subfolders included), or use the buttons above.</span>
           <i class="bi bi-shield-lock"></i>
@@ -352,7 +352,7 @@
         </div>
       </div>
       <div class="col-lg-7">
-        <div id="editor-wrap" style="display:none;">
+        <div id="editor-wrap" data-start-hidden>
           {# flex-wrap and text-break: a long path was one unbreakable flex item, and at 375px it
              pushed Save and Close off the card and the page 740px wide. Now the path breaks, and
              the buttons take the next line when they do not fit beside it. #}
@@ -368,7 +368,7 @@
           </div>
           {# An instance's _default.cfg: LinuxGSM puts its own copy back every time it runs, so a save
              there is refused (files.CMPC_DEFAULT_CFG_REFUSED). Shown by openFile for that file. #}
-          <div id="cmpc-default-warn" class="alert alert-warning small py-1 px-2 mb-1" role="note" style="display:none;">
+          <div id="cmpc-default-warn" class="alert alert-warning small py-1 px-2 mb-1" role="note" data-start-hidden>
             <i class="bi bi-exclamation-triangle"></i>
             <span>LinuxGSM puts its own copy of this file back every time it runs, so changes saved here would be lost. Set them in the server's own config instead.</span>
             <a href="#config" class="alert-link">Open the Config tab</a>
@@ -384,7 +384,7 @@
           </div>
         </div>
         <div id="editor-empty">
-          <i class="bi bi-file-earmark-text" style="font-size:2rem;opacity:.5;"></i>
+          <i class="bi bi-file-earmark-text fs-r200 opacity-50"></i>
           <div class="mt-2 small">Select a text file on the left to view &amp; edit it.</div>
         </div>
       </div>
@@ -398,10 +398,10 @@
      are superadmin-only (.fpm-su); a row's download needs DOWNLOAD_BACKUP (.fpm-dl), its delete
      DELETE_BACKUP (.fpm-del), its restore RESTORE_BACKUP (.fpm-rs). Nothing to back up when the game
      files never downloaded. -->
-<div class="card" id="backup-card" data-sfsub="backups" style="display:none;"{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}{% if not fpm.rs %} data-fpm-nors{% endif %}>
+<div class="card" id="backup-card" data-sfsub="backups" data-start-hidden{% if not fpm.su %} data-fpm-nosu{% endif %}{% if not fpm.dl %} data-fpm-nodl{% endif %}{% if not fpm.rm %} data-fpm-nodel{% endif %}{% if not fpm.rs %} data-fpm-nors{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-archive"></i> Backups</span>
-    <span class="text-secondary" style="font-size:.66rem;">
+    <span class="text-secondary fs-r66">
       <i class="bi bi-info-circle"></i>
       LinuxGSM backups of this server's files, stored on the host. Automatic backups run on the schedule
       below; the newest few are retained, as set by "keep", and older ones are pruned. A backup skips
@@ -410,10 +410,10 @@
   </div>
   <div class="card-body">
     <div id="bk-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading backups…</div>
-    <div id="bk-wrap" style="display:none;">
+    <div id="bk-wrap" data-start-hidden>
       <div class="row g-3 align-items-end mb-2">
         <div class="col-6 col-md-4 fpm-su">
-          <label class="form-label mb-1" style="font-size:.7rem;" for="bk-interval">Automatic backup</label>
+          <label class="form-label mb-1 fs-r70" for="bk-interval">Automatic backup</label>
           <select id="bk-interval" class="form-select form-select-sm" data-action="saveBkSchedule" data-on="change">
             <option value="default">Use panel default</option>
             <option value="0">Off</option>
@@ -425,7 +425,7 @@
           </select>
         </div>
         <div class="col-6 col-md-3 fpm-su">
-          <label class="form-label mb-1" style="font-size:.7rem;" for="bk-keep">Keep newest</label>
+          <label class="form-label mb-1 fs-r70" for="bk-keep">Keep newest</label>
           <select id="bk-keep" class="form-select form-select-sm" data-action="saveBkSchedule" data-on="change">
             <option value="default">Use panel default</option>
             <option value="1">1</option><option value="2">2</option><option value="3">3</option>
@@ -447,13 +447,13 @@
         <span id="bk-restore-status" class="small"></span>
       </div>
       {% if fpm.rs and fpm.edit %}
-      <div class="small text-secondary mb-2" style="font-size:.7rem;">
+      <div class="small text-secondary mb-2 fs-r70">
         Upload a LinuxGSM backup of this server (.tar.zst, .tar.gz or .tar, up to 32 GB). It is checked as a restore checks it, then listed here under a LinuxGSM backup's name.
       </div>
       {% endif %}
       <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">
-          <thead><tr><th>Backup</th><th style="width:1%;white-space:nowrap;">Size</th><th style="width:1%;white-space:nowrap;">When</th><th style="width:1%;"></th></tr></thead>
+          <thead><tr><th>Backup</th><th class="w-1p text-nowrap">Size</th><th class="w-1p text-nowrap">When</th><th class="w-1p"></th></tr></thead>
           <tbody id="bk-rows"><tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr></tbody>
         </table>
       </div>
@@ -463,10 +463,10 @@
 {% endif %}
 
 <!-- Scheduled tasks (cron) -->
-<div class="card" id="cron-card" data-sfsub="schedule" style="display:none;">
+<div class="card" id="cron-card" data-sfsub="schedule" data-start-hidden>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-clock-history"></i> Scheduled Tasks <span class="text-secondary small">(cron)</span></span>
-    <span class="text-secondary" style="font-size:.66rem;">
+    <span class="text-secondary fs-r66">
       <i class="bi bi-info-circle"></i>
       Runs as <code>{{ server.short_name }}</code>
       <span class="d-block">Every task can be rescheduled or deleted here, including the ones the panel installed. Lines tagged autostart or daily-restart also have a switch on the server page, and deleting the monitor task turns Autostart off.</span>
@@ -476,16 +476,16 @@
     <!-- Add / edit form -->
     <form id="cron-form" class="row g-2 align-items-end mb-2" data-action="saveCron" data-args='["@event"]' data-on="submit">
       <div class="col-12 col-md-3">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="cron-sched">Schedule</label>
+        <label class="form-label mb-1 fs-r70" for="cron-sched">Schedule</label>
         <input type="text" id="cron-sched" class="form-control form-control-sm font-monospace" placeholder="*/5 * * * *" spellcheck="false" required>
       </div>
       <div class="col-12 col-md-6">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="cron-cmd">Command</label>
+        <label class="form-label mb-1 fs-r70" for="cron-cmd">Command</label>
         <input type="text" id="cron-cmd" class="form-control form-control-sm font-monospace" placeholder="/home/{{ server.short_name }}/backup.sh" spellcheck="false" required data-no-i18n>
       </div>
       <div class="col-12 col-md-3 d-flex gap-2">
         <button type="submit" class="btn btn-primary btn-sm flex-grow-1" id="cron-submit"><i class="bi bi-plus-lg"></i> Add task</button>
-        <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" style="display:none;" data-action="cancelCronEdit">Cancel</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" data-start-hidden data-action="cancelCronEdit">Cancel</button>
       </div>
       {# Warn players first (server_schedule_chains.js): a restart, stop or update with chat warnings
          before it, which the panel composes into one cron line. Only where the console's chat command
@@ -495,12 +495,12 @@
         <div class="form-check mb-0">
           <input class="form-check-input" type="checkbox" id="sch-on">
           <label class="form-check-label small" for="sch-on">Warn players first</label>
-          <span class="text-secondary d-block" style="font-size:.66rem;">Chat messages in the game before a restart, stop or update. The first one goes out at the scheduled time.</span>
+          <span class="text-secondary d-block fs-r66">Chat messages in the game before a restart, stop or update. The first one goes out at the scheduled time.</span>
         </div>
         <div id="sch-panel" class="mt-1" hidden>
           <div class="d-flex flex-wrap gap-2 align-items-end mb-1">
             <div>
-              <label class="form-label mb-1" style="font-size:.7rem;" for="sch-action">Action</label>
+              <label class="form-label mb-1 fs-r70" for="sch-action">Action</label>
               <select id="sch-action" class="form-select form-select-sm">
                 <option value="restart">Restart</option>
                 <option value="stop">Stop</option>
@@ -510,7 +510,7 @@
             <button type="button" class="btn btn-outline-secondary btn-sm" id="sch-add"><i class="bi bi-plus-lg"></i> Add a warning</button>
           </div>
           <div id="sch-steps"></div>
-          <div id="sch-when" class="text-secondary" style="font-size:.66rem;"></div>
+          <div id="sch-when" class="text-secondary fs-r66"></div>
         </div>
       </div>
       {% endif %}
@@ -521,18 +521,18 @@
     {% call fold('Schedule help', id='cron-help', cls='mb-2') %}
     <!-- Quick-pick presets -->
     <div class="d-flex flex-wrap gap-1 mb-2 align-items-center" id="cron-presets">
-      <span class="text-secondary me-1" style="font-size:.68rem;">Quick pick:</span>
-      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="*/5 * * * *">Every 5 min</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 * * * *">Hourly</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 * * *">Daily 5am</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 * * 0">Weekly (Sun)</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="0 5 1 * *">Monthly (1st)</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:.7rem;" data-cron="@reboot">At boot</button>
+      <span class="text-secondary me-1 fs-r68">Quick pick:</span>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 fs-r70" data-cron="*/5 * * * *">Every 5 min</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 fs-r70" data-cron="0 * * * *">Hourly</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 fs-r70" data-cron="0 5 * * *">Daily 5am</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 fs-r70" data-cron="0 5 * * 0">Weekly (Sun)</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 fs-r70" data-cron="0 5 1 * *">Monthly (1st)</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-2 fs-r70" data-cron="@reboot">At boot</button>
     </div>
       {# One <span> per term. Written as prose ("Ranges 1-5, lists 1,3,5") the only text nodes
          between the <code> literals were ", lists" and ", steps" — comma-led scraps no catalog
          can translate. Each label now stands alone as its own word. #}
-      <span class="text-secondary" style="font-size:.62rem;">Fields: <code>min hour day month weekday</code>
+      <span class="text-secondary fs-r62">Fields: <code>min hour day month weekday</code>
         <span class="ms-2">Ranges <code>1-5</code></span>
         <span class="ms-2">Lists <code>1,3,5</code></span>
         <span class="ms-2">Steps <code>*/10</code></span>
@@ -540,15 +540,15 @@
       </span>
     {% endcall %}
     <!-- Live explainer (crontab.guru style) -->
-    <div id="cron-explain" class="mb-2 px-2 py-1 rounded" style="border:1px solid var(--border); background:var(--bg-elevated);">
-      <div id="cron-desc" class="text-secondary" style="font-size:.8rem;"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
-      <div id="cron-next" class="text-secondary mt-1" style="font-size:.66rem;"></div>
+    <div id="cron-explain" class="mb-2 px-2 py-1 rounded cron-explain-box">
+      <div id="cron-desc" class="text-secondary"><i class="bi bi-magic"></i> Type a schedule (or pick one above) to see what it means.</div>
+      <div id="cron-next" class="text-secondary mt-1 fs-r66"></div>
     </div>
     {# WHOSE CLOCK. cron runs on the host, so every time on this page — the presets above
        included — is the host's local time, not yours. The panel's own bootstrap sets new hosts to
        UTC, so for most operators these numbers are hours away from what they read on the wall,
        and nothing said so. #}
-    <div class="d-flex flex-wrap align-items-center gap-2 mb-1"><span class="text-secondary" style="font-size:.68rem;">
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-1"><span class="text-secondary fs-r68">
       <i class="bi bi-clock-history"></i>
       {% if host_timezone %}
         <span>Times are the host's local time</span> <code data-no-i18n>{{ host_timezone }}</code>
@@ -559,9 +559,9 @@
     <!-- Existing entries -->
     <div id="cron-list-wrap">
       <div id="cron-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading scheduled tasks…</div>
-      <div class="table-responsive" style="display:none;" id="cron-table-wrap">
-        <table class="table table-sm align-middle mb-0" style="font-size:.78rem;">
-          <thead><tr><th style="width:1%;white-space:nowrap;">Schedule</th><th>Command</th><th style="width:1%;white-space:nowrap;">Last run</th><th style="width:1%;white-space:nowrap;"></th></tr></thead>
+      <div class="table-responsive" data-start-hidden id="cron-table-wrap">
+        <table class="table table-sm align-middle mb-0 fs-r78">
+          <thead><tr><th class="w-1p text-nowrap">Schedule</th><th>Command</th><th class="w-1p text-nowrap">Last run</th><th class="w-1p text-nowrap"></th></tr></thead>
           <tbody id="cron-tbody"></tbody>
         </table>
       </div>
@@ -575,10 +575,10 @@
    fills its values, so nothing moves when it loads. #}
 {% if wipe_supported(server.game_type) %}
 {% set wipe_reset = wipe_reset_game(server.game_type) %}
-<div class="card mt-3" id="wipe-card" data-sfsub="schedule" style="display:none;">
+<div class="card mt-3" id="wipe-card" data-sfsub="schedule" data-start-hidden>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-eraser-fill"></i> {% if wipe_reset %}Scheduled world reset{% else %}Scheduled wipe{% endif %} <span class="badge bg-danger">Destructive</span></span>
-    <span class="text-secondary" style="font-size:.66rem;" id="wipe-state">Off</span>
+    <span class="text-secondary fs-r66" id="wipe-state">Off</span>
   </div>
   <div class="card-body">
     {% if server.game_type == 'mc' %}
@@ -601,7 +601,7 @@
       <input type="hidden" id="wipe-kind" value="reset">
       {% else %}
       <div class="col-6 col-md-2">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-kind">Wipe</label>
+        <label class="form-label mb-1 fs-r70" for="wipe-kind">Wipe</label>
         <select id="wipe-kind" class="form-select form-select-sm">
           <option value="map">Map wipe</option>
           <option value="full">Full wipe</option>
@@ -609,7 +609,7 @@
       </div>
       {% endif %}
       <div class="col-6 col-md-3">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-preset">When</label>
+        <label class="form-label mb-1 fs-r70" for="wipe-preset">When</label>
         <select id="wipe-preset" class="form-select form-select-sm" data-action="wipePresetChanged" data-on="change">
           <option value="first-thursday">First Thursday of the month</option>
           <option value="weekly-thursday">Every Thursday</option>
@@ -617,11 +617,11 @@
         </select>
       </div>
       <div class="col-6 col-md-2" id="wipe-at-col">
-        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-at">Time (your time)</label>
+        <label class="form-label mb-1 fs-r70" for="wipe-at">Time (your time)</label>
         <input type="time" id="wipe-at" class="form-control form-control-sm" value="19:00">
       </div>
       <div class="col-12 col-md-3" id="wipe-cron-col" hidden>
-        <label class="form-label mb-1" style="font-size:.7rem;" for="wipe-cron">Cron (your time)</label>
+        <label class="form-label mb-1 fs-r70" for="wipe-cron">Cron (your time)</label>
         <input type="text" id="wipe-cron" class="form-control form-control-sm font-monospace" placeholder="0 19 * * 4" spellcheck="false" data-no-i18n>
       </div>
       <div class="col-12 col-md-2 d-flex gap-2">
@@ -644,7 +644,7 @@
 {% endif %}
 
 <!-- Alerts & notifications -->
-<div class="card" id="alerts-card" data-sfsub="alerts" style="display:none;">
+<div class="card" id="alerts-card" data-sfsub="alerts" data-start-hidden>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-bell"></i> Alerts &amp; Notifications</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="testAlert" data-args='["@self"]'><i class="bi bi-send"></i> Send test alert</button>
@@ -655,7 +655,7 @@
       so they still fire even if the panel is down. Enable a provider and fill in its details.
     </p>
     <div id="alerts-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading alert settings…</div>
-    <div id="alerts-body" style="display:none;"></div>
+    <div id="alerts-body" data-start-hidden></div>
     <div class="mt-2">
       <button class="btn btn-primary btn-sm" data-action="saveAlerts" data-args='["@self"]'><i class="bi bi-save"></i> Save alerts</button>
       <span id="alerts-msg" class="small ms-2"></span>
@@ -666,7 +666,7 @@
 {# Mods install INTO serverfiles, so there is nowhere to put one until the game files download. #}
 {% if not install_failed and mods_kind(server.game_type) == "lgsm" %}
 <!-- Mods / addons -->
-<div class="card" id="mods-card" data-sfsub="mods" style="display:none;">
+<div class="card" id="mods-card" data-sfsub="mods" data-start-hidden>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Mods &amp; Addons</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="loadMods" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -677,10 +677,10 @@
       Installing runs LinuxGSM's own installer; stop the server first if a mod asks for it.
     </p>
     <div id="mods-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading mods…</div>
-    <div id="mods-unsupported" class="text-secondary small" style="display:none;">
+    <div id="mods-unsupported" class="text-secondary small" data-start-hidden>
       This game doesn't have any LinuxGSM-installable mods.
     </div>
-    <div id="mods-body" style="display:none;">
+    <div id="mods-body" data-start-hidden>
       <div id="mods-count" class="small text-secondary mb-2"></div>
       <div id="mods-list" class="d-flex flex-column gap-1"></div>
     </div>
@@ -691,7 +691,7 @@
 
 {# Call of Duty: no LinuxGSM installer; the server loads the mod folder its fs_game names (services/cod_mods). #}
 {% if not install_failed and mods_kind(server.game_type) == "cod" %}
-<div class="card" id="codmods-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card" id="codmods-card" data-sfsub="mods" data-start-hidden{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Mods</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="loadCodMods" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -702,9 +702,9 @@
       Players download the mod's files from the server when its game config allows downloads.
     </p>
     <div id="codmods-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading mods…</div>
-    <div id="codmods-body" style="display:none;">
+    <div id="codmods-body" data-start-hidden>
       <div id="codmods-list" class="d-flex flex-column gap-1 mb-2"></div>
-      <div id="codmods-where" class="small text-warning mb-2" style="display:none;"></div>
+      <div id="codmods-where" class="small text-warning mb-2" data-start-hidden></div>
       <div class="d-flex align-items-center flex-wrap gap-2">
         <span id="codmods-upload" class="small text-secondary"></span>
         {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="codModsOpenFolder" data-args='["@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
@@ -717,7 +717,7 @@
 
 {# Arma 3 / DayZ: the local @folders LinuxGSM's mods and servermods settings load (services/arma_mods). #}
 {% if not install_failed and mods_kind(server.game_type) == "arma" %}
-<div class="card" id="gm-arma-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card" id="gm-arma-card" data-sfsub="mods" data-start-hidden{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Mod folders</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="gmArmaLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -728,12 +728,12 @@
       server mods load on the server only. The change applies the next time the server starts.
     </p>
     <div class="small fw-semibold mb-1">Mods</div>
-    <div class="border rounded small mb-2" style="height:6.5rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-mods" data-no-i18n></ul></div>
+    <div class="border rounded small mb-2 hs-r65"><ul class="list-unstyled mb-0" id="gm-arma-mods" data-no-i18n></ul></div>
     <div class="small fw-semibold mb-1">Server mods</div>
-    <div class="border rounded small mb-2" style="height:4.25rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-servermods" data-no-i18n></ul></div>
+    <div class="border rounded small mb-2 hs-r425"><ul class="list-unstyled mb-0" id="gm-arma-servermods" data-no-i18n></ul></div>
     <div class="small fw-semibold mb-1">Other folders</div>
-    <div class="border rounded small mb-2" style="height:4.25rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-arma-other" data-no-i18n></ul></div>
-    <div id="gm-arma-note" class="small text-secondary mb-2" style="min-height:1.5em;"></div>
+    <div class="border rounded small mb-2 hs-r425"><ul class="list-unstyled mb-0" id="gm-arma-other" data-no-i18n></ul></div>
+    <div id="gm-arma-note" class="small text-secondary mb-2 minh-15em"></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       <button class="btn btn-sm btn-primary fpm-edit" data-action="gmArmaSave" data-args='["@self"]'><i class="bi bi-save"></i> Save mod lists</button>
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
@@ -746,7 +746,7 @@
 
 {# Factorio: the mods in serverfiles/mods, on or off in mod-list.json (services/fctr_mods). #}
 {% if not install_failed and mods_kind(server.game_type) == "fctr" %}
-<div class="card" id="gm-fctr-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card" id="gm-fctr-card" data-sfsub="mods" data-start-hidden{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Mods</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="gmFctrLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -755,8 +755,8 @@
     <p class="small text-secondary mb-2">
       Turn this server's mods on or off. The server reads mods/mod-list.json when it starts, so a change applies at the next restart.
     </p>
-    <div class="border rounded small mb-2" style="height:14rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-fctr-list" data-no-i18n></ul></div>
-    <div id="gm-fctr-note" class="small text-warning mb-2" style="min-height:1.5em;"></div>
+    <div class="border rounded small mb-2 hs-r14"><ul class="list-unstyled mb-0" id="gm-fctr-list" data-no-i18n></ul></div>
+    <div id="gm-fctr-note" class="small text-warning mb-2 minh-15em"></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles/mods","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
       <span id="gm-fctr-msg" class="small" role="status"></span>
@@ -768,7 +768,7 @@
 
 {# Minecraft Java: the world's datapacks, and Modrinth's (services/mc_packs, services/modrinth). #}
 {% if not install_failed and mods_kind(server.game_type) == "mc" %}
-<div class="card" id="gm-mc-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card" id="gm-mc-card" data-sfsub="mods" data-start-hidden{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Datapacks</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="gmMcLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -777,15 +777,15 @@
     <p class="small text-secondary mb-2">
       The datapacks in this server's world. The server loads them when it loads the world, so a change applies at the next restart.
     </p>
-    <div id="gm-mc-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;"></div>
-    <div class="border rounded small mb-2" style="height:7rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-list" data-no-i18n></ul></div>
+    <div id="gm-mc-world" class="small text-secondary mb-1 text-break"></div>
+    <div class="border rounded small mb-2 hs-r7"><ul class="list-unstyled mb-0" id="gm-mc-list" data-no-i18n></ul></div>
     <form class="d-flex flex-wrap gap-2 mb-1 fpm-edit" data-action="gmMcSearch" data-args='["@event"]' data-on="submit">
       <label for="gm-mc-q" class="visually-hidden">Search Modrinth's datapacks</label>
-      <input type="search" id="gm-mc-q" class="form-control form-control-sm" style="flex:1 1 12rem; min-width:0;"
+      <input type="search" id="gm-mc-q" class="form-control form-control-sm fx-12"
              maxlength="80" autocomplete="off" spellcheck="false" placeholder="Search Modrinth's datapacks" aria-label="Search Modrinth's datapacks">
       <button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-search"></i> Search</button>
     </form>
-    <div class="border rounded small mb-2 fpm-edit" style="height:7rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mc-hits" data-no-i18n></ul></div>
+    <div class="border rounded small mb-2 fpm-edit hs-r7"><ul class="list-unstyled mb-0" id="gm-mc-hits" data-no-i18n></ul></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmMcOpenFolder" data-args='["@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
       <span id="gm-mc-msg" class="small" role="status"></span>
@@ -797,7 +797,7 @@
 
 {# Minecraft Bedrock: shared behavior and resource packs, on or off for the world (services/mc_packs). #}
 {% if not install_failed and mods_kind(server.game_type) == "mcb" %}
-<div class="card" id="gm-mcb-card" data-sfsub="mods" style="display:none;"{% if not fpm.edit %} data-fpm-ro{% endif %}>
+<div class="card" id="gm-mcb-card" data-sfsub="mods" data-start-hidden{% if not fpm.edit %} data-fpm-ro{% endif %}>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-puzzle"></i> Packs</span>
     <button class="btn btn-sm btn-outline-secondary" data-action="gmMcbLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
@@ -806,8 +806,8 @@
     <p class="small text-secondary mb-2">
       The behavior and resource packs in this server's shared packs folders. Turn one on to apply it to the server's world; a change applies at the next restart.
     </p>
-    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break" style="min-height:1.5em;"></div>
-    <div class="border rounded small mb-2" style="height:13rem; overflow-y:auto;"><ul class="list-unstyled mb-0" id="gm-mcb-list" data-no-i18n></ul></div>
+    <div id="gm-mcb-world" class="small text-secondary mb-1 text-break"></div>
+    <div class="border rounded small mb-2 hs-r13"><ul class="list-unstyled mb-0" id="gm-mcb-list" data-no-i18n></ul></div>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       {% if fpm.view %}<button class="btn btn-sm btn-outline-secondary" data-action="gmOpenFolder" data-args='["serverfiles/behavior_packs","@self"]'><i class="bi bi-folder2-open"></i> Open in Files</button>{% endif %}
       <span id="gm-mcb-msg" class="small" role="status"></span>

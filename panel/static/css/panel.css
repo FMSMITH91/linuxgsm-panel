@@ -2558,3 +2558,694 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   letter-spacing:.02em;
   caret-color:transparent;
 }
+
+/* ── Strict CSP: data-start-hidden (shared) ── */
+
+/* An element that starts hidden: what style="display:none" did before the page policy refused style
+   attributes. js/start_hidden.js turns the mark into an inline display set through the CSSOM. */
+[data-start-hidden] { display: none; }
+
+/* ── Strict CSP (B1): classes that replace inline style attributes ── */
+
+/* Server page, Files & Config and Databases. Each class carries what one style="" attribute did, so
+   the page draws the same with style-src-attr 'none'. Small text sizes, named by rem x 100. */
+.fs-r55 { font-size: .55rem !important; }
+
+.fs-r60 { font-size: .6rem !important; }
+
+.fs-r62 { font-size: .62rem !important; }
+
+.fs-r66 { font-size: .66rem !important; }
+
+.fs-r68 { font-size: .68rem !important; }
+
+.fs-r70 { font-size: .7rem !important; }
+
+.fs-r72 { font-size: .72rem !important; }
+
+.fs-r78 { font-size: .78rem !important; }
+
+.fs-r80 { font-size: .8rem !important; }
+
+.fs-r85 { font-size: .85rem !important; }
+
+.fs-r140 { font-size: 1.4rem !important; }
+
+.fs-r200 { font-size: 2rem !important; }
+
+.cursor-pointer { cursor: pointer !important; }
+
+.minw-0 { min-width: 0 !important; }
+
+.minh-15em { min-height: 1.5em !important; }
+
+.minh-32em { min-height: 3.2em !important; }
+
+.w-1p { width: 1% !important; }
+
+.w-r75 { width: 7.5rem !important; }
+
+.mw-r22 { max-width: 22rem !important; }
+
+.mw-180px { max-width: 180px !important; }
+
+.mw-260px { max-width: 260px !important; }
+
+.wb-all { word-break: break-all !important; }
+
+.pre-wrap-all {
+  white-space: pre-wrap !important;
+  word-break: break-all !important;
+}
+
+/* A field in a wrapping row: grows from its basis and may shrink below its content. */
+.fx-9 {
+  flex: 1 1 9rem !important;
+  min-width: 0 !important;
+}
+
+.fx-10 {
+  flex: 1 1 10rem !important;
+  min-width: 0 !important;
+}
+
+.fx-12 {
+  flex: 1 1 12rem !important;
+  min-width: 0 !important;
+}
+
+.fx-14 {
+  flex: 1 1 14rem !important;
+  min-width: 0 !important;
+}
+
+.fx-16 {
+  flex: 1 1 16rem !important;
+  min-width: 0 !important;
+}
+
+.fx2-12 {
+  flex: 2 1 12rem !important;
+  min-width: 0 !important;
+}
+
+.fx0-6 {
+  flex: 0 1 6rem !important;
+  min-width: 0 !important;
+}
+
+/* A fixed-height list that scrolls (mod lists, Workshop boxes, Minecraft lists). */
+.hs-r35 {
+  height: 3.5rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r425 {
+  height: 4.25rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r65 {
+  height: 6.5rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r7 {
+  height: 7rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r8 {
+  height: 8rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r10 {
+  height: 10rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r11 {
+  height: 11rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r12 {
+  height: 12rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r13 {
+  height: 13rem !important;
+  overflow-y: auto !important;
+}
+
+.hs-r14 {
+  height: 14rem !important;
+  overflow-y: auto !important;
+}
+
+/* Chart.js canvases: a positioned box of a fixed height the chart fills. */
+.chart-box-140 {
+  position: relative !important;
+  height: 140px !important;
+}
+
+.chart-box-150 {
+  position: relative !important;
+  height: 150px !important;
+}
+
+/* The server page's status badge, coloured by the status it was drawn with; server_detail.js
+   recolours it live through el.style.background. */
+.status-badge-online,
+.status-badge-offline,
+.status-badge-other { color: #0a0f1a !important; }
+
+.status-badge-online { background: #3fb950; }
+
+.status-badge-offline { background: #f85149; }
+
+.status-badge-other { background: #d29922; }
+
+/* The cron explainer under the schedule field. */
+.cron-explain-box {
+  border: 1px solid var(--border) !important;
+  background: var(--bg-elevated) !important;
+}
+
+/* A cron line's error under its command. */
+.cron-err {
+  font-size: .66rem !important;
+  word-break: break-all !important;
+  white-space: normal !important;
+  max-width: 22rem !important;
+}
+
+/* A file browser row's name: as typed, spaces kept. */
+.fb-row-name {
+  font-size: .85rem !important;
+  white-space: pre !important;
+}
+
+/* The label column of an upload's "on server / uploading" comparison. */
+.cmp-line-label {
+  font-size: .62rem !important;
+  letter-spacing: .04em !important;
+  min-width: 4.2rem !important;
+}
+
+/* A GMod content row's label: takes the room left and truncates. */
+.gmc-label {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  cursor: pointer !important;
+}
+
+/* The dimmed full-screen layer behind the server page's own dialogs (action output, players
+   online, ban scope) and the cards in it. */
+.sv-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgb(0 0 0 / 60%) !important;
+  z-index: 1080 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 1rem !important;
+}
+
+.sv-overlay-top { z-index: 1090 !important; }
+
+.sv-card-440 {
+  max-width: 440px !important;
+  width: 100% !important;
+}
+
+.sv-card-540 {
+  max-width: 540px !important;
+  width: 100% !important;
+}
+
+.sv-card-760 {
+  max-width: 760px !important;
+  width: 100% !important;
+  max-height: 85vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.sv-card-scroll {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+}
+
+.sv-output-pre {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  margin: 0 !important;
+  font-size: .8rem !important;
+}
+
+/* The Databases page's read-only views in a dialog: a whole cell, and a statement to confirm. */
+.dbm-pre-cell {
+  white-space: pre-wrap !important;
+  word-break: break-all !important;
+  max-height: 60vh !important;
+  overflow: auto !important;
+}
+
+.dbm-pre-sql {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  max-height: 40vh !important;
+  overflow: auto !important;
+}
+
+/* Elements whose class a script rewrites whole (the cron explainer's line, a Minecraft card's world
+   line, the Workshop card's message): an id rule keeps the size the style attribute gave them, as
+   the attribute did, whatever class the script sets. */
+#cron-desc { font-size: .8rem !important; }
+
+#gm-mc-world,
+#gm-mcb-world,
+#wsc-msg { min-height: 1.5em !important; }
+
+/* ── Strict CSP (B2): classes that replace inline style attributes ── */
+
+/* Single-declaration helpers named by their value (fs-r70 = font-size .7rem, mh-200px = max-height
+   200px), used by the Hosts list, the host page, Tailscale and the firewall card. Each is !important,
+   as the style attribute it replaces outranked every stylesheet rule (`.table td` sets a font size at
+   a higher specificity than one class); w-0p is not, since the scripts set that width afterwards. */
+.fs-em46 { font-size: .46em !important; }
+
+.fs-em65 { font-size: .65em !important; }
+
+.fs-r58 { font-size: .58rem !important; }
+
+
+.fs-r65 { font-size: .65rem !important; }
+
+
+
+
+
+
+
+.fs-r300 { font-size: 3rem !important; }
+
+.tnum { font-variant-numeric: tabular-nums !important; }
+
+.ff-mono { font-family: monospace !important; }
+
+.ff-uimono { font-family: ui-monospace, monospace !important; }
+
+.lh-15 { line-height: 1.5 !important; }
+
+.ls-0 { letter-spacing: 0 !important; }
+
+
+.op-80 { opacity: .8 !important; }
+
+
+.mt-r015 { margin-top: .15rem !important; }
+
+/* A progress bar's starting width: page scripts then set el.style.width through the CSSOM. */
+.w-0p { width: 0%; }
+
+
+.w-r55 { width: 5.5rem !important; }
+
+.w-110px { width: 110px !important; }
+
+.w-120px { width: 120px !important; }
+
+.w-150px { width: 150px !important; }
+
+.h-12px { height: 12px !important; }
+
+.h-14px { height: 14px !important; }
+
+.h-18px { height: 18px !important; }
+
+.minw-260px { min-width: 260px !important; }
+
+.minh-r1 { min-height: 1rem !important; }
+
+
+.mw-230px { max-width: 230px !important; }
+
+.mw-280px { max-width: 280px !important; }
+
+.mw-340px { max-width: 340px !important; }
+
+.mw-640px { max-width: 640px !important; }
+
+.mh-120px { max-height: 120px !important; }
+
+.mh-200px { max-height: 200px !important; }
+
+.mh-340px { max-height: 340px !important; }
+
+.mh-400px { max-height: 400px !important; }
+
+.mh-500px { max-height: 500px !important; }
+
+.mh-52vh { max-height: 52vh !important; }
+
+/* The Tailscale page's larger status dots. */
+.dot-12px {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+/* Host page: the overall CPU figure. */
+.rm-cpu-big {
+  font-size: 1.7rem !important;
+  line-height: 1 !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: -.01em !important;
+}
+
+/* Host page: the "this is the panel's own host" note. */
+.rm-local-note {
+  background: rgb(16 185 129 / 8%) !important;
+  border-color: var(--accent) !important;
+}
+
+/* Host page: the fail2ban explainer, set off by a rule on its left. */
+.rm-quote {
+  border-left: 2px solid var(--border, #1f2937) !important;
+  padding-left: .65rem !important;
+  color: var(--text-muted) !important;
+}
+
+/* Host page: the security log and the OS update log (each adds its own max-height). */
+.rm-log-box {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  padding: .5rem .7rem !important;
+  overflow: auto !important;
+  font-size: .72rem !important;
+  line-height: 1.5 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  margin: 0 !important;
+}
+
+/* Host page: the panel self-update log. */
+.rm-pu-log {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  padding: .5rem .7rem !important;
+  max-height: 280px !important;
+  overflow-y: auto !important;
+  font-family: ui-monospace, "JetBrains Mono", monospace !important;
+  font-size: .72rem !important;
+  line-height: 1.55 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
+/* Host page: one value in the hardware summary. */
+.rm-spec-val {
+  font-size: .9rem !important;
+  font-weight: 600 !important;
+  color: var(--text-heading) !important;
+  word-break: break-word !important;
+  line-height: 1.3 !important;
+}
+
+/* Hosts list: a host's bootstrap log under its card. */
+.mr-bs-log {
+  max-height: 180px !important;
+  overflow: auto !important;
+  font-size: .68rem !important;
+  background: var(--bg) !important;
+  padding: 6px !important;
+  border-radius: 4px !important;
+}
+
+/* Hosts list: the Prepare & Secure dialog's log. */
+.mr-bootstrap-log {
+  max-height: 260px !important;
+  overflow-y: auto !important;
+  font-size: .7rem !important;
+  background: var(--bg) !important;
+  padding: 8px !important;
+  border-radius: 4px !important;
+}
+
+/* Tailscale page: the card that warns about a public Funnel. */
+.ts-warn-card { border-color: var(--bs-warning, #f0ad4e) !important; }
+
+/* ── Strict CSP (B3): classes that replace inline style attributes ── */
+
+/* The page policy's style-src-attr is 'none', so no element may carry a style attribute. Each class
+   below holds exactly what one or more of those attributes held; a value that comes from data (a
+   tag's colour, a cursor position) is set from script through the CSSOM instead, which the policy
+   allows. !important, as on Bootstrap's utilities: an attribute outranked every rule, and one class
+   does not (.table td's font size beat .fs-r80), so without it the element would change. The only
+   declarations without it are the ones a script then changes through the CSSOM (.cursor-flash's
+   opacity, transform and transition), which an !important rule would freeze. */
+.maxw-400 { max-width: 400px !important; }
+
+.maxw-420 { max-width: 420px !important; }
+
+.maxw-440 { max-width: 440px !important; }
+
+.maxw-540 { max-width: 540px !important; }
+
+.maxw-560 { max-width: 560px !important; }
+
+.maxw-640 { max-width: 640px !important; }
+
+.maxw-8rem { max-width: 8rem !important; }
+
+.maxw-70ch { max-width: 70ch !important; }
+
+.maxw-75ch { max-width: 75ch !important; }
+
+.minh-1em { min-height: 1em !important; }
+
+.w-190px { width: 190px !important; }
+
+.fs-r75 { font-size: .75rem !important; }
+
+.fs-r100 { font-size: 1rem !important; }
+
+.fs-r400 { font-size: 4rem !important; }
+
+.pre-line { white-space: pre-line !important; }
+
+.pre-wrap-word {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
+/* A list that scrolls once it is taller than its cap (permission and server pickers). */
+.scroll-120 {
+  max-height: 120px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-160 {
+  max-height: 160px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-180 {
+  max-height: 180px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-300 {
+  max-height: 300px !important;
+  overflow-y: auto !important;
+}
+
+.scroll-350 {
+  max-height: 350px !important;
+  overflow-y: auto !important;
+}
+
+/* The panel's own border colour over Bootstrap's .border / .border-top (both !important). */
+.border-panel { border-color: var(--border) !important; }
+
+/* A password or code field beside another in a wrapping row: grows from 12rem / 10rem, or holds 9rem. */
+.field-grow-12 {
+  min-width: 12rem !important;
+  flex: 1 1 12rem !important;
+}
+
+.field-grow-10 {
+  min-width: 10rem !important;
+  flex: 1 1 10rem !important;
+}
+
+.field-fixed-9 {
+  min-width: 9rem !important;
+  flex: 0 1 9rem !important;
+}
+
+/* The sign-in code field, and the backup codes. */
+.otp-input {
+  letter-spacing: .2em !important;
+  font-size: 1.2rem !important;
+}
+
+.code-tracking { letter-spacing: .1em !important; }
+
+/* The 2FA QR code on a white tile, so it scans in the dark theme. */
+.qr-tile {
+  display: inline-block !important;
+  background: #fff !important;
+  padding: 12px !important;
+  border-radius: 8px !important;
+  line-height: 0 !important;
+}
+
+/* A new API token, shown once. */
+.token-code {
+  word-break: break-all !important;
+  background: rgb(0 0 0 / 20%) !important;
+  border-radius: 6px !important;
+}
+
+/* Sidebar: a host's link indented under its section, and the version line. */
+.sidebar-nav a.sidebar-sub { padding-left: 1.6rem !important; }
+
+.sidebar-meta {
+  font-size: .66rem !important;
+  color: var(--text-muted, #6b7684) !important;
+}
+
+/* Dashboard: the bulk-action bar (sticks to the top or the bottom of the view), the search box,
+   the in-game name under a server's title, and the accent colour picker on Settings. */
+.card.bulk-bar {
+  position: sticky !important;
+  z-index: 1020 !important;
+  border: 1px solid var(--bs-border-color) !important;
+}
+
+.bulk-bar-top { top: 1rem !important; }
+
+.bulk-bar-bottom { bottom: 1rem !important; }
+
+.dash-search-group {
+  width: 220px !important;
+  max-width: 100% !important;
+}
+
+.game-name-line {
+  font-size: .72rem !important;
+  max-width: 22ch !important;
+}
+
+.summary-plain {
+  cursor: pointer !important;
+  list-style: none !important;
+}
+
+.accent-picker {
+  max-width: 3rem !important;
+  padding: .15rem !important;
+}
+
+/* Built by panel.js: the toast stack and each toast, the "Copied" label at the cursor, a confirm
+   dialog's overlay and card, and its body when it holds a node (capped, so Confirm stays on screen). */
+.toast-area {
+  position: fixed !important;
+  top: 1rem !important;
+  left: 0 !important;
+  right: 0 !important;
+  margin: 0 auto !important;
+  z-index: 11000 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: .5rem !important;
+  width: min(92vw, 520px) !important;
+  pointer-events: none !important;
+}
+
+.panel-toast {
+  font-size: .85rem !important;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 55%) !important;
+  text-align: center !important;
+  pointer-events: auto !important;
+  max-width: 100% !important;
+  overflow-wrap: anywhere !important;
+}
+
+.cursor-flash {
+  position: fixed !important;
+  z-index: 12000 !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+  color: #0b0f17 !important;
+  font-size: .72rem !important;
+  font-weight: 700 !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 45%) !important;
+  opacity: 1;
+  transform: translateY(0);
+  transition: transform .6s ease, opacity .6s ease;
+}
+
+.dialog-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgb(0 0 0 / 60%) !important;
+  z-index: 11050 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 1rem !important;
+}
+
+.dialog-card {
+  max-width: 480px !important;
+  width: 100% !important;
+}
+
+.dialog-card-scroll {
+  max-width: 480px !important;
+  width: 100% !important;
+  max-height: 90vh !important;
+  overflow: auto !important;
+}
+
+.cd-body-node {
+  white-space: normal !important;
+  max-height: 50vh !important;
+  overflow-y: auto !important;
+}
+
+/* A copy-to-clipboard fallback's textarea: in the page, never seen. */
+.copy-offscreen {
+  position: fixed !important;
+  opacity: 0 !important;
+}
+
+/* The panel update link in the sidebar, and a host's link in the OS updates banner. */
+.update-link {
+  color: var(--warning-ink, #d29922) !important;
+  text-decoration: none !important;
+  font-weight: 600 !important;
+}
+
+.uis-nag-link {
+  display: inline-block !important;
+  padding: .25rem 0 !important;
+}
+
+.dash-connect-code {
+  font-size: .78rem !important;
+  cursor: pointer !important;
+}

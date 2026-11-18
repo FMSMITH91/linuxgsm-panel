@@ -74,6 +74,23 @@ check("cflite: every producer (build, batch, prune, coverage) ends by checking i
       not _store_bad30 and len(_store_bodies30) == 4 and len(set(_store_bodies30)) == 1,
       repr(_store_bad30 or [len(set(_store_bodies30))]))
 
+# Each corpus-storing producer names every target's corpus: build.sh builds every tests/fuzz/fuzz_*.py,
+# so a target left out of EXPECT had its stored corpus checked by nothing (three were, 2026-11-17).
+_targets30 = sorted("cifuzz-corpus-" + f[:-3] for f in os.listdir(os.path.join(_root, "tests", "fuzz"))
+                    if f.startswith("fuzz_") and f.endswith(".py"))
+
+
+def _expect30(job_text):
+    """The names in a job's `EXPECT: >-` block, sorted ([] when it has none)."""
+    m = _re30.search(r"EXPECT: >-\n((?:[ ]{12}\S.*\n)+)", job_text)
+    return sorted(m.group(1).split()) if m else []
+
+
+_exp30 = {"%s/%s" % fj: _expect30(_job29(_wf29(fj[0]), fj[1]))
+          for fj in (("cflite_batch.yml", "batch"), ("cflite_cron.yml", "prune"))}
+check("cflite: the batch and prune runs check a stored corpus for EVERY fuzz target build.sh builds",
+      len(_targets30) >= 9 and all(v == _targets30 for v in _exp30.values()), repr((_targets30, _exp30)))
+
 # ── E4: the build on main is never cancelled by the next merge ──────────────────────────────────
 _bcode30 = _code29(_wf29("cflite_build.yml"))
 check("cflite: the continuous build on main has no concurrency group (a cancelled build on main's "

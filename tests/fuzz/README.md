@@ -29,38 +29,49 @@ grammar the bytes drive, and compares mawk's and gawk's verdicts when both are i
 ## Run locally
 
 ```sh
-pip install atheris          # plus the panel's own deps: pip install --no-deps -r panel/install/requirements.txt
+python -m pip install --require-hashes --only-binary :all: -r .github/ci-requirements/atheris.txt
+python -m pip install --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt
 python tests/fuzz/fuzz_game_status.py -max_total_time=60 tests/fuzz/corpus/game_status
 ```
 
+Both installs are the hash-pinned files CI uses (OWASP Top 10 CI/CD Security Risks, CICD-SEC-3
+Dependency Chain Abuse: a vetted version, checksum verification). CI runs the harnesses on
+Python 3.12, which Atheris ships wheels for.
+
 `corpus/<target>/` holds committed seed inputs. A crash writes a `crash-*` reproducer to the
-working directory; re-run the harness with that file as its sole argument to reproduce.
+working directory (an `oom-*` or `timeout-*` one for an input that used too much memory or
+time); re-run the harness with that file as its sole argument to reproduce.
 
 ## Adding a target
 
-Add `fuzz_<name>.py` here (pre-import `ssh_manager`'s heavy deps uninstrumented, then
+Add `fuzz_<name>.py` here (set `EVENTLET_NO_GREENDNS=yes`, pre-import `ssh_manager`'s heavy deps
+uninstrumented with the same list as `fuzz_game_status.py`, then
 `with atheris.instrument_imports(): from panel.ops import ssh_manager`), a `corpus/<name>/` seed
-or two, and `<name>` to `fuzz.yml`'s `matrix.target`.
+or two, `<name>` to `fuzz.yml`'s `matrix.target`, and `cifuzz-corpus-fuzz_<name>` to the `EXPECT`
+lists in `cflite_batch.yml` and `cflite_cron.yml`, which check that each run stored the corpus
+it made. `.clusterfuzzlite/build.sh` builds every `fuzz_*.py` here without a change.
 
 ## CI
 
 - `.github/workflows/fuzz.yml` runs every harness with plain Atheris: 60 s each on pull requests
-  that touch a parser or a harness, 600 s each nightly, and on manual dispatch. A crash fails the
-  job and uploads the reproducer.
+  that touch a parser or a harness and on manual dispatch, 600 s each nightly. A crash, an
+  out-of-memory (2560 MB) or a 25 s timeout on one input fails the job and uploads the reproducer.
 - **ClusterFuzzLite** (`.clusterfuzzlite/`: `Dockerfile`, `build.sh` and `project.yaml`, the
   OSS-Fuzz build contract) runs the same harnesses with the OSS-Fuzz toolchain:
 
   | workflow | when | what it does |
   |---|---|---|
-  | `cflite_pr.yml` | each pull request | fuzzes only the targets the diff reaches, files crashes as SARIF findings, and drops a crash main's build already has |
+  | `cflite_pr.yml` | each pull request | fuzzes only the targets the diff reaches (every target until a coverage report exists), files crashes as SARIF findings, and drops a crash main's build already has |
   | `cflite_batch.yml` | nightly | fuzzes every target and keeps the corpus (`cifuzz-corpus-<target>`) |
   | `cflite_cron.yml` | daily | prunes the corpus and reports coverage (`cifuzz-coverage-latest`) |
   | `cflite_build.yml` | each push to main | keeps that commit's build (`cifuzz-build-address-<commit>`) |
+  | `cflite_cleanup.yml` | every 6 hours | deletes any `cifuzz-*` artifact not made by a run of this repository's main |
 
   All of it is stored as Actions artifacts (no storage repository). Every job that reads a
   `cifuzz-*` artifact first checks it was made by a run of this repository's main, because a
   fork's pull request can upload one too; it fails, naming them, while one from anywhere else is stored.
-  Delete one with `gh api -X DELETE repos/FMSMITH91/linuxgsm-panel/actions/artifacts/<id>`.
+  `cflite_cleanup.yml` deletes such an artifact at its next run, or at once when run by hand; or
+  delete one with `gh api -X DELETE repos/FMSMITH91/linuxgsm-panel/actions/artifacts/<id>`.
 
 To check the ClusterFuzzLite build locally (needs Docker), from the repo root:
 
@@ -74,5 +85,6 @@ python3 /tmp/oss-fuzz/infra/helper.py run_fuzzer --external $PWD fuzz_console
 
 Run `check_build` after touching `build.sh` or a harness's imports: a bundle can compile and still
 fail on its first import if a dynamically imported module was not bundled, which is why `build.sh`
-collects every submodule of `eventlet`, `paramiko` and `dns` and names `panel.core.config` as a
-hidden import.
+collects every submodule of `eventlet` and `paramiko` and names `panel.core.config` as a hidden
+import. It sets `EVENTLET_NO_GREENDNS=yes` first: the panel does not install dnspython, and with
+greendns on, `import eventlet` fails while the submodules are collected.

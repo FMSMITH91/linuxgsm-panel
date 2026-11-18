@@ -93,15 +93,15 @@ function loadSecurityTopIps(){
       // (after _F2B_EVENT_RE) should not be the only thing keeping markup out of the page.
       var att = Number(o.attempts) || 0, bans = Number(o.bans) || 0;
       var badge = o.banned_now ? '<span class="badge bg-danger">banned now</span>'
-                : (bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+bans+' <span>'+(bans===1?'ban':'bans')+'</span></span>' : '');
+                : (bans>0 ? '<span class="badge bg-secondary fw-normal">'+bans+' <span>'+(bans===1?'ban':'bans')+'</span></span>' : '');
       var block = o.blocked
-        ? '<span class="badge bg-dark border me-1" style="font-weight:normal;"><i class="bi bi-shield-fill-x"></i> blocked</span>'
-          +'<button class="btn btn-link btn-sm p-0" style="font-size:.72rem;"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
-        : '<button class="btn btn-sm btn-outline-danger py-0 px-1" style="font-size:.72rem;"'+_da('blockOffender',[o.ip,'@self'])+'><i class="bi bi-shield-lock"></i> Block</button>';
+        ? '<span class="badge bg-dark border me-1 fw-normal"><i class="bi bi-shield-fill-x"></i> blocked</span>'
+          +'<button class="btn btn-link btn-sm p-0 fs-r72"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
+        : '<button class="btn btn-sm btn-outline-danger py-0 px-1 fs-r72"'+_da('blockOffender',[o.ip,'@self'])+'><i class="bi bi-shield-lock"></i> Block</button>';
       // Which fail2ban jail(s) caught this IP (e.g. sshd, recidive, the panel-login jail).
       var jails=(o.jails||[]);
       var jailCell = jails.length
-        ? jails.map(function(j){ return '<span class="badge border text-secondary me-1 mb-1" style="font-weight:normal;">'+escapeHtml(j)+'</span>'; }).join('')
+        ? jails.map(function(j){ return '<span class="badge border text-secondary me-1 mb-1 fw-normal">'+escapeHtml(j)+'</span>'; }).join('')
         : '<span class="text-secondary">—</span>';
       return '<tr><td class="small text-secondary">'+(i+1)+'</td>'
         +'<td class="small"><code>'+escapeHtml(o.ip)+'</code></td>'
@@ -192,9 +192,9 @@ function renderWhitelist(list){
   var el=document.getElementById('sec-wl-list'); if(!el) return;
   if(!list.length){ el.innerHTML='<span class="small text-secondary">Nothing whitelisted. Your Tailscale IPs are always exempt.</span>'; return; }
   el.innerHTML=list.map(function(ip){  // nosemgrep
-    return '<span class="badge bg-secondary d-inline-flex align-items-center gap-1" style="font-weight:normal;">'
-      +'<code style="color:inherit;">'+escapeHtml(ip)+'</code>'
-      +'<button type="button" class="btn btn-link p-0 text-light" style="font-size:.7rem;line-height:1;text-decoration:none;" '
+    return '<span class="badge bg-secondary d-inline-flex align-items-center gap-1 fw-normal">'
+      +'<code class="text-reset">'+escapeHtml(ip)+'</code>'
+      +'<button type="button" class="btn btn-link p-0 text-light fs-r70 lh-1 text-decoration-none" '
       +_da('removeWhitelist',[ip])+' title="Remove from whitelist">&times;</button></span>';
   }).join('');
 }
@@ -255,14 +255,14 @@ function loadSecurityBans(){
         // Counts apart from their words (and made numbers here, at the innerHTML sink), so each
         // word is a whole node the i18n walker can translate.
         +'<span class="badge bg-'+(j.currently_banned?'danger':'secondary')+'">'+(Number(j.currently_banned)||0)+' <span>banned</span></span> '
-        +'<span class="text-secondary" style="font-size:.7rem;">'+(Number(j.total_banned)||0)+' <span>total</span> · '
+        +'<span class="text-secondary fs-r70">'+(Number(j.total_banned)||0)+' <span>total</span> · '
         +(Number(j.total_failed)||0)+' <span>failed</span></span> '
-        +'<button class="btn btn-link p-0 ms-1" style="font-size:.7rem;vertical-align:baseline;"'
+        +'<button class="btn btn-link p-0 ms-1 fs-r70 align-baseline"'
         +_da('loadSecurityLog',['fail2ban',j.jail])+' title="Show this jail\'s ban/unban activity">view log</button></div>';
       var body=(j.banned_ips&&j.banned_ips.length)
         ? '<div class="d-flex flex-wrap gap-2">'+j.banned_ips.map(function(ip){
-            return '<span class="badge border bg-dark" style="font-weight:normal;">'+escapeHtml(ip)
-              +' <button class="btn btn-link p-0 ms-1 text-danger" style="font-size:.7rem;vertical-align:baseline;"'
+            return '<span class="badge border bg-dark fw-normal">'+escapeHtml(ip)
+              +' <button class="btn btn-link p-0 ms-1 text-danger fs-r70 align-baseline"'
               +_da('unbanIp',[j.jail,ip,'@self'])+' title="Lift this ban">unban</button></span>'; }).join('')+'</div>'
         : '<div class="text-secondary small">No IPs banned right now.</div>';
       return '<div class="mb-3">'+head+body+'</div>';
@@ -550,14 +550,14 @@ function renderUpdates(d, note){
   var sec=pkgs.filter(isSecurityPkg).length;
   var head=(n ? '<div class="mb-1"><span class="text-warning"><i class="bi bi-exclamation-triangle-fill"></i> '
                 + n + ' <span>' + (n===1?'update available':'updates available') + '</span></span>'
-                + (sec ? ' <span class="badge bg-danger" style="font-weight:normal;">'+sec+' <span>security</span></span>' : '')
+                + (sec ? ' <span class="badge bg-danger fw-normal">'+sec+' <span>security</span></span>' : '')
                 + '</div>'
               : '<div class="text-success"><i class="bi bi-check-circle"></i> System is up to date.</div>')
-         + (note ? '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(note)+'</div>' : '');
-  var rows=!n ? '' : '<div style="max-height:200px;overflow:auto;">' + pkgs.map(function(p){
+         + (note ? '<div class="text-secondary fs-r68">'+escapeHtml(note)+'</div>' : '');
+  var rows=!n ? '' : '<div class="mh-200px overflow-auto">' + pkgs.map(function(p){
     var ver = p.from ? (escapeHtml(p.from)+' → <span class="text-success">'+escapeHtml(p.version)+'</span>')
                      : escapeHtml(p.version||'');
-    return '<div style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
+    return '<div class="ff-mono fs-r72 lh-15">'
          + '<span class="'+(isSecurityPkg(p)?'text-danger':'text-info')+'">'
          + escapeHtml(p.label||p.name)+'</span> '+ver+'</div>';   // label: "libx11-6 (i386)" beside its amd64 row
   }).join('') + '</div>';
@@ -575,15 +575,15 @@ function renderDeferred(d, n){
   var held=d.deferred||[];
   if(!held.length){
     return (d.deferred_known===false && n)
-      ? '<div class="text-secondary mt-1" style="font-size:.68rem;"><span>'
+      ? '<div class="text-secondary mt-1 fs-r68"><span>'
         + "Couldn't read which of these apt is holding back."
         + '</span></div>' : '';
   }
-  return '<div class="mt-2" id="update-deferred"><div class="text-secondary" style="font-size:.72rem;">'
+  return '<div class="mt-2" id="update-deferred"><div class="text-secondary fs-r72">'
        + '<i class="bi bi-hourglass-split"></i> <span>'
        + "Held back by apt (Ubuntu's phased rollout, or kept back) — an upgrade does not install these yet."
-       + '</span></div><div style="max-height:120px;overflow:auto;">' + held.map(function(p){
-    return '<div class="text-secondary" style="font-family:monospace;font-size:.72rem;line-height:1.5;">'
+       + '</span></div><div class="mh-120px overflow-auto">' + held.map(function(p){
+    return '<div class="text-secondary ff-mono fs-r72 lh-15">'
          + escapeHtml(p.label||p.name) + (p.version ? ' '+escapeHtml(p.version) : '') + '</div>';
   }).join('') + '</div></div>';
 }

@@ -18,7 +18,7 @@ function _tsUpNow(outEl, btn){
     if(d.connected){ outEl.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected!</span>'; setTimeout(function(){ window.refreshSection('#ts-page','wireTsButtons'); }, 900); return; }
     outEl.innerHTML = '<div class="alert alert-info py-2 small mb-0 text-start">'  // nosemgrep - literals plus auth_url, tsEsc-wrapped in both text places and _da()-encoded in the button
       + '<strong>1.</strong> Open this link and approve this machine in your Tailscale account:<br>'
-      + '<a href="' + tsEsc(d.auth_url) + '" target="_blank" rel="noopener noreferrer" style="word-break:break-all;">' + tsEsc(d.auth_url) + '</a>'
+      + '<a href="' + tsEsc(d.auth_url) + '" target="_blank" rel="noopener noreferrer" class="wb-all">' + tsEsc(d.auth_url) + '</a>'
       + ' <button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('_copyDataU', ['@self']) + ' data-u="' + tsEsc(d.auth_url) + '"><i class="bi bi-clipboard"></i></button><br>'
       + '<strong>2.</strong> <span id="ts-wait"><i class="bi bi-hourglass-split"></i> Waiting for you to authorize…</span></div>';
     // One live poll, with a deadline. Its only exit was the host reporting running:true, so the

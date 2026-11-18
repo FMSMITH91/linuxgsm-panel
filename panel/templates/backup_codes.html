@@ -2,7 +2,7 @@
 {% block title %}{{ t('Backup codes') }}{% endblock %}
 {% block content %}
 
-<div class="card mx-auto" style="max-width: 640px;">
+<div class="card mx-auto maxw-640">
   <div class="card-header"><i class="bi bi-key-fill"></i> Your 2FA backup codes</div>
   <div class="card-body">
     <div class="alert alert-warning py-2 small mb-3">
@@ -12,9 +12,9 @@
       If you download the .txt file, keep it somewhere secure and encrypt it with a password — anyone who
       gets this file can use these codes to bypass your two-factor login.
     </div>
-    <div class="row row-cols-2 g-2 font-monospace mb-3" style="font-size:1rem;">
+    <div class="row row-cols-2 g-2 font-monospace mb-3 fs-r100">
       {% for c in codes %}
-      <div class="col"><div class="border rounded text-center py-2" style="letter-spacing:.1em;">{{ c }}</div></div>
+      <div class="col"><div class="border rounded text-center py-2 code-tracking">{{ c }}</div></div>
       {% endfor %}
     </div>
     <div class="d-flex gap-2 flex-wrap align-items-center">

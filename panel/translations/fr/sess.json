@@ -17,5 +17,5 @@
   "With “Remember me”, a sign-in lasts {lasts}, then asks for the password.": "Avec « Se souvenir de moi », une connexion dure {lasts}, puis redemande le mot de passe.",
   "This change needs your password again because you signed in a while ago. Nothing you typed is lost.": "Cette modification redemande votre mot de passe car vous vous êtes connecté il y a un moment. Rien de ce que vous avez saisi n’est perdu.",
   "Confirm and save": "Confirmer et enregistrer",
-  "The password is asked again before a terminal, an uninstall, a backup restore, a user or group change, or a Settings or Notifications save.": "Le mot de passe est redemandé avant un terminal, une désinstallation, une restauration de sauvegarde, une modification d’utilisateurs ou de groupes, ou l’enregistrement des Paramètres ou des Notifications."
+  "The password is asked again before a terminal and other high-risk changes: users and groups, hosts, the firewall, updates, certificates, databases, backups, Settings and Notifications.": "Le mot de passe est redemandé avant un terminal et d’autres changements à risque : utilisateurs et groupes, hôtes, pare-feu, mises à jour, certificats, bases de données, sauvegardes, Paramètres et Notifications."
 }

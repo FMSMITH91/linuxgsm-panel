@@ -114,21 +114,21 @@
     <div class="card-body">
       <p class="text-secondary small mb-3">{% if current_user.totp_enabled %}Change your account password. You'll need your current password and an authenticator code to confirm it's you.{% else %}Change your account password. You'll need your current password to confirm it's you.{% endif %}</p>
       <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off">
-        <div class="mb-2" style="max-width: 420px;">
+        <div class="mb-2 maxw-420">
           <label class="form-label small mb-1" for="account-current_password">Current password</label>
           <input id="account-current_password" type="password" name="current_password" class="form-control form-control-sm" autocomplete="current-password" required>
         </div>
-        <div class="mb-2" style="max-width: 420px;">
+        <div class="mb-2 maxw-420">
           <label class="form-label small mb-1" for="account-new_password">New password</label>
           <input id="account-new_password" type="password" name="new_password" class="form-control form-control-sm" autocomplete="new-password" minlength="8" required>
           <div class="form-text">At least 15 characters (8 with two-factor authentication on); any characters, spaces too. Not a common password.</div>
         </div>
-        <div class="mb-2" style="max-width: 420px;">
+        <div class="mb-2 maxw-420">
           <label class="form-label small mb-1" for="account-confirm_password">Confirm new password</label>
           <input id="account-confirm_password" type="password" name="confirm_password" class="form-control form-control-sm" autocomplete="new-password" minlength="8" required>
         </div>
         {% if current_user.totp_enabled %}
-        <div class="mb-3" style="max-width: 420px;">
+        <div class="mb-3 maxw-420">
           <label class="form-label small mb-1" for="account-totp_code">Authenticator code</label>
           <input id="account-totp_code" type="text" name="totp_code" class="form-control form-control-sm"
                  autocomplete="one-time-code" placeholder="6-digit code (or a backup code)" required>
@@ -151,9 +151,9 @@
            every later login easier, so it asks for the same proof. A backup code works here. #}
         <form method="POST" action="{{ url_for('account_2fa_disable') }}">
           <span class="form-label small d-inline-block" id="tfa-off-label">Confirm your password and a current code to turn 2FA off</span>
-          <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;" role="group" aria-labelledby="tfa-off-label">
-            <input type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
-            <input type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
+          <div class="d-flex gap-2 flex-wrap maxw-560" role="group" aria-labelledby="tfa-off-label">
+            <input type="password" name="password" class="form-control form-control-sm field-grow-12" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+            <input type="text" name="totp_code" class="form-control form-control-sm field-fixed-9" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
             <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Disable 2FA</button>
           </div>
         </form>
@@ -194,12 +194,12 @@
       {% else %}
       <form method="POST" action="{{ url_for('account_owner_transfer') }}" autocomplete="off">
         <p class="text-secondary small mb-2">They become the owner; you stay a superadmin. Confirm with your password and a code from your authenticator (not a backup code).</p>
-        <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
-          <select id="account-owner_new" name="new_owner" class="form-select form-select-sm" style="min-width:10rem;flex:1 1 10rem;" aria-label="New owner" required>
+        <div class="d-flex gap-2 flex-wrap maxw-560">
+          <select id="account-owner_new" name="new_owner" class="form-select form-select-sm field-grow-10" aria-label="New owner" required>
             {% for s in successors %}<option value="{{ s.id }}" data-no-i18n>{{ s.username }}</option>{% endfor %}
           </select>
-          <input id="account-owner_password" type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
-          <input id="account-owner_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" inputmode="numeric" placeholder="Authenticator code" aria-label="Authenticator code" required>
+          <input id="account-owner_password" type="password" name="password" class="form-control form-control-sm field-grow-12" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+          <input id="account-owner_totp_code" type="text" name="totp_code" class="form-control form-control-sm field-fixed-9" autocomplete="one-time-code" inputmode="numeric" placeholder="Authenticator code" aria-label="Authenticator code" required>
           <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Transfer ownership</button>
         </div>
       </form>
@@ -262,9 +262,9 @@
       {% if new_token %}
       <div class="alert alert-success py-2">
         <div class="small mb-1"><strong>Copy your new token now — it won't be shown again.</strong></div>
-        <code class="user-select-all d-block p-2" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">{{ new_token }}</code>
+        <code class="user-select-all d-block p-2 token-code">{{ new_token }}</code>
         <div class="small text-secondary mt-2">Example:</div>
-        <code class="d-block p-2 small" style="word-break:break-all; background:rgba(0,0,0,.2); border-radius:6px;">curl -H "Authorization: Bearer {{ new_token }}" https://your-panel:5000/api/servers</code>
+        <code class="d-block p-2 small token-code">curl -H "Authorization: Bearer {{ new_token }}" https://your-panel:5000/api/servers</code>
       </div>
       {% endif %}
 
@@ -290,14 +290,14 @@
         {% else %}
         <label class="form-label small mb-1" for="account-api_password">Your account password</label>
         {% endif %}
-        <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
-          <input id="account-api_password" type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" required>
+        <div class="d-flex gap-2 flex-wrap maxw-560">
+          <input id="account-api_password" type="password" name="password" class="form-control form-control-sm field-grow-12" autocomplete="current-password" placeholder="Password" required>
           {% if current_user.totp_enabled %}
-          <input id="account-api_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
+          <input id="account-api_totp_code" type="text" name="totp_code" class="form-control form-control-sm field-fixed-9" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
           {% endif %}
           {# How long a new token lives (Authorization Cheat Sheet: short-lived credentials). A token
              minted before this choice existed keeps working until it is replaced or revoked. #}
-          <select name="expires_days" class="form-select form-select-sm" style="width:auto;" aria-label="Token lifetime">
+          <select name="expires_days" class="form-select form-select-sm w-auto" aria-label="Token lifetime">
             <option value="30">Expires in 30 days</option>
             <option value="90" selected>Expires in 90 days</option>
             <option value="365">Expires in a year</option>
