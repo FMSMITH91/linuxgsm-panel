@@ -88,6 +88,9 @@ and that list is skipped until it is there.
 - **Backups:** how many days to keep, and a passphrase to encrypt them.
 - **Alert devices and Telegram:** remove a device, unlink Telegram, or tick *Stop alerts on this device*
   when you sign out.
+- **Your browser:** signing out clears the panel's cookies, its saved pages and its browser storage
+  (the console's command history among them). When you keep alerts on that device, its alert
+  subscription stays.
 - **Outside services:** Settings → Outside services has one switch per service above, each with a
   note of what stops working when it is off.
 - **Accounts:** deleting an account removes its devices, sessions and linked chat.
