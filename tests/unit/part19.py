@@ -930,7 +930,7 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
     # block already holds comment lines between its entries, so `# 'tests/fuzz/**'` fits its style.
     _sc_list = "\n".join(_sg_re.sub(r"(?:^|\s)#.*$", "", _l) for _l in _sc_list.splitlines())
     _sc_after = [_b for _b in _sc_steps[_sc_at:].split("\n      - ")[1:]
-                 if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|\./\.cflite-actions/)"
+                 if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|\$/\.github/actions/cflite-)"
                                   r"|^name: (Install|Fuzz))", _b, _sg_re.M)]
     if _sc_at < 0 or _sc_steps.find("\n      - ") < _sc_at - 400:
         _sc_bad.append("%s: no scope step first" % _sc_wf)

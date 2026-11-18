@@ -3,8 +3,8 @@
 * ClusterFuzzLite builds and fuzzes on Ubuntu 24.04 images pinned by digest: the fuzz image's base
   (.clusterfuzzlite/Dockerfile), and this repository's copies of the vendor's two actions
   (.github/actions/cflite-*), which are upstream's files byte for byte but for the `image:` line.
-  project.yaml selects the same base, every job checks the copies out before using them, and no
-  workflow runs the vendor's actions, whose images are named by tag.
+  project.yaml selects the same base, every step names its copy by GitHub's self-repository form
+  (`$/`, no checkout), and no workflow runs the vendor's actions, whose images are named by tag.
 * Scorecard's image cannot be pinned in its job (its publishing rules), so scorecard.yml records its
   digest, checks the tag against it before the analysis, and checks what the analysis pulled after;
   both checks run here on stand-in tools, and the recorded tag follows the action's version.
@@ -107,52 +107,40 @@ check("cflite images: project.yaml selects ubuntu-24-04, the Dockerfile's one FR
       not _os_all242 and all(_os_ctl242.values()), repr((_os_all242, _os_ctl242)))
 
 
-# ── 3. every job checks the copies out before it uses them ─────────────────────────────────────────
-_LOCAL242 = "uses: ./.cflite-actions/.github/actions/cflite-"
-_CHECKOUT242 = ("        uses: actions/checkout@", "          persist-credentials: false\n",
-                "          path: .cflite-actions\n", "          sparse-checkout: .github/actions\n")
+# ── 3. every ClusterFuzzLite step names its copy in the self-repository form ───────────────────────
+# `$/` reads the action from the commit the run is for, with no checkout; `./` would read whatever file
+# sits at that path in the workspace when the step starts, which an earlier step can write (zizmor
+# self-repository; GitHub changelog 2026-07-30, "Reference same-repository actions with self-repository
+# syntax").
+_CFL_STEP242 = _re242.compile(r"^        uses: (\S*cflite\S*|\S*clusterfuzzlite\S*)", _re242.M)
 
 
-def _if242(step):
-    """A step's `if:` condition, or "" when it has none."""
-    m = _re242.search(r"^        if: (.+)$", step, _re242.M)
-    return m.group(1) if m else ""
+def _cfl_uses242(text):
+    """(job, uses) for every ClusterFuzzLite step of one workflow."""
+    return [(job, m.group(1)) for job in _jobs29(text) for s in _steps29(_job29(text, job))
+            for m in _CFL_STEP242.finditer(s)]
 
 
-def _job_checkout_bad242(steps):
-    """For one job's steps: None when no step uses a copy, else whether its checkout is missing or wrong."""
-    users = [i for i, s in enumerate(steps) if _LOCAL242 in s]
-    if not users:
-        return None
-    outs = [i for i, s in enumerate(steps) if all(w in s for w in _CHECKOUT242)]
-    return not outs or outs[0] > users[0] or _if242(steps[outs[0]]) != _if242(steps[users[0]])
+def _cfl_bad242(found):
+    """The steps that do not run a copy by `$/`, and how many jobs run one."""
+    ok = ("$/.github/actions/cflite-build-fuzzers", "$/.github/actions/cflite-run-fuzzers")
+    return [u for _, u in found if u not in ok], len({j for j, u in found if u in ok})
 
 
-def _checkout_bad242(name, text):
-    """(jobs that use a copy, what is wrong): a job using a copy with no sparse checkout of it first."""
-    verdicts = {job: _job_checkout_bad242(_steps29(_job29(text, job))) for job in _jobs29(text)}
-    return (len([v for v in verdicts.values() if v is not None]),
-            ["%s/%s: no checkout of .github/actions, on the same condition, before its first use" % (name, job)
-             for job, v in verdicts.items() if v])
-
-
-_co242 = [_checkout_bad242(f, _wf29(f)) for f in ("cflite_pr.yml", "cflite_batch.yml", "cflite_build.yml",
-                                                  "cflite_cron.yml")]
-_co_bad242 = [b for _, bad in _co242 for b in bad]
-_pr242 = _wf29("cflite_pr.yml")
-_co_ctl242 = {
-    "no checkout": _checkout_bad242("x", _pr242.replace("          sparse-checkout: .github/actions\n", ""))[1],
-    "a token kept": _checkout_bad242("x", _pr242.replace("          persist-credentials: false\n          path: "
-                                                        ".cflite-actions", "          path: .cflite-actions"))[1],
-    "checked out unconditionally": _checkout_bad242("x", _pr242.replace(
-        "        if: steps.scope.outputs.run == 'true'\n        uses: actions/checkout@",
-        "        uses: actions/checkout@"))[1],
+_cfl_found242 = [(f + "/" + j, u) for f in ("cflite_pr.yml", "cflite_batch.yml", "cflite_build.yml", "cflite_cron.yml")
+                 for j, u in _cfl_uses242(_wf29(f))]
+_cfl_all242 = _cfl_bad242(_cfl_found242)
+_cfl_ctl242 = {
+    "workspace-relative": _cfl_bad242(_cfl_uses242(_wf29("cflite_build.yml").replace(
+        "uses: $/.github/actions/", "uses: ./.github/actions/")))[0],
+    "the vendor's action": _cfl_bad242(_cfl_uses242(_wf29("cflite_build.yml").replace(
+        "uses: $/.github/actions/cflite-build-fuzzers",
+        "uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1")))[0],
 }
-check("cflite workflows: each of the five jobs that runs a copy checks out only .github/actions, into "
-      ".cflite-actions with no token kept, before it and on the same condition; a missing, token-keeping or "
-      "unconditional checkout is caught",
-      sum(j for j, _ in _co242) == 5 and not _co_bad242 and all(_co_ctl242.values()),
-      repr(([j for j, _ in _co242], _co_bad242, _co_ctl242)))
+check("cflite workflows: all nine ClusterFuzzLite steps, in five jobs, run a copy by `$/` (the run's own "
+      "commit, no checkout); a workspace-relative `./` path or the vendor's action is caught",
+      _cfl_all242 == ([], 5) and len(_cfl_found242) == 9 and all(_cfl_ctl242.values()),
+      repr((_cfl_all242, _cfl_found242, _cfl_ctl242)))
 
 
 # ── 4. Scorecard: the recorded digest, before the analysis and in its own pull ─────────────────────

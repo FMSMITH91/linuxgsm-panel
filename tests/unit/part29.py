@@ -93,7 +93,7 @@ def _write_exe29(path, text):
 
 # The ClusterFuzzLite steps run this repository's copies of the vendor's two actions, whose images
 # are pinned by digest (.github/actions/cflite-*; part242 holds them to upstream's).
-_CFL_ACTIONS29 = "uses: ./.cflite-actions/.github/actions/cflite-"
+_CFL_ACTIONS29 = "uses: $/.github/actions/cflite-"
 _CFL_BUILD29 = _CFL_ACTIONS29 + "build-fuzzers\n"
 _CFL_RUN29 = _CFL_ACTIONS29 + "run-fuzzers\n"
 
@@ -730,8 +730,11 @@ def _all_uses29():
 
 
 def _pinned29(ref):
-    """A local action and a docker:// image are not commits; anything else ends in @<40 hex>."""
-    if ref.startswith(("./", "docker://")):
+    """A local action, this repository's own ($/, its run's commit) or a docker:// image is not a commit.
+
+    Anything else ends in @<40 hex>.
+    """
+    if ref.startswith(("./", "$/", "docker://")):
         return True
     return _re29.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref) is not None
 
