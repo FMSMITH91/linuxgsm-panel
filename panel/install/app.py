@@ -595,7 +595,7 @@ def _player_count_watch(app):
         _t0 = time.time()
         try:
             _refresh_player_counts(app)
-            runtime_stats.beat("player-counts", _player_poll_cadence(app), time.time() - _t0)
+            runtime_stats.beat("player-counts", _player_poll_cadence(app, time.time()), time.time() - _t0)
         except Exception:
             runtime_stats.bump("loopfail", "player-counts")
             _log.debug("player-count poller pass failed", exc_info=True)

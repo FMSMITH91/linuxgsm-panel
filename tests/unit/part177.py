@@ -80,7 +80,8 @@ def _run_netif177(text):
             fh.write(text)
         out = _subprocess177.run(["bash", "-c", cmd[0].replace("/proc/net/dev", path)],  # nosec B603 B607
                                  capture_output=True, text=True, timeout=10, check=False)
-    return out.stdout.splitlines()
+    # The part is the host sample's one awk, which prints the other figures too.
+    return [ln for ln in out.stdout.splitlines() if ln.startswith("NETIF ")]
 
 
 _lines177 = _run_netif177(proc_net_dev_sample)

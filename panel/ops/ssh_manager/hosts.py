@@ -2303,8 +2303,8 @@ def remote_uptime(server, force=False):
         if hit and hit[0] > now:
             return hit[1]
     # uptime, df and free in the C locale: their words ("up", "Mem:") and decimal commas are
-    # translated on a host set to another language, and the awk below reads them (see _core's
-    # _host_sample_cmd). The MEMPCT awk too: mawk, Ubuntu's default awk, printf's a decimal comma
+    # translated on a host set to another language, and the awk below reads them (as _core's
+    # _game_sample_cmd does). The MEMPCT awk too: mawk, Ubuntu's default awk, printf's a decimal comma
     # in the caller's locale ("30,2" on a German host, measured), and LC_ALL on `free` is not its.
     # One composite command with tagged lines, parsed below — one round-trip, one process spawn.
     parts = [
