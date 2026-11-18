@@ -114,9 +114,20 @@ def parse_page(html):
     return (m.group(0), m.group(1), s.group(1).lower()) if s else None
 
 
+def sha1_hex(data):
+    """The SHA1 of `data`, as DB-IP's page publishes it (its only checksums are MD5 and SHA1).
+
+    What it guards is a second preimage (a different file with the published sum), which SHA1 still
+    resists; the page and the file both come over TLS from db-ip.com, and the file must then also be an
+    MMDB file. No collision-dependent use (signatures, certificates) is made of it.
+    """
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
+    return hashlib.sha1(data, usedforsecurity=False).hexdigest()  # nosec B324 - DB-IP publishes SHA1 only
+
+
 def unpack(gz, sha1):
     """The database inside `gz`, once it matches `sha1` and looks like an MMDB file, else None."""
-    matched = hashlib.sha1(gz, usedforsecurity=False).hexdigest() == sha1  # nosec B324 - DB-IP publishes SHA1
+    matched = sha1_hex(gz) == sha1
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(gz)) as fh:
             data = fh.read(UNPACKED_CAP + 1)
@@ -124,7 +135,7 @@ def unpack(gz, sha1):
         return None
     if len(data) > UNPACKED_CAP:
         return None
-    if not matched and hashlib.sha1(data, usedforsecurity=False).hexdigest() != sha1:  # nosec B324
+    if not matched and sha1_hex(data) != sha1:
         return None
     return data if MMDB_MARKER in data[-512 * 1024:] else None
 

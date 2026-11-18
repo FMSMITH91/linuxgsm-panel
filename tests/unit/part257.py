@@ -20,13 +20,13 @@ Shells run under bash in a throwaway folder; nothing reaches a host or db-ip.com
 """
 import base64 as _b64m257
 import gzip as _gzip257
-import hashlib as _hl257
 import json as _json257
 import os
 import re as _re257
 import shutil as _shutil257
 import subprocess as _sp257  # nosec B404 - bash and node over this part's own throwaway files
 import tempfile as _tf257
+import urllib.request as _urlreq257
 
 from unit.part01 import _root, check, eq
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
@@ -122,7 +122,7 @@ def _ini257():
 # ── 3. DB-IP ────────────────────────────────────────────────────────────────────────────────────
 _DB257 = b"\x00" * 64 + _geo257.MMDB_MARKER + b"\xe1\x00metadata"
 _GZ257 = _gzip257.compress(_DB257)
-_SHA_GZ257 = _hl257.sha1(_GZ257).hexdigest()   # nosec B324 - DB-IP publishes SHA1; a checksum in a test
+_SHA_GZ257 = _geo257.sha1_hex(_GZ257)
 _PAGE257 = ('<a href="https://download.db-ip.com/free/dbip-country-lite-%s.csv.gz">CSV</a> ... '
             '<a href="https://download.db-ip.com/free/dbip-country-lite-%s.mmdb.gz">MMDB</a>'
             '<dt>MD5</dt><dd>%s</dd><dt>SHA1</dt><dd>%s</dd>' % (_MONTH257, _MONTH257, "a" * 32, _SHA_GZ257))
@@ -147,9 +147,9 @@ def _geoip257():
        _geo257.parse_page(_PAGE257), (url, _MONTH257, _SHA_GZ257))
     eq("DB-IP: the file is used only when it matches the SHA1 (of the .gz or of the database) and is an MMDB file",
        [_geo257.unpack(_GZ257, _SHA_GZ257) == _DB257,
-        _geo257.unpack(_GZ257, _hl257.sha1(_DB257).hexdigest()) == _DB257,  # nosec B324 - a checksum in a test
-        _geo257.unpack(_GZ257, "0" * 40), _geo257.unpack(_gzip257.compress(b"x" * 99), _hl257.sha1(  # nosec B324
-            _gzip257.compress(b"x" * 99)).hexdigest())],
+        _geo257.unpack(_GZ257, _geo257.sha1_hex(_DB257)) == _DB257,
+        _geo257.unpack(_GZ257, "0" * 40),
+        _geo257.unpack(_gzip257.compress(b"x" * 99), _geo257.sha1_hex(_gzip257.compress(b"x" * 99)))],
        [True, True, None, None])
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.encode(), None), url: (_GZ257, None)})
     first = _geo257.latest()
@@ -162,11 +162,13 @@ def _geoip257():
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.encode(), None)}, switch=False)
     eq("DB-IP: turned off in Outside services, nothing is asked", (_geo257.latest(), asked),
        ((None, "", _geo257.OFF), []))
-    redirect = _geo257._AllowedRedirect()
+    redirect, req = _geo257._AllowedRedirect(), _urlreq257.Request(_geo257.PAGE)
     eq("DB-IP: a redirect is followed on db-ip.com's two hosts only, over https",
        [_geo257._allowed(u) for u in ("https://download.db-ip.com/x", "http://db-ip.com/x", "https://evil.example/x",
                                       "https://db-ip.com:8443/x")]
-       + [redirect.redirect_request(None, None, 302, "", {}, "https://evil.example/x")], [True, False, False, False, None])
+       + [redirect.redirect_request(req, None, 302, "", {}, u) is not None
+          for u in ("https://evil.example/x", "https://download.db-ip.com/free/x.gz")],
+       [True, False, False, False, False, True])
     check("Outside services: DB-IP has its own switch, which says what it sends and what Off stops",
           any(s["key"] == _os257.DBIP and "no player address" in s["note"] for s in _os257.SERVICES), "")
 
@@ -312,9 +314,9 @@ def _settings257(ids):
     eq("settings: b3.ini goes back on stdin with only the panel's plugin lines changed (the operator's plugin and the "
        "password kept), no rebuild, a restart watched, audited",
        (ok.status_code, _ad257.b3_ini_plugins(stdin), "myext: @conf/myext.ini" in stdin,
-        "rcon_password: %s" % _RC257 in stdin, "podman build" in re_[1], _RC257 in re_[1],
-        _p9_audit("addon_settings").success),
-       (202, ["admin", "afk", "tk"], True, True, False, False, True))
+        "rcon_password: %s" % _RC257 in stdin, "/panel-addons/b3/Data/b3.ini.new && mv" in re_[1], "podman build" in re_[1],
+        _RC257 in re_[1], _p9_audit("addon_settings").success),
+       (202, ["admin", "afk", "tk"], True, True, True, False, False, True))
 
 
 def _update257(ids):
