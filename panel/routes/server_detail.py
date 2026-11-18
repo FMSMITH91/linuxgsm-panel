@@ -1783,7 +1783,7 @@ def _register_schedules(app):
             log_action(current_user, "set_autostart", target=gs.name, success=False,
                        detail=("%s - %s" % (enabled, detail or ""))[:300], server=gs)
             return jsonify({"success": False,
-                            "message": i18n.tr(detail) if detail else "Failed to update crontab"}), 500
+                            "message": i18n.tr(detail) if detail else "Failed to update crontab"}), 502
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -1835,7 +1835,7 @@ def _register_schedules(app):
             log_action(current_user, "set_daily_restart", target=gs.name, success=False,
                        detail=("%s - %s" % (_at, detail or ""))[:300], server=gs)
             return jsonify({"success": False,
-                            "message": i18n.tr(detail) if detail else "Failed to update schedule"}), 500
+                            "message": i18n.tr(detail) if detail else "Failed to update schedule"}), 502
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 

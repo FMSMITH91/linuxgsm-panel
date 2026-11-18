@@ -2737,7 +2737,7 @@ def _uninstall_claimed(app, gs, remote, server_id, name):
                           "place — nothing was deleted from the panel. {why}",
                           user=short_name, host=remote.display_name, name=name,
                           why=readable_reason(err or out or "userdel exited %d" % rc)[:200])
-            return _index_reply(_em, False, "danger", 500)
+            return _index_reply(_em, False, "danger", 502)   # the host's userdel failed
         if rc == 12:
             fw_notes.append(i18n.Sentence("The account was removed but its home directory could not "
                                           "be — check /home/{user} on the host.", user=short_name))

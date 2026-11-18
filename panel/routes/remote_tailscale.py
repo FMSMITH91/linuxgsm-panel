@@ -89,7 +89,8 @@ def _register_status_and_link_join(app):
             log_action(current_user, "remote_tailscale_up", target=remote.name, success=ok,
                        remote=remote)
             if not ok:
-                return jsonify({"success": False, "message": i18n.tr(result)}), 500
+                # The host's `tailscale up` failed: an upstream failure (502), not the panel's (500).
+                return jsonify({"success": False, "message": i18n.tr(result)}), 502
             if result == "ALREADY_CONNECTED":
                 return jsonify({"success": True, "connected": True})
             return jsonify({"success": True, "connected": False, "url": result})
