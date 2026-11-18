@@ -83,11 +83,9 @@
     if (a.geolocation_option) settingsFold(a, box);
   }
 
-  var GEO_SAID = {
-    off: 'Geolocation is off.',
+  var GEO_SAID = {off: 'Geolocation is off.',
     offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
-    online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'
-  };
+    online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'};
   function geoStatus(a, box) {
     box.appendChild(node('div', 'small text-secondary', T(GEO_SAID[a.geolocation] || GEO_SAID.off)));
     if (a.geolocation === 'offline') {
