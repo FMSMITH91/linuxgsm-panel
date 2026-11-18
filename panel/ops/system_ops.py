@@ -1413,7 +1413,10 @@ def get_server_status(force=False):
     ts_ssh = tailscale_ssh_status()
     ts_ssh_choice = tailscale_ssh_choice()
     uptime = server_uptime()
-    has_sudo = _check_sudo()
+    # Whether this host can run the panel's privileged actions: the helper or root answers without
+    # asking sudo, and only the shell path (no helper, not root) runs the cached `sudo -n true`. Under
+    # the helper's narrow grant that probe is always refused, and sudo logs each refusal.
+    has_sudo = _can_escalate()
     ts_iface = detect_tailscale_interface()
 
     # Is the Tailscale interface already let in by UFW? Read from the rules ufw_status() parsed.
