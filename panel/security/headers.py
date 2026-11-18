@@ -56,11 +56,11 @@ CORP = "same-origin"
 COEP = "require-corp"
 
 # What the after-request cache step gives a response that set no Cache-Control of its own (app.py).
-PRIVATE_REVALIDATE = "no-cache, private"
+PRIVATE_REVALIDATE = "no-store"
 # OWASP HTTP Headers Cheat Sheet, "Cache-Control": no-store for sensitive responses. Every JSON answer
-# is one (server state, a user's details, a generated password, a debug report), and no page reads a
-# JSON answer back from the cache. HTML pages keep PRIVATE_REVALIDATE so the back/forward cache still
-# works (panel.js re-checks the session on a restore), except a page that shows a secret (no_store).
+# is one (server state, a user's details, a generated password, a debug report), and so is every
+# signed-in page; no page reads either back from the cache. A browser may still restore a page from the
+# back/forward cache, and panel.js re-checks the session when it does.
 NO_STORE = "no-store"
 
 

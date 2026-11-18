@@ -219,8 +219,8 @@ check("headers: a page is never framed (X-Frame-Options DENY), keeps no opener, 
       and _page214.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
       and _page214.headers.get("X-DNS-Prefetch-Control") == "off"
       and _page214.headers.get("Cross-Origin-Resource-Policy") == "same-origin", repr(dict(_page214.headers)))
-check("headers: ...and keeps no-cache, private, so the back/forward cache still works",
-      _page214.headers.get("Cache-Control") == "no-cache, private", repr(_page214.headers.get("Cache-Control")))
+check("headers: ...and is no-store (OWASP: a signed-in page is sensitive, so no copy is kept)",
+      _page214.headers.get("Cache-Control") == "no-store", repr(_page214.headers.get("Cache-Control")))
 check("headers: a JSON answer is no-store, with the inert CSP and CORP",
       _api214.headers.get("Cache-Control") == "no-store"
       and _api214.headers.get("Content-Security-Policy") == _hdr214.INERT_CSP

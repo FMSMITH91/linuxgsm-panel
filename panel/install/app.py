@@ -1943,11 +1943,11 @@ def create_app():
                 #     again. Without this, Back (or reopening the tab) after the cookie expired
                 #     could paint the old dashboard from the disk cache — fully rendered and
                 #     completely dead, so every button on it failed instead of taking you to the
-                #     login screen. `no-cache` means "ask first", and the ask is what redirects.
-                #     Deliberately NOT `no-store`, which would also evict the page from the
-                #     back/forward cache and undo the bfcache work in panel.js; the JS side covers
-                #     a bfcache restore by pinging /api/auth/ping on pageshow.
-                resp.headers["Cache-Control"] = "no-cache, private"
+                #     login screen. `no-store` (OWASP HTTP Headers and Session Management cheat
+                #     sheets: sensitive pages are not stored) also keeps no copy on disk; a browser
+                #     may still restore it from the back/forward cache, and panel.js re-checks the
+                #     session with /api/auth/ping on pageshow when it does.
+                resp.headers["Cache-Control"] = "no-store"
         except Exception:  # nosec B110 - a cache header is an optimisation, never correctness:
             pass           # if request.path is unavailable the response still goes out, unchanged.
         # 2) gzip text responses (HTML ~10x, JSON ~17x smaller) when the client accepts it — the

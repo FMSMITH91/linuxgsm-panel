@@ -169,9 +169,9 @@ def _register_sign_in(app):
         # Clear-Site-Data (Session Management Cheat Sheet, "Web Content Caching and Clear-Site-Data":
         # "cache", "cookies", "storage" at logout): the browser drops this site's cookies, storage
         # (the console's command history among them) and its HTTP cache. The signed-in pages are
-        # `no-cache, private` (app.py: no-store would keep them out of the back/forward cache), which
-        # lets the browser keep a copy on disk; "cache" removes those copies (the dashboard, the
-        # audit log, host addresses) at sign-out. The cost is one fresh download of the scripts and
+        # `no-store` (app.py), so no copy of them is kept; "cache" also drops anything an older
+        # release left on disk (the dashboard, the audit log, host addresses) at sign-out, and
+        # whatever else is cached for this site. The cost is one fresh download of the scripts and
         # styles at the next sign-in. The message rides the URL, not a flash: the flash is kept in
         # the session cookie this header deletes.
         # "storage" also unregisters the site's service workers, and with them this device's push

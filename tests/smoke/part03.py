@@ -1030,11 +1030,11 @@ check("security header: the page CSP takes styles from the panel and the request
       "style attribute (style-src-attr 'none'; no 'unsafe-inline' anywhere)",
       "style-src 'self' 'nonce-" in _hcsp and "style-src-elem 'self' 'nonce-" in _hcsp
       and "style-src-attr 'none'" in _hcsp and "unsafe-inline" not in _hcsp, _hcsp)
-check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and keeps "
-      "no-cache, private (the back/forward cache)",
+check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and is "
+      "no-store (OWASP: no copy of a signed-in page is kept)",
       (hr.headers.get("Cross-Origin-Opener-Policy"), hr.headers.get("Cross-Origin-Resource-Policy"),
        hr.headers.get("X-DNS-Prefetch-Control"), hr.headers.get("Cache-Control"))
-      == ("same-origin", "same-origin", "off", "no-cache, private"), repr(dict(hr.headers)))
+      == ("same-origin", "same-origin", "off", "no-store"), repr(dict(hr.headers)))
 _hj = app.test_client().get("/healthz")
 check("security header: a JSON answer is no-store, with CORP and the inert CSP",
       (_hj.headers.get("Cache-Control"), _hj.headers.get("Cross-Origin-Resource-Policy"),
