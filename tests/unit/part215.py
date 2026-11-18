@@ -758,7 +758,7 @@ def _s215_serve_path():
     for label in ("add-fails", "not-shown"):
         st, body, log, cfg = results[label]
         _all215("serve path: when %s, the old mount is left untouched and the config unchanged" % label,
-              [st == 500,
+              [st == 502,
                   "remove-old" not in [e[0] for e in log],
                   cfg["tailscale_mount"] == "/lgsm"],
               repr(results[label]))

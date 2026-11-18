@@ -514,8 +514,8 @@ def _toggles83(client, sid):
         got[act] = (refused, (code, _p9_audit_count(act) - n, _p9_audit(act).success))
     check("audit: Autostart and the daily restart audit a crontab write the host refused, and one "
           "that raised, as failed (neither left a row on any transport)",
-          got == {"set_autostart": ((500, 1, False), (500, 1, False)),
-                  "set_daily_restart": ((500, 1, False), (500, 1, False))}, repr(got))
+          got == {"set_autostart": ((502, 1, False), (500, 1, False)),
+                  "set_daily_restart": ((502, 1, False), (500, 1, False))}, repr(got))
 
 
 def _queued83(sid):
