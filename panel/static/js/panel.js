@@ -445,6 +445,15 @@ function _cdGateConfirm(opts, input, okBtn, errEl){
     input.addEventListener('input', function(){ okBtn.disabled = !input.value; if(errEl) errEl.style.display='none'; });
   }
 }
+// Where a dialog goes: inside the open Bootstrap modal when there is one, else the page. A shown
+// modal traps focus (Bootstrap's FocusTrap): a dialog outside it never keeps focus, so its field
+// (a typed name, the step-up password) could not be typed into over the Databases manager or the
+// Hosts page's Tailscale setup. Inside the modal it is within the trap. The overlay is
+// position: fixed, and .modal has no transform, so it still covers the whole screen.
+function _cdHost(){
+  var open = document.querySelectorAll('.modal.show');
+  return open.length ? open[open.length - 1] : document.body;
+}
 window.confirmDialog = function(opts){
   opts = opts || {};
   var inputHtml = _cdInputHtml(opts);
@@ -461,7 +470,7 @@ window.confirmDialog = function(opts){
     + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
     + '<button class="btn ' + escapeHtml(opts.confirmClass || 'btn-primary') + '" data-cd="ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
     + '</div></div></div>';
-  document.body.appendChild(ov);
+  _cdHost().appendChild(ov);
   _cdFillBody(ov, opts);
   var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
       errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
@@ -471,6 +480,9 @@ window.confirmDialog = function(opts){
   function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
   function onKey(e){ if(e.key === 'Escape') close(); }
   document.addEventListener('keydown', onKey);
+  // Escape closes this dialog only: inside a Bootstrap modal the key would also reach the modal,
+  // which closes itself on it (and with it whatever was typed there).
+  ov.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ e.stopPropagation(); close(); } });
   var api = {
     close: close,
     // nosemgrep - okHtml is this button's OWN markup, captured above; the message uses textContent.
