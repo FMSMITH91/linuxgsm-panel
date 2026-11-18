@@ -233,6 +233,8 @@ def _ts_setup47():
             "function tsOut(){ return box; }\n"
             "let reply;\n"
             "function tsApi(){ return reply(); }\n"
+            "global.document = {getElementById: () => null};\n"
+            + _cut47(src, "function tsUpRequest(") + "\n"
             + _cut47(src, "function tsDoUp(") + "\n"
             "(async () => {\n"
             "  reply = () => Promise.resolve({success: false, message: 'timed out'});\n"

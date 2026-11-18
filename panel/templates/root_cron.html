@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ t("Root's crontab") }}{% endblock %}
+{# The panel owner's root cron page (panel/routes/root_cron.py, panel/services/root_cron.py).
+   Every change form carries the password (and the 2FA code): each change is confirmed in its own
+   request, not by a recent sign-in. #}
+{% macro confirm_fields(idp) %}
+<div class="col-sm-4">
+  <label class="form-label small mb-1" for="{{ idp }}-pw">Your password</label>
+  <input type="password" id="{{ idp }}-pw" name="password" class="form-control form-control-sm" required autocomplete="current-password">
+</div>
+{% if current_user.totp_enabled %}
+<div class="col-sm-3">
+  <label class="form-label small mb-1" for="{{ idp }}-code">Authentication code</label>
+  <input type="text" id="{{ idp }}-code" name="totp_code" class="form-control form-control-sm" inputmode="numeric" autocomplete="one-time-code" maxlength="14" required>
+</div>
+{% endif %}
+{% endmacro %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+  <h1 class="page-title mb-0"><i class="bi bi-clock"></i> <span>Root's crontab</span> <small class="text-secondary" data-no-i18n>{{ remote.name }}</small></h1>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('panel_settings') }}#sec-schedules"><i class="bi bi-arrow-left"></i> Settings</a>
+</div>
+
+<div class="alert alert-warning small" role="alert">
+  <i class="bi bi-exclamation-triangle-fill"></i>
+  <span>Every job here runs as root on this host: anything it runs can change everything on it. Each change asks for your password and is kept in the audit log with the old and new line, which superadmins can read, so keep secrets in a root-only file rather than in the line.</span>
+  {% if remote.timezone %}<span>Times are the host's own clock:</span> <code>{{ remote.timezone }}</code>.{% else %}<span>Times are the host's own clock, which the panel could not read.</span>{% endif %}
+</div>
+
+{% if hosts|length > 1 %}
+<details class="mb-3 small" id="rc-hosts">
+  <summary>Another host</summary>
+  <div class="d-flex flex-wrap gap-2 mt-1">
+    {% for h in hosts %}{% if h.id != remote.id %}
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('root_cron_page', remote_id=h.id) }}" data-no-i18n>{{ h.name }}</a>
+    {% endif %}{% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% if not opened %}
+<div class="alert alert-secondary small" id="rc-not-opened">Root's crontab on this host was not opened to the panel at install. To allow it, run the installer again with PANEL_ROOT_CRON=1 (sudo PANEL_ROOT_CRON=1 bash install.sh).</div>
+{% elif got is none %}
+<div class="alert alert-secondary small" id="rc-unread">Root's crontab could not be read on this host.</div>
+{% else %}
+<div class="card mb-3" id="rc-jobs">
+  <div class="card-header"><i class="bi bi-list-task"></i> Jobs</div>
+  <div class="card-body">
+    {% set jobs = rows|selectattr('kind', 'equalto', 'job')|list %}
+    {% if not jobs %}<p class="small text-secondary mb-2">{% if got.state == 'none' %}Root has no crontab yet.{% else %}No jobs.{% endif %}</p>{% endif %}
+    {% for r in jobs %}
+    <div class="border-bottom py-2">
+      <div class="small"><code class="rc-schedule" data-no-i18n>{{ r.schedule }}</code> <code class="rc-command" data-no-i18n>{{ r.command }}</code></div>
+      <details class="mt-1">
+        <summary class="small">Edit or delete</summary>
+        <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off">
+          <input type="hidden" name="n" value="{{ r.n }}">
+          <input type="hidden" name="was" value="{{ r.raw }}">
+          <input type="hidden" name="sha" value="{{ sha }}">
+          <div class="col-sm-4">
+            <label class="form-label small mb-1" for="rc-s{{ r.n }}">Schedule</label>
+            <input type="text" id="rc-s{{ r.n }}" name="schedule" class="form-control form-control-sm font-monospace" maxlength="100" value="{{ r.schedule }}" spellcheck="false">
+          </div>
+          <div class="col-sm-8">
+            <label class="form-label small mb-1" for="rc-c{{ r.n }}">Command</label>
+            <input type="text" id="rc-c{{ r.n }}" name="command" class="form-control form-control-sm font-monospace" maxlength="1000" value="{{ r.command }}" spellcheck="false">
+          </div>
+          {{ confirm_fields('rc-e' ~ r.n) }}
+          <div class="col-sm-auto d-flex gap-2">
+            <button type="submit" name="op" value="save" class="btn btn-sm btn-primary"><i class="bi bi-save"></i> Save</button>
+            <button type="submit" name="op" value="delete" class="btn btn-sm btn-outline-danger" formnovalidate><i class="bi bi-trash"></i> Delete</button>
+          </div>
+        </form>
+      </details>
+    </div>
+    {% endfor %}
+
+    <details class="mt-3" id="rc-add"{% if not jobs %} open{% endif %}>
+      <summary class="small fw-semibold"><i class="bi bi-plus-lg"></i> Add a job</summary>
+      <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off">
+        <input type="hidden" name="op" value="add">
+        <input type="hidden" name="sha" value="{{ sha }}">
+        <div class="col-sm-4">
+          <label class="form-label small mb-1" for="rc-s0">Schedule</label>
+          <input type="text" id="rc-s0" name="schedule" class="form-control form-control-sm font-monospace" maxlength="100" required placeholder="30 4 * * *" spellcheck="false">
+        </div>
+        <div class="col-sm-8">
+          <label class="form-label small mb-1" for="rc-c0">Command</label>
+          <input type="text" id="rc-c0" name="command" class="form-control form-control-sm font-monospace" maxlength="1000" required spellcheck="false">
+        </div>
+        {{ confirm_fields('rc-a') }}
+        <div class="col-sm-auto"><button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Add</button></div>
+      </form>
+      <div class="small text-secondary mt-1">Schedule: minute hour day month weekday (such as <code>30 4 * * *</code>, every day at 04:30), or @reboot, @hourly, @daily, @weekly, @monthly, @yearly. A % in the command is kept as a %.</div>
+    </details>
+
+    {% set others = rows|rejectattr('kind', 'equalto', 'job')|rejectattr('kind', 'equalto', 'blank')|list %}
+    {% if others %}
+    <details class="mt-3" id="rc-other">
+      <summary class="small"><span>Variables and comments, kept as they are</span> <span data-no-i18n>({{ others|length }})</span></summary>
+      <pre class="small mb-0 mt-1" data-no-i18n>{% for r in others %}{{ r.n }}: {{ r.raw }}
+{% endfor %}</pre>
+      {% if others|selectattr('kind', 'equalto', 'other')|list %}<div class="small text-warning">A line here is not one the panel can read, so it will not save a change until that line is fixed from a shell.</div>{% endif %}
+    </details>
+    {% endif %}
+  </div>
+</div>
+
+<details class="card mb-3" id="rc-crond">
+  <summary class="card-header uid-summary-card"><i class="bi bi-folder2-open"></i> <code>/etc/cron.d</code> <span data-no-i18n>({{ got.crond|length }})</span> <span>Read-only</span></summary>
+  <div class="card-body">
+    {% for f in got.crond %}
+    <div class="small fw-semibold mt-2"><code data-no-i18n>{{ f.name }}</code>{% if f.panel %} <span class="badge text-bg-secondary">Written by the panel</span>{% endif %}</div>
+    <pre class="small mb-0" data-no-i18n>{{ f.text }}</pre>
+    {% else %}
+    <p class="small text-secondary mb-0">No files.</p>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+{% endblock %}

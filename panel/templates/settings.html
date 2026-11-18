@@ -136,7 +136,7 @@
           </div>
           <div class="small text-secondary mt-1">A normal sign-in ends after the idle timeout without use, or at the absolute limit. Background refreshes are not use.</div>
           <div class="small text-secondary" id="s-remember-rule">{{ remember_rule() }}</div>
-          <div class="small text-secondary">The password is asked again before a terminal and other high-risk changes: users and groups, hosts, the firewall, updates, certificates, databases, backups, Settings and Notifications.</div>
+          <div class="small text-secondary">The password is asked again before a terminal and other high-risk changes, such as users, hosts, the firewall, updates and backups.</div>
 
           <div class="form-check mt-3">
             <input class="form-check-input" type="checkbox" id="s-require-2fa" name="require_2fa"
@@ -183,6 +183,8 @@
 
   <button type="submit" class="btn btn-primary"><i class="bi bi-save"></i> Save settings</button>
 </form>
+
+{% include "_settings_schedules.html" %}
 
 {# The panel's own HTTPS certificate (panel/routes/tls_cert.py, panel/services/tls_own.py). Its own
    forms, outside the Settings form: each change is checked, saved and loaded by a restart. OWASP
@@ -266,5 +268,6 @@
 
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/settings.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/schedules.js') }}"></script>
 {# A stale sign-in confirms its password in place before the save (step_up_required on its POST). #}
 {% endblock %}

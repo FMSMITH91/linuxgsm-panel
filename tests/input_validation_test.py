@@ -651,6 +651,31 @@ def _check_tailscale_mount():
           [k.get("mount") for k in _ts_calls] == ["/lgsm"], repr(_ts_calls))
 
 
+def _check_tailscale_control_server(c):
+    """POST /api/tailscale/control-server: an address and nothing else, refused with a 400, never stored."""
+    # The control server for new joins (a self-hosted one such as Headscale): an address and nothing
+    # else, refused with a 400 and never stored. It ends up in `tailscale up --login-server=` as
+    # root, and in the href of the login link the page shows.
+    _cs_before = load_config().get("tailscale_control_url")
+    for _bad in ("hs.example.test", "https://hs.example.test/admin", "https://u:p@hs.example.test",
+                 "javascript:alert(1)", "https://hs.example.test --ssh", "--login-server=https://x.test",
+                 "https://hs.example.test:99999", "ftp://hs.example.test", "https://hs.example.test?x=1",
+                 "https://" + "a" * 300 + ".test", ["https://hs.example.test"]):
+        r = c.post("/api/tailscale/control-server", json={"control_url": _bad})
+        check("tailscale control server %r is refused with a 400 that says why" % (_bad,)[:90],
+              r.status_code == 400 and (r.get_json() or {}).get("success") is False
+              and "control server" in ((r.get_json() or {}).get("message") or ""),
+              "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
+    check("tailscale control server: a refused address is never stored",
+          load_config().get("tailscale_control_url") == _cs_before,
+          "config moved to %r" % (load_config().get("tailscale_control_url"),))
+    r = c.post("/api/tailscale/control-server", json={"control_url": "https://hs.example.test:8443"})
+    check("tailscale control server: a usable address is stored as typed (positive control)",
+          r.status_code == 200 and load_config().get("tailscale_control_url") == "https://hs.example.test:8443",
+          "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
+    c.post("/api/tailscale/control-server", json={"control_url": ""})
+
+
 def _r16d_int_or_port_sites(text):
     """[(line, text)] of each _int_or call in Python source `text` that parses a port.
 
@@ -793,6 +818,7 @@ try:
     _check_free_port()
     _check_data_layer_ports()
     _check_tailscale_mount()
+    _check_tailscale_control_server(c)
     _check_no_port_parsed_with_int_or()
 
 except Exception as exc:                      # a crash in the harness is a failure, not a pass

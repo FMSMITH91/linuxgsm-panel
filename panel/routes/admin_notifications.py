@@ -26,6 +26,8 @@ from app import (_new_user_language)
 from panel.core import outside_services, session_policy
 from panel.routes.groups import _posted_ids
 from panel.routes import tls_cert as _tls_cert
+from panel.routes import root_cron as _root_cron
+from panel.routes import schedules as _schedules
 from panel.services import tls_own as _tls_own
 
 
@@ -36,6 +38,8 @@ def register(app):
     _register_invites(app)
     _register_user_delete(app)
     _tls_cert.register(app)   # the HTTPS certificate card on the Settings page
+    _schedules.register(app)  # the Schedules card on the Settings page
+    _root_cron.register(app)  # the panel owner's root cron page, switched on from that card
 
 
 def _register_panel_settings(app):

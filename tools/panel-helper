@@ -47,11 +47,13 @@ USAGE
     panel-helper <verb> [arg ...]      exit 2 = unknown verb / bad argument, else the tool's own rc
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
+import base64
 import fcntl
 import filecmp
 import glob
 import grp
 import gzip
+import hashlib
 import io
 import ipaddress
 import json
@@ -390,6 +392,29 @@ def panel_conf():
 
 
 TS_LOGIN_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# A self-hosted control server for `tailscale up --login-server=` (privileged.CONTROL_URL_RE, the
+# same pattern; a unit test ties the two): http(s), a lower-case DNS name or IPv4 address, an
+# optional port, nothing after it. "-" is Tailscale's own, and adds no flag.
+CONTROL_URL_RE = (r"https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+                  r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[1-9][0-9]{0,4})?")
+
+
+def ts_login_re(control):
+    """The login link `tailscale up` prints for `control` (privileged.ts_login_url_re's twin).
+
+    A self-hosted server prints a link on itself (Headscale: <server_url>/register/<id>), so the
+    pattern is its own address, the default port optional, and a path in a narrow charset.
+    """
+    if control in (None, "", "-"):
+        return TS_LOGIN_RE
+    m = re.fullmatch(r"(https?)://([^:/]+)(?::(\d+))?", control)
+    if m is None:
+        return TS_LOGIN_RE
+    port = (r"(?::%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None \
+        else ":" + m.group(3)
+    return re.compile(r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), re.escape(m.group(2)), port))
+
+
 # `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes.
 R24T_SSH_PREF = {"on": "true", "off": "false"}
 # The BackendStates of a node that has joined a tailnet and is in it (or on its way back in with
@@ -868,6 +893,14 @@ def v_authkey(s):
     return s
 
 
+def v_control_url(s):
+    """A control server for --login-server (CONTROL_URL_RE), or "-" for Tailscale's own."""
+    if s != "-" and (len(s) > 255 or not re.fullmatch(CONTROL_URL_RE, s)
+                     or int(s.rsplit(":", 1)[1] if s.count(":") == 2 else "1") > 65535):
+        raise ValueError("not a control server address")
+    return s
+
+
 def ts_serve_argv(verb, grammar, mount, scheme, port):
     """`tailscale serve|funnel` argv for both CLI grammars — see tools/panel-helper.
 
@@ -883,9 +916,11 @@ def ts_serve_argv(verb, grammar, mount, scheme, port):
     return ["tailscale", verb, "--bg", "--https", "443", mount, upstream]
 
 
-def ts_up_argv(ssh, routes, tags=None, auth_key=None):
+def ts_up_argv(ssh, routes, tags=None, auth_key=None, control="-"):
     """The `tailscale up` argument vector, assembled from validated pieces."""
     argv = ["tailscale", "up", "--accept-routes"]
+    if control not in (None, "-"):
+        argv.append("--login-server=%s" % control)
     if auth_key is not None:
         argv += ["--auth-key", auth_key]
     if ssh == "yes":
@@ -2381,6 +2416,106 @@ def v_cron_b64(s):
     return s
 
 
+# ── root's own crontab (root-crontab-read / root-crontab-write) ─────────────────────────────────
+# The panel's copy is privileged.py's ROOT_CRON_* block; a unit test runs both over one corpus.
+# A job's command runs as root by design, so what is checked is the SHAPE of every line: blank, a
+# comment, a variable (NAME=value) or a job whose five schedule fields (or one @keyword) are
+# cron's own grammar, with no control character, so no line can smuggle in another. Both verbs are
+# refused unless the operator opened root's crontab to the panel at install (PANEL_ROOT_CRON=1,
+# recorded here in panel.conf as root_cron=yes; _root_cron_refusal): a verb that installs root's
+# crontab is root on this host, which the narrow grant otherwise withholds from the panel.
+ROOT_CRON_MAX_BYTES = 65536
+ROOT_CRON_MAX_LINES = 1000
+ROOT_CRON_LINE_MAX = 4096
+ROOT_CRON_SPECIALS = ("@reboot", "@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight",
+                      "@hourly")
+ROOT_CRON_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+ROOT_CRON_DAYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+ROOT_CRON_FIELDS = ((0, 59, ()), (0, 23, ()), (1, 31, ()), (1, 12, ROOT_CRON_MONTHS), (0, 7, ROOT_CRON_DAYS))
+ROOT_CRON_TEXT_RE = r"[^\x00-\x08\x0a-\x1f\x7f]*"
+# A variable line is NAME=value, spaces allowed before the "=": the name is checked alone, after
+# splitting at the first "=", so no pattern has to find where the name ends.
+ROOT_CRON_ENV_NAME_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+ROOT_CRON_ITEM_RE = r"(\*|([0-9]{1,2})(?:-([0-9]{1,2}))?)(?:/([0-9]{1,2}))?"
+ROOT_CRON_CONF_KEY = "root_cron"
+ROOT_CRON_DIR = "/etc/cron.d"
+ROOT_CRON_DIR_FILE_RE = r"[A-Za-z0-9_-]{1,64}"
+ROOT_CRON_DIR_MAX_FILES = 100
+ROOT_CRON_DIR_FILE_MAX = 65536
+
+
+def root_cron_field_ok(text, index):
+    """Whether `text` is cron's grammar for schedule field `index` (0 minute .. 4 day of week)."""
+    low, high, names = ROOT_CRON_FIELDS[index]
+    if names and text.lower() in names:
+        return True
+    return all(_root_cron_item_ok(re.fullmatch(ROOT_CRON_ITEM_RE, part), low, high) for part in text.split(","))
+
+
+def _root_cron_item_ok(m, low, high):
+    """One comma-separated item of a schedule field (its ROOT_CRON_ITEM_RE match, or None)."""
+    if not m:
+        return False
+    step = int(m.group(4)) if m.group(4) is not None else None
+    if m.group(2) is not None:
+        a = int(m.group(2))
+        b = int(m.group(3)) if m.group(3) is not None else a
+        if not low <= a <= b <= high or (step is not None and m.group(3) is None):
+            return False
+    return step is None or 1 <= step <= high
+
+
+def root_cron_line_kind(line):
+    """'blank', 'comment', 'env' or 'job' for one crontab line; '' when it is none of them."""
+    if len(line) > ROOT_CRON_LINE_MAX or not re.fullmatch(ROOT_CRON_TEXT_RE, line):
+        return ""
+    s = line.strip(" \t")
+    if not s:
+        return "blank"
+    if s.startswith("#"):
+        return "comment"
+    name, eq, _value = s.partition("=")
+    if eq and re.fullmatch(ROOT_CRON_ENV_NAME_RE, name.rstrip(" \t")):
+        return "env"
+    return "job" if _root_cron_job_ok(s) else ""
+
+
+def _root_cron_job_ok(s):
+    """Whether `s` (a stripped line) is a job: an @keyword or five schedule fields, then a command."""
+    if s.startswith("@"):
+        word, _sep, rest = s.replace("\t", " ").partition(" ")
+        return word in ROOT_CRON_SPECIALS and bool(rest.strip(" \t"))
+    fields = s.split(None, 5)
+    return len(fields) == 6 and bool(fields[5].strip()) and all(root_cron_field_ok(fields[i], i) for i in range(5))
+
+
+def root_crontab_problem(text):
+    """Why `text` may not be installed as root's crontab, in fixed words; "" when it may.
+
+    Only a line NUMBER is named, never its text: this stderr is shown in the panel.
+    """
+    if not isinstance(text, str):
+        return "not text"
+    if len(text.encode("utf-8", "surrogateescape")) > ROOT_CRON_MAX_BYTES:
+        return "too long"
+    if text and not text.endswith("\n"):
+        return "the last line has no newline"
+    lines = text.split("\n")[:-1] if text else []
+    if len(lines) > ROOT_CRON_MAX_LINES:
+        return "too many lines"
+    for n, line in enumerate(lines, 1):
+        if not root_cron_line_kind(line):
+            return "line %d is not a job, a variable, a comment or blank" % n
+    return ""
+
+
+def v_sha256_hex(s):
+    """A SHA-256 digest in hex: what root-crontab-write expects root's crontab to hash to now."""
+    if not re.fullmatch(r"[0-9a-f]{64}", s):
+        raise ValueError("not a sha256 digest")
+    return s
+
+
 # apt-upgrade-running's pgrep pattern: is an OS update already running? Its three ways of being one:
 #   * apt-get upgrading, OPTIONS ANYWHERE before the subcommand. It needed `upgrade` straight after
 #     `apt-get `, which the old foreground verb wrote; the panel's own os-update-run job puts its
@@ -2574,9 +2709,11 @@ VERBS = {
     # from a validated piece — routes are PARSED as networks, tags must be `tag:name`, and the auth
     # key is charset-checked and never echoed back, not even in a rejection.
     # The auth key is not an argument either: stdin in, `--auth-key file:/dev/stdin` out.
-    "tailscale-up-key": ([v_yesno, v_routes, v_tags],
-                         lambda a: ts_up_argv(a[0], a[1], a[2], auth_key="file:/dev/stdin"), None),
-    "tailscale-up-login": ([v_yesno, v_routes], lambda a: [], None),
+    # The control server is an optional last argument: none joins Tailscale's own, as before.
+    "tailscale-up-key": ([v_yesno, v_routes, v_tags, Rest(v_control_url, 0, 1)],
+                         lambda a: ts_up_argv(a[0], a[1], a[2], auth_key="file:/dev/stdin",
+                                              control=a[3] if len(a) > 3 else "-"), None),
+    "tailscale-up-login": ([v_yesno, v_routes, Rest(v_control_url, 0, 1)], lambda a: [], None),
 
     # ── host hardening ──
     # The value is checked against the key's own allowed set, so a directive can only be set to
@@ -2667,6 +2804,10 @@ VERBS = {
     # Copy one Let's Encrypt certificate (fullchain.pem + privkey.pem) into data/ssl for the panel to
     # check and load. The name is the only argument; both paths are fixed here (do_tls_le_copy).
     "tls-le-copy": ([v_tls_le_name], lambda a: [], None),
+    # Root's own crontab (do_root_crontab_read / do_root_crontab_write), refused unless opened at
+    # install (_root_cron_refusal). The write's content comes on stdin.
+    "root-crontab-read": ([], lambda a: [], None),
+    "root-crontab-write": ([v_sha256_hex], lambda a: [], None),
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
     "game-backup-read": ([v_game_account, v_backup_name], lambda a: [], None),
@@ -6359,6 +6500,7 @@ def do_tailscale_up_login(args, content):
     `yes` (with --ssh) has already been refused by PRECHECKS unless the operator chose Tailscale SSH at
     install (_r25a_ssh_refusal): that link lets whoever opens it pick the tailnet that gets SSH."""
     ssh, routes = args[0], args[1]
+    control = args[2] if len(args) > 2 else "-"
     early = _r24t_up_login_early(_r24t_ts_json("status", "--json"))
     if early is not None:
         return early
@@ -6366,7 +6508,7 @@ def do_tailscale_up_login(args, content):
         os.unlink(TS_UP_LOG)
     except FileNotFoundError:
         pass                      # first run on this host, or /run was cleared by a reboot
-    argv = ts_up_argv(ssh, routes)
+    argv = ts_up_argv(ssh, routes, control=control)
     argv[0] = resolve("tailscale")
     # O_EXCL | O_NOFOLLOW, after the unlink above, as tailscale-install does. This was O_CREAT |
     # O_TRUNC, which opens whatever already sits at the name: a symlink there made root truncate
@@ -6388,7 +6530,7 @@ def do_tailscale_up_login(args, content):
                 text = fh.read()
         except OSError:
             continue
-        m = TS_LOGIN_RE.search(text)
+        m = ts_login_re(control).search(text)
         if m:
             sys.stdout.write(m.group(0))
             return 0
@@ -7026,6 +7168,99 @@ def do_write_file(args, content):
             pass
         raise
     return 0
+
+
+def _root_crontab_now():
+    """(root's crontab as bytes, "ok" or "none", None), b"" for none, or (None, "", why) when unreadable."""
+    try:
+        p = subprocess.run([resolve("crontab"), "-u", "root", "-l"], shell=False,  # nosec B603 - fixed argv
+                           stdin=subprocess.DEVNULL, capture_output=True, env=_clean_env(), timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None, "", "crontab could not be run"
+    if p.returncode == 0:
+        return p.stdout, "ok", None
+    if b"no crontab for" in (p.stderr or b""):
+        return b"", "none", None
+    return None, "", "root's crontab could not be read"
+
+
+def _root_cron_dir_files():
+    """[(name, first ROOT_CRON_DIR_FILE_MAX bytes)] of the regular files cron reads in /etc/cron.d.
+
+    Opened without following a link (a link is skipped, as the shell form skips it), names cron
+    would read only, sorted, at most ROOT_CRON_DIR_MAX_FILES.
+    """
+    out = []
+    try:
+        names = sorted(os.listdir(ROOT_CRON_DIR))
+    except OSError:
+        return out
+    for name in names:
+        if len(out) >= ROOT_CRON_DIR_MAX_FILES:
+            break
+        if not re.fullmatch(ROOT_CRON_DIR_FILE_RE, name):
+            continue
+        try:
+            fd = os.open(os.path.join(ROOT_CRON_DIR, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                out.append((name, os.read(fd, ROOT_CRON_DIR_FILE_MAX)))
+        finally:
+            os.close(fd)
+    return out
+
+
+def do_root_crontab_read(args, _content):
+    """Print root's crontab and the /etc/cron.d files, in the format privileged.py's shell form prints.
+
+    `root-crontab ok <base64>` or `root-crontab none`, then `crond <name> <base64>` per file. Base64,
+    so no byte of a file can start a line of its own here.
+    """
+    data, state, why = _root_crontab_now()
+    if why:
+        print("panel-helper: %s" % why, file=sys.stderr)
+        return 1
+    print(("root-crontab ok " + base64.b64encode(data).decode()) if state == "ok" else "root-crontab none")
+    for name, body in _root_cron_dir_files():
+        print("crond %s %s" % (name, base64.b64encode(body).decode()))
+    return 0
+
+
+def do_root_crontab_write(args, content):
+    """Install `content` (stdin) as root's crontab, only while the current one hashes to args[0].
+
+    Every line is checked first (root_crontab_problem). Then root's crontab is read and hashed: a
+    different digest means it changed since the panel showed it, and nothing is written (rc 3), so
+    two editors never overwrite each other's change unseen. `crontab -u root -` installs it, which
+    is cron's own way and keeps the spool file's owner and mode as cron wants them.
+    """
+    why = root_crontab_problem(content)
+    if why:
+        print("panel-helper: root-crontab-write refused: %s" % why, file=sys.stderr)
+        return 2
+    data, _state, why = _root_crontab_now()
+    if why:
+        print("panel-helper: %s" % why, file=sys.stderr)
+        return 1
+    if hashlib.sha256(data).hexdigest() != args[0]:
+        print("panel-helper: root's crontab changed since it was read", file=sys.stderr)
+        return 3
+    p = subprocess.run([resolve("crontab"), "-u", "root", "-"], shell=False,  # nosec B603 - fixed argv
+                       input=content.encode("utf-8", "surrogateescape"), capture_output=True,
+                       env=_clean_env(), timeout=30)
+    sys.stdout.write(p.stdout.decode("utf-8", "replace"))
+    sys.stderr.write(p.stderr.decode("utf-8", "replace"))
+    return p.returncode
+
+
+def _root_cron_refusal(_args):
+    """Why root's crontab may not be read or written here, or "": only when chosen at install."""
+    if panel_conf().get(ROOT_CRON_CONF_KEY) == "yes":
+        return ""
+    return ("root's crontab on this host was not opened to the panel at install; to allow it, re-run "
+            "the installer with PANEL_ROOT_CRON=1 (sudo PANEL_ROOT_CRON=1 bash install.sh)")
 
 
 # ── Game databases (MariaDB / MySQL) ─────────────────────────────────────────────────────────────
@@ -8307,6 +8542,8 @@ ACTIONS = {
     "panel-db-repair": do_panel_db_repair,
     "panel-restore": do_panel_restore,
     "tls-le-copy": do_tls_le_copy,
+    "root-crontab-read": do_root_crontab_read,
+    "root-crontab-write": do_root_crontab_write,
     "panel-self-update": do_panel_self_update,
     "tailscale-install": do_tailscale_install,
     "game-backup-read": do_game_backup_read,
@@ -8348,8 +8585,8 @@ ACTIONS = {
 # tests/unit/part05.py derives this set from the source and fails if it drifts, so adding a verb
 # that reads stdin without listing it here cannot silently start returning "".
 # The database verbs (but db-probe) read their sign-in document (db_read_doc).
-STDIN_VERBS = frozenset({"write-file", "content-cron-write", "db-harden", "db-create", "db-password",
-                         "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check", "db-rehost",
+STDIN_VERBS = frozenset({"write-file", "content-cron-write", "root-crontab-write", "db-harden", "db-create",
+                         "db-password", "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check", "db-rehost",
                          "db-query"})
 
 # Verbs whose arguments are fine but which may still be refused by the state of the host, read
@@ -8363,6 +8600,8 @@ PRECHECKS = {
     "tailscale-up-login": _r25a_ssh_refusal,
     "tailscale-ssh": _r25a_ssh_refusal,
     "tailscale-serve": _r25j_serve_port_refusal,
+    "root-crontab-read": _root_cron_refusal,
+    "root-crontab-write": _root_cron_refusal,
 }
 
 # Argv verbs whose SECRET comes on stdin: {verb: (its validator, the text the tool reads)}.
@@ -8415,7 +8654,7 @@ READ_VERBS = frozenset({
     "gmod-mount-read", "journal", "journal-cron", "journal-cron-account", "lgsm-discover",
     "listening-sockets", "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running",
     "pro-status",
-    "restart-flags", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
+    "restart-flags", "root-crontab-read", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
     "ufw-show-added", "ufw-status", "ufw-stored-rules",
 })
 # ...of which these stream a download for as long as it takes, so they have no deadline: they end

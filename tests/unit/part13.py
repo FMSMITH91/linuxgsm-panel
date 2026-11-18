@@ -2731,8 +2731,10 @@ try:
     _tsi_calls10[:] = []
     _ts_fq10 = (_rts10("100.64.0.9", "me.x.ts.net"), _rts10("box.example.com", "me.x.ts.net"))
     _tsi10.get_tailscale_info = _core_tsinfo10
+    # A node name with no domain in it ("me") names no tailnet: the bare name is dialled as typed.
+    # It used to get ".ts.net" glued on, which is no tailnet's suffix (and never a self-hosted one's).
     check("core tailscale host: a bare name takes this node's MagicDNS domain",
-          _ts_hosts10[:2] == ("box.tail1234.ts.net", "box.ts.net"), repr(_ts_hosts10))
+          _ts_hosts10[:2] == ("box.tail1234.ts.net", "box"), repr(_ts_hosts10))
     check("core tailscale host: no domain, or tailscaled not answering, leaves the name as typed",
           _ts_hosts10[2:] == ("box", "box"), repr(_ts_hosts10))
     check("core tailscale host: a tailnet IP or a dotted name is used as-is, without asking",

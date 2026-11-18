@@ -487,7 +487,8 @@ def _console_tick(app, socketio, gs, server_id):
     * GROWN: read from where we were, at most _CONSOLE_READ_CAP bytes, and advance by what was
       READ — never to the file's size, which discarded everything past the cap.
 
-    A read that did not run leaves the offset alone so the next tick re-reads the same range.
+    A read that did not run leaves the offset alone so the next tick re-reads the same range. True
+    is returned for a read that found the log exactly where the offsets say (console_rest.tick).
 
     ONE round trip per tick once the console has been seen (_console_poll_cmd): the stat and the
     byte-range read used to be two `sudo -u <account>` calls whenever the log had grown, so a busy
@@ -498,13 +499,12 @@ def _console_tick(app, socketio, gs, server_id):
     log_path = gs.console_log
     remote = gs.remote
     if _console_offsets.get(server_id) is None:
-        _console_first_sight(remote, gs, log_path, server_id)
-        return
+        return _console_first_sight(remote, gs, log_path, server_id)
     state = _console_offsets[server_id]
     reply, rc = _console_poll_read(remote, gs, log_path, state["ino"], state["pos"])
     if reply is None:
         _feed_tick(server_id, "read-failed" if rc != 0 else "stat-unparseable")
-        return
+        return False
     ino, size, started, diff, framed = reply
     start = _console_read_start(server_id, ino, size)
     if start is None:
@@ -515,12 +515,12 @@ def _console_tick(app, socketio, gs, server_id):
         # the log's end recorded, nothing read — exactly as a new one would be. Unpacking its None
         # raised, and the tick was counted as failed.
         _feed_tick(server_id)
-        return
+        return False
     state, pos = start
     verdict = _console_reply_verdict(size, pos, started, diff)
     if verdict is not None:
         _feed_tick(server_id, verdict or None)
-        return
+        return verdict == ""        # the log is exactly where the offsets say (console_rest.seen)
     # The frame is the POSITIVE TOKEN that this read ran at all. tailscale and local do not
     # raise: a 64KB read that exceeds the 5s timeout returns ("", "SSH command timed out", -1),
     # so advancing here would jump `diff` bytes over output the host never sent. Re-read the same
@@ -529,7 +529,7 @@ def _console_tick(app, socketio, gs, server_id):
     out = _console_whole_lines(server_id, framed) if rc == 0 else None
     if out is None:
         _feed_tick(server_id, "read-unframed" if rc == 0 else "read-failed")
-        return
+        return False
     # The partial line held from here on is the poller's own (see _console_catchup).
     state["fresh"] = False
     _emit_console_lines(socketio, gs, server_id, out, [_console_chain(state), ino, pos + diff])
@@ -537,16 +537,18 @@ def _console_tick(app, socketio, gs, server_id):
     # to what the file holds), and this line is reached only past the frame check above.
     state["pos"] = pos + diff
     _feed_tick(server_id)
+    return False        # the log grew, so it is not where the offsets said
 
 
 def _console_first_sight(remote, gs, log_path, server_id):
-    """First sight: record where the log ends now and read nothing (one stat round trip)."""
+    """First sight: record where the log ends now and read nothing (one stat round trip); True if it did."""
     stat = _console_log_stat(remote, gs, log_path)
     if stat is None:
         _feed_tick(server_id, "stat-unparseable")
-        return
+        return False
     _console_read_start(server_id, *stat)
     _feed_tick(server_id)
+    return True
 
 
 def _console_reply_verdict(size, pos, started, diff):
@@ -1668,9 +1670,8 @@ def _read_console_window(remote, gs, want, host_tz):
         # "console stops responding until I press Load older" report.
         # A log that does not exist (LinuxGSM's start is `mv` then `touch`) is a read that did not
         # run, rc 1, not "readable, and nothing in it": Load older wiped the console on that.
-        out, _, rc = _sm.read_as_game_user(
-            remote, gs.short_name, _console_window_cmd(log_path, want),
-            timeout=15, selfname=gs.lgsm_name)
+        out, rc = _crest.window_read(gs, want, want == _CONSOLE_LINES, _console_window_place, lambda: _sm.read_as_game_user(
+            remote, gs.short_name, _console_window_cmd(log_path, want), timeout=15, selfname=gs.lgsm_name))
         # Where the window ends in the log: the place the page is caught up from. A reply without
         # one (no `@` line) is still a window, with no place: the page stitches it by its text.
         at, out, newlines = _console_window_place(out)

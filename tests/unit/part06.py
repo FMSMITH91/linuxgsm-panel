@@ -1039,7 +1039,8 @@ def _is_dispatch(call):
                     and isinstance(_sub.func, _ast.Attribute)
                     and getattr(_sub.func.value, "id", "") == "_priv"
                     and _sub.func.attr in ("remote_command", "remote_write_command",
-                                           "remote_content_cron_command")):
+                                           "remote_content_cron_command",
+                                           "remote_root_crontab_write_command")):
                 return True
     return False
 
@@ -1069,7 +1070,9 @@ check("escalation census: it reads every panel module and root script",
 # So count what it excludes and pin that: there are exactly four transports (run_privileged and
 # write_root_file in ssh_manager, twice each for the helper-present and no-helper paths, plus
 # _run_verb in system_ops), plus two for write_content_cron, whose destination is per-user and so
-# cannot live in WRITE_TARGETS. Raise this only when the verb layer genuinely gains another one.
+# cannot live in WRITE_TARGETS, and one for write_root_crontab (ssh_manager/cron.py), whose content is
+# checked line by line (privileged.root_crontab_problem) and installed by `crontab -u root -`. Raise this only when the
+# verb layer genuinely gains another one.
 _excluded = 0
 for _f in _ESCALATION_PATHS:
     with open(_f, encoding="utf-8") as _esc_fh:
@@ -1081,8 +1084,8 @@ for _f in _ESCALATION_PATHS:
             if (_k.arg == "sudo" and isinstance(_k.value, _ast.Constant)
                     and _k.value.value is True and _is_dispatch(_n)):
                 _excluded += 1
-check("escalation census: the exclusion covers exactly the 6 known transports",
-      _excluded == 6, "excluded %d" % _excluded)
+check("escalation census: the exclusion covers exactly the 7 known transports",
+      _excluded == 7, "excluded %d" % _excluded)
 
 for _kind, _limit in _CEILING.items():
     check("escalation census: %s sites <= %d (currently %d) — ratchet, never raise"
@@ -5857,8 +5860,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # link, check and unlink, all login_required and each acting on the caller's own row only.
 # 302, was 299: tls_cert.py's HTTPS certificate card (paste, Let's Encrypt, back to the built-in one),
 # each superadmin-only with step-up.
-check("register_routes: every one of the 302 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 302,
+# 307, was 302: tailscale.py's control-server save (a self-hosted control server for new joins),
+# superadmin-only with step-up; Settings > Schedules' save (superadmin, step-up) and the root cron page,
+# its change and its switch (panel owner only, the password confirmed in each change request; root_cron.py).
+check("register_routes: every one of the 307 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 307,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -7892,9 +7898,12 @@ from panel.ops import tailscale_integration as _tsi
 _tsi_src = _modsrc("tailscale_integration")
 check("tailscale: the panel-host login-URL check is a fullmatch, not a prefix test",
       'startswith("https://login.tailscale.com/")' not in _tsi_src
-      and "TS_LOGIN_URL_RE.fullmatch" in _tsi_src)
+      and "_priv.ts_login_url_re(control).fullmatch(line)" in _tsi_src)
+# The pattern is per control server now (Tailscale's own, or a self-hosted one: part240), built by
+# privileged.ts_login_url_re, which both flows call.
 check("tailscale: both flows share ONE definition of the URL",
-      _sm_hosts._TS_LOGIN_URL_RE is _privmod.TS_LOGIN_URL_RE)
+      "_priv.ts_login_url_re(control).fullmatch(line)" in _modsrc("panel/ops/ssh_manager/hosts.py")
+      and _privmod.ts_login_url_re("-") is _privmod.TS_LOGIN_URL_RE)
 _ts_good = "https://login.tailscale.com/a/0123456789abcdef"
 check("tailscale: a real login URL is accepted",
       _privmod.TS_LOGIN_URL_RE.fullmatch(_ts_good) is not None)

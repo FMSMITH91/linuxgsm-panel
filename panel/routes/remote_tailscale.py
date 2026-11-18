@@ -4,9 +4,10 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
-from panel.ops.ssh_manager import (close_connection, remote_bootstrap_tailscale,
+from panel.ops.ssh_manager import (auth_key_hint, close_connection, remote_bootstrap_tailscale,
     remote_check_tailscale, remote_install_tailscale, remote_migrate_to_tailscale,
     remote_tailscale_finalize, remote_tailscale_up_url, tailscale_routes_problem)
+from panel.ops import tailscale_integration as ts
 from panel.security.auth import (MANAGE_REMOTES, get_host_remote, get_remote, log_action,
     permission_required)
 from panel.security import privileged as _priv
@@ -259,7 +260,7 @@ def _register_key_join_and_migrate(app):
         advertise_routes = _json_str(data, "advertise_routes")
 
         if not auth_key:
-            return jsonify({"success": False, "message": "Auth key is required. Get one at https://login.tailscale.com/admin/keys"}), 400
+            return jsonify({"success": False, "message": i18n.tr(auth_key_hint(ts.control_url()))}), 400
         bad_routes = tailscale_routes_problem(advertise_routes)
         if bad_routes:
             return jsonify({"success": False, "message": i18n.tr(bad_routes)}), 400

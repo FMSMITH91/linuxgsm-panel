@@ -174,7 +174,7 @@ def _serve_enable(port, mount, funnel, page):
 
 
 def came_through_serve(info):
-    """Whether this request reached the panel through Tailscale Serve (its host is the node's ts.net name)."""
+    """Whether this request reached the panel through Tailscale Serve (its host is the node's MagicDNS name)."""
     dns = (getattr(info, "dns_name", None) or "").lower().rstrip(".")
     host = (request.host or "").rsplit("]", 1)[-1].split(":")[0].lower().rstrip(".")
     return bool(dns) and host == dns
@@ -355,7 +355,8 @@ def _register_tailscale_setup(app):
                                panel_routes=panel_routes, panel_leftovers=panel_leftovers,
                                shared_funnel=shared_funnel,
                                serve_default_mount=_serve_default_mount(info, cfg, port),
-                               ts_detail=ts_detail, via_serve=came_through_serve(info))
+                               ts_detail=ts_detail, via_serve=came_through_serve(info),
+                               offer=control_offer(info, cfg))
 
     @app.route("/api/tailscale")
     @login_required
@@ -370,6 +371,8 @@ def _register_tailscale_setup(app):
             "version": info.version,
             "magic_dns_enabled": info.magic_dns_enabled,
             "funnel_enabled": info.funnel_enabled,
+            "serve_offered": ts.serve_https_offered(info),
+            "funnel_offered": ts.funnel_offered(info),
         }
         if _sees_panel_host_tailnet(current_user):
             out.update({
@@ -404,6 +407,16 @@ def _register_tailscale_setup(app):
         log_action(current_user, "tailscale_install_local", target=LOCAL_HOST_LABEL, success=ok)
         return jsonify({"success": ok, "log": log})
 
+    # Superadmin and step-up, like `up`: the control server decides which tailnet a joining host
+    # trusts. Stored only; nothing runs until the next join.
+    @app.route("/api/tailscale/control-server", methods=["POST"])
+    @login_required
+    @superadmin_required
+    @step_up_required
+    def api_tailscale_control_server():
+        """Save the control server (Tailscale's own, or a self-hosted one) that new joins use."""
+        return _control_server_save(_json_body())
+
     @app.route("/api/tailscale/up", methods=["POST"])
     @login_required
     @superadmin_required
@@ -428,6 +441,46 @@ def _register_tailscale_setup(app):
         if res == "ALREADY_CONNECTED":
             return jsonify({"success": True, "connected": True})
         return jsonify({"success": True, "connected": False, "auth_url": res})
+
+
+def control_offer(info, cfg):
+    """What the Tailscale page says about the control server.
+
+    The saved address, the host's, and what that server offers (Serve's HTTPS, Funnel, the MagicDNS
+    suffix). No command of its own: all of it is read from `info`, the page's one Tailscale reading.
+    """
+    saved, _why = ts.parse_control_url(cfg.get("tailscale_control_url"))
+    return {"saved": saved, "host_control": "" if ts.control_is_tailscale(info) else info.control_url,
+            "self_hosted": not ts.control_is_tailscale(info), "serve": ts.serve_https_offered(info),
+            "funnel": ts.funnel_offered(info), "suffix": getattr(info, "magic_dns_suffix", ""),
+            "plain_http": urlsplit(saved).scheme == "http"}
+
+
+# Shown under the control-server field, and returned by its save, when the address is http://:
+# OWASP's Transport Layer Security Cheat Sheet ("Use TLS For All Pages") recommends TLS throughout.
+CONTROL_HTTP_NOTE = ("A plain HTTP address is outside OWASP's recommendation: the login link opens in "
+                     "your browser unencrypted. Use the server's HTTPS address if it has one.")
+
+
+def _control_server_save(data):
+    """POST /api/tailscale/control-server: store the control server new joins use, audited old -> new."""
+    # A string, and present: a list or a missing field would read as "" and quietly switch new
+    # joins back to Tailscale's own server.
+    if not isinstance(data.get("control_url"), str):
+        return jsonify({"success": False, "message": i18n.tr(ts._CONTROL_URL_BAD)}), 400
+    url, why = ts.parse_control_url(_json_str(data, "control_url"))
+    if why is not None:
+        return jsonify({"success": False, "message": i18n.tr(why)}), 400
+    cfg = load_config()
+    old, _why = ts.parse_control_url(cfg.get("tailscale_control_url"))
+    if url != old:
+        set_config_keys(cfg, tailscale_control_url=url)
+        log_action(current_user, "tailscale_control_server", target=LOCAL_HOST_LABEL,
+                   detail="%s -> %s" % (old or "Tailscale", url or "Tailscale"))
+    said = (i18n.tr("New joins use {url}.", url=url) if url
+            else i18n.tr("New joins use Tailscale's own control server."))
+    return jsonify({"success": True, "message": said, "control_url": url,
+                    "note": i18n.tr(CONTROL_HTTP_NOTE) if urlsplit(url).scheme == "http" else ""})
 
 
 def _r31a_suggestion(cfg):

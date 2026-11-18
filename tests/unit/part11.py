@@ -261,8 +261,9 @@ try:
           "Running and takes the host name from it",
           _ts_fb.running and _ts_fb.backend_state == "Running" and _ts_fb.hostname == "oldbox",
           repr(_ts_fb))
-    check("tailscale info: ...and with no DNS name, MagicDNS is detected by resolving the host name",
-          _ts_fb.magic_dns_enabled is True and _ts_gai == ["oldbox.tailscale.net"],
+    check("tailscale info: ...and with no DNS name, MagicDNS is detected by resolving the node's name under "
+          "the tailnet's own suffix (it asked <host>.tailscale.net, a name no tailnet uses)",
+          _ts_fb.magic_dns_enabled is True and _ts_gai == ["oldbox.tail1234.ts.net"],
           "magic=%r lookups=%r" % (_ts_fb.magic_dns_enabled, _ts_gai))
     _tsi.socket = NS(AF_INET=2, getaddrinfo=lambda *a: (_ for _ in ()).throw(OSError("nxdomain")))
     check("tailscale info: ...a name that does not resolve leaves MagicDNS off",
@@ -2316,6 +2317,11 @@ try:
           and not any(c for c in _w.calls if c[0] == "cmd" and "reboot-required" in c[1]), _bs[1])
 
     # ── remote Tailscale ───────────────────────────────────────────────────────────────────────
+    # A join names the panel's control server (tailscale_integration.control_url), which reads the
+    # panel host's Tailscale state: here a host that has not joined, so Tailscale's own (part240
+    # drives a self-hosted one). Restored after the join checks.
+    _ts_gti_saved = _tsi.get_tailscale_info
+    _tsi.get_tailscale_info = lambda force_refresh=False: _tsi.TailscaleInfo()
     _TS_RUN = _p8_json.dumps({"BackendState": "Running", "Self": {
         "DNSName": "vps.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.5", "fd7a:115c:a1e0::5"]}})
     _wire(cmds=[("which tailscale", ("/usr/bin/tailscale\nINSTALLED", "", 0)),
@@ -2416,6 +2422,7 @@ try:
     check("remote tailscale bootstrap: an inactive UFW gets no rule, and not-running after auth fails",
           _bt[:2] == (False, "Tailscale installed but not running after auth")
           and not _w.verbs_called("ufw-allow-iface"), repr(_bt[:2]))
+    _tsi.get_tailscale_info = _ts_gti_saved
 
     _ts_st["v"] = {"running": False}
     eq("migrate: not running -> nothing changes",

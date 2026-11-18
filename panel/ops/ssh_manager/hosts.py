@@ -3036,12 +3036,6 @@ def remote_install_tailscale(server):
     return True, "Tailscale installed successfully", "\n".join(log)
 
 
-# The login URL `tailscale up` prints. Same charset the remote-side grep looks for, re-checked on
-# THIS side because the remote's output is not something we control. Defined in privileged.py so
-# this and tailscale_integration's panel-host twin cannot check it differently — they did.
-_TS_LOGIN_URL_RE = _priv.TS_LOGIN_URL_RE
-
-
 # The one body of /etc/sysctl.d/99-tailscale.conf, for both ways of joining. The login-link flow
 # wrote IPv4 forwarding alone over the file the auth-key flow writes with both families, so an
 # IPv6 route it advertised carried nothing, and re-running it on a host joined by key dropped that
@@ -3113,15 +3107,21 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     # Was a shell one-liner: rm, nohup, a redirect, a background job, a seq loop and a grep. The
     # verb starts `tailscale up` detached and polls its OWN log — whose path is fixed in the verb
     # table and lives in /run rather than /tmp, where any local user could have pre-created it.
+    # --login-server when the tailnet is on a self-hosted control server (ts.control_url): the remote
+    # joins the panel's tailnet, and its login link is on that server.
+    from panel.ops import tailscale_integration as _ts
+    control = _ts.control_url()
     out, _err, rc = _core.run_privileged(server, "tailscale-up-login",
-                                  ["yes" if enable_ssh else "no", advertise_routes or "-"],
-                                  timeout=40)
+                                  ["yes" if enable_ssh else "no", advertise_routes or "-"]
+                                  + _ts.control_args(control), timeout=40)
     line = (out or "").strip().split("\n")[-1].strip() if out else ""
     # fullmatch, not startswith: the charset above is enforced by a grep running ON the remote host,
     # so a compromised host simply ignores it and can return anything after the trusted prefix. This
     # URL is rendered into the panel's HTML, so the whole string has to be pinned here, once, rather
     # than left for each consumer to escape.
-    if _TS_LOGIN_URL_RE.fullmatch(line):
+    # The pattern is privileged.ts_login_url_re's, the one tailscale_integration's panel-host twin
+    # checks too, so the two cannot check the link differently (they once did).
+    if _priv.ts_login_url_re(control).fullmatch(line):
         return True, line
     status = remote_check_tailscale(server)
     if status.get("running") or line == "ALREADY_CONNECTED":
@@ -3130,6 +3130,17 @@ def remote_tailscale_up_url(server, enable_ssh=True, advertise_routes=""):
     # Sheet). Only the exit status is logged, as an int, so no host text reaches the log either.
     _core._log.warning("tailscale up gave no login link (rc=%d)", rc if isinstance(rc, int) else -1)
     return False, "Could not get a Tailscale login link — is Tailscale installed on the remote?"
+
+
+# Where an auth key comes from: Tailscale's admin console, or the self-hosted control server itself.
+AUTH_KEY_HINT_TS = "Auth key is required. Generate one at https://login.tailscale.com/admin/keys"
+AUTH_KEY_HINT_SELF_HOSTED = ("Auth key is required. Create a pre-auth key on your control server "
+                             "(Headscale: headscale preauthkeys create --user <USER_ID>).")
+
+
+def auth_key_hint(control):
+    """The sentence asking for an auth key, for the control server `control` ("-": Tailscale's own)."""
+    return AUTH_KEY_HINT_TS if control in (None, "", "-") else AUTH_KEY_HINT_SELF_HOSTED
 
 
 def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_routes="", tags=""):
@@ -3144,8 +3155,10 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
     """
     log = []
 
+    from panel.ops import tailscale_integration as _ts
+    control = _ts.control_url()
     if not auth_key:
-        return False, "Auth key is required. Generate one at https://login.tailscale.com/admin/keys", "\n".join(log)
+        return False, auth_key_hint(control), "\n".join(log)
     advertise_routes = _r20a_routes_or_none(advertise_routes)
     if advertise_routes is None:
         return False, i18n.Sentence(_R20A_BAD_ROUTES), "\n".join(log)
@@ -3154,7 +3167,8 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
     # with IPv4 and IPv6 forwarding already written and loaded. Raised as it was, so the route's
     # answer ("That isn't a usable Tailscale auth key.", a 400) is unchanged.
     _priv.check_args("tailscale-up-key", [auth_key, "yes" if enable_ssh else "no",
-                                          advertise_routes or "-", tags or "-"])
+                                          advertise_routes or "-", tags or "-"]
+                     + _ts.control_args(control))
 
     # 1. Enable IP forwarding for subnet routing
     if advertise_routes:
@@ -3172,7 +3186,8 @@ def remote_bootstrap_tailscale(server, auth_key="", enable_ssh=True, advertise_r
     # never echoed back — not even in a rejection message.
     out, err, rc = _core.run_privileged(server, "tailscale-up-key",
                                   [auth_key, "yes" if enable_ssh else "no",
-                                   advertise_routes or "-", tags or "-"], timeout=60)
+                                   advertise_routes or "-", tags or "-"] + _ts.control_args(control),
+                                  timeout=60)
     log.append(f"tailscale up: {out[-300:] if out else ''}")
     if rc != 0:
         return False, i18n.Sentence("Tailscale auth failed: {why}", why=err or out[-200:]), "\n".join(log)
@@ -6396,7 +6411,8 @@ def _r32b_panel_dials_public(server):
 
 def _r28b_host_on_tailnet(host):
     """True when `host` (an address or a name) is reached over the tailnet; an unresolved name is not."""
-    if host.lower().rstrip(".").endswith(".ts.net"):
+    from panel.ops import tailscale_integration as _ts
+    if _ts.is_tailnet_name(host):
         return True
     addrs = [host] if ip_address_or_none(host) is not None else _r28b_resolve(host)
     return bool(addrs) and all(_r28b_tailnet_addr(a) for a in addrs)

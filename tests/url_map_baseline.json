@@ -1012,6 +1012,17 @@
       "GET"
     ]
   },
+  "GET /root-cron/<int:remote_id>": {
+    "endpoint": "root_cron_page",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:root_cron_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /server-management": {
     "endpoint": "server_management",
     "guards": [
@@ -2963,6 +2974,18 @@
       "POST"
     ]
   },
+  "POST /api/tailscale/control-server": {
+    "endpoint": "api_tailscale_control_server",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:api_tailscale_control_server"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/tailscale/install": {
     "endpoint": "api_tailscale_install",
     "guards": [
@@ -3169,6 +3192,28 @@
       "POST"
     ]
   },
+  "POST /root-cron/<int:remote_id>/change": {
+    "endpoint": "root_cron_change",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:root_cron_change"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /root-cron/switch": {
+    "endpoint": "root_cron_switch",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:root_cron_switch"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /server/<int:server_id>/action": {
     "endpoint": "server_action",
     "guards": [
@@ -3257,6 +3302,18 @@
       "auth.py:decorated_function(super_admin)",
       "account_guard.py:wrapped",
       "view:panel_settings_save"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /settings/schedules": {
+    "endpoint": "settings_schedules_save",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:settings_schedules_save"
     ],
     "methods": [
       "POST"

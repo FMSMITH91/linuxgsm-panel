@@ -2769,6 +2769,32 @@ _r39d_local_grant_choice() {
     return 0
 }
 
+# ── Root's crontab on this host: the operator's choice, recorded root-owned ──────────────────────
+# The panel owner's root cron page (Settings > Schedules) reads and installs root's crontab through
+# the helper's root-crontab-read and root-crontab-write. A verb that installs root's crontab is root
+# on this host, which the narrow grant otherwise keeps from the panel's account; so the helper
+# refuses both unless panel.conf records `root_cron=yes`, which only this installer writes.
+#
+# Prints "yes|no <why>", why being env|kept|default. `PANEL_ROOT_CRON=1 ./install.sh` opens it (=0
+# closes it). Unset, the recorded choice is kept, so an update never changes it; with none it is
+# no. A run the panel started (PANEL_SELF_UPDATE) never takes the answer from the environment.
+_d1_root_cron_choice() {
+    local _conf="$1" _prev="" _env="${PANEL_ROOT_CRON:-}"
+    [[ -z "${PANEL_SELF_UPDATE:-}" ]] || _env=""
+    case "${_env}" in
+        1|yes|true) echo "yes env"; return 0 ;;
+        0|no|false) echo "no env"; return 0 ;;
+    esac
+    if [[ -f "${_conf}" ]]; then
+        _prev="$(sed -n 's/^root_cron=//p' "${_conf}" 2>/dev/null | tail -n 1)" || _prev=""
+    fi
+    case "${_prev}" in
+        yes|no) echo "${_prev} kept"; return 0 ;;
+    esac
+    echo "no default"
+    return 0
+}
+
 # ── the panel's own port, recorded root-owned ────────────────────────────────────────────────────
 # The helper's `tailscale-serve` (Serve, and Funnel to the internet) publishes ONE port: the one
 # panel.conf records as `panel_port`. The panel's account cannot change that file, so a compromised
@@ -2958,12 +2984,16 @@ install_root_tools() {
     local _ts_ssh_why=""
     read -r TS_SSH_CHOICE _ts_ssh_why <<< "$(_r25a_tailscale_ssh_choice "${PANEL_CONF}")" || true
     [[ "${TS_SSH_CHOICE:-}" == "yes" ]] || TS_SSH_CHOICE=no
+    # And the root cron choice, before the rewrite: an unset PANEL_ROOT_CRON keeps what was recorded.
+    local _rc_why=""
+    read -r ROOT_CRON_CHOICE _rc_why <<< "$(_d1_root_cron_choice "${PANEL_CONF}")" || true
+    [[ "${ROOT_CRON_CHOICE:-}" == "yes" ]] || ROOT_CRON_CHOICE=no
     # Likewise read before the rewrite: an update keeps the recorded port unless it may take a new one.
     local _panel_port_rec=""
     _panel_port_rec="$(_r25j_panel_port_to_record "${PANEL_CONF}")" || _panel_port_rec=""
-    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\nlocal_grant=%s\n' \
+    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\nlocal_grant=%s\nroot_cron=%s\n' \
         "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" "${TS_SSH_CHOICE}" \
-        "${_panel_port_rec}" "${LOCAL_GRANT_CHOICE}" \
+        "${_panel_port_rec}" "${LOCAL_GRANT_CHOICE}" "${ROOT_CRON_CHOICE}" \
         | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
         && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
         && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
@@ -2978,6 +3008,11 @@ install_root_tools() {
             ok "Tailscale SSH: the panel may turn it on for this host (PANEL_TAILSCALE_SSH=0 to refuse)"
         else
             info "Tailscale SSH: the panel will not turn it on for this host (PANEL_TAILSCALE_SSH=1 to allow)"
+        fi
+        if [[ "${ROOT_CRON_CHOICE}" == "yes" ]]; then
+            ok "Root's crontab: the panel owner's root cron page may change it on this host (PANEL_ROOT_CRON=0 to close it)"
+        else
+            info "Root's crontab: closed to the panel on this host (PANEL_ROOT_CRON=1 to open it to the owner's root cron page)"
         fi
     fi
 

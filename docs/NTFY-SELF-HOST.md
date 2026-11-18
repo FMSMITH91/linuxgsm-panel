@@ -66,7 +66,8 @@ sudo tailscale serve --bg --https=443 127.0.0.1:2586
 tailscale serve status
 ```
 
-Serve gives ntfy a trusted `*.ts.net` certificate and keeps it inside your tailnet. Use Serve, never
+Serve gives ntfy a trusted `*.ts.net` certificate and keeps it inside your tailnet (on a Headscale
+tailnet the name ends in its base domain, and Serve needs a Headscale that issues certificates). Use Serve, never
 Funnel: Funnel would publish it to the internet. To stop it, run the same command with `off` at the
 end. If the panel itself is already served on port 443 of this machine, choose another HTTPS port
 (for example `--https=8443`) and add `:8443` to `base-url` and to the panel's Server field.

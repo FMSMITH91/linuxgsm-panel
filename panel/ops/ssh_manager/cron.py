@@ -2255,3 +2255,20 @@ def _lgsm_query_port(vals, fallback_port):
     """The query port: LinuxGSM's queryport, else its port, else the one the panel already knows."""
     return ((vals.get("queryport") or "").strip() or (vals.get("port") or "").strip()
             or str(fallback_port or "").strip())
+
+
+def write_root_crontab(server, content, expected, timeout=30):
+    """Install `content` as root's crontab on `server`, only while the current one hashes to `expected`.
+
+    Two-sided like _core.write_root_file: locally the helper's root-crontab-write takes the content
+    on stdin (never a command line) and checks every line itself; elsewhere (a remote, or the panel's
+    host before its helper is installed) the same check runs in
+    privileged.remote_root_crontab_write_command, the content travels base64, and run_command
+    escalates it as it does every verb's shell form. rc 3 on either side means root's crontab changed
+    since it was read, and nothing was written.
+    """
+    if _core.is_local_server(server) and _core.helper_present():
+        return _core._exec_local_argv(_priv.helper_argv("root-crontab-write", [expected]), timeout=timeout,
+                                      stdin_text=content)
+    return _core.run_command(server, _core._R19A_C_LOCALE + _priv.remote_root_crontab_write_command(
+        content, expected), timeout=timeout, sudo=True)

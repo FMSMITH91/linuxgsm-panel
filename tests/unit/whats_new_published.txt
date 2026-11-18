@@ -733,3 +733,11 @@ ca04de9c The changelog lists changes by the day they were released.
 d8c66800 Settings says which actions ask for the password again.
 28411d6a The guides match what the panel does.
 4524d418 Pages refuse inline style attributes.
+4462e983 Settings → Schedules.
+0efda6ea Root's crontab, for the panel owner.
+bdcb317a Headscale as the Tailscale control server.
+bc9f934c Tailnet names under any domain.
+b16195bb MagicDNS check asked a name no tailnet uses.
+adbf52b7 Root's crontab stays closed on the panel host unless opened at install.
+3fe2b860 The login link must come from the chosen control server.
+cc33e4ec An open console costs the server less when it is quiet.

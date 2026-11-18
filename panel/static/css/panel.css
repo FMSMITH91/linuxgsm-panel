@@ -3249,3 +3249,8 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   font-size: .78rem !important;
   cursor: pointer !important;
 }
+
+/* ── Schedules and root cron ── */
+.sch-select { max-width: 12rem !important; }
+.rc-command { word-break: break-all !important; }
+.rc-schedule { white-space: nowrap !important; }
