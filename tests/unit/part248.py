@@ -4,20 +4,57 @@
    backup-failure and not-installed lines, the `details` secret labels, the debug report's key=value
    scrub and the release notes' links. A line of one tag (or key word) repeated with no phrase after
    it took time growing with its square (the key=value scrub with its cube); judged on growth.
+2. The port check before a Start or a not-online Restart: when the game port is listening and a process
+   of the server's own game account runs (its stored status is stale), a Restart goes ahead and a Start
+   says the server may already be up (still offering Start anyway); otherwise as before.
+3. A port saved BACK to the stored one while a Start runs (clearing pending_port): the stored port still
+   follows the port the game bound, and the save waits for the next start.
+4. The sign-in paths: the file browser refuses ~/.bash_aliases, ~/.bashrc.d and ~/.k5users too, and a
+   restore (of an uploaded archive as well) keeps every sign-in path as the account has it, never the
+   archive's copy (run by bash on part190's stand-in home).
+5. Writes refused while the server is being restored (its files replaced, its crontab set aside and put
+   back): the daily restart, LinuxGSM log timestamps off, GMod content apply and remove, and the two
+   silent cron writes (the restart check's re-type, newly gained maintenance commands).
+6. A resting console (console_rest) is read on the pass that answers a page's catch-up, as the poller
+   runs the two: serve the catch-ups, then the tick.
+7. A backup's database dump runs only once the backup goes ahead: not for one skipped for players online
+   (the hourly ticker's, the queued sweep's and the wipe's path, and "Back up now"), and before the
+   archive when it does go ahead.
+8. A reboot of the panel's own host waits while a game server is being restored (the panel process runs
+   the restore, on any host): blocked with the restore named, through the no-host-row reboot route too.
+9. A panel backup restore reads the archive's shape header by header before anything unpacks it, for a
+   decrypted archive as for a plain one: a member declaring more than the free disk space, a name that
+   is not one of the four, or a fifth member is refused there.
 
 HOW IT RUNS. Every caller is called in-process on invented text; the one that reads a host has its
 game-account shell stubbed. Nothing reaches a host or data/.
 """
-
+import gzip as _gz248
+import os as _os248
+import pathlib as _pl248
+import shutil as _shutil248
 import sys
+import tarfile as _tf248
+import tempfile as _tmp248
+import time as _time248
 from types import SimpleNamespace as _NS248
 
-from unit.part01 import check, eq
-from unit.part12 import _p9_patch_sm, _p9_restore_all
+from unit.part01 import check, eq, skip
+from unit.part12 import (_P9_TRIPPED, P9_ADMIN, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_client, _p9_delete_server,
+                         _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_row, _p9_set,
+                         _p9_threading)
 from unit.part187 import _r42m_growth, _r42m_grows_linearly
-from panel.ops import system_ops as _so248
-from panel.ops.ssh_manager import game as _game248
-from panel.routes import _shared as _sh248, server_detail as _sd248
+from unit.part190 import _U190, _UNDO190, _Sb190, _crafted190, _missing190
+from panel.core.panel_state import _console_offsets as _offsets248, r36j_route_job as _job248
+from panel.db.models import _NO_BIRTH as _NO_BIRTH248, GameServer as _GS248, db as _db248
+from panel.ops import backup as _bk248, system_ops as _so248
+from panel.ops.ssh_manager import files as _files248, game as _game248
+from panel.routes import _shared as _sh248, console_rest as _crest248, server_detail as _sd248
+from panel.routes import databases as _dbr248, game_restore as _grr248, panel_backup as _pbk248
+from panel.routes import server_files as _sf248
+from panel.services import host_reboot as _hr248
+from unit.part110 import _Unread110
+from panel.services import game_restore as _grs248
 from panel.services import lgsm_players as _lgp248, lgsm_releases as _rel248, wipe_schedule as _wipe248
 
 _app248 = sys.modules["app"]
@@ -84,3 +121,53 @@ eq("lgsm output r30: the key=value scrub still keeps a hyphen-led key and masks 
    _so248._redact("--db-password=hunter2r30 next"), "--db-password=[redacted] next")
 
 
+# ── 2. the port check when the server's own account runs ─────────────────────────────────────────
+_pc_sid248 = _p9_new_server(P9_HOST, "p248pc", "csgo", 42480, name="p248-pc", status="offline")
+_pc248 = {"bg": [], "metrics": None, "reads": 0}
+
+
+def _pc_metrics248(remote, user, port):
+    _pc248["reads"] += 1
+    return _pc248["metrics"]
+
+
+def _pc_act248(client, action, metrics):
+    """POST the action endpoint with the game port listening -> (json, background actions started, metrics reads)."""
+    _pc248["metrics"] = metrics
+    n_bg, n_rd = len(_pc248["bg"]), _pc248["reads"]
+    r = client.post("/api/server/%d/action" % _pc_sid248, json={"action": action})
+    return r.get_json(silent=True) or {}, len(_pc248["bg"]) - n_bg, _pc248["reads"] - n_rd
+
+
+_PC_UP248 = {"ram_total": 1, "game_procs": 3}
+_PC_DOWN248 = {"ram_total": 1, "game_procs": 0}
+_PC_UNREAD248 = {"ram_total": 0, "game_procs": 0}
+try:
+    _p9_arm(who="part248")
+    _pc_trips248 = len(_P9_TRIPPED)
+    _p9_patch_sm("_remote_listening_ports", lambda remote: {42480, 22})
+    _p9_patch_sm("server_live_metrics", _pc_metrics248)
+    _p9_patch(_sd248, "_bg_power_action", lambda app, gs, remote, action, actor, **k: _pc248["bg"].append(action))
+    _p9_patch(_sd248, "_live_run_state", lambda gs, remote: None)
+    _pc_c248 = _p9_client(P9_ADMIN)
+    _pc248["restart_up"] = _pc_act248(_pc_c248, "restart", _PC_UP248)
+    _pc248["start_up"] = _pc_act248(_pc_c248, "start", _PC_UP248)
+    _pc248["restart_down"] = _pc_act248(_pc_c248, "restart", _PC_DOWN248)
+    _pc248["restart_unread"] = _pc_act248(_pc_c248, "restart", _PC_UNREAD248)
+    _pc248["restart_raises"] = _pc_act248(_pc_c248, "restart", None)
+    _pc248["trips"] = _P9_TRIPPED[_pc_trips248:]
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_pc_sid248)
+_PC_BUSY248 = "Port 42480 is already in use on this host (not by a server the panel knows). Start anyway?"
+check("port check r30: a Restart of a server whose status is stale (offline) while its own game account runs and "
+      "its port listens goes ahead, from one read of its processes",
+      _pc248["restart_up"][0].get("success") is True and _pc248["restart_up"][1:] == (1, 1), repr(_pc248["restart_up"]))
+check("port check r30: a Start of it is refused saying it may already be up, and still offers Start anyway",
+      _pc248["start_up"][0].get("port_in_use") is True and _pc248["start_up"][1] == 0
+      and "may already be up" in (_pc248["start_up"][0].get("message") or ""), repr(_pc248["start_up"]))
+eq("port check r30: with none of its account's processes running, or that read failing (zero sample or None), a "
+   "Restart is refused as before, blaming the unknown listener",
+   [(_pc248[k][0].get("message"), _pc248[k][1]) for k in ("restart_down", "restart_unread", "restart_raises")],
+   [(_PC_BUSY248, 0)] * 3)
+check("port check r30: ...and nothing reached a host", _pc248["trips"] == [], repr(_pc248["trips"]))

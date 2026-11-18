@@ -4,5 +4,6 @@
   "Port {port} is in use by {name}, which is running. Stop it first, or start anyway.": "El puerto {port} lo usa {name}, que está en marcha. Detenlo primero o inicia de todos modos.",
   "Port {port} is already in use on this host (not by a server the panel knows). Start anyway?": "El puerto {port} ya está en uso en este host (no por un servidor que el panel conozca). ¿Iniciar de todos modos?",
   "The panel now watches port {port} for this server.": "El panel vigila ahora el puerto {port} para este servidor.",
-  "Port {port} takes effect at the next restart. Until then the panel keeps watching port {old}, which the running server still uses.": "El puerto {port} se aplica en el próximo reinicio. Hasta entonces el panel sigue vigilando el puerto {old}, que el servidor en marcha aún usa."
+  "Port {port} takes effect at the next restart. Until then the panel keeps watching port {old}, which the running server still uses.": "El puerto {port} se aplica en el próximo reinicio. Hasta entonces el panel sigue vigilando el puerto {old}, que el servidor en marcha aún usa.",
+  "Port {port} is in use, and this server's game account has processes running: the server may already be up. Refresh the page to see, or start anyway.": "El puerto {port} está en uso y la cuenta de juego de este servidor tiene procesos en marcha: puede que el servidor ya esté funcionando. Actualiza la página para comprobarlo, o inicia de todos modos."
 }

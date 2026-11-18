@@ -281,7 +281,7 @@ def _pck_gate(gs, remote, action, actor, port_gate):
         log_action(actor, f"force_{action}_server", target=gs.name, server=gs,
                    detail="started with the port check skipped")
         return None
-    return _pck.start_refusal(gs, remote)
+    return _pck.start_refusal(gs, remote, action)
 
 
 def _pck_power_refusal(gs, remote, action, actor, port_gate):

@@ -10,7 +10,9 @@ that is not running) first looks:
 2. a listener on the server's game port on the host (TCP or UDP), from one unprivileged
    `ss -H -lntu` (ssh_manager._remote_listening_ports, which every dashboard poll already runs and
    caches for a few seconds; `-n` prints numbers only, so the locale changes nothing it reads):
-   the start is refused as a port in use by something the panel does not know.
+   the start is refused as a port in use by something the panel does not know. Unless a process of
+   the server's own game account runs (its status may be stale): a Restart then goes ahead, and a
+   Start is refused saying the server may already be up.
 
 Either refusal is a PortBusy, which the page offers to send again with `force` ("Start anyway").
 The check fails OPEN: a read that fails, raises, times out or comes back empty starts the server
@@ -109,20 +111,37 @@ def _pck_listening(remote):
         return None
 
 
-def start_refusal(gs, remote):
-    """Why starting `gs` now would collide on its port (a PortBusy), or None to go ahead.
+def _pck_own_process(gs, remote):
+    """Whether a process of `gs`'s game account runs on its host: True, False, or None when unread.
 
-    Fails open: anything that cannot be read, or raises, is None.
+    The same 2 s cached sample the power actions read (server_live_metrics); its all-zero answer
+    (ram_total 0) is a failed read, never a "no".
     """
     try:
-        return _pck_refusal(gs, remote)
+        m = _sm.server_live_metrics(remote, gs.short_name, gs.port)
+    except Exception:  # noqa: BLE001 - paramiko raises where the other transports return ""
+        _log.info("port check: the server's own processes could not be read", exc_info=True)
+        return None
+    if not m or not m.get("ram_total"):
+        return None
+    return bool(m.get("game_procs"))
+
+
+def start_refusal(gs, remote, action="start"):
+    """Why a panel `action` ("start" or "restart") on `gs` now would collide on its port, or None to go ahead.
+
+    A PortBusy, or for a Start of a server whose own game account is the one running, a plain
+    "already running". Fails open: anything that cannot be read, or raises, is None.
+    """
+    try:
+        return _pck_refusal(gs, remote, action)
     except Exception:  # noqa: BLE001 - never make Start less reliable than it was
         db.session.rollback()
         _log.warning("port check before a start failed; starting anyway", exc_info=True)
         return None
 
 
-def _pck_refusal(gs, remote):
+def _pck_refusal(gs, remote, action="start"):
     """start_refusal's body."""
     port = start_port(gs)
     if port is None:
@@ -139,9 +158,28 @@ def _pck_refusal(gs, remote):
                       gs.name)
         return None
     if port in live:
-        return PortBusy("Port {port} is already in use on this host (not by a server the panel knows). "
-                        "Start anyway?", port=port)
+        return _pck_live_hit(gs, remote, action, port)
     return None
+
+
+def _pck_live_hit(gs, remote, action, port):
+    """The answer when `port` is already listening: maybe the server itself, with a stale status.
+
+    The stored status is refreshed by the monitor pass and the page polls, so a server started a
+    moment ago (or one whose status went stale) reads "not online" while it is up on its own port.
+    A Restart of it then goes ahead (the restart stops it first). A Start is still refused, with
+    "Start anyway" offered, but says the server may already be up instead of blaming a process the
+    panel does not know: the account's processes are not proof (a LinuxGSM cron run is one too), and
+    a start of a server that is up is only LinuxGSM saying so. Only when none of the account's
+    processes runs, or that cannot be read, is the port someone else's.
+    """
+    if _pck_own_process(gs, remote):
+        if action == "restart":
+            return None
+        return PortBusy("Port {port} is in use, and this server's game account has processes running: the "
+                        "server may already be up. Refresh the page to see, or start anyway.", port=port)
+    return PortBusy("Port {port} is already in use on this host (not by a server the panel knows). "
+                    "Start anyway?", port=port)
 
 
 def follow_pending(gs, remote, rules):
