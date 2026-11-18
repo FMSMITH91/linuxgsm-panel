@@ -93,6 +93,16 @@ def _grammar239():
        (("30 4 * * * date +\\%F > /x", ""), "date +%F", None, None, None))
 
 
+def _parse239():
+    """The page reads only the verb's own format: a bad name, bad base64 or a stray line is dropped."""
+    got = _rc239.parse_read("root-crontab ok KiAqICogKiAqIHgK\ncrond ../etc eAo=\ncrond ok-name !!\nnoise\n"
+                            "crond lgsm-gmod-content-a eAo=\nroot-crontab none extra\n")
+    eq("root cron read: only well-formed lines count, a /etc/cron.d name must be one cron reads, and the "
+       "panel's GMod content file is marked",
+       (got["state"], got["text"], [(f["name"], f["panel"]) for f in got["crond"]]),
+       ("ok", "* * * * * x\n", [("lgsm-gmod-content-a", True)]))
+
+
 # ── 2. the verbs: the helper and the remote shell forms ───────────────────────────────────────────
 class _Cron239:
     """subprocess for the helper: `crontab -u root -l` answers `current`; `-` records what it installs."""
@@ -498,6 +508,7 @@ def _text239():
 
 try:
     _grammar239()
+    _parse239()
     _helper_verbs239()
     _remote_forms239()
     _host_opened239()
