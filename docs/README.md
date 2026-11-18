@@ -197,7 +197,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `tailscale_control_url` | *(empty: Tailscale)* | A self-hosted control server (Headscale) that new Tailscale joins use, as `https://host[:port]`. Set it on the `/tailscale` page; see [Headscale](#headscale-a-self-hosted-control-server) |
 | `trusted_proxies` | `["127.0.0.0/8", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
 | `trusted_proxy_users` | `www-data`, `nginx`, `http`, `caddy`, `cloudflared` | With `trust_proxy`, on loopback: the local accounts a proxy may run as (names or uids). Root and the panel's own account always count |
-| `session_idle_minutes` | 30 | A normal sign-in ends after this long without use (older installs: `session_lifetime_hours`) |
+| `session_idle_minutes` | 30 | A normal sign-in ends after this long without use (older installs: `session_lifetime_hours`); an upload still running counts as use, a page's own background checks do not |
 | `session_absolute_hours` | 8 | ...or this long after sign-in, however active |
 | `remember_days` | 3 | A "Remember me" sign-in signs back in by itself until this many days after sign-in, then asks for the password |
 | `step_up_minutes` | 10 | How long a sign-in or password confirmation covers the high-risk actions listed under [Security](#security) (0 = never ask again) |
