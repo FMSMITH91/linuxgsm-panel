@@ -6,12 +6,14 @@ Each part names the OWASP cheat sheet section it follows (read 2026-11-15).
   Stuffing Prevention Cheat Sheet). /login already limits each address (8 failures in 5 minutes);
   failures are now also counted per USERNAME, so a spray from many addresses meets a limit too: after
   ACCOUNT_SOFT_FAILS failures in ACCOUNT_WINDOW the name is paused for LOCK_BASE seconds, doubling with
-  each further failure up to LOCK_MAX ("exponential backoff", never a permanent lockout, so it cannot
-  be used to shut a real user out for good), and ACCOUNT_DAY_FAILS in a day pause it for LOCK_MAX after
-  every failure (low-and-slow guessing). An address gets a day limit as well (IP_DAY_FAILS). Any name
-  is counted, real or not, and the refusal is the address throttle's own sentence, so nothing tells
-  an account that exists from one that does not. One audit row (`login_locked`, the vocabulary's
-  authn_login_lock) and one alert per lockout.
+  each further failure up to LOCK_MAX ("exponential backoff", never a permanent lockout), and
+  ACCOUNT_DAY_FAILS in a day pause it for LOCK_MAX after every failure (low-and-slow guessing). An
+  address gets a day limit as well (IP_DAY_FAILS). Any name is counted, real or not, and the refusal
+  is the address throttle's own sentence, so nothing tells an account that exists from one that does
+  not. One audit row (`login_locked`, the vocabulary's authn_login_lock) and one alert per lockout.
+  The pause holds only browsers the account has not signed in from: one with a valid device cookie
+  (device_cookie, OWASP "Slow Down Online Guessing Attacks with Device Cookies") is counted on its
+  own, so a slow trickle of wrong guesses at a name cannot keep its owner out.
 * Required 2FA (Multifactor Authentication Cheat Sheet, "Quick Recommendations": require MFA for
   administrative users). With Settings' switch on, a superadmin or anyone allowed the terminal, users
   or groups who has no 2FA is sent to set it up right after the password and can do nothing else.
@@ -54,9 +56,14 @@ LOCK_BASE = 60
 LOCK_MAX = 15 * 60
 IP_DAY_FAILS = 100
 _MAX_KEYS = 20000             # names and addresses held at once; the oldest goes first past this
-_FAILS = {}                   # "u:<name>" / "ip:<bucket>" -> deque of failure (or in-flight) times
-_NOTED = {}                   # "u:<name>" -> the pause end already audited (one row per lockout)
+_FAILS = {}                   # "u:<name>" / "d:<device>" / "ip:<bucket>" -> deque of failure (or in-flight) times
+_NOTED = {}                   # "u:<name>" / "d:<device>" -> the pause end already audited (one row per lockout)
 _LOCK = threading.Lock()
+
+
+def _dkey(device):
+    """The throttle key for a browser holding a valid device cookie: its nonce."""
+    return "d:" + device
 
 
 def _ukey(username):
@@ -91,26 +98,31 @@ def _pause_end(fails, now):
     return fails[-1] + pause
 
 
-def account_reserve(username, now):
-    """Count one password attempt for `username`; (stamp, 0), or (None, seconds left) while paused.
+def account_reserve(username, now, device=None):
+    """Count one password attempt for `username`; (slot, 0), or (None, seconds left) while paused.
 
+    `device` is the nonce of a valid device cookie for that account (device_cookie.presented_nonce).
+    Such a browser's attempt is counted against the browser instead of the name, and the name's pause
+    does not hold it; a browser that is itself paused counts as an unknown one, held by the name.
     Reserved before the hash runs, as the address throttle does, so a parallel burst cannot all read
     "under the limit"; account_release gives the slot back for an attempt that did not fail.
     """
     key = _ukey(username)
     with _LOCK:
         _prune(now)
+        if device and _pause_end(_FAILS.get(_dkey(device)), now) <= now:
+            key = _dkey(device)
         fails = _FAILS.get(key)
         end = _pause_end(fails, now) if fails else 0
         if end > now:
             return None, int(end - now) + 1
         _FAILS.setdefault(key, deque(maxlen=ACCOUNT_DAY_FAILS * 2)).append(now)
-        return now, 0
+        return (key, now), 0
 
 
-def account_release(username, stamp):
+def account_release(slot):
     """Give back a slot account_reserve handed out, for an attempt that did not fail."""
-    key = _ukey(username)
+    key, stamp = slot
     with _LOCK:
         fails = _FAILS.get(key)
         if fails and stamp in fails:
@@ -119,9 +131,18 @@ def account_release(username, stamp):
                 _FAILS.pop(key, None)
 
 
-def account_new_lockout(username, now):
-    """After a failure: the pause it started, in seconds, when it started one not yet reported; else 0."""
-    key = _ukey(username)
+def is_device_slot(slot):
+    """Whether account_reserve counted this attempt against a known browser rather than the name."""
+    return bool(slot) and slot[0].startswith("d:")
+
+
+def account_new_lockout(username, now, slot=None):
+    """After a failure: the pause it started, in seconds, when it started one not yet reported; else 0.
+
+    `slot` is the attempt's account_reserve slot when there was one: a known browser's failure pauses
+    that browser, not the name.
+    """
+    key = slot[0] if slot else _ukey(username)
     with _LOCK:
         end = _pause_end(_FAILS.get(key), now)
         if end <= now or _NOTED.get(key) == end:
