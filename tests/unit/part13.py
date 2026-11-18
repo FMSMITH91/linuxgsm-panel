@@ -5276,6 +5276,7 @@ def _ca13_check_failing_boot():
     check("create_app: each failed boot step is logged, not swallowed",
           all((m in logs for m in ("notifications master-switch migration skipped",
                                    "legacy super_admin cleanup skipped",
+                                   "legacy secret encryption failed",
                                    "at-rest column encryption migration failed",
                                    "audit IP anonymisation failed"))), logs[-400:])
     check("create_app: an unparseable audit retention deletes nothing",
