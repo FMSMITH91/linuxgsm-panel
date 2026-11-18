@@ -1072,9 +1072,10 @@ for _label, _pat in _fixture_shapes:
           "%s" % (_hits[:1],))
 
 # ── Supported-release claim vs what CI actually proves ──────────────────────────────────────────
-# The README tells people which Ubuntu releases the panel runs on; the CI matrix is the only thing
-# that proves it. These drift apart silently — a release added to one and not the other is
-# invisible until somebody installs onto it and finds out. Assert the claim and the proof agree.
+# The README and docs/install.md tell people which Ubuntu releases the panel runs on; the CI
+# matrix is the only thing that proves it. These drift apart silently — a release added to one and
+# not the other is invisible until somebody installs onto it and finds out. Assert the claim and
+# the proof agree.
 # Parsed with regex rather than PyYAML so this gate needs no dependency CI doesn't already install.
 _repo = _pl.Path(_UNIT_ROOT)
 _ci_yml = (_repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -1089,6 +1090,10 @@ _readme_releases = set(_re_fx.findall(r"([0-9]{2}\.[0-9]{2})", _readme_line))
 check("supported releases: CI matrix has at least one entry", bool(_ci_releases), str(_ci_pairs))
 eq("supported releases: README lists exactly what CI tests",
    sorted(_readme_releases), sorted(_ci_releases))
+_install_md = (_repo / "docs" / "install.md").read_text(encoding="utf-8")
+_install_line = next((ln for ln in _install_md.splitlines() if "LTS** for the panel" in ln), "")
+eq("supported releases: docs/install.md's requirements list exactly what CI tests",
+   sorted(set(_re_fx.findall(r"([0-9]{2}\.[0-9]{2})", _install_line))), sorted(_ci_releases))
 # Each release must be paired with the Python IT ships — testing 26.04 on 3.12 would prove nothing
 # about the interpreter people will actually run the panel under.
 _EXPECTED_PY = {"22.04": "3.10", "24.04": "3.12", "26.04": "3.14"}

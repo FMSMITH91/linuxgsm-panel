@@ -6690,30 +6690,30 @@ check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from
       and len(_cc_dl_uses) == 2 and len(set(_cc_dl_uses)) == 1,
       repr((_cc_jsdl_with, _js_up and _js_up.groups(), _cc_dl_uses)))
 
-# ── deleting a host says what stays on it, and the README's removal commands do what they say ────
+# ── deleting a host says what stays on it, and the install guide's removal commands do what they say
 # The delete forgets a host and never connects to it, so the gamedig tree, its links and the weekly
-# root cron stay on that host; the confirmation did not say so. It does now, and README's
+# root cron stay on that host; the confirmation did not say so. It does now, and docs/install.md's
 # "Removing a host" lists them with commands to remove them. Those paths must be the ones the code
 # installs to, and the commands are run here against a fixture root: they take the panel's tree,
 # cron, log and links, and leave a gamedig link that points anywhere else, and a directory that
-# still holds something (a panel host's helper) — the sudo rm -rf a README hands out is tested.
+# still holds something (a panel host's helper) — the sudo rm -rf the docs hand out is tested.
 _rh_js = open(os.path.join(_root, "panel", "static", "js", "manage_remotes.js"), encoding="utf-8").read()
 # find(), not index(): a renamed function or heading must fail the checks below by name.
 _rh_fn = _rh_js[_rh_js.find("function removeRemote(btn){"):] if "function removeRemote(btn){" in _rh_js else ""
 _rh_fn = _rh_fn[:_rh_fn.find("\n}\n")]
 _rh_note = ("Nothing on the host itself is changed: its game servers keep running, and the gamedig "
-            "tool and weekly cron the panel installed there stay. The README’s “Removing a "
-            "host” section says how to remove them.")
-_rh_readme = open(os.path.join(_root, "docs", "README.md"), encoding="utf-8").read()
+            "tool and weekly cron the panel installed there stay. The “Removing a host” section "
+            "of the install guide (docs/install.md) says how to remove them.")
+_rh_readme = open(os.path.join(_root, "docs", "install.md"), encoding="utf-8").read()
 _rh_sec = (_rh_readme[_rh_readme.find("\n### Removing a host\n"):]
            if "\n### Removing a host\n" in _rh_readme else "")
 _rh_sec = _rh_sec[:_rh_sec.find("\n## ", 1)] if "\n## " in _rh_sec[1:] else _rh_sec
 _rh_cron = _privmod.WRITE_TARGETS["node-tools-cron"][0]
 check("delete host: the confirmation says what stays on the host, in its own translatable sentence",
-      "'" + _rh_note + "'" in _rh_fn and "The README" in _rh_note
+      "'" + _rh_note + "'" in _rh_fn and "(docs/install.md)" in _rh_note
       and all(_rh_note in json.load(open(os.path.join(_root, "panel", "translations", _lg, "actions.json"),
                                          encoding="utf-8")) for _lg in ("es", "fr")), _rh_fn[:400])
-check("delete host: README's 'Removing a host' names the paths the code installs to",
+check("delete host: docs/install.md's 'Removing a host' names the paths the code installs to",
       "`%s`" % _privmod.GAMEDIG_DIR in _rh_sec and "`%s`" % _rh_cron in _rh_sec
       and "`/usr/local/bin/gamedig`" in _rh_sec and "`/usr/bin/gamedig`" in _rh_sec
       and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
@@ -6742,7 +6742,7 @@ try:
         return _r, _p
 
     _r, _p = _rh_run()
-    check("delete host: README's removal commands take the panel's gamedig tree, cron, log and "
+    check("delete host: docs/install.md's removal commands take the panel's gamedig tree, cron, log and "
           "link, and leave a gamedig that is not the panel's",
           _rh_cmd is not None and _p.returncode == 0
           and not os.path.lexists(_r + _privmod.GAMEDIG_DIR) and not os.path.lexists(_r + _rh_cron)
@@ -7281,7 +7281,8 @@ def _docsrc(leaf):
 
 
 _sec = _docsrc("SECURITY.md")
-_readme = _docsrc("README.md")
+_features = _docsrc("features.md")
+_perms = _docsrc("permissions.md")
 
 # The census table quotes the sudo=True ceiling the escalation ratchet above enforces. It said 3
 # for a release after the NodeSource step became a verb and the real number was 2.
@@ -7294,10 +7295,10 @@ check("docs: SECURITY.md states the real verb count",
       "table has %d; SECURITY.md says %s"
       % (len(_privmod.verbs()),
          (re.search(r"(\d+) verbs", _sec) or ["?", "?"])[1]))
-check("docs: README states the real number of alert events",
-      "%d events" % len(N.EVENTS) in _readme,
-      "EVENTS has %d; README says %s"
-      % (len(N.EVENTS), (re.search(r"for (\d+) events", _readme) or ["?", "?"])[1]))
+check("docs: features.md states the real number of alert events",
+      "%d events" % len(N.EVENTS) in _features,
+      "EVENTS has %d; features.md says %s"
+      % (len(N.EVENTS), (re.search(r"for (\d+) events", _features) or ["?", "?"])[1]))
 # The systemd unit list in SECURITY.md must name every unit the verb table actually accepts.
 check("docs: SECURITY.md's systemd unit list matches privileged.UNITS",
       all(("`%s`" % _u) in _sec for _u in _privmod.UNITS),
@@ -7305,14 +7306,14 @@ check("docs: SECURITY.md's systemd unit list matches privileged.UNITS",
 # super_admin is the is_superadmin FLAG, not a permission. Documenting it as grantable sends an
 # operator looking for a tickbox that was deliberately removed.
 from panel.security import auth as _authmod
-check("docs: README does not offer super_admin as a grantable permission",
-      "| `super_admin` |" not in _readme)
+check("docs: permissions.md does not offer super_admin as a grantable permission",
+      "| `super_admin` |" not in _perms)
 check("docs: ...and it really is not one", "super_admin" not in _authmod.ALL_PERMISSIONS)
 # ...and it names every permission that IS one (review 1013a): use_terminal, a shell on a host as
 # the panel's own account, was the one missing, and the most powerful of them.
-_r20d_perm_table = (_readme.split("| Permission | Grants |", 1)[1].split("\n\n", 1)[0]
-                    if "| Permission | Grants |" in _readme else "")
-check("docs: README's Permissions table names every grantable permission",
+_r20d_perm_table = (_perms.split("| Permission | Grants |", 1)[1].split("\n\n", 1)[0]
+                    if "| Permission | Grants |" in _perms else "")
+check("docs: permissions.md's Permissions table names every grantable permission",
       _r20d_perm_table != "" and all("`%s`" % _p in _r20d_perm_table for _p in _authmod.ALL_PERMISSIONS),
       "missing: %s" % sorted(_p for _p in _authmod.ALL_PERMISSIONS if "`%s`" % _p not in _r20d_perm_table))
 
@@ -8918,8 +8919,8 @@ check("config: a single trusted_proxies string is one entry, not its characters"
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.
-_ip_readme = open(os.path.join(_root, "docs", "README.md"), encoding="utf-8").read()
-check("README: the nginx block sets X-Forwarded-For rather than passing the client's through",
+_ip_readme = open(os.path.join(_root, "docs", "configuration.md"), encoding="utf-8").read()
+check("docs/configuration.md: the nginx block sets X-Forwarded-For rather than passing the client's through",
       "proxy_add_x_forwarded_for" in _ip_readme,
       "nginx forwards whatever the client sent")
 

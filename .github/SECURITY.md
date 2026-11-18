@@ -97,7 +97,7 @@ account.
 
 ### The panel owner
 
-The panel owner ([docs/README.md](../docs/README.md#the-panel-owner)) is one account that the web UI
+The panel owner ([docs/permissions.md](../docs/permissions.md#the-panel-owner)) is one account that the web UI
 never lets another administrator deactivate, demote, rename, delete or reset, and that alone may open a
 terminal on the panel's host or restore or download a panel backup (the ways in to `panel.db` and
 the panel's keys from the UI).
@@ -359,7 +359,7 @@ gamedig tree, its two links and the weekly root cron that re-runs `install-gamed
 fetches nothing while the tree is in place, so that part is root-owned, hash-locked and inert.
 **Tailscale, if the panel set it up there, is not inert:** the host stays in your tailnet until you
 log it out. The fail2ban whitelist file and the auto-block firewall rules stay too.
-README's [Removing a host](../docs/README.md#removing-a-host) lists each with the commands that remove it.
+The install guide's [Removing a host](../docs/install.md#removing-a-host) lists each with the commands that remove it.
 
 ### What you can do today
 

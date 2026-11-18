@@ -19,7 +19,7 @@ Held here:
   never "no release key, rerun with PANEL_ALLOW_UNSIGNED_UPDATE=1"; no ssh-keygen says so.
 * Nothing tells an operator to UPDATE or RECOVER by piping a script from GitHub into a shell: the
   fresh install's banner names the installer already on the host (the signed path), as do
-  install.sh's header, recover.sh's and the README's recovery section.
+  install.sh's header, recover.sh's and the recovery section of docs/security-features.md.
 * tools/sign-release.sh's warning before signing lists every file root installs from a release and
   runs (install.sh's stage_root_source callers), held equal to them here.
 * An account with no "What's new" stamp (an upgrade that died between adding the column and
@@ -471,7 +471,7 @@ _inst_tail156 = _INST156[_INST156.index('info "[4/4] Verifying the panel is up')
 _banner156 = [ln for ln in _inst_tail156.splitlines() if 'echo -e "  Update:' in ln]
 _hints156 = [ln.strip() for ln in _INST156.splitlines() if ln.strip().startswith("UPDATE_HINT=")]
 _rec156 = _read156("panel", "install", "recover.sh")
-_readme156 = _read156("docs", "README.md")
+_readme156 = _read156("docs", "security-features.md")
 _hdr156 = _INST156[:_INST156.index("# Fresh install behaviour:")]
 check("A10 L install.sh: the fresh install's Update line names the installer already on the host (root: the "
       "root-owned copy; per-user: the checkout's), never 're-run this same command' (the curl one-liner)",
@@ -479,11 +479,12 @@ check("A10 L install.sh: the fresh install's Update line names the installer alr
       and sorted(_hints156) == sorted([
           'UPDATE_HINT="the panel\'s Update button, or as root over SSH: cd / && sudo bash ${HELPER_DIR}/install.sh"',
           'UPDATE_HINT="the panel\'s Update button, or: bash ${PANEL_DIR}/install.sh"']), repr((_banner156, _hints156)))
-check("A10 L: install.sh's header offers curl only to install, and recover.sh's header and the README's recovery "
+check("A10 L: install.sh's header offers curl only to install, and recover.sh's header and the docs' recovery "
       "section no longer pipe recover.sh from GitHub into a root shell",
       "Install OR update with ONE command" not in _hdr156
       and "sudo bash /usr/local/lib/linuxgsm-panel/install.sh" in _hdr156
       and "recover.sh | sudo bash" not in _rec156 and "recover.sh | sudo bash" not in _readme156
+      and "\n## Recovery\n" in _readme156
       and "curl" not in _rec156.split("set -euo pipefail", 1)[0], "")
 
 

@@ -63,7 +63,11 @@ dated section below lists what that day's releases changed, newest first; the nu
   section, newest first, with what they added, changed, fixed and secured.
 - **Settings says which actions ask for the password again.** The note under the step-up time now
   names the kinds of change that do (users, hosts, the firewall, updates, backups), not only a few
-  of them; the README lists every one.
+  of them; docs/security-features.md lists every one.
+- **A shorter README.** The README is now a front page: what the panel is, its key features, how to
+  install and update, and links. Its detailed sections moved unchanged to new pages under `docs/`
+  (install, features, configuration, permissions, security features, development), and deleting a
+  host now points to the install guide's "Removing a host" section.
 
 ### Fixed
 

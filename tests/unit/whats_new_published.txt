@@ -791,3 +791,4 @@ c6ab4344 A failed dump upload says whether an earlier dump was put back.
 6a4b40a9 A refused Let's Encrypt certificate is recorded in the audit log.
 7f487832 Add-ons in containers: IW4MAdmin and B3.
 2973d843 Add-ons run locked down, and only for those you allow.
+62b554cb A shorter README.

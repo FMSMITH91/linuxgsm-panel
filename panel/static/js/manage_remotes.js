@@ -729,7 +729,7 @@ function removeRemote(btn){
     body: tfHtml('Delete {name}? This removes it and all of its game servers from the panel.',
                  {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}})
       + '<span class="d-block small text-muted mt-2">'
-      + 'Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The README’s “Removing a host” section says how to remove them.'
+      + 'Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The “Removing a host” section of the install guide (docs/install.md) says how to remove them.'
       + '</span>',
     requirePassword: true,
     requireLabel: 'Enter your account password to confirm:',

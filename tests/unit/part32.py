@@ -1022,13 +1022,16 @@ def _p32_install_ufw():
 # ═══ 8. the docs: no hand-written Serve line with an upstream ════════════════════════════════════
 def _p32_docs():
     bad = []
-    for rel in (os.path.join("docs", "README.md"), os.path.join("docs", "https.md")):
+    # Every page under docs/ but the CHANGELOG (a record of what was, not advice to copy).
+    pages = sorted(os.path.join("docs", f) for f in os.listdir(os.path.join(_ROOT32, "docs"))
+                   if f.endswith(".md") and f != "CHANGELOG.md")
+    for rel in pages:
         for n, line in enumerate(_script_text(rel).splitlines(), 1):
             if re.search(r"tailscale\s+(?:serve|funnel)\b[^`\n]*\b(?:https?|https\+insecure)://", line):
                 bad.append("%s:%d" % (rel, n))
     check("docs: no `tailscale serve`/`funnel` command with an upstream to copy (the README's http:// "
           "one 502s against the default HTTPS panel and makes the wizard publish a second route)",
-          bad == [], repr(bad))
+          len(pages) > 2 and os.path.join("docs", "configuration.md") in pages and bad == [], repr((pages, bad)))
 
 
 def _p32_harness():

@@ -195,12 +195,12 @@ try:
 finally:
     _so168.PANEL_DIR, _so168._remote_ci_state = _saved168
 
-# ── the list in this repository, and the README's fix for a panel that predates it ──────────────
+# ── the list in this repository, and the install guide's fix for a panel that predates it ───────
 with open(os.path.join(_root, "panel", "install", "update-stops"), encoding="utf-8") as _fh168:
     _ids168 = [ln.split()[0] for ln in _fh168 if ln.strip() and not ln.startswith("#")]
 check("update-stops: every line is a full commit id followed by why", all(_re168.fullmatch(r"[0-9a-f]{40}", i)
                                                                          for i in _ids168) and _ids168, repr(_ids168))
-with open(os.path.join(_root, "docs", "README.md"), encoding="utf-8") as _fh168:
+with open(os.path.join(_root, "docs", "install.md"), encoding="utf-8") as _fh168:
     _readme168 = _fh168.read()
-eq("README: the command for a panel stuck before the root clean-up pins release 1, the first required stop",
+eq("docs/install.md: the command for a panel stuck before the root clean-up pins release 1, the first required stop",
    sorted(set(_re168.findall(r"PANEL_UPDATE_REF=([0-9a-f]{40})", _readme168))), _ids168[:1])

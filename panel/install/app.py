@@ -681,7 +681,7 @@ def _node_tools_cron_pass(app):
         upgrade, which after the first pass is all of them.
 
     It acts only on hosts in the database: deleting a host from the panel stops this at once, and
-    leaves on that host what was installed there (README, "Removing a host"). Both lists are read
+    leaves on that host what was installed there (docs/install.md, "Removing a host"). Both lists are read
     once, at the start, and one host's gamedig install can take minutes, so a host deleted while a
     pass is under way was still in the list and got written to again. Each row is re-read from the
     database just before it is acted on, and one that is gone is skipped.
