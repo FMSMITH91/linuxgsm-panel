@@ -290,16 +290,19 @@ def _scorecard127():
     got = {
         "Scorecard failed": _gate127(_run("Scorecard analysis", "completed", "failure")),
         "Scorecard running": _gate127(_run("Scorecard analysis", "in_progress", None)),
+        "Scorecard image checks failed": _gate127(_run("Scorecard image pin", "completed", "failure")
+                                                  + _run("Scorecard image pulled", "completed", "failure")),
         "control: a CI leg failed beside it": _gate127(_run("Scorecard analysis", "completed", "success")
                                                        + _run("checks (y)", "completed", "failure")),
         "control: Lighthouse failed": _gate127(_run("lighthouse", "completed", "failure")),
         "control: pip-audit failed": _gate127(_run("pip-audit", "completed", "failure")),
         "control: open alerts": _gate127(_run("Open code-scanning alerts", "completed", "failure")),
     }
-    check("update gate: a failed or running Scorecard analysis no longer holds a commit back (a GitHub-side "
-          "error in it held every panel's update on 2026-10-22), while a failing CI leg, Lighthouse, pip-audit "
-          "or the open code-scanning alerts check beside it still does",
+    check("update gate: a failed or running Scorecard analysis, or a failed check of its image, no longer "
+          "holds a commit back (a GitHub-side error in it held every panel's update on 2026-10-22), while a "
+          "failing CI leg, Lighthouse, pip-audit or the open code-scanning alerts check beside it still does",
           got == {"Scorecard failed": "passing", "Scorecard running": "passing",
+                  "Scorecard image checks failed": "passing",
                   "control: a CI leg failed beside it": "failing", "control: Lighthouse failed": "failing",
                   "control: pip-audit failed": "failing", "control: open alerts": "failing"}, repr(got))
 

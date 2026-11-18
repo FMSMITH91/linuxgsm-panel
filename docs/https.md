@@ -86,7 +86,10 @@ longest browsers accept; a new one is made at start-up once fewer than 30 days r
 `data/ssl/`, serving `https://<your-ip>:5000` directly, renewed at start-up and with no domain. Set
 `"use_https": false` and restart to serve plain HTTP. It stands down behind a reverse proxy
 (`trust_proxy`), and behind Tailscale Serve when the panel is bound to `127.0.0.1`; on any other
-bind it stays on and Serve reaches it with `https+insecure://`.
+bind it stays on and Serve reaches it with `https+insecure://`. The panel's own TLS (this option and
+option 5) takes TLS 1.3, and TLS 1.2 only with forward-secret AEAD suites (ECDHE with AES-GCM or
+ChaCha20-Poly1305), as the OWASP Transport Layer Security Cheat Sheet recommends; a client that
+offers only CBC suites or TLS 1.1 cannot connect.
 
 **Caveat:** browsers warn that the cert isn't from a trusted CA, and it protects against passive
 eavesdropping but not a determined man-in-the-middle. For serious public use prefer options 1–3.

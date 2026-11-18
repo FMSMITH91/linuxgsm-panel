@@ -646,17 +646,23 @@ _rn_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 with open(os.path.join(_rn_root, ".github", "renovate.json"), encoding="utf-8") as _rn_fh:
     _rn_cfg = _sg_json.load(_rn_fh)
 _rn_mgrs = _rn_cfg.get("customManagers") or [{}]
-check("renovate: one regex manager over the workflows, the dockerfile manager on the fuzz image only, no "
+# A second regex manager and the github-actions manager keep the pinned container images current;
+# what they match is part242's.
+check("renovate: two regex managers over the workflows (downloads first), the dockerfile manager on the "
+      "fuzz image only, the github-actions manager on the two ClusterFuzzLite action copies only, no "
       "other manager, no dashboard, a release age floor",
-      _rn_cfg.get("enabledManagers") == ["custom.regex", "dockerfile"]
+      _rn_cfg.get("enabledManagers") == ["custom.regex", "dockerfile", "github-actions"]
       and _rn_cfg.get("dockerfile") == {"managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]}
-      and len(_rn_mgrs) == 1
-      and _rn_mgrs[0].get("customType") == "regex"
-      and _rn_mgrs[0].get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"]
-      and len(_rn_mgrs[0].get("matchStrings") or []) == 1
-      and _rn_cfg.get("dependencyDashboard") is False
+      and _rn_cfg.get("github-actions") == {"managerFilePatterns": ["/^\\.github/actions/cflite-[a-z-]+/action\\.yml$/"]}
+      and len(_rn_mgrs) == 2
+      and all(_m.get("customType") == "regex" for _m in _rn_mgrs)
+      and all(_m.get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"] for _m in _rn_mgrs)
+      and all(len(_m.get("matchStrings") or []) == 1 for _m in _rn_mgrs)
+      and "github-release-attachments" in _rn_mgrs[0]["matchStrings"][0]
+      and _rn_cfg.get("dependencyDashboard") == {"enabled": False}
       and _sg_re.fullmatch(r"[1-9][0-9]* days", _rn_cfg.get("minimumReleaseAge") or "") is not None,
-      repr({k: _rn_cfg.get(k) for k in ("enabledManagers", "dockerfile", "dependencyDashboard", "minimumReleaseAge")}))
+      repr({k: _rn_cfg.get(k) for k in ("enabledManagers", "dockerfile", "github-actions", "dependencyDashboard",
+                                        "minimumReleaseAge")}))
 # Renovate's matchStrings are JavaScript (RE2) regexes: `(?<name>` is Python's `(?P<name>`.
 _rn_pat = _sg_re.compile(_sg_re.sub(r"\(\?<(?=[A-Za-z])", "(?P<",
                                     (_rn_mgrs[0].get("matchStrings") or ["(?!)"])[0]))
@@ -924,7 +930,7 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
     # block already holds comment lines between its entries, so `# 'tests/fuzz/**'` fits its style.
     _sc_list = "\n".join(_sg_re.sub(r"(?:^|\s)#.*$", "", _l) for _l in _sc_list.splitlines())
     _sc_after = [_b for _b in _sc_steps[_sc_at:].split("\n      - ")[1:]
-                 if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|google/clusterfuzzlite)"
+                 if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|\$/\.github/actions/cflite-)"
                                   r"|^name: (Install|Fuzz))", _b, _sg_re.M)]
     if _sc_at < 0 or _sc_steps.find("\n      - ") < _sc_at - 400:
         _sc_bad.append("%s: no scope step first" % _sc_wf)

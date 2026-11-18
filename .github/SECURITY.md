@@ -355,7 +355,9 @@ Every workflow's token starts with no permissions (`permissions: {}`), and each 
 scopes it uses. No workflow runs on `pull_request_target`, and every action is pinned to a full commit
 SHA. Every job but the deploy starts with StepSecurity's Harden-Runner; the pull-request jobs whose
 outbound hosts are few and known run it in block mode, refusing every host not on their list (OWASP
-Top 10 CI/CD Security Risks, CICD-SEC-5 to CICD-SEC-7).
+Top 10 CI/CD Security Risks, CICD-SEC-5 to CICD-SEC-7). The Docker images the fuzzing runs in are
+pinned by digest too; the one image that cannot be, Scorecard's, is checked against a recorded
+digest before and after it runs (CICD-SEC-3).
 
 ### The CI secret
 

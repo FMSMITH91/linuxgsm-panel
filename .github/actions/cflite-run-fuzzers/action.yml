@@ -1,0 +1,98 @@
+# ClusterFuzzLite's run_fuzzers action: google/clusterfuzzlite actions/run_fuzzers/action.yml at
+# 884713a6c30a92e5e8544c39945cd7cb630abcd1, with ONE line changed. Upstream's `image:` names
+# gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers:v1 by tag alone, and that tag is rebuilt
+# and moved upstream daily with no commit here, so the code that builds and runs the fuzz
+# targets, holding the job's token, could change under any run. Here `image:` names the Ubuntu 24.04 build of the same image
+# (the one .clusterfuzzlite/project.yaml's base_os_version selects) by tag AND digest: Docker pulls
+# by the digest alone, and Renovate's github-actions manager (.github/renovate.json) looks the tag
+# up and proposes its new digest as a reviewed commit. Every input and env line is upstream's, so
+# the workflows pass the same `with:` they passed to the upstream action.
+# Upstream's image, given base_os_version ubuntu-24-04, starts this 24.04 image BY TAG from inside
+# itself (oss-fuzz infra/cifuzz/config_utils.py pivot_to_ubuntu_24_04). Started here directly, the
+# 24.04 image runs the same entrypoint and has nothing to pivot to, so no image is pulled by tag.
+# tests/unit/part242.py holds the rest of this file byte for byte to upstream's.
+# action.yml
+name: 'run-fuzzers'
+description: 'Runs fuzz target binaries.'
+inputs:
+  language:
+    description: 'Programming language project is written in.'
+    required: false
+    default: 'c++'
+  fuzz-seconds:
+    description: 'The total time allotted for fuzzing in seconds.'
+    required: true
+    default: 600
+  dry-run:
+    description: 'If set, run the action without actually reporting a failure.'
+    default: false
+  sanitizer:
+    description: 'The sanitizer to run the fuzzers with.'
+    default: 'address'
+  mode:
+    description: |
+      The mode to run the fuzzers with ("code-change", "batch", "coverage", or "prune").
+      "code-change" is for fuzzing a pull request or commit.
+      "batch" is for non-interactive fuzzing of an entire project.
+      "coverage" is for coverage generation.
+      "prune" is for corpus pruning.
+    required: false
+    default: 'code-change'
+  github-token:
+    description: |
+      Token for GitHub API.
+      You should use "secrets.GITHUB_TOKEN" in your workflow file, do not
+      hardcode the token.
+      TODO(https://github.com/google/oss-fuzz/pull/5841#discussion_r639393361):
+      Document locking this down.
+    required: true
+  storage-repo:
+    description: |
+      The git repo to use for storing certain artifacts from fuzzing.
+    required: false
+  storage-repo-branch:
+    description: |
+      The branch of the git repo to use for storing certain artifacts from
+      fuzzing.
+    default: main
+    required: false
+  storage-repo-branch-coverage:
+    description: |
+      The branch of the git repo to use for storing coverage reports.
+    default: gh-pages
+    required: false
+  report-unreproducible-crashes:
+    description: 'If True, then unreproducible crashes will be reported.'
+    required: false
+    default: False
+  minimize-crashes:
+    description: 'If True, reportable crashes will be minimized.'
+    required: false
+    default: False
+  parallel-fuzzing:
+    description: "Whether to use all available cores for fuzzing."
+    required: false
+    default: false
+  output-sarif:
+    description: "Whether to output fuzzing results to SARIF."
+    required: false
+    default: false
+runs:
+  using: 'docker'
+  image: 'docker://gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers:ubuntu-24-04-v1@sha256:475ec5a91d4b6a42edd0818c88099b96125f031d95a48fa1e87aa2dfa104ecdf'
+  env:
+    FUZZ_SECONDS: ${{ inputs.fuzz-seconds }}
+    MODE: ${{ inputs.mode }}
+    LANGUAGE: ${{ inputs.language }}
+    DRY_RUN: ${{ inputs.dry-run}}
+    SANITIZER: ${{ inputs.sanitizer }}
+    GITHUB_TOKEN: ${{ inputs.github-token }}
+    LOW_DISK_SPACE: 'True'
+    GIT_STORE_REPO: ${{ inputs.storage-repo }}
+    GIT_STORE_BRANCH: ${{ inputs.storage-repo-branch }}
+    GIT_STORE_BRANCH_COVERAGE: ${{ inputs.storage-repo-branch-coverage }}
+    REPORT_UNREPRODUCIBLE_CRASHES: ${{ inputs.report-unreproducible-crashes }}
+    OUTPUT_SARIF: ${{ inputs.output-sarif }}
+    MINIMIZE_CRASHES: ${{ inputs.minimize-crashes }}
+    CFL_PLATFORM: 'github'
+    PARALLEL_FUZZING: ${{ inputs.parallel-fuzzing }}

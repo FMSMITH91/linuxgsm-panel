@@ -1,0 +1,4 @@
+#scan
+-- dump
+SET sql_mode='NO_BACKSLASH_ESCAPES';
+SELECT 'x\'; USE mysql; -- ';

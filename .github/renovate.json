@@ -3,34 +3,104 @@
   "description": [
     "Renovate keeps the sha256-pinned release downloads in the workflows current (gitleaks,",
     "actionlint, osv-scanner, the Codacy coverage reporter), which Dependabot cannot see, and the",
-    "fuzz image's base (.clusterfuzzlite/Dockerfile, pinned as tag@sha256), whose new digest it",
-    "proposes when the tag moves.",
+    "container images pinned as tag@sha256: the fuzz image's base (.clusterfuzzlite/Dockerfile), the",
+    "images of this repository's two ClusterFuzzLite actions (.github/actions/cflite-*/action.yml) and",
+    "the Scorecard action's image recorded in scorecard.yml. For an image it proposes the tag's new",
+    "digest when the tag moves, never another tag: the Scorecard tag follows the action's version,",
+    "which Dependabot updates.",
     "Everything else stays with Dependabot (.github/dependabot.yml, which has no docker entry), so",
-    "the two never propose the same update.",
-    "Each pin is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
+    "the two never propose the same update: the github-actions manager reads the two local action",
+    "files only, never a workflow.",
+    "Each pinned download is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
     "line directly above the VERSION (the release tag) and SHA256 lines. The",
     "github-release-attachments datasource finds the asset the current sha256 belongs to and",
-    "proposes the new tag together with that asset's new sha256. tests/unit/part19.py gates that",
-    "every pinned download is matched, and that the dockerfile manager reads that one file only."
+    "proposes the new tag together with that asset's new sha256. A pinned image in a workflow is an",
+    "*IMAGE: 'name:tag@sha256:...' line under `# renovate: datasource=docker`.",
+    "The registries these images live on (gcr.io, ghcr.io) give Renovate no release timestamp, and",
+    "with the default timestamp-required a digest update would wait on minimumReleaseAge forever, so",
+    "docker updates are raised without one (Renovate docs, minimumReleaseAgeBehaviour).",
+    "tests/unit/part19.py and part242.py gate that every pin is matched and that each manager reads",
+    "only its own files."
   ],
-  "enabledManagers": ["custom.regex", "dockerfile"],
+  "enabledManagers": [
+    "custom.regex",
+    "dockerfile",
+    "github-actions"
+  ],
   "customManagers": [
     {
       "customType": "regex",
       "description": "Workflow release downloads pinned by tag and sha256",
-      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\\n\\s+[A-Z_]*VERSION: '(?<currentValue>[^'\\s]+)'\\n\\s+[A-Z_]*SHA256: '(?<currentDigest>[0-9a-f]{64})'"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Workflow container images pinned by tag and digest",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker)\\n\\s+[A-Z_]*IMAGE: '(?<depName>[a-z0-9./_-]+):(?<currentValue>[A-Za-z0-9._-]+)@(?<currentDigest>sha256:[0-9a-f]{64})'"
+      ],
+      "versioningTemplate": "docker"
     }
   ],
   "dockerfile": {
-    "managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]
+    "managerFilePatterns": [
+      "/^\\.clusterfuzzlite/Dockerfile$/"
+    ]
   },
-  "dependencyDashboard": false,
+  "github-actions": {
+    "managerFilePatterns": [
+      "/^\\.github/actions/cflite-[a-z-]+/action\\.yml$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Images: the tag's new digest only, never another tag",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "gcr.io and ghcr.io publish no release timestamp: raise the digest update rather than hold it forever",
+      "matchDatasources": [
+        "docker"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
+      "description": "The fuzz build's base and the two ClusterFuzzLite action images move together",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "/^gcr\\.io/oss-fuzz-base//"
+      ],
+      "groupName": "ClusterFuzzLite images"
+    }
+  ],
+  "dependencyDashboard": {
+    "enabled": false
+  },
   "minimumReleaseAge": "7 days",
-  "labels": ["ci"],
+  "labels": [
+    "ci"
+  ],
   "prConcurrentLimit": 3,
   "rebaseWhen": "conflicted",
-  "schedule": ["* 0-5 * * 1"]
+  "schedule": [
+    "* 0-5 * * 1"
+  ]
 }

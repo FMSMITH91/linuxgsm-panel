@@ -991,8 +991,8 @@ try:
         _hl_calls.clear()
         _p9_patch(_p9_so, _hl_fn, _hl_rec(_hl_fn, (False, "tailscale is not installed")))
         _r = _A.post(_hl_url)
-        check("%s: failure is a 500 with the host's reason, and nothing is invalidated" % _hl_url,
-              _r.status_code == 500 and _p9_json(_r).get("message") == "tailscale is not installed"
+        check("%s: failure is a 502 with the host's reason, and nothing is invalidated" % _hl_url,
+              _r.status_code == 502 and _p9_json(_r).get("message") == "tailscale is not installed"
               and "invalidate" not in [c[0] for c in _hl_calls], repr((_r.status_code, _hl_calls)))
 
     # Reads whose failure must still answer with the shape the page renders from.
@@ -1703,8 +1703,8 @@ try:
           and _p9_audit("set_autostart").detail == "False", repr(_d))
     _sd_auto[0] = (False, "")
     _r = _A.post("/api/server/%d/autostart" % P9_GS, json={"enabled": True})
-    check("autostart: a crontab write that failed is a 500 and the flag is left alone",
-          _r.status_code == 500 and _p9_json(_r).get("message") == "Failed to update crontab"
+    check("autostart: a crontab write the host refused is a 502 and the flag is left alone",
+          _r.status_code == 502 and _p9_json(_r).get("message") == "Failed to update crontab"
           and _p9_row(P9_GS).autostart is False, repr(_p9_json(_r)))
     _sd_auto[0] = ConnectionError("down")
     _r = _A.post("/api/server/%d/autostart" % P9_GS, json={"enabled": True})
@@ -1720,8 +1720,8 @@ try:
     _p9_patch(_p9_sd, "set_daily_restart", _daily)
     _p9_set(P9_GS, daily_restart=False, daily_restart_at="05:00")
     _r = _A.post("/api/server/%d/daily-restart" % P9_GS, json={"enabled": True, "time": "06:30"})
-    check("daily restart: a schedule the host refused is a 500 with its reason; nothing stored",
-          _r.status_code == 500 and _p9_json(_r).get("message") == "crontab refused"
+    check("daily restart: a schedule the host refused is a 502 with its reason; nothing stored",
+          _r.status_code == 502 and _p9_json(_r).get("message") == "crontab refused"
           and _p9_row(P9_GS).daily_restart is False and _p9_row(P9_GS).daily_restart_at == "05:00",
           repr(_p9_json(_r)))
     _sd_daily[0] = ConnectionError("down")

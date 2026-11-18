@@ -465,20 +465,27 @@ _sq1_sched = _sq28_drive([], sha=None)
 check("sonar main gate: ...with no commit given (the schedule) it judges the analysed commit at once",
       _sq1_sched[0] == [] and _sq1_sched[1] == _SHA28 and _sq1_sched[3] == []
       and not any(_c[0] == "project_analyses/search" for _c in _sq1_sched[2]), repr(_sq1_sched))
-# The line SonarCloud's Accepted docker:S6471 sits on. When that line is edited (a new digest too),
-# SonarCloud closes the issue and raises it under a NEW key on main, and main's gate fails after the
-# merge because KNOWN_ACCEPTED names the closed key: no pull request check could see it. So an edit
-# to the line fails here first. Merge it only with the new key: Accept the issue SonarCloud raises on
-# the pull request's analysis, put its key in KNOWN_ACCEPTED, then the new line and key here.
-_SQ28_ACCEPTED_AT = ("AaHkWUMULZkAFiLSHxwS", (".clusterfuzzlite", "Dockerfile"),
-                     "FROM gcr.io/oss-fuzz-base/base-builder-python:latest@sha256:"
-                     "6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23")
+# The line SonarCloud's Accepted docker:S6471 sits on: line 21, the FROM. SonarCloud carries an
+# issue (and its Accepted status) to the next analysis when it finds the same rule on the same line
+# hash, or on the same line number with the same message (sonar-core issue/tracking/Tracker.java,
+# trackNonClosed). #562 moved the FROM from line 17 to 21 AND changed its text, so neither held:
+# SonarCloud closed the issue, raised it under a NEW key on main, and main's gate failed after the
+# merge because KNOWN_ACCEPTED named the closed key, which no pull request check could see. So the
+# FROM must stay on line 21; a new digest on it keeps the line and the message. Any other edit is
+# merged only with the new key: Accept the issue SonarCloud raises on the pull request's analysis,
+# put its key in KNOWN_ACCEPTED, then the new line and key here.
+_SQ28_ACCEPTED_AT = ("AaHkWUMULZkAFiLSHxwS", (".clusterfuzzlite", "Dockerfile"), 21,
+                     "FROM gcr.io/oss-fuzz-base/base-builder-python:ubuntu-24-04@sha256:"
+                     "56c7b79a492890e6ca979816a09f25ce6393802a3917bfba0cfd76f1c9ded1b7")
 with open(os.path.join(_R28, *_SQ28_ACCEPTED_AT[1]), encoding="utf-8") as _f28:
     _sq28_lines = _f28.read().splitlines()
-check("sonar main gate: the line holding the Accepted issue is the one its key was raised on (an edit "
-      "re-keys it in SonarCloud and turns main red after the merge: update KNOWN_ACCEPTED's key first)",
-      _SQ28_ACCEPTED_AT[2] in _sq28_lines and _SQ28_ACCEPTED_AT[0] in _sq28.KNOWN_ACCEPTED,
-      repr([_l for _l in _sq28_lines if _l.startswith("FROM ")]))
+check("sonar main gate: the Accepted issue's FROM line is still line 21, the line its key was raised on (a "
+      "FROM that moves re-keys it in SonarCloud and turns main red after the merge: update KNOWN_ACCEPTED's "
+      "key first), and it is the line recorded here",
+      len(_sq28_lines) >= 21 and _sq28_lines[_SQ28_ACCEPTED_AT[2] - 1] == _SQ28_ACCEPTED_AT[3]
+      and [_l for _l in _sq28_lines if _l.startswith("FROM ")] == [_SQ28_ACCEPTED_AT[3]]
+      and _SQ28_ACCEPTED_AT[0] in _sq28.KNOWN_ACCEPTED,
+      repr([(_i + 1, _l) for _i, _l in enumerate(_sq28_lines) if _l.startswith("FROM ")]))
 _sq28_out = _io28.StringIO()
 with _ctx28.redirect_stdout(_sq28_out):
     _sq28_rcs = (_sq28.main(["x", "--self-test"]),

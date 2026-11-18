@@ -29,8 +29,8 @@ from panel.core.config import encrypt_secret
 from panel.core.http import _json_body, _json_str, _log_and_generic
 from panel.db.models import DatabaseEndpoint, EndpointClient, GameDatabase, HostDatabaseServer, RemoteServer, db
 from panel.ops.ssh_manager import databases as _dbs
-from panel.security.auth import (EDIT_DATABASE_DATA, MANAGE_DATABASES, VIEW_SERVERS, get_remote, get_user_servers,
-                                 has_permission, log_action, superadmin_required)
+from panel.security.auth import (EDIT_DATABASE_DATA, MANAGE_DATABASES, VIEW_SERVERS, _r17c_row_id, get_remote,
+                                 get_user_servers, has_permission, log_action, superadmin_required)
 
 _TS_FRESH = 600            # a host's tailnet address is read again after 10 minutes
 _TS_IPS = {}               # remote id -> (monotonic time, tailnet IPv4 or "")
@@ -326,7 +326,8 @@ def _choices_answer(game):
 def _reuse_external(game, ep_id):
     """The stored admin login of external endpoint `ep_id`, as the form's fields, or None."""
     from panel.core.config import decrypt_secret
-    ep = db.session.get(DatabaseEndpoint, ep_id) if isinstance(ep_id, int) else None
+    # A row id, or no lookup: an int past SQLite's range raised OverflowError at the lookup (a 500).
+    ep = db.session.get(DatabaseEndpoint, ep_id) if _r17c_row_id(ep_id) is not None else None
     if ep is None or ep.kind != "external":
         return None
     return {"address": ep.address, "port": ep.port, "user": ep.admin_user or "",

@@ -83,6 +83,7 @@
   "binary (not text)": "binaire (pas du texte)",
   "binary, {n} bytes": "binaire, {n} octets",
   "the SQL inside is larger than 16 GiB": "le SQL qu'il contient dépasse 16 Gio",
+  "the dump holds SQL the upload check cannot read safely (an sql_mode or character set that changes how quotes are read, PREPARE or EXECUTE, LOAD DATA, or a client command): make it with mysqldump or mariadb-dump from this one database": "le dump contient du SQL que la vérification de l'envoi ne peut pas lire sans risque (un sql_mode ou un jeu de caractères qui change la lecture des guillemets, PREPARE ou EXECUTE, LOAD DATA, ou une commande du client) : faites-le avec mysqldump ou mariadb-dump à partir de cette seule base de données",
   "the dump names another database (a system schema or another server's database)": "le dump nomme une autre base de données (un schéma système ou la base de données d'un autre serveur)",
   "the dump switches to another database (USE, CREATE DATABASE, DROP DATABASE or CONNECT): make it of this one database only, without --databases or --all-databases": "le dump bascule vers une autre base de données (USE, CREATE DATABASE, DROP DATABASE ou CONNECT) : faites-le de cette seule base de données, sans --databases ni --all-databases",
   "the file could not be read to its end (damaged, or cut short)": "le fichier n'a pas pu être lu jusqu'au bout (endommagé ou tronqué)",

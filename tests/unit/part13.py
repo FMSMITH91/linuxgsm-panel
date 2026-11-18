@@ -4979,12 +4979,15 @@ def _ca13_check_page_headers(client):
     js = sorted(p for p in os.listdir(os.path.join(client.application.static_folder, "js")) if p.endswith(".js"))[0]
     rows = []
     for r in (page, client.get("/api/auth/ping", headers={"Accept": "application/json"}), client.get("/static/js/" + js)):
-        rows.append((r.mimetype, [h for h in ("X-Frame-Options", "Permissions-Policy") if h in r.headers],
+        rows.append((r.mimetype, [h for h in ("X-Frame-Options", "Permissions-Policy", "Cross-Origin-Embedder-Policy")
+                                  if h in r.headers],
                      "nonce-" in r.headers.get("Content-Security-Policy", ""),
                      r.headers.get("Content-Security-Policy") == "default-src 'none'; frame-ancestors 'none'",
                      all(r.headers.get(h) for h in ("X-Content-Type-Options", "Referrer-Policy", "X-Robots-Tag"))))
-    page_only = ["X-Frame-Options", "Permissions-Policy"]
-    eq("app responses: a page carries the full CSP, X-Frame-Options and Permissions-Policy; a JSON answer and a "
+    page_only = ["X-Frame-Options", "Permissions-Policy", "Cross-Origin-Embedder-Policy"]
+    eq("app responses: a page's Cross-Origin-Embedder-Policy is require-corp (OWASP HTTP Headers Cheat Sheet)",
+       page.headers.get("Cross-Origin-Embedder-Policy"), "require-corp")
+    eq("app responses: a page carries the full CSP, X-Frame-Options, Permissions-Policy and COEP; a JSON answer and a "
        "static script carry only the short CSP that loads, runs and frames nothing; nosniff, Referrer-Policy "
        "and X-Robots-Tag stay on all three",
        rows, [("text/html", page_only, True, False, True), ("application/json", [], False, True, True),

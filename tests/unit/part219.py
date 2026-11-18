@@ -121,12 +121,13 @@ check("db-query: the helper's stdin is the sign-in document, then the request as
       _doc219.startswith("pw %s\nend\n{" % _K219) and '"run":' in _doc219, _doc219[:80])
 check("db-query: the helper runs it to its end (not a read a signal may stop) and reads its stdin",
       "db-query" not in _h219.READ_VERBS and "db-query" in _h219.STDIN_VERBS and "db-query" in _priv219.DB_PW_VERBS)
-check("db-query and db-import: the client runs with --binary-mode on both paths (no client command but DELIMITER "
-      "in what it reads)",
+check("db-query and db-import: the client runs with --binary-mode and --loose-local-infile=0 on both paths (no "
+      "client command but DELIMITER in what it reads, and a dump's LOAD DATA LOCAL reads no file of this host)",
       "--binary-mode" in _priv219.DB_QUERY_OPTS and "--binary-mode" in _h219.DB_QUERY_OPTS
-      and "--binary-mode --batch" in _priv219.remote_command("db-import", ["mariadb", "3306", "gm219", "gs12_lp"])
-      and '"--binary-mode", "--batch", name]' in open(_os219.path.join(_root, "tools", "panel-helper"),
-                                                       encoding="utf-8").read())
+      and "--binary-mode --loose-local-infile=0 --batch" in _priv219.remote_command(
+          "db-import", ["mariadb", "3306", "gm219", "gs12_lp"])
+      and '"--binary-mode", "--loose-local-infile=0", "--batch", name]' in open(
+          _os219.path.join(_root, "tools", "panel-helper"), encoding="utf-8").read())
 
 # ── 2 + 3. the helper's verb and its remote rendering, against a stand-in client ─────────────────
 _O219 = _os219.path.join(_T219, "o")

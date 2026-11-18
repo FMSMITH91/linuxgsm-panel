@@ -26,3 +26,15 @@ config-variables:
   - DEPLOY_ENABLED
   - DEPLOY_HOST
   - DEPLOY_USER
+
+# GitHub's self-repository form, `uses: $/<path>` (GitHub changelog 2026-07-30, "Reference
+# same-repository actions with self-repository syntax"), reads a same-repository action from the
+# run's own commit, with no checkout. The ClusterFuzzLite workflows run .github/actions/cflite-*
+# that way. actionlint v1.7.12 predates it and reports each such step as an action "in invalid
+# format because ref is missing" (rhysd/actionlint#711 and #732, open). Only that message, for
+# only those two actions, in only those workflows, is ignored: anything else in them still fails.
+# Remove this once the pinned rhysd/actionlint accepts `$/`.
+paths:
+  .github/workflows/cflite_*.yml:
+    ignore:
+      - 'specifying action "\$/\.github/actions/cflite-(build|run)-fuzzers" in invalid format because ref is missing'

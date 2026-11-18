@@ -2047,17 +2047,18 @@ def _register_file_removal(app):
         if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         rel = _json_body().get("path", "")
+        # A path is text: a list, object, number or true reached the host-side checks' .strip() and
+        # answered 500 (OWASP Input Validation Cheat Sheet: check the type before anything uses it).
+        if not isinstance(rel, str):
+            return jsonify({"success": False, "message": "Invalid path"}), 400
         refused = _write_refused(gs, "delete_file", rel)
         if refused is not None:
             return refused
         try:
-            with _r20b_audit_on_raise("delete_file", detail=_audit_safe(_audit_name(rel)),
-                                      target=gs.name, server=gs):
+            with _r20b_audit_on_raise("delete_file", detail=_audit_safe(_audit_name(rel)), target=gs.name, server=gs):
                 ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
-            log_action(current_user, "delete_file", target=gs.name,
-                       detail=_failed_detail(_audit_safe(_audit_name(rel)), ok,
-                                             _sm.delete_failure_reason(msg)),
-                       success=ok, server=gs)
+            log_action(current_user, "delete_file", target=gs.name, success=ok, server=gs,
+                       detail=_failed_detail(_audit_safe(_audit_name(rel)), ok, _sm.delete_failure_reason(msg)))
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500

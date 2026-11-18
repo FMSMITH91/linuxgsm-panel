@@ -63,7 +63,7 @@ _UPLOADS = {}
 _UPLOADS_LOCK = threading.Lock()
 
 _M = {k: "__DBUP_%s__" % k for k in ("READY", "SIZE", "OFFSET", "NOPART", "FAIL", "SPACE", "STORED", "FORMAT",
-                                     "NOTTEXT", "NOTSQL", "SWITCH", "OTHER", "BIG", "DAMAGED")}
+                                     "NOTTEXT", "NOTSQL", "SWITCH", "OTHER", "OPAQUE", "BIG", "DAMAGED")}
 _REFUSALS = {
     "NOPART": "the upload is no longer on the host (it was cancelled, or left too long)",
     "FAIL": "the host could not write the upload into the server's files",
@@ -74,6 +74,9 @@ _REFUSALS = {
     "SWITCH": "the dump switches to another database (USE, CREATE DATABASE, DROP DATABASE or CONNECT): make it of "
               "this one database only, without --databases or --all-databases",
     "OTHER": "the dump names another database (a system schema or another server's database)",
+    "OPAQUE": "the dump holds SQL the upload check cannot read safely (an sql_mode or character set that changes how "
+              "quotes are read, PREPARE or EXECUTE, LOAD DATA, or a client command): make it with mysqldump or "
+              "mariadb-dump from this one database",
     "BIG": "the SQL inside is larger than 16 GiB",
     "DAMAGED": "the file could not be read to its end (damaged, or cut short)",
 }
@@ -216,7 +219,7 @@ def finish_script(user, uid, size, name):
         # NUL bytes become spaces for the scan only (the stored dump is unchanged): Ubuntu 22.04's mawk ends a
         # string at a NUL in match/index/split, so the rest of such a line would go unread there.
         "v=$(rd 2>/dev/null | tr '\\000' ' ' | %s); r=$?" % scan,
-        'case "$v" in SCANNED) [ "$r" = 0 ] || { %s echo %s; exit 5; };; BIG|SWITCH|OTHER) %s echo "__DBUP_${v}__"; '
+        'case "$v" in SCANNED) [ "$r" = 0 ] || { %s echo %s; exit 5; };; BIG|SWITCH|OTHER|OPAQUE) %s echo "__DBUP_${v}__"; '
         'exit 5;; *) %s echo %s; exit 5;; esac' % (rm, _M["DAMAGED"], rm, rm, _M["DAMAGED"]),
         'if [ "$m" != 1f8b ]; then gzip -c -n -- "$p" > "$p.gz" && mv -f -- "$p.gz" "$p" || { %s echo %s; exit 6; }; fi'
         % (rm, _M["FAIL"]),

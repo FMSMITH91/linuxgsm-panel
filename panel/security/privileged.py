@@ -3003,7 +3003,7 @@ _DB_IMPORT_SH = (
     '[ "$(stat -c %%s -- "$z")" -le %d ] || { echo "panel-db: the dump is larger than 2 GiB"; exit 4; }; '
     'sb=; case "$("$4" --help 2>/dev/null)" in *--sandbox*) sb=--sandbox;; esac; '
     "gzip -dc -- \"$z\" | sed %s | \"$4\" --defaults-extra-file=\"$f\" $sb --protocol=tcp "
-    '--host="$5" --port="$3" "${@:6}" --binary-mode --batch "$2" && echo restored'
+    '--host="$5" --port="$3" "${@:6}" --binary-mode --loose-local-infile=0 --batch "$2" && echo restored'
     % (DB_DUMP_DIR, DB_IMPORT_MAX,
        shlex.quote("1{\\%^" + re.sub(r"([*\\])", r"\\\1", DB_SANDBOX_LINE) + "$%d;}")))
 

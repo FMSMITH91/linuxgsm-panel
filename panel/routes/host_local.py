@@ -118,7 +118,10 @@ def _register_host_tailscale(app):
             so.invalidate_server_status()   # firewall changed → next page load re-probes
             log_action(current_user, "ufw_allow_tailscale", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": i18n.tr(msg)})
-        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
+        # 502: the host's command failed (or found no Tailscale interface), not the panel. The same
+        # JSON message; a 500 is kept for the panel's own faults (OWASP REST Security Cheat Sheet,
+        # "HTTP Return Codes").
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 502
 
     @app.route("/api/server-management/ts-ssh-enable", methods=["POST"])
     @login_required
@@ -135,7 +138,7 @@ def _register_host_tailscale(app):
             # The operator's install-time choice, not a failure: a stable code beside the sentence.
             return jsonify({"success": False, "code": "tailscale_ssh_not_chosen",
                             "message": i18n.tr(msg)}), 403
-        return jsonify({"success": False, "message": msg}), 500
+        return jsonify({"success": False, "message": msg}), 502
 
     @app.route("/api/server-management/ts-ssh-disable", methods=["POST"])
     @login_required
@@ -148,7 +151,7 @@ def _register_host_tailscale(app):
             so.invalidate_server_status()   # tailscale-ssh state changed → next load re-probes
             log_action(current_user, "tailscale_ssh_disable", target=LOCAL_HOST_LABEL, detail=msg)
             return jsonify({"success": True, "message": msg})
-        return jsonify({"success": False, "message": msg}), 500
+        return jsonify({"success": False, "message": msg}), 502
 
 
 def _register_panel_update(app):

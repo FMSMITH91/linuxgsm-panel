@@ -1030,11 +1030,11 @@ check("security header: the page CSP takes styles from the panel and the request
       "style attribute (style-src-attr 'none'; no 'unsafe-inline' anywhere)",
       "style-src 'self' 'nonce-" in _hcsp and "style-src-elem 'self' 'nonce-" in _hcsp
       and "style-src-attr 'none'" in _hcsp and "unsafe-inline" not in _hcsp, _hcsp)
-check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and keeps "
-      "no-cache, private (the back/forward cache)",
+check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and is "
+      "no-store (OWASP: no copy of a signed-in page is kept)",
       (hr.headers.get("Cross-Origin-Opener-Policy"), hr.headers.get("Cross-Origin-Resource-Policy"),
        hr.headers.get("X-DNS-Prefetch-Control"), hr.headers.get("Cache-Control"))
-      == ("same-origin", "same-origin", "off", "no-cache, private"), repr(dict(hr.headers)))
+      == ("same-origin", "same-origin", "off", "no-store"), repr(dict(hr.headers)))
 _hj = app.test_client().get("/healthz")
 check("security header: a JSON answer is no-store, with CORP and the inert CSP",
       (_hj.headers.get("Cache-Control"), _hj.headers.get("Cross-Origin-Resource-Policy"),
@@ -3488,8 +3488,8 @@ check("auth: ...and answers a dead one with the flagged 401",
       _ping_anon.status_code == 401 and _ping_anon.headers.get("X-Auth-Required") == "1",
       "status=%d" % _ping_anon.status_code)
 _page = s1.get("/account")
-check("auth: a signed-in page is never served from the browser cache unrevalidated",
-      "no-cache" in (_page.headers.get("Cache-Control") or ""),
+check("auth: a signed-in page is never kept in the browser cache (no-store)",
+      "no-store" in (_page.headers.get("Cache-Control") or ""),
       "Cache-Control: %s" % (_page.headers.get("Cache-Control") or "(none)"))
 
 # A legacy cookie (client_as injects a _user_id with no sid, like a pre-feature login) is

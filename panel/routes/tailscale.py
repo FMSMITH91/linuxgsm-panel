@@ -165,7 +165,9 @@ def _serve_enable(port, mount, funnel, page):
     success, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=funnel,
                                             backend_scheme=_serve_scheme_now(cfg, current_app.config))
     if not success:
-        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
+        # The host's Serve command failed: 502, as every Serve change here answers a host failure
+        # (a 500 is the panel's own fault).
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 502
     set_config_keys(load_config(), tailscale_setup_done=True, tailscale_use_funnel=funnel,
                     tailscale_mount=mount)
     log_action(current_user, "tailscale_serve_enable", target=LOCAL_HOST_LABEL, detail=msg)
@@ -196,8 +198,8 @@ def _serve_disable(port, mount, confirmed=False):
     success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
     if not success:
         # A mount that is another app's is refused before anything runs: the request's fault, a
-        # 409 with its message, not the 500 of a host that failed the command.
-        return jsonify({"success": False, "message": i18n.tr(msg)}), (409 if ts.disable_refused(msg) else 500)
+        # 409 with its message, not the 502 of a host that failed the command.
+        return jsonify({"success": False, "message": i18n.tr(msg)}), (409 if ts.disable_refused(msg) else 502)
     # Mirror the enable branch. Nothing else in the repo ever cleared these, so a disable left
     # tailscale_setup_done True — which six readers treat as ground truth: one permits a
     # 127.0.0.1-only bind (lockout risk) and the boot path RE-APPLIES Serve, quietly undoing the
@@ -230,14 +232,14 @@ def _serve_change_mount(port, mount, page):
     if not ok:
         log_action(current_user, "tailscale_serve_change_path", target=LOCAL_HOST_LABEL,
                    detail="%s: %s" % (detail, msg), success=False)
-        return jsonify({"success": False, "message": i18n.tr(msg)}), 500
+        return jsonify({"success": False, "message": i18n.tr(msg)}), 502
     route = ts.panel_route(ts.get_tailscale_info(force_refresh=True).serve_config, port, mount, scheme)
     if route is None:
         log_action(current_user, "tailscale_serve_change_path", target=LOCAL_HOST_LABEL,
                    detail=detail + ": the new path did not show in Serve's configuration; the old was kept",
                    success=False)
         return jsonify({"success": False, "message": "Serve did not show the new path afterwards, so the old "
-                                                     "path was kept and still works."}), 500
+                                                     "path was kept and still works."}), 502
     set_config_keys(load_config(), tailscale_mount=mount)
     log_action(current_user, "tailscale_serve_change_path", target=LOCAL_HOST_LABEL, detail=detail)
     left = _remove_serve_leftovers(port, mount, "Change path on the Tailscale page", _serve_audit)
@@ -272,7 +274,7 @@ def _serve_remove_route(port, data):
                  % (mount, err or state), False)
     return jsonify({"success": False, "message": (
         "Couldn't read this host's Tailscale Serve configuration, so nothing was removed."
-        if state == "unread" else i18n.tr("Failed to remove: {why}", why=err))}), 500
+        if state == "unread" else i18n.tr("Failed to remove: {why}", why=err))}), 502
 
 
 def _r14a_not_removable(route, cfg):
@@ -296,7 +298,7 @@ def _leftover_route(port, url, raw_mount):
     info = ts.get_tailscale_info(force_refresh=True)
     if info.serve_unreadable:
         return None, (jsonify({"success": False, "message": "Couldn't read this host's Tailscale "
-                               "Serve configuration, so nothing was removed."}), 500)
+                               "Serve configuration, so nothing was removed."}), 502)
     ours = ts.panel_serve_routes(info.serve_config, port)
     route = next((r for r in ours if r["url"] == url and r["mount"] == mount), None)
     if route is None:
@@ -511,8 +513,8 @@ def _register_tailscale_serve(app):
         # Checked HERE as well as in setup_tailscale_serve, for the reason api_tags_create gives
         # about tag names: this is where the value came from a request, so this is where a bad one
         # can be answered as a 400 with a message the form can show. The branches below report
-        # every failure as a 500 — right for "the host refused the command", wrong for "you typed
-        # a mount point that isn't one", and the two are not distinguishable from a message.
+        # every host failure as a 502 — right for "the host refused the command", wrong for "you
+        # typed a mount point that isn't one", and the two are not distinguishable from a message.
         try:
             mount = _priv._ts_mount(data.get("mount", "/") or "/")
         except _priv.VerbError:

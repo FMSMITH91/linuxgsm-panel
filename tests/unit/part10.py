@@ -1559,11 +1559,11 @@ try:
     _eau = _pb7_c.post("/api/panel/enable-auto-updates")
     _our = _pb7_c.post("/api/server-management/os-update-run")
     _rbt = _pb7_c.post("/api/server-management/reboot", json={"delay": 10})
-    eq("panel_backup/host actions: outcomes pass through; a refused OS update is a 500",
+    eq("panel_backup/host actions: outcomes pass through; a refused OS update is a 502 (the host's failure)",
        [(_eau.status_code, _eau.get_json()), (_our.status_code, _our.get_json()),
         (_rbt.status_code, _rbt.get_json())],
        [(200, {"success": True, "message": "Automatic security updates are now enabled."}),
-        (500, {"success": False, "message": "Sudo access required."}),
+        (502, {"success": False, "message": "Sudo access required."}),
         (200, {"success": True, "message": "Server will reboot in 10 seconds."})])
     eq("panel_backup/host actions: only what happened is audited (no row for the refused update)",
        [(a, d, s) for a, _t, d, s in _pb7_log],
@@ -1576,11 +1576,11 @@ try:
     _eau2 = _pb7_c.post("/api/panel/enable-auto-updates")
     _our2 = _pb7_c.post("/api/server-management/os-update-run")
     _rbt2 = _pb7_c.post("/api/server-management/reboot", json={})
-    eq("panel_backup/host actions: the other half — a raise is a 500, a refused reboot is a 500",
+    eq("panel_backup/host actions: the other half — a raise is a 500, a refused reboot is a 502",
        [(_eau2.status_code, (_eau2.get_json() or {}).get("success")), (_our2.status_code, _our2.get_json()),
         (_rbt2.status_code, _rbt2.get_json())],
        [(500, False), (200, {"success": True, "message": "OS update started in background."}),
-        (500, {"success": False, "message": "Sudo access required for reboot."})])
+        (502, {"success": False, "message": "Sudo access required for reboot."})])
     eq("panel_backup/host actions: ...and the audit has the update that started, not the reboot that did not",
        [a for a, _t, _d, _s in _pb7_log], ["os_update_run"])
 except Exception as e:  # noqa: BLE001 - a harness failure must fail by name, not end the suite

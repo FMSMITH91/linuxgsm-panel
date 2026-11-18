@@ -268,7 +268,11 @@ it is also where you manage them: **Add a database** (choose the game server, gi
   `panel-db-dumps/<name>.sql.gz` first, the file each backup writes), or upload a `.sql` / `.sql.gz` dump
   (up to 2 GiB) to replace the database's contents. The upload is checked on the host before anything is
   restored: a dump that switches to or names another database (`USE`, `CREATE DATABASE`, made with
-  `--databases`) is refused.
+  `--databases`) is refused, and so is one holding SQL the check cannot read safely (an `sql_mode` or
+  character set that changes how quotes are read, `PREPARE`/`EXECUTE`, `LOAD DATA`, or a client
+  command such as `\C`). The check reads the SQL as the database client does, so data that only
+  mentions a statement is restored as it is. A plain `mysqldump` or `mariadb-dump` of the one database
+  passes.
 - **Password and delete**: reset the password, restore from the dump in the server's files, delete.
   These and an upload ask for your password again when you last confirmed it more than a few minutes ago,
   and delete and restore also ask you to type the database's name.
@@ -370,7 +374,7 @@ failed=""; for s in tests/*_test.py; do PYTHON=./venv/bin/python ./tools/smoke-l
 
 Use `tools/smoke-local.sh`, not `tools/run-tests.sh` (what CI runs): the latter makes real `sudo -n` probes, which can lock you out of sudo, and real outbound SSH.
 
-CI also runs CodeQL, Bandit, Semgrep, zizmor, a dependency audit and fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner: it records outbound connections and root processes in the job's public log, routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist. The pull-request jobs that reach only a few known hosts (GitHub, PyPI, npm, OSV, Semgrep, SonarCloud) run it in block mode, which refuses every other host; the rest stay in audit mode. Each workflow's token starts with no permissions, and each job grants only what it uses.
+CI also runs CodeQL, Bandit, Semgrep, zizmor, a dependency audit and fuzzing (`tests/fuzz/`). Every CI job except the deploy job starts with StepSecurity's Harden-Runner: it records outbound connections and root processes in the job's public log, routes the job's DNS through its own proxy, and blocks hosts on StepSecurity's global blocklist. The pull-request jobs that reach only a few known hosts (GitHub, PyPI, npm, OSV, Semgrep, SonarCloud, Ubuntu's and Microsoft's package mirrors, LinuxGSM's site) run it in block mode, which refuses every other host; the rest stay in audit mode. Each workflow's token starts with no permissions, and each job grants only what it uses.
 
 The application lives in `panel/` (`core`, `db`, `security`, `ops`, `services`, `routes`; each package's module-level imports reach only the ones before it, enforced by `tests/unit/part01.py`). The files installed panels address by path (`app.py`, `manage.py`, `db_maintenance.py`, `recover.sh`, `uninstall.sh`, `VERSION`, `release-signers`, `update-stops` and the requirements lockfiles) are in `panel/install/`. `install.sh` stays at the repo root because the install one-liner fetches it from there.
 

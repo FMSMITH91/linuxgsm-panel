@@ -45,6 +45,14 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **A malformed request no longer fills the panel's log.** A request with no HTTP version is answered
+  with a plain "Bad Request" instead of writing about 35 lines of error to the log each time.
+- **Wrong values in a few requests answer "invalid" instead of a server error.** Deleting a file with
+  a path that is not text, a firewall rule number that is too large, or a database server id that is
+  too large.
+- **A host command that fails answers 502, not 500.** Tailscale Serve and SSH, the firewall's
+  Tailscale rule, OS updates, reboots, autostart, the daily restart and uninstalling a server's
+  account; the message shown is unchanged.
 - **MagicDNS check asked a name no tailnet uses.** When Tailscale's status gave no name, the panel
   looked up `<host>.tailscale.net`, which never resolves; it now asks the node's real name, or
   nothing.
@@ -55,6 +63,22 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **Signed-in pages are not kept in the browser's cache.** They are sent `no-store`, and signing out
+  also clears anything an older release left there.
+- **Signing out removes the "Remember me" cookie in the browser.** Its deletion now carries the
+  attributes the browser needs to apply it; the server already refused the old cookie.
+- **The panel's own HTTPS offers only modern encryption.** TLS 1.3, and TLS 1.2 only with
+  forward-secret authenticated ciphers; the older CBC ciphers are gone.
+- **Pages refuse resources from other sites (Cross-Origin-Embedder-Policy).** The panel loads
+  everything from itself, so nothing changes in use.
+- **The database upload check reads SQL the way the database client does.** A statement split over
+  lines, or with comments or unusual whitespace between its words, no longer gets past the check
+  before a restore. Data that only mentions a statement is still restored as it is.
+- **Dumps the check cannot read safely are refused.** A dump that changes how quotes are read (an
+  sql_mode or character set), builds or loads SQL while it runs (PREPARE, EXECUTE, LOAD DATA), or
+  holds a client command is refused with a message that says how to make a plain dump.
+- **A database restore never reads files from the host.** The client runs with local file loading
+  off, as the SQL box already did.
 - **Root's crontab stays closed on the panel host unless opened at install.** The privileged helper
   refuses to read or change root's crontab unless the installer recorded `PANEL_ROOT_CRON=1`, and it
   checks every line against cron's grammar before installing it.

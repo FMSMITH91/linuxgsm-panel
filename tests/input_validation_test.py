@@ -651,6 +651,40 @@ def _check_tailscale_mount():
           [k.get("mount") for k in _ts_calls] == ["/lgsm"], repr(_ts_calls))
 
 
+# A JSON field of the wrong TYPE, or past the range its column or verb takes. A route that reads
+# `body.get(k)` gets whatever JSON sent: a list, an object, a number, true, or an integer far past
+# SQLite's. Each value here answered 500 from one route until it checked the type or range first
+# (OWASP Input Validation Cheat Sheet, "syntactic validation"): delete-path's path reached the
+# host-side checks' .strip(), and an endpoint id past 2**63 reached SQLite. A type sweep of every
+# POST route's JSON names (each name alone, each of these values) found no other 5xx.
+_WRONG_TYPES = ([None, None], {"a": 1}, 5, True, 1.5, [["x"]], 10 ** 30)
+
+
+def _check_json_field_types():
+    """A path that is not text, and an endpoint id past SQLite's range, are refused, not a 500."""
+    with app.app_context():
+        gs = GameServer(remote_id=remote_id, name="iv-types", short_name="ivtypes", game_type="css",
+                        port=27399, installed=True, status="offline")
+        db.session.add(gs)
+        db.session.commit()
+        gid = gs.id
+    for _v in _WRONG_TYPES:
+        r = c.post("/api/server/%d/delete-path" % gid, json={"path": _v})
+        check("delete-path path=%r is a 400 'Invalid path', not a 500" % (_v,),
+              r.status_code == 400 and (r.get_json() or {}).get("message") == "Invalid path",
+              "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
+        for _route, _body in (("rename-path", {"path": _v, "new_name": "x.txt"}),
+                              ("create-path", {"dir": _v, "name": "x.txt", "kind": "file"})):
+            r = c.post("/api/server/%d/%s" % (gid, _route), json=_body)
+            check("%s with path=%r is refused before the host, not a 500" % (_route, _v),
+                  r.status_code < 500 and (r.get_json() or {}).get("success") is False,
+                  "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
+    for _v in (10 ** 30, 2 ** 63, -1, 0):
+        r = c.post("/api/remote/%d/databases/endpoint" % remote_id, json={"endpoint_id": _v})
+        check("databases endpoint_id=%r is 'No such database server' (404), not a 500" % (_v,),
+              r.status_code == 404, "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
+
+
 def _check_tailscale_control_server(c):
     """POST /api/tailscale/control-server: an address and nothing else, refused with a 400, never stored."""
     # The control server for new joins (a self-hosted one such as Headscale): an address and nothing
@@ -818,6 +852,7 @@ try:
     _check_free_port()
     _check_data_layer_ports()
     _check_tailscale_mount()
+    _check_json_field_types()
     _check_tailscale_control_server(c)
     _check_no_port_parsed_with_int_or()
 

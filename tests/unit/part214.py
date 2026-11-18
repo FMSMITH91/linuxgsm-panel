@@ -219,8 +219,8 @@ check("headers: a page is never framed (X-Frame-Options DENY), keeps no opener, 
       and _page214.headers.get("Cross-Origin-Opener-Policy") == "same-origin"
       and _page214.headers.get("X-DNS-Prefetch-Control") == "off"
       and _page214.headers.get("Cross-Origin-Resource-Policy") == "same-origin", repr(dict(_page214.headers)))
-check("headers: ...and keeps no-cache, private, so the back/forward cache still works",
-      _page214.headers.get("Cache-Control") == "no-cache, private", repr(_page214.headers.get("Cache-Control")))
+check("headers: ...and is no-store (OWASP: a signed-in page is sensitive, so no copy is kept)",
+      _page214.headers.get("Cache-Control") == "no-store", repr(_page214.headers.get("Cache-Control")))
 check("headers: a JSON answer is no-store, with the inert CSP and CORP",
       _api214.headers.get("Cache-Control") == "no-store"
       and _api214.headers.get("Content-Security-Policy") == _hdr214.INERT_CSP
@@ -228,8 +228,8 @@ check("headers: a JSON answer is no-store, with the inert CSP and CORP",
       and "X-Frame-Options" not in _api214.headers, repr(dict(_api214.headers)))
 eq("headers: ...a JSON answer that chose its own caching keeps it", _own214.headers.get("Cache-Control"),
    "public, max-age=300")
-check("headers: a stylesheet keeps its caching and gets CORP",
-      _css214.headers.get("Cache-Control") == "no-cache, private"
+check("headers: a stylesheet keeps the cache step's no-store and gets CORP",
+      _css214.headers.get("Cache-Control") == "no-store"
       and _css214.headers.get("Cross-Origin-Resource-Policy") == "same-origin", repr(dict(_css214.headers)))
 eq("headers: no_store() makes a page that shows a secret no-store", _sec214.headers.get("Cache-Control"), "no-store")
 eq("headers: HSTS is two years with includeSubDomains, and no preload", _hdr214.HSTS,

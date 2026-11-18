@@ -8171,8 +8171,9 @@ def _db_import_child(pw, client, port, name, secret):
         conn = _db_conn_args(sess)
         # --binary-mode: no client command but DELIMITER and \C in the dump (no `system`, `source`,
         # `\!`...), in both clients; the dump is content a game account or an uploader chose.
+        # --loose-local-infile=0, as db-query: a dump's LOAD DATA LOCAL never reads this host's files.
         argv = [client, conn[0]] + (["--sandbox"] if "--sandbox" in help_text else []) + conn[1:] \
-            + ["--binary-mode", "--batch", name]
+            + ["--binary-mode", "--loose-local-infile=0", "--batch", name]
         return _db_feed(sess, argv, fd, pw)
     finally:
         _db_done(sess)
