@@ -29,6 +29,20 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Changed
 
+- **The panel asks game servers for their player counts less often when nobody needs them.** With no
+  page showing the counts and no player alert set, the count is refreshed every 90 seconds instead of
+  every 45; a page that shows the counts, "notify when empty", "server full" and "new player record"
+  keep the 45-second refresh.
+- **Live figures cost the host less.** The host sample reads memory, load, cores, uptime and traffic
+  in one pass and shares its port list with the server-status check; a remote host page's live bars
+  no longer hold a quarter-second window on every read; two people watching the same server share
+  one sample; and the host page's live bars stop polling while they are off screen.
+- **Privileged calls use about half the CPU.** The privileged helper runs from bytecode the installer
+  compiles as root, instead of compiling its source on every call, and falls back to the source
+  whenever that bytecode cannot be trusted or is out of date.
+- **The ban watcher reads fail2ban only when something changed.** About 4 privileged reads an hour on
+  a quiet host instead of 40; every 90 seconds while an address is banned. Ban and unban alerts
+  arrive as quickly as before.
 - **An open console costs the server less when it is quiet.** Each open server page re-reads the
   console log every 30 seconds. While the console shows nothing new, that read is now answered from
   the panel's last look at the log instead of reading it on the server again. On the test server an
@@ -63,6 +77,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **The helper's bytecode is checked before root runs it.** The command sudo runs is a small
+  root-owned entry that loads the helper's bytecode only when every directory and file on its path is
+  root-owned and writable by nobody else and the bytecode matches the installed source; the sudoers
+  rule is unchanged.
 - **Signed-in pages are not kept in the browser's cache.** They are sent `no-store`, and signing out
   also clears anything an older release left there.
 - **Signing out removes the "Remember me" cookie in the browser.** Its deletion now carries the
