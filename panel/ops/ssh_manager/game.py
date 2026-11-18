@@ -2104,7 +2104,7 @@ def last_backup_made(server, user):
 
 
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
-                    query_type=None):
+                    query_type=None, before=None):
     """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
 
     The backup archives serverfiles into ~/lgsm/backup/. Runs AS THE GAME USER, non-interactively
@@ -2121,6 +2121,10 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     which is exactly why `query_type` has to be threaded in (see below).
 
     The name of the archive it proved it wrote is kept for last_backup_made.
+
+    `before` (no arguments), when given, is called once the backup is going ahead: after LinuxGSM's
+    postponed check and the player check, before anything is archived. The panel dumps the server's
+    databases into its files there, so a backup skipped for players online dumps nothing.
     """
     selfname = selfname or user
     _LAST_MADE.pop((getattr(server, "id", None), user), None)
@@ -2138,6 +2142,8 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         skip = _backup_players_online(server, user, game_type, port, query_type, selfname)
         if skip:
             return False, skip, True
+    if before is not None:
+        before()
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". See
     # _stale_backup_lock_sweep for when a lock counts as orphaned. It runs BEFORE the headroom

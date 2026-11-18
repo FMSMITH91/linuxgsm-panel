@@ -423,6 +423,9 @@ try:
         _S208.calls.clear()
 
         def runner(*a, **k):
+            # As run_game_backup: `before` (the dump) runs once the backup goes ahead, then the archive.
+            if k.get("before"):
+                k["before"]()
             order.append("runner:%s" % ",".join(c[0] for c in _S208.calls))
             return True, "", False
         with _p9.app_context():
@@ -448,6 +451,9 @@ try:
         order = []
 
         def runner(*a, **k):
+            # As run_game_backup: `before` (the dump) runs once the backup goes ahead, then the archive.
+            if k.get("before"):
+                k["before"]()
             order.append("runner:%s" % ",".join(c[0] for c in _S208.calls))
             return True, "", False
         _S208.reset(dump=dump_ans)

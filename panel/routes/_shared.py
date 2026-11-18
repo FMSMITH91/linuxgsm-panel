@@ -652,9 +652,13 @@ def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
             _game_backup_status.pop(sid, None)
         return False, _R39A_BACKUP_HELD, True
     # The server's databases go into the archive as a dump in its files (routes/databases.py); a
-    # dump that fails is said in the outcome and never stops the backup.
+    # dump that fails is said in the outcome and never stops the backup. Dumped only once the
+    # backup is going ahead (run_game_backup's `before`): one skipped for players online, every
+    # hour while they are on, dumped every database each time for nothing.
     from panel.routes import databases as _dbr
-    db_note = _dbr.dump_for_backup(sid, *args[:2]) if len(args) >= 2 else None
+    notes = []
+    if len(args) >= 2:
+        kwargs["before"] = lambda: notes.append(_dbr.dump_for_backup(sid, *args[:2]))
     try:
         result = (runner or run_game_backup)(*args, **kwargs)
     except Exception as e:
@@ -672,7 +676,7 @@ def _marked_backup(sid, *args, runner=None, held=None, wipe_ok=False, **kwargs):
     # It RETURNED, so the host answered: a streak of raises (_backup_raise_streak) is over, and
     # the next raise is news worth an alert again.
     _backup_raise_streak.pop(sid, None)
-    return _dbr.with_note(result, db_note)
+    return _dbr.with_note(result, notes[0] if notes else None)
 
 
 def _r25b_mark_orphaned(sid, mark, held):

@@ -337,3 +337,53 @@ finally:
 eq("console rest r30: a resting console is not read on a quiet pass, and is read on the pass that answers a page's "
    "catch-up (the answer sent to that page)", (_cr248["quiet"], _cr248["caught"], _cr248["emits"]),
    (0, 1, [("console_catchup", "sock248")]))
+
+
+# ── 7. the database dump waits for the player check ──────────────────────────────────────────────
+_dd_sid248 = _p9_new_server(P9_HOST, "p248dd", "csgo", 42510, name="p248-dd")
+
+
+class _DdStop248(Exception):
+    """Raised by the first host call after the player check: the backup was going ahead."""
+
+
+def _dd_runs248(players):
+    """Both callers once with `players` online ("" for none) -> [(dumps, outcome or "went ahead")] per caller."""
+    out = []
+    _p9_patch(_game248, "_backup_players_online", lambda *a, **k: players)
+
+    def stop(*a, **k):
+        raise _DdStop248()
+    _p9_patch_sm("shell_as_game_user", stop)
+    for call in (lambda: _sh248._marked_backup(_dd_sid248, _dd_row248.remote, "p248dd", "csgoserver", 3,
+                                               game_type="csgo", port=42510),
+                 lambda: _pbk248._back_up_one_now(_app248, _dd_sid248, "p248-dd", (3, False), _NO_BIRTH248)):
+        n = len(_dd248)
+        try:
+            got = call()
+        except _DdStop248:
+            got = "went ahead"
+        out.append((len(_dd248) - n, got if got == "went ahead" else bool(got)))
+    return out
+
+
+_dd248 = []
+try:
+    _p9_arm(who="part248")
+    _dd_trips248 = len(_P9_TRIPPED)
+    _p9_patch(_dbr248, "dump_for_backup", lambda sid, remote, account: _dd248.append(sid))
+    _p9_patch(_game248, "_lg264_bk_before", lambda *a, **k: None)
+    with _p9.app_context():
+        _dd_row248 = _db248.session.get(_GS248, _dd_sid248)
+        _dd_busy248 = _dd_runs248("2 player(s) online")
+        _dd_go248 = _dd_runs248("")
+    _dd_trip_list248 = _P9_TRIPPED[_dd_trips248:]
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_dd_sid248)
+    _sh248._game_backup_status.pop(_dd_sid248, None)
+eq("backup dump r30: a backup skipped for players online (the ticker's path and Back up now) dumps no database",
+   [d for d, _ in _dd_busy248], [0, 0])
+eq("backup dump r30: one that goes ahead dumps them once, before the archive is made (the next host call)",
+   _dd_go248, [(1, "went ahead"), (1, "went ahead")])
+check("backup dump r30: ...and nothing reached a host", _dd_trip_list248 == [], repr(_dd_trip_list248))
