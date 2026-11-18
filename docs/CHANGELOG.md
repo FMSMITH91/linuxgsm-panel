@@ -77,6 +77,14 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **Required two-factor setup also holds consoles and terminals.** With Settings requiring 2FA, an
+  account that had not set it up could still open a live console or a terminal over the panel's live
+  connection with its password alone; that connection is now refused, and a console or terminal
+  already open closes once the rule applies.
+- **Wrong passwords sent from elsewhere no longer lock you out.** A browser that has signed in to an
+  account is remembered with a signed device cookie, and the pause that repeated wrong passwords put
+  on an account name no longer holds it, so nobody can keep you, or the superadmin, from signing in
+  by guessing slowly; other browsers are still paused as before.
 - **The helper's bytecode is checked before root runs it.** The command sudo runs is a small
   root-owned entry that loads the helper's bytecode only when every directory and file on its path is
   root-owned and writable by nobody else and the bytecode matches the installed source; the sudoers
