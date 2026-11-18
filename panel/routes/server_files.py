@@ -504,7 +504,7 @@ def _console_tick(app, socketio, gs, server_id):
     reply, rc = _console_poll_read(remote, gs, log_path, state["ino"], state["pos"])
     if reply is None:
         _feed_tick(server_id, "read-failed" if rc != 0 else "stat-unparseable")
-        return
+        return False
     ino, size, started, diff, framed = reply
     start = _console_read_start(server_id, ino, size)
     if start is None:
@@ -515,7 +515,7 @@ def _console_tick(app, socketio, gs, server_id):
         # the log's end recorded, nothing read — exactly as a new one would be. Unpacking its None
         # raised, and the tick was counted as failed.
         _feed_tick(server_id)
-        return
+        return False
     state, pos = start
     verdict = _console_reply_verdict(size, pos, started, diff)
     if verdict is not None:
@@ -529,7 +529,7 @@ def _console_tick(app, socketio, gs, server_id):
     out = _console_whole_lines(server_id, framed) if rc == 0 else None
     if out is None:
         _feed_tick(server_id, "read-unframed" if rc == 0 else "read-failed")
-        return
+        return False
     # The partial line held from here on is the poller's own (see _console_catchup).
     state["fresh"] = False
     _emit_console_lines(socketio, gs, server_id, out, [_console_chain(state), ino, pos + diff])
