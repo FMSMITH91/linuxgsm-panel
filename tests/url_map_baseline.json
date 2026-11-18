@@ -1015,7 +1015,8 @@
   "GET /root-cron/<int:remote_id>": {
     "endpoint": "root_cron_page",
     "guards": [
-      "utils.py:decorated_view",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:root_cron_page"
     ],
     "methods": [
@@ -3194,7 +3195,8 @@
   "POST /root-cron/<int:remote_id>/change": {
     "endpoint": "root_cron_change",
     "guards": [
-      "utils.py:decorated_view",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:root_cron_change"
     ],
     "methods": [
@@ -3204,7 +3206,8 @@
   "POST /root-cron/switch": {
     "endpoint": "root_cron_switch",
     "guards": [
-      "utils.py:decorated_view",
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
       "view:root_cron_switch"
     ],
     "methods": [
