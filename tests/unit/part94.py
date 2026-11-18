@@ -38,7 +38,7 @@ from types import SimpleNamespace as NS
 from sqlalchemy.exc import OperationalError as _OpErr94
 
 from unit.console_live import as_state as _console_state94
-from unit.part01 import check
+from unit.part01 import check, eq
 from unit.part10 import _Over
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_flashes, _p9_json,
                          _p9_ms, _p9_patch, _p9_restore_all, _p9_rv, _p9_sd, _p9_sf, _p9_sh, _p9_patch_sm)
@@ -220,7 +220,13 @@ def _v6_limit_move94():
           ends["v6 LIMIT"] == [v6_limit] and ends["v6 ALLOW"] == [v6_allow]
           and ends["v6 LIMIT + harmless"] == sorted([v6_limit] + _HARMLESS94)
           and got["v6 LIMIT"][2] == ["ufw-allow-from-port", "ufw-delete-allow-from-port"]
+          and got["v6 ALLOW"][2] == ["ufw-allow-from-port", "ufw-delete-allow-from-port"]
           and all(not v[0][0] for v in got.values()), repr(got))
+    # Every row got as far as the stand-in's `sshd -t` and was reverted from there: a row refused at
+    # step 1, or one that opened nothing, also "ends as it began" (review 1118 T8b).
+    eq("ssh port move: ...every one of those moves reached sshd's own check and was undone from there, not "
+       "refused before it", {k: "sshd rejected the new config" in str(v[0][1]) for k, v in got.items()},
+       {k: True for k in got})
     _v6_harmless_check94(got, ends)
 
 

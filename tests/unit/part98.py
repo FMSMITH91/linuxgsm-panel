@@ -533,12 +533,16 @@ def _sudo_reads98():
         cur[0] = name
         got[name] = fn()
     bad = [a for a in asked if a[2] is not False]
+    # Each named read reached run_command (a read moved onto run_privileged would drop out of `asked`
+    # and leave `bad` empty), apt's upgradable list among them (review 1118 T8b).
+    apt = [a for a in asked if a[0] == "remote_os_check_updates" and "apt list --upgradable" in a[1]]
     check("reads: Tailscale's status, prefs and `which`, and apt's upgradable list run with sudo=False, "
           "so a sudo that wants a password no longer reads as \"unreachable\" or (for the tailnet "
           "exemption) as Tailscale stopped, which let a tailnet address be blocked",
           not bad and got == {"remote_check_tailscale": True, "_tailscale_conn_state": (True, True),
-                              "tailnet_exempt_ips": {"100.64.0.10"}, "remote_os_check_updates": True},
-          repr((bad, got)))
+                              "tailnet_exempt_ips": {"100.64.0.10"}, "remote_os_check_updates": True}
+          and {a[0] for a in asked} == set(got) and len(apt) == 1 and apt[0][2] is False,
+          repr((bad, got, asked)))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

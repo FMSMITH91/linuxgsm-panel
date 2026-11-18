@@ -21,7 +21,7 @@ from types import SimpleNamespace as NS
 
 import pyotp as _pyotp18
 
-from unit.part01 import _r13d_window, _r21d_urlopen_of, check
+from unit.part01 import _r13d_window, _r21d_urlopen_of, check, eq
 from unit.part01 import skip as _skip18
 from unit.part05 import _helper as _helper18, _priv as _priv18
 from unit.part12 import (_p9, _p9_arm, _p9_app, _p9_client, _p9_core, _p9_json, _p9_patch, _p9_restore_all,
@@ -955,7 +955,39 @@ check("required checks: ...including SonarCloud's zero-new-issues job, Dependenc
       "and every fuzz job",
       {("github-actions", "SonarCloud new issues"), ("github-actions", "Dependency Review"),
        ("github-actions", "actionlint"), ("github-actions", "fuzz the diff (address)")} <= set(_rq)
-      and sum(1 for _a, _n in _rq if _n.startswith("fuzz (")) == 6, repr(_rq))
+      and sum(1 for _a, _n in _rq if _n.startswith("fuzz (")) >= 6, repr(_rq))
+# A job TEMPLATE like `fuzz (${{ matrix.target }})` matches any one listed leg, so "every job is required"
+# above could not ask for a new matrix value, and a count held the fuzz list at its first six while three
+# more legs ran unrequired (review 1118 T9C1). So for every required job named by ONE matrix key written
+# as a list (`target: [ a, b ]`), the legs required are that list, exactly.
+
+
+def _r30t_matrix_legs(txt, tpl):
+    """(key, sorted values) of the one-key list matrix `tpl` is named by in workflow `txt`, else None."""
+    keys = _sg_re.findall(r"\$\{\{\s*matrix\.(\w+)\s*\}\}", tpl)
+    found = _sg_re.search(r"\n\s+%s: \[([^\]\n]*)\]" % keys[0], txt) if len(keys) == 1 else None
+    return (keys[0], sorted(_v.strip().strip("\"'") for _v in found.group(1).split(","))) if found else None
+
+
+_mx_bad, _mx_read = [], []
+for _wf in sorted(_rq_hosts | {"fuzz.yml"}):
+    for _tpl, _rx in _rq_jobs.get(_wf, ("", []))[1]:
+        _legs = _r30t_matrix_legs(_rq_jobs[_wf][0], _tpl)
+        if _legs is None:
+            continue
+        _mx_read.append(_tpl)
+        _listed = sorted(_m.group(1) for _a, _n in _rq for _m in [_sg_re.fullmatch(_rx, _n)] if _m and _a == "github-actions")
+        if _listed != _legs[1]:
+            _mx_bad.append("%s %r: matrix %r, required %r" % (_wf, _tpl, _legs[1], _listed))
+check("required checks: ...and every job named by one list matrix (fuzz's targets, gamedig's node versions) "
+      "is required for each value of it, exactly (a new value fails here by name until it is required)",
+      {"fuzz (${{ matrix.target }})", "gamedig lockfile (node ${{ matrix.node }})"} <= set(_mx_read) and not _mx_bad,
+      repr((_mx_bad, _mx_read)))
+eq("required checks: ...the matrix reader finds a one-key list and leaves a two-key name alone (control)",
+   [_r30t_matrix_legs("    matrix:\n        target: [ b, a ]\n", "fuzz (${{ matrix.target }})"),
+    _r30t_matrix_legs("\n        node: [\"18.19\", \"22\"]\n", "n (${{ matrix.node }})"),
+    _r30t_matrix_legs("x", "c (${{ matrix.os }} · py${{ matrix.python }})")],
+   [("target", ["a", "b"]), ("node", ["18.19", "22"]), None])
 
 
 # ── SonarCloud reads only UTF-8 ─────────────────────────────────────────────────────────────────
