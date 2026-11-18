@@ -17,10 +17,38 @@ has:
   (`ghcr.io/raidmax/iw4madmin`), pinned by digest. Before the first start the panel writes its settings: this server
   on `127.0.0.1`, the RCON password from the server's config, and the game log. It keeps its own SQLite database in
   its folder, so it needs no Databases-tab database. Its anti-cheat and profanity plugins start off.
-- **B3** (Call of Duty, United Offensive, Call of Duty 2): **legacy and opt-in.** It's built on the host from one
-  pinned commit of FMSMITH91/big-brother-bot, with hash-pinned dependencies, and it needs one of the server's own
-  databases from the Databases tab. Geolocation is off by default. When it's on, players' IP addresses go to
-  ipwho.is (only that one of B3's two services can be relayed).
+- **B3** (Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4 / CoD4x, World at War and Soldier of
+  Fortune 2): **legacy and opt-in.** It's built on the host from one pinned commit of FMSMITH91/big-brother-bot, with
+  hash-pinned dependencies, and it needs one of the server's own databases from the Databases tab. On Soldier of
+  Fortune 2 B3 has no private messages: every reply is said in public chat. Wolfenstein: Enemy Territory is built in
+  but not offered yet.
+
+### B3's settings
+
+An installed B3 has a folded **B3 settings** section on its row: **Apply and restart** rewrites only these, in
+`b3.ini` and `conf/plugin_geolocation.ini`, and keeps every other edit you made there and in `conf/`.
+
+- **Geolocation**, off by default:
+  - **Offline: country.** B3 looks each player's country up in DB-IP's free "IP to Country Lite" database, in the
+    add-on's `geoip` folder (read-only inside the container). No player address leaves the host. The panel's host
+    downloads the database from db-ip.com once a month, checks it against the SHA1 that db-ip.com publishes, and
+    keeps it for the month. Turn the download off in Settings → Outside services → *Country database for B3*; B3
+    then keeps the copy it has. Geolocation Off downloads nothing.
+  - **Online: city.** Each joining player's IP address goes to ipwho.is, through a relay (the only service the
+    container can reach for it).
+- **Plugins**: B3's own plugins that work on these games. Admin is always on. Never offered: adv (an internet
+  feed), censor, punkbuster, translator (Google's service), banlist and the ftpytail plugins (they fetch from other
+  machines, which the container can't reach), and other games' plugins.
+
+IP Geolocation by DB-IP (https://db-ip.com), licensed under CC BY 4.0.
+
+### Updates
+
+The card shows **Update available** when the panel's pinned version is newer than the installed one (a new
+IW4MAdmin image digest or B3 commit), or, for an offline B3, when a newer month of the country database is out.
+**Update** downloads or builds the new image, writes the unit again and restarts the add-on; its data, settings
+and database are kept. It asks for the password like Install, and it is audited. The panel's pins themselves are
+proposed daily by Renovate (B3's fork `master`, IW4MAdmin's `latest` digest).
 
 ## Network
 
@@ -50,17 +78,19 @@ An install that stops again within 30 seconds is reported with its last log line
 remove ask for the password when the sign-in is older than the confirmation window. Every install, start, stop and
 remove is audited.
 
-Removing an add-on deletes its container, image, unit and files. Its database is kept. Removing the last one also
+Removing an add-on deletes its container, image, unit and files: for B3 that is its whole folder, its settings and
+any plugin settings you edited included. Its database is kept. Removing the last one also
 removes the account's Podman storage (its base images and Podman's own folders) and turns lingering off; the
 account's own journal is kept. Uninstalling the server also deletes the account's user journal, so an account
 later given the same user id can't read the old add-ons' lines. The add-on's folder is in the game account's home,
 so the server's backups include it.
 
-The add-on reads the RCON password the game itself reads: `rconpassword` for Call of Duty and United Offensive,
-`rcon_password` for Call of Duty 2, 4 and World at War. LinuxGSM's default World at War config sets
+The add-on reads the RCON password the game itself reads: `rconpassword` for Call of Duty, United Offensive and
+Soldier of Fortune 2, `rcon_password` for Call of Duty 2, 4 and World at War. LinuxGSM's default World at War config sets
 `rconpassword`, which that game ignores; the install then asks you to rename it to `rcon_password` and restart
 the server.
 
 The game's log is found where the game writes it: `serverfiles` for Call of Duty 4 (LinuxGSM sets its home path
-there), `~/.callofduty` for Call of Duty and United Offensive, `~/.callofduty2` for Call of Duty 2 and `~/.codwaw`
-for World at War.
+there), `~/.callofduty` for Call of Duty and United Offensive, `~/.callofduty2` for Call of Duty 2, `~/.codwaw`
+for World at War, and `~/.sof2/base/date` for Soldier of Fortune 2 (LinuxGSM's `g_log "date"`, which the game
+takes as a file name).

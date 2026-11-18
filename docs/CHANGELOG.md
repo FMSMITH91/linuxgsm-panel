@@ -34,6 +34,17 @@ dated section below lists what that day's releases changed, newest first; the nu
   version of its source and uses one of the server's databases. An add-on that stops again right
   after its first start is reported with its own last log lines. Nothing is installed until you
   install an add-on; it needs Ubuntu 24.04 or newer.
+- **B3 for Call of Duty 4, World at War and Soldier of Fortune 2.** The B3 add-on is now offered for
+  Call of Duty 4 (CoD4x), World at War and Soldier of Fortune 2 as well, each tested against the
+  server LinuxGSM installs. On Soldier of Fortune 2 B3 has no private messages, and the card says so.
+- **B3's settings on its card.** An installed B3 has a folded settings section: geolocation off,
+  offline (a player's country, from DB-IP's free database on the host, so no player address leaves
+  it) or online (a city, from ipwho.is), and B3's own plugins, each switched on or off. Applying them
+  rewrites only those settings and restarts B3; your other edits are kept. The panel's host downloads
+  DB-IP's database once a month, checks it, and it can be turned off in Outside services.
+- **Add-on updates.** The Add-ons tab says when an add-on has a newer version (or, for offline
+  geolocation, a newer month of its country database), and Update installs it and restarts the
+  add-on, keeping its data, settings and database.
 
 ### Changed
 
@@ -71,6 +82,27 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **A game download that fails LinuxGSM's checksum ends as a failed install.** The install now checks
+  that the server's executable is where LinuxGSM's own start looks for it, so an archive that failed
+  its MD5 check is no longer reported as installed. It downloads once more, then says which file
+  failed, with its checksum and the one LinuxGSM expects; another LinuxGSM failure is shown in
+  LinuxGSM's own words.
+- **Retrying an install after an interrupted download works.** Every game download now starts with
+  LinuxGSM's download folder emptied, so a partial file left by a connection reset no longer fails
+  every later try, and a failed install leaves no multi-gigabyte partial behind.
+- **Uninstalling no longer brings back an empty journal for an earlier account.** journald
+  re-created an empty user journal for a deleted account at every rotation; the uninstall now
+  removes those too, and only those, on the panel's host and on remote hosts.
+- **Add-ons install on a per-user panel.** The server's account is put in the panel's game group
+  before it is readied for containers, which the readying needs; an account that can reach root is
+  still refused.
+- **A failed add-on step says why.** The host's own words (the helper's, apt's or systemd's) follow
+  the panel's sentence, on the add-on and in the audit log, and the "Installing the add-on" line
+  clears when the install ends.
+- **The Install button stays visible when an add-on needs a database.** It shows disabled, with the
+  reason beside it and an Open Databases button, and says so when the host has no database server yet.
+- **Removing B3 says what goes with it.** The confirmation says its folder, settings and edited plugin
+  settings are deleted and its database is kept.
 - **No restart in the middle of a restore.** Installing, renewing or removing the HTTPS certificate
   waits while a game server is restored or the panel's host is being rebooted.
 - **A rolled-back update keeps the breached-password list.**
