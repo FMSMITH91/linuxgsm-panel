@@ -200,17 +200,18 @@ def _user241(name):
         return u.id
 
 
-def _logout_cookies241():
-    """Over HTTPS, sign in with "remember me", sign out: every __Host- cookie set is Secure, Path=/, no Domain."""
-    keys = ("REMEMBER_COOKIE_NAME", "REMEMBER_COOKIE_SECURE", "SESSION_COOKIE_NAME", "SESSION_COOKIE_SECURE",
-            "SESSION_COOKIE_PATH", "REMEMBER_COOKIE_PATH", "REMEMBER_COOKIE_HTTPONLY", "REMEMBER_COOKIE_SAMESITE",
-            "REMEMBER_COOKIE_DURATION")
-    saved = {k: _p9.config.get(k) for k in keys}
-    _p9.config.update(REMEMBER_COOKIE_NAME="__Host-remember_token", REMEMBER_COOKIE_SECURE=True,
-                      SESSION_COOKIE_NAME="__Host-p241_session", SESSION_COOKIE_SECURE=True,
-                      SESSION_COOKIE_PATH="/", REMEMBER_COOKIE_PATH="/", REMEMBER_COOKIE_HTTPONLY=True,
-                      REMEMBER_COOKIE_SAMESITE="Lax",    # as create_app sets them (app.py); an earlier part
-                      REMEMBER_COOKIE_DURATION=_td241(days=3))   # leaves the duration unset
+_HTTPS241 = dict(REMEMBER_COOKIE_NAME="__Host-remember_token", REMEMBER_COOKIE_SECURE=True,
+                 SESSION_COOKIE_NAME="__Host-p241_session", SESSION_COOKIE_SECURE=True, SESSION_COOKIE_PATH="/",
+                 REMEMBER_COOKIE_PATH="/", REMEMBER_COOKIE_HTTPONLY=True, REMEMBER_COOKIE_SAMESITE="Lax",
+                 REMEMBER_COOKIE_DURATION=_td241(days=3))
+# The cookie settings create_app makes over HTTPS (app.py, auth._host_prefix_cookies); part12's app has
+# none of them, and an earlier part leaves the remember duration unset.
+
+
+def _signin_signout241():
+    """Over HTTPS: sign in with "remember me", then sign out. (sign-in response, sign-out response)."""
+    saved = {k: _p9.config.get(k) for k in _HTTPS241}
+    _p9.config.update(_HTTPS241)
     try:
         _user241("p241_out")
         # An earlier part's failed sign-ins must not throttle this one (part215 resets the same way).
@@ -220,21 +221,36 @@ def _logout_cookies241():
         c.environ_base["REMOTE_ADDR"] = "198.51.100.241"
         signin = c.post("/login", data={"username": "p241_out", "password": _K241, "remember": "on"},
                         base_url="https://p241.localhost")
-        set_at_signin = [h for h in signin.headers.getlist("Set-Cookie") if h.startswith("__Host-remember_token=")]
-        out = c.post("/logout", base_url="https://p241.localhost")
+        return signin, c.post("/logout", base_url="https://p241.localhost")
     finally:
         _p9.config.update(saved)
-    cookies = out.headers.getlist("Set-Cookie")
-    gone = [h for h in cookies if h.startswith("__Host-remember_token=")]
+
+
+def _remember241(resp):
+    """The Set-Cookie values `resp` sends for the remember cookie."""
+    return [h for h in resp.headers.getlist("Set-Cookie") if h.startswith("__Host-remember_token=")]
+
+
+def _host_prefix_ok241(header):
+    """Whether a __Host- Set-Cookie value has what the prefix needs: Secure, Path=/ and no Domain."""
+    return "; Secure" in header and "; Path=/" in header and "Domain=" not in header
+
+
+def _logout_cookies241():
+    """Over HTTPS, sign in with "remember me", sign out: every __Host- cookie set is Secure, Path=/, no Domain."""
+    signin, out = _signin_signout241()
+    set_at_signin, gone = _remember241(signin), _remember241(out)
+    if not set_at_signin:
+        check("sign-out: the 'remember me' sign-in set the remember cookie (fixture)", False,
+              repr((signin.status_code, signin.headers.get("Location"))))
+        return
     attrs = [a.strip().lower() for a in (gone[0].split(";")[1:] if gone else [])]
     eq("sign-out: the remember cookie set at sign-in is deleted with Max-Age=0, Secure, HttpOnly, Path=/ and "
        "SameSite=Lax (a browser ignores a __Host- cookie sent without Secure), and only once",
-       (len(set_at_signin), len(gone), "max-age=0" in attrs, "secure" in attrs, "httponly" in attrs,
-        "path=/" in attrs, "samesite=lax" in attrs), (1, 1, True, True, True, True, True),
-       ) if set_at_signin else check("sign-out: the 'remember me' sign-in set the remember cookie (fixture)", False,
-                                     repr((signin.status_code, signin.headers.get("Location"), cookies)))
-    bad = [h.split("=")[0] for h in cookies if h.startswith("__Host-")
-           and not ("; Secure" in h and "; Path=/" in h and "Domain=" not in h)]
+       (len(set_at_signin), len(gone), [w in attrs for w in ("max-age=0", "secure", "httponly", "path=/",
+                                                             "samesite=lax")]), (1, 1, [True] * 5))
+    bad = [h.split("=")[0] for h in out.headers.getlist("Set-Cookie")
+           if h.startswith("__Host-") and not _host_prefix_ok241(h)]
     eq("sign-out: every __Host- cookie the answer sets carries Secure and Path=/ and no Domain", bad, [])
     eq("sign-out: Clear-Site-Data clears the cache, cookies and storage (OWASP Session Management Cheat Sheet)",
        out.headers.get("Clear-Site-Data"), '"cache", "cookies", "storage"')
