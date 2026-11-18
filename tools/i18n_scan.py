@@ -531,7 +531,13 @@ def is_js_ui_word(text, before):
 # A literal handed to t() (or a file's own wrapper for it, _discT) is a string the code itself says
 # a person reads, whatever its shape: lower-case ("player is connected to"), one word, or a branch
 # of a ternary inside the call. Matched as "an open t( call with no unbalanced bracket since".
-_JS_T_CALL = re.compile(r"""\b(?:t|_discT|tf|tfHtml|tfn|tfNodes)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$""")
+# The wrappers a file defines for window.t / window.tf under its own name count the same: a one-word
+# label passed to `T('Column')` or `_tr('Extra')` was gated only if it also looked like prose, and four
+# shipped untranslated (review 1118 A12a). A unit check holds this list to every such wrapper in
+# panel/static/js, so a new one fails by name until it is listed here.
+JS_T_ALIASES = ("_discT", "T", "TF", "_tr", "dbmT", "_hch_t")
+_JS_T_CALL = re.compile(r"""\b(?:t|tf|tfHtml|tfn|tfNodes|%s)\((?:[^;'"()]|'[^'\n]*'|"[^"\n]*"|\([^()]*\))*$"""
+                        % "|".join(JS_T_ALIASES))
 
 
 _R15C_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
@@ -546,11 +552,12 @@ def is_js_t_arg(text, before):
     # values object, and read as one it left every template after it unclaimed (tfn's plural, the
     # second branch of a ternary), so a new sentence there passed the gate with no translation.
     call = _R15C_QUOTED.sub("", m.group(0)) if m else ""
-    if call.startswith("tf") and "{" in call:
+    # TF( is a file's own tf(): the same values-object rule and the same template rule.
+    if call.lower().startswith("tf") and "{" in call:
         return False
     # A tf() template is a sentence by construction: its {placeholders}, a "/" or a "=" are words
     # there ("{used} / {total} used", "Blank = use the default"); only markup or code is refused.
-    codey = re.compile(r"[<>{}$\\]") if m and m.group(0).startswith("tf") else _JS_CODEY
+    codey = re.compile(r"[<>{}$\\]") if m and m.group(0).lower().startswith("tf") else _JS_CODEY
     return bool(re.search(r"[A-Za-z]{2}", text) and not codey.search(re.sub(r"#?\{\w+\}", "", text))
                 and not re.search(r"[=!]==?\s*$", before) and m)
 
