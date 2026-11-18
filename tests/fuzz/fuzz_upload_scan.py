@@ -68,8 +68,8 @@ _BENIGN = ["-- MySQL dump 10.13  Distrib 8.0", "/*!40101 SET NAMES utf8mb4 */;",
            "/*!40101 SET @saved_cs_client     = @@character_set_client */;",
            "/*!40101 SET character_set_client = @saved_cs_client */;",
            "/*!50001 VIEW `v` AS select `t`.`id` AS `id` from `t` USE INDEX (`PRIMARY`) */;",
-           "/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `tr` BEFORE INSERT ON `t` "
-           "FOR EACH ROW SET NEW.name = 'it''s' */;",
+           ("/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `tr` BEFORE INSERT ON `t` "
+            "FOR EACH ROW SET NEW.name = 'it''s' */;"),
            "CREATE TABLE `characters` (`names` varchar(9) CHARACTER SET latin1, `use` int);",
            "/* a comment\nover two lines */", "SELECT 'a string\nover two lines';"]
 # Statements to refuse, as words: {db} a name, {q} one quoted or not; the blanks between words are fuzzed.

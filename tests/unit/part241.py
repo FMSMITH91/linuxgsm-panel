@@ -123,9 +123,13 @@ def _http09_241():
     eq("web server: the line with no version, and the standard library's own refusals (an HTTP/0.9 POST, "
        "version 9.9, no method), write nothing to the log: no traceback, no echoed request line",
        ("Traceback" in err, "AttributeError" in err, "Bad request" in err, "HTTP/9.9" in err), (False,) * 4)
-    eq("web server: the standard library's refusals say Server: LinuxGSM Panel, not its name and the Python "
-       "version", [(b"Server: LinuxGSM Panel" in r, b"Python/" in r, b"BaseHTTP" in r) for r in odd],
-       [(True, False, False)] * 3)
+    # Whether a refusal is answered at all differs by Python (3.12 closes some without a reply); what
+    # must hold on every version is that no answer names the standard library or the Python version,
+    # and that any Server header is the panel's own.
+    eq("web server: the standard library's refusals never name it or the Python version; a Server header, "
+       "when one is sent, says LinuxGSM Panel",
+       [(b"Python/" in r, b"BaseHTTP" in r, b"Server:" in r and b"Server: LinuxGSM Panel" not in r) for r in odd],
+       [(False, False, False)] * 3)
     eq("web server: it keeps serving before and after (control)",
        (ready, after.split(b"\r\n")[0]), (True, b"HTTP/1.1 200 OK"))
 
@@ -138,6 +142,7 @@ def _client241(cafile, max_version=None, ciphers=None):
     ctx = _ssl241.SSLContext(_ssl241.PROTOCOL_TLS_CLIENT)
     ctx.load_verify_locations(cafile)
     ctx.verify_flags |= _ssl241.VERIFY_X509_PARTIAL_CHAIN
+    # A client that OFFERS old versions on purpose: the check is that the server refuses them.
     ctx.minimum_version = _ssl241.TLSVersion.MINIMUM_SUPPORTED
     if max_version is not None:
         ctx.maximum_version = max_version

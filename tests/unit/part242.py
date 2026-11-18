@@ -233,7 +233,8 @@ def _sc_run242(step, digest="", log="", image=_IMG242):
     out = os.path.join(_TMP242, "out")
     open(out, "w").close()
     env = dict(os.environ, PATH=_BIN242 + os.pathsep + os.environ.get("PATH", ""), GITHUB_OUTPUT=out,
-               SCORECARD_IMAGE=image, IMAGE=image, GH_TOKEN="t", GITHUB_REPOSITORY="o/r", GITHUB_RUN_ID="9",
+               SCORECARD_IMAGE=image, IMAGE=image, GH_TOKEN="t",  # nosec B106 - a stand-in, never sent anywhere
+               GITHUB_REPOSITORY="o/r", GITHUB_RUN_ID="9",
                GITHUB_RUN_ATTEMPT="1", P242_DIGEST=digest, P242_LOG=os.path.join(_TMP242, "job.log"))
     r = _sp242.run(["bash", script], capture_output=True, text=True, env=env, timeout=60, check=False)  # nosec B603 B607
     with open(out, encoding="utf-8") as fh:
