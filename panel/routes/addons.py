@@ -36,6 +36,7 @@ _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
 _NO_RCON = "The server's config has no RCON password (rcon_password or rconpassword). Set one, then install again."
 _NO_PORT = "No free port was found on this host for the add-on's page or relays."
+_NO_IDS = "Couldn't read the server account's user and group ids on the host."
 _BAD_DB_HOST = "The database's server address can't be used for the add-on's relay."
 _NO_PODMAN = "Couldn't install Podman on this host."
 _NO_PREPARE = "Couldn't ready the server's account for containers (subordinate ids and lingering)."
@@ -132,6 +133,8 @@ def _host_refusal(gs, p, need_ports):
         return _NO_LOG
     if not p["rcon"]:
         return _NO_RCON
+    if p["ids"] is None:
+        return _NO_IDS
     return "" if len(p["ports"]) >= need_ports else _NO_PORT
 
 
@@ -189,7 +192,8 @@ def _install_texts(gs, plan, p, who):
                             p["ports"][1 if web else 0:])
     local_db = plan["db_port"] if plan["db"] is not None and plan["db_host"] == "127.0.0.1" else None
     net = _ad.network(gs.port, local_db, relay_list, p["splice"])
-    unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list)
+    unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
+                       p["ids"])
     settings, files, secrets = _settings(gs, plan, p)
     meta = json.dumps({"kind": addon_id, "version": _ad.CATALOG[addon_id]["version"],
                        "image": _ad.CATALOG[addon_id]["image"],

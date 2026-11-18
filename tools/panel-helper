@@ -5786,9 +5786,18 @@ def do_addon_account_prepare(args, content):
     return 0
 
 
-# How long addon-account-release waits for the account's user manager to stop: its add-ons get their
-# own stop timeout (30 s, panel/services/addons.py STOP_TIMEOUT) and the manager its shutdown.
+# How long addon-account-release waits for the account's user manager to stop. Ubuntu's own
+# user@.service.d/timeout.conf gives the manager 5 s, after which systemd kills it; this is the
+# outer bound for a host without that drop-in.
 ADDON_MANAGER_STOP_TIMEOUT = 75
+# What an account's user manager and Podman leave outside its home: its user journal (the add-ons'
+# log lines; journald names it by uid, so a later account given the same uid would read it) and
+# Podman's runtime folders in /tmp (made when it ran with no user manager). The lowest uid they
+# are removed for is useradd's UID_MIN: a game account is never below it.
+ADDON_FORGET_MIN_UID = 1000
+JOURNAL_ROOTS = ("/var/log/journal", "/run/log/journal")
+ADDON_TMP_DIRS = ("/tmp/podman-run-%d", "/tmp/containers-user-%d")
+_USER_JOURNAL_RE = re.compile(r"user-(\d+)(?:@[0-9a-f]+(?:-[0-9a-f]+){1,2})?\.journal~?")
 
 
 def do_addon_account_release(args, content):
@@ -5796,11 +5805,12 @@ def do_addon_account_release(args, content):
 
     `loginctl disable-linger` alone leaves the manager (user@<uid>.service) stopping in the
     background; an uninstall's `user-kill-processes` straight after it SIGKILLs it, and systemd
-    keeps it "failed" until someone resets it. So this stops the manager and waits for it (its
-    add-ons stop cleanly within their own stop timeout), then `systemctl reset-failed` clears a
-    failure either way. The account is validated as for the other destroy verbs (never the panel's
-    own account). Prints linger=off, then manager=stopped or manager=stop-failed; exits with
-    disable-linger's status.
+    keeps it "failed" until someone resets it. So this stops the manager and waits for it (within
+    the manager's own stop timeout: 5 s on Ubuntu, then systemd kills what is left), then
+    `systemctl reset-failed` clears a failure either way. Last, the account's user journal and
+    Podman's /tmp folders are removed (_addon_forget_account). The account is validated as for the
+    other destroy verbs (never the panel's own account). Prints linger=off, manager=stopped or
+    manager=stop-failed, then forgotten=<count>; exits with disable-linger's status.
     """
     user = args[0]
     try:
@@ -5824,7 +5834,38 @@ def do_addon_account_release(args, content):
     subprocess.run([resolve("systemctl"), "reset-failed", unit],         # nosec B603 - fixed argv
                    shell=False, capture_output=True, timeout=30, env=_clean_env())
     sys.stdout.write("manager=%s\n" % ("stopped" if rc == 0 else "stop-failed"))
+    sys.stdout.write("forgotten=%d\n" % _addon_forget_account(uid))
     return 0
+
+
+def _addon_forget_account(uid):
+    """Remove the account's user journal files and Podman's /tmp folders; returns how many went.
+
+    The journal is rotated first, so journald lets go of the account's active file. Only files
+    named user-<uid>.journal (or a rotated user-<uid>@....journal) directly in a machine-id folder
+    of the two journal roots, and only the two /tmp folders that are real folders owned by the
+    uid, are removed; nothing for a uid below ADDON_FORGET_MIN_UID.
+    """
+    if not isinstance(uid, int) or uid < ADDON_FORGET_MIN_UID:
+        return 0
+    subprocess.run([resolve("journalctl"), "--rotate"],                 # nosec B603 - fixed argv
+                   shell=False, capture_output=True, timeout=60, env=_clean_env())
+    gone = 0
+    for root in JOURNAL_ROOTS:
+        for path in glob.glob(os.path.join(root, "[0-9a-f]" * 32, "user-%d*.journal*" % uid)):
+            m = _USER_JOURNAL_RE.fullmatch(os.path.basename(path))
+            if m and int(m.group(1)) == uid and not os.path.islink(path):
+                os.unlink(path)
+                gone += 1
+    for path in (t % uid for t in ADDON_TMP_DIRS):
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISDIR(st.st_mode) and st.st_uid == uid:
+            shutil.rmtree(path, ignore_errors=True)
+            gone += 1
+    return gone
 
 
 def _enrol(user):

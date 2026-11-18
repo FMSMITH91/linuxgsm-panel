@@ -268,7 +268,9 @@ The narrowing is in the argument types:
   in `/etc/subuid` and `/etc/subgid`) and turns on lingering for it. The helper refuses an account that is
   not in `lgsmpanel-games` (one the panel may already become) and the panel's own account;
   `addon-account-release` (lingering off, then the account's user manager stopped and its failed state
-  cleared with `systemctl reset-failed`) refuses the same accounts. The containers themselves run rootless,
+  cleared with `systemctl reset-failed`; then, for a uid of 1000 or more, its user journal files, after a
+  `journalctl --rotate`, and Podman's two `/tmp` folders when they are real folders the uid owns, so an account
+  later given the same uid can't read the old add-ons' logs) refuses the same accounts. The containers themselves run rootless,
   as the game account, from its own user manager: no root daemon and no Docker socket (OWASP Docker
   Security Cheat Sheet, rules 1 and 11). A container's network reaches only what is forwarded to the host's
   loopback (the game's RCON port, its database, the relays it needs): on Ubuntu 26.04 nothing else at all

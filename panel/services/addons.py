@@ -37,7 +37,7 @@ THE ADD-ONS
     B3 (cod, coduo, cod2): legacy, opt-in. Built on the host from addon_images/b3 (a Containerfile:
     FMSMITH91/big-brother-bot at one commit, its dependencies by hash), with one of this server's
     databases from the Databases tab (never one another add-on uses). Its geolocation, which sends
-    each player's IP address to ipwho.is and ipapi.co, is off unless chosen at install.
+    each player's IP address to ipwho.is, is off unless chosen at install.
 
 The host keeps the state: ~/panel-addons/<id>/addon.json says what the panel installed. Nothing is
 installed until someone with Manage add-ons installs an add-on.
@@ -77,7 +77,7 @@ CATALOG = {
         "web_port": 1624,
         # It stops gracefully on SIGINT (Application/Main.cs: Console.CancelKeyPress); on SIGTERM
         # its synchronous ProcessExit shutdown outlasted Podman's wait and it was killed (137).
-        "stop_signal": "SIGINT",
+        "stop_signal": "SIGINT", "stop_timeout": 30, "success_exit": None,
         "database": False, "build": None, "legacy": False, "log_file": None,
         "data_kept": False,
     },
@@ -92,8 +92,13 @@ CATALOG = {
         "env": ("TZ=Etc/UTC", "HOME=/data"),
         "settings": "Data/b3.ini",
         "web_port": None,
-        # B3 shuts down on SIGTERM and exits 0 (b3/__init__.py term_signal_handler).
-        "stop_signal": "SIGTERM",
+        # B3 shuts down on SIGTERM and logs "EXITING: 0" at once (b3/__init__.py term_signal_handler),
+        # but at the pinned commit its process then waits for any pending player-authentication
+        # retry timer (b3/parsers/cod.py newPlayer: threading.Timer, not daemon, re-armed up to 10
+        # times), so a stop after it has read a join or chat line outlasted any wait and Podman
+        # killed it (137). Nothing is open by then (its database is closed before EXITING), so the
+        # wait is 10 s and that kill counts as a clean stop for B3 only.
+        "stop_signal": "SIGTERM", "stop_timeout": 10, "success_exit": "137",
         "database": True, "build": "b3", "legacy": True, "log_file": "Data/b3.log",
         "data_kept": True,
     },
@@ -119,7 +124,6 @@ MEMORY = "1g"
 PIDS = 512
 RESTART_BURST = 5
 RESTART_WINDOW = 600
-STOP_TIMEOUT = 30
 # After the first start, how long the install watches the add-on before calling it running. On the
 # test box IW4MAdmin died 10 s after a start that systemd had reported done (and exited 0, so no
 # restart showed it): three times that.
@@ -135,9 +139,11 @@ PORT_BASE = 21000
 _PORT_TRIES = 40
 # systemd's TCP relay (systemd-socket-proxyd(8)), run as the account for a relay() it needs.
 SOCKET_PROXYD = "/usr/lib/systemd/systemd-socket-proxyd"
-# The services B3's geolocation asks (b3/plugins/geolocation/geolocators.py), each on its own
-# loopback address inside the container, relayed to HTTPS on the internet.
-B3_GEOLOCATORS = (("ipwho.is", "127.0.0.2"), ("ipapi.co", "127.0.0.3"))
+# The service B3's geolocation asks first (b3/plugins/geolocation/geolocators.py), on port 443 of
+# the container's loopback, relayed to HTTPS on the internet. Only one fits: pasta's -T takes no
+# address, on either release (conf.c conf_ports: an address is for -t/-u only), so a second service
+# on 443 has nowhere to go. Its other one (ipapi.co) is left out: it can't resolve inside.
+B3_GEOLOCATORS = (("ipwho.is", "127.0.0.1"),)
 # The plugins a B3 install turns on (the distribution's own list, less adv: it reads an RSS feed
 # from the internet; censor: it punishes words on its own; punkbuster: off on these games).
 B3_PLUGINS = ("admin", "cmdmanager", "pingwatch", "pluginmanager", "spamcontrol", "stats", "status", "tk",
@@ -250,8 +256,11 @@ _ENV = ('export XDG_RUNTIME_DIR="/run/user/$(id -u)"; '
 def probe_sh(addon_id, selfname, server_id, game_type, nports):
     """The install's first read, as the account: the host, the game's log folder, RCON, free ports.
 
-    Prints os=, podman=, splice=1 (pasta has --splice-only), logdir= (the folder of the newest
-    games_mp.log under serverfiles or ~/.callofduty*), rcon.b64= (the config's RCON password line,
+    Prints os=, podman=, splice=1 (pasta has --splice-only), uid= and gid= (the account's, for the
+    unit's User= and Group=), logdir= (the folder of the newest games_mp.log under serverfiles, or
+    the game's own folder in the home: LinuxGSM sets fs_homepath only for cod4server, so CoD1 and
+    United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and World at War under
+    ~/.codwaw), rcon.b64= (the config's RCON password line,
     base64), ports= (the first `nports` free host ports from PORT_BASE + the server id) and
     installed=1 when the add-on is already there.
     """
@@ -259,8 +268,8 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     ports = " ".join(str(PORT_BASE + int(server_id) + i) for i in range(_PORT_TRIES))
     return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; '
-            'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; '
-            'l=$(find serverfiles .callofduty* -maxdepth 3 -type f -name games_mp.log -printf "%%T@ %%h\\n" '
+            'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
+            'l=$(find serverfiles .callofduty* .cod* -maxdepth 3 -type f -name games_mp.log -printf "%%T@ %%h\\n" '
             '2>/dev/null | sort -nr | head -n 1 | cut -d" " -f2-); echo "logdir=$l"; '
             'echo "rcon.b64=$(grep -iE "^[[:space:]]*seta?[[:space:]]+rcon_?password" %s 2>/dev/null '
             '| tail -n 1 | head -c 400 | base64 -w0)"; '
@@ -284,9 +293,14 @@ def log_dir(user, rel):
 
 
 def parse_probe(out):
-    """What probe_sh found: {os, podman, splice, logdir, rcon, ports, installed} (rcon decoded and parsed)."""
+    """What probe_sh found: {os, podman, splice, ids, logdir, rcon, ports, installed} (rcon decoded and parsed).
+
+    ids is (uid, gid), or None unless both are plain numbers above 0.
+    """
     kv = kv_lines(out)
-    return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "splice": kv.get("splice") == "1",
+    ids = (kv.get("uid", ""), kv.get("gid", ""))
+    ids = (int(ids[0]), int(ids[1])) if all(x.isdecimal() and 0 < int(x) < 2 ** 31 for x in ids) else None
+    return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "splice": kv.get("splice") == "1", "ids": ids,
             "logdir": kv.get("logdir", ""), "rcon": rcon_password(_unb64(kv.get("rcon.b64", ""))),
             "ports": [int(p) for p in kv.get("ports", "").split() if p.isdecimal()],
             "installed": kv.get("installed") == "1"}
@@ -461,15 +475,14 @@ def network(game_port, db_port, relay_list, splice):
     opts += ["-U", str(int(game_port))]
     if db_port:
         opts += ["-T", "3306:%d" % int(db_port)]
-    for _name, addr, cport, hport, _target in relay_list:
-        spec = "%d:%d" % (int(cport), int(hport))
-        opts += ["-T", spec if addr == "127.0.0.1" else "%s/%s" % (addr, spec)]
+    for _name, _addr, cport, hport, _target in relay_list:
+        opts += ["-T", "%d:%d" % (int(cport), int(hport))]     # no address: -T takes none
     return "pasta:" + ",".join(opts)
 
 
 def _podman_args(addon_id, relay_list):
     a = CATALOG[addon_id]
-    args = ["--memory=%s" % MEMORY, "--stop-timeout=%d" % STOP_TIMEOUT, "--dns=none"]
+    args = ["--memory=%s" % MEMORY, "--stop-timeout=%d" % a["stop_timeout"], "--dns=none"]
     if a["stop_signal"] != "SIGTERM":
         args.append("--stop-signal=%s" % a["stop_signal"])
     args += ["--add-host=%s:%s" % (name, addr) for name, addr in B3_GEOLOCATORS
@@ -477,8 +490,12 @@ def _podman_args(addon_id, relay_list):
     return "PodmanArgs=" + " ".join(args)
 
 
-def quadlet(user, addon_id, logdir, net, port, relay_list=()):
-    """The add-on's Quadlet unit text (~/.config/containers/systemd/<unit>.container)."""
+def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None):
+    """The add-on's Quadlet unit text (~/.config/containers/systemd/<unit>.container).
+
+    `ids` is the account's (uid, gid): with keep-id they are the process's user inside, set
+    explicitly because on Podman 4.9 an image's own USER wins over keep-id's default.
+    """
     a = CATALOG[addon_id]
     base = addon_dir(user, addon_id)
     needs = ["%s%s-%s.socket" % (UNIT_PREFIX, addon_id, r[0]) for r in relay_list]
@@ -492,15 +509,17 @@ def quadlet(user, addon_id, logdir, net, port, relay_list=()):
         "Network=%s" % net,
     ] + (["PublishPort=127.0.0.1:%d:%d" % (port, a["web_port"])] if a["web_port"] else []) + [
         "Environment=%s" % e for e in a["env"]] + vols + [
-        # keep-id: the add-on runs as the game account's own uid inside the container, not as root
-        # there (podman-run(1): keep-id runs the process as the user's UID and overrides the image's
-        # USER), so the files it writes in its folder belong to the account.
+        # keep-id maps the game account's own uid into the container, and User=/Group= run the add-on
+        # as it (not as root there), so the files it writes in its folder belong to the account. Both
+        # are needed: on Podman 4.9.3 an image's own USER (B3's 65534) wins over keep-id's default.
         "UserNS=keep-id",
+    ] + (["User=%d" % ids[0], "Group=%d" % ids[1]] if ids else []) + [
         "ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=%d" % PIDS,
         "HealthCmd=none", _podman_args(addon_id, relay_list),
         # always: an add-on that quits, even with status 0, is started again (IW4MAdmin exits 0 on a
         # fatal error); the start limit above stops a loop, and a stop from the panel never restarts.
         "", "[Service]", "Restart=always", "RestartSec=30", "TimeoutStartSec=300",
+    ] + (["SuccessExitStatus=%s" % a["success_exit"]] if a["success_exit"] else []) + [
         "", "[Install]", "WantedBy=default.target", "",
     ]
     return "\n".join(lines)
@@ -525,12 +544,35 @@ def _image_sh(addon_id, d):
                TAIL_LINES, d, BUILD_DIR))
 
 
+# A line Podman itself logs into the unit's journal (an event: "container died <id> (image=...)"),
+# which buries the add-on's own lines; matched with or without journalctl's short-iso prefix.
+_PODMAN_EVENT_ERE = "(^|: )(container|image|pod|volume|network) [a-z_-]+ [0-9a-f]{12,64}( |$)"
+
+
+def _journal_sh(addon_id, lines, fmt):
+    """Shell printing the add-on's own last `lines` journal lines (its container's output).
+
+    The lines its container wrote (CONTAINER_NAME, set by Podman's journald log driver); when there
+    are none, the unit's journal without Podman's own event lines.
+    """
+    unit = unit_name(addon_id)
+    return ("o=$(journalctl --user CONTAINER_NAME=%s -n %d --no-pager -o %s 2>/dev/null | grep -v '^-- No entries --$'); "
+            "[ -n \"$o\" ] || o=$(journalctl --user -u %s.service -n %d --no-pager -o %s 2>/dev/null "
+            "| grep -vE '%s' | grep -v '^-- No entries --$' | tail -n %d); [ -n \"$o\" ] && printf '%%s\\n' \"$o\""
+            % (unit, lines, fmt, unit, lines * 4, fmt, _PODMAN_EVENT_ERE, lines))
+
+
 def _tail_sh(user, addon_id):
-    """Shell printing the add-on's last TAIL_LINES log lines: its own log file if it keeps one, else its journal."""
+    """Shell printing the add-on's last TAIL_LINES log lines.
+
+    Its own log file if it has written one, else its journal (a B3 that never started has no b3.log yet).
+    """
     a = CATALOG[addon_id]
-    if a["log_file"]:
-        return "tail -n %d %s 2>/dev/null" % (TAIL_LINES, shlex.quote("%s/%s" % (addon_dir(user, addon_id), a["log_file"])))
-    return "journalctl --user -u %s.service -n %d --no-pager -o cat 2>/dev/null" % (unit_name(addon_id), TAIL_LINES)
+    journal = _journal_sh(addon_id, TAIL_LINES, "cat")
+    if not a["log_file"]:
+        return "{ %s; }" % journal
+    own = shlex.quote("%s/%s" % (addon_dir(user, addon_id), a["log_file"]))
+    return "{ { [ -s %s ] && tail -n %d %s; } || { %s; }; }" % (own, TAIL_LINES, own, journal)
 
 
 def _settle_sh(user, addon_id):
@@ -562,21 +604,27 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
     uu = "/home/%s/%s" % (user, USER_UNIT_DIR)
     unit = unit_name(addon_id)
     dirs = " ".join(shlex.quote("%s/%s" % (d, m)) for m in [m for m, _at in a["mounts"]] + [BUILD_DIR])
-    puts = [_put_sh("%s/%s.container" % (q, unit), unit_text), _put_sh("%s/%s" % (d, META_FILE), meta_text)]
-    puts += [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())]
-    puts += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
+    early = [_put_sh("%s/%s" % (d, META_FILE), meta_text)]
+    early += [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())]
+    # The units are written only once the image exists: a user manager that comes up meanwhile
+    # (lingering was just turned on) would start the unit through default.target and fail on an
+    # image it doesn't have yet.
+    late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
+    late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
     secret = shlex.quote("%s/%s" % (d, a["settings"]))
     return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
             "cat > %s.new && mv -f -T %s.new %s && %s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "i=0; while [ ! -S \"$XDG_RUNTIME_DIR/bus\" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done; "
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
             "podman system migrate >/dev/null 2>&1; %s"
+            "%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "systemctl --user daemon-reload && systemctl --user start %s.service "
-            "|| { echo ADDON_START_FAILED; %s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
+            "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
+            "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%secho %s"
-            % (dirs, shlex.quote(q), shlex.quote(uu), secret, secret, secret, " && ".join(puts),
-               _image_sh(addon_id, shlex.quote(d)), unit, _tail_sh(user, addon_id), _settle_sh(user, addon_id),
-               _MARK_INSTALLED))
+            % (dirs, shlex.quote(q), shlex.quote(uu), secret, secret, secret, " && ".join(early),
+               _image_sh(addon_id, shlex.quote(d)), " && ".join(late), unit, unit, _tail_sh(user, addon_id),
+               _settle_sh(user, addon_id), _MARK_INSTALLED))
 
 
 def install_outcome(out, rc):
@@ -600,19 +648,17 @@ def action_sh(addon_id, action):
 def logs_sh(user, addon_id):
     """The add-on's last LOG_LINES lines.
 
-    Its own log file if it keeps one (B3's b3.log), else its unit's journal, else the newest file in
-    its Log folder.
+    Its own log file if it keeps one (B3's b3.log), else its own journal lines (without Podman's
+    event lines), else the newest file in its Log folder.
     """
     a = CATALOG[addon_id]
     own = shlex.quote("%s/%s" % (addon_dir(user, addon_id), a["log_file"])) if a["log_file"] else "''"
     log_dir = shlex.quote(addon_dir(user, addon_id) + "/Log")
-    return (_ENV + "if [ -n %s ] && [ -f %s ]; then tail -n %d %s; else "
-            "o=$(journalctl --user -u %s.service -n %d --no-pager -o short-iso 2>/dev/null "
-            "| grep -v '^-- No entries --$'); "
-            "if [ -n \"$o\" ]; then printf '%%s\\n' \"$o\"; else "
-            "f=$(ls -1t %s 2>/dev/null | head -n 1); [ -n \"$f\" ] && tail -n %d %s/\"$f\"; fi; fi "
+    return (_ENV + "{ if [ -n %s ] && [ -f %s ]; then tail -n %d %s; else "
+            "%s || { f=$(ls -1t %s 2>/dev/null | head -n 1); [ -n \"$f\" ] && tail -n %d %s/\"$f\"; }; fi; } "
             "| tail -c %d; true"
-            % (own, own, LOG_LINES, own, unit_name(addon_id), LOG_LINES, log_dir, LOG_LINES, log_dir, LOG_BYTES))
+            % (own, own, LOG_LINES, own, _journal_sh(addon_id, LOG_LINES, "short-iso"), log_dir, LOG_LINES,
+               log_dir, LOG_BYTES))
 
 
 def remove_sh(user, addon_id):
@@ -620,6 +666,8 @@ def remove_sh(user, addon_id):
 
     The folder goes through `podman unshare`, so a file the container made as one of its own users
     (a subordinate id) goes too. A built image's leftover build layers go with `podman image prune`.
+    When it was the account's last add-on, Podman's own storage and files go too (`podman system
+    reset`: base images, layers, its state; then its cache and the folders it made, when empty).
     Prints ADDON_REMOVED and others=0/1 (whether another add-on is left).
     """
     unit = unit_name(addon_id)
@@ -632,9 +680,20 @@ def remove_sh(user, addon_id):
             "podman rmi %s >/dev/null 2>&1; podman image prune -f >/dev/null 2>&1; "
             "podman unshare rm -rf -- %s 2>/dev/null || rm -rf -- %s; "
             "[ -e %s ] && exit 30; rmdir %s 2>/dev/null; "
-            "if [ -d %s ]; then echo others=1; else echo others=0; fi; echo %s"
+            "if [ -d %s ]; then echo others=1; else %secho others=0; fi; echo %s"
             % (unit, shlex.quote("/home/%s/%s/%s.container" % (user, QUADLET_DIR, unit)), relay_glob, unit,
-               shlex.quote(CATALOG[addon_id]["image"]), d, d, d, home, home, _MARK_REMOVED))
+               shlex.quote(CATALOG[addon_id]["image"]), d, d, d, home, home, _podman_purge_sh(user), _MARK_REMOVED))
+
+
+def _podman_purge_sh(user):
+    """Shell removing the account's Podman storage and files once it runs no add-on (best effort)."""
+    h = "/home/%s" % user
+    return ("podman system reset -f >/dev/null 2>&1; rm -rf -- %s; rm -f -- %s; "
+            "rmdir -- %s %s %s %s %s %s 2>/dev/null; "
+            % (shlex.quote(h + "/.cache/containers"), shlex.quote(h + "/.config/cni/net.d/87-podman-bridge.conflist"),
+               shlex.quote(h + "/" + QUADLET_DIR), shlex.quote(h + "/.config/containers"),
+               shlex.quote(h + "/" + USER_UNIT_DIR), shlex.quote(h + "/.config/systemd"),
+               shlex.quote(h + "/.config/cni/net.d"), shlex.quote(h + "/.config/cni")))
 
 
 def remove_outcome(out, rc):

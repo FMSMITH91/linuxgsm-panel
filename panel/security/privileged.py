@@ -1854,21 +1854,32 @@ def _addon_prepare_remote(a):
             % (shlex.quote(a[0]), ADDON_SUBID_COUNT, ADDON_SUBID_MIN, ADDON_SUBID_LAST))
 
 
-# How long addon-account-release waits for the account's user manager to stop (the helper's same constant).
+# How long addon-account-release waits for the account's user manager to stop, and the lowest uid it
+# removes a user journal and Podman's /tmp folders for (the helper's same constants).
 ADDON_MANAGER_STOP_TIMEOUT = 75
+ADDON_FORGET_MIN_UID = 1000
 
 
 def _addon_release_remote(a):
     """The remote form of addon-account-release: the helper's do_addon_account_release, as shell.
 
     Lingering off, then the account's user manager stopped (waited for, at most
-    ADDON_MANAGER_STOP_TIMEOUT seconds) and its failed state cleared. Prints linger=off, then
-    manager=stopped or manager=stop-failed.
+    ADDON_MANAGER_STOP_TIMEOUT seconds) and its failed state cleared; then, for a uid of at least
+    ADDON_FORGET_MIN_UID, its user journal files (after a rotation) and Podman's two /tmp folders
+    when they are real folders it owns. Prints linger=off, manager=stopped or manager=stop-failed,
+    then forgotten=<count>.
     """
     return ("u=%s; uid=$(id -u \"$u\") || exit 1; loginctl disable-linger \"$u\" || exit 1; echo linger=off; "
             "if timeout %d systemctl stop \"user@$uid.service\"; then m=stopped; else m=stop-failed; fi; "
-            "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\""
-            % (shlex.quote(a[0]), ADDON_MANAGER_STOP_TIMEOUT))
+            "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\"; n=0; "
+            "if [ \"$uid\" -ge %d ] 2>/dev/null; then journalctl --rotate >/dev/null 2>&1; "
+            "for f in /var/log/journal/*/user-\"$uid\".journal /var/log/journal/*/user-\"$uid\"@*.journal* "
+            "/run/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\"@*.journal*; do "
+            "if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then rm -f -- \"$f\" && n=$((n + 1)); fi; done; "
+            "for d in /tmp/podman-run-\"$uid\" /tmp/containers-user-\"$uid\"; do "
+            "if [ -d \"$d\" ] && [ ! -L \"$d\" ] && [ \"$(stat -c %%u \"$d\")\" = \"$uid\" ]; then "
+            "rm -rf --one-file-system -- \"$d\" && n=$((n + 1)); fi; done; fi; echo \"forgotten=$n\""
+            % (shlex.quote(a[0]), ADDON_MANAGER_STOP_TIMEOUT, ADDON_FORGET_MIN_UID))
 
 
 def _f2b_log_lines_remote(a):

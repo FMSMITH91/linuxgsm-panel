@@ -1,8 +1,9 @@
 # Add-ons
 
 A game server's **Files & Config → Add-ons** tab (with `manage_addons`) installs admin tools that run beside the game.
-Each runs in a **rootless Podman container as the server's own account**. There is no root daemon and no Docker
-socket, and the container's root is that account. The container has:
+Each runs in a **rootless Podman container as the server's own account**, and inside the container it runs as that
+account's own user and group too, never as root there. There is no root daemon and no Docker socket. The container
+has:
 
 - no added capability and no new privileges;
 - a read-only system, a 1 GB memory cap and a 512-process cap;
@@ -19,7 +20,8 @@ socket, and the container's root is that account. The container has:
 - **B3** (Call of Duty, United Offensive, Call of Duty 2): **legacy and opt-in.** It's built on the host from one
   pinned commit of FMSMITH91/big-brother-bot, with hash-pinned dependencies, and it needs one of the server's own
   databases from the Databases tab. Geolocation is off by default. When it's on, players' IP addresses go to
-  ipwho.is and ipapi.co.
+  ipwho.is (only that one of B3's two services can be relayed). A stop that finds B3 still waiting on a
+  player lookup ends it after 10 seconds, which counts as a clean stop.
 
 ## Network
 
@@ -42,5 +44,11 @@ An install that stops again within 30 seconds is reported with its last log line
 remove ask for the password when the sign-in is older than the confirmation window. Every install, start, stop and
 remove is audited.
 
-Removing an add-on deletes its container, image, unit and files. Its database is kept. The add-on's folder is in the
-game account's home, so the server's backups include it.
+Removing an add-on deletes its container, image, unit and files. Its database is kept. Removing the last one also
+removes the account's Podman storage (its base images and Podman's own files), turns lingering off and deletes the
+account's add-on log lines from the system journal; uninstalling the server does the same. The add-on's folder is
+in the game account's home, so the server's backups include it.
+
+The game's log is found where the game writes it: `serverfiles` for Call of Duty 4 (LinuxGSM sets its home path
+there), `~/.callofduty` for Call of Duty and United Offensive, `~/.callofduty2` for Call of Duty 2 and `~/.codwaw`
+for World at War.

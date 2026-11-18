@@ -32,8 +32,8 @@ dated section below lists what that day's releases changed, newest first; the nu
   removes it. IW4MAdmin (Call of Duty 4, World at War) keeps its own database; B3 (Call of Duty,
   United Offensive, Call of Duty 2) is legacy and opt-in, is built on the host from one pinned
   version of its source and uses one of the server's databases. An add-on that stops again right
-  after its first start is reported with its last log lines. Nothing is installed until you install
-  an add-on; it needs Ubuntu 24.04 or newer.
+  after its first start is reported with its own last log lines. Nothing is installed until you
+  install an add-on; it needs Ubuntu 24.04 or newer.
 
 ### Changed
 
@@ -206,10 +206,12 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Add-ons run locked down, and only for those you allow.** The container has no added capability,
   no new privileges, a read-only system and memory and process caps. Its network reaches only the
   game's RCON port and its database: on Ubuntu 26.04 nothing else at all, on 24.04 not the internet
-  or other machines. Its page is on 127.0.0.1 only. B3's geolocation, which sends players' IP
-  addresses to ipwho.is and ipapi.co, is off unless you tick it. A new permission, Manage add-ons, is
-  given to no group; install and remove ask for your password when you signed in a while ago, and
-  every action is in the audit log.
+  or other machines. Its page is on 127.0.0.1 only, and it runs as the server's account inside too,
+  not as root there. B3's geolocation, which sends players' IP addresses to ipwho.is, is off unless
+  you tick it. Removing an add-on, or the server, deletes its logs and Podman's files too, so an
+  account later given the same user id can't read them. A new permission, Manage add-ons, is given
+  to no group; install and remove ask for your password when you signed in a while ago, and every
+  action is in the audit log.
 
 ## [2026.11.17] — 2026-11-17
 

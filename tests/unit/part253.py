@@ -218,7 +218,7 @@ def _host253(probe=None, install_out="ADDON_INSTALLED\n", remove_out="others=0\n
             return remove_out, "", 0
         if "games_mp.log" in sh:
             return probe if probe is not None else (
-                "os=24.04\npodman=\nlogdir=serverfiles/main\nports= 21009\nrcon.b64=%s\n"
+                "os=24.04\npodman=\nuid=1001\ngid=1001\nlogdir=serverfiles/main\nports= 21009\nrcon.b64=%s\n"
                 % _ad253._b64('set rcon_password "%s"' % _RC253)), "", 0
         if "journalctl" in sh:
             return "conn Password=%s\n" % _DBV253, "", 0

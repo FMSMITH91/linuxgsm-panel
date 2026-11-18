@@ -29,7 +29,7 @@ import subprocess as _sp255  # nosec B404 - bash over the panel's own shell form
 import tempfile as _tf255
 from types import SimpleNamespace as _NS255
 
-from unit.part01 import check, eq
+from unit.part01 import check, eq, skip
 from unit.part05 import _helper as _h255
 from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
                          _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_threading,
@@ -64,7 +64,11 @@ def _lock255():
         _ad255.network(28961, None, [("db", "127.0.0.1", 3306, 21005, "100.70.1.2:3307"),
                                      ("geo1", "127.0.0.2", 443, 21006, "ipwho.is:443")], False)],
        ["pasta:--splice-only,-U,28960,-T,3306:3306",
-        "pasta:-4,-o,127.0.0.1,-U,28961,-T,3306:21005,-T,127.0.0.2/443:21006"])
+        "pasta:-4,-o,127.0.0.1,-U,28961,-T,3306:21005,-T,443:21006"])
+    geo = _ad255.relays(_ad255.B3, "100.70.1.2", 3307, True, [21005, 21006, 21007])
+    nets = [_ad255.network(28960, None, geo, splice) for splice in (True, False)]
+    eq("lock: -T never carries an address, on 26.04 (--splice-only) or 24.04 (pasta's -T takes none)",
+       [_re255.findall(r"-T,([^,]+)", n) for n in nets], [["3306:21005", "443:21006"]] * 2)
     p = _ad255.probe_sh(_ad255.IW4MADMIN, "cod4server", 3, "cod4", 1)
     check("lock: the probe asks pasta whether it has --splice-only", "pasta --help" in p and "--splice-only" in p, p[:80])
     eq("lock: the probe's answer is read", [_ad255.parse_probe("splice=1\n")["splice"], _ad255.parse_probe("")["splice"]],
@@ -80,10 +84,15 @@ def _lock255():
 def _stand_ins255(bindir):
     os.makedirs(bindir, exist_ok=True)
     tools = {
-        "podman": "#!/bin/sh\necho \"podman $*\" >> \"$S255_LOG\"\n",
+        "podman": ("#!/bin/sh\necho \"podman $*\" >> \"$S255_LOG\"\n"
+                   "case \"$1\" in pull|build) [ -e \"$S255_UNIT\" ] && echo unit-before-image >> \"$S255_LOG\";; "
+                   "unshare) shift; exec \"$@\";; esac\nexit 0\n"),
         "systemctl": ("#!/bin/sh\necho \"systemctl $*\" >> \"$S255_LOG\"\n"
-                      "case \"$*\" in *is-active*) echo \"$S255_STATE\";; *NRestarts*) echo \"$S255_NR\";; esac\n"),
-        "journalctl": "#!/bin/sh\nprintf 'first line\\nlast words %s\\n' \"$S255_SECRET\"\n",
+                      "case \"$*\" in *is-active*) echo \"$S255_STATE\";; *NRestarts*) echo \"$S255_NR\";; "
+                      "*--user\\ start*) [ \"$S255_START\" = fail ] && exit 1;; esac\nexit 0\n"),
+        "journalctl": ("#!/bin/sh\ncase \"$*\" in *CONTAINER_NAME*) [ -n \"$S255_NOFIELD\" ] && exit 0;; esac\n"
+                       "printf 'container died 0123456789abcdef (image=x, name=y)\\nfirst line\\nlast words %s\\n' "
+                       "\"$S255_SECRET\"\n"),
         "sleep": "#!/bin/sh\nexit 0\n",
     }
     for name, text in tools.items():
@@ -94,22 +103,25 @@ def _stand_ins255(bindir):
         os.chmod(path, 0o700)  # nosec B103 - a stand-in tool in the part's own temp dir
 
 
-def _run_install255(state, restarts):
-    """install_sh for IW4MAdmin under bash with stand-ins: (rc, stdout, the tools' log, files under home)."""
-    root = os.path.join(_TMP255, "inst-%s-%s" % (state, restarts))
+def _run_install255(state, restarts, addon=_ad255.IW4MADMIN, start="ok", nofield=""):
+    """install_sh under bash with stand-ins: (rc, stdout, the tools' log, files under home)."""
+    root = os.path.join(_TMP255, "inst-%s-%s-%s-%s-%s" % (addon, state, restarts, start, nofield))
     run, home, bindir = os.path.join(root, "run"), os.path.join(root, "home"), os.path.join(_TMP255, "bin")
     os.makedirs(run, exist_ok=True)
     _stand_ins255(bindir)
     bus = _socket255.socket(_socket255.AF_UNIX)
     bus.bind(os.path.join(run, "bus"))
     log = os.path.join(root, "tools.log")
-    sh = _ad255.install_sh("u255", _ad255.IW4MADMIN, "[Unit]\n", "{}\n", _ad255.iw4madmin_files())
+    files = _ad255.iw4madmin_files() if addon == _ad255.IW4MADMIN else _ad255.build_files(addon)
+    sh = _ad255.install_sh("u255", addon, "[Unit]\n", "{}\n", files)
     sh = sh.replace('"/run/user/$(id -u)"', run).replace("/home/u255", home)
+    unit = os.path.join(home, ".config", "containers", "systemd", "lgsm-addon-%s.container" % addon)
     try:
         r = _sp255.run(["bash", "-c", sh], input='{"Servers": []}\n', capture_output=True, text=True,  # nosec B603 B607
                        timeout=60, check=False,
                        env={"PATH": bindir + ":/usr/bin:/bin", "S255_LOG": log, "S255_STATE": state,
-                            "S255_NR": str(restarts), "S255_SECRET": _RC255})
+                            "S255_NR": str(restarts), "S255_SECRET": _RC255, "S255_UNIT": unit,
+                            "S255_START": start, "S255_NOFIELD": nofield})
     finally:
         bus.close()
     tools = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
@@ -135,6 +147,23 @@ def _settle255():
     eq("first start: running for the whole settle time is installed, with the settings and plugin answers written",
        [rc, out.strip()[-15:], open(settings, encoding="utf-8").read() if os.path.exists(settings) else "",
         os.path.exists(stats), "podman pull" in tools], [0, "ADDON_INSTALLED", '{"Servers": []}\n', True, True])
+    unit = os.path.join(home, ".config", "containers", "systemd", "lgsm-addon-iw4madmin.container")
+    eq("first start: the unit is written only once the image is there (a user manager coming up can't start it early)",
+       ["unit-before-image" in tools, os.path.exists(unit)], [False, True])
+    _first_start_tails255()
+
+
+def _first_start_tails255():
+    rc, out, tools, _home = _run_install255("failed", 0, nofield="1")
+    tail = _ad255.install_outcome(out, rc)[2]
+    eq("first start: the tail is the add-on's own lines, not Podman's event lines",
+       ["last words" in tail, "container died" in tail], [True, False])
+    rc, out, tools, _home = _run_install255("active", 0, addon=_ad255.B3, start="fail")
+    ok, said, tail = _ad255.install_outcome(out, rc)
+    eq("first start: a B3 that never started (no b3.log yet) is stopped and shows its journal's lines",
+       [rc, said == _ad255._FAIL_MARKS["ADDON_START_FAILED"], "last words" in tail,
+        "--user stop lgsm-addon-b3.service" in tools, "podman build" in tools, "unit-before-image" in tools],
+       [25, True, True, True, True, False])
 
 
 def _host255(probe, install_out="ADDON_INSTALLED\n", install_rc=0, status="", log_text=""):
@@ -162,9 +191,10 @@ def _host255(probe, install_out="ADDON_INSTALLED\n", install_rc=0, status="", lo
     return calls
 
 
-def _probe255(logdir="serverfiles/main", rcon_line='set rcon_password "%s"' % _RC255, extra="port=\n"):
-    return ("os=24.04\npodman=podman version 4.9.3\nlogdir=%s\nrcon.b64=%s\n%s"
-            % (logdir, _ad255._b64(rcon_line), extra))
+def _probe255(logdir="serverfiles/main", rcon_line='set rcon_password "%s"' % _RC255, extra="port=\n",
+              ids="uid=1004\ngid=1005\n"):
+    return ("os=24.04\npodman=podman version 4.9.3\n%slogdir=%s\nrcon.b64=%s\n%s"
+            % (ids, logdir, _ad255._b64(rcon_line), extra))
 
 
 def _installed255(calls):
@@ -215,6 +245,15 @@ def _iw4m255(ids):
        [x in unit for x in ("--stop-signal=SIGINT", "--stop-timeout=30", "Restart=always",
                             "PublishPort=127.0.0.1:21003:1624")], [True] * 4)
     check("IW4MAdmin install: no secret on any command line", _RC255 not in sh)
+    eq("IW4MAdmin unit: its own uid and gid, and a kill is never called a clean stop",
+       ["User=1004" in unit.splitlines(), "Group=1005" in unit.splitlines(), "SuccessExitStatus" in unit],
+       [True, True, False])
+    calls = _host255(_probe255(extra="ports= 21003\n", ids="uid=\ngid=1005\n"))
+    _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
+    _p9_drain()
+    row = _p9_audit("addon_install")
+    eq("install: an account whose ids can't be read is refused before anything is installed",
+       [row.success, _ra255._NO_IDS in row.detail, bool(_installed255(calls)[0])], [False, True, False])
 
 
 # ── 4. releasing an account ─────────────────────────────────────────────────────────────────────
@@ -226,8 +265,10 @@ def _release_helper255(stop_rc):
         if argv[1:2] == ["stop"] and stop_rc is None:
             raise _h255.subprocess.TimeoutExpired(argv, 1)
         return _NS255(returncode=stop_rc if argv[1:2] == ["stop"] else 0, stderr=b"")
-    saved = {k: getattr(_h255, k) for k in ("pwd", "subprocess", "resolve")}
+    saved = {k: getattr(_h255, k) for k in ("pwd", "subprocess", "resolve", "JOURNAL_ROOTS", "ADDON_TMP_DIRS")}
     try:
+        _h255.JOURNAL_ROOTS = (os.path.join(_TMP255, "nojournal"),)
+        _h255.ADDON_TMP_DIRS = (os.path.join(_TMP255, "notmp-%d"),)
         _h255.pwd = _NS255(getpwnam=lambda n: _NS255(pw_name=n, pw_uid=4321))
         _h255.subprocess = _NS255(run=run, TimeoutExpired=saved["subprocess"].TimeoutExpired)
         _h255.resolve = lambda prog: prog
@@ -240,26 +281,82 @@ def _release_helper255(stop_rc):
 
 def _release255():
     want = [["loginctl", "disable-linger", "cod4server"], ["systemctl", "stop", "user@4321.service"],
-            ["systemctl", "reset-failed", "user@4321.service"]]
+            ["systemctl", "reset-failed", "user@4321.service"], ["journalctl", "--rotate"]]
     eq("release (helper): lingering off, the user manager stopped, its failed state cleared",
        _release_helper255(0), (0, want))
     eq("release (helper): a manager that does not stop in time is still cleared", _release_helper255(None), (0, want))
     bindir = os.path.join(_TMP255, "rbin")
     os.makedirs(bindir, exist_ok=True)
-    for tool in ("loginctl", "systemctl"):
+    for tool in ("loginctl", "systemctl", "journalctl"):
         path = os.path.join(bindir, tool)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write('#!/bin/sh\necho "%s $*"\n' % tool)
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         os.chmod(path, 0o700)  # nosec B103 - a stand-in tool in the part's own temp dir
+    uid = _pv255.pwd.getpwnam("nobody").pw_uid
+    roots = _fake_journal255("rremote", uid)
     cmd = _pv255.remote_command("addon-account-release", ["nobody"])
+    for real, fake in (("/var/log/journal", roots[0]), ("/run/log/journal", roots[1]),
+                       ("/tmp/podman-run-", roots[2] + "/podman-run-"), ("/tmp/containers-user-", roots[2] + "/containers-user-")):
+        cmd = cmd.replace(real, fake)
     r = _sp255.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30,  # nosec B603 B607
                    env={"PATH": bindir + ":/usr/bin:/bin"}, check=False)
-    uid = _pv255.pwd.getpwnam("nobody").pw_uid
-    eq("release (remote form): the same three steps, then what it did",
-       (r.returncode, r.stdout),
+    eq("release (remote form): the same steps, then the uid's journal files go (a folder it doesn't own stays)",
+       (r.returncode, r.stdout, sorted(_left255(roots))),
        (0, "loginctl disable-linger nobody\nlinger=off\nsystemctl stop user@%d.service\n"
-           "systemctl reset-failed user@%d.service\nmanager=stopped\n" % (uid, uid)))
+           "systemctl reset-failed user@%d.service\nmanager=stopped\nforgotten=3\n" % (uid, uid),
+        sorted(_KEPT255 + ["podman-run-%d" % uid, "containers-user-%d" % uid])))
+    _forget255()
+
+
+# What must survive a forget: another uid's journal (a longer number), the system journal, a link.
+_KEPT255 = ["user-%s0.journal", "system.journal", "user-link.journal"]
+
+
+def _fake_journal255(tag, uid):
+    """Two journal roots and a /tmp stand-in, holding the uid's files and ones that must stay."""
+    base = os.path.join(_TMP255, tag)
+    roots = [os.path.join(base, "var"), os.path.join(base, "run"), os.path.join(base, "tmp")]
+    mid = os.path.join(roots[0], "0123456789abcdef0123456789abcdef")
+    os.makedirs(mid, exist_ok=True)
+    os.makedirs(os.path.join(roots[1], "fedcba9876543210fedcba9876543210"), exist_ok=True)
+    for name in ("user-%d.journal" % uid, "user-%d@00ab-0000000000000001-0005f3a1b2c3d4e5.journal" % uid,
+                 "user-%d0.journal" % uid, "system.journal"):
+        open(os.path.join(mid, name), "w").close()
+    open(os.path.join(roots[1], "fedcba9876543210fedcba9876543210", "user-%d.journal" % uid), "w").close()
+    os.symlink(os.path.join(mid, "system.journal"), os.path.join(mid, "user-link.journal"))
+    for d in ("podman-run-%d" % uid, "containers-user-%d" % uid):
+        os.makedirs(os.path.join(roots[2], d, "sub"), exist_ok=True)
+    global _KEPT255
+    _KEPT255 = [k % uid if "%s" in k else k for k in ("user-%s0.journal", "system.journal", "user-link.journal")]
+    return roots
+
+
+def _left255(roots):
+    return [n for r in roots for _d, _s, files in os.walk(r) for n in files + _s if n not in ("sub",)
+            and not _re255.fullmatch(r"[0-9a-f]{32}", n)]
+
+
+def _forget255():
+    uid = os.getuid()
+    if uid < _h255.ADDON_FORGET_MIN_UID:
+        skip("release (helper): the uid's journal files and its own /tmp folders go", "runs as a uid below 1000 (root)")
+        return
+    roots = _fake_journal255("rhelper", uid)
+    saved = {k: getattr(_h255, k) for k in ("subprocess", "resolve", "JOURNAL_ROOTS", "ADDON_TMP_DIRS")}
+    ran = []
+    try:
+        _h255.subprocess = _NS255(run=lambda argv, **_k: ran.append(argv) or _NS255(returncode=0))
+        _h255.resolve = lambda prog: prog
+        _h255.JOURNAL_ROOTS = tuple(roots[:2])
+        _h255.ADDON_TMP_DIRS = (roots[2] + "/podman-run-%d", roots[2] + "/containers-user-%d")
+        got = (_h255._addon_forget_account(uid), _h255._addon_forget_account(999))
+    finally:
+        for k, v in saved.items():
+            setattr(_h255, k, v)
+    eq("release (helper): after a rotation, the uid's journal files and its own /tmp folders go, nothing else; "
+       "nothing at all for a uid below 1000",
+       (got, ran, sorted(_left255(roots))), ((5, 0), [["journalctl", "--rotate"]], sorted(_KEPT255)))
 
 
 # ── 5. B3 ───────────────────────────────────────────────────────────────────────────────────────
@@ -307,18 +404,22 @@ def _b3_local255(ids):
     eq("B3 unit: SIGTERM stop (no other signal), restarted even after a clean exit, its built image, never pulled",
        ["--stop-signal" in unit, "Restart=always" in unit, "Image=localhost/lgsm-addon-b3:" + _ad255.B3_COMMIT[:12] in unit,
         "Pull=never" in unit], [False, True, True, True])
+    eq("B3 unit: runs as the account's own uid and gid (keep-id plus User=/Group=: the image's USER wins otherwise)",
+       [x in unit.splitlines() for x in ("UserNS=keep-id", "User=1004", "Group=1005")], [True, True, True])
+    eq("B3 unit: a stop waits 10 s, and the kill after B3's own clean exit counts as a stop",
+       ["--stop-timeout=10" in unit, "SuccessExitStatus=137" in unit.splitlines()], [True, True])
 
 
 def _b3_geo255(ids):
-    code, _sh, ini, puts = _b3_install255(ids, True, "ports= 21010 21011\n")
+    code, _sh, ini, puts = _b3_install255(ids, True, "ports= 21010\n")
     unit = _unit_of255(puts)
     services = [t for p, t in sorted(puts.items()) if p.endswith(".service")]
     eq("B3 geolocation on: the plugins listed, each service through its own relay, nothing else reachable",
        [code, "geolocation:\n" in ini, "location: @conf/conf/plugin_location.ini" in ini,
-        "-T,127.0.0.2/443:21010,-T,127.0.0.3/443:21011" in _net_line255(unit),
-        "--add-host=ipwho.is:127.0.0.2" in unit, "--add-host=ipapi.co:127.0.0.3" in unit, len(services),
+        _net_line255(unit).endswith(",-T,3306:3306,-T,443:21010"),
+        "--add-host=ipwho.is:127.0.0.1" in unit, "ipapi.co" in unit, len(services),
         [x.rsplit(" ", 1)[-1].strip() for x in services], "Requires=lgsm-addon-b3-geo1.socket" in unit],
-       [202, True, True, True, True, True, 2, ["ipwho.is:443", "ipapi.co:443"], True])
+       [202, True, True, True, True, False, 1, ["ipwho.is:443"], True])
     check("B3 geolocation on: the audit says so", "geolocation on" in _audit_started255(), _audit_started255())
     _p9_patch(_ra255, "_db_target", lambda r: ("100.70.1.2", 3307))
     code, _sh, ini, puts = _b3_install255(ids, False, "ports= 21012\n")
@@ -346,6 +447,12 @@ def _b3_pieces255():
        [_ad255.log_dir("u", ".callofduty/main"), _ad255.log_dir("u", "./x"), _ad255.log_dir("u", ".callofduty/..")],
        ["/home/u/.callofduty/main", "", ""])
     check("B3 log: its own b3.log comes first", "panel-addons/b3/Data/b3.log" in _ad255.logs_sh("u", _ad255.B3))
+    find = _re255.search(r"find (.*?) -maxdepth", _ad255.probe_sh(_ad255.B3, "codserver", 4, "cod", 0))
+    eq("log search: serverfiles, ~/.callofduty* (CoD1, UO, CoD2) and ~/.cod* (World at War's ~/.codwaw)",
+       find.group(1).split() if find else [], ["serverfiles", ".callofduty*", ".cod*"])
+    eq("probe: the account's uid and gid are read, and only plain numbers count",
+       [_ad255.parse_probe("uid=1004\ngid=1005\n")["ids"], _ad255.parse_probe("uid=0\ngid=0\n")["ids"],
+        _ad255.parse_probe("uid=x\ngid=1\n")["ids"]], [(1004, 1005), None, None])
 
 
 def _b3_build255():
@@ -356,6 +463,12 @@ def _b3_build255():
        [_ad255.B3_COMMIT in _re255.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re255.M),
         _ad255.B3_BASE in _re255.findall(r"^ARG BASE_IMAGE=(\S+)", cf, _re255.M),
         _re255.findall(r"^FROM (\S+)", cf, _re255.M)], [True, True, ["${BASE_IMAGE}", "${BASE_IMAGE}"]])
+    lines = cf.splitlines()
+    at = {k: next((i for i, x in enumerate(lines) if x.startswith(k)), -1)
+          for k in ("COPY entrypoint.sh", "RUN chmod 0755 /opt/b3/entrypoint.sh", "USER 65534")}
+    eq("B3 build: the start script is made readable (the panel writes it 0600, COPY keeps that) before USER",
+       [at["COPY entrypoint.sh"] < at["RUN chmod 0755 /opt/b3/entrypoint.sh"] < at["USER 65534"],
+        at["COPY entrypoint.sh"] >= 0], [True, True])
     check("B3 build: the checkout must be exactly the pinned commit, and pip installs by hash from wheels only",
           'test "$(git rev-parse HEAD)" = "${B3_COMMIT}"' in cf and "--require-hashes" in cf and "--only-binary :all:" in cf)
     pins = _re255.findall(r"^([A-Za-z0-9_.-]+)==\S+ \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", req, _re255.M)
@@ -371,6 +484,34 @@ def _b3_remove255(ids):
     eq("remove: B3's database is kept; IW4MAdmin's data goes with it (and says so)",
        (r.get("message"), r2.get("message")), (_ra255._REMOVED[True], _ra255._REMOVED[False]))
     check("remove: the add-on's relays go too", "lgsm-addon-b3-*" in _ad255.remove_sh("u", _ad255.B3))
+
+
+def _run_remove255(other):
+    """remove_sh for B3 under bash with stand-ins, in a throwaway home: (rc, stdout, tools' log, home)."""
+    home = os.path.join(_TMP255, "rm-%s" % other)
+    for d in ("panel-addons/b3/Data", ".cache/containers/x", ".config/containers/systemd", ".config/systemd/user"):
+        os.makedirs(os.path.join(home, d), exist_ok=True)
+    if other:
+        os.makedirs(os.path.join(home, "panel-addons", "iw4madmin"), exist_ok=True)
+    log = os.path.join(home, "tools.log")
+    bindir = os.path.join(_TMP255, "bin")
+    _stand_ins255(bindir)
+    sh = _ad255.remove_sh("u255", _ad255.B3).replace("/home/u255", home)
+    r = _sp255.run(["bash", "-c", sh], capture_output=True, text=True, timeout=60, check=False,  # nosec B603 B607
+                   env={"PATH": bindir + ":/usr/bin:/bin", "S255_LOG": log, "S255_UNIT": "/nonexistent"})
+    return r.returncode, r.stdout, open(log, encoding="utf-8").read() if os.path.exists(log) else "", home
+
+
+def _purge255():
+    rc, out, tools, home = _run_remove255(True)
+    eq("remove: with another add-on left, Podman's storage stays",
+       [rc, "others=1" in out, "system reset" in tools, os.path.isdir(os.path.join(home, ".cache", "containers"))],
+       [0, True, False, True])
+    rc, out, tools, home = _run_remove255(False)
+    eq("remove: the last add-on takes the account's Podman storage, cache and empty folders with it",
+       [rc, "others=0" in out, "podman system reset -f" in tools,
+        [d for d in (".cache/containers", ".config/containers", ".config/systemd") if os.path.exists(os.path.join(home, d))]],
+       [0, True, True, []])
 
 
 def _b3_logs255(ids):
@@ -417,6 +558,7 @@ try:
     _release255()
     _b3_pieces255()
     _b3_build255()
+    _purge255()
     _ids255 = _fixture255()
     try:
         _routes255(_ids255)

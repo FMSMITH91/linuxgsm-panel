@@ -68,7 +68,7 @@
         TF('Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).', {port: a.port})));
     }
     if (a.geolocation_option) {
-      box.appendChild(node('div', 'small text-secondary', a.geolocation ? T('Geolocation is on: players\' IP addresses go to ipwho.is and ipapi.co.') : T('Geolocation is off.')));
+      box.appendChild(node('div', 'small text-secondary', a.geolocation ? T('Geolocation is on: players\' IP addresses go to ipwho.is.') : T('Geolocation is off.')));
     }
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
@@ -89,7 +89,7 @@
     wrap.appendChild(cb);
     wrap.appendChild(lab);
     box.appendChild(wrap);
-    box.appendChild(node('div', 'small text-secondary', T('Off unless you tick it. When on, B3 sends each joining player\'s IP address to ipwho.is (or ipapi.co) to find their country and city, and shows them in the game (!locate and the join message).')));
+    box.appendChild(node('div', 'small text-secondary', T('Off unless you tick it. When on, B3 sends each joining player\'s IP address to ipwho.is to find their country and city, and shows them in the game (!locate and the join message).')));
   }
 
   function installRow(a, d, box) {

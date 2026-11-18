@@ -36,8 +36,11 @@ RUN python -m pip install --no-cache-dir --root-user-action=ignore --disable-pip
 COPY --from=source /src/b3 /opt/b3/b3
 COPY --from=source /src/b3_run.py /opt/b3/b3_run.py
 COPY entrypoint.sh /opt/b3/entrypoint.sh
+# The panel writes this folder 0600 and COPY keeps a file's mode: the start script must be readable
+# by the account the add-on runs as.
+RUN chmod 0755 /opt/b3/entrypoint.sh && chmod 0644 /opt/b3-requirements.txt
 WORKDIR /opt/b3
-# Not root inside: the panel runs it with UserNS=keep-id (the game account's uid); this is the
-# fallback for any other runtime.
+# Not root inside: the panel runs it with UserNS=keep-id and User=/Group= set to the game
+# account's ids; this is the fallback for any other runtime.
 USER 65534:65534
 ENTRYPOINT ["/bin/sh", "/opt/b3/entrypoint.sh"]
