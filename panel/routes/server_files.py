@@ -501,6 +501,7 @@ def _console_tick(app, socketio, gs, server_id):
         _console_first_sight(remote, gs, log_path, server_id)
         return
     state = _console_offsets[server_id]
+    began = _crest.clock()
     reply, rc = _console_poll_read(remote, gs, log_path, state["ino"], state["pos"])
     if reply is None:
         _feed_tick(server_id, "read-failed" if rc != 0 else "stat-unparseable")
@@ -519,6 +520,8 @@ def _console_tick(app, socketio, gs, server_id):
     state, pos = start
     verdict = _console_reply_verdict(size, pos, started, diff)
     if verdict is not None:
+        if verdict == "":
+            _crest.seen(server_id, began)   # the log is exactly where the offsets say (cached_window)
         _feed_tick(server_id, verdict or None)
         return
     # The frame is the POSITIVE TOKEN that this read ran at all. tailscale and local do not
@@ -541,11 +544,13 @@ def _console_tick(app, socketio, gs, server_id):
 
 def _console_first_sight(remote, gs, log_path, server_id):
     """First sight: record where the log ends now and read nothing (one stat round trip)."""
+    began = _crest.clock()
     stat = _console_log_stat(remote, gs, log_path)
     if stat is None:
         _feed_tick(server_id, "stat-unparseable")
         return
     _console_read_start(server_id, *stat)
+    _crest.seen(server_id, began)
     _feed_tick(server_id)
 
 
@@ -648,6 +653,8 @@ def _console_read_start(server_id, ino, size):
         pos = 0
         state.update(ino=ino, pos=0, chain=next(_console_chains), fresh=False)
         _console_partial.pop(server_id, None)
+        # A log truncated and written back to the kept window read's size is not that window.
+        _crest.forget_window(server_id)
         _feed_mark(server_id, "rotations", counter=True)
     return state, pos
 
@@ -1668,9 +1675,7 @@ def _read_console_window(remote, gs, want, host_tz):
         # "console stops responding until I press Load older" report.
         # A log that does not exist (LinuxGSM's start is `mv` then `touch`) is a read that did not
         # run, rc 1, not "readable, and nothing in it": Load older wiped the console on that.
-        out, _, rc = _sm.read_as_game_user(
-            remote, gs.short_name, _console_window_cmd(log_path, want),
-            timeout=15, selfname=gs.lgsm_name)
+        out, rc = _console_window_reply(remote, gs, log_path, want)
         # Where the window ends in the log: the place the page is caught up from. A reply without
         # one (no `@` line) is still a window, with no place: the page stitches it by its text.
         at, out, newlines = _console_window_place(out)
@@ -1689,6 +1694,28 @@ def _read_console_window(remote, gs, want, host_tz):
     except Exception:
         lines, whole = [], False
     return readable, lines, (at if readable else None), whole
+
+
+def _console_window_reply(remote, gs, log_path, want):
+    """The window read's (out, rc): the last one again while the console poller vouches for it.
+
+    A page asks for the log's last _CONSOLE_LINES lines every 30 s, which on a quiet console is the
+    same answer each time. While the poller is watching the console and a read of its, begun after
+    the last window read ended, found the log at that read's inode and size, the log has not changed
+    since and that read's reply is returned (console_rest.cached_window). Anything else reads.
+    """
+    sid = getattr(gs, "id", None)
+    hit = _crest.cached_window(sid, want) if sid is not None else None
+    if hit is not None:
+        return hit
+    out, _, rc = _sm.read_as_game_user(
+        remote, gs.short_name, _console_window_cmd(log_path, want),
+        timeout=15, selfname=gs.lgsm_name)
+    at, rest, _newlines = _console_window_place(out)
+    if (sid is not None and want == _CONSOLE_LINES and rc == 0 and at is not None
+            and rest.startswith("B") and rest.endswith("E")):
+        _crest.keep_window(sid, want, at[1:], (out, rc))
+    return out, rc
 
 
 def _since_arg(raw):
