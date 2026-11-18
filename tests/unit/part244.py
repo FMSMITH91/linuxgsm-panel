@@ -19,6 +19,7 @@ own /proc. Nothing reaches a host or data/.
 import os
 import subprocess as _sp244  # nosec B404 - bash over the panel's own sample command, read-only /proc
 import sys
+import threading as _threading244
 import time as _time244
 from types import SimpleNamespace as NS
 
@@ -392,6 +393,30 @@ check("/stats: the running check that refuses a power action still reads a sampl
       len([c for c in _sent244 if "ps -u" in c]) == 2 and _running244 is True, repr((_sent244[-1:], _running244)))
 _p9_set(P9_GM, status="offline")
 _p9_set(P9_GS, status="online")
+
+# Two viewers whose polls arrive together share the one sample (the second waits for the first).
+_sent244.clear()
+
+
+def _slow_game244(server, cmd, timeout=None, sudo=None):
+    _sent244.append(cmd)
+    _time244.sleep(0.3)
+    return _game244(cmd), "", 0
+
+
+_p9_patch(_core244, "run_command", _slow_game244)
+_core244._live_metrics_cache.pop((244005, "csgoserver", 27015), None)
+_got244 = []
+_ths244 = [_threading244.Thread(target=lambda: _got244.append(_core244.server_live_metrics(
+    NS(id=244005), "csgoserver", 27015, max_age=7)["port_open"])) for _ in range(2)]
+for _th244 in _ths244:
+    _th244.start()
+for _th244 in _ths244:
+    _th244.join(10)
+_p9_restore_all()
+_core244._live_metrics_cache.pop((244005, "csgoserver", 27015), None)
+eq("/stats: two viewers whose polls arrive together run one sample between them, and both get it",
+   (len(_sent244), _got244), (1, [True, True]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

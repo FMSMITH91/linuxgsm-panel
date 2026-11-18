@@ -3212,11 +3212,9 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False, ma
     """
     _now = time.time()
     _ck = (getattr(server, "id", None), short_name, game_port)
-    if not force:
-        _hit = _live_metrics_cache.get(_ck)
-        # The entry holds its expiry; it was taken _LIVE_METRICS_TTL before that.
-        if _hit and _hit[0] + ((max_age or _LIVE_METRICS_TTL) - _LIVE_METRICS_TTL) > _now:
-            return _hit[1]
+    _hit = None if force else _live_hit(_ck, _now, max_age)
+    if _hit is not None:
+        return _hit
     # Re-validated HERE, like run_as_game_user, send_console_command and _rewrite_crontab: both
     # values below are interpolated into the shell command unquoted, and GameServer's @validates
     # fires on assignment only — never on a row loaded from the database, so a row written before
@@ -3236,11 +3234,39 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False, ma
     # No sudo: every part of this reads world-readable state — /proc/stat, /proc/loadavg,
     # /proc/uptime, free, df, nproc, `ps -u <user>` and a listening-socket count. It was asking for
     # root it never needed, and on the panel's own host that was a local sudo call on every poll.
-    out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port), timeout=15, sudo=False)
-    m = _parse_game_sample(out)
-    if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
-        _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
+    # One sample at a time per server: two viewers whose polls arrive together (two tabs opened at
+    # once poll in step) both missed the cache while the first sample was still running. The second
+    # now waits for it and is answered from it.
+    with _live_lock(_ck):
+        _hit = None if force else _live_hit(_ck, _now, max_age)
+        if _hit is not None:
+            return _hit
+        out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port), timeout=15, sudo=False)
+        m = _parse_game_sample(out)
+        if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
+            _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
     return m
+
+
+_live_locks = register_remote_cache({})   # same keys as _live_metrics_cache -> its sample's lock
+_live_locks_guard = threading.Lock()
+
+
+def _live_lock(ck):
+    """The lock one server's live sample is taken under."""
+    with _live_locks_guard:
+        return _live_locks.setdefault(ck, threading.Lock())
+
+
+def _live_hit(ck, now, max_age):
+    """The cached sample for `ck` if it is young enough (max_age, else _LIVE_METRICS_TTL), else None.
+
+    The entry holds its expiry; the sample was taken _LIVE_METRICS_TTL before that.
+    """
+    hit = _live_metrics_cache.get(ck)
+    if hit and hit[0] + ((max_age or _LIVE_METRICS_TTL) - _LIVE_METRICS_TTL) > now:
+        return hit[1]
+    return None
 
 
 # The one game's processes as `pid rss etimes`, from ONE ps (see _HOST_SAMPLE_AWK): their
