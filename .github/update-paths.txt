@@ -76,6 +76,8 @@ noise .dockerignore
 # requirements-bootstrap.txt, which install.sh does read, and which therefore counts.
 noise panel/install/requirements.in
 noise panel/install/requirements-bootstrap.in
+# The B3 add-on's requirements.in, likewise: its build reads requirements.txt beside it.
+noise panel/addon_images/b3/requirements.in
 # osv-scanner's dated exemptions for requirements.txt (security-code.yml); nothing on a host reads it.
 noise panel/install/osv-scanner.toml
 # Analysis and lint configuration, read by the scanners alone.
