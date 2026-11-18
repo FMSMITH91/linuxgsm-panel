@@ -268,7 +268,8 @@ def _other_super239():
     with _p9.app_context():
         u = _U239.query.filter_by(username="p239_super").first()
         if u is None:
-            u = _U239(username="p239_super", password_hash="x", display_name="S", is_superadmin=True,
+            u = _U239(username="p239_super", password_hash="x",  # nosec B106 - a test row's placeholder, not a password
+                      display_name="S", is_superadmin=True,
                       is_owner=False, is_active=True)
             _db239.session.add(u)
             _db239.session.commit()

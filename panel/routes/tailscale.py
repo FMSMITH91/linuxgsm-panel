@@ -453,13 +453,13 @@ def control_offer(info, cfg):
     return {"saved": saved, "host_control": "" if ts.control_is_tailscale(info) else info.control_url,
             "self_hosted": not ts.control_is_tailscale(info), "serve": ts.serve_https_offered(info),
             "funnel": ts.funnel_offered(info), "suffix": getattr(info, "magic_dns_suffix", ""),
-            "plain_http": saved.startswith("http://")}
+            "plain_http": urlsplit(saved).scheme == "http"}
 
 
 # Shown under the control-server field, and returned by its save, when the address is http://:
 # OWASP's Transport Layer Security Cheat Sheet ("Use TLS For All Pages") recommends TLS throughout.
-CONTROL_HTTP_NOTE = ("http:// is outside OWASP's recommendation: the login link opens in your "
-                     "browser unencrypted. Use the server's https:// address if it has one.")
+CONTROL_HTTP_NOTE = ("A plain HTTP address is outside OWASP's recommendation: the login link opens in "
+                     "your browser unencrypted. Use the server's HTTPS address if it has one.")
 
 
 def _control_server_save(data):
@@ -480,7 +480,7 @@ def _control_server_save(data):
     said = (i18n.tr("New joins use {url}.", url=url) if url
             else i18n.tr("New joins use Tailscale's own control server."))
     return jsonify({"success": True, "message": said, "control_url": url,
-                    "note": i18n.tr(CONTROL_HTTP_NOTE) if url.startswith("http://") else ""})
+                    "note": i18n.tr(CONTROL_HTTP_NOTE) if urlsplit(url).scheme == "http" else ""})
 
 
 def _r31a_suggestion(cfg):

@@ -34,6 +34,7 @@ _CONFIRM_REFUSED = {
 def register(app):
     """Register the root cron page, its change route and the owner's on/off switch."""
     app.jinja_env.globals["root_cron_on"] = _rc.enabled
+
     @app.route("/root-cron/<int:remote_id>")
     @login_required
     @superadmin_required     # and then the owner only, checked in the view

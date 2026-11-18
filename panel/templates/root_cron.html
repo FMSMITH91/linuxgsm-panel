@@ -65,7 +65,7 @@
             <label class="form-label small mb-1" for="rc-c{{ r.n }}">Command</label>
             <input type="text" id="rc-c{{ r.n }}" name="command" class="form-control form-control-sm font-monospace" maxlength="1000" value="{{ r.command }}" spellcheck="false">
           </div>
-          {{ confirm_fields('rc-e%d' % r.n) }}
+          {{ confirm_fields('rc-e' ~ r.n) }}
           <div class="col-sm-auto d-flex gap-2">
             <button type="submit" name="op" value="save" class="btn btn-sm btn-primary"><i class="bi bi-save"></i> Save</button>
             <button type="submit" name="op" value="delete" class="btn btn-sm btn-outline-danger" formnovalidate><i class="bi bi-trash"></i> Delete</button>

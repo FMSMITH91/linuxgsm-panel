@@ -18,7 +18,7 @@ Every host, address and key here is invented (.test names, documentation ranges)
 import json as _json240
 import os
 import shutil as _sh240
-import subprocess as _sp240
+import subprocess as _sp240  # nosec B404 - runs bash and the helper's own functions on fixed test input
 import tempfile as _tmp240
 from types import SimpleNamespace as _NS240
 

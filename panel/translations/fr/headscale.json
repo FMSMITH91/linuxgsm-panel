@@ -4,7 +4,7 @@
   "This host is joined to:": "Cet hôte est rattaché à :",
   "Control server address": "Adresse du serveur de contrôle",
   "Recommended: an https:// address (OWASP Transport Layer Security Cheat Sheet).": "Recommandé : une adresse https:// (OWASP Transport Layer Security Cheat Sheet).",
-  "http:// is outside OWASP's recommendation: the login link opens in your browser unencrypted. Use the server's https:// address if it has one.": "http:// est hors de la recommandation de l'OWASP : le lien de connexion s'ouvre dans votre navigateur sans chiffrement. Utilisez l'adresse https:// du serveur s'il en a une.",
+  "A plain HTTP address is outside OWASP's recommendation: the login link opens in your browser unencrypted. Use the server's HTTPS address if it has one.": "Une adresse HTTP non chiffrée est hors de la recommandation de l'OWASP : le lien de connexion s'ouvre dans votre navigateur sans chiffrement. Utilisez l'adresse HTTPS du serveur s'il en a une.",
   "Tailscale Serve (private HTTPS):": "Tailscale Serve (HTTPS privé) :",
   "offered": "proposé",
   "not offered: this server issues no HTTPS certificates": "non proposé : ce serveur ne délivre aucun certificat HTTPS",
