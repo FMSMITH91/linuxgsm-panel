@@ -36,8 +36,15 @@ go through relays on the host's loopback.
 Installing the first add-on on a host (Ubuntu 24.04 or newer):
 
 - installs `podman`, `uidmap` and `passt` from Ubuntu;
+- on the panel's own host, puts the server's account in the panel's game group (`lgsmpanel-games`) if it is not in
+  it yet, with the same checks as any enrolment (an account that can reach root is refused);
 - gives the account a range of subordinate ids if it has none;
 - turns on lingering, so the account's user manager starts the add-on at boot.
+
+A step that fails says why, with the host's own words after the panel's sentence (apt's, the helper's or
+systemd's). An add-on that needs a database while the server has none free shows its Install button disabled,
+with the reason beside it and an **Open Databases** button; when the host has no database server yet, the reason
+says so, since the Databases tab sets one up first.
 
 An install that stops again within 30 seconds is reported with its last log lines and left stopped. Install and
 remove ask for the password when the sign-in is older than the confirmation window. Every install, start, stop and

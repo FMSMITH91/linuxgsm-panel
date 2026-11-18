@@ -5,7 +5,7 @@
 // in a dialog first (step_up_form.js's window.stepUpThen).
 (function () {
   'use strict';
-  var st = {d: null, loaded: false, busy: false, poll: null};
+  var st = {d: null, loaded: false, busy: false, poll: null, watch: false};
   var STATE = {
     active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
     failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'
@@ -92,15 +92,32 @@
     box.appendChild(node('div', 'small text-secondary', T('Off unless you tick it. When on, B3 sends each joining player\'s IP address to ipwho.is to find their country and city, and shows them in the game (!locate and the join message).')));
   }
 
+  // An add-on that needs a database while the server has none free: Install shows, disabled, with why
+  // beside it, and a button to the Databases tab when this viewer has that tab. A host with no
+  // database server yet is named, since the Databases tab then offers to set one up first.
+  function noDatabaseRow(a, d, box) {
+    var bar = node('div', 'd-flex flex-wrap gap-2 align-items-center mt-1');
+    var b = button(T('Install'), 'bi-download', 'adInstall', [a.id], 'btn-primary');
+    b.disabled = true;
+    var why = node('span', 'small text-secondary', d.db_host === 'none'
+      ? T('This host has no database server yet. Set one up in the Databases tab, then add a database there: this add-on needs one of its own.')
+      : T('Add a database in the Databases tab first: this add-on needs one of its own.'));
+    why.id = 'ad-why-' + a.id;
+    b.setAttribute('aria-describedby', why.id);
+    bar.appendChild(b);
+    bar.appendChild(why);
+    if (document.querySelector('[data-sfsub-btn="databases"]')) {
+      bar.appendChild(button(T('Open Databases'), 'bi-database', 'adOpenDatabases', []));
+    }
+    box.appendChild(bar);
+  }
+
   function installRow(a, d, box) {
     if (a.legacy) {
       box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive and Call of Duty 2. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
     }
     var free = (d.databases || []).filter(function (x) { return !x.used_by; });
-    if (a.needs_database && !free.length) {
-      box.appendChild(node('div', 'small text-secondary', T('Add a database in the Databases tab first: this add-on needs one of its own.')));
-      return;
-    }
+    if (a.needs_database && !free.length) { noDatabaseRow(a, d, box); return; }
     if (a.geolocation_option) geoSwitch(a, box);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.needs_database) bar.appendChild(dbSelect(a, d.databases || []));
@@ -141,6 +158,9 @@
     list.textContent = '';
     (d.addons || []).forEach(function (a) { list.appendChild(addonRow(a, d)); });
     var busy = (d.addons || []).some(function (a) { return a.installing; });
+    // An install this page started has ended: its "Installing the add-on" line goes, and the row says
+    // how it went (installed, or the error in red), so no green line stays beside a failure.
+    if (st.watch && !busy) { st.watch = false; say(''); }
     if (busy && !st.poll) {
       var until = Date.now() + 20 * 60000;   // an install's pull and first start finish well inside this
       st.poll = setInterval(function () {
@@ -164,8 +184,13 @@
   function after(res) {
     st.busy = false;
     var ok = res.ok && res.d.success !== false, text = (ok ? '✓ ' : '✗ ') + (res.d.message || res.d.error || T('Failed'));
+    var started = ok && res.d.started === true;
+    st.watch = started;
     say(text, ok ? 'text-success' : 'text-danger');
-    return window.adLoad(true).then(function () { say(text, ok ? 'text-success' : 'text-danger'); return ok; });
+    return window.adLoad(true).then(function () {
+      if (!started || st.watch) say(text, ok ? 'text-success' : 'text-danger');   // unless the install already ended
+      return ok;
+    });
   }
   function failed() { st.busy = false; say('✗ ' + T('Could not reach the panel. Try again.'), 'text-danger'); return false; }
 
@@ -218,6 +243,14 @@
       say(d.log ? '' : T('The log is empty.'));
       return true;
     }).catch(failed);
+  };
+
+  // The Databases tab, opened the way its own button in the page's section nav opens it
+  // (server_files.js shows the section; server_databases.js loads it on that click).
+  window.adOpenDatabases = function () {
+    var b = document.querySelector('[data-sfsub-btn="databases"]');
+    if (b) b.click();
+    return !!b;
   };
 
   // Load when the tab is first opened (or the page opens on it).

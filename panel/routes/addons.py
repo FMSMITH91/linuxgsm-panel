@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from flask import jsonify
 from flask_login import current_user, login_required
 
-from panel.core import i18n
+from panel.core import i18n, terminal
 from panel.core.config import decrypt_secret
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.db.models import GameDatabase, GameServer, HostDatabaseServer, claim_row, db, row_birth
@@ -50,6 +50,16 @@ _NOT_REMOVED = "The add-on couldn't be removed completely. Try again."
 # (server id, add-on id) -> {"running": bool, "why": str, "tail": str}: an install in the background.
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
+
+
+def _with_reason(sentence, out, err):
+    """The step's sentence, then the host's own words for why (its stderr, else its output), tidy and capped.
+
+    The step's answer is the host's text: colours stripped, whitespace collapsed (as the install's
+    other reasons are shown), its last 200 characters. The sentence alone when the host said nothing.
+    """
+    said = " ".join(terminal.strip_escapes((err or "").strip() or out or "").split())[-200:]
+    return i18n.Sentence("{step} The host said: {detail}", step=i18n.Sentence(sentence), detail=said) if said else sentence
 
 
 def _say(status, sentence, **extra):
@@ -100,26 +110,44 @@ def _addon_rows(gs, found):
     return rows
 
 
+def _db_host_state(gs, rows, dbs):
+    """Whether the host has a database server, for an add-on that needs a database and has none free.
+
+    "none" only when the Databases tab's own last look found none (it then offers to set one up
+    first); "" otherwise, or when no add-on is waiting on a database. Read from what the panel
+    stored (databases.host_state without a probe), so the tab asks nothing more of the host.
+    """
+    if not any(r["needs_database"] for r in rows) or any(not d["used_by"] for d in dbs):
+        return ""
+    if _net.endpoint_for_host(gs.remote_id) is not None:
+        return ""
+    from panel.routes import databases as _dbr   # it imports this module: read at call time
+    return "none" if _dbr.host_state(gs.remote, may_probe=False)[0] == "none" else ""
+
+
 def _status_answer(gs):
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.status_sh(), timeout=30)
     if rc != 0:
         return _say(200, "Couldn't read this server's add-ons: the host did not answer. Try again.", unread=True)
     st = _ad.parse_status(out)
     why = _ad.runtime_refusal(st["os"], st["podman"])
-    return jsonify({"success": True, "addons": _addon_rows(gs, st["addons"]),
-                    "databases": _databases(gs, st["addons"]), "podman": st["podman"],
-                    "runtime_error": i18n.tr(why) if why else ""})
+    rows, dbs = _addon_rows(gs, st["addons"]), _databases(gs, st["addons"])
+    return jsonify({"success": True, "addons": rows, "databases": dbs, "podman": st["podman"],
+                    "db_host": _db_host_state(gs, rows, dbs), "runtime_error": i18n.tr(why) if why else ""})
 
 
 # ── install, in the background ────────────────────────────────────────────────────────────────
 def _apt_install(remote):
-    """Podman and its two helpers from Ubuntu's archive (universe added once if apt can't find them)."""
-    rc = _sm.run_privileged(remote, "apt-install", list(_ad.PACKAGES), timeout=900)[2]
-    if rc == 0:
-        return True
+    """Podman and its two helpers from Ubuntu's archive (universe added once if apt can't find them).
+
+    "" once they are installed, else _NO_PODMAN with apt's own last words.
+    """
+    if _sm.run_privileged(remote, "apt-install", list(_ad.PACKAGES), timeout=900)[2] == 0:
+        return ""
     _sm.run_privileged(remote, "apt-add-repo", ["universe"], timeout=300)
     _sm.run_privileged(remote, "apt-update", [], timeout=300)
-    return _sm.run_privileged(remote, "apt-install", list(_ad.PACKAGES), timeout=900)[2] == 0
+    out, err, rc = _sm.run_privileged(remote, "apt-install", list(_ad.PACKAGES), timeout=900)
+    return "" if rc == 0 else _with_reason(_NO_PODMAN, out, err)
 
 
 def _taken(p, addon_id):
@@ -154,10 +182,18 @@ def _install_refusal(gs, plan, p):
 
 def _runtime(gs, p):
     """Podman on the host and the account readied: "" when both are done, else why not."""
-    if not p["podman"] and not _apt_install(gs.remote):
-        return _NO_PODMAN
-    _out, _err, rc = _sm.run_privileged(gs.remote, "addon-account-prepare", [gs.short_name], timeout=60)
-    return "" if rc == 0 else _NO_PREPARE
+    why = "" if p["podman"] else _apt_install(gs.remote)
+    if why:
+        return why
+    # On the panel's own host the helper readies only an account in its game group, and an account
+    # can be outside it (one made before the group existed, or by a per-user install, whose
+    # sudoers grant never named the group). Enrolled first, with gameuser-group's own checks (it
+    # refuses an account that can reach root); a remote host's form needs no group (enrol skips it).
+    refused = _sm.enrol_game_user(gs.remote, gs.short_name)
+    if refused:
+        return _with_reason(_NO_PREPARE, "", refused)
+    out, err, rc = _sm.run_privileged(gs.remote, "addon-account-prepare", [gs.short_name], timeout=60)
+    return "" if rc == 0 else _with_reason(_NO_PREPARE, out, err)
 
 
 # A relay's target goes into a unit file: an address or a host name, nothing that could break the line.
@@ -219,12 +255,12 @@ def _install_steps(gs, plan, who):
     why = _plan_refusal(gs, plan)
     if why:
         return why, ""
-    out, _err, rc = _sm.shell_as_game_user(
+    out, err, rc = _sm.shell_as_game_user(
         gs.remote, gs.short_name,
         _ad.probe_sh(plan["id"], gs.lgsm_name, gs.id, gs.game_type, plan["ports"]) + "; " + _ad.status_sh(),
         timeout=60, selfname=gs.lgsm_name)
     if rc != 0:
-        return "Couldn't read the server's account on the host: it did not answer.", ""
+        return _with_reason("Couldn't read the server's account on the host: it did not answer.", "", err), ""
     p = dict(_ad.parse_probe(out), addons=_ad.parse_status(out)["addons"])
     p["rcon"], p["rcon_why"] = _ad.game_rcon(gs.game_type, p["rcon_lines"])
     why = _install_refusal(gs, plan, p) or _runtime(gs, p)
@@ -291,27 +327,29 @@ def _install_answer(app, gs, addon_id):
 
 # ── start, stop, remove, logs ─────────────────────────────────────────────────────────────────
 def _action_answer(gs, addon_id, action):
-    _out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
-                                            timeout=_ad.ACTION_TIMEOUT)
+    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
+                                          timeout=_ad.ACTION_TIMEOUT)
     ok = rc == 0
+    why = "" if ok else _with_reason(_NOT_DONE[action], out, err)
     log_action(current_user, "addon_start" if action == "start" else "addon_stop", target=gs.name, server=gs, success=ok,
-               detail="%s %s" % (addon_id, "done" if ok else "failed (rc %s)" % rc))
+               detail="%s %s" % (addon_id, "done" if ok else "failed (rc %s): %s" % (rc, why)))
     if not ok:
-        return _say(200, _NOT_DONE[action])
+        return _say(200, why)
     return jsonify({"success": True, "message": i18n.tr(_DONE[action])})
 
 
 def _remove_answer(gs, addon_id):
-    out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
-                                           timeout=_ad.ACTION_TIMEOUT)
+    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
+                                          timeout=_ad.ACTION_TIMEOUT)
     removed, others = _ad.remove_outcome(out, rc)
+    why = "" if removed else _with_reason(_NOT_REMOVED, "", err)
     if removed and not others:
         # The account runs no add-on any more: its user manager need not linger. Best-effort.
         _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name, "keep"], timeout=90)
     log_action(current_user, "addon_remove", target=gs.name, server=gs, success=removed,
-               detail="%s %s" % (addon_id, "removed" if removed else "not removed (rc %s)" % rc))
+               detail="%s %s" % (addon_id, "removed" if removed else "not removed (rc %s): %s" % (rc, why)))
     if not removed:
-        return _say(200, _NOT_REMOVED)
+        return _say(200, why)
     return jsonify({"success": True, "message": i18n.tr(_REMOVED[_ad.CATALOG[addon_id]["data_kept"]])})
 
 
