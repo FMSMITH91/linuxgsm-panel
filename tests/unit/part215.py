@@ -689,8 +689,8 @@ def _s215_rotation_and_logout():
     check("sessions: turning 2FA on gives this device a new session id and signs the others out",
           on.status_code == 200 and before != after and other.status_code == 401 and here.status_code == 200,
           repr((on.status_code, before, after, other.status_code, here.status_code)))
-    check("sessions: logout sends Clear-Site-Data for cookies and storage (not cache), and says so on the login page",
-          out.headers.get("Clear-Site-Data") == '"cookies", "storage"'
+    check("sessions: logout sends Clear-Site-Data for the cache, cookies and storage, and says so on the login page",
+          out.headers.get("Clear-Site-Data") == '"cache", "cookies", "storage"'
           and out.headers.get("Location", "").endswith("/login?signed_out=1")
           and "You have been logged out." in c2.get("/login?signed_out=1").get_data(as_text=True),
           repr(dict(out.headers)))

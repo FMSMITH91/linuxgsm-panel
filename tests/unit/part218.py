@@ -10,7 +10,7 @@
 * Who gets what, decided at send time: server events to who can access the server, panel-wide ones
   to superadmins, each user's own choice, account changes to that account; access removed,
   deactivated or deleted gets nothing; 404/410 removes the device; the text carries no address.
-* Sign-out: alerts kept (Clear-Site-Data "cookies" only) or stopped (the row gone, storage cleared).
+* Sign-out: alerts kept (Clear-Site-Data "cache" and "cookies" only) or stopped (the row gone, storage cleared).
 Every route runs on part12's app with its transport tripwire armed; the push POST itself is stubbed.
 """
 import base64 as _b64_218
@@ -653,18 +653,19 @@ def _s218_signout():
           _pa218.endpoint_hash(b.sub["endpoint"]) in page and _pa218.endpoint_hash(bo.sub["endpoint"]) not in page
           and b.sub["endpoint"] not in page and 'name="stop_alerts"' in page, page[:120])
     keep = _p9_client(uid).post("/logout", data={"push_endpoint": b.sub["endpoint"]})
-    check("sign-out: alerts kept by default: Clear-Site-Data is cookies only (storage would remove the service "
-          "worker), and the device stays", keep.headers.get("Clear-Site-Data") == '"cookies"' and _rows218(uid) == 1,
+    check("sign-out: alerts kept by default: Clear-Site-Data is the cache and cookies only (storage would remove the "
+          "service worker), and the device stays",
+          keep.headers.get("Clear-Site-Data") == '"cache", "cookies"' and _rows218(uid) == 1,
           repr(keep.headers.get("Clear-Site-Data")))
     foreign = _p9_client(plain_u).post("/logout", data={"push_endpoint": bo.sub["endpoint"], "stop_alerts": "1"})
     plain = _p9_client(other).post("/logout")
     check("sign-out: another account's endpoint or none at all: the full clear, and nobody's device touched",
-          foreign.headers.get("Clear-Site-Data") == '"cookies", "storage"' and _rows218(other) == 1
-          and plain.headers.get("Clear-Site-Data") == '"cookies", "storage"', repr(foreign.headers.get("Clear-Site-Data")))
+          foreign.headers.get("Clear-Site-Data") == '"cache", "cookies", "storage"' and _rows218(other) == 1
+          and plain.headers.get("Clear-Site-Data") == '"cache", "cookies", "storage"', repr(foreign.headers.get("Clear-Site-Data")))
     since = _last218()
     stop = _p9_client(stop_u).post("/logout", data={"push_endpoint": bs.sub["endpoint"], "stop_alerts": "1"})
     check("sign-out: 'Stop alerts on this device' removes it, audits it and clears the site's storage too",
-          stop.headers.get("Clear-Site-Data") == '"cookies", "storage"' and _rows218(stop_u) == 0
+          stop.headers.get("Clear-Site-Data") == '"cache", "cookies", "storage"' and _rows218(stop_u) == 0
           and len(_audit218("push_unsubscribe", since)) == 1, repr(stop.headers.get("Clear-Site-Data")))
 
 

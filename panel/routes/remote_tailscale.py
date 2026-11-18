@@ -280,7 +280,7 @@ def _register_key_join_and_migrate(app):
             return _unreachable("tailscale on a remote host")
         # A VerbError is the privilege boundary REFUSING the value — "not an auth key" — which is
         # a bad request, not a panel fault. api_tailscale_serve already answers 400 for its own
-        # mount-point refusal and says why: the branches below report every failure as a 500,
+        # mount-point refusal and says why: the branches below report every host failure as a 502,
         # right for "the host refused the command", wrong for "you pasted something that isn't a
         # key", and the two are not distinguishable from the message.
         except _priv.VerbError:

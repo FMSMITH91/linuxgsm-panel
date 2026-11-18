@@ -460,8 +460,8 @@ def _register_tailscale_serve(app):
         # Checked HERE as well as in setup_tailscale_serve, for the reason api_tags_create gives
         # about tag names: this is where the value came from a request, so this is where a bad one
         # can be answered as a 400 with a message the form can show. The branches below report
-        # every failure as a 500 — right for "the host refused the command", wrong for "you typed
-        # a mount point that isn't one", and the two are not distinguishable from a message.
+        # every host failure as a 502 — right for "the host refused the command", wrong for "you
+        # typed a mount point that isn't one", and the two are not distinguishable from a message.
         try:
             mount = _priv._ts_mount(data.get("mount", "/") or "/")
         except _priv.VerbError:
