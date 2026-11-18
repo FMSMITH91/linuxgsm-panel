@@ -2008,15 +2008,20 @@ def classify_install_failure(output):
         return ("os_unsupported", i18n.Sentence(
             "LinuxGSM does not support this game on {os}. It caps this one at an older Ubuntu release; the "
             "game picker marks those.", os=m.group(1).strip()))
+    return _checksum_cause(text)
+
+
+def _checksum_cause(text):
+    """The download_checksum cause, from LinuxGSM's own checksum report in `text`, or None."""
     bad_sum = lgsm_checksum_failure(text)
-    if bad_sum:
-        return ("download_checksum", i18n.Sentence(
-            "LinuxGSM's download of {file} failed its {kind} check twice: the file it got has the checksum "
-            "{got}, and LinuxGSM expects {want}. LinuxGSM stopped before installing any game files. Try "
-            "again later; if it keeps failing, the file on LinuxGSM's download server or the checksum in "
-            "LinuxGSM needs a fix from LinuxGSM.",
-            file=bad_sum[0], kind=bad_sum[1], got=bad_sum[2], want=bad_sum[3]))
-    return None
+    if not bad_sum:
+        return None
+    return ("download_checksum", i18n.Sentence(
+        "LinuxGSM's download of {file} failed its {kind} check twice: the file it got has the checksum "
+        "{got}, and LinuxGSM expects {want}. LinuxGSM stopped before installing any game files. Try "
+        "again later; if it keeps failing, the file on LinuxGSM's download server or the checksum in "
+        "LinuxGSM needs a fix from LinuxGSM.",
+        file=bad_sum[0], kind=bad_sum[1], got=bad_sum[2], want=bad_sum[3]))
 
 
 # The line the install's own command prints after LinuxGSM ends (manage_servers._game_files_command).

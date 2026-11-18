@@ -222,6 +222,10 @@ def _step4_256_checks():
           and fails[0][2:] == (True, True), repr(fails))
     eq("install step 4: ...after one more download (and LinuxGSM's download folder is emptied once it fails)",
        (downloads, wipes), (2, 1))
+    _step4_more256()
+
+
+def _step4_more256():
     ok, fails, downloads, wipes = _step4_256("sum1", [("downloading file ... FAIL\n__x\n", 1, False, True),
                                                       ("Install Complete!\n", 0, True)])
     eq("install step 4: a download cut off part way (its partial archive left in lgsm/tmp) installs on the next "
