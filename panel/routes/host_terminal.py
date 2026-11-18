@@ -25,7 +25,7 @@ from panel.ops.ssh_manager import is_local_server
 from panel.routes._shared import _json_int
 from panel.security.auth import (USE_TERMINAL, _deny, _r17c_row_id, get_remote, has_permission, log_action,
     permission_required)
-from panel.security.account_guard import step_up_needed, step_up_required
+from panel.security.account_guard import held_at_sign_in_gate, step_up_needed, step_up_required
 
 # sid -> (remote_id, models.row_birth of that host). Labels audit rows, tears down on disconnect,
 # and is what every access re-check asks about. The row's identity, not just its id: SQLite handed a
@@ -72,11 +72,12 @@ def _may_use_terminal():
     term_open and get a shell. The whole point of that gate is that the admin who typed the
     temporary password must not be able to keep using it, and a shell is the last place to make an
     exception. The route above is covered by before_request; these events are not, so they ask
-    here.
+    here. The same holds for Settings' "Require 2FA": an account held at 2FA setup is refused a
+    shell (account_guard.held_at_sign_in_gate asks both gates' questions).
     """
     if not current_user.is_authenticated:
         return False
-    if getattr(current_user, "must_change_password", False):
+    if held_at_sign_in_gate(current_user):
         return False
     return bool(current_user.is_superadmin or has_permission(current_user, USE_TERMINAL))
 
@@ -119,7 +120,7 @@ def _terminal_still_permitted(uid, cred, entry):
     `entry` is the shell's _sid_host entry, (remote_id, row_birth).
 
     The same questions the event handlers ask of current_user — active, not held at a forced
-    password change, USE_TERMINAL (or superadmin), may_shell_on the host — plus whether the login
+    password change or at a required 2FA setup, USE_TERMINAL (or superadmin), may_shell_on the host — plus whether the login
     itself is still accepted (_credential_still_valid: epoch, session row, idle expiry, a bearer
     token's hash). Asked of what term_open recorded, because the sweep has no request.
 
@@ -129,7 +130,7 @@ def _terminal_still_permitted(uid, cred, entry):
     from panel.db.models import User
     from panel.routes.server_files import _credential_still_valid
     user = db.session.get(User, uid) if uid is not None else None
-    if user is None or not user.is_active or getattr(user, "must_change_password", False):
+    if user is None or not user.is_active or held_at_sign_in_gate(user):
         return False
     if not (user.is_superadmin or has_permission(user, USE_TERMINAL)):
         return False

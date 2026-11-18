@@ -168,6 +168,19 @@ def twofa_required(user):
     return bool(get_user_permissions(user) & {USE_TERMINAL, MANAGE_USERS, MANAGE_GROUPS})
 
 
+def held_at_sign_in_gate(user):
+    """Whether `user` is held at a sign-in gate: a handed-over password to change, or 2FA to set up.
+
+    The two gates are before_request hooks (app.py's password-change gate and twofa_gate below), and
+    a before_request never runs for a Socket.IO event: flask-socketio takes /socket.io/ ahead of the
+    Flask app. So every socket path asks this instead (the connect handler, join_console, term_open
+    and the terminal's other events, and the console and terminal sweeps), with the same predicates
+    the hooks use. Without it an account held at 2FA setup opened a terminal or a console with its
+    password alone.
+    """
+    return bool(getattr(user, "must_change_password", False) or twofa_required(user))
+
+
 def twofa_gate():
     """before_request: send an account that must set up 2FA to the setup page; None to go on."""
     if not getattr(current_user, "is_authenticated", False) or not twofa_required(current_user):
