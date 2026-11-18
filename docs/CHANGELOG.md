@@ -12,8 +12,26 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ## [2026.11.18] — 2026-11-18
 
+### Added
+
+- **Settings → Schedules.** Every background job the panel runs is listed with what it does, how
+  often it runs, and when it last ran and runs next. You can set the time of the daily panel backup,
+  how often the panel checks for its own updates, and the time of the daily OS update check, or turn
+  that check off.
+- **Root's crontab, for the panel owner.** The owner can turn on a page that adds, changes and
+  deletes root's cron jobs on any host, with `/etc/cron.d` shown read-only. It is off by default,
+  asks for the password on every change and records each change in the audit log; on the panel's
+  own host it also has to be opened at install with `PANEL_ROOT_CRON=1`.
+- **Headscale as the Tailscale control server.** The Tailscale page (and the setup wizard's Tailscale
+  step) takes the address of a self-hosted control server such as Headscale, and every join the
+  panel runs, on this host or a remote, then uses it. Serve and Funnel are offered only where that
+  server supports them, and the page says what it offers.
+
 ### Changed
 
+- **Tailnet names under any domain.** A MagicDNS name under a self-hosted server's own domain counts
+  as a tailnet name everywhere a `.ts.net` name did: the firewall's and the public-SSH guards'
+  tailnet checks, a bare remote name, the peer check and the debug report.
 - **The changelog lists changes by the day they were released.** Each day's releases have their own
   section, newest first, with what they added, changed, fixed and secured.
 - **Settings says which actions ask for the password again.** The note under the step-up time now
@@ -22,6 +40,9 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **MagicDNS check asked a name no tailnet uses.** When Tailscale's status gave no name, the panel
+  looked up `<host>.tailscale.net`, which never resolves; it now asks the node's real name, or
+  nothing.
 - **The guides match what the panel does.** The README, HTTPS and ntfy guides, the security policy,
   the threat model and the privacy statement were checked line by line against the code and
   corrected: every action that asks for the password again, the real default group and roles, the
@@ -29,6 +50,12 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **Root's crontab stays closed on the panel host unless opened at install.** The privileged helper
+  refuses to read or change root's crontab unless the installer recorded `PANEL_ROOT_CRON=1`, and it
+  checks every line against cron's grammar before installing it.
+- **The login link must come from the chosen control server.** A join's login link is accepted only
+  when it is on the configured control server, checked in full by the panel, the root helper and a
+  remote's own search.
 - **Pages refuse inline style attributes.** The panel's Content Security Policy now takes styles only
   from its own stylesheets and the page's nonce, and refuses every inline style attribute
   (`style-src-attr 'none'`; no `'unsafe-inline'` anywhere). Injected markup can no longer restyle a
