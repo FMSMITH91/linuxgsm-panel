@@ -91,12 +91,19 @@ def _write_exe29(path, text):
     os.chmod(path, 0o755)  # nosec B103 - a stand-in program this part runs; it must be executable
 
 
+# The ClusterFuzzLite steps run this repository's copies of the vendor's two actions, whose images
+# are pinned by digest (.github/actions/cflite-*; part242 holds them to upstream's).
+_CFL_ACTIONS29 = "uses: ./.cflite-actions/.github/actions/cflite-"
+_CFL_BUILD29 = _CFL_ACTIONS29 + "build-fuzzers\n"
+_CFL_RUN29 = _CFL_ACTIONS29 + "run-fuzzers\n"
+
+
 # ── ClusterFuzzLite, PR side: the vendor's 600s, split across the targets ─────────────────────────
 # 180s over six targets was 30s each, shorter than the ssh_manager targets' start-up, and each was
 # killed as "process timed out" before libFuzzer finished (CF1).
 def _cf1_seconds():
     runs = [s for s in _steps29(_job29(_wf29("cflite_pr.yml"), "code-change"))
-            if "clusterfuzzlite/actions/run_fuzzers@" in s]
+            if _CFL_RUN29 in s]
     check("cflite_pr: the PR run fuzzes for the vendor's 600s in code-change mode",
           len(runs) == 1
           and _re29.search(r"^ +fuzz-seconds: 600$", runs[0], _re29.M) is not None
@@ -352,8 +359,8 @@ def _cf2_producers(cfl):
                         _re29.M):
         bad.append("cflite_pr.yml: no actions: read")
     bld = [s for s in _steps29(_job29(cfl.get("cflite_build.yml", ""), "build"))
-           if "clusterfuzzlite/actions/" in s]
-    if not (len(bld) == 1 and "clusterfuzzlite/actions/build_fuzzers@" in bld[0]
+           if _CFL_ACTIONS29 in s]
+    if not (len(bld) == 1 and _CFL_BUILD29 in bld[0]
             and _re29.search(r"^ +upload-build: true$", bld[0], _re29.M)):
         bad.append("cflite_build.yml: not one ClusterFuzzLite step, a build_fuzzers with "
                    "upload-build: true")
@@ -367,9 +374,9 @@ def _cf2_producers(cfl):
 # step that can read one (run_fuzzers; build_fuzzers given a token), and the copies are one.
 def _reads_artifacts29(step):
     """run_fuzzers reads the corpus (and a build); build_fuzzers given a token reads coverage."""
-    if "clusterfuzzlite/actions/run_fuzzers@" in step:
+    if _CFL_RUN29 in step:
         return True
-    return "clusterfuzzlite/actions/build_fuzzers@" in step and "github-token:" in step
+    return _CFL_BUILD29 in step and "github-token:" in step
 
 
 def _guards_in_job(steps):
@@ -729,7 +736,7 @@ def _pinned29(ref):
     return _re29.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref) is not None
 
 
-_TAGGED29 = ("clusterfuzzlite-build-fuzzers:v1", "clusterfuzzlite-run-fuzzers:v1", "scorecard-action")
+_PINNED29 = ("clusterfuzzlite-build-fuzzers:ubuntu-24-04-v1@sha256:", "clusterfuzzlite-run-fuzzers:ubuntu-24-04-v1@sha256:")
 
 
 def _sc8_pins():
@@ -738,13 +745,15 @@ def _sc8_pins():
     check("workflows: every action is pinned to a full-length commit SHA",
           all([len(uses) >= 40, any(u.startswith("actions/checkout@") for _, u in uses), not unpinned]),
           repr((len(uses), unpinned)))
-    # The ClusterFuzzLite actions run images they name by tag (the Dockerfile's header says so, of
-    # "that SHA"): one SHA across every workflow, so the one note covers them all.
-    shas = {_re29.sub(r".*@", "", u) for _, u in uses if u.startswith("google/clusterfuzzlite/")}
-    df = _read29(".clusterfuzzlite", "Dockerfile")
-    check("cflite: every ClusterFuzzLite action is at one SHA, and the Dockerfile says its images "
-          "are pulled by tag",
-          all([len(shas) == 1] + [w in df for w in _TAGGED29]), repr(shas))
+    # No workflow runs the vendor's actions, which name their images by tag: every ClusterFuzzLite
+    # step is this repository's copy, whose image is pinned by digest.
+    vendor = sorted({u for _, u in uses if u.startswith("google/clusterfuzzlite/")})
+    local = sorted({u for _, u in uses if "/.github/actions/cflite-" in u})
+    imgs = "".join(_read29(".github", "actions", d, "action.yml")
+                   for d in ("cflite-build-fuzzers", "cflite-run-fuzzers"))
+    check("cflite: no workflow runs the vendor's ClusterFuzzLite actions; every step runs one of the two "
+          "copies, whose images are pinned by digest",
+          not vendor and len(local) == 2 and all(w in imgs for w in _PINNED29), repr((vendor, local)))
 
 
 _TMP29 = _tf29.mkdtemp(prefix="lgsm-unit-p29-")

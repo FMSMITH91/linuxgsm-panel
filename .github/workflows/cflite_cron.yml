@@ -50,15 +50,26 @@ jobs:
             exit 1
           fi
 
+      # The ClusterFuzzLite steps below run this repository's copies of the vendor's actions, whose
+      # images are pinned by digest (.github/actions/cflite-*/action.yml say why). A local action is
+      # read from a checkout, so that folder alone is checked out, into a directory of its own, out
+      # of the way of the workspace ClusterFuzzLite fills; no token is kept in it.
+      - name: Check out the pinned ClusterFuzzLite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          path: .cflite-actions
+          sparse-checkout: .github/actions
+
       - name: Build fuzzers
         id: build
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-build-fuzzers
         with:
           language: python
 
       - name: Prune
         # Drops inputs that no longer reach anything new, so the corpus stays fast to replay.
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-run-fuzzers
         with:
           language: python
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -133,9 +144,20 @@ jobs:
             exit 1
           fi
 
+      # The ClusterFuzzLite steps below run this repository's copies of the vendor's actions, whose
+      # images are pinned by digest (.github/actions/cflite-*/action.yml say why). A local action is
+      # read from a checkout, so that folder alone is checked out, into a directory of its own, out
+      # of the way of the workspace ClusterFuzzLite fills; no token is kept in it.
+      - name: Check out the pinned ClusterFuzzLite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          path: .cflite-actions
+          sparse-checkout: .github/actions
+
       - name: Build fuzzers (coverage)
         id: build
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-build-fuzzers
         with:
           language: python
           sanitizer: coverage
@@ -144,7 +166,7 @@ jobs:
         # Which lines the fuzzers actually reach — a different question from tests/ coverage, and
         # the honest way to tell whether a target is exercising the parser or bouncing off a guard.
         # The report is the cifuzz-coverage-latest artifact on this run.
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-run-fuzzers
         with:
           language: python
           github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -155,10 +155,22 @@ jobs:
             exit 1
           fi
 
+      # The ClusterFuzzLite steps below run this repository's copies of the vendor's actions, whose
+      # images are pinned by digest (.github/actions/cflite-*/action.yml say why). A local action is
+      # read from a checkout, so that folder alone is checked out, into a directory of its own, out
+      # of the way of the workspace ClusterFuzzLite fills; no token is kept in it.
+      - name: Check out the pinned ClusterFuzzLite actions
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          path: .cflite-actions
+          sparse-checkout: .github/actions
+
       - name: Build fuzzers (${{ matrix.sanitizer }})
         id: build
         if: steps.scope.outputs.run == 'true'
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-build-fuzzers
         with:
           language: python
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -189,7 +201,7 @@ jobs:
       - name: Fuzz the changed code (${{ matrix.sanitizer }})
         id: run
         if: steps.scope.outputs.run == 'true'
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-run-fuzzers
         with:
           language: python   # run_fuzzers defaults to c++ — it does not inherit the build's setting
           github-token: ${{ secrets.GITHUB_TOKEN }}

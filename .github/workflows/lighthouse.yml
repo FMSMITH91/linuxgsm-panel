@@ -54,10 +54,27 @@ jobs:
       actions: read   # the reuse step reads the pull request run's jobs
       checks: read    # ...and the check runs on the pull request's head
     steps:
+      # Block mode. The hosts are the ones this job's Harden-Runner insights recorded over pull
+      # request runs from 2026-11-17 and 2026-11-18, beyond the Actions service names the agent
+      # allows by itself: GitHub (the scope and reuse steps), PyPI (the pip install), and the two the
+      # throwaway PANEL fetches for the pages it renders, LinuxGSM's game list from
+      # raw.githubusercontent.com and its game icons from linuxgsm.com, so the pages audited are the
+      # ones a panel with its outside services on serves. What it refuses is Chrome's own traffic
+      # (component updates, Safe Browsing, autofill and password-leak lookups to Google hosts). That
+      # traffic is the browser's, not the page's: the page's CSP lets it reach only its own origin,
+      # and Lighthouse scores the page's requests and console, so refusing it changes no measured
+      # request. The js coverage job (ci.yml) has run headless Chrome under the same refusal.
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            linuxgsm.com:443
+            pypi.org:443
+            raw.githubusercontent.com:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

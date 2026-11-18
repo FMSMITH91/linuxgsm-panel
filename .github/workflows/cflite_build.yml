@@ -7,7 +7,8 @@ name: ClusterFuzzLite continuous builds
 # against the pull request. Without a stored build every crash is reported, the safe direction,
 # so this only cuts noise. Copied from
 # https://google.github.io/clusterfuzzlite/running-clusterfuzzlite/github-actions/#continuous-builds
-# (the vendor workflow), with the action pinned by SHA as every `uses:` here is.
+# (the vendor workflow), run through this repository's digest-pinned copy of the action
+# (.github/actions/cflite-build-fuzzers).
 #
 # Unfiltered on purpose: the novelty check looks builds up by commit, so a build skipped for a
 # commit is a build the next pull request cannot use.
@@ -43,9 +44,21 @@ jobs:
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
+
+      # The ClusterFuzzLite steps below run this repository's copies of the vendor's actions, whose
+      # images are pinned by digest (.github/actions/cflite-*/action.yml say why). A local action is
+      # read from a checkout, so that folder alone is checked out, into a directory of its own, out
+      # of the way of the workspace ClusterFuzzLite fills; no token is kept in it.
+      - name: Check out the pinned ClusterFuzzLite actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          path: .cflite-actions
+          sparse-checkout: .github/actions
+
       - name: Build fuzzers (${{ matrix.sanitizer }})
         id: build
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: ./.cflite-actions/.github/actions/cflite-build-fuzzers
         with:
           language: python
           sanitizer: ${{ matrix.sanitizer }}
