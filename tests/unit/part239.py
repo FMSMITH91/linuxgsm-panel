@@ -246,6 +246,23 @@ def _remote_forms239():
         _pv239.helper_argv("root-crontab-write", ["a" * 64])[-2:]), (True, True, ["root-crontab-write", "a" * 64]))
 
 
+def _transport239():
+    """write_root_crontab: the helper with the content on stdin locally, run_command's escalated shell else."""
+    from types import SimpleNamespace as _NS239
+    calls, new, sha = [], "@daily x\n", "a" * 64
+    _p9_patch(_core239, "_exec_local_argv", lambda argv, timeout=30, stdin_text=None: calls.append(
+        ("argv", argv[-2:], stdin_text)) or ("", "", 0))
+    _p9_patch(_core239, "run_command", lambda server, cmd, timeout=30, sudo=None, stdin_text=None: calls.append(
+        ("shell", sudo, "crontab -u root -" in cmd and sha in cmd and new not in cmd)) or ("", "", 0))
+    for local, helper in ((True, True), (True, False), (False, True)):
+        _p9_patch(_core239, "is_local_server", lambda server, v=local: v)
+        _p9_patch(_core239, "helper_present", lambda recheck=False, v=helper: v)
+        _cron239.write_root_crontab(_NS239(id=1), new, sha)
+    eq("write_root_crontab: on the panel host the helper gets the content on stdin and only the digest on "
+       "argv; without the helper, and on a remote, the escalated shell form carries it base64",
+       calls, [("argv", ["root-crontab-write", sha], new), ("shell", True, True), ("shell", True, True)])
+
+
 # ── 3. the routes ─────────────────────────────────────────────────────────────────────────────────
 def _other_super239():
     with _p9.app_context():
@@ -512,6 +529,9 @@ try:
     _helper_verbs239()
     _remote_forms239()
     _host_opened239()
+    _p9_arm(who="part239")
+    _transport239()
+    _p9_restore_all()
     _p9_arm(who="part239")
     _owner_only239()
     _switch239()
