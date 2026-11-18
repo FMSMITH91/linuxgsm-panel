@@ -97,6 +97,9 @@ TOOLS = {
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
     "debconf-set-selections": ("/usr/bin/debconf-set-selections",),
     "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
+    # Lingering for a game account that runs add-ons in rootless containers, and its removal
+    # (addon-account-prepare / addon-account-release). Nothing else.
+    "loginctl": ("/usr/bin/loginctl", "/bin/loginctl"),
     # `sudo -l -U <account>` and nothing else: sudo's own answer when the policy has non-file
     # sources (_sudo_lists_rules). Named for that one use, like bash_installer, so plain `sudo`
     # stays unresolvable and no verb can build a command around it. EVERY one present is asked:
@@ -2829,6 +2832,10 @@ VERBS = {
     "terminal-scope": ([v_pid], lambda a: [], None),
     # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
     "gameuser-group": ([v_managed_user], lambda a: [], None),
+    # A game account's rootless add-on containers: subordinate ids and lingering, and lingering off
+    # again -- see do_addon_account_prepare. Never the panel's own account.
+    "addon-account-prepare": ([v_destroyable_user], lambda a: [], None),
+    "addon-account-release": ([v_destroyable_user], lambda a: ["loginctl", "disable-linger", a[0]], None),
     # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
     # once its rollout reaches this host; the OS Updates card lists it apart until then.
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
@@ -5687,6 +5694,96 @@ def do_gameuser_group(args, content):
         sys.stderr.write("refusing to enrol %s in %s: %s\n" % (user, GAME_GROUP, reason))
         return 1
     return _enrol(user)
+
+
+# A rootless container's user namespace (addon-account-prepare): the range each account holds, in
+# /etc/subuid and /etc/subgid, the size Podman's rootless tutorial and useradd's SUB_UID_COUNT give.
+# A new range starts after every range either file already holds and never below useradd's
+# SUB_UID_MIN, so two accounts never share an id. privileged.py holds the same constants.
+ADDON_SUBID_COUNT = 65536
+ADDON_SUBID_MIN = 100000
+ADDON_SUBID_LAST = 4294967294
+SUBID_FILES = ("/etc/subuid", "/etc/subgid")
+
+
+def _subid_rows(path):
+    """The (name, start, count) rows of one subordinate id file; a malformed line is skipped."""
+    rows = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.strip().split(":")
+                if len(parts) == 3 and parts[1].isdecimal() and parts[2].isdecimal():
+                    rows.append((parts[0], int(parts[1]), int(parts[2])))
+    except FileNotFoundError:
+        pass
+    return rows
+
+
+def _subid_held(rows, pw):
+    """True when `rows` give the account (by name or uid) a range of at least ADDON_SUBID_COUNT."""
+    return any(name in (pw.pw_name, str(pw.pw_uid)) and count >= ADDON_SUBID_COUNT
+               for name, _start, count in rows)
+
+
+def _subid_flags(pw):
+    """The usermod flags that give the account the ranges it lacks ([] when it holds both), or None.
+
+    None: no free range is left below ADDON_SUBID_LAST.
+    """
+    rows = [_subid_rows(path) for path in SUBID_FILES]
+    start = max([ADDON_SUBID_MIN] + [s + c for r in rows for _n, s, c in r])
+    end = start + ADDON_SUBID_COUNT - 1
+    if end > ADDON_SUBID_LAST:
+        return None
+    flags = []
+    for flag, r in zip(("--add-subuids", "--add-subgids"), rows):
+        if not _subid_held(r, pw):
+            flags += [flag, "%d-%d" % (start, end)]
+    return flags
+
+
+def do_addon_account_prepare(args, content):
+    """Ready a game account for rootless add-on containers: subordinate ids, then lingering.
+
+    Podman's rootless mode maps the container's users onto a range of subordinate uids and gids
+    the account holds in /etc/subuid and /etc/subgid (useradd usually gives one; an account made
+    before that, or by hand, may have none). A range is added only to the file that lacks one, with
+    `usermod --add-subuids/--add-subgids`, starting after every range already there. Lingering
+    (`loginctl enable-linger`) keeps the account's user manager running with nobody signed in, so
+    the add-on runs and starts again at boot as that account -- no root daemon anywhere.
+
+    Only an account in GAME_GROUP: one the panel already may become, so this gives the panel
+    nothing over an account it could not already reach. Prints subids=added or subids=present,
+    then linger=on.
+    """
+    user = args[0]
+    try:
+        pw = pwd.getpwnam(user)
+        member = GAME_GROUP in _groups_of(user)
+    except Exception:
+        pw, member = None, False
+    if pw is None or not member:
+        sys.stderr.write("refusing %s: not a game account of the panel's (%s)\n" % (user, GAME_GROUP))
+        return 1
+    flags = _subid_flags(pw)
+    if flags is None:
+        sys.stderr.write("no free subordinate id range\n")
+        return 1
+    if flags:
+        r = subprocess.run([resolve("usermod")] + flags + [user],      # nosec B603 - fixed argv
+                           shell=False, capture_output=True, timeout=30, env=_clean_env())
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+            return r.returncode
+    sys.stdout.write("subids=%s\n" % ("added" if flags else "present"))
+    r = subprocess.run([resolve("loginctl"), "enable-linger", user],   # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30, env=_clean_env())
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+        return r.returncode
+    sys.stdout.write("linger=on\n")
+    return 0
 
 
 def _enrol(user):
@@ -8574,6 +8671,7 @@ ACTIONS = {
     "steamcmd-install": do_steamcmd_install,
     "steam-dumps-sweep": do_steam_dumps_sweep,
     "gameuser-group": do_gameuser_group,
+    "addon-account-prepare": do_addon_account_prepare,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
     "nodesource-setup": do_nodesource_setup,

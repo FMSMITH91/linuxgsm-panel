@@ -233,7 +233,7 @@ It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management,
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
 a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, root's crontab for the
-owner's root cron page, and more — 135 verbs.
+owner's root cron page, readying a game account for add-on containers, and more — 137 verbs.
 The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
@@ -262,6 +262,14 @@ The narrowing is in the argument types:
   travels on stdin, never in the command.
 - **Secrets** (the Tailscale auth key, the Ubuntu Pro token) never appear on a command line; they
   travel on stdin.
+- **Add-ons in containers** need root for two things only: Podman's packages (the existing `apt-install`
+  verb, with the fixed list `podman uidmap passt`) and `addon-account-prepare <account>`, which gives a game
+  account a range of subordinate uids and gids (only where it has none, starting after every range already
+  in `/etc/subuid` and `/etc/subgid`) and turns on lingering for it. The helper refuses an account that is
+  not in `lgsmpanel-games` (one the panel may already become) and the panel's own account;
+  `addon-account-release` (`loginctl disable-linger`) refuses the panel's own account too. The containers
+  themselves run rootless, as the game account, from its own user manager: no root daemon and no Docker
+  socket (OWASP Docker Security Cheat Sheet, rules 1 and 11).
 - **Root's crontab** (`root-crontab-read`, `root-crontab-write`) is closed unless you open it at install
   (`PANEL_ROOT_CRON=1`/`0`, recorded root-owned in `panel.conf`; the default is closed). The write takes the
   new crontab on stdin, refuses any line that is not blank, a comment, a `NAME=value` variable or a job with
