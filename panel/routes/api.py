@@ -329,6 +329,19 @@ def _register_server_status(app):
         })
 
 
+# /stats answers every viewer of a server from one sample per poll period: server_detail.js polls it
+# every 8 s while the server is online and every 20 s otherwise. A second under that, so a viewer's
+# own next poll (sent at least a full period after the last) is never answered from its last sample:
+# one viewer sees a fresh sample on every poll, and a second viewer shares it instead of paying for
+# another. _live_run_state, which refuses a power action, keeps the 2 s cache.
+_STATS_SHARE_ONLINE, _STATS_SHARE_OTHER = 7, 19
+
+
+def _stats_max_age(gs):
+    """How old a sample /stats may answer `gs`'s viewers with, in seconds."""
+    return _STATS_SHARE_ONLINE if gs.status == "online" else _STATS_SHARE_OTHER
+
+
 def _register_server_stats(app):
     """One server's live stats and installed version."""
     @app.route("/api/server/<int:server_id>/stats")
@@ -343,7 +356,7 @@ def _register_server_stats(app):
         gs = get_game(server_id)
         remote = gs.remote
         try:
-            m = _sm.server_live_metrics(remote, gs.short_name, gs.port)
+            m = _sm.server_live_metrics(remote, gs.short_name, gs.port, max_age=_stats_max_age(gs))
         except Exception:
             # An unreachable host is an expected condition, not a server error — return
             # 200 with an error field (the poller handles it) so it doesn't log a console
