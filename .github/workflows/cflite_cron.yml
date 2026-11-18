@@ -56,12 +56,14 @@ jobs:
       # from a file an earlier step could have written into the workspace.
       - name: Build fuzzers
         id: build
+        # nosemgrep: yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha -- this repository's own copy of the action (no other repo)
         uses: $/.github/actions/cflite-build-fuzzers
         with:
           language: python
 
       - name: Prune
         # Drops inputs that no longer reach anything new, so the corpus stays fast to replay.
+        # nosemgrep: yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha -- this repository's own copy of the action (no other repo)
         uses: $/.github/actions/cflite-run-fuzzers
         with:
           language: python
@@ -143,6 +145,7 @@ jobs:
       # from a file an earlier step could have written into the workspace.
       - name: Build fuzzers (coverage)
         id: build
+        # nosemgrep: yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha -- this repository's own copy of the action (no other repo)
         uses: $/.github/actions/cflite-build-fuzzers
         with:
           language: python
@@ -152,6 +155,7 @@ jobs:
         # Which lines the fuzzers actually reach — a different question from tests/ coverage, and
         # the honest way to tell whether a target is exercising the parser or bouncing off a guard.
         # The report is the cifuzz-coverage-latest artifact on this run.
+        # nosemgrep: yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha -- this repository's own copy of the action (no other repo)
         uses: $/.github/actions/cflite-run-fuzzers
         with:
           language: python

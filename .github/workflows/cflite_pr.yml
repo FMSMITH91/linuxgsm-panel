@@ -162,6 +162,7 @@ jobs:
       - name: Build fuzzers (${{ matrix.sanitizer }})
         id: build
         if: steps.scope.outputs.run == 'true'
+        # nosemgrep: yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha -- this repository's own copy of the action (no other repo)
         uses: $/.github/actions/cflite-build-fuzzers
         with:
           language: python
@@ -193,6 +194,7 @@ jobs:
       - name: Fuzz the changed code (${{ matrix.sanitizer }})
         id: run
         if: steps.scope.outputs.run == 'true'
+        # nosemgrep: yaml.github-actions.security.third-party-action-not-pinned-to-commit-sha.third-party-action-not-pinned-to-commit-sha -- this repository's own copy of the action (no other repo)
         uses: $/.github/actions/cflite-run-fuzzers
         with:
           language: python   # run_fuzzers defaults to c++ — it does not inherit the build's setting
