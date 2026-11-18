@@ -117,16 +117,27 @@ def _apt_install(remote):
     return _sm.run_privileged(remote, "apt-install", list(_ad.PACKAGES), timeout=900)[2] == 0
 
 
+def _taken(p, addon_id):
+    """The databases the account's other add-ons use, by name."""
+    return {(a.get("meta") or {}).get("database") for k, a in p["addons"].items() if k != addon_id}
+
+
+def _host_refusal(gs, p):
+    """Why the host or the game stops the install: an old system, no game log, no RCON, no port."""
+    if not _ad.log_dir(gs.short_name, p["logdir"]):
+        return _NO_LOG
+    if not p["rcon"]:
+        return _NO_RCON
+    return "" if p["port"] else _NO_PORT
+
+
 def _install_refusal(gs, addon_id, p, r):
     """Why the probe's answer stops the install ("" when it may go on)."""
-    taken = {(a.get("meta") or {}).get("database") for k, a in p["addons"].items() if k != addon_id}
     if p["installed"]:
         return _INSTALLED_ALREADY
-    if r.name in taken:
+    if r.name in _taken(p, addon_id):
         return _DB_TAKEN
-    return (_ad.runtime_refusal(p["os"], p["podman"])
-            or ("" if _ad.log_dir(gs.short_name, p["logdir"]) else _NO_LOG)
-            or ("" if p["rcon"] else _NO_RCON) or ("" if p["port"] else _NO_PORT))
+    return _ad.runtime_refusal(p["os"], p["podman"]) or _host_refusal(gs, p)
 
 
 def _runtime(gs, p):

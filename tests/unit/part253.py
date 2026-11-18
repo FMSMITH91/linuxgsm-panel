@@ -253,6 +253,25 @@ def _permission253(ids):
        [(403, "reauth_required"), (403, "reauth_required")])
 
 
+def _install_calls253(calls, ok):
+    verbs = [c[1] for c in calls if c[0] == "verb"]
+    check("install: Podman is installed when missing, then the account is readied",
+          verbs[:1] + verbs[-1:] == ["apt-install", "addon-account-prepare"],
+          repr((verbs, ok.status_code, _p9_audit("addon_install").detail, [c[1][:80] for c in calls])))
+    eq("install: the packages are the fixed list", next((c[2] for c in calls if c[1] == "apt-install"), None),
+       ["podman", "uidmap", "passt"])
+
+
+def _install_secrets253(calls):
+    inst = [c for c in calls if c[0] == "sh" and "podman pull" in c[1]]
+    settings = _json253.loads(inst[0][2]) if inst and inst[0][2] else {}
+    srv = (settings.get("Servers") or [{}])[0]
+    check("install: the settings travel on stdin with the RCON and database passwords",
+          srv.get("Password") == _RC253 and _DBV253 in settings.get("ConnectionString", ""), repr(settings)[:200])
+    check("install: no secret is on any command line",
+          not [c for c in calls if c[0] == "sh" and (_RC253 in c[1] or _DBV253 in c[1])])
+
+
 def _install253(ids):
     sid, _other, mine, theirs = ids
     calls = _host253()
@@ -262,19 +281,8 @@ def _install253(ids):
           bad.status_code == 400 and not calls, repr((bad.status_code, calls[:1])))
     ok = a.post("/api/server/%d/addons/iw4madmin/install" % sid, json={"database_id": mine})
     _p9_drain()
-    verbs = [c[1] for c in calls if c[0] == "verb"]
-    check("install: Podman is installed when missing, then the account is readied",
-          verbs[:1] + verbs[-1:] == ["apt-install", "addon-account-prepare"],
-          repr((verbs, ok.status_code, _p9_audit("addon_install").detail, [c[1][:80] for c in calls])))
-    eq("install: the packages are the fixed list", next((c[2] for c in calls if c[1] == "apt-install"), None),
-       ["podman", "uidmap", "passt"])
-    inst = [c for c in calls if c[0] == "sh" and "podman pull" in c[1]]
-    settings = _json253.loads(inst[0][2]) if inst and inst[0][2] else {}
-    check("install: the settings travel on stdin with the RCON and database passwords",
-          settings.get("Servers", [{}])[0].get("Password") == _RC253 and _DBV253 in settings.get("ConnectionString", ""),
-          repr(settings)[:200])
-    check("install: no secret is on any command line", not any(
-        (_RC253 in c[1] or _DBV253 in c[1]) for c in calls if c[0] == "sh"))
+    _install_calls253(calls, ok)
+    _install_secrets253(calls)
     row = _p9_audit("addon_install")
     eq("install: 202, then an audit row that it is installed", (ok.status_code, row.success, row.detail),
        (202, True, "iw4madmin installed"))
@@ -347,20 +355,28 @@ def _tab253(ids):
           and 'data-sfsub-btn="addons"' not in other, "")
 
 
-def _text253():
-    """Every sentence the routes, the service, the tab's script and its template show, in es and fr."""
-    import re
-    base = os.path.join(os.path.dirname(_ra253.__file__), "..")
+def _said_in_modules253():
     said = set()
     for mod in (_ra253, _ad253):
-        said |= {v for k, v in vars(mod).items() if k.startswith("_") and isinstance(v, str) and v[:1].isupper()
-                 and v.endswith(".") and " " in v}
-    said |= set(_ra253._DONE.values()) | set(_ra253._NOT_DONE.values()) | set(_ad253._FAIL_MARKS.values())
+        for k, v in vars(mod).items():
+            if k.startswith("_") and isinstance(v, str) and v[:1].isupper() and v.endswith(".") and " " in v:
+                said.add(v)
+    return said | set(_ra253._DONE.values()) | set(_ra253._NOT_DONE.values()) | set(_ad253._FAIL_MARKS.values())
+
+
+def _said_in_page253(base):
+    import re
     js = open(os.path.join(base, "static", "js", "server_addons.js"), encoding="utf-8").read()
-    said |= {m.replace("\\'", "'") for m in re.findall(r"T\('((?:[^'\\]|\\.)*)'\)", js)}
-    said |= set(re.findall(r"^\s+(?:active|activating|deactivating|inactive|failed|reloading|unknown): '([^']+)'", js, re.M))
+    said = {m.replace("\\'", "'") for m in re.findall(r"T\('((?:[^'\\]|\\.)*)'\)", js)}
+    said |= set(re.findall(r"^\s+(?:active|activating|deactivating|inactive|failed|reloading|unknown): '([^']+)'",
+                           js, re.M))
     html = open(os.path.join(base, "templates", "_server_addons.html"), encoding="utf-8").read()
-    said |= {m.strip() for m in re.findall(r"<li>([^<]+)</li>", html)}
+    return said | {m.strip() for m in re.findall(r"<li>([^<]+)</li>", html)}
+
+
+def _text253():
+    """Every sentence the routes, the service, the tab's script and its template show, in es and fr."""
+    said = _said_in_modules253() | _said_in_page253(os.path.join(os.path.dirname(_ra253.__file__), ".."))
     said.add("Manage a server's add-ons: install, start, stop and remove admin tools that run in containers "
              "beside the game as its account, and read their logs")
     missing = [(lang, x) for lang in ("es", "fr") for x in sorted(said) if x not in _i18n253.catalog(lang)]
