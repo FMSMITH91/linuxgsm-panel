@@ -257,7 +257,7 @@ def _iw4m255(ids):
 
 
 # ── 4. releasing an account ─────────────────────────────────────────────────────────────────────
-def _release_helper255(stop_rc, mode="keep"):
+def _release_helper255(stop_rc, mode="keep", roots=None):
     ran = []
 
     def run(argv, **_k):
@@ -267,7 +267,7 @@ def _release_helper255(stop_rc, mode="keep"):
         return _NS255(returncode=stop_rc if argv[1:2] == ["stop"] else 0, stderr=b"")
     saved = {k: getattr(_h255, k) for k in ("pwd", "subprocess", "resolve", "JOURNAL_ROOTS", "ADDON_TMP_DIRS")}
     try:
-        _h255.JOURNAL_ROOTS = (os.path.join(_TMP255, "nojournal"),)
+        _h255.JOURNAL_ROOTS = tuple(roots[:2]) if roots else (os.path.join(_TMP255, "nojournal"),)
         _h255.ADDON_TMP_DIRS = (os.path.join(_TMP255, "notmp-%d"),)
         _h255.pwd = _NS255(getpwnam=lambda n: _NS255(pw_name=n, pw_uid=4321))
         _h255.subprocess = _NS255(run=run, TimeoutExpired=saved["subprocess"].TimeoutExpired)
@@ -285,6 +285,14 @@ def _release255():
     eq("release (helper): lingering off, the user manager stopped, its failed state cleared; no journal file, no rotation",
        [_release_helper255(0), _release_helper255(0, "forget")], [(0, want), (0, want)])
     eq("release (helper): a manager that does not stop in time is still cleared", _release_helper255(None), (0, want))
+    keep = _fake_journal255("hverb-keep", 4321)
+    rc, ran = _release_helper255(0, "keep", keep)
+    eq("release (helper verb, keep): the account's journal stays whole and nothing rotates",
+       (rc, ran, sorted(_left255(keep[:2]))), (0, want, sorted(_ALL255)))
+    gone = _fake_journal255("hverb-forget", 4321)
+    rc, ran = _release_helper255(0, "forget", gone)
+    eq("release (helper verb, forget): rotated once, then the account's journal files go",
+       (rc, ran, sorted(_left255(gone[:2]))), (0, want + [["journalctl", "--rotate"]], sorted(_KEPT255)))
     eq("release: the remove route keeps the journal, an uninstall forgets it (both sides take only keep/forget)",
        [_arity255("keep"), _arity255("forget"), _arity255("keep", "x"), _arity255(), _arity255("purge")],
        [False, False, True, True, True])
