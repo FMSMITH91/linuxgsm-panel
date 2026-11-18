@@ -479,14 +479,21 @@ def _calls_encrypt247(node):
                for n in _ast247.walk(node))
 
 
+def _assign_targets247(node):
+    """The attribute names an Assign gives an encrypt_secret(...) value (tuple assignments matched up)."""
+    out = set()
+    for tgt in node.targets:
+        pairs = (list(zip(tgt.elts, node.value.elts)) if isinstance(tgt, _ast247.Tuple)
+                 and isinstance(node.value, _ast247.Tuple) else [(tgt, node.value)])
+        out |= {t.attr for t, v in pairs if isinstance(t, _ast247.Attribute) and _calls_encrypt247(v)}
+    return out
+
+
 def _targets_in247(tree):
     out = set()
     for node in _ast247.walk(tree):
         if isinstance(node, _ast247.Assign):
-            for tgt in node.targets:
-                pairs = (list(zip(tgt.elts, node.value.elts)) if isinstance(tgt, _ast247.Tuple)
-                         and isinstance(node.value, _ast247.Tuple) else [(tgt, node.value)])
-                out |= {t.attr for t, v in pairs if isinstance(t, _ast247.Attribute) and _calls_encrypt247(v)}
+            out |= _assign_targets247(node)
         elif isinstance(node, _ast247.Call) and getattr(node.func, "id", "") != "dict":
             out |= {k.arg for k in node.keywords if k.arg and _calls_encrypt247(k.value)}
     return out

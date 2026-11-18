@@ -223,8 +223,8 @@ def _backup_refs(db_file, ring, refs):
     """
     import os
     from urllib.parse import quote
-    from sqlalchemy import column, create_engine, select, table
-    from sqlalchemy.exc import OperationalError, SQLAlchemyError
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import SQLAlchemyError
     from sqlalchemy.pool import NullPool
     if not db_file or db_file == ":memory:":
         return True
@@ -234,22 +234,31 @@ def _backup_refs(db_file, ring, refs):
     eng = create_engine("sqlite:///file:%s?mode=ro&uri=true" % quote(path), poolclass=NullPool)
     try:
         with eng.connect() as conn:
-            for tname, _pk, cname in _text_columns():
-                col = table(tname, column(cname)).c[cname]
-                stmt = select(col).where(col.like("enc:v%"), ~col.like(_kr.V2_PREFIX + ring.current + ":%"))
-                try:
-                    rows = conn.execute(stmt).fetchall()
-                except OperationalError as exc:
-                    if "no such" not in str(exc.orig):
-                        return False
-                    conn.rollback()      # an older schema: that table or column holds nothing
-                    continue
-                refs.update(_kr.key_ref(v) for (v,) in rows if isinstance(v, str))
-        return True
+            return all(_backup_column_refs(conn, ring, refs, tname, cname) for tname, _pk, cname in _text_columns())
     except SQLAlchemyError:
         return False
     finally:
         eng.dispose()
+
+
+def _backup_column_refs(conn, ring, refs, tname, cname):
+    """Add one backup column's key references to `refs`. -> False when it could not be read.
+
+    A table or column the backup does not have (an older schema) holds nothing: True.
+    """
+    from sqlalchemy import column, select, table
+    from sqlalchemy.exc import OperationalError
+    col = table(tname, column(cname)).c[cname]
+    stmt = select(col).where(col.like("enc:v%"), ~col.like(_kr.V2_PREFIX + ring.current + ":%"))
+    try:
+        rows = conn.execute(stmt).fetchall()
+    except OperationalError as exc:
+        if "no such" not in str(exc.orig):
+            return False
+        conn.rollback()
+        return True
+    refs.update(_kr.key_ref(v) for (v,) in rows if isinstance(v, str))
+    return True
 
 
 def _config_refs(obj, ring, refs):
