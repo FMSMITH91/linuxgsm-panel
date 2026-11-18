@@ -8,6 +8,7 @@ var tsCont = document.getElementById('ts-continue');
 function tsRefresh(){ return tsApi('status').then(function(s){ tsRender(s); return s; }).catch(function(){ tsBox.innerHTML='<div class="text-danger small">Could not check Tailscale status.</div>'; }); }
 
 function tsRender(s){
+  tsShowControl(false);
   if(s.error){ tsBox.innerHTML='<div class="text-danger small">'+tsEsc(s.error)+'</div>'; return; }  // nosemgrep - tsEsc is window.escapeHtml
   if(s.running && s.dns_name){
     if(s.serve_url){
@@ -42,25 +43,25 @@ function tsRender(s){
   if(s.installed && !s.running){
     tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale is installed but not connected to a tailnet yet.</div>'
       + '<button type="button" class="btn btn-primary w-100" id="ts-up"><i class="bi bi-box-arrow-up-right"></i> Connect to my tailnet</button>'
-      + tsControlField() + '<div id="ts-out" class="small mt-2"></div>';
+      + '<div id="ts-out" class="small mt-2"></div>';
+    tsShowControl(true);
     document.getElementById('ts-up').onclick=tsDoUp;
     return;
   }
   tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale isn\'t installed on this host yet.</div>'
     + '<button type="button" class="btn btn-primary w-100" id="ts-install"><i class="bi bi-download"></i> Install &amp; connect Tailscale</button>'
-    + tsControlField() + '<div id="ts-out" class="small mt-2"></div>';
+    + '<div id="ts-out" class="small mt-2"></div>';
+  tsShowControl(true);
   document.getElementById('ts-install').onclick=tsDoInstall;
 }
 
 function tsOut(){ return document.getElementById('ts-out'); }
 
-// The optional control server for the join (a self-hosted one such as Headscale), folded: most
-// tailnets are Tailscale's own and never open it. Literals only.
-function tsControlField(){
-  return '<details class="uis-fold mt-2"><summary class="uis-fold-sum"><span>Self-hosted control server (Headscale)?</span></summary>'
-    + '<div class="uis-fold-body"><label class="form-label small" for="ts-control">Control server address</label>'
-    + '<input id="ts-control" type="url" class="form-control form-control-sm" maxlength="255" placeholder="https://headscale.example.com" autocomplete="off" spellcheck="false">'
-    + '<div class="small text-secondary mt-1">Leave it empty for Tailscale. Recommended: an https:// address (OWASP Transport Layer Security Cheat Sheet).</div></div></details>';
+// The optional control server for the join (#ts-control-wrap in the template): shown only while
+// this host is not on a tailnet yet, the two states that offer Install or Connect.
+function tsShowControl(on){
+  var w = document.getElementById('ts-control-wrap');
+  if (w) w.style.display = on ? '' : 'none';
 }
 // The join's request: the control server only when one was typed (none keeps the stored one).
 function tsUpRequest(){

@@ -8,6 +8,7 @@ from panel.core.clock import (utcnow)
 from panel.core.config import (decrypt_secret, encrypt_secret, update_config)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (tailscale_integration as ts)
+from panel.ops.tailscale_integration import control_url as _ts_control_url
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_access_remote,
     get_host_remote, get_remote, log_action, permission_required)
@@ -224,10 +225,10 @@ def _register_remote_list(app):
             remotes = [r for r in remotes if r.id in allowed]
         info = ts.get_tailscale_info()
         # ts_self_hosted: the join dialog's auth-key help names the self-hosted control server
-        # instead of linking to Tailscale's admin console. From the same cached reading.
+        # instead of linking to Tailscale's admin console. From the same cached reading, no command.
         return render_template("manage_remotes.html", remotes=remotes,
                                tailscale_installed=info.installed,
-                               ts_self_hosted=ts.control_url(info=info) != "-")
+                               ts_self_hosted=_ts_control_url(info=info) != "-")
 
     @app.route("/remotes/add", methods=["POST"])
     @login_required
