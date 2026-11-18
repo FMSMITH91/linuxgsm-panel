@@ -30,6 +30,7 @@ HOW IT RUNS. Every caller is called in-process on invented text; the one that re
 game-account shell stubbed. Nothing reaches a host or data/.
 """
 import gzip as _gz248
+import io as _io248
 import os as _os248
 import pathlib as _pl248
 import shutil as _shutil248
@@ -462,9 +463,17 @@ try:
     _pr248["foreign"] = _prestore248(_pr_dir248, "panel-backup-20261118-000003-manual.tar.gz",
                                      _ptar248([("evil.sh", 0)]))
     _pr248["seen"] = len(_pr_seen248)
-    _pr248["fits"] = _prestore248(_pr_dir248, "panel-backup-20261118-000004-manual.tar.gz",
-                                  _ptar248([("config.json", 0), ("panel.db", 300 * 1024 ** 2)]))
+    # 4 MB of zeros packs to a few KB, far past an upload's ratio once its slack is taken away.
+    _p9_patch(_bk248, "_UPLOAD_SLACK", 0)
+    _pr_buf248 = _io248.BytesIO()
+    with _tf248.open(fileobj=_pr_buf248, mode="w:gz") as _pr_t248:
+        for _pr_n248, _pr_d248 in (("config.json", b"{}"), ("panel.db", b"\0" * (4 * 1024 ** 2))):
+            _pr_ti248 = _tf248.TarInfo(_pr_n248)
+            _pr_ti248.size = len(_pr_d248)
+            _pr_t248.addfile(_pr_ti248, _io248.BytesIO(_pr_d248))
+    _pr248["fits"] = _prestore248(_pr_dir248, "panel-backup-20261118-000004-manual.tar.gz", _pr_buf248.getvalue())
     _pr248["fits_seen"] = len(_pr_seen248)
+    _pr248["fits_upload"] = _bk248.upload_refusal(_os248.path.join(_pr_dir248, "panel-backup-20261118-000004-manual.tar.gz"))
 finally:
     _p9_restore_all()
     _shutil248.rmtree(_pr_dir248, ignore_errors=True)
@@ -472,6 +481,7 @@ eq("panel restore r30: an encrypted archive whose plaintext declares a panel.db 
    "one, are refused before the members are read whole; a fifth member and a foreign name likewise",
    [_pr248[k] for k in ("enc_huge", "plain_huge", "fifth", "foreign")] + [_pr248["seen"]],
    [(False, _bk248._R30_PAST_FREE)] * 2 + [(False, "Backup archive looks invalid.")] * 2 + [0])
-eq("panel restore r30: a backup whose panel.db packs far tighter than an upload may (300 MB of zeros) still passes "
-   "the shape check on to the member check (control)", (_pr248["fits"], _pr248["fits_seen"]),
-   ((False, "members read"), 1))
+eq("panel restore r30: a backup whose panel.db packs far tighter than an upload may still passes the restore's "
+   "shape check on to the member check, while the same file as an upload is refused (control)",
+   (_pr248["fits"], _pr248["fits_seen"], "far more than a panel backup" in _pr248["fits_upload"][0]),
+   ((False, "members read"), 1, True))
