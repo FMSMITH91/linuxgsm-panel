@@ -171,3 +171,36 @@ eq("port check r30: with none of its account's processes running, or that read f
    [(_pc248[k][0].get("message"), _pc248[k][1]) for k in ("restart_down", "restart_unread", "restart_raises")],
    [(_PC_BUSY248, 0)] * 3)
 check("port check r30: ...and nothing reached a host", _pc248["trips"] == [], repr(_pc248["trips"]))
+
+# ── 3. a port saved back to the stored one during a Start ────────────────────────────────────────
+_pb_sid248 = _p9_new_server(P9_HOST, "p248pb", "csgo", 42490, name="p248-pb", status="offline")
+
+
+def _pb_run248():
+    """The stand-in Start: while it runs, the Settings tab saves the stored port back (pending cleared)."""
+    _p9_set(_pb_sid248, pending_port=None)
+    return "Starting csgoserver: OK", "", 0
+
+
+try:
+    _p9_arm(who="part248")
+    _pb_trips248 = len(_P9_TRIPPED)
+    _p9_patch(_sd248, "threading", _p9_threading(_P9Thread))
+    _p9_patch_sm("run_as_game_user", lambda *a, **k: _pb_run248())
+    _p9_patch_sm("set_game_priority", lambda *a, **k: None)
+    _p9_patch(_lgp248, "allowance_seconds", lambda *a, **k: 0)
+    _p9_patch_sm("_remote_listening_ports", lambda remote: set())
+    _p9_patch_sm("protected_host_ports", lambda remote: {22})
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: True)
+    _p9_patch_sm("remote_ufw_close_game_port", lambda remote, port, user: (1, ""))
+    _p9_patch(_sh248, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_sd248, "_live_run_state", lambda gs, remote: None)
+    _p9_set(_pb_sid248, port=42490, pending_port=42491)
+    _p9_client(P9_ADMIN).post("/api/server/%d/action" % _pb_sid248, json={"action": "start"})
+    _p9_drain()
+    _pb248 = (_p9_row(_pb_sid248).port, _p9_row(_pb_sid248).pending_port, _P9_TRIPPED[_pb_trips248:])
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_pb_sid248)
+eq("pending port r30: a port saved back to the stored one during a Start: the stored port follows the port the "
+   "game bound, the save waits for the next start, and nothing reached a host", _pb248, (42491, 42490, []))

@@ -298,9 +298,11 @@ def _pck_after_power(gs, remote, action, rc, bound):
     keeps waiting (port_check.follow_pending). `bound` is the port the start was issued on
     (port_check.start_port, read before the run): a port saved DURING the run, which the game did not
     bind, is not followed and waits for the next start. The stored port still moves to `bound` when
-    that is a port saved before the run, since the old stored port is the one the game left.
+    that is a port saved before the run, since the old stored port is the one the game left. That
+    holds when the later save put the port BACK to the stored one too (it cleared pending_port): the
+    game still bound `bound`, so the stored port follows it and the save waits for the next start.
     """
-    if rc != 0 or action not in ("start", "restart") or not gs.pending_port:
+    if rc != 0 or action not in ("start", "restart"):
         return
     later = _pck.start_port(gs)
     if later == bound:
