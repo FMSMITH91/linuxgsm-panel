@@ -141,7 +141,15 @@ function _unblockOffenderNow(ip, btn){
     .then(function(r){return r.json();}).then(function(d){ if(window.toast) toast(d.message||(d.success?'Unblocked':'Failed'), d.success?'success':'info'); _uitKeptOutChanged(); })
     .catch(function(){ if(window.toast) toast('Unblock failed','danger'); if(btn) btn.disabled=false; });
 }
-function toggleAutoblock(cb){ _secStepUp(function(){ _toggleAutoblockNow(cb); }); }
+// The click has already flipped the switch: put it back to the host's state until the change is
+// confirmed and sent. A cancelled password dialog then leaves it showing the truth, and the
+// threshold Save (which posts the switch's state with the threshold) cannot send an unconfirmed one.
+function toggleAutoblock(cb){
+  if(!cb) return;
+  var want=!!cb.checked;
+  cb.checked=!want;
+  _secStepUp(function(){ cb.checked=want; _toggleAutoblockNow(cb); });
+}
 function _toggleAutoblockNow(cb){
   var on=!!(cb&&cb.checked);
   fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
