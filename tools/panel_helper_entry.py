@@ -100,7 +100,7 @@ def bytecode(data, source):
     if int.from_bytes(data[4:8], "little") != _CHECKED_HASH or data[8:16] != source_hash(source):
         return None
     try:
-        # nosemgrep: python.lang.security.deserialization.pickle.avoid-marshal
+        # nosemgrep: python.lang.security.audit.marshal.marshal-usage
         code = marshal.loads(data[_HEADER:])  # nosec B302 - root's own pyc, checked above
     except (ValueError, EOFError, TypeError):
         return None

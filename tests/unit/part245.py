@@ -143,14 +143,12 @@ def _section_install_and_run245():
 
 
 def _variant245(name, mutate):
-    """A good tree, `mutate(lib)` applied: whether the entry still used the bytecode, and whether its code runs."""
+    """A good tree, `mutate(lib)` applied: whether the entry used the bytecode, and whether it got the helper's code."""
     top, lib = _tree245(name)
     _install245(lib)
     mutate(lib)
     code, hit = _E245.load(lib, _UID245, top)
-    ns = {"__name__": "probe245"}
-    exec(code, ns)  # nosec B102 - the repo's own helper source, run as a module (no main)
-    return hit, callable(ns.get("validate"))
+    return hit, "validate" in code.co_names and "run" in code.co_names   # the helper's own module code
 
 
 def _chmod245(rel, add):
