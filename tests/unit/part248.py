@@ -387,3 +387,34 @@ eq("backup dump r30: a backup skipped for players online (the ticker's path and 
 eq("backup dump r30: one that goes ahead dumps them once, before the archive is made (the next host call)",
    _dd_go248, [(1, "went ahead"), (1, "went ahead")])
 check("backup dump r30: ...and nothing reached a host", _dd_trip_list248 == [], repr(_dd_trip_list248))
+
+
+# ── 8. the panel host's reboot waits for a game server's restore ─────────────────────────────────
+_hb248 = {}
+try:
+    _p9_arm(who="part248")
+    _hb_trips248 = len(_P9_TRIPPED)
+    _hb_sent248 = []
+    _p9_patch(_so248, "server_reboot", lambda delay=5: (_hb_sent248.append(delay), (True, "Server will reboot"))[1])
+    _p9_patch(_pbk248, "RemoteServer", _Unread110(False))
+    _hb_c248 = _p9_client(P9_ADMIN)
+    with _p9.app_context():
+        _hb248["idle"] = [b["kind"] for b in _hr248._panel_host_blockers()]
+    _grr248._grs_status[9248008] = {"running": True}
+    try:
+        with _p9.app_context():
+            _hb248["restoring"] = [b["kind"] for b in _hr248._panel_host_blockers()]
+        _hb_r248 = _hb_c248.post("/api/server-management/reboot", json={"delay": 5})
+        _hb_j248 = _hb_r248.get_json(silent=True) or {}
+        _hb248["route"] = (_hb_r248.status_code, [b.get("kind") for b in _hb_j248.get("blockers") or ()],
+                           "restore of a game server" in (_hb_j248.get("message") or ""), len(_hb_sent248))
+    finally:
+        _grr248._grs_status.pop(9248008, None)
+    _hb248["trips"] = _P9_TRIPPED[_hb_trips248:]
+finally:
+    _p9_restore_all()
+eq("panel host reboot r30: no game-restore blocker with no restore running, one while a game server is restored",
+   (_hb248.get("idle"), _hb248.get("restoring")), ([], ["game_restore"]))
+eq("panel host reboot r30: the no-host-row reboot route answers 409 naming the restore and sends no reboot",
+   _hb248.get("route"), (409, ["game_restore"], True, 0))
+check("panel host reboot r30: ...and nothing reached a host", _hb248.get("trips") == [], repr(_hb248.get("trips")))

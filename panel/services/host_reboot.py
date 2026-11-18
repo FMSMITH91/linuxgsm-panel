@@ -570,6 +570,12 @@ def _panel_host_blockers():
     # refuses the other direction (@_r23a_not_while_panel_host_reboots).
     if so._r30a_repair_starting():
         out.append(_rw.panel_blocker("db_repair"))
+    # A game server being restored from a backup, on any host: the panel process runs that restore
+    # (stop, unpack, switch over, start), so rebooting the panel's own host cuts it off part way, as
+    # a panel restart would (panel_host_busy refuses those for the same reason).
+    from panel.routes import game_restore as _grs
+    if _grs.restore_running():
+        out.append(_rw.panel_blocker("game_restore"))
     return out
 
 

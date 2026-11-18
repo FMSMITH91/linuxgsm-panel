@@ -75,7 +75,8 @@ PANEL_NAME = i18n.Sentence("the panel")
 _PANEL_BLOCKER_WORDS = {"self_update": i18n.Sentence("an update of the panel"),
                         "restore": i18n.Sentence("a restore of the panel"),
                         "full_backup": i18n.Sentence("a full backup of the panel"),
-                        "db_repair": i18n.Sentence("a database repair of the panel")}
+                        "db_repair": i18n.Sentence("a database repair of the panel"),
+                        "game_restore": i18n.Sentence("a restore of a game server from its backup")}
 
 # A running job's phase as words. The raw token ("stopping", "arming") went into the translated
 # "{host} is already being rebooted ({phase})." as written.

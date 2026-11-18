@@ -4,5 +4,6 @@
   "A database repair is already starting — give it about a minute, then reload the page.": "Ya se está iniciando una reparación de la base de datos: espera alrededor de un minuto y vuelve a cargar la página.",
   "a database repair of {name}": "una reparación de la base de datos de {name}",
   "a database repair of the panel": "una reparación de la base de datos del panel",
-  "a database repair is starting": "se está iniciando una reparación de la base de datos"
+  "a database repair is starting": "se está iniciando una reparación de la base de datos",
+  "a game server restore is running": "se está restaurando un servidor de juego"
 }
