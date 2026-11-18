@@ -29,6 +29,11 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Changed
 
+- **An open console costs the server less when it is quiet.** Each open server page re-reads the
+  console log every 30 seconds. While the console shows nothing new, that read is now answered from
+  the panel's last look at the log instead of reading it on the server again. On the test server an
+  idle console with two pages open went from 14 to 10 log reads a minute, and from 47 to 35
+  system-log lines a minute.
 - **Tailnet names under any domain.** A MagicDNS name under a self-hosted server's own domain counts
   as a tailnet name everywhere a `.ts.net` name did: the firewall's and the public-SSH guards'
   tailnet checks, a bare remote name, the peer check and the debug report.

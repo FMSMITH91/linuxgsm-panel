@@ -740,3 +740,4 @@ bc9f934c Tailnet names under any domain.
 b16195bb MagicDNS check asked a name no tailnet uses.
 adbf52b7 Root's crontab stays closed on the panel host unless opened at install.
 3fe2b860 The login link must come from the chosen control server.
+cc33e4ec An open console costs the server less when it is quiet.
