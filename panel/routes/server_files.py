@@ -1472,7 +1472,8 @@ def _gmod_uninstall_request(app, gs, remote, sel):
     # Asked again here, where nothing yields before the job is marked running: the content scan
     # above is SSH, and a reboot that registered during it runs its census after this point, so it
     # either is refused or sees the job (host_reboot._content_running).
-    refused = _r36c_reboot_refused(gs, "gmod_content_uninstall")
+    # And while the server is being restored (or wiped): the restore replaces the mount.cfg this rewrites.
+    refused = _r36c_reboot_refused(gs, "gmod_content_uninstall") or _r39a_wipe_refused(gs, "gmod_content_uninstall")
     if refused is not None:
         return refused
     if not _claim_gmod_content_host(remote.id):
@@ -1496,7 +1497,7 @@ def _gmod_apply_request(app, gs, remote, sel):
             "Couldn't read this server's current mounts, so the panel won't rewrite them — "
             "applying now could unmount content the server already has. Check the host is "
             "reachable and reload this card.")}), 409
-    refused = _r36c_reboot_refused(gs, "gmod_content")     # as in _gmod_uninstall_request
+    refused = _r36c_reboot_refused(gs, "gmod_content") or _r39a_wipe_refused(gs, "gmod_content")  # as uninstall
     if refused is not None:
         return refused
     if not _claim_gmod_content_host(remote.id):
@@ -2682,7 +2683,8 @@ def _register_gmod_content(app):
                 "names.")}), 400
         # Content is HOST-wide: removing it, or fetching what is not on the host yet, needs the
         # host (see _sf_gmod_host_refusal).
-        refused = (_r36c_reboot_refused(gs, "gmod_content_uninstall" if action == "uninstall" else "gmod_content")
+        kind = "gmod_content_uninstall" if action == "uninstall" else "gmod_content"
+        refused = (_r36c_reboot_refused(gs, kind) or _r39a_wipe_refused(gs, kind)
                    or _sf_gmod_host_refusal(gs, remote, action, sel))
         if refused is not None:
             return refused
@@ -2773,8 +2775,10 @@ def _fpm_logts_off(gs):
     want = "off"
     # The instance cfg the settings form writes: the same refusal, said as `error`,
     # which is what the page reads here. Its row keeps the reason whole, as every
-    # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence.
-    why = game_account_write_refusal(gs.remote, gs.short_name)
+    # other refusal row (_r14b_refused): a 250 cut stopped it mid-sentence. Refused
+    # while a restore runs too, as _write_refused is: the restore replaces that cfg.
+    why = grs_or_wipe_sentence(gs.id, gs.name) if grs_restore_running(gs.id) else \
+        game_account_write_refusal(gs.remote, gs.short_name)
     if why is not None:
         log_action(current_user, "set_log_timestamps", target=gs.name,
                    detail=_r14b_refused("", why), success=False, server=gs)

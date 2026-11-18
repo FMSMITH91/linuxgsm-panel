@@ -1492,8 +1492,9 @@ def lg265_schedule_gained(gs, old, cmds):
     """
     gained = {c.get("cmd") for c in cmds} - {c.get("cmd") for c in (old or [])}
     added = (gained & set(_sm.LGC_CRON_CMDS)) - {"monitor"} if old else set()
-    # A crontab write asks what every cron write asks (the account may be the host's sudo login).
-    if not added or game_account_write_refusal(gs.remote, gs.short_name) is not None:
+    # A crontab write asks what every cron write asks (the account may be the host's sudo login), and
+    # waits out a restore, which sets the crontab aside and puts it back (the next refresh gains it).
+    if not added or grs_restore_running(gs.id) or game_account_write_refusal(gs.remote, gs.short_name) is not None:
         return set()
     ok, why = _sm.add_maintenance_cron(gs.remote, gs.short_name, gs.lgsm_name, added)
     if not ok:

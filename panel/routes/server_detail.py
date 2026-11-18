@@ -1511,10 +1511,11 @@ def _r16b_retype_restart_check(gs):
     is none, and the daily heal only runs once a day: until then the line kept the old type, and a
     game queryable only through the new override was still restarted at the daily time whoever was
     playing. The in-place upgrade rewrites a recognised check to what set_daily_restart writes now.
-    It rewrites the crontab, so it asks what every cron write asks, silently, as _cron_listing does.
-    Best-effort: the override is stored either way, and the daily pass rewrites the line.
+    It rewrites the crontab, so it asks what every cron write asks, silently, as _cron_listing does,
+    and skips while a restore has the crontab set aside (a line written then is lost when it is put
+    back). Best-effort: the override is stored either way, and the daily pass rewrites the line.
     """
-    if not gs.daily_restart:
+    if not gs.daily_restart or grs_restore_running(gs.id):
         return
     try:
         if game_account_write_refusal(gs.remote, gs.short_name) is None:
@@ -1807,6 +1808,10 @@ def _register_schedules(app):
         gs = get_game(server_id)
         if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
             return jsonify({"success": False, "message": "Permission denied"}), 403
+        # As Autostart: a restore sets the crontab aside and puts it back, so a line written now is lost.
+        held = _autostart_restore_gate(gs)
+        if held is not None:
+            return held
         body = _json_body()
         # A JSON boolean or a 400, as Autostart: bool("false") is True, so `{"enabled": "false"}`
         # wrote the restart-when-empty cron line it asked to remove.

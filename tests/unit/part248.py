@@ -239,3 +239,63 @@ else:
     eq("sign-in paths r30: a restore of an archive that holds .bashrc, .bash_aliases, .k5login, .rhosts, .profile "
        "and .bashrc.d restores the game files but keeps the account's own .bashrc and brings in none of the others",
        _signin_restore248(), ("done", "own bashrc\n", [], ""))
+
+
+# ── 5. writes refused while a restore runs ───────────────────────────────────────────────────────
+_rg_sid248 = _p9_new_server(P9_HOST, "p248rg", "gmod", 42500, name="p248-rg")
+_rg248 = {"writes": []}
+
+
+def _rg_write248(what):
+    """A recorder standing in for a host writer: notes `what` and answers success."""
+    def rec(*a, **k):
+        _rg248["writes"].append(what)
+        return True, ""
+    return rec
+
+
+def _rg_posts248(client):
+    """Each write route's (status, body) and the silent writers' answers, run once."""
+    base = "/api/server/%d/" % _rg_sid248
+    r = [client.post(base + "daily-restart", json={"enabled": True, "time": "05:00", "tz": "UTC"}),
+         client.post(base + "log-timestamps", json={"enabled": False}),
+         client.post(base + "gmod-content", json={"action": "mount", "games": ["cstrike"]}),
+         client.post(base + "gmod-content", json={"action": "uninstall", "games": ["cstrike"]})]
+    with _p9.app_context():
+        gs = _db248.session.get(_GS248, _rg_sid248)
+        _sd248._r16b_retype_restart_check(gs)
+        gained = _sh248.lg265_schedule_gained(gs, [{"cmd": "start"}], [{"cmd": "start"}, {"cmd": "update"}])
+    return [x.status_code for x in r], gained
+
+
+try:
+    _p9_arm(who="part248")
+    _rg_trips248 = len(_P9_TRIPPED)
+    _p9_set(_rg_sid248, daily_restart=True)
+    _p9_patch(_sd248, "set_daily_restart", _rg_write248("daily"))
+    _p9_patch(_sf248, "lgsm_write_config", _rg_write248("cfg"))
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: _rg248["writes"].append("retype") or True)
+    _p9_patch_sm("add_maintenance_cron", _rg_write248("gained"))
+    _p9_patch(_sh248, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_sf248, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_sd248, "game_account_write_refusal", lambda *a, **k: None)
+    _rg_c248 = _p9_client(P9_ADMIN)
+    with _job248(_rg_sid248, _sh248.GRS_KIND):
+        _rg248["held"] = _rg_posts248(_rg_c248) + (list(_rg248["writes"]),)
+    _rg248["trips"] = _P9_TRIPPED[_rg_trips248:]
+    # The silent writers with no restore: both write (controls for the two that answer nothing).
+    del _rg248["writes"][:]
+    with _p9.app_context():
+        _rg_gs248 = _db248.session.get(_GS248, _rg_sid248)
+        _sd248._r16b_retype_restart_check(_rg_gs248)
+        _rg248["free"] = (_sh248.lg265_schedule_gained(_rg_gs248, [{"cmd": "start"}],
+                                                        [{"cmd": "start"}, {"cmd": "update"}]), list(_rg248["writes"]))
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_rg_sid248)
+eq("restore gate r30: while the server is being restored, the daily restart, log timestamps off and GMod content "
+   "apply and remove answer 409, the restart check's re-type and newly gained maintenance commands write nothing, "
+   "and no writer ran", _rg248["held"], ([409, 409, 409, 409], set(), []))
+eq("restore gate r30: with no restore, the re-type and the gained command both write (control)",
+   _rg248["free"], ({"update"}, ["retype", "gained"]))
+check("restore gate r30: ...and nothing reached a host", _rg248["trips"] == [], repr(_rg248["trips"]))
