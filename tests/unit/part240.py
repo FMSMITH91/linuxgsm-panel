@@ -359,6 +359,11 @@ def _names240():
         rows = [_ts240.is_tailnet_name(h) for h in ("vps1." + _SUFFIX240, "VPS1.%s." % _SUFFIX240,
                                                      "vps1.%s.evil.test" % _SUFFIX240, "evil" + _SUFFIX240,
                                                      "vps.tail1234.ts.net", "100.64.0.9", _SUFFIX240)]
+        # The lock-out guards resolve a self-hosted suffix's name (part247 has the public answer): here it
+        # resolves to a tailnet address, as MagicDNS answers it.
+        _p9_patch(_ts240, "socket", _NS240(IPPROTO_TCP=6,
+                                           getaddrinfo=lambda h, *a, **k: [(2, 1, 6, "", ("100.64.0.9", 0))]))
+        _p9_patch(_hosts240, "_r28b_resolve", lambda h: ["100.64.0.9"])
         callers = (_fw240._fwa_is_tailnet_host("vps1." + _SUFFIX240),
                    _hosts240._r28b_host_on_tailnet("vps1." + _SUFFIX240),
                    _core240._r20a_magicdns_host("vps1"),
@@ -368,8 +373,8 @@ def _names240():
         _p9_arm(who="part240")
     eq("headscale: a name under the tailnet's own base domain is a tailnet name; a look-alike is not",
        rows, [True, True, False, False, True, False, False])
-    eq("headscale: ...for the firewall's and the public-SSH guard's tailnet test, the bare-name dial and "
-       "the peer check alike", callers, (True, True, "vps1." + _SUFFIX240, True))
+    eq("headscale: ...for the firewall's and the public-SSH guard's tailnet test (the name resolving to a tailnet "
+       "address), the bare-name dial and the peer check alike", callers, (True, True, "vps1." + _SUFFIX240, True))
 
 
 def _scrub240():
