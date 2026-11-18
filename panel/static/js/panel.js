@@ -1050,9 +1050,16 @@ window.UPro = (function(){
 // raw bytes at the offset the server holds (it answers where it is when a piece's answer was lost),
 // then finish. `base` is the start URL; pieces go to base+'/'+id and the end to base+'/'+id+'/finish'.
 // onProgress(sent, total). Resolves with the finish answer, or with the first refusal.
+//
+// Every request is the person's own upload, however long after the click it is sent: marked
+// X-Panel-Background: 0, so the sign-in's idle clock moves with each piece (the wrapper above would
+// mark a piece sent 10 s after the last click as a timer's, and an upload longer than the idle
+// timeout was cut off by a 401 part way). A piece or finish request that never answers (the
+// connection dropped, a proxy's error page) rejects: a piece's is cancelled first, so the server
+// lets the next upload start at once instead of holding this one.
 window.backupUpload = function(file, base, onProgress){
   var post = function(url, body, type){
-    return fetch(url, {method: 'POST', headers: {'Content-Type': type || 'application/json'}, body: body})
+    return fetch(url, {method: 'POST', headers: {'Content-Type': type || 'application/json', 'X-Panel-Background': '0'}, body: body})
       .then(function(r){ return r.json(); });
   };
   return post(base, JSON.stringify({size: file.size})).then(function(start){
@@ -1066,6 +1073,9 @@ window.backupUpload = function(file, base, onProgress){
         if(d && d.success){ at = Number(d.received); tries = 0; return next(); }
         if(d && d.resume && tries < 3){ at = Number(d.received) || 0; tries++; return next(); }
         return cancel(d);
+      }, function(err){
+        // No answer: release the upload (best effort), then fail as before.
+        return cancel(null).then(function(){ throw err; });
       });
     };
     // A finish whose answer did not come back is asked again (the server kept the upload for it).
