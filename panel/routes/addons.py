@@ -131,6 +131,8 @@ def _b3_fields(gs, meta):
             "switchable": list(_ad.B3_SWITCHABLE), "geo_switchable": list(_ad.B3_GEO_SWITCHABLE),
             "geoip": meta.get("geoip", "") if geo == _ad.GEO_OFFLINE else "",
             "credit": _geoip.CREDIT,
+            # Offline needs DB-IP's database: with its Outside services switch off, the card says so.
+            "geoip_off": "" if _geoip.download_allowed() else i18n.tr(_geoip.OFF),
             "note": i18n.tr(_PUBLIC_REPLIES[gs.game_type]) if gs.game_type in _PUBLIC_REPLIES else ""}
 
 

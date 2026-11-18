@@ -89,6 +89,7 @@
   function geoStatus(a, box) {
     box.appendChild(node('div', 'small text-secondary', T(GEO_SAID[a.geolocation] || GEO_SAID.off)));
     if (a.geolocation === 'offline') {
+      if (a.geoip_off) box.appendChild(node('div', 'small text-warning', a.geoip_off));
       if (a.geoip) box.appendChild(node('div', 'small text-secondary', TF('Country database: {month}.', {month: a.geoip})));
       creditLine(a, box);
     }
@@ -115,6 +116,8 @@
     wrap.appendChild(lab);
     wrap.appendChild(sel);
     wrap.appendChild(node('div', 'small text-secondary', T('Offline looks each player\'s country up in DB-IP\'s free database: the panel\'s host downloads it from db-ip.com once a month, and no player address is sent anywhere. Online sends each joining player\'s IP address to ipwho.is for their city. Either shows it in the game (!locate and the join message).')));
+    // Offline with DB-IP's download turned off (Outside services): said here, before it is chosen.
+    if (a.geoip_off) wrap.appendChild(node('div', 'small text-warning', a.geoip_off));
     return wrap;
   }
 

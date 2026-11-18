@@ -42,11 +42,15 @@ _PORTS_ASKED = 2 + len(_ad.B3_GEOLOCATORS)
 
 
 def update_reason(addon_id, meta, month=None):
-    """Why an installed add-on has an update: "image", "geoip" (B3 offline, an older month) or ""."""
+    """Why an installed add-on has an update: "image", "geoip" (B3 offline, an older month) or "".
+
+    "geoip" only while Settings -> Outside services lets the panel download DB-IP's database: with it
+    off, that update could fetch nothing, so it is not offered (the card says the switch is off).
+    """
     if (meta.get("image") or "") != _ad.CATALOG[addon_id]["image"]:
         return "image"
     if (addon_id == _ad.B3 and _ad.geo_mode(meta.get("geolocation")) == _ad.GEO_OFFLINE
-            and str(meta.get("geoip") or "") < (month or _geoip.month_now())):
+            and str(meta.get("geoip") or "") < (month or _geoip.month_now()) and _geoip.download_allowed()):
         return "geoip"
     return ""
 

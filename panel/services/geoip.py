@@ -5,15 +5,17 @@ WHAT AND WHY
     `mmdb` service), so no player's IP address leaves the game's host. DB-IP publishes a free country
     database every month under CC BY 4.0, with no account: https://db-ip.com/db/download/ip-to-country-lite
     (read 2026-11-18). That page links the month's file, dbip-country-lite-YYYY-MM.mmdb.gz on
-    download.db-ip.com, and shows its MD5 and SHA1; it shows no SHA-256. The licence asks for credit,
+    download.db-ip.com, and shows its MD5 and SHA1 in the block just above that link (the CSV's block,
+    with its own sums, comes first). Both sums are of the unpacked database, not of the .gz (checked
+    against the November 2026 file); there is no SHA-256. The licence asks for credit,
     which CREDIT is, shown on the add-on's card and in docs/addons.md.
 
 HOW IT IS FETCHED
     Only when a B3 add-on is set to offline geolocation (install, settings or update), and only while
     Settings -> Outside services has DB-IP on. The panel's host asks for the page, then the file, over
     HTTPS from those two hosts only (a redirect anywhere else is refused), with a size cap on each. The
-    file must match the SHA1 the page shows (of the .gz, or of the database inside it: the page does
-    not say which), unpack to at most UNPACKED_CAP bytes, and end with MaxMind's metadata marker. It is
+    file must unpack to at most UNPACKED_CAP bytes, match the SHA1 the page shows for it, and end with
+    MaxMind's metadata marker. It is
     kept in data/geoip/ for the month, so every add-on that month gets the same file from one download.
     No player data is sent: the request carries only the panel's User-Agent.
 
@@ -49,18 +51,26 @@ _UA = "linuxgsm-panel (B3 country database)"
 # Every MaxMind DB file ends its data section with this marker before the metadata (MaxMind DB spec 2.0).
 MMDB_MARKER = b"\xab\xcd\xefMaxMind.com"
 _FILE_RE = re.compile(r"https://download\.db-ip\.com/free/dbip-country-lite-(\d{4}-\d{2})\.mmdb\.gz")
-_SHA1_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{40})(?![0-9a-fA-F])")
-# How far after the file's link the page shows its checksums (its MD5, then its SHA1).
-_SUM_WINDOW = 2000
+# Any of the page's download links: the one before the MMDB's ends the CSV's block.
+_ANY_FILE_RE = re.compile(r"https://download\.db-ip\.com/free/")
+# The SHA1 a block shows: its SHA1SUM label, then the 40 hex digits.
+_SHA1_RE = re.compile(r"SHA1SUM\s*</dt>\s*<dd[^>]*>\s*([0-9a-fA-F]{40})\s*</dd>", re.I)
 
 OFF = "The DB-IP country database is turned off in Settings → Outside services."
 UNREACHABLE = "Couldn't download the DB-IP country database. Try again later."
+UNREADABLE = ("DB-IP's download page no longer shows the country database's link and checksum where the panel looks "
+              "for them, so it wasn't downloaded.")
 BAD_FILE = "The DB-IP country database didn't match its published checksum, so it wasn't used."
 
 
 def month_now():
     """The current month in UTC as YYYY-MM: the release a current file carries."""
     return time.strftime("%Y-%m", time.gmtime())
+
+
+def download_allowed():
+    """Whether Settings -> Outside services lets the panel download DB-IP's database."""
+    return _outside.enabled(_outside.DBIP)
 
 
 def _allowed(url):
@@ -104,14 +114,19 @@ def _get(url, cap):
 def parse_page(html):
     """(file URL, its month YYYY-MM, its SHA1) from the download page's HTML, or None.
 
-    The SHA1 is the first 40-hex-digit value after the file's link (the page lists the MD5, 32
-    digits, and then the SHA1 beside each file).
+    Each file has a block on the page: its details, its MD5SUM and SHA1SUM, then its link. The SHA1 is
+    the last SHA1SUM between the previous download link (the CSV's) and the MMDB's link, so the CSV's
+    own sums are never taken.
     """
-    m = _FILE_RE.search(html or "")
+    html = html or ""
+    m = _FILE_RE.search(html)
     if not m:
         return None
-    s = _SHA1_RE.search(html, m.end(), m.end() + _SUM_WINDOW)
-    return (m.group(0), m.group(1), s.group(1).lower()) if s else None
+    start = 0
+    for prev in _ANY_FILE_RE.finditer(html, 0, m.start()):
+        start = prev.end()
+    found = _SHA1_RE.findall(html, start, m.start())
+    return (m.group(0), m.group(1), found[-1].lower()) if found else None
 
 
 def sha1_hex(data):
@@ -126,8 +141,7 @@ def sha1_hex(data):
 
 
 def unpack(gz, sha1):
-    """The database inside `gz`, once it matches `sha1` and looks like an MMDB file, else None."""
-    matched = sha1_hex(gz) == sha1
+    """The database inside `gz`, once it matches `sha1` (DB-IP's sum is the database's) and is an MMDB file."""
     try:
         with gzip.GzipFile(fileobj=io.BytesIO(gz)) as fh:
             data = fh.read(UNPACKED_CAP + 1)
@@ -135,7 +149,7 @@ def unpack(gz, sha1):
         return None
     if len(data) > UNPACKED_CAP:
         return None
-    if not matched and sha1_hex(data) != sha1:
+    if sha1_hex(data) != sha1:
         return None
     return data if MMDB_MARKER in data[-512 * 1024:] else None
 
@@ -177,12 +191,14 @@ def latest():
     path, month = _cached()
     if path is not None and month >= month_now():
         return path, month, ""
-    if not _outside.enabled(_outside.DBIP):
+    if not download_allowed():
         return path, month, OFF
     page, _why = _get(PAGE, PAGE_CAP)
-    found = parse_page(page.decode("utf-8", "replace")) if page is not None else None
-    if found is None:
+    if page is None:
         return path, month, UNREACHABLE
+    found = parse_page(page.decode("utf-8", "replace"))
+    if found is None:
+        return path, month, UNREADABLE
     url, new_month, sha1 = found
     if path is not None and new_month <= month:
         return path, month, ""
