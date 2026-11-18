@@ -58,6 +58,21 @@ def _bup_stalled(e, now):
     return e["user"] == current_user.id and not e.get("busy") and now - e["ts"] > _UPLOAD_STALLED
 
 
+def _bup_take_target(kind, sid, now):
+    """Under the lock: whether the target is free, and the id of the stalled upload taken out for it.
+
+    (True, id or None) when free; (False, None) when a live upload, or another user's, holds it.
+    """
+    for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
+        _uploads.pop(uid, None)
+    same = [e for e in _uploads.values() if e["kind"] == kind and e["sid"] == sid]
+    if any(not _bup_stalled(e, now) for e in same):
+        return False, None
+    for e in same:
+        _uploads.pop(e["uid"], None)
+    return True, (same[0]["uid"] if same else None)
+
+
 def _bup_new(kind, sid, size):
     """Register a new upload: (its id or None, the id of this user's stalled upload it replaced or None).
 
@@ -65,14 +80,9 @@ def _bup_new(kind, sid, size):
     """
     now = time.time()
     with _uploads_lock:
-        for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
-            _uploads.pop(uid, None)
-        same = [e for e in _uploads.values() if e["kind"] == kind and e["sid"] == sid]
-        if any(not _bup_stalled(e, now) for e in same):
+        free, old = _bup_take_target(kind, sid, now)
+        if not free:
             return None, None
-        old = same[0]["uid"] if same else None
-        for e in same:
-            _uploads.pop(e["uid"], None)
         uid = secrets.token_hex(16)
         _uploads[uid] = {"uid": uid, "kind": kind, "sid": sid, "user": current_user.id, "size": size, "got": 0,
                          "ts": now}

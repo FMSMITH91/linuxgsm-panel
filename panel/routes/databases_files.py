@@ -376,9 +376,8 @@ def _refused(key):
     return i18n.Sentence("The dump was not restored: {why}.", why=i18n.Sentence(_REFUSALS[key]))
 
 
-def _upload_start(gs, r):
-    """Start an upload: the size checked, the account guard asked, the part file made."""
-    size = _json_body().get("size")
+def _start_refusal(gs, r, size):
+    """The refusal for an upload start (a size out of range, an account the guard refuses), or None."""
     if isinstance(size, bool) or not isinstance(size, int) or not 0 < size <= UPLOAD_MAX:
         return _say(400, i18n.Sentence("Give the dump's size: a whole number of bytes, at most {limit}.",
                                        limit="2 GiB"))
@@ -387,6 +386,15 @@ def _upload_start(gs, r):
         log_action(current_user, "db_upload", target=gs.name, server=gs, success=False,
                    detail="%s: refused: %s" % (r.name, i18n.tr(why)))
         return _say(409, why)
+    return None
+
+
+def _upload_start(gs, r):
+    """Start an upload: the size checked, the account guard asked, the part file made."""
+    size = _json_body().get("size")
+    refused = _start_refusal(gs, r, size)
+    if refused is not None:
+        return refused
     uid, old = _new_upload(r.id, size)
     if uid is None or (old is not None and not _replace_stalled(gs, r, uid, old)):
         return _say(409, "An upload to this database is already running.")

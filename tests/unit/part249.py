@@ -480,7 +480,7 @@ def _game_starts249(user_of_old):
     def _run(*a, **k):
         cmds.append(a[1])
         return _MARKS249.game["UPREADY"], "", 0
-    _p9_patch(_bu249, "_sm", _NS249(game_user_cmd=lambda user, inner: inner, _fmt_size=lambda n: str(n),
+    _p9_patch(_bu249, "_sm", _NS249(game_user_cmd=lambda user, inner: inner, _fmt_size=str,
                                     run_command=_run))
     _p9_patch(_shr249, "game_account_write_refusal", lambda *a, **k: None)
     c, out = _p9_client(P9_ADMIN), {}
@@ -503,7 +503,7 @@ def _piece_busy249():
     def _run(*a, **k):
         seen.append(entry.get("busy"))
         return _MARKS249.game["UPSIZE"] + " 4", "", 0
-    _p9_patch(_bu249, "_sm", _NS249(game_user_cmd=lambda user, inner: inner, _fmt_size=lambda n: str(n),
+    _p9_patch(_bu249, "_sm", _NS249(game_user_cmd=lambda user, inner: inner, _fmt_size=str,
                                     run_command=_run))
     _plant249(_bu249._uploads, entry)
     r = _p9_client(P9_ADMIN).post("/api/panel/backup/game/%d/upload/%s?offset=0" % (P9_GS, _OLD249), data=b"abcd",
