@@ -743,10 +743,16 @@ def _serve_console_catchups(app, socketio, gs, server_id):
     tick of this console is half done, and nothing else moves its offset. The answer goes to the
     asking socket alone, on the connection the pushes use, so it arrives after every push made
     before it and before every push made after it. See _console_catchup.
+
+    A catch-up answered here wakes a resting console (console_rest): the page has just come back and
+    the lines written next are wanted within a pass, not a rest. The request is gone from the map by
+    the time the tick asks it, so the wake is said here.
     """
     with _viewers_lock:
         reqs = _console_catchups.pop(server_id, None) or {}
         watching = set(_console_viewers.get(server_id) or ())
+    if any(sid in watching for sid in reqs):
+        _crest.wake(server_id)
     for sid, req in reqs.items():
         if sid not in watching:
             continue          # left again, or its socket dropped: there is no one to answer

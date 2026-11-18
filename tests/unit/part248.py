@@ -299,3 +299,41 @@ eq("restore gate r30: while the server is being restored, the daily restart, log
 eq("restore gate r30: with no restore, the re-type and the gained command both write (control)",
    _rg248["free"], ({"update"}, ["retype", "gained"]))
 check("restore gate r30: ...and nothing reached a host", _rg248["trips"] == [], repr(_rg248["trips"]))
+
+
+# ── 6. a served catch-up wakes a resting console ─────────────────────────────────────────────────
+_CR_SID248 = 9248006
+_cr_gs248 = _NS248(id=_CR_SID248, remote=_NS248(id=9248006), short_name="p248cr", name="p248-cr")
+_cr248 = {"reads": 0, "emits": []}
+
+
+def _cr_tick248(app, socketio, gs, server_id):
+    """The poller's tick, standing in: a read that finds nothing new (offsets unchanged)."""
+    _cr248["reads"] += 1
+    return True
+
+
+def _cr_pass248(catchup):
+    """One poller pass over a console resting after 5 quiet reads, with or without a page's catch-up."""
+    _offsets248[_CR_SID248] = {"ino": 7, "pos": 100, "chain": 1, "idle": 5, "read_at": _time248.time()}
+    _sf248._console_viewers[_CR_SID248] = {"sock248"}
+    if catchup:
+        _sf248._console_catchups[_CR_SID248] = {"sock248": {"id": 1, "since": None, "tries": 0}}
+    n = _cr248["reads"]
+    sock = _NS248(emit=lambda event, reply, to=None: _cr248["emits"].append((event, to)))
+    _sf248._serve_console_catchups(_app248, sock, _cr_gs248, _CR_SID248)
+    _crest248.tick(_cr_tick248, _sf248._console_catchups, _app248, sock, _cr_gs248, _CR_SID248)
+    return _cr248["reads"] - n
+
+
+try:
+    _p9_patch(_sf248, "_console_catchup", lambda gs, server_id, req: {"server_id": server_id, "id": req["id"]})
+    _cr248["quiet"] = _cr_pass248(False)
+    _cr248["caught"] = _cr_pass248(True)
+finally:
+    _p9_restore_all()
+    for _cr_map248 in (_offsets248, _sf248._console_viewers, _sf248._console_catchups, _crest248._woken):
+        _cr_map248.pop(_CR_SID248, None)
+eq("console rest r30: a resting console is not read on a quiet pass, and is read on the pass that answers a page's "
+   "catch-up (the answer sent to that page)", (_cr248["quiet"], _cr248["caught"], _cr248["emits"]),
+   (0, 1, [("console_catchup", "sock248")]))
