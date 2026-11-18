@@ -101,6 +101,13 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Database column headers and yes/no are translated in Spanish and French.**
 - **A malformed request no longer fills the panel's log.** A request with no HTTP version is answered
   with a plain "Bad Request" instead of writing about 35 lines of error to the log each time.
+- **A visitor who hangs up mid-download no longer adds errors to the log.** Closing or resetting the
+  connection while a page or file is still being sent was logged as an error with a full traceback,
+  about 1 KB each time, by anyone. It is a normal client action and is no longer logged; a response
+  that fails for any other reason still is.
+- **A second dump upload waits for the first one's restore.** A new upload to the same database, or a
+  cancel of the running one, is refused as "already running" until the restore has finished, so two
+  restores never run at once and the earlier dump kept aside is never lost.
 - **Wrong values in a few requests answer "invalid" instead of a server error.** Deleting a file with
   a path that is not text, a firewall rule number that is too large, or a database server id that is
   too large.
