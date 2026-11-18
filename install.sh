@@ -2795,6 +2795,36 @@ _d1_root_cron_choice() {
     return 0
 }
 
+# ── Let's Encrypt certificates the panel may copy: the operator's choice, recorded root-owned ─────
+# Settings > HTTPS certificate copies a certbot certificate into the panel through the helper's
+# tls-le-copy: root reads a private key the panel's account cannot. So the helper copies only the
+# names panel.conf records as `tls_le_names` (comma-separated), which only this installer writes;
+# any other certificate on the host (a mail server's, a website's) stays root's alone.
+#
+# Prints the names to record. `PANEL_TLS_LE_NAMES=panel.example.com ./install.sh` sets them (a
+# comma-separated list; `none` clears it). Unset, the recorded names are kept, so an update never
+# changes them; with none recorded, none. A run the panel started (PANEL_SELF_UPDATE) never takes
+# them from the environment. Anything that is not a certificate name is left out.
+_b1_tls_le_names_choice() {
+    local _conf="$1" _src="" _out="" _n=""
+    if [[ -n "${PANEL_TLS_LE_NAMES:-}" ]] && [[ -z "${PANEL_SELF_UPDATE:-}" ]]; then
+        _src="${PANEL_TLS_LE_NAMES}"
+        [[ "${_src}" != "none" ]] || _src=""
+    elif [[ -f "${_conf}" ]]; then
+        _src="$(sed -n 's/^tls_le_names=//p' "${_conf}" 2>/dev/null | tail -n 1)" || _src=""
+    fi
+    local _label='[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?' _names=()
+    IFS=',' read -r -a _names <<< "${_src}" || true
+    for _n in "${_names[@]}"; do
+        _n="${_n//[[:space:]]/}"
+        if [[ "${_n}" =~ ^${_label}(\.${_label})*$ ]] && [[ "${#_n}" -le 253 ]] && [[ ",${_out}," != *",${_n},"* ]]; then
+            _out="${_out:+${_out},}${_n}"
+        fi
+    done
+    printf '%s\n' "${_out}"
+    return 0
+}
+
 # ── the panel's own port, recorded root-owned ────────────────────────────────────────────────────
 # The helper's `tailscale-serve` (Serve, and Funnel to the internet) publishes ONE port: the one
 # panel.conf records as `panel_port`. The panel's account cannot change that file, so a compromised
@@ -3029,12 +3059,14 @@ install_root_tools() {
     local _rc_why=""
     read -r ROOT_CRON_CHOICE _rc_why <<< "$(_d1_root_cron_choice "${PANEL_CONF}")" || true
     [[ "${ROOT_CRON_CHOICE:-}" == "yes" ]] || ROOT_CRON_CHOICE=no
+    # And the Let's Encrypt names the helper may copy: an unset PANEL_TLS_LE_NAMES keeps the record.
+    TLS_LE_NAMES="$(_b1_tls_le_names_choice "${PANEL_CONF}")" || TLS_LE_NAMES=""
     # Likewise read before the rewrite: an update keeps the recorded port unless it may take a new one.
     local _panel_port_rec=""
     _panel_port_rec="$(_r25j_panel_port_to_record "${PANEL_CONF}")" || _panel_port_rec=""
-    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\nlocal_grant=%s\nroot_cron=%s\n' \
+    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\ntailscale_ssh=%s\npanel_port=%s\nlocal_grant=%s\nroot_cron=%s\ntls_le_names=%s\n' \
         "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" "${TS_SSH_CHOICE}" \
-        "${_panel_port_rec}" "${LOCAL_GRANT_CHOICE}" "${ROOT_CRON_CHOICE}" \
+        "${_panel_port_rec}" "${LOCAL_GRANT_CHOICE}" "${ROOT_CRON_CHOICE}" "${TLS_LE_NAMES}" \
         | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
         && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
         && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
@@ -3054,6 +3086,11 @@ install_root_tools() {
             ok "Root's crontab: the panel owner's root cron page may change it on this host (PANEL_ROOT_CRON=0 to close it)"
         else
             info "Root's crontab: closed to the panel on this host (PANEL_ROOT_CRON=1 to open it to the owner's root cron page)"
+        fi
+        if [[ -n "${TLS_LE_NAMES}" ]]; then
+            ok "Let's Encrypt: the panel may load the certificate(s) ${TLS_LE_NAMES} (PANEL_TLS_LE_NAMES=none to close)"
+        else
+            info "Let's Encrypt: no certificate is open to the panel (PANEL_TLS_LE_NAMES=<name> to allow one)"
         fi
     fi
 
@@ -4135,7 +4172,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
      (data/ and venv/ were not touched.)"
     fi
     if [[ -f "${BACKUP}/data.tgz" ]]; then
-        ${TREE_SUDO:-} find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups -exec rm -rf {} + 2>/dev/null || true
+        # Not the breached-password list either: data.tgz leaves it out (the snapshot's comment),
+        # so wiping it here would leave the panel without it until a later update fetched it.
+        ${TREE_SUDO:-} find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups ! -name common-passwords-100k.txt -exec rm -rf {} + 2>/dev/null || true
         if ! ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"; then
             die "Update FAILED, and so did the rollback: the data snapshot could not be unpacked.
      ${PANEL_DIR}/data is INCOMPLETE — the database and encryption keys are missing. Restore by hand from:

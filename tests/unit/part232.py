@@ -259,7 +259,8 @@ def _helper_verb232(verb, args, timeout=30, merge_stderr=True):
 def _arm_helper232(owner=None):
     _p9_patch(_ph232, "TLS_LE_ROOT", str(_LE232))
     _p9_patch(_ph232, "TLS_LE_OWNER", os.getuid() if owner is None else owner)
-    _p9_patch(_ph232, "panel_conf", lambda: {"data_dir": str(_TMP232 / "data")})
+    _p9_patch(_ph232, "panel_conf", lambda: {"data_dir": str(_TMP232 / "data"),
+                                             "tls_le_names": "panel.example.com,bad.example.com,missing.example.com"})
     _p9_patch(_so232, "_run_verb", _helper_verb232)
 
 

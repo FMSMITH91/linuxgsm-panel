@@ -4253,7 +4253,11 @@ def do_panel_restore(args, content):
 # certificate chain or a single PEM private key that root owns, so the verb cannot be pointed at
 # any other file. OWASP Transport Layer Security Cheat Sheet, "Use Strong Keys and Protect Them":
 # the private key lands 0600 and owned by the panel's account, the only one that serves it.
+# And only for a certificate the operator opened to the panel at install (PANEL_TLS_LE_NAMES,
+# recorded root-owned in panel.conf as tls_le_names=a,b; _tls_le_refusal): another service's
+# certificate on the same host (a mail server's, a website's) keeps its key root's alone.
 TLS_LE_ROOT = "/etc/letsencrypt"
+TLS_LE_CONF_KEY = "tls_le_names"
 TLS_LE_MAX = 65536
 TLS_LE_OWNER = 0
 # (certbot's file, the staging name in data/ssl, its mode, the PEM blocks it may hold)
@@ -4342,6 +4346,14 @@ def _tls_le_write(sfd, name, data, mode):
         os.close(fd)
 
 
+def _tls_le_refusal(name):
+    """Why certificate `name` may not be copied, or "": only a name panel.conf's tls_le_names lists."""
+    opened = [n.strip() for n in panel_conf().get(TLS_LE_CONF_KEY, "").split(",")]
+    if name in [n for n in opened if n]:
+        return ""
+    return "not opened"
+
+
 def do_tls_le_copy(args, content):
     """Copy Let's Encrypt certificate `args[0]` (its full chain and private key) into data/ssl.
 
@@ -4349,6 +4361,9 @@ def do_tls_le_copy(args, content):
     read and the panel's account cannot. Prints COPIED on success.
     """
     name = args[0]
+    if _tls_le_refusal(name):
+        sys.stderr.write("tls-le-copy: certificate not opened to the panel at install\n")
+        return 1
     try:
         blobs = [(_tls_le_read(name, src, kinds), dst, mode) for src, dst, mode, kinds in TLS_LE_FILES]
     except FileNotFoundError:

@@ -106,7 +106,11 @@ certificate from a real certificate authority into the panel's built-in HTTPS, i
   verb: one validated name, both paths fixed, root-owned PEM files only) into `data/ssl/`. With
   "Load a renewed certificate automatically" on (the default), the panel copies the files again once
   a day and, when certbot has renewed the certificate (a later expiry date), loads it and restarts.
-  This needs the helper, so install.sh must have been run as root.
+  This needs the helper, so install.sh must have been run as root, and the helper copies only a
+  certificate opened to the panel at install: run the installer once with
+  `sudo PANEL_TLS_LE_NAMES=panel.example.com bash install.sh` (a comma-separated list; `none` closes
+  it; an update keeps it). Any other certificate on the host, a mail server's or a website's, keeps
+  its private key root's alone.
 - **Paste a certificate.** The certificate with its full chain, and its private key without a
   passphrase, both PEM.
 

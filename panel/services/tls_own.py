@@ -51,6 +51,10 @@ SOON_DAYS = 30
 
 LE_NOT_FOUND = "There is no Let's Encrypt certificate called {name} on this host (sudo certbot certificates lists them)."
 LE_FAILED = "The Let's Encrypt files could not be copied. Check the panel log."
+# The helper copies only the certificates the operator opened at install (its tls_le_names).
+LE_NOT_OPENED = ("The Let's Encrypt certificate {name} was not opened to the panel at install. To allow it, run "
+                 "the installer again as root with PANEL_TLS_LE_NAMES={name} (sudo PANEL_TLS_LE_NAMES={name} bash "
+                 "install.sh).")
 
 
 def _x509():
@@ -353,6 +357,8 @@ def _le_failure(name, rc, err):
     """What to tell the operator when the helper did not copy certificate `name`."""
     if "no such certificate" in err:
         return i18n.Sentence(LE_NOT_FOUND, name=name)
+    if "not opened to the panel" in err:
+        return i18n.Sentence(LE_NOT_OPENED, name=name)
     if "privileged helper" in err:
         return "This needs the panel's privileged helper: re-run install.sh as root."
     _log.warning("tls-le-copy failed: rc=%s %s", rc, err[:200])
@@ -412,7 +418,8 @@ def maybe_renew(boot=None, now=None):
     """Once a day, load a Let's Encrypt certificate certbot has renewed. -> what happened, as a word.
 
     "renewed" (installed and a restart asked for), "same" (nothing newer), "refused" (the copy
-    failed its check), "failed" (it could not be copied) or "" (not due). Never raises: it rides
+    failed its check), "failed" (it could not be copied), "busy" (the panel may not restart now:
+    host_reboot.panel_host_busy; the next tick tries again) or "" (not due). Never raises: it rides
     the update-check ticker beside the expiry alert.
     """
     now = time.time() if now is None else now
@@ -420,6 +427,9 @@ def maybe_renew(boot=None, now=None):
         cfg = load_config()
         if not _renew_due(cfg, boot, now):
             return ""
+        from panel.services import host_reboot
+        if host_reboot.panel_host_busy():
+            return "busy"     # a restore or the host's reboot is running; not marked as done
         _RENEW["at"] = now
         return _renew(cfg)
     except Exception:  # noqa: BLE001 - a background tick; the expiry alert still warns

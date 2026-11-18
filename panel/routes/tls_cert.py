@@ -4,6 +4,10 @@ Superadmin only, and each change asks a stale sign-in for the password again (st
 the certificate and key decide who the browser believes it is talking to. Each POST answers with a
 redirect back to the card, the outcome and every note in flashes. The checking and the files are
 panel/services/tls_own.py; the restart that loads a new pair is system_ops.restart_panel.
+
+Each change restarts the panel, so each is refused while the panel must not restart
+(host_reboot.panel_host_busy: a game-server restore running, or the panel's own host being
+rebooted), before anything is written: a restart then would cut that work in two.
 """
 from flask import flash, redirect, request, url_for
 from flask_login import current_user, login_required
@@ -34,6 +38,16 @@ def _restart_and_say(what):
               "warning")
 
 
+def _busy_refusal():
+    """A redirect saying why the panel may not restart now, or None when it may (panel_host_busy)."""
+    from panel.services import host_reboot
+    busy = host_reboot.panel_host_busy()
+    if not busy:
+        return None
+    flash(i18n.tr(busy), "danger")
+    return _back()
+
+
 def _flash_notes(notes):
     for note in notes:
         flash(i18n.tr(note), "warning")
@@ -62,6 +76,9 @@ def register(app):
     @superadmin_required
     @step_up_required       # the key and certificate the panel's HTTPS serves
     def tls_cert_paste():
+        refused = _busy_refusal()
+        if refused is not None:
+            return refused
         f = request.form
         names = tls_own.panel_names(load_config(), request.host)
         checked = tls_own.check((f.get("cert_pem") or "").encode("utf-8", "replace"),
@@ -73,6 +90,9 @@ def register(app):
     @superadmin_required
     @step_up_required       # the key and certificate the panel's HTTPS serves
     def tls_cert_letsencrypt():
+        refused = _busy_refusal()
+        if refused is not None:
+            return refused
         name = (request.form.get("le_name") or "").strip().lower()
         autorenew = "le_autorenew" in request.form     # a ticked checkbox is sent, an unticked one is not
         update_config(lambda cfg: cfg.update({"tls_le_autorenew": autorenew}))
@@ -88,6 +108,9 @@ def register(app):
     @superadmin_required
     @step_up_required       # the key and certificate the panel's HTTPS serves
     def tls_cert_remove():
+        refused = _busy_refusal()
+        if refused is not None:
+            return refused
         if load_config().get("tls_cert_source") not in tls_own.certs.OPERATOR_SOURCES:
             flash("The panel is already using its built-in certificate.", "info")
             return _back()
