@@ -29,7 +29,8 @@
     var label = document.createElement('label'); label.className = 'form-label small'; label.htmlFor = 'su-code';
     label.textContent = 'Authentication code';   // the page's translator swaps it (its translation is shared)
     var code = document.createElement('input'); code.type = 'text'; code.id = 'su-code'; code.className = 'form-control';
-    code.inputMode = 'numeric'; code.autocomplete = 'one-time-code'; code.maxLength = 14; code.placeholder = '000000';
+    // No numeric keypad: a backup code (letters and a dash) is taken here too (_reauth_refusal).
+    code.autocomplete = 'one-time-code'; code.maxLength = 14; code.placeholder = '000000';
     box.appendChild(label); box.appendChild(code); wrap.appendChild(box);
     return code;
   }

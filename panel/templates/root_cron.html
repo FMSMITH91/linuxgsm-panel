@@ -11,7 +11,7 @@
 {% if current_user.totp_enabled %}
 <div class="col-sm-3">
   <label class="form-label small mb-1" for="{{ idp }}-code">Authentication code</label>
-  <input type="text" id="{{ idp }}-code" name="totp_code" class="form-control form-control-sm" inputmode="numeric" autocomplete="one-time-code" maxlength="14" required>
+  <input type="text" id="{{ idp }}-code" name="totp_code" class="form-control form-control-sm" autocomplete="one-time-code" maxlength="14" required>
 </div>
 {% endif %}
 {% endmacro %}
