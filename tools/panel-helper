@@ -5716,7 +5716,7 @@ def _subid_rows(path):
                 if len(parts) == 3 and parts[1].isdecimal() and parts[2].isdecimal():
                     rows.append((parts[0], int(parts[1]), int(parts[2])))
     except FileNotFoundError:
-        pass
+        pass  # no file yet means no ranges given: the prepare verb creates it with the first one
     return rows
 
 
