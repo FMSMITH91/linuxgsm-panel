@@ -58,13 +58,18 @@ def _bup_stalled(e, now):
     return e["user"] == current_user.id and not e.get("busy") and now - e["ts"] > _UPLOAD_STALLED
 
 
+def _bup_prune(now):
+    """Under the lock: forget every upload untouched for _UPLOAD_IDLE."""
+    for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
+        _uploads.pop(uid, None)
+
+
 def _bup_take_target(kind, sid, now):
     """Under the lock: whether the target is free, and the id of the stalled upload taken out for it.
 
     (True, id or None) when free; (False, None) when a live upload, or another user's, holds it.
     """
-    for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
-        _uploads.pop(uid, None)
+    _bup_prune(now)
     same = [e for e in _uploads.values() if e["kind"] == kind and e["sid"] == sid]
     if any(not _bup_stalled(e, now) for e in same):
         return False, None
