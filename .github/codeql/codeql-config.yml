@@ -42,8 +42,9 @@ paths-ignore:
 #   notifications.telegram_get_me      GET on api.telegram.org via _tg_api_url.
 #   notifications._gateway_connector   The Discord command bot's WebSocket (websocket-client), to the
 #                                      constant DISCORD_GATEWAY_URL, wss://gateway.discord.gg.
-#   system_ops._ci_fetch_page          GET on api.github.com: the owner/repo of this checkout's own
-#                                      origin remote, and a commit sha.
+#   system_ops._ci_get_json            GET on api.github.com: the owner/repo of this checkout's own
+#                                      origin remote, and a commit sha (its check runs, and the
+#                                      workflow runs a schedule started on it).
 #   lgsm_data._download                GET on raw.githubusercontent.com/GameServerManagers/LinuxGSM,
 #                                      with a validated release tag and a LinuxGSM data filename.
 #   lgsm_releases._open                GET on the fixed https://api.github.com/repos/GameServerManagers/
