@@ -1080,7 +1080,9 @@ ROOT_CRON_DAYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 # (lowest, highest, names) of minute, hour, day of month, month, day of week (0 and 7 are Sunday).
 ROOT_CRON_FIELDS = ((0, 59, ()), (0, 23, ()), (1, 31, ()), (1, 12, ROOT_CRON_MONTHS), (0, 7, ROOT_CRON_DAYS))
 ROOT_CRON_TEXT_RE = r"[^\x00-\x08\x0a-\x1f\x7f]*"
-ROOT_CRON_ENV_RE = r"[A-Za-z_][A-Za-z0-9_]*[ \t]*=.*"
+# A variable line is NAME=value, spaces allowed before the "=": the name is checked alone, after
+# splitting at the first "=", so no pattern has to find where the name ends.
+ROOT_CRON_ENV_NAME_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 ROOT_CRON_ITEM_RE = r"(\*|([0-9]{1,2})(?:-([0-9]{1,2}))?)(?:/([0-9]{1,2}))?"
 # The panel's conf file the helper reads it from, and the key.
 ROOT_CRON_CONF_KEY = "root_cron"
@@ -1125,7 +1127,8 @@ def root_cron_line_kind(line):
         return "blank"
     if s.startswith("#"):
         return "comment"
-    if re.fullmatch(ROOT_CRON_ENV_RE, s):
+    name, eq, _value = s.partition("=")
+    if eq and re.fullmatch(ROOT_CRON_ENV_NAME_RE, name.rstrip(" \t")):
         return "env"
     return "job" if _root_cron_job_ok(s) else ""
 

@@ -474,7 +474,8 @@ def _names_tailscale_value(info, st, key):
     """Map one identity-looking string of the tailscale data, and the parts of it that print alone."""
     value = info.strip().rstrip(".")
     st.add(value, "tailnet-name")
-    if key == "magic_dns_suffix" and "." in value and not value.lower().endswith("ts.net"):
+    low = value.lower()
+    if key == "magic_dns_suffix" and "." in value and not (low == "ts.net" or low.endswith(".ts.net")):
         st.ts_suffix = value.lower()
     if key in _TS_WHOLE_KEYS:
         return

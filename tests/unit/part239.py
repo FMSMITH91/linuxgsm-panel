@@ -80,11 +80,11 @@ def _grammar239():
     eq("root cron grammar: the limits and keywords are the same numbers in both copies",
        [getattr(_pv239, n) for n in ("ROOT_CRON_MAX_BYTES", "ROOT_CRON_MAX_LINES", "ROOT_CRON_LINE_MAX",
                                      "ROOT_CRON_SPECIALS", "ROOT_CRON_FIELDS", "ROOT_CRON_TEXT_RE",
-                                     "ROOT_CRON_ENV_RE", "ROOT_CRON_ITEM_RE", "ROOT_CRON_CONF_KEY", "ROOT_CRON_DIR",
+                                     "ROOT_CRON_ENV_NAME_RE", "ROOT_CRON_ITEM_RE", "ROOT_CRON_CONF_KEY", "ROOT_CRON_DIR",
                                      "ROOT_CRON_DIR_FILE_RE", "ROOT_CRON_DIR_MAX_FILES", "ROOT_CRON_DIR_FILE_MAX")],
        [getattr(_h239, n) for n in ("ROOT_CRON_MAX_BYTES", "ROOT_CRON_MAX_LINES", "ROOT_CRON_LINE_MAX",
                                     "ROOT_CRON_SPECIALS", "ROOT_CRON_FIELDS", "ROOT_CRON_TEXT_RE",
-                                    "ROOT_CRON_ENV_RE", "ROOT_CRON_ITEM_RE", "ROOT_CRON_CONF_KEY", "ROOT_CRON_DIR",
+                                    "ROOT_CRON_ENV_NAME_RE", "ROOT_CRON_ITEM_RE", "ROOT_CRON_CONF_KEY", "ROOT_CRON_DIR",
                                     "ROOT_CRON_DIR_FILE_RE", "ROOT_CRON_DIR_MAX_FILES", "ROOT_CRON_DIR_FILE_MAX")])
     eq("root cron job lines: a % is stored escaped and shown as typed; a bad schedule or a two-line command "
        "is refused",
@@ -524,6 +524,12 @@ def _text239():
           len(_h239.VERBS))
 
 
+
+def _cron_off239(cfg):
+    """Turn root cron back off in a config dict (the state every other part expects)."""
+    cfg.pop(_rc239.ENABLED_KEY, None)
+
+
 try:
     _grammar239()
     _parse239()
@@ -543,6 +549,6 @@ try:
     _text239()
 finally:
     _p9_restore_all()
-    _cfg239.update_config(lambda c: c.pop(_rc239.ENABLED_KEY, None))
+    _cfg239.update_config(_cron_off239)
     _drop_other239()
 check("part239: no check reached a real host", len(_P9_TRIPPED) == _trips239, repr(_P9_TRIPPED[_trips239:][:4]))
