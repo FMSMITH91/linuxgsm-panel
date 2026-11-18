@@ -267,9 +267,13 @@ The narrowing is in the argument types:
   account a range of subordinate uids and gids (only where it has none, starting after every range already
   in `/etc/subuid` and `/etc/subgid`) and turns on lingering for it. The helper refuses an account that is
   not in `lgsmpanel-games` (one the panel may already become) and the panel's own account;
-  `addon-account-release` (`loginctl disable-linger`) refuses the panel's own account too. The containers
-  themselves run rootless, as the game account, from its own user manager: no root daemon and no Docker
-  socket (OWASP Docker Security Cheat Sheet, rules 1 and 11).
+  `addon-account-release` (lingering off, then the account's user manager stopped and its failed state
+  cleared with `systemctl reset-failed`) refuses the same accounts. The containers themselves run rootless,
+  as the game account, from its own user manager: no root daemon and no Docker socket (OWASP Docker
+  Security Cheat Sheet, rules 1 and 11). A container's network reaches only what is forwarded to the host's
+  loopback (the game's RCON port, its database, the relays it needs): on Ubuntu 26.04 nothing else at all
+  (pasta `--splice-only`); on 24.04 not the internet or other machines (`-o 127.0.0.1`, `-4`), though a
+  service listening on one of the host's own other addresses stays reachable.
 - **Root's crontab** (`root-crontab-read`, `root-crontab-write`) is closed unless you open it at install
   (`PANEL_ROOT_CRON=1`/`0`, recorded root-owned in `panel.conf`; the default is closed). The write takes the
   new crontab on stdin, refuses any line that is not blank, a comment, a `NAME=value` variable or a job with

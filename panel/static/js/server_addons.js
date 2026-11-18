@@ -62,10 +62,14 @@
   }
 
   function installedRow(a, box) {
-    var line = node('div', 'small text-secondary text-break');
-    line.textContent = TF('Database {db}. Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).',
-                          {db: a.database || '?', port: a.port || '?'});
-    box.appendChild(line);
+    if (a.database) box.appendChild(node('div', 'small text-secondary text-break', TF('Database {db}.', {db: a.database})));
+    if (a.port) {
+      box.appendChild(node('div', 'small text-secondary text-break',
+        TF('Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).', {port: a.port})));
+    }
+    if (a.geolocation_option) {
+      box.appendChild(node('div', 'small text-secondary', a.geolocation ? T('Geolocation is on: players\' IP addresses go to ipwho.is and ipapi.co.') : T('Geolocation is off.')));
+    }
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
@@ -74,14 +78,32 @@
     box.appendChild(bar);
   }
 
+  // The geolocation switch (B3): off unless ticked, with what it sends and to whom.
+  function geoSwitch(a, box) {
+    var wrap = node('div', 'form-check mt-1');
+    var cb = node('input', 'form-check-input');
+    cb.type = 'checkbox';
+    cb.id = 'ad-geo-' + a.id;
+    var lab = node('label', 'form-check-label small', T('Geolocation'));
+    lab.htmlFor = cb.id;
+    wrap.appendChild(cb);
+    wrap.appendChild(lab);
+    box.appendChild(wrap);
+    box.appendChild(node('div', 'small text-secondary', T('Off unless you tick it. When on, B3 sends each joining player\'s IP address to ipwho.is (or ipapi.co) to find their country and city, and shows them in the game (!locate and the join message).')));
+  }
+
   function installRow(a, d, box) {
+    if (a.legacy) {
+      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive and Call of Duty 2. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
+    }
     var free = (d.databases || []).filter(function (x) { return !x.used_by; });
-    if (!free.length) {
-      box.appendChild(node('div', 'small text-secondary', T('Add a database in the Databases tab first: each add-on needs one of its own.')));
+    if (a.needs_database && !free.length) {
+      box.appendChild(node('div', 'small text-secondary', T('Add a database in the Databases tab first: this add-on needs one of its own.')));
       return;
     }
+    if (a.geolocation_option) geoSwitch(a, box);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
-    bar.appendChild(dbSelect(a, d.databases || []));
+    if (a.needs_database) bar.appendChild(dbSelect(a, d.databases || []));
     var b = button(T('Install'), 'bi-download', 'adInstall', [a.id], 'btn-primary');
     if (d.runtime_error || a.installing) b.disabled = true;
     bar.appendChild(b);
@@ -99,6 +121,11 @@
     head.appendChild(node('span', badge, state));
     box.appendChild(head);
     if (a.error) box.appendChild(node('div', 'small text-danger', a.error));
+    if (a.tail) {
+      var pre = node('pre', 'small border rounded p-2 mt-1 mb-0 ad-log', a.tail);
+      pre.setAttribute('data-no-i18n', '');
+      box.appendChild(pre);
+    }
     if (a.installed) installedRow(a, box);
     else if (!a.installing) installRow(a, d, box);
     return box;
@@ -142,17 +169,20 @@
   }
   function failed() { st.busy = false; say('✗ ' + T('Could not reach the panel. Try again.'), 'text-danger'); return false; }
 
+  function row(id) { return ((st.d && st.d.addons) || []).filter(function (a) { return a.id === id; })[0] || {}; }
+
   window.adInstall = function (id) {
-    var sel = el('ad-db-' + id);
-    if (st.busy || !sel || !sel.value) return;
-    var dbId = Number.parseInt(sel.value, 10);
+    var a = row(id), sel = el('ad-db-' + id), geo = el('ad-geo-' + id), body = {};
+    if (st.busy || (a.needs_database && (!sel || !sel.value))) return;
+    if (a.needs_database) body.database_id = Number.parseInt(sel.value, 10);
+    if (geo) body.geolocation = geo.checked === true;
     window.confirmDialog({title: T('Install the add-on'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Install'),
-      bodyText: T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads the add-on\'s image. The add-on reads the server\'s RCON password and game log.'),
+      bodyText: T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads or builds the add-on\'s image. The add-on reads the server\'s RCON password and game log.'),
       onConfirm: function () {
         stepUp(function () {
           st.busy = true;
           say(T('Installing the add-on…'));
-          postJson(api('/' + id + '/install'), {database_id: dbId}).then(after).catch(failed);
+          postJson(api('/' + id + '/install'), body).then(after).catch(failed);
         });
       }});
   };
@@ -167,7 +197,8 @@
   window.adRemove = function (id) {
     if (st.busy) return;
     window.confirmDialog({title: T('Remove the add-on'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Remove'),
-      bodyText: T('This stops the add-on and deletes its container, image and files, its settings included. Its database is kept.'),
+      bodyText: row(id).data_kept ? T('This stops the add-on and deletes its container, image and files, its settings included. Its database is kept.')
+        : T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.'),
       onConfirm: function () {
         stepUp(function () {
           st.busy = true;

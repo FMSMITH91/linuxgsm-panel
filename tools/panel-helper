@@ -2835,7 +2835,7 @@ VERBS = {
     # A game account's rootless add-on containers: subordinate ids and lingering, and lingering off
     # again -- see do_addon_account_prepare. Never the panel's own account.
     "addon-account-prepare": ([v_destroyable_user], lambda a: [], None),
-    "addon-account-release": ([v_destroyable_user], lambda a: ["loginctl", "disable-linger", a[0]], None),
+    "addon-account-release": ([v_destroyable_user], lambda a: [], None),
     # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
     # once its rollout reaches this host; the OS Updates card lists it apart until then.
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
@@ -5786,6 +5786,47 @@ def do_addon_account_prepare(args, content):
     return 0
 
 
+# How long addon-account-release waits for the account's user manager to stop: its add-ons get their
+# own stop timeout (30 s, panel/services/addons.py STOP_TIMEOUT) and the manager its shutdown.
+ADDON_MANAGER_STOP_TIMEOUT = 75
+
+
+def do_addon_account_release(args, content):
+    """Release a game account's add-on runtime: lingering off, its user manager stopped and cleared.
+
+    `loginctl disable-linger` alone leaves the manager (user@<uid>.service) stopping in the
+    background; an uninstall's `user-kill-processes` straight after it SIGKILLs it, and systemd
+    keeps it "failed" until someone resets it. So this stops the manager and waits for it (its
+    add-ons stop cleanly within their own stop timeout), then `systemctl reset-failed` clears a
+    failure either way. The account is validated as for the other destroy verbs (never the panel's
+    own account). Prints linger=off, then manager=stopped or manager=stop-failed; exits with
+    disable-linger's status.
+    """
+    user = args[0]
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        sys.stderr.write("refusing %s: no such account\n" % user)
+        return 1
+    r = subprocess.run([resolve("loginctl"), "disable-linger", user],   # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30, env=_clean_env())
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+        return r.returncode
+    sys.stdout.write("linger=off\n")
+    unit = "user@%d.service" % uid
+    try:
+        rc = subprocess.run([resolve("systemctl"), "stop", unit],        # nosec B603 - fixed argv
+                            shell=False, capture_output=True, timeout=ADDON_MANAGER_STOP_TIMEOUT,
+                            env=_clean_env()).returncode
+    except subprocess.TimeoutExpired:
+        rc = -1
+    subprocess.run([resolve("systemctl"), "reset-failed", unit],         # nosec B603 - fixed argv
+                   shell=False, capture_output=True, timeout=30, env=_clean_env())
+    sys.stdout.write("manager=%s\n" % ("stopped" if rc == 0 else "stop-failed"))
+    return 0
+
+
 def _enrol(user):
     """groupadd -f GAME_GROUP, then usermod -aG it for `user`. The caller has already decided."""
     rc = subprocess.run([resolve("groupadd"), "-f", GAME_GROUP],      # nosec B603 - fixed argv
@@ -8672,6 +8713,7 @@ ACTIONS = {
     "steam-dumps-sweep": do_steam_dumps_sweep,
     "gameuser-group": do_gameuser_group,
     "addon-account-prepare": do_addon_account_prepare,
+    "addon-account-release": do_addon_account_release,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
     "nodesource-setup": do_nodesource_setup,

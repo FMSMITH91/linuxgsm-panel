@@ -68,10 +68,11 @@ def _verbs253():
     if _pv253._is_panel_account(panel_user):
         check("addon verbs: release refuses the panel's own account (it would end a per-user install's boot start)",
               _refuses253("addon-account-release", panel_user))
-    eq("addon verbs: release is `loginctl disable-linger <account>` on both sides",
+    eq("addon verbs: release is the helper's own function on both sides (no fixed argv)",
        (_pv253.tool_argv("addon-account-release", ["cod4server"]),
-        _h253.VERBS["addon-account-release"][1](["cod4server"])),
-       (["loginctl", "disable-linger", "cod4server"], ["loginctl", "disable-linger", "cod4server"]))
+        _h253.VERBS["addon-account-release"][1](["cod4server"]),
+        _h253.ACTIONS.get("addon-account-release") is _h253.do_addon_account_release),
+       ([], [], True))
     eq("addon verbs: the two copies of the id range agree",
        (_pv253.ADDON_SUBID_COUNT, _pv253.ADDON_SUBID_MIN, _pv253.ADDON_SUBID_LAST),
        (_h253.ADDON_SUBID_COUNT, _h253.ADDON_SUBID_MIN, _h253.ADDON_SUBID_LAST))
@@ -161,9 +162,9 @@ def _pieces253():
        [bool(_ad253.runtime_refusal("22.04", "")), bool(_ad253.runtime_refusal("24.04", "podman version 3.4.4")),
         _ad253.runtime_refusal("24.04", "podman version 4.9.3"), _ad253.runtime_refusal("26.04", "")],
        [True, True, "", ""])
-    eq("network: RCON (UDP) always, the database's port only when it is on this host",
-       [_ad253.network(28960, "127.0.0.1", 3306), _ad253.network(28961, "100.70.1.2", 3306)],
-       ["pasta:-U,28960,-T,3306", "pasta:-U,28961"])
+    eq("network: RCON (UDP) always, the database's port only when it is on this host, the lock first",
+       [_ad253.network(28960, 3306, [], False), _ad253.network(28961, None, [], True)],
+       ["pasta:-4,-o,127.0.0.1,-U,28960,-T,3306:3306", "pasta:--splice-only,-U,28961"])
     unit = _ad253.quadlet("cod4server", "iw4madmin", "/home/cod4server/serverfiles/main", "pasta:-U,28960", 21007)
     want = ("ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=512", "Pull=never",
             "PublishPort=127.0.0.1:21007:1624", "Volume=/home/cod4server/serverfiles/main:/gamelog:ro",
@@ -172,12 +173,12 @@ def _pieces253():
        [w for w in want if w not in unit], [])
     check("unit: no privileged mode, host network or added capability",
           not any(x in unit for x in ("--privileged", "Network=host", "AddCapability")), unit[:200])
-    doc = _json253.loads(_ad253.iw4madmin_settings("cod4", 28960, _RC253, "Server=127.0.0.1"))
+    doc = _json253.loads(_ad253.iw4madmin_settings("cod4", 28960, _RC253))
     srv = doc["Servers"][0]
-    eq("IW4MAdmin settings: one server on 127.0.0.1 with the CoD4x parser, the game log, mysql, no Id",
+    eq("IW4MAdmin settings: one server on 127.0.0.1 with the CoD4x parser, the game log, SQLite, no Id",
        (srv["IPAddress"], srv["Port"], srv["Password"], srv["RConParserVersion"], srv["ManualLogPath"],
-        doc["DatabaseProvider"], doc["AutoMessagePeriod"] >= 60, "Id" in doc),
-       ("127.0.0.1", 28960, _RC253, "CoD4x Parser", "/gamelog/games_mp.log", "mysql", True, False))
+        doc["DatabaseProvider"], "ConnectionString" in doc, doc["AutoMessagePeriod"] >= 60, "Id" in doc),
+       ("127.0.0.1", 28960, _RC253, "CoD4x Parser", "/gamelog/games_mp.log", "sqlite", False, True, False))
 
 
 # ── 3. the routes ─────────────────────────────────────────────────────────────────────────────────
@@ -217,7 +218,7 @@ def _host253(probe=None, install_out="ADDON_INSTALLED\n", remove_out="others=0\n
             return remove_out, "", 0
         if "games_mp.log" in sh:
             return probe if probe is not None else (
-                "os=24.04\npodman=\nlogdir=serverfiles/main\nport=21009\nrcon.b64=%s\n"
+                "os=24.04\npodman=\nlogdir=serverfiles/main\nports= 21009\nrcon.b64=%s\n"
                 % _ad253._b64('set rcon_password "%s"' % _RC253)), "", 0
         if "journalctl" in sh:
             return "conn Password=%s\n" % _DBV253, "", 0
@@ -271,20 +272,17 @@ def _install_stdin253(calls):
 def _install_secrets253(calls):
     settings = _install_stdin253(calls)
     srv = (settings.get("Servers") or [{}])[0]
-    check("install: the settings travel on stdin with the RCON and database passwords",
-          srv.get("Password") == _RC253 and _DBV253 in settings.get("ConnectionString", ""), repr(settings)[:200])
+    check("install: the settings travel on stdin with the RCON password, and IW4MAdmin's own SQLite database",
+          srv.get("Password") == _RC253 and settings.get("DatabaseProvider") == "sqlite", repr(settings)[:200])
     check("install: no secret is on any command line",
           not [c for c in calls if c[0] == "sh" and (_RC253 in c[1] or _DBV253 in c[1])])
 
 
 def _install253(ids):
-    sid, _other, mine, theirs = ids
+    sid = ids[0]
     calls = _host253()
     a = _p9_client(P9_ADMIN)
-    bad = a.post("/api/server/%d/addons/iw4madmin/install" % sid, json={"database_id": theirs})
-    check("install: another server's database is refused and nothing runs",
-          bad.status_code == 400 and not calls, repr((bad.status_code, calls[:1])))
-    ok = a.post("/api/server/%d/addons/iw4madmin/install" % sid, json={"database_id": mine})
+    ok = a.post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
     _p9_drain()
     _install_calls253(calls, ok)
     _install_secrets253(calls)
@@ -294,14 +292,14 @@ def _install253(ids):
 
 
 def _install_refused253(ids):
-    sid, mine = ids[0], ids[2]
-    for probe, want in (("os=24.04\npodman=\nlogdir=serverfiles/main\nport=21009\n", _ra253._NO_RCON),
-                        ("os=24.04\npodman=\nlogdir=\nport=21009\nrcon.b64=%s\n" % _ad253._b64("set rcon_password x"),
+    sid = ids[0]
+    for probe, want in (("os=24.04\npodman=\nlogdir=serverfiles/main\nports= 21009\n", _ra253._NO_RCON),
+                        ("os=24.04\npodman=\nlogdir=\nports= 21009\nrcon.b64=%s\n" % _ad253._b64("set rcon_password x"),
                          _ra253._NO_LOG),
-                        ("os=22.04\npodman=\nlogdir=serverfiles/main\nport=21009\nrcon.b64=%s\n"
+                        ("os=22.04\npodman=\nlogdir=serverfiles/main\nports= 21009\nrcon.b64=%s\n"
                          % _ad253._b64("set rcon_password x"), "Add-ons need Ubuntu 24.04 or newer on the game's host.")):
         calls = _host253(probe=probe)
-        _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={"database_id": mine})
+        _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
         _p9_drain()
         row = _p9_audit("addon_install")
         check("install refused (%s): audited as failed, nothing installed or readied" % want[:40],
@@ -346,7 +344,7 @@ def _uninstall253():
     _p9_patch(_ms253, "_lgp", _NS253(stop_now=lambda *a, **k: None))
     _p9_patch(_ms253, "time", _NS253(sleep=lambda s: None))
     _ms253._stop_game_processes(_NS253(id=1), "cod4server", "cod4server")
-    eq("uninstall: lingering is released before the account's processes are killed", calls,
+    eq("uninstall: lingering is released (and the manager stopped) before the account's processes are killed", calls,
        ["addon-account-release", "user-kill-processes"])
 
 
@@ -366,7 +364,8 @@ def _said_in_modules253():
         for k, v in vars(mod).items():
             if k.startswith("_") and isinstance(v, str) and v[:1].isupper() and v.endswith(".") and " " in v:
                 said.add(v)
-    return said | set(_ra253._DONE.values()) | set(_ra253._NOT_DONE.values()) | set(_ad253._FAIL_MARKS.values())
+    return (said | set(_ra253._DONE.values()) | set(_ra253._NOT_DONE.values()) | set(_ad253._FAIL_MARKS.values())
+            | set(_ra253._REMOVED.values()))
 
 
 def _said_in_page253(base):
@@ -385,7 +384,7 @@ def _text253():
     said.add("Manage a server's add-ons: install, start, stop and remove admin tools that run in containers "
              "beside the game as its account, and read their logs")
     missing = [(lang, x) for lang in ("es", "fr") for x in sorted(said) if x not in _i18n253.catalog(lang)]
-    check("text: the check found the add-ons' sentences to look up", len(said) > 40, repr(len(said)))
+    check("text: the check found the add-ons' sentences to look up", len(said) > 50, repr(len(said)))
     eq("text: every new sentence has a Spanish and a French translation", missing[:4], [])
 
 

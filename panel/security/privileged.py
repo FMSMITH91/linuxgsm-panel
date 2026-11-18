@@ -1488,10 +1488,11 @@ _ARGV = {
     # A game account's add-ons in rootless containers (panel/services/addons.py): a range of
     # subordinate uids and gids for the container's user namespace, and lingering so the account's
     # user manager runs (and starts its add-ons at boot) with nobody signed in. Release turns the
-    # lingering off again; the ranges stay, as useradd would have left them. Neither takes the
-    # panel's own account. See tools/panel-helper (do_addon_account_prepare).
+    # lingering off again, stops the account's user manager and clears its failed state; the ranges
+    # stay, as useradd would have left them. Neither takes the panel's own account. See
+    # tools/panel-helper (do_addon_account_prepare, do_addon_account_release).
     "addon-account-prepare": ([_destroyable_user], lambda a: [], None),
-    "addon-account-release": ([_destroyable_user], lambda a: ["loginctl", "disable-linger", a[0]], None),
+    "addon-account-release": ([_destroyable_user], lambda a: [], None),
     # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
@@ -1851,6 +1852,23 @@ def _addon_prepare_remote(a):
             "if [ -n \"$f\" ]; then usermod $f \"$u\" || exit 1; echo subids=added; else echo subids=present; fi; "
             "loginctl enable-linger \"$u\" && echo linger=on"
             % (shlex.quote(a[0]), ADDON_SUBID_COUNT, ADDON_SUBID_MIN, ADDON_SUBID_LAST))
+
+
+# How long addon-account-release waits for the account's user manager to stop (the helper's same constant).
+ADDON_MANAGER_STOP_TIMEOUT = 75
+
+
+def _addon_release_remote(a):
+    """The remote form of addon-account-release: the helper's do_addon_account_release, as shell.
+
+    Lingering off, then the account's user manager stopped (waited for, at most
+    ADDON_MANAGER_STOP_TIMEOUT seconds) and its failed state cleared. Prints linger=off, then
+    manager=stopped or manager=stop-failed.
+    """
+    return ("u=%s; uid=$(id -u \"$u\") || exit 1; loginctl disable-linger \"$u\" || exit 1; echo linger=off; "
+            "if timeout %d systemctl stop \"user@$uid.service\"; then m=stopped; else m=stop-failed; fi; "
+            "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\""
+            % (shlex.quote(a[0]), ADDON_MANAGER_STOP_TIMEOUT))
 
 
 def _f2b_log_lines_remote(a):
@@ -2269,6 +2287,7 @@ _REMOTE_ACTIONS = {
     "ufw-stored-rules": _fwa_ufw_stored_remote,
     "journal-cron-account": _cron_journal_account_remote,
     "addon-account-prepare": _addon_prepare_remote,
+    "addon-account-release": _addon_release_remote,
     "root-crontab-read": lambda a: _ROOT_CRON_READ_REMOTE,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,

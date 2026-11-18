@@ -18,9 +18,11 @@
       <ul class="small mb-0">
         <li>Each add-on runs in a rootless Podman container as this server's account: no root daemon, no added privileges, a read-only system and capped memory.</li>
         <li>Installing the first add-on on a host installs Podman from Ubuntu and lets the account's services run while nobody is signed in, so add-ons start again after a reboot.</li>
-        <li>Each add-on uses one of this server's databases from the Databases tab, and no other add-on may use the same one.</li>
+        <li>An add-on's network is locked to what it needs: the game's RCON port and its database. On Ubuntu 26.04 it reaches nothing else. On Ubuntu 24.04 it can't reach the internet or other machines either, but a service listening on one of this host's own addresses (its Tailscale address, say) stays reachable.</li>
+        <li>B3 uses one of this server's databases from the Databases tab, and no other add-on may use the same one. IW4MAdmin keeps its own database (SQLite) in its folder.</li>
+        <li>An add-on's folder is in the server's home folder, so the server's backups include it.</li>
         <li>An add-on's web page listens on this host's own address only (127.0.0.1). Reach it through an SSH tunnel or Tailscale.</li>
-        <li>Removing an add-on deletes its container, image and files. Its database is kept.</li>
+        <li>Removing an add-on deletes its container, image and files. A database from the Databases tab is kept; an add-on's own data goes with it.</li>
       </ul>
     {% endcall %}
   </div>

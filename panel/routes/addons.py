@@ -9,6 +9,7 @@ account is a plain game account (game_account_write_refusal). Root is reached on
 helper's verbs (`apt-install`, `addon-account-prepare`, `addon-account-release`).
 """
 import json
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -33,17 +34,19 @@ _DB_TAKEN = "Another add-on already uses that database. Each add-on needs its ow
 _BUSY = "The add-on is already being installed. Wait for it to finish."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
-_NO_RCON = "The server's config has no RCON password (rcon_password). Set one, then install again."
-_NO_PORT = "No free port was found on this host for the add-on's page."
+_NO_RCON = "The server's config has no RCON password (rcon_password or rconpassword). Set one, then install again."
+_NO_PORT = "No free port was found on this host for the add-on's page or relays."
+_BAD_DB_HOST = "The database's server address can't be used for the add-on's relay."
 _NO_PODMAN = "Couldn't install Podman on this host."
 _NO_PREPARE = "Couldn't ready the server's account for containers (subordinate ids and lingering)."
-_STARTED = "Installing the add-on. Downloading its image takes a few minutes."
+_STARTED = "Installing the add-on. Downloading or building its image takes a few minutes."
 _DONE = {"start": "The add-on was started.", "stop": "The add-on was stopped."}
 _NOT_DONE = {"start": "The add-on didn't start. Its log says why.", "stop": "The add-on didn't stop."}
-_REMOVED = "The add-on was removed. Its database is kept in the Databases tab."
+_REMOVED = {True: "The add-on was removed. Its database is kept in the Databases tab.",
+            False: "The add-on was removed, with its data."}
 _NOT_REMOVED = "The add-on couldn't be removed completely. Try again."
 
-# (server id, add-on id) -> {"running": bool, "why": str}: an install in the background.
+# (server id, add-on id) -> {"running": bool, "why": str, "tail": str}: an install in the background.
 _JOBS = {}
 _JOBS_LOCK = threading.Lock()
 
@@ -74,7 +77,7 @@ def _databases(gs, found):
     used = {}
     for k, a in found.items():
         name = (a.get("meta") or {}).get("database")
-        if isinstance(name, str):
+        if isinstance(name, str) and name:
             used[name] = k
     rows = GameDatabase.query.filter_by(game_server_id=gs.id).order_by(GameDatabase.name).all()
     return [{"id": r.id, "name": r.name, "used_by": used.get(r.name, "")} for r in rows]
@@ -88,10 +91,11 @@ def _addon_rows(gs, found):
         with _JOBS_LOCK:
             job = dict(_JOBS.get((gs.id, k)) or {})
         rows.append({"id": k, "name": a["name"], "version": a["version"], "source": a["source"],
-                     "legacy": a["legacy"], "installed": got is not None,
-                     "state": (got or {}).get("state", ""), "port": meta.get("port"),
+                     "legacy": a["legacy"], "needs_database": a["database"], "data_kept": a["data_kept"],
+                     "geolocation_option": k == _ad.B3, "geolocation": bool(meta.get("geolocation")),
+                     "installed": got is not None, "state": (got or {}).get("state", ""), "port": meta.get("port"),
                      "database": meta.get("database", ""), "installing": bool(job.get("running")),
-                     "error": i18n.tr(job["why"]) if job.get("why") else ""})
+                     "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", "")})
     return rows
 
 
@@ -122,22 +126,27 @@ def _taken(p, addon_id):
     return {(a.get("meta") or {}).get("database") for k, a in p["addons"].items() if k != addon_id}
 
 
-def _host_refusal(gs, p):
-    """Why the host or the game stops the install: an old system, no game log, no RCON, no port."""
+def _host_refusal(gs, p, need_ports):
+    """Why the host or the game stops the install: no game log, no RCON, not enough free ports."""
     if not _ad.log_dir(gs.short_name, p["logdir"]):
         return _NO_LOG
     if not p["rcon"]:
         return _NO_RCON
-    return "" if p["port"] else _NO_PORT
+    return "" if len(p["ports"]) >= need_ports else _NO_PORT
 
 
-def _install_refusal(gs, addon_id, p, r):
+def _install_refusal(gs, plan, p):
     """Why the probe's answer stops the install ("" when it may go on)."""
     if p["installed"]:
         return _INSTALLED_ALREADY
-    if r.name in _taken(p, addon_id):
+    r = plan["db"]
+    if r is not None and r.name in _taken(p, plan["id"]):
         return _DB_TAKEN
-    return _ad.runtime_refusal(p["os"], p["podman"]) or _host_refusal(gs, p)
+    if plan["id"] == _ad.B3 and p["rcon"]:
+        why = _ad.b3_ini_refusal(p["rcon"])
+        if why:
+            return why
+    return _ad.runtime_refusal(p["os"], p["podman"]) or _host_refusal(gs, p, plan["ports"])
 
 
 def _runtime(gs, p):
@@ -148,76 +157,130 @@ def _runtime(gs, p):
     return "" if rc == 0 else _NO_PREPARE
 
 
-def _install_texts(gs, addon_id, p, r, who):
-    """(settings, unit, record) the install writes, and the secrets to scrub from its output."""
-    host, port = _db_target(r)
+# A relay's target goes into a unit file: an address or a host name, nothing that could break the line.
+_HOST_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+
+
+def _plan(gs, addon_id, db_id, geolocation):
+    """What the install needs before it reads the host: the database row and its endpoint, the ports."""
+    r = db.session.get(GameDatabase, db_id) if db_id is not None else None
+    host, port = _db_target(r) if r is not None else ("", 0)
+    nrelays = (1 if r is not None and host != "127.0.0.1" else 0) + (
+        len(_ad.B3_GEOLOCATORS) if geolocation else 0)
+    return {"id": addon_id, "db": r, "db_host": host, "db_port": port, "geolocation": geolocation,
+            "ports": (1 if _ad.CATALOG[addon_id]["web_port"] else 0) + nrelays}
+
+
+def _settings(gs, plan, p):
+    """(the secret settings file's text, the other files, the secrets to scrub) for this add-on."""
+    if plan["id"] == _ad.IW4MADMIN:
+        return _ad.iw4madmin_settings(gs.game_type, gs.port, p["rcon"]), _ad.iw4madmin_files(), (p["rcon"],)
+    r = plan["db"]
     secret = decrypt_secret(r.secret) or ""
-    conn = _ad.connection_string(host, port, r.name, secret)
-    settings = _ad.iw4madmin_settings(gs.game_type, gs.port, p["rcon"], conn)
-    unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]),
-                       _ad.network(gs.port, host, port), p["port"])
+    ini = _ad.b3_ini(gs.game_type, gs.port, p["rcon"], r.name, secret, plan["geolocation"])
+    return ini, _ad.build_files(plan["id"]), (secret, p["rcon"])
+
+
+def _install_texts(gs, plan, p, who):
+    """(settings, files, unit, relay units, record, secrets) the install writes."""
+    addon_id = plan["id"]
+    web = p["ports"][0] if _ad.CATALOG[addon_id]["web_port"] else None
+    relay_list = _ad.relays(addon_id, plan["db_host"], plan["db_port"], plan["geolocation"],
+                            p["ports"][1 if web else 0:])
+    local_db = plan["db_port"] if plan["db"] is not None and plan["db_host"] == "127.0.0.1" else None
+    net = _ad.network(gs.port, local_db, relay_list, p["splice"])
+    unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list)
+    settings, files, secrets = _settings(gs, plan, p)
     meta = json.dumps({"kind": addon_id, "version": _ad.CATALOG[addon_id]["version"],
-                       "image": _ad.CATALOG[addon_id]["image"], "database": r.name, "port": p["port"],
+                       "image": _ad.CATALOG[addon_id]["image"],
+                       "database": plan["db"].name if plan["db"] is not None else "", "port": web,
+                       "geolocation": bool(plan["geolocation"]), "network": net,
                        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                        "installed_by": who}) + "\n"
-    return settings, unit, meta, (secret, p["rcon"])
+    return settings, files, unit, _ad.relay_units(addon_id, relay_list), meta, secrets
 
 
-def _install_steps(gs, addon_id, db_id, who):
-    """The install itself: "" when the add-on runs, else why not (an English sentence)."""
-    r = db.session.get(GameDatabase, db_id)
-    if r is None or r.game_server_id != gs.id:
+def _plan_refusal(gs, plan):
+    """Why the plan itself stops the install: no database of this server, or one no relay can name."""
+    r = plan["db"]
+    if _ad.CATALOG[plan["id"]]["database"] and (r is None or r.game_server_id != gs.id):
         return _NO_DB
-    out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name,
-                                           _ad.probe_sh(addon_id, gs.lgsm_name, gs.id) + "; " + _ad.status_sh(),
-                                           timeout=60, selfname=gs.lgsm_name)
-    if rc != 0:
-        return "Couldn't read the server's account on the host: it did not answer."
-    p = dict(_ad.parse_probe(out), addons=_ad.parse_status(out)["addons"])
-    why = _install_refusal(gs, addon_id, p, r) or _runtime(gs, p)
+    if r is not None and plan["db_host"] != "127.0.0.1" and not _HOST_RE.fullmatch(plan["db_host"] or ""):
+        return _BAD_DB_HOST
+    return ""
+
+
+def _install_steps(gs, plan, who):
+    """The install itself: ("", "") when the add-on runs, else (why, log tail); why is an English sentence."""
+    why = _plan_refusal(gs, plan)
     if why:
-        return why
-    settings, unit, meta, secrets = _install_texts(gs, addon_id, p, r, who)
+        return why, ""
+    out, _err, rc = _sm.shell_as_game_user(
+        gs.remote, gs.short_name,
+        _ad.probe_sh(plan["id"], gs.lgsm_name, gs.id, gs.game_type, plan["ports"]) + "; " + _ad.status_sh(),
+        timeout=60, selfname=gs.lgsm_name)
+    if rc != 0:
+        return "Couldn't read the server's account on the host: it did not answer.", ""
+    p = dict(_ad.parse_probe(out), addons=_ad.parse_status(out)["addons"])
+    why = _install_refusal(gs, plan, p) or _runtime(gs, p)
+    if why:
+        return why, ""
+    settings, files, unit, units, meta, secrets = _install_texts(gs, plan, p, who)
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name,
-                                           _ad.install_sh(gs.short_name, addon_id, unit, meta),
+                                           _ad.install_sh(gs.short_name, plan["id"], unit, meta, files, units),
                                            timeout=_ad.INSTALL_TIMEOUT, selfname=gs.lgsm_name, stdin_text=settings)
-    ok, said = _ad.install_outcome(_ad.scrub(out or "", secrets), rc)
-    return "" if ok else said
+    ok, said, tail = _ad.install_outcome(_ad.scrub(out or "", secrets), rc)
+    return ("", "") if ok else (said, _ad.scrub(tail, secrets))
 
 
-def _install_worker(app, gs_id, born, addon_id, db_id, who):
+def _install_worker(app, gs_id, born, plan_args, who):
     """Run one install in a thread, record how it went, and audit it."""
+    addon_id = plan_args[0]
     with app.app_context():
-        why = ""
+        why, tail = "", ""
         try:
             gs = claim_row(GameServer, gs_id, born)
-            why = _install_steps(gs, addon_id, db_id, who) if gs is not None else ""
             if gs is not None:
+                why, tail = _install_steps(gs, _plan(gs, *plan_args), who)
                 log_action(None, "addon_install", target=gs.name, actor=who, server=gs, success=not why,
                            detail="%s installed" % addon_id if not why else "%s not installed: %s" % (addon_id, why))
         except Exception:
             why = _log_and_generic("add-on install failed")
         finally:
             with _JOBS_LOCK:
-                _JOBS[(gs_id, addon_id)] = {"running": False, "why": why}
+                _JOBS[(gs_id, addon_id)] = {"running": False, "why": why, "tail": tail}
+
+
+def _install_choice(gs, addon_id):
+    """(database id or None, geolocation) from the request, or a refusal answer."""
+    body = _json_body()
+    geolocation = body.get("geolocation") is True and addon_id == _ad.B3
+    if not _ad.CATALOG[addon_id]["database"]:
+        return (None, geolocation), None
+    db_id = body.get("database_id")
+    if not isinstance(db_id, int) or isinstance(db_id, bool):
+        return None, _say(400, _NO_DB)
+    r = db.session.get(GameDatabase, db_id)
+    if r is None or r.game_server_id != gs.id:
+        return None, _say(400, _NO_DB)
+    return (db_id, geolocation), None
 
 
 def _install_answer(app, gs, addon_id):
-    body = _json_body()
-    db_id = body.get("database_id")
-    if not isinstance(db_id, int) or isinstance(db_id, bool):
-        return _say(400, _NO_DB)
-    r = db.session.get(GameDatabase, db_id)
-    if r is None or r.game_server_id != gs.id:
-        return _say(400, _NO_DB)
+    choice, refused = _install_choice(gs, addon_id)
+    if refused is not None:
+        return refused
+    db_id, geolocation = choice
     with _JOBS_LOCK:
         if (_JOBS.get((gs.id, addon_id)) or {}).get("running"):
             return _say(409, _BUSY)
-        _JOBS[(gs.id, addon_id)] = {"running": True, "why": ""}
+        _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": ""}
+    r = db.session.get(GameDatabase, db_id) if db_id is not None else None
     log_action(current_user, "addon_install", target=gs.name, server=gs,
-               detail="%s: started, database %s" % (addon_id, r.name))
+               detail="%s: started%s%s" % (addon_id, ", database %s" % r.name if r is not None else "",
+                                           ", geolocation on" if geolocation else ""))
     threading.Thread(target=_install_worker, daemon=True,
-                     args=(app, gs.id, row_birth(gs), addon_id, db_id, current_user.username)).start()
+                     args=(app, gs.id, row_birth(gs), (addon_id, db_id, geolocation), current_user.username)).start()
     return jsonify({"success": True, "started": True, "message": i18n.tr(_STARTED)}), 202
 
 
@@ -239,12 +302,12 @@ def _remove_answer(gs, addon_id):
     removed, others = _ad.remove_outcome(out, rc)
     if removed and not others:
         # The account runs no add-on any more: its user manager need not linger. Best-effort.
-        _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name], timeout=30)
+        _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name], timeout=90)
     log_action(current_user, "addon_remove", target=gs.name, server=gs, success=removed,
                detail="%s %s" % (addon_id, "removed" if removed else "not removed (rc %s)" % rc))
     if not removed:
         return _say(200, _NOT_REMOVED)
-    return jsonify({"success": True, "message": i18n.tr(_REMOVED)})
+    return jsonify({"success": True, "message": i18n.tr(_REMOVED[_ad.CATALOG[addon_id]["data_kept"]])})
 
 
 def _logs_answer(gs, addon_id):
