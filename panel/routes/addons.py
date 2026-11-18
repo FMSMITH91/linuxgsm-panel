@@ -38,6 +38,10 @@ _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
 _NO_LOG_NAMED = "Couldn't find the game's log ({log}). Start the server once so it writes one, then install again."
 _NO_RCON = "The server's config sets no RCON password. Set one, then install again."
+_NO_CONSOLE_LOG = ("Couldn't find the game's console.log. Add -condebug to the server's start parameters (its LinuxGSM "
+                   "config's startparameters), restart the server, then install again.")
+_NO_SOURCEMOD = ("B3 needs SourceMod on this game server. Install Metamod: Source and SourceMod (LinuxGSM's "
+                 "mods-install), restart the server, then install again.")
 _NO_PORT = "No free port was found on this host for the add-on's page or relays."
 _NO_IDS = "Couldn't read the server account's user and group ids on the host."
 _BAD_DB_HOST = "The database's server address can't be used for the add-on's relay."
@@ -181,8 +185,16 @@ def _taken(p, addon_id):
     return {(a.get("meta") or {}).get("database") for k, a in p["addons"].items() if k != addon_id}
 
 
+def _no_log(game_type):
+    """What to do when the game's log was not found: start the server once, or (Source) add -condebug."""
+    name = _ad.game_log_name(game_type)
+    if name == "console.log":
+        return _NO_CONSOLE_LOG
+    return _NO_LOG if name == "games_mp.log" else i18n.Sentence(_NO_LOG_NAMED, log=name)
+
+
 def _host_refusal(gs, p, need_ports):
-    """Why the host or the game stops the install: no game log, no RCON, no port to reach the game, no free ports.
+    """Why the host or the game stops the install: no game log, no SourceMod, no RCON, no port, no free ports.
 
     Sets p["game_port"]: the port the game really listens on (services/addons.game_port).
     """
@@ -190,8 +202,9 @@ def _host_refusal(gs, p, need_ports):
     if why:
         return why
     if not _ad.log_dir(gs.short_name, p["logdir"]):
-        name = _ad.game_log_name(gs.game_type)
-        return _NO_LOG if name == "games_mp.log" else i18n.Sentence(_NO_LOG_NAMED, log=name)
+        return _no_log(gs.game_type)
+    if gs.game_type in _ad.SOURCEMOD_DIR and not p.get("sourcemod"):
+        return _NO_SOURCEMOD
     if not p["rcon"]:
         return p["rcon_why"] or _NO_RCON
     if p["ids"] is None:
@@ -263,7 +276,7 @@ def _install_texts(gs, plan, p, who):
     relay_list = _ad.relays(addon_id, plan["db_host"], plan["db_port"], plan["geolocation"],
                             p["ports"][1 if web else 0:])
     local_db = plan["db_port"] if plan["db"] is not None and plan["db_host"] == "127.0.0.1" else None
-    net = _ad.network(p["game_port"], local_db, relay_list, p["splice"])
+    net = _ad.network(p["game_port"], local_db, relay_list, p["splice"], gs.game_type in _ad.RCON_TCP_GAMES)
     unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
                        p["ids"])
     settings, files, secrets = _settings(gs, plan, p)

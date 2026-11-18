@@ -113,7 +113,7 @@ def _unit(gs, addon_id, p, meta, geo):
     web, free = _web_and_free(addon_id, meta, p["ports"])
     relay_list = _ad.relays(addon_id, host, port, geo, free)
     local_db = port if r is not None and host == "127.0.0.1" else None
-    net = _ad.network(_reach_port(gs, meta, p), local_db, relay_list, p["splice"])
+    net = _ad.network(_reach_port(gs, meta, p), local_db, relay_list, p["splice"], gs.game_type in _ad.RCON_TCP_GAMES)
     unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
                        p["ids"])
     return unit, _ad.relay_units(addon_id, relay_list), net, web

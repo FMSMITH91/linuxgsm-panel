@@ -16,7 +16,7 @@ THE CONTAINER (OWASP Docker Security Cheat Sheet)
 
 THE NETWORK (pasta(1), podman-run(1); the cheat sheet has no rule for a container's outbound traffic)
     The container has its own network namespace, and reaches only what network() forwards to the
-    host's loopback: the game's RCON port (UDP) and, for an add-on with a database, that database
+    host's loopback: the game's RCON port (UDP; TCP for a Source game) and, for an add-on with a database, that database
     (TCP; a database on another machine through a relay on this host, see relays()). Its web page,
     if it has one, is published on 127.0.0.1 only. Nothing else:
       - where pasta has --splice-only (passt 2026_01_20 and later: Ubuntu 26.04), the namespace has
@@ -34,7 +34,8 @@ THE ADD-ONS
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
     two plugin questions its first start would ask are answered in their own files.
-    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet): legacy, opt-in. Built on
+    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet; q3, csgo and ins built in, each behind its own
+    switch: B3_LATER_GAMES): legacy, opt-in. Built on
     the host from addon_images/b3 (a Containerfile: FMSMITH91/big-brother-bot at one commit, its
     dependencies by hash), with one of this server's databases from the Databases tab (never one
     another add-on uses). Its geolocation is off unless chosen: offline (a country, from DB-IP's
@@ -57,6 +58,22 @@ B3 = "b3"
 # it listens on (Wolfenstein: Enemy Territory binds 0.0.0.0:27960 unless the instance's startparameters set
 # net_port: vps-b3 round 3). An add-on for one needs the server running at install, to read the real port.
 LIVE_PORT_GAMES = ("wet",)
+# More B3 games, built in and each switched on after its own test against LinuxGSM's server (the
+# vps checklist): Quake 3 Arena (q3server, the id 1.32c build), Counter-Strike: Global Offensive and
+# Insurgency (Source engine: B3 needs SourceMod on the server and its console.log from -condebug, and
+# speaks RCON over TCP). Not offered, each for its reason in docs/addons.md: ET: Legacy (B3's et parser
+# reads neither its status rows nor its chat lines), Arma 3 and Chivalry: Medieval Warfare (their RCON
+# is not set up by LinuxGSM's configs, so nothing on the host says where B3 would reach it).
+B3_Q3 = False
+B3_CSGO = False
+B3_INS = False
+# Each one's B3 parser (b3/parsers/<name>.py at B3_COMMIT), and whether it is offered.
+B3_LATER_GAMES = (("q3", "q3", B3_Q3), ("csgo", "csgo", B3_CSGO), ("ins", "insurgency", B3_INS))
+# Games whose RCON is TCP on the game port (Source's), forwarded with -T; the others' is UDP (-U).
+RCON_TCP_GAMES = ("csgo", "ins")
+# Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
+# folder LinuxGSM's mods-install puts it in.
+SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
 # FMSMITH91/big-brother-bot master on 2026-11-18 (the merge of its PR #23: commands refused to a player B3
 # has not authenticated, and a guard on group changes; #22 and #21 CoD4x and vanilla ET; #19 the geolocation
 # services, #20 the offline .mmdb lookup): the B3 the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
@@ -103,8 +120,8 @@ CATALOG = {
         "source": "https://github.com/FMSMITH91/big-brother-bot",
         # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
         # and 3b). United Offensive is CoD1's engine and log: B3's cod parser. World at War is cod5.
-        "games": {"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2",
-                  "wet": "et"},
+        "games": dict({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2",
+                       "wet": "et"}, **{g: parser for g, parser, on in B3_LATER_GAMES if on}),
         # geoip: DB-IP's country database, put there by the panel (services/geoip.py), read-only inside.
         "mounts": (("Data", "/data"), ("geoip", "/geoip:ro")),
         "env": ("TZ=Etc/UTC", "HOME=/data"),
@@ -187,11 +204,14 @@ _GEOLOCATORS = {GEO_OFFLINE: "mmdb", GEO_ONLINE: "ipwho.is"}
 B3_GEO_INI = "Data/conf/plugin_geolocation.ini"
 # The config folder a game's RCON password is read from, by game type (LinuxGSM's servercfgdir:
 # serverfiles/main; uo for United Offensive, base for SoF2, etmain for ET).
-_CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain"}
+_CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain", "q3": "baseq3", "csgo": "csgo/cfg", "ins": "insurgency/cfg"}
 # The game's log file and where to look for it, by game type (default: games_mp.log, which every CoD
 # writes under its own folder in the home, or under serverfiles for cod4server). SoF2 1.02a/1.03 takes
 # LinuxGSM's `g_log "date"` as a file name (~/.sof2/base/date); ET's is serverfiles/etmain/etserver.log.
-_GAME_LOG = {"sof2": (".sof2", "date"), "wet": ("serverfiles", "etserver.log")}
+# Quake 3 1.32c writes g_log's default, games.log, under its home path (~/.q3a/baseq3: LinuxGSM sets
+# only fs_basepath). A Source game's is console.log in its game folder, written with -condebug.
+_GAME_LOG = {"sof2": (".sof2", "date"), "wet": ("serverfiles", "etserver.log"), "q3": (".q3a", "games.log"),
+             "csgo": ("serverfiles/csgo", "console.log"), "ins": ("serverfiles/insurgency", "console.log")}
 _LOG_DEFAULT = ("serverfiles .callofduty* .cod*", "games_mp.log")
 
 # What the host prints, read by the parsers below.
@@ -212,7 +232,8 @@ _FAIL_MARKS = {
 START_LIMIT = _FAIL_MARKS["ADDON_START_LIMIT"]
 _B3_RCON_REFUSAL = ("B3 can't use this RCON password: it has a space at either end, or a space before a ';'. "
                     "Change it, then install again.")
-_RCON_RE = {name: re.compile(r'^[ \t]*seta?[ \t]+%s[ \t]+(?:"([^"\r\n]*)"|(\S+))' % name, re.I | re.M)
+# `set` is optional: a config line is a console command, and Source's server.cfg has none.
+_RCON_RE = {name: re.compile(r'^[ \t]*(?:seta?[ \t]+)?%s[ \t]+(?:"([^"\r\n]*)"|(\S+))' % name, re.I | re.M)
             for name in ("rcon_password", "rconpassword")}
 # The RCON password setting each game reads. CoD4 and World at War read rcon_password only: World at
 # War answers "The server must set 'rcon_password'" when only rconpassword is set (test box,
@@ -220,7 +241,8 @@ _RCON_RE = {name: re.compile(r'^[ \t]*seta?[ \t]+%s[ \t]+(?:"([^"\r\n]*)"|(\S+))
 # RCON test passed on LinuxGSM's codserver config, which sets only that) and United Offensive is
 # CoD1's engine; CoD2 is taken as rcon_password like the later engines (not yet seen on a box).
 RCON_SETTING = {"cod": "rconpassword", "coduo": "rconpassword", "cod2": "rcon_password", "cod4": "rcon_password",
-                "codwaw": "rcon_password", "sof2": "rconpassword", "wet": "rconpassword"}
+                "codwaw": "rcon_password", "sof2": "rconpassword", "wet": "rconpassword", "q3": "rconpassword",
+                "csgo": "rcon_password", "ins": "rcon_password"}
 _START_FIRST = ("Start the game server first: its start command sets no port, so the add-on reads the port it really "
                 "listens on, then install again.")
 _RCON_RENAME = ("This game ignores rconpassword. In the server's config, rename it to rcon_password, restart the "
@@ -344,7 +366,8 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     cod4server, so CoD1 and United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and
     World at War under ~/.codwaw; SoF2's under ~/.sof2, ET's under serverfiles), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
     game_rcon picks the game's own), ports= (the first `nports` free host ports from PORT_BASE + the
-    server id) and installed=1 when the add-on is already there.
+    server id), installed=1 when the add-on is already there, and for a Source game sourcemod=1 when
+    SourceMod is installed (SOURCEMOD_DIR).
     """
     cfg = "serverfiles/%s/%s.cfg" % (_CFG_DIR.get(game_type, "main"), selfname)
     where, name = _GAME_LOG.get(game_type, _LOG_DEFAULT)
@@ -354,14 +377,16 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
             'l=$(find %s -maxdepth 3 -type f -name %s -printf "%%T@ %%h\\n" '
             '2>/dev/null | sort -nr | head -n 1 | cut -d" " -f2-); echo "logdir=$l"; '
-            'echo "rcon.b64=$(grep -iE "^[[:space:]]*seta?[[:space:]]+rcon_?password[[:space:]]" %s 2>/dev/null '
+            'echo "rcon.b64=$(grep -iE "^[[:space:]]*(seta?[[:space:]]+)?rcon_?password[[:space:]]" %s 2>/dev/null '
             '| head -c 4000 | base64 -w0)"; '
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
             'echo "ports=$f"; echo "udp=$(ss -Hulnp 2>/dev/null | grep -F "users:((" | awk \'{print $4}\' '
-            '| sed "s/.*://" | sort -un | tr "\\n" " ")"; [ -f %s ] && echo installed=1; true'
+            '| sed "s/.*://" | sort -un | tr "\\n" " ")"; [ -f %s ] && echo installed=1; %strue'
             % (where, shlex.quote(name), shlex.quote(cfg), ports, int(nports),
-               shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE))))
+               shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE)),
+               "[ -d %s ] && echo sourcemod=1; " % shlex.quote(SOURCEMOD_DIR[game_type])
+               if game_type in SOURCEMOD_DIR else ""))
 
 
 # The game's log folder as the probe prints it, relative to the home: plain path words only, since it
@@ -389,7 +414,7 @@ def parse_probe(out):
             "logdir": kv.get("logdir", ""), "rcon_lines": _unb64(kv.get("rcon.b64", "")),
             "ports": [int(p) for p in kv.get("ports", "").split() if p.isdecimal()],
             "udp": [int(p) for p in kv.get("udp", "").split() if p.isdecimal() and 0 < int(p) < 65536],
-            "installed": kv.get("installed") == "1"}
+            "installed": kv.get("installed") == "1", "sourcemod": kv.get("sourcemod") == "1"}
 
 
 def status_sh():
@@ -687,15 +712,15 @@ def relay_units(addon_id, relay_list):
     return units
 
 
-def network(game_port, db_port, relay_list, splice):
+def network(game_port, db_port, relay_list, splice, rcon_tcp=False):
     """The container's Network= value: pasta, reaching only what it forwards to the host's loopback.
 
-    -U the game's RCON port (UDP). -T the database's port (TCP) when the database is on this host
+    -U the game's RCON port (UDP), or -T with `rcon_tcp` (a Source game: RCON_TCP_GAMES). -T the database's port (TCP) when the database is on this host
     (`db_port`, seen at 3306 inside), and each relay's (`relay_list`, from relays()). Then the lock:
     --splice-only where pasta has it, else -4 and -o 127.0.0.1 (see the module's NETWORK note).
     """
     opts = ["--splice-only"] if splice else ["-4", "-o", "127.0.0.1"]
-    opts += ["-U", str(int(game_port))]
+    opts += ["-T" if rcon_tcp else "-U", str(int(game_port))]
     if db_port:
         opts += ["-T", "3306:%d" % int(db_port)]
     for _name, _addr, cport, hport, _target in relay_list:
