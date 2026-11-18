@@ -124,10 +124,14 @@ def _bash_on76(_server, command, *_a, **_k):
 
 _ram76 = _smc76._parse_host_sample(_bash76(_smc76._host_sample_cmd())[0])[0]
 _gram76 = _smc76._parse_game_sample(_bash76(_smc76._game_sample_cmd(None, None))[0])
+# The host sampler reads /proc/meminfo, whose labels are never translated, so it sees this machine's
+# own memory; the game sampler still reads the stand-in `free`.
+with open("/proc/meminfo", encoding="utf-8") as _mi76:
+    _memtotal76 = next(int(ln.split()[1]) * 1024 for ln in _mi76 if ln.startswith("MemTotal:"))
 check("live metrics: on a German-locale host the host and game samplers still read RAM (free's "
       "translated `Speicher:` line left ram_total at 0, the panel's 'not read' sentinel)",
-      _ram76["ram_total"] == 8000000000 and _gram76["ram_total"] == 8000000000,
-      repr((_ram76["ram_total"], _gram76["ram_total"])))
+      _ram76["ram_total"] == _memtotal76 and _gram76["ram_total"] == 8000000000,
+      repr((_ram76["ram_total"], _memtotal76, _gram76["ram_total"])))
 
 with _patched():
     _arm76()

@@ -45,6 +45,9 @@ runtime panel/install/update-stops
 # did not: it then answers an unknown verb with rc 2 and no fallback, and the feature behind that
 # verb fails silently.
 runtime tools/panel-helper
+# tools/panel_helper_entry.py is installed over the path sudo runs and loads the helper's bytecode:
+# the same boundary, refreshed the same way.
+runtime tools/panel_helper_entry.py
 # tools/gamedig: install.sh installs these three root-owned on every host and runs the script, and
 # every game account runs the tree it installs. A commit changing only them (every Dependabot bump
 # of the lockfile) is an update. privileged.GAMEDIG_FILES names them; a unit test holds the two

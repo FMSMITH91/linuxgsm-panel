@@ -163,13 +163,13 @@ _ufw_gate = {"key": None, "read_at": float("-inf"), "checked_at": float("-inf"),
              "last_skipped": False}
 
 
-def ufw_rules_key():
-    """(inode, size, mtime_ns) per rule file — ("missing",) for one that is absent — or None.
+def _stat_key(paths):
+    """(inode, size, mtime_ns) per path — ("missing",) for one that is absent — or None.
 
-    None is "could not look", and the watcher reads on it.
+    None is "could not look", and a watcher reads on it.
     """
     key = []
-    for path in UFW_RULE_FILES:
+    for path in paths:
         try:
             st = os.stat(path)
         except FileNotFoundError:
@@ -179,6 +179,11 @@ def ufw_rules_key():
             return None
         key.append((st.st_ino, st.st_size, st.st_mtime_ns))
     return tuple(key)
+
+
+def ufw_rules_key():
+    """The UFW rule files' _stat_key."""
+    return _stat_key(UFW_RULE_FILES)
 
 
 def watch_ufw(read):
@@ -211,6 +216,72 @@ def ufw_gate_state():
     When it last checked, when it last read, and whether that last check skipped its read.
     """
     return dict(_ufw_gate)
+
+
+# ── the ban-watcher's fail2ban read, skipped while nothing it could show has changed ─────────────
+# The panel jail's list can change in three ways, and each leaves a mark the panel's account can
+# stat without privilege (/var/log and /var/lib/fail2ban are searchable by others on Ubuntu):
+#   * a ban: it follows failure lines the panel itself writes to data/auth.log, and fail2ban then
+#     logs "Ban" to /var/log/fail2ban.log and records it in its database;
+#   * a ban or unban made by hand with fail2ban-client: the same log line and database write;
+#   * a ban expiring: fail2ban logs "Unban".
+# So the 90 s watcher reads the jail, a privileged call, only when one of those files changed, plus:
+#   * on the tick after a change too, since the ban lands a moment after the auth.log line that
+#     caused it (and a host whose fail2ban logs elsewhere still sees it within one tick);
+#   * on every tick while anything is banned, so an expiry is noticed as soon as before, wherever
+#     fail2ban logs;
+#   * until the first good reading, after a reading that failed (None), or when a stat failed;
+#   * every F2B_FORCED_READ seconds regardless.
+# The files are stat'ed BEFORE the read, so a change made while it ran is seen next tick.
+F2B_STATE_FILES = ("/var/log/fail2ban.log", "/var/lib/fail2ban/fail2ban.sqlite3")
+F2B_FORCED_READ = 900
+_f2b_gate = {"key": None, "read_at": float("-inf"), "checked_at": float("-inf"), "skipped": 0,
+             "last_skipped": False, "settling": True}
+
+
+def _panel_auth_log():
+    """The panel's own failed-login log, which the jail reads (app.AUTH_LOG_PATH)."""
+    from panel.core.config import DATA_DIR
+    return os.path.join(str(DATA_DIR), "auth.log")
+
+
+def f2b_state_key():
+    """The _stat_key of fail2ban's log and database and the panel's own auth.log."""
+    return _stat_key(F2B_STATE_FILES + (_panel_auth_log(),))
+
+
+def _f2b_may_skip(key, seen, now):
+    """Whether this tick may skip the jail read (see the block comment above)."""
+    return (key is not None and key == _f2b_gate["key"] and not _f2b_gate["settling"]
+            and seen is not None and not seen and now - _f2b_gate["read_at"] < F2B_FORCED_READ)
+
+
+def watch_f2b(read, seen):
+    """The ban-watcher's fail2ban step: read() unless nothing it could show has changed.
+
+    `read` is system_ops.panel_fail2ban_banned_ips and `seen` the watcher's last reading. Returns
+    the reading, or None when it skipped, which the watcher already treats as "no news".
+    """
+    key = f2b_state_key()                 # before the read: a change made during it is caught next tick
+    now = time.monotonic()
+    _f2b_gate["checked_at"] = now
+    if _f2b_may_skip(key, seen, now):
+        _f2b_gate["skipped"] += 1
+        _f2b_gate["last_skipped"] = True
+        return None
+    _f2b_gate["last_skipped"] = False
+    _f2b_gate["settling"] = key != _f2b_gate["key"]
+    reading = read()
+    if reading is not None and key is not None:
+        _f2b_gate["key"], _f2b_gate["read_at"] = key, now
+    else:
+        _f2b_gate["key"] = None           # nothing measured: read again next tick
+    return reading
+
+
+def f2b_gate_state():
+    """A copy of the fail2ban gate's state for the debug report, as ufw_gate_state."""
+    return dict(_f2b_gate)
 
 
 def set_whitelist(entries):

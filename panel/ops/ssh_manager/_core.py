@@ -24,6 +24,7 @@ from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
 from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4
 from panel.security import privileged as _priv
+from panel.ops import live_read as _live
 from panel.ops import netdev as _netdev
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
 # Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. A
@@ -2983,12 +2984,15 @@ def _awk_jiffies(pids, into):
 
 # Every process as `user pid rss etimes`, fed to _HOST_SAMPLE_AWK.
 _HOST_PS = "ps -eo user:32=,pid=,rss=,etimes= 2>/dev/null"
+#
+# The same awk then reads the host's memory, load, cores, uptime and traffic straight from /proc
+# (panel/ops/live_read.HOST_PROC_AWK), where they were five more processes.
 _HOST_SAMPLE_AWK = (
     '{ gsub(/^ +| +$/, "", $1); u[$2] = $1; r[$1] += $3; c[$1]++; if ($4 > m[$1]) m[$1] = $4 } '
     'END { ' + _AWK_CPU_LINE + _awk_jiffies("u", "s") + 'for (x in s) print "GJA", x, s[x]; '
     'system("sleep 0.25"); ' + _AWK_CPU_LINE + _awk_jiffies("u", "t") +
     'for (x in t) print "GJB", x, t[x]; '
-    'for (x in r) print "GAMERAM", x, r[x], c[x]; for (x in m) print "GUP", x, m[x] }'
+    'for (x in r) print "GAMERAM", x, r[x], c[x]; for (x in m) print "GUP", x, m[x]; ' + _live.HOST_PROC_AWK + '}'
 )
 
 
@@ -3008,9 +3012,17 @@ def host_live_metrics(server, force=False):
         hit = _host_metrics_cache.get(ck)
         if hit and hit[0] > now:
             return hit[1]
-    out, _, _ = run_command(server, _host_sample_cmd(), timeout=20, sudo=False)
+    # One `ss` per host per portscan._PORT_SCAN_TTL, shared both ways with the port scan: an open
+    # dashboard polls this every 10 s and /api/servers' scan every 8 s, and each ran its own `ss`.
+    from panel.ops.ssh_manager import portscan as _ps
+    known = _ps.fresh_ports(ck, now)
+    out, _, _ = run_command(server, _host_sample_cmd(with_ports=known is None), timeout=20, sudo=False)
 
     host, acc = _parse_host_sample(out)
+    if known is not None:
+        acc["ports"] = known
+    elif acc["ports_read"]:
+        _ps.note_ports(ck, now, acc["ports"])
     cpu_lines = acc["cpu"]
     total_delta = 0
     if len(cpu_lines) >= 2 and len(cpu_lines[0]) >= 7 and len(cpu_lines[1]) >= 7:
@@ -3023,26 +3035,28 @@ def host_live_metrics(server, force=False):
     return result
 
 
-# `free` is read by its "Mem:" label, which procps translates ("Speicher:" on a German host,
-# "Pamięć:" on a Polish one): no MEM line, ram_total 0, and every consumer reads that as "this host
-# was not read". LC_ALL=C on that one command, so nothing else here changes locale.
-def _host_sample_cmd():
-    """host_live_metrics' one command: two CPU samples 0.25s apart and the per-user figures, then the rest."""
+# The listening ports, each once (no `sort -u`: the parser keeps a set). "PORTS <n>" says the scan
+# answered: a host where `ss` printed nothing is a read that did not happen, the same rule as
+# portscan._remote_listening_ports, so only an answered scan is shared with it.
+_HOST_SS = ("ss -H -ltnu 2>/dev/null | awk '{n = split($5, a, \":\"); if (!s[a[n]]++) print \"PORT\", a[n]} "
+            "END {if (NR) print \"PORTS\", NR}'")
+
+
+def _host_sample_cmd(with_ports=True):
+    """host_live_metrics' one command: two CPU samples 0.25s apart, the per-user and host figures, disk and ports.
+
+    `with_ports` False leaves out the `ss`, for a host whose ports another read took a moment ago.
+    """
     parts = [
         # The two CPU samples 0.25 s apart, every user's jiffies at each, RAM, process count and
-        # uptime per user: ONE ps (see _HOST_SAMPLE_AWK).
+        # uptime per user, and the host's memory, load, cores, uptime and traffic: ONE ps and ONE
+        # awk (see _HOST_SAMPLE_AWK).
         f"{_HOST_PS} | awk '{_HOST_SAMPLE_AWK}'",
-        "LC_ALL=C free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
-        "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
-        "df -B1 / | tail -1 | awk '{print \"DISK\",$2,$3}'",
-        "echo CORES $(nproc)",
-        "echo UPTIME $(awk '{print int($1)}' /proc/uptime)",
-        "ss -H -ltnu 2>/dev/null | awk '{n=split($5,a,\":\"); print \"PORT\", a[n]}' | sort -u",
-        # Every interface's received and sent byte counters (fields 1 and 9 after the name). The
-        # name is glued to the first counter once it is large ("eth0:123456"), so the ":" becomes
-        # a space before splitting. Filtered in panel/ops/netdev.py, where the rule can be tested.
-        "awk 'NR>2{sub(/:/,\" \"); print \"NETIF\",$1,$2,$10}' /proc/net/dev 2>/dev/null",
+        # The last line `tail -1` took, without the tail.
+        "df -B1 / | awk 'NR > 1 {d = $2 \" \" $3} END {if (d != \"\") print \"DISK\", d}'",
     ]
+    if with_ports:
+        parts.append(_HOST_SS)
     return " ; ".join(parts)
 
 
@@ -3100,10 +3114,14 @@ def _hs_port(f, _host, acc):
         acc["ports"].add(int(f[1]))
 
 
+def _hs_ports_read(f, _host, acc):
+    acc["ports_read"] = len(f) >= 2 and f[1].isdecimal() and int(f[1]) > 0
+
+
 _HOST_SAMPLE_LINES = {
     "cpu": _hs_cpu, "GJA": _hs_jiffies, "GJB": _hs_jiffies, "MEM": _put_mem, "LOAD": _put_load,
     "DISK": _put_disk, "CORES": _hs_host_int, "UPTIME": _hs_host_int, "GAMERAM": _hs_gameram,
-    "GUP": _hs_gup, "PORT": _hs_port, "NETIF": _netdev.netif_line,
+    "GUP": _hs_gup, "PORT": _hs_port, "PORTS": _hs_ports_read, "NETIF": _netdev.netif_line,
 }
 
 
@@ -3123,7 +3141,8 @@ def _parse_host_sample(out):
     host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
             "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
             "cores": 1, "uptime_secs": 0, "net_rx_bytes": None, "net_tx_bytes": None, "net_read_at": None}
-    acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": set(), "cpu": []}
+    acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": set(), "cpu": [],
+           "ports_read": False}
     _parse_tagged(out, _HOST_SAMPLE_LINES, host, acc)
     return host, acc
 
@@ -3178,7 +3197,7 @@ def metrics_for_game(sample, short_name, game_port):
     return m
 
 
-def server_live_metrics(server, short_name=None, game_port=None, force=False):
+def server_live_metrics(server, short_name=None, game_port=None, force=False, max_age=None):
     """One-round-trip live metrics for polling.
 
     Reports both whole-VPS figures (CPU%% via /proc/stat delta, RAM, disk, load, uptime) AND — when
@@ -3187,13 +3206,15 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
     jiffies across the same 0.25s window as the VPS CPU sample, expressed as a share of total
     machine capacity (same basis as cpu_percent). Kept to a single SSH command for speed, and cached
     for a couple of seconds so two open tabs/viewers of one server don't each run the sample.
+
+    `max_age`: answer from a sample taken up to that many seconds ago instead (the /stats poll shares
+    one sample per poll period between its viewers). Without it, _LIVE_METRICS_TTL.
     """
     _now = time.time()
     _ck = (getattr(server, "id", None), short_name, game_port)
-    if not force:
-        _hit = _live_metrics_cache.get(_ck)
-        if _hit and _hit[0] > _now:
-            return _hit[1]
+    _hit = None if force else _live_hit(_ck, _now, max_age)
+    if _hit is not None:
+        return _hit
     # Re-validated HERE, like run_as_game_user, send_console_command and _rewrite_crontab: both
     # values below are interpolated into the shell command unquoted, and GameServer's @validates
     # fires on assignment only — never on a row loaded from the database, so a row written before
@@ -3213,11 +3234,39 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
     # No sudo: every part of this reads world-readable state — /proc/stat, /proc/loadavg,
     # /proc/uptime, free, df, nproc, `ps -u <user>` and a listening-socket count. It was asking for
     # root it never needed, and on the panel's own host that was a local sudo call on every poll.
-    out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port), timeout=15, sudo=False)
-    m = _parse_game_sample(out)
-    if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
-        _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
+    # One sample at a time per server: two viewers whose polls arrive together (two tabs opened at
+    # once poll in step) both missed the cache while the first sample was still running. The second
+    # now waits for it and is answered from it.
+    with _live_lock(_ck):
+        _hit = None if force else _live_hit(_ck, _now, max_age)
+        if _hit is not None:
+            return _hit
+        out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port), timeout=15, sudo=False)
+        m = _parse_game_sample(out)
+        if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
+            _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
     return m
+
+
+_live_locks = register_remote_cache({})   # same keys as _live_metrics_cache -> its sample's lock
+_live_locks_guard = threading.Lock()
+
+
+def _live_lock(ck):
+    """The lock one server's live sample is taken under."""
+    with _live_locks_guard:
+        return _live_locks.setdefault(ck, threading.Lock())
+
+
+def _live_hit(ck, now, max_age):
+    """The cached sample for `ck` if it is young enough (max_age, else _LIVE_METRICS_TTL), else None.
+
+    The entry holds its expiry; the sample was taken _LIVE_METRICS_TTL before that.
+    """
+    hit = _live_metrics_cache.get(ck)
+    if hit and hit[0] + ((max_age or _LIVE_METRICS_TTL) - _LIVE_METRICS_TTL) > now:
+        return hit[1]
+    return None
 
 
 # The one game's processes as `pid rss etimes`, from ONE ps (see _HOST_SAMPLE_AWK): their
@@ -3311,12 +3360,35 @@ def _parse_game_sample(out):
     return m
 
 
+# A remote host page's live read diffs /proc/stat against the previous poll's, with no 0.25 s window
+# on a steady poll (panel/ops/live_read.py says when).
+_remote_cpu_prev = register_remote_cache({})   # remote id -> (when, {cpuN: jiffies}) of its last read
+
+
+def _remote_live_read(server):
+    """(sections, rc) of one live read of a remote: the previous poll's CPU read as A when it is usable."""
+    rid = getattr(server, "id", None)
+    now = time.time()
+    prev = _remote_cpu_prev.get(rid) if rid is not None else None
+    age = now - prev[0] if prev else None
+    steady = _live.steady(age)
+    # sudo=False: everything read here is world-readable, and the default (the row's sudo_enabled)
+    # made this poll a `sudo bash -c` on a remote, failing outright where sudo wants a password.
+    out, _, rc = run_command(server, _live.ONE_READ if steady else _live.TWO_READS, timeout=12, sudo=False)
+    acc = _live.parse_sections(out)
+    if steady:
+        acc["A"] = prev[1]
+    if _live.keep_read(rid, acc, age):
+        _remote_cpu_prev[rid] = (now, acc["B"])
+    return acc, rc
+
+
 def remote_live_metrics(server):
     """Per-core + overall CPU%% and RAM/swap for a server.
 
     In the SAME shape as system_ops.live_metrics() — so the remote management page can reuse the
-    Panel Server's live bar graphs. One SSH round trip (two /proc/stat samples 0.25s apart +
-    /proc/meminfo). For the local machine, delegates to system_ops.
+    Panel Server's live bar graphs. One SSH round trip (/proc/stat, diffed against the previous
+    poll's, + /proc/meminfo; see _remote_live_read). For the local machine, delegates to system_ops.
     """
     if is_local_server(server):
         try:
@@ -3324,16 +3396,10 @@ def remote_live_metrics(server):
             return system_ops.live_metrics()
         except Exception:
             _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
-    cmd = ("echo ===A; grep '^cpu' /proc/stat; echo ===B; sleep 0.25; grep '^cpu' /proc/stat; "
-           "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo; "
-           "echo ===DISK; df -PB1 /")
-    # sudo=False: everything read here is world-readable, and the default (the row's sudo_enabled)
-    # made this poll a `sudo bash -c` on a remote, failing outright where sudo wants a password.
-    out, _, _lm_rc = run_command(server, cmd, timeout=12, sudo=False)
-    acc = _parse_live_sections(out)
+    acc, _lm_rc = _remote_live_read(server)
     A, B, mem = acc["A"], acc["B"], acc["MEM"]
     disk_total, disk_used = acc["disk"]
-    cores = [_cpu_pct(A, B, n) for n in _cpu_core_names(A)]
+    cores = [_live.cpu_pct(A, B, n) for n in _live.core_names(A)]
     ram_total = mem.get("MemTotal", 0)
     ram_used = ram_total - mem.get("MemAvailable", 0)
     swap_total = mem.get("SwapTotal", 0)
@@ -3349,7 +3415,7 @@ def remote_live_metrics(server):
     read_ok = bool(_lm_rc == 0 and "cpu" in A and "cpu" in B and ram_total)
     return {
         "read_ok": read_ok,
-        "cpu_overall": _cpu_pct(A, B, "cpu"),
+        "cpu_overall": _live.cpu_pct(A, B, "cpu"),
         "cpu_cores": cores,
         "core_count": len(cores),
         "ram_used": ram_used, "ram_total": ram_total,
@@ -3364,54 +3430,6 @@ def remote_live_metrics(server):
 def _share(used, total):
     """`used` as a percentage of `total`, to one place — 0 (an int, as it always was) for no total."""
     return round(used / total * 100, 1) if total else 0
-
-
-def _parse_live_sections(out):
-    """remote_live_metrics' output by section: {"A"/"B": {cpuN: jiffies}, "MEM": {...}, "disk"}."""
-    section = None
-    acc = {"A": {}, "B": {}, "MEM": {}, "disk": (0, 0)}
-    for line in (out or "").splitlines():
-        if line.startswith("==="):
-            section = line[3:]
-            continue
-        parts = line.split()
-        if parts:
-            _live_section_line(section, parts, acc)
-    return acc
-
-
-def _live_section_line(section, parts, acc):
-    """Fold one non-blank line of `section` into `acc`; a line of no known shape is skipped."""
-    if section in ("A", "B") and parts[0].startswith("cpu") and len(parts) >= 8:
-        acc[section][parts[0]] = [int(x) for x in parts[1:8]]
-    elif section == "MEM" and len(parts) >= 2:
-        _live_mem_line(parts, acc["MEM"])
-    elif section == "DISK" and len(parts) >= 4 and parts[1].isdecimal():
-        # df -PB1 data row: Filesystem 1B-blocks Used Available Use% Mounted (skip the header)
-        acc["disk"] = (int(parts[1]), int(parts[2]))
-
-
-def _live_mem_line(parts, mem):
-    """One /proc/meminfo line into `mem`, in bytes; a value that is not a number is skipped."""
-    try:
-        mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
-    except ValueError:
-        _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
-
-
-def _cpu_pct(A, B, n):
-    """CPU% of /proc/stat line `n` between the A and B samples; 0.0 when either lacks it."""
-    if n not in A or n not in B:
-        return 0.0
-    idle = B[n][3] - A[n][3]
-    total = sum(B[n]) - sum(A[n])
-    return round((1 - idle / total) * 100, 1) if total > 0 else 0.0
-
-
-def _cpu_core_names(A):
-    """The per-core `cpuN` names in sample A, in core order."""
-    return sorted((n for n in A if n != "cpu" and n.startswith("cpu")),
-                  key=lambda x: int(x[3:]) if x[3:].isdecimal() else 0)
 
 
 # Drops the one line whose content — leading and trailing whitespace ignored — equals

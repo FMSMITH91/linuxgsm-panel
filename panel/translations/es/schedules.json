@@ -85,7 +85,7 @@
   "Game restores": "Restauraciones de juegos",
   "Checks each game server and host is up, and sends the alerts you set.": "Comprueba que cada servidor de juego y cada host estén activos, y envía los avisos que configuraste.",
   "Reads new console lines for the consoles that are open.": "Lee las nuevas líneas de consola de las consolas abiertas.",
-  "Asks each running game server how many players are on.": "Pregunta a cada servidor de juego en marcha cuántos jugadores hay.",
+  "Asks each running game server how many players are on; every 90 s when no page or alert needs them.": "Pregunta a cada servidor de juego en marcha cuántos jugadores hay; cada 90 s cuando ninguna página ni alerta los necesita.",
   "Records CPU, memory and disk use for the charts.": "Registra el uso de CPU, memoria y disco para los gráficos.",
   "Restarts or stops a server you queued, once its players leave.": "Reinicia o detiene un servidor que pusiste en cola, cuando se van sus jugadores.",
   "Takes the daily panel backup, scheduled game backups and queued ones.": "Hace la copia diaria del panel, las copias programadas de los juegos y las que están en cola.",

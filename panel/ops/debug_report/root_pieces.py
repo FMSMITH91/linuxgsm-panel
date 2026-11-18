@@ -125,7 +125,8 @@ def _piece_line(name, piece, res):
         res.find("warn", "Root-owned pieces", "%s differs from this commit" % name)
         return "DIFFERS from HEAD: %s" % _older_commit(piece.get("rel"), piece.get("blob") or "")
     return {"missing": "missing", "unreadable": "unreadable (permission)",
-            "unknown": "not compared (git ls-tree failed)"}.get(state, "?")
+            "unknown": "not compared (git ls-tree failed)",
+            "unused": "not used (the helper is installed whole)"}.get(state, "?")
 
 
 def _panel_conf_line():
