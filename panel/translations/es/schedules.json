@@ -38,7 +38,6 @@
   "Every 30 minutes": "Cada 30 minutos",
   "Every hour": "Cada hora",
   "Root's crontab": "Crontab de root",
-  "Root's cron jobs on this host. Only you can see this.": "Las tareas cron de root en este host. Solo tú puedes ver esto.",
   "Every job here runs as root on this host: anything it runs can change everything on it. Each change asks for your password and is kept in the audit log with the old and new line, which superadmins can read, so keep secrets in a root-only file rather than in the line.": "Cada tarea de aquí se ejecuta como root en este host: lo que ejecute puede cambiar todo en él. Cada cambio pide tu contraseña y queda en el registro de auditoría con la línea antigua y la nueva, que los superadministradores pueden leer, así que guarda los secretos en un archivo solo para root y no en la línea.",
   "Times are the host's own clock:": "Las horas son las del reloj del propio host:",
   "Times are the host's own clock, which the panel could not read.": "Las horas son las del reloj del propio host, que el panel no pudo leer.",

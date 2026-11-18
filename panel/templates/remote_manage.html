@@ -198,20 +198,14 @@
         <a href="{{ url_for('host_terminal', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary">
           <i class="bi bi-terminal"></i> Open terminal
         </a>
-      </div>
-    </div>
-  </div>
-  {% endif %}
-
-  {# Root's crontab (panel/routes/root_cron.py): the panel owner's only, and only once turned on in
-     Settings > Schedules; the route checks both again. #}
-  {% if current_user.is_superadmin and current_user.is_owner and root_cron_on() %}
-  <div class="col-md-6 mb-3">
-    <div class="card h-100">
-      <div class="card-header" id="sec-root-cron"><i class="bi bi-clock"></i> Root's crontab</div>
-      <div class="card-body">
-        <p class="small text-secondary">Root's cron jobs on this host. Only you can see this.</p>
-        <a href="{{ url_for('root_cron_page', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-clock"></i> Open</a>
+        {# Root's crontab (panel/routes/root_cron.py): the panel owner's only, once turned on in
+           Settings > Schedules; the route checks both again. Beside the terminal, not a card of its
+           own, so the tab does not grow. #}
+        {% if current_user.is_superadmin and current_user.is_owner and root_cron_on() %}
+        <a href="{{ url_for('root_cron_page', remote_id=remote.id) }}" class="btn btn-sm btn-outline-secondary" id="sec-root-cron">
+          <i class="bi bi-clock"></i> Root's crontab
+        </a>
+        {% endif %}
       </div>
     </div>
   </div>
