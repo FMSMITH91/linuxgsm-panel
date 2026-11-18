@@ -968,17 +968,15 @@ def _login_totp_replayed(attempt, u):
                        attempted=u.username, reason="replayed 2FA code", two_factor=True)
 
 
-def _login_password(attempt):
-    """Step 1: username and password."""
-    username = request.form.get("username", "").strip()
-    password = request.form.get("password", "")
-    remember = request.form.get("remember") == "on"
+def _login_reserve(attempt, username):
+    """(the named account or None, its throttle slot, None); or (None, None, the refusal) while paused.
 
-    # Counted per NAME as well as per address (account_guard), before the hash runs. A paused name
-    # is refused with the address throttle's own sentence and no password check at all, so the
-    # answer says nothing about the account, and a guess sent during the pause is not even tried.
-    # A browser this account has signed in from (a valid device cookie) is counted on its own and
-    # not held by the name's pause, so wrong guesses from elsewhere cannot lock the owner out.
+    Counted per NAME as well as per address (account_guard), before the hash runs. A paused name is
+    refused with the address throttle's own sentence and no password check at all, so the answer
+    says nothing about the account, and a guess sent during the pause is not even tried. A browser
+    this account has signed in from (a valid device cookie) is counted on its own and not held by
+    the name's pause, so wrong guesses from elsewhere cannot lock the owner out.
+    """
     user = User.query.filter_by(username=username).first()
     device = device_cookie.presented_nonce(user) if user and user.is_active else None
     slot, _left = account_guard.account_reserve(username, attempt.now, device=device)
@@ -986,8 +984,20 @@ def _login_password(attempt):
         g._login_failed = True
         _authlog.warning("panel login blocked from %s", _log_ip(attempt.ip))   # fail2ban: a hit
         flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
-        return render_template("login.html")
+        return None, None, render_template("login.html")
     g._login_slot = slot          # _note_lockout: whose pause a failure here can start
+    return user, slot, None
+
+
+def _login_password(attempt):
+    """Step 1: username and password."""
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    remember = request.form.get("remember") == "on"
+
+    user, slot, refused = _login_reserve(attempt, username)
+    if refused is not None:
+        return refused
     if user and user.is_active and check_password(password, user.password_hash):
         account_guard.account_release(slot)
         return _login_password_ok(attempt, user, password, remember)

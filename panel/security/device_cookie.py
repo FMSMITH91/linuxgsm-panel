@@ -64,7 +64,12 @@ def presented_nonce(user):
         data = _serializer().loads(raw, max_age=DEVICE_COOKIE_DAYS * 86400)
     except BadSignature:          # SignatureExpired is a BadSignature too
         return None
-    if not isinstance(data, dict) or data.get("u") != user.id:
+    return _nonce_for(data, user.id)
+
+
+def _nonce_for(data, user_id):
+    """The nonce of a verified cookie payload when it names account `user_id`; else None."""
+    if not isinstance(data, dict) or data.get("u") != user_id:
         return None
     nonce = data.get("n")
     return nonce if isinstance(nonce, str) and 16 <= len(nonce) <= 64 else None

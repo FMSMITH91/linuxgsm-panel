@@ -284,15 +284,14 @@ def _s246_device_attributes():
     plain = _device_set_cookie246(False)
     line = https[0] if len(https) == 1 else ""
     parts = [p.strip() for p in line.split(";")]
+    wanted = {"Secure", "HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=%d" % (_dc246.DEVICE_COOKIE_DAYS * 86400)}
+    domains = [p for p in parts if p.lower().startswith("domain=")]
     check("device cookie: over HTTPS it is __Host-, Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, "
           "kept DEVICE_COOKIE_DAYS",
-          line.startswith("__Host-lgpanel_device=") and "Secure" in parts and "HttpOnly" in parts
-          and "SameSite=Strict" in parts and "Path=/" in parts
-          and not [p for p in parts if p.lower().startswith("domain=")]
-          and ("Max-Age=%d" % (_dc246.DEVICE_COOKIE_DAYS * 86400)) in parts, repr(https))
+          all([line.startswith("__Host-lgpanel_device="), wanted <= set(parts), not domains]), repr(https))
+    one = plain[0] if len(plain) == 1 else ""
     check("device cookie: ...over plain HTTP it keeps a plain name and no Secure, so the browser keeps it",
-          len(plain) == 1 and plain[0].startswith("lgpanel_device=") and "Secure" not in plain[0]
-          and "SameSite=Strict" in plain[0], repr(plain))
+          all([one.startswith("lgpanel_device="), "Secure" not in one, "SameSite=Strict" in one]), repr(plain))
 
 
 def _s246_device_own_failures():
