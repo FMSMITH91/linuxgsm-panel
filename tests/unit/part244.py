@@ -314,15 +314,16 @@ _p9_patch(_core244, "time", _fake_time244)
 _core244._remote_cpu_prev.pop(244003, None)
 _rv244 = NS(id=244003, is_local=False, auth_method="key", host="192.0.2.99", name="p244")
 _seq244 = []
-for _at244 in (0, 2, 2.2, 4, 40):
+for _at244 in (0, 2, 2.2, 2.6, 4, 40):
     _T244[0] = 50_000.0 + _at244
     _m244 = _core244.remote_live_metrics(_rv244)
     _seq244.append(("sleep 0.25" in _sent244[-1], _m244["cpu_overall"], _m244["read_ok"]))
 _p9_restore_all()
 eq("remote live read: a cold start takes the 0.25 s window; a poll 2 s later diffs against the last "
-   "read with no window; a second caller 0.2 s after takes the window; a 36 s gap takes it again",
+   "read with no window; a second caller 0.2 s after takes the window and is not kept (0.6 s after the "
+   "kept read is still a steady poll); a 36 s gap takes it again",
    _seq244, [(True, 20.0, True), (False, 20.0, True), (True, 20.0, True), (False, 20.0, True),
-             (True, 20.0, True)])
+             (False, 20.0, True), (True, 20.0, True)])
 
 # Through the host page's route.
 _p9_arm()
