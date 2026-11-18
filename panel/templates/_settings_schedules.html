@@ -48,7 +48,7 @@
                    data-confirm-off="{{ t('Turn off the daily OS update check? You will not be alerted to waiting updates, security updates included. Each host\'s Maintenance tab still checks when you press Check.') }}">
             <label class="form-check-label small" for="sch-os">Check every day</label>
           </div>
-          <div class="small text-secondary">OWASP recommends on (Top 10:2025 A03, patch management).</div>
+          <div class="small text-secondary">OWASP recommends on.</div>
           <div class="small text-warning{% if sc.os_on %} d-none{% endif %}" id="sch-os-owasp">Off: outside OWASP's recommendation. No alert for waiting updates; the Maintenance tab still checks when you press Check.</div>
           <label class="form-label small mb-1 mt-2" for="sch-os-at">Time of day <span class="sch-zone">(UTC)</span></label>
           <input type="time" id="sch-os-at" name="os_check_at" class="form-control form-control-sm maxw-8rem"

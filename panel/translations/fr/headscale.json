@@ -3,7 +3,7 @@
   "The coordination server this panel's hosts join: Tailscale's own, or a self-hosted one such as Headscale. Connecting this host, and a remote's login link or auth key, use it. Leave it empty for Tailscale.": "Le serveur de coordination que rejoignent les hôtes de ce panneau : celui de Tailscale, ou un serveur auto-hébergé comme Headscale. La connexion de cet hôte, ainsi que le lien de connexion ou la clé d'authentification d'un hôte distant, l'utilisent. Laissez-le vide pour Tailscale.",
   "This host is joined to:": "Cet hôte est rattaché à :",
   "Control server address": "Adresse du serveur de contrôle",
-  "Recommended: an https:// address (OWASP Transport Layer Security Cheat Sheet).": "Recommandé : une adresse https:// (OWASP Transport Layer Security Cheat Sheet).",
+  "Recommended: an https:// address.": "Recommandé : une adresse https://.",
   "A plain HTTP address is outside OWASP's recommendation: the login link opens in your browser unencrypted. Use the server's HTTPS address if it has one.": "Une adresse HTTP non chiffrée est hors de la recommandation de l'OWASP : le lien de connexion s'ouvre dans votre navigateur sans chiffrement. Utilisez l'adresse HTTPS du serveur s'il en a une.",
   "Tailscale Serve (private HTTPS):": "Tailscale Serve (HTTPS privé) :",
   "offered": "proposé",
@@ -22,7 +22,7 @@
   "New joins use Tailscale's own control server.": "Les nouvelles connexions utilisent le serveur de contrôle de Tailscale.",
   "Auth key is required. Create a pre-auth key on your control server (Headscale: headscale preauthkeys create --user <USER_ID>).": "Une clé d'authentification est requise. Créez une clé de pré-authentification sur votre serveur de contrôle (Headscale : headscale preauthkeys create --user <USER_ID>).",
   "Self-hosted control server (Headscale)?": "Serveur de contrôle auto-hébergé (Headscale) ?",
-  "Leave it empty for Tailscale. Recommended: an https:// address (OWASP Transport Layer Security Cheat Sheet).": "Laissez-le vide pour Tailscale. Recommandé : une adresse https:// (OWASP Transport Layer Security Cheat Sheet).",
+  "Leave it empty for Tailscale. Recommended: an https:// address.": "Laissez-le vide pour Tailscale. Recommandé : une adresse https://.",
   "This tailnet's control server does not issue HTTPS certificates, so Tailscale Serve isn't available. Finish setup and open the panel at its tailnet address.": "Le serveur de contrôle de ce tailnet ne délivre pas de certificats HTTPS, donc Tailscale Serve n'est pas disponible. Terminez la configuration et ouvrez le panneau à son adresse tailnet.",
   "Create a pre-auth key on your control server. On Headscale:": "Créez une clé de pré-authentification sur votre serveur de contrôle. Sur Headscale :",
   "https://headscale.example.com": "https://headscale.example.com"
