@@ -46,6 +46,14 @@ HSTS = "max-age=63072000; includeSubDomains"
 # the browser), so both can be as strict as there is.
 COOP = "same-origin"
 CORP = "same-origin"
+# HTTP Headers Cheat Sheet, "Cross-Origin-Embedder-Policy (COEP)": require-corp, so a page loads only
+# same-origin resources or ones that opt in. Every resource a panel page loads is its own (the CSP
+# allows 'self' and data: only; the vendored libraries are served from /static), and a same-origin
+# resource needs no opt-in, so nothing changes for the panel's own pages. A download is a navigation,
+# which COEP does not restrict, and the alerts service worker (static/push/sw.js, a script response,
+# so it gets no COEP) fetches nothing. CORP stays same-origin, stricter than the cheat sheet's
+# same-site: no other site, a sibling subdomain included, has a reason to load a panel response.
+COEP = "require-corp"
 
 # What the after-request cache step gives a response that set no Cache-Control of its own (app.py).
 PRIVATE_REVALIDATE = "no-cache, private"
@@ -66,8 +74,8 @@ def set_page_headers(resp, csp):
 
     A page gets CSP (csp() builds it), X-Frame-Options DENY (the CSP's frame-ancestors 'none' for the
     browsers that predate it: OWASP Clickjacking Defense Cheat Sheet), Permissions-Policy,
-    Cross-Origin-Opener-Policy and X-DNS-Prefetch-Control off (HTTP Headers Cheat Sheet: the page's
-    links are not all the panel's own). Every response gets Cross-Origin-Resource-Policy. A JSON answer
+    Cross-Origin-Opener-Policy, Cross-Origin-Embedder-Policy and X-DNS-Prefetch-Control off (HTTP
+    Headers Cheat Sheet: the page's links are not all the panel's own). Every response gets Cross-Origin-Resource-Policy. A JSON answer
     left at PRIVATE_REVALIDATE by the cache step (which runs before this one) becomes NO_STORE.
     """
     resp.headers.setdefault("Cross-Origin-Resource-Policy", CORP)
@@ -80,6 +88,7 @@ def set_page_headers(resp, csp):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Permissions-Policy", PERMISSIONS_POLICY)
     resp.headers.setdefault("Cross-Origin-Opener-Policy", COOP)
+    resp.headers.setdefault("Cross-Origin-Embedder-Policy", COEP)
     resp.headers.setdefault("X-DNS-Prefetch-Control", "off")
     resp.headers.setdefault("Content-Security-Policy", csp())
 
