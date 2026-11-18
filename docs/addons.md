@@ -3,6 +3,7 @@
 A game server's **Files & Config → Add-ons** tab (with `manage_addons`) installs admin tools that run beside the game.
 Each runs in a **rootless Podman container as the server's own account**. There is no root daemon and no Docker
 socket, and the container's root is that account. The container has:
+
 - no added capability and no new privileges;
 - a read-only system, a 1 GB memory cap and a 512-process cap;
 - the game's log folder mounted read-only;
@@ -24,6 +25,7 @@ socket, and the container's root is that account. The container has:
 
 An add-on reaches only the game's RCON port and its database. A database on another machine, and B3's geolocation,
 go through relays on the host's loopback.
+
 - **Ubuntu 26.04:** it reaches nothing else.
 - **Ubuntu 24.04:** it can't reach the internet or other machines, but services listening on the host's own other
   addresses (such as its Tailscale address) stay reachable.
@@ -31,6 +33,7 @@ go through relays on the host's loopback.
 ## Installing, checking, removing
 
 Installing the first add-on on a host (Ubuntu 24.04 or newer):
+
 - installs `podman`, `uidmap` and `passt` from Ubuntu;
 - gives the account a range of subordinate ids if it has none;
 - turns on lingering, so the account's user manager starts the add-on at boot.

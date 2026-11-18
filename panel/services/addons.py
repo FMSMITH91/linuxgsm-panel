@@ -164,7 +164,7 @@ _FAIL_MARKS = {
 }
 _B3_RCON_REFUSAL = ("B3 can't use this RCON password: it has a space at either end, or a space before a ';'. "
                     "Change it, then install again.")
-_RCON_RE = re.compile(r'^\s*seta?\s+rcon_?password\s+(?:"([^"\r\n]*)"|(\S+))', re.I | re.M)
+_RCON_RE = re.compile(r'^[ \t]*seta?[ \t]+rcon_?password[ \t]+(?:"([^"\r\n]*)"|(\S+))', re.I | re.M)
 _KV_RE = re.compile(r"([a-z][a-z0-9_.]{0,40})=(.*)")
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)")
 _STATES = ("active", "activating", "deactivating", "inactive", "failed", "reloading")
@@ -332,8 +332,10 @@ def iw4madmin_settings(game_type, game_port, rcon):
     listens on every address of the container's own network; the host publishes it on 127.0.0.1.
     """
     parser = CATALOG[IW4MADMIN]["games"][game_type]
+    # Where IW4MAdmin listens inside its own container network; the host publishes it on 127.0.0.1.
+    bind = "http://0.0.0.0:%d" % CATALOG[IW4MADMIN]["web_port"]  # NOSONAR(S5332) - a listen address, not a request
     doc = {
-        "Webfront": {"Enabled": True, "BindUrl": "http://0.0.0.0:%d" % CATALOG[IW4MADMIN]["web_port"]},
+        "Webfront": {"Enabled": True, "BindUrl": bind},
         "DatabaseProvider": "sqlite",
         "UseLocalTranslations": True,
         "AutoMessagePeriod": 60,
@@ -419,9 +421,10 @@ def build_files(addon_id):
 def relays(addon_id, db_host, db_port, geolocation, ports):
     """The TCP relays the add-on needs on this host.
 
-    Each is (name, address in the container, port there, host port, target "host:port"). A database on this host needs none (network() forwards its port straight). One on another
-    machine, and each geolocation service when chosen, gets a relay: systemd-socket-proxyd as the
-    account, listening on one of `ports` (free host ports on 127.0.0.1) and connecting to that one
+    Each is (name, address in the container, port there, host port, target "host:port"). A database
+    on this host needs none (network() forwards its port straight). One on another machine, and each
+    geolocation service when chosen, gets a relay: systemd-socket-proxyd as the account, listening
+    on one of `ports` (free host ports on 127.0.0.1) and connecting to that one
     target only, so the container never needs a route to anywhere.
     """
     want = []
@@ -489,6 +492,10 @@ def quadlet(user, addon_id, logdir, net, port, relay_list=()):
         "Network=%s" % net,
     ] + (["PublishPort=127.0.0.1:%d:%d" % (port, a["web_port"])] if a["web_port"] else []) + [
         "Environment=%s" % e for e in a["env"]] + vols + [
+        # keep-id: the add-on runs as the game account's own uid inside the container, not as root
+        # there (podman-run(1): keep-id runs the process as the user's UID and overrides the image's
+        # USER), so the files it writes in its folder belong to the account.
+        "UserNS=keep-id",
         "ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=%d" % PIDS,
         "HealthCmd=none", _podman_args(addon_id, relay_list),
         # always: an add-on that quits, even with status 0, is started again (IW4MAdmin exits 0 on a

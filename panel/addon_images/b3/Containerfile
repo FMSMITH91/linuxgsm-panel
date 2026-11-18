@@ -37,4 +37,7 @@ COPY --from=source /src/b3 /opt/b3/b3
 COPY --from=source /src/b3_run.py /opt/b3/b3_run.py
 COPY entrypoint.sh /opt/b3/entrypoint.sh
 WORKDIR /opt/b3
+# Not root inside: the panel runs it with UserNS=keep-id (the game account's uid); this is the
+# fallback for any other runtime.
+USER 65534:65534
 ENTRYPOINT ["/bin/sh", "/opt/b3/entrypoint.sh"]

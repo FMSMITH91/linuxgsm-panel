@@ -166,7 +166,7 @@ def _pieces253():
        [_ad253.network(28960, 3306, [], False), _ad253.network(28961, None, [], True)],
        ["pasta:-4,-o,127.0.0.1,-U,28960,-T,3306:3306", "pasta:--splice-only,-U,28961"])
     unit = _ad253.quadlet("cod4server", "iw4madmin", "/home/cod4server/serverfiles/main", "pasta:-U,28960", 21007)
-    want = ("ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=512", "Pull=never",
+    want = ("UserNS=keep-id", "ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=512", "Pull=never",
             "PublishPort=127.0.0.1:21007:1624", "Volume=/home/cod4server/serverfiles/main:/gamelog:ro",
             "Image=ghcr.io/raidmax/iw4madmin@sha256:", "PodmanArgs=--memory=1g", "WantedBy=default.target")
     eq("unit: the hardening, the pinned image and the loopback-only page are all there",
