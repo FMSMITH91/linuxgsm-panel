@@ -15,7 +15,7 @@ from panel.core import i18n
 from panel.db.models import RemoteServer, db
 from panel.ops import ssh_manager as _sm
 from panel.security import owner as _owner
-from panel.security.auth import _r17c_row_id, log_action
+from panel.security.auth import _r17c_row_id, log_action, superadmin_required
 from panel.services import root_cron as _rc
 
 NOT_OWNER = "Root's crontab is for the panel owner only."
@@ -36,6 +36,7 @@ def register(app):
     app.jinja_env.globals["root_cron_on"] = _rc.enabled
     @app.route("/root-cron/<int:remote_id>")
     @login_required
+    @superadmin_required     # and then the owner only, checked in the view
     def root_cron_page(remote_id):
         """Root's crontab and /etc/cron.d on one host (read-only for /etc/cron.d)."""
         u = current_user._get_current_object()
@@ -55,6 +56,7 @@ def register(app):
 
     @app.route("/root-cron/<int:remote_id>/change", methods=["POST"])
     @login_required
+    @superadmin_required     # and then the owner only, checked in the view
     def root_cron_change(remote_id):
         """Add, edit or delete one job in root's crontab, confirmed with the password in this request."""
         u = current_user._get_current_object()
@@ -74,6 +76,8 @@ def register(app):
         why = why or _confirm_refusal(u)
         if not why:
             why = _apply(remote, op, n, was, line, f.get("sha", ""))
+        # No remote=: the row holds the crontab lines, so the host's delegated viewers do not read it
+        # (rbac_test _AX_PRIVATE_HOST_ROWS); its actor and superadmins do.
         log_action(u, "root_cron_change", target=remote.name,
                    detail=what + (" (refused: %s)" % why if why else ""), success=not why)
         flash(i18n.tr(why or SAVED), "danger" if why else "success")
@@ -81,6 +85,7 @@ def register(app):
 
     @app.route("/root-cron/switch", methods=["POST"])
     @login_required
+    @superadmin_required     # and then the owner only, checked in the view
     def root_cron_switch():
         """Turn the root cron page on or off (owner, password in this request)."""
         u = current_user._get_current_object()

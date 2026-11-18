@@ -4777,6 +4777,14 @@ _AX_ACTION_FROM_CALLER = {
     "_r39a_wipe_refused",       # server_files' mods and cron Run now POSTs pass mods_<which> /
                                 # cron_run_now — refused while a scheduled wipe is being tried
 }
+# Rows that name a host and deliberately pass no remote=, so only their actor and superadmins read them,
+# never the host's delegated viewers: {(file, function): why}. Each must still exist (checked below).
+_AX_PRIVATE_HOST_ROWS = {
+    # A root cron change's row holds the old and new crontab line, which may carry a secret the
+    # owner typed into a command; a delegated viewer with VIEW_LOGS on that host must not read it.
+    ("panel/routes/root_cron.py", "root_cron_change"): "the crontab lines in the detail",
+}
+_ax_private_seen = set()
 _ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
 _ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)
 _ax_host = ([_ax_like(p) for p in _axm.AUDIT_HOST_ACTION_LIKE],
@@ -4813,8 +4821,12 @@ for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROO
         _kw = {k.arg: k.value for k in _n.keywords}
         _tgt = _kw.get("target", _n.args[2] if len(_n.args) > 2 else None)
         for _obj, _var in (("server", "gs"), ("remote", "remote")):
+            _private = (str(_f.relative_to(_ROOT)), _fn_of.get(id(_n))) in _AX_PRIVATE_HOST_ROWS and _obj == "remote"
             if _ax_names(_tgt, _var) and _obj not in _kw:
-                _ax_bad.append("%s names %s.name but passes no %s=" % (_where, _var, _obj))
+                if _private:
+                    _ax_private_seen.add((str(_f.relative_to(_ROOT)), _fn_of.get(id(_n))))
+                else:
+                    _ax_bad.append("%s names %s.name but passes no %s=" % (_where, _var, _obj))
         for _obj, (_likes, _exact) in (("server", _ax_srv), ("remote", _ax_host)):
             if _obj not in _kw:
                 continue
@@ -4874,6 +4886,8 @@ check("audit ids: the scan found the server and host rows to check (positive con
           _ax_counts["server"], _ax_counts["remote"]))
 check("audit ids: every row about a server or host passes it, with an action the backfill knows",
       not _ax_bad, "; ".join(_ax_bad[:5]))
+check("audit ids: every row kept from a host's viewers on purpose is still there (the list cannot rot)",
+      _ax_private_seen == set(_AX_PRIVATE_HOST_ROWS), repr(sorted(set(_AX_PRIVATE_HOST_ROWS) - _ax_private_seen)))
 
 check("rbac: a route that opens SSH reached the suite's refusal, not a real host (positive control)",
       len(_RBAC_SSH_TRIES) > 0 and _sm_core._open_client is _rbac_no_ssh,
