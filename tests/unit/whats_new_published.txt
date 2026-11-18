@@ -756,3 +756,5 @@ c6919738 Signed-in pages are not kept in the browser's cache.
 f977af9d Privileged calls use about half the CPU.
 20d8b650 The ban watcher reads fail2ban only when something changed.
 f87ad562 The helper's bytecode is checked before root runs it.
+a2674832 Required two-factor setup also holds consoles and terminals.
+4d0986f0 Wrong passwords sent from elsewhere no longer lock you out.

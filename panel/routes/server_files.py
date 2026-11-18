@@ -26,6 +26,7 @@ from panel.ops import socket_hooks as _socket_hooks
 # server_detail's log_action is the one seam for both routes.
 from panel.routes import console_rest as _crest, server_detail as _sd
 from panel.routes import game_config_form as _gcf_routes
+from panel.security.account_guard import held_at_sign_in_gate
 from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can_manage_files,
     _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
@@ -945,7 +946,7 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
 
     Asks the SAME questions the join handler asks, of what was stored at join rather than of a
     request, because there is no request here: the row still exists and is active, it is not held
-    at a forced password change, it reaches this server and holds VIEW_CONSOLE — and the
+    at a forced password change or a required 2FA setup, it reaches this server and holds VIEW_CONSOLE — and the
     CREDENTIAL the socket joined with is still accepted (_credential_still_valid: the session row,
     its epoch and idle expiry via _login_id_still_accepted, and a bearer token's hash).
 
@@ -984,7 +985,7 @@ def _viewer_still_allowed(uid, server_id, cred):
     return bool(
         user is not None
         and getattr(user, "is_active", False)
-        and not getattr(user, "must_change_password", False)
+        and not held_at_sign_in_gate(user)
         and can_access_server(user, server_id)
         and (user.is_superadmin or has_permission(user, VIEW_CONSOLE))
         and _credential_still_valid(uid, cred))
@@ -2947,8 +2948,9 @@ def _create_console_socket(app):
         # RCON output, admin commands, player names and connect lines, to a session the panel had
         # decided may not use the panel yet. host_terminal's _may_use_terminal asks this for
         # exactly this reason; this is THE connect handler for the namespace, so asking here covers
-        # every event on it.
-        if getattr(current_user, "must_change_password", False):
+        # every event on it. Settings' "Require 2FA" is the same kind of gate (account_guard's
+        # twofa_gate), so held_at_sign_in_gate asks both.
+        if held_at_sign_in_gate(current_user):
             return False
         # Recorded for the ban sweep. A handshake from an address already banned is refused here
         # too: ProxiedBanGate refuses it first on every path it sees, and this costs one lookup.
@@ -2989,11 +2991,11 @@ def _register_console_viewers(socketio):
         # Enforce the SAME access control as the HTTP console routes: the socket must
         # belong to a logged-in user who has access to this specific server AND holds
         # VIEW_CONSOLE. Without this, any socket could stream any server's console.
-        # must_change_password is asked again here, not only in the connect handler: a socket
-        # opened BEFORE an admin reset that account's password is already connected, and connect
-        # does not run a second time.
+        # The sign-in gates are asked again here, not only in the connect handler: a socket opened
+        # BEFORE an admin reset that account's password (or before Settings began requiring 2FA of
+        # it) is already connected, and connect does not run a second time.
         if (not current_user.is_authenticated
-                or getattr(current_user, "must_change_password", False)
+                or held_at_sign_in_gate(current_user)
                 or not can_access_server(current_user, server_id)
                 or not (current_user.is_superadmin or has_permission(current_user, VIEW_CONSOLE))):
             emit("console_output", {"server_id": server_id,

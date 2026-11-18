@@ -12974,8 +12974,11 @@ check("terminal: the reconnect guard is never cleared",
 # the check looks for, so searching the raw source passed with the guard deleted.
 _htr_code7 = re.sub(r'"""(?:.|\n)*?"""', "", _htr_src7)
 _htr_code7 = "\n".join(_l for _l in _htr_code7.splitlines() if not _l.lstrip().startswith("#"))
+# They ask it through account_guard.held_at_sign_in_gate, shared with the console's socket paths.
+from panel.security import account_guard as _ag7  # noqa: E402
 check("terminal: the socket events enforce the forced password change themselves",
-      re.search(r"\bmust_change_password\b", _htr_code7) is not None,
+      re.search(r"\bheld_at_sign_in_gate\(", _htr_code7) is not None
+      and re.search(r"\bmust_change_password\b", _ck_inspect.getsource(_ag7.held_at_sign_in_gate).split('"""')[-1]),
       "must_change_password is enforced by an @app.before_request, which a Socket.IO event never "
       "enters — a handed-over temporary password could open a shell")
 

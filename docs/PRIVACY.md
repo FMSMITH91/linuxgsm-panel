@@ -43,6 +43,7 @@ a stolen disk.
 | Stats history | 14 days |
 | Panel backups | 14 days by default (1–365) |
 | "Remember me" sign-in | 3 days by default (Settings → Sessions & Security) |
+| Device cookie (in your browser: your account's number and a random value, so wrong passwords sent from elsewhere do not pause your sign-in) | 180 days from your last sign-in; signing out clears it |
 | Everything else | Until you delete it |
 
 ## What leaves your server

@@ -6,7 +6,7 @@ import collections
 import re
 from datetime import timedelta
 from contextlib import (suppress)
-from flask import (flash, g, jsonify, redirect, render_template, request, session, url_for)
+from flask import (after_this_request, flash, g, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
@@ -20,7 +20,7 @@ from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
     session_fingerprint, throttle_key, verify_totp_step)
 from panel.services import (notifications)
-from panel.security import account_guard, account_notices
+from panel.security import account_guard, account_notices, device_cookie
 import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
     _LOGIN_FAILS_LOCK, _authlog, _log, _log_ip, _maybe_alert_admin_bruteforce,
@@ -785,11 +785,24 @@ def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
 
 
 def _note_lockout(who, ip, now):
-    """When this failure paused sign-ins for `who`: one audit row and one alert for the pause."""
-    pause = account_guard.account_new_lockout(who, now)
+    """When this failure paused sign-ins for `who`: one audit row and one alert for the pause.
+
+    A failure from a browser the account has signed in from (device_cookie) pauses that browser
+    only, and the row and alert say so.
+    """
+    slot = g.get("_login_slot")
+    pause = account_guard.account_new_lockout(who, now, slot=slot)
     if not pause:
         return
     minutes = max(1, (pause + 59) // 60)
+    if account_guard.is_device_slot(slot):
+        log_action(None, "login_locked", target=who, actor=who, success=False,
+                   detail="sign-ins for this name from one signed-in browser paused %d min after "
+                          "repeated failures (last from %s)" % (minutes, ip))
+        notifications.notify("account_locked", "Sign-ins paused for an account",
+                             "Sign-ins for '%s' from a browser it has signed in from are paused for "
+                             "%d min after repeated failed attempts (last from %s)." % (who, minutes, ip))
+        return
     log_action(None, "login_locked", target=who, actor=who, success=False,
                detail="sign-ins for this name paused %d min after repeated failures (last from %s)"
                       % (minutes, ip))
@@ -828,6 +841,10 @@ def _login_succeed(attempt, user, remember):
               "danger")
         return render_template("login.html")
     login_user(user, remember=remember)
+    # A fresh device cookie for this browser (a new nonce each sign-in): from now on the name's
+    # sign-in pause does not hold it (device_cookie, account_guard).
+    _uid = user.id
+    after_this_request(lambda resp: device_cookie.issue(resp, _uid))
     # The client this session belongs to, for "strong" protection (auth.py
     # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
     # session, and this one is permanent.
@@ -951,24 +968,38 @@ def _login_totp_replayed(attempt, u):
                        attempted=u.username, reason="replayed 2FA code", two_factor=True)
 
 
+def _login_reserve(attempt, username):
+    """(the named account or None, its throttle slot, None); or (None, None, the refusal) while paused.
+
+    Counted per NAME as well as per address (account_guard), before the hash runs. A paused name is
+    refused with the address throttle's own sentence and no password check at all, so the answer
+    says nothing about the account, and a guess sent during the pause is not even tried. A browser
+    this account has signed in from (a valid device cookie) is counted on its own and not held by
+    the name's pause, so wrong guesses from elsewhere cannot lock the owner out.
+    """
+    user = User.query.filter_by(username=username).first()
+    device = device_cookie.presented_nonce(user) if user and user.is_active else None
+    slot, _left = account_guard.account_reserve(username, attempt.now, device=device)
+    if slot is None:
+        g._login_failed = True
+        _authlog.warning("panel login blocked from %s", _log_ip(attempt.ip))   # fail2ban: a hit
+        flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
+        return None, None, render_template("login.html")
+    g._login_slot = slot          # _note_lockout: whose pause a failure here can start
+    return user, slot, None
+
+
 def _login_password(attempt):
     """Step 1: username and password."""
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     remember = request.form.get("remember") == "on"
 
-    # Counted per NAME as well as per address (account_guard), before the hash runs. A paused name
-    # is refused with the address throttle's own sentence and no password check at all, so the
-    # answer says nothing about the account, and a guess sent during the pause is not even tried.
-    stamp, _left = account_guard.account_reserve(username, attempt.now)
-    if stamp is None:
-        g._login_failed = True
-        _authlog.warning("panel login blocked from %s", _log_ip(attempt.ip))   # fail2ban: a hit
-        flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
-        return render_template("login.html")
-    user = User.query.filter_by(username=username).first()
+    user, slot, refused = _login_reserve(attempt, username)
+    if refused is not None:
+        return refused
     if user and user.is_active and check_password(password, user.password_hash):
-        account_guard.account_release(username, stamp)
+        account_guard.account_release(slot)
         return _login_password_ok(attempt, user, password, remember)
     # For a missing/inactive user we skipped the (slow) hash compare above;
     # run a dummy one now so response time doesn't reveal whether the account
