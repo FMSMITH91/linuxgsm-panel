@@ -201,11 +201,15 @@ _FAIL_MARKS = {
     "ADDON_NO_USER_MANAGER": "The account's user manager didn't start, so the add-on can't run as it.",
     "ADDON_PULL_FAILED": "Couldn't download the add-on's image. Check that this host can reach its registry.",
     "ADDON_BUILD_FAILED": "Couldn't build the add-on's image on this host. Its log says why.",
+    # Before ADDON_START_FAILED, which is printed with it: the first mark found is the one said.
+    "ADDON_START_LIMIT": "systemd refused to start the add-on: it was started more than 5 times in 10 minutes, its "
+                         "limit against a crash loop. Wait a few minutes, then start it.",
     "ADDON_START_FAILED": "The add-on was installed but didn't start. Its log says why.",
     "ADDON_DIED": "The add-on was installed but stopped again within 30 seconds, so it was left stopped. "
                   "Its last log lines are below.",
     "ADDON_WRITE_FAILED": "Couldn't write the add-on's files in the server's home folder.",
 }
+START_LIMIT = _FAIL_MARKS["ADDON_START_LIMIT"]
 _B3_RCON_REFUSAL = ("B3 can't use this RCON password: it has a space at either end, or a space before a ';'. "
                     "Change it, then install again.")
 _RCON_RE = {name: re.compile(r'^[ \t]*seta?[ \t]+%s[ \t]+(?:"([^"\r\n]*)"|(\S+))' % name, re.I | re.M)
@@ -763,6 +767,20 @@ def _image_sh(addon_id, d):
                TAIL_LINES, d, BUILD_DIR))
 
 
+def _fresh_start_sh(addon_id, verb):
+    """Shell for a start or restart the operator asked for: the unit's start limit cleared first.
+
+    The unit's StartLimitBurst counts every start in RESTART_WINDOW, the operator's too, so the sixth
+    Apply or Update within it left the add-on down (`start-limit-hit`). `reset-failed` clears that
+    count (systemctl(1)), so the limit is left for Restart=always's crash loops. A start that still
+    hits it prints ADDON_START_LIMIT, so the card says so instead of pointing at a clean log.
+    """
+    unit = unit_name(addon_id)
+    return ("systemctl --user reset-failed %s.service 2>/dev/null; systemctl --user %s %s.service || { rc=$?; "
+            "[ \"$(systemctl --user show -p Result --value %s.service 2>/dev/null)\" = start-limit-hit ] "
+            "&& echo ADDON_START_LIMIT; (exit $rc); }" % (unit, verb, unit, unit))
+
+
 # A line Podman itself logs into the unit's journal (an event: "container died <id> (image=...)"),
 # which buries the add-on's own lines; matched with or without journalctl's short-iso prefix.
 _PODMAN_EVENT_ERE = "(^|: )(container|image|pod|volume|network) [a-z_-]+ [0-9a-f]{12,64}( |$)"
@@ -839,12 +857,13 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
             "podman system migrate >/dev/null 2>&1; %s"
             "%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
-            "systemctl --user daemon-reload && systemctl --user start %s.service "
+            "systemctl --user daemon-reload && { %s; } "
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%secho %s"
             % (dirs, shlex.quote(q), shlex.quote(uu), secret, secret, secret, " && ".join(early),
-               _image_sh(addon_id, shlex.quote(d)), " && ".join(late), unit, unit, _tail_sh(user, addon_id),
+               _image_sh(addon_id, shlex.quote(d)), " && ".join(late), _fresh_start_sh(addon_id, "start"), unit,
+               _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), _MARK_INSTALLED))
 
 
@@ -886,13 +905,14 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
             "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; %s"
             "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
-            "systemctl --user daemon-reload && systemctl --user restart %s.service "
+            "systemctl --user daemon-reload && { %s; } "
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%s%secho %s"
             % (_dirs(d, a, files), shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early),
                _image_sh(addon_id, shlex.quote(d)) if rebuild else "", _relays_gone_sh(user, addon_id),
-               " && ".join(late), unit, unit, _tail_sh(user, addon_id), _settle_sh(user, addon_id), drop,
+               " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
+               _settle_sh(user, addon_id), drop,
                _MARK_INSTALLED))
 
 
@@ -927,10 +947,15 @@ def install_outcome(out, rc):
 
 
 def action_sh(addon_id, action):
-    """Start or stop the add-on's unit, as the account (`action` is "start" or "stop")."""
+    """Start or stop the add-on's unit, as the account (`action` is "start" or "stop").
+
+    A start is the operator's, so the unit's start limit is cleared first (_fresh_start_sh).
+    """
     if action not in ("start", "stop"):
         raise ValueError("unknown add-on action")
-    return _ENV + "systemctl --user %s %s.service" % (action, unit_name(addon_id))
+    if action == "start":
+        return _ENV + _fresh_start_sh(addon_id, "start")
+    return _ENV + "systemctl --user stop %s.service" % unit_name(addon_id)
 
 
 def logs_sh(user, addon_id):

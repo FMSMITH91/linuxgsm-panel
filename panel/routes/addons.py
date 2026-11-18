@@ -393,7 +393,13 @@ def _action_answer(gs, addon_id, action):
     out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
                                           timeout=_ad.ACTION_TIMEOUT)
     ok = rc == 0
-    why = "" if ok else _with_reason(_NOT_DONE[action], out, err)
+    said = _ad.START_LIMIT if action == "start" and "ADDON_START_LIMIT" in (out or "") else _NOT_DONE[action]
+    why = "" if ok else _with_reason(said, "" if said is _ad.START_LIMIT else out, err)
+    if ok:
+        with _JOBS_LOCK:   # an earlier job's failure no longer describes an add-on that runs now
+            job = _JOBS.get((gs.id, addon_id))
+            if job is not None and not job.get("running"):
+                _JOBS.pop((gs.id, addon_id), None)
     log_action(current_user, "addon_start" if action == "start" else "addon_stop", target=gs.name, server=gs, success=ok,
                detail="%s %s" % (addon_id, "done" if ok else "failed (rc %s): %s" % (rc, why)))
     if not ok:
