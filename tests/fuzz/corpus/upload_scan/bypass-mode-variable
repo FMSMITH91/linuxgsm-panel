@@ -1,0 +1,4 @@
+#scan
+-- dump
+SET @m = CONCAT('NO_BACKSLASH', '_ESCAPES');
+SET sql_mode = @m;

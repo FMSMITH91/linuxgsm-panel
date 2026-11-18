@@ -1,0 +1,4 @@
+#scan
+-- dump
+SET NAMES gbk;
+SELECT '¿\'; USE mysql; -- ';

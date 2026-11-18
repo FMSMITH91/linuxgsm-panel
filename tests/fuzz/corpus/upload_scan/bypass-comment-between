@@ -1,0 +1,3 @@
+#scan
+-- dump
+DROP/* x */DATABASE gs9_x;

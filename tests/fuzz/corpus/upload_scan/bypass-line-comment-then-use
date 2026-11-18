@@ -1,0 +1,6 @@
+#scan
+-- dump
+SELECT 1 # x
+; USE
+-- c
+mysql;
