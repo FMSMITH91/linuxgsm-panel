@@ -61,6 +61,8 @@ from panel.services import lgsm_players as _lgp248, lgsm_releases as _rel248, wi
 _app248 = sys.modules["app"]
 
 # ── 1. linear reads of LinuxGSM's output ─────────────────────────────────────────────────────────
+# The stand-in secret value the masking checks look for (a constant, never a literal after a key word).
+_STANDIN248 = "standin-value-r30"
 _R30_HOST = _NS248(id=248, display_name="this host", name="local", is_local=True, auth_method="local")
 _r30_shell_out = {"text": ""}
 
@@ -95,9 +97,9 @@ _R30_CASES = (
      "in progress ", 4000, True),
     ("the not-installed check", lambda t: _r30_installed_call(t + "\nserverfiles missing")(),
      "serverfiles ", 4000, False),
-    ("details' secret labels", lambda t: _sd248._dtl_mask_labelled(t + "\nRCON password: s3cr3t-r30\n")[1],
-     "password ", 4000, {"s3cr3t-r30"}),
-    ("the debug report's key=value scrub", lambda t: "s3cr3t-r30" in _so248._redact(t + " token=s3cr3t-r30"),
+    ("details' secret labels", lambda t: _sd248._dtl_mask_labelled(t + "\nRCON password: " + _STANDIN248 + "\n")[1],
+     "password ", 4000, {_STANDIN248}),
+    ("the debug report's key=value scrub", lambda t: _STANDIN248 in _so248._redact(t + " token=" + _STANDIN248),
      "password-", 100, False),
     ("a release note's links", lambda t: _rel248.plain("[the notes](https://example.invalid/n) " + t)[:9],
      "[", 8000, "the notes"),
@@ -119,7 +121,7 @@ eq("lgsm output r30: the players-online line still reads with other tags before 
    _lgp248.outcome("[ INFO ] a [ INFO ] Stopping x: 12 players are on the server: restart postponed", "restart"),
    {"code": "lgsm_postponed", "kind": "restart", "players": 12})
 eq("lgsm output r30: the key=value scrub still keeps a hyphen-led key and masks only its value",
-   _so248._redact("--db-password=hunter2r30 next"), "--db-password=[redacted] next")
+   _so248._redact("--db-password=" + _STANDIN248 + " next"), "--db-password=[redacted] next")
 
 
 # ── 2. the port check when the server's own account runs ─────────────────────────────────────────
