@@ -36,7 +36,7 @@ from panel.ops.ssh_manager import databases as _dbs
 from panel.routes._shared import _r20b_audit_on_raise, _r42r_audit_after, game_account_write_refusal
 from panel.security.auth import (MANAGE_DATABASES, MANAGE_REMOTES, VIEW_SERVERS, get_game, get_host_remote, get_remote,
                                  has_permission, log_action, server_access_required, superadmin_required)
-from panel.routes import databases_net as _net
+from panel.routes import addons, databases_net as _net
 from panel.security.account_guard import step_up_needed, step_up_refusal, step_up_required
 from panel.services import db_snippets as _snip
 
@@ -1074,5 +1074,6 @@ def register(app):
     _move_route(app)
     _remote_routes(app)
     _net.register(app)
+    addons.register(app)          # the Add-ons card: its add-ons each use one of these databases
     databases_data.register(app)
     databases_files.register(app)

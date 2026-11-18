@@ -5878,8 +5878,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 307, was 302: tailscale.py's control-server save (a self-hosted control server for new joins),
 # superadmin-only with step-up; Settings > Schedules' save (superadmin, step-up) and the root cron page,
 # its change and its switch (panel owner only, the password confirmed in each change request; root_cron.py).
-check("register_routes: every one of the 307 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 307,
+# 312, was 307: panel/routes/addons.py's Add-ons tab: its status, install, start/stop, remove and log
+# (MANAGE_ADDONS and server access; install and remove with step-up).
+check("register_routes: every one of the 312 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 312,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

@@ -85,6 +85,10 @@ MANAGE_DATABASES = "manage_databases"
 # the database's own account). Granted to no group by default; it is given with MANAGE_DATABASES,
 # which browsing (and the manager itself) takes.
 EDIT_DATABASE_DATA = "edit_database_data"
+# A server's add-ons (panel/routes/addons.py): admin tools in rootless containers beside the game, run
+# as its account. Installing one installs Podman on the host through the helper and reads the game's
+# RCON password, so it is granted to no group by default; a superadmin holds every permission.
+MANAGE_ADDONS = "manage_addons"
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
@@ -124,6 +128,8 @@ ALL_PERMISSIONS = {
                        "their passwords"),
     EDIT_DATABASE_DATA: ("Change the data in a server's databases: edit rows and run SQL statements (give "
                          "Manage a server's databases with it)"),
+    MANAGE_ADDONS: ("Manage a server's add-ons: install, start, stop and remove admin tools that run in "
+                    "containers beside the game as its account, and read their logs"),
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",

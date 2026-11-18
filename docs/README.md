@@ -114,6 +114,7 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - **Scheduled Rust wipes**, with a backup taken first.
 - **Garry's Mod content mounting** — one shared copy of CS:Source and other Source games' content per host, mounted read-only into each GMod server.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
+- **Add-ons in containers** — admin tools beside a game server, each in a rootless Podman container as the server's own account. See [Add-ons](#add-ons).
 
 ### Backups
 
@@ -242,6 +243,7 @@ next sign-in. If the owner can no longer sign in, ownership is moved from the pa
 | `download_backup` / `delete_backup` | Download / delete a game server's backup archives (a deleted backup is gone for good). Taking a backup, its schedule and the panel's own backups stay with superadmins |
 | `restore_backup` | Restore a game server from one of its backups: the server is stopped, a backup of its current state is taken first, then its files are replaced with the archive's (the account's SSH keys and shell start-up files are kept as they are, never taken from the archive). The most destructive backup permission. Uploading a backup to restore also needs `edit_files` (an uploaded archive can hold any file, including the scripts the server runs) |
 | `manage_databases` | A server's MariaDB/MySQL databases: add, delete, restore and reset them, and see their passwords. Given to no group by default. Setting up a host's database server also needs `manage_remotes`; the admin login of an existing server is for superadmins |
+| `manage_addons` | A server's add-ons: install, start, stop and remove them, and read their logs. Installing the first one on a host installs Podman through the helper. Given to no group by default |
 | `edit_database_data` | Change the data inside a server's databases on the Databases page: edit rows and run SQL statements, always as that database's own account. Given to no group by default; give it with `manage_databases`, which browsing (and the manager itself) needs |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
 
@@ -286,6 +288,27 @@ the server's prepared statements, so nothing typed can run a client command.
 **What is logged** (the audit log): opening a table, every row change (the table, the columns and how many
 rows; never a value), every SQL statement (its kind, the database, how many rows, and the statement with
 each quoted value replaced by `?`), each dump download and each upload.
+
+### Add-ons
+
+A game server's **Files & Config → Add-ons** tab (with `manage_addons`) installs admin tools that run
+beside the game. Each runs in a **rootless Podman container as the server's own account**: there is no
+root daemon and no Docker socket, the container's root is that account, and it has no added
+capability, no new privileges, a read-only system, a 1 GB memory cap and a 512-process cap. Its
+network is its own: it reaches only the game's RCON port and the local database's port on the host,
+and its web page listens on `127.0.0.1` only (reach it with an SSH tunnel, `ssh -L <port>:127.0.0.1:<port>`,
+or over Tailscale). The game's log folder is mounted read-only.
+
+- **IW4MAdmin** (Call of Duty 4 / CoD4x and World at War): the image its author publishes
+  (`ghcr.io/raidmax/iw4madmin`), pinned by digest. The panel writes its settings before the first start:
+  this server on `127.0.0.1`, the RCON password from the server's config, the game log, and one of the
+  server's databases from the Databases tab. Each add-on needs a database of its own.
+
+Installing the first add-on on a host (Ubuntu 24.04 or newer) installs `podman`, `uidmap` and `passt`
+from Ubuntu, gives the account a range of subordinate ids if it has none, and turns on lingering so the
+account's user manager starts the add-on at boot. Install and remove ask for the password when the
+sign-in is older than the confirmation window, and every install, start, stop and remove is audited.
+Removing an add-on deletes its container, image, unit and files; its database is kept.
 
 ## Production deployment
 
