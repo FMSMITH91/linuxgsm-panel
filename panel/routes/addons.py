@@ -8,6 +8,7 @@ refusals included. A path that writes into, or runs code as, the game account as
 account is a plain game account (game_account_write_refusal). Root is reached only through the
 helper's verbs (`apt-install`, `addon-account-prepare`, `addon-account-release`).
 """
+import base64
 import json
 import re
 import threading
@@ -21,11 +22,12 @@ from panel.core.config import decrypt_secret
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.db.models import GameDatabase, GameServer, HostDatabaseServer, claim_row, db, row_birth
 from panel.ops import ssh_manager as _sm
-from panel.routes import databases_net as _net
+from panel.routes import addons_change as _change, databases_net as _net
 from panel.routes._shared import game_account_write_refusal
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
 from panel.services import addons as _ad
+from panel.services import geoip as _geoip
 
 _DENIED = "Permission denied"
 _UNKNOWN = "This server can't run that add-on."
@@ -40,6 +42,7 @@ _NO_IDS = "Couldn't read the server account's user and group ids on the host."
 _BAD_DB_HOST = "The database's server address can't be used for the add-on's relay."
 _NO_PODMAN = "Couldn't install Podman on this host."
 _NO_PREPARE = "Couldn't ready the server's account for containers (subordinate ids and lingering)."
+_NO_GEOIP = "Couldn't put the country database in the add-on's folder."
 _STARTED = "Installing the add-on. Downloading or building its image takes a few minutes."
 _DONE = {"start": "The add-on was started.", "stop": "The add-on was stopped."}
 _NOT_DONE = {"start": "The add-on didn't start. Its log says why.", "stop": "The add-on didn't stop."}
@@ -101,13 +104,30 @@ def _addon_rows(gs, found):
         meta = (got or {}).get("meta") or {}
         with _JOBS_LOCK:
             job = dict(_JOBS.get((gs.id, k)) or {})
-        rows.append({"id": k, "name": a["name"], "version": a["version"], "source": a["source"],
-                     "legacy": a["legacy"], "needs_database": a["database"], "data_kept": a["data_kept"],
-                     "geolocation_option": k == _ad.B3, "geolocation": bool(meta.get("geolocation")),
-                     "installed": got is not None, "state": (got or {}).get("state", ""), "port": meta.get("port"),
-                     "database": meta.get("database", ""), "installing": bool(job.get("running")),
-                     "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", "")})
+        rows.append(dict({"id": k, "name": a["name"], "version": a["version"], "source": a["source"],
+                          "legacy": a["legacy"], "needs_database": a["database"], "data_kept": a["data_kept"],
+                          "installed": got is not None, "state": (got or {}).get("state", ""), "port": meta.get("port"),
+                          "database": meta.get("database", ""), "installing": bool(job.get("running")),
+                          "job": job.get("kind", "install") if job.get("running") else "",
+                          "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", ""),
+                          "update": _change.update_reason(k, meta) if got is not None else ""},
+                         **(_b3_fields(gs, meta) if k == _ad.B3 else {"geolocation_option": False})))
     return rows
+
+
+# SoF2's B3 parser has no private message: every reply is said to the whole server (vps-b3 round 3).
+_PUBLIC_REPLIES = "On Soldier of Fortune 2, B3 has no private messages: every reply is said in public chat."
+
+
+def _b3_fields(gs, meta):
+    """B3's row fields: its geolocation and plugins as set, what the card may switch, its notes and credit."""
+    geo = _ad.geo_mode(meta.get("geolocation"))
+    return {"geolocation_option": True, "geolocation": geo, "geo_modes": list(_ad.GEO_MODES),
+            "plugins": [x for x in meta.get("plugins") or _ad.B3_PLUGINS if isinstance(x, str)],
+            "switchable": list(_ad.B3_SWITCHABLE), "geo_switchable": list(_ad.B3_GEO_SWITCHABLE),
+            "geoip": meta.get("geoip", "") if geo == _ad.GEO_OFFLINE else "",
+            "credit": _geoip.CREDIT,
+            "note": i18n.tr(_PUBLIC_REPLIES) if gs.game_type == "sof2" else ""}
 
 
 def _db_host_state(gs, rows, dbs):
@@ -205,7 +225,7 @@ def _plan(gs, addon_id, db_id, geolocation):
     r = db.session.get(GameDatabase, db_id) if db_id is not None else None
     host, port = _db_target(r) if r is not None else ("", 0)
     nrelays = (1 if r is not None and host != "127.0.0.1" else 0) + (
-        len(_ad.B3_GEOLOCATORS) if geolocation else 0)
+        len(_ad.B3_GEOLOCATORS) if _ad.geo_mode(geolocation) == _ad.GEO_ONLINE else 0)
     return {"id": addon_id, "db": r, "db_host": host, "db_port": port, "geolocation": geolocation,
             "ports": (1 if _ad.CATALOG[addon_id]["web_port"] else 0) + nrelays}
 
@@ -217,7 +237,10 @@ def _settings(gs, plan, p):
     r = plan["db"]
     secret = decrypt_secret(r.secret) or ""
     ini = _ad.b3_ini(gs.game_type, gs.port, p["rcon"], r.name, secret, plan["geolocation"])
-    return ini, _ad.build_files(plan["id"]), (secret, p["rcon"])
+    files = _ad.build_files(plan["id"])
+    if _ad.geo_mode(plan["geolocation"]) != _ad.GEO_OFF:
+        files[_ad.B3_GEO_INI] = _ad.geolocation_ini("", plan["geolocation"])
+    return ini, files, (secret, p["rcon"])
 
 
 def _install_texts(gs, plan, p, who):
@@ -231,13 +254,37 @@ def _install_texts(gs, plan, p, who):
     unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
                        p["ids"])
     settings, files, secrets = _settings(gs, plan, p)
-    meta = json.dumps({"kind": addon_id, "version": _ad.CATALOG[addon_id]["version"],
-                       "image": _ad.CATALOG[addon_id]["image"],
-                       "database": plan["db"].name if plan["db"] is not None else "", "port": web,
-                       "geolocation": bool(plan["geolocation"]), "network": net,
-                       "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       "installed_by": who}) + "\n"
+    meta = json.dumps(dict(record(addon_id, plan["geolocation"], list(_ad.B3_PLUGINS), plan.get("geoip", "")),
+                           database=plan["db"].name if plan["db"] is not None else "", port=web, network=net,
+                           installed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                           installed_by=who)) + "\n"
     return settings, files, unit, _ad.relay_units(addon_id, relay_list), meta, secrets
+
+
+def record(addon_id, geolocation, plugins, geoip=""):
+    """The fields of the add-on's record (addon.json) that say what is installed and how it is set.
+
+    image and version: what the catalog pinned at the time (an update compares them); B3's commit, its
+    geolocation mode, the plugins the card turned on, and the month of the country database it was given.
+    """
+    rec = {"kind": addon_id, "version": _ad.CATALOG[addon_id]["version"], "image": _ad.CATALOG[addon_id]["image"]}
+    if addon_id == _ad.B3:
+        rec.update(commit=_ad.B3_COMMIT, geolocation=_ad.geo_mode(geolocation), plugins=list(plugins), geoip=geoip)
+    return rec
+
+
+def push_geoip(gs, addon_id):
+    """Put this month's country database in the add-on's geoip folder: (its month, "") or ("", why not)."""
+    path, month, why = _geoip.latest()
+    if path is None:
+        return "", why or _geoip.UNREACHABLE
+    with open(path, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode("ascii")
+    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.geoip_put_sh(gs.short_name, addon_id),
+                                          timeout=300, stdin_text=b64)
+    if rc != 0 or "GEOIP_PUT" not in (out or ""):
+        return "", _with_reason(_NO_GEOIP, out, err)
+    return month, ""
 
 
 def _plan_refusal(gs, plan):
@@ -264,6 +311,8 @@ def _install_steps(gs, plan, who):
     p = dict(_ad.parse_probe(out), addons=_ad.parse_status(out)["addons"])
     p["rcon"], p["rcon_why"] = _ad.game_rcon(gs.game_type, p["rcon_lines"])
     why = _install_refusal(gs, plan, p) or _runtime(gs, p)
+    if not why and _ad.geo_mode(plan["geolocation"]) == _ad.GEO_OFFLINE:
+        plan["geoip"], why = push_geoip(gs, plan["id"])
     if why:
         return why, ""
     settings, files, unit, units, meta, secrets = _install_texts(gs, plan, p, who)
@@ -295,7 +344,7 @@ def _install_worker(app, gs_id, born, plan_args, who):
 def _install_choice(gs, addon_id):
     """(database id or None, geolocation) from the request, or a refusal answer."""
     body = _json_body()
-    geolocation = body.get("geolocation") is True and addon_id == _ad.B3
+    geolocation = _ad.geo_mode(body.get("geolocation")) if addon_id == _ad.B3 else _ad.GEO_OFF
     if not _ad.CATALOG[addon_id]["database"]:
         return (None, geolocation), None
     db_id = body.get("database_id")
@@ -319,7 +368,7 @@ def _install_answer(app, gs, addon_id):
     r = db.session.get(GameDatabase, db_id) if db_id is not None else None
     log_action(current_user, "addon_install", target=gs.name, server=gs,
                detail="%s: started%s%s" % (addon_id, ", database %s" % r.name if r is not None else "",
-                                           ", geolocation on" if geolocation else ""))
+                                           ", geolocation %s" % geolocation if geolocation != _ad.GEO_OFF else ""))
     threading.Thread(target=_install_worker, daemon=True,
                      args=(app, gs.id, row_birth(gs), (addon_id, db_id, geolocation), current_user.username)).start()
     return jsonify({"success": True, "started": True, "message": i18n.tr(_STARTED)}), 202
@@ -408,6 +457,28 @@ def register(app):
         if step_up_needed():          # root installs on the host and the RCON password: confirm first
             return step_up_refusal()
         return _guarded(server_id, addon_id, lambda gs: _install_answer(app, gs, addon_id))
+
+    @app.route("/api/server/<int:server_id>/addons/<addon_id>/update", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_addon_update(server_id, addon_id):
+        """Update an installed add-on to the catalog's image (in the background), keeping its data and settings."""
+        if not has_permission(current_user, MANAGE_ADDONS):
+            return _say(403, _DENIED)
+        if step_up_needed():          # a new image runs as the game account: confirm first, as for install
+            return step_up_refusal()
+        return _guarded(server_id, addon_id, lambda gs: _change.start(app, gs, addon_id, "update"))
+
+    @app.route("/api/server/<int:server_id>/addons/<addon_id>/settings", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_addon_settings(server_id, addon_id):
+        """Apply B3's settings (geolocation, plugins) and restart it (in the background)."""
+        if not has_permission(current_user, MANAGE_ADDONS):
+            return _say(403, _DENIED)
+        if step_up_needed():          # geolocation can send players' addresses out: confirm first
+            return step_up_refusal()
+        return _guarded(server_id, addon_id, lambda gs: _change.start(app, gs, addon_id, "settings"))
 
     @app.route("/api/server/<int:server_id>/addons/<addon_id>/<action>", methods=["POST"])
     @login_required

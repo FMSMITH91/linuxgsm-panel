@@ -34,10 +34,12 @@ THE ADD-ONS
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
     two plugin questions its first start would ask are answered in their own files.
-    B3 (cod, coduo, cod2): legacy, opt-in. Built on the host from addon_images/b3 (a Containerfile:
-    FMSMITH91/big-brother-bot at one commit, its dependencies by hash), with one of this server's
-    databases from the Databases tab (never one another add-on uses). Its geolocation, which sends
-    each player's IP address to ipwho.is, is off unless chosen at install.
+    B3 (cod, coduo, cod2, cod4, codwaw, sof2; wet behind B3_ET): legacy, opt-in. Built on
+    the host from addon_images/b3 (a Containerfile: FMSMITH91/big-brother-bot at one commit, its
+    dependencies by hash), with one of this server's databases from the Databases tab (never one
+    another add-on uses). Its geolocation is off unless chosen: offline (a country, from DB-IP's
+    database in the add-on's folder, see services/geoip.py; no player address leaves the host) or
+    online (a city, from ipwho.is through a relay: each player's IP address goes there).
 
 The host keeps the state: ~/panel-addons/<id>/addon.json says what the panel installed. Nothing is
 installed until someone with Manage add-ons installs an add-on.
@@ -51,17 +53,27 @@ import shlex
 # ── the catalog ─────────────────────────────────────────────────────────────────────────────────
 IW4MADMIN = "iw4madmin"
 B3 = "b3"
-# FMSMITH91/big-brother-bot master on 2026-11-15 (the merge of its PR #17): the B3 the add-on builds.
-B3_COMMIT = "b8e98400c51bb329e026f5b1c5e6f3b50f65518c"
+# Wolfenstein: Enemy Territory (vanilla 2.60b) for B3: built in, and offered once a box test passes at the
+# pinned commit. The re-test at edc945b2 found that an unauthenticated player could run !iamgod on vanilla
+# ET; 7e734849 refuses commands to unauthenticated players, and ET waits for its box re-test at that commit.
+# (CoD4x passed the edc945b2 re-test and is offered.)
+B3_ET = False
+# FMSMITH91/big-brother-bot master on 2026-11-18 (the merge of its PR #23: commands refused to a player B3
+# has not authenticated, and a guard on group changes; #22 and #21 CoD4x and vanilla ET; #19 the geolocation
+# services, #20 the offline .mmdb lookup): the B3 the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
+# Containerfile's ARG together.
+B3_COMMIT = "7e73484988c11d61563fd4a4ab6f92733964fbf8"
+# RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
+# 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
+IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
 # python:3.12-slim (Debian 13) on 2026-11-18, by its multi-arch index digest: the build's base.
 B3_BASE = "docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
 CATALOG = {
     IW4MADMIN: {
         "name": "IW4MAdmin",
-        # RaidMax/IW4M-Admin release 2026.2.4.1 (prerelease channel), the `latest` tag on
-        # 2026-11-18: org.opencontainers.image.revision 80bf102b, linux/amd64.
-        "image": "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46",
-        "version": "2026.2.4.1",
+        "image": IW4MADMIN_IMAGE,
+        # The tag and the digest's start: a digest Renovate moves has no release name beside it.
+        "version": "latest " + IW4MADMIN_IMAGE.rsplit(":", 1)[1][:12],
         "source": "https://github.com/RaidMax/IW4M-Admin",
         # game type -> the parser IW4MAdmin matches by name (its Plugins/ScriptPlugins/Parser*.cs).
         # LinuxGSM's cod4server runs CoD4x (executable cod4x18_dedrun).
@@ -86,9 +98,12 @@ CATALOG = {
         "image": "localhost/lgsm-addon-b3:" + B3_COMMIT[:12],
         "version": "2.0.0dev " + B3_COMMIT[:8],
         "source": "https://github.com/FMSMITH91/big-brother-bot",
-        # game type -> B3's parser. United Offensive is CoD1's engine and log: B3's cod parser.
-        "games": {"cod": "cod", "coduo": "cod", "cod2": "cod2"},
-        "mounts": (("Data", "/data"),),
+        # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
+        # and 3b). United Offensive is CoD1's engine and log: B3's cod parser. World at War is cod5.
+        "games": dict({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2"},
+                      **({"wet": "et"} if B3_ET else {})),
+        # geoip: DB-IP's country database, put there by the panel (services/geoip.py), read-only inside.
+        "mounts": (("Data", "/data"), ("geoip", "/geoip:ro")),
         "env": ("TZ=Etc/UTC", "HOME=/data"),
         "settings": "Data/b3.ini",
         "web_port": None,
@@ -145,13 +160,36 @@ B3_GEOLOCATORS = (("ipwho.is", "127.0.0.1"),)
 # from the internet; censor: it punishes words on its own; punkbuster: off on these games).
 B3_PLUGINS = ("admin", "cmdmanager", "pingwatch", "pluginmanager", "spamcontrol", "stats", "status", "tk",
               "welcome")
+# The plugins the card switches on and off (b3/conf at B3_COMMIT, each a plugin for any game): admin is
+# always on (the commands themselves). Never offered: adv (an RSS feed from the internet), censor
+# (punishes words on its own), punkbuster (not on these games), translator (Google's service); nor
+# what cannot work here: banlist, ftpytail and sftpytail (fetch from other machines; the container
+# reaches none), poweradmin*, callvote, censorurt, jumper, spawnkill, urtserversidedemo (other games'
+# parsers). geolocation and location follow the Geolocation setting; countryfilter and geowelcome
+# need it on.
+B3_SWITCHABLE = ("afk", "chatlogger", "cmdmanager", "customcommands", "firstkill", "ipban", "login", "makeroom",
+                 "netblocker", "nickreg", "pingwatch", "pluginmanager", "scheduler", "spamcontrol", "spree",
+                 "stats", "status", "tk", "welcome", "xlrstats")
+B3_GEO_SWITCHABLE = ("countryfilter", "geowelcome")
 # Geolocation's, when chosen: the lookup itself and the location plugin (!locate, join message).
 B3_GEO_PLUGINS = ("geolocation", "location")
-# A plugin with no settings file of its own (b3.ini names it with an empty value).
-_B3_NO_FILE = ("geolocation",)
+# A plugin whose settings file in b3/conf is XML.
+_B3_XML = ("scheduler",)
+# Geolocation: off, offline (a country, from DB-IP's database: services/geoip.py) or online (a city,
+# from ipwho.is through a relay). An older install's record holds true/false: online/off.
+GEO_OFF, GEO_OFFLINE, GEO_ONLINE = "off", "offline", "online"
+GEO_MODES = (GEO_OFF, GEO_OFFLINE, GEO_ONLINE)
+# Each mode's [settings] geolocators in plugin_geolocation.ini (the plugin's own service names).
+_GEOLOCATORS = {GEO_OFFLINE: "mmdb", GEO_ONLINE: "ipwho.is"}
+B3_GEO_INI = "Data/conf/plugin_geolocation.ini"
 # The config folder a game's RCON password is read from, by game type (LinuxGSM's servercfgdir:
-# serverfiles/main, serverfiles/uo for United Offensive).
-_CFG_DIR = {"coduo": "uo"}
+# serverfiles/main; uo for United Offensive, base for SoF2, etmain for ET).
+_CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain"}
+# The game's log file and where to look for it, by game type (default: games_mp.log, which every CoD
+# writes under its own folder in the home, or under serverfiles for cod4server). SoF2 1.02a/1.03 takes
+# LinuxGSM's `g_log "date"` as a file name (~/.sof2/base/date); ET's is serverfiles/etmain/etserver.log.
+_GAME_LOG = {"sof2": (".sof2", "date"), "wet": ("serverfiles", "etserver.log")}
+_LOG_DEFAULT = ("serverfiles .callofduty* .cod*", "games_mp.log")
 
 # What the host prints, read by the parsers below.
 _MARK_INSTALLED = "ADDON_INSTALLED"
@@ -175,12 +213,24 @@ _RCON_RE = {name: re.compile(r'^[ \t]*seta?[ \t]+%s[ \t]+(?:"([^"\r\n]*)"|(\S+))
 # RCON test passed on LinuxGSM's codserver config, which sets only that) and United Offensive is
 # CoD1's engine; CoD2 is taken as rcon_password like the later engines (not yet seen on a box).
 RCON_SETTING = {"cod": "rconpassword", "coduo": "rconpassword", "cod2": "rcon_password", "cod4": "rcon_password",
-                "codwaw": "rcon_password"}
+                "codwaw": "rcon_password", "sof2": "rconpassword", "wet": "rconpassword"}
 _RCON_RENAME = ("This game ignores rconpassword. In the server's config, rename it to rcon_password, restart the "
                 "server, then install again.")
 _KV_RE = re.compile(r"([a-z][a-z0-9_.]{0,40})=(.*)")
 _VERSION_RE = re.compile(r"(?<!\d)(\d{1,9})\.(\d{1,9})")
 _STATES = ("active", "activating", "deactivating", "inactive", "failed", "reloading")
+
+
+def game_log_name(game_type):
+    """The game log's file name B3 or IW4MAdmin reads, by game type (games_mp.log unless _GAME_LOG says)."""
+    return _GAME_LOG.get(game_type, _LOG_DEFAULT)[1]
+
+
+def geo_mode(value):
+    """A geolocation setting as one of GEO_MODES: a record's older true/false is online/off; anything else off."""
+    if value is True:
+        return GEO_ONLINE
+    return value if value in GEO_MODES else GEO_OFF
 
 
 def addon(addon_id):
@@ -264,26 +314,28 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     """The install's first read, as the account: the host, the game's log folder, RCON, free ports.
 
     Prints os=, podman=, splice=1 (pasta has --splice-only), uid= and gid= (the account's, for the
-    unit's User= and Group=), logdir= (the folder of the newest games_mp.log under serverfiles, or
-    the game's own folder in the home: LinuxGSM sets fs_homepath only for cod4server, so CoD1 and
-    United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and World at War under
-    ~/.codwaw), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
+    unit's User= and Group=), logdir= (the folder of the newest game log, game_log_name: games_mp.log
+    under serverfiles, or the game's own folder in the home: LinuxGSM sets fs_homepath only for
+    cod4server, so CoD1 and United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and
+    World at War under ~/.codwaw; SoF2's under ~/.sof2, ET's under serverfiles), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
     game_rcon picks the game's own), ports= (the first `nports` free host ports from PORT_BASE + the
     server id) and installed=1 when the add-on is already there.
     """
     cfg = "serverfiles/%s/%s.cfg" % (_CFG_DIR.get(game_type, "main"), selfname)
+    where, name = _GAME_LOG.get(game_type, _LOG_DEFAULT)
     ports = " ".join(str(PORT_BASE + int(server_id) + i) for i in range(_PORT_TRIES))
     return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; '
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
-            'l=$(find serverfiles .callofduty* .cod* -maxdepth 3 -type f -name games_mp.log -printf "%%T@ %%h\\n" '
+            'l=$(find %s -maxdepth 3 -type f -name %s -printf "%%T@ %%h\\n" '
             '2>/dev/null | sort -nr | head -n 1 | cut -d" " -f2-); echo "logdir=$l"; '
             'echo "rcon.b64=$(grep -iE "^[[:space:]]*seta?[[:space:]]+rcon_?password[[:space:]]" %s 2>/dev/null '
             '| head -c 4000 | base64 -w0)"; '
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
             'echo "ports=$f"; [ -f %s ] && echo installed=1; true'
-            % (shlex.quote(cfg), ports, int(nports), shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE))))
+            % (where, shlex.quote(name), shlex.quote(cfg), ports, int(nports),
+               shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE))))
 
 
 # The game's log folder as the probe prints it, relative to the home: plain path words only, since it
@@ -407,14 +459,25 @@ def b3_ini_refusal(rcon):
     return _B3_RCON_REFUSAL if rcon != rcon.strip() or re.search(r"\s;", rcon) else ""
 
 
-def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation):
+def b3_plugin_line(name):
+    """The b3.ini [plugins] line for plugin `name`, with its settings file in the add-on's conf folder."""
+    return "%s: @conf/conf/plugin_%s.%s" % (name, name, "xml" if name in _B3_XML else "ini")
+
+
+def b3_plugins(geolocation, chosen=B3_PLUGINS):
+    """The plugins b3.ini turns on: admin, the `chosen` switchable ones, and geolocation's when it is on."""
+    on = geo_mode(geolocation) != GEO_OFF
+    geo = B3_GEO_PLUGINS + tuple(p for p in B3_GEO_SWITCHABLE if p in chosen) if on else ()
+    return ("admin",) + tuple(p for p in B3_SWITCHABLE if p in chosen) + geo     # geolocation before what needs it
+
+
+def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation, chosen=B3_PLUGINS):
     """b3.ini for one server, as text (it holds the RCON and database passwords).
 
     The database is reached at 127.0.0.1:3306 inside the container, which network() forwards. The
     panel's database names and passwords are letters, digits and - _ . only
     (ssh_manager/databases.new_password), so they need no quoting in the URL.
     """
-    plugins = B3_PLUGINS + (B3_GEO_PLUGINS if geolocation else ())
     lines = [
         "; Written by linuxgsm-panel: the B3 add-on of this game server. Reinstalling rewrites it.",
         "[b3]", "parser: %s" % CATALOG[B3]["games"][game_type],
@@ -422,7 +485,8 @@ def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation):
         "bot_name: b3", "bot_prefix: ^0(^2b3^0)^7:", "time_format: %I:%M%p %Z %m/%d/%y", "time_zone: UTC",
         "log_level: 20", "logfile: @conf/b3.log", "disabled_plugins:", "external_plugins_dir: @b3/extplugins",
         "", "[server]", "rcon_password: %s" % rcon, "port: %d" % int(game_port),
-        "game_log: /gamelog/games_mp.log", "public_ip: 127.0.0.1", "rcon_ip: 127.0.0.1", "punkbuster: off",
+        "game_log: /gamelog/%s" % game_log_name(game_type), "public_ip: 127.0.0.1", "rcon_ip: 127.0.0.1",
+        "punkbuster: off",
         "delay: 0.33", "lines_per_second: 50",
         "", "[update]", "channel: skip",
         "", "[messages]",
@@ -435,8 +499,120 @@ def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation):
         "unbanned_by: $clientname^7 was un-banned by $adminname^7 $reason",
         "unbanned: $clientname^7 was un-banned^7 $reason",
         "", "[plugins]",
-    ] + ["%s:%s" % (p, "" if p in _B3_NO_FILE else " @conf/conf/plugin_%s.ini" % p) for p in plugins]
+    ] + [b3_plugin_line(p) for p in b3_plugins(geolocation, chosen)]
     return "\n".join(lines) + "\n"
+
+
+# The [plugins] lines the panel owns in b3.ini: every plugin the card can turn on or off, and admin.
+_B3_OWNED = frozenset(("admin",) + B3_SWITCHABLE + B3_GEO_SWITCHABLE + B3_GEO_PLUGINS)
+_INI_KEY_RE = re.compile(r"^[ \t]*([A-Za-z0-9_.-]+)[ \t]*[:=]")
+_INI_SECTION_RE = re.compile(r"^[ \t]*\[([^\]]+)\]")
+
+
+def _ini_lines(text):
+    """An ini file's lines, without the empty string a final newline leaves."""
+    lines = (text or "").split("\n")
+    return lines[:-1] if lines and lines[-1] == "" else lines
+
+
+def _sections(lines):
+    """Each line's section (lower case; "" before the first header), in order."""
+    out, section = [], ""
+    for line in lines:
+        m = _INI_SECTION_RE.match(line)
+        if m:
+            section = m.group(1).strip().lower()
+        out.append(section)
+    return out
+
+
+def _ini_key(line):
+    """The key a `key: value` (or `key = value`) line sets, lower case; "" for any other line."""
+    k = _INI_KEY_RE.match(line)
+    return k.group(1).lower() if k else ""
+
+
+def _header_at(lines, name):
+    """The index of section `name`'s first header line, or None."""
+    for i, line in enumerate(lines):
+        m = _INI_SECTION_RE.match(line)
+        if m and m.group(1).strip().lower() == name:
+            return i
+    return None
+
+
+def _section_end(lines, at):
+    """The index after the last line of the section headed at `at` that is not blank."""
+    end = at + 1
+    while end < len(lines) and not _INI_SECTION_RE.match(lines[end]):
+        end += 1
+    while end > at + 1 and not lines[end - 1].strip():
+        end -= 1
+    return end
+
+
+def _into_section(lines, name, new, at_end):
+    """`lines` with `new` put in section `name`: after its header, or (`at_end`) after its last line that is not blank.
+
+    The section is added at the end when the file has none.
+    """
+    at = _header_at(lines, name)
+    if at is None:
+        return lines + ([""] if lines else []) + ["[%s]" % name] + new
+    end = _section_end(lines, at) if at_end else at + 1
+    return lines[:end] + new + lines[end:]
+
+
+def b3_ini_apply(text, geolocation, chosen):
+    """`text` (b3.ini) with the [plugins] lines the panel owns set to `chosen` and the geolocation mode.
+
+    Every other line is kept as it was: the passwords, the operator's own settings, comments, and the
+    [plugins] lines of plugins the panel does not offer (an operator's external plugin). The owned lines
+    are dropped where they were and the ones turned on are written at the end of [plugins], which is
+    added when the file has none.
+    """
+    lines = _ini_lines(text)
+    keep = [ln for ln, sec in zip(lines, _sections(lines)) if not (sec == "plugins" and _ini_key(ln) in _B3_OWNED)]
+    return "\n".join(_into_section(keep, "plugins", [b3_plugin_line(p) for p in b3_plugins(geolocation, chosen)],
+                                   at_end=True)) + "\n"
+
+
+def b3_ini_plugins(text):
+    """The owned plugins b3.ini turns on (its [plugins] keys among those the panel offers), in order."""
+    on, section = [], ""
+    for line in (text or "").split("\n"):
+        m = _INI_SECTION_RE.match(line)
+        if m:
+            section = m.group(1).strip().lower()
+            continue
+        k = _INI_KEY_RE.match(line)
+        if section == "plugins" and k and k.group(1).lower() in _B3_OWNED and k.group(1).lower() not in on:
+            on.append(k.group(1).lower())
+    return on
+
+
+def geolocation_ini(text, geolocation):
+    """plugin_geolocation.ini with [settings] geolocators and mmdb_file set for `geolocation`.
+
+    The two keys are the panel's; the rest of an existing file (the operator's comments and anything
+    else) is kept. Offline asks only the database in the add-on's geoip folder, online only ipwho.is
+    (the service the relay reaches). Off leaves the file as it is (the plugin is not loaded).
+    """
+    mode = geo_mode(geolocation)
+    if mode == GEO_OFF:
+        return text
+    want = {"geolocators": _GEOLOCATORS[mode], "mmdb_file": "/geoip/dbip-country-lite.mmdb"}
+    lines, out, done = _ini_lines(text), [], set()
+    for line, sec in zip(lines, _sections(lines)):
+        key = _ini_key(line)
+        if sec == "settings" and key in want:
+            if key not in done:
+                out.append("%s: %s" % (key, want[key]))
+                done.add(key)
+            continue
+        out.append(line)
+    rest = ["%s: %s" % (k, v) for k, v in want.items() if k not in done]
+    return "\n".join(_into_section(out, "settings", rest, at_end=False)) + "\n"
 
 
 def build_files(addon_id):
@@ -464,7 +640,7 @@ def relays(addon_id, db_host, db_port, geolocation, ports):
     want = []
     if CATALOG[addon_id]["database"] and db_host and db_host != "127.0.0.1":
         want.append(("db", "127.0.0.1", 3306, "%s:%d" % (db_host, int(db_port))))
-    if addon_id == B3 and geolocation:
+    if addon_id == B3 and geo_mode(geolocation) == GEO_ONLINE:
         want += [("geo%d" % i, addr, 443, "%s:443" % name) for i, (name, addr) in enumerate(B3_GEOLOCATORS, 1)]
     return [(n, addr, cport, hport, target) for (n, addr, cport, target), hport in zip(want, ports)]
 
@@ -602,6 +778,8 @@ def _settle_sh(user, addon_id):
     TAIL_LINES of its log (base64), and exits 26.
     """
     unit = unit_name(addon_id)
+    # systemd counts NRestarts from the last start it was told to make (a start that is not an automatic
+    # restart resets it: src/core/service.c service_start), so after the install's start or a change's restart any restart at all is the add-on failing.
     return ("i=0; while [ $i -lt %d ]; do sleep 2; i=$((i + 2)); "
             "s=$(systemctl --user is-active %s.service 2>/dev/null); "
             "r=$(systemctl --user show -p NRestarts --value %s.service 2>/dev/null); "
@@ -623,7 +801,7 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
     q = "/home/%s/%s" % (user, QUADLET_DIR)
     uu = "/home/%s/%s" % (user, USER_UNIT_DIR)
     unit = unit_name(addon_id)
-    dirs = " ".join(shlex.quote("%s/%s" % (d, m)) for m in [m for m, _at in a["mounts"]] + [BUILD_DIR])
+    dirs = _dirs(d, a, files)
     early = [_put_sh("%s/%s" % (d, META_FILE), meta_text)]
     early += [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())]
     # The units are written only once the image exists: a user manager that comes up meanwhile
@@ -645,6 +823,72 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
             % (dirs, shlex.quote(q), shlex.quote(uu), secret, secret, secret, " && ".join(early),
                _image_sh(addon_id, shlex.quote(d)), " && ".join(late), unit, unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), _MARK_INSTALLED))
+
+
+def _dirs(d, a, files):
+    """The add-on's folders to make, quoted: its mounts', the build folder, and each file's own."""
+    rels = [m for m, _at in a["mounts"]] + [BUILD_DIR] + sorted({os.path.dirname(r) for r in (files or {})} - {""})
+    return " ".join(shlex.quote("%s/%s" % (d, r)) for r in rels)
+
+
+def _relays_gone_sh(user, addon_id):
+    """Shell stopping and removing the add-on's relay units (a settings change or an update writes its own)."""
+    return ("for f in /home/%s/%s/%s%s-*; do [ -e \"$f\" ] || continue; systemctl --user stop \"${f##*/}\" "
+            "2>/dev/null; rm -f \"$f\"; done; " % (user, USER_UNIT_DIR, UNIT_PREFIX, addon_id))
+
+
+def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None, rebuild=False, settings=False,
+                   old_image=""):
+    """A settings change or an update, as the account: rewrite, restart, watch. Ends like install_sh.
+
+    Writes the record, `files` and, with `settings`, the settings file from stdin (b3.ini holds the
+    passwords); with `rebuild`, pulls or builds the image again. The relay units are replaced by
+    `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
+    Its data, settings and database stay. `old_image`, when the update moved it, is removed afterwards.
+    """
+    a = CATALOG[addon_id]
+    d = addon_dir(user, addon_id)
+    unit = unit_name(addon_id)
+    q = "/home/%s/%s" % (user, QUADLET_DIR)
+    uu = "/home/%s/%s" % (user, USER_UNIT_DIR)
+    secret = shlex.quote("%s/%s" % (d, a["settings"]))
+    early = [_put_sh("%s/%s" % (d, META_FILE), meta_text)]
+    early += [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())]
+    late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
+    late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
+    stdin = ("cat > %s.new && mv -f -T %s.new %s && " % (secret, secret, secret)) if settings else ""
+    drop = ("podman rmi %s >/dev/null 2>&1; " % shlex.quote(old_image)) if old_image and old_image != a["image"] else ""
+    return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
+            "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
+            "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; %s"
+            "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
+            "systemctl --user daemon-reload && systemctl --user restart %s.service "
+            "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
+            "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
+            "%s%secho %s"
+            % (_dirs(d, a, files), shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early),
+               _image_sh(addon_id, shlex.quote(d)) if rebuild else "", _relays_gone_sh(user, addon_id),
+               " && ".join(late), unit, unit, _tail_sh(user, addon_id), _settle_sh(user, addon_id), drop,
+               _MARK_INSTALLED))
+
+
+def b3_conf_read_sh(user):
+    """Shell printing B3's b3.ini and plugin_geolocation.ini, base64, as b3ini.b64= and geoini.b64= lines."""
+    d = addon_dir(user, B3)
+    return ('echo "b3ini.b64=$(head -c 200000 %s 2>/dev/null | base64 -w0)"; '
+            'echo "geoini.b64=$(head -c 200000 %s 2>/dev/null | base64 -w0)"; '
+            % (shlex.quote("%s/%s" % (d, CATALOG[B3]["settings"])), shlex.quote("%s/%s" % (d, B3_GEO_INI))))
+
+
+def geoip_put_sh(user, addon_id):
+    """Shell, as the account, writing the country database from stdin (base64) into the add-on's geoip folder.
+
+    Prints GEOIP_PUT once it is in place; written beside and renamed, so a reader never sees half a file.
+    """
+    f = shlex.quote("%s/geoip/%s" % (addon_dir(user, addon_id), "dbip-country-lite.mmdb"))
+    g = shlex.quote("%s/geoip" % addon_dir(user, addon_id))
+    return (_ENV + "umask 077; mkdir -p %s && base64 -d > %s.new && mv -f -T %s.new %s && echo GEOIP_PUT"
+            % (g, f, f, f))
 
 
 def install_outcome(out, rc):

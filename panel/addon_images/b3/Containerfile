@@ -10,7 +10,8 @@
 #     from wheels only.
 # git and the fetched history stay in the first stage; the image keeps B3's code and its packages.
 ARG BASE_IMAGE=docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
-ARG B3_COMMIT=b8e98400c51bb329e026f5b1c5e6f3b50f65518c
+# renovate: B3_COMMIT follows FMSMITH91/big-brother-bot master (.github/renovate.json)
+ARG B3_COMMIT=7e73484988c11d61563fd4a4ab6f92733964fbf8
 
 FROM ${BASE_IMAGE} AS source
 ARG B3_COMMIT

@@ -10,6 +10,7 @@
     active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
     failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'
   };
+  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…'};
 
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
@@ -67,29 +68,86 @@
       box.appendChild(node('div', 'small text-secondary text-break',
         TF('Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).', {port: a.port})));
     }
-    if (a.geolocation_option) {
-      box.appendChild(node('div', 'small text-secondary', a.geolocation ? T('Geolocation is on: players\' IP addresses go to ipwho.is.') : T('Geolocation is off.')));
+    if (a.geolocation_option) geoStatus(a, box);
+    if (a.update) {
+      box.appendChild(node('div', 'small text-warning', a.update === 'geoip'
+        ? T('Update available: a newer month of the country database.') : T('Update available: a newer version of the add-on.')));
     }
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
+    if (a.update) bar.appendChild(button(T('Update'), 'bi-arrow-up-circle', 'adUpdate', [a.id], 'btn-outline-primary'));
     bar.appendChild(button(T('Log'), 'bi-journal-text', 'adLog', [a.id]));
     bar.appendChild(button(T('Remove'), 'bi-trash', 'adRemove', [a.id], 'btn-outline-danger'));
     box.appendChild(bar);
+    if (a.geolocation_option) settingsFold(a, box);
   }
 
-  // The geolocation switch (B3): off unless ticked, with what it sends and to whom.
-  function geoSwitch(a, box) {
-    var wrap = node('div', 'form-check mt-1');
-    var cb = node('input', 'form-check-input');
-    cb.type = 'checkbox';
-    cb.id = 'ad-geo-' + a.id;
-    var lab = node('label', 'form-check-label small', T('Geolocation'));
-    lab.htmlFor = cb.id;
-    wrap.appendChild(cb);
+  var GEO_SAID = {
+    off: 'Geolocation is off.',
+    offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
+    online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'
+  };
+  function geoStatus(a, box) {
+    box.appendChild(node('div', 'small text-secondary', T(GEO_SAID[a.geolocation] || GEO_SAID.off)));
+    if (a.geolocation === 'offline') {
+      if (a.geoip) box.appendChild(node('div', 'small text-secondary', TF('Country database: {month}.', {month: a.geoip})));
+      creditLine(a, box);
+    }
+  }
+  function creditLine(a, box) {
+    var c = node('div', 'small text-secondary', a.credit || '');
+    c.setAttribute('data-no-i18n', '');
+    box.appendChild(c);
+  }
+
+  // The geolocation choice (B3), at install and in its settings: off unless chosen.
+  function geoSelect(a, id, value) {
+    var wrap = node('div', 'mt-1');
+    var lab = node('label', 'form-label small mb-0', T('Geolocation'));
+    lab.htmlFor = id;
+    var sel = node('select', 'form-select form-select-sm fx-12');
+    sel.id = id;
+    [['off', T('Off')], ['offline', T('Offline: country')], ['online', T('Online: city')]].forEach(function (o) {
+      var opt = node('option', null, o[1]);
+      opt.value = o[0];
+      if (o[0] === (value || 'off')) opt.selected = true;
+      sel.appendChild(opt);
+    });
     wrap.appendChild(lab);
-    box.appendChild(wrap);
-    box.appendChild(node('div', 'small text-secondary', T('Off unless you tick it. When on, B3 sends each joining player\'s IP address to ipwho.is to find their country and city, and shows them in the game (!locate and the join message).')));
+    wrap.appendChild(sel);
+    wrap.appendChild(node('div', 'small text-secondary', T('Offline looks each player\'s country up in DB-IP\'s free database: the panel\'s host downloads it from db-ip.com once a month, and no player address is sent anywhere. Online sends each joining player\'s IP address to ipwho.is for their city. Either shows it in the game (!locate and the join message).')));
+    return wrap;
+  }
+
+  // B3's settings, folded: geolocation and its plugins. Apply rewrites only those in b3.ini and restarts it.
+  function settingsFold(a, box) {
+    var fold = node('details', 'mt-2');
+    fold.appendChild(node('summary', 'small', T('B3 settings')));
+    fold.appendChild(geoSelect(a, 'ad-set-geo-' + a.id, a.geolocation));
+    var grid = node('div', 'd-flex flex-wrap gap-2 mt-2');
+    var on = a.plugins || [];
+    (a.switchable || []).concat(a.geo_switchable || []).forEach(function (p) {
+      var w = node('div', 'form-check small');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-plug-' + a.id + '-' + p;
+      cb.value = p;
+      cb.checked = on.indexOf(p) >= 0;
+      cb.setAttribute('data-ad-plugin', a.id);
+      var l = node('label', 'form-check-label', p + ((a.geo_switchable || []).indexOf(p) >= 0 ? ' ' + T('(needs geolocation)') : ''));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      grid.appendChild(w);
+    });
+    fold.appendChild(node('div', 'small text-secondary mt-2', T('B3\'s plugins. Admin is always on.')));
+    fold.appendChild(grid);
+    var bar = node('div', 'd-flex flex-wrap gap-2 mt-2');
+    bar.appendChild(button(T('Apply and restart'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
+    fold.appendChild(bar);
+    fold.appendChild(node('div', 'small text-secondary mt-1', T('Only these settings are rewritten in b3.ini; your other edits there and in its conf folder are kept.')));
+    box.appendChild(fold);
   }
 
   // An add-on that needs a database while the server has none free: Install shows, disabled, with why
@@ -114,11 +172,12 @@
 
   function installRow(a, d, box) {
     if (a.legacy) {
-      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive and Call of Duty 2. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
+      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4, World at War and Soldier of Fortune 2. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
     }
+    if (a.note) box.appendChild(node('div', 'small text-secondary', a.note));
     var free = (d.databases || []).filter(function (x) { return !x.used_by; });
     if (a.needs_database && !free.length) { noDatabaseRow(a, d, box); return; }
-    if (a.geolocation_option) geoSwitch(a, box);
+    if (a.geolocation_option) box.appendChild(geoSelect(a, 'ad-geo-' + a.id, 'off'));
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.needs_database) bar.appendChild(dbSelect(a, d.databases || []));
     var b = button(T('Install'), 'bi-download', 'adInstall', [a.id], 'btn-primary');
@@ -133,7 +192,7 @@
     var name = node('strong', null, a.name + ' ' + a.version);
     name.setAttribute('data-no-i18n', '');
     head.appendChild(name);
-    var state = a.installing ? T('Installing…') : (a.installed ? T(STATE[a.state] || STATE.unknown) : T('Not installed'));
+    var state = a.installing ? T(JOB[a.job] || JOB.install) : (a.installed ? T(STATE[a.state] || STATE.unknown) : T('Not installed'));
     var badge = a.state === 'active' ? 'badge text-bg-success' : 'badge text-bg-secondary';
     head.appendChild(node('span', badge, state));
     box.appendChild(head);
@@ -143,6 +202,7 @@
       pre.setAttribute('data-no-i18n', '');
       box.appendChild(pre);
     }
+    if (a.installed && a.note) box.appendChild(node('div', 'small text-secondary', a.note));
     if (a.installed) installedRow(a, box);
     else if (!a.installing) installRow(a, d, box);
     return box;
@@ -200,7 +260,7 @@
     var a = row(id), sel = el('ad-db-' + id), geo = el('ad-geo-' + id), body = {};
     if (st.busy || (a.needs_database && (!sel || !sel.value))) return;
     if (a.needs_database) body.database_id = Number.parseInt(sel.value, 10);
-    if (geo) body.geolocation = geo.checked === true;
+    if (geo) body.geolocation = geo.value;
     window.confirmDialog({title: T('Install the add-on'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Install'),
       bodyText: T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads or builds the add-on\'s image. The add-on reads the server\'s RCON password and game log.'),
       onConfirm: function () {
@@ -222,7 +282,7 @@
   window.adRemove = function (id) {
     if (st.busy) return;
     window.confirmDialog({title: T('Remove the add-on'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Remove'),
-      bodyText: row(id).data_kept ? T('This stops the add-on and deletes its container, image and files, its settings included. Its database is kept.')
+      bodyText: row(id).data_kept ? T('This stops the add-on and deletes its container, image and folder: its settings and any plugin settings you edited go with it. Its database is kept in the Databases tab.')
         : T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.'),
       onConfirm: function () {
         stepUp(function () {
@@ -231,6 +291,31 @@
           postJson(api('/' + id + '/remove'), {}).then(after).catch(failed);
         });
       }});
+  };
+
+  window.adUpdate = function (id) {
+    if (st.busy) return;
+    window.confirmDialog({title: T('Update the add-on'), icon: 'arrow-up-circle', confirmClass: 'btn-primary', confirmLabel: T('Update'),
+      bodyText: T('This downloads or builds the add-on\'s new image and restarts it. Its data, settings and database are kept.'),
+      onConfirm: function () {
+        stepUp(function () {
+          st.busy = true;
+          say(T('Updating the add-on…'));
+          postJson(api('/' + id + '/update'), {}).then(after).catch(failed);
+        });
+      }});
+  };
+
+  window.adSettings = function (id) {
+    var geo = el('ad-set-geo-' + id);
+    if (st.busy || !geo) return;
+    var plugins = Array.prototype.filter.call(document.querySelectorAll('[data-ad-plugin="' + id + '"]'),
+      function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
+    stepUp(function () {
+      st.busy = true;
+      say(T('Applying the settings…'));
+      postJson(api('/' + id + '/settings'), {geolocation: geo.value, plugins: plugins}).then(after).catch(failed);
+    });
   };
 
   window.adLog = function (id) {
