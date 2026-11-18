@@ -5848,6 +5848,11 @@ def _addon_forget_account(uid):
     """
     if not isinstance(uid, int) or uid < ADDON_FORGET_MIN_UID:
         return 0
+    return _forget_journal(uid) + _forget_podman_tmp(uid)
+
+
+def _forget_journal(uid):
+    """Rotate the journal, then delete the uid's user journal files (exact names only); how many went."""
     subprocess.run([resolve("journalctl"), "--rotate"],                 # nosec B603 - fixed argv
                    shell=False, capture_output=True, timeout=60, env=_clean_env())
     gone = 0
@@ -5857,6 +5862,12 @@ def _addon_forget_account(uid):
             if m and int(m.group(1)) == uid and not os.path.islink(path):
                 os.unlink(path)
                 gone += 1
+    return gone
+
+
+def _forget_podman_tmp(uid):
+    """Delete Podman's /tmp folders of the uid, when each is a real folder it owns; how many went."""
+    gone = 0
     for path in (t % uid for t in ADDON_TMP_DIRS):
         try:
             st = os.lstat(path)

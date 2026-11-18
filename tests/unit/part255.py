@@ -159,7 +159,7 @@ def _first_start_tails255():
     eq("first start: the tail is the add-on's own lines, not Podman's event lines",
        ["last words" in tail, "container died" in tail], [True, False])
     rc, out, tools, _home = _run_install255("active", 0, addon=_ad255.B3, start="fail")
-    ok, said, tail = _ad255.install_outcome(out, rc)
+    _ok, said, tail = _ad255.install_outcome(out, rc)
     eq("first start: a B3 that never started (no b3.log yet) is stopped and shows its journal's lines",
        [rc, said == _ad255._FAIL_MARKS["ADDON_START_FAILED"], "last words" in tail,
         "--user stop lgsm-addon-b3.service" in tools, "podman build" in tools, "unit-before-image" in tools],
