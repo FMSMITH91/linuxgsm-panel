@@ -556,26 +556,21 @@ def _panel_host_blockers():
     except Exception:  # noqa: BLE001
         _log.debug("self-update state unreadable", exc_info=True)
     from panel.ops import backup as _bk
-    # restore_pending, not the restore's lock alone: _launch_installer asks the same question this
-    # way. The lock is released when the restore DISPATCHES its detached swap, a second or two
+    from panel.routes import game_restore as _grs
+    # restore: restore_pending, not the restore's lock alone: _launch_installer asks the same question
+    # this way. The lock is released when the restore DISPATCHES its detached swap, a second or two
     # before the swap stops the panel; a reboot planned in that window put in a database with no
     # record of what the plan had stopped.
-    if _bk.restore_pending():
-        out.append(_rw.panel_blocker("restore"))
-    if _full_backup_lock.locked():
-        out.append(_rw.panel_blocker("full_backup"))
-    # A database repair this process launched in the last two minutes: it stops the panel and may
-    # put the rolling backup back, which predates a plan made now. The reboot_restore rows were then
-    # gone, the stopped servers stayed stopped and their Autostart locks aside. The repair already
-    # refuses the other direction (@_r23a_not_while_panel_host_reboots).
-    if so._r30a_repair_starting():
-        out.append(_rw.panel_blocker("db_repair"))
-    # A game server being restored from a backup, on any host: the panel process runs that restore
-    # (stop, unpack, switch over, start), so rebooting the panel's own host cuts it off part way, as
-    # a panel restart would (panel_host_busy refuses those for the same reason).
-    from panel.routes import game_restore as _grs
-    if _grs.restore_running():
-        out.append(_rw.panel_blocker("game_restore"))
+    # db_repair: a database repair this process launched in the last two minutes: it stops the panel
+    # and may put the rolling backup back, which predates a plan made now. The reboot_restore rows
+    # were then gone, the stopped servers stayed stopped and their Autostart locks aside. The repair
+    # already refuses the other direction (@_r23a_not_while_panel_host_reboots).
+    # game_restore: a game server being restored from a backup, on any host: the panel process runs
+    # that restore (stop, unpack, switch over, start), so rebooting the panel's own host cuts it off
+    # part way, as a panel restart would (panel_host_busy refuses those for the same reason).
+    held = {"restore": _bk.restore_pending(), "full_backup": _full_backup_lock.locked(),
+            "db_repair": so._r30a_repair_starting(), "game_restore": _grs.restore_running()}
+    out.extend(_rw.panel_blocker(kind) for kind, on in held.items() if on)
     return out
 
 

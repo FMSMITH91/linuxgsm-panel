@@ -13,7 +13,7 @@ _REST_SECONDS instead of on every 2 s pass. It is straight back to every pass on
   is wanted now;
 * the panel said something in it (_console_push wakes it): an action began or ended, a start, stop
   or restart;
-* a page coming back to it asked to be caught up.
+* a page coming back to it asked to be caught up (wake_for_catchups, as the poller answers it).
 
 While output flows nothing changes: every pass reads it, exactly as before. What a rest can cost is
 the first line after a quiet spell of _IDLE_TICKS passes or more, which is shown up to _REST_SECONDS
@@ -56,6 +56,16 @@ _seen = register_server_state({})
 def wake(server_id):
     """Read this console on the next pass: the panel just said something in it."""
     _woken[server_id] = time.time()
+
+
+def wake_for_catchups(server_id, reqs, watching):
+    """Wake this console when one of the catch-ups `reqs` ({socket id: request}) is from a page still `watching`.
+
+    The poller answers them (and drops them from its map) before the tick, so _resting, which looks
+    for a pending one in that map, never sees them: the wake is said here instead.
+    """
+    if any(sid in watching for sid in reqs):
+        wake(server_id)
 
 
 def _resting(state, gs, server_id, pending):

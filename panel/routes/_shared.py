@@ -604,6 +604,16 @@ def grs_restore_running(sid):
     return GRS_KIND in r36j_route_jobs(sid)
 
 
+def grs_or_account_refusal(gs, account_refusal):
+    """Why `gs`'s game account may not be written now: its restore running, else `account_refusal`'s answer; or None.
+
+    `account_refusal` is the caller's own game_account_write_refusal (the name its tests stub).
+    """
+    if grs_restore_running(gs.id):
+        return grs_or_wipe_sentence(gs.id, gs.name)
+    return account_refusal(gs.remote, gs.short_name)
+
+
 def grs_or_wipe_sentence(sid, name):
     """Why a write is refused on server `sid` (shown as `name`) while its restore or its scheduled wipe runs."""
     if grs_restore_running(sid):

@@ -1716,6 +1716,16 @@ def _autostart_restore_gate(gs):
     return None
 
 
+def _daily_restart_refusal(gs):
+    """The daily-restart switch's refusal: no permission (403), or a restore running (409, as Autostart's).
+
+    A restore sets the account's crontab aside and puts it back, so a line written meanwhile is lost.
+    """
+    if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
+        return jsonify({"success": False, "message": "Permission denied"}), 403
+    return _autostart_restore_gate(gs)
+
+
 def _autostart_reboot_gate(gs, enabled):
     """The Autostart switch while its host is being rebooted: a 409 to return, or None to go on.
 
@@ -1806,12 +1816,9 @@ def _register_schedules(app):
         meaning depends on a box the operator never looks at.
         """
         gs = get_game(server_id)
-        if not current_user.is_superadmin and not has_permission(current_user, RESTART_SERVER):
-            return jsonify({"success": False, "message": "Permission denied"}), 403
-        # As Autostart: a restore sets the crontab aside and puts it back, so a line written now is lost.
-        held = _autostart_restore_gate(gs)
-        if held is not None:
-            return held
+        refused = _daily_restart_refusal(gs)
+        if refused is not None:
+            return refused
         body = _json_body()
         # A JSON boolean or a 400, as Autostart: bool("false") is True, so `{"enabled": "false"}`
         # wrote the restart-when-empty cron line it asked to remove.

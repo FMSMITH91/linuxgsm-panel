@@ -2103,8 +2103,7 @@ def last_backup_made(server, user):
     return _LAST_MADE.get((getattr(server, "id", None), user))
 
 
-def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
-                    query_type=None, before=None):
+def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False, **opts):
     """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
 
     The backup archives serverfiles into ~/lgsm/backup/. Runs AS THE GAME USER, non-interactively
@@ -2122,10 +2121,15 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
 
     The name of the archive it proved it wrote is kept for last_backup_made.
 
-    `before` (no arguments), when given, is called once the backup is going ahead: after LinuxGSM's
-    postponed check and the player check, before anything is archived. The panel dumps the server's
-    databases into its files there, so a backup skipped for players online dumps nothing.
+    `opts`: `query_type` (above), and `before` (no arguments), called once the backup is going ahead:
+    after LinuxGSM's postponed check and the player check, before anything is archived. The panel
+    dumps the server's databases into its files there, so a backup skipped for players online dumps
+    nothing. Any other keyword is a TypeError, as it was before they moved here.
     """
+    unknown = set(opts) - {"query_type", "before"}
+    if unknown:
+        raise TypeError("run_game_backup() got unexpected keyword(s): %s" % ", ".join(sorted(unknown)))
+    query_type, before = opts.get("query_type"), opts.get("before")
     selfname = selfname or user
     _LAST_MADE.pop((getattr(server, "id", None), user), None)
     # Refused before the player query, the headroom prune and the listing, which would otherwise
