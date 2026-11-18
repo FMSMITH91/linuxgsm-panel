@@ -1,0 +1,84 @@
+# ClusterFuzzLite's build_fuzzers action: google/clusterfuzzlite actions/build_fuzzers/action.yml at
+# 884713a6c30a92e5e8544c39945cd7cb630abcd1, with ONE line changed. Upstream's `image:` names
+# gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers:v1 by tag alone, and that tag is rebuilt
+# and moved upstream daily with no commit here, so the code that builds and runs the fuzz
+# targets, holding the job's token, could change under any run. Here `image:` names the Ubuntu 24.04 build of the same image
+# (the one .clusterfuzzlite/project.yaml's base_os_version selects) by tag AND digest: Docker pulls
+# by the digest alone, and Renovate's github-actions manager (.github/renovate.json) looks the tag
+# up and proposes its new digest as a reviewed commit. Every input and env line is upstream's, so
+# the workflows pass the same `with:` they passed to the upstream action.
+# Upstream's image, given base_os_version ubuntu-24-04, starts this 24.04 image BY TAG from inside
+# itself (oss-fuzz infra/cifuzz/config_utils.py pivot_to_ubuntu_24_04). Started here directly, the
+# 24.04 image runs the same entrypoint and has nothing to pivot to, so no image is pulled by tag.
+# tests/unit/part242.py holds the rest of this file byte for byte to upstream's.
+# action.yml
+name: 'build-fuzzers'
+description: "Builds project's fuzzers."
+inputs:
+  language:
+    description: 'Programming language project is written in.'
+    required: false
+    default: 'c++'
+  dry-run:
+    description: 'If set, run the action without actually reporting a failure.'
+    default: false
+  allowed-broken-targets-percentage:
+    description: 'The percentage of broken targets allowed in bad_build_check.'
+    required: false
+  sanitizer:
+    description: 'The sanitizer to build the fuzzers with.'
+    default: 'address'
+  project-src-path:
+    description: "The path to the project's source code checkout."
+    required: false
+  bad-build-check:
+    description: "Whether or not OSS-Fuzz's check for bad builds should be done."
+    required: false
+    default: true
+  keep-unaffected-fuzz-targets:
+    description: "Whether to keep unaffected fuzzers or delete them."
+    required: false
+    default: false
+  storage-repo:
+    description: |
+      The git repo to use for storing certain artifacts from fuzzing.
+    required: false
+  storage-repo-branch:
+    description: |
+      The branch of the git repo to use for storing certain artifacts from
+      fuzzing.
+    required: false
+  storage-repo-branch-coverage:
+    description: |
+      The branch of the git repo to use for storing coverage reports.
+    required: false
+  upload-build:
+    description: |
+      If set, will upload the build.
+    default: false
+  github-token:
+    description: |
+      Token for GitHub API.
+      You should use "secrets.GITHUB_TOKEN" in your workflow file, do not
+      hardcode the token.
+      TODO(https://github.com/google/oss-fuzz/pull/5841#discussion_r639393361):
+      Document locking this down.
+    required: false
+runs:
+  using: 'docker'
+  image: 'docker://gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers:ubuntu-24-04-v1@sha256:654aaf4ed425acecdbcb25d426a30565486858ccdfdf8f061dcc84f14b511323'
+  env:
+    ALLOWED_BROKEN_TARGETS_PERCENTAGE: ${{ inputs.allowed-broken-targets-percentage}}
+    BAD_BUILD_CHECK: ${{ inputs.bad-build-check }}
+    UPLOAD_BUILD: ${{ inputs.upload-build }}
+    LANGUAGE: ${{ inputs.language }}
+    DRY_RUN: ${{ inputs.dry-run}}
+    SANITIZER: ${{ inputs.sanitizer }}
+    PROJECT_SRC_PATH: ${{ inputs.project-src-path }}
+    GITHUB_TOKEN: ${{ inputs.github-token }}
+    GIT_STORE_REPO: ${{ inputs.storage-repo }}
+    GIT_STORE_BRANCH: ${{ inputs.storage-repo-branch }}
+    GIT_STORE_BRANCH_COVERAGE: ${{ inputs.storage-repo-branch-coverage }}
+    CFL_PLATFORM: 'github'
+    LOW_DISK_SPACE: 'True'
+    KEEP_UNAFFECTED_FUZZ_TARGETS: ${{ inputs.keep-unaffected-fuzz-targets }}

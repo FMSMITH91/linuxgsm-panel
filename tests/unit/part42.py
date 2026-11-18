@@ -46,12 +46,13 @@ _WF42 = os.path.join(_root, ".github", "workflows")
 # `use-policy-store` lets StepSecurity's policy store replace the egress policy (block) for a job
 # that holds id-token: write (the action's policy-utils.ts mergeConfigs).
 # Block mode is the one other shape: `egress-policy: block` and an `allowed-endpoints` list of
-# host:443 names, nothing else (which jobs block, and why the rest audit, is part223's).
+# host:port names, a host optionally a `*.` wildcard and the port 443 or 80, nothing else (which
+# jobs block, which host:port each may name, and why the rest audit, is part223's).
 _HR_STEP42 = _re42.compile(r"      - name: Harden Runner\n"
                            r"        uses: step-security/harden-runner@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)\n"
                            r"        with:\n"
                            r"          egress-policy: (?:audit\n|block\n          allowed-endpoints: >\n"
-                           r"(?:            [a-z0-9.-]+:443\n)+)")
+                           r"(?:            (?:\*\.)?[a-z0-9.-]+:(?:443|80)\n)+)")
 # Jobs Harden-Runner cannot run in, each with why. A reusable-workflow call site (`uses:` on the job)
 # has no steps of its own and is exempt by its shape; a job in a container must be listed here (the
 # agent needs the runner VM, not a container: the action's docs/limitations.md).
@@ -143,7 +144,7 @@ _hr_files42 = sorted(_glob42.glob(os.path.join(_WF42, "*.yml"))
 _hr_jobs42, _hr_bad_all42, _hr_pins42 = _hr_scan42(
     [(os.path.basename(_p42), open(_p42, encoding="utf-8").read()) for _p42 in _hr_files42])
 check("harden-runner: every job of every workflow but deploy begins with the Harden-Runner step, "
-      "SHA-pinned with its version comment, in audit mode or in block mode with a host:443 list and no "
+      "SHA-pinned with its version comment, in audit mode or in block mode with a host:port list and no "
       "other input, once, and every job "
       "on the same pin",
       not _hr_bad_all42 and len(_hr_pins42) == 1 and len(_hr_files42) >= 22 and len(_hr_jobs42) >= 30
@@ -169,6 +170,7 @@ def _hr_step_text42(pin=_HR_A42, policy="audit"):
 
 
 _HR_JOB42 = "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n%s      - run: true\n"
+_HR_LIST42 = "          allowed-endpoints: >\n            %s\n"
 _HR42 = _hr_step_text42()
 _hr_cases42 = {
     "first": [_HR_JOB42 % _HR42],
@@ -177,6 +179,10 @@ _hr_cases42 = {
     "missing": [_HR_JOB42 % "      - uses: actions/checkout@x\n"],
     "second": [_HR_JOB42 % ("      - uses: actions/checkout@x\n" + _HR42)],
     "block mode": [_HR_JOB42 % _hr_step_text42(policy="block")],
+    "block with a list": [_HR_JOB42 % (_hr_step_text42(policy="block") + _HR_LIST42
+                                       % "github.com:443\n            *.archive.ubuntu.com:80")],
+    "block on another port": [_HR_JOB42 % (_hr_step_text42(policy="block") + _HR_LIST42 % "github.com:8443")],
+    "block with a bare wildcard": [_HR_JOB42 % (_hr_step_text42(policy="block") + _HR_LIST42 % "*:443")],
     "by tag": [_HR_JOB42 % _HR42.replace("@%s # %s" % _HR_A42, "@v2")],
     "no version comment": [_HR_JOB42 % _HR42.replace(" # %s" % _HR_A42[1], "")],
     "twice": [_HR_JOB42 % (_HR42 + _HR42)],
@@ -193,12 +199,13 @@ _hr_cases42 = {
 }
 _hr_seen42 = {k: bool(_hr_scan42([("t%d.yml" % i, t) for i, t in enumerate(v)])[1])
               for k, v in _hr_cases42.items()}
-check("harden-runner: ...the check fails a job without it, with it later, twice, in block mode, by "
-      "tag, with no version comment, with any other input or key, on a pin the other jobs do not "
-      "share, or in a container, and passes a comment above it, every job bumped together, and a "
-      "reusable-workflow call",
+check("harden-runner: ...the check fails a job without it, with it later, twice, in block mode with no "
+      "list, a port but 443 or 80, or a bare wildcard, by tag, with no version comment, with any other "
+      "input or key, on a pin the other jobs do not share, or in a container, and passes a comment above "
+      "it, a block list of host:443 and *.host:80, every job bumped together, and a reusable-workflow call",
       _hr_seen42 == {"first": False, "comment above": False, "a blank line after": False,
-                     "missing": True, "second": True, "block mode": True, "by tag": True,
+                     "missing": True, "second": True, "block mode": True, "block with a list": False,
+                     "block on another port": True, "block with a bare wildcard": True, "by tag": True,
                      "no version comment": True, "twice": True, "extra input": True,
                      "policy input": True, "input after a blank line": True,
                      "another step key": True, "every job bumped together": False,

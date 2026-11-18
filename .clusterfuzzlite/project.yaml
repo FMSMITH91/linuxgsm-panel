@@ -8,3 +8,7 @@ fuzzing_engines:
 sanitizers:
   - address
   - undefined
+# Build and fuzz on Ubuntu 24.04. Without it ClusterFuzzLite keeps the legacy Ubuntu 20.04 images
+# (OSS-Fuzz docs/getting-started/continuous_integration.md, "Ubuntu 24.04 Support"). The Dockerfile's
+# FROM and .github/actions/cflite-* pin the 24.04 images by digest; part242 holds the three to it.
+base_os_version: ubuntu-24-04

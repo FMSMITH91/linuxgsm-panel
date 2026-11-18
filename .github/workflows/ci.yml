@@ -79,10 +79,34 @@ jobs:
           - os: ubuntu-26.04
             python: "3.14"
     steps:
+      # Block mode. The hosts are the ones this job's Harden-Runner insights recorded on every leg
+      # over pull request runs from 2026-11-17 and 2026-11-18, beyond the Actions service names the
+      # agent allows by itself: GitHub (the scope and reuse steps), PyPI (the pip installs),
+      # release-assets/objects (setup-python, when a runner image lacks the Python asked for), and
+      # apt's (the zsh/systemd-journal-remote install). apt's first mirror is the cloud region's
+      # plain-http one, azure.archive.ubuntu.com or us-east-2.ec2.archive.ubuntu.com, so it is a
+      # wildcard on port 80 (the agent matches `*.` as a suffix: docs.stepsecurity.io, "Endpoint
+      # match precedence"), then the https archive and security mirrors the runner image lists after
+      # it (actions/runner-images configure-apt-sources.sh), packages.microsoft.com and esm.ubuntu.com.
+      # Everything else is refused with a REJECT (step-security/agent firewall.go), so a suite's
+      # TEST-NET address gets "connection refused" at once, as tools/nosudo_runner.py refuses it
+      # locally, and an unlisted name resolves to the agent's sinkhole address and is refused too.
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            *.archive.ubuntu.com:80
+            api.github.com:443
+            archive.ubuntu.com:443
+            esm.ubuntu.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            objects.githubusercontent.com:443
+            packages.microsoft.com:443
+            pypi.org:443
+            release-assets.githubusercontent.com:443
+            security.ubuntu.com:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

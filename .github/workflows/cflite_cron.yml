@@ -50,15 +50,19 @@ jobs:
             exit 1
           fi
 
+      # The ClusterFuzzLite steps below run this repository's copies of the vendor's actions, whose
+      # images are pinned by digest (.github/actions/cflite-*/action.yml say why), by GitHub's
+      # self-repository form `$/`: read from the commit this run is for, with no checkout, and never
+      # from a file an earlier step could have written into the workspace.
       - name: Build fuzzers
         id: build
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: $/.github/actions/cflite-build-fuzzers
         with:
           language: python
 
       - name: Prune
         # Drops inputs that no longer reach anything new, so the corpus stays fast to replay.
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: $/.github/actions/cflite-run-fuzzers
         with:
           language: python
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -133,9 +137,13 @@ jobs:
             exit 1
           fi
 
+      # The ClusterFuzzLite steps below run this repository's copies of the vendor's actions, whose
+      # images are pinned by digest (.github/actions/cflite-*/action.yml say why), by GitHub's
+      # self-repository form `$/`: read from the commit this run is for, with no checkout, and never
+      # from a file an earlier step could have written into the workspace.
       - name: Build fuzzers (coverage)
         id: build
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: $/.github/actions/cflite-build-fuzzers
         with:
           language: python
           sanitizer: coverage
@@ -144,7 +152,7 @@ jobs:
         # Which lines the fuzzers actually reach — a different question from tests/ coverage, and
         # the honest way to tell whether a target is exercising the parser or bouncing off a guard.
         # The report is the cifuzz-coverage-latest artifact on this run.
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: $/.github/actions/cflite-run-fuzzers
         with:
           language: python
           github-token: ${{ secrets.GITHUB_TOKEN }}

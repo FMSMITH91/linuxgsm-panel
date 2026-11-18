@@ -79,11 +79,17 @@ check("CI secrets: no workflow runs on pull_request_target, and none a pull requ
 # ── 2. Harden-Runner: which jobs block, and the hosts they may reach ─────────────────────────────
 # Read from each job's own Harden-Runner log over four or more runs of every event it runs on: the
 # hosts it called beyond the GitHub Actions service names the agent allows by itself.
+# The unit suites' legs add apt's: the cloud region's plain-http mirror (a wildcard: Azure's or AWS's),
+# the https archive and security mirrors the runner image lists after it, Microsoft's package
+# repository and Ubuntu Pro's; Lighthouse adds the two hosts its throwaway panel fetches pages' data from.
 _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "objects.githubusercontent.com:443",
              "release-assets.githubusercontent.com:443", "pypi.org:443", "files.pythonhosted.org:443",
-             "registry.npmjs.org:443", "api.osv.dev:443", "semgrep.dev:443", "sonarcloud.io:443"}
+             "registry.npmjs.org:443", "api.osv.dev:443", "semgrep.dev:443", "sonarcloud.io:443",
+             "*.archive.ubuntu.com:80", "archive.ubuntu.com:443", "security.ubuntu.com:443",
+             "packages.microsoft.com:443", "esm.ubuntu.com:443",
+             "raw.githubusercontent.com:443", "linuxgsm.com:443"}
 _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("ci.yml", "coverage"),
-             ("ci.yml", "js-coverage"), ("codeql.yml", "analyze"),
+             ("ci.yml", "js-coverage"), ("ci.yml", "checks"), ("lighthouse.yml", "lighthouse"), ("codeql.yml", "analyze"),
              ("codeql.yml", "pr-alerts"), ("complexity.yml", "complexity"),
              ("dependency-review.yml", "dependency-review"), ("fuzz.yml", "fuzz"),
              ("security-code.yml", "dependency-audit"), ("security-code.yml", "sast-bandit"),
@@ -92,14 +98,14 @@ _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), (
 _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no pull request can show a block list " \
                 "is complete before it holds every panel's update"
 _AUDIT223 = {
-    ("ci.yml", "checks"): "the suites dial TEST-NET addresses on purpose, and apt's mirror host varies by region",
-    ("lighthouse.yml", "lighthouse"): "Chrome's own calls and the page's fetches change the score it measures",
-    ("cflite_pr.yml", "code-change"): "ClusterFuzzLite builds and fuzzes inside Docker images it pulls by tag",
+    ("cflite_pr.yml", "code-change"): "ClusterFuzzLite builds and fuzzes in Docker containers with their own "
+                                      "networking (the images are pinned by digest: part242)",
     ("cflite_batch.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
     ("cflite_cron.yml", "prune"): _MAIN_ONLY223, ("cflite_cron.yml", "coverage"): _MAIN_ONLY223,
     ("cflite_cleanup.yml", "cleanup"): _MAIN_ONLY223, ("codacy-alerts.yml", "open-errors"): _MAIN_ONLY223,
     ("codacy-coverage.yml", "upload"): _MAIN_ONLY223, ("codeql-alerts.yml", "open-alerts"): _MAIN_ONLY223,
     ("scorecard.yml", "analysis"): _MAIN_ONLY223, ("sonar-main-issues.yml", "sonar-main-issues"): _MAIN_ONLY223,
+    ("scorecard.yml", "image-pin"): _MAIN_ONLY223, ("scorecard.yml", "image-pulled"): _MAIN_ONLY223,
     ("deploy.yml", "deploy"): "carries no Harden-Runner at all (part42)",
 }
 

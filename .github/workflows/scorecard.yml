@@ -32,8 +32,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The action below runs a Docker image it names by TAG (ghcr.io/ossf/scorecard-action:<version>
+  # in its action.yaml), so the tag could be moved to other code with no commit here, and that code
+  # holds the job's id-token. It cannot be pinned by digest in this workflow: publish_results is
+  # accepted only from a job whose steps all `uses:` an approved action or the image by tag
+  # (ossf/scorecard-action README, "Workflow Restrictions"; ossf/scorecard-infra
+  # api/app/server/verify_workflow.go reads `docker://<image>@sha256:...` as an unapproved step).
+  # So the digest is recorded here, checked against the tag before the job runs, and checked again
+  # against what the job's own `docker pull` printed after it ran. tests/unit/part242.py holds the
+  # tag to the action's version comment, so a Dependabot bump of the action fails there until the
+  # digest is recorded for the new tag; Renovate proposes the tag's new digest (.github/renovate.json).
+  # Neither job verifies code, so the panel's update gate ignores both, as it ignores the analysis
+  # (system_ops._CI_IGNORE, deploy.yml's IGNORED).
+  image-pin:
+    name: Scorecard image pin
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      image: ${{ steps.pin.outputs.image }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: The action's image tag still names the recorded digest
+        id: pin
+        env:
+          # renovate: datasource=docker
+          SCORECARD_IMAGE: 'ghcr.io/ossf/scorecard-action:v2.5.0@sha256:1e1481c65fc2407d3fd6ab18a23c741eb4d1c0d9359ebafc4b3ab13aa61d8627'
+        run: |
+          set -euo pipefail
+          ref="${SCORECARD_IMAGE%@*}"; want="${SCORECARD_IMAGE#*@}"
+          repo="${ref#ghcr.io/}"; repo="${repo%:*}"; tag="${ref##*:}"
+          token="$(curl --proto '=https' -fsS --retry 3 --max-time 30 "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)"
+          # Every manifest type, so the registry answers with the digest `docker pull` prints.
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+          accept+=',application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json'
+          got="$(curl --proto '=https' -fsSI --retry 3 --max-time 30 -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" \
+                   "https://ghcr.io/v2/${repo}/manifests/${tag}" \
+                 | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" {print $2}')"
+          echo "${ref} names ${got:-nothing}; recorded ${want}"
+          if [ "${got}" != "${want}" ]; then
+            echo "::error::${ref} names ${got:-nothing}, not the recorded ${want}: check that image before recording it here."
+            exit 1
+          fi
+          echo "image=${SCORECARD_IMAGE}" >> "${GITHUB_OUTPUT}"
+
   analysis:
     name: Scorecard analysis
+    needs: image-pin
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -62,3 +111,41 @@ jobs:
           name: scorecard-results
           path: results.sarif
           retention-days: 5
+
+  image-pulled:
+    name: Scorecard image pulled
+    needs: [image-pin, analysis]
+    # Whenever the analysis job ran at all: a failed analysis still pulled its image first.
+    if: always() && needs.image-pin.result == 'success' && needs.analysis.result != 'skipped'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: read   # reads the analysis job's log
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      # The runner pulls a step's image while it sets the job up ("Pull down action image"), and
+      # `docker pull` prints the digest it got. The check above ran seconds before that pull; this
+      # one reads the pull itself, so a tag moved in between is caught too.
+      - name: The analysis job pulled the recorded digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.image-pin.outputs.image }}
+        run: |
+          set -euo pipefail
+          want="${IMAGE#*@}"; ref="${IMAGE%@*}"
+          job="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
+                   --paginate --jq '.jobs[] | select(.name == "Scorecard analysis") | .id')"
+          # Not `gh api`: it refuses a log that holds terminal escape sequences.
+          log="$(curl --proto '=https' -fsSL --retry 3 --max-time 60 -H "Authorization: Bearer ${GH_TOKEN}" \
+                   "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/jobs/${job}/logs")"
+          got="$(awk -v img="Pull down action image '${ref}'" 'index($0, img) {on = 1}
+                 on && match($0, /Digest: sha256:[0-9a-f]+/) {print substr($0, RSTART + 8, RLENGTH - 8); exit}' <<< "${log}")"
+          echo "the analysis job pulled ${ref} at ${got:-an unknown digest}; recorded ${want}"
+          if [ "${got}" != "${want}" ]; then
+            echo "::error::The Scorecard analysis job ran ${ref} at ${got:-an unknown digest}, not the recorded ${want}."
+            exit 1
+          fi
