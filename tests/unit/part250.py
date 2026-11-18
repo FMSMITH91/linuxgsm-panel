@@ -95,18 +95,26 @@ check("config watch: every config.py function that names config.json, the secret
 
 
 # ── 4. every alert names the row that routes it ───────────────────────────────────────────────────
+_ROW250 = dict([(k, "server") for k in _pa250.SERVER_EVENTS] + [(k, "remote") for k in _pa250.HOST_EVENTS])
+
+
+def _alert_key250(n):
+    """The event key of a notify("<event>", …) call node for a server or host event, else None."""
+    if not (isinstance(n, _ast250.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) == "notify" and n.args):
+        return None
+    key = getattr(n.args[0], "value", None) if isinstance(n.args[0], _ast250.Constant) else None
+    return key if key in _ROW250 else None
+
+
 def _alert_routes250(source):
     """[(line, key, the keyword it should pass, passed?)] for each notify("<event>", …) call in `source`."""
-    want = dict([(k, "server") for k in _pa250.SERVER_EVENTS] + [(k, "remote") for k in _pa250.HOST_EVENTS])
     out = []
     for n in _ast250.walk(_ast250.parse(source)):
-        if (isinstance(n, _ast250.Call) and getattr(n.func, "attr", getattr(n.func, "id", None)) == "notify"
-                and n.args and isinstance(n.args[0], _ast250.Constant) and n.args[0].value in want):
-            kw = {k.arg: k.value for k in n.keywords}
-            key = n.args[0].value
-            given = kw.get(want[key])
-            out.append((n.lineno, key, want[key],
-                        given is not None and not (isinstance(given, _ast250.Constant) and given.value is None)))
+        key = _alert_key250(n)
+        if key is not None:
+            given = {k.arg: k.value for k in n.keywords}.get(_ROW250[key])
+            none = isinstance(given, _ast250.Constant) and given.value is None
+            out.append((n.lineno, key, _ROW250[key], given is not None and not none))
     return out
 
 

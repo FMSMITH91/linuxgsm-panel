@@ -3990,7 +3990,7 @@ check("docs: SECURITY.md shows the helper's Defaults! line exactly as install.sh
 # starting it, names the part that asked for it (part250 checks the list is empty), and forgets the
 # rate limit, so the next render that misses its stub is named too. A part that tests the resolvers
 # themselves (part18) swaps _shared.threading for part12's queue first, and is not recorded.
-from unit.part10 import _Over as _p9_Over  # noqa: E402
+_p9_Over = __import__("unit.part10", fromlist=["_Over"])._Over   # (part10's module-object stand-in)
 P9_RESOLVER_THREADS = []
 
 

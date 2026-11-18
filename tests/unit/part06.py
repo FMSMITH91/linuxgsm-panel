@@ -9421,8 +9421,6 @@ check("notifications: a provider that REJECTS a message says so in the log",
 # answered True with every network fetch failing, and the route turned that into
 # {"success": true, "message": "Loaded 30 games."} plus an audit row saying it worked.
 from panel.services import lgsm_data as _lg                                        # noqa: E402
-import shutil as _lg_shutil                                                         # noqa: E402
-import tempfile as _lg_tempfile                                                     # noqa: E402
 
 
 def _lg_cache_state(d):
@@ -9437,7 +9435,7 @@ _lg_shared_before = _lg_cache_state(_lg_o_cache)
 try:
     # Its own cache dir: a refresh writes what it fetched (here a one-game stub list) into the cache,
     # and the shared one (part04's fixture) is what every later part's lookups read (review 1118 T4).
-    _lg._CACHE_DIR = __import__("pathlib").Path(_lg_tempfile.mkdtemp(prefix="unit-p06-lgsm-"))
+    _lg._CACHE_DIR = __import__("pathlib").Path(_tempfile.mkdtemp(prefix="unit-p06-lgsm-"))
     _lg._fetch = lambda name: None                       # every fetch fails
     _lg_bad = _lg.refresh(force=True)
     _lg._fetch = lambda name: ("shortname,gameservername,gamename,os\n"
@@ -9445,7 +9443,7 @@ try:
                                else "all,bc\n")
     _lg_good = _lg.refresh(force=True)
 finally:
-    _lg_shutil.rmtree(str(_lg._CACHE_DIR), ignore_errors=True)
+    _shutil.rmtree(str(_lg._CACHE_DIR), ignore_errors=True)
     _lg._fetch, _lg._CACHE_DIR = _lg_o_fetch, _lg_o_cache
     _lg._mem.clear()
 check("lgsm_data: the refresh checks leave the shared cache (part04's fixture) exactly as they found it",
@@ -9644,15 +9642,11 @@ def _r30t_pat_tail(node):
     template `t` does. Anything else reads as "". A pattern built with `+` or `%` used to read as ""
     and was skipped (cron.py's _CRON_SCHED_RE, review 1118 T4).
     """
-    if isinstance(node, _anc_ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, _anc_ast.JoinedStr):
-        return "".join(v.value for v in node.values if isinstance(v, _anc_ast.Constant) and isinstance(v.value, str))
-    if isinstance(node, _anc_ast.BinOp) and isinstance(node.op, _anc_ast.Add):
-        return _r30t_pat_tail(node.right)
-    if isinstance(node, _anc_ast.BinOp) and isinstance(node.op, _anc_ast.Mod):
-        return _r30t_pat_tail(node.left)
-    return ""
+    if isinstance(node, _anc_ast.BinOp):
+        side = {_anc_ast.Add: "right", _anc_ast.Mod: "left"}.get(type(node.op))
+        return _r30t_pat_tail(getattr(node, side)) if side else ""
+    parts = node.values if isinstance(node, _anc_ast.JoinedStr) else [node]
+    return "".join(v.value for v in parts if isinstance(v, _anc_ast.Constant) and isinstance(v.value, str))
 
 
 eq("regex anchors: a pattern's tail is read through `+`, `%` and f-strings, and a call reads as nothing (control)",

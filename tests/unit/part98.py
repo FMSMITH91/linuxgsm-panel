@@ -15,7 +15,7 @@ from types import SimpleNamespace as NS
 
 from sqlalchemy.exc import OperationalError as _OpErr98
 
-from unit.part01 import _root as _root98, check, ufw_stored_answer
+from unit.part01 import _root as _root98, check, eq, ufw_stored_answer
 from unit.part12 import (_P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_core, _p9_json, _p9_ms, _p9_patch,
                          _p9_restore_all, _p9_sd, _p9_sf, _p9_patch_sm)
 from panel.core import i18n as _i18n98
@@ -532,17 +532,22 @@ def _sudo_reads98():
                      ("remote_os_check_updates", lambda: _hosts98.remote_os_check_updates(srv)["ok"])):
         cur[0] = name
         got[name] = fn()
+    _sudo_reads_check98(asked, got)
+
+
+def _sudo_reads_check98(asked, got):
     bad = [a for a in asked if a[2] is not False]
-    # Each named read reached run_command (a read moved onto run_privileged would drop out of `asked`
-    # and leave `bad` empty), apt's upgradable list among them (review 1118 T8b).
-    apt = [a for a in asked if a[0] == "remote_os_check_updates" and "apt list --upgradable" in a[1]]
     check("reads: Tailscale's status, prefs and `which`, and apt's upgradable list run with sudo=False, "
           "so a sudo that wants a password no longer reads as \"unreachable\" or (for the tailnet "
           "exemption) as Tailscale stopped, which let a tailnet address be blocked",
           not bad and got == {"remote_check_tailscale": True, "_tailscale_conn_state": (True, True),
-                              "tailnet_exempt_ips": {"100.64.0.10"}, "remote_os_check_updates": True}
-          and {a[0] for a in asked} == set(got) and len(apt) == 1 and apt[0][2] is False,
-          repr((bad, got, asked)))
+                              "tailnet_exempt_ips": {"100.64.0.10"}, "remote_os_check_updates": True},
+          repr((bad, got)))
+    # Each named read reached run_command (a read moved onto run_privileged would drop out of `asked`
+    # and leave `bad` empty), apt's upgradable list among them (review 1118 T8b).
+    apt = [a[2] for a in asked if a[0] == "remote_os_check_updates" and "apt list --upgradable" in a[1]]
+    eq("reads: ...each of those reads reached run_command, apt's upgradable list once, with sudo=False",
+       (sorted({a[0] for a in asked}), apt), (sorted(got), [False]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

@@ -210,19 +210,26 @@ def _r30t_defines164(code, name):
                          % ((e,) * 6), code) is not None
 
 
+def _r30t_reads_bare164(code, name):
+    """Whether `code` reads `name` bare (not as a property, nor a key) without defining it itself."""
+    return (not _r30t_defines164(code, name)
+            and _re164.search(r"(?<![\w$.])%s(?![\w$])(?!\s*:)" % _re164.escape(name), code) is not None)
+
+
+def _r30t_tops164(code, inline):
+    """[(file, name)] of every top-level definition in the scripts and the templates' inline blocks."""
+    tops = [(f, a or b) for f, c in code.items() for a, b in _TOP164.findall(c)]
+    return tops + [("template " + f, a or b or c) for f, blocks in inline.items() for blk in blocks
+                   for a, b, c in _TPLTOP164.findall(blk)]
+
+
 def _r30t_cross_reads164(scripts, inline):
     """{name: [files]}: top-level names of one script or inline block read bare by another script."""
     code = {f: _r30t_code164(t) for f, t in scripts.items()}
-    tops = {f: {a or b for a, b in _TOP164.findall(c)} for f, c in code.items()}
-    for f, blocks in inline.items():
-        tops["template " + f] = {a or b or c for blk in blocks for a, b, c in _TPLTOP164.findall(blk)}
     out = {}
-    for owner, names in tops.items():
-        for name in names:
-            for f, c in code.items():
-                if (f != owner and not _r30t_defines164(c, name)
-                        and _re164.search(r"(?<![\w$.])%s(?![\w$])(?!\s*:)" % _re164.escape(name), c)):
-                    out.setdefault(name, set()).add(f)
+    for owner, name in _r30t_tops164(code, inline):
+        for f in (f for f, c in code.items() if f != owner and _r30t_reads_bare164(c, name)):
+            out.setdefault(name, set()).add(f)
     return {k: sorted(v) for k, v in out.items()}
 
 
