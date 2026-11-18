@@ -1057,6 +1057,8 @@ def _remote_routes(app):
         """Delete a database whose game server was removed from the panel (a dump is kept first)."""
         if not has_permission(current_user, MANAGE_DATABASES):
             return _say(403, _DENIED)
+        if step_up_needed():          # a delete, as the per-server one asks: the password again past the window
+            return step_up_refusal()
         remote = get_remote(remote_id)
         try:
             return _orphan_delete_answer(remote, db_id)

@@ -1,0 +1,5 @@
+{
+  "Your password is shorter than 15 characters, which is too weak without two-factor authentication. Change it to one of at least 15 characters first, then turn 2FA off.": "Votre mot de passe compte moins de 15 caractères, ce qui est trop faible sans l'authentification à deux facteurs. Remplacez-le d'abord par un mot de passe d'au moins 15 caractères, puis désactivez la 2FA.",
+  "Only a name opened to the panel at install:": "Seulement un nom ouvert au panneau à l'installation :",
+  "The Let's Encrypt certificate {name} was not opened to the panel at install. To allow it, run the installer again as root with PANEL_TLS_LE_NAMES={name} (sudo PANEL_TLS_LE_NAMES={name} bash install.sh).": "Le certificat Let's Encrypt {name} n'a pas été ouvert au panneau à l'installation. Pour l'autoriser, relancez l'installateur en root avec PANEL_TLS_LE_NAMES={name} (sudo PANEL_TLS_LE_NAMES={name} bash install.sh)."
+}

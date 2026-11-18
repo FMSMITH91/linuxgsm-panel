@@ -101,6 +101,7 @@ def _register_panel_settings(app):
 
         def _mut(cfg):
             changed[:] = [session_policy.change_note(cfg, lifetimes),   # once, however often it runs
+                          session_policy.switch_note(cfg, f.get("require_2fa"), protection),
                           outside_services.change_note(cfg, outside)]
             cfg.update(outside)
             cfg.update({
@@ -698,7 +699,11 @@ def _apply_resets(user, _pending_audit):
     # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
     # only renames someone must not quietly invalidate their login.
     new_password = None
-    if request.form.get("reset_password") == "on":
+    # A 2FA reset issues a new password too: the account's password may be one of 8 to 14
+    # characters, allowed only while 2FA was on. The forced change that follows asks for 15 (OWASP
+    # Authentication Cheat Sheet, "Implement Proper Password Strength Controls").
+    _reset_2fa = request.form.get("reset_2fa") == "on" and user.totp_enabled
+    if request.form.get("reset_password") == "on" or _reset_2fa:
         new_password = generate_password()
         # set_password, not a bare assignment: the outgoing password joins the history, so a
         # user handed a reset cannot answer the forced change by typing back the password the
@@ -728,7 +733,7 @@ def _apply_resets(user, _pending_audit):
         _pending_audit.append(("reset_user_password", user.username, ""))
 
     # Admin reset of a user's 2FA (for when they lose their authenticator).
-    if request.form.get("reset_2fa") == "on" and user.totp_enabled:
+    if _reset_2fa:
         user.totp_enabled = False
         user.totp_secret = None
         user.backup_codes = ""

@@ -29,6 +29,7 @@ from panel.core.config import encrypt_secret
 from panel.core.http import _json_body, _json_str, _log_and_generic
 from panel.db.models import DatabaseEndpoint, EndpointClient, GameDatabase, HostDatabaseServer, RemoteServer, db
 from panel.ops.ssh_manager import databases as _dbs
+from panel.security.account_guard import step_up_required_to_change
 from panel.security.auth import (EDIT_DATABASE_DATA, MANAGE_DATABASES, VIEW_SERVERS, _r17c_row_id, get_remote,
                                  get_user_servers, has_permission, log_action, superadmin_required)
 
@@ -439,6 +440,7 @@ def register(app):
     @app.route("/api/remote/<int:remote_id>/databases/endpoint", methods=["GET", "POST"])
     @login_required
     @superadmin_required
+    @step_up_required_to_change     # choosing (and storing) a database server's admin login
     def api_remote_databases_endpoint(remote_id):
         """Return (GET) or choose (POST) the server this host's new databases go to."""
         from flask import request

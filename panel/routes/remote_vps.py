@@ -978,6 +978,7 @@ def _register_game_ports(app):
 
     @app.route("/api/server/<int:server_id>/sync-ports", methods=["POST"])
     @login_required
+    @step_up_required       # a firewall change, as opening one game port asks
     @server_access_required
     def api_server_sync_ports(server_id):
         """Detect ALL of a game server's ports from LinuxGSM and open every one in the firewall.

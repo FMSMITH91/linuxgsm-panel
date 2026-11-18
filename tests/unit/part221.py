@@ -236,7 +236,11 @@ _STEP_UP_POSTS221 = ("/api/remote/{r}/close-port-22", "/api/remote/{r}/ssh-mode"
                      "/api/remote/{r}/databases/admin-reveal",
                      # Ubuntu Pro attach / service / detach and the OS's automatic security updates.
                      "/api/remote/{r}/pro-attach", "/api/remote/{r}/pro-service", "/api/remote/{r}/pro-detach",
-                     "/api/panel/enable-auto-updates")
+                     "/api/panel/enable-auto-updates",
+                     # A kept database's delete, a database server's admin login (the endpoint form), the
+                     # tailscale0 allow after a join and the sync of a server's ports into the firewall.
+                     "/api/remote/{r}/databases/1/delete", "/api/remote/{r}/databases/endpoint",
+                     "/api/remote/{r}/tailscale-finalize", "/api/server/{s}/sync-ports")
 
 
 def _stale221(minutes_ago=60):
@@ -257,7 +261,7 @@ def _step_up_routes221():
     c = _stale221()
     wrong = []
     for url in _STEP_UP_POSTS221:
-        r = c.post(url.format(r=rid), json={})
+        r = c.post(url.format(r=rid, s=_ROWS221["servers"][0]), json={})
         if not (r.status_code == 403 and r.headers.get("X-Reauth-Required") == "1"
                 and _p9_json(r).get("error") == "reauth_required"):
             wrong.append((url, r.status_code))
