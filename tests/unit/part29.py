@@ -745,8 +745,14 @@ def _sc8_pins():
     check("workflows: every action is pinned to a full-length commit SHA",
           all([len(uses) >= 40, any(u.startswith("actions/checkout@") for _, u in uses), not unpinned]),
           repr((len(uses), unpinned)))
-    # No workflow runs the vendor's actions, which name their images by tag: every ClusterFuzzLite
-    # step is this repository's copy, whose image is pinned by digest.
+    _sc8_cflite(uses)
+
+
+def _sc8_cflite(uses):
+    """No workflow runs the vendor's ClusterFuzzLite actions; every step runs a digest-pinned copy.
+
+    The vendor's actions name their images by tag, so each step runs this repository's copy instead.
+    """
     vendor = sorted({u for _, u in uses if u.startswith("google/clusterfuzzlite/")})
     local = sorted({u for _, u in uses if "/.github/actions/cflite-" in u})
     imgs = "".join(_read29(".github", "actions", d, "action.yml")

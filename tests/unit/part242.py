@@ -119,20 +119,21 @@ def _if242(step):
     return m.group(1) if m else ""
 
 
+def _job_checkout_bad242(steps):
+    """For one job's steps: None when no step uses a copy, else whether its checkout is missing or wrong."""
+    users = [i for i, s in enumerate(steps) if _LOCAL242 in s]
+    if not users:
+        return None
+    outs = [i for i, s in enumerate(steps) if all(w in s for w in _CHECKOUT242)]
+    return not outs or outs[0] > users[0] or _if242(steps[outs[0]]) != _if242(steps[users[0]])
+
+
 def _checkout_bad242(name, text):
     """(jobs that use a copy, what is wrong): a job using a copy with no sparse checkout of it first."""
-    jobs, bad = 0, []
-    for job in _jobs29(text):
-        steps = _steps29(_job29(text, job))
-        users = [i for i, s in enumerate(steps) if _LOCAL242 in s]
-        if not users:
-            continue
-        jobs += 1
-        outs = [i for i, s in enumerate(steps) if all(w in s for w in _CHECKOUT242)]
-        if not outs or outs[0] > users[0] or _if242(steps[outs[0]]) != _if242(steps[users[0]]):
-            bad.append("%s/%s: no checkout of .github/actions, on the same condition, before step %d"
-                       % (name, job, users[0]))
-    return jobs, bad
+    verdicts = {job: _job_checkout_bad242(_steps29(_job29(text, job))) for job in _jobs29(text)}
+    return (len([v for v in verdicts.values() if v is not None]),
+            ["%s/%s: no checkout of .github/actions, on the same condition, before its first use" % (name, job)
+             for job, v in verdicts.items() if v])
 
 
 _co242 = [_checkout_bad242(f, _wf29(f)) for f in ("cflite_pr.yml", "cflite_batch.yml", "cflite_build.yml",
@@ -165,11 +166,16 @@ _SC_OK242 = ("actions/checkout", "actions/create-github-app-token", "ossf/scorec
              "github/codeql-action/upload-sarif", "step-security/harden-runner")
 
 
-def _sc_bad242(text):
-    """What is wrong with scorecard.yml's pin and its three jobs' wiring."""
+def _sc_pin_bad242(text):
+    """What is wrong with scorecard.yml's recorded image: not one, or not the action's own version."""
     pins = _PIN242.findall(text)
     ver = _re242.findall(r"uses: ossf/scorecard-action@[0-9a-f]{40} # (v[0-9.]+)$", text, _re242.M)
-    bad = [] if len(pins) == 1 and ver == [pins[0][1]] else ["pin %r, action version %r" % (pins, ver)]
+    return [] if len(pins) == 1 and ver == [pins[0][1]] else ["pin %r, action version %r" % (pins, ver)]
+
+
+def _sc_bad242(text):
+    """What is wrong with scorecard.yml's pin and its three jobs' wiring."""
+    bad = _sc_pin_bad242(text)
     an = _job29(text, "analysis")
     uses = [_re242.search(r"^\s+uses: ([^@\s]+)@", s, _re242.M) for s in _steps29(an)]
     if not uses or not all(u and u.group(1) in _SC_OK242 for u in uses):
