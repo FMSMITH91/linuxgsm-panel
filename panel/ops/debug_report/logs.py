@@ -299,9 +299,17 @@ def _panel_accounts():
 
 
 def _game_read(rest):
-    """The fixed label for what a command run as a game account was, from its fingerprint."""
+    """The fixed label for what a command run as a game account was, from its fingerprint.
+
+    Every game-account shell body opens with ssh_manager's GAME_SHELL_CWD (`cd / || exit; `), which
+    is dropped first: left in, its `cd ` made the "LinuxGSM action" fingerprint (a body that opens
+    with its own `cd` and holds `&&`) match every body with an `&&`.
+    """
+    from panel.ops.ssh_manager._core import GAME_SHELL_CWD
+    lead = "-c " + GAME_SHELL_CWD
+    body = "-c " + rest[len(lead):] if rest.startswith(lead) else rest
     for label, tokens in _GAME_READS:
-        if all(t in rest for t in tokens):
+        if all(t in body for t in tokens):
             return label
     return "other"
 
