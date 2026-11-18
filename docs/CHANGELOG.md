@@ -47,9 +47,16 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Add-on updates.** The Add-ons tab says when an add-on has a newer version (or, for offline
   geolocation, a newer month of its country database), and Update installs it and restarts the
   add-on, keeping its data, settings and database.
+- **Your own B3 plugins, if you choose.** B3's settings can load plugins from a folder in the
+  add-on's Data. It is off by default, warns that such a plugin is someone else's code running inside
+  B3's container with its database and RCON access, asks for the password, and is recorded in the
+  audit log; the folder is mounted read-only.
 
 ### Changed
 
+- **The host page no longer asks sudo every five minutes.** With the panel's helper installed (or the
+  panel running as root) it knows it can run its privileged actions without trying `sudo -n true`,
+  which the helper's narrow grant refuses and sudo logged as "a password is required" each time.
 - **The panel asks game servers for their player counts less often when nobody needs them.** With no
   page showing the counts and no player alert set, the count is refreshed every 90 seconds instead of
   every 45; a page that shows the counts, "notify when empty", "server full" and "new player record"
@@ -173,6 +180,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **An uninstalled server's tmux folder no longer passes to the next account.** Uninstalling a game
+  server now also removes its account's `/tmp/tmux-<uid>` and Java `/tmp/hsperfdata_<account>`
+  folders (only real folders that account owns), so a new account given the same user id doesn't
+  inherit them.
 - **Let's Encrypt certificates must be opened to the panel at install.** The panel copies a certbot
   certificate only when the installer was run with `PANEL_TLS_LE_NAMES=<name>`, so another service's
   certificate on the same host keeps its private key root's. If you already load one through Settings,

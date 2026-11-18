@@ -23,6 +23,31 @@ has:
   Databases tab. On Soldier of Fortune 2 and Enemy Territory B3 has no private messages: every reply is said in
   public chat.
 
+### More games for B3
+
+Quake 3 Arena, Counter-Strike: Global Offensive and Insurgency are built in and each switched on once it has been
+tested against LinuxGSM's own server (until then the Add-ons tab doesn't offer B3 for them):
+
+- **Quake 3 Arena** (B3's `q3` parser): RCON `rconpassword`, the log `~/.q3a/baseq3/games.log` (the game's default
+  `g_log` under its home path).
+- **Counter-Strike: Global Offensive** and **Insurgency** (B3's `csgo` and `insurgency` parsers): B3 needs
+  SourceMod on the server (install Metamod: Source and SourceMod with LinuxGSM's `mods-install`), and reads
+  `console.log`, which the server writes only when its start parameters (the LinuxGSM config's `startparameters`)
+  include `-condebug`. RCON is `rcon_password` in the server's config, over TCP on the game port. The install
+  says which of these is missing.
+
+Not offered:
+
+- **ET: Legacy**: B3's `et` parser reads neither ET: Legacy's `status` rows (they end with an extra
+  `lastConnectTime` column, so no player matches and each check drops them all) nor its chat lines (the name and
+  the text carry colour codes, so no `!` command is seen). Its default config also sets no `g_log`, so it writes
+  no game log.
+- **Arma 3**: B3's `arma3` parser gets everything over BattlEye RCon, whose password and port live in BattlEye's
+  own config file. LinuxGSM's `arma3server` neither writes that file nor names its folder (`bepath` is empty), so
+  nothing on the host says where B3 would reach it.
+- **Chivalry: Medieval Warfare**: B3's `chiv` parser talks to the game's own RCON over TCP; LinuxGSM's
+  `PCServer-UDKGame.ini` sets an admin password but no RCON port, so nothing on the host says where it listens.
+
 ### B3's settings
 
 An installed B3 has a folded **B3 settings** section on its row: **Apply and restart** rewrites only these, in
@@ -31,14 +56,28 @@ An installed B3 has a folded **B3 settings** section on its row: **Apply and res
 - **Geolocation**, off by default:
   - **Offline: country.** B3 looks each player's country up in DB-IP's free "IP to Country Lite" database, in the
     add-on's `geoip` folder (read-only inside the container). No player address leaves the host. The panel's host
-    downloads the database from db-ip.com once a month, checks it against the SHA1 that db-ip.com publishes, and
-    keeps it for the month. Turn the download off in Settings → Outside services → *Country database for B3*; B3
-    then keeps the copy it has. Geolocation Off downloads nothing.
+    downloads the database from db-ip.com once a month, checks it against the SHA1 that db-ip.com publishes (of the
+    unpacked database), and keeps it for the month. Turn the download off in Settings → Outside services →
+    *Country database for B3*; B3 then keeps the copy it has, the card says the download is off, and no update for
+    a newer month is offered. Geolocation Off downloads nothing.
   - **Online: city.** Each joining player's IP address goes to ipwho.is, through a relay (the only service the
     container can reach for it).
 - **Plugins**: B3's own plugins that work on these games. Admin is always on. Never offered: adv (an internet
   feed), censor, punkbuster, translator (Google's service), banlist and the ftpytail plugins (they fetch from other
   machines, which the container can't reach), and other games' plugins.
+
+- **My own plugins**, off by default: B3 also loads plugins from the add-on's `Data/extplugins` folder. A plugin
+  there is someone else's code: it runs inside B3's container with B3's database and RCON access, and the panel
+  doesn't check it. Turning this on asks once more, then for the password like Install, and it is audited. The
+  folder is mounted read-only (B3 can't change the code it loads), and the container keeps its other limits. To
+  add a plugin:
+  1. copy its `.py` file (or its folder) and its `.ini` into `Data/extplugins` in the add-on's folder
+     (`~/panel-addons/b3/` in the server's home);
+  2. add its line under `[plugins]` in `Data/b3.ini`, for example `myplugin: @conf/extplugins/plugin_myplugin.ini`;
+  3. press **Apply and restart**.
+
+  Turned off again, the folder is no longer mounted and B3 looks in its own (empty) one; its files stay, and B3
+  logs that it could not load a plugin still listed in `[plugins]`. Apply sets `external_plugins_dir` in `[b3]`.
 
 IP Geolocation by DB-IP (<https://db-ip.com>), licensed under CC BY 4.0.
 
@@ -47,12 +86,14 @@ IP Geolocation by DB-IP (<https://db-ip.com>), licensed under CC BY 4.0.
 The card shows **Update available** when the panel's pinned version is newer than the installed one (a new
 IW4MAdmin image digest or B3 commit), or, for an offline B3, when a newer month of the country database is out.
 **Update** downloads or builds the new image, writes the unit again and restarts the add-on; its data, settings
-and database are kept. It asks for the password like Install, and it is audited. The panel's pins themselves are
+and database are kept. It asks for the password like Install, and it is audited. A start, Apply or Update you ask
+for clears the unit's start limit first (5 starts in 10 minutes, kept against a crash loop), so a run of changes
+doesn't leave the add-on down; if systemd still refuses a start for that limit, the card says so. The panel's pins themselves are
 proposed daily by Renovate (B3's fork `master`, IW4MAdmin's `latest` digest).
 
 ## Network
 
-An add-on reaches only the game's RCON port and its database. A database on another machine, and B3's geolocation,
+An add-on reaches only the game's RCON port (UDP, or TCP for a Source game) and its database. A database on another machine, and B3's geolocation,
 go through relays on the host's loopback.
 
 - **Ubuntu 26.04:** it reaches nothing else.
@@ -81,8 +122,9 @@ remove is audited.
 Removing an add-on deletes its container, image, unit and files: for B3 that is its whole folder, its settings and
 any plugin settings you edited included. Its database is kept. Removing the last one also
 removes the account's Podman storage (its base images and Podman's own folders) and turns lingering off; the
-account's own journal is kept. Uninstalling the server also deletes the account's user journal, so an account
-later given the same user id can't read the old add-ons' lines. The add-on's folder is in the game account's home,
+account's own journal is kept. Uninstalling the server also deletes the account's user journal, and its tmux and
+Java folders in `/tmp` (`/tmp/tmux-<uid>`, `/tmp/hsperfdata_<account>`), so an account later given the same user
+id can't read the old add-ons' lines or inherit the old tmux socket folder. The add-on's folder is in the game account's home,
 so the server's backups include it.
 
 The add-on reads the RCON password the game itself reads: `rconpassword` for Call of Duty, United Offensive,

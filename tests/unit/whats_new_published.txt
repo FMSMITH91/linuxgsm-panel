@@ -802,3 +802,6 @@ e8916ec3 B3's settings on its card.
 5886749f A failed add-on step says why.
 64a98f83 The Install button stays visible when an add-on needs a database.
 5313066c Removing B3 says what goes with it.
+05702714 Your own B3 plugins, if you choose.
+de047a6a The host page no longer asks sudo every five minutes.
+3181e4e9 An uninstalled server's tmux folder no longer passes to the next account.
