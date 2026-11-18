@@ -202,6 +202,11 @@ GEO_MODES = (GEO_OFF, GEO_OFFLINE, GEO_ONLINE)
 # Each mode's [settings] geolocators in plugin_geolocation.ini (the plugin's own service names).
 _GEOLOCATORS = {GEO_OFFLINE: "mmdb", GEO_ONLINE: "ipwho.is"}
 B3_GEO_INI = "Data/conf/plugin_geolocation.ini"
+# The operator's own B3 plugins (off unless turned on in B3's settings): this folder of the add-on's
+# Data, mounted read-only over its place in /data, is then b3.ini's external_plugins_dir. Off, B3 looks
+# in its own (empty) extplugins folder in the image, and the folder is not mounted.
+B3_OWN_PLUGINS = "Data/extplugins"
+_B3_EXT_DIR = {False: "@b3/extplugins", True: "@conf/extplugins"}
 # The config folder a game's RCON password is read from, by game type (LinuxGSM's servercfgdir:
 # serverfiles/main; uo for United Offensive, base for SoF2, etmain for ET).
 _CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain", "q3": "baseq3", "csgo": "csgo/cfg", "ins": "insurgency/cfg"}
@@ -535,7 +540,7 @@ def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation, chosen=B
         "[b3]", "parser: %s" % CATALOG[B3]["games"][game_type],
         "database: mysql://%s:%s@127.0.0.1:3306/%s" % (db_name, db_secret, db_name),
         "bot_name: b3", "bot_prefix: ^0(^2b3^0)^7:", "time_format: %I:%M%p %Z %m/%d/%y", "time_zone: UTC",
-        "log_level: 20", "logfile: @conf/b3.log", "disabled_plugins:", "external_plugins_dir: @b3/extplugins",
+        "log_level: 20", "logfile: @conf/b3.log", "disabled_plugins:", "external_plugins_dir: %s" % _B3_EXT_DIR[False],
         "", "[server]", "rcon_password: %s" % rcon, "port: %d" % int(game_port),
         "game_log: /gamelog/%s" % game_log_name(game_type), "public_ip: 127.0.0.1", "rcon_ip: 127.0.0.1",
         "punkbuster: off",
@@ -615,18 +620,37 @@ def _into_section(lines, name, new, at_end):
     return lines[:end] + new + lines[end:]
 
 
-def b3_ini_apply(text, geolocation, chosen):
+def b3_ini_apply(text, geolocation, chosen, own_plugins=False):
     """`text` (b3.ini) with the [plugins] lines the panel owns set to `chosen` and the geolocation mode.
 
     Every other line is kept as it was: the passwords, the operator's own settings, comments, and the
     [plugins] lines of plugins the panel does not offer (an operator's external plugin). The owned lines
     are dropped where they were and the ones turned on are written at the end of [plugins], which is
-    added when the file has none.
+    added when the file has none. [b3] external_plugins_dir is the panel's too: the own-plugins folder
+    with `own_plugins`, else B3's own.
     """
     lines = _ini_lines(text)
     keep = [ln for ln, sec in zip(lines, _sections(lines)) if not (sec == "plugins" and _ini_key(ln) in _B3_OWNED)]
+    keep = _ini_set(keep, "b3", {"external_plugins_dir": _B3_EXT_DIR[bool(own_plugins)]})
     return "\n".join(_into_section(keep, "plugins", [b3_plugin_line(p) for p in b3_plugins(geolocation, chosen)],
                                    at_end=True)) + "\n"
+
+
+def _ini_set(lines, section, want):
+    """`lines` with each key of `want` set in `section`: its first line rewritten, a repeat dropped, a missing one added.
+
+    A missing key goes right after the section's header (the section is added when there is none).
+    """
+    out, done = [], set()
+    for line, sec in zip(lines, _sections(lines)):
+        key = _ini_key(line)
+        if sec == section and key in want:
+            if key not in done:
+                out.append("%s: %s" % (key, want[key]))
+                done.add(key)
+            continue
+        out.append(line)
+    return _into_section(out, section, ["%s: %s" % (k, v) for k, v in want.items() if k not in done], at_end=False)
 
 
 def b3_ini_plugins(text):
@@ -654,17 +678,7 @@ def geolocation_ini(text, geolocation):
     if mode == GEO_OFF:
         return text
     want = {"geolocators": _GEOLOCATORS[mode], "mmdb_file": "/geoip/dbip-country-lite.mmdb"}
-    lines, out, done = _ini_lines(text), [], set()
-    for line, sec in zip(lines, _sections(lines)):
-        key = _ini_key(line)
-        if sec == "settings" and key in want:
-            if key not in done:
-                out.append("%s: %s" % (key, want[key]))
-                done.add(key)
-            continue
-        out.append(line)
-    rest = ["%s: %s" % (k, v) for k, v in want.items() if k not in done]
-    return "\n".join(_into_section(out, "settings", rest, at_end=False)) + "\n"
+    return "\n".join(_ini_set(_ini_lines(text), "settings", want)) + "\n"
 
 
 def build_files(addon_id):
@@ -738,16 +752,20 @@ def _podman_args(addon_id, relay_list):
     return "PodmanArgs=" + " ".join(args)
 
 
-def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None):
+def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None, own_plugins=False):
     """The add-on's Quadlet unit text (~/.config/containers/systemd/<unit>.container).
 
     `ids` is the account's (uid, gid): with keep-id they are the process's user inside, set
-    explicitly because on Podman 4.9 an image's own USER wins over keep-id's default.
+    explicitly because on Podman 4.9 an image's own USER wins over keep-id's default. With
+    `own_plugins` (B3), the own-plugins folder is mounted read-only over its place in /data, so B3
+    cannot change the code it runs from there.
     """
     a = CATALOG[addon_id]
     base = addon_dir(user, addon_id)
     needs = ["%s%s-%s.socket" % (UNIT_PREFIX, addon_id, r[0]) for r in relay_list]
     vols = ["Volume=%s/%s:%s" % (base, d, at) for d, at in a["mounts"]] + ["Volume=%s:/gamelog:ro" % logdir]
+    if own_plugins and addon_id == B3:
+        vols.append("Volume=%s/%s:/data/extplugins:ro" % (base, B3_OWN_PLUGINS))
     lines = [
         "# Written by linuxgsm-panel: the %s add-on of this game server. The panel rewrites it." % a["name"],
         "[Unit]", "Description=%s (linuxgsm-panel add-on)" % a["name"],
@@ -910,12 +928,14 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     Writes the record, `files` and, with how["settings"], the settings file from stdin (b3.ini holds the
     passwords); with how["rebuild"], pulls or builds the image again. The relay units are replaced by
     `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
+    how["dirs"] are more folders of the add-on to make (B3's own-plugins folder, when it is mounted).
     Its data, settings and database stay. how["old_image"], when the update moved it, is removed afterwards.
     """
     how = how or {}
     rebuild, settings, old_image = how.get("rebuild", False), how.get("settings", False), how.get("old_image", "")
     a = CATALOG[addon_id]
     d = addon_dir(user, addon_id)
+    folders = _dirs(d, a, files) + "".join(" " + shlex.quote("%s/%s" % (d, x)) for x in how.get("dirs", ()))
     unit = unit_name(addon_id)
     q = "/home/%s/%s" % (user, QUADLET_DIR)
     uu = "/home/%s/%s" % (user, USER_UNIT_DIR)
@@ -934,7 +954,7 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%s%secho %s"
-            % (_dirs(d, a, files), shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early),
+            % (folders, shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early),
                _image_sh(addon_id, shlex.quote(d)) if rebuild else "", _relays_gone_sh(user, addon_id),
                " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), drop,

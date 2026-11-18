@@ -133,6 +133,7 @@ def _b3_fields(gs, meta):
     return {"geolocation_option": True, "geolocation": geo, "geo_modes": list(_ad.GEO_MODES),
             "plugins": [x for x in meta.get("plugins") or _ad.B3_PLUGINS if isinstance(x, str)],
             "switchable": list(_ad.B3_SWITCHABLE), "geo_switchable": list(_ad.B3_GEO_SWITCHABLE),
+            "own_plugins": meta.get("own_plugins") is True, "own_plugins_dir": _ad.B3_OWN_PLUGINS,
             "geoip": meta.get("geoip", "") if geo == _ad.GEO_OFFLINE else "",
             "credit": _geoip.CREDIT,
             # Offline needs DB-IP's database: with its Outside services switch off, the card says so.
@@ -288,15 +289,17 @@ def _install_texts(gs, plan, p, who):
     return settings, files, unit, _ad.relay_units(addon_id, relay_list), meta, secrets
 
 
-def record(addon_id, geolocation, plugins, geoip=""):
+def record(addon_id, geolocation, plugins, geoip="", own_plugins=False):
     """The addon.json fields that say what is installed and how it is set.
 
     image and version: what the catalog pinned at the time (an update compares them); B3's commit, its
-    geolocation mode, the plugins the card turned on, and the month of the country database it was given.
+    geolocation mode, the plugins the card turned on, the month of the country database it was given,
+    and whether its own-plugins folder is mounted.
     """
     rec = {"kind": addon_id, "version": _ad.CATALOG[addon_id]["version"], "image": _ad.CATALOG[addon_id]["image"]}
     if addon_id == _ad.B3:
-        rec.update(commit=_ad.B3_COMMIT, geolocation=_ad.geo_mode(geolocation), plugins=list(plugins), geoip=geoip)
+        rec.update(commit=_ad.B3_COMMIT, geolocation=_ad.geo_mode(geolocation), plugins=list(plugins), geoip=geoip,
+                   own_plugins=bool(own_plugins))
     return rec
 
 

@@ -6,10 +6,13 @@ database stay; the unit and the relays are written again. Both take MANAGE_ADDON
 confirmation an install takes, and the root-capable-account guard (routes/addons._guarded), and both
 are audited with the server, refusals included.
 
-SETTINGS (B3). Geolocation (off, offline country, online city) and B3's own plugins (services/addons
-B3_SWITCHABLE). Only what the panel owns is rewritten: the [plugins] lines of the plugins it offers
-in b3.ini (b3_ini_apply) and two keys of plugin_geolocation.ini (geolocation_ini); the passwords, the
-operator's other settings and every other file in conf/ are kept.
+SETTINGS (B3). Geolocation (off, offline country, online city), B3's own plugins (services/addons
+B3_SWITCHABLE) and the operator's own plugins folder (B3_OWN_PLUGINS: off unless turned on; a plugin
+there is third-party code the panel does not check, run inside B3's container, so turning it on takes
+the same step-up and is audited by name). Only what the panel owns is rewritten: the [plugins] lines
+of the plugins it offers and [b3] external_plugins_dir in b3.ini (b3_ini_apply) and two keys of
+plugin_geolocation.ini (geolocation_ini); the passwords, the operator's other settings and every other
+file in conf/ are kept. The container's limits stay as they are: the folder is mounted read-only.
 
 UPDATE. A new image (a pull by digest, or a build from the new commit), and for an offline B3 this
 month's country database (services/geoip.py). The card offers it when the record (addon.json) says
@@ -32,7 +35,7 @@ from panel.services import addons as _ad
 from panel.services import geoip as _geoip
 
 _NOT_INSTALLED = "That add-on isn't installed on this server."
-_BAD_SETTINGS = "Choose a geolocation setting and only plugins this add-on offers."
+_BAD_SETTINGS = "Choose a geolocation setting, only plugins this add-on offers, and whether to load your own plugins."
 _NOT_B3 = "Only B3 has settings here."
 _NO_READ = "Couldn't read the add-on's settings on the host: it did not answer."
 _STARTED = {"settings": "Applying the settings: the add-on restarts.",
@@ -56,14 +59,17 @@ def update_reason(addon_id, meta, month=None):
 
 
 def settings_choice(body):
-    """(geolocation mode, plugins) from a settings post, or None when either is not one the card offers."""
-    geo, plugins = body.get("geolocation"), body.get("plugins")
-    if geo not in _ad.GEO_MODES or not isinstance(plugins, list):
+    """(geolocation mode, plugins, own plugins on) from a settings post, or None when one is not what the card offers.
+
+    own_plugins must be true or false when given; left out, it is off.
+    """
+    geo, plugins, own = body.get("geolocation"), body.get("plugins"), body.get("own_plugins", False)
+    if geo not in _ad.GEO_MODES or not isinstance(plugins, list) or not isinstance(own, bool):
         return None
     allowed = set(_ad.B3_SWITCHABLE + _ad.B3_GEO_SWITCHABLE)
     if not all(isinstance(p, str) and p in allowed for p in plugins):
         return None
-    return geo, [p for p in _ad.B3_SWITCHABLE + _ad.B3_GEO_SWITCHABLE if p in plugins]
+    return geo, [p for p in _ad.B3_SWITCHABLE + _ad.B3_GEO_SWITCHABLE if p in plugins], own
 
 
 def _read(gs, addon_id):
@@ -107,15 +113,15 @@ def _reach_port(gs, meta, p):
     return port or known
 
 
-def _unit(gs, addon_id, p, meta, geo):
-    """(unit text, relay units, Network=, the page's port) for the add-on as it is set now."""
+def _unit(gs, addon_id, p, meta, geo, own=False):
+    """(unit text, relay units, Network=, the page's port) for the add-on as it is set now (`own`: B3's own plugins)."""
     r, host, port = _db_of(gs, meta)
     web, free = _web_and_free(addon_id, meta, p["ports"])
     relay_list = _ad.relays(addon_id, host, port, geo, free)
     local_db = port if r is not None and host == "127.0.0.1" else None
     net = _ad.network(_reach_port(gs, meta, p), local_db, relay_list, p["splice"], gs.game_type in _ad.RCON_TCP_GAMES)
     unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
-                       p["ids"])
+                       p["ids"], own_plugins=own)
     return unit, _ad.relay_units(addon_id, relay_list), net, web
 
 
@@ -126,28 +132,29 @@ def _secrets(gs, addon_id, meta, p):
     return (rcon, (decrypt_secret(r.secret) or "") if r is not None else "")
 
 
-def _b3_files(b3ini, geoini, geo, plugins):
-    """(b3.ini's new text or None, the files to write) for B3 set to `geo` and `plugins`."""
+def _b3_files(b3ini, geoini, choice):
+    """(b3.ini's new text or None, the files to write) for B3 set to `choice` (geolocation, plugins, own plugins)."""
+    geo, plugins, own = choice
     files = {}
     if geo != _ad.GEO_OFF:
         files[_ad.B3_GEO_INI] = _ad.geolocation_ini(geoini, geo)
-    new = _ad.b3_ini_apply(b3ini, geo, plugins) if b3ini else None
+    new = _ad.b3_ini_apply(b3ini, geo, plugins, own) if b3ini else None
     return (new if new != b3ini else None), files
 
 
 def _settings_now(addon_id, meta, b3ini, choice):
-    """(geolocation mode, plugins) to apply: the posted ones, else as the add-on is set now.
+    """(geolocation mode, plugins, own plugins on) to apply: the posted ones, else as the add-on is set now.
 
     For B3 the plugins are read from b3.ini itself, so an update keeps a plugin the operator turned
-    on or off there by hand.
+    on or off there by hand; the own-plugins folder stays as the record says.
     """
     if choice is not None:
         return choice
-    geo = _ad.geo_mode(meta.get("geolocation"))
+    geo, own = _ad.geo_mode(meta.get("geolocation")), meta.get("own_plugins") is True
     if addon_id == _ad.B3 and b3ini:
         allowed = _ad.B3_SWITCHABLE + _ad.B3_GEO_SWITCHABLE
-        return geo, [x for x in _ad.b3_ini_plugins(b3ini) if x in allowed]
-    return geo, list(meta.get("plugins") or _ad.B3_PLUGINS)
+        return geo, [x for x in _ad.b3_ini_plugins(b3ini) if x in allowed], own
+    return geo, list(meta.get("plugins") or _ad.B3_PLUGINS), own
 
 
 def _geoip_for(gs, addon_id, rec, geo, kind):
@@ -172,19 +179,20 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
     meta = p["meta"]
     if meta is None:
         return _NOT_INSTALLED, ""
-    geo, plugins = _settings_now(addon_id, meta, b3ini, choice)
-    rec = dict(meta, **_record(addon_id, geo, plugins, meta, kind))
+    now = _settings_now(addon_id, meta, b3ini, choice)
+    geo, own = now[0], now[2] and addon_id == _ad.B3
+    rec = dict(meta, **_record(addon_id, now, meta, kind))
     why = _geoip_for(gs, addon_id, rec, geo, kind)
     if why:
         return why, ""
-    new_ini, files = _b3_files(b3ini, geoini, geo, plugins) if addon_id == _ad.B3 else (None, {})
+    new_ini, files = _b3_files(b3ini, geoini, now) if addon_id == _ad.B3 else (None, {})
     if kind == "update":
         files.update(_ad.build_files(addon_id))
-    unit, units, net, web = _unit(gs, addon_id, p, meta, geo)
+    unit, units, net, web = _unit(gs, addon_id, p, meta, geo, own)
     rec.update(network=net, port=web, changed_by=who)
     sh = _ad.reconfigure_sh(gs.short_name, addon_id, unit, json.dumps(rec) + "\n", files, units,
                             {"rebuild": kind == "update", "settings": new_ini is not None,
-                             "old_image": meta.get("image", "")})
+                             "old_image": meta.get("image", ""), "dirs": [_ad.B3_OWN_PLUGINS] if own else []})
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=_ad.INSTALL_TIMEOUT,
                                            selfname=gs.lgsm_name, stdin_text=new_ini)
     secrets = _secrets(gs, addon_id, meta, p)
@@ -192,11 +200,12 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
     return ("", "") if ok else (said, _ad.scrub(tail, secrets))
 
 
-def _record(addon_id, geo, plugins, meta, kind):
-    """The record's fields a change sets: the catalog's image after an update, B3's settings, who and when."""
+def _record(addon_id, now, meta, kind):
+    """The record's fields a change sets: the catalog's image after an update, B3's settings (`now`), who and when."""
     from panel.routes import addons as _ra
-    rec = _ra.record(addon_id, geo, plugins, meta.get("geoip", "")) if kind == "update" else (
-        {"geolocation": geo, "plugins": list(plugins)} if addon_id == _ad.B3 else {})
+    geo, plugins, own = now
+    rec = _ra.record(addon_id, geo, plugins, meta.get("geoip", ""), own) if kind == "update" else (
+        {"geolocation": geo, "plugins": list(plugins), "own_plugins": own} if addon_id == _ad.B3 else {})
     rec["changed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return rec
 
@@ -233,8 +242,8 @@ def start(app, gs, addon_id, kind):
         if (_ra._JOBS.get((gs.id, addon_id)) or {}).get("running"):
             return _ra._say(409, _ra._BUSY)
         _ra._JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": kind}
-    detail = "%s: started" % addon_id + ("" if choice is None else ", geolocation %s, plugins %s"
-                                         % (choice[0], " ".join(choice[1]) or "none"))
+    detail = "%s: started" % addon_id + ("" if choice is None else ", geolocation %s, plugins %s, own plugins %s"
+                                         % (choice[0], " ".join(choice[1]) or "none", "on" if choice[2] else "off"))
     log_action(current_user, "addon_update" if kind == "update" else "addon_settings", target=gs.name, server=gs,
                detail=detail)
     threading.Thread(target=_worker, daemon=True,

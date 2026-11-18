@@ -144,11 +144,28 @@
     });
     fold.appendChild(node('div', 'small text-secondary mt-2', T('B3\'s plugins. Admin is always on.')));
     fold.appendChild(grid);
+    ownPlugins(a, fold);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-2');
     bar.appendChild(button(T('Apply and restart'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
     fold.appendChild(bar);
     fold.appendChild(node('div', 'small text-secondary mt-1', T('Only these settings are rewritten in b3.ini; your other edits there and in its conf folder are kept.')));
     box.appendChild(fold);
+  }
+
+  // The operator's own plugins folder: off unless turned on; the warning sits beside the switch.
+  var OWN_WARN = 'A plugin in this folder is someone else\'s code: it runs inside B3\'s container, with B3\'s database and RCON access, and the panel doesn\'t check it. Load only plugins you trust. The folder is mounted read-only, and the container keeps its other limits.';
+  function ownPlugins(a, fold) {
+    var w = node('div', 'form-check small mt-2');
+    var cb = node('input', 'form-check-input');
+    cb.type = 'checkbox';
+    cb.id = 'ad-own-' + a.id;
+    cb.checked = !!a.own_plugins;
+    var l = node('label', 'form-check-label', TF('Load my own plugins from the add-on\'s {dir} folder', {dir: a.own_plugins_dir || 'Data/extplugins'}));
+    l.htmlFor = cb.id;
+    w.appendChild(cb);
+    w.appendChild(l);
+    fold.appendChild(w);
+    fold.appendChild(node('div', 'small text-warning', T(OWN_WARN)));
   }
 
   // An add-on that needs a database while the server has none free: Install shows, disabled, with why
@@ -324,11 +341,21 @@
     if (st.busy || !geo) return;
     var plugins = Array.prototype.filter.call(document.querySelectorAll('[data-ad-plugin="' + id + '"]'),
       function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
-    stepUp(function () {
-      st.busy = true;
-      say(T('Applying the settings…'));
-      postJson(api('/' + id + '/settings'), {geolocation: geo.value, plugins: plugins}).then(after).catch(failed);
-    });
+    var own = el('ad-own-' + id), ownOn = !!(own && own.checked);
+    var go = function () {
+      stepUp(function () {
+        st.busy = true;
+        say(T('Applying the settings…'));
+        postJson(api('/' + id + '/settings'), {geolocation: geo.value, plugins: plugins, own_plugins: ownOn}).then(after).catch(failed);
+      });
+    };
+    // Turning the own-plugins folder on is asked once more, with the warning.
+    if (ownOn && !row(id).own_plugins) {
+      window.confirmDialog({title: T('Load your own B3 plugins'), icon: 'exclamation-triangle', confirmClass: 'btn-warning',
+        confirmLabel: T('Turn on and restart'), bodyText: T(OWN_WARN), onConfirm: go});
+      return;
+    }
+    go();
   };
 
   window.adLog = function (id) {
