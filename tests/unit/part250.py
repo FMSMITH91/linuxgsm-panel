@@ -133,9 +133,15 @@ eq("alerts: ...the scan names a call without its row, or with None for it, and p
 
 
 # ── 5. the i18n gate knows every translation wrapper a script defines ─────────────────────────────
-if os.path.join(_root, "tools") not in _sys250.path:
-    _sys250.path.append(os.path.join(_root, "tools"))
-import i18n_scan as _scan250  # noqa: E402
+_TOOLS250 = os.path.join(_root, "tools")
+_added250 = _TOOLS250 not in _sys250.path
+if _added250:
+    _sys250.path.append(_TOOLS250)
+try:
+    import i18n_scan as _scan250  # noqa: E402
+finally:
+    if _added250:                 # the parts after this one see sys.path as it was
+        _sys250.path.remove(_TOOLS250)
 
 _WRAP250 = _re250.compile(
     r"(?:\bfunction\s+([A-Za-z_$][\w$]*)|\b([A-Za-z_$][\w$]*)\s*=\s*function)\s*\(\s*\w+(?:\s*,\s*\w+)?\s*\)\s*\{\s*"
