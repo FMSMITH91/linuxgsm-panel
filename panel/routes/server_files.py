@@ -2046,6 +2046,10 @@ def _register_file_removal(app):
         if not _fpm_can_edit():
             return jsonify({"error": "Permission denied"}), 403
         rel = _json_body().get("path", "")
+        # A path is text: a list, object, number or true reached the host-side checks' .strip() and
+        # answered 500 (OWASP Input Validation Cheat Sheet: check the type before anything uses it).
+        if not isinstance(rel, str):
+            return jsonify({"success": False, "message": "Invalid path"}), 400
         refused = _write_refused(gs, "delete_file", rel)
         if refused is not None:
             return refused

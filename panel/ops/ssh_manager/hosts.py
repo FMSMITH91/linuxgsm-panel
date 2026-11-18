@@ -984,7 +984,9 @@ def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
         n = int(num)
     except (TypeError, ValueError, OverflowError):
         return False, "Invalid rule number"
-    if n < 1:
+    # The helper's verb takes 1-9999 (privileged._rulenum); a larger number raised its VerbError
+    # out of the route as a 500 instead of being refused here.
+    if not 1 <= n <= 9999:
         return False, "Invalid rule number"
     if expect_key is not None and not isinstance(expect_key, str):
         return False, "Invalid rule identity"
