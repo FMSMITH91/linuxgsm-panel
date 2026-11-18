@@ -3253,14 +3253,14 @@ def _ban_watch_tick(app, state):
     tick itself; the loop that calls it only sleeps and counts failures.
     """
     _taken = _t0 = time.monotonic()
-    reading = so.panel_fail2ban_banned_ips()
+    reading = _banlist.watch_f2b(so.panel_fail2ban_banned_ips, state.get("seen"))   # None: skipped
     state["seen"], new_bans, unbans = _f2b_ban_events(state.get("seen"), reading)
     _f2b_record_events(app, new_bans, unbans)
     # The same reading feeds the panel's own ban gate, for traffic the firewall rule never sees
     # (Tailscale Funnel, which can also be switched on outside the panel, so this does not ask),
     # with the UFW denies and the whitelist. Each reading carries when it was TAKEN, so a slower
-    # read cannot overwrite a newer refresh. fail2ban is read every tick, always: its bans come
-    # and go on their own clock.
+    # read cannot overwrite a newer refresh. fail2ban is read when its files changed, while anything
+    # is banned, and every banlist.F2B_FORCED_READ seconds (banlist.watch_f2b).
     _banlist.set_f2b(reading, _taken)
     _banlist.set_whitelist(load_config().get("security_whitelist") or [])
     # UFW only when its rule files changed (or every banlist.UFW_FORCED_READ seconds): the rules
