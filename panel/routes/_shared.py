@@ -1657,7 +1657,7 @@ def _looks_installed(app, remote, short_name, lgsm_name):
 
 
 def _installed_verdict(remote, short_name, out, err):
-    """_looks_installed's answer from what its read printed (`details`, then the executable's mark)."""
+    """The answer _looks_installed gives from what its read printed (`details`, then the executable's mark)."""
     exe = _EXE_MARK_RE.findall(out or "")
     low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
     if re.search(_R30_NOT_INSTALLED, low):

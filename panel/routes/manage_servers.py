@@ -1348,7 +1348,8 @@ def _install_game_files(job, remote, gs):
     installed_ok = False
     last_out = ""
     why = None
-    tried = set()
+    primed_windows = False
+    sum_retried = False     # a failed checksum is downloaded once more, once
     for attempt in range(3):
         last_out = _download_game_files(job, remote, auto, attempt, last_out)
         # The real test — did the game files actually install? rc alone lies on a
@@ -1379,19 +1380,23 @@ def _install_game_files(job, remote, gs):
                   "could not read the host. The files may well be there; try "
                   "again once the host is answering.",
                   last_out[-300:], retryable=True, explained=True); return False
-        again, why, last_out = _game_files_retry(job, remote, gs, auto, last_out, tried)
+        again, why, last_out, primed_windows, sum_retried = _game_files_next(
+            job, remote, gs, auto, last_out, primed_windows, sum_retried)
         if not again:
             break
     if not installed_ok:
+        _wipe_lgsm_tmp(remote, short_name)    # the last try's partial archive, GBs, not left behind
         _fail_game_files(job, why, last_out)
         return False
     return True
 
 
-def _game_files_retry(job, remote, gs, auto, last_out, tried):
-    """Step 4 after a download whose files are not there: (download again?, the cause, last_out).
+def _game_files_next(job, remote, gs, auto, last_out, primed_windows, sum_retried):
+    """Step 4 after a download whose files are not there.
 
-    `tried` holds the one-off remedies already used in this install ("platform", "checksum").
+    -> (download again?, the cause or None, last_out, primed_windows, sum_retried): the two flags are
+    the one-off remedies already used in this install (the Invalid-platform prime, a second download
+    after a failed checksum).
     """
     # Some failures a second download cannot fix: no Steam licence, no crash-dump
     # slot, a game LinuxGSM does not support on this release. Retrying those
@@ -1410,22 +1415,21 @@ def _game_files_retry(job, remote, gs, auto, last_out, tried):
     # and read a GitHub thread, which is the opposite of what this is for.
     # Once per install: if priming does not take, the next pass reports it
     # rather than looping.
-    if why and why[0] == "steam_platform" and "platform" not in tried:
-        tried.add("platform")
-        return True, None, _prime_windows_depot(job, remote, gs, auto, last_out)   # judged on the next pass
-    # A download that failed LinuxGSM's checksum is downloaded once more: a transfer corrupted on
-    # the way gets a good copy, and the file LinuxGSM keeps in lgsm/tmp is wiped first, since
-    # LinuxGSM re-checks a file it already has instead of fetching it again (core_dl.sh
-    # fn_fetch_file). The same failure a second time is reported with LinuxGSM's own numbers.
-    if why and why[0] == "download_checksum" and "checksum" not in tried:
-        tried.add("checksum")
-        why = None
+    if why and why[0] == "steam_platform" and not primed_windows:
+        primed_windows = True
+        # Judged on what the next pass finds.
+        return True, None, _prime_windows_depot(job, remote, gs, auto, last_out), primed_windows, sum_retried
+    # A download that failed LinuxGSM's checksum is downloaded once more: a transfer corrupted or
+    # cut off on the way gets a good copy. The command clears lgsm/tmp first, since LinuxGSM
+    # re-checks a file it already has instead of fetching it again (core_dl.sh fn_fetch_file).
+    # The same failure a second time is reported with LinuxGSM's own numbers.
+    if why and why[0] == "download_checksum" and not sum_retried:
+        return True, None, last_out, primed_windows, True
     if why:
-        return False, why, last_out
-    # Not really installed: wipe LinuxGSM's cached (likely corrupt) archive so the
-    # next attempt re-downloads fresh instead of reusing the bad file.
-    _wipe_lgsm_tmp(remote, job.short_name)
-    return True, None, last_out
+        return False, why, last_out, primed_windows, sum_retried
+    # Not really installed: download again. The next download starts with LinuxGSM's cached
+    # (likely partial or corrupt) archive cleared (_LGSM_TMP_CLEAR in the command itself).
+    return True, None, last_out, primed_windows, sum_retried
 
 
 def _note_lgsm_exit(short_name, last_out):
@@ -1443,10 +1447,14 @@ def _note_lgsm_exit(short_name, last_out):
 def _game_files_command(job, remote):
     """Step 4's auto-install command, once any stale Steam crash-dump slot is freed. -> the command."""
     short_name, lgsm_name = job.short_name, job.lgsm_name
-    # The exit status is printed after LinuxGSM ends, as the game account, so it reaches the panel
-    # whichever transport runs it (lgsm_exit_status reads it).
-    auto = _sm.game_user_cmd(short_name, f"cd /home/{short_name} && ./{lgsm_name} auto-install; "
-                                         f"echo \"{LGSM_EXIT_MARK}$?\"", selfname=lgsm_name) + " 2>&1"
+    # Every download starts with LinuxGSM's own lgsm/tmp emptied (_LGSM_TMP_CLEAR). A download cut off
+    # part way leaves its partial file there under the archive's own name, and LinuxGSM's fn_fetch_file
+    # downloads only a file that is MISSING: every later run, a Retry included, re-checked that partial
+    # and failed its checksum (seen with 3.6 and 6.1 GB archives from linuxgsm.download). In the same
+    # command, so it costs no extra round trip. The exit status is printed after LinuxGSM ends, as the
+    # game account, so it reaches the panel whichever transport runs it (lgsm_exit_status reads it).
+    auto = _sm.game_user_cmd(short_name, f"cd /home/{short_name} && {_LGSM_TMP_CLEAR} && ./{lgsm_name} "
+                                         f"auto-install; echo \"{LGSM_EXIT_MARK}$?\"", selfname=lgsm_name) + " 2>&1"
     # Free any Steam crash-dump slot left behind by a deleted game account. Steam
     # has ten, one per account, and a full table stops SteamCMD dead on a host
     # whose servers were all working — see do_steam_dumps_sweep. Best-effort: a
@@ -1543,15 +1551,27 @@ def _prime_windows_depot(job, remote, gs, auto, last_out):
     return last_out
 
 
+# LinuxGSM's download folder (tmpdir="${lgsmdir}/tmp", linuxgsm.sh) emptied, relative to the game
+# account's home and run as that account: only when lgsm and lgsm/tmp are real folders, never through a
+# link, so nothing outside lgsm/tmp is touched. It names no account, so one text serves every install.
+_LGSM_TMP_CLEAR = ("{ [ -d lgsm ] && [ ! -L lgsm ] && [ -d lgsm/tmp ] && [ ! -L lgsm/tmp ] "
+                   "&& rm -rf -- lgsm/tmp/* lgsm/tmp/.[!.]* 2>/dev/null; true; }")
+
+
 def _wipe_lgsm_tmp(remote, short_name):
-    """Clear LinuxGSM's cached download before step 4's next attempt. Best-effort."""
+    """Empty LinuxGSM's download folder after a failed step 4: a partial archive there is GBs. Best-effort."""
     try:
-        _sm.shell_as_game_user(
-            remote, short_name,
-            f"rm -rf /home/{short_name}/lgsm/tmp/* 2>/dev/null; echo cleared",
-            timeout=30)
+        _sm.shell_as_game_user(remote, short_name, f"cd /home/{short_name} && {_LGSM_TMP_CLEAR} && echo cleared",
+                               timeout=30)
     except Exception:
         _log.debug("_run: ignored non-fatal error", exc_info=True)
+
+
+def _lgsm_said(why, last_out):
+    """The FAIL lines LinuxGSM ended with, when it exited non-zero for a cause nothing classified ("" else)."""
+    if why or lgsm_exit_status(last_out) in (None, 0):
+        return ""
+    return lgsm_fail_lines(last_out)
 
 
 def _fail_game_files(job, why, last_out):
@@ -1564,7 +1584,7 @@ def _fail_game_files(job, why, last_out):
     # Only INSTALL_FAILURE_FINAL is beyond a retry.
     # LinuxGSM said why: a non-zero exit with its FAIL lines (a download that did not complete, a
     # game it has no files for). That is the reason shown, not a guess about the mirror.
-    said = "" if why or lgsm_exit_status(last_out) in (None, 0) else lgsm_fail_lines(last_out)
+    said = _lgsm_said(why, last_out)
     if said:
         _fail("Game files didn't install — LinuxGSM stopped with this failure", said, retryable=True)
         return
