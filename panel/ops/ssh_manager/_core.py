@@ -1385,11 +1385,14 @@ def _r20a_magicdns_host(host):
     if "." in host or ":" in host:
         return host
     from panel.ops import tailscale_integration as ts
+    # The tailnet's own suffix: the part of this node's MagicDNS name after its first label (ts.net,
+    # or a self-hosted control server's base domain), else the status's suffix. With none known the
+    # bare name is dialled as it is, for the host's resolver; it used to get ".ts.net" glued on,
+    # a name that is no tailnet's.
     info = ts.get_tailscale_info()
-    if info.dns_name:
-        domain = info.dns_name.split(".", 1)[1] if "." in info.dns_name else "ts.net"
-        return f"{host}.{domain}"
-    return host
+    dns = getattr(info, "dns_name", "") or ""
+    suffix = dns.split(".", 1)[1] if "." in dns else ts.tailnet_suffix(info)
+    return f"{host}.{suffix}" if suffix else host
 
 
 def _tailscale_connect_host(server):

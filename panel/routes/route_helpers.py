@@ -6,6 +6,7 @@ from flask import (current_app, flash, jsonify, redirect, render_template, reque
 from flask_login import (current_user)
 from panel.core import i18n
 from panel.core.clock import (utcnow)
+from panel.core.http import (_json_body, _json_str)
 from panel.core.config import (_r13a_cfg_text, _r15a_cfg_int, encrypt_secret, load_config, remove_setup_token,
                                set_config_keys)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
@@ -185,6 +186,26 @@ def _setup_log(action, target, **kw):
     log_action(user, action, target=target, actor=None if user else _SETUP_ACTOR, **kw)
 
 
+def _setup_control_server(data):
+    """Store the wizard's control server before its join; None, or the 400 that refuses the address.
+
+    Only when the step sent one (its optional "Self-hosted control server" field): an empty or
+    absent field leaves the stored one as it is. Audited old -> new, like the Tailscale page's save.
+    """
+    if "control_url" not in data:
+        return None
+    url, why = ts.parse_control_url(_json_str(data, "control_url"))
+    if why is not None:
+        return jsonify({"success": False, "message": i18n.tr(why)}), 400
+    cfg = load_config()
+    old, _why = ts.parse_control_url(cfg.get("tailscale_control_url"))
+    if url and url != old:
+        set_config_keys(cfg, tailscale_control_url=url)
+        _setup_log("setup_tailscale_control_server", target=_SETUP_TARGET,
+                   detail="%s -> %s" % (old or "Tailscale", url))
+    return None
+
+
 def _register_setup_tailscale(app):
     """The wizard's Tailscale step: status, install, sign-in and Serve."""
     @app.route("/api/setup/tailscale/status")
@@ -201,6 +222,9 @@ def _register_setup_tailscale(app):
             "dns_name": info.dns_name, "ips": info.tailscale_ips,
             "serve_url": serve_url,
             "https_url": serve_url,
+            # False on a self-hosted control server that issues no certificates (Headscale up to
+            # 0.29): the step then says so instead of offering a Serve that cannot work.
+            "serve_offered": ts.serve_https_offered(info),
         })
 
     @app.route("/api/setup/tailscale/install", methods=["POST"])
@@ -218,6 +242,9 @@ def _register_setup_tailscale(app):
     def api_setup_ts_up():
         if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
+        refused = _setup_control_server(_json_body())
+        if refused is not None:
+            return refused
         ok, res = ts.tailscale_up_local(enable_ssh=True)
         _setup_log("setup_tailscale_up", target=_SETUP_TARGET, success=ok)
         if not ok:

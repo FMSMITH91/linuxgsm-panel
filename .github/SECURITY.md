@@ -219,7 +219,8 @@ argument vector: no shell, and only the programs its verbs name. Its shebang is
 It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management, the sshd port
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
-a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, and more — 133 verbs.
+a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, root's crontab for the
+owner's root cron page, and more — 135 verbs.
 The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
@@ -246,10 +247,18 @@ The narrowing is in the argument types:
   travels on stdin, never in the command.
 - **Secrets** (the Tailscale auth key, the Ubuntu Pro token) never appear on a command line; they
   travel on stdin.
+- **Root's crontab** (`root-crontab-read`, `root-crontab-write`) is closed unless you open it at install
+  (`PANEL_ROOT_CRON=1`/`0`, recorded root-owned in `panel.conf`; the default is closed). The write takes the
+  new crontab on stdin, refuses any line that is not blank, a comment, a `NAME=value` variable or a job with
+  cron's own schedule grammar, and installs it with `crontab -u root -` only while root's crontab still
+  hashes to what the panel read. Opening it lets the panel owner run any command as root on this host from
+  the root cron page; that page is off by default, the owner's alone, and asks for the password on every change.
 - `apt-install` checks every package name and bounds the list; dpkg's conflict answers are fixed in
   the helper, so an unattended upgrade never overwrites a config file you edited.
 - **Tailscale on the panel's host** changes only through verbs; the panel's account is not
-  tailscaled's operator. The helper will not move a joined host to another tailnet. Tailscale SSH
+  tailscaled's operator. The helper will not move a joined host to another tailnet. A join may name
+  a self-hosted control server (`--login-server`), checked as an http(s) address with no path, and
+  the login link it prints must be on that server. Tailscale SSH
   there is your choice at install (`PANEL_TAILSCALE_SSH=1`/`0`, recorded root-owned in `panel.conf`).
   Serve and Funnel publish only the panel's own recorded port, and Funnel is refused while another
   app is served on the same listener, unless Funnel is already on there.

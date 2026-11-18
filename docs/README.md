@@ -40,6 +40,7 @@ The installer runs unattended. It:
    - **As root** → a dedicated non-login **`lgsmpanel`** user running a system service, with a scoped passwordless-sudo entry for managing the local host (see [SECURITY.md](../.github/SECURITY.md)).
    - Either way, the `linuxgsm-panel-recover` command (reset a password, turn off 2FA, create an admin from a shell).
 4. Asks whether to turn on **Tailscale SSH on the panel host** (no by default). Answer ahead with `PANEL_TAILSCALE_SSH=1` or `=0`, placed after `sudo`: `curl … | sudo PANEL_TAILSCALE_SSH=1 bash`. An update keeps the answer.
+5. Keeps **root's crontab on the panel host** closed to the panel. `PANEL_ROOT_CRON=1` (placed after `sudo`, like the line above) opens it to the panel owner's root cron page; `=0` closes it again, and an update keeps the answer.
 
 On a root install, `sudo` to root is refused in a terminal on the panel host (the `lgsmpanel` user's grant names only its helper and the game accounts). To allow it, re-run the installer with `PANEL_TERMINAL_SUDO=1` (`cd / && sudo PANEL_TERMINAL_SUDO=1 bash /usr/local/lib/linuxgsm-panel/install.sh`) and give the panel user a password (`sudo passwd lgsmpanel`); sudo then asks for it every time, and `PANEL_TERMINAL_SUDO=0` removes it. A per-user install's terminal runs as your own user, with whatever sudo that user already has. You would be typing that password into a terminal the panel renders, so it protects against a stolen session, not a compromised panel.
 
@@ -127,6 +128,9 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - **Chat command bot** (Telegram *or* Discord): `/status`, `/servers`, `/players <name>`, `/start` / `/stop` / `/restart <name>`, `/update` and more. Opt-in and limited to the configured chat; in it, anyone can use `/status`, `/servers`, `/hosts`, `/connect` and `/help`, and every command that changes something runs only for the user IDs listed under Notifications → Telegram/Discord → *Users who may run commands*.
 - Tailscale integration, multiple SSH remotes with host-key pinning, a web terminal, diagnostics, and audit logging.
 
+- **Schedules** (Administration → Settings → Schedules): every job the panel runs by itself, with what it does, how often, and when it last ran and runs next. The daily panel backup's time of day, how often the panel checks for its own updates, and the daily OS-update check (its time, or off) can be changed there; times are shown in your own time zone.
+- **Root's crontab** (the panel owner only, off by default): add, change and delete root's cron jobs on any host, with `/etc/cron.d` shown read-only and the panel's own files marked. The owner turns it on under Settings → Schedules; each change asks for the password (and 2FA code) and is audited with the old and new line. On the panel host it also has to be opened at install with `PANEL_ROOT_CRON=1`. A job runs as root, so anything it runs can change everything on that host.
+
 **Also:** branding and session settings in-app, HTTPS by default, TOTP 2FA with backup codes, English/Spanish/French, light and dark themes, installable on a phone's home screen, and a **What's new** card after each update.
 
 ### Rebooting a host
@@ -190,6 +194,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `port` | 5000 | Web server port |
 | `bind_host` | *(auto)* | Bind address — empty picks `127.0.0.1` when Tailscale Serve can proxy, else `0.0.0.0`. Set `127.0.0.1` explicitly behind a proxy |
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
+| `tailscale_control_url` | *(empty: Tailscale)* | A self-hosted control server (Headscale) that new Tailscale joins use, as `https://host[:port]`. Set it on the `/tailscale` page; see [Headscale](#headscale-a-self-hosted-control-server) |
 | `trusted_proxies` | `["127.0.0.0/8", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
 | `trusted_proxy_users` | `www-data`, `nginx`, `http`, `caddy`, `cloudflared` | With `trust_proxy`, on loopback: the local accounts a proxy may run as (names or uids). Root and the panel's own account always count |
 | `session_idle_minutes` | 30 | A normal sign-in ends after this long without use (older installs: `session_lifetime_hours`) |
@@ -200,7 +205,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |
 
-Branding, the default language, session settings, the two reboot settings, the HTTPS certificate ([https.md](https.md)) and the **Outside services** switches are also editable at **Administration → Settings** (superadmin). Outside services has one switch for each service the panel calls by itself (the update check, Have I Been Pwned, LinuxGSM's game list and release notes, game icons, Steam Workshop titles, Modrinth and the public address lookup), each saying what stops working when it is off; alert channels and alert devices have their own switches ([PRIVACY.md](PRIVACY.md)). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
+Branding, the default language, session settings, the two reboot settings, the HTTPS certificate ([https.md](https.md)), the **Schedules** card and the **Outside services** switches are also editable at **Administration → Settings** (superadmin). Outside services has one switch for each service the panel calls by itself (the update check, Have I Been Pwned, LinuxGSM's game list and release notes, game icons, Steam Workshop titles, Modrinth and the public address lookup), each saying what stops working when it is off; alert channels and alert devices have their own switches ([PRIVACY.md](PRIVACY.md)). The panel's `port` and `bind_host` are changed at **Panel Server → Panel binding**, which also updates the firewall; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 
@@ -216,7 +221,7 @@ administrator can deactivate, demote, rename or delete it, or reset its password
 superadmin cannot take the panel from another. The owner can still change their own display name,
 password, 2FA and sessions on the Account page. A terminal on the panel's own host, and restoring or
 downloading a panel backup, are the owner's only: each reaches the panel's database, where every
-account lives, or the keys that sign every sign-in.
+account lives, or the keys that sign every sign-in. The root cron page (root's crontab on any host) is the owner's only too.
 
 To hand the panel over, the owner uses **Account → Panel owner → Transfer ownership**: it goes to
 another active superadmin who has 2FA turned on, and is confirmed with the owner's password and a
@@ -286,6 +291,19 @@ each quoted value replaced by `?`), each dump download and each upload.
 Run behind **Tailscale** (recommended — tailnet-only, no open ports) or a **reverse proxy**. With a proxy, set `"trust_proxy": true` and `"bind_host": "127.0.0.1"` so the panel serves HTTP to the proxy that terminates TLS. See [docs/https.md](https.md).
 
 For Tailscale Serve, use the setup wizard's Tailscale step or **Enable Serve** on the panel's `/tailscale` page rather than a `tailscale serve` command of your own: the panel then writes the route on the scheme it is actually serving and keeps it pointed at the panel. A route you add by hand is not managed, and on the panel's host such a command needs `sudo`. The `/tailscale` page lists a hand-made route with a **Remove** button.
+
+### Headscale (a self-hosted control server)
+
+The panel works with [Headscale](https://headscale.net/stable/) as well as Tailscale's own coordination server. Enter its address under **Control server** on the `/tailscale` page (or, during setup, under *Self-hosted control server* in the Tailscale step), for example `https://headscale.example.com`. Every join the panel runs then passes it as `tailscale up --login-server`: Connect on the panel host, and the login link or auth key for a remote. A host you joined by hand is detected from its own prefs, and remotes follow it while the field is empty.
+
+- **Joining.** The login link opens on your Headscale server, which shows the `headscale auth register` command that approves the machine. For an auth key, create one there with `headscale preauthkeys create --user <USER_ID>`.
+- **What Headscale does not offer, the panel does not offer either.** It reads what the control server grants this machine (the same capabilities the `tailscale` command checks):
+  - **Serve** needs an HTTPS certificate from the control server. Headscale releases up to 0.29 issue none, so the panel hides Enable Serve and says why; reach the panel at its tailnet address with the panel's own certificate (Settings > HTTPS certificate). A Headscale that issues certificates (`dns.certificates` in its config) is detected and Serve is offered again.
+  - **Funnel** is not implemented by Headscale, so the Funnel switch is hidden.
+  - **Tailscale SSH** works, under the `ssh` rules of Headscale's own policy.
+  - **MagicDNS names** end in Headscale's `dns.base_domain`, not `ts.net`; the panel reads the suffix from the tailnet and uses it wherever it qualifies or recognises a name.
+- Headscale uses Tailscale's own address ranges (100.64.0.0/10 and fd7a:115c:a1e0::/48); its docs say other ranges are not supported, and so the panel's tailnet checks stay as they are.
+- Use an `https://` address (OWASP Transport Layer Security Cheat Sheet). An `http://` one is accepted, with a warning, for a test setup.
 
 ```nginx
 # Reverse proxy — the WebSocket console needs the upgrade headers

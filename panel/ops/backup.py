@@ -527,14 +527,21 @@ def daily_backup_tick():
     """Take a daily backup when one is due; called periodically by the panel's background thread.
 
     If daily backups are enabled and the newest daily one is >~24h old (or none exists), make one
-    and prune old dailies. Cheap no-op otherwise. Returns True if a backup was taken.
+    and prune old dailies. With a time of day set (Settings > Schedules), one is taken at the first
+    pass after that time once the newest daily backup is older than it; the backup ticker passes
+    hourly, so within the hour after. Cheap no-op otherwise. Returns True if a backup was taken.
     """
+    from panel.services import schedules as _sched   # lazy: services import ops, not the reverse
     cfg = load_config()
     if not cfg.get("backup_enabled", True):
         return False
     dailies = [b for b in list_backups() if b["kind"] == "daily"]
     newest = dailies[0]["created"] if dailies else 0
-    if time.time() - newest < 23 * 3600:      # ~daily, with slack so a slightly-early tick is fine
+    at = _sched.backup_at()
+    if at is not None:
+        if not _sched.due_at_slot(at, newest):
+            return False
+    elif time.time() - newest < 23 * 3600:      # ~daily, with slack so a slightly-early tick is fine
         return False
     ok, _ = create_backup("daily")
     if ok:

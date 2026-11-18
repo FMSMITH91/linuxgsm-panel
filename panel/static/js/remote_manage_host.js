@@ -137,7 +137,7 @@ function closePanelPort(){
     ? 'Close the public web port?\n\nTailscale Serve could not be read just now, so whether Funnel also makes the panel reachable from the internet is not known.'
     : _fun
     ? 'Close the public web port?\n\nFunnel is on for the panel’s Tailscale Serve address, so the panel stays reachable from the internet through it.'
-    : 'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at your ts.net URL (Tailscale Serve) — this removes the public way in.';
+    : 'Close the public web port so the panel is reachable ONLY over your tailnet?\n\nMake sure you can already reach the panel at its Tailscale Serve address — this removes the public way in.';
   confirmDialog({title:'Close public panel port', icon:'shield-lock', confirmClass:'btn-danger', confirmLabel:'Close public port',
     bodyText:body,
     onConfirm:function(){ _rmhStepUp(function(){

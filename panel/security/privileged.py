@@ -187,6 +187,55 @@ TS_UP_POLL_SECONDS = 20
 # panel's HTML. Whoever checks it must FULLMATCH — a prefix test accepts anything after the trusted
 # part, and the far side's grep is running on a host whose output is exactly what is in question.
 TS_LOGIN_URL_RE = re.compile(r"https://login\.tailscale\.com/[A-Za-z0-9/]+")
+# A self-hosted control server (Headscale and the like), as `tailscale up --login-server=` takes it:
+# http(s), a lower-case DNS name or IPv4 address, an optional port, and nothing after it (no path,
+# query, userinfo or fragment). The panel stores it in this one spelling (control_url in
+# tailscale_integration), and tools/panel-helper checks the same pattern (a unit test ties the two).
+# "-" means Tailscale's own coordination server: no --login-server at all.
+CONTROL_URL_RE = (r"https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+                  r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[1-9][0-9]{0,4})?")
+CONTROL_URL_MAX = 255
+
+
+def ts_login_url_re(control="-"):
+    """The login link `tailscale up` prints, for the control server it was pointed at.
+
+    Tailscale's own: TS_LOGIN_URL_RE. A self-hosted one prints a link on ITSELF (Headscale:
+    `<server_url>/register/<auth id>`, the id being URL-safe base64), so the pattern is that
+    server's own address and a path in the same narrow charset, with "-" and "_" added. A default
+    port may be spelled or left out by the server's own config, so `:443` (https) or `:80` (http)
+    is optional when the stored address has none.
+    """
+    if control in (None, "", "-"):
+        return TS_LOGIN_URL_RE
+    m = re.fullmatch(r"(https?)://([^:/]+)(?::(\d+))?", control)
+    if m is None:
+        return TS_LOGIN_URL_RE
+    port = (r"(?::%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None \
+        else ":" + m.group(3)
+    return re.compile(r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), re.escape(m.group(2)), port))
+
+
+def _r40_control(args, i):
+    """The control-server argument at `args[i]` (validated by the table), or "-" when none was given."""
+    return args[i] if len(args) > i else "-"
+
+
+def _r40_login_ere(control):
+    """ts_login_url_re(control) as the POSIX ERE a remote's `grep -oE` takes (no helper there).
+
+    Built from the same validated pieces, so the two cannot disagree; the panel re-checks what comes
+    back with ts_login_url_re(...).fullmatch, because the remote's grep is not something it controls.
+    """
+    if control in (None, "", "-"):
+        return r"https://login\.tailscale\.com/[A-Za-z0-9/]+"
+    m = re.fullmatch(r"(https?)://([^:/]+)(?::(\d+))?", control)
+    if m is None:
+        return r"https://login\.tailscale\.com/[A-Za-z0-9/]+"
+    port = ("(:%s)?" % (443 if m.group(1) == "https" else 80)) if m.group(3) is None else ":" + m.group(3)
+    return r"%s://%s%s/[A-Za-z0-9/_-]+" % (m.group(1), m.group(2).replace(".", r"\."), port)
+
+
 # `tailscale-ssh on|off` as the value `tailscale set --ssh=` takes (tools/panel-helper's twin).
 R24T_SSH_PREF = {"on": "true", "off": "false"}
 
@@ -451,6 +500,15 @@ def _authkey(s):
     return str(s)
 
 
+def _control_url(s):
+    """A control server for `tailscale up --login-server`, or "-" for Tailscale's own (CONTROL_URL_RE)."""
+    s = str(s)
+    if s != "-" and (len(s) > CONTROL_URL_MAX or not re.fullmatch(CONTROL_URL_RE, s)
+                     or int(s.rsplit(":", 1)[1] if s.count(":") == 2 else "1") > 65535):
+        raise VerbError("not a control server address")
+    return s
+
+
 def ts_serve_argv(verb, grammar, mount, scheme, port):
     """`tailscale serve|funnel` argv for both CLI grammars — see tools/panel-helper.
 
@@ -484,9 +542,11 @@ def ts_serve_argv(verb, grammar, mount, scheme, port):
     return ["tailscale", verb, "--bg", "--https", "443", mount, upstream]
 
 
-def ts_up_argv(ssh, routes, tags=None, auth_key=None):
+def ts_up_argv(ssh, routes, tags=None, auth_key=None, control="-"):
     """The `tailscale up` argument vector — see tools/panel-helper."""
     argv = ["tailscale", "up", "--accept-routes"]
+    if control not in (None, "-"):
+        argv.append("--login-server=%s" % control)
     if auth_key is not None:
         argv += ["--auth-key", auth_key]
     if ssh == "yes":
@@ -997,6 +1057,156 @@ def _cron_b64(s):
     return s
 
 
+# ── root's own crontab (root-crontab-read / root-crontab-write) ─────────────────────────────────
+# The one place the panel reads and writes root's crontab, for the owner's root cron page
+# (panel/routes/root_cron.py). The command in a job runs as root by design, so what is checked is
+# the SHAPE of every line, never what a command does: each line is blank, a comment, a variable
+# (NAME=value) or a job whose five schedule fields (or one @keyword) are cron's own grammar, with
+# no control character, so no line can smuggle in a second one. tools/panel-helper holds the same
+# rules (ROOT_CRON_* and root_crontab_problem); a unit test runs both over one corpus.
+#
+# On the panel's own host both verbs are refused unless the operator opened them at install
+# (PANEL_ROOT_CRON=1, recorded root-owned in panel.conf as root_cron=yes): without that, a write
+# verb would hand anyone controlling the panel's account root on this host, which the narrow
+# grant exists to prevent. A remote host is root to the panel by design (sudo over SSH), so there
+# the owner's switch in the panel is the gate.
+ROOT_CRON_MAX_BYTES = 65536
+ROOT_CRON_MAX_LINES = 1000
+ROOT_CRON_LINE_MAX = 4096
+ROOT_CRON_SPECIALS = ("@reboot", "@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight",
+                      "@hourly")
+ROOT_CRON_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+ROOT_CRON_DAYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+# (lowest, highest, names) of minute, hour, day of month, month, day of week (0 and 7 are Sunday).
+ROOT_CRON_FIELDS = ((0, 59, ()), (0, 23, ()), (1, 31, ()), (1, 12, ROOT_CRON_MONTHS), (0, 7, ROOT_CRON_DAYS))
+ROOT_CRON_TEXT_RE = r"[^\x00-\x08\x0a-\x1f\x7f]*"
+# A variable line is NAME=value, spaces allowed before the "=": the name is checked alone, after
+# splitting at the first "=", so no pattern has to find where the name ends.
+ROOT_CRON_ENV_NAME_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+ROOT_CRON_ITEM_RE = r"(\*|([0-9]{1,2})(?:-([0-9]{1,2}))?)(?:/([0-9]{1,2}))?"
+# The panel's conf file the helper reads it from, and the key.
+ROOT_CRON_CONF_KEY = "root_cron"
+ROOT_CRON_DIR = "/etc/cron.d"
+ROOT_CRON_DIR_FILE_RE = r"[A-Za-z0-9_-]{1,64}"
+ROOT_CRON_DIR_MAX_FILES = 100
+ROOT_CRON_DIR_FILE_MAX = 65536
+
+
+def root_cron_field_ok(text, index):
+    """Whether `text` is cron's grammar for schedule field `index` (0 minute .. 4 day of week).
+
+    `*`, a number, a range, each with an optional step (`*/5`, `1-10/2`), or a comma list of
+    those; a month or day name only on its own (crontab(5): "ranges or lists of names are not
+    allowed"). Every number within the field's range, a range's start at most its end.
+    """
+    low, high, names = ROOT_CRON_FIELDS[index]
+    if names and text.lower() in names:
+        return True
+    return all(_root_cron_item_ok(re.fullmatch(ROOT_CRON_ITEM_RE, part), low, high) for part in text.split(","))
+
+
+def _root_cron_item_ok(m, low, high):
+    """One comma-separated item of a schedule field (its ROOT_CRON_ITEM_RE match, or None)."""
+    if not m:
+        return False
+    step = int(m.group(4)) if m.group(4) is not None else None
+    if m.group(2) is not None:
+        a = int(m.group(2))
+        b = int(m.group(3)) if m.group(3) is not None else a
+        if not low <= a <= b <= high or (step is not None and m.group(3) is None):
+            return False
+    return step is None or 1 <= step <= high
+
+
+def root_cron_line_kind(line):
+    """'blank', 'comment', 'env' or 'job' for one crontab line; '' when it is none of them."""
+    if len(line) > ROOT_CRON_LINE_MAX or not re.fullmatch(ROOT_CRON_TEXT_RE, line):
+        return ""
+    s = line.strip(" \t")
+    if not s:
+        return "blank"
+    if s.startswith("#"):
+        return "comment"
+    name, eq, _value = s.partition("=")
+    if eq and re.fullmatch(ROOT_CRON_ENV_NAME_RE, name.rstrip(" \t")):
+        return "env"
+    return "job" if _root_cron_job_ok(s) else ""
+
+
+def _root_cron_job_ok(s):
+    """Whether `s` (a stripped line) is a job: an @keyword or five schedule fields, then a command."""
+    if s.startswith("@"):
+        word, _sep, rest = s.replace("\t", " ").partition(" ")
+        return word in ROOT_CRON_SPECIALS and bool(rest.strip(" \t"))
+    fields = s.split(None, 5)
+    return len(fields) == 6 and bool(fields[5].strip()) and all(root_cron_field_ok(fields[i], i) for i in range(5))
+
+
+def root_crontab_problem(text):
+    """Why `text` may not be installed as root's crontab, in fixed words; "" when it may.
+
+    Bounded in size and lines, ending in a newline (cron ignores a last line without one), and
+    every line one root_cron_line_kind knows. Only a line NUMBER is named, never its text.
+    """
+    if not isinstance(text, str):
+        return "not text"
+    if len(text.encode("utf-8", "surrogateescape")) > ROOT_CRON_MAX_BYTES:
+        return "too long"
+    if text and not text.endswith("\n"):
+        return "the last line has no newline"
+    lines = text.split("\n")[:-1] if text else []
+    if len(lines) > ROOT_CRON_MAX_LINES:
+        return "too many lines"
+    for n, line in enumerate(lines, 1):
+        if not root_cron_line_kind(line):
+            return "line %d is not a job, a variable, a comment or blank" % n
+    return ""
+
+
+def _sha256_hex(s):
+    """A SHA-256 digest in hex: what root-crontab-write expects root's crontab to hash to now."""
+    s = str(s)
+    if not re.fullmatch(r"[0-9a-f]{64}", s):
+        raise VerbError("not a sha256 digest")
+    return s
+
+
+# The remote form of root-crontab-read: the helper's output format, from a shell. One line
+# `root-crontab ok <base64>` (or `root-crontab none` when root has no crontab), then one line
+# `crond <name> <base64>` per regular file in /etc/cron.d that cron reads (a name of letters,
+# digits, `_` and `-`), at most ROOT_CRON_DIR_MAX_FILES of them and the first
+# ROOT_CRON_DIR_FILE_MAX bytes of each. A link is skipped, as the helper skips it.
+_ROOT_CRON_READ_REMOTE = (
+    "b=$(crontab -u root -l 2>/dev/null | base64 -w0; exit \"${PIPESTATUS[0]}\"); "
+    "if [ $? -eq 0 ]; then echo \"root-crontab ok $b\"; else echo 'root-crontab none'; fi; "
+    "i=0; for f in %(dir)s/*; do n=${f##*/}; "
+    "case \"$n\" in ''|*[!A-Za-z0-9_-]*) continue ;; esac; "
+    "[ ${#n} -le 64 ] && [ -f \"$f\" ] && [ ! -L \"$f\" ] || continue; "
+    "i=$((i+1)); [ \"$i\" -le %(max)d ] || break; "
+    "echo \"crond $n $(head -c %(size)d -- \"$f\" | base64 -w0)\"; done"
+    % {"dir": ROOT_CRON_DIR, "max": ROOT_CRON_DIR_MAX_FILES, "size": ROOT_CRON_DIR_FILE_MAX})
+
+
+def remote_root_crontab_write_command(content, expected):
+    """The shell that installs `content` as root's crontab on a REMOTE host, if it still hashes to `expected`.
+
+    The remote half of root-crontab-write (write_root_crontab picks the transport). The content is
+    checked here with root_crontab_problem first, as the helper checks it, and travels base64 so
+    every byte stays inert through the shell. Root's crontab is read and hashed on the host just
+    before the install; when it is not what the page was showing (someone changed it meanwhile)
+    nothing is written and the command exits 3.
+    """
+    why = root_crontab_problem(content)
+    if why:
+        raise VerbError(why)
+    expected = _sha256_hex(expected)
+    b64 = base64.b64encode(content.encode("utf-8", "surrogateescape")).decode()
+    return ("cur=$(crontab -u root -l 2>/dev/null | sha256sum | cut -d' ' -f1); "
+            "if [ \"$cur\" != %s ]; then echo \"root's crontab changed since it was read\"; exit 3; fi; "
+            "echo %s | base64 -d | crontab -u root - 2>&1"
+            % (shlex.quote(expected), shlex.quote(b64)))
+
+
 # apt-upgrade-running's pgrep pattern: is an OS update already running? Its three ways of being one:
 #   * apt-get upgrading, OPTIONS ANYWHERE before the subcommand. It needed `upgrade` straight after
 #     `apt-get `, which the old foreground verb wrote; the panel's own os-update-run job puts its
@@ -1146,9 +1356,12 @@ _ARGV = {
 
     # ── tailscale ──
     # The auth key is read from stdin (`file:/dev/stdin`), never passed as a value: SECRET_STDIN.
-    "tailscale-up-key": ([_authkey, _yesno, _routes, _tags],
-                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key="file:/dev/stdin"), None),
-    "tailscale-up-login": ([_yesno, _routes], lambda a: [], None),
+    # The control server is an optional last argument (Rest, 0..1), so a caller that names none
+    # joins Tailscale's own exactly as before.
+    "tailscale-up-key": ([_authkey, _yesno, _routes, _tags, Rest(_control_url, 0, 1)],
+                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key="file:/dev/stdin",
+                                              control=_r40_control(a, 4)), None),
+    "tailscale-up-login": ([_yesno, _routes, Rest(_control_url, 0, 1)], lambda a: [], None),
 
     # ── host hardening ──
     "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
@@ -1227,6 +1440,11 @@ _ARGV = {
     # Copy one Let's Encrypt certificate into data/ssl for the panel to check and load. The name is
     # the only argument; both paths are fixed in the helper (do_tls_le_copy).
     "tls-le-copy": ([_tls_le_name], lambda a: [], None),
+    # Root's own crontab, for the owner's root cron page: read it (with /etc/cron.d, read-only),
+    # and install a new one, given on stdin, only while the current one still hashes to the digest
+    # passed. Both are refused on the panel's host unless opened at install. See ROOT_CRON_*.
+    "root-crontab-read": ([], lambda a: [], None),
+    "root-crontab-write": ([_sha256_hex], lambda a: [], None),
     # Panel self-update. Two validated arguments — a commit sha and a branch, each of which may be
     # "-" for none — exported into the environment of a ROOT-OWNED installer. See tools/panel-helper
     # for what this deliberately does not claim to make safe.
@@ -1407,6 +1625,7 @@ LOCAL_ONLY_VERBS = frozenset({
     # Two-sided callers: the remote half is a dedicated builder, not this table.
     "write-file",        # write_root_file() -> remote_write_command() when not local
     "content-cron-write",# write_content_cron() -> remote_content_cron_command() when not local
+    "root-crontab-write",# write_root_crontab() -> remote_root_crontab_write_command() when not local
     "game-file-read",    # the file browser's download: is_local_server() branch in files.py
     "game-dir-tar",      # same call site as game-file-read
     "game-backup-read",  # the backup download: is_local_server() branch in cron.py
@@ -1710,7 +1929,7 @@ def _r22a_content_cron_path(user):
 
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
-    "tailscale-up-key": lambda a: (shlex.join(ts_up_argv(a[1], a[2], a[3]))
+    "tailscale-up-key": lambda a: (shlex.join(ts_up_argv(a[1], a[2], a[3], control=_r40_control(a, 4)))
                                    + " --auth-key \"file:$f\""),
 }
 
@@ -1874,12 +2093,12 @@ _REMOTE_ACTIONS = {
     "tailscale-up-login": lambda a: (
         "rm -f %s ; nohup %s > %s 2>&1 & "
         "for i in $(seq 1 %d); do "
-        "u=$(grep -oE 'https://login\\.tailscale\\.com/[A-Za-z0-9/]+' %s | head -1) ; "
+        "u=$(grep -oE %s %s | head -1) ; "
         "[ -n \"$u\" ] && { echo \"$u\" ; break ; } ; "
         "grep -qi 'success' %s && { echo ALREADY_CONNECTED ; break ; } ; "
         "sleep 1 ; done"
-        % (TS_UP_LOG, shlex.join(ts_up_argv(a[0], a[1])), TS_UP_LOG, TS_UP_POLL_SECONDS,
-           TS_UP_LOG, TS_UP_LOG)),
+        % (TS_UP_LOG, shlex.join(ts_up_argv(a[0], a[1], control=_r40_control(a, 2))), TS_UP_LOG,
+           TS_UP_POLL_SECONDS, shlex.quote(_r40_login_ere(_r40_control(a, 2))), TS_UP_LOG, TS_UP_LOG)),
     "os-update-run": lambda a: (
         "setsid bash -c %s </dev/null >/dev/null 2>&1 & echo %s"
         % (shlex.quote((
@@ -2013,6 +2232,7 @@ _REMOTE_ACTIONS = {
     "ufw-delete-num-if": _ufw_delete_num_if_remote,
     "ufw-stored-rules": _fwa_ufw_stored_remote,
     "journal-cron-account": _cron_journal_account_remote,
+    "root-crontab-read": lambda a: _ROOT_CRON_READ_REMOTE,
     "nodesource-setup": _nodesource_setup_remote,
     "gamedig-install": _gamedig_install_remote,
 }

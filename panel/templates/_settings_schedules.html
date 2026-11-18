@@ -1,0 +1,113 @@
+{# Settings -> Schedules (panel/routes/schedules.py, panel/services/schedules.py). The panel's own
+   background jobs, the three whose timing may be changed, and (for the panel owner) the switch for
+   the root cron page. Its own form, outside the Settings form. Folded: a page of rows most visits
+   never open. Times are typed and shown in the viewer's zone (schedules.js); stored in UTC. #}
+{% set sc = schedules_card() %}
+<details class="card mt-3" id="sec-schedules">
+  <summary class="card-header uid-summary-card"><i class="bi bi-clock-history"></i> Schedules</summary>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('settings_schedules_save') }}"
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+      <input type="hidden" name="tz" id="sch-tz" value="">
+      <div class="row g-3">
+        <div class="col-lg-4">
+          <div class="fw-semibold small">Daily panel backup</div>
+          <div class="small text-secondary">The panel's database, settings and keys.</div>
+          <label class="form-label small mb-1 mt-2" for="sch-backup-at">Time of day <span class="sch-zone">(UTC)</span></label>
+          <input type="time" id="sch-backup-at" name="backup_at" class="form-control form-control-sm maxw-8rem"
+                 value="{{ sc.backup_at }}" data-utc-hhmm="{{ sc.backup_at }}">
+          <div class="small text-secondary mt-1">Empty: about every 24 hours. Taken within the hour after this time.</div>
+          <div class="small mt-1"><span>Last:</span> {{ sc.backup_last|datetime }}</div>
+          {% if sc.backup_on %}
+          <div class="small"><span>Next:</span> {{ sc.backup_next|datetime }}</div>
+          {% else %}
+          <div class="small text-warning">Off: no daily backup is taken.</div>
+          {% endif %}
+          <a class="small" href="{{ url_for('server_management') }}#backups"><i class="bi bi-box-seam"></i> On or off, and how long they are kept</a>
+        </div>
+        <div class="col-lg-4">
+          <div class="fw-semibold small">Panel update check</div>
+          <div class="small text-secondary">Asks GitHub whether a newer panel release is out.</div>
+          <label class="form-label small mb-1 mt-2" for="sch-update-every">How often</label>
+          <select id="sch-update-every" name="update_every" class="form-select form-select-sm sch-select">
+            {% for m in sc.update_choices %}
+            <option value="{{ m }}" {% if m == sc.update_every %}selected{% endif %}>{% if m < 60 %}{{ t('Every 30 minutes') }}{% elif m == 60 %}{{ t('Every hour') }}{% elif m < 1440 %}{{ t('Every {n} hours').replace('{n}', (m // 60)|string) }}{% else %}{{ t('Once a day') }}{% endif %}</option>
+            {% endfor %}
+          </select>
+          <div class="small text-secondary mt-1">Fewer checks: a new release, security fixes included, is noticed later.</div>
+          <div class="small mt-1"><span>Last:</span> {{ sc.update_last|datetime }}</div>
+          <div class="small"><span>Next:</span> {{ sc.update_next|datetime }}</div>
+          <a class="small" href="#sec-outside"><i class="bi bi-globe2"></i> On or off: Outside services</a>
+        </div>
+        <div class="col-lg-4">
+          <div class="fw-semibold small">OS update check</div>
+          <div class="small text-secondary">Runs apt update on every host once a day and alerts you to waiting updates.</div>
+          <div class="form-check form-switch mt-2 mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="sch-os" name="os_check"
+                   {% if sc.os_on %}checked{% endif %}
+                   data-confirm-off="{{ t('Turn off the daily OS update check? You will not be alerted to waiting updates, security updates included. Each host\'s Maintenance tab still checks when you press Check.') }}">
+            <label class="form-check-label small" for="sch-os">Check every day</label>
+          </div>
+          <div class="small text-secondary">OWASP recommends on (Top 10:2025 A03, patch management).</div>
+          <div class="small text-warning{% if sc.os_on %} d-none{% endif %}" id="sch-os-owasp">Off: outside OWASP's recommendation. No alert for waiting updates; the Maintenance tab still checks when you press Check.</div>
+          <label class="form-label small mb-1 mt-2" for="sch-os-at">Time of day <span class="sch-zone">(UTC)</span></label>
+          <input type="time" id="sch-os-at" name="os_check_at" class="form-control form-control-sm maxw-8rem"
+                 value="{{ sc.os_at }}" data-utc-hhmm="{{ sc.os_at }}">
+          <div class="small text-secondary mt-1">Empty: 24 hours after the last check. The first check after a restart runs at once.</div>
+          <div class="small mt-1"><span>Last:</span> {{ sc.os_last|datetime }}</div>
+          {% if sc.os_on %}<div class="small"><span>Next:</span> {{ sc.os_next|datetime }}</div>{% endif %}
+        </div>
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary mt-3"><i class="bi bi-save"></i> Save schedules</button>
+    </form>
+
+    <details class="mt-3" id="sch-workers">
+      <summary class="small fw-semibold"><span>Other background jobs</span> <span data-no-i18n>({{ sc.workers|length }})</span></summary>
+      <div class="small text-secondary mt-1">These run on fixed timings other parts of the panel rely on, so they are shown, not changed.</div>
+      <div class="table-responsive">
+        <table class="table table-sm small mb-0">
+          <thead><tr><th>Job</th><th class="d-none d-md-table-cell">What it does</th><th>How often</th><th>Last</th><th>Next</th></tr></thead>
+          <tbody>
+            {% for w in sc.workers %}
+            <tr><td>{{ t(w.name) }}</td><td class="d-none d-md-table-cell">{{ t(w.what) }}</td><td>{{ w.often }}</td>
+                <td>{{ w.last|datetime }}</td><td>{% if w.next %}{{ w.next|datetime }}{% else %}—{% endif %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    {% if sc.owner %}
+    {# The root cron page (panel/routes/root_cron.py): the panel owner's alone, off until turned on
+       here, the password asked on every change. #}
+    <div class="border-top mt-3 pt-3" id="sch-root-cron">
+      <div class="fw-semibold small"><i class="bi bi-shield-exclamation"></i> Root's crontab (panel owner only)</div>
+      <div class="small text-secondary">Add, change or delete root's cron jobs on any host. A job runs as root: anything it runs can change everything on that host. Only you can see this.</div>
+      <form method="POST" action="{{ url_for('root_cron_switch') }}" class="row g-2 align-items-end mt-1" autocomplete="off">
+        <input type="hidden" name="on" value="{{ '0' if sc.root_cron_on else '1' }}">
+        <div class="col-sm-4">
+          <label class="form-label small mb-1" for="sch-rc-pw">Your password</label>
+          <input type="password" id="sch-rc-pw" name="password" class="form-control form-control-sm" required autocomplete="current-password">
+        </div>
+        {% if current_user.totp_enabled %}
+        <div class="col-sm-3">
+          <label class="form-label small mb-1" for="sch-rc-code">Authentication code</label>
+          <input type="text" id="sch-rc-code" name="totp_code" class="form-control form-control-sm" inputmode="numeric" autocomplete="one-time-code" maxlength="14" required>
+        </div>
+        {% endif %}
+        <div class="col-sm-auto">
+          {% if sc.root_cron_on %}
+          <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-toggle-on"></i> Turn the root cron page off</button>
+          {% else %}
+          <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-toggle-off"></i> Turn the root cron page on</button>
+          {% endif %}
+        </div>
+      </form>
+      {% if sc.root_cron_on %}
+      <div class="small mt-2"><span>On. Open it from a host's Host Controls tab, or:</span>
+        <a href="{{ url_for('root_cron_page', remote_id=local_remote_id) if local_remote_id else url_for('manage_remotes') }}"><i class="bi bi-clock"></i> this panel's host</a></div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+</details>

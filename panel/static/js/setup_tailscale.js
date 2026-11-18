@@ -8,12 +8,20 @@ var tsCont = document.getElementById('ts-continue');
 function tsRefresh(){ return tsApi('status').then(function(s){ tsRender(s); return s; }).catch(function(){ tsBox.innerHTML='<div class="text-danger small">Could not check Tailscale status.</div>'; }); }
 
 function tsRender(s){
+  tsShowControl(false);
   if(s.error){ tsBox.innerHTML='<div class="text-danger small">'+tsEsc(s.error)+'</div>'; return; }  // nosemgrep - tsEsc is window.escapeHtml
   if(s.running && s.dns_name){
     if(s.serve_url){
       tsBox.innerHTML='<div class="alert alert-success py-2 small mb-2"><i class="bi bi-check-circle-fill"></i> '  // nosemgrep - literals plus a tsEsc-wrapped dns_name
         + 'Connected and serving over HTTPS at<br><a href="'+tsEsc(s.https_url)+'" target="_blank" rel="noopener noreferrer" class="wb-all">'+tsEsc(s.https_url)+'</a></div>'
         + '<div class="text-secondary small">Finish setup, then reach the panel at that private HTTPS URL.</div>';
+      tsCont.innerHTML='<i class="bi bi-arrow-right"></i> Continue';
+      tsCont.className='btn btn-primary w-100';
+    } else if(s.serve_offered === false){
+      // A self-hosted control server that issues no certificates (Headscale up to 0.29): Serve
+      // cannot publish the panel there, so the step says so and lets the operator go on.
+      tsBox.innerHTML='<div class="alert alert-info py-2 small mb-2"><i class="bi bi-check-circle"></i> '+tfHtml('Connected to your tailnet as {name}.', {name: {html: '<code>'+tsEsc(s.dns_name)+'</code>'}})+'</div>'  // nosemgrep - tfHtml plus a tsEsc-wrapped dns_name
+        + '<div class="text-secondary small">This tailnet\'s control server does not issue HTTPS certificates, so Tailscale Serve isn\'t available. Finish setup and open the panel at its tailnet address.</div>';
       tsCont.innerHTML='<i class="bi bi-arrow-right"></i> Continue';
       tsCont.className='btn btn-primary w-100';
     } else {
@@ -36,16 +44,32 @@ function tsRender(s){
     tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale is installed but not connected to a tailnet yet.</div>'
       + '<button type="button" class="btn btn-primary w-100" id="ts-up"><i class="bi bi-box-arrow-up-right"></i> Connect to my tailnet</button>'
       + '<div id="ts-out" class="small mt-2"></div>';
+    tsShowControl(true);
     document.getElementById('ts-up').onclick=tsDoUp;
     return;
   }
   tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale isn\'t installed on this host yet.</div>'
     + '<button type="button" class="btn btn-primary w-100" id="ts-install"><i class="bi bi-download"></i> Install &amp; connect Tailscale</button>'
     + '<div id="ts-out" class="small mt-2"></div>';
+  tsShowControl(true);
   document.getElementById('ts-install').onclick=tsDoInstall;
 }
 
 function tsOut(){ return document.getElementById('ts-out'); }
+
+// The optional control server for the join (#ts-control-wrap in the template): shown only while
+// this host is not on a tailnet yet, the two states that offer Install or Connect.
+function tsShowControl(on){
+  var w = document.getElementById('ts-control-wrap');
+  if (w) w.style.display = on ? '' : 'none';
+}
+// The join's request: the control server only when one was typed (none keeps the stored one).
+function tsUpRequest(){
+  var c = document.getElementById('ts-control');
+  var v = c ? c.value.trim() : '';
+  if (!v) return {method:'POST'};
+  return {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({control_url: v})};
+}
 
 function tsDoInstall(){
   var b=document.getElementById('ts-install'); b.disabled=true;
@@ -59,7 +83,7 @@ function tsDoInstall(){
 
 function tsDoUp(){
   tsOut().innerHTML='<i class="bi bi-arrow-repeat"></i> Starting Tailscale…';
-  tsApi('up',{method:'POST'}).then(function(d){
+  tsApi('up', tsUpRequest()).then(function(d){
     // A failed `up` after a successful install left the step with no way on: the Install button stays
     // disabled once the install worked, and nothing else was offered but a reload. "Check again"
     // redraws the step from Tailscale's state — "installed, not connected", with its Connect button.
