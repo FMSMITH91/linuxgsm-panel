@@ -924,9 +924,11 @@ def _fresh_start_sh(addon_id, verb):
     Apply or Update within it left the add-on down (`start-limit-hit`). `reset-failed` clears that
     count (systemctl(1)), so the limit is left for Restart=always's crash loops. A start that still
     hits it prints ADDON_START_LIMIT, so the card says so instead of pointing at a clean log.
+    Sets t0 to the time just before the start, so a failure's tail (_tail_sh) shows this start's lines.
     """
     unit = unit_name(addon_id)
-    return ("systemctl --user reset-failed %s.service 2>/dev/null; systemctl --user %s %s.service || { rc=$?; "
+    return ("t0=$(date +%%s); systemctl --user reset-failed %s.service 2>/dev/null; systemctl --user %s %s.service "
+            "|| { rc=$?; "
             "[ \"$(systemctl --user show -p Result --value %s.service 2>/dev/null)\" = start-limit-hit ] "
             "&& echo ADDON_START_LIMIT; (exit $rc); }" % (unit, verb, unit, unit))
 
@@ -936,30 +938,41 @@ def _fresh_start_sh(addon_id, verb):
 _PODMAN_EVENT_ERE = "(^|: )(container|image|pod|volume|network) [a-z_-]+ [0-9a-f]{12,64}( |$)"
 
 
-def _journal_sh(addon_id, lines, fmt):
+def _journal_sh(addon_id, lines, fmt, since=False):
     """Shell printing the add-on's own last `lines` journal lines (its container's output).
 
     The lines its container wrote (CONTAINER_NAME, set by Podman's journald log driver); when there
-    are none, the unit's journal without Podman's own event lines.
+    are none, the unit's journal without Podman's own event lines. With `since`, only the lines
+    from $t0 on (the epoch second _fresh_start_sh took before the start). Fails when it printed none.
     """
     unit = unit_name(addon_id)
-    return ("o=$(journalctl --user CONTAINER_NAME=%s -n %d --no-pager -o %s 2>/dev/null | grep -v '^-- No entries --$'); "
-            "[ -n \"$o\" ] || o=$(journalctl --user -u %s.service -n %d --no-pager -o %s 2>/dev/null "
+    after = " --since \"@$t0\"" if since else ""
+    return ("o=$(journalctl --user CONTAINER_NAME=%s%s -n %d --no-pager -o %s 2>/dev/null "
+            "| grep -v '^-- No entries --$'); "
+            "[ -n \"$o\" ] || o=$(journalctl --user -u %s.service%s -n %d --no-pager -o %s 2>/dev/null "
             "| grep -vE '%s' | grep -v '^-- No entries --$' | tail -n %d); [ -n \"$o\" ] && printf '%%s\\n' \"$o\""
-            % (unit, lines, fmt, unit, lines * 4, fmt, _PODMAN_EVENT_ERE, lines))
+            % (unit, after, lines, fmt, unit, after, lines * 4, fmt, _PODMAN_EVENT_ERE, lines))
 
 
 def _tail_sh(user, addon_id):
-    """Shell printing the add-on's last TAIL_LINES log lines.
+    """Shell printing the last log lines of the start that just failed (at most TAIL_LINES from each source).
 
-    Its own log file if it has written one, else its journal (a B3 that never started has no b3.log yet).
+    After a start (t0 set by _fresh_start_sh): its own log file's tail if this start wrote to it, then
+    the journal's lines since the start. A B3 that dies checking b3.ini writes only to the journal, and
+    its b3.log still ends with the last clean shutdown, so that file alone pointed at a clean log (VPS
+    round D, O-D1). With neither, or no t0: the log file's tail if it has one, else the journal's.
     """
     a = CATALOG[addon_id]
     journal = _journal_sh(addon_id, TAIL_LINES, "cat")
+    fresh = _journal_sh(addon_id, TAIL_LINES, "cat", since=True)
     if not a["log_file"]:
-        return "{ %s; }" % journal
+        return "{ { [ -n \"${t0:-}\" ] && { %s; }; } || { %s; }; }" % (fresh, journal)
     own = shlex.quote("%s/%s" % (addon_dir(user, addon_id), a["log_file"]))
-    return "{ { [ -s %s ] && tail -n %d %s; } || { %s; }; }" % (own, TAIL_LINES, own, journal)
+    return ("{ n=; if [ -n \"${t0:-}\" ]; then "
+            "if [ -s %s ] && [ \"$(stat -c %%Y %s 2>/dev/null || echo 0)\" -ge \"$t0\" ]; then tail -n %d %s; n=1; fi; "
+            "{ %s; } && n=1; fi; "
+            "[ -n \"$n\" ] || { { [ -s %s ] && tail -n %d %s; } || { %s; }; }; }"
+            % (own, own, TAIL_LINES, own, fresh, own, TAIL_LINES, own, journal))
 
 
 def _settle_sh(user, addon_id):
