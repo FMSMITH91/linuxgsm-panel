@@ -467,7 +467,6 @@ def _close259(pair):
 
 def _listening259(port):
     """The local addresses listening on TCP `port`, read from /proc/net/tcp and tcp6 (no socket is opened)."""
-    import ipaddress as _ip259
     out = []
     for table, width in (("/proc/net/tcp", 8), ("/proc/net/tcp6", 32)):
         try:
@@ -483,7 +482,7 @@ def _listening259(port):
             raw = bytes.fromhex(addr)
             # Each 32-bit word is in host (little-endian) order.
             raw = b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
-            out.append(str(_ip259.ip_address(raw)))
+            out.append(str(_ipaddress259.ip_address(raw)))
     return sorted(out)
 
 
