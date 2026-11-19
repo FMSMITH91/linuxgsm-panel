@@ -756,7 +756,7 @@ try:
     check("backup/enc: no passphrase is refused, and says why",
           _bk._decrypt_archive(str(_epath), _out, "") == (False,
               "This backup is encrypted — a passphrase is required."))
-    # Fernet authenticates; a modified archive must never be unpacked over a live install.
+    # AES-GCM authenticates (its tag); a modified archive must never be unpacked over a live install.
     _tamp = bytearray(_eblob); _tamp[-20] ^= 0xFF
     _tpath = str(_bktmp / "tampered.enc"); open(_tpath, "wb").write(bytes(_tamp))
     check("backup/enc: a single flipped ciphertext bit is refused",
@@ -767,10 +767,13 @@ try:
           _bk._decrypt_archive(_tpath, _out, _bk_pass)[0] is False)
     check("backup/enc: a plain tar.gz is not mistaken for an encrypted one",
           _bk._decrypt_archive(str(_bk._safe_path(_bname)), _out, _bk_pass)[0] is False)
-    # Salt is per-archive, so two backups of identical input share no ciphertext prefix.
+    # Salt is per-archive. Comparing the raw bytes proved nothing: the random GCM nonce sits inside
+    # any prefix long enough to reach it, so read each header's salt and compare those.
     _eok2, _ename2 = _bk.create_backup("manual")
+    _salts02 = [_bk._parse_enc_header2(b)[1][0]
+                for b in (_eblob, _bk._safe_path(_ename2).read_bytes())]
     check("backup/enc: each archive gets its own salt",
-          _bk._safe_path(_ename2).read_bytes()[:200] != _eblob[:200])
+          _salts02[0] != _salts02[1] and [len(x) for x in _salts02] == [16, 16])
 
     # ── restore_backup end to end on an ENCRYPTED archive ──────────────────────────────────
     # The destructive step is the privileged verb, so stubbing it leaves the whole real path
