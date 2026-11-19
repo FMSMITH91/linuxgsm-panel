@@ -382,12 +382,11 @@
     return !!b;
   };
 
-  // Load when the tab is first opened (or the page opens on it). A visit to the Databases tab can add a
-  // database or a database server, so the card asks again the next time it is opened.
-  document.addEventListener('click', function (e) {
-    var t = e.target && e.target.closest ? e.target : null;
-    if (t && t.closest('[data-sfsub-btn="databases"]')) st.loaded = false;
-    if (t && t.closest('[data-sfsub-btn="addons"]')) void window.adLoad(false); });
-  window.addEventListener('hashchange', function () { if (location.hash === '#addons') void window.adLoad(false); });
-  if (location.hash === '#addons') void window.adLoad(false);
+  // Load when the section is first shown (server_files.js: a click, a #hash, or the section a viewer
+  // without VIEW_FILES opens on), or when the page opened on it before this script ran. A visit to
+  // the Databases tab can add a database or a database server, so the card asks again the next time.
+  document.addEventListener('sfsub:shown', function (e) {
+    if (e.detail === 'databases') st.loaded = false;
+    if (e.detail === 'addons') void window.adLoad(false); });
+  if (window._uis_sfOnView && window._uis_sfOnView('addons')) void window.adLoad(false);
 })();

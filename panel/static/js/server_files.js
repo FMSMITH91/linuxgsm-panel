@@ -4,7 +4,10 @@
 // on the URL's #hash, as the server page's tabs do, so a reload or a shared link lands on it; a
 // hash naming a section this page does not have (one this viewer has no permission for) opens the
 // first section it does have: Config, or for a viewer without VIEW_FILES the next one along.
-// Only display changes: every section's data still loads with the page, as before.
+// Every section's data loads with the page, except Databases and Add-ons, which load the first time
+// they are shown: each shown section is announced as a `sfsub:shown` event (detail: its name), the
+// fallback section a viewer without VIEW_FILES lands on included (no hash, no click: it sat on
+// "Loading…"). Those two scripts come after this one, so they also read the section on view now.
 function _uis_sfSections(){
   return Array.prototype.map.call(document.querySelectorAll('[data-sfsub-btn]'), function(b){
     return b.getAttribute('data-sfsub-btn');
@@ -22,7 +25,13 @@ function _uis_sfShow(name, keepHash){
     b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
   if (!keepHash) { try { history.replaceState(null, '', '#' + name); } catch(e){ /* a sandboxed frame: the section still shows */ } }
+  document.dispatchEvent(new CustomEvent('sfsub:shown', {detail: name}));
   return name;
+}
+// Is `name` the section on view? For a script that loads after the first _uis_sfShow.
+function _uis_sfOnView(name){
+  var b = document.querySelector('[data-sfsub-btn="' + name + '"]');
+  return !!(b && b.classList.contains('active'));
 }
 (function(){
   var nav = document.getElementById('sfsub-nav'); if (!nav) return;

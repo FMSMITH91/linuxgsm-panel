@@ -500,11 +500,10 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
   window.dbTabCtx = {st: st, row: row, act: act, show: show, el: el, say: say, postJson: postJson, after: after, failed: failed};
 
 
-  // Load when the tab is first opened (or the page opens on it).
-  document.addEventListener('click', function (e) {
-    if (e.target && e.target.closest && e.target.closest('[data-sfsub-btn="databases"]')) void window.dbLoad(false); });
-  window.addEventListener('hashchange', function () { if (location.hash === '#databases') void window.dbLoad(false); });
-  if (location.hash === '#databases') void window.dbLoad(false);
+  // Load when the section is first shown (server_files.js: a click, a #hash, or the section a viewer
+  // without VIEW_FILES opens on), or when the page opened on it before this script ran.
+  document.addEventListener('sfsub:shown', function (e) { if (e.detail === 'databases') void window.dbLoad(false); });
+  if (window._uis_sfOnView && window._uis_sfOnView('databases')) void window.dbLoad(false);
 })();
 
 // Move account, and a super admin's choice of a database server on another machine (over Tailscale).
