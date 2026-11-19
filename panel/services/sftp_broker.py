@@ -332,7 +332,7 @@ def _h_auth_key(_app, req, _spawn):
     ip, now = _ip(req), time.time()
     if _throttled(ip, now):
         return {"ok": False, "why": "address rate-limited"}
-    name, user = _named(req.get("username"))
+    _name, user = _named(req.get("username"))
     why = user_refusal(user, now)
     if why:
         return {"ok": False, "why": why}

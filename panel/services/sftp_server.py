@@ -365,7 +365,7 @@ class VirtualSftp(SFTPServerInterface):
             folder, _rest = self.split(path)
             if not folder:
                 return [self._root_attrs(f) for f in self._folders()]
-            target, backend, real, _rel = self.resolve(path)
+            _target, backend, real, _rel = self.resolve(path)
             return [self.attrs_for(n, a) for n, a in backend.listdir(real)]
         except Refused as r:
             return r.answer()
@@ -438,7 +438,10 @@ class VirtualSftp(SFTPServerInterface):
         """Where a link leads, as a path in the virtual tree, when it stays in the server's folder."""
         try:
             folder, _rest = self.split(path)
-            target, _backend, real, rel = self.resolve(path)
+            _t, backend, link, _r = self.resolve(path, follow=False)
+            if not _stat.S_ISLNK(backend.stat(link, follow=False).get("mode", 0)):
+                return (SFTP_FAILURE, "Not a link")
+            rel = self.resolve(path)[3]
             return "/" + "/".join(p for p in (folder, rel) if p)
         except Refused as r:
             return r.answer()

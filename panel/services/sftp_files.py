@@ -46,6 +46,7 @@ TOP_REFUSED = "The top folder lists your servers; files go inside a server's fol
 CROSS_SERVER = "Files can only be moved within one server's folder."
 OWNER_REFUSED = "Files keep the game account as their owner."
 STAGE_MAX = 1024 * 1024
+WRITE_FAILED = "The write failed."
 AUTHZ_HOLD = 1.0             # seconds an open file's reads and writes reuse the last permission answer
 DENIED = "Permission denied"
 
@@ -513,13 +514,18 @@ class WriteHandle(_Handle):
             if self.writer is not None:
                 self.writer.flush()
         except bk.BackendError as exc:
-            why = why or str(exc) or "The write failed."
-        if self.handle is not None:
-            try:
-                self.backend.close_handle(self.handle)
-            except bk.BackendError as exc:
-                why = why or str(exc) or "The write failed."
-        return self._into_place(why)
+            why = why or str(exc) or WRITE_FAILED
+        return self._into_place(self._close_on_host(why))
+
+    def _close_on_host(self, why):
+        """Close the host's handle, if one is open; `why`, or the close's own failure."""
+        if self.handle is None:
+            return why
+        try:
+            self.backend.close_handle(self.handle)
+        except bk.BackendError as exc:
+            return why or str(exc) or WRITE_FAILED
+        return why
 
     def _into_place(self, why):
         """Rename the staged copy over the file (with the file's mode), or remove it when the upload failed."""
