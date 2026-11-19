@@ -35,7 +35,7 @@ dated section below lists what that day's releases changed, newest first; the nu
   after its first start is reported with its own last log lines. Nothing is installed until you
   install an add-on; it needs Ubuntu 24.04 or newer.
 - **B3 for Call of Duty 4, World at War and Soldier of Fortune 2.** The add-on now builds B3 v2.0.0
-  (plus two later parser fixes), which refuses commands to players it has not authenticated. It is
+  (plus later parser fixes), which refuses commands to players it has not authenticated. It is
   offered for Call of Duty 4 (CoD4x), World at War and Soldier of Fortune 2 as well, each tested
   against the server LinuxGSM installs, and it uses the port the game really listens on. On Soldier
   of Fortune 2 B3 has no private messages, and the card says so.

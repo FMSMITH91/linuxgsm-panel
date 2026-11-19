@@ -28,10 +28,10 @@ Wolfenstein: Enemy Territory, Quake 3 Arena, ET: Legacy, Counter-Strike: Global 
 in and each switched on once it has been tested against LinuxGSM's own server (until then the Add-ons tab doesn't
 offer B3 for them). A game that is switched on joins the list above and the card's legacy warning.
 
-On Wolfenstein: Enemy Territory, ET: Legacy and Quake 3 Arena, B3's pinned version doesn't recognise human players
-yet: it asks the server about a player by slot number (`dumpuser <slot>`), and these servers' `dumpuser` only
-takes a player's name, so no player is ever authenticated and B3 refuses them every command. They stay off until a
-B3 fix for this has been tested on a real server.
+On Wolfenstein: Enemy Territory, ET: Legacy and Quake 3 Arena, an earlier B3 never recognised human players: it
+asked the server about a player by slot number (`dumpuser <slot>`), and these servers' `dumpuser` only takes a
+player's name, so no player was authenticated and B3 refused them every command. The pinned B3 asks by the
+player's name instead; these games stay off until that has been tested on a real server.
 
 - **Wolfenstein: Enemy Territory** (B3's `et` parser): RCON `rconpassword`, the log
   `serverfiles/etmain/etserver.log`. LinuxGSM's config sets `set g_logsync 0`, so the game buffers its log and B3

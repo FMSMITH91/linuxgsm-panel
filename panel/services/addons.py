@@ -68,11 +68,12 @@ LIVE_PORT_GAMES = ("wet", "etl")
 # in docs/addons.md: Arma 3 and Chivalry: Medieval Warfare (their RCON is not set up by LinuxGSM's
 # configs, so nothing on the host says where B3 would reach it). Switching one on also adds its name to
 # the card's legacy warning (server_addons.js installNotes, and its es/fr text).
-# Wolfenstein: Enemy Territory (wetserver) was offered and is switched off again: B3 at B3_COMMIT asks
+# Wolfenstein: Enemy Territory (wetserver) was offered and is switched off again: B3 at 1b96587f asked
 # `dumpuser <slot>` for a player's cl_guid, and these Quake 3 engines' dumpuser takes only a player's name
-# (ET: Legacy's sv_ccmds.c SV_DumpUser_f -> SV_GetPlayerByName), so no human player is ever authorized
-# on wet, etl or q3 (VPS round D, F-D1). On again once a B3 fork commit with that fixed has been tested;
-# wet's parser, RCON setting, log path and live port are all kept below.
+# (ET: Legacy's sv_ccmds.c SV_DumpUser_f -> SV_GetPlayerByName), so no human player was ever authorized
+# on wet, etl or q3 (VPS round D, F-D1). B3_COMMIT has the fork's fix (its PR #25); wet, etl and q3 go on
+# once a VPS round has seen a real player authorized at it. wet's parser, RCON setting, log path and live
+# port are all kept below.
 B3_WET = False
 B3_Q3 = False
 B3_ETL = False
@@ -86,13 +87,16 @@ RCON_TCP_GAMES = ("csgo", "ins")
 # Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
 # folder LinuxGSM's mods-install puts it in.
 SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
-# FMSMITH91/big-brother-bot master on 2026-11-19 (the merge of its PR #24: the q3 parser reads `ip:port` status
-# rows; the et parser reads ET: Legacy's status and chat, and asks `dumpuser` for a player's cl_guid, which no ET
-# server writes to its game log), on top of v2.0.0 (#23: commands refused to a player B3 has not authenticated;
+# FMSMITH91/big-brother-bot master on 2026-11-19 (the merge of its PR #25: the Quake 3 engine parsers ask
+# `dumpuser` by the slot's name from `status`, colour codes cleaned and quoted, and by the slot number only when
+# that name is unsafe to send or not unique; the reply is accepted only when its name, and its IP when both show
+# one, is that slot's. Before it, PR #24: the q3 parser reads `ip:port` status rows; the et parser reads ET:
+# Legacy's status and chat, and asks `dumpuser` for a player's cl_guid, which no ET server writes to its game
+# log), on top of v2.0.0 (#23: commands refused to a player B3 has not authenticated;
 # #22 and #21 CoD4x and vanilla ET; #19 and #20 geolocation): the B3 the add-on builds. Renovate proposes the
 # branch's newest commit (.github/renovate.json), in this line and the Containerfile's ARG together.
-B3_COMMIT = "1b96587fe567c5ca635e43a4daa59d174b7abe29"
-# The fork's last release, v2.0.0 (an annotated tag on 7e734849); this pin is two parser fixes past it and has
+B3_COMMIT = "920d736648e2544714ee58a74e556fbbb3881892"
+# The fork's last release, v2.0.0 (an annotated tag on 7e734849); this pin is three parser fixes past it and has
 # no tag of its own, so the card shows this number beside the pin's short commit. The build checks the commit,
 # not a tag.
 B3_RELEASE = "2.0.0"
