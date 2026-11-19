@@ -830,3 +830,9 @@ e1256264 A failed update's rollback says when the panel folder is incomplete.
 e8b3b2ab Manage add-ons opens the Add-ons tab.
 a16f140f The B3 add-on keeps its base image and Python packages current.
 ece743b7 SFTP settings save while Tailscale is down.
+7acd656a The Firewall page shows a rule's logging again.
+de00616e Slow connections can no longer fill up the panel.
+15b2ee4d A download nobody reads no longer fills the log.
+d7292006 Block tells the truth about an address held by a logged deny rule.
+ec95fd0b The file browser and SFTP no longer write the tmpfiles lines a game account applies at start.
+a346c7b0 A LinuxGSM start line naming many settings no longer stalls the panel.

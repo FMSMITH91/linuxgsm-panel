@@ -12,8 +12,32 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ## [2026.11.19] — 2026-11-19
 
+### Fixed
+
+- **The Firewall page shows a rule's logging again.** A rule with logging shows ufw's `log` or `log-all` beside where it applies, and is no longer shown merged
+  with the same rule without logging.
+
 ### Security
 
+- **Slow connections can no longer fill up the panel.** A request now has to arrive whole in set times: its headers within 40 seconds of its first byte, and a
+  body at a steady minimum rate after a minute's grace. A client sending one byte at a time used to keep
+  its connection for as long as it liked, and about a thousand of them stopped the panel answering
+  anyone. One address may also hold at most 64 connections at once (viewers coming through Tailscale
+  Serve or a proxy on the same machine are not counted). Large uploads on slow links and the live
+  console and terminal are not affected.
+- **A download nobody reads no longer fills the log.** A client that stopped reading an answer left an error with a traceback in the panel's log every
+  minute, and anyone could do it without signing in. It is now treated like a client that hung up.
+- **Block tells the truth about an address held by a logged deny rule.** A deny rule with logging (`ufw deny log from <ip>`) was not read as a block. Block then said "Blocked"
+  while ufw skipped the new rule as a duplicate, and if the rule sat below the allow rules the address
+  still reached SSH and every open port. Block now says it cannot move such a rule, and Unblock says
+  when one still blocks the address.
+- **The file browser and SFTP no longer write the tmpfiles lines a game account applies at start.** `~/.config/user-tmpfiles.d` and `~/.local/share/user-tmpfiles.d` (applied every time the account's
+  services start, which an add-on makes happen at boot), the session bus's `~/.local/share/dbus-1` and
+  `~/.forward` are refused like `~/.ssh`. A line put there could write an SSH key or a service for the
+  account after your access to the server ended. A game restore keeps the account's own and takes none
+  from the archive.
+- **A LinuxGSM start line naming many settings no longer stalls the panel.** A start line naming thousands of settings took seconds to read on every world reset check, holding
+  up every other page; the config is now read once per check.
 - **Idle connections can no longer take the panel down.** A connection that sends nothing is closed after 30 seconds, and one that stops part-way through a
   request after 60. Out of file descriptors, the web server now waits for connections to close instead
   of ending the panel, and the service has room for 8,192 of them; about a thousand idle connections

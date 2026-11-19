@@ -133,27 +133,44 @@ def _r21b_real_home(hq):
 # someone does: sshd's ~/.ssh (authorized_keys, rc, environment), the host-trust files rsh and
 # HostbasedAuthentication read (.rhosts, .shosts), Kerberos' .k5login and the .k5users ksu reads,
 # bash's start-up and logout files with what the distributions' own ~/.bashrc sources (Debian and
-# Ubuntu: ~/.bash_aliases; Fedora and RHEL: every file in ~/.bashrc.d), and the variables pam_env
-# reads at sign-in. And what the account's own systemd user manager starts by itself: its units
-# and drop-ins (~/.config/systemd and ~/.local/share/systemd: systemd.unit(5), "User Unit Search
-# Path"; generators beside them), the environment it gives every service (~/.config/environment.d,
-# environment.d(5)), and Podman's Quadlet files and settings (~/.config/containers: a .container
-# file with WantedBy= is started at boot with no symlink to make, podman-systemd.unit(5)). An add-on
-# turns lingering on for its account (addon-account-prepare), so that manager runs from boot with
-# nobody signed in. A key, a line or a unit put there opens a shell or runs code as the account
-# outside the panel, with no audit, that outlives the grant it was made with. The file browser and
-# the SFTP service never write, upload, create or rename onto one, nor make or rename a folder
-# above one (~/.config, ~/.local, ~/.local/share: a folder renamed into place would bring its own
-# units): a write judged on the path RESOLVED on the host (_login_guard), where the
+# Ubuntu: ~/.bash_aliases; Fedora and RHEL: every file in ~/.bashrc.d), the variables pam_env reads at
+# sign-in, and ~/.forward, whose `|command` lines a local mail server runs as the account (cron mails a
+# job's output to it).
+#
+# And every folder in the home the account's own systemd user manager reads when it starts, with what
+# it starts from there. An add-on turns lingering on for its account (addon-account-prepare), so that
+# manager runs from boot with nobody signed in. From the systemd manuals (checked 2026-11-19):
+#   * units and drop-ins: ~/.config/systemd/user and user.control (systemd.unit(5), "User Unit Search
+#     Path"), ~/.local/share/systemd/user ($XDG_DATA_HOME), and the manager's own user.conf beside
+#     them (systemd-user.conf(5)): the whole of ~/.config/systemd and ~/.local/share/systemd;
+#   * the environment it gives every service: ~/.config/environment.d (environment.d(5));
+#   * tmpfiles: ~/.config/user-tmpfiles.d and ~/.local/share/user-tmpfiles.d (tmpfiles.d(5)), which the
+#     user unit systemd-tmpfiles-setup.service applies at every start (`systemd-tmpfiles --user --create
+#     --remove --boot`, WantedBy=basic.target): an `f`, `w`, `L` or `C` line there writes, appends to,
+#     links or copies any path the account owns, ~/.ssh/authorized_keys or a unit included;
+#   * the session bus it starts: ~/.local/share/dbus-1 (services the bus starts as the account when
+#     anything asks for their name);
+#   * Podman's Quadlet files and settings: ~/.config/containers (a .container file with WantedBy= is
+#     started at boot with no symlink to make, podman-systemd.unit(5)).
+# The user generators run from system folders only (systemd.generator(7)), and the rest of the search
+# paths are in /etc, /usr or $XDG_RUNTIME_DIR (/run/user), which no game account's file tools reach.
+#
+# A key, a line or a unit put there opens a shell or runs code as the account outside the panel, with
+# no audit, that outlives the grant it was made with. ONE list for every tool that writes the home:
+# the file browser and the SFTP service never write, upload, create or rename onto one, nor make or
+# rename a folder above one (~/.config, ~/.local, ~/.local/share: a folder renamed into place would
+# bring its own units): a write judged on the path RESOLVED on the host (_login_guard), where the
 # inside-the-home check is made, a create or rename by the name it lands at (those refuse any link
-# on the way). Not listed: crontabs (in /var/spool/cron, outside every home already) and
-# ~/.config/autostart (only a desktop session reads it, and a game host has none).
+# on the way); and a game restore keeps the account's own and takes none from the archive
+# (game_restore.KEEP). Not listed: crontabs (in /var/spool/cron, outside every home already) and
+# ~/.config/autostart (only a graphical session starts what it names, and a game host has none).
 _LOGIN_DIRS = (".ssh", ".bashrc.d", ".config/systemd", ".config/environment.d", ".config/containers",
-               ".local/share/systemd")
+               ".config/user-tmpfiles.d", ".local/share/systemd", ".local/share/user-tmpfiles.d",
+               ".local/share/dbus-1")
 # Every folder above a sign-in folder (.config for .config/systemd): itself, not what else it holds.
 _LOGIN_ABOVE = tuple(sorted({"/".join(d.split("/")[:i]) for d in _LOGIN_DIRS for i in range(1, d.count("/") + 1)}))
 _LOGIN_FILES = (".bashrc", ".profile", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases",
-                ".pam_environment", ".rhosts", ".shosts", ".k5login", ".k5users")
+                ".pam_environment", ".rhosts", ".shosts", ".k5login", ".k5users", ".forward")
 _LOGIN_MARK = "__LOGIN_FILE__"
 LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's account or what it starts on its own "
                       "(SSH keys, shell start-up files, user services), so the file browser does not change it. "

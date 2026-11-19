@@ -1896,7 +1896,7 @@ def _so7_ufw_tailscale_reads():
     SO._run_verb = _so7_saved["_run_verb"]
     eq("so/ufw_status: the (v6) duplicate rows are not listed twice",
        (_us["enabled"], _us["rules"]) if isinstance(_us, dict) else _us,
-       (True, [{"to": "22/tcp", "action": "ALLOW", "direction": "IN", "from": "Anywhere"}]))
+       (True, [{"to": "22/tcp", "action": "ALLOW", "direction": "IN", "from": "Anywhere", "log": ""}]))
     eq("so/ufw_allows_iface_in: no interface is never 'allowed'",
        SO.ufw_allows_iface_in([{"to": "Anywhere on ", "action": "ALLOW", "direction": "IN"}], ""), False)
     SO.detect_tailscale_interface = lambda: None

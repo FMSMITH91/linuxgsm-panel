@@ -646,18 +646,44 @@ def _ufw_rule_split(line):
     return None
 
 
+# The attributes ufw prints after the From column, in parentheses and comma-separated: the rule's
+# logging (`ufw allow log 22/tcp`, `log-all`) and, in a numbered listing, "out" for an outbound rule.
+# ufw 0.36's get_status (backend_iptables.py): "%-26s %-12s%-26s%s%s" of To, the action and direction,
+# From, " (<attribs>)" and " # <comment>"; the same in plain, verbose and numbered output.
+UFW_ATTRIBS = frozenset({"log", "log-all", "out"})
+
+
+def ufw_split_attribs(text):
+    """(`text` without ufw's trailing attribute group, the rule's logging attribute or "").
+
+    `text` is a rule row (or its From column) with the `# comment` already cut off. Only a last
+    parenthesised group made of those words is one: "(v6)" is the family, not an attribute. Every
+    reader of ufw rows takes the attributes off through this one parse: firewall._parse_ufw_rule (the
+    Firewall page and the lock-out guards), ufweval, _r14a_ufw_row and _ufw_deny_sources.
+    """
+    t = text.rstrip()
+    at = t.rfind("(")
+    if not t.endswith(")") or at < 0:
+        return text, ""
+    words = [w.strip().lower() for w in t[at + 1:-1].split(",")]
+    if not all(w in UFW_ATTRIBS for w in words):
+        return text, ""
+    return t[:at].rstrip(), next((w for w in words if w != "out"), "")
+
+
 def _r14a_ufw_row(line):
-    """_ufw_rule_split's row, with ufw's trailing `# comment` taken off `from` (no reader wants it).
+    """_ufw_rule_split's row, with ufw's trailing `# comment` and attributes taken off `from`.
 
     _ufw_rule_split keeps everything after the action as `from`, the comment included, so a test
     on the source read the comment: `Anywhere on lo  ALLOW IN  <net>/udp  # tag` did not
     end in "/udp", and ufw_allows_iface_in counted that UDP-only rule as letting everything in.
+    The same for a logged rule (`<net>/udp (log)`): the attribute goes to `log` (ufw_split_attribs).
     Every reader of ufw rows goes through this; _ufw_rule_split itself stays the pattern it
     replaced (the unit suite holds it to that).
     """
     rule = _ufw_rule_split(line)
     if rule:
-        rule["from"] = rule["from"].partition("#")[0].strip()
+        rule["from"], rule["log"] = ufw_split_attribs(rule["from"].partition("#")[0].strip())
     return rule
 
 
@@ -4316,7 +4342,7 @@ def _ufw_deny_sources(status_out, shadowed=None):
     "blocked", and the Block button answer "already blocked … (left as it is)", while the attacker
     kept reaching SSH and every open port. So an operator's deny that sits below an inbound
     ALLOW/LIMIT of its family covering its source is NOT a block here: it is left out, and put in
-    `shadowed` (a dict, when given) as {source: {"comment", "action"}} for _ufw_deny_with to move
+    `shadowed` (a dict, when given) as {source: {"comment", "action", "log"}} for _ufw_deny_with to move
     to the top. The panel's own rules go in at position 1 and are reported wherever they sit.
 
     A single address is keyed by its canonical form; a network by its CIDR. Port-specific denies,
@@ -4331,6 +4357,10 @@ def _ufw_deny_sources(status_out, shadowed=None):
         # and `\s*` beside `.*` in front of an anchor is a scan the pattern never needed.
         m = re.match(r"\s*\[\s*\d+\]\s*", line)
         body, _, comment = (line[m.end():] if m else line).partition("#")
+        # ufw prints a logged rule's attribute after From (`Anywhere  DENY  203.0.113.9 (log)`). Left
+        # in, that row was no block at all, so Block inserted a deny ufw skipped as a duplicate (exit
+        # 0) and answered "Blocked" for an address the operator's deny, below the allows, let through.
+        body, log = ufw_split_attribs(body)
         v6 = "(v6)" in body
         toks = body.replace("(v6)", " ").split()
         act = next((i for i, t in enumerate(toks) if t in ("DENY", "REJECT", "ALLOW", "LIMIT")), None)
@@ -4374,7 +4404,7 @@ def _ufw_deny_sources(status_out, shadowed=None):
         comment = comment.strip()
         tag = comment if re.fullmatch(r"panel-[a-z-]+", comment) else _UFW_EXTERNAL_TAG
         if _ufw_deny_tag_rank(tag) == 0 and _ufw_shadowing_allows(allows, net):
-            late.setdefault(key, {"comment": comment, "action": toks[act]})
+            late.setdefault(key, {"comment": comment, "action": toks[act], "log": log})
             continue
         if key not in found or _ufw_deny_tag_rank(tag) < _ufw_deny_tag_rank(found[key]):
             found[key] = tag
@@ -4431,8 +4461,14 @@ def _ufw_raise_shadowed_deny(ip, rule, run):
     `ufw delete deny` does not match a REJECT. IPv6 is moved like IPv4 — ufw-deny-ip is
     `ufw prepend`, which puts a rule at the top of its own address family. (It was `insert 1`,
     which ufw refuses for IPv6 while IPv4 rules exist, and IPv6 was refused here for that reason
-    after the verb stopped using it: the answer told the operator to run `ufw prepend` by hand.)"""
-    if rule.get("action") != "DENY":
+    after the verb stopped using it: the answer told the operator to run `ufw prepend` by hand.)
+
+    Nor a deny with logging (`ufw deny log from <ip>`): ufw matches a delete on the logging too
+    (UFWRule.match answers -1, "all but action, log-type and/or comment", which set_rule removes only
+    when it is 0 or -2), so `delete deny from <ip>` says "Could not delete non-existent rule" with
+    exit 0, the prepend is "Skipping inserting existing rule", and "Moved" would be reported for a
+    rule still where it blocks nothing."""
+    if rule.get("action") != "DENY" or rule.get("log"):
         return False, i18n.Sentence("{ip} already has a firewall rule of its own denying it, but the rule sits "
                                     "below rules that allow traffic, so it blocks nothing. The panel cannot move "
                                     "this one — put it above them on the host (`ufw prepend`).", ip=ip)

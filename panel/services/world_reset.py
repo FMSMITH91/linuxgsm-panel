@@ -232,6 +232,39 @@ _WWR_OTHER_LINE = re.compile(r'^ *([A-Za-z_][A-Za-z0-9_]*)="([^"\\`]*)"(?:[ \t]+
 _WWR_ARITH = re.compile(r"\$\(\(|\$\[|\$\{\$?[^}$]*\[|\$\{\$?[^}:$]*:(?![-=+?])")
 
 
+# The words of a config line: runs of name characters. A key is named on a line when one of them IS
+# the key (the boundary _wwr_cfg_key's word test had: no name character on either side).
+_WWR_WORD = re.compile(r"[A-Za-z0-9_]+")
+# `${key=…}` / `${key:=…}` in a value: the names it sets.
+_WWR_DEFAULT_SET = re.compile(r"\$\{([A-Za-z0-9_]+):?=")
+# Assignment-shaped text in a value (`key=2`, `key+=1`, `key++`, `--key`): the names it would set if another
+# line evaluated it as arithmetic. The lookbehind starts a name only at a name's first character.
+_WWR_ASSIGNED = re.compile(r"(?<![A-Za-z0-9_])(?:\+\+|--)?([A-Za-z0-9_]+)[ \t]*"
+                           r"(?:\+\+|--|(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=))")
+
+
+class _WwrLine:
+    """What _wwr_cfg_key needs from one non-comment config line, worked out once for every key it names.
+
+    `other` is the key of another key's plain line (_WWR_OTHER_LINE), else None; `opaque` that its value
+    holds arithmetic (_WWR_ARITH) or `${!` (a variable reached through another's value), so it may set
+    any key; `sets` the names its value sets with `${key:=…}` or holds as assignment-shaped text.
+    """
+    __slots__ = ("text", "other", "opaque", "sets")
+
+    def __init__(self, text):
+        self.text = text
+        m = _WWR_OTHER_LINE.match(text)
+        self.other = m.group(1) if m else None
+        value = m.group(2) if m else ""
+        self.opaque = bool(m) and (bool(_WWR_ARITH.search(value)) or "${!" in value)
+        self.sets = (set(_WWR_DEFAULT_SET.findall(value)) | set(_WWR_ASSIGNED.findall(value))) if m else set()
+
+    def names_only(self, key):
+        """See _wwr_names_only."""
+        return self.other is not None and self.other != key and not self.opaque and key not in self.sets
+
+
 def _wwr_names_only(line, key):
     """Whether `line` is another key's plain line in which `key` is only named or expanded, never set.
 
@@ -242,20 +275,41 @@ def _wwr_names_only(line, key):
     text: such a value, evaluated as arithmetic by another line, would set the key there.
     A plain mention (`-port ${port}`, the option named like its key) is only text.
     """
-    m = _WWR_OTHER_LINE.match(line)
-    if m is None or m.group(1) == key:
-        return False
-    value = m.group(2)
-    if _WWR_ARITH.search(value) or "${!" in value or re.search(r"\$\{%s:?=" % key, value):
-        return False
-    return not re.search(r"(?<![A-Za-z0-9_])(?:\+\+|--)?%s[ \t]*(?:\+\+|--|(?:[-+*/%%&|^]|<<|>>|\*\*)?=(?!=))"
-                         % key, value)
+    return _WwrLine(line).names_only(key)
+
+
+def _wwr_cfg_index(texts):
+    """Each config text's non-comment lines, by the names they hold: [{name: [_WwrLine, ...]}], one per text.
+
+    Built once per read: looking each key up by scanning every line (and judging a line that names many
+    keys once per key) cost the number of names a start parameter expands times the config's size, and
+    the game account writes both (review 1120 A04), on the wipe ticker's greenlet.
+    """
+    index = []
+    for text in texts:
+        by_name = {}
+        for ln in text.split("\n"):
+            if ln.lstrip(" \t").startswith("#"):
+                continue
+            facts = None
+            for name in set(_WWR_WORD.findall(ln)):
+                if facts is None:
+                    facts = _WwrLine(ln)
+                by_name.setdefault(name, []).append(facts)
+        index.append(by_name)
+    return index
 
 
 def _wwr_cfg_key(texts, key):
+    """One setting from the instance's LinuxGSM config texts: _wwr_indexed_key over their one index."""
+    return _wwr_indexed_key(_wwr_cfg_index(texts), key)
+
+
+def _wwr_indexed_key(index, key):
     r"""One setting from the instance's LinuxGSM config files (LGSM_CFG_ORDER): (value, None) or (None, why).
 
-    LinuxGSM sources the files in that order (the last assignment wins), and just before a start it
+    `index` is _wwr_cfg_index of the texts, in that order. LinuxGSM sources the files in that order (the
+    last assignment wins), and just before a start it
     reads startparameters and preexecutable again (linuxgsm.sh fn_reload_startparameters): from the
     LAST file in that order where grep finds `^[[:blank:]]*key=`, through
     `eval key="$(sed -nr 's/^ *key=(.*)$/\1/p' file)"`, which takes the FIRST such line of the file
@@ -273,11 +327,9 @@ def _wwr_cfg_key(texts, key):
     """
     tail = "" if key in _WWR_RELOADED else r"(?:[ \t]+#.*)?"
     plain = re.compile(r'^ *%s="([^"\\`]*)"%s$' % (key, tail))
-    word = re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % key)
     found = ""
-    for text in texts:
-        vals = [plain.match(ln) for ln in text.split("\n") if word.search(ln) and not ln.lstrip(" \t").startswith("#")
-                and not _wwr_names_only(ln, key)]
+    for by_name in index:
+        vals = [plain.match(ln.text) for ln in by_name.get(key, ()) if not ln.names_only(key)]
         if not all(vals):
             return None, i18n.Sentence("the LinuxGSM config sets {key} in a form the panel cannot read the way "
                                        "LinuxGSM does (only key=\"value\" lines, indented by spaces at most)", key=key)
@@ -292,9 +344,10 @@ def cfg_values(texts, keys):
     if any(_WWR_CFG_CMD.match(ln) for text in texts for ln in text.split("\n")):
         return None, i18n.Sentence("the LinuxGSM config loads another file or runs eval, which the panel does not "
                                    "follow")
+    index = _wwr_cfg_index(texts)
     values = {}
     for key in keys:
-        values[key], why = _wwr_cfg_key(texts, key)
+        values[key], why = _wwr_indexed_key(index, key)
         if why is not None:
             return None, why
     return values, None

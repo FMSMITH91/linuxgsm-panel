@@ -12130,7 +12130,7 @@ check("autoblock: an operator's deny BELOW an allow of its family is not read as
       not {"203.0.113.20", "203.0.113.21", "203.0.113.22", "2001:db8::20"} & set(_sh_read6),
       "read %r" % (_sh_read6,))
 check("autoblock: ...it is handed back as shadowed, with its comment and action",
-      _sh_late6.get("203.0.113.20") == {"comment": "ssh brute!", "action": "DENY"}
+      _sh_late6.get("203.0.113.20") == {"comment": "ssh brute!", "action": "DENY", "log": ""}
       and _sh_late6.get("203.0.113.22", {}).get("action") == "REJECT"
       and "2001:db8::20" in _sh_late6, "shadowed %r" % (_sh_late6,))
 _sh_above6 = ("Anywhere                   DENY        203.0.113.20\n"
