@@ -172,7 +172,10 @@ def run_once(app, spawn, argv=None):
     return listening
 
 
-HANDLER_SLOTS = 16          # requests answered at once; one more waits for a slot
+HANDLER_SLOTS = 16          # file requests (authz, servers) answered at once; one more is answered "busy"
+SIGN_IN_SLOTS = 8           # sign-in and audit requests answered at once, beside the file requests
+SIGN_IN_OPS = frozenset(("conn", "auth_key", "auth_kbd", "auth_fail", "auth_done", "session_end", "audit"))
+BUSY = "The panel is busy answering other SFTP requests; try again in a moment."
 
 
 def serve(app, sock, spawn):
@@ -183,10 +186,17 @@ def serve(app, sock, spawn):
     not answer the permission check, which can take minutes) never holds every other user's
     sign-in, listing and transfer. The answer carries the request's id, which is how the service
     matches it. "hello" and "ready" are answered here, in order: the start depends on them.
+
+    The service gives up on an answer after a minute and the client asks again, but the abandoned
+    request runs to its end, so a host that stops answering could take every slot. The reader
+    therefore never waits for a file-request slot (a full pool answers "busy" at once), and
+    sign-ins, sign-in failures and audit rows, which only read and write the panel's database,
+    have a pool of their own that a stuck host cannot fill.
     """
     rf = sock.makefile("rb")
     link = {"sock": sock, "lock": threading.Lock(), "open": True,
-            "slots": threading.BoundedSemaphore(HANDLER_SLOTS)}
+            "slots": threading.BoundedSemaphore(HANDLER_SLOTS),
+            "sign_in": threading.BoundedSemaphore(SIGN_IN_SLOTS)}
     listening = False
     try:
         while True:
@@ -203,24 +213,41 @@ def serve(app, sock, spawn):
                 listening = listening or bool(req.get("op") == "ready" and req.get("bound"))
                 _answer(app, link, req, spawn)
                 continue
-            link["slots"].acquire()
-            threading.Thread(target=_answer_in_slot, args=(app, link, req, spawn), name="sftp-answer",
-                             daemon=True).start()
+            _dispatch(app, link, req, spawn)
     finally:
         with link["lock"]:
             link["open"] = False        # an answer still being worked out is not sent on a closed socket
 
 
-def _answer_in_slot(app, link, req, spawn):
+def _dispatch(app, link, req, spawn):
+    """Answer `req` in a thread of its own slot; a file request with no free slot is answered "busy"."""
+    if req.get("op") in SIGN_IN_OPS:
+        pool = link["sign_in"]
+        pool.acquire()          # quick database work only: never held by a host that does not answer
+    else:
+        pool = link["slots"]
+        if not pool.acquire(blocking=False):
+            _send(link, {"ok": False, "busy": True, "reason": BUSY, "id": req.get("id")})
+            return
+    threading.Thread(target=_answer_in_slot, args=(app, link, req, spawn, pool), name="sftp-answer",
+                     daemon=True).start()
+
+
+def _answer_in_slot(app, link, req, spawn, pool):
     try:
         _answer(app, link, req, spawn)
     finally:
-        link["slots"].release()
+        pool.release()
 
 
 def _answer(app, link, req, spawn):
     """Work out one answer and send it, unless the service's socket has gone meanwhile."""
-    data = json.dumps(dict(handle(app, req, spawn), id=req.get("id"))).encode("utf-8") + b"\n"
+    _send(link, dict(handle(app, req, spawn), id=req.get("id")))
+
+
+def _send(link, answer):
+    """Send one answer line, unless the service's socket has gone meanwhile."""
+    data = json.dumps(answer).encode("utf-8") + b"\n"
     with link["lock"]:
         if not link["open"]:
             return

@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from types import SimpleNamespace
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
-from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows)
+from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows, r36j_route_job)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, claim_row,
     db, row_birth, row_label, same_row)
 from panel.ops import (backup as bk)
@@ -43,7 +43,7 @@ from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _pr
     resolve_free_port)
 from panel.routes import databases as _dbr
 from panel.routes._shared import (INVALID_ACCOUNT_NAME, _looks_installed, _notify_servers_changed,
-    _record_game_clock, grs_or_wipe_sentence, grs_restore_running, privileged_accounts)
+    _r39a_wipe_running, _record_game_clock, grs_or_wipe_sentence, privileged_accounts)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -2645,11 +2645,6 @@ def _register_uninstall_and_edit(app):
         _busy = _r35b_reboot_refusal(gs)
         if _busy:
             return _index_reply(_busy, False, "warning", 409)
-        # ...nor while it is being restored from a backup (or a restore a panel restart cut off is not
-        # settled yet): the restore's switch-over or its undo would run on an account removed under it.
-        if grs_restore_running(server_id):
-            return _index_reply(i18n.tr(grs_or_wipe_sentence(server_id, name)), False, "warning", 409)
-
         # Held for the whole host-side sequence, and retry_install refuses while it is. The
         # _install_job_running test above ran ONCE, and everything after it yields on SSH for up
         # to a couple of minutes (a graceful stop alone may take 60s): a Retry pressed in that
@@ -2661,7 +2656,16 @@ def _register_uninstall_and_edit(app):
             return _index_reply(i18n.tr("'{name}' is already being uninstalled or installed — wait for "
                                         "that to finish.", name=name), False, "warning", 409)
         try:
-            return _r25b_uninstall_claimed(app, gs, gs.remote, server_id, name)
+            # Registered for the wipe's and the restore's own "other work" checks, then asked about
+            # them: each side registers before it asks, so two that start together never both go
+            # ahead. Not beside a restore from a backup (or one a panel restart cut off, not settled
+            # yet) or a scheduled wipe: their switch-over, undo or LinuxGSM run would go on in an
+            # account this removes; nor beside an add-on install or change, which would write into it.
+            with r36j_route_job(server_id, "uninstall"):
+                busy = _uninstall_other_work(server_id, name)
+                if busy:
+                    return _index_reply(i18n.tr(busy), False, "warning", 409)
+                return _r25b_uninstall_claimed(app, gs, gs.remote, server_id, name)
         finally:
             _release_uninstall(server_id)
 
@@ -2710,6 +2714,16 @@ def _register_uninstall_and_edit(app):
         db.session.commit()
         log_action(current_user, "edit_server", target=gs.name, server=gs)
         return _form_ok(i18n.tr("Server '{name}' updated.", name=gs.name), "manage_servers")
+
+
+def _uninstall_other_work(server_id, name):
+    """Why the uninstall cannot go on beside other work on the server (a sentence), or None."""
+    from panel.routes.addons import ADDON_BUSY, job_running
+    if _r39a_wipe_running(server_id):
+        return grs_or_wipe_sentence(server_id, name)
+    if job_running(server_id):
+        return ADDON_BUSY
+    return None
 
 
 def _claim_uninstall(server_id):

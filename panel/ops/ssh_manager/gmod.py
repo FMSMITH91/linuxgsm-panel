@@ -559,9 +559,10 @@ def ensure_content_update_cron(server, content_user):
     # A game the user already updates in its own crontab is left to that job (never a second one).
     names = [n for n in names if not _crontab_updates(ct, n)]
     if not names:
-        _core.run_privileged(server, "content-cron-remove", [content_user], timeout=10,
-                       merge_stderr=False)
-        return True
+        # Its answer counts: a failed remove leaves the panel's update jobs beside the admin's own.
+        _, _, rc = _core.run_privileged(server, "content-cron-remove", [content_user], timeout=10,
+                                        merge_stderr=False)
+        return rc == 0
     _, _, rc = _core.write_content_cron(server, content_user,
                                   _content_update_cron_body(content_user, names), timeout=15)
     return rc == 0

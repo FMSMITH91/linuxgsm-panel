@@ -473,11 +473,34 @@ panel_version() {
         sha="$(_gitc rev-parse --short HEAD 2>/dev/null)" || sha=""
         case "${sha}" in *[!0-9a-f]*) sha="" ;; esac
         if ver="$(_epoch_version "${ts}")"; then
-            echo "${ver}${sha:+ · ${sha}}"
+            echo "$(_release_name "${ver}")${sha:+ · ${sha}}"
             return 0
         fi
     fi
     _version_file
+}
+
+# HEAD's release name (2026.11.16.2) when its signing saved one, else the date version `$1`: the
+# same rule as _release_name in panel/ops/system_ops.py. tools/sign-release.sh saves main/<sha>.name
+# on release-signatures (fetched into RELEASE_SIG_REF); a commit that changes nothing a panel runs
+# gets none, so the first named commit walking back HEAD's first parents of the same date is the
+# release running. Only a name of that date (with or without a suffix) is printed.
+_release_name() {
+    local ver="$1" names day cand ct name
+    local ref="${RELEASE_SIG_REF:-refs/linuxgsm-panel/release-signatures}:${DEFAULT_BRANCH:-main}"
+    names="$(_gitc ls-tree --name-only "${ref}" 2>/dev/null)" || names=""
+    [[ "${ver}" =~ ^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})$ && -n "${names}" ]] || { echo "${ver}"; return 0; }
+    day="$(date -u -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" +%s 2>/dev/null)" \
+        || { echo "${ver}"; return 0; }
+    while IFS=' ' read -r cand ct; do
+        [[ "$(_epoch_version "${ct}")" == "${ver}" ]] || break
+        if [[ "${cand}" =~ ^[0-9a-f]{40}$ ]] && grep -qxF -- "${cand}.name" <<<"${names}"; then
+            name="$(_gitc cat-file blob "${ref}/${cand}.name" 2>/dev/null | tr -d '[:space:]')" || name=""
+            [[ "${name}" =~ ^${ver//./\\.}(\.[0-9]{1,3})?$ ]] && { echo "${name}"; return 0; }
+            break
+        fi
+    done < <(_gitc log --first-parent --no-show-signature --format='%H %ct' "--since=@${day}" HEAD -- 2>/dev/null)
+    echo "${ver}"
 }
 
 # The account a root run works inside PANEL_DIR as: `root` only when the tree is root's in a way

@@ -485,7 +485,7 @@ def _addon_change263(sid):
         _p9_restore_all()
     eq("add-ons: an update or Apply runs the install's checks first: no game log, or no account ids, is refused "
        "with the install's sentence and no unit is written (Volume=:/gamelog, a unit with no User=)",
-       (no_log[0] == _ra263._NO_LOG, no_ids[0], shells), (True, _ra263._NO_IDS, []))
+       (no_log[0] == _ra263._AGAIN[_ra263._NO_LOG], no_ids[0], shells), (True, _ra263._NO_IDS, []))
 
 
 def _addon_census263(sid):

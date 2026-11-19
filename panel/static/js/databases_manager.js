@@ -534,25 +534,34 @@ function dbmEditorField(c, cell, isNew) {
   // A piece whose answer was lost (no answer, a proxy's error page, a host that could not be read, or the
   // server still busy with the same piece) is sent again at the same offset after a pause (PIECE_RETRY_MS):
   // one the host did append comes back 409 with where it is now. Only once the pauses are spent does the
-  // upload fail (and the caller cancel it).
-  var PIECE_RETRY_MS = [2000, 5000, 10000, 20000];
+  // upload fail (and the caller cancel it). A busy answer spends no pause: the first piece may still be
+  // writing for as long as the server gives a piece (300 s), so it is asked again every PIECE_BUSY_PAUSE_MS
+  // until PIECE_BUSY_MS has passed.
+  var PIECE_RETRY_MS = [2000, 5000, 10000, 20000], PIECE_BUSY_MS = 330000, PIECE_BUSY_PAUSE_MS = 5000;
   function pieceRetryable(res) {
     return res.status >= 500 || res.d.busy === true || (res.status === 200 && res.d.success !== true && !res.d.resume);
   }
-  function sendPieces(up, uid, file, chunk, from, lost) {
+  function sendPieces(up, uid, file, chunk, from, lost, busyUntil) {
     lost = lost || 0;
     if (from >= file.size) return Promise.resolve(true);
     var piece = file.slice(from, Math.min(file.size, from + chunk));
     function again(err) {
       if (lost >= PIECE_RETRY_MS.length) throw err;
       return new Promise(function (done) { setTimeout(done, PIECE_RETRY_MS[lost]); })
-        .then(function () { return sendPieces(up, uid, file, chunk, from, lost + 1); });
+        .then(function () { return sendPieces(up, uid, file, chunk, from, lost + 1, busyUntil); });
     }
     return fetch(up.base + '/upload/' + uid + '?offset=' + from,
                  {method: 'POST', headers: {'Content-Type': 'application/octet-stream', 'X-Panel-Background': '0'}, body: piece})
       .then(readJson, function (err) { return {lostErr: err}; }).then(function (res) {
         if (res.lostErr) return again(res.lostErr);
         if (res.status === 409 && res.d.resume) return sendPieces(up, uid, file, chunk, res.d.received);
+        if (res.d.busy === true) {
+          busyUntil = busyUntil || Date.now() + PIECE_BUSY_MS;
+          if (Date.now() < busyUntil) {
+            return new Promise(function (done) { setTimeout(done, PIECE_BUSY_PAUSE_MS); })
+              .then(function () { return sendPieces(up, uid, file, chunk, from, lost, busyUntil); });
+          }
+        }
         if (!res.ok || res.d.success !== true) {
           if (pieceRetryable(res)) return again(new Error(failText(res)));
           throw new Error(failText(res));

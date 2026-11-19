@@ -24,10 +24,10 @@ from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.db.models import GameDatabase, GameServer, HostDatabaseServer, claim_row, db, row_birth
 from panel.ops import ssh_manager as _sm
 from panel.routes import addons_change as _change, databases_net as _net
-from panel.routes._shared import game_account_write_refusal
+from panel.routes._shared import _reboot_holds, game_account_write_refusal
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
-from panel.services import addons as _ad
+from panel.services import addons as _ad, reboot_words as _rw
 from panel.services import geoip as _geoip
 
 _DENIED = "Permission denied"
@@ -37,6 +37,9 @@ _DB_TAKEN = "Another add-on already uses that database. Each add-on needs its ow
 _BUSY = "The add-on is already being installed. Wait for it to finish."
 _BUSY_START = "The add-on's last start is still being watched. Wait a few seconds and try again."
 _BUSY_REMOVE = "The add-on is still being installed, updated or started. Wait for it to finish, then remove it."
+_BUSY_REMOVING = "The add-on is being removed. Wait for it to finish."
+# For the Databases tab and the uninstall: an add-on job on the server is still running.
+ADDON_BUSY = "An add-on is being installed, updated or removed on this server. Try again once it has finished."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
 _NO_LOG_NAMED = "Couldn't find the game's log ({log}). Start the server once so it writes one, then install again."
@@ -49,6 +52,19 @@ _NO_G_LOG = ("ET: Legacy writes no game log until g_log names one. In the server
              "restart the server, then install again.")
 _G_LOG_PLAIN = ("Set g_log in the server's config to a plain file name, such as \"etserver.log\" (no folder), restart "
                 "the server, then install again.")
+# The same steps for an Update or Apply on an installed add-on, where "install again" would mean
+# Remove, which deletes the add-on's data: the change is simply tried again.
+_AGAIN = {
+    _NO_LOG: "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then try again.",
+    _NO_LOG_NAMED: "Couldn't find the game's log ({log}). Start the server once so it writes one, then try again.",
+    _NO_CONSOLE_LOG: ("Couldn't find the game's console.log. Add -condebug to the server's start parameters (its "
+                      "LinuxGSM config's startparameters), restart the server, then try again."),
+    _NO_G_LOG: ("ET: Legacy writes no game log until g_log names one. In the server's config ({cfg}), add the line "
+                "set g_log \"etserver.log\" below the line exec legacy.cfg (ET: Legacy's legacy.cfg sets g_log to "
+                "\"\"), restart the server, then try again."),
+    _G_LOG_PLAIN: ("Set g_log in the server's config to a plain file name, such as \"etserver.log\" (no folder), "
+                   "restart the server, then try again."),
+}
 _NO_SOURCEMOD = ("B3 needs SourceMod on this game server. Install Metamod: Source and SourceMod (LinuxGSM's "
                  "mods-install), restart the server, then install again.")
 _NO_PORT = "No free port was found on this host for the add-on's page or relays."
@@ -114,6 +130,11 @@ def _databases(gs, found):
             used[name] = k
     rows = GameDatabase.query.filter_by(game_server_id=gs.id).order_by(GameDatabase.name).all()
     return [{"id": r.id, "name": r.name, "used_by": used.get(r.name, "")} for r in rows]
+
+
+def busy_sentence(job):
+    """The 409 sentence for an add-on job already running (`job`: its _JOBS entry)."""
+    return {"start": _BUSY_START, "remove": _BUSY_REMOVING}.get(job.get("kind"), _BUSY)
 
 
 def job_running(gs_id):
@@ -256,6 +277,14 @@ def _no_g_log(gs, name):
 def _log_refusal(gs, p):
     """Why the game's log can't be read ("" when it can): it is there, in a folder the unit can name."""
     return "" if p["log_found"] and _ad.log_dir(gs.short_name, p["logdir"]) else _no_log(gs, p)
+
+
+def change_log_refusal(gs, p):
+    """_log_refusal for an Update or Apply: the same steps, ending "then try again" rather than "install again"."""
+    why = _log_refusal(gs, p)
+    if isinstance(why, i18n.Sentence):
+        return i18n.Sentence(_AGAIN.get(why.template, why.template), **why.vals)
+    return _AGAIN.get(why, why)
 
 
 def _host_refusal(gs, p, need_ports):
@@ -458,8 +487,9 @@ def _install_answer(app, gs, addon_id):
         return refused
     db_id, geolocation = choice
     with _JOBS_LOCK:
-        if (_JOBS.get((gs.id, addon_id)) or {}).get("running"):
-            return _say(409, _BUSY)
+        job = _JOBS.get((gs.id, addon_id)) or {}
+        if job.get("running"):
+            return _say(409, busy_sentence(job))
         _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": ""}
     r = db.session.get(GameDatabase, db_id) if db_id is not None else None
     log_action(current_user, "addon_install", target=gs.name, server=gs,
@@ -551,7 +581,7 @@ def _start_answer(app, gs, addon_id):
     with _JOBS_LOCK:
         job = _JOBS.get((gs.id, addon_id)) or {}
         if job.get("running"):
-            return _say(409, _BUSY_START if job.get("kind") == "start" else _BUSY)
+            return _say(409, busy_sentence(job))
         _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": "start"}
     threading.Thread(target=_start_worker, daemon=True,
                      args=(app, gs.id, row_birth(gs), addon_id, current_user.username)).start()
@@ -590,12 +620,19 @@ def _action_answer(app, gs, addon_id, action):
 def _remove_answer(gs, addon_id):
     # An install, update or settings change still running would write its unit and relays again
     # after the remove, leaving an auto-starting unit for an add-on the card calls not installed.
+    # The remove is a job itself while it runs, so an install, update, settings change or start
+    # begun meanwhile is refused too (it would write the unit back, or lose its folder to rm -rf).
     with _JOBS_LOCK:
-        busy = (_JOBS.get((gs.id, addon_id)) or {}).get("running")
-    if busy:
-        return _say(409, _BUSY_REMOVE)
-    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
-                                          timeout=_ad.ACTION_TIMEOUT)
+        job = _JOBS.get((gs.id, addon_id)) or {}
+        if job.get("running"):
+            return _say(409, _BUSY_REMOVING if job.get("kind") == "remove" else _BUSY_REMOVE)
+        _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": "remove"}
+    try:
+        out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
+                                              timeout=_ad.ACTION_TIMEOUT)
+    finally:
+        with _JOBS_LOCK:
+            _JOBS.pop((gs.id, addon_id), None)
     removed, others = _ad.remove_outcome(out, rc)
     why = "" if removed else _with_reason(_NOT_REMOVED, "", err)
     if removed and not others:
@@ -637,6 +674,13 @@ def _guarded(server_id, addon_id, answer, reading=False):
     why = _account_refusal(gs, addon_id or "add-ons", reading)
     if why:
         return _say(200, why)
+    if not reading and _reboot_holds(gs):
+        # The reboot's census has been taken: a job started now is never seen by it, and the
+        # reboot would cut the install, image build or restart off part way.
+        why = _rw.busy_message(gs.remote.display_name)
+        log_action(current_user, "addon_refused", target=gs.name, server=gs, success=False,
+                   detail="%s: %s" % (addon_id, why))
+        return _say(409, why)
     try:
         return answer(gs)
     except ConnectionError:

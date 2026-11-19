@@ -177,14 +177,16 @@ LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's accoun
                       "Nothing was changed.")
 
 
-def _is_login_path(rel):
+def _is_login_path(rel, above=True):
     """Whether `rel` (relative to the game account's home) names a sign-in path, as written.
 
-    A sign-in file, anything in or at a sign-in folder (a prefix match on whole components), or a
-    folder above one.
+    A sign-in file, anything in or at a sign-in folder (a prefix match on whole components), or
+    (`above`) a folder above one. Making a new, empty folder passes above=False: an empty ~/.config
+    starts nothing, and a game's own files go there (Unity games keep theirs in ~/.config/unity3d).
+    Only a folder renamed into place there brings units with it, and a rename still asks about it.
     """
     r = _pp.normpath(str(rel or "").lstrip("/"))
-    return (r in _LOGIN_FILES or r in _LOGIN_ABOVE
+    return (r in _LOGIN_FILES or (above and r in _LOGIN_ABOVE)
             or any(r == d or r.startswith(d + "/") for d in _LOGIN_DIRS))
 
 
@@ -2274,7 +2276,7 @@ def create_refusal(user, reldir, name, kind, selfname=None):
         # the log folders on its next start, so the reserved wording, true in every state.
         # CREATE_CONSOLE is the host's answer while the console is attached (_console_guard).
         return CREATE_RESERVED
-    if _is_login_path(rel):
+    if _is_login_path(rel, above=kind != "folder"):
         return LOGIN_FILE_REFUSED     # by name only, as rename_refusal says why
     return None
 

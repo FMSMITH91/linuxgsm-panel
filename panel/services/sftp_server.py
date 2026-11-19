@@ -158,6 +158,7 @@ class Connection(ServerInterface):
         self.tries = 0
         self.counted = False        # a password attempt the panel already counted as a failure
         self.offered = False
+        self.answered = False       # the panel answered a key check (a check it never answered is not a failure)
         self.last_why = ""
         self.who = ""
         self.user = None            # {"uid", "epoch", "name", "method", "detail"} once signed in
@@ -195,14 +196,41 @@ class Connection(ServerInterface):
         reply = self.service.panel.ask({"op": "auth_key", "ip": self.ip, "username": username,
                                         "type": key.get_name(),
                                         "blob": base64.b64encode(key.asbytes()).decode("ascii")})
+        self.answered = self.answered or ("ok" in reply and not reply.get("busy"))
         if not reply.get("ok"):
             self.last_why = reply.get("why") or self.last_why
             return AUTH_FAILED
+        self._watch_signature(key, reply.get("fp", ""))
         # paramiko pins the name for the whole connection and runs this check again right before it
         # verifies a signature, so the last check that passed is the credential that signed in.
         self._pending = {"uid": reply["uid"], "epoch": reply["epoch"], "name": reply["name"],
                          "method": "publickey", "detail": reply.get("detail", ""), "fp": reply.get("fp", "")}
         return AUTH_SUCCESSFUL
+
+    def _watch_signature(self, key, fp):
+        """Count a signature that does not verify as one failed sign-in, as a wrong password is.
+
+        paramiko asks check_auth_publickey before it checks a signature, and for a client's unsigned
+        "would this key do?" query as well, then calls this key's verify_ssh_sig only for a signed
+        request: a failed proof is counted here, once each, and the query never is.
+        """
+        verify = key.verify_ssh_sig
+
+        def checked(data, msg):
+            try:
+                good = verify(data, msg)
+            except Exception:
+                self._proof_failed(fp)
+                raise
+            if not good:
+                self._proof_failed(fp)
+            return good
+        key.verify_ssh_sig = checked
+
+    def _proof_failed(self, fp):
+        self.counted = True
+        self.service.panel.ask({"op": "auth_fail", "ip": self.ip, "username": self.who,
+                                "why": "the signature did not verify for key %s" % (fp or "?")})
 
     def check_auth_interactive(self, username, submethods):
         """Ask for the password and the authenticator code, when the Settings card allows them."""
@@ -303,6 +331,8 @@ class VirtualSftp(SFTPServerInterface):
         reply = self.service.panel.ask({"op": "authz", "uid": u["uid"], "epoch": u["epoch"], "fp": u["fp"],
                                         "folder": folder, "write": bool(write), "ip": self.conn.ip})
         if not reply.get("ok"):
+            if reply.get("busy"):
+                raise Refused(SFTP_FAILURE, reply.get("reason") or DENIED)
             if reply.get("gone"):
                 raise Refused(SFTP_NO_SUCH_FILE, "No such file")
             raise Refused(SFTP_PERMISSION_DENIED, reply.get("reason") or DENIED)
@@ -312,7 +342,7 @@ class VirtualSftp(SFTPServerInterface):
         u = self.conn.signed_in()
         reply = self.service.panel.ask({"op": "servers", "uid": u["uid"], "epoch": u["epoch"], "fp": u["fp"]})
         if not reply.get("ok"):
-            raise Refused(SFTP_PERMISSION_DENIED, reply.get("reason") or DENIED)
+            raise Refused(SFTP_FAILURE if reply.get("busy") else SFTP_PERMISSION_DENIED, reply.get("reason") or DENIED)
         return reply.get("folders") or []
 
     def audit(self, target, action, detail, success=True):
@@ -671,7 +701,7 @@ class Service:
             while t.is_active() and not t.is_authenticated() and time.monotonic() < deadline \
                     and conn.tries <= MAX_AUTH_TRIES:
                 time.sleep(0.2)
-            if not t.is_authenticated():
+            if not _authenticated(t):
                 self._report_failure(conn)
                 return True
             self._signed_in(ip)
@@ -718,7 +748,7 @@ class Service:
 
     def _report_failure(self, conn):
         """A connection that tried a credential and never signed in: one failed sign-in for the panel."""
-        if conn.offered and not conn.counted:
+        if conn.offered and conn.answered and not conn.counted:
             self.panel.ask({"op": "auth_fail", "ip": conn.ip, "username": conn.who,
                             "why": conn.last_why or "no accepted key"})
 
@@ -771,6 +801,16 @@ class Service:
             _core.register_pin_app(app)
             self._db_app = app
         return self._db_app
+
+
+def _authenticated(t):
+    """Whether the client signed in on `t`, also once the connection has closed.
+
+    Transport.is_authenticated() answers False for a closed transport, so a client that signed in
+    and left within one poll was audited as a failed sign-in and counted against its address.
+    """
+    handler = getattr(t, "auth_handler", None)
+    return bool(handler is not None and handler.is_authenticated())
 
 
 def _minutes(value):

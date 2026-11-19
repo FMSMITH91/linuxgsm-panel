@@ -87,8 +87,8 @@ def _write_problem(target, rel, existed):
     return None
 
 
-def _new_name_problem(target, rel):
-    """Why a new file or folder may not be made at `rel`, or None."""
+def _new_name_problem(target, rel, above=True):
+    """Why a new file or folder may not be made at `rel`, or None (`above`: as _is_login_path takes it)."""
     problem = name_problem(posixpath.basename(rel))
     if problem:
         return problem
@@ -96,7 +96,7 @@ def _new_name_problem(target, rel):
         return CREATE_RESERVED
     if rel in _console_paths(target.selfname):
         return CONSOLE_REFUSED
-    if _is_login_path(rel):
+    if _is_login_path(rel, above=above):
         return LOGIN_FILE_REFUSED
     return None
 
@@ -234,7 +234,7 @@ class Files:
 
     def _mkdir(self, vfs, path, _new, attr):
         target, backend, real, rel = vfs.resolve(path, write=True)
-        why = _new_name_problem(target, rel) if rel else TOP_REFUSED
+        why = _new_name_problem(target, rel, above=False) if rel else TOP_REFUSED
         if why:
             vfs.audit(target, "create_folder", "refused: %s: %s" % (rel, why), success=False)
             raise _refused(SFTP_PERMISSION_DENIED, why)
@@ -417,6 +417,7 @@ class ReadHandle(_Handle):
 
 DENIED_NOW = "You no longer have permission to use this server's files."
 CUT_OFF = "The connection ended before the upload was closed."
+CUT_OFF_IN_PLACE = "written in place; the connection ended before the file was closed"
 
 
 class WriteHandle(_Handle):
@@ -528,10 +529,24 @@ class WriteHandle(_Handle):
         why = self._finish_on_host(self.failed)
         ok, rel = why is None, self.info["rel"]
         size = len(self.stage) if self.stage is not None else self.high
+        cut = self._cut_off_in_place(why, rel, size)
+        if cut:
+            return cut
         # "(overwrote)" only when it did: a refused upload left the file as it was.
         detail = "%s (%d bytes)%s" % (rel, size, " (overwrote)" if ok and self.info["existed"] else "")
         self.vfs.audit(self.target, "upload_file", detail if ok else "refused: %s: %s" % (detail, why), success=ok)
         return None if ok else (SFTP_FAILURE, why or "The upload failed.")
+
+    def _cut_off_in_place(self, why, rel, size):
+        """Audit a write straight into the file that a disconnect cut off; its answer, or None for any other close.
+
+        Written in place (an append, or a write into an existing file), the bytes are in the file,
+        so the row says the file changed, not that the upload was refused.
+        """
+        if why != CUT_OFF or self.stage is not None or self.info.get("staged_to") is not None:
+            return None
+        self.vfs.audit(self.target, "upload_file", "%s (%d bytes, %s)" % (rel, size, CUT_OFF_IN_PLACE))
+        return (SFTP_FAILURE, why)
 
     def _finish_on_host(self, why):
         """Write a staged config, wait for every write, close, rename into place. -> why it failed, or None.

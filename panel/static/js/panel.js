@@ -1089,9 +1089,11 @@ window.UPro = (function(){
 // pause (RETRY_MS): a piece the host did append comes back 409 with where it is now, and
 // the upload goes on from there, so a phone changing networks does not lose the whole upload. Only
 // once the retries are spent is the upload cancelled (the server then lets the next one start at
-// once), and a request that never answered rejects as before.
+// once), and a request that never answered rejects as before. A busy answer spends no retry: the
+// first piece may still be writing for as long as the server gives a piece (300 s), so it is asked
+// again every BUSY_PAUSE_MS until BUSY_MS has passed, and the upload goes on from where it got to.
 window.backupUpload = function(file, base, onProgress){
-  var RETRY_MS = [2000, 5000, 10000, 20000];
+  var RETRY_MS = [2000, 5000, 10000, 20000], BUSY_MS = 330000, BUSY_PAUSE_MS = 5000;
   var retryable = function(res){
     var d = res.d || {};
     return res.status >= 500 || d.busy === true || (res.status === 200 && d.success !== true && !d.resume);
@@ -1108,9 +1110,13 @@ window.backupUpload = function(file, base, onProgress){
   };
   return post(base, JSON.stringify({size: file.size})).then(function(start){
     if(!start || !start.success || !start.id) return start || {success: false};
-    var chunk = Number(start.chunk) || 4194304, at = 0, tries = 0, lost = 0;
+    var chunk = Number(start.chunk) || 4194304, at = 0, tries = 0, lost = 0, busyUntil = 0;
     // The same piece again after a pause; once the pauses are spent, cancelled (and a lost request rethrown).
     var again = function(err, d){
+      if(d && d.busy === true){
+        busyUntil = busyUntil || Date.now() + BUSY_MS;
+        if(Date.now() < busyUntil) return new Promise(function(done){ setTimeout(done, BUSY_PAUSE_MS); }).then(next);
+      }
       if(lost >= RETRY_MS.length){
         return err ? cancel(null).then(function(){ throw err; }) : cancel(d);
       }
@@ -1122,7 +1128,7 @@ window.backupUpload = function(file, base, onProgress){
       if(at >= file.size) return finish(0);
       return piece(base + '/' + start.id + '?offset=' + at, file.slice(at, Math.min(at + chunk, file.size))).then(function(res){
         var d = res.d;
-        if(d && d.success){ at = Number(d.received); tries = 0; lost = 0; return next(); }
+        if(d && d.success){ at = Number(d.received); tries = 0; lost = 0; busyUntil = 0; return next(); }
         if(d && d.resume && tries < 3){ at = Number(d.received) || 0; tries++; return next(); }
         return retryable(res) ? again(null, d) : cancel(d);
       }, function(err){ return again(err, null); });

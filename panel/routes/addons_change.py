@@ -178,7 +178,7 @@ def _unit_refusal(gs, p):
     from panel.routes import addons as _ra   # it imports this module: read at call time
     if p["meta"] is None:
         return _NOT_INSTALLED
-    return _ra._log_refusal(gs, p) or (_ra._NO_IDS if p["ids"] is None else "")
+    return _ra.change_log_refusal(gs, p) or (_ra._NO_IDS if p["ids"] is None else "")
 
 
 def _change_steps(gs, addon_id, who, kind, choice=None):
@@ -251,8 +251,9 @@ def start(app, gs, addon_id, kind):
         if choice is None:
             return _ra._say(400, _BAD_SETTINGS)
     with _ra._JOBS_LOCK:
-        if (_ra._JOBS.get((gs.id, addon_id)) or {}).get("running"):
-            return _ra._say(409, _ra._BUSY)
+        job = _ra._JOBS.get((gs.id, addon_id)) or {}
+        if job.get("running"):
+            return _ra._say(409, _ra.busy_sentence(job))
         _ra._JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": kind}
     detail = "%s: started" % addon_id + ("" if choice is None else ", geolocation %s, plugins %s, own plugins %s"
                                          % (choice[0], " ".join(choice[1]) or "none", "on" if choice[2] else "off"))

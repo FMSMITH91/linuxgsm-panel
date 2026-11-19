@@ -60,8 +60,12 @@ def _bup_stalled(e, now):
 
 
 def _bup_prune(now):
-    """Under the lock: forget every upload untouched for _UPLOAD_IDLE."""
-    for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE]:
+    """Under the lock: forget every upload with no request running and none for _UPLOAD_IDLE.
+
+    A finish can run for hours (_GAME_FINISH_TIMEOUT); forgotten meanwhile, a new upload to the same
+    server was accepted, and its start deleted the part file the finish was still checking.
+    """
+    for uid in [u for u, e in _uploads.items() if now - e["ts"] > _UPLOAD_IDLE and not e.get("busy")]:
         _uploads.pop(uid, None)
 
 
