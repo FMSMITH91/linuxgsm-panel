@@ -153,23 +153,28 @@ def _hi_ok192(op, val, unit):
     return px > 1400 or (op == "<=" and px == 1400)
 
 
+def _feature1400_192(g):
+    """Read one media feature: False when it caps the width below 1400px, None when it does not, True if unknown."""
+    if "width" not in g:
+        return None                     # pointer, hover, a colour scheme: true on some wide screen
+    up = _re192.fullmatch(r"(?:[\d.]+(?:px|r?em) <=? )?width (<=?) ([\d.]+)(px|r?em)", g)
+    mx = _re192.fullmatch(r"max-width: ?([\d.]+)(px|r?em)", g)
+    if up:
+        return None if _hi_ok192(up.group(1), up.group(2), up.group(3)) else False
+    if mx:
+        return None if _hi_ok192("<=", mx.group(1), mx.group(2)) else False
+    low = _re192.fullmatch(r"(?:min-width: ?|width >=? )[\d.]+(?:px|r?em)", g)
+    return None if low else True        # a form this reader does not know: reachable, so it is judged
+
+
 def _query1400_192(query):
     """Whether one media query (no commas) can match at some viewport 1400px wide or wider."""
-    if query.startswith("not ") or query.startswith("only "):
+    if query.startswith(("not ", "only ")):
         return True                     # read as reachable: this reader does not negate
     for g in _re192.findall(r"\(([^()]*)\)", query):
-        g = " ".join(g.split())
-        if "width" not in g:
-            continue                    # pointer, hover, a colour scheme: true on some wide screen
-        up = _re192.fullmatch(r"(?:[\d.]+(?:px|r?em) <=? )?width (<=?) ([\d.]+)(px|r?em)", g)
-        mx = _re192.fullmatch(r"max-width: ?([\d.]+)(px|r?em)", g)
-        low = _re192.fullmatch(r"(?:min-width: ?|width >=? )[\d.]+(?:px|r?em)", g)
-        if up and not _hi_ok192(up.group(1), up.group(2), up.group(3)):
-            return False
-        if mx and not _hi_ok192("<=", mx.group(1), mx.group(2)):
-            return False
-        if not (up or mx or low):
-            return True                 # a form this reader does not know: reachable, so it is judged
+        said = _feature1400_192(" ".join(g.split()))
+        if said is not None:
+            return said
     return True
 
 

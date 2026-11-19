@@ -120,18 +120,26 @@ def _has_call261(node):
     """Whether a '+' chain has a call of a named function among its operands (`secBase() + '/x'`)."""
     if node.get("type") == "CallExpression":
         return (node.get("callee") or {}).get("type") == "Identifier"
-    return node.get("type") == "BinaryExpression" and node.get("operator") == "+" and (
-        _has_call261(node["left"]) or _has_call261(node["right"]))
+    return _is_plus261(node) and (_has_call261(node["left"]) or _has_call261(node["right"]))
+
+
+def _is_plus261(node):
+    return node.get("type") == "BinaryExpression" and node.get("operator") == "+"
+
+
+def _leaf_alts261(node, resolve):
+    """The readings of one operand: a URL helper's call gives each URL it returns, a literal itself."""
+    if _has_call261(node):
+        got = resolve(node["callee"]["name"])
+        return [list(p) for p in got] if got else None
+    one = _concat261(node)
+    return [one] if one else None
 
 
 def _alts261(node, resolve):
     """Every reading of a '+' chain: a call of a URL helper gives one per URL it returns, other parts a hole."""
-    if node.get("type") == "CallExpression" and (node.get("callee") or {}).get("type") == "Identifier":
-        got = resolve(node["callee"]["name"])
-        return [list(p) for p in got] if got else None
-    if node.get("type") != "BinaryExpression" or node.get("operator") != "+":
-        one = _concat261(node)
-        return [one] if one else None
+    if not _is_plus261(node):
+        return _leaf_alts261(node, resolve)
     left, right = _alts261(node["left"], resolve), _alts261(node["right"], resolve)
     if not (left or right):
         return None
@@ -411,14 +419,20 @@ class _Js261:
                 if url:
                     self.sites.append((f, line, url, method, ("helper", None) if guard else scope))
 
+    def _string_node(self, f, node, up, parents):
+        """A '+' chain holding a helper's call waits for every helper to be known; any other string is a site now."""
+        if _concat261(up) is not None:
+            return
+        if _is_plus261(node) and _has_call261(node) and not (_is_plus261(up) and _has_call261(up)):
+            self.deferred.append((f, node, list(parents)))
+        else:
+            self._site(f, node, parents, _concat261(node))
+
     def _visit(self, f, node, parents):
         up = parents[-1] if parents else {}
         kind = node["type"]
-        if kind == "BinaryExpression" and _concat261(up) is None and _has_call261(node) \
-                and not _has_call261(up if up.get("type") == "BinaryExpression" else {}):
-            self.deferred.append((f, node, list(parents)))
-        elif kind in ("Literal", "TemplateLiteral", "BinaryExpression") and _concat261(up) is None:
-            self._site(f, node, parents, _concat261(node))
+        if kind in ("Literal", "TemplateLiteral", "BinaryExpression"):
+            self._string_node(f, node, up, parents)
         if kind == "CallExpression":
             self._call_args(f, node, parents)
         if kind == "Literal" and isinstance(node.get("value"), str):
@@ -439,31 +453,38 @@ class _Js261:
         if key:
             self.refs.setdefault(key, []).append(_use_kind261(node, up, parents))
 
+    def _attr_read(self, f, call, parents):
+        """Note `x.getAttribute('data-…-url')`: a site of each endpoint the templates fill that attribute with."""
+        args = call.get("arguments") or []
+        name = args[0].get("value") if args else None
+        for ep in sorted(self.attr_urls.get(name, ()) if isinstance(name, str) else ()):
+            self.attr_sites.append((f, call["loc"]["start"]["line"], ep, _fetch_method261(call, parents),
+                                    _scope261(parents)))
+
     def _call_args(self, f, call, parents):
         """Note a fetch whose URL ends in a parameter, a parameter handed on, a literal argument, a data-…-url read."""
         callee = _callee_name261(call)
-        args = call.get("arguments") or []
-        if callee == "getAttribute" and args[:1] and isinstance(args[0].get("value"), str):
-            for ep in sorted(self.attr_urls.get(args[0]["value"], ())):
-                up = parents[-1] if parents else {}
-                self.attr_sites.append((f, call["loc"]["start"]["line"], ep,
-                                        _fetch_method261(call, parents) if up.get("type") == "CallExpression"
-                                        else None, _scope261(parents)))
-        key = "fetch" if callee == "fetch" else (
-            _key261(call["callee"]["name"], parents) if (call.get("callee") or {}).get("type") == "Identifier" else None)
-        if not key:
-            return
+        if callee == "getAttribute":
+            self._attr_read(f, call, parents)
+        named = (call.get("callee") or {}).get("type") == "Identifier"
+        key = "fetch" if callee == "fetch" else (_key261(callee, parents) if named else None)
+        if key:
+            for pos, arg in enumerate(call.get("arguments") or []):
+                self._arg(f, call, parents, key, pos, arg)
+
+    def _arg(self, f, call, parents, key, pos, arg):
+        """One argument of a call: a parameter at the end of a fetched URL or handed on, or a literal."""
+        tail = _tail261(arg)
+        owner = _param_of261(tail[1], parents + [call]) if tail else None
         inner = _scope261(parents)[0] == "helper"
-        for pos, arg in enumerate(args):
-            tail = _tail261(arg)
-            owner = _param_of261(tail[1], parents + [call]) if tail else None
-            if owner and key == "fetch" and pos == 0:
-                self.param_fns[owner] = (tail[0], _init_method261(args[1] if len(args) > 1 else None), inner)
-            elif owner and key != "fetch":
-                self.forwards.append((owner[0], owner[1], key, pos, tail[0], inner))
-            pieces = _concat261(arg)
-            if pieces and key != "fetch":
-                self.param_args.append((f, arg["loc"]["start"]["line"], key, pos, pieces, _scope261(parents)))
+        args = call["arguments"]
+        if owner and key == "fetch" and pos == 0:
+            self.param_fns[owner] = (tail[0], _init_method261(args[1] if len(args) > 1 else None), inner)
+        elif owner and key != "fetch":
+            self.forwards.append((owner[0], owner[1], key, pos, tail[0], inner))
+        pieces = _concat261(arg) if key != "fetch" else None
+        if pieces:
+            self.param_args.append((f, arg["loc"]["start"]["line"], key, pos, pieces, _scope261(parents)))
 
     def _helpers(self, f, node, parents, pieces):
         """Note a base-plus-argument call (`api('/x')`) and a function returning a base plus its argument."""
@@ -528,16 +549,21 @@ def _gate261():
     js = _Js261(_esprima261)
     rules = _step_up_rules261()
     bare, seen_rules = [], set()
-    sites = [(f, line, [r for r, ep in rules if _matches261(url, _sample261(r))], method, scope)
-             for f, line, url, method, scope in js.sites]
-    sites += [(f, line, [r for r, e in rules if e == ep], method, scope) for f, line, ep, method, scope in js.attr_sites]
-    for f, line, hit, method, scope in sites:
+    for f, line, hit, method, scope in _rule_sites261(js, rules):
         if not hit or method == "GET":
             continue
         seen_rules.update(hit)
         if not js.guarded(scope) and hit[0] not in _OWN_REAUTH261:
             bare.append("%s:%d %s (%s)" % (f, line, hit[0], scope[1] or scope[0]))
     return js, rules, bare, seen_rules
+
+
+def _rule_sites261(js, rules):
+    """Each site with the step-up rules it can be: by its URL pieces, or by the endpoint an attribute names."""
+    sites = [(f, line, [r for r, _ep in rules if _matches261(url, _sample261(r))], method, scope)
+             for f, line, url, method, scope in js.sites]
+    return sites + [(f, line, [r for r, e in rules if e == ep], method, scope)
+                    for f, line, ep, method, scope in js.attr_sites]
 
 
 _G261 = _gate261()

@@ -92,22 +92,31 @@ def _gh_names_sudo(value, known):
     return False
 
 
+def _gh_assign_pairs(n):
+    """Return (target, value) for one `=`, a tuple unpacked pairwise."""
+    out = []
+    for t in n.targets:
+        both = isinstance(t, _gh_ast.Tuple) and isinstance(n.value, _gh_ast.Tuple)
+        out += list(zip(t.elts, n.value.elts)) if both else [(t, n.value)]
+    return out
+
+
+def _gh_default_pairs(a):
+    """Return (parameter, default) for a function's arguments that have one."""
+    pos = a.posonlyargs + a.args
+    return list(zip(pos[len(pos) - len(a.defaults):], a.defaults)) + [
+        (k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+
+
 def _gh_bound_pairs(tree):
     """Yield (target, value) for every binding in `tree`: =, : =, :=, tuple unpacking, a parameter's default."""
     for n in _gh_ast.walk(tree):
         if isinstance(n, _gh_ast.Assign):
-            for t in n.targets:
-                if isinstance(t, _gh_ast.Tuple) and isinstance(n.value, _gh_ast.Tuple):
-                    yield from zip(t.elts, n.value.elts)
-                else:
-                    yield t, n.value
+            yield from _gh_assign_pairs(n)
         elif isinstance(n, (_gh_ast.AnnAssign, _gh_ast.NamedExpr)) and n.value is not None:
             yield n.target, n.value
         elif isinstance(n, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef, _gh_ast.Lambda)):
-            a = n.args
-            pos = a.posonlyargs + a.args
-            yield from zip(pos[len(pos) - len(a.defaults):], a.defaults)
-            yield from ((k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None)
+            yield from _gh_default_pairs(n.args)
 
 
 def _gh_sudo_names(tree):
