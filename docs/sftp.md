@@ -100,7 +100,9 @@ in with a password at all. Backup codes are not accepted over SFTP.
 - Renaming never replaces a file that is already there. Moving between two servers' folders is not
   possible.
 - An upload larger than the limit, or one that would leave less than 256 MiB free on the game host's
-  disk, is refused.
+  disk, is refused. A new file is staged and only moved into place when it completes, so a refused one
+  leaves nothing. Writing into, or appending to, an existing file changes it in place: the part written
+  before the refusal stays (it is within the limit), so check that file afterwards.
 - Every upload, delete, rename, new folder and permission change is recorded in the audit log, about
   that server, with your address. Reads are not recorded.
 - A session ends at its absolute limit (8 hours by default, the panel's own sign-in limit): after it, a new
