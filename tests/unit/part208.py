@@ -821,6 +821,7 @@ _LIST208 = {"state": "ready", "remote_id": 3, "host": {"flavor": "mariadb", "ver
 _out208 = _js99("databases tab script", (
     "global.serverId = 7; global.location = {hash: ''}; global.addEventListener = () => {};\n"
     "document.addEventListener = () => {}; global.confirmDialog = o => o.onConfirm();\n"
+    "document.querySelector = document.querySelector || (() => null);\n"
     "let copied = []; global.copyText = (s) => copied.push(s);\n"
     "E87.prototype.replaceChild = function (n, o) { const i = this.children.indexOf(o); if (i >= 0) this.children[i] = n; return o; };\n"
     + _JS208 + "\n"), (), (
@@ -873,6 +874,7 @@ def _fresh208(body, **over):
     return _js99("databases tab script (fresh page)", (
         "global.serverId = 7; global.location = {hash: ''}; global.addEventListener = () => {};\n"
         "document.addEventListener = () => {}; global.confirmDialog = o => o.onConfirm();\n"
+        "document.querySelector = document.querySelector || (() => null);\n"
         "let copied = []; global.copyText = (s) => copied.push(s);\n"
         "E87.prototype.replaceChild = function (n, o) { const i = this.children.indexOf(o); if (i >= 0) this.children[i] = n; return o; };\n"
         + _JS208 + "\n"), (), (

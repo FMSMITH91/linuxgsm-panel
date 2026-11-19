@@ -119,3 +119,27 @@ _missing169 = [p for keep in _ps169._JOB_KEEP.values() for p in keep
 _missing169 += [p for p in _ps169._ALWAYS_RUN if not os.path.exists(os.path.join(_root, p))]
 eq("pr_scope: every file a job keeps (it installs or runs it) exists, so a rename cannot drop it from the job",
    _missing169, [])
+
+
+def _installs169(block):
+    """List the requirements files a job block installs (-r, --requirement, --requirement=)."""
+    return sorted(set(_re169.findall(r"(?:-r|--requirement)[ =]+([\w./-]+\.(?:txt|in))", block)))
+
+
+def _skipped_installs169(name, block):
+    """List the files a job installs that its own --job list says cannot change what it measures."""
+    return [f for f in _installs169(block) if _ps169.irrelevant_to(name, f)]
+
+
+# A job that skips for a path it installs would pass a pull request that bumps only that file without ever
+# installing it: each --job job's installs are read from its own block and held against its list.
+_inst169 = {n: _installs169(_job169(w, j)) for n, (w, j) in _WIRING169.items()}
+eq("pr_scope --job: no job skips for a requirements file it installs (read from its own workflow block)",
+   {n: _skipped_installs169(n, _job169(w, j)) for n, (w, j) in _WIRING169.items()},
+   {n: [] for n in _WIRING169})
+check("pr_scope --job: ...the coverage job's installs were read, its coverage.txt among them (floor)",
+      ".github/ci-requirements/coverage.txt" in _inst169["coverage"], repr(_inst169))
+eq("pr_scope --job: (control) a file a job installs from a directory its list skips is reported",
+   _skipped_installs169("coverage", "        run: pip install -r .github/ci-requirements/foo.txt "
+                                    "--requirement=.github/ci-requirements/coverage.txt\n"),
+   [".github/ci-requirements/foo.txt"])

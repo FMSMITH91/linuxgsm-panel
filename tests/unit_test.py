@@ -2078,6 +2078,10 @@ _r16d_wrap_ts_handles()
 # per-source cap on the web server, quiet client stalls, logged ufw denies and the page's logging mark,
 # the user manager's tmpfiles and bus folders, world reset's one config index) runs the web server on
 # loopback, part47's node runner, part190's restore sandbox and bash; imports part01, 47, 190 and 260.
+# part265 (review pass 32, the browser side: step-up dialogs, OWASP notes, lazy sections, marked messages) runs
+# node over panel/static/js and tools/i18n_scan.py; imports part01, 05, 221 and 249.
+# part267 (review pass 32, the app side: SFTP key proofs counted, the panel's answer pools, add-on remove as a job,
+# uninstall beside a wipe or an add-on job, busy upload pieces) drives part12's app and a real paramiko client.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
           "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
           "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2096,7 +2100,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part221", "part222", "part223", "part224", "part225", "part226", "part227", "part228", "part229", "part230", "part231", "part232", "part233", "part234",
     "part235", "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244",
     "part245", "part246", "part247", "part248", "part249", "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258",
-    "part259", "part260", "part261", "part262", "part263", "part264", "part15")
+    "part259", "part260", "part261", "part262", "part263", "part264", "part265", "part267", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

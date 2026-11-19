@@ -10,7 +10,7 @@
     active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
     failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'
   };
-  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…'};
+  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…', remove: 'Removing…'};
 
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
@@ -73,9 +73,9 @@
       box.appendChild(node('div', 'small text-warning', a.update === 'geoip'
         ? T('Update available: a newer month of the country database.') : T('Update available: a newer version of the add-on.')));
     }
-    // An install, update or settings change still running: nothing to press until it ends (a start
-    // being watched can still be stopped; a Remove meanwhile is refused with the reason).
-    if ({install: 1, update: 1, settings: 1}[a.job]) return;
+    // An install, update, settings change or remove still running: nothing to press until it ends (a
+    // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
+    if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
@@ -382,12 +382,12 @@
     return !!b;
   };
 
-  // Load when the tab is first opened (or the page opens on it). A visit to the Databases tab can add a
-  // database or a database server, so the card asks again the next time it is opened.
-  document.addEventListener('click', function (e) {
-    var t = e.target && e.target.closest ? e.target : null;
-    if (t && t.closest('[data-sfsub-btn="databases"]')) st.loaded = false;
-    if (t && t.closest('[data-sfsub-btn="addons"]')) void window.adLoad(false); });
-  window.addEventListener('hashchange', function () { if (location.hash === '#addons') void window.adLoad(false); });
-  if (location.hash === '#addons') void window.adLoad(false);
+  // Load when the section is first shown (server_files.js: a click, a #hash, or the section a viewer
+  // without VIEW_FILES opens on), or when the page opened on it before this script ran. A visit to
+  // the Databases tab can add a database or a database server, so the card asks again the next time.
+  document.addEventListener('sfsub:shown', function (e) {
+    if (e.detail === 'databases') st.loaded = false;
+    if (e.detail === 'addons') void window.adLoad(false); });
+  var onView = document.querySelector('[data-sfsub-btn="addons"]');
+  if (onView && onView.classList.contains('active')) void window.adLoad(false);
 })();

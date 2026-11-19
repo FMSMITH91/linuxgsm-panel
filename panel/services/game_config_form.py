@@ -538,12 +538,13 @@ def _gcf_json_object(s, i, depth, sink, path):
     while more:
         i = _gcf_json_char(s, i, '"', "bad key") - 1
         key, i = json.decoder.scanstring(s, i + 1)
-        if key in obj:
+        child = (path + (key,)) if path is not None and depth < 2 else None
+        if key in obj and child is not None:
             # Two fields of one name: editing the first changes text a last-wins reader ignores, and
-            # the save would still say "Saved". Such a file gets the raw editor only.
+            # the save would still say "Saved". Such a file gets the raw editor only. A repeat the
+            # form never shows (in an array, or deeper than its fields) leaves the form as it is.
             raise _GcfJsonError("duplicate key")
         i = _gcf_json_char(s, i, ":", "no colon")
-        child = (path + (key,)) if path is not None and depth < 2 else None
         i, obj[key] = _gcf_json_value(s, i, depth + 1, sink, child)
         i, more = _gcf_json_more(s, i, "}")
     return i, obj

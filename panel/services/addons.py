@@ -1218,19 +1218,25 @@ def remove_sh(user, addon_id):
     When it was the account's last add-on, Podman's own storage and files go too (`podman system
     reset`, then what it leaves: see _podman_purge_sh).
     Prints ADDON_REMOVED and others=0/1 (whether another add-on is left).
+    The image the unit runs goes as well as the catalog's: an add-on not updated since the catalog's
+    image changed runs an older one, which would otherwise stay while another add-on is left.
     """
     unit = unit_name(addon_id)
     d = shlex.quote(addon_dir(user, addon_id))
     home = shlex.quote("/home/%s/%s" % (user, HOME_DIR))
+    quadlet = shlex.quote("/home/%s/%s/%s.container" % (user, QUADLET_DIR, unit))
     relay_glob = "/home/%s/%s/%s%s-*" % (user, USER_UNIT_DIR, UNIT_PREFIX, addon_id)
-    return (_ENV + "systemctl --user stop %s.service 2>/dev/null; rm -f %s; "
+    return (_ENV + "img=$(sed -n 's/^Image=//p' %s 2>/dev/null | head -n 1); "
+            "systemctl --user stop %s.service 2>/dev/null; rm -f %s; "
             "for f in %s; do [ -e \"$f\" ] || continue; systemctl --user stop \"${f##*/}\" 2>/dev/null; rm -f \"$f\"; "
             "done; systemctl --user daemon-reload 2>/dev/null; podman rm -f --ignore %s >/dev/null 2>&1; "
-            "podman rmi %s >/dev/null 2>&1; podman image prune -f >/dev/null 2>&1; "
+            "podman rmi %s >/dev/null 2>&1; "
+            "case \"$img\" in ''|-*) ;; *) podman rmi -- \"$img\" >/dev/null 2>&1 ;; esac; "
+            "podman image prune -f >/dev/null 2>&1; "
             "podman unshare rm -rf -- %s 2>/dev/null || rm -rf -- %s; "
             "[ -e %s ] && exit 30; rmdir %s 2>/dev/null; "
             "if [ -d %s ]; then echo others=1; else %secho others=0; fi; echo %s"
-            % (unit, shlex.quote("/home/%s/%s/%s.container" % (user, QUADLET_DIR, unit)), relay_glob, unit,
+            % (quadlet, unit, quadlet, relay_glob, unit,
                shlex.quote(CATALOG[addon_id]["image"]), d, d, d, home, home, _podman_purge_sh(user), _MARK_REMOVED))
 
 

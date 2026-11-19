@@ -9,9 +9,10 @@
 * The login's 2FA step: an Argon2id backup code and a bcrypt one from before each sign in once.
 * A stored Argon2id hash asking for more than four times the current cost, and a password over
   MAX_PASSWORD_BYTES, are refused.
-* Backups: a new archive's header records scrypt N=2^17, r=8, p=1 and opens again; one written at
-  the old N=2^15 still opens; a header asking for more than the bound is refused by the restore
-  before anything is derived; the derivation runs through tpool under eventlet.
+* Backups: a new archive is version 2 (AES-256-GCM under Argon2id m=47104, t=1, p=1) and opens
+  again; a version-1 archive (Fernet under scrypt, here at the old N=2^15) still opens; a header
+  asking for more than the bound is refused by the restore before anything is derived; both
+  derivations (Argon2id and scrypt) run through tpool under eventlet.
 Every account lives in part12's app database, with its transport tripwire armed; the backup paths
 point at a temp dir. Nothing reaches a host or data/.
 """
@@ -347,6 +348,29 @@ def _s212_backup_crafted():
         _patcher212.is_monkey_patched, _tpool212.execute = saved
     check("backup kdf: the scrypt derivation runs through tpool under eventlet",
           calls == [_bk212._scrypt] and len(_b64212.urlsafe_b64decode(key)) == 32, repr(calls))
+    _s212_argon_off_hub()
+
+
+def _s212_argon_off_hub():
+    """Check the version-2 derivation (Argon2id, every new backup and its restore) leaves the hub too."""
+    calls = []
+    saved = (_patcher212.is_monkey_patched, _tpool212.execute)
+    _patcher212.is_monkey_patched = lambda name: True
+    _tpool212.execute = lambda fn, *a: calls.append(fn) or fn(*a)
+    tmp = _tf212.mkdtemp(prefix="p212-argon-")
+    try:
+        key = _bk212._derive_key2(_K212_BK, b"s" * 16, m=8, t=1, p=1)
+        src, enc, out = (_os212.path.join(tmp, n) for n in ("a.tar.gz", "a.enc", "b.tar.gz"))
+        with open(src, "wb") as f:
+            f.write(b"p212 argon")
+        _bk212._encrypt_archive(src, enc, _K212_BK)
+        opened = _bk212._decrypt_archive(enc, out, _K212_BK)
+    finally:
+        _patcher212.is_monkey_patched, _tpool212.execute = saved
+        _sh212.rmtree(tmp, ignore_errors=True)
+    check("backup kdf: the Argon2id derivation runs through tpool under eventlet, for a new archive and "
+          "for its restore",
+          calls == [_bk212._argon2id] * 3 and len(key) == 32 and opened == (True, ""), repr((calls, opened)))
 
 
 def _s212_backups():

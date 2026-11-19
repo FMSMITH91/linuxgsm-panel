@@ -17,10 +17,14 @@
     // named button to carry); this listener lets it through because of the mark above.
     if (form.requestSubmit) form.requestSubmit(); else form.submit();
   }
-  function intro(){
+  // The words follow what is being confirmed: a form's save keeps what was typed into it ("Nothing
+  // you typed is lost", "Confirm and save"), but most callers of stepUpThen (a reboot, a delete, a
+  // restore, a poll that finishes a Tailscale setup) save nothing typed, and said so for all of them.
+  function intro(form){
     var wrap = document.createElement('div');
     var p = document.createElement('p'); p.className = 'mb-3';
-    p.textContent = t('This change needs your password again because you signed in a while ago. Nothing you typed is lost.');
+    p.textContent = form ? t('This change needs your password again because you signed in a while ago. Nothing you typed is lost.')
+                         : t('This action needs your password again because you signed in a while ago.');
     wrap.appendChild(p);
     return wrap;
   }
@@ -36,12 +40,16 @@
   }
   // Ask for the password (and the code when `totp`) in a dialog on this page and confirm it with
   // /account/reauth; then go(). `cancelled` (optional) runs when the dialog is closed unconfirmed.
-  function confirmThen(go, totp, cancelled){
-    var body = intro();
+  // `form`: the dialog is for a data-step-up form's save (its words, above).
+  function confirmThen(go, totp, cancelled, form){
+    var body = intro(form);
     var code = totp ? withCode(body) : null;
+    // Cancel stays live while the password is checked. Pressed then, the dialog is gone and the
+    // caller told it was cancelled, so the check's answer must not run the action after all.
+    var gone = false;
     window.confirmDialog({title: t('Confirm it is you'), icon: 'shield-lock', bodyNode: body,
-      requirePassword: true, requireLabel: t('Password'), confirmLabel: t('Confirm and save'),
-      onCancel: cancelled,
+      requirePassword: true, requireLabel: t('Password'), confirmLabel: form ? t('Confirm and save') : t('Confirm'),
+      onCancel: function(){ gone = true; if (cancelled) cancelled(); },
       onConfirm: function(password, api){
         var fd = new FormData();
         fd.append('password', password);
@@ -50,10 +58,11 @@
           .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, d: d || {}}; })
                               .catch(function(){ return {ok: false, d: {}}; }); })
           .then(function(res){
+            if (gone) return;
             if (res.ok && res.d.success) { api.close(); go(); return; }
             api.error(res.d.message || t('Incorrect.'));
           })
-          .catch(function(){ api.error(t('Incorrect.')); });
+          .catch(function(){ if (!gone) api.error(t('Incorrect.')); });
       }});
   }
   // window.stepUpThen(go, totp, cancelled): run go() once this sign-in may do a high-risk action,
@@ -62,13 +71,14 @@
   // sent without it still meets the 403 + X-Reauth-Required that panel.js turns into the confirm
   // page. `cancelled` (optional) runs when the password dialog is closed without confirming, for a
   // control that already shows the unsaved change (a switch) to show the saved state again.
-  window.stepUpThen = function(go, totp, cancelled){
+  function stepUp(go, totp, cancelled, form){
     fetch(mp() + '/api/auth/ping?step_up=1', {cache: 'no-store'})
       .then(function(r){ return r.ok ? r.json() : {}; })
       // No answer: go on and let the server decide (it refuses a stale request on its own).
-      .then(function(d){ if (d && d.step_up === true) confirmThen(go, totp, cancelled); else go(); })
+      .then(function(d){ if (d && d.step_up === true) confirmThen(go, totp, cancelled, form); else go(); })
       .catch(function(){ go(); });
-  };
+  }
+  window.stepUpThen = function(go, totp, cancelled){ stepUp(go, totp, cancelled, false); };
   document.addEventListener('submit', function(e){
     var form = e.target;
     if (!form || !form.hasAttribute || !form.hasAttribute('data-step-up')) return;
@@ -77,6 +87,6 @@
     if (form.classList && form.classList.contains('ajax-form')) return;
     if (form.getAttribute('data-step-up-ok') === '1') { form.removeAttribute('data-step-up-ok'); return; }
     e.preventDefault();
-    window.stepUpThen(function(){ send(form); }, form.getAttribute('data-step-up-totp') === '1');
+    stepUp(function(){ send(form); }, form.getAttribute('data-step-up-totp') === '1', null, true);
   });
 })();

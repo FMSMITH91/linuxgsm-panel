@@ -454,7 +454,13 @@ _ADDON_DELETE = "{addon} uses this database. Remove the add-on on the Add-ons ta
 
 
 def _addon_refusal(gs, r, sentence):
-    """The refusal when an installed add-on uses database `r` (its name in `sentence`), or None."""
+    """The refusal when an add-on uses database `r` (its name in `sentence`), or one is being set up, or None.
+
+    An install or settings change still running has chosen its database but written no record yet,
+    so the record read alone would let a reset or a delete cut it off before it ever starts.
+    """
+    if addons.job_running(gs.id):
+        return _say(409, addons.ADDON_BUSY)
     addon = addons.addon_using_database(gs, r.name)
     return _say(409, i18n.Sentence(sentence, addon=addon)) if addon else None
 

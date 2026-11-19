@@ -1,0 +1,17 @@
+{
+  "This action needs your password again because you signed in a while ago.": "Esta acción necesita de nuevo tu contraseña porque iniciaste sesión hace un rato.",
+  "Use at least 15 characters": "Usa al menos 15 caracteres",
+  "New backups will be encrypted": "Las copias de seguridad nuevas se cifrarán",
+  "Encryption off": "Cifrado desactivado",
+  "Could not start": "No se pudo iniciar",
+  "Could not check players": "No se pudieron comprobar los jugadores",
+  "Could not start backup — connection error": "No se pudo iniciar la copia de seguridad: error de conexión",
+  "Delete failed — connection error": "El borrado falló: error de conexión",
+  "Could not send": "No se pudo enviar",
+  "Restart failed — connection error": "El reinicio falló: error de conexión",
+  "Restarted — the change is now loaded.": "Reiniciado: el cambio ya está cargado.",
+  "Run failed": "La ejecución falló",
+  "Task added": "Tarea añadida",
+  "Task deleted": "Tarea eliminada",
+  "Task updated": "Tarea actualizada"
+}

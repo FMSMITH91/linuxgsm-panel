@@ -132,6 +132,10 @@ def _wwr_logical_lines(props):
     Lines end only at \\n, \\r or \\r\\n (not at the other characters str.splitlines() breaks on); a
     line ending in an odd number of backslashes goes on with the next line, its leading blanks dropped;
     a comment line (`#` or `!` first) never goes on.
+
+    The parts are joined once, and each physical line's own backslashes decide whether it goes on (as
+    java.util.Properties counts them, afresh on each line): growing the line part by part and
+    re-reading its whole end each time took quadratic time on a file of many continued lines.
     """
     phys = re.split(r"\r\n|\r|\n", props)
     out, i = [], 0
@@ -139,9 +143,12 @@ def _wwr_logical_lines(props):
         line, i = phys[i].lstrip(_WWR_BLANK), i + 1
         if not line or line[0] in "#!":
             continue
-        while _wwr_continues(line) and i < len(phys):
-            line, i = line[:-1] + phys[i].lstrip(_WWR_BLANK), i + 1
-        out.append(line)
+        parts = [line]
+        while _wwr_continues(parts[-1]) and i < len(phys):
+            parts[-1] = parts[-1][:-1]
+            parts.append(phys[i].lstrip(_WWR_BLANK))
+            i += 1
+        out.append("".join(parts))
     return out
 
 

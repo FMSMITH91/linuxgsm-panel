@@ -1,4 +1,5 @@
 """System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
+import calendar
 import fnmatch
 import http.client
 import json
@@ -1516,17 +1517,53 @@ def _release_name(commit, date_ver):
     main/<sha>.name on release-signatures, which the update check and install.sh fetch into
     _RELEASE_SIG_REF. Only a name of this commit's own date, with or without the suffix, is taken:
     a release signed before names were saved, or an unreadable one, shows the date as before.
+
+    A commit that changes nothing a panel runs (CI, tooling) is signed with no name and no GitHub
+    Release, so the code running is that of the nearest named commit before it on main: the name
+    is the first one found walking back the first parents of the same date (_named_same_day).
     """
     sha, _, rc = _git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], timeout=10)
     sha = sha.strip()
     if rc != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
         return date_ver
-    name, _, rc = _git(["cat-file", "blob", "%s:%s/%s.name" % (_RELEASE_SIG_REF, _DEFAULT_BRANCH, sha)],
+    named = _named_same_day(sha, date_ver)
+    if named is None:
+        return date_ver
+    name, _, rc = _git(["cat-file", "blob", "%s:%s/%s.name" % (_RELEASE_SIG_REF, _DEFAULT_BRANCH, named)],
                        timeout=10)
     name = name.strip()
     if rc == 0 and re.fullmatch(re.escape(date_ver) + r"(?:\.[0-9]{1,3})?", name):
         return name
     return date_ver
+
+
+def _named_same_day(sha, date_ver):
+    """The first of `sha` and its first-parent ancestors committed on `date_ver` that has a saved name, or None.
+
+    One listing of the saved names and one walk of the day's first parents (git stops at the
+    day's start; the walk also ends at the first commit of another date), so a day with many
+    commits still costs three git calls.
+    """
+    names = _saved_release_names()
+    m = re.fullmatch(r"([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})", date_ver or "")
+    if not names or m is None:
+        return None
+    day = calendar.timegm((int(m.group(1)), int(m.group(2)), int(m.group(3)), 0, 0, 0))
+    out, _, rc = _git(["log", "--first-parent", "--no-show-signature", "--format=%H %ct",
+                       "--since=@%d" % day, sha, "--"], timeout=10)
+    for line in out.splitlines() if rc == 0 else ():
+        cand, _, ct = line.partition(" ")
+        if _version_from_epoch(ct) != date_ver:
+            return None
+        if cand in names:
+            return cand
+    return None
+
+
+def _saved_release_names():
+    """The commits (full shas) whose release name tools/sign-release.sh saved; empty when none can be read."""
+    out, _, rc = _git(["ls-tree", "--name-only", "%s:%s" % (_RELEASE_SIG_REF, _DEFAULT_BRANCH)], timeout=10)
+    return {n[:-5] for n in out.splitlines() if n.endswith(".name")} if rc == 0 else set()
 
 
 def _version_file():

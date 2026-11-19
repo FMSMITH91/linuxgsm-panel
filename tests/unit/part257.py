@@ -478,9 +478,9 @@ def _card_checks257():
           repr(got.get("dialogs")))
     eq("card: no Update button when none is available", _card257("").get("update"), 0)
     _src = _read257("panel", "static", "js", "server_addons.js")
-    _hook = _src[_src.find("document.addEventListener('click'"):]
+    _hook = _src[_src.find("document.addEventListener('sfsub:shown'"):]
     check("card: a visit to the Databases tab makes the card ask again when it is next opened",
-          "closest('[data-sfsub-btn=\"databases\"]')) st.loaded = false;" in _hook[:400], _hook[:400])
+          "if (e.detail === 'databases') st.loaded = false;" in _hook[:400], _hook[:400])
 
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────

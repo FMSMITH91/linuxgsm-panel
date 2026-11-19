@@ -414,8 +414,17 @@ _ctl153 = _wiring153("ci.yml", "coverage", "coverage", ("Measure", "Not a step")
 check("reuse wiring: (control) a work step the job does not have is caught",
       any("does not have" in b for b in _ctl153), repr(_ctl153))
 
-_ci_jobs153 = _re153.findall(r"^  ([a-z][a-z-]*):\n", _code29(_wf29("ci.yml")).split("\njobs:\n", 1)[1],
-                             _re153.M)
+
+def _jobs_of153(text):
+    """List the job ids of a workflow's text: every key two spaces in under jobs:, in GitHub's id alphabet."""
+    return _re153.findall(r"^  ([A-Za-z_][A-Za-z0-9_-]*):[ \t]*$", _code29(text).split("\njobs:\n", 1)[1],
+                          _re153.M)
+
+
+_ci_jobs153 = _jobs_of153(_wf29("ci.yml"))
+_ctl_jobs153 = _jobs_of153(_wf29("ci.yml") + "\n  py_X9:\n    runs-on: ubuntu-24.04\n")
+check("reuse wiring: (control) the job reader sees an id with a capital, a digit and an underscore",
+      _ctl_jobs153 == _ci_jobs153 + ["py_X9"], repr(_ctl_jobs153))
 check("reuse wiring: every ci.yml job reuses, and each is a check the panel's update gate requires "
       "(system_ops._CI_REQUIRED), so main still carries each name",
       sorted(_ci_jobs153) == sorted(j for w, j in _REUSERS153 if w == "ci.yml")

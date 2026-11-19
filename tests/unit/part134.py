@@ -221,7 +221,9 @@ const secs = NAMES.map((n, i) => new El({'data-sfsub': n, hidden: i > 0}));
 const btns = NAMES.map((n, i) => new El({'data-sfsub-btn': n, active: i === 0}));
 global.history = {replaceState: (a, b, h) => { global.location.hash = h; }};
 global.location = {hash: ''};
-global.document = {querySelectorAll: s => s === '[data-sfsub]' ? secs : s === '[data-sfsub-btn]' ? btns : []};
+global.document = {querySelectorAll: s => s === '[data-sfsub]' ? secs : s === '[data-sfsub-btn]' ? btns : [],
+                   dispatchEvent: () => true};
+global.CustomEvent = function(type, init){ this.type = type; this.detail = (init || {}).detail; };
 const shown = () => secs.filter(e => e.style.display !== 'none').map(e => e.attrs['data-sfsub']);
 const active = () => btns.filter(b => b.classList.contains('active')).map(b => b.attrs['data-sfsub-btn']);
 """

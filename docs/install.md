@@ -76,6 +76,7 @@ Deleting a host on **Remote Servers** makes the panel forget it and its game ser
 - **Tailscale, if the panel set it up there.** This is the one leftover that is still a way in: `sudo tailscale logout` (or remove the machine in the Tailscale admin console), then `sudo ufw delete allow in on tailscale0` and `sudo rm -f /etc/sysctl.d/99-tailscale.conf`.
 - **the fail2ban whitelist file** (its addresses can never be banned there): `sudo rm -f /etc/fail2ban/jail.d/zz-panel-whitelist.local && sudo fail2ban-client reload`.
 - **auto-block firewall rules**, UFW denies commented `panel-autoblock` (`sudo ufw status numbered`, then `sudo ufw delete <n>`).
+- **add-ons (B3, IW4MAdmin) keep running.** Each starts at every boot as its game account's user service (lingering is on), with the game's RCON password and its database login in its settings. Remove them on each server's **Add-ons** tab before deleting the host. Afterwards it takes, as that account, stopping and disabling its `lgsm-addon-*` user units and `podman system reset`, then `sudo loginctl disable-linger <account>`.
 - **whatever "Prepare & Secure" set up**, if you ran it: ordinary host configuration (packages, UFW, fail2ban, SSH hardening, swap, timezone, automatic updates).
 
 To remove the panel's gamedig and its cron, run this on the host over SSH — **not on a host where a panel is installed** (there `uninstall.sh` removes them), and not if that host's servers use "restart when empty", which counts players with gamedig:

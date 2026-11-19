@@ -45,7 +45,7 @@ _CV_GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
 # how install.sh asks git as the checkout's owner.
 _CV_SH = "set -euo pipefail\n" + "".join(
     _inst_shfn(n) for n in ("_gitc", "_epoch_version", "_r42i_tree_owner", "_owner_read", "_version_file",
-                            "panel_version"))
+                            "_release_name", "panel_version"))
 
 
 def _cv_git(repo, *args, **env):

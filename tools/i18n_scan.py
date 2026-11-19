@@ -726,6 +726,19 @@ def _js_claims(text, before):
     return is_js_ui_text(text) or is_js_ui_word(text, before[-80:]) or is_js_t_arg(text, before)
 
 
+# A status mark in front of a message ('✗ Use at least 15 characters'): i18n.js keeps the mark and
+# looks up the rest (its MARK), so the rest is the text a catalog has to hold. Judged with the mark
+# on, a literal opened with a symbol, not a capital, and five such messages on the Backups card were
+# English for every es/fr viewer with the gate green.
+_JS_MARK = re.compile(r"^[✓✗✅❌] (.+)$", re.S)
+
+
+def _js_unmark(text):
+    """The text i18n.js looks up for `text`: without a leading status mark and its space."""
+    m = _JS_MARK.match(text)
+    return m.group(1) if m else text
+
+
 def _js_whole_claim(joined, before):
     """A literal-only run's text as ONE node, whitespace-collapsed, when it is claimed as such."""
     key = re.sub(r"\s+", " ", joined).strip()
@@ -756,10 +769,11 @@ def _js_run_claims(run, standalone, source):
     """The user-visible texts one run of literals (from _js_literal_runs) makes, as a list."""
     before = source[max(0, run[0][2] - _R15C_LOOKBACK):run[0][2]]
     joined = "".join(s[0] for s in run)
-    whole = _js_whole_claim(joined, before) if standalone else None
+    whole = _js_whole_claim(_js_unmark(joined), before) if standalone else None
     if whole:
         return [whole]
-    out = [text for text, bef in _js_claim_parts(run, standalone, source) if _js_claims(text, bef)]
+    out = [_js_unmark(text) for text, bef in _js_claim_parts(run, standalone, source)
+           if _js_claims(_js_unmark(text), bef)]
     return (out + _r18c_markup_claims(run, joined) + _js_icon_tail(joined, standalone)
             + _r18c_close_tails(joined, standalone))
 
@@ -1313,7 +1327,16 @@ def emphasis_split_js(js_dir=JS_DIR):
 def missing_js(lang="es", js_dir=JS_DIR, translation_dir=TRANSLATION_DIR):
     """{string: {filename}} for JS user-visible text with no entry in `lang`'s catalog."""
     catalog = load_catalog(lang, translation_dir)
-    return {t: w for t, w in scan_js(js_dir).items() if t not in catalog}
+    return {t: w for t, w in scan_js(js_dir).items() if not in_catalog(t, catalog)}
+
+
+def in_catalog(text, catalog):
+    """Whether a scanned text reaches the page translated: as a key, or as the rest of a marked key.
+
+    A marked text is found by its whole self first ("✓ Saved" is a key of its own), then without the
+    mark (_js_unmark, which is how scan_js reports it): either one in the catalog is enough.
+    """
+    return text in catalog or any("%s %s" % (m, text) in catalog for m in "✓✗✅❌")
 
 
 def load_catalog(lang, translation_dir=TRANSLATION_DIR):
