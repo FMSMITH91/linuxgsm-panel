@@ -66,7 +66,7 @@ def _start_seconds268(n):
     best = None
     for _ in range(3):
         t0 = _time268.perf_counter()
-        _wwr268.start_words(texts, "p268u", "p268srv")
+        _words268(texts)
         took = _time268.perf_counter() - t0
         best = took if best is None else min(best, took)
     return best
@@ -165,7 +165,7 @@ def _cron268(cmd, debian):
 
     Debian's and Ubuntu's cron (3.0pl1) also turns `\\` into `\`; cronie keeps both.
     """
-    out, esc, rest = [], False, None
+    out, esc = [], False
     for i, ch in enumerate(cmd):
         if esc:
             esc = False
@@ -174,13 +174,15 @@ def _cron268(cmd, debian):
             else:
                 out.append(ch)
         elif ch == "%":
-            rest = cmd[i + 1:]
-            break
+            return "".join(out), _cron_input268(cmd[i + 1:])
         else:
             out.append(ch)
             esc = ch == "\\"
-    if rest is None:
-        return "".join(out), None
+    return "".join(out), None
+
+
+def _cron_input268(rest):
+    """What cron writes to the command's standard input from the text after the cut (do_command.c's second loop)."""
     fed, esc = [], False
     for ch in rest:
         if esc and ch != "%":
@@ -190,7 +192,7 @@ def _cron268(cmd, debian):
         esc = ch == "\\"
         if not esc:
             fed.append(ch)
-    return "".join(out), "".join(fed) + ("\\" if esc else "")
+    return "".join(fed) + ("\\" if esc else "")
 
 
 _TYPED268 = ("date +%F", "date +\\%F", "tar czf /root/b-\\%F.tgz /etc", "a%b\\%c%", "x\\y \\;", "end\\",
