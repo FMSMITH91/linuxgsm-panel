@@ -22,7 +22,6 @@ import base64
 import hashlib
 import io
 import ipaddress
-import re
 
 # The environment variable that hands the service its end of the panel's socket pair (a fd number).
 IPC_FD_ENV = "LGSM_PANEL_SFTP_IPC_FD"
