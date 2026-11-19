@@ -83,6 +83,7 @@ def _status_cmds258(helper, euid, sudo_ok=False):
     def run(cmd, *a, **k):
         ran.append(cmd)
         return ("OK" if sudo_ok and "sudo -n true" in cmd else "NOPASS"), "", 0
+    _p9_arm(who="part258")     # first: the stand-ins below replace its system_ops._run
     _p9_patch(_so258, "_run", run)
     _p9_patch(_so258, "_helper_present", lambda: helper)
     _p9_patch(_so258, "os", _OsAs258(euid))

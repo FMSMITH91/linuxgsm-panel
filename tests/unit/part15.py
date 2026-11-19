@@ -11,7 +11,8 @@ local timezone is moved far east and far west of UTC while the checks run, and a
 proves each move took effect: a timezone that silently did not apply would pass the very bug these
 checks are for.
 
-As the last part, it also ends the run with a look for threads left running that can reach a host.
+As the last part, it also judges the run-wide records every part left (page-render lookups, unarmed
+requests) and ends the run with a look for threads left running that can reach a host.
 """
 import os
 import shutil
@@ -292,6 +293,33 @@ finally:
             os.environ[_cv_k] = _cv_val
     _time15.tzset()
     shutil.rmtree(_CV_SB, ignore_errors=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Run-wide gates on what every part recorded
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# They are judged here because this part runs last: a gate in a numbered part reads the record at
+# its own place in _PARTS, so the parts listed after it are never judged (part250 held both, and
+# part251-part259 went unchecked). part250 keeps their controls.
+import glob as _glob15  # noqa: E402
+import sys as _sys15  # noqa: E402
+
+from unit.part12 import P9_RESOLVER_THREADS as _threads_rec15, P9_UNARMED_REQUESTS as _unarmed_rec15  # noqa: E402
+from unit.part250 import _tripwire_parts250  # noqa: E402
+
+_before15 = sorted(n for n in (os.path.basename(p)[:-3] for p in _glob15.glob(os.path.join(_root, "tests", "unit", "part*.py")))
+                   if n != "part15" and "unit." + n not in _sys15.modules)
+check("unit suite: part15 runs last (every other tests/unit/part*.py ran before it, so its run-wide gates "
+      "and the leftover-thread look below see every part)", not _before15, "run after part15: %s" % _before15)
+check("page renders: no part rendered a server page with the timezone or public-IP lookup unstubbed (each "
+      "started a thread that read the fixture host after the part's stubs were gone)",
+      not _threads_rec15, repr(_threads_rec15[:6]))
+_twparts15 = _tripwire_parts250()
+_unarmed15 = sorted({(p, path) for p, path in _unarmed_rec15 if p in _twparts15})
+check("tripwire: every part that ends on \"nothing reached a real transport\" drove part12's app only with the "
+      "tripwire armed (a request after a bare _p9_restore_all() records no trip whatever it reaches)",
+      len(_twparts15) >= 30 and not _unarmed15,
+      repr({p: [r for q, r in _unarmed15 if q == p][:3] for p in sorted({q for q, _r in _unarmed15})}))
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

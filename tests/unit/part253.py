@@ -29,8 +29,8 @@ from types import SimpleNamespace as _NS253
 from unit.part01 import check, eq
 from unit.part05 import _helper as _h253
 from unit.part12 import (P9_ADMIN, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
-                         _p9_delete_server, _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all,
-                         _p9_threading, _P9Thread)
+                         _p9_delete_server, _p9_drain, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_quiet_lookups,
+                         _p9_restore_all, _p9_threading, _P9Thread)
 from panel.core import i18n as _i18n253
 from panel.core.config import encrypt_secret as _enc253
 from panel.db.models import GameDatabase as _GD253, db as _db253
@@ -351,6 +351,7 @@ def _uninstall253():
 # ── 4. the tab and its text ───────────────────────────────────────────────────────────────────────
 def _tab253(ids):
     _host253()
+    _p9_quiet_lookups()   # the page's background timezone / public-IP reads; the caller restores
     page = _p9_client(P9_ADMIN).get("/server/%d/files" % ids[0]).get_data(as_text=True)
     other = _p9_client(P9_ADMIN).get("/server/%d/files" % ids[1]).get_data(as_text=True)
     check("tab: a CoD4 server's Files & Config page has the Add-ons tab and its script; a TF2 server's has not",
