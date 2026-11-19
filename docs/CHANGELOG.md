@@ -46,11 +46,26 @@ dated section below lists what that day's releases changed, newest first; the nu
   reload now shows the right note.
 - **More Backups and Files & Config messages are translated.** Fifteen status messages, such as "Use at least
   15 characters", are now in Spanish and French.
+- **A root cron job written with `\%` runs whole.** A command typed the way crontabs write a percent sign
+  (`date +\%F`) was saved so that cron cut the job at that `%` and ran only the part before it, while the
+  page showed the command unchanged. It now runs as a `%`, and the page shows what cron runs. A command with
+  two backslashes in a row is refused, since Debian's and Ubuntu's cron reads them as one and other crons
+  as two; a job from a shell that has them, or a bare `%` feeding the command its input, is shown with a
+  note and can be deleted but not edited on the page.
 - **The Firewall page shows a rule's logging again.** A rule with logging shows ufw's `log` or `log-all` beside where it applies, and is no longer shown merged
   with the same rule without logging.
 
 ### Security
 
+- **A LinuxGSM start line that repeats a long setting no longer stalls the panel.** A start line naming
+  one long setting many times was built in full on every world reset check: about 20 KB of config made a
+  16 MB string and took seconds, holding up every other page, and more could run the panel out of memory.
+  Start parameters longer than a server can be started with (131,072 characters, before or after the
+  settings are put in) are now refused at once, and building them stops at that size.
+- **World reset sees two more ways a LinuxGSM config can change a setting.** A value of just `--port` (or
+  `++port`) that another line evaluates as arithmetic, and bash 5.3's `${ command; }` and `${| command; }`,
+  which run in the config's own shell, can each change a setting with no `port=` in sight. The world reset
+  now counts such a line as possibly setting it and refuses to judge the world from that setting.
 - **A failed SFTP key signature is logged and counted.** A sign-in that offers a registered key with a
   signature that does not verify is now written to the audit log and auth.log at once and counts against the
   address, like a wrong password; asking whether a key would do is not counted.

@@ -47,6 +47,7 @@ THE WORLD, per game (LinuxGSM master, 2026-11; Minecraft Wiki "Server.properties
   <-savedir>/worlds_local/<-world>/ (vh_layout), Project Zomboid's ~/Zomboid/Saves/Multiplayer/
   <-servername>/ (pz_layout). The plan's "base" is that folder, relative to the account's home.
 """
+import itertools
 import re
 import shlex
 
@@ -244,18 +245,25 @@ _WWR_ARITH = re.compile(r"\$\(\(|\$\[|\$\{\$?[^}$]*\[|\$\{\$?[^}:$]*:(?![-=+?])"
 _WWR_WORD = re.compile(r"[A-Za-z0-9_]+")
 # `${key=…}` / `${key:=…}` in a value: the names it sets.
 _WWR_DEFAULT_SET = re.compile(r"\$\{([A-Za-z0-9_]+):?=")
-# Assignment-shaped text in a value (`key=2`, `key+=1`, `key++`, `--key`): the names it would set if another
-# line evaluated it as arithmetic. The lookbehind starts a name only at a name's first character.
-_WWR_ASSIGNED = re.compile(r"(?<![A-Za-z0-9_])(?:\+\+|--)?([A-Za-z0-9_]+)[ \t]*"
-                           r"(?:\+\+|--|(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=))")
+# Assignment-shaped text in a value (`key=2`, `key+=1`, `key++`, `--key`, `++ key`): the names it would set
+# if another line evaluated it as arithmetic. The lookbehind starts a name only at a name's first character.
+# A prefix `--`/`++` needs nothing after the name: a value of only `--port`, evaluated as arithmetic by
+# another line, decrements port (review 1121 A04); bash allows blanks between the operator and the name.
+# The operator after a name is only looked at, never taken, so `x --port` names both x and port.
+_WWR_ASSIGNED = re.compile(r"(?:\+\+|--)[ \t]*([A-Za-z0-9_]+)|(?<![A-Za-z0-9_])([A-Za-z0-9_]+)(?=[ \t]*"
+                           r"(?:\+\+|--|(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)))")
+# Bash 5.3's `${ cmd; }` and `${| cmd; }` (a blank, tab, newline or `|` straight after `${`) run the command in
+# the CURRENT shell, so it can set any variable (`${ printf -v port %s 2; }`) with no `key=` text at all.
+_WWR_FUNSUB = re.compile(r"\$\{[ \t\n|]")
 
 
 class _WwrLine:
     """What _wwr_cfg_key needs from one non-comment config line, worked out once for every key it names.
 
     `other` is the key of another key's plain line (_WWR_OTHER_LINE), else None; `opaque` that its value
-    holds arithmetic (_WWR_ARITH) or `${!` (a variable reached through another's value), so it may set
-    any key; `sets` the names its value sets with `${key:=…}` or holds as assignment-shaped text.
+    holds arithmetic (_WWR_ARITH), `${!` (a variable reached through another's value) or bash 5.3's
+    `${ cmd; }` / `${| cmd; }` (_WWR_FUNSUB), so it may set any key; `sets` the names its value sets with
+    `${key:=…}` or holds as assignment-shaped text.
     """
 
     __slots__ = ("text", "other", "opaque", "sets")
@@ -265,8 +273,10 @@ class _WwrLine:
         m = _WWR_OTHER_LINE.match(text)
         self.other = m.group(1) if m else None
         value = m.group(2) if m else ""
-        self.opaque = bool(m) and (bool(_WWR_ARITH.search(value)) or "${!" in value)
-        self.sets = (set(_WWR_DEFAULT_SET.findall(value)) | set(_WWR_ASSIGNED.findall(value))) if m else set()
+        self.opaque = bool(m) and (bool(_WWR_ARITH.search(value)) or "${!" in value
+                                   or bool(_WWR_FUNSUB.search(value)))
+        self.sets = (set(_WWR_DEFAULT_SET.findall(value)) | {a or b for a, b in _WWR_ASSIGNED.findall(value)}
+                     if m else set())
 
     def names_only(self, key):
         """See _wwr_names_only."""
@@ -277,10 +287,12 @@ def _wwr_names_only(line, key):
     """Whether `line` is another key's plain line in which `key` is only named or expanded, never set.
 
     Inside double quotes bash sets a variable through `${key:=…}` / `${key=…}` and through anything
-    evaluated as arithmetic (_WWR_ARITH), where `key=2`, `key+=1` or `key++` sets it; a command
-    substitution runs in a subshell and sets nothing here. So the line counts only with neither,
-    no `${!ref…}` (a variable reached through another's value), and no assignment-shaped `key=`
-    text: such a value, evaluated as arithmetic by another line, would set the key there.
+    evaluated as arithmetic (_WWR_ARITH), where `key=2`, `key+=1`, `key++` or `--key` sets it; a
+    `$(…)` command substitution runs in a subshell and sets nothing here, but bash 5.3's `${ cmd; }`
+    and `${| cmd; }` run in the current shell and may set anything (_WWR_FUNSUB). So the line counts
+    only with none of those, no `${!ref…}` (a variable reached through another's value), and no
+    assignment-shaped `key=` or `--key` text: such a value, evaluated as arithmetic by another line,
+    would set the key there.
     A plain mention (`-port ${port}`, the option named like its key) is only text.
     """
     return _WwrLine(line).names_only(key)
@@ -648,6 +660,17 @@ _WWR_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 _WWR_EXPANSION = re.compile(r"\$\{(%s):\+((?:[^${}]|\$\{%s\})*)\}|\$\{(%s)\}|\$(%s)" % ((_WWR_NAME,) * 4))
 _WWR_SIMPLE_REF = re.compile(r"\$\{(%s)\}" % _WWR_NAME)
 _WWR_ODD_EXPANSION = i18n.Sentence("the start parameters use a shell expansion the panel does not read")
+# LinuxGSM hands "${preexecutable} ${executable} ${startparameters}" to tmux as ONE argument, and Linux refuses
+# an argument longer than MAX_ARG_STRLEN (32 pages, 131,072 bytes), so no longer start string can start. Every
+# expansion copies a value the game account writes, so the expanded text grew as references x value length:
+# 20 KB of config built a 16 MB string and took seconds on the wipe ticker's greenlet, more ran out of
+# memory (review 1121 A04). The start parameters are refused past this bound before anything is expanded,
+# and the expansion stops as soon as its result passes it, so the work is linear in the config whatever
+# it holds (OWASP Denial of Service Cheat Sheet, Input validation: limit the input's size, no
+# input-based resource allocation; cheap validation first). Characters, never more than the bytes.
+_WWR_START_MAX = 131072
+_WWR_TOO_LONG = i18n.Sentence("the start parameters, with the settings they name put in, are longer than a server "
+                              "can be started with")
 
 
 def _wwr_refs(text):
@@ -661,13 +684,38 @@ def _wwr_refs(text):
     return names
 
 
-def _wwr_expand(text, env):
-    """`text` with its expansions put in from `env` (unset is empty), each replaced once, never re-read."""
-    def one(m):
-        if m.group(1):
-            return _WWR_SIMPLE_REF.sub(lambda r: env.get(r.group(1), ""), m.group(2)) if env.get(m.group(1)) else ""
-        return env.get(m.group(3) or m.group(4), "")
-    return _WWR_EXPANSION.sub(one, text)
+def _wwr_pieces(m, env):
+    """The pieces one _WWR_EXPANSION match `m` expands to from `env` (unset is empty), never re-read."""
+    if not m.group(1):
+        yield env.get(m.group(3) or m.group(4), "")
+        return
+    if not env.get(m.group(1)):
+        return
+    word, at = m.group(2), 0
+    for r in _WWR_SIMPLE_REF.finditer(word):
+        yield word[at:r.start()]
+        yield env.get(r.group(1), "")
+        at = r.end()
+    yield word[at:]
+
+
+def _wwr_expand(text, env, limit=_WWR_START_MAX):
+    """`text` with its expansions put in from `env`, each replaced once; None when that passes `limit` characters.
+
+    Built piece by piece against the bound, never as a whole first (_WWR_START_MAX).
+    """
+    out, size, at = [], 0, 0
+    for m in _WWR_EXPANSION.finditer(text):
+        for piece in itertools.chain((text[at:m.start()],), _wwr_pieces(m, env)):
+            size += len(piece)
+            if size > limit:
+                return None
+            out.append(piece)
+        at = m.end()
+    if size + len(text) - at > limit:
+        return None
+    out.append(text[at:])
+    return "".join(out)
 
 
 def _wwr_env(texts, names, base):
@@ -686,6 +734,8 @@ def _wwr_env(texts, names, base):
             return None, i18n.Sentence("the LinuxGSM setting {key} expands another setting, which the panel does not "
                                        "follow", key=key)
         env[key] = _wwr_expand(value, base)
+        if env[key] is None:
+            return None, _WWR_TOO_LONG
     return env, None
 
 
@@ -706,13 +756,18 @@ def start_words(texts, user, selfname):
     if why is not None:
         return None, why
     raw = "%s %s" % (values["startparameters"], values["extraparams"])
+    if len(raw) > _WWR_START_MAX:
+        return None, _WWR_TOO_LONG
     names = _wwr_refs(raw)
     if names is None:
         return None, _WWR_ODD_EXPANSION
     env, why = _wwr_env(texts, names, base)
     if why is not None:
         return None, why
-    return _wwr_split(_wwr_expand(raw, env))
+    expanded = _wwr_expand(raw, env)
+    if expanded is None:
+        return None, _WWR_TOO_LONG
+    return _wwr_split(expanded)
 
 
 def _wwr_split(text):
