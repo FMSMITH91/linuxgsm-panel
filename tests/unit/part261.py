@@ -495,7 +495,7 @@ def _databases261():
     return _run249("step-up (node): the database pages", prog)
 
 
-_TOP261 = _top_level261()
+_top_level261()
 _DB261 = _databases261()
 if _DB261 is not None:
     eq("step-up (node): the database server choice (Save, Clear), the Databases tab's reset, delete and restore, the "

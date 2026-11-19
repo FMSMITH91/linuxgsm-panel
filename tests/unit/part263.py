@@ -55,6 +55,7 @@ from panel.security import account_guard as _ag263, privileged as _pv263
 from panel.services import addons as _ad263, game_config_form as _gcf263, host_reboot as _hr263
 from panel.services import reboot_words as _rw263, sftp_backend as _bk263, sftp_broker as _br263
 from panel.services import sftp_common as _sc263, sftp_files as _sf263, sftp_server as _ss263
+from eventlet.timeout import Timeout as _GreenTimeout263   # noqa: E402 - with the other imports above
 # A stored hash no password can match (a test user that signs in only by key).
 _NO_LOGIN263 = "!"
 
@@ -82,9 +83,8 @@ def _join263(thread, seconds):
     """Wait for `thread` at most `seconds` (eventlet's green join raises its Timeout instead of returning)."""
     try:
         thread.join(seconds)
-    except BaseException as exc:  # noqa: BLE001 - only the green join's Timeout is taken here
-        if type(exc).__name__ != "Timeout":
-            raise
+    except _GreenTimeout263:
+        pass   # still running after `seconds`: the caller checks is_alive()
 
 
 def _end_link263(panel, ours, theirs, rf):
