@@ -28,7 +28,15 @@ from unit.part249 import _DOM249, _SETTLE249, _cut249, _js249
 _PANEL265 = _js249("panel.js")
 _CD265 = "\n".join(_cut249(_PANEL265, head) for head in (
     "function _cdHost(", "function _cdGateConfirm(", "window.confirmDialog = function("))
-_CD_STUBS265 = "function escapeHtml(s){ return String(s); } function _cdInputHtml(){ return ''; } function _cdFillBody(){}\n"
+_CD_STUBS265 = r"""
+function escapeHtml(s){ return String(s); } function _cdInputHtml(){ return ''; } function _cdFillBody(){}
+// Markup and text replace each other, as in a browser; the dialog's OK button starts with its label.
+Object.defineProperty(El.prototype, 'innerHTML', {get(){ return this._html || ''; }, set(v){ this._html = String(v); this._text = ''; }});
+Object.defineProperty(El.prototype, 'textContent', {get(){ return this._text; }, set(v){ this._text = String(v); this._html = ''; this.children = []; }});
+const _q265 = El.prototype.querySelector;
+El.prototype.querySelector = function(sel){ const had = sel in this._q, e = _q265.call(this, sel);
+  if (!had && sel === '[data-cd="ok"]') e.textContent = 'OK-LABEL'; return e; };
+"""
 _TYPED265 = "the-other-panels-phrase"   # what the node test types into the backup passphrase field
 
 
@@ -51,8 +59,8 @@ const input = ov.querySelector('#cd-input'), ok = ov.querySelector('[data-cd="ok
 input.value = '""" + _TYPED265 + r"""'; (input.listeners.input || []).forEach(f => f());
 const typed = !ok.disabled;
 ok.onclick();
-const after = {disabled: ok.disabled, spinner: /spinner/.test(ok.innerHTML), value: input.value, open: !ov.removed,
-               sent: sent.length};
+const after = {disabled: ok.disabled, spinner: /spinner/.test(ok.innerHTML), label: ok.textContent, value: input.value,
+               open: !ov.removed, sent: sent.length};
 mode.go = true; ok.onclick();
 console.log(JSON.stringify({typed, after, sent}));
 """)
@@ -65,7 +73,7 @@ if _pc265 is not None:
        "Restore pressable again (not disabled, no spinner) and the typed passphrase kept, nothing sent; confirming "
        "then sends the restore with that passphrase",
        (_pc265.get("typed"), _pc265.get("after"), _pc265.get("sent")),
-       (True, {"disabled": False, "spinner": False, "value": _TYPED265, "open": True, "sent": 0},
+       (True, {"disabled": False, "spinner": False, "label": "OK-LABEL", "value": _TYPED265, "open": True, "sent": 0},
         [["/api/panel/backup/restore", {"name": "other.tar.gz", "passphrase": _TYPED265}]]))
 
 
@@ -78,7 +86,7 @@ const ov = document.body.children[document.body.children.length - 1];
 const input = ov.querySelector('#cd-input'), ok = ov.querySelector('[data-cd="ok"]');
 input.value = 'x'; (input.listeners.input || []).forEach(f => f()); ok.onclick();
 input.value = ''; api.ready();
-console.log(JSON.stringify({disabled: ok.disabled, spinner: /spinner/.test(ok.innerHTML)}));
+console.log(JSON.stringify({disabled: ok.disabled, spinner: /spinner/.test(ok.innerHTML), label: ok.textContent}));
 """)
     return _node221("confirm dialog (node): ready with an empty field", prog)
 
@@ -86,7 +94,7 @@ console.log(JSON.stringify({disabled: ok.disabled, spinner: /spinner/.test(ok.in
 _re265 = _ready_empty265()
 if _re265 is not None:
     eq("confirm dialog (node): api.ready() with the field emptied meanwhile drops the spinner but keeps Confirm "
-       "disabled, as typing nothing would", _re265, {"disabled": True, "spinner": False})
+       "disabled, as typing nothing would", _re265, {"disabled": True, "spinner": False, "label": "OK-LABEL"})
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

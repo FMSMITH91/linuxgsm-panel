@@ -482,7 +482,7 @@ window.confirmDialog = function(opts){
   _cdHost().appendChild(ov);
   _cdFillBody(ov, opts);
   var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
-      errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
+      errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML, okText = okBtn.textContent;
   // Hidden until api.error shows it (display ''): set through the CSSOM, as a style attribute in
   // the markup above would be refused by the page policy.
   if (errEl) errEl.style.display = 'none';
@@ -502,7 +502,8 @@ window.confirmDialog = function(opts){
     busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; },
     // Back to ready with what was typed kept: for a caller whose own step was abandoned (a password
     // dialog on top of this one, cancelled), so Confirm can be pressed again. error() clears the field.
-    ready: function(){ okBtn.disabled = !!(input && !input.value); okBtn.innerHTML=okHtml; }
+    // The label is plain text (escaped into the markup above), so it goes back as text.
+    ready: function(){ okBtn.disabled = !!(input && !input.value); okBtn.textContent = okText; }
   };
   _cdGateConfirm(opts, input, okBtn, errEl);
   function submit(){
