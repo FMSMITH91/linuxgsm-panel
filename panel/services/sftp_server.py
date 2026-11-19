@@ -693,13 +693,13 @@ class Service:
     def _app(self):
         if self._db_app is None:
             from flask import Flask
-            from panel.core.config import DB_PATH
+            from panel.core.config import DB_ENGINE_OPTIONS, DB_PATH
             from panel.db.models import db
             from panel.ops.ssh_manager import _core
             app = Flask("panel-sftp")
             app.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///%s" % DB_PATH,
                               SQLALCHEMY_TRACK_MODIFICATIONS=False,
-                              SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": 15}})
+                              SQLALCHEMY_ENGINE_OPTIONS=dict(DB_ENGINE_OPTIONS))
             db.init_app(app)
             _core.register_pin_app(app)
             self._db_app = app

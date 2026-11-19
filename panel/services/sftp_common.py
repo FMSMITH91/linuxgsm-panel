@@ -178,6 +178,12 @@ def bind_addresses(choice, tailscale_ips, ipv6):
     return []
 
 
+def listen_text(addr, port):
+    """`addr:port` as a client is given it: an IPv6 address in brackets (`[::]:2222`, RFC 3986 3.2.2)."""
+    addr = str(addr)
+    return "[%s]:%s" % (addr, port) if ":" in addr else "%s:%s" % (addr, port)
+
+
 def _tailnet_addresses(ips):
     """The addresses in `ips` that are inside Tailscale's ranges, IPv4 first, each once."""
     out = []

@@ -16,7 +16,8 @@ from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
-    MIN_PORT, SAFE_LABEL_RE, _port_or, host_key_fingerprint_arg, host_key_sha256, ip_address_or_none)
+    MIN_PORT, SAFE_LABEL_RE, _port_or, host_key_fingerprint_arg, host_key_sha256, ip_address_or_none,
+    key_text_problem)
 from panel.core.panel_state import (forget_rows)
 from panel.routes import databases as _dbr
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
@@ -249,6 +250,10 @@ def _register_remote_list(app):
                 or _add_remote_target_error(is_local, host, auth_method))
         if _bad:
             return _form_err(_bad, "manage_remotes")
+        # Key text pasted into the key PATH field is refused before anything opens it or logs it.
+        _key_text = key_text_problem(auth_method, credential)
+        if _key_text:
+            return _form_err(i18n.tr(_key_text), "manage_remotes")
         _refused = _delegated_add_refusal(is_local, auth_method)
         if _refused:
             return _form_err(_refused, "manage_remotes", code=403)
@@ -326,6 +331,12 @@ def _register_remote_edit(app):
         # the row, change its SSH user or turn its sudo off — the row every panel-host action and
         # every game server on this machine runs through.
         remote = get_host_remote(remote_id)
+        # Key text in the key PATH field: refused before any field of the row changes, and never
+        # repeated (validation.key_text_problem).
+        _key_text = key_text_problem(_edited("auth_method", remote.auth_method),
+                                     request.form.get("credential", "").strip())
+        if _key_text:
+            return _form_err(i18n.tr(_key_text), "manage_remotes")
         # A BLANK field is not an edit. `.get(key, default)` only falls back when the key is
         # ABSENT, and the edit form posts all three of these every time — without `required`,
         # unlike the add form above it (panel/templates/manage_remotes.html:25/29 have it, :193/:197 do

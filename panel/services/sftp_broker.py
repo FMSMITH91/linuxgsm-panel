@@ -213,17 +213,21 @@ def _h_ready(app, req, spawn):
     bound = req.get("bound") or []
     if bound:
         _set_status("running", bound=bound, detail=req.get("error") or "")
-        _f2b_follow(app)
+        f2b_follow(app)
     else:
         _set_status("error", error="The SFTP service could not listen on its address.", detail=req.get("error") or "")
     return {"ok": True}
 
 
-def _f2b_follow(app):
-    """Point the panel's fail2ban jail at the SFTP port as well, when it listens on every address."""
-    if spawn_choice() != sc.BIND_ALL:
-        return
+def f2b_follow(app):
+    """Rewrite the panel's fail2ban jail for the SFTP settings as saved (in a thread; best-effort).
 
+    On every start and every Settings save, not only for "all addresses": the jail lists the SFTP
+    port only while that is the choice (system_ops._panel_f2b_sftp_port), so leaving it, or turning
+    the service off, has to rewrite the jail too. Only "all" used to: the port stayed listed until
+    something else rewrote the jail. An unchanged jail is left as it is (ensure_panel_fail2ban).
+    Returns the started thread.
+    """
     def _run():
         try:
             from app import _apply_whitelist_to_fail2ban
@@ -231,13 +235,9 @@ def _f2b_follow(app):
                 _apply_whitelist_to_fail2ban()
         except Exception:  # noqa: BLE001 - the jail is best-effort, as at boot
             _log.debug("fail2ban update for SFTP failed", exc_info=True)
-    threading.Thread(target=_run, name="sftp-f2b", daemon=True).start()
-
-
-def spawn_choice():
-    """The address choice the running service was started with, or None."""
-    spawn = _STATE.get("spawn") or {}
-    return spawn.get("choice")
+    worker = threading.Thread(target=_run, name="sftp-f2b", daemon=True)
+    worker.start()
+    return worker
 
 
 def _ip(req):

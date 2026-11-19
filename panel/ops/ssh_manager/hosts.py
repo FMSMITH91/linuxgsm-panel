@@ -6786,10 +6786,13 @@ def _ssh_test_failure(exc, host, port):
         return f"Connection to {host}:{port} timed out. Is the host reachable?"
     if isinstance(exc, socket.gaierror):
         return f"Cannot resolve hostname: {host}"
+    if isinstance(exc, _core.KeyTextNotPath):
+        return i18n.Sentence(str(exc))   # the panel's own fixed sentence, in the viewer's language
     # Don't surface the raw exception text to the browser — it can carry internal detail
-    # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
-    # in the message — exc_info already carries the detail), show a generic message.
-    _core._log.warning("ssh_test_connection failed", exc_info=exc)
+    # (key paths, host internals). Nor the log: an OSError from opening the key repeats the "path",
+    # which was the whole private key when key text reached it, and a traceback (exc_info) printed
+    # it into the journal. A fixed sentence and the exception's class only (_core.exc_label).
+    _core._log.warning("ssh_test_connection failed: %s", _core.exc_label(exc))
     return "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 

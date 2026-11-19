@@ -8,7 +8,7 @@
     <div class="small mb-2" id="sftp-state">
       {% if not sf.s.enabled %}<span class="badge bg-secondary">Off</span> Users cannot sign in to SFTP.
       {% elif sf.status.state == 'running' %}<span class="badge bg-success">On</span> <span>Listening on</span>
-        {% for b in sf.status.bound %}<code data-no-i18n>{{ b[0] }}:{{ b[1] }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        {% for b in sf.listening %}<code data-no-i18n>{{ b }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
       {% elif sf.status.state == 'starting' %}<span class="badge bg-info">Starting</span>
       {% elif sf.status.state == 'waiting' %}<span class="badge bg-warning text-dark">Waiting</span> <span>{{ t(sf.status.error) }}</span>
       {% else %}<span class="badge bg-danger">Not running</span> <span>{{ t(sf.status.error) }}</span>{% endif %}

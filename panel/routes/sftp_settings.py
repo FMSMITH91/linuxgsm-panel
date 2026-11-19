@@ -9,7 +9,7 @@ Account > SFTP: each user's own public keys. Adding one asks a stale sign-in for
 (OWASP Authentication Cheat Sheet, "Re-authentication After Risk Events": a new credential is one)
 and is audited; so is removing one.
 """
-from flask import flash, jsonify, redirect, request, url_for
+from flask import current_app, flash, jsonify, redirect, request, url_for
 from flask_login import current_user, login_required
 
 from panel.core import i18n
@@ -50,6 +50,9 @@ def register(app):
             sc.ensure_host_key(update_config, load_config, encrypt_secret, decrypt_secret)
         log_action(current_user, "settings_update", target="panel", detail=change_note(before, after))
         sftp_broker.restart()
+        # The jail lists the SFTP port only while it listens on every address; off, or another
+        # address, has no start to rewrite it from (sftp_broker.f2b_follow).
+        sftp_broker.f2b_follow(current_app._get_current_object())
         flash(i18n.tr("SFTP settings saved."), "success")
         for note in notes(after):
             flash(i18n.tr(note), "warning")
@@ -136,11 +139,13 @@ def settings_card():
     s = sc.settings(cfg)
     ts_ips = sftp_broker.tailscale_ips()
     stored = cfg.get(sc.HOST_KEY_KEY) or ""
+    status = sftp_broker.status()
     return {
         "s": s, "bind": s["bind"] or sc.default_bind(bool(ts_ips)),
         "tailscale_up": bool(ts_ips), "tailscale_ip": (sc.bind_addresses(sc.BIND_TAILSCALE, ts_ips, False)
                                                        or [""])[0],
-        "ipv6": sc.host_has_ipv6(), "status": sftp_broker.status(),
+        "ipv6": sc.host_has_ipv6(), "status": status,
+        "listening": [sc.listen_text(addr, port) for addr, port in status.get("bound") or []],
         "fingerprint": sc.host_fingerprint(decrypt_secret(stored)) if stored else "",
         "default_port": sc.DEFAULT_PORT, "recommended_cap": sc.RECOMMENDED_CAP_MB,
         "recommended_idle": sc.RECOMMENDED_IDLE_MINUTES, "idle_outside": sc.idle_outside_owasp(s["idle_min"]),

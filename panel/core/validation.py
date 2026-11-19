@@ -61,6 +61,33 @@ SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}\Z""")
 # `is_local`, never by an edit.
 EDITABLE_AUTH_METHODS = ("key", "password", "tailscale")
 
+# A KEY login's credential is the PATH of a private key file on the panel host, never the key's
+# text. Pasting the key itself is an easy mistake, and it used to reach paramiko as a file name:
+# open() failed, and the FileNotFoundError, whose message is the "path", i.e. the whole private
+# key, was logged with its traceback into the system journal. OWASP Logging Cheat Sheet, "Data to
+# exclude": encryption keys and other primary secrets are not recorded. So text that cannot be a
+# path is refused before anything opens it, and the refusal never repeats it.
+_PATH_MAX = 4096    # Linux PATH_MAX, terminating NUL included
+_NAME_MAX = 255     # Linux NAME_MAX: the longest single path component
+KEY_TEXT_REFUSED = ("The key field takes the path of a private key file on the panel host (for "
+                    "example /home/panel/.ssh/id_ed25519), not the key itself. Nothing was sent or "
+                    "saved. Put the key in a file the panel's account can read and enter its path.")
+
+
+def key_text_problem(auth_method, credential):
+    """KEY_TEXT_REFUSED when a key login's credential looks like key text, not a path; else None.
+
+    Key text: a PEM or OpenSSH header (`-----BEGIN`), a line break or any other control character,
+    or a length no file name can have. A password is not judged here: any text may be one.
+    """
+    if auth_method != "key" or not credential:
+        return None
+    if "-----BEGIN" in credential or any(ord(c) < 32 or ord(c) == 127 for c in credential):
+        return KEY_TEXT_REFUSED
+    if len(credential) >= _PATH_MAX or any(len(p) > _NAME_MAX for p in credential.split("/")):
+        return KEY_TEXT_REFUSED
+    return None
+
 # ── IP addresses and networks ─────────────────────────────────────────────
 # ipaddress parses an IPv6 ZONE ID (the scope after '%') and keeps it VERBATIM. 'fe80::1%x y',
 # 'fe80::1%$(id)' and 'fe80::1%' + a newline + 'FAKE' all parse, and str() hands the text back with

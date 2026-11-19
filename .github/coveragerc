@@ -1,0 +1,26 @@
+# coverage.py settings for the coverage job (.github/workflows/ci.yml, step "Measure"), passed with
+# --rcfile. Kept here, not as .coveragerc in the repository root (each root entry is pinned).
+#
+# patch = subprocess measures the Python processes the suites start, as well as the suite itself:
+# the SFTP service runs as its own process (panel/services/sftp_broker.py starts
+# `python -m panel.services.sftp_server`), and without this nothing of it was measured. coverage.py
+# passes these settings to each child in COVERAGE_PROCESS_CONFIG, with data_file and source made
+# absolute, so a child started in another directory still writes beside the others for
+# `coverage combine`. The patch needs a configuration FILE (not command-line options) and parallel
+# data files, which it turns on itself; parallel is set here as well so it reads as it runs.
+# patch = _exit: the SFTP service ends with os._exit(0) (sftp_server._die), which skips the exit
+# handlers that save a process's data; the patch saves it first.
+# coverage.py 7.17.2 docs: "Measuring subprocesses" (subprocess.html) and "[run] patch" (config.html).
+#
+# omit: "*/" rather than "./", because a child resolves a relative pattern against its own working
+# directory; the repository has no other tests/, tools/ or .venv/ below its root.
+[run]
+source = .
+omit =
+    */tests/*
+    */tools/*
+    */.venv/*
+parallel = true
+patch =
+    subprocess
+    _exit

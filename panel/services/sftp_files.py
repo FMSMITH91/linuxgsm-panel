@@ -499,7 +499,8 @@ class WriteHandle(_Handle):
         why = self._finish_on_host(self.failed)
         ok, rel = why is None, self.info["rel"]
         size = len(self.stage) if self.stage is not None else self.high
-        detail = "%s (%d bytes)%s" % (rel, size, " (overwrote)" if self.info["existed"] else "")
+        # "(overwrote)" only when it did: a refused upload left the file as it was.
+        detail = "%s (%d bytes)%s" % (rel, size, " (overwrote)" if ok and self.info["existed"] else "")
         self.vfs.audit(self.target, "upload_file", detail if ok else "refused: %s: %s" % (detail, why), success=ok)
         return None if ok else (SFTP_FAILURE, why or "The upload failed.")
 

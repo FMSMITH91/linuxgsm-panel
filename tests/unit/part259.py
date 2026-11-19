@@ -13,6 +13,11 @@
    folder lists only the servers the user may edit; a permission removed mid-session; paths that try
    to leave a server's folder (.., absolute, a link inside pointing out); the panel's file-name
    rules; the size cap; the audit rows; and nothing listening once it is off.
+4. The card shows an IPv6 listener as [addr]:port; the fail2ban jail is rewritten on every start and
+   save, so the SFTP port leaves it with "all addresses".
+5. Key TEXT pasted into a host's key PATH field (Remotes > Add and Edit, the setup wizard, a row
+   already holding it, the Test button, every connection) is refused with a fixed sentence and never
+   reaches a log record, traceback, flash or response (OWASP Logging Cheat Sheet, "Data to exclude").
 
 HOW IT RUNS. Routes on part12's app. The service is started as it is in production (sftp_broker.
 run_once: `python -m panel.services.sftp_server` with a socket pair), bound to 127.0.0.1 on a free
@@ -179,6 +184,11 @@ eq("sftp sign-in: keys only under every choice by default; the password and code
 _restarts259 = []
 _REAL_RESTART259 = _br259.restart
 _p9_patch(_br259, "restart", lambda: _restarts259.append(1))
+# The jail rewrite runs the root helper: recorded here, and the real one checked in section 4 with
+# the app's jail writer stubbed.
+_follows259 = []
+_REAL_F2B_FOLLOW259 = _br259.f2b_follow
+_p9_patch(_br259, "f2b_follow", lambda app: _follows259.append(app is not None))
 _p9_patch(_br259, "tailscale_ips", lambda: [])
 _A259 = _p9_client(P9_ADMIN)
 
@@ -743,6 +753,10 @@ if _E2E_UP259 and _s is not None:
               and any("big.bin" in x[2] and "size limit" in x[2] and not x[1] for x in _rows["upload_file"])
               and any("upload.bin -> maps/u.bin" in x[2] for x in _rows["rename_file"]), repr(_rows))
         eq("sftp writes: a read is not audited", _audits259("read_file", _since_w), [])
+        _refused_up259 = [x[2] for x in _rows["upload_file"] if not x[1]]
+        eq("sftp writes: a refused upload's audit row never says it overwrote the file (the overwrite was refused)",
+           (any("upload.bin" in x for x in _refused_up259), [x for x in _refused_up259 if "(overwrote)" in x]),
+           (True, []))
 
     except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
         check("sftp end to end: the write checks ran to their end", False, repr(_exc259))
@@ -956,6 +970,194 @@ if _E2E:
                                                                  "p259_off", "p259_noview"))).all():
             _db259.session.delete(_row)
         _db259.session.commit()
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. Part 2: the card's IPv6 listener, the jail on every bind change
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+eq("sftp card: an IPv6 listener is shown in brackets, an IPv4 one as it is",
+   [_sc259.listen_text("::", 2222), _sc259.listen_text("2001:db8::10", 2201), _sc259.listen_text("127.0.0.1", 2222)],
+   ["[::]:2222", "[2001:db8::10]:2201", "127.0.0.1:2222"])
+_put_cfg259(sftp_enabled=True, sftp_bind="all", sftp_port=2222)
+_p9_patch(_br259, "status", lambda: {"state": "running", "bound": [["0.0.0.0", 2222], ["::", 2222]],  # nosec B104
+                                      "error": "", "detail": "", "since": 0.0})
+_html_v6_259 = _A259.get("/settings").get_data(as_text=True)
+_state_v6_259 = _html_v6_259.split('id="sftp-state"', 1)[-1].split("</div>", 1)[0]
+eq("sftp card: ...and the Settings page says so (`[::]:2222`, never `:::2222`)",
+   ("<code data-no-i18n>[::]:2222</code>" in _state_v6_259, ":::2222" in _state_v6_259,
+    "<code data-no-i18n>0.0.0.0:2222</code>" in _state_v6_259), (True, False, True))
+
+# Every save rewrites the jail, whichever address it chose: leaving "all addresses" has to take the
+# SFTP port out again (it stayed listed until something else rewrote the jail).
+_follows259.clear()
+_save259(sftp_bind="loopback")
+_flashed259()
+eq("sftp fail2ban: a save that leaves every address rewrites the jail too", _follows259, [True])
+_jail_calls259 = []
+import app as _app259   # noqa: E402 - the module the broker imports the jail writer from
+_p9_patch(_app259, "_apply_whitelist_to_fail2ban", lambda: _jail_calls259.append(_sc259.settings(
+    _cfg259.load_config())["bind"]) or (True, "jail ok"))
+_put_cfg259(sftp_enabled=True, sftp_bind="loopback")
+_REAL_F2B_FOLLOW259(_p9).join(15)
+_put_cfg259(sftp_enabled=False, sftp_bind="all")
+_REAL_F2B_FOLLOW259(_p9).join(15)
+eq("sftp fail2ban: the jail is rewritten on a start or save under every choice, off included (not only 'all')",
+   _jail_calls259, ["loopback", "all"])
+_follows259.clear()
+_br259._h_ready(_p9, {"bound": [["127.0.0.1", 2222]]}, {})
+eq("sftp fail2ban: ...and a start on 127.0.0.1 asks for it", _follows259, [True])
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 5. Key TEXT in a host's key PATH field never reaches a log line, a traceback, a flash or a response
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Remotes > Add takes the PATH of a key file. Pasted key text used to reach paramiko as a file name,
+# and the FileNotFoundError naming it, the whole private key, was logged with its traceback.
+# OWASP Logging Cheat Sheet, "Data to exclude": encryption keys and other primary secrets.
+import traceback as _tb259   # noqa: E402
+from types import SimpleNamespace as _NS259   # noqa: E402
+from cryptography.hazmat.primitives import serialization as _ser259   # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import ed25519 as _ed259   # noqa: E402
+from panel.core import validation as _val259   # noqa: E402
+from panel.db.models import RemoteServer as _RS259   # noqa: E402
+from panel.ops.ssh_manager import _core as _core259, hosts as _hosts259   # noqa: E402
+from panel.routes import route_helpers as _rh259   # noqa: E402
+
+_KEY_TEXT259 = _ed259.Ed25519PrivateKey.generate().private_bytes(
+    _ser259.Encoding.PEM, _ser259.PrivateFormat.OpenSSH, _ser259.NoEncryption()).decode("ascii").strip()
+_KEY_BODY259 = [ln for ln in _KEY_TEXT259.splitlines() if not ln.startswith("-----")]
+# What would give the key away: every 12 characters of its body, on any line or across them.
+_KEY_FLAT259 = "".join(_KEY_BODY259)
+_KEY_BITS259 = [_KEY_FLAT259[i:i + 12] for i in range(0, len(_KEY_FLAT259) - 12, 6)]
+_KEY_ONE_LINE259 = _KEY_TEXT259.replace("\n", "")   # what a browser's one-line text box keeps of a paste
+
+
+def _leaks259(*texts):
+    """The key fragments found in `texts` (none is the answer wanted)."""
+    blob = "\n".join(t if isinstance(t, str) else repr(t) for t in texts)
+    flat = blob.replace("\n", "").replace("\\n", "")
+    return [b for b in _KEY_BITS259 if b in blob or b in flat]
+
+
+class _Records259(_logging259.Handler):
+    """Every record, formatted with its traceback, as the journal would get it."""
+
+    def __init__(self):
+        """Every level, the lowest included."""
+        super().__init__(level=1)
+        self.lines = []
+
+    def emit(self, record):
+        """Keep the record as one formatted text, its traceback included."""
+        self.lines.append(_logging259.Formatter("%(name)s %(levelname)s %(message)s").format(record))
+
+
+_rec259 = _Records259()
+_root259 = _logging259.getLogger()
+_root_level259 = _root259.level
+_root259.addHandler(_rec259)
+_root259.setLevel(1)
+try:
+    eq("key text: the check refuses a pasted key (header, line breaks, one line), and a path or password passes",
+       [_val259.key_text_problem("key", _KEY_TEXT259) is not None,
+        _val259.key_text_problem("key", _KEY_ONE_LINE259) is not None,
+        _val259.key_text_problem("key", "/srv/keys/id\ned25519") is not None,
+        _val259.key_text_problem("key", "/srv/" + "k" * 256) is not None,
+        _val259.key_text_problem("key", "/home/panel/.ssh/id_ed25519"),
+        _val259.key_text_problem("key", ""),
+        _val259.key_text_problem("password", "-----BEGIN pass\nword")],
+       [True, True, True, True, None, None, None])
+
+    _add_form259 = {"name": "p259-keytext", "host": "192.0.2.59", "ssh_user": "root", "ssh_port": "22",
+                    "auth_method": "key", "lgsm_user": "", "host_key_fingerprint": ""}
+    _rows_before259 = None
+    with _p9.app_context():
+        _rows_before259 = _RS259.query.count()
+    _answers259 = []
+    for _cred259 in (_KEY_TEXT259, _KEY_ONE_LINE259):
+        _r = _A259.post("/remotes/add", data=dict(_add_form259, credential=_cred259),
+                        headers={"X-Requested-With": "XMLHttpRequest"})
+        _answers259.append((_r.status_code, (_r.get_json() or {}).get("message"), _r.get_data(as_text=True)))
+    _r = _A259.post("/remotes/add", data=dict(_add_form259, credential=_KEY_TEXT259))
+    _flash_add259 = _flashed259()
+    with _p9.app_context():
+        _rows_after259 = _RS259.query.count()
+    eq("key text: Remotes > Add refuses it (as typed and as one line) before anything connects, and stores nothing",
+       ([(c, m) for c, m, _t in _answers259], _r.status_code, _flash_add259, _rows_after259 == _rows_before259),
+       ([(400, _val259.KEY_TEXT_REFUSED)] * 2, 302, [_val259.KEY_TEXT_REFUSED], True))
+
+    with _p9.app_context():
+        _host259 = _RS259.query.filter_by(name="p9-host").first()
+        _host_id259, _cred_before259 = _host259.id, _host259.auth_credential
+    _r = _A259.post("/remotes/%d/edit" % _host_id259,
+                    data={"name": "", "host": "", "ssh_user": "", "ssh_port": "22", "auth_method": "key",
+                          "credential": _KEY_TEXT259, "host_key_fingerprint": ""},
+                    headers={"X-Requested-With": "XMLHttpRequest"})
+    _edit_answer259 = _r.get_data(as_text=True)
+    with _p9.app_context():
+        _cred_after259 = _db259.session.get(_RS259, _host_id259).auth_credential
+    eq("key text: editing a host refuses it too, and its stored credential is left as it was",
+       (_r.status_code, (_r.get_json() or {}).get("message"), _cred_after259 == _cred_before259),
+       (400, _val259.KEY_TEXT_REFUSED, True))
+
+    with _p9.test_request_context("/setup", method="POST", data=dict(_add_form259, credential=_KEY_TEXT259)):
+        _rh259._setup_add_remote(None, {})
+        from flask import get_flashed_messages as _gfm259
+        _wizard_flash259 = _gfm259()
+    eq("key text: the setup wizard's host step refuses it the same way", _wizard_flash259,
+       [_val259.KEY_TEXT_REFUSED])
+
+    # A row that already holds key text (stored before the forms refused it): the Test button and every
+    # connection refuse to open it, with a fixed sentence.
+    from panel.core.config import encrypt_secret as _enc259   # noqa: E402
+    with _p9.app_context():
+        _kt_row259 = _RS259(name="p259-keyrow", host="192.0.2.60", port=22, username="root", auth_method="key",
+                            auth_credential=_enc259(_KEY_TEXT259), is_online=True)
+        _db259.session.add(_kt_row259)
+        _db259.session.commit()
+        _kt_id259 = _kt_row259.id
+    _r = _A259.post("/remotes/%d/test" % _kt_id259, headers={"X-Requested-With": "XMLHttpRequest"})
+    _test_answer259 = _r.get_data(as_text=True)
+    eq("key text: a stored one is refused by the Test button with the panel's own sentence",
+       "holds key text, not a path" in ((_r.get_json() or {}).get("message") or ""), True)
+    _conn_err259 = None
+    with _p9.app_context():
+        try:
+            _core259._connect_client(_pk259.SSHClient(), _db259.session.get(_RS259, _kt_id259))
+        except ConnectionError as _e259:
+            _conn_err259 = _e259
+    _conn_text259 = "".join(_tb259.format_exception(_conn_err259)) if _conn_err259 else ""
+    eq("key text: ...and by every connection (get_connection's connect), whose error and traceback hold none of it",
+       ("holds key text, not a path" in str(_conn_err259), _leaks259(_conn_text259)), (True, []))
+    with _p9.app_context():
+        _db259.session.delete(_db259.session.get(_RS259, _kt_id259))
+        _db259.session.commit()
+
+    # Whatever OSError a key file raises, its file name (the "path") reaches no log line or answer.
+    _fnf259 = FileNotFoundError(2, "No such file or directory", _KEY_ONE_LINE259)
+    _said259 = _hosts259._ssh_test_failure(_fnf259, "192.0.2.61", 22)
+    _REAL_CBA259 = _core259._connect_by_auth_method
+    _p9_patch(_core259, "_connect_by_auth_method", lambda *a, **k: (_ for _ in ()).throw(
+        FileNotFoundError(2, "No such file or directory", _KEY_ONE_LINE259)))
+    _osr259 = None
+    try:
+        _core259._connect_client(None, _NS259(auth_credential="", auth_method="key", host="192.0.2.62", port=22))
+    except ConnectionError as _e259:
+        _osr259 = _e259
+    _p9_patch(_core259, "_connect_by_auth_method", _REAL_CBA259)
+    eq("key text: a key file's OSError is said without its file name, in the answer, the log and the traceback",
+       (_leaks259(_said259), "key file could not be read (No such file or directory)" in str(_osr259),
+        _leaks259("".join(_tb259.format_exception(_osr259)) if _osr259 else "")),
+       ([], True, []))
+    eq("key text: nothing of the key reached any log record, response, flash or traceback above",
+       _leaks259(_rec259.lines, [a[2] for a in _answers259], _flash_add259, _edit_answer259, _wizard_flash259,
+                 _test_answer259), [])
+    eq("key text: ...and the failure that was logged is a fixed sentence and the class",
+       any(ln.endswith("ssh_test_connection failed: FileNotFoundError (ENOENT)") for ln in _rec259.lines), True)
+finally:
+    _root259.removeHandler(_rec259)
+    _root259.setLevel(_root_level259)
+
 
 # ── put everything back ──
 _p9_restore_all()

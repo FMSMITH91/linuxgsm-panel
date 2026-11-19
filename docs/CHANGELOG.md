@@ -193,6 +193,12 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **A private key pasted where a key path belongs is no longer written to the log.** Remotes → Add
+  and Edit, and the setup wizard's host step, take the path of a key file on the panel's host. Pasted
+  key text used to be opened as a file name, and the error naming it, the whole private key, was
+  written to the system journal with its traceback. Such text is now refused before anything uses
+  it, a host that already holds it is not connected with it, a failed key login is logged as a fixed
+  sentence, and database errors no longer list the values of the statement that failed.
 - **An uninstalled server's tmux folder no longer passes to the next account.** Uninstalling a game
   server now also removes its account's `/tmp/tmux-<uid>` and Java `/tmp/hsperfdata_<account>`
   folders (only real folders that account owns), so a new account given the same user id doesn't
