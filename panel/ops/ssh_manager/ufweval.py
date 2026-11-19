@@ -46,8 +46,6 @@ Conn = collections.namedtuple("Conn", "version src dst dport iface what")
 
 # A column's trailing protocol (`22/tcp`, `192.0.2.0/24/udp`, `Anywhere/gre`): ufw's supported ones.
 _PROTOS = frozenset({"tcp", "udp", "ipv6", "esp", "ah", "igmp", "gre", "vrrp"})
-# The attributes `ufw status numbered` prints after the From column: "(log)", "(log-all)", "(out)".
-_ATTRIBS = frozenset({"log", "log-all", "out"})
 # What `ufw allow OpenSSH` resolves to when the profile files themselves could not be read: the
 # profile openssh-server ships (/etc/ufw/applications.d/openssh-server).
 _KNOWN_APPS = {"openssh": [([(22, 22)], "tcp")]}
@@ -63,15 +61,9 @@ def _strip_proto(word):
 
 
 def _strip_attribs(text):
-    """The From column without the "(log)" / "(log-all)" / "(out)" attributes ufw prints after it."""
-    t = text.rstrip()
-    if not t.endswith(")"):
-        return text
-    at = t.rfind("(")
-    words = t[at + 1:-1].split(",") if at >= 0 else []
-    if words and all(w.strip().lower() in _ATTRIBS for w in words):
-        return t[:at].rstrip()
-    return text
+    """The From column without the "(log)" / "(log-all)" / "(out)" attributes (system_ops.ufw_split_attribs)."""
+    from panel.ops import system_ops as _so
+    return _so.ufw_split_attribs(text)[0]
 
 
 def _net(word):

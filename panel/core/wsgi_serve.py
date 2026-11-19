@@ -35,22 +35,34 @@ recommends ("Only Support Strong Protocols", "Only Support Strong Ciphers"): TLS
 only with forward-secret AEAD suites (ECDHE with AES-GCM or ChaCha20-Poly1305), no CBC. Python's
 default server list also offered two TLS 1.2 ECDHE-ECDSA CBC suites.
 
-Idle and slow connections are closed, and running out of descriptors does not end the server
-(OWASP Denial of Service Cheat Sheet, "Network attacks > Rate limiting": a request-read timeout
-against slow clients, an absolute connection timeout, a load limit). eventlet's defaults were
-`socket_timeout=None` and `keepalive=True`: a connection that sent nothing waited in readline for
-ever, holding a green thread and a descriptor, so about a thousand idle TCP connections (no account
-needed) used the process's 1,024 descriptors, accept() raised EMFILE, eventlet re-raised it out of
-server(), and the process ended; Restart=always brought it back for the same connections to take
-down again. Now:
-  * IDLE_SECONDS: how long a connection may sit with no request (a new one before its first request
-    line, a kept-alive one between requests) before it is closed;
-  * io_seconds(): every read and write after that (headers, a body, a polling request, the TLS
-    handshake, a WebSocket's upgrade) gives up after this long with no progress. It is longer than
-    Socket.IO's own heartbeat window (socket_hooks.LIMITS: a ping every ping_interval, answered
+Idle and slow connections are closed, one source cannot hold the server, and running out of
+descriptors does not end the server (OWASP Denial of Service Cheat Sheet, "Rate limiting": request-read
+timeouts with a minimum ingress data rate against slow HTTP attacks, an absolute connection timeout, a
+load limit). eventlet's defaults were `socket_timeout=None` and `keepalive=True`: a connection that
+sent nothing waited in readline for ever, holding a green thread and a descriptor, so about a thousand
+idle TCP connections (no account needed) used the process's 1,024 descriptors, accept() raised EMFILE,
+eventlet re-raised it out of server(), and the process ended; Restart=always brought it back for the
+same connections to take down again. Timeouts per read alone were not enough either: a client sending
+one byte every few seconds made progress on every read, so it kept its connection for days, and about
+1,024 of them filled eventlet's pool, after which nobody was served (review 1120). Now:
+  * IDLE_SECONDS: from the end of a request (or the accept) to the next request's first byte, the TLS
+    handshake included, whatever arrives in between (_Protocol._first_byte, one eventlet.Timeout);
+  * HEADER_SECONDS: from that first byte to the end of the request's headers, however they trickle
+    (one eventlet.Timeout, cancelled when the request reaches the app: from then on the time is the
+    app's, and a WebSocket's upgrade or a polling request is not cut);
+  * a request body: BODY_GRACE_SECONDS of waiting for the client, plus one second for every
+    BODY_MIN_RATE bytes it has sent (_PacedBody); only time spent waiting for the client counts;
+  * io_seconds(): every read and write also gives up after this long with no progress. It is longer
+    than Socket.IO's own heartbeat window (socket_hooks.LIMITS: a ping every ping_interval, answered
     within ping_timeout). Once a WebSocket is open, engineio sets that window as the socket's
     timeout itself (engineio socket.py _websocket_handler), and the browser answers every ping, so a
-    live console or terminal is not cut by either.
+    live console or terminal is not cut by any of these;
+  * PER_SOURCE_CONNECTIONS: one source (an IPv6 one by its /64) holds at most this many connections;
+    a further one is closed as soon as it is accepted (_SourceCap). Loopback is not counted: behind
+    Tailscale Serve or a proxy on the box every viewer arrives on it, and the proxy keeps its own
+    per-client limits;
+  * a client that stops reading an answer, or stalls its body, is ClientStalled, which the log treats
+    like a client that hung up (_client_hung_up): nothing is logged for it, as for a reset;
   * the listening socket's accept() (_Listener) waits and tries again on EMFILE, ENFILE, ENOBUFS and
     ENOMEM instead of ending the server, and on the errors Linux passes up from a connection that
     failed before it was accepted (accept(2), "Error handling"), which eventlet also took as the end;
@@ -61,6 +73,7 @@ eventlet is imported inside serve(), never at module level: importing panel must
 (EVENTLET_NO_GREENDNS has to be set first).
 """
 import errno
+import ipaddress
 import logging
 import ssl
 import sys
@@ -82,17 +95,30 @@ def _text(msg, args):
 _HANGUP_ERRNOS = frozenset({errno.EPIPE, errno.ECONNRESET, errno.ECONNABORTED, errno.ESHUTDOWN})
 
 
-def _client_hung_up(exc):
-    """Whether `exc` and every exception in its chain is a write to a client that went away.
+class ClientStalled(TimeoutError):
+    """The client stopped keeping up: it sent its request, or read the answer, too slowly.
 
-    False for no exception, and for a chain that also holds any other one (a real failure, then the
-    hang-up while it was handled). The walk is bounded, as a chain may be built by hand.
+    Raised in place of the socket's own timeout wherever the client is the one being waited for (the
+    request's first byte, its line and headers, its body, a write it does not read), and only there, so
+    a timeout of the panel's own (an SSH read inside a streamed download) is still a TimeoutError of
+    another class and is still logged. A TimeoutError, so eventlet's process_request takes it as the
+    expected end of a connection (`except socket.timeout`) and closes it without a word.
+    """
+
+
+def _client_hung_up(exc):
+    """Whether `exc` and every exception in its chain is the client going away or stalling.
+
+    A write to a client that closed or reset the connection (_HANGUP_ERRNOS), or a ClientStalled (a
+    client that stopped reading). False for no exception, and for a chain that also holds any other
+    one (a real failure, then the hang-up while it was handled). The walk is bounded, as a chain may
+    be built by hand.
     """
     found = False
     for _ in range(8):
         if exc is None:
             return found
-        if not isinstance(exc, OSError) or exc.errno not in _HANGUP_ERRNOS:
+        if not isinstance(exc, ClientStalled) and (not isinstance(exc, OSError) or exc.errno not in _HANGUP_ERRNOS):
             return False
         found = True
         exc = exc.__cause__ or exc.__context__
@@ -118,7 +144,13 @@ class _TracebacksOnly:
         """Nothing: eventlet's debug lines (a client that went away) are not the panel's to keep."""
 
     def error(self, msg, *args, **_kwargs):
-        """Log one of eventlet's own error lines (a request body it could not read) as a warning."""
+        """Log one of eventlet's own error lines (a request body it could not read) as a warning.
+
+        Not when the body could not be read because the client hung up or stalled (_client_hung_up):
+        that line names the client's own request, and anyone could add one per connection.
+        """
+        if _client_hung_up(sys.exc_info()[1]):
+            return
         _log.warning("web server: %s", _text(msg, args))
 
     def write(self, msg, *args):
@@ -149,7 +181,159 @@ def tls_context(certfile, keyfile, ssl_module=ssl):
     return ctx
 
 
-def _protocol(base):
+class _ClientWrites:
+    """The response's writer (the protocol's wfile): a write the client does not read in time is ClientStalled.
+
+    The socket's own timeout (io_seconds()) is a TimeoutError like any other, and eventlet logs a
+    failed response's traceback, so a client that asked for a large answer and never read it put one
+    ERROR traceback in the log per connection per minute: no account needed, and a phone that slept
+    mid-download read as a panel fault. Raised outside the `except`, so the chain holds nothing else.
+    """
+
+    def __init__(self, fileobj):
+        self._f = fileobj
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    @staticmethod
+    def _call(fn, *args):
+        try:
+            return fn(*args)
+        except TimeoutError:
+            pass    # raised again below, outside the except, so the chain holds nothing else
+        raise ClientStalled("the client stopped reading the response")
+
+    def write(self, data):
+        """The buffered writer's write, ClientStalled on a timeout."""
+        return self._call(self._f.write, data)
+
+    def writelines(self, lines):
+        """The buffered writer's writelines, ClientStalled on a timeout."""
+        return self._call(self._f.writelines, lines)
+
+    def flush(self):
+        """The buffered writer's flush, ClientStalled on a timeout."""
+        return self._call(self._f.flush)
+
+
+class _PacedBody:
+    """The request body's reader (what wsgi.input reads from): the client must keep a minimum rate.
+
+    The socket's timeout is per read, so a body sent one byte a minute held a green thread for as long
+    as the client liked. Here the client gets `grace` seconds of waiting, plus one more for every
+    `rate` bytes it has sent (Apache's RequestReadTimeout body=…,MinRate=…, the example the OWASP
+    Denial of Service Cheat Sheet gives under "Rate limiting"). Only time spent waiting for the client
+    counts: a route that reads a piece and then spends a minute on it (an upload copied on over SSH)
+    loses nothing. Past the budget the read raises ClientStalled (werkzeug answers the request as a
+    client disconnect) and the connection is closed, never kept alive to read the rest.
+    """
+
+    def __init__(self, rfile, handler, timeout, grace, rate):
+        self._f = rfile
+        self._handler = handler
+        self._timeout = timeout
+        self._grace = grace
+        self._rate = rate
+        self._waited = 0.0
+        self._got = 0
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    def budget(self):
+        """Seconds the client may still keep the next read waiting."""
+        return self._grace + self._got / self._rate - self._waited
+
+    def _paced(self, fn, *args):
+        left = self.budget()
+        started = time.monotonic()
+        try:
+            if left <= 0:
+                raise ClientStalled("the client sent its request body too slowly")
+            with self._timeout(left, ClientStalled("the client sent its request body too slowly")):
+                data = fn(*args)
+        except ClientStalled:
+            self._handler.close_connection = 1
+            raise
+        finally:
+            self._waited += time.monotonic() - started
+        self._got += sum(map(len, data)) if isinstance(data, list) else len(data or b"")
+        return data
+
+    def read(self, *args):
+        """The buffered reader's read, inside the body's time budget."""
+        return self._paced(self._f.read, *args)
+
+    def readline(self, *args):
+        """The buffered reader's readline, inside the body's time budget."""
+        return self._paced(self._f.readline, *args)
+
+    def readlines(self, *args):
+        """The buffered reader's readlines, inside the body's time budget."""
+        return self._paced(self._f.readlines, *args)
+
+
+class _DeadlinesMixin:
+    """The whole-request deadlines (see the module docstring), mixed into _protocol's class with a timeout.
+
+    `_timeout` is eventlet.Timeout (a class, so reading it from the instance does not bind it) and
+    `_limits` the {idle, header, body_grace, body_rate} seconds; _protocol sets both on the class it
+    builds, which is the only class this is mixed into.
+    """
+
+    _deadline = None
+
+    def setup(self):
+        """The base's setup, with a client write that stalls past its timeout read as a hang-up."""
+        super().setup()
+        self.wfile = _ClientWrites(self.wfile)
+
+    def handle_one_request(self):
+        """One request: the next request's first byte within idle seconds, then its headers within header seconds."""
+        if not self._first_byte():
+            self.close_connection = 1
+            return
+        # From the request's first byte to the end of its headers: one deadline for the lot.
+        self._deadline = self._timeout(self._limits["header"],
+                                       ClientStalled("the client sent its request too slowly"))
+        try:
+            super().handle_one_request()
+        finally:
+            self._end_deadline()
+
+    def _first_byte(self):
+        """Wait (idle seconds at most, a TLS handshake included) for the next request's first byte."""
+        peek = getattr(self.rfile, "peek", None)
+        if peek is None or self.rfile.closed:
+            return True
+        try:
+            with self._timeout(self._limits["idle"], ClientStalled("no request")):
+                return bool(peek(1))
+        except OSError:
+            # Gone, reset, a failed handshake, or silent for the idle time: nothing to answer.
+            return False
+
+    def _end_deadline(self):
+        if self._deadline is not None:
+            self._deadline.cancel()
+            self._deadline = None
+
+    def get_environ(self):
+        """The base's environ, with the body read through _PacedBody and the header deadline ended."""
+        # The request's headers are in: the app's time is not the client's. The body is read from
+        # here on through _PacedBody (wsgi.input and eventlet.input are the same Input).
+        self._end_deadline()
+        raw = getattr(self, "rfile")   # set by the base handler's setup()
+        setattr(self, "rfile", _PacedBody(raw, self, self._timeout, self._limits["body_grace"],
+                                          self._limits["body_rate"]))
+        try:
+            return super().get_environ()
+        finally:
+            setattr(self, "rfile", raw)
+
+
+def _protocol(base, timeout=None, limits=None):
     """Eventlet's HttpProtocol, refusing a request line that names no HTTP version (see the module).
 
     The other malformed request lines (no method, an unknown protocol, a version past HTTP/1.x) were
@@ -157,6 +341,9 @@ def _protocol(base):
     so to the journal, with the line the client sent in them, and its answer named the Python version
     in `Server:`. Both are dropped: the answer says `Server: LinuxGSM Panel`, as the panel's own
     responses do, and nothing an unauthenticated client sends before a request reaches Flask is logged.
+
+    With `timeout` (eventlet.Timeout) and `limits` ({idle, header, body_grace, body_rate}), each request
+    also has whole-request deadlines rather than per-read ones (see the module docstring).
     """
     class _Protocol(base):
         def parse_request(self):
@@ -174,12 +361,31 @@ def _protocol(base):
         def version_string(self):
             """The panel's own Server value, not the standard library's name and Python version."""
             return "LinuxGSM Panel"
-    return _Protocol
+    if timeout is None:
+        return _Protocol
+    return type("_TimedProtocol", (_DeadlinesMixin, _Protocol), {"_timeout": timeout, "_limits": limits})
 
 
 # A connection with no request in progress (before its first request line, or kept alive between
-# two) is closed after this many seconds.
+# two) is closed after this many seconds: from the end of the last request (or the accept) to the next
+# request's first byte, a TLS handshake included.
 IDLE_SECONDS = 30
+# From a request's first byte to the end of its headers, whatever the pace: Apache's own ceiling for the
+# header read (mod_reqtimeout's default header=20-40,MinRate=500). A browser sends both in one packet.
+HEADER_SECONDS = 40
+# A request body: this many seconds of waiting for the client, plus one more for every BODY_MIN_RATE
+# bytes it has sent (mod_reqtimeout's MinRate=500, about 4 kbit/s, far below any real link). The grace
+# is the read timeout the body had before (io_seconds() with the panel's own heartbeat), so a phone
+# whose link stalls at the start of an upload is no worse off than it was.
+BODY_GRACE_SECONDS = 60
+BODY_MIN_RATE = 500
+# Connections one source may hold open at once; a further one is closed as soon as it is accepted. A
+# browser opens at most 6 HTTP/1.1 connections to a host plus a Socket.IO socket per open tab, so a
+# household or office behind one address, several people with several tabs, stays well inside it.
+# Loopback (Tailscale Serve, a reverse proxy on the box, where every viewer arrives as 127.0.0.1 or
+# ::1) is not counted: the proxy holds its own per-client limits, and capping it would cap everyone.
+# An IPv6 source is counted by its /64, the block one subscriber is given.
+PER_SOURCE_CONNECTIONS = 64
 # Socket.IO's heartbeat window (ping_interval + ping_timeout) is multiplied by this for io_seconds(),
 # so a WebSocket answering every ping always reads well inside it: 45 s -> 60 s with the panel's own.
 _IO_OVER_HEARTBEAT = 4 / 3
@@ -241,10 +447,101 @@ class _Listener:
                          errno.errorcode.get(e.errno, e.errno))
 
 
-def serve(app, host, port, ssl_args=None, idle_seconds=IDLE_SECONDS, io_timeout=None):
+def _source_key(addr):
+    """The source a connection from `addr` (accept()'s address) is counted under; None for loopback.
+
+    An IPv4-mapped IPv6 address is its IPv4 address, and an IPv6 address counts as its /64.
+    """
+    host = str(addr[0] if isinstance(addr, tuple) and addr else addr).partition("%")[0]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_loopback:
+        return None
+    if ip.version == 6:
+        return str(ipaddress.ip_network((ip, 64), strict=False))
+    return str(ip)
+
+
+def _refused(*_args):
+    """A refused connection's green thread: nothing to do, eventlet's link closes the socket."""
+
+
+class _SourceCap:
+    """eventlet's pool of connections, holding no more than `cap` from one source (_source_key) at a time.
+
+    Given to eventlet.wsgi.server as its custom_pool: its accept loop calls spawn(process_request,
+    [addr, socket, state]) for every connection and links the green thread to its clean-up, which closes
+    the socket. A source already at the cap gets a free green thread that does nothing, so its socket is
+    closed at once, without waiting for room in the pool (OWASP Denial of Service Cheat Sheet, "Rate
+    limiting": a load limit, by the offending address). One warning a minute at most names it.
+    """
+
+    def __init__(self, pool, spawn_free, cap):
+        self._pool = pool
+        self._spawn_free = spawn_free
+        self._cap = cap
+        self._open = {}
+        self._refusals = 0
+        self._logged = 0.0
+
+    def open_from(self, key):
+        """How many connections from `key` are open (or waiting for room in the pool)."""
+        return self._open.get(key, 0)
+
+    def spawn(self, function, conn_state, *args, **kwargs):
+        """Start `function(conn_state, ...)` in the pool, or refuse the connection when its source is full."""
+        key = _source_key(conn_state[0])
+        if key is not None and self._open.get(key, 0) >= self._cap:
+            self._refuse(key)
+            return self._spawn_free(_refused, conn_state)
+        if key is not None:
+            self._open[key] = self._open.get(key, 0) + 1
+        try:
+            return self._pool.spawn(self._run, key, function, conn_state, *args, **kwargs)
+        except Exception:
+            self._release(key)
+            raise
+
+    def _run(self, key, function, *args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        finally:
+            self._release(key)
+
+    def _release(self, key):
+        if key is None:
+            return
+        left = self._open.get(key, 0) - 1
+        if left > 0:
+            self._open[key] = left
+        else:
+            self._open.pop(key, None)
+
+    def _refuse(self, key):
+        self._refusals += 1
+        now = time.monotonic()
+        if now - self._logged >= _STARVED_LOG_EVERY:
+            self._logged = now
+            _log.warning("web server: %s already holds %d connections; closed %d more from it since the last "
+                         "warning", key, self._cap, self._refusals)
+            self._refusals = 0
+
+    def waitall(self):
+        """Wait for every greenthread in the pool: eventlet calls this when the server ends."""
+        return self._pool.waitall()
+
+
+def serve(app, host, port, ssl_args=None, idle_seconds=IDLE_SECONDS, io_timeout=None, limits=None):
     """Serve `app` on host:port until the process ends; `ssl_args` holds certfile/keyfile for TLS.
 
-    `idle_seconds` and `io_timeout` (default io_seconds()) are the two connection timeouts above.
+    `idle_seconds` and `io_timeout` (default io_seconds()) are the two connection timeouts above;
+    `limits` may replace any of the request deadlines and the per-source cap: {"header":
+    HEADER_SECONDS, "body_grace": BODY_GRACE_SECONDS, "body_rate": BODY_MIN_RATE, "per_source":
+    PER_SOURCE_CONNECTIONS}.
     """
     import eventlet
     import eventlet.green.socket
@@ -257,6 +554,11 @@ def serve(app, host, port, ssl_args=None, idle_seconds=IDLE_SECONDS, io_timeout=
     if ssl_args:
         ctx = tls_context(ssl_args["certfile"], ssl_args["keyfile"], eventlet.green.ssl)
         sock = ctx.wrap_socket(sock, server_side=True)
+    limits = dict({"header": HEADER_SECONDS, "body_grace": BODY_GRACE_SECONDS, "body_rate": BODY_MIN_RATE,
+                   "per_source": PER_SOURCE_CONNECTIONS}, **(limits or {}), idle=idle_seconds)
+    pool = _SourceCap(eventlet.GreenPool(eventlet.wsgi.DEFAULT_MAX_SIMULTANEOUS_REQUESTS), eventlet.spawn,
+                      limits["per_source"])
     eventlet.wsgi.server(_Listener(sock, eventlet.sleep), app, log=_TracebacksOnly(), log_output=True,
-                         debug=False, protocol=_protocol(eventlet.wsgi.HttpProtocol),
-                         keepalive=idle_seconds, socket_timeout=io_seconds() if io_timeout is None else io_timeout)
+                         debug=False, protocol=_protocol(eventlet.wsgi.HttpProtocol, eventlet.Timeout, limits),
+                         keepalive=idle_seconds, socket_timeout=io_seconds() if io_timeout is None else io_timeout,
+                         custom_pool=pool)

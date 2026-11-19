@@ -286,7 +286,9 @@ function _fwRenderRules(listEl, openGroups) {
       var port = g.is_iface
         ? '<span class="badge bg-info text-dark">' + esc(g.port_num) + '</span>'
         : '<code>' + esc(g.port_num) + '</code>';
-      var scope = (g.action !== 'ALLOW' ? '<span class="badge bg-danger me-1">' + esc(g.action) + '</span>' : '') + esc(g.scope);
+      // ufw's own word for the rule's logging (log / log-all), as it prints it after the source.
+      var scope = (g.action !== 'ALLOW' ? '<span class="badge bg-danger me-1">' + esc(g.action) + '</span>' : '') + esc(g.scope)
+        + (g.log ? ' <span class="badge bg-secondary" data-no-i18n>' + esc(g.log) + '</span>' : '');
       html += '<tr><td>' + port + '</td>'
         + '<td>' + protoBadge(g.proto_label) + '</td>'
         + '<td class="small" data-no-i18n>' + esc(g.comment || '—') + '</td>'

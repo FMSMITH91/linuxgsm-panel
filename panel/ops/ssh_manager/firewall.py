@@ -17,26 +17,14 @@ from panel.ops.ssh_manager import (_core, hosts)  # noqa: E402,F401  (module obj
 # ─── Remote Firewall Management (UFW) ─────────────────────────
 
 
-# The attributes ufw prints after the From column, in parentheses and comma-separated: the rule's
-# logging (`ufw allow log 22/tcp`, `log-all`) and, in a numbered listing, "out" for an outbound
-# rule. ufw 0.36's get_status (backend_iptables.py): "%-26s %-12s%-26s%s%s" of To, the action and
-# direction, From, " (<attribs>)" and " # <comment>".
-_UFW_ATTRIBS = frozenset({"log", "log-all", "out"})
-
-
 def _split_ufw_attribs(rule):
-    """(`rule` without ufw's trailing attributes, the logging attribute or "").
+    """(`rule` without ufw's trailing attributes, the logging attribute or ""): system_ops.ufw_split_attribs.
 
-    Only a last parenthesised group made of those words is one: "(v6)" is the family, not an attribute.
+    One parse for every reader of ufw rows (the blocked-IPs read, the tailscale0 test, ufweval and this
+    page); "(v6)" is the family, not an attribute.
     """
-    t = rule.rstrip()
-    at = t.rfind("(")
-    if not t.endswith(")") or at < 0:
-        return rule, ""
-    words = [w.strip().lower() for w in t[at + 1:-1].split(",")]
-    if not words or not all(w in _UFW_ATTRIBS for w in words):
-        return rule, ""
-    return t[:at], next((w for w in words if w != "out"), "")
+    from panel.ops import system_ops as _so
+    return _so.ufw_split_attribs(rule)
 
 
 def _parse_ufw_rule(detail):
@@ -134,6 +122,9 @@ def _new_ufw_group(p, key):
         "nums": [], "families": [], "port_label": port_label,
         "port_num": port_num, "proto_label": proto_label,
         "comment": p["comment"], "scope": _ufw_scope(p), "iface": iface,
+        # ufw's per-rule logging ("log", "log-all", "" for none), shown beside the scope: it was part of
+        # the From text until that was read for what it is, and then shown nowhere.
+        "log": p.get("log", ""),
         "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
         "is_iface": bool(iface), "is_block": is_block,
         "block_ip": from_ip if is_block else "",
@@ -173,7 +164,9 @@ def _group_ufw_rules(rules):
     index = {}
     for r in rules:
         p = _parse_ufw_rule(r["detail"])
-        key = (p["to"], p["action"], p["direction"], p["from"], p["iface"], p["comment"])
+        # The logging is part of which rule this is: a logged and an unlogged rule are two rules to ufw
+        # (a delete must name the logging to match), never one row on the page.
+        key = (p["to"], p["action"], p["direction"], p["from"], p["iface"], p["comment"], p["log"])
         g = index.get(key)
         if not g:
             g = _new_ufw_group(p, key)

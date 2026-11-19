@@ -91,9 +91,10 @@ in with a password at all. Backup codes are not accepted over SFTP.
   cannot be made over SFTP.
 - The file manager's rules apply: the LinuxGSM folder, `serverfiles`, the script and the account's
   own start-up files are never deleted or renamed; `~/.ssh`, `~/.bashrc` and the other sign-in files
-  are never written, nor the services the account starts by itself (`~/.config/systemd`,
-  `~/.local/share/systemd`, `~/.config/environment.d`, `~/.config/containers`) or the folders above
-  them; LinuxGSM's own `_default.cfg` is never written; a LinuxGSM config that would
+  are never written (`~/.forward` too), nor what the account's services read when they start
+  (`~/.config/systemd`, `~/.local/share/systemd`, `~/.config/environment.d`, `~/.config/containers`,
+  `~/.config/user-tmpfiles.d`, `~/.local/share/user-tmpfiles.d`, `~/.local/share/dbus-1`) or the
+  folders above them; LinuxGSM's own `_default.cfg` is never written; a LinuxGSM config that would
   switch `logtimestamp` on is refused whole (it freezes the live console); the live console's log and
   its folders are never changed; names with control characters, text-direction characters or spaces
   at either end are refused.
