@@ -1531,6 +1531,7 @@ _ui190 = _node190(_SET190 + (
     "global.confirmDialog = o => { need = o.requireText; o.onConfirm(); };\n"
     "global.fetch = (u, o) => { posted.push([u, JSON.parse(o.body)]); return Promise.resolve({json: () => ({success: true})}); };\n"
     + _cutjs190(_RMB190, "function bkGameRows(") + "\n" + _cutjs190(_RMB190, "function restoreGameBackup(") + "\n"
+    + _cutjs190(_RMB190, "function _bkStepUp(") + "\n"
     "const html = bkGameRows({id: 7, name: 'My Server', backups: [{name: 'ms-2026-11-01-000000.tar.gz', size: 1, created: 0}]});\n"
     "const at = {'data-name': 'ms-2026-11-01-000000.tar.gz', 'data-gid': '7', 'data-server': 'My Server'};\n"
     "restoreGameBackup({getAttribute: k => at[k]});\n"

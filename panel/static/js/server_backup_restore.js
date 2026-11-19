@@ -19,11 +19,18 @@ function _grsRenderStatus(r){
   return !!r.running;
 }
 
+// Starting an upload and a restore ask a sign-in past the confirmation window for the password again
+// (account_guard.step_up_required): asked here in a dialog first (step_up_form.js's window.stepUpThen),
+// so the chosen file and the typed name are kept; where the route does not ask, nothing is shown.
+function _grsStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 // Upload a backup of this server (window.backupUpload): it lands in the list, then restores like any other.
 function uploadBk(){ var f=document.getElementById('bk-upload-file'); if(f){ f.value=''; f.click(); } }
 function uploadBkPicked(el){
   var file = el && el.files && el.files[0];
   if(!file) return;
+  _grsStepUp(function(){ _uploadBkNow(file); });
+}
+function _uploadBkNow(file){
   var btn=document.getElementById('bk-upload'), st=document.getElementById('bk-restore-status');
   if(btn) btn.disabled=true;
   var say=function(t, cls){ if(st){ st.className='small '+cls; st.textContent=t; } };
@@ -41,7 +48,7 @@ function restoreBk(btn){
   confirmDialog({title:'Restore from backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
     bodyText:tf('Restore {server} from this backup?\n\n{name}\n\nEvery file of the server is replaced with the copy in the archive: its world, configs and LinuxGSM files. The server is stopped first, and a fresh backup of its current state is taken before anything is replaced, so you can go back. A running server is started again afterwards.', {server: SERVER_NAME, name: name}),
     requireText: SERVER_NAME, requireLabel: tf('Type the server name to confirm'),
-    onConfirm:function(){
+    onConfirm:function(){ _grsStepUp(function(){
       btn.disabled=true;
       fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/restore',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({name:name, confirm:SERVER_NAME})})
@@ -52,5 +59,5 @@ function restoreBk(btn){
           if(d.success && !window._bkPoll) window._bkPoll=setInterval(loadBackups, 4000);
           if(!d.success) btn.disabled=false;
         }).catch(function(){ window.toast(tf('Restore failed'),'danger'); btn.disabled=false; });
-    }});
+    }); }});
 }

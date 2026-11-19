@@ -371,7 +371,8 @@ _fb_prog81 = (
     "console.log(JSON.stringify({value: sel.value, label: o.textContent, posted: posted && posted.full_interval_days,\n"
     "  relabel: [o.attrs['data-i18n-text'], o.attrs['data-i18n-vars']]}));\n") % (
         _cut_or81(_RB81, "function _r20cIntervalOption("), _cut_or81(_RB81, "function bkRenderFullSchedule("),
-        _cut_or81(_RB81, "function saveBackupSettings("), _cut_or81(_RB81, "function _r29c_bkEditing(")
+        _cut_or81(_RB81, "function saveBackupSettings(") + "\n" + _cut_or81(_RB81, "function _saveBackupSettingsNow(")
+        + "\n" + _cut_or81(_RB81, "function _bkStepUp("), _cut_or81(_RB81, "function _r29c_bkEditing(")
         + "\n" + _cut_or81(_RB81, "function _r29c_bkSetIdle(")
         # the save goes through the card's in-flight counter (review 1017a); its release timer is not run
         + "\nglobal.setTimeout = () => 0; global.clearTimeout = () => {};\n"

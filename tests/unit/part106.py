@@ -97,7 +97,8 @@ _out106 = _js106(_name106, (
      "function _r25c_bkUnread(", "var _r30c_bkSaving", "function _r30c_bkSave(",
      "function loadBackups(", "function bkRenderGames(", "function bkRenderFullSchedule(",
      "function _r20cIntervalOption(", "function bkShowEncState(", "function _bkShowShortNote(", "function _r29c_bkPassDone(",
-     "function saveBackupPassphrase(", "function clearBackupPassphrase(", "function setGameSchedule("), (
+     "function saveBackupPassphrase(", "function clearBackupPassphrase(", "function setGameSchedule(",
+     "function _bkStepUp("), (
     "  const out = {}, $ = id => document.getElementById(id);\n"
     "  const pass = $('bk-pass'), kp = $('bk-keep'), fk = $('fb-keep');\n"
     "  const refresh = async (focus) => { document.activeElement = focus || null; loadBackups(); await settle(); };\n"

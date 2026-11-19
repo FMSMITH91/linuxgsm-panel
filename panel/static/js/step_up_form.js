@@ -35,12 +35,13 @@
     return code;
   }
   // Ask for the password (and the code when `totp`) in a dialog on this page and confirm it with
-  // /account/reauth; then go().
-  function confirmThen(go, totp){
+  // /account/reauth; then go(). `cancelled` (optional) runs when the dialog is closed unconfirmed.
+  function confirmThen(go, totp, cancelled){
     var body = intro();
     var code = totp ? withCode(body) : null;
     window.confirmDialog({title: t('Confirm it is you'), icon: 'shield-lock', bodyNode: body,
       requirePassword: true, requireLabel: t('Password'), confirmLabel: t('Confirm and save'),
+      onCancel: cancelled,
       onConfirm: function(password, api){
         var fd = new FormData();
         fd.append('password', password);
@@ -55,15 +56,17 @@
           .catch(function(){ api.error(t('Incorrect.')); });
       }});
   }
-  // window.stepUpThen(go, totp): run go() once this sign-in may do a high-risk action, asking for
-  // the password in place first when the server says it is needed. For a page's own fetch() to a
-  // step_up_required route, so the page (and what was typed in it) stays put; a fetch sent without
-  // it still meets the 403 + X-Reauth-Required that panel.js turns into the confirm page.
-  window.stepUpThen = function(go, totp){
+  // window.stepUpThen(go, totp, cancelled): run go() once this sign-in may do a high-risk action,
+  // asking for the password in place first when the server says it is needed. For a page's own
+  // fetch() to a step_up_required route, so the page (and what was typed in it) stays put; a fetch
+  // sent without it still meets the 403 + X-Reauth-Required that panel.js turns into the confirm
+  // page. `cancelled` (optional) runs when the password dialog is closed without confirming, for a
+  // control that already shows the unsaved change (a switch) to show the saved state again.
+  window.stepUpThen = function(go, totp, cancelled){
     fetch(mp() + '/api/auth/ping?step_up=1', {cache: 'no-store'})
       .then(function(r){ return r.ok ? r.json() : {}; })
       // No answer: go on and let the server decide (it refuses a stale request on its own).
-      .then(function(d){ if (d && d.step_up === true) confirmThen(go, totp); else go(); })
+      .then(function(d){ if (d && d.step_up === true) confirmThen(go, totp, cancelled); else go(); })
       .catch(function(){ go(); });
   };
   document.addEventListener('submit', function(e){
