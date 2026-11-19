@@ -9,9 +9,10 @@
    The card's Start is watched for the settle time; one that dies says so with its log, the journal's lines
    from this start included (b3.log may still end with an earlier clean shutdown).
    Its tail, and the Log, mask the RCON passwords the same shell read (the game config's and b3.ini's), and
-   with no read, any value written as an RCON setting.
+   with no read, any value written as an RCON setting. The Log shows the journal's lines newer than b3.log
+   below it. A card Stop during the watch is a stop, not a death, and a Start right after it works.
 4. Uninstall: the account's tmux and JVM folders in /tmp go (helper and remote form), only real folders it owns.
-5. B3's later games (wet, q3, etl, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
+5. B3's later games: wet, q3 and etl on, csgo and ins off; switched on, the probe, the refusals (SourceMod,
    console.log, ET: Legacy's g_log), the TCP RCON forward, the live port and b3.ini.
 6. The own-plugins folder: off by default; on, a read-only mount and external_plugins_dir; the card asks again.
 
@@ -423,6 +424,84 @@ def _rcon_mask258(sid):
        [x for x in got if x], [_GAMEPW258, _INIPW258 + " ; set by hand", _INIPW258])
 
 
+# The Log (VPS round E, O-E1): b3.log's tail, then, under a heading, the journal's lines from the second after
+# b3.log's last write (a start that died checking b3.ini wrote only there), masked as the rest.
+_JNEWER258 = """#!/bin/bash
+echo "$*" >> "$(dirname "$0")/journal.log"
+case "$*" in *"--since @"[0-9]*) echo 'invalid parser specified in b3::parser (%s)' ;; esac
+exit 0
+"""
+
+
+def _log_journal258(sid):
+    home, data, user = _rcon_home258(sid)
+    b3log = os.path.join(data, "Data", "b3.log")
+    _write258(b3log, _STALE258)
+    os.utime(b3log, (1700000000, 1700000000))
+    real = _ad258.addon_dir(user, "b3")
+
+    def shell(server, u, sh, **_k):
+        r = _bash258(sh.replace('cd "$HOME"', "cd %s" % home).replace(real, data), path_first=home)
+        return r.stdout, r.stderr, r.returncode
+    _p9_patch(_ra258, "game_account_write_refusal", lambda remote, user, reading=False: None)
+    _p9_patch_sm("shell_as_game_user", shell)
+
+    def log():
+        _write258(os.path.join(home, "journal.log"), "")
+        text = (_p9_client(P9_ADMIN).get("/api/server/%d/addons/b3/logs" % sid).get_json() or {}).get("log", "")
+        with open(os.path.join(home, "journal.log"), encoding="utf-8") as fh:
+            return text, _re258.findall(r"--since @(\d+)", fh.read())
+    _write258(os.path.join(home, "journalctl"), _JNEWER258 % _GAMEPW258)
+    newer = log()
+    _write258(os.path.join(home, "journalctl"), "#!/bin/bash\nexit 0\n")
+    none = log()
+    eq("Log (route, bash): b3.log's lines, then under a heading the journal's from the second after b3.log's last "
+       "write, masked (a config error that echoed the RCON password); with none newer, b3.log's alone",
+       (newer, none[0]),
+       ((_STALE258.rstrip("\n") + "\n\n" + _ra258._JOURNAL_NEWER + "\ninvalid parser specified in b3::parser (%s)"
+         % _ad258._MASK, ["1700000001"]), _STALE258))
+
+
+# A card Stop during the Start's watch (VPS round E, O-E2): the watch then sees the add-on stopped. That is the
+# operator's stop, not a death; the Stop answers once the watch has ended, so a Start right after it runs.
+def _stop_in_watch258(sid):
+    stop_rc = [0]
+
+    def shell(server, user, sh, **_k):
+        if "ADDON_STARTED" in sh:     # the Start's shell; its watch sees the add-on gone
+            return "ADDON_DIED\ntail.b64=%s\n" % _ad258._b64("EXITING: 0\n"), "", 26
+        return "", "", stop_rc[0]
+    _p9_patch(_ra258, "game_account_write_refusal", lambda remote, user, reading=False: None)
+    _p9_patch(_ra258, "threading", _p9_threading(_P9Thread))
+    _p9_patch(_ra258, "time", _types258.SimpleNamespace(monotonic=_tm258.monotonic, sleep=lambda _s: _p9_drain()))
+    _p9_patch_sm("shell_as_game_user", shell)
+    c, url, key = _p9_client(P9_ADMIN), "/api/server/%d/addons/b3/" % sid, (sid, "b3")
+
+    def job(pop=False):
+        with _ra258._JOBS_LOCK:
+            return dict((_ra258._JOBS.pop(key, None) if pop else _ra258._JOBS.get(key)) or {})
+    first = c.post(url + "start").status_code
+    again = c.post(url + "start")
+    stop = c.post(url + "stop")
+    after_stop, audit = job(), _p9_audit("addon_start")
+    next_start = c.post(url + "start").status_code
+    _p9_drain()
+    alone = job(pop=True).get("why")
+    c.post(url + "start")
+    stop_rc[0] = 1
+    c.post(url + "stop")
+    _p9_drain()
+    failed_stop = job(pop=True).get("why")
+    eq("Start then Stop during its watch (route): a second Start is told the start is still watched; the Stop waits "
+       "for the watch, says stopped, leaves no error and the start is audited as stopped from the card; a Start "
+       "right after runs; a death with no Stop, or after a Stop that failed, is still the death",
+       (first, again.status_code, (again.get_json() or {}).get("error"), stop.status_code,
+        (stop.get_json() or {}).get("message"), after_stop, audit.success, audit.detail, next_start, alone,
+        failed_stop),
+       (202, 409, _ra258._BUSY_START, 200, "The add-on was stopped.", {}, True,
+        "b3 stopped from the card during the start's watch", 202, _ra258._START_DIED, _ra258._START_DIED))
+
+
 # ── 4. /tmp at uninstall ────────────────────────────────────────────────────────────────────────
 def _tmp_tree258(name, tmux):
     base = os.path.join(_TMP258, name)
@@ -511,17 +590,18 @@ def _text258(*parts):
 
 # ── 5. B3's later games ─────────────────────────────────────────────────────────────────────────
 def _later_games258():
-    eq("later games: wet, q3, etl, csgo and ins have their parsers but are off until switched on",
+    eq("later games: wet, q3 and etl are switched on (VPS round E); csgo and ins have their parsers but stay off",
        (_ad258.B3_LATER_GAMES, [_ad258.offered(g) for g in ("wet", "q3", "csgo", "ins", "etl", "arma3", "cmw")]),
-       ((("wet", "et", False), ("q3", "q3", False), ("etl", "et", False), ("csgo", "csgo", False),
-         ("ins", "insurgency", False)), [[], [], [], [], [], [], []]))
+       ((("wet", "et", True), ("q3", "q3", True), ("etl", "et", True), ("csgo", "csgo", False),
+         ("ins", "insurgency", False)), [["b3"], ["b3"], [], [], ["b3"], [], []]))
     warn = next(iter(_re258.findall(r"T\('(Legacy, opt-in: B3 [^']*)'\)",
                                     _text258("panel", "static", "js", "server_addons.js"))), "")
     said = [warn] + [_json258.loads(_text258("panel", "translations", lang, "nx.json")).get(warn, "")
                      for lang in ("es", "fr")]
-    names = ("Enemy Territory", "Quake", "ET: Legacy", "Counter-Strike", "Insurgency")
-    eq("the card's legacy warning (and its es/fr text) names Soldier of Fortune 2 and no switched-off game",
-       [("Soldier of Fortune 2" in t, [n for n in names if n in t]) for t in said], [(True, [])] * 3)
+    names = ("Soldier of Fortune 2", "Wolfenstein: Enemy Territory", "ET: Legacy", "Quake 3 Arena", "Counter-Strike",
+             "Insurgency")
+    eq("the card's legacy warning (and its es/fr text) names Soldier of Fortune 2 and the switched-on games, and no "
+       "switched-off one", [[n for n in names if n in t] for t in said], [list(names[:4])] * 3)
     eq("later games: RCON settings, logs, TCP RCON and SourceMod folders",
        ([_ad258.RCON_SETTING[g] for g in ("q3", "csgo", "ins")], [_ad258.game_log_name(g) for g in ("q3", "csgo")],
         _ad258.RCON_TCP_GAMES, sorted(_ad258.SOURCEMOD_DIR)),
@@ -641,22 +721,17 @@ _GLOG258 = 'exec legacy.cfg\nset g_log "%s"\n//legacy.cfg\nset g_log ""\n'
 
 
 def _install_etl258(ids):
-    games = _ad258.CATALOG["b3"]["games"]
-    games["etl"] = "et"
-    try:
-        said = [_etl_try258(ids, *a) for a in (
-            ("27961", 'set g_log "early.log"\nexec legacy.cfg\n//legacy.cfg\nset g_log ""\n', "early.log\n"),
-            ("27961", _GLOG258 % "logs/etl.log", "etconsole.log\n"),
-            ("27961", _GLOG258 % "etserver.log", "etconsole.log\n"),
-            ("", _GLOG258 % "etserver.log", "etconsole.log\netserver.log\n"),
-            ("27961", _GLOG258 % "etserver.log", "etconsole.log\netserver.log\n"))]
-    finally:
-        games.pop("etl", None)
+    said = [_etl_try258(ids, *a) for a in (
+        ("27961", 'set g_log "early.log"\nexec legacy.cfg\n//legacy.cfg\nset g_log ""\n', "early.log\n"),
+        ("27961", _GLOG258 % "logs/etl.log", "etconsole.log\n"),
+        ("27961", _GLOG258 % "etserver.log", "etconsole.log\n"),
+        ("", _GLOG258 % "etserver.log", "etconsole.log\netserver.log\n"),
+        ("27961", _GLOG258 % "etserver.log", "etconsole.log\netserver.log\n"))]
     refusals = [(d, inst) for _c, d, inst in said[:4]]
     code, _d, inst = said[4]
     stdin = (inst or ("", "", ""))[2] or ""
     unit = next((t for p, t in _puts258((inst or ("", ""))[1]).items() if p.endswith(".container")), "")
-    eq("install (ET: Legacy, switched on): no g_log says what to add and where; a folder in g_log, a log not "
+    eq("install (ET: Legacy, on as shipped): no g_log says what to add and where; a folder in g_log, a log not "
        "written yet and a stopped server are refused, each saying so",
        [("set g_log \"etserver.log\" below the line exec legacy.cfg" in refusals[0][0],
          "serverfiles/etmain/etlserver.cfg" in refusals[0][0]), "plain file name" in refusals[1][0],
@@ -685,14 +760,9 @@ def _apply_etl258(ids):
                               "state.b3=active\nb3ini.b64=%s\ngeoini.b64=\n" % (
                                   _ad258._b64(_json258.dumps(meta)), _ad258._b64(_B3INI258)))
     calls = _host258(answer)
-    games = _ad258.CATALOG["b3"]["games"]
-    games["etl"] = "et"
-    try:
-        code = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/settings" % ids["etl"],
-                                         json={"geolocation": "off", "plugins": ["tk"]}).status_code
-        _p9_drain()
-    finally:
-        games.pop("etl", None)
+    code = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/settings" % ids["etl"],
+                                     json={"geolocation": "off", "plugins": ["tk"]}).status_code
+    _p9_drain()
     sh = next((c[1] for c in calls if c[0] == "sh" and "restart lgsm-addon-b3" in c[1]), "")
     unit = next((t for p, t in _puts258(sh).items() if p.endswith(".container")), "")
     eq("apply (ET: Legacy): the unit keeps the game log's folder, serverfiles/legacy",
@@ -932,6 +1002,7 @@ try:
     _ids258 = _fixture258()
     try:
         for _step258 in (lambda ids: _start_route258(ids["cod2"]), lambda ids: _rcon_mask258(ids["cod2"]),
+                         lambda ids: _log_journal258(ids["cod2"]), lambda ids: _stop_in_watch258(ids["cod2"]),
                          _row_geo_off258, _install_csgo258, _install_etl258, _apply_etl258, _own258):
             _p9_restore_all()
             _p9_arm(who="part258")
