@@ -6836,7 +6836,7 @@ try:
         _bad = _rh_unsafe(_cmd, _r)
         if _bad:
             return _r, NS(returncode=98, stderr="not run, it reaches past the sandbox: %s" % _bad)
-        _p = _sh_sub.run(["bash", "-c", "set -uo pipefail\nsudo() { \x22$@\x22; }\n" + _cmd],
+        _p = _sh_sub.run([_shutil.which("bash") or "/bin/bash", "-c", "set -uo pipefail\nsudo() { \x22$@\x22; }\n" + _cmd],
                          capture_output=True, text=True, check=False,
                          env={"PATH": _rh_bin, "HOME": _rh_sb, "LC_ALL": "C"})
         return _r, _p
