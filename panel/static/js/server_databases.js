@@ -110,9 +110,10 @@ function dbDrawGrant(g, st) {
   if (!u.value && !p.value) { u.value = g.user; p.value = st.grantPw; }
 }
 
-// Setting up MariaDB, and storing, clearing or showing its admin login, are step_up_required routes: a
-// sign-in past the confirmation window confirms the password in a dialog first (step_up_form.js's
-// window.stepUpThen); without it the server's 403 still sends the tab to the confirm page and back.
+// Setting up MariaDB, storing, clearing or showing its admin login, choosing a database server on another
+// machine, and a database's password reset, delete and restore are step_up_required routes: a sign-in past
+// the confirmation window confirms the password in a dialog first (step_up_form.js's window.stepUpThen), so
+// what was typed stays on the page; without it the server's 403 sends the tab to the confirm page and back.
 function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 
 (function () {
@@ -462,7 +463,7 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     if (!db) return;
     window.confirmDialog({title: T('Reset password'), icon: 'key', confirmClass: 'btn-warning', confirmLabel: T('Reset password'),
       bodyText: T('Anything using the old password stops connecting until you update its config.'),
-      onConfirm: function () { void act(id, 'reset-password', {}, T('Setting a new password…')); }});
+      onConfirm: function () { _dbStepUp(function () { void act(id, 'reset-password', {}, T('Setting a new password…')); }); }});
   };
 
   window.dbDelete = function (id) {
@@ -471,7 +472,7 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     window.confirmDialog({title: T('Delete database'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Delete'),
       bodyText: T('Delete this database and its user? A copy is kept on the host for 30 days.'),
       requireText: db.name, requireLabel: TF('Type the database name ({name}) to confirm:', {name: db.name}),
-      onConfirm: function () { void act(id, 'delete', {confirm: db.name}, T('Deleting the database…')); }});
+      onConfirm: function () { _dbStepUp(function () { void act(id, 'delete', {confirm: db.name}, T('Deleting the database…')); }); }});
   };
 
   window.dbRestore = function (id) {
@@ -480,7 +481,7 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     window.confirmDialog({title: T('Restore from dump'), icon: 'arrow-counterclockwise', confirmClass: 'btn-warning', confirmLabel: T('Restore'),
       bodyText: TF('Replace this database\'s contents with panel-db-dumps/{file} from this server\'s files? Each backup writes that file; a restored backup brings it back.', {file: db.name + '.sql.gz'}),
       requireText: db.name, requireLabel: TF('Type the database name ({name}) to confirm:', {name: db.name}),
-      onConfirm: function () { void act(id, 'restore', {confirm: db.name}, T('Restoring the database…')); }});
+      onConfirm: function () { _dbStepUp(function () { void act(id, 'restore', {confirm: db.name}, T('Restoring the database…')); }); }});
   };
 
   window.dbAdminReveal = function (btn) {
@@ -555,6 +556,11 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
 
   window.dbRemoteSave = function (ev) {
     if (ev) ev.preventDefault();
+    if (c.st.busy || !c.el('db-remote-kind').value) return;
+    // The fields are read once the password is confirmed: they stay as typed while the dialog is open.
+    _dbStepUp(remoteSaveNow);
+  };
+  function remoteSaveNow() {
     var v = c.el('db-remote-kind').value, body;
     if (c.st.busy || !v) return;
     if (v.indexOf('h:') === 0) body = {kind: 'managed', db_remote_id: Number.parseInt(v.slice(2), 10)};
@@ -564,12 +570,15 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     c.st.busy = true;
     c.say(T('Checking the database server from this host…'));
     c.postJson(remoteApi(), body).then(function (r) { c.el('db-remote-pw').value = ''; if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
-  };
+  }
 
   window.dbRemoteClear = function () {
     if (c.st.busy) return;
-    c.st.busy = true;
-    c.postJson(remoteApi(), {clear: true}).then(function (r) { if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
+    _dbStepUp(function () {
+      if (c.st.busy) return;
+      c.st.busy = true;
+      c.postJson(remoteApi(), {clear: true}).then(function (r) { if (r.ok) c.show('db-remote', false); return c.after(r, true); }).catch(c.failed);
+    });
   };
 
 })();

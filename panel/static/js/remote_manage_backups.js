@@ -714,10 +714,14 @@ function deleteBackup(name,btn){
         .catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(btn) btn.disabled=false; });
     }});
 }
+// A restore is a step_up_required route: a sign-in past the confirmation window confirms the password
+// in a dialog first (step_up_form.js's window.stepUpThen), so a typed passphrase is not lost to the
+// confirm page.
+function _bkStepUp(go){ if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 function restoreBackup(name,encrypted,btn){
   confirmDialog({title:'Restore backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
     bodyText:tf('Restore this backup?\n\n{name}\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.', {name: name}),
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');
       // No passphrase on the first attempt even for an encrypted archive: the server falls back to
@@ -725,7 +729,7 @@ function restoreBackup(name,encrypted,btn){
       // archive from ANOTHER panel (or from before the passphrase changed) needs to be asked for,
       // so the common case stays one click.
       void _bkRestore(name, null, btn, encrypted);   // _bkRestore ends in its own .catch
-    }});
+    }); }});
 }
 function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
   var body={name:name}; if(passphrase) body.passphrase=passphrase;
@@ -771,13 +775,13 @@ function _bkAskSkipSafety(name, passphrase, btn, encrypted, why){
   confirmDialog({title:'No safety copy', icon:'exclamation-triangle',
     confirmLabel:'Restore anyway', confirmClass:'btn-danger',
     bodyText:why,
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       // A plain confirmDialog has already closed itself by the time this runs (panel.js) — only
       // the requirePassword form leaves it open for the caller.
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');
       void _bkRestore(name, passphrase, btn, encrypted, true);   // _bkRestore ends in its own .catch
-    }});
+    }); }});
 }
 function _bkAskPassphrase(name, btn){
   confirmDialog({title:'Passphrase needed', icon:'shield-lock', confirmLabel:'Restore',
@@ -785,7 +789,8 @@ function _bkAskPassphrase(name, btn){
     requireLabel:'Backup passphrase',
     requirePlaceholder:'The passphrase this backup was written with',
     bodyText:'This backup is encrypted, and this panel\'s configured passphrase does not open it — it was written by another panel, or before the passphrase was changed.',
-    onConfirm:function(val, api){
+    // The passphrase dialog stays open under the password one, so a cancelled confirmation keeps what was typed.
+    onConfirm:function(val, api){ _bkStepUp(function(){
       fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({name:name, passphrase:val})})
         .then(r=>r.json()).then(function(d){
@@ -802,7 +807,7 @@ function _bkAskPassphrase(name, btn){
           else api.error(d.message||'Could not restore.');
         })
         .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
-    }});
+    }); }});
 }
 
 function bkShowEncState(on, short){

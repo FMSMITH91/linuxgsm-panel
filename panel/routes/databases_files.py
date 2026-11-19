@@ -338,12 +338,22 @@ def _new_upload(db_id, size):
 
 
 @contextmanager
-def _working(e):
-    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends."""
+def _working(e, alone=False):
+    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends.
+
+    With `alone` (a piece) it yields False, and marks nothing, while another request on the upload is
+    still running: a piece the page sends again after losing an answer must not append beside the
+    first one, which is still writing the same staged piece on the host.
+    """
     with _UPLOADS_LOCK:
-        e["busy"] = e.get("busy", 0) + 1
+        free = not e.get("busy")
+        if free or not alone:
+            e["busy"] = e.get("busy", 0) + 1
+    if alone and not free:
+        yield False
+        return
     try:
-        yield
+        yield True
     finally:
         with _UPLOADS_LOCK:
             e["busy"] -= 1
@@ -465,7 +475,10 @@ def _upload_piece(gs, r, uid):
     refused = _piece_refusal(e, data, off)
     if refused:
         return refused
-    with _working(e):
+    with _working(e, alone=True) as mine:
+        if not mine:
+            return jsonify({"success": False, "busy": True, "message": i18n.tr(
+                "The previous piece is still being written. Try again in a moment.")}), 409
         state, val = _upcmd(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
     if state == "ok" and str(val).isdecimal():
         return jsonify({"success": True, "received": int(val)})

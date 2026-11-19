@@ -501,6 +501,10 @@ function dbmEditorField(c, cell, isNew) {
   var T = dbmT, node = dbmNode, readJson = dbmReadJson, failText = dbmFailText;
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
   function el(id) { return document.getElementById(id); }
+  // Starting a dump upload, and the password reset, restore and delete below, are routes that ask a sign-in
+  // past the confirmation window for the password again: asked here in a dialog over the manager (step_up_form.js's
+  // window.stepUpThen), so the chosen file and the typed name stay; a bare request would leave for the confirm page.
+  function stepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 
   // ── dumps ───────────────────────────────────────────────────────────────────────────────────────
   window.dbmDump = function () {
@@ -527,14 +531,32 @@ function dbmEditorField(c, cell, isNew) {
   }
   // An upload keeps the database it was started for (`up`: its URL and name), whatever the dialog is
   // opened on meanwhile; each request is marked as the person's own (postJson's `mine`).
-  function sendPieces(up, uid, file, chunk, from) {
+  // A piece whose answer was lost (no answer, a proxy's error page, a host that could not be read, or the
+  // server still busy with the same piece) is sent again at the same offset after a pause (PIECE_RETRY_MS):
+  // one the host did append comes back 409 with where it is now. Only once the pauses are spent does the
+  // upload fail (and the caller cancel it).
+  var PIECE_RETRY_MS = [2000, 5000, 10000, 20000];
+  function pieceRetryable(res) {
+    return res.status >= 500 || res.d.busy === true || (res.status === 200 && res.d.success !== true && !res.d.resume);
+  }
+  function sendPieces(up, uid, file, chunk, from, lost) {
+    lost = lost || 0;
     if (from >= file.size) return Promise.resolve(true);
     var piece = file.slice(from, Math.min(file.size, from + chunk));
+    function again(err) {
+      if (lost >= PIECE_RETRY_MS.length) throw err;
+      return new Promise(function (done) { setTimeout(done, PIECE_RETRY_MS[lost]); })
+        .then(function () { return sendPieces(up, uid, file, chunk, from, lost + 1); });
+    }
     return fetch(up.base + '/upload/' + uid + '?offset=' + from,
                  {method: 'POST', headers: {'Content-Type': 'application/octet-stream', 'X-Panel-Background': '0'}, body: piece})
-      .then(readJson).then(function (res) {
+      .then(readJson, function (err) { return {lostErr: err}; }).then(function (res) {
+        if (res.lostErr) return again(res.lostErr);
         if (res.status === 409 && res.d.resume) return sendPieces(up, uid, file, chunk, res.d.received);
-        if (!res.ok) throw new Error(failText(res));
+        if (!res.ok || res.d.success !== true) {
+          if (pieceRetryable(res)) return again(new Error(failText(res)));
+          throw new Error(failText(res));
+        }
         progress(TF('Uploaded {p}%', {p: Math.floor(100 * res.d.received / file.size)}));
         return sendPieces(up, uid, file, chunk, res.d.received);
       });
@@ -578,20 +600,24 @@ function dbmEditorField(c, cell, isNew) {
     window.confirmDialog({title: T('Restore from a dump file'), icon: 'upload', confirmClass: 'btn-warning', confirmLabel: T('Upload and restore'),
       bodyText: TF('Replace the contents of {name} with {file}?', {name: st.db.name, file: f.name}),
       requireText: st.db.name, requireLabel: TF('Type the database name ({name}) to confirm:', {name: st.db.name}),
-      onConfirm: function () { upload(f); }});
+      onConfirm: function () { stepUp(function () { upload(f); }); }});
   };
 
   // ── password and delete (the Databases tab's own routes) ────────────────────────────────────────
   function act(tail, body, busyText, after) {
     if (st.busy) return;
-    st.busy = true;
-    say(busyText);
-    postJson(api('/' + tail), body).then(function (res) {
-      st.busy = false;
-      if (!res.ok || res.d.success === false) { say(failText(res), 'text-danger'); return; }
-      say('✓ ' + res.d.message, 'text-success');
-      if (after) after();
-    }).catch(failed);
+    var url = api('/' + tail);           // the database the dialog was confirmed for, whatever is opened meanwhile
+    stepUp(function () {
+      if (st.busy) return;
+      st.busy = true;
+      say(busyText);
+      postJson(url, body).then(function (res) {
+        st.busy = false;
+        if (!res.ok || res.d.success === false) { say(failText(res), 'text-danger'); return; }
+        say('✓ ' + res.d.message, 'text-success');
+        if (after) after();
+      }).catch(failed);
+    });
   }
   window.dbmReset = function () {
     window.confirmDialog({title: T('Reset password'), icon: 'key', confirmClass: 'btn-warning', confirmLabel: T('Reset password'),

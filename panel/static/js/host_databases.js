@@ -7,6 +7,9 @@
   if (!card) return;
   function T(s) { return window.t ? window.t(s) : s; }
   function api(tail) { return MOUNT + '/api/remote/' + REMOTE_ID + '/databases' + (tail || ''); }
+  // The delete asks a sign-in past the confirmation window for the password again: asked in a dialog here
+  // (step_up_form.js's window.stepUpThen), so the page stays put instead of leaving for the confirm page.
+  function stepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 
   function item(db) {
     var li = document.createElement('li');
@@ -39,13 +42,13 @@
     window.confirmDialog({title: T('Delete database'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Delete'),
       bodyText: T('Delete this database and its user? A copy is kept on the host for 30 days.'),
       requireText: name, requireLabel: window.tf('Type the database name ({name}) to confirm:', {name: name}),
-      onConfirm: function () {
+      onConfirm: function () { stepUp(function () {
         fetch(api('/' + id + '/delete'), {method: 'POST', headers: {'Content-Type': 'application/json'},
                                           body: JSON.stringify({confirm: name})})
           .then(function (r) { return r.json(); })
           .then(function (d) { if (window.toast) window.toast((d && d.message) || T('Failed'), d && d.success ? 'success' : 'danger'); return window.hostDbLoad(); })
           .catch(function () { if (window.toast) window.toast(T('Could not reach the panel. Try again.'), 'danger'); });
-      }});
+      }); }});
   };
 
   void window.hostDbLoad();

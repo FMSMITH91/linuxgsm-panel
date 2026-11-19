@@ -350,32 +350,45 @@ function _tsUpWait(remoteId) {
       fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-check').then(r => r.json()).then(s => {
         if (s.running) {
           clearInterval(t); delete _tsUpPolls[remoteId];
-          var w = document.getElementById('ts-wait-' + remoteId);
-          if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! Finalizing (UFW)…</span>';
-          // Always allow the tailscale0 interface in UFW, then offer to switch the
-          // panel's connect address to Tailscale and drop public SSH.
-          fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-finalize', {method:'POST'})
-            .then(r => r.json()).then(f => {
-              var ip = ((f.tailscale_ip || s.tailscale_ip || '').split(',')[0] || '').trim();
-              // Only when the finalize says it happened. The route answers ufw_allowed=false when UFW
-              // was inactive, absent or unreadable (so no allow was issued) — and a refused or
-              // unreachable finalize carries no such key at all — yet this sentence printed on all
-              // of them, about a firewall nobody had touched.
-              var ufwText = f.ufw_allowed === true
-                ? 'UFW now allows the tailscale0 interface.'
-                : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
-              if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + tfHtml('Connected! IP: {ip}', {ip: {html: '<code>' + escapeHtml(ip) + '</code>'}})  // nosemgrep
-                + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
-                + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
-            })
-            // escapeHtml here too: the success path above escapes this exact value, and it is the
-            // remote host's `tailscale status --json` output either way — a finalize failure does
-            // not make it any more trustworthy.
-            .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + tfHtml('Connected! IP: {ip}', {ip: s.tailscale_ip || ''}) + '</span>'; });  // nosemgrep
+          _tsFinalize(remoteId, s.tailscale_ip || '');
         }
       }).catch(function(){});
     }, 4000);
     _tsUpPolls[remoteId] = t;   // so the next press replaces this one instead of adding to it
+}
+
+// Always allow the tailscale0 interface in UFW, then offer to switch the panel's connect address to
+// Tailscale and drop public SSH. A step_up_required route, and approving the machine can take minutes,
+// long enough for the sign-in to pass the confirmation window: so the password is confirmed in place
+// first. Until the finalize is sent the line keeps a "Finish setup" button, so a cancelled dialog can be
+// tried again (reopening Tailscale Setup on a running node offers only the move, never this step).
+function _tsFinalize(remoteId, ipHint) {
+  var w = document.getElementById('ts-wait-' + remoteId);
+  if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! Finalizing (UFW)…</span> '  // nosemgrep - literals only
+    + '<button type="button" class="btn btn-sm btn-outline-secondary py-0"' + _da('_tsFinalize', [remoteId, ipHint]) + '>Finish setup</button>';
+  _mrStepUp(function() { _tsFinalizeNow(remoteId, ipHint); });
+}
+function _tsFinalizeNow(remoteId, ipHint) {
+  var w = document.getElementById('ts-wait-' + remoteId);
+  if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! Finalizing (UFW)…</span>';
+  fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-finalize', {method:'POST'})
+    .then(r => r.json()).then(f => {
+      var ip = ((f.tailscale_ip || ipHint || '').split(',')[0] || '').trim();
+      // Only when the finalize says it happened. The route answers ufw_allowed=false when UFW
+      // was inactive, absent or unreadable (so no allow was issued) — and a refused or
+      // unreachable finalize carries no such key at all — yet this sentence printed on all
+      // of them, about a firewall nobody had touched.
+      var ufwText = f.ufw_allowed === true
+        ? 'UFW now allows the tailscale0 interface.'
+        : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
+      if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + tfHtml('Connected! IP: {ip}', {ip: {html: '<code>' + escapeHtml(ip) + '</code>'}})  // nosemgrep
+        + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
+        + '<div class="mt-2">' + _tsMigrateOffer(remoteId) + '</div>';
+    })
+    // escapeHtml here too: the success path above escapes this exact value, and it is the
+    // remote host's `tailscale status --json` output either way — a finalize failure does
+    // not make it any more trustworthy.
+    .catch(function(){ if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> ' + tfHtml('Connected! IP: {ip}', {ip: ipHint}) + '</span>'; });  // nosemgrep
 }
 
 // `btn` is the Install button: disabled while the request runs, and for good once it succeeded. A
