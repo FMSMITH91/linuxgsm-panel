@@ -463,7 +463,7 @@ function fbSpaceLines(parts, keep, dk){
 // not ask, the dialog never shows and the change goes straight through.
 // A switch or box has already changed when this runs: a cancelled dialog reads the stored settings
 // back, so the card never shows a change that was not saved.
-function saveBackupSettings(){ _bkStepUp(_saveBackupSettingsNow, loadBackups); }
+function saveBackupSettings(){ _bkStepUp(_saveBackupSettingsNow, function(){ loadBackups(); }); }
 function _saveBackupSettingsNow(){
   var enabled=document.getElementById('bk-enabled').checked;
   // An EMPTY or non-numeric box must not be sent as NaN — JSON.stringify turns that into null,

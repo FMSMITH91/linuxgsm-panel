@@ -940,3 +940,18 @@ _cd261 = _run249("confirm dialog (node): the cancel hook", _CDJS261)
 if _cd261 is not None:
     eq("confirm dialog (node): Cancel calls onCancel once (a second press does nothing), Confirm never does, Escape "
        "does, and a dialog without the hook cancels quietly", _cd261, ["cancel", "confirm", "cancel"])
+
+_SUJS261 = (_SETTLE249 + r"""
+global.window = global; global.MOUNT = ''; let opts = null;
+global.fetch = (url) => Promise.resolve({ok: true, json: () => Promise.resolve({step_up: /step_up=1/.test(url)})});
+global.confirmDialog = o => { opts = o; }; global.t = s => s;
+global.document = {createElement: () => ({appendChild(){}, style: {}}), addEventListener(){}};
+""" + _js249("step_up_form.js") + r"""
+(async () => { const cb = () => 1; let went = 0;
+  window.stepUpThen(() => { went++; }, false, cb); await settle();
+  console.log(JSON.stringify({passed: !!opts && opts.onCancel === cb, went})); })();
+""")
+_su261 = _run249("step-up form (node): the cancel hook passed on", _SUJS261)
+if _su261 is not None:
+    eq("step-up form (node): stepUpThen hands its cancel callback to the password dialog, and runs nothing while the "
+       "dialog is open", _su261, {"passed": True, "went": 0})
