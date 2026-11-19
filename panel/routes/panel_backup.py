@@ -867,6 +867,7 @@ def _register_panel_backups(app):
     @app.route("/api/panel/backup/delete", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # the panel's own backups (its database, config and keys) cannot be had back
     def api_panel_backup_delete():
         # _json_str, because a non-string reached backup._safe_path and raised TypeError out of
         # os.path — "expected str, bytes or os.PathLike object, not int", as a 500.
@@ -935,6 +936,7 @@ def _register_panel_backups(app):
     @app.route("/api/panel/backup/settings", methods=["POST"])
     @login_required
     @superadmin_required
+    @step_up_required       # can switch the backups, or their encryption, off
     def api_panel_backup_settings():
         data = _json_body()
         # Absent key = leave it alone, so an unrelated settings save cannot silently turn

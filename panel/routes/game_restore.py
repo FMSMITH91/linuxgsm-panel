@@ -46,6 +46,7 @@ from panel.ops import backup as bk
 from panel.ops.ssh_manager import list_game_backups, shell_as_game_user
 from panel.ops import ssh_manager as _sm
 from panel.routes import _shared
+from panel.security.account_guard import step_up_required
 from panel.security.auth import RESTORE_BACKUP, get_game, log_action, permission_required, server_access_required
 from panel.services import game_restore as grs, lgsm_players as _lgp
 from panel.services.monitoring import _end_offline_window, _mark_expected_offline
@@ -306,6 +307,8 @@ def register(app):
     @app.route("/api/panel/backup/game/<int:server_id>/restore", methods=["POST"])
     @login_required
     @permission_required(RESTORE_BACKUP)
+    # Above server_access_required, which reads the view's own parameters (a wrapper has none).
+    @step_up_required       # replaces the server's whole home: confirm the password, as a database restore does
     @server_access_required
     def api_panel_backup_game_restore(server_id):
         """Start restoring the server from one of its backups; the work runs in the background."""

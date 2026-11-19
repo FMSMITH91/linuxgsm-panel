@@ -169,6 +169,18 @@ def _geoip_for(gs, addon_id, rec, geo, kind):
     return why
 
 
+def _unit_refusal(gs, p):
+    """Why the unit can't be written now ("" when it can): installed, and the install's checks on the log and ids.
+
+    Without them a change wrote `Volume=:/gamelog:ro` (the log not found) or a unit with no
+    User=/Group= (no ids), and the restart left the add-on down with only "didn't start".
+    """
+    from panel.routes import addons as _ra   # it imports this module: read at call time
+    if p["meta"] is None:
+        return _NOT_INSTALLED
+    return _ra._log_refusal(gs, p) or (_ra._NO_IDS if p["ids"] is None else "")
+
+
 def _change_steps(gs, addon_id, who, kind, choice=None):
     """A settings change or an update: ("", "") when the add-on runs again, else (why, log tail)."""
     got = _read(gs, addon_id)
@@ -176,8 +188,9 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
         return _NO_READ, ""
     p, b3ini, geoini = got
     meta = p["meta"]
-    if meta is None:
-        return _NOT_INSTALLED, ""
+    why = _unit_refusal(gs, p)
+    if why:
+        return why, ""
     now = _settings_now(addon_id, meta, b3ini, choice)
     geo, own = now[0], now[2] and addon_id == _ad.B3
     rec = dict(meta, **_record(addon_id, now, meta, kind))

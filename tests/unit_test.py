@@ -2068,6 +2068,9 @@ _r16d_wrap_ts_handles()
 # manager's folders, appends, logged ufw rules, the arithmetic scan, backup encryption) runs install.sh
 # text under bash, a loopback web server and part12's app with part135's stand-in hosts and part190's
 # restore sandbox; imports part01, 06, 12, 135 and 190.
+# part263 (review pass 31, the app side: the SFTP service's panel answers and cut-off uploads, key removal and
+# last-used, add-on job guards, subordinate ids, Tailscale v6 exemptions, GMod cron, duplicate JSON keys, the
+# reboot census) drives part12's app and runs shell under bash; was part260 on its branch.
 # part261 (review pass 31, the browser side: every step-up route fetched inside a step-up helper, lost
 # upload pieces sent again, Manage add-ons opening Files & Config, the SFTP card with Tailscale down) runs
 # node over panel/static/js and drives part12's app; imports part01, 05, 12, 221, 226 and 249.
@@ -2089,7 +2092,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part221", "part222", "part223", "part224", "part225", "part226", "part227", "part228", "part229", "part230", "part231", "part232", "part233", "part234",
     "part235", "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244",
     "part245", "part246", "part247", "part248", "part249", "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258",
-    "part259", "part260", "part261", "part262", "part15")
+    "part259", "part260", "part261", "part262", "part263", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

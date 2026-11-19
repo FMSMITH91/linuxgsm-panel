@@ -512,14 +512,15 @@ def _r40_running_work(gs):
 
 
 def _r36j_route_jobs(gid, live=()):
-    """What the routes and sweeps are running on server `gid`, by r36j kind (plus a content install).
+    """What the routes and sweeps are running on server `gid`, by r36j kind (plus a content or add-on install).
 
     A mods install/remove, a Run now, a scheduled wipe, a queued stop/restart, a server-page action.
     A server-page action registers "action" for its run (server_detail): with `live` (the server's
     running long actions) given, it is left out, since the live chain's blocker already names it.
     """
-    jobs = (["content"] if _content_running(gid) else []) + r36j_route_jobs(gid)
-    return [k for k in jobs if not (k == "action" and live)]
+    from panel.routes.addons import job_running     # an add-on install or update: lazily, routes import this
+    jobs = (["content"] if _content_running(gid) else []) + (["addon"] if job_running(gid) else [])
+    return [k for k in jobs + r36j_route_jobs(gid) if not (k == "action" and live)]
 
 
 def _content_running(gid):

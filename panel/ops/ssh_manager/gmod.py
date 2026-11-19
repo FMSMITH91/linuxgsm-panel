@@ -502,11 +502,17 @@ def _read_content_crontab(server, content_user):
     return ct, ct_read
 
 
-def _crontab_updates_content(ct):
-    """True when a crontab already carries an active LinuxGSM `update` / `update-lgsm` job."""
+def _crontab_updates(ct, lgsm):
+    """True when a crontab already carries an active job that updates the content of script `lgsm`.
+
+    Only `<script> update` (or u, force-update, fu) for THAT script counts: any line holding the
+    word "update" (another game's job, an `apt update`) used to make the panel write no content cron
+    at all, so content games it installed next to the admin's own job never got their weekly update.
+    """
+    job = re.compile(r"(?:^|[\s/])%s\s+(?:update|u|force-update|fu)(?=$|[\s;&|>])" % re.escape(lgsm))
     for line in (ct or "").splitlines():
         s = line.strip()
-        if s and not s.startswith("#") and re.search(r"\bupdate(-lgsm)?\b", s):
+        if s and not s.startswith("#") and job.search(s):
             return True
     return False
 
@@ -536,15 +542,13 @@ def ensure_content_update_cron(server, content_user):
     """
     if not _CU_NAME_RE.match(content_user or ""):
         return False
-    # If the content user already automates updates in its OWN crontab (e.g. a hand-rolled content box
-    # like an existing srcds), leave it alone — never add duplicate update jobs on top of the admin's.
+    # A game the content user already updates in its OWN crontab (e.g. a hand-rolled content box like
+    # an existing srcds) is left to that job — never a duplicate update on top of the admin's.
     ct, ct_read = _read_content_crontab(server, content_user)
     if not ct_read:
         _core._log.warning("content update cron: could not read %s's crontab — leaving the cron "
                            "as it is", content_user)
         return None
-    if _crontab_updates_content(ct):
-        return True   # the user already updates its content; don't manage a second cron
     names = _installed_content_lgsm_names(server, content_user)
     if names is None:
         # An unreadable sweep is not an empty host. Removing the cron on one is how every content
@@ -552,6 +556,8 @@ def ensure_content_update_cron(server, content_user):
         _core._log.warning("content update cron: install sweep unreadable for %s — leaving the "
                            "cron as it is", content_user)
         return None
+    # A game the user already updates in its own crontab is left to that job (never a second one).
+    names = [n for n in names if not _crontab_updates(ct, n)]
     if not names:
         _core.run_privileged(server, "content-cron-remove", [content_user], timeout=10,
                        merge_stderr=False)

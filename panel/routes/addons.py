@@ -36,6 +36,7 @@ _NO_DB = "Choose one of this server's databases for the add-on."
 _DB_TAKEN = "Another add-on already uses that database. Each add-on needs its own."
 _BUSY = "The add-on is already being installed. Wait for it to finish."
 _BUSY_START = "The add-on's last start is still being watched. Wait a few seconds and try again."
+_BUSY_REMOVE = "The add-on is still being installed, updated or started. Wait for it to finish, then remove it."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
 _NO_LOG_NAMED = "Couldn't find the game's log ({log}). Start the server once so it writes one, then install again."
@@ -113,6 +114,39 @@ def _databases(gs, found):
             used[name] = k
     rows = GameDatabase.query.filter_by(game_server_id=gs.id).order_by(GameDatabase.name).all()
     return [{"id": r.id, "name": r.name, "used_by": used.get(r.name, "")} for r in rows]
+
+
+def job_running(gs_id):
+    """Whether an add-on install, update or settings change is running on server `gs_id` (the reboot census).
+
+    Not a start being watched: that is 30 seconds, and a reboot starts the add-on again anyway.
+    """
+    with _JOBS_LOCK:
+        return any(k[0] == gs_id and j.get("running") and j.get("kind") != "start" for k, j in _JOBS.items())
+
+
+def addon_using_database(gs, name):
+    """The name of the add-on on `gs` whose record names database `name`, or "" (none, or not read).
+
+    For the Databases tab: a password reset or a delete under a running add-on (B3 keeps the
+    password in its own b3.ini) silently cuts it off. One read of the account's add-on records,
+    only for a game an add-on with a database is offered for; a host that cannot be read, or an
+    account the panel does not read as, is "" (the database change is not held on it).
+    """
+    if not any(_ad.CATALOG[k]["database"] for k in _ad.offered(gs.game_type)):
+        return ""
+    if game_account_write_refusal(gs.remote, gs.short_name, reading=True):
+        return ""
+    try:
+        out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.status_sh(), timeout=30)
+    except ConnectionError:
+        return ""
+    if rc != 0:
+        return ""
+    for k, a in _ad.parse_status(out)["addons"].items():
+        if (a.get("meta") or {}).get("database") == name:
+            return _ad.CATALOG[k]["name"]
+    return ""
 
 
 def _addon_rows(gs, found):
@@ -554,6 +588,12 @@ def _action_answer(app, gs, addon_id, action):
 
 
 def _remove_answer(gs, addon_id):
+    # An install, update or settings change still running would write its unit and relays again
+    # after the remove, leaving an auto-starting unit for an add-on the card calls not installed.
+    with _JOBS_LOCK:
+        busy = (_JOBS.get((gs.id, addon_id)) or {}).get("running")
+    if busy:
+        return _say(409, _BUSY_REMOVE)
     out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
                                           timeout=_ad.ACTION_TIMEOUT)
     removed, others = _ad.remove_outcome(out, rc)

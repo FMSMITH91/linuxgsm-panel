@@ -56,6 +56,8 @@ two-factor authentication, every time: a key signs in without your browser sessi
 session must not be enough to add one. Each added or removed key is recorded in the audit log and
 shown in your account's recent security changes. Changing your password, "Sign out everywhere", an
 administrator's password reset and deactivating the account remove your keys: add yours again after.
+Removing a key ends any SFTP session signed in with it at its next request; a key's "last used"
+changes only when a session really starts.
 
 In FileZilla (Site Manager → New site):
 
@@ -113,9 +115,10 @@ in with a password at all. Backup codes are not accepted over SFTP.
 ## Signing in safely
 
 - Sign-in counts against the same limits as the web sign-in: 8 failures from one address in 5
-  minutes, then a pause; a day limit per address; and a pause for a name after repeated failures
-  (which holds key sign-in to that name too while it lasts). Each failure is in the audit log and in
-  `data/auth.log`, which the panel's fail2ban jail reads.
+  minutes, then a pause; a day limit per address; and a pause for a name after repeated wrong
+  passwords (password sign-in only: a key cannot be guessed, so wrong passwords sent by someone else
+  cannot lock you out of key sign-in). Each failure is in the audit log and in `data/auth.log`, which
+  the panel's fail2ban jail reads.
 - A deactivated account, one that must change its password first, and one that Settings requires
   two-factor authentication of and has none, cannot sign in.
 - The client only ever learns that sign-in failed; the reason is in the audit log.

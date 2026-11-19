@@ -47,7 +47,7 @@ from panel.services import sftp_backend as bk
 from panel.services import sftp_common as sc
 # Defined in sftp_files, never here: this module runs as __main__, and a class it defined would be a
 # different class from the one the other modules import by name, so their raise would escape its except.
-from panel.services.sftp_files import DENIED, Files, Refused
+from panel.services.sftp_files import CUT_OFF, DENIED, Files, Refused, WriteHandle
 
 _log = logging.getLogger("panel.sftp")
 
@@ -69,33 +69,78 @@ WINDOW = 4 * 1024 * 1024     # the SSH channel window offered to clients
 
 # ── The panel ──────────────────────────────────────────────────────────────────────────────────
 class Panel:
-    """Request/response over the socket the panel handed this process: one JSON line each way."""
+    """Request/response over the socket the panel handed this process: one JSON line each way.
+
+    Many requests are in flight at once (one per connection's SFTP request): each waits for the
+    answer that carries its own id, and one reader thread hands every answer to its request
+    (_read_loop). So a slow answer (a host that does not answer a permission check) holds only the
+    request that asked it, never every other user's sign-in and listing. A request that gives up
+    gets {}, and its answer, if it comes later, is dropped by id.
+
+    The reader never times out. A buffered socket reader that timed out once refuses every later
+    read ("cannot read from timed out object"): one slow answer used to leave the service refusing
+    every request while it still showed as running.
+    """
 
     def __init__(self, sock):
         """The panel at the far end of `sock`."""
+        # Blocking, explicitly: the panel made the pair under eventlet, which leaves the descriptor
+        # O_NONBLOCK, and this process inherits that. A reader with no timeout on it would see EAGAIN
+        # as the first quiet moment and take it for the panel going away.
+        sock.setblocking(True)
         self._sock = sock
-        self._rfile = sock.makefile("rb")             # buffered: one request is in flight at a time
+        self._send_lock = threading.Lock()
         self._lock = threading.Lock()
         self._next = 0
+        self._waiting = {}          # request id -> [Event, the answer]
+        self.reader = threading.Thread(target=self._read_loop, name="sftp-panel-reader", daemon=True)
+        self.reader.start()
 
     def ask(self, request, timeout=60):
-        """Send `request` (a dict) and return the panel's answer; {} when the panel did not answer."""
+        """Send `request` (a dict) and return the panel's answer; {} when the panel did not answer in time."""
         with self._lock:
             self._next += 1
-            request = dict(request, id=self._next)
+            rid = self._next
+            slot = self._waiting[rid] = [threading.Event(), None]
+        try:
+            with self._send_lock:
+                self._sock.sendall(json.dumps(dict(request, id=rid)).encode("utf-8") + b"\n")
+            if slot[0].wait(timeout):
+                return slot[1]
+            _log.warning("the panel did not answer an SFTP request in time")
+        except OSError:
+            _log.warning("the panel did not answer an SFTP request")
+        finally:
+            with self._lock:
+                self._waiting.pop(rid, None)
+        return {}
+
+    def _read_loop(self):
+        """Hand each answer to the request waiting for it; end the process when the panel's socket closes."""
+        rfile = self._sock.makefile("rb")
+        while True:
             try:
-                self._sock.settimeout(timeout)
-                self._sock.sendall(json.dumps(request).encode("utf-8") + b"\n")
-                while True:
-                    line = self._rfile.readline(1024 * 1024)
-                    if not line:
-                        _die("the panel closed its socket")
-                    reply = json.loads(line)
-                    if reply.get("id") == self._next:
-                        return reply
-            except (OSError, ValueError):
-                _log.warning("the panel did not answer an SFTP request")
-                return {}
+                line = rfile.readline(1024 * 1024)
+            except OSError:
+                line = b""
+            if not line:
+                _die("the panel closed its socket")
+                return
+            self._deliver(line)
+
+    def _deliver(self, line):
+        """Give one answer line to the request with its id (an answer nobody waits for is dropped)."""
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            return
+        if not isinstance(reply, dict):
+            return
+        with self._lock:
+            slot = self._waiting.get(reply.get("id"))
+        if slot is not None:
+            slot[1] = reply
+            slot[0].set()
 
 
 def _die(why):
@@ -153,8 +198,10 @@ class Connection(ServerInterface):
         if not reply.get("ok"):
             self.last_why = reply.get("why") or self.last_why
             return AUTH_FAILED
+        # paramiko pins the name for the whole connection and runs this check again right before it
+        # verifies a signature, so the last check that passed is the credential that signed in.
         self._pending = {"uid": reply["uid"], "epoch": reply["epoch"], "name": reply["name"],
-                         "method": "publickey", "detail": reply.get("detail", "")}
+                         "method": "publickey", "detail": reply.get("detail", ""), "fp": reply.get("fp", "")}
         return AUTH_SUCCESSFUL
 
     def check_auth_interactive(self, username, submethods):
@@ -175,7 +222,7 @@ class Connection(ServerInterface):
             self.counted = True
             return AUTH_FAILED
         self._pending = {"uid": reply["uid"], "epoch": reply["epoch"], "name": reply["name"],
-                         "method": "keyboard-interactive", "detail": "password and authenticator code"}
+                         "method": "keyboard-interactive", "detail": "password and authenticator code", "fp": ""}
         return AUTH_SUCCESSFUL
 
     def past_absolute(self):
@@ -241,7 +288,7 @@ class VirtualSftp(SFTPServerInterface):
         """Audit the sign-in once the client opens SFTP."""
         u = self.conn.signed_in()
         self.service.panel.ask({"op": "auth_done", "ip": self.conn.ip, "uid": u["uid"],
-                                "method": u["method"], "detail": u["detail"]})
+                                "method": u["method"], "detail": u["detail"], "fp": u["fp"]})
 
     def session_ended(self):
         """Close every game host connection this session opened."""
@@ -253,7 +300,7 @@ class VirtualSftp(SFTPServerInterface):
     # ── the panel's answers ──
     def ask_folder(self, folder, write):
         u = self.conn.signed_in()
-        reply = self.service.panel.ask({"op": "authz", "uid": u["uid"], "epoch": u["epoch"],
+        reply = self.service.panel.ask({"op": "authz", "uid": u["uid"], "epoch": u["epoch"], "fp": u["fp"],
                                         "folder": folder, "write": bool(write), "ip": self.conn.ip})
         if not reply.get("ok"):
             if reply.get("gone"):
@@ -263,7 +310,7 @@ class VirtualSftp(SFTPServerInterface):
 
     def _folders(self):
         u = self.conn.signed_in()
-        reply = self.service.panel.ask({"op": "servers", "uid": u["uid"], "epoch": u["epoch"]})
+        reply = self.service.panel.ask({"op": "servers", "uid": u["uid"], "epoch": u["epoch"], "fp": u["fp"]})
         if not reply.get("ok"):
             raise Refused(SFTP_PERMISSION_DENIED, reply.get("reason") or DENIED)
         return reply.get("folders") or []
@@ -478,6 +525,26 @@ class PanelSftpServer(SFTPServer):
     def _check_file(self, request_number, msg):
         # Hashing a file with MD5 or SHA-1 on request is not offered.
         self._send_status(request_number, SFTP_OP_UNSUPPORTED)
+
+    def finish_subsystem(self):
+        """End the session: the files the client left open first, then the host connections.
+
+        paramiko ends the session (session_ended closes every host connection) BEFORE it closes the
+        files a client left open, so an upload cut off by a disconnect, the idle close or the
+        absolute limit could no longer remove its hidden staged copy (up to the size cap) from the
+        game's folder, and it stayed there for good. Here each open file is closed while its host
+        connection is still up, an unfinished upload marked as cut off first: never put in place,
+        since a partial upload must not replace the file.
+        """
+        for f in list(self.file_table.values()):
+            if isinstance(f, WriteHandle) and not f.failed:
+                f.failed = CUT_OFF
+            try:
+                f.close()
+            except Exception:  # noqa: BLE001 - one file's close must not keep the rest open
+                _log.debug("closing a file left open at the end of an SFTP session", exc_info=True)
+        self.file_table = {}
+        super().finish_subsystem()
 
     def _process(self, t, request_number, msg):
         # A file's CLOSE answers with its close(): paramiko answers OK whatever close() found, and an

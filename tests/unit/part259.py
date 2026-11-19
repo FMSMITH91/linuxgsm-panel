@@ -9,10 +9,11 @@
 3. The service end to end: a real paramiko SSH client against the real service process, the panel
    side answered by sftp_broker in this process, and the files reached through this machine's own
    sftp-server as the account running the suite. Sign-in by key and by password with an
-   authenticator code; refusals (no 2FA, deactivated, paused, wrong key, a replayed code); the top
-   folder lists only the servers the user may edit; a permission removed mid-session; paths that try
-   to leave a server's folder (.., absolute, a link inside pointing out); the panel's file-name
-   rules; the size cap; the audit rows; and nothing listening once it is off.
+   authenticator code; refusals (no 2FA, deactivated, a paused name's password, wrong key, a replayed
+   code; a paused name's key still signs in); the top folder lists only the servers the user may
+   edit; a permission removed mid-session; paths that try to leave a server's folder (.., absolute,
+   a link inside pointing out); the panel's file-name rules; the size cap; the audit rows; and
+   nothing listening once it is off.
 4. The card shows an IPv6 listener as [addr]:port; the fail2ban jail is rewritten on every start and
    save, so the SFTP port leaves it with "all addresses".
 5. Key TEXT pasted into a host's key PATH field (Remotes > Add and Edit, the setup wizard, a row
@@ -882,9 +883,17 @@ if _E2E_UP259:
         _now259 = _time259.time()
         for _ in range(_ag259.ACCOUNT_SOFT_FAILS):
             _ag259.account_reserve("p259_ed", _now259)
+            _ag259.account_reserve("p259_2fa", _now259)
         _p4 = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
-        eq("sftp sign-in: a name paused after repeated failures is refused even with its key", _p4[0], None)
+        eq("sftp sign-in: a name paused after repeated wrong passwords still signs in with its key (not a guess)",
+           sorted(_p4[1].listdir("/")) if _p4[0] else repr(_p4[1]), ["Alpha One"])
         _close259(_p4) if _p4[0] else None
+        _since_p259 = _last_audit_id259()
+        _p4b = _connect259("p259_2fa", kbd=(_PW259, "000000"), host_key=_HK259)
+        _close259(_p4b) if _p4b[0] else None
+        check("sftp sign-in: ...while a paused name's password sign-in is refused as paused",
+              _p4b[0] is None and any("paused" in x[2] for x in _audits259("sftp_login_failed", _since_p259)),
+              repr(_audits259("sftp_login_failed", _since_p259)))
         _ag259.reset_throttle()
         _app259._LOGIN_FAILS.clear()
         _app259._LOGIN_FAILS[_auth259.throttle_key("127.0.0.1")] = [_time259.time()] * _app259.LOGIN_MAX_FAILS

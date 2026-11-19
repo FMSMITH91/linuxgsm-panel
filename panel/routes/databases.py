@@ -448,11 +448,25 @@ def _reveal_answer(gs, r):
     return _no_store(jsonify({"success": True, "password": secret}))
 
 
+_ADDON_RESET = ("{addon} uses this database, and its own settings hold the current password. Remove the add-on on "
+                "the Add-ons tab first, then reset the password.")
+_ADDON_DELETE = "{addon} uses this database. Remove the add-on on the Add-ons tab first, then delete the database."
+
+
+def _addon_refusal(gs, r, sentence):
+    """The refusal when an installed add-on uses database `r` (its name in `sentence`), or None."""
+    addon = addons.addon_using_database(gs, r.name)
+    return _say(409, i18n.Sentence(sentence, addon=addon)) if addon else None
+
+
 def _reset_answer(gs, r):
     """POST: a new password for the database's user (both of its host entries)."""
     remote, hd = _net.admin_target(gs.remote, _host_row(gs.remote_id), r)
     if remote is None:
         return _say(409, _NOT_READY)
+    held = _addon_refusal(gs, r, _ADDON_RESET)
+    if held is not None:
+        return held
     secret = _dbs.new_password()
     with _r20b_audit_on_raise("db_password", target=gs.name, detail=r.name, server=gs):
         ok, said = _dbs.set_password(remote, hd, r.name, secret)
@@ -485,6 +499,9 @@ def _delete_answer(gs, r):
     local = _host_row(gs.remote_id)
     if _net.admin_target(gs.remote, local, r)[0] is None:
         return _say(409, _NOT_READY)
+    held = _addon_refusal(gs, r, _ADDON_DELETE)
+    if held is not None:
+        return held
     name = r.name
     with _r20b_audit_on_raise("db_delete", target=gs.name, detail=name, server=gs):
         ok, said = drop_row(gs.remote, local, r, gs.short_name)

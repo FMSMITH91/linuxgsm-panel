@@ -360,6 +360,18 @@ def _working(e, alone=False):
             e["ts"] = time.time()
 
 
+@contextmanager
+def _finishing(e):
+    """A finish of upload `e` is running (checking the dump, then restoring): a cancel waits for it to end."""
+    with _UPLOADS_LOCK:
+        e["finishing"] = e.get("finishing", 0) + 1
+    try:
+        yield
+    finally:
+        with _UPLOADS_LOCK:
+            e["finishing"] -= 1
+
+
 def _replace_stalled(gs, r, uid, old):
     """Cancel the stalled upload `old` on the host for the new `uid`. -> True, or False with `old` kept.
 
@@ -499,7 +511,7 @@ def _upload_finish(gs, r, uid):
         return _say(409, _dbr._NOT_READY)
     # The upload stays listed, and busy, until its restore has ended: a second upload to the same database
     # (or a cancel or another finish of this one) started meanwhile is refused, never run alongside it.
-    with _working(e):
+    with _working(e), _finishing(e):
         state, val = _upcmd(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
         if state == "unread":
             return jsonify({"success": False, "retry": True, "message": i18n.tr(_dbr._UNREAD)}), 200
@@ -557,11 +569,14 @@ def _upload_cancel(gs, r, uid):
     e = _get_upload(uid, r.id)
     if e is None:
         return _say(404, "No such upload.")
+    # Refused while a finish is still checking the dump, not only once it restores: taken out of the
+    # list then, a second upload to the database was accepted and its finish moved the first one over
+    # the earlier dump the first restore was keeping aside (`.prev`).
     with _UPLOADS_LOCK:
-        restoring = bool(e.get("restoring"))
-        if not restoring:
+        running = bool(e.get("restoring") or e.get("finishing"))
+        if not running:
             _UPLOADS.pop(e["uid"], None)
-    if restoring:
+    if running:
         return _say(409, S_RUNNING)
     state, _v = _upcmd(gs, cancel_script(gs.short_name, e["uid"], r.name), 60)
     return jsonify({"success": state == "ok"})

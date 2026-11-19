@@ -34,6 +34,7 @@ from panel.ops import backup as bk
 from panel.ops import ssh_manager as _sm
 from panel.core.stdin_chunks import StdinChunks
 from panel.routes import _shared
+from panel.security.account_guard import step_up_required
 from panel.security.auth import (EDIT_FILES, RESTORE_BACKUP, get_game, has_permission, log_action,
                                  permission_required, server_access_required, superadmin_required)
 from panel.services import game_restore as grs
@@ -192,6 +193,8 @@ def _register_game(app):
     @app.route("/api/panel/backup/game/<int:server_id>/upload", methods=["POST"])
     @login_required
     @permission_required(RESTORE_BACKUP)
+    # Above server_access_required, which reads the view's own parameters (a wrapper has none).
+    @step_up_required       # an uploaded archive is restored over the server: asked at its start, as a database's
     @server_access_required
     def api_panel_backup_game_upload(server_id):
         """Start an upload: check the size against the cap and the host's free space, make the part file."""

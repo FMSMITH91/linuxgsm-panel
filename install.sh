@@ -4024,16 +4024,31 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         # generic sentence is skipped — but only that sentence. The RECOVERY below runs for a die
         # exactly as it does for an unexplained abort, because the panel is stopped either way.
         [[ "${_DIE_SAID:-0}" -eq 1 ]] || warn "The update aborted unexpectedly${_why} with the panel stopped."
+        # The unpack below runs over an emptied PANEL_DIR, so a failed one (I/O error, a full disk,
+        # a damaged archive) leaves no panel to start: said as such, like the health-check
+        # rollback's, never "restarted on ${FROM_VER}".
+        local _rb_failed=0
         if [[ "${_CODE_FETCHED}" -eq 1 ]] && [[ -f "${BACKUP}/code.tgz" ]]; then
             warn "Putting ${FROM_VER} back from the snapshot…"
             ${TREE_SUDO:-} find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
                 ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
-            ${TREE_SUDO:-} tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz" 2>/dev/null || true
-            install_deps || true
+            if ${TREE_SUDO:-} tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz"; then
+                install_deps || true
+            else
+                _rb_failed=1
+            fi
         fi
         [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree 2>/dev/null || true
         restore_service_unit
         svc daemon-reload || true
+        if [[ "${_rb_failed}" -eq 1 ]]; then
+            [[ "${_rc}" -ne 0 ]] || _rc=1
+            warn "Update ABORTED partway through${_why}, and the snapshot of ${FROM_VER} could not be unpacked.
+     ${PANEL_DIR} is INCOMPLETE and the panel will not start. Restore it by hand from:
+       ${BACKUP}/code.tgz
+     (data/ and venv/ were not touched.)"
+            exit "${_rc}"
+        fi
         svc start linuxgsm-panel.service || true
         if [[ "${_DIE_SAID:-0}" -eq 1 ]]; then
             # The what and the why are already on screen; add only what the die could not know —
