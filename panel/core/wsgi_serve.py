@@ -198,7 +198,8 @@ _STARVED_LOG_EVERY = 60.0
 def io_seconds(limits=None):
     """The read/write timeout for a connection: Socket.IO's heartbeat window times _IO_OVER_HEARTBEAT."""
     if limits is None:
-        from panel.ops.socket_hooks import LIMITS as limits
+        from panel.ops.socket_hooks import LIMITS
+        limits = LIMITS
     return (limits["ping_interval"] + limits["ping_timeout"]) * _IO_OVER_HEARTBEAT
 
 
