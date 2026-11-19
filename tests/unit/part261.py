@@ -329,14 +329,20 @@ class _Js261:
         if kind == "Literal" and isinstance(node.get("value"), str):
             self.strings.add(node["value"])
             self.actions.update(_re261.findall(r'data-action="([\w$.]+)"', node["value"]))
-        if kind == "Identifier" and not _not_a_use261(node, up, parents):
-            own = up.get("type") == "MemberExpression" and up.get("property") is node
-            key = node["name"] if own else _key261(node["name"], parents)
-            if key:
-                self.refs.setdefault(key, []).append(_use_kind261(node, up, parents))
+        if kind == "Identifier":
+            self._use(node, up, parents)
         if kind == "CallExpression" and (node.get("callee") or {}).get("type") == "Identifier":
             self.calls.append((f, node["loc"]["start"]["line"], _key261(node["callee"]["name"], parents),
                                _fetch_method261(node, parents), _scope261(parents)))
+
+    def _use(self, node, up, parents):
+        """Record a use of a name with the scope it runs in."""
+        if _not_a_use261(node, up, parents):
+            return
+        own = up.get("type") == "MemberExpression" and up.get("property") is node
+        key = node["name"] if own else _key261(node["name"], parents)
+        if key:
+            self.refs.setdefault(key, []).append(_use_kind261(node, up, parents))
 
     def _helpers(self, f, node, parents, pieces):
         """Note a base-plus-argument call (`api('/x')`) and a function returning a base plus its argument."""
