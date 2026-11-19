@@ -55,7 +55,6 @@ MAX_AUTH_TRIES = 6           # OpenSSH's MaxAuthTries default
 LOGIN_GRACE = 60             # seconds to sign in (OpenSSH's LoginGraceTime is 120)
 MAX_CONNECTIONS = 64
 MAX_UNAUTH_PER_ADDRESS = 10
-MAX_OPEN_FILES = 64          # open files and folders per session
 STAGE_MAX = 1024 * 1024      # a LinuxGSM config is checked whole before it is written: at most this
 WINDOW = 4 * 1024 * 1024     # the SSH channel window offered to clients
 

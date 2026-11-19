@@ -10,8 +10,8 @@
       {% elif sf.status.state == 'running' %}<span class="badge bg-success">On</span> <span>Listening on</span>
         {% for b in sf.status.bound %}<code data-no-i18n>{{ b[0] }}:{{ b[1] }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
       {% elif sf.status.state == 'starting' %}<span class="badge bg-info">Starting</span>
-      {% elif sf.status.state == 'waiting' %}<span class="badge bg-warning text-dark">Waiting</span> <span data-no-i18n>{{ t(sf.status.error) }}</span>
-      {% else %}<span class="badge bg-danger">Not running</span> <span data-no-i18n>{{ t(sf.status.error) }}</span>{% endif %}
+      {% elif sf.status.state == 'waiting' %}<span class="badge bg-warning text-dark">Waiting</span> <span>{{ t(sf.status.error) }}</span>
+      {% else %}<span class="badge bg-danger">Not running</span> <span>{{ t(sf.status.error) }}</span>{% endif %}
       {% if sf.status.detail %}<code class="d-block text-break" data-no-i18n>{{ sf.status.detail }}</code>{% endif %}
     </div>
     {% if sf.fingerprint %}

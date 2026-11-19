@@ -46,6 +46,7 @@ TOP_REFUSED = "The top folder lists your servers; files go inside a server's fol
 CROSS_SERVER = "Files can only be moved within one server's folder."
 OWNER_REFUSED = "Files keep the game account as their owner."
 STAGE_MAX = 1024 * 1024
+MAX_OPEN_FILES = 64          # open files per session
 WRITE_FAILED = "The write failed."
 AUTHZ_HOLD = 1.0             # seconds an open file's reads and writes reuse the last permission answer
 DENIED = "Permission denied"
@@ -145,7 +146,7 @@ class Files:
     def open(self, vfs, path, flags, attr):
         """A ReadHandle or WriteHandle for `path`. Raises Refused or BackendError."""
         writing = bool(flags & (_os.O_WRONLY | _os.O_RDWR | _os.O_CREAT | _os.O_TRUNC | _os.O_APPEND))
-        if vfs.open_count >= vfs.service.cfg.get("max_open", 64):
+        if vfs.open_count >= MAX_OPEN_FILES:
             raise _refused(SFTP_FAILURE, "Too many files are open in this session.")
         target, backend, real, rel = vfs.resolve(path, write=writing)
         try:

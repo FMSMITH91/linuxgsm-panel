@@ -125,7 +125,7 @@ That is a measurement of one machine, not a promise; a remote host adds the seco
   by `panel/services/sftp_broker.py`. It stops when the panel stops, and is started again if it
   ends.
 - Each game server's files are reached through the host's own OpenSSH `sftp-server` program, run as
-  the game account: on the panel's host with `sudo -n -u <account>` (the panel's sudoers grant
+  the game account: on the panel's host with `sudo -u <account>` (the panel's sudoers grant
   already allows becoming a game account), on a remote host over the panel's existing SSH connection
   to it. `sftp-server` is run with `-P symlink,hardlink`.
 - The host key is Ed25519, made the first time the service is turned on, and kept in `config.json`

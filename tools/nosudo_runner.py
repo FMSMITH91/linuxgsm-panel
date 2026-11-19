@@ -125,6 +125,8 @@ def _install():
     from panel.ops.ssh_manager import cron as _sm_cron, files as _sm_files, game as _sm_game
     from panel.ops.ssh_manager import firewall as _sm_fw, gmod as _sm_gmod, hosts as _sm_hosts
     from panel.ops.ssh_manager import portscan as _sm_ps
+    # The SFTP service's: the broker starts the service, the backend starts sftp-server as a game account.
+    from panel.services import sftp_backend as _sftp_bk, sftp_broker as _sftp_br
 
     # ONE shim object, shared by every target — not one per module. The real `subprocess` IS one
     # object that all of them import, and a test that reaches for it expects that: part01 patches
@@ -137,7 +139,7 @@ def _install():
     _shim = _make_shim(_greened)
     _targets = (system_ops, backup, db_maintenance, tailscale_integration, terminal_session,
                 _dr_systemd, _dr_install, _dr_network,
-                _sm_core, _sm_cron, _sm_files, _sm_game, _sm_fw, _sm_gmod, _sm_hosts, _sm_ps)
+                _sm_core, _sm_cron, _sm_files, _sm_game, _sm_fw, _sm_gmod, _sm_hosts, _sm_ps, _sftp_bk, _sftp_br)
     for mod in _targets:
         if getattr(mod, "subprocess", None) is not None:
             mod.subprocess = _shim

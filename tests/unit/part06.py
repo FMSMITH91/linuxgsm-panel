@@ -5880,9 +5880,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # its change and its switch (panel owner only, the password confirmed in each change request; root_cron.py).
 # 312, was 307: panel/routes/addons.py's Add-ons tab: its status, install, start/stop, remove and log
 # (MANAGE_ADDONS and server access; install and remove with step-up).
+# 317, was 314: panel/routes/sftp_settings.py's SFTP card save and the Account page's two key routes.
 # 314, was 312: panel/routes/addons.py's update and B3 settings (MANAGE_ADDONS and server access, step-up).
-check("register_routes: every one of the 314 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 314,
+check("register_routes: every one of the 317 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 317,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -9703,7 +9704,7 @@ check("regex anchors: every line-parser entry still names a $-anchored pattern i
 # name, and a mod id.
 _INLINE_DOLLAR_OK = {
     r"^(.*)/(tcp|udp)$",                                            # a ufw port column
-    r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
+    r"\s*port\s*=\s*(\d+)(?:,\d+)*\s*$",                             # the panel jail's port line (web,sftp)
     # Built patterns, keyed on the literal they end in (`+`) or their template (`%`):
     r"(/\S*?)/?$",                     # files.py: the `pwd -P` line after its mark, matched per line (re.M)
     r"\s*%s\s*=\s*(\S+)\s*$",          # system_ops: one line of the panel's fail2ban jail file

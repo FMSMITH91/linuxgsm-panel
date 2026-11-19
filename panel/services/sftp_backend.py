@@ -5,7 +5,7 @@ session uses it starts the host's `sftp-server` binary as the game account, exac
 manager runs its reads and writes as that account (ssh_manager._core.game_user_cmd), and talks the
 SFTP protocol (version 3, draft-ietf-secsh-filexfer-02) to it:
 
-* the panel's own host: `sudo -n -u <account> <sftp-server>` over pipes (the second line of the
+* the panel's own host: `sudo -u <account> <sftp-server>` over pipes (the second line of the
   panel's sudoers grant lets it become a game account; never root, never the panel's own account
   unless that IS the game account);
 * a remote host over paramiko: the same command on a new channel of a connection opened like every
@@ -23,7 +23,6 @@ file. This module is plain threads and blocking I/O; it runs only in the service
 """
 import logging
 import os
-import shutil
 import struct
 import subprocess  # nosec B404 - argv lists only, built here from validated parts
 import threading
@@ -477,15 +476,16 @@ def local_sftp_server():
 
 
 def local_argv(user, me):
-    """The argv that runs this host's sftp-server as `user` (sudo -n -u, unless `user` is `me`), or None."""
-    from panel.ops.ssh_manager import _core
+    """The argv that runs this host's sftp-server as `user` (sudo -u, unless `user` is `me`), or None."""
+    from panel.ops.ssh_manager import _core, cron
     path = local_sftp_server()
     if path is None or not _core.game_idents_ok(user):
         return None
     if user == me:
         return [path, *SFTP_SERVER_ARGS]
-    sudo = shutil.which("sudo") or "/usr/bin/sudo"
-    return [sudo, "-n", "-u", user, "--", path, *SFTP_SERVER_ARGS]
+    # The one `sudo -u` argv builder the file browser's downloads use too (cron._as_user_argv): the
+    # panel's sudoers grant lets it become a game account, and only that.
+    return cron._as_user_argv(user, path, *SFTP_SERVER_ARGS)
 
 
 def remote_shell(user):

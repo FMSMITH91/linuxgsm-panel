@@ -164,9 +164,10 @@ def _stub_subprocess(fake_shell):
     from panel.ops.debug_report import _src_systemd as dr_systemd, install as dr_install
     from panel.ops.debug_report import network as dr_network
     from panel.ops.ssh_manager import _core, cron, files, firewall, game, gmod, hosts, portscan
+    from panel.services import sftp_backend, sftp_broker
     deny = _Deny(fake_shell)
     for mod in (so, ts, term, backup, db_maintenance, dr_systemd, dr_install, dr_network,
-                _core, cron, files, firewall, game, gmod, hosts, portscan):
+                _core, cron, files, firewall, game, gmod, hosts, portscan, sftp_backend, sftp_broker):
         if getattr(mod, "subprocess", None) is not None:
             mod.subprocess = deny
     if getattr(_core, "_real_subprocess", None) is not None:

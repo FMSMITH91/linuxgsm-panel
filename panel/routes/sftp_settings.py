@@ -62,7 +62,7 @@ def register(app):
         """Add one public key to the signed-in account."""
         parsed, why = sc.parse_public_key(request.form.get("public_key"), request.form.get("label"))
         if why is None and current_user.sftp_keys.count() >= sc.MAX_KEYS_PER_USER:
-            why = "An account can hold %d SFTP keys. Remove one first." % sc.MAX_KEYS_PER_USER
+            why = i18n.Sentence("An account can hold {n} SFTP keys. Remove one first.", n=sc.MAX_KEYS_PER_USER)
         if why is None and current_user.sftp_keys.filter_by(fingerprint=parsed.fingerprint).first():
             why = "That key is already on your account."
         if why:
@@ -114,7 +114,8 @@ def notes(s):
         out.append("Password and code sign-in is on. The recommended setting is SSH keys only: a key "
                    "cannot be guessed.")
     if s["cap_mb"] > sc.RECOMMENDED_CAP_MB:
-        out.append("The upload size limit is above the recommended %d MiB." % sc.RECOMMENDED_CAP_MB)
+        out.append(i18n.Sentence("The upload size limit is above the recommended {mib} MiB.",
+                                 mib=sc.RECOMMENDED_CAP_MB))
     return out
 
 

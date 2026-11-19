@@ -135,10 +135,10 @@ def tailscale_ips():
     try:
         from panel.ops import tailscale_integration as ts
         info = ts.get_tailscale_info()
+        return list(getattr(info, "tailscale_ips", None) or []) if getattr(info, "running", False) else []
     except Exception:  # noqa: BLE001 - no Tailscale is an answer
         _log.debug("tailscale info unavailable", exc_info=True)
         return []
-    return list(info.tailscale_ips or []) if info.running else []
 
 
 def run_once(app, spawn, argv=None):

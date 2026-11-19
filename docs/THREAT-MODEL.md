@@ -202,7 +202,7 @@ every address (the operator's explicit choice, with a warning; the panel never o
 | R | Changes without a trace | Mitigate: every upload, delete, rename, new folder and permission change is an audit row about the server with the user and address; every sign-in and refusal too. |
 | I | A user reads servers they were not granted | Mitigate: the panel answers every request: the folder list and each request need `edit_files` and access to that server, reads `view_files` as well, and a root-capable game account is refused as in the file manager. A removed permission, a deactivation or "sign out everywhere" takes effect on the next request; an open file within one second. |
 | D | Uploads fill the disk; connections exhaust the service | Mitigate: an upload size cap (Settings, 4 GiB recommended), refused when less than 256 MiB would stay free, 64 open files per session, 64 connections and 10 unsigned-in connections per address. The service is its own process: a transfer cannot stall the panel's pages or live console. |
-| E | The SFTP service used to reach root or the panel's account | Mitigate: it runs as the panel's account and starts `sftp-server` as the game account only (`sudo -n -u`, the grant's `%lgsmpanel-games` line); no shell, command, forwarding or subsystem but sftp is accepted. |
+| E | The SFTP service used to reach root or the panel's account | Mitigate: it runs as the panel's account and starts `sftp-server` as the game account only (`sudo -u`, the grant's `%lgsmpanel-games` line); no shell, command, forwarding or subsystem but sftp is accepted. |
 
 ## Residual risks
 
