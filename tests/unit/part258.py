@@ -113,23 +113,24 @@ _DB258 = b"\x00" * 64 + _geo258.MMDB_MARKER + b"\xe1\x00metadata"
 _GZ258 = _gzip258.compress(_DB258)
 _SHA_DB258 = _geo258.sha1_hex(_DB258)
 _URL258 = "https://download.db-ip.com/free/dbip-country-lite-%s.mmdb.gz" % _MONTH258
-_CARD258 = """		<div class="col-6">
-			<div class="card">
-				<dl class="card-body">
-					<dt>Format</dt>
-					<dd>%s</dd>
-					<dt>Release</dt>
-					<dd>November 2026</dd>
-					<dt>MD5SUM</dt>
-					<dd class="small">%s</dd>
-					<dt>SHA1SUM</dt>
-					<dd class="small">%s</dd>
-				</dl>
-				<div class="px-1 mb-1">
-					<a href='https://download.db-ip.com/free/dbip-country-lite-%s.%s.gz' class='btn btn-block icon-txt download free_download_link'>Download IP to Country Lite %s</a>
-				</div>
-			</div>
-		</div>
+_CARD258 = """    <div class="col-6">
+      <div class="card">
+        <dl class="card-body">
+          <dt>Format</dt>
+          <dd>%s</dd>
+          <dt>Release</dt>
+          <dd>November 2026</dd>
+          <dt>MD5SUM</dt>
+          <dd class="small">%s</dd>
+          <dt>SHA1SUM</dt>
+          <dd class="small">%s</dd>
+        </dl>
+        <div class="px-1 mb-1">
+          <a href='https://download.db-ip.com/free/dbip-country-lite-%s.%s.gz'
+           class='btn btn-block icon-txt download free_download_link'>Download IP to Country Lite %s</a>
+        </div>
+      </div>
+    </div>
 """
 
 
