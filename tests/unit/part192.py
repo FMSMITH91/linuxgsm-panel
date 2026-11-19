@@ -147,6 +147,66 @@ def _rule192(at, selector):
     return out
 
 
+def _hi_ok192(op, val, unit):
+    """Whether an upper bound on the width (`op` < or <=, `val` in `unit`) still lets 1400px through."""
+    px = float(val) * (16 if unit.endswith("em") else 1)
+    return px > 1400 or (op == "<=" and px == 1400)
+
+
+def _query1400_192(query):
+    """Whether one media query (no commas) can match at some viewport 1400px wide or wider."""
+    if query.startswith("not ") or query.startswith("only "):
+        return True                     # read as reachable: this reader does not negate
+    for g in _re192.findall(r"\(([^()]*)\)", query):
+        g = " ".join(g.split())
+        if "width" not in g:
+            continue                    # pointer, hover, a colour scheme: true on some wide screen
+        up = _re192.fullmatch(r"(?:[\d.]+(?:px|r?em) <=? )?width (<=?) ([\d.]+)(px|r?em)", g)
+        mx = _re192.fullmatch(r"max-width: ?([\d.]+)(px|r?em)", g)
+        low = _re192.fullmatch(r"(?:min-width: ?|width >=? )[\d.]+(?:px|r?em)", g)
+        if up and not _hi_ok192(up.group(1), up.group(2), up.group(3)):
+            return False
+        if mx and not _hi_ok192("<=", mx.group(1), mx.group(2)):
+            return False
+        if not (up or mx or low):
+            return True                 # a form this reader does not know: reachable, so it is judged
+    return True
+
+
+def _media1400_192(prelude):
+    """Whether an @media prelude can match at a viewport 1400px wide or wider (any of its queries)."""
+    return any(_query1400_192(q.strip()) for q in prelude[len("@media"):].split(","))
+
+
+def _walk1400_192(blocks, names, live=True):
+    """Yield (live, prelude, body) for every style rule; live is False inside a block no wide screen reaches.
+
+    An @container is reached only when its container is declared in a reached rule (`names`; None: all).
+    """
+    for prelude, body in blocks:
+        if isinstance(body, str):
+            yield live, prelude, body
+            continue
+        sub = live
+        if prelude.startswith("@media"):
+            sub = live and _media1400_192(prelude)
+        elif prelude.startswith("@container") and names is not None:
+            sub = live and (prelude.split()[1:2] or [""])[0] in names
+        yield from _walk1400_192(body, names, sub)
+
+
+def _wide_actions192(css):
+    """List the rules a 1400px-or-wider screen reaches that style the Actions cell (bar the toggle's reset)."""
+    names = set()
+    for live, _p, body in _walk1400_192(css, None):
+        decl = _decls192(body)
+        for key in ("container", "container-name"):
+            if live and decl.get(key):
+                names.add(decl[key].split("/")[0].split()[0])
+    return [p for live, p, _b in _walk1400_192(css, names)
+            if live and "col-actions" in p and p != ".col-actions .dash-more-btn"]
+
+
 _MOB192 = "@media (width <= 991.98px)"
 _TR192 = ".table-responsive .dash-srv-table > tbody > tr[data-server-id]"
 check("panel.css dashboard phone card: below 992px (phones and tablets) the column headers are hidden, all "
@@ -189,9 +249,20 @@ check("panel.css dashboard table on a desktop: below 1400px the buttons wrap to 
       "4 from 1200px, with the spaces between them removed; at 1400px and up nothing changes them",
       (_mid192.get("white-space"), _mid192.get("width"), _mid192.get("font-size"), _mid4_192.get("width"))
       == ("normal !important", "calc(3 * (2.425rem + 4px) + .7rem)", "0", "calc(4 * (2.425rem + 4px) + .7rem)")
-      and not any(".dash-srv-table td.col-actions" in p and "1400" not in at
-                  for at, rules in _css192 if at.startswith("@media") and "992" in at and "<" not in at
-                  for p, _b in rules if isinstance(_b, str)), repr((_mid192, _mid4_192)))
+      and not _wide_actions192(_css192), repr((_mid192, _mid4_192, _wide_actions192(_css192))))
+_WIDE_PLANTS192 = ("@media (width >= 1400px) { .dash-srv-table td.col-actions { width: 10rem } }",
+                   "@media (min-width: 1200px) { .dash-srv-table td.col-actions { width: 10rem } }",
+                   ".dash-srv-table td.col-actions { width: 10rem }",
+                   "@supports (display: grid) { .dash-srv-table .col-actions .btn { margin: 0 } }")
+check("panel.css dashboard table on a desktop: (control) the 1400px-and-up reader reads each media "
+      "query form, and a rule for the Actions cell that a wide screen reaches is caught, top level included",
+      [_media1400_192(q) for q in (_WIDE192, _MID192, _MID4_192, _MOB192, "@media (min-width: 1400px)",
+                                   "@media (max-width: 1399.98px)", "@media (pointer: coarse)",
+                                   "@media (width < 1400px), (width >= 1600px)", "@media not print")]
+      == [True, False, False, False, True, False, True, True, True]
+      and all(_wide_actions192(_blocks192(_p192)) for _p192 in _WIDE_PLANTS192)
+      and not _wide_actions192(_blocks192("@container dmbrow (width < 19rem) { td.col-actions { order: 1 } }")),
+      repr([_wide_actions192(_blocks192(_p192)) for _p192 in _WIDE_PLANTS192]))
 
 # ── 3. dashboard.js in node ─────────────────────────────────────────────────────────────────────
 with open(_os192.path.join(_root, "panel", "static", "js", "dashboard.js"), encoding="utf-8") as _fh192:

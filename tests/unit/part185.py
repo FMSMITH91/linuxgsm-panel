@@ -81,6 +81,9 @@ class _Ufw185:
 def _limit185(rules, port=22, local=False, **kw):
     """remote_ufw_limit_port(port/tcp) on a stand-in with `rules` -> (ok, message, verbs sent)."""
     ufw = _Ufw185(rules, **kw)
+    # Armed here, not only in the finally: a helper before this one may end on a bare _p9_restore_all(),
+    # and an unarmed call records no trip whatever it reaches.
+    _p9_arm(who="part185")
     _p9_patch(_p9_core, "run_privileged", ufw.priv)
     try:
         row = _NS185(id=-185, name="p185", is_local=local, auth_method="local" if local else "key")
@@ -212,6 +215,7 @@ def _r42f_limit_route185():
             return r.status_code, _p9_json(r), ufw.sent, _p9_audit("remote_port_limit").success
         finally:
             _p9_restore_all()
+            _p9_arm(who="part185")
     off, on = post(_TS185), post(_PUB185)
     check("1112 A03 (route, limit): POST /api/remote/<id>/firewall/limit on a host whose SSH is tailnet-only "
           "answers the refusal, sends no `ufw limit` and audits a failure; a public 22/tcp is limited and "
