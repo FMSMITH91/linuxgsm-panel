@@ -45,6 +45,8 @@ _TMP258 = _tf258.mkdtemp(prefix="p258-")
 _RC258 = "p258-rcon-" + "value"            # the game's RCON password in these checks
 _DBV258 = "Dbv258" + "abcdefghijklmnopq"   # a database's password in these checks
 _MONTH258 = "2026-11"
+# The folder the clean-up shells name; every check rewrites it into this part's own throwaway folder.
+_SHELL_TMP258 = "/tmp/"  # nosec B108 - only replaced, never used as a path
 
 
 def _bash258(sh, path_first=None, timeout=30):
@@ -311,8 +313,8 @@ def _helper_release258():
 def _remote_tmp258():
     base = _tmp_tree258("remote-tmp", "tmux-%d" % os.getuid())
     uid = os.getuid()
-    sh = ("u=acct258; uid=%d; n=0; " % uid + _jf258.account_tmp_sh().replace("/tmp/", base + "/")
-          + 'echo "n=$n"; u=linked258; n=0; ' + _jf258.account_tmp_sh().replace("/tmp/", base + "/")
+    sh = ("u=acct258; uid=%d; n=0; " % uid + _jf258.account_tmp_sh().replace(_SHELL_TMP258, base + "/")
+          + 'echo "n=$n"; u=linked258; n=0; ' + _jf258.account_tmp_sh().replace(_SHELL_TMP258, base + "/")
           + 'echo "n=$n"')
     r = _bash258(sh)
     release = _pv258._addon_release_remote(["acct258", "forget"])
@@ -320,7 +322,7 @@ def _remote_tmp258():
        "only with forget, inside the uid >= 1000 test",
        (r.stdout.split(), sorted(os.listdir(base)), os.listdir(os.path.join(base, "elsewhere")),
         _jf258.account_tmp_sh() in release, _jf258.account_tmp_sh() in _pv258._addon_release_remote(["acct258", "keep"]),
-        0 <= release.find("-ge 1000") < release.find("/tmp/tmux-")),
+        0 <= release.find("-ge 1000") < release.find(_SHELL_TMP258 + "tmux-")),
        (["n=2", "n=0"], ["elsewhere", "hsperfdata_file258", "hsperfdata_linked258"], ["keep"], True, False, True))
 
 
