@@ -6774,7 +6774,7 @@ check("delete host: both lists of what stays on a forgotten host name its add-on
       "running as the game account (docs/install.md says how to stop them; SECURITY.md where)",
       "add-ons (B3, IW4MAdmin)" in _rh_sec and "`podman system reset`" in _rh_sec
       and "loginctl disable-linger" in _rh_sec and "add-ons (B3, IW4MAdmin)" in _rh_secmd
-      and "Add-ons tab" in _rh_secmd, (_rh_sec[:200], _rh_secmd[:200]))
+      and "Add-ons tab" in _rh_secmd, repr((_rh_sec[:200], _rh_secmd[:200])))
 # The add-on routes that ask for the password (step_up_needed() in the view): the security page's step-up list
 # and the manage_addons row name each one's action, so a route that starts to ask is a doc change too.
 _rh_addons = open(os.path.join(_root, "panel", "routes", "addons.py"), encoding="utf-8").read()
@@ -6792,7 +6792,7 @@ check("docs: each add-on action that asks for the password (install, update, set
       "security page's step-up list and in the manage_addons permission row",
       _rh_su_acts == ["install", "remove", "settings", "update"] and _rh_perm
       and all(_rh_words[a][0] in _rh_sf.split("an add-on;")[0].rsplit(";", 1)[-1] for a in _rh_su_acts)
-      and all(_rh_words[a][1] in _rh_perm[0] for a in _rh_su_acts), (_rh_su_acts, _rh_perm))
+      and all(_rh_words[a][1] in _rh_perm[0] for a in _rh_su_acts), repr((_rh_su_acts, _rh_perm)))
 _rh_cmd = re.search(r"```bash\n(.*?)```", _rh_sec, re.S)
 _rh_sb = _tempfile.mkdtemp(prefix="rmhost-")
 
