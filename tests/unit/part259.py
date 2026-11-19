@@ -209,8 +209,9 @@ _save259(sftp_bind="loopback")
 eq("sftp card: no warning for 127.0.0.1", any("reachable from the internet" in m for m in _flashed259()), False)
 _r259 = _save259(sftp_bind="tailscale")
 eq("sftp card: the Tailscale address is refused while Tailscale is down (nothing saved)",
-   (_sc259.settings(_cfg259.load_config())["bind"], any("Choose where" in m for m in _flashed259())),
-   ("loopback", True))
+   (_r259.status_code, _sc259.settings(_cfg259.load_config())["bind"],
+    any("Choose where" in m for m in _flashed259())),
+   (302, "loopback", True))
 _save259(sftp_port="0")
 _save259(sftp_port="70000")
 _save259(sftp_max_upload_mb="0")
@@ -358,7 +359,8 @@ with _p9.app_context():
     _kadd259 = [(r.success, r.detail) for r in _AL259.query.filter_by(action="sftp_key_add", user_id=_OWNER259)]
     _kid259 = _Key259.query.filter_by(user_id=_OWNER259).first().id if _keys259 else 0
 eq("sftp keys: the Account page adds a key once (a duplicate and a 2048-bit RSA are refused)",
-   (_add259.status_code, _keys259), (302, [("laptop", "ssh-ed25519", _OWNER259)]))
+   (_add259.status_code, _dup259.status_code, _small259.status_code, _keys259),
+   (302, 302, 302, [("laptop", "ssh-ed25519", _OWNER259)]))
 check("sftp keys: every add is audited, refusals as failures",
       [s for s, _d in _kadd259] == [True, False, False] and "SHA256:" in _kadd259[0][1], repr(_kadd259))
 _stale259 = _p9_client(_OWNER259)
@@ -831,11 +833,8 @@ if _E2E_UP259:
         import app as _app259
         _app259._LOGIN_FAILS.clear()
         _now259 = _time259.time()
-        for _i in range(_ag259.ACCOUNT_SOFT_FAILS):
+        for _ in range(_ag259.ACCOUNT_SOFT_FAILS):
             _ag259.account_reserve("p259_ed", _now259)
-        _with_epoch = None
-        with _p9.app_context():
-            _with_epoch = _db259.session.get(_User259, _ED).auth_epoch
         _p4 = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
         eq("sftp sign-in: a name paused after repeated failures is refused even with its key", _p4[0], None)
         _close259(_p4) if _p4[0] else None
@@ -874,7 +873,7 @@ if _E2E_UP259:
         _E2E259.port = _E2E259.idle_port
         _busy = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
         _idle = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
-        for _i in range(9):                  # a request every half second, for 4.5 s
+        for _ in range(9):                   # a request every half second, for 4.5 s
             _sftp_listing259(_busy[1], "/")
             _time259.sleep(0.5)
         _busy_alive = bool(_busy[0]) and _busy[0].get_transport().is_active()

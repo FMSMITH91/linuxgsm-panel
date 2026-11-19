@@ -310,7 +310,8 @@ KEY_TYPES = {"ssh-ed25519": "Ed25519", "ecdsa-sha2-nistp256": "ECDSA P-256",
              "ssh-rsa": "RSA"}
 RSA_TOO_SMALL = "RSA keys need at least 3072 bits. An Ed25519 key is recommended (ssh-keygen -t ed25519)."
 _KEY_LINE_MAX = 16384
-_B64_RE = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+# The base64 alphabet (RFC 4648 section 4) a key line's middle field is made of; checked by set, not by a regex.
+_B64_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 LABEL_MAX = 80
 
 
@@ -350,6 +351,12 @@ def parse_public_key(text, label=""):
 NOT_A_KEY_LINE = "That is not an OpenSSH public key line (type, then the key, then a comment)."
 
 
+def _is_b64(field):
+    """True when `field` is base64 characters with at most two "=" of padding at its end."""
+    body = field.rstrip("=")
+    return bool(body) and len(field) - len(body) <= 2 and set(body) <= _B64_CHARS
+
+
 def _key_line_parts(text):
     """([type, base64, comment...], None) for one public-key line, or (None, why it is not one)."""
     line = (text or "").strip()
@@ -358,7 +365,7 @@ def _key_line_parts(text):
     if len(line) > _KEY_LINE_MAX or "\n" in line or "\r" in line:
         return None, "Paste one public key: a single line."
     parts = line.split(None, 2)
-    if len(parts) < 2 or not _B64_RE.fullmatch(parts[1]):
+    if len(parts) < 2 or not _is_b64(parts[1]):
         return None, NOT_A_KEY_LINE
     if parts[0] not in KEY_TYPES:
         return None, "Use an Ed25519, ECDSA or RSA key (Ed25519 is recommended)."
