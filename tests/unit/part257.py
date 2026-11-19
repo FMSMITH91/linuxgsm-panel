@@ -1,7 +1,8 @@
 """Part 257 of the unit suite: B3's games and settings, DB-IP's country database, add-on updates, Renovate's pins.
 
-1. The catalog: B3 at its fork commit (with maxminddb hashed in its lock) for cod, coduo, cod2, cod4, codwaw,
-   sof2 and wet, each with its parser, RCON setting and game log; the port the game really listens on.
+1. The catalog: B3 at its fork commit (with maxminddb hashed in its lock) for cod, coduo, cod2, cod4, codwaw
+   and sof2, each with its parser, RCON setting and game log; wet's kept behind B3_WET; the port the game
+   really listens on.
    The probe under bash finds SoF2's log, ~/.sof2/base/date.
 2. b3.ini: the game log per game, geolocation off / offline / online, the plugins; a settings change
    rewrites only the panel's [plugins] lines and the two keys of plugin_geolocation.ini.
@@ -55,10 +56,11 @@ def _read257(*parts):
 # ── 1. the catalog ──────────────────────────────────────────────────────────────────────────────
 def _catalog257():
     games = _ad257.CATALOG[_ad257.B3]["games"]
-    eq("B3: offered for cod, coduo, cod2, cod4 (CoD4x), codwaw, sof2 and wet (vanilla ET) with their parsers",
-       (games, _ad257.offered("cod4"), _ad257.offered("wet")),
-       ({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2", "wet": "et"},
-        ["b3", "iw4madmin"], ["b3"]))
+    eq("B3: offered for cod, coduo, cod2, cod4 (CoD4x), codwaw and sof2 with their parsers; not for wet (vanilla "
+       "ET), switched off until B3 authorizes its players",
+       (games, _ad257.offered("cod4"), _ad257.offered("wet"), _ad257.B3_WET, _ad257.B3_LATER_GAMES[0]),
+       ({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2"},
+        ["b3", "iw4madmin"], [], False, ("wet", "et", False)))
     eq("game port: where the game listens, else its config's; ET (its start sets no port) needs to be running",
        [_ad257.game_port("wet", 27970, [27960]), _ad257.game_port("wet", 27970, [])[0],
         _ad257.game_port("cod2", 28960, []), _ad257.game_port("cod2", 28960, [28960, 28961]),
@@ -274,14 +276,27 @@ def _install_offline257(ids):
 
 
 def _install_wet257(ids):
-    """Vanilla ET: the port it really listens on, read from its own socket; refused while it is stopped."""
-    code, _push, inst, _puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "")
-    refused = _p9_audit("addon_install").detail
-    code2, _push, inst2, puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "27960")
+    """Vanilla ET: refused while B3_WET is off; switched on, B3 uses the port the game really listens on.
+
+    Its start passes no port, so a stopped server is refused.
+    """
+    off, _push, _inst, _puts, off_calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "27960")
+    sh_calls = [c for c in off_calls if c[0] == "sh"]
+    rows = (_p9_client(P9_ADMIN).get("/api/server/%d/addons" % ids["wet"]).get_json() or {}).get("addons")
+    eq("install (ET, switched off): refused as for any game B3 isn't offered for, nothing runs on the host; the "
+       "card lists no add-on for it", (off, sh_calls, rows), (404, [], []))
+    games = _ad257.CATALOG["b3"]["games"]
+    games["wet"] = "et"
+    try:
+        code, _push, inst, _puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "")
+        refused = _p9_audit("addon_install").detail
+        code2, _push, inst2, puts, _calls = _install257(ids["wet"], ids["wetdb"], "off", probe=_WETPROBE257 % "27960")
+    finally:
+        games.pop("wet", None)
     unit = _put257(puts, ".container")
     stdin = inst2[2] if inst2 else ""
-    eq("install (ET): stopped, it is refused (its start passes no port, so only a running server says it); running "
-       "on 27960 while its config says 27970, B3 and the unit use 27960; its log is etmain/etserver.log",
+    eq("install (ET, switched on): stopped, it is refused (its start passes no port, so only a running server says "
+       "it); running on 27960 while its config says 27970, B3 and the unit use 27960; its log is etmain/etserver.log",
        (code, inst, "Start the game server first" in refused, code2, ",-U,27960" in unit, "port: 27960\n" in stdin,
         "game_log: /gamelog/etserver.log\n" in stdin, "parser: et\n" in stdin),
        (202, None, True, 202, True, True, True, True))

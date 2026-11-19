@@ -6,9 +6,10 @@
    first); it is the unpacked database's; a page with no link and sum says so; with the Outside services
    switch off no month update is offered and the card says the switch is off.
 3. The start limit: an operator's start, Apply or Update clears it first; a start that still hits it says so.
-   The card's Start is watched for the settle time; one that dies says so with its log.
+   The card's Start is watched for the settle time; one that dies says so with its log, the journal's lines
+   from this start included (b3.log may still end with an earlier clean shutdown).
 4. Uninstall: the account's tmux and JVM folders in /tmp go (helper and remote form), only real folders it owns.
-5. B3's later games (q3, etl, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
+5. B3's later games (wet, q3, etl, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
    console.log, ET: Legacy's g_log), the TCP RCON forward, the live port and b3.ini.
 6. The own-plugins folder: off by default; on, a read-only mount and external_plugins_dir; the card asks again.
 
@@ -25,6 +26,7 @@ import re as _re258
 import shutil as _shutil258
 import subprocess as _sp258  # nosec B404 - bash and node over this part's own throwaway files
 import tempfile as _tf258
+import time as _tm258
 import types as _types258
 
 from unit.part01 import _root, check, eq
@@ -272,6 +274,60 @@ def _start_watch_sh258():
              "limit": ((False, "ADDON_START_LIMIT", _CRASH258 + "\n"), False)})
 
 
+# The failed start's tail (VPS round D, O-D1): a journalctl answering by its `--since` (the `jmode` file
+# beside it picks what this start wrote to the journal) and logging its arguments; b3.log's age decides.
+_JOURNAL258 = """#!/bin/bash
+d=$(dirname "$0")
+echo "$*" >> "$d/journal.log"
+case "$(cat "$d/jmode"):$*" in
+  fresh:*"--since @"[0-9]*) echo 'CRITICAL: invalid parser specified in b3::parser (p258bogus)' ;;
+  *"--since"*) ;;
+  *) echo 'an older journal line' ;;
+esac
+exit 0
+"""
+_STALE258 = "Shutting down database connection\nEXITING: 0\n"
+
+
+def _fail_tail258():
+    d = os.path.join(_TMP258, "failtail")
+    data = os.path.join(d, "addon")
+    os.makedirs(os.path.join(data, "Data"), exist_ok=True)
+    stubs = (("systemctl", _WATCH258 % (d, d)), ("journalctl", _JOURNAL258), ("sleep", "#!/bin/bash\nexit 0\n"))
+    for name, text in stubs:
+        _write258(os.path.join(d, name), text)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(os.path.join(d, name), 0o700)  # nosec B103 - this part's own stub, its owner only
+    _write258(os.path.join(d, "mode"), "dies")
+    log = os.path.join(data, "Data", "b3.log")
+    real = _ad258.addon_dir("u258", "b3")
+
+    def run(jmode, b3log, age, sh=None):
+        _write258(os.path.join(d, "jmode"), jmode)
+        _write258(os.path.join(d, "journal.log"), "")
+        _write258(log, b3log)
+        when = _tm258.time() + age
+        os.utime(log, (when, when))
+        r = _bash258((sh or _ad258.start_sh("u258", "b3")).replace('cd "$HOME"', "cd %s" % _TMP258)
+                     .replace(real, data), path_first=d)
+        with open(os.path.join(d, "journal.log"), encoding="utf-8") as fh:
+            since = sorted({bool(_re258.fullmatch(r"@\d{9,}", v)) for v in _re258.findall(r"--since (\S*)", fh.read())})
+        return _ad258.start_outcome(r.stdout, r.returncode)[2] if sh is None else r.stdout, since
+    crit = "CRITICAL: invalid parser specified in b3::parser (p258bogus)\n"
+    got = [run("fresh", _STALE258, -3600), run("fresh", "B3 started\nthis start's line\n", 3600),
+           run("none", _STALE258, -3600)]
+    eq("a failed start's tail (bash): the journal's lines since this start, after b3.log's only when this start "
+       "wrote it; a b3.log left from an earlier clean shutdown is not shown when the journal says why; with "
+       "nothing new anywhere, b3.log's last lines as before",
+       got, [(crit, [True]), ("B3 started\nthis start's line\n" + crit, [True]), (_STALE258, [True])])
+    bare = run("fresh", _STALE258, -3600, sh=_ad258._tail_sh("u258", "b3"))
+    eq("a tail with no start before it (no t0): b3.log's last lines, no --since", bare, (_STALE258, []))
+    eq("install, Apply/Update and Start take t0 right before their start, and their failure tails read it",
+       [("t0=$(date +%s); systemctl --user reset-failed lgsm-addon-b3.service" in sh and '--since "@$t0"' in sh)
+        for sh in (_ad258.install_sh("u258", "b3", "UNIT", "{}"), _ad258.reconfigure_sh("u258", "b3", "UNIT", "{}"),
+                   _ad258.start_sh("u258", "b3"))], [True, True, True])
+
+
 def _start_route258(sid):
     _p9_patch(_ra258, "game_account_write_refusal", lambda remote, user, reading=False: None)
     _p9_patch(_ra258, "threading", _p9_threading(_P9Thread))
@@ -375,12 +431,24 @@ def _remote_tmp258():
        (["n=2", "n=0"], ["elsewhere", "hsperfdata_file258", "hsperfdata_linked258"], ["keep"], True, False, True))
 
 
+def _text258(*parts):
+    with open(os.path.join(_root, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
 # ── 5. B3's later games ─────────────────────────────────────────────────────────────────────────
 def _later_games258():
-    eq("later games: q3, etl, csgo and ins have their parsers but are off until switched on",
-       (_ad258.B3_LATER_GAMES, [_ad258.offered(g) for g in ("q3", "csgo", "ins", "etl", "arma3", "cmw")]),
-       ((("q3", "q3", False), ("etl", "et", False), ("csgo", "csgo", False), ("ins", "insurgency", False)),
-        [[], [], [], [], [], []]))
+    eq("later games: wet, q3, etl, csgo and ins have their parsers but are off until switched on",
+       (_ad258.B3_LATER_GAMES, [_ad258.offered(g) for g in ("wet", "q3", "csgo", "ins", "etl", "arma3", "cmw")]),
+       ((("wet", "et", False), ("q3", "q3", False), ("etl", "et", False), ("csgo", "csgo", False),
+         ("ins", "insurgency", False)), [[], [], [], [], [], [], []]))
+    warn = next(iter(_re258.findall(r"T\('(Legacy, opt-in: B3 [^']*)'\)",
+                                    _text258("panel", "static", "js", "server_addons.js"))), "")
+    said = [warn] + [_json258.loads(_text258("panel", "translations", lang, "nx.json")).get(warn, "")
+                     for lang in ("es", "fr")]
+    names = ("Enemy Territory", "Quake", "ET: Legacy", "Counter-Strike", "Insurgency")
+    eq("the card's legacy warning (and its es/fr text) names Soldier of Fortune 2 and no switched-off game",
+       [("Soldier of Fortune 2" in t, [n for n in names if n in t]) for t in said], [(True, [])] * 3)
     eq("later games: RCON settings, logs, TCP RCON and SourceMod folders",
        ([_ad258.RCON_SETTING[g] for g in ("q3", "csgo", "ins")], [_ad258.game_log_name(g) for g in ("q3", "csgo")],
         _ad258.RCON_TCP_GAMES, sorted(_ad258.SOURCEMOD_DIR)),
@@ -778,6 +846,7 @@ try:
     _geo_off258()
     _limit_sh258()
     _start_watch_sh258()
+    _fail_tail258()
     _helper_tmp258()
     _helper_release258()
     _remote_tmp258()
