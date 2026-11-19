@@ -50,7 +50,8 @@ from panel.core.config import encrypt_secret as _enc263
 from panel.db.models import GameDatabase as _GD263, SftpKey as _Key263, User as _User263, db as _db263
 from panel.ops.ssh_manager import _core as _core263, gmod as _gmod263, hosts as _hosts263
 from panel.routes import addons as _ra263, addons_change as _ch263, databases_files as _dbf263
-from panel.routes import databases_net as _net263, host_local as _hl263, remote_security as _rs263
+from panel.routes import databases_net as _net263, host_local as _hl263, manage_servers as _ms263
+from panel.routes import remote_security as _rs263
 from panel.security import account_guard as _ag263, privileged as _pv263
 from panel.services import addons as _ad263, game_config_form as _gcf263, host_reboot as _hr263
 from panel.services import reboot_words as _rw263, sftp_backend as _bk263, sftp_broker as _br263
@@ -824,12 +825,35 @@ def _gcf_dup263():
 
 
 def _install_pass263():
+    _p9_arm(who="part263")
     ok, fails, downloads, _w = _step4_256("p263-last", [("", 1, False), ("", 1, False), (_SUM_OUT256, 1, False),
                                                         ("Install Complete!\n", 0, True)])
     eq("install step 4: a checksum failure first seen on the third download still gets the one more download it "
        "was promised, and that download installs (the loop ended there and the install failed)",
        (ok, fails, downloads), (True, [], 4))
     _p9_restore_all()
+    _install_prime263()
+
+
+def _install_prime263():
+    """Run step 4 where "Invalid platform" is first seen on the third download (the Windows-depot prime's pass)."""
+    written, validated = [], []
+    _p9_arm(who="part263")
+    _p9_patch(_ms263, "lgsm_write_config", lambda r, u, n, kv: written.append(dict(kv)) or (True, ""))
+    _p9_patch_sm("run_as_game_user", lambda r, u, cmd, **k: validated.append(cmd) or ("", "", 0))
+    try:
+        # Two quiet failures, then SteamCMD's refusal; the prime's own download, then the pass it was promised.
+        ok, fails, downloads, _w = _step4_256("p263-prime", [
+            ("", 1, False), ("", 1, False), ("Error! App '222860' state is 0x202 after update job.\n"
+                                             "Invalid platform\n", 1, False),
+            ("windows depot pulled\n", 0, False), ("Install Complete!\n", 0, True)])
+    finally:
+        _p9_restore_all()
+    eq("install step 4: \"Invalid platform\" first seen on the third download is primed with the Windows depot "
+       "(set, then unset, then validate) and still gets the download it was promised, which installs (the loop "
+       "ended after the prime and the install failed)",
+       (ok, fails, downloads, written, validated),
+       (True, [], 5, [{"steamcmdforcewindows": "yes"}, {"steamcmdforcewindows": "no"}], ["validate"]))
 
 
 def _abort_trap263():
