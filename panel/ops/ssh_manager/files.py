@@ -920,13 +920,36 @@ def _lgc_write_config_locked(server, user, selfname, updates):
     return _write_file_as_user(server, user, inst, content.encode(), selfname)
 
 
+# The most settings one lgsm_write_config takes, and the most text they may add up to. LinuxGSM's
+# _default.cfg files hold about 110 settings (rustserver 111, csgoserver 109), and the Settings tab
+# posts only the ones changed; the text bound is read_file's own default (1 MiB), past which the
+# editor could not open the file the save wrote. A request is refused whole before anything is read.
+CFG_UPDATE_MAX_KEYS = 1000
+CFG_UPDATE_MAX_CHARS = 1048576
+LGSM_CONFIG_TOO_BIG = ("That is more settings, or more text, than one save takes — nothing has been "
+                       "changed.")
+
+
+def _cfg_updates_too_big(updates):
+    """Whether `updates` holds more keys, or more key and value text, than one save takes."""
+    if not isinstance(updates, dict):
+        return False
+    if len(updates) > CFG_UPDATE_MAX_KEYS:
+        return True
+    return sum(len(str(k)) + len(str(v)) for k, v in updates.items()) > CFG_UPDATE_MAX_CHARS
+
+
 def _cfg_write_refusal(updates):
     """Why lgsm_write_config refuses `updates` before reading anything, or None.
 
-    logtimestamp is only ever turned off (_turns_logtimestamp_on); LinuxGSM v26.4.0's
+    A map past CFG_UPDATE_MAX_KEYS / CFG_UPDATE_MAX_CHARS is refused first (OWASP Denial of Service
+    Cheat Sheet, input validation: bound what a request may make the server do). logtimestamp is
+    only ever turned off (_turns_logtimestamp_on); LinuxGSM v26.4.0's
     stoponlyifnoplayers / warnplayerstimer take only the values LinuxGSM acts on
     (lgsm_players.bad_setting, which also writes a good timer back as LinuxGSM reads it).
     """
+    if _cfg_updates_too_big(updates):
+        return LGSM_CONFIG_TOO_BIG
     if _turns_logtimestamp_on(updates):
         return LGSM_TIMESTAMPS_REFUSED
     from panel.services import lgsm_players
@@ -1053,6 +1076,20 @@ def _cfg_dq_escape(val):
     return "".join(out)
 
 
+# The key of an assignment line, as _apply_cfg_updates matches one (`  key =` at the start).
+_CFG_ASSIGN_KEY_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _cfg_key_lines(lines):
+    """{key: [indexes]} of the assignment lines in `lines`, read once."""
+    where = {}
+    for i, ln in enumerate(lines):
+        m = _CFG_ASSIGN_KEY_RE.match(ln)
+        if m:
+            where.setdefault(m.group(1), []).append(i)
+    return where
+
+
 def _apply_cfg_updates(lines, updates):
     """Set each valid key in `lines` IN PLACE: replace its uncommented lines, else append one.
 
@@ -1060,20 +1097,24 @@ def _apply_cfg_updates(lines, updates):
     assignment wins (and _parse_cfg reads it the same way). A hand-edited cfg holding the key twice
     had only its first line rewritten — the save said "Saved", the server kept the old value, and
     the form read the old value back.
+
+    The lines are indexed by key once (_cfg_key_lines), so a save costs lines + keys. Matching
+    every key against every line cost keys x lines, and each new key appended a line, so a map of
+    20,000 new keys held the panel's one event loop (every user's console) for about 12 seconds.
+    A comment line never matches: `#` is not a space, so the key cannot start it.
     """
+    where = _cfg_key_lines(lines)
     for key, val in (updates or {}).items():
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
         val = str(val).replace("\r", " ").replace("\n", " ")
         newline = f'{key}="{_cfg_dq_escape(val)}"'
-        pat = re.compile(r"^\s*" + re.escape(key) + r"\s*=")
-        replaced = False
-        for i, ln in enumerate(lines):
-            if pat.match(ln) and not ln.strip().startswith("#"):
-                lines[i] = newline
-                replaced = True
-        if not replaced:
+        hits = where.get(key)
+        if not hits:
             lines.append(newline)
+            continue
+        for i in hits:
+            lines[i] = newline
 
 
 # --- Mods / addons (LinuxGSM mods-install / mods-remove) --------------------
@@ -2623,6 +2664,6 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
 _WRITE_REASONS = frozenset({
     "Invalid path", "Invalid filename", "Invalid account or script name",
     _RAWLTS_REFUSED, _RAWLTS_UNCHECKED, UPLOAD_CHECK_FAILED, R14B_NOT_TEXT,
-    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, WRITE_CONSOLE, R31J_CONSOLE_UNREAD, R34B_WRITE_RESERVED,
+    LGSM_TIMESTAMPS_REFUSED, LGSM_CONFIG_UNREAD, LGSM_CONFIG_TOO_BIG, WRITE_CONSOLE, R31J_CONSOLE_UNREAD, R34B_WRITE_RESERVED,
     CMPC_DEFAULT_CFG_REFUSED, LOGIN_FILE_REFUSED,
 })
