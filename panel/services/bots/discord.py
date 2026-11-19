@@ -302,15 +302,19 @@ def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
         name = gs.name
 
         def _done(ok, detail):
+            # `detail` is the last line of LinuxGSM's output, which the game account writes (its
+            # scripts, its servername): fenced (_dc_literal), so a masked link or a heading in it
+            # is shown as text, never rendered in the bot's message.
             if ok is None:
                 # LinuxGSM postponed or refused it (players online), or skipped it (another update was
                 # running): the detail says which.
-                _dc_reply(bot_token, channel_id, "⏳ %s — %s" % (name, detail or action))
+                _dc_reply(bot_token, channel_id, "⏳ %s — %s%s"
+                          % (name, action, (":\n" + _dc_literal(detail)) if detail else ""))
             elif ok:
                 _dc_reply(bot_token, channel_id, "✅ %s — %s finished." % (name, action))
             else:
                 _dc_reply(bot_token, channel_id, "⚠️ %s — %s failed%s"
-                          % (name, action, (": " + detail) if detail else "."))
+                          % (name, action, (":\n" + _dc_literal(detail)) if detail else "."))
 
         _dc_ack(bot_token, channel_id, action_ack(action, name))
         try:
