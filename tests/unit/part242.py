@@ -304,7 +304,8 @@ _rules242 = _rn242.get("packageRules") or []
 _group242 = [r for r in _rules242 if r.get("groupName")]
 _grp_re242 = [_js_re242(p) for p in (_group242[0].get("matchPackageNames") or [])] if len(_group242) == 1 else []
 _imgs242 = {"gcr.io/oss-fuzz-base/base-builder-python": True, "gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers": True,
-            "gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers": True, "ghcr.io/ossf/scorecard-action": False}
+            "gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers": True, "ghcr.io/ossf/scorecard-action": False,
+            "docker.io/library/python": False}
 check("renovate: docker images get digest updates only (no other tag), raised without a release timestamp "
       "(gcr.io and ghcr.io give none, so timestamp-required would hold them forever), and the three "
       "ClusterFuzzLite images move as one group that the Scorecard image is not in",

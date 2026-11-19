@@ -46,6 +46,7 @@ The host keeps the state: ~/panel-addons/<id>/addon.json says what the panel ins
 installed until someone with Manage add-ons installs an add-on.
 """
 import base64
+import hashlib
 import json
 import os
 import re
@@ -103,8 +104,32 @@ B3_RELEASE = "2.0.0"
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
 IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
-# python:3.12-slim (Debian 13) on 2026-11-18, by its multi-arch index digest: the build's base.
+# python:3.12-slim (Debian 13) on 2026-11-18, by its multi-arch index digest: the build's base. Renovate
+# proposes the tag's new digest here and in the Containerfile's ARG BASE_IMAGE together (.github/renovate.json).
 B3_BASE = "docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+# The files of an add-on's build folder (panel/addon_images/<build>/) that go to the host.
+BUILD_FILES = ("Containerfile", "requirements.txt", "entrypoint.sh")
+_IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addon_images")
+
+
+def build_id(folder, base):
+    """A short id of what an image built on the host is made of: its base image and its build folder's files.
+
+    Part of the image's tag beside the source commit, so a new base digest, a new lock of its Python
+    packages or a changed Containerfile (the automatic update pull requests among them) is offered as
+    an update to every host still running the image built before, as a new commit is.
+    """
+    h = hashlib.sha256(base.encode("utf-8"))
+    for name in BUILD_FILES:
+        h.update(b"\0" + name.encode("ascii") + b"\0")
+        try:
+            with open(os.path.join(folder, name), "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            h.update(b"\0missing")      # read at import: a missing file fails the build, never the panel's start
+    return h.hexdigest()[:8]
+
+
 CATALOG = {
     IW4MADMIN: {
         "name": "IW4MAdmin",
@@ -132,7 +157,7 @@ CATALOG = {
     },
     B3: {
         "name": "B3 (Big Brother Bot)",
-        "image": "localhost/lgsm-addon-b3:" + B3_COMMIT[:12],
+        "image": "localhost/lgsm-addon-b3:%s-%s" % (B3_COMMIT[:12], build_id(os.path.join(_IMAGES_DIR, "b3"), B3_BASE)),
         "version": "%s (%s)" % (B3_RELEASE, B3_COMMIT[:8]),
         "source": "https://github.com/FMSMITH91/big-brother-bot",
         # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
@@ -796,9 +821,9 @@ def build_files(addon_id):
     build = CATALOG[addon_id]["build"]
     if not build:
         return {}
-    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addon_images", build)
+    base = os.path.join(_IMAGES_DIR, build)
     got = {}
-    for name in ("Containerfile", "requirements.txt", "entrypoint.sh"):
+    for name in BUILD_FILES:
         with open(os.path.join(base, name), encoding="utf-8") as fh:
             got["%s/%s" % (BUILD_DIR, name)] = fh.read()
     return got

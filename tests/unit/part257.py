@@ -498,14 +498,17 @@ def _renovate257():
     for m in cfg.get("customManagers") or []:
         hits = _manager_hits257(m)
         if hits:
-            found.setdefault(m.get("datasourceTemplate"), []).extend(hits)
+            found.setdefault("%s %s" % (m.get("datasourceTemplate"), m.get("currentValueTemplate")), []).extend(hits)
     daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
-    eq("Renovate: B3's commit in addons.py and the Containerfile (git-refs, master) and IW4MAdmin's digest (docker, "
-       "latest), each matched once, checked daily",
+    base = _ad257.B3_BASE.split("@")[1]
+    eq("Renovate: B3's commit in addons.py and the Containerfile (git-refs, master), IW4MAdmin's digest (docker, "
+       "latest) and the B3 image's base digest in addons.py and the Containerfile (docker, 3.12-slim), each matched "
+       "once, checked daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
-       ({"git-refs": [("panel/services/addons.py", _PIN257), ("panel/addon_images/b3/Containerfile", _PIN257)],
-         "docker": [("panel/services/addons.py", _ad257.IW4MADMIN_IMAGE.split("@")[1])]},
-        ["big-brother-bot", "ghcr.io/raidmax/iw4madmin"]))
+       ({"git-refs master": [("panel/services/addons.py", _PIN257), ("panel/addon_images/b3/Containerfile", _PIN257)],
+         "docker latest": [("panel/services/addons.py", _ad257.IW4MADMIN_IMAGE.split("@")[1])],
+         "docker 3.12-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},
+        ["big-brother-bot", "docker.io/library/python", "ghcr.io/raidmax/iw4madmin"]))
 
 
 # ── 7. the remote form of addon-account-release ─────────────────────────────────────────────────
