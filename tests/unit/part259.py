@@ -533,6 +533,11 @@ else:
             _bio = _io259.BytesIO()
             eq("sftp paths: a link that stays inside the folder still works",
                _sftp_err259(_s.getfo, "/Alpha One/inside-link.cfg", _bio) + " " + _bio.getvalue().decode(), "ok hostname p259\n")
+            eq("sftp paths: readlink names an inside link's target in the tree, and refuses an outward one",
+               (_sftp_err259(lambda p: _io259.StringIO(_s.readlink(p)).read(), "/Alpha One/inside-link.cfg"),
+                _s.readlink("/Alpha One/inside-link.cfg") if _sftp_err259(_s.readlink, "/Alpha One/inside-link.cfg") == "ok"
+                else None, _sftp_err259(_s.readlink, "/Alpha One/escape.txt")[:15]),
+               ("ok", "/Alpha One/server.cfg", "PermissionError"))
             eq("sftp paths: no link can be made over SFTP", _sftp_err259(_s.symlink, "/etc", "/Alpha One/l")[:13],
                "OSError: Link")
             check("sftp paths: writing through an outward link is refused and nothing lands outside",

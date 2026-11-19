@@ -1565,6 +1565,27 @@
       "POST"
     ]
   },
+  "POST /account/sftp-keys/<int:key_id>/remove": {
+    "endpoint": "account_sftp_key_remove",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:account_sftp_key_remove"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /account/sftp-keys/add": {
+    "endpoint": "account_sftp_key_add",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:account_sftp_key_add"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /account/telegram/check": {
     "endpoint": "account_telegram_check",
     "guards": [
@@ -3394,6 +3415,18 @@
       "auth.py:decorated_function(super_admin)",
       "account_guard.py:wrapped",
       "view:settings_schedules_save"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /settings/sftp": {
+    "endpoint": "sftp_settings_save",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:sftp_settings_save"
     ],
     "methods": [
       "POST"
