@@ -168,6 +168,7 @@ check("_gitc r31: judged root's, a folder that is not root's when opened (no-fol
 # user namespace where this account is uid 0 (unshare -r), skipped by name where there is none.
 _ROOTS260 = os.path.join(_TMP260, "roots")
 _repo260(_ROOTS260)
+_ROOT_GATE260 = "_gitc r31: root's own tree runs git as root, without SUDO_UID"
 _root_env260 = dict(_GIT_ENV260, SUDO_UID="4242", SUDO_GID="4242", SUDO_USER="p260panel")
 _root_script260 = ("set -uo pipefail\nPANEL_DIR=%s\nPANEL_USER=p260nobody\n" % _shlex260.quote(_ROOTS260)
                    + _GITC260 + "_gitc rev-parse --show-toplevel\n_gitc -c 'alias.penv=!env' penv\n")
@@ -180,14 +181,16 @@ if _argv260 is not None:
     except (OSError, _sp260.SubprocessError):
         _r_e260 = None      # no answer: reported as a SKIP below, never as a pass
 if _r_e260 is None or (_argv260 and _argv260[0] == "unshare" and "unshare:" in (_r_e260.stderr or "")):
-    skip("_gitc r31: root's own tree runs git as root, without SUDO_UID", "no root and no user namespace here")
+    skip(_ROOT_GATE260, "no root and no user namespace here")
 else:
     _lines_e260 = _r_e260.stdout.splitlines()
-    check("_gitc r31: root's own tree, as root, runs git there (opened no-follow, its .git root's)",
-          _r_e260.returncode == 0 and bool(_lines_e260) and _lines_e260[0] == os.path.realpath(_ROOTS260),
+    _ran_e260 = _r_e260.returncode == 0 and bool(_lines_e260) and _lines_e260[0] == os.path.realpath(_ROOTS260)
+    _sudo_e260 = sorted(ln.split("=", 1)[0] for ln in _lines_e260 if ln.startswith("SUDO_"))
+    check("_gitc r31: root's own tree, as root, runs git there (opened no-follow, its .git root's)", _ran_e260,
           "rc=%s out=%r err=%r" % (_r_e260.returncode, _r_e260.stdout[:300], _r_e260.stderr[-300:]))
-    eq("_gitc r31: ...with SUDO_UID, SUDO_GID and SUDO_USER removed from git's environment",
-       sorted(ln.split("=", 1)[0] for ln in _lines_e260 if ln.startswith("SUDO_")), [])
+    eq("_gitc r31: ...with SUDO_UID, SUDO_GID and SUDO_USER removed from git's environment", _sudo_e260, [])
+    # The same branch under its skip's own name: ci.yml's root step judges a skipped gate by that name.
+    check(_ROOT_GATE260, _ran_e260 and _sudo_e260 == [], "ran=%s sudo=%s" % (_ran_e260, _sudo_e260))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
