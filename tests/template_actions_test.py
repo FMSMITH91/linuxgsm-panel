@@ -3833,12 +3833,15 @@ check(-1 not in (_str_named, _str_running, _str_absent)
 # ── "UFW now allows tailscale0" only when the finalize says it did ────────────────────────────
 # The route answers ufw_allowed=false when UFW was inactive, absent, unreadable or refused the
 # rule (and a refused/unreachable finalize has no such key), yet the sentence printed on all of them.
-# The wait (and its finalize) is _tsUpWait since review 1017c's "Check again", called by tailscaleUp.
-_mr_ts = _js_code_only(_js_function_body(
-    (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "_tsUpWait") or "")
+# The wait is _tsUpWait since review 1017c's "Check again", called by tailscaleUp; once the machine is
+# running it hands over to _tsFinalize (the password asked in place first), which sends the finalize
+# from _tsFinalizeNow.
+_mr_src = (ROOT / "panel" / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
+_mr_wait = _js_code_only(_js_function_body(_mr_src, "_tsUpWait") or "")
+_mr_ts = _js_code_only(_js_function_body(_mr_src, "_tsFinalizeNow") or "")
 _ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
 _ufw_line_i = _mr_ts.find("'UFW now allows the tailscale0 interface.'")
-check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,
+check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts and "_tsFinalize(remoteId" in _mr_wait,
       "js: the tailscale-up flow was found in manage_remotes.js", "extractor found %d chars" % len(_mr_ts))
 check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("allows the tailscale0") == 1
       and "+ escapeHtml(ufwText) +" in _mr_ts,
