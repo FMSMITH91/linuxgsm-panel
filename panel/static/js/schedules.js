@@ -23,12 +23,15 @@
 
 // The OS update check's switch asks before it goes off, as the Outside services switches do: it is
 // put back on at once and turned off only on Confirm. Its "outside OWASP's recommendation" note
-// follows it. A note, never a refusal.
+// follows it, on load and on pageshow too: a switch the browser restores to its unsaved state (a
+// reload in Firefox) fires no change. A note, never a refusal.
 (function(){
   var box = document.getElementById('sch-os');
   if (!box) return;
   var note = document.getElementById('sch-os-owasp');
   function sync(){ if (note) note.classList.toggle('d-none', box.checked); }
+  window.addEventListener('pageshow', sync);
+  sync();
   box.addEventListener('change', function(){
     if (box.checked || !window.confirmDialog) { sync(); return; }
     box.checked = true;
