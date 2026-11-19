@@ -123,9 +123,14 @@ def _ini257():
 _DB257 = b"\x00" * 64 + _geo257.MMDB_MARKER + b"\xe1\x00metadata"
 _GZ257 = _gzip257.compress(_DB257)
 _SHA_GZ257 = _geo257.sha1_hex(_GZ257)
-_PAGE257 = ('<a href="https://download.db-ip.com/free/dbip-country-lite-%s.csv.gz">CSV</a> ... '
-            '<a href="https://download.db-ip.com/free/dbip-country-lite-%s.mmdb.gz">MMDB</a>'
-            '<dt>MD5</dt><dd>%s</dd><dt>SHA1</dt><dd>%s</dd>' % (_MONTH257, _MONTH257, "a" * 32, _SHA_GZ257))
+_SHA_DB257 = _geo257.sha1_hex(_DB257)
+# DB-IP's page as it is laid out (part258 has the full markup): each file's MD5SUM and SHA1SUM, of the
+# unpacked file, above its link; the CSV's block first.
+_PAGE257 = ('<dl><dt>MD5SUM</dt><dd class="small">%s</dd><dt>SHA1SUM</dt><dd class="small">%s</dd></dl>'
+            "<a href='https://download.db-ip.com/free/dbip-country-lite-%s.csv.gz'>CSV</a> ... "
+            '<dl><dt>MD5SUM</dt><dd class="small">%s</dd><dt>SHA1SUM</dt><dd class="small">%s</dd></dl>'
+            "<a href='https://download.db-ip.com/free/dbip-country-lite-%s.mmdb.gz'>MMDB</a>"
+            % ("c" * 32, "c" * 40, _MONTH257, "a" * 32, _SHA_DB257, _MONTH257))
 
 
 def _geo_stub257(gets, switch=True, month=_MONTH257):
@@ -144,10 +149,11 @@ def _geo_stub257(gets, switch=True, month=_MONTH257):
 def _geoip257():
     url = "https://download.db-ip.com/free/dbip-country-lite-%s.mmdb.gz" % _MONTH257
     eq("DB-IP: the page gives the MMDB file's link, month and SHA1 (not the CSV's)",
-       _geo257.parse_page(_PAGE257), (url, _MONTH257, _SHA_GZ257))
-    eq("DB-IP: the file is used only when it matches the SHA1 (of the .gz or of the database) and is an MMDB file",
-       [_geo257.unpack(_GZ257, _SHA_GZ257) == _DB257,
-        _geo257.unpack(_GZ257, _geo257.sha1_hex(_DB257)) == _DB257,
+       _geo257.parse_page(_PAGE257), (url, _MONTH257, _SHA_DB257))
+    eq("DB-IP: the file is used only when the database matches the SHA1 and is an MMDB file (the .gz's sum is not "
+       "the published one)",
+       [_geo257.unpack(_GZ257, _SHA_GZ257) is None,
+        _geo257.unpack(_GZ257, _SHA_DB257) == _DB257,
         _geo257.unpack(_GZ257, "0" * 40),
         _geo257.unpack(_gzip257.compress(b"x" * 99), _geo257.sha1_hex(_gzip257.compress(b"x" * 99)))],
        [True, True, None, None])
@@ -157,7 +163,7 @@ def _geoip257():
     eq("DB-IP: downloaded once for the month, then kept (the second ask reaches nothing)",
        (first[1:], first[0] is not None and first[0].read_bytes() == _DB257, again[1:], asked),
        ((_MONTH257, ""), True, (_MONTH257, ""), [_geo257.PAGE, url]))
-    asked = _geo_stub257({_geo257.PAGE: (_PAGE257.replace(_SHA_GZ257, "1" * 40).encode(), None), url: (_GZ257, None)})
+    asked = _geo_stub257({_geo257.PAGE: (_PAGE257.replace(_SHA_DB257, "1" * 40).encode(), None), url: (_GZ257, None)})
     eq("DB-IP: a file that doesn't match its SHA1 is not kept (the page and the file were both asked for)",
        (_geo257.latest(), asked), ((None, "", _geo257.BAD_FILE), [_geo257.PAGE, url]))
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.encode(), None)}, switch=False)
@@ -449,7 +455,8 @@ def _card_checks257():
         "no private messages" in got.get("text", "")), (True, 1, ["stats", "tk"], True, True))
     eq("card: Apply posts the geolocation and the ticked plugins to the settings route",
        got.get("posts"), [["/api/server/7/addons/b3/settings", {"geolocation": "offline",
-                                                                 "plugins": ["afk", "countryfilter"]}]])
+                                                                 "plugins": ["afk", "countryfilter"],
+                                                                 "own_plugins": False}]])
     check("card: B3's Remove warns that its folder goes (settings and plugin edits) and its database stays",
           any("plugin settings you edited" in d and "database is kept" in d for d in got.get("dialogs") or []),
           repr(got.get("dialogs")))
