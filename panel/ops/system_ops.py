@@ -3916,10 +3916,10 @@ _WRITE_TARGET_BY_PATH = {p: name for name, (p, _m) in _priv.WRITE_TARGETS.items(
 
 def _panel_f2b_filter_body():
     """fail2ban filter matching the panel's own auth.log lines; <HOST> captures the offender. A
-    failed or throttled password login, and a bearer-token attempt the token throttle refused
-    (auth._token_auth_note_blocked)."""
+    failed or throttled password login, a bearer-token attempt the token throttle refused
+    (auth._token_auth_note_blocked), and a failed or refused SFTP sign-in (services/sftp_broker)."""
     return ("[Definition]\n"
-            "failregex = panel (?:login|api token) (?:failed|blocked) from <HOST>$\n"
+            "failregex = panel (?:login|api token|sftp login) (?:failed|blocked) from <HOST>$\n"
             "ignoreregex =\n")
 
 
@@ -4050,14 +4050,44 @@ def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
             "enabled = true\n"
             "backend = " + _F2B_PANEL_BACKEND + "\n"
             + ("banaction = %s\n" % _F2B_PANEL_ALLPORTS_ACTION if allports else "") +
-            "port = %d\n"
+            "port = %s\n"
             "filter = linuxgsm-panel\n"
             "logpath = %s\n"
             "maxretry = 5\n"
             "findtime = 10m\n"
             "bantime = 1h\n"
-            "ignoreip = %s\n" % (web_port, auth_log,
+            "ignoreip = %s\n" % (_panel_f2b_ports(web_port), auth_log,
                                  _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips))))
+
+
+def _panel_f2b_sftp_port():
+    """The SFTP service's port while it is on and listens on every address, else None.
+
+    Then its failed sign-ins (auth.log, "panel sftp login failed from <ip>") are banned on that port
+    too, beside the web port. On the Tailscale address or 127.0.0.1 the client is a tailnet peer or
+    a local tunnel, which the jail's ignoreip never bans; the panel's own throttle holds those.
+    Unreadable config: None (the web port alone, as before the SFTP service existed).
+    """
+    try:
+        from panel.core import config as _cfg
+        from panel.services import sftp_common as _sc
+        s = _sc.settings(_cfg.load_config())
+    except Exception:  # noqa: BLE001 - no SFTP port is the answer that changes nothing
+        _log.debug("f2b: SFTP settings unreadable", exc_info=True)
+        return None
+    return s["port"] if s["enabled"] and s["bind"] == _sc.BIND_ALL else None
+
+
+def _panel_f2b_ports(web_port):
+    """The jail's `port` value: the web port, then the SFTP port when that is banned on too."""
+    extra = _panel_f2b_sftp_port()
+    return "%d" % int(web_port) if extra in (None, int(web_port)) else "%d,%d" % (int(web_port), extra)
+
+
+def _panel_f2b_jail_sftp_ok(web_port):
+    """Whether the jail's ports after the web port are the ones _panel_f2b_ports wants now."""
+    have = str(_panel_f2b_jail_value("port") or "").split(",")[1:]
+    return have == _panel_f2b_ports(web_port).split(",")[1:]
 
 
 def _panel_f2b_jail_value(key):
@@ -4099,7 +4129,7 @@ def _panel_f2b_jail_port():
     try:
         with open(_F2B_PANEL_JAIL) as f:
             for line in f:
-                m = re.match(r"\s*port\s*=\s*(\d+)\s*$", line)
+                m = re.match(r"\s*port\s*=\s*(\d+)(?:,\d+)*\s*$", line)
                 if m:
                     return int(m.group(1))
     except OSError:
@@ -4854,7 +4884,7 @@ def panel_jail_health(auth_log, web_port, ignore_ips=None):
     allports = _panel_login_proxied()
     want_action = _F2B_PANEL_ALLPORTS_ACTION if allports else None
     want_ignore = _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips)).split()
-    return {"port": _panel_f2b_jail_port() == int(web_port),
+    return {"port": _panel_f2b_jail_port() == int(web_port) and _panel_f2b_jail_sftp_ok(web_port),
             "banaction": _panel_f2b_jail_value("banaction") == want_action,
             "logpath": _panel_f2b_jail_value("logpath") == str(auth_log),
             "backend": _panel_f2b_jail_value("backend") == _F2B_PANEL_BACKEND,

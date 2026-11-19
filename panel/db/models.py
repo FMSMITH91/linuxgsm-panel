@@ -1815,6 +1815,30 @@ class PushSubscription(db.Model):
         "push_subscriptions", lazy="dynamic", cascade="all, delete-orphan"))
 
 
+class SftpKey(db.Model):
+    """One SSH public key that signs its owner in to the panel's SFTP service (panel/services/sftp_*).
+
+    Added and removed on the owner's Account page (adding asks for the password again and is audited).
+    A public key is not a secret, so it is stored as it is; `fingerprint` (OpenSSH's SHA256 form) is
+    what a sign-in looks a key up by and what the page shows. Removed with the account.
+    """
+
+    __tablename__ = "sftp_key"
+    # AUTOINCREMENT: the Account page removes a key by id; a deleted row's id must never be reused.
+    __table_args__ = (db.UniqueConstraint("user_id", "fingerprint", name="uq_sftp_key_user_fp"),
+                      {"sqlite_autoincrement": True})
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), index=True, nullable=False)
+    label = db.Column(db.String(80), default="")
+    key_type = db.Column(db.String(40), nullable=False)
+    key_blob = db.Column(db.Text, nullable=False)          # base64 of the SSH wire-format public key
+    fingerprint = db.Column(db.String(64), index=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    last_used = db.Column(db.DateTime, nullable=True)
+    user = db.relationship("User", backref=db.backref(
+        "sftp_keys", lazy="dynamic", cascade="all, delete-orphan"))
+
+
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
 # login cookie, a page's own URLs — and so must never be handed to a new row
 # (panel/db/id_sequence.py). The last three are keyed only by URLs: a Global Bans page left open
@@ -1824,7 +1848,7 @@ class PushSubscription(db.Model):
 # a unit check holds the two lists together.
 _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
                          GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase, DatabaseEndpoint,
-                         EndpointClient, PushSubscription)
+                         EndpointClient, PushSubscription, SftpKey)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {

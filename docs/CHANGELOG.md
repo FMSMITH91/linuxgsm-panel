@@ -14,6 +14,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Added
 
+- **SFTP for every user, with their own login.** Settings → SFTP turns on a built-in SFTP service (off by default) on the Tailscale
+  address, 127.0.0.1 or every address. Each user signs in with an SSH key from their Account page (or
+  a password with an authenticator code, if allowed) and sees one folder for each server they may edit
+  files on, with every upload, delete and rename in the audit log. See [sftp.md](sftp.md).
 - **Settings → Schedules.** Every background job the panel runs is listed with what it does, how
   often it runs, and when it last ran and runs next. You can set the time of the daily panel backup,
   how often the panel checks for its own updates, and the time of the daily OS update check, or turn

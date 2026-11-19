@@ -120,6 +120,17 @@ def account_reserve(username, now, device=None):
         return (key, now), 0
 
 
+def account_paused(username, now):
+    """Seconds `username`'s sign-ins stay paused (0: not paused), counting nothing.
+
+    For a sign-in that is not a guess (an SSH key over SFTP): the pause still holds it, as it holds
+    every sign-in to the name, but asking does not count as an attempt.
+    """
+    with _LOCK:
+        end = _pause_end(_FAILS.get(_ukey(username)), now)
+    return int(end - now) + 1 if end > now else 0
+
+
 def account_release(slot):
     """Give back a slot account_reserve handed out, for an attempt that did not fail."""
     key, stamp = slot

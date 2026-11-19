@@ -67,6 +67,7 @@ Trust boundaries:
 | TB6 | Panel to database servers | database contents written by players and plugins |
 | TB7 | GitHub to an installed panel (updates) | anyone holding the GitHub account or a CI token |
 | TB8 | CI runners (pull-request code) | anyone who opens a pull request |
+| TB9 | SFTP client to the panel's SFTP service (off by default) | anyone who can reach its port; signed-in users with `edit_files` |
 
 ## Assets
 
@@ -186,6 +187,22 @@ the file that holds them.
 | I | A secret reaches pull-request code | Mitigate: the only secrets live in environments only `main` can use; pull-request jobs hold the job token alone (CICD-SEC-6). |
 | E | A job's token can do more than the job needs | Mitigate: every workflow starts with `permissions: {}` and each job grants only what it uses (CICD-SEC-5). |
 | I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list (the unit suites' `checks` matrix, their coverage and JavaScript coverage jobs, and Lighthouse among them); the rest audit (CICD-SEC-7, CICD-SEC-10). |
+
+### TB9: SFTP client to the panel's SFTP service
+
+Off by default (Settings → SFTP, [sftp.md](sftp.md)). Listens on the Tailscale address, 127.0.0.1, or
+every address (the operator's explicit choice, with a warning; the panel never opens the firewall).
+
+| STRIDE | Threat | Response and controls |
+| --- | --- | --- |
+| S | Password guessing over SFTP | Mitigate: SSH keys only by default (OWASP Authentication Cheat Sheet, "Protect Against Automated Attacks": a key cannot be guessed); a password is accepted only with a single-use authenticator code, only for accounts with 2FA, and only when a superadmin allows it. Every attempt counts against the web sign-in's address throttle, day limit and per-name pause, and writes the `data/auth.log` line the fail2ban jail counts; the jail also bans on the SFTP port when it listens on every address; a banned address is turned away (`panel/services/sftp_broker.py`). At most 6 credentials per connection and 60 s to sign in (`panel/services/sftp_server.py`). |
+| S | A client is shown a forged server | Mitigate: an Ed25519 host key made on first use and kept encrypted with the key ring; its fingerprint is on the Settings card and every user's Account page to check at first connection. |
+| T | A path, or a link planted in a home, reaches files outside the server's folder | Mitigate: every path is resolved by the host (`sftp-server`'s realpath, links followed) and refused unless it stays in the game account's home; links cannot be made over SFTP (refused, and `sftp-server -P symlink,hardlink`); and every read and write runs AS the game account, so a link swapped in between the check and the open reaches only what that account could reach anyway (OWASP Path Traversal Prevention Cheat Sheet, "Symbolic Links and Race Conditions") (`panel/services/sftp_server.py`, `panel/services/sftp_backend.py`). |
+| T | Uploads that break the server or the console | Mitigate: the file manager's rules (protected LinuxGSM paths, sign-in files, `_default.cfg`, the console's log, a config turning `logtimestamp` on, name rules) on the host-resolved path (`panel/services/sftp_files.py`). |
+| R | Changes without a trace | Mitigate: every upload, delete, rename, new folder and permission change is an audit row about the server with the user and address; every sign-in and refusal too. |
+| I | A user reads servers they were not granted | Mitigate: the panel answers every request: the folder list and each request need `edit_files` and access to that server, reads `view_files` as well, and a root-capable game account is refused as in the file manager. A removed permission, a deactivation or "sign out everywhere" takes effect on the next request; an open file within one second. |
+| D | Uploads fill the disk; connections exhaust the service | Mitigate: an upload size cap (Settings, 4 GiB recommended), refused when less than 256 MiB would stay free, 64 open files per session, 64 connections and 10 unsigned-in connections per address. The service is its own process: a transfer cannot stall the panel's pages or live console. |
+| E | The SFTP service used to reach root or the panel's account | Mitigate: it runs as the panel's account and starts `sftp-server` as the game account only (`sudo -n -u`, the grant's `%lgsmpanel-games` line); no shell, command, forwarding or subsystem but sftp is accepted. |
 
 ## Residual risks
 

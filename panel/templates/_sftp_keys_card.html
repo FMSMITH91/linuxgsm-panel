@@ -1,0 +1,62 @@
+{# The Account page's SFTP card (panel/routes/sftp_settings.py): this account's own SSH keys for the
+   panel's SFTP service, how to connect, and which servers' folders it will see. Adding a key asks a
+   stale sign-in for the password first (data-step-up); both changes are audited. #}
+{% set sk = sftp_account_card(current_user) %}
+<div class="card" id="sec-sftp">
+  <div class="card-header"><i class="bi bi-folder-symlink"></i> SFTP</div>
+  <div class="card-body">
+    {% if not sk.enabled %}
+    <div class="small text-secondary mb-2">The panel's SFTP service is off. An administrator can turn it on in Settings. Keys you add now work once it is on.</div>
+    {% else %}
+    <dl class="row small mb-2">
+      <dt class="col-4">Host</dt><dd class="col-8">{% if sk.address %}<code data-no-i18n>{{ sk.address }}</code>{% else %}<span>This panel's address</span>{% endif %}</dd>
+      <dt class="col-4">Port</dt><dd class="col-8"><code data-no-i18n>{{ sk.port }}</code></dd>
+      <dt class="col-4">User</dt><dd class="col-8"><code data-no-i18n>{{ current_user.username }}</code></dd>
+      {% if sk.fingerprint %}<dt class="col-4">Host key</dt><dd class="col-8"><code class="text-break" data-no-i18n>{{ sk.fingerprint }}</code></dd>{% endif %}
+    </dl>
+    {% if not sk.running %}<div class="small text-warning mb-2">The SFTP service is not running right now.</div>{% endif %}
+    <div class="small mb-2">
+      {% if sk.folders %}<span>Folders you will see:</span> <span data-no-i18n>{{ sk.folders|join(', ') }}</span>
+      {% else %}<span class="text-secondary">You may not edit files on any server, so you will see no folders.</span>{% endif %}
+    </div>
+    {% if sk.password %}<div class="small text-secondary mb-2">{% if current_user.totp_enabled %}You can also sign in with your password and your authenticator code.{% else %}Signing in with a password also needs two-factor authentication on your account.{% endif %}</div>{% endif %}
+    {% endif %}
+
+    {% if sk.key_rows %}
+    <ul class="list-unstyled small mb-2" id="sftp-keys">
+      {% for k in sk.key_rows %}
+      <li class="d-flex align-items-start gap-2 py-1 border-bottom">
+        <div class="flex-grow-1 text-break">
+          <div><strong data-no-i18n>{{ k.label or k.type }}</strong> <span class="badge bg-secondary" data-no-i18n>{{ k.type }}</span></div>
+          <code data-no-i18n>{{ k.fingerprint }}</code>
+          <div class="text-secondary"><span>Added</span> <span data-no-i18n>{{ k.created|datetime }}</span>{% if k.last_used %} · <span>Last used</span> <span data-no-i18n>{{ k.last_used|datetime }}</span>{% endif %}</div>
+        </div>
+        <form method="POST" action="{{ url_for('account_sftp_key_remove', key_id=k.id) }}" class="ajax-form" data-ajax-refresh="#sec-sftp"
+              data-confirm="{{ t('Remove this SFTP key? It stops working at once.') }}" data-confirm-title="Remove key"
+              data-confirm-class="btn-danger" data-confirm-label="Remove" data-confirm-icon="trash">
+          <button type="submit" class="btn btn-sm btn-outline-danger" aria-label="Remove key"><i class="bi bi-trash"></i></button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="small text-secondary mb-2">No SFTP keys yet.</div>
+    {% endif %}
+
+    {% if sk.key_rows|length < sk.max_keys %}
+    <form method="POST" action="{{ url_for('account_sftp_key_add') }}" autocomplete="off"
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+      <label class="form-label small mb-1" for="sftp-key">Public key (the one line in your .pub file)</label>
+      <textarea id="sftp-key" name="public_key" rows="2" class="form-control form-control-sm font-monospace" required
+                maxlength="16384" spellcheck="false" placeholder="ssh-ed25519 AAAA… you@laptop"></textarea>
+      <div class="d-flex gap-2 flex-wrap mt-2">
+        <input type="text" name="label" class="form-control form-control-sm field-grow-12" maxlength="80"
+               placeholder="Label (optional)" aria-label="Label (optional)">
+        <button class="btn btn-primary btn-sm text-nowrap" type="submit"><i class="bi bi-key"></i> Add key</button>
+      </div>
+      <div class="small text-secondary mt-1">Ed25519 is recommended; ECDSA works too, and RSA of 3072 bits or more.</div>
+      <div class="small text-secondary"><span>To make one:</span> <code data-no-i18n>ssh-keygen -t ed25519</code></div>
+    </form>
+    {% endif %}
+  </div>
+</div>
