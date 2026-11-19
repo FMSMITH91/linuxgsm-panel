@@ -35,7 +35,8 @@ from unit import REPO_ROOT as _gh_root  # noqa: E402
 # -u {user}`, `sudo -C 3 -u` and `sudo --preserve-env=PATH -u` all read as clean. A bare word
 # (`sudo journalctl -u`) is a command, and ends the options.
 _GH_HOLE = "\x00"
-_GH_OPTS = (r"\bsudo(?:\s+(?:-[A-Za-z]*[CDghpRrTtU]\s+\S+|--?[A-Za-z][\w-]*(?:=\S*)?|"
+# sudo.ws (classic sudo on Ubuntu 26.04) and sudo-rs spelled out are the same command word.
+_GH_OPTS = (r"\bsudo(?:\.ws|-rs)?(?:\s+(?:-[A-Za-z]*[CDghpRrTtU]\s+\S+|--?[A-Za-z][\w-]*(?:=\S*)?|"
             + _GH_HOLE + r"))*\s+(?:-[A-Za-z]*u\s*|--user[=\s]\s*)")
 # An opening quote may sit between the flag and the account (`sudo -u '{user}'`): hand-typed
 # quotes are no quoting at all against a name holding `'` (GHSA-hh39's own payload class), and
@@ -80,15 +81,41 @@ def _gh_quoted(v):
 _GH_SUDO_NAMES = set()
 
 
-def _gh_sudo_names(tree):
-    """The names (or attribute names) `tree` assigns a string constant whose first word is sudo."""
-    out = set()
+def _gh_names_sudo(value, known):
+    """Whether an assigned value is the sudo command: a string whose first word is sudo, a known name, or a ?: branch."""
+    if isinstance(value, _gh_ast.Constant) and isinstance(value.value, str):
+        return re.match(r"\s*(?:\S*/)?sudo(?:\.ws|-rs)?(?:\s|$)", value.value) is not None
+    if isinstance(value, (_gh_ast.Name, _gh_ast.Attribute)):
+        return getattr(value, "id", getattr(value, "attr", None)) in known
+    if isinstance(value, _gh_ast.IfExp):
+        return _gh_names_sudo(value.body, known) or _gh_names_sudo(value.orelse, known)
+    return False
+
+
+def _gh_bound_pairs(tree):
+    """Yield (target, value) for every binding in `tree`: =, : =, :=, tuple unpacking, a parameter's default."""
     for n in _gh_ast.walk(tree):
-        value = getattr(n, "value", None) if isinstance(n, (_gh_ast.Assign, _gh_ast.AnnAssign)) else None
-        if isinstance(value, _gh_ast.Constant) and isinstance(value.value, str) \
-                and re.match(r"\s*(?:\S*/)?sudo(?:\.ws)?(?:\s|$)", value.value):
-            targets = n.targets if isinstance(n, _gh_ast.Assign) else [n.target]
-            out |= {getattr(t, "id", getattr(t, "attr", None)) for t in targets} - {None}
+        if isinstance(n, _gh_ast.Assign):
+            for t in n.targets:
+                if isinstance(t, _gh_ast.Tuple) and isinstance(n.value, _gh_ast.Tuple):
+                    yield from zip(t.elts, n.value.elts)
+                else:
+                    yield t, n.value
+        elif isinstance(n, (_gh_ast.AnnAssign, _gh_ast.NamedExpr)) and n.value is not None:
+            yield n.target, n.value
+        elif isinstance(n, (_gh_ast.FunctionDef, _gh_ast.AsyncFunctionDef, _gh_ast.Lambda)):
+            a = n.args
+            pos = a.posonlyargs + a.args
+            yield from zip(pos[len(pos) - len(a.defaults):], a.defaults)
+            yield from ((k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None)
+
+
+def _gh_sudo_names(tree):
+    """The names (or attribute names) `tree` binds to the sudo command, an alias of one included."""
+    pairs = [(getattr(t, "id", getattr(t, "attr", getattr(t, "arg", None))), v) for t, v in _gh_bound_pairs(tree)]
+    out = set()
+    for _round in range(4):          # an alias of an alias: a few rounds reach every chain written so far
+        out |= {name for name, v in pairs if name and _gh_names_sudo(v, out)}
     return out
 
 
@@ -96,8 +123,9 @@ def _gh_hole(value):
     """The text an interpolated `value` stands for: the word sudo when it names sudo, else a hole."""
     # `f"{sudo} -u {user}"` / `f"{self._sudo} -u ..."`: the command word itself interpolated, by a
     # name that says so or by one the module assigned the sudo command to.
-    names = getattr(value, "id", getattr(value, "attr", None))
-    return "sudo" if "sudo" in _gh_ast.unparse(value).lower() or names in _GH_SUDO_NAMES else _GH_HOLE
+    # Any name inside it counts (`{p.strip()}`), not only a bare one.
+    names = {getattr(n, "id", getattr(n, "attr", None)) for n in _gh_ast.walk(value)}
+    return "sudo" if "sudo" in _gh_ast.unparse(value).lower() or names & _GH_SUDO_NAMES else _GH_HOLE
 
 
 def _gh_text(node):
@@ -283,7 +311,8 @@ def _gh_is_sudo_word(e):
     if isinstance(e, _gh_ast.Constant) and isinstance(e.value, str):
         return e.value.rsplit("/", 1)[-1] in _GH_SUDO_BASENAMES
     if isinstance(e, (_gh_ast.Name, _gh_ast.Attribute)):
-        return "sudo" in (getattr(e, "id", None) or e.attr).lower()
+        name = getattr(e, "id", None) or e.attr
+        return "sudo" in name.lower() or name in _GH_SUDO_NAMES
     # A call that hands back the prefix (`sudo_prefix() + ["-u", user]`), judged by its name too.
     if isinstance(e, _gh_ast.Call) and isinstance(e.func, (_gh_ast.Name, _gh_ast.Attribute)):
         return _gh_is_sudo_word(e.func)
@@ -999,6 +1028,25 @@ _gh_ctl = {
         'def f(user):\n    p = "sudo -n"\n    return f"{p} -u {user} bash -c x"\n'),
     "G1 the sudo word from a variable not named for it, concat": _gh_plant(
         'def f(user):\n    p = "sudo -n"\n    return p + " -u " + user\n'),
+    # Review 1120 T4: each of these scanned clean.
+    "G1 sudo.ws spelled out": _gh_plant('def f(user):\n    return f"sudo.ws -u {user} bash -c x"\n'),
+    "G1 sudo.ws by path": _gh_plant('def f(user):\n    return f"/usr/bin/sudo.ws -u {user} bash -c x"\n'),
+    "G1 sudo-rs spelled out": _gh_plant('def f(user):\n    return f"sudo-rs -u {user} bash -c x"\n'),
+    "G1 the sudo word from a parameter's default": _gh_plant(
+        'def f(user, p="sudo -n"):\n    return f"{p} -u {user} bash"\n'),
+    "G1 the sudo word from a ?: branch": _gh_plant(
+        'def f(user, r):\n    p = "sudo -n" if r else ""\n    return f"{p} -u {user} bash"\n'),
+    "G1 the sudo word from an alias of a sudo name": _gh_plant(
+        'SUDO_WS = "/usr/bin/sudo.ws"\ndef f(user):\n    p = SUDO_WS\n    return f"{p} -u {user} bash"\n'),
+    "G1 the sudo word from tuple unpacking": _gh_plant(
+        'def f(user):\n    p, q = "sudo -n", "x"\n    return f"{p} -u {user} bash"\n'),
+    "G1 the sudo word from a walrus": _gh_plant(
+        'def f(user):\n    if (p := "sudo -n"):\n        return f"{p} -u {user} bash"\n'),
+    "G1 the sudo word through a method call on its name": _gh_plant(
+        'def f(user):\n    p = "sudo -n "\n    return f"{p.strip()} -u {user} bash"\n'),
+    "G2 the sudo word from an attribute set in __init__": _gh_plant(
+        'class C:\n    def __init__(self):\n        self.p = "sudo"\n'
+        '    def f(self, user):\n        return [self.p, "-u", user, "cat"]\n'),
     "G3 through a string method and .format()": _gh_plant(
         'def f(server, user, gs):\n'
         '    name = (gs.lgsm_name or "").strip()\n'
