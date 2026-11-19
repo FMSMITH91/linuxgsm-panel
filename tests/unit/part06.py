@@ -4723,9 +4723,11 @@ try:
     # for services that have nothing to do with the panel included. privileged.py says so on the
     # line above the constant: "fail2ban's operator-owned jail file". The panel writes INTO it; it
     # does not own it. Only the panel-NAMED files under jail.d/ and filter.d/ are the panel's to
-    # remove, which is why this filters rather than taking WRITE_TARGETS whole.
-    _f2b_owned = [t for t in _f2b_all
-                  if ("linuxgsm-panel" in t or "zz-panel-whitelist" in t)]
+    # remove. The ones left in place are named here, each with its reason, so a new panel target under
+    # /etc/fail2ban/ (whatever its name) is judged instead of dropping out of a name filter.
+    _F2B_KEPT = {"/etc/fail2ban/jail.local": "the operator's own jail file; the panel writes into it",
+                 "/etc/fail2ban/jail.d/zz-panel-sshd.local": "follows the SSH port, which uninstall leaves moved"}
+    _f2b_owned = [t for t in _f2b_all if t not in _F2B_KEPT]
     check("uninstall.sh: (premise) privileged.py writes panel-named fail2ban files",
           len(_f2b_owned) >= 3, repr(_f2b_owned))
     check("uninstall.sh: (premise) ...and jail.local is not one of them — it is the operator's",
@@ -4734,8 +4736,9 @@ try:
     _f2b_missing = [t for t in _f2b_owned if t not in _un_txt]
     check("uninstall.sh: removes every fail2ban file the panel OWNS",
           not _f2b_missing, "not removed: %s" % _f2b_missing)
-    check("uninstall.sh: ...and never deletes the operator's own jail.local",
-          "/etc/fail2ban/jail.local" not in _un_txt)
+    check("uninstall.sh: ...and never deletes the operator's own jail.local, nor the SSH-port jail it keeps; "
+          "each kept file is still one privileged.py writes",
+          not [t for t in _F2B_KEPT if t in _un_txt] and set(_F2B_KEPT) <= set(_f2b_all), repr(sorted(_F2B_KEPT)))
     check("uninstall.sh: ...and reloads fail2ban so it stops watching the deleted log",
           "fail2ban-client reload" in _un_txt)
 
@@ -7189,18 +7192,36 @@ check("dependency review: runs on a change to gamedig's package.json or lockfile
       re.search(r"^  pull_request:\n    branches: \[ main \]\n(?!    paths)", _ci_dr_on, re.M) is not None
       and "\n    paths" not in _ci_dr_on, _ci_dr_on[-400:])
 # ...and a workflow that runs only on listed paths must list the pinned files it installs, or a
-# Dependabot bump of that file is never tested (fuzz.yml filters by path).
-_ci_unwatched = []
+# Dependabot bump of that file is never tested. The list is `on: paths:` or, since the required
+# checks moved to scope steps, a step's `scope=( ... )` (fuzz.yml, cflite_pr.yml): its comment lines
+# are dropped, and each entry is a glob.
+import fnmatch as _fnm06  # noqa: E402
+
+
+def _ci_watch_lists(w):
+    """The path lists a workflow runs on: its `on:` block's when it has `paths:`, and each scope=( ... )."""
+    on = w[:w.index("\npermissions:")] if "\npermissions:" in w else w
+    lists = [on] if re.search(r"^\s+paths:\s*$", on, re.M) else []
+    lists += re.findall(r"\n\s+scope=\(\n(.*?)\n\s+\)\n", w, re.S)
+    return [re.findall(r"'([^']+)'", "\n".join(ln for ln in t.splitlines() if not ln.strip().startswith("#")))
+            for t in lists]
+
+
+_ci_unwatched, _ci_judged = [], []
 for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
     _w = open(_wf, encoding="utf-8").read()
-    _on = _w[:_w.index("\npermissions:")] if "\npermissions:" in _w else _w
-    if not re.search(r"^\s+paths:\s*$", _on, re.M):
-        continue
-    for _u in sorted(set(re.findall(r"-r (\.github/ci-requirements[^\s]*\.txt)", _w))):
-        if "'%s'" % _u not in _on:
+    _lists = _ci_watch_lists(_w)
+    for _u in sorted(set(re.findall(r"-r (\.github/ci-requirements[^\s]*\.txt)", _w))) if _lists else []:
+        _ci_judged.append((os.path.basename(_wf), _u))
+        if not any(_fnm06.fnmatchcase(_u, _e) for _lst in _lists for _e in _lst):
             _ci_unwatched.append("%s: %s" % (os.path.basename(_wf), _u))
-check("workflows: a path-filtered workflow runs when a pinned tool file it installs changes",
-      not _ci_unwatched, repr(_ci_unwatched))
+check("workflows: a path-filtered workflow runs when a pinned tool file it installs changes (its on: paths "
+      "or its scope step's list; fuzz.yml's atheris.txt is judged)",
+      ("fuzz.yml", ".github/ci-requirements/atheris.txt") in _ci_judged and not _ci_unwatched,
+      repr((_ci_unwatched, _ci_judged)))
+eq("workflows: ...a scope list's comment line does not count as an entry, a glob entry does (control)",
+   _ci_watch_lists("on:\n  push:\npermissions: {}\n          scope=(\n            # 'a.txt'\n"
+                   "            'b/**'\n          )\n"), [["b/**"]])
 
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
@@ -11493,14 +11514,26 @@ check("install.sh: ...while a fetch that failed still says it couldn't reach the
 _mu_html = open(os.path.join(_root, "panel", "templates", "manage_users.html"), encoding="utf-8").read()
 # Every way a tag starts hidden: strict CSP forbids style="display:none", so the panel hides a tag at
 # render time with data-start-hidden (panel.css), the hidden attribute or Bootstrap's d-none.
-_R30T_HIDDEN = r'id="eu-2fa-block"[^>]*(?:data-start-hidden|\bhidden\b|\bd-none\b|display\s*:\s*none)'
+# The whole opening tag is read, so an attribute before the id counts as one after it; aria-hidden
+# only hides from assistive technology and is not a hidden tag.
+_R30T_TAG = r'<[a-z]+\b[^>]*\bid="eu-2fa-block"[^>]*>'
+_R30T_HIDDEN = r'data-start-hidden|(?<![-\w])hidden\b|\bd-none\b|display\s*:\s*none'
+
+
+def _r30t_hidden(html):
+    """Whether the eu-2fa-block tag starts hidden; None when there is no such tag."""
+    tag = re.search(_R30T_TAG, html)
+    return None if tag is None else bool(re.search(_R30T_HIDDEN, tag.group(0)))
+
+
 check("users page: the 2FA reset control is not hidden at render time",
-      not re.search(_R30T_HIDDEN, _mu_html),
-      "the block starts hidden again — an admin looking for the 2FA reset finds nothing")
-eq("users page: ...the test reads data-start-hidden, hidden, d-none and display:none, and not a plain tag (control)",
-   [bool(re.search(_R30T_HIDDEN, '<div id="eu-2fa-block" %s>' % _a)) for _a in
-    ("data-start-hidden", "hidden", 'class="d-none"', 'style="display: none"', 'role="group"')],
-   [True, True, True, True, False])
+      _r30t_hidden(_mu_html) is False,
+      "the block starts hidden again (or is gone) — an admin looking for the 2FA reset finds nothing")
+eq("users page: ...the test reads data-start-hidden, hidden, d-none and display:none before or after the id, "
+   "and not a plain tag or aria-hidden (control)",
+   [_r30t_hidden(_t % _a) for _t in ('<div id="eu-2fa-block" %s>', '<div %s id="eu-2fa-block">') for _a in
+    ("data-start-hidden", "hidden", 'class="d-none"', 'style="display: none"', 'role="group"', 'aria-hidden="true"')],
+   [True, True, True, True, False, False] * 2)
 _mu_js = open(os.path.join(_root, "panel", "static", "js", "manage_users.js"), encoding="utf-8").read()
 check("users page: ...and the script disables it rather than hiding it",
       "box.disabled = !u.totp_enabled" in _mu_js,
@@ -12386,25 +12419,46 @@ check("terminal: a handshake that never completes says so, instead of 'Connectin
 #
 # Scanned across the strings the panel SHOWS, not just that table: a docs pointer is only worth
 # printing if it resolves.
-_doc_refs6 = []
-for _pyf6 in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):
+# The strings the panel shows live in its Python, templates, scripts and es/fr catalogs, and every docs
+# file it points at is lower-case now (docs/install.md, docs/sftp.md): read them all, either case.
+_DOC_REF6 = re.compile(r"(?<![%\w.-])((?:[\w.-]+/)*[A-Za-z0-9_-]+\.md)\b")
+
+
+def _doc_ref_resolves6(ref, src):
+    """Whether a .md name in `src` is a file.
+
+    A path is read from the checkout (a GitHub blob/<branch>/ URL's tail too) or beside the file; a bare
+    name in the root, .github/, docs/ or beside the file.
+    """
+    if "/" in ref:
+        tail = re.sub(r"^.*?\bblob/[^/]+/", "", ref)
+        return any(os.path.isfile(os.path.join(_d6, tail)) for _d6 in (_root, os.path.dirname(src),
+                                                                         os.path.dirname(os.path.dirname(src))))
+    return any(os.path.isfile(os.path.join(_d6, ref)) for _d6 in (_root, os.path.join(_root, ".github"),
+                                                                    os.path.join(_root, "docs"), os.path.dirname(src)))
+
+
+_doc_refs6, _doc_seen6 = [], set()
+for _pyf6 in sorted(_f6 for _x6 in ("py", "html", "js", "json")
+                    for _f6 in glob.glob(os.path.join(_root, "panel", "**", "*." + _x6), recursive=True)):
     _rel6 = os.path.relpath(_pyf6, _root)
     for _lineno6, _line6 in enumerate(open(_pyf6, encoding="utf-8"), 1):
-        if _line6.lstrip().startswith("#"):
+        if _pyf6.endswith(".py") and _line6.lstrip().startswith("#"):
             continue                      # a comment is for a reader of the source, not a user
-        for _m6 in re.finditer(r"""["']([^"']*?\b([A-Z][A-Za-z0-9_-]*\.md)\b[^"']*)["']""", _line6):
-            _fname6 = _m6.group(2)
-            if not any(os.path.exists(os.path.join(_root, _d6, _fname6)) for _d6 in ("", ".github", "docs")):
-                _doc_refs6.append("%s:%d -> %s" % (_rel6, _lineno6, _fname6))
-check("docs: no user-facing string points at a file that does not exist",
-      not _doc_refs6,
+        for _m6 in _DOC_REF6.finditer(_line6):
+            _doc_seen6.add(_m6.group(1))
+            if not _doc_ref_resolves6(_m6.group(1), _pyf6):
+                _doc_refs6.append("%s:%d -> %s" % (_rel6, _lineno6, _m6.group(1)))
+check("docs: no user-facing string points at a file that does not exist (Python, templates, scripts and "
+      "the es/fr catalogs; docs/install.md and docs/sftp.md are among those read)",
+      not _doc_refs6 and {"docs/install.md", "docs/sftp.md"} <= _doc_seen6,
       "dangling: %s — the reader is told to go and read something that is not in the repo"
-      % ("; ".join(_doc_refs6),))
-# ...and the check is not vacuous: it must be able to SEE a .md reference at all.
-check("docs: ...and the scan can actually find a .md reference (not a dead regex)",
-      len(re.findall(r"""["']([^"']*?\b([A-Z][A-Za-z0-9_-]*\.md)\b[^"']*)["']""",
-                     'x = "see README.md for more"')) == 1,
-      "the pattern matches nothing, so the gate above would pass against any dangling pointer")
+      % ("; ".join(_doc_refs6[:8]),))
+# ...and the check is not vacuous: it must be able to SEE a .md reference at all, and judge it.
+eq("docs: ...and the scan finds a .md reference in either case, with its path, and not a %s.md format (control)",
+   [_m6.group(1) for _m6 in _DOC_REF6.finditer('see README.md, "docs/sftp.md" and %s.md')]
+   + [_doc_ref_resolves6("docs/nosuch.md", __file__), _doc_ref_resolves6("docs/sftp.md", __file__)],
+   ["README.md", "docs/sftp.md", False, True])
 
 # ── the route-coverage tool must not flatter its own answer ───────────────────────────────────
 # tools/route_coverage.py reports which route bodies no suite enters. Its first version shared one

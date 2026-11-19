@@ -75,10 +75,29 @@ def _gh_quoted(v):
     return isinstance(v, _gh_ast.Call) and _gh_callee(v) in _GH_QUOTERS
 
 
+# The names the module being scanned assigns a string starting with the sudo command (`p = "sudo -n"`),
+# set by _gh_scan: a name that does not say "sudo" still puts the word in the text it is joined into.
+_GH_SUDO_NAMES = set()
+
+
+def _gh_sudo_names(tree):
+    """The names (or attribute names) `tree` assigns a string constant whose first word is sudo."""
+    out = set()
+    for n in _gh_ast.walk(tree):
+        value = getattr(n, "value", None) if isinstance(n, (_gh_ast.Assign, _gh_ast.AnnAssign)) else None
+        if isinstance(value, _gh_ast.Constant) and isinstance(value.value, str) \
+                and re.match(r"\s*(?:\S*/)?sudo(?:\.ws)?(?:\s|$)", value.value):
+            targets = n.targets if isinstance(n, _gh_ast.Assign) else [n.target]
+            out |= {getattr(t, "id", getattr(t, "attr", None)) for t in targets} - {None}
+    return out
+
+
 def _gh_hole(value):
     """The text an interpolated `value` stands for: the word sudo when it names sudo, else a hole."""
-    # `f"{sudo} -u {user}"` / `f"{self._sudo} -u ..."`: the command word itself interpolated.
-    return "sudo" if "sudo" in _gh_ast.unparse(value).lower() else _GH_HOLE
+    # `f"{sudo} -u {user}"` / `f"{self._sudo} -u ..."`: the command word itself interpolated, by a
+    # name that says so or by one the module assigned the sudo command to.
+    names = getattr(value, "id", getattr(value, "attr", None))
+    return "sudo" if "sudo" in _gh_ast.unparse(value).lower() or names in _GH_SUDO_NAMES else _GH_HOLE
 
 
 def _gh_text(node):
@@ -669,7 +688,9 @@ def _gh_call_problem(rel, n, fn):
     in_arg = any(_gh_names_script(a, tainted) for a in n.args[_first_text:])
     if not (in_arg or _gh_interpolates_self(fn, tainted)):
         return None
-    passes_self = _gh_callee(n) in _GH_TEXT_RUNNERS and any(k.arg == "selfname" for k in n.keywords)
+    # selfname= must carry the script name: `selfname=None` passes the keyword and checks nothing.
+    passes_self = _gh_callee(n) in _GH_TEXT_RUNNERS and any(
+        k.arg == "selfname" and _gh_names_script(k.value, tainted) for k in n.keywords)
     if passes_self or _gh_validates_before(fn, n.lineno, tainted):
         return None
     return ("G3 %s:%d %s(): its body names the LinuxGSM script, and %s() is neither "
@@ -770,6 +791,8 @@ def _r18d_other_program_first(before):
 def _gh_scan(src, rel):
     """(problems, sites, helper_calls) for one module's source. `rel` is its repo-relative path."""
     tree = _gh_ast.parse(src)
+    _GH_SUDO_NAMES.clear()
+    _GH_SUDO_NAMES.update(_gh_sudo_names(tree))
     funcs = _gh_functions(tree)
     sites = _gh_sites(tree)
     problems = [p for s in sites for p in _gh_site_problems(rel, _gh_enclosing(funcs, s[0]), s)]
@@ -969,6 +992,13 @@ _gh_ctl = {
     "G3 the name handed to a helper that builds the runner's text": _gh_plant(
         'def f(server, user, selfname, ap, inner):\n'
         '    return _core.shell_as_game_user(server, user, _protected_resolved(user, ap, selfname, inner))\n'),
+    "G3 selfname=None passed": _gh_plant(
+        'def f(server, user, selfname):\n'
+        '    return _core.shell_as_game_user(server, user, f"./{selfname} x", selfname=None)\n'),
+    "G1 the sudo word from a variable not named for it, f-string": _gh_plant(
+        'def f(user):\n    p = "sudo -n"\n    return f"{p} -u {user} bash -c x"\n'),
+    "G1 the sudo word from a variable not named for it, concat": _gh_plant(
+        'def f(user):\n    p = "sudo -n"\n    return p + " -u " + user\n'),
     "G3 through a string method and .format()": _gh_plant(
         'def f(server, user, gs):\n'
         '    name = (gs.lgsm_name or "").strip()\n'
