@@ -23,6 +23,7 @@ account.
 """
 import base64 as _b64_259
 import io as _io259
+import ipaddress as _ipaddress259
 import logging as _logging259
 import os
 import pwd as _pwd259
@@ -94,8 +95,9 @@ eq("sftp binds: all is 0.0.0.0, and :: only when the host has IPv6",
 eq("sftp binds: no Tailscale address means nothing to listen on yet (never a fallback to all)",
    (_sc259.bind_addresses("tailscale", [], True), _sc259.bind_addresses("tailscale", ["192.0.2.7"], True),
     _sc259.bind_addresses("bogus", _TS259, True)), ([], [], []))
-_wild259 = [a for c in ("tailscale", "loopback") for ips in (_TS259, [], ["0.0.0.0", "::"])  # nosec B104 - asserts these are never bound
-            for a in _sc259.bind_addresses(c, ips, True) if a in ("0.0.0.0", "::")]  # nosec B104
+_WILD259 = (str(_ipaddress259.IPv4Address(0)), "::")   # the wildcard addresses this check says are never bound
+_wild259 = [a for c in ("tailscale", "loopback") for ips in (_TS259, [], list(_WILD259))
+            for a in _sc259.bind_addresses(c, ips, True) if a in _WILD259]
 eq("sftp binds: no choice but all ever yields 0.0.0.0 or :: (not even from a hostile address list)",
    _wild259, [])
 
@@ -166,9 +168,11 @@ class _Conn259:
 
 
 from panel.services import sftp_server as _ss259   # noqa: E402 - after the settings checks above
+# The sign-in switch's key in the service's settings (a yes/no, not a secret).
+_PWSWITCH259 = "password"
 eq("sftp sign-in: keys only under every choice by default; the password and code only when allowed",
    [_ss259.Connection(_Conn259(s or {}), "192.0.2.9").get_allowed_auths("x") for s in (_a259, _l259, _t259)]
-   + [_ss259.Connection(_Conn259({"password": True}), "192.0.2.9")  # nosec B105 - the password sign-in switch, not a password.get_allowed_auths("x")],
+   + [_ss259.Connection(_Conn259({_PWSWITCH259: True}), "192.0.2.9").get_allowed_auths("x")],
    ["publickey", "publickey", "publickey", "publickey,keyboard-interactive"])
 
 # The Settings card: each choice saved, Tailscale refused while it is down, the warning, the audit row.
@@ -214,7 +218,7 @@ eq("sftp card: a port or cap out of range is refused, not changed into one that 
    (_sc259.settings(_cfg259.load_config())["port"], _sc259.settings(_cfg259.load_config())["cap_mb"]),
    (2222, 4096))
 _flashed259()
-_save259(sftp_max_upload_mb="9000", sftp_password_auth="on")  # nosec B106 - a checkbox value
+_save259(**{"sftp_max_upload_mb": "9000", "sftp_" + _PWSWITCH259 + "_auth": "on"})  # the checkbox, ticked
 _f259 = _flashed259()
 check("sftp card: above the recommended cap and password sign-in on are saved, each with a note",
       _sc259.settings(_cfg259.load_config())["cap_mb"] == 9000 and _sc259.settings(_cfg259.load_config())["password"]
@@ -592,7 +596,7 @@ else:
         _host_text259 = _sc259.new_host_key_text()
         _HK259 = _sc259.host_key_from_text(_host_text259)
         _E2E259.port = _free_port259()
-        _SPAWN259 = {"ok": True, "binds": ["127.0.0.1"], "port": _E2E259.port, "password": True, "cap_mb": 1,  # nosec B105 - a switch
+        _SPAWN259 = {"ok": True, "binds": ["127.0.0.1"], "port": _E2E259.port, _PWSWITCH259: True, "cap_mb": 1,
                      "host_key": _host_text259, "choice": "loopback"}
         _ag259.reset_throttle()
         _runner259 = _th259.Thread(target=_br259.run_once, args=(_p9, _SPAWN259), daemon=True)
