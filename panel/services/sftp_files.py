@@ -416,6 +416,7 @@ class ReadHandle(_Handle):
 
 
 DENIED_NOW = "You no longer have permission to use this server's files."
+CUT_OFF = "The connection ended before the upload was closed."
 
 
 class WriteHandle(_Handle):
@@ -492,13 +493,33 @@ class WriteHandle(_Handle):
             if "size" in attrs:
                 del self.stage[attrs["size"]:]
             return SFTP_OK          # permission bits and times of a staged config: as LinuxGSM left them
+        refused = self._chattr_refusal(attrs)
+        if refused:
+            return refused
         try:
             self.writer.flush()
             if attrs:
                 self.backend.fsetstat(self.handle, attrs)
         except bk.BackendError as exc:
             return (exc.code, str(exc))
+        if "mode" in attrs or "size" in attrs:
+            self.vfs.audit(self.target, "edit_file", "%s (%s)" % (self.info["rel"], _attr_words(attrs)))
         return SFTP_OK
+
+    def _chattr_refusal(self, attrs):
+        """The path form's rules and audit row for an open file (Files._chattr), or None; trims `attrs`.
+
+        An open handle is no way round them. On a whole-file upload over an existing file the mode is
+        dropped: the close gives the file its old mode back (_into_place).
+        """
+        if self.info.get("staged_to") and self.info["existed"]:
+            attrs.pop("mode", None)
+        rel = self.info["rel"]
+        why = _chattr_problem(self.target, rel, attrs)
+        if not why:
+            return None
+        self.vfs.audit(self.target, "edit_file", "refused: %s: %s" % (rel, why), success=False)
+        return (SFTP_PERMISSION_DENIED, why)
 
     def close(self):
         """Finish the upload on the host and audit it; None, or the (code, text) of its failure."""

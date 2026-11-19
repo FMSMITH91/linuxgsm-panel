@@ -216,14 +216,13 @@ def _fwb_panel_host_addrs():
 def _fwb_single_refusal(remote, target):
     """The route's own refusal for ONE address (a JSON answer's message), on its canonical form, or None.
 
-    The tailnet: an address tailscale_exempt_ips holds (the host's tailnet up), or one in Tailscale's
-    own IPv6 range, which nothing else uses; and the whitelist.
+    The tailnet: an address tailnet_exempt_ips holds (Tailscale's IPv6 range always, its IPv4 range
+    while the host's tailnet is up); and the whitelist.
     """
     addr = ip_address_or_none(target)
     if addr is None:
         return None
-    if tailnet_exempt_ips(remote, {target}) or (addr.version == 6 and any(
-            addr in n for n in _TAILNET_NETS if n.version == 6)):
+    if tailnet_exempt_ips(remote, {target}):
         return i18n.tr("{ip} is a Tailscale address — blocking it would cut off tailnet access.", ip=target)
     if _whitelisted(target):
         return i18n.tr("{ip} is on the security whitelist — remove it there first to block it.", ip=target)

@@ -77,6 +77,23 @@ updates:
       ci-check-tools:
         patterns: ["*"]
 
+  # The B3 add-on image's Python dependencies: panel/addon_images/b3/requirements.txt is pip-compile's
+  # hashed lock of requirements.in beside it, compiled on Python 3.12 (the image's base), so Dependabot
+  # re-runs pip-compile on that Python, the whole set resolved together and the hashes regenerated.
+  # Daily, as Renovate checks the image's base and B3's commit (.github/renovate.json, which runs no
+  # pip manager, so the two never propose the same update). The image installs wheels only.
+  - package-ecosystem: "pip"
+    directory: "/panel/addon_images/b3"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    cooldown:
+      default-days: 7
+    groups:
+      b3-python-dependencies:
+        patterns: ["*"]
+
   # gamedig, the player-query tool every host runs. tools/gamedig/package-lock.json is the whole
   # tree, with a sha512 per package that `npm ci` checks (install-gamedig.sh), and it moves ONLY
   # through these pull requests — the hosts no longer fetch whatever the registry serves. Version

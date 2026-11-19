@@ -155,8 +155,9 @@ _LOGIN_ABOVE = tuple(sorted({"/".join(d.split("/")[:i]) for d in _LOGIN_DIRS for
 _LOGIN_FILES = (".bashrc", ".profile", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases",
                 ".pam_environment", ".rhosts", ".shosts", ".k5login", ".k5users")
 _LOGIN_MARK = "__LOGIN_FILE__"
-LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's account (SSH keys and shell "
-                      "start-up files), so the file browser does not change it. Nothing was changed.")
+LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's account or what it starts on its own "
+                      "(SSH keys, shell start-up files, user services), so the file browser does not change it. "
+                      "Nothing was changed.")
 
 
 def _is_login_path(rel):

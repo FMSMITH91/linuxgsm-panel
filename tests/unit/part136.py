@@ -318,7 +318,9 @@ try:
     _WL136 = [_ip136.ip_network("198.51.100.5/32")]   # NOSONAR(S1313)
     _p9_patch(_rs136, "_whitelist_networks", lambda: _WL136)
     _p9_patch(_mon136, "_whitelist_networks", lambda: _WL136)
-    _p9_patch(_rs136, "tailnet_exempt_ips", lambda remote, ips: {i for i in ips if i == "100.100.1.1"})
+    # As the real one answers with the host's tailnet up: the CGNAT address, and Tailscale's IPv6 range always.
+    _p9_patch(_rs136, "tailnet_exempt_ips",
+              lambda remote, ips: {i for i in ips if i == "100.100.1.1" or i.startswith("fd7a:115c:a1e0:")})
     _p9_patch(_rs136, "remote_ufw_deny_ip", lambda r, ip: (_ipb_calls.append(ip), (True, "ok"))[1])
     _p9_patch(_rs136, "_follow_in_panel_gate", lambda remote, ok: None)
     _p9_patch(_rs136, "_fwb_panel_host_addrs", lambda: _OWN136["v"])

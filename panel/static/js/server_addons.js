@@ -73,6 +73,9 @@
       box.appendChild(node('div', 'small text-warning', a.update === 'geoip'
         ? T('Update available: a newer month of the country database.') : T('Update available: a newer version of the add-on.')));
     }
+    // An install, update or settings change still running: nothing to press until it ends (a start
+    // being watched can still be stopped; a Remove meanwhile is refused with the reason).
+    if ({install: 1, update: 1, settings: 1}[a.job]) return;
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));

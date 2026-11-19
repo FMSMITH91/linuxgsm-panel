@@ -26,7 +26,7 @@ from types import SimpleNamespace as NS
 from unit.part01 import check, eq
 from unit.part05 import _root
 from unit.part12 import (_p9_quiet_lookups, P9_ADMIN, P9_GM, P9_GS, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
-                         _p9_patch, _p9_restore_all, _p9_set)
+                         _p9_patch, _p9_restore_all, _p9_row, _p9_set)
 from unit.part47 import _node47
 from panel.db.models import GameServer as _GS244, User as _U244, db as _db244
 from panel.ops.ssh_manager import _core as _core244
@@ -179,14 +179,16 @@ for _what244, _go244 in (("dashboard", lambda: _A244.get("/")),
     _code244 = _go244().status_code
     _marks244[_what244] = (_code244, _mon244._player_poll_state["viewed"] >= _t244)
 _reset_poll244()
-_A244.post("/api/server/%d/notify-empty" % P9_GS, json={"enabled": False})
-_marks244["notify off"] = (200, _mon244._player_poll_state["viewed"] > 0)
+_off244 = _A244.post("/api/server/%d/notify-empty" % P9_GS, json={"enabled": False})
+# Its own status and the stored switch, so a refused or failed request cannot read as "did not keep it".
+_marks244["notify off"] = (_off244.status_code, _mon244._player_poll_state["viewed"] > 0,
+                           _p9_row(P9_GS).notify_when_empty)
 _p9_restore_all()
 _p9_set(P9_GS, notify_when_empty=False)
 eq("player poll: the dashboard, the Game Servers poll, a server's status and arming 'notify when empty' "
    "each keep the 45 s cadence; switching the alert off does not",
    _marks244, {"dashboard": (200, True), "Game Servers poll": (200, True), "server status": (200, True),
-               "notify when empty": (200, True), "notify off": (200, False)})
+               "notify when empty": (200, True), "notify off": (200, False, False)})
 _reset_poll244()
 
 

@@ -321,7 +321,13 @@ document.addEventListener('click', function(e){
                  {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}}),
     requireText: short,
     requireLabel: tf('Type the server’s username ({user}) to confirm:', {user: short}),
-    onConfirm: function(){ doUninstall(b.getAttribute('data-server-id'), name, b); }
+    // A step_up_required route: a sign-in past the confirmation window confirms the password in place
+    // first (step_up_form.js), as panel.js's Uninstall does. No page loading this script draws the button
+    // today; kept correct for when the list comes back (see _hasServerList below).
+    onConfirm: function(){
+      var go = function(){ doUninstall(b.getAttribute('data-server-id'), name, b); };
+      if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();
+    }
   });
 });
 // Drop a server's rows (main row + its install-progress row) in place, with a short fade — no

@@ -32,7 +32,7 @@
         <legend class="form-label small mb-1">Listen on</legend>
         <div class="form-check">
           <input class="form-check-input" type="radio" name="sftp_bind" id="sftp-bind-ts" value="tailscale"
-                 {% if sf.bind == 'tailscale' %}checked{% endif %}{% if not sf.tailscale_up %} disabled{% endif %}>
+                 {% if sf.bind == 'tailscale' %}checked{% endif %}{% if not sf.tailscale_up and sf.bind != 'tailscale' %} disabled{% endif %}>
           <label class="form-check-label small" for="sftp-bind-ts"><span>This host's Tailscale address</span>{% if sf.tailscale_ip %} <code data-no-i18n>{{ sf.tailscale_ip }}</code>{% endif %}</label>
           <div class="small text-secondary">{% if sf.tailscale_up %}Recommended: only devices on your tailnet can reach it.{% else %}Tailscale is not up on this host.{% endif %}</div>
         </div>

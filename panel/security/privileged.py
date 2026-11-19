@@ -1840,17 +1840,23 @@ def _addon_prepare_remote(a):
 
     A range is added only to the file that lacks one for the account (by name or by uid, holding at
     least ADDON_SUBID_COUNT ids); the new range starts after every range in either file. Then the
-    account lingers. Prints subids=added or subids=present, then linger=on.
+    account lingers. Prints subids=added or subids=present, then linger=on. All under a lock on /etc
+    (two installs at once picked one range); a range overlapping another account's is taken back.
     """
-    return ("u=%s; n=%d; uid=$(id -u \"$u\") || exit 1; "
+    return ("exec 9</etc && flock 9 || exit 1; u=%s; n=%d; uid=$(id -u \"$u\") || exit 1; "
             "has() { awk -F: -v u=\"$u\" -v i=\"$uid\" -v n=\"$n\" "
             "'($1 == u || $1 == i) && $3 ~ /^[0-9]+$/ && $3 + 0 >= n { f = 1 } END { exit !f }' "
             "\"$1\" 2>/dev/null; }; "
             "s=$(cat /etc/subuid /etc/subgid 2>/dev/null | awk -F: -v m=%d "
             "'$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { e = $2 + $3; if (e > m) m = e } END { printf \"%%.0f\", m }'); "
             "e=$((s + n - 1)); [ \"$e\" -le %d ] || { echo 'no free subordinate id range' >&2; exit 1; }; "
-            "f=''; has /etc/subuid || f=\"$f --add-subuids $s-$e\"; has /etc/subgid || f=\"$f --add-subgids $s-$e\"; "
-            "if [ -n \"$f\" ]; then usermod $f \"$u\" || exit 1; echo subids=added; else echo subids=present; fi; "
+            "f=''; d=''; has /etc/subuid || { f=\"$f --add-subuids $s-$e\"; d=\"$d --del-subuids $s-$e\"; }; "
+            "has /etc/subgid || { f=\"$f --add-subgids $s-$e\"; d=\"$d --del-subgids $s-$e\"; }; "
+            "if [ -n \"$f\" ]; then usermod $f \"$u\" || exit 1; "
+            "if cat /etc/subuid /etc/subgid 2>/dev/null | awk -F: -v u=\"$u\" -v i=\"$uid\" -v s=\"$s\" -v e=\"$e\" "
+            "'$1 != u && $1 != i && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $2 + 0 <= e + 0 && $2 + $3 - 1 >= s + 0 "
+            "{ f = 1 } END { exit !f }'; then usermod $d \"$u\"; echo 'new range overlaps another account; undone' >&2; exit 1; fi; "
+            "echo subids=added; else echo subids=present; fi; "
             "loginctl enable-linger \"$u\" && echo linger=on"
             % (shlex.quote(a[0]), ADDON_SUBID_COUNT, ADDON_SUBID_MIN, ADDON_SUBID_LAST))
 
@@ -3084,7 +3090,11 @@ def _db_import_remote(a):
     """db-import: flavor port[@address] account name. Runs the client as the account, as the database's user."""
     flavor, target, account, name = a
     port, addr = db_net_target("tcp" + target)
-    tls = " ".join(DB_NET_TLS_OFF) if "@" in target else ""
+    # Every tailnet option db_conn_net gives the other connections (and the helper's own db-import):
+    # without the key option a MySQL 8 caching_sha2 login over the tunnel fails with ERROR 2061
+    # whenever the server has not cached the password, and a server that is off would hold the
+    # restore to the verb's own timeout instead of 10 seconds.
+    tls = " ".join(DB_NET_CONNECT + DB_NET_TLS_OFF + DB_NET_KEY) if "@" in target else ""
     return ("exec 2>&1; " + _db_client_sh(flavor)
             + "runuser -u %s -- bash -c %s _ %s %s %s \"$C\" %s %s"
             % (shlex.quote(account), shlex.quote(_DB_IMPORT_SH), shlex.quote(home_of(account)), name, port,

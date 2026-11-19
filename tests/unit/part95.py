@@ -261,7 +261,8 @@ _out95 = _js95(_name95, (
     # the card's in-flight save counter (review 1017a): loadBackups and the saves read it
     + _RB95[_RB95.index("var _r30c_bkSaving"):].split("\n", 1)[0] + "\n"),
     ("function bkMsg(", "function bkReconcile(", "function _r25c_bkUnread(", "function _r30c_bkSave(",
-     "function loadBackups(", "function runFullBackup(", "function saveBackupSettings("), (
+     "function loadBackups(", "function runFullBackup(", "function saveBackupSettings(",
+     "function _saveBackupSettingsNow(", "function _bkStepUp("), (
     "  const out = {}, l = document.getElementById('bk-loading'), m = document.getElementById('bk-msg');\n"
     "  reply(" + _J95["backups"] + "); loadBackups(); await settle();\n"
     "  out.list = {loading: l.innerHTML || '', listed};\n"

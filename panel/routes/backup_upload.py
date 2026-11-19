@@ -34,6 +34,7 @@ from panel.ops import backup as bk
 from panel.ops import ssh_manager as _sm
 from panel.core.stdin_chunks import StdinChunks
 from panel.routes import _shared
+from panel.security.account_guard import step_up_required
 from panel.security.auth import (EDIT_FILES, RESTORE_BACKUP, get_game, has_permission, log_action,
                                  permission_required, server_access_required, superadmin_required)
 from panel.services import game_restore as grs
@@ -95,16 +96,32 @@ def _bup_new(kind, sid, size):
 
 
 @contextmanager
-def _bup_working(e):
-    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends."""
+def _bup_working(e, alone=False):
+    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends.
+
+    With `alone` (a piece) it yields False, and marks nothing, while another request on the upload is
+    still running: a piece the page sends again after losing an answer must not append beside the
+    first one, which is still writing the same staged piece on the host.
+    """
     with _uploads_lock:
-        e["busy"] = e.get("busy", 0) + 1
+        free = not e.get("busy")
+        if free or not alone:
+            e["busy"] = e.get("busy", 0) + 1
+    if alone and not free:
+        yield False
+        return
     try:
-        yield
+        yield True
     finally:
         with _uploads_lock:
             e["busy"] -= 1
             e["ts"] = time.time()
+
+
+def _bup_busy():
+    """The answer to a piece sent while the upload's previous request is still running: try again shortly."""
+    return jsonify({"success": False, "busy": True,
+                    "message": i18n.tr("The previous piece is still being written. Try again in a moment.")}), 409
 
 
 def _bup_get(uid, kind, sid):
@@ -176,6 +193,8 @@ def _register_game(app):
     @app.route("/api/panel/backup/game/<int:server_id>/upload", methods=["POST"])
     @login_required
     @permission_required(RESTORE_BACKUP)
+    # Above server_access_required, which reads the view's own parameters (a wrapper has none).
+    @step_up_required       # an uploaded archive is restored over the server: asked at its start, as a database's
     @server_access_required
     def api_panel_backup_game_upload(server_id):
         """Start an upload: check the size against the cap and the host's free space, make the part file."""
@@ -304,7 +323,9 @@ def _bup_game_piece(server_id, uid):
     refused = _bup_piece_refusal(entry, grs.UPLOAD_CHUNK)
     if refused is not None:
         return refused
-    with _bup_working(entry):
+    with _bup_working(entry, alone=True) as mine:
+        if not mine:
+            return _bup_busy()
         state, val = _bup_game_run(gs, grs.upload_chunk_script(gs.short_name, entry["uid"], _bup_offset()),
                                    _GAME_PIECE_TIMEOUT, stdin=_bup_b64_chunks(request.get_data(cache=True)))
     if state == "ok" and str(val).isdecimal():
@@ -380,7 +401,9 @@ def _bup_panel_piece(uid):
     refused = _bup_piece_refusal(entry, bk.UPLOAD_CHUNK)
     if refused is not None:
         return refused
-    with _bup_working(entry):
+    with _bup_working(entry, alone=True) as mine:
+        if not mine:
+            return _bup_busy()
         ok, now = bk.upload_append(entry["uid"], _bup_offset(), request.get_data(cache=True))
     entry["got"] = max(now, 0)
     if ok:

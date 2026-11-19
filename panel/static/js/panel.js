@@ -485,12 +485,15 @@ window.confirmDialog = function(opts){
   // Hidden until api.error shows it (display ''): set through the CSSOM, as a style attribute in
   // the markup above would be refused by the page policy.
   if (errEl) errEl.style.display = 'none';
-  function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
-  function onKey(e){ if(e.key === 'Escape') close(); }
+  var closed = false;
+  function close(){ closed = true; ov.remove(); document.removeEventListener('keydown', onKey); }
+  // Cancel, Escape or a click beside the card: closed without confirming (opts.onCancel, once).
+  function dismiss(){ if(closed) return; close(); if(opts.onCancel) opts.onCancel(); }
+  function onKey(e){ if(e.key === 'Escape') dismiss(); }
   document.addEventListener('keydown', onKey);
   // Escape closes this dialog only: inside a Bootstrap modal the key would also reach the modal,
   // which closes itself on it (and with it whatever was typed there).
-  ov.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ e.stopPropagation(); close(); } });
+  ov.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ e.stopPropagation(); dismiss(); } });
   var api = {
     close: close,
     // nosemgrep - okHtml is this button's OWN markup, captured above; the message uses textContent.
@@ -505,8 +508,8 @@ window.confirmDialog = function(opts){
     close(); if (opts.onConfirm) opts.onConfirm(val, api);
   }
   okBtn.onclick = submit;
-  ov.querySelector('[data-cd="cancel"]').onclick = close;
-  ov.addEventListener('click', function(e){ if(e.target === ov) close(); });
+  ov.querySelector('[data-cd="cancel"]').onclick = dismiss;
+  ov.addEventListener('click', function(e){ if(e.target === ov) dismiss(); });
   if (input) {
     input.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); submit(); } });
     setTimeout(function(){ input.focus(); }, 50);
@@ -1074,29 +1077,50 @@ window.UPro = (function(){
 // Every request is the person's own upload, however long after the click it is sent: marked
 // X-Panel-Background: 0, so the sign-in's idle clock moves with each piece (the wrapper above would
 // mark a piece sent 10 s after the last click as a timer's, and an upload longer than the idle
-// timeout was cut off by a 401 part way). A piece or finish request that never answers (the
-// connection dropped, a proxy's error page) rejects: a piece's is cancelled first, so the server
-// lets the next upload start at once instead of holding this one.
+// timeout was cut off by a 401 part way).
+//
+// A piece whose answer was lost (no answer at all, a proxy's error page, a host that could not be
+// reached, or the server still busy with the same piece) is sent again at the same offset after a
+// pause (RETRY_MS): a piece the host did append comes back 409 with where it is now, and
+// the upload goes on from there, so a phone changing networks does not lose the whole upload. Only
+// once the retries are spent is the upload cancelled (the server then lets the next one start at
+// once), and a request that never answered rejects as before.
 window.backupUpload = function(file, base, onProgress){
+  var RETRY_MS = [2000, 5000, 10000, 20000];
+  var retryable = function(res){
+    var d = res.d || {};
+    return res.status >= 500 || d.busy === true || (res.status === 200 && d.success !== true && !d.resume);
+  };
+  var headers = function(type){ return {'Content-Type': type || 'application/json', 'X-Panel-Background': '0'}; };
   var post = function(url, body, type){
-    return fetch(url, {method: 'POST', headers: {'Content-Type': type || 'application/json', 'X-Panel-Background': '0'}, body: body})
+    return fetch(url, {method: 'POST', headers: headers(type), body: body})
       .then(function(r){ return r.json(); });
+  };
+  // A piece's answer with its HTTP status: a 5xx, a busy answer or a host error is worth sending again.
+  var piece = function(url, body){
+    return fetch(url, {method: 'POST', headers: headers('application/octet-stream'), body: body})
+      .then(function(r){ return r.json().then(function(d){ return {status: r.status, d: d}; }); });
   };
   return post(base, JSON.stringify({size: file.size})).then(function(start){
     if(!start || !start.success || !start.id) return start || {success: false};
-    var chunk = Number(start.chunk) || 4194304, at = 0, tries = 0;
+    var chunk = Number(start.chunk) || 4194304, at = 0, tries = 0, lost = 0;
+    // The same piece again after a pause; once the pauses are spent, cancelled (and a lost request rethrown).
+    var again = function(err, d){
+      if(lost >= RETRY_MS.length){
+        return err ? cancel(null).then(function(){ throw err; }) : cancel(d);
+      }
+      var wait = RETRY_MS[lost++];
+      return new Promise(function(done){ setTimeout(done, wait); }).then(next);
+    };
     var next = function(){
       if(onProgress) onProgress(at, file.size);
       if(at >= file.size) return finish(0);
-      return post(base + '/' + start.id + '?offset=' + at, file.slice(at, Math.min(at + chunk, file.size)),
-                  'application/octet-stream').then(function(d){
-        if(d && d.success){ at = Number(d.received); tries = 0; return next(); }
+      return piece(base + '/' + start.id + '?offset=' + at, file.slice(at, Math.min(at + chunk, file.size))).then(function(res){
+        var d = res.d;
+        if(d && d.success){ at = Number(d.received); tries = 0; lost = 0; return next(); }
         if(d && d.resume && tries < 3){ at = Number(d.received) || 0; tries++; return next(); }
-        return cancel(d);
-      }, function(err){
-        // No answer: release the upload (best effort), then fail as before.
-        return cancel(null).then(function(){ throw err; });
-      });
+        return retryable(res) ? again(null, d) : cancel(d);
+      }, function(err){ return again(err, null); });
     };
     // A finish whose answer did not come back is asked again (the server kept the upload for it).
     var finish = function(n){

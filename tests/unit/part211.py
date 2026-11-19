@@ -215,9 +215,9 @@ check("databases verbs: TLS is turned off only for a server at a tailnet address
       and _helper.db_conn_net("tcp3306@100.64.0.5") == _priv211.db_conn_net("tcp3306@100.64.0.5")
       and not any("ssl" in a for a in _helper.db_conn_net("tcp3306")))
 _imp211 = _priv211.remote_command("db-import", ["mariadb", "3306@100.64.0.5", "pmcserver", "gs12_lp"])
-check("databases verbs: a restore from another machine connects to the server's tailnet address, TLS off; a local "
-      "one to 127.0.0.1 without",
-      _imp211.rstrip().endswith("3306 \"$C\" 100.64.0.5 --loose-skip-ssl --loose-ssl-mode=DISABLED")
+check("databases verbs: a restore from another machine connects to the server's tailnet address with every tailnet "
+      "option (connect timeout, TLS off, the server's RSA key); a local one to 127.0.0.1 without",
+      _imp211.rstrip().endswith("3306 \"$C\" 100.64.0.5 " + " ".join(_helper.db_conn_net("tcp3306@100.64.0.5")[3:]))
       and _priv211.remote_command("db-import", ["mariadb", "3306", "pmcserver", "gs12_lp"])
       .rstrip().endswith("3306 \"$C\" 127.0.0.1"), _imp211[-160:])
 _PW211, _APW211 = "Zremote211" + "q" * 20, "Zadmin211" + "w" * 12

@@ -6276,22 +6276,30 @@ _TAILNET_CGNAT = "100.64.0.0/10"  # NOSONAR - the range Tailscale assigns every 
 
 
 def tailnet_exempt_ips(server, ips):
-    """Of `ips`, the Tailscale-range (100.64.0.0/10) addresses that must NOT be firewall-blocked —
-    but only when Tailscale is actually running on this host. Returns a set of canonical IP strings
-    (empty if Tailscale is down or nothing is in range). Works for local + remote (run_command
-    dispatches). Best-effort; fails safe to no exemptions."""
-    net = ip_network_or_none(_TAILNET_CGNAT)
-    if net is None:
-        return set()
-    cand = set()
+    """Of `ips`, the Tailscale addresses that must NOT be firewall-blocked, as canonical IP strings.
+
+    Tailscale's IPv6 range (fd7a:115c:a1e0::/48) always: nothing else uses it, and a peer reaching
+    the host over the tailnet often arrives from its IPv6 address (MagicDNS answers AAAA too), so a
+    deny for it is a tailnet peer cut off. The IPv4 CGNAT range (100.64.0.0/10) only while
+    Tailscale is actually running on this host (other networks use that range too). Works for
+    local + remote (run_command dispatches). The auto-block, the panel host's Block and the remote
+    Block all ask this one function.
+    """
+    v6, cand = set(), set()
     for ip in ips or ():
         addr = ip_address_or_none(ip)
         if addr is None:
             continue
-        if addr in net:
-            cand.add(str(addr))
+        for net in _r11a_tailnet_nets:
+            if addr.version == net.version and addr in net:
+                (v6 if addr.version == 6 else cand).add(str(addr))
     if not cand:
-        return set()   # nothing in the tailnet range → skip the (relatively costly) tailscale probe
+        return v6      # no IPv4 tailnet address → skip the (relatively costly) tailscale probe
+    return v6 | _cgnat_exempt(server, cand)
+
+
+def _cgnat_exempt(server, cand):
+    """The IPv4 tailnet addresses `cand` while this host's Tailscale runs (or cannot be asked); else none."""
     # "Can't confirm" must EXEMPT here, which is the opposite of what fail-safe means everywhere
     # else in this file. The only consumer is _autoblock_reconcile, and a missing exemption does not
     # mean "do nothing" — it means the address gets a UFW deny inserted at POSITION 1, which the

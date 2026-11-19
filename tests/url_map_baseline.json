@@ -1716,6 +1716,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_backup_delete"
     ],
     "methods": [
@@ -1761,6 +1762,7 @@
     "guards": [
       "utils.py:decorated_view(restore_backup)[server_access]",
       "auth.py:decorated_function(restore_backup)[server_access]",
+      "account_guard.py:wrapped[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_panel_backup_game_restore"
     ],
@@ -1784,6 +1786,7 @@
     "guards": [
       "utils.py:decorated_view(restore_backup)[server_access]",
       "auth.py:decorated_function(restore_backup)[server_access]",
+      "account_guard.py:wrapped[server_access]",
       "auth.py:decorated_function[server_access]",
       "view:api_panel_backup_game_upload"
     ],
@@ -1845,6 +1848,7 @@
     "guards": [
       "utils.py:decorated_view(super_admin)",
       "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
       "view:api_panel_backup_settings"
     ],
     "methods": [

@@ -127,10 +127,12 @@ def _r16d_remove_paths(paths):
 import unit as _unit_pkg  # noqa: E402
 from panel.core import config as _cfg_live  # noqa: E402
 
+# Each function under every path it names (harden_data_permissions chmods all three); part250 holds this to config.py.
 _WATCHED = {"CONFIG_FILE": ("load_config", "_cfg_current", "save_config", "update_config", "config_unreadable", "harden_data_permissions"),
-            "SECRET_FILE": ("get_secret_key",), "CRED_KEY_FILE": ("_cred_keyring", "_cred_keyring_for_write", "cred_key_lock", "rotate_cred_key")}
-# The checkout's own paths, for the one part01 check that asserts where they resolve.
-_unit_pkg.LIVE_PATHS = {_n: getattr(_cfg_live, _n) for _n in _WATCHED}
+            "SECRET_FILE": ("get_secret_key", "harden_data_permissions"),
+            "CRED_KEY_FILE": ("_cred_keyring", "_cred_keyring_for_write", "cred_key_lock", "rotate_cred_key", "harden_data_permissions")}
+# The checkout's own paths, for the one part01 check that asserts where they resolve; the map, for part250.
+_unit_pkg.LIVE_PATHS, _unit_pkg.WATCHED = {_n: getattr(_cfg_live, _n) for _n in _WATCHED}, _WATCHED
 _LIVE_REAL = {_n: os.path.realpath(str(_p)) for _n, _p in _unit_pkg.LIVE_PATHS.items()}
 _RUN_DATA = tempfile.mkdtemp(prefix="lgsm-unit-data-")
 for _n, _p in _unit_pkg.LIVE_PATHS.items():
@@ -139,10 +141,12 @@ _TESTS_DIR = os.path.join(_root, "tests") + os.sep
 _config_touches = []
 
 
-def _watch(attr, fn):
+def _watch(attrs, fn):
     @functools.wraps(fn)
     def _watched(*a, **k):
-        if os.path.realpath(str(getattr(_cfg_live, attr))) == _LIVE_REAL[attr]:
+        # Each path it names, and a path it is handed (_key_missing(path): callers pass SECRET_FILE or CRED_KEY_FILE).
+        if any(os.path.realpath(str(_p)) in _LIVE_REAL.values()
+               for _p in [getattr(_cfg_live, _x) for _x in attrs] + [_v for _v in a[:1] if isinstance(_v, (str, os.PathLike))]):
             f = sys._getframe(1)
             while f is not None and not f.f_code.co_filename.startswith(_TESTS_DIR):
                 f = f.f_back
@@ -153,9 +157,8 @@ def _watch(attr, fn):
     return _watched
 
 
-for _attr, _fns in _WATCHED.items():
-    for _fn in _fns:
-        setattr(_cfg_live, _fn, _watch(_attr, getattr(_cfg_live, _fn)))
+for _fn in sorted({_f for _fns in _WATCHED.values() for _f in _fns} | {"_key_missing"}):
+    setattr(_cfg_live, _fn, _watch([_a for _a, _fns in _WATCHED.items() if _fn in _fns], getattr(_cfg_live, _fn)))
 
 # ── nothing in this suite runs the machine's own `tailscale` ─────────────────────────────────────
 # Every page render reads Tailscale state for the nav (inject_globals), and a cold or 15 s-old
@@ -2065,6 +2068,12 @@ _r16d_wrap_ts_handles()
 # manager's folders, appends, logged ufw rules, the arithmetic scan, backup encryption) runs install.sh
 # text under bash, a loopback web server and part12's app with part135's stand-in hosts and part190's
 # restore sandbox; imports part01, 06, 12, 135 and 190.
+# part263 (review pass 31, the app side: the SFTP service's panel answers and cut-off uploads, key removal and
+# last-used, add-on job guards, subordinate ids, Tailscale v6 exemptions, GMod cron, duplicate JSON keys, the
+# reboot census) drives part12's app and runs shell under bash; was part260 on its branch.
+# part261 (review pass 31, the browser side: every step-up route fetched inside a step-up helper, lost
+# upload pieces sent again, Manage add-ons opening Files & Config, the SFTP card with Tailscale down) runs
+# node over panel/static/js and drives part12's app; imports part01, 05, 12, 221, 226 and 249.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
           "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
           "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2083,7 +2092,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part221", "part222", "part223", "part224", "part225", "part226", "part227", "part228", "part229", "part230", "part231", "part232", "part233", "part234",
     "part235", "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244",
     "part245", "part246", "part247", "part248", "part249", "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258",
-    "part259", "part260", "part15")
+    "part259", "part260", "part261", "part262", "part263", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

@@ -56,6 +56,8 @@ two-factor authentication, every time: a key signs in without your browser sessi
 session must not be enough to add one. Each added or removed key is recorded in the audit log and
 shown in your account's recent security changes. Changing your password, "Sign out everywhere", an
 administrator's password reset and deactivating the account remove your keys: add yours again after.
+Removing a key ends any SFTP session signed in with it at its next request; a key's "last used"
+changes only when a session really starts.
 
 In FileZilla (Site Manager → New site):
 
@@ -98,7 +100,9 @@ in with a password at all. Backup codes are not accepted over SFTP.
 - Renaming never replaces a file that is already there. Moving between two servers' folders is not
   possible.
 - An upload larger than the limit, or one that would leave less than 256 MiB free on the game host's
-  disk, is refused.
+  disk, is refused. A new file is staged and only moved into place when it completes, so a refused one
+  leaves nothing. Writing into, or appending to, an existing file changes it in place: the part written
+  before the refusal stays (it is within the limit), so check that file afterwards.
 - Every upload, delete, rename, new folder and permission change is recorded in the audit log, about
   that server, with your address. Reads are not recorded.
 - A session ends at its absolute limit (8 hours by default, the panel's own sign-in limit): after it, a new
@@ -113,9 +117,10 @@ in with a password at all. Backup codes are not accepted over SFTP.
 ## Signing in safely
 
 - Sign-in counts against the same limits as the web sign-in: 8 failures from one address in 5
-  minutes, then a pause; a day limit per address; and a pause for a name after repeated failures
-  (which holds key sign-in to that name too while it lasts). Each failure is in the audit log and in
-  `data/auth.log`, which the panel's fail2ban jail reads.
+  minutes, then a pause; a day limit per address; and a pause for a name after repeated wrong
+  passwords (password sign-in only: a key cannot be guessed, so wrong passwords sent by someone else
+  cannot lock you out of key sign-in). Each failure is in the audit log and in `data/auth.log`, which
+  the panel's fail2ban jail reads.
 - A deactivated account, one that must change its password first, and one that Settings requires
   two-factor authentication of and has none, cannot sign in.
 - The client only ever learns that sign-in failed; the reason is in the audit log.

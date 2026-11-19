@@ -612,7 +612,10 @@ function deleteGroup(nums, btn, warn, reason, key) {
     }});
 }
 
-function syncPorts(serverId, btn) {
+// A step_up_required route, like the card's other changes: the password is confirmed in place first,
+// and the spinner goes up only once that has passed (a cancelled dialog leaves the button as it was).
+function syncPorts(serverId, btn) { _fwStepUp(function() { _syncPortsNow(serverId, btn); }); }
+function _syncPortsNow(serverId, btn) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Detecting…';
   fetch(MOUNT + '/api/server/' + serverId + '/sync-ports', { method: 'POST' })  // nosemgrep

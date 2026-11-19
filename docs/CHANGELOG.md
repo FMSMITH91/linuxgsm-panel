@@ -132,6 +132,38 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **SFTP keeps working after a slow answer from the panel.** One answer slower than a minute (a host that
+  stopped answering a permission check) left SFTP refusing every sign-in and listing while Settings still
+  showed it running. Requests are now answered side by side, so one slow request holds nobody else.
+- **An SFTP upload cut off part way leaves nothing behind.** A disconnect, the idle close or the time limit
+  used to leave the upload's hidden part-file in the game server's folder.
+- **Add-on Remove waits for an install or update to finish.** Removing during one left a unit that started an
+  add-on the card called not installed. An update or Apply now refuses a missing game log or account ids, as
+  the install does. A host reboot waits for a running add-on install or update.
+- **The Databases tab no longer cuts off an add-on's database.** Resetting the password of a database, or
+  deleting one, that an installed add-on (B3) uses is refused and names the add-on. Cancelling an upload while
+  its check still runs no longer lets a second upload replace the kept earlier dump.
+- **GMod content updates for every content game.** One update line for another game (or `apt update`) in the
+  content account's crontab stopped the panel scheduling weekly content updates for the games it installed.
+- **A config file with a setting written twice opens in the text editor only.** The form edited the copy the
+  game ignores.
+- **Installs that needed a last fix finish.** A checksum retry or the Windows-depot workaround chosen on the
+  third download now gets its download, instead of ending the install as failed.
+- **A failed update's rollback says when the panel folder is incomplete.** It no longer says that the panel
+  was restarted.
+- **A password check no longer sends you away from the page.** Finishing a Tailscale setup, Sync ports, a
+  panel backup restore or delete, the backup settings, a game server's backup restore or upload, choosing a
+  database server on another machine, and a database's reset, delete, restore or dump upload now ask for your
+  password in place when your sign-in is older than the confirmation window, and keep what you typed.
+- **Uploads survive a dropped connection.** A backup or database dump upload sends a piece again after a short
+  pause when its answer was lost, instead of failing the whole upload.
+- **Manage add-ons opens the Add-ons tab.** A user given only Manage add-ons can now open Files & Config,
+  where the Add-ons tab is.
+- **The B3 add-on keeps its base image and Python packages current.** Its base image and its Python packages
+  are now updated by automatic pull requests, and a new one is offered as an add-on update on hosts that built
+  B3 before.
+- **SFTP settings save while Tailscale is down.** With the service set to listen on Tailscale, it can be
+  turned off or its port changed while Tailscale is down.
 - **An add-on that stops again after Start says why.** The add-on card's Start now watches the add-on
   for 30 seconds, as an install does. If it stops or restarts in that time, it is left stopped and the
   card shows why, with the lines it logged during that start, instead of a bare "Failed". Those lines,

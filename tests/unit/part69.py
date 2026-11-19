@@ -144,7 +144,8 @@ _prog69 = (
     "global.setTimeout = () => 0; global.location = {reload(){}};\n"
     + "".join(_cut47(_BK69, h) + "\n" for h in (
         "function _bkRestore(", "function _bkRestoreWantsPassphrase(", "function _bkRestoreWantsSkipSafety(",
-        "function _bkRestoreDone(", "function _bkAskSkipSafety(", "function _bkAskPassphrase("))
+        "function _bkRestoreDone(", "function _bkAskSkipSafety(", "function _bkAskPassphrase(",
+        "function _bkStepUp("))         # no stepUpThen here: the helper runs each restore at once
     + "(async () => { const out = {};\n"
     "  answers = [A.safety, A.skipped]; _bkRestore('p.tar.gz', null, null, false); await settle();\n"
     "  out.plain = {dialogs: dialogs.slice(), posted: posted.slice()}; dialogs = []; posted = [];\n"

@@ -437,6 +437,35 @@ def _gh_check_guarded_columns():
           "models: %r / backup: %r" % (sorted(guarded), sorted(_gh_bk._RESTORE_IDENT_COLUMNS)))
 
 
+# Every port column restore holds to its type, driven, and the tuple held to models.py: each column a
+# @validates method sends through _validate_port. Only game_server.port was ever restored as text.
+def _gh_port_columns():
+    """{(table, column)} whose @validates method in models.py calls _validate_port."""
+    with open(os.path.join(_gh_root, "panel", "db", "models.py"), encoding="utf-8") as f:
+        tree = _gh_ast.parse(f.read())
+    return {(_gh_tablename(cls), k) for cls in tree.body if isinstance(cls, _gh_ast.ClassDef) for m in cls.body
+            if isinstance(m, _gh_ast.FunctionDef)
+            and any(isinstance(c, _gh_ast.Call) and _gh_callee(c) == "_validate_port" for c in _gh_ast.walk(m))
+            for k in _gh_validated_keys(m)}
+
+
+def _gh_check_port_columns(live_bytes):
+    """A text query port or host port is refused, naming the row; the tuple is models.py's port columns."""
+    ports = _gh_port_columns()
+    check("GHSA-hh39 restore: it holds to their type exactly the port columns models.py checks with _validate_port",
+          {("game_server", "query_port"), ("remote_server", "port")} <= ports
+          and ports == set(_gh_bk._RESTORE_PORT_COLUMNS),
+          "models: %r / backup: %r" % (sorted(ports), sorted(_gh_bk._RESTORE_PORT_COLUMNS)))
+    for what, sql, named in (("a query port stored as text", "UPDATE game_server SET query_port = '27016; id'",
+                              "game server #16 (query_port)"),
+                             ("a host's SSH port stored as text", "UPDATE remote_server SET port = '22; id'",
+                              "host #1 (port)")):
+        ok, msg = _gh_restore(_gh_db([(16, "gmodserver", "gmod", 27015)], sql=[sql]))
+        check("GHSA-hh39 restore: a backup carrying %s is refused, naming the row, before anything is touched"
+              % what, ok is False and named in msg and _gh_calls == [] and _gh_bk.DB_PATH.read_bytes() == live_bytes,
+              "%r %r %r" % (ok, msg, _gh_calls))
+
+
 try:
     _gh_live_bytes = _gh_redirect_backup()
     _gh_check_bad_rows(_gh_live_bytes)
@@ -448,6 +477,7 @@ try:
     _gh_check_index_fixture()
     _gh_check_f2_controls()
     _gh_check_guarded_columns()
+    _gh_check_port_columns(_gh_live_bytes)
 finally:
     for _gh_a, _gh_v in _gh_bk_saved.items():
         setattr(_gh_bk, _gh_a, _gh_v)

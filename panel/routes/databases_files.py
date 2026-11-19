@@ -338,16 +338,38 @@ def _new_upload(db_id, size):
 
 
 @contextmanager
-def _working(e):
-    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends."""
+def _working(e, alone=False):
+    """A request on upload `e` is running: it is not stalled, and its quiet time starts when the request ends.
+
+    With `alone` (a piece) it yields False, and marks nothing, while another request on the upload is
+    still running: a piece the page sends again after losing an answer must not append beside the
+    first one, which is still writing the same staged piece on the host.
+    """
     with _UPLOADS_LOCK:
-        e["busy"] = e.get("busy", 0) + 1
+        free = not e.get("busy")
+        if free or not alone:
+            e["busy"] = e.get("busy", 0) + 1
+    if alone and not free:
+        yield False
+        return
     try:
-        yield
+        yield True
     finally:
         with _UPLOADS_LOCK:
             e["busy"] -= 1
             e["ts"] = time.time()
+
+
+@contextmanager
+def _finishing(e):
+    """A finish of upload `e` is running (checking the dump, then restoring): a cancel waits for it to end."""
+    with _UPLOADS_LOCK:
+        e["finishing"] = e.get("finishing", 0) + 1
+    try:
+        yield
+    finally:
+        with _UPLOADS_LOCK:
+            e["finishing"] -= 1
 
 
 def _replace_stalled(gs, r, uid, old):
@@ -465,7 +487,10 @@ def _upload_piece(gs, r, uid):
     refused = _piece_refusal(e, data, off)
     if refused:
         return refused
-    with _working(e):
+    with _working(e, alone=True) as mine:
+        if not mine:
+            return jsonify({"success": False, "busy": True, "message": i18n.tr(
+                "The previous piece is still being written. Try again in a moment.")}), 409
         state, val = _upcmd(gs, piece_script(gs.short_name, e["uid"], off), _PIECE_TIMEOUT, stdin=_b64_chunks(data))
     if state == "ok" and str(val).isdecimal():
         return jsonify({"success": True, "received": int(val)})
@@ -486,7 +511,7 @@ def _upload_finish(gs, r, uid):
         return _say(409, _dbr._NOT_READY)
     # The upload stays listed, and busy, until its restore has ended: a second upload to the same database
     # (or a cancel or another finish of this one) started meanwhile is refused, never run alongside it.
-    with _working(e):
+    with _working(e), _finishing(e):
         state, val = _upcmd(gs, finish_script(gs.short_name, e["uid"], e["size"], r.name), _FINISH_TIMEOUT)
         if state == "unread":
             return jsonify({"success": False, "retry": True, "message": i18n.tr(_dbr._UNREAD)}), 200
@@ -544,11 +569,14 @@ def _upload_cancel(gs, r, uid):
     e = _get_upload(uid, r.id)
     if e is None:
         return _say(404, "No such upload.")
+    # Refused while a finish is still checking the dump, not only once it restores: taken out of the
+    # list then, a second upload to the database was accepted and its finish moved the first one over
+    # the earlier dump the first restore was keeping aside (`.prev`).
     with _UPLOADS_LOCK:
-        restoring = bool(e.get("restoring"))
-        if not restoring:
+        running = bool(e.get("restoring") or e.get("finishing"))
+        if not running:
             _UPLOADS.pop(e["uid"], None)
-    if restoring:
+    if running:
         return _say(409, S_RUNNING)
     state, _v = _upcmd(gs, cancel_script(gs.short_name, e["uid"], r.name), 60)
     return jsonify({"success": state == "ok"})

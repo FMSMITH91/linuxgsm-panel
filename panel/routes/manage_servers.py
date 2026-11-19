@@ -1350,7 +1350,8 @@ def _install_game_files(job, remote, gs):
     why = None
     primed_windows = False
     sum_retried = False     # a failed checksum is downloaded once more, once
-    for attempt in range(3):
+    attempt, passes = 0, 3
+    while attempt < passes:
         last_out = _download_game_files(job, remote, auto, attempt, last_out)
         # The real test — did the game files actually install? rc alone lies on a
         # corrupt/truncated download.
@@ -1380,10 +1381,17 @@ def _install_game_files(job, remote, gs):
                   "could not read the host. The files may well be there; try "
                   "again once the host is answering.",
                   last_out[-300:], retryable=True, explained=True); return False
+        remedies = (primed_windows, sum_retried)
         again, why, last_out, primed_windows, sum_retried = _game_files_next(
             job, remote, gs, auto, last_out, primed_windows, sum_retried)
         if not again:
             break
+        attempt += 1
+        # A one-off remedy chosen on the last pass (the Windows-depot prime, a second download after
+        # a failed checksum) gets the pass it promised: the loop used to end there, so a prime that
+        # worked was recorded as a failed install and a classified checksum failure lost its words.
+        if attempt == passes and (primed_windows, sum_retried) != remedies:
+            passes += 1
     if not installed_ok:
         _wipe_lgsm_tmp(remote, short_name)    # the last try's partial archive, GBs, not left behind
         _fail_game_files(job, why, last_out)

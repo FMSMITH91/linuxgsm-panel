@@ -23,7 +23,12 @@
     "only its own files.",
     "The add-ons' pins (panel/services/addons.py): B3's source commit, which follows",
     "FMSMITH91/big-brother-bot master (git-refs, in addons.py and the B3 Containerfile together),",
-    "and IW4MAdmin's image, the digest of its `latest` tag. Both are checked daily (packageRules)."
+    "IW4MAdmin's image, the digest of its `latest` tag, and the B3 image's base, the digest of",
+    "python:3.12-slim (B3_BASE in addons.py and ARG BASE_IMAGE in the B3 Containerfile together;",
+    "written by digest alone, as podman takes it, so the tag Renovate follows is the manager's",
+    "currentValueTemplate). All three are checked daily (packageRules). The B3 image's Python",
+    "dependencies (panel/addon_images/b3/requirements.txt, pip-compile's lock of requirements.in)",
+    "stay with Dependabot, like every other pip lockfile here: Renovate runs no pip manager."
   ],
   "enabledManagers": [
     "custom.regex",
@@ -78,6 +83,19 @@
       ],
       "currentValueTemplate": "latest",
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The B3 add-on image's base: the digest of python:3.12-slim, in addons.py and the B3 Containerfile together",
+      "managerFilePatterns": [
+        "/^panel/services/addons\\.py$/",
+        "/^panel/addon_images/b3/Containerfile$/"
+      ],
+      "matchStrings": [
+        "(?:B3_BASE = \"|ARG BASE_IMAGE=)(?<depName>docker\\.io/library/python)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "currentValueTemplate": "3.12-slim",
+      "datasourceTemplate": "docker"
     }
   ],
   "dockerfile": {
@@ -124,6 +142,7 @@
       "description": "The add-ons' pins are checked every day; B3's fork is this project's own, so its commits need no waiting period",
       "matchDepNames": [
         "big-brother-bot",
+        "docker.io/library/python",
         "ghcr.io/raidmax/iw4madmin"
       ],
       "schedule": [

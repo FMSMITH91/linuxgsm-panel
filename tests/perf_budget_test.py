@@ -305,6 +305,21 @@ def seed_minecraft_server():
         return gs.id
 
 
+def seed_addon_server():
+    """One Call of Duty 4 server, a game both add-ons are offered for; its id.
+
+    The add-on pages answer 404 for a game no add-on is offered for (every seeded csgo server), before any
+    read, so they are swept through this one. Seeded once, before both sweeps, like the Minecraft one.
+    """
+    with app.app_context():
+        remotes = RemoteServer.query.all()
+        gs = GameServer(name="codperf", short_name="cod4server", game_type="cod4", port=28960,
+                        remote_id=remotes[2 % len(remotes)].id, installed=True)
+        db.session.add(gs)
+        db.session.commit()
+        return gs.id
+
+
 GROUPS_SMALL = 3
 GROUPS_LARGE = 24        # same servers, 8x the groups
 
@@ -376,13 +391,14 @@ def _seed_admin_and_hosts():
         return admin.id
 
 
-def _get_page_paths(admin_id, mc_server):
+def _get_page_paths(admin_id, mc_server, addon_server):
     """Every GET page in the url map, with a real row's id in place of each id placeholder.
 
-    The Minecraft lists page gets the Minecraft server: any other game is refused before a read.
+    The Minecraft lists page gets the Minecraft server and the add-on pages the Call of Duty 4 one: any
+    other game is refused before a read.
     """
     with app.app_context():
-        one_server = GameServer.query.filter(GameServer.id != mc_server).first().id
+        one_server = GameServer.query.filter(GameServer.id.notin_((mc_server, addon_server))).first().id
         one_remote = RemoteServer.query.first().id
 
     subs = {"<int:server_id>": str(one_server), "<int:remote_id>": str(one_remote),
@@ -400,6 +416,8 @@ def _get_page_paths(admin_id, mc_server):
                 continue
             if "/mc-lists/" in p:
                 p = p.replace("<int:server_id>", str(mc_server))
+            if "/addons" in p:
+                p = p.replace("<int:server_id>", str(addon_server))
             for k, v in subs.items():
                 p = p.replace(k, v)
             # <any(a, b):x> is a fixed list: its first option is a real page of that rule.
@@ -554,7 +572,8 @@ try:
     admin_id = _seed_admin_and_hosts()
     seed_servers(0, SERVERS_SMALL)
     mc_server = seed_minecraft_server()
-    paths = _get_page_paths(admin_id, mc_server)
+    addon_server = seed_addon_server()
+    paths = _get_page_paths(admin_id, mc_server, addon_server)
     check("perf: the sweep requests every GET page but the pinned few it cannot (a new page left out "
           "is named here)", set(_r41t_unswept) == _r41t_unswept_known,
           repr(sorted(set(_r41t_unswept) ^ _r41t_unswept_known)))
@@ -576,6 +595,15 @@ try:
           len(_anypages) == 2 and all(small_st.get(p) == 200 and large_st.get(p) == 200 for p in _anypages)
           and "/api/server/%d/mc-lists/ops" % mc_server in _anypages,
           repr([(p, small_st.get(p), large_st.get(p)) for p in _anypages]))
+    _addonpages = sorted(p for p in paths if "/addons" in p)
+    # ...and the list page's 200 is its answer (the offered add-ons), not a refusal said with a 200.
+    _addonlist = c.get("/api/server/%d/addons" % addon_server).get_json() or {}
+    check("perf: ...and both add-on pages answered 200 in both sweeps (each read the add-on state of a server "
+          "an add-on is offered for, not a 404 for another game)",
+          _addonpages == ["/api/server/%d/addons" % addon_server, "/api/server/%d/addons/b3/logs" % addon_server]
+          and all(small_st.get(p) == 200 and large_st.get(p) == 200 for p in _addonpages)
+          and _addonlist.get("success") is True and len(_addonlist.get("addons") or []) == 2,
+          repr(([(p, small_st.get(p), large_st.get(p)) for p in _addonpages], _addonlist)))
     _check_the_sweep_ran({p: n for p, n in small.items() if small_st.get(p) == 200},
                          {p: n for p, n in large.items() if large_st.get(p) == 200})
     grew = _pages_that_grew(small, large)

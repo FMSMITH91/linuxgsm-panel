@@ -1,8 +1,8 @@
 """Part 250 of the unit suite: checks that can fail, for what the suites themselves promise.
 
-* A server page rendered by a part starts no background host lookup (timezone, public IP): each part
-  stubs the name the page looks up. part12 records any such thread instead of starting it.
-* A part that ends on "nothing reached a real transport" sent no request with part12's tripwire off.
+* The controls for two run-wide gates that part15 judges, because it runs last: a server page rendered
+  by a part starts no background host lookup (part12 records any such thread instead of starting it),
+  and a part that ends on "nothing reached a real transport" sent no request with the tripwire off.
 * The run-wide config/key watch (tests/unit_test.py) wraps every config.py function that names the
   config file, the secret key or the credential key.
 * Every monitoring alert names the row that decides who gets the push: a server event its `server=`,
@@ -19,6 +19,7 @@ import re as _re250
 import sys as _sys250
 from types import SimpleNamespace as _NS250
 
+import unit as _unit250
 from unit.part01 import check, eq
 from unit.part05 import _root
 from unit.part12 import (P9_RESOLVER_THREADS, P9_UNARMED_REQUESTS, _p9, _p9_arm, _p9_client, _p9_restore_all,
@@ -32,20 +33,20 @@ def _read250(*parts):
         return fh.read()
 
 
-# ── 1. no part's page render started a background host lookup ─────────────────────────────────────
-_threads250 = list(P9_RESOLVER_THREADS)
+# ── 1. a page render that misses its stub is recorded, named by its part, not started ──────────────
+# The run-wide judgement of what every part recorded is part15's: it runs last, so it also sees the
+# parts listed after this one.
+_seen250 = len(P9_RESOLVER_THREADS)
 _p9_sh._host_timezone_cached(_NS250(id=-250, timezone=""), _p9)
-_control250 = P9_RESOLVER_THREADS[len(_threads250):]
-del P9_RESOLVER_THREADS[len(_threads250):]
-eq("page renders: no part rendered a server page with the timezone or public-IP lookup unstubbed (each "
-   "started a thread that read the fixture host after the part's stubs were gone)", _threads250, [])
+_control250 = P9_RESOLVER_THREADS[_seen250:]
+del P9_RESOLVER_THREADS[_seen250:]
 eq("page renders: ...a render that misses its stub is recorded, named by its part, not started (control)",
    _control250, [("part250", "_maybe_resolve_host_timezone")])
 
 
-# ── 2. no request ran unarmed in a part that checks the tripwire ────────────────────────────────────
+# ── 2. a request is noted only when the tripwire is off (part15 judges the whole run) ─────────────
 def _tripwire_parts250():
-    """The parts (but part12, which owns it) that end on a _P9_TRIPPED check."""
+    """The parts (but part12, which owns it) that end on a _P9_TRIPPED check; part15 reads it."""
     out = set()
     for path in _glob250.glob(os.path.join(_root, "tests", "unit", "part*.py")):
         name = os.path.basename(path)[:-3]
@@ -54,8 +55,6 @@ def _tripwire_parts250():
     return out
 
 
-_twparts250 = _tripwire_parts250()
-_unarmed250 = sorted({(p, path) for p, path in P9_UNARMED_REQUESTS if p in _twparts250})
 _p9_client(-1).get("/p250-unarmed")
 _p9_arm(who="part250")
 try:
@@ -63,10 +62,6 @@ try:
 finally:
     _p9_restore_all()
 _ctl_unarmed250 = [r for r in P9_UNARMED_REQUESTS if r[0] == "part250"]
-check("tripwire: every part that ends on \"nothing reached a real transport\" drove part12's app only with the "
-      "tripwire armed (a request after a bare _p9_restore_all() records no trip whatever it reaches)",
-      len(_twparts250) >= 30 and not _unarmed250,
-      repr({p: [r for q, r in _unarmed250 if q == p][:3] for p in sorted({q for q, _r in _unarmed250})}))
 eq("tripwire: ...a request is noted only when the tripwire is off (control)",
    _ctl_unarmed250, [("part250", "/p250-unarmed")])
 
@@ -92,6 +87,19 @@ check("config watch: every config.py function that names config.json, the secret
       "is wrapped by the runner's watch (config_value's reader and cred_key_lock were not)",
       {"_cfg_current", "cred_key_lock", "get_secret_key"} <= set(_readers250) and not _unwatched250,
       repr((_unwatched250, sorted(_readers250))))
+
+
+def _under_paths250(watched, readers):
+    """{function: the paths it names that the runner does not watch it under} (empty when each is)."""
+    under = {n: {a for a, fns in watched.items() if n in fns} for n in readers}
+    return {n: sorted(set(paths) - under[n]) for n, paths in readers.items() if set(paths) - under[n]}
+
+
+eq("config watch: ...each one is watched under EVERY path it names, not only one (harden_data_permissions "
+   "chmods all three), and _key_missing, handed the path, is wrapped too",
+   (_under_paths250(_unit250.WATCHED, _readers250), hasattr(_cfg250._key_missing, "__wrapped__")), ({}, True))
+eq("config watch: ...a function watched under one of the paths it names is reported (control)",
+   _under_paths250({"CONFIG_FILE": ("f",)}, {"f": ["CONFIG_FILE", "SECRET_FILE"]}), {"f": ["SECRET_FILE"]})
 
 
 # ── 4. every alert names the row that routes it ───────────────────────────────────────────────────

@@ -5743,6 +5743,61 @@ def _subid_flags(pw):
     return flags
 
 
+def _subid_add(pw, user):
+    """Give the account the ranges it lacks: (0, whether any was added), or (rc, None) with stderr written.
+
+    Reading the files, picking the next free range and usermod's append hold one exclusive lock, so
+    two add-on installs on two servers of the host at once cannot both pick the same range (shadow's
+    usermod checks only that THIS account does not hold it already). The lock is on the root-owned
+    folder that holds the files, which is never replaced (usermod replaces the files themselves).
+    """
+    try:
+        lock = os.open(os.path.dirname(SUBID_FILES[0]), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError as e:
+        sys.stderr.write("cannot lock the subordinate id files (%s)\n" % e.__class__.__name__)
+        return 1, None
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _subid_add_locked(pw, user)
+    finally:
+        os.close(lock)              # closing the descriptor releases the lock
+
+
+def _subid_add_locked(pw, user):
+    """_subid_add's body, under its lock; a new range another account's overlaps is taken back."""
+    flags = _subid_flags(pw)
+    if flags is None:
+        sys.stderr.write("no free subordinate id range\n")
+        return 1, None
+    if not flags:
+        return 0, False
+    rc = _usermod(flags + [user])
+    if rc:
+        return rc, None
+    start, end = (int(x) for x in flags[1].split("-"))
+    if _subid_overlap(pw, start, end):
+        _usermod([f.replace("--add-", "--del-") for f in flags] + [user])
+        sys.stderr.write("the new subordinate id range overlaps another account's; it was taken back\n")
+        return 1, None
+    return 0, True
+
+
+def _subid_overlap(pw, start, end):
+    """Whether a range of another account in either file overlaps start-end."""
+    mine = (pw.pw_name, str(pw.pw_uid))
+    return any(name not in mine and first <= end and first + count - 1 >= start
+               for path in SUBID_FILES for name, first, count in _subid_rows(path))
+
+
+def _usermod(argv):
+    """Run usermod with `argv`; its return code (its stderr written on a failure)."""
+    r = subprocess.run([resolve("usermod")] + argv,         # nosec B603 - fixed argv
+                       shell=False, capture_output=True, timeout=30, env=_clean_env())
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
+    return r.returncode
+
+
 def do_addon_account_prepare(args, content):
     """Ready a game account for rootless add-on containers: subordinate ids, then lingering.
 
@@ -5766,17 +5821,10 @@ def do_addon_account_prepare(args, content):
     if pw is None or not member:
         sys.stderr.write("refusing %s: not a game account of the panel's (%s)\n" % (user, GAME_GROUP))
         return 1
-    flags = _subid_flags(pw)
-    if flags is None:
-        sys.stderr.write("no free subordinate id range\n")
-        return 1
-    if flags:
-        r = subprocess.run([resolve("usermod")] + flags + [user],      # nosec B603 - fixed argv
-                           shell=False, capture_output=True, timeout=30, env=_clean_env())
-        if r.returncode != 0:
-            sys.stderr.write(r.stderr.decode("utf-8", "replace")[:400])
-            return r.returncode
-    sys.stdout.write("subids=%s\n" % ("added" if flags else "present"))
+    rc, added = _subid_add(pw, user)
+    if rc:
+        return rc
+    sys.stdout.write("subids=%s\n" % ("added" if added else "present"))
     r = subprocess.run([resolve("loginctl"), "enable-linger", user],   # nosec B603 - fixed argv
                        shell=False, capture_output=True, timeout=30, env=_clean_env())
     if r.returncode != 0:

@@ -457,7 +457,14 @@ function fbSpaceLines(parts, keep, dk){
     parts.push('<span class="text-secondary"><i class="bi bi-lightbulb"></i> '+tfHtml('Recommended: keep ≤ {n} at ~{size} per run (leaves comfortable headroom).', {n: {html: '<strong>'+escapeHtml(String(recKeep))+'</strong>'}, size: fbFmtBytes(dk.cycle)})+'</span>');
   }
 }
-function saveBackupSettings(){
+// The backup settings, a panel backup's delete and restore, and a game server's restore ask a sign-in
+// past the confirmation window for the password again (account_guard.step_up_required): asked here in
+// a dialog first (_bkStepUp, below), so nothing typed is lost to the confirm page. Where the route does
+// not ask, the dialog never shows and the change goes straight through.
+// A switch or box has already changed when this runs: a cancelled dialog reads the stored settings
+// back, so the card never shows a change that was not saved.
+function saveBackupSettings(){ _bkStepUp(_saveBackupSettingsNow, function(){ loadBackups(); }); }
+function _saveBackupSettingsNow(){
   var enabled=document.getElementById('bk-enabled').checked;
   // An EMPTY or non-numeric box must not be sent as NaN — JSON.stringify turns that into null,
   // which the server reads as "don't change this field". That is the right outcome (the value on
@@ -680,14 +687,14 @@ function restoreGameBackup(btn){
   confirmDialog({title:'Restore from backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
     bodyText:tf('Restore {server} from this backup?\n\n{name}\n\nEvery file of the server is replaced with the copy in the archive: its world, configs and LinuxGSM files. The server is stopped first, and a fresh backup of its current state is taken before anything is replaced, so you can go back. A running server is started again afterwards.', {server: server, name: name}),
     requireText: server, requireLabel: tf('Type the server name to confirm'),
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       btn.disabled=true;
       fetch(MOUNT+'/api/panel/backup/game/'+gid+'/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name, confirm:server})})
         .then(r=>r.json()).then(function(d){
           bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
           btn.disabled=false; loadBackups();
         }).catch(function(){ bkMsg('✗ '+tf('Restore failed'),'text-danger'); btn.disabled=false; });
-    }});
+    }); }});
 }
 function deleteGameBackup(btn){
   var name=btn.getAttribute('data-name'), gid=btn.getAttribute('data-gid');
@@ -707,17 +714,22 @@ function deleteGameBackup(btn){
 function deleteBackup(name,btn){
   confirmDialog({title:'Delete backup', icon:'trash', confirmClass:'btn-danger', confirmLabel:'Delete',
     bodyText:tf('Delete this backup?\n\n{name}', {name: name}),
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       if(btn) btn.disabled=true;
       fetch(MOUNT+'/api/panel/backup/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})})
         .then(r=>r.json()).then(function(d){ bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger'); loadBackups(); })
         .catch(function(){ bkMsg('✗ Delete failed','text-danger'); if(btn) btn.disabled=false; });
-    }});
+    }); }});
+}
+// A panel backup's restore too (see saveBackupSettings above): a typed passphrase is not lost to the
+// confirm page. `cancelled` (optional) runs when the password dialog is closed unconfirmed.
+function _bkStepUp(go, cancelled){
+  if(window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true, cancelled); else go();
 }
 function restoreBackup(name,encrypted,btn){
   confirmDialog({title:'Restore backup', icon:'arrow-counterclockwise', confirmClass:'btn-danger', confirmLabel:'Restore',
     bodyText:tf('Restore this backup?\n\n{name}\n\nThis OVERWRITES the panel\'s current database, settings and keys, then restarts the panel. A pre-restore safety backup is taken first.', {name: name}),
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');
       // No passphrase on the first attempt even for an encrypted archive: the server falls back to
@@ -725,7 +737,7 @@ function restoreBackup(name,encrypted,btn){
       // archive from ANOTHER panel (or from before the passphrase changed) needs to be asked for,
       // so the common case stays one click.
       void _bkRestore(name, null, btn, encrypted);   // _bkRestore ends in its own .catch
-    }});
+    }); }});
 }
 function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
   var body={name:name}; if(passphrase) body.passphrase=passphrase;
@@ -771,13 +783,13 @@ function _bkAskSkipSafety(name, passphrase, btn, encrypted, why){
   confirmDialog({title:'No safety copy', icon:'exclamation-triangle',
     confirmLabel:'Restore anyway', confirmClass:'btn-danger',
     bodyText:why,
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       // A plain confirmDialog has already closed itself by the time this runs (panel.js) — only
       // the requirePassword form leaves it open for the caller.
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');
       void _bkRestore(name, passphrase, btn, encrypted, true);   // _bkRestore ends in its own .catch
-    }});
+    }); }});
 }
 function _bkAskPassphrase(name, btn){
   confirmDialog({title:'Passphrase needed', icon:'shield-lock', confirmLabel:'Restore',
@@ -785,7 +797,8 @@ function _bkAskPassphrase(name, btn){
     requireLabel:'Backup passphrase',
     requirePlaceholder:'The passphrase this backup was written with',
     bodyText:'This backup is encrypted, and this panel\'s configured passphrase does not open it — it was written by another panel, or before the passphrase was changed.',
-    onConfirm:function(val, api){
+    // The passphrase dialog stays open under the password one, so a cancelled confirmation keeps what was typed.
+    onConfirm:function(val, api){ _bkStepUp(function(){
       fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({name:name, passphrase:val})})
         .then(r=>r.json()).then(function(d){
@@ -802,7 +815,7 @@ function _bkAskPassphrase(name, btn){
           else api.error(d.message||'Could not restore.');
         })
         .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
-    }});
+    }); }});
 }
 
 function bkShowEncState(on, short){
@@ -828,7 +841,7 @@ function saveBackupPassphrase(btn){
   if(pass.length<15){ bkMsg('✗ Use at least 15 characters','text-danger'); if(box) box.focus(); return; }
   confirmDialog({title:'Encrypt new backups', icon:'shield-lock', confirmLabel:'Turn on encryption',
     bodyText:'From now on every new backup is encrypted with this passphrase.\n\nWrite it down somewhere other than this machine FIRST. There is no reset and no recovery — if you lose it, every backup written with it is permanently unreadable, including the one you would restore from.',
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       if(btn) btn.disabled=true;
       _r30c_bkSave(MOUNT+'/api/panel/backup/settings', {passphrase:pass})
         .then(r=>r.json()).then(function(d){
@@ -836,13 +849,13 @@ function saveBackupPassphrase(btn){
           if(d.success){ _r29c_bkPassDone(); bkMsg('✓ New backups will be encrypted','text-success'); loadBackups(); }
           else bkMsg('✗ '+(d.message||'Could not save'),'text-danger');
         }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not save','text-danger'); });
-    }});
+    }); }});
 }
 function clearBackupPassphrase(btn){
   confirmDialog({title:'Turn off backup encryption', icon:'unlock', confirmClass:'btn-danger',
     confirmLabel:'Turn off',
     bodyText:'New backups will be written unencrypted — database, settings and BOTH encryption keys in one openable file.\n\nArchives already encrypted stay encrypted, and still need their passphrase to restore.',
-    onConfirm:function(){
+    onConfirm:function(){ _bkStepUp(function(){
       if(btn) btn.disabled=true;
       _r30c_bkSave(MOUNT+'/api/panel/backup/settings', {passphrase:''})
         .then(r=>r.json()).then(function(d){
@@ -851,7 +864,7 @@ function clearBackupPassphrase(btn){
           bkMsg(d.success?'✓ Encryption off':'✗ Could not save', d.success?'text-warning':'text-danger');
           loadBackups();
         }).catch(function(){ if(btn) btn.disabled=false; bkMsg('✗ Could not save','text-danger'); });
-    }});
+    }); }});
 }
 
 // The uninstall confirm used to live here. It moved to panel.js so that the SAME gate — type the

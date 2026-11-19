@@ -5,10 +5,10 @@ The service (sftp_server.py) runs as a child process of the panel. This module, 
 * starts it when Settings turns it on, with the addresses, port and host key it is to use; stops
   it when Settings turns it off or changes it, and starts it again; starts it again after a crash
   (a supervised loop, app._make_supervisor), and it ends with the panel (its stdin is the panel's);
-* answers its questions over a socket pair, one JSON line each way, in ONE greenlet that owns the
-  socket (memory one-greenlet-per-descriptor): may this address connect; is this key, or this
-  password and code, a sign-in for this name; which servers may this user's files be edited on;
-  may this request go ahead; and the audit rows.
+* answers its questions over a socket pair, one JSON line each way, read by ONE greenlet that owns
+  the socket (memory one-greenlet-per-descriptor), each answered in a greenlet of its own: may
+  this address connect; is this key, or this password and code, a sign-in for this name; which
+  servers may this user's files be edited on; may this request go ahead; and the audit rows.
 
 The answers use what the web sign-in uses, in this process where its state lives:
 * the address throttle (app._LOGIN_FAILS: 8 failures in 5 minutes, and account_guard's day limit
@@ -172,22 +172,62 @@ def run_once(app, spawn, argv=None):
     return listening
 
 
+HANDLER_SLOTS = 16          # requests answered at once; one more waits for a slot
+
+
 def serve(app, sock, spawn):
-    """Answer the service's requests until its socket closes. -> whether it reported listening."""
+    """Answer the service's requests until its socket closes. -> whether it reported listening.
+
+    This greenlet alone reads the socket (a second reader of one descriptor fails); each request is
+    answered in a thread (a greenlet in the panel) of its own, so one slow answer (a host that does
+    not answer the permission check, which can take minutes) never holds every other user's
+    sign-in, listing and transfer. The answer carries the request's id, which is how the service
+    matches it. "hello" and "ready" are answered here, in order: the start depends on them.
+    """
     rf = sock.makefile("rb")
+    link = {"sock": sock, "lock": threading.Lock(), "open": True,
+            "slots": threading.BoundedSemaphore(HANDLER_SLOTS)}
     listening = False
-    while True:
-        line = rf.readline(1024 * 1024)
-        if not line:
-            return listening
+    try:
+        while True:
+            line = rf.readline(1024 * 1024)
+            if not line:
+                return listening
+            try:
+                req = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(req, dict):
+                continue
+            if req.get("op") in ("hello", "ready"):
+                listening = listening or bool(req.get("op") == "ready" and req.get("bound"))
+                _answer(app, link, req, spawn)
+                continue
+            link["slots"].acquire()
+            threading.Thread(target=_answer_in_slot, args=(app, link, req, spawn), name="sftp-answer",
+                             daemon=True).start()
+    finally:
+        with link["lock"]:
+            link["open"] = False        # an answer still being worked out is not sent on a closed socket
+
+
+def _answer_in_slot(app, link, req, spawn):
+    try:
+        _answer(app, link, req, spawn)
+    finally:
+        link["slots"].release()
+
+
+def _answer(app, link, req, spawn):
+    """Work out one answer and send it, unless the service's socket has gone meanwhile."""
+    data = json.dumps(dict(handle(app, req, spawn), id=req.get("id"))).encode("utf-8") + b"\n"
+    with link["lock"]:
+        if not link["open"]:
+            return
         try:
-            req = json.loads(line)
-        except ValueError:
-            continue
-        reply = handle(app, req, spawn)
-        if req.get("op") == "ready" and req.get("bound"):
-            listening = True
-        sock.sendall(json.dumps(dict(reply, id=req.get("id"))).encode("utf-8") + b"\n")
+            link["sock"].sendall(data)
+        except OSError:
+            _log.debug("the SFTP service's socket closed before an answer", exc_info=True)
 
 
 def handle(app, req, spawn):
@@ -303,7 +343,7 @@ def _h_conn(_app, req, _spawn):
     return {"ok": True}
 
 
-def user_refusal(user, now):
+def user_refusal(user):
     """Why `user` may not use SFTP now (for the audit row), or None. A None user is no such user."""
     from panel.security import account_guard
     if user is None:
@@ -314,8 +354,10 @@ def user_refusal(user, now):
         return "must change the password first"
     if account_guard.twofa_required(user):
         return "two-factor authentication is required and not set up"
-    if account_guard.account_paused(user.username, now):
-        return "sign-ins for this name are paused after repeated failures"
+    # The name's pause is not asked here: it is for guessed passwords (account_reserve, in the
+    # password sign-in). A key cannot be guessed, so a pause that wrong passwords sent by anyone can
+    # keep up must not shut a user's key sign-in or end their open session (OWASP Authentication
+    # Cheat Sheet, "Account Lockout": a lockout must not become a denial of service).
     return None
 
 
@@ -328,13 +370,12 @@ def _named(username):
 
 def _h_auth_key(_app, req, _spawn):
     import base64
-    from panel.db.models import SftpKey, db
-    from panel.core.clock import utcnow
+    from panel.db.models import SftpKey
     ip, now = _ip(req), time.time()
     if _throttled(ip, now):
         return {"ok": False, "why": "address rate-limited"}
     _name, user = _named(req.get("username"))
-    why = user_refusal(user, now)
+    why = user_refusal(user)
     if why:
         return {"ok": False, "why": why}
     try:
@@ -345,9 +386,10 @@ def _h_auth_key(_app, req, _spawn):
     row = SftpKey.query.filter_by(user_id=user.id, fingerprint=fp).first()
     if row is None or not sc.key_matches(row.key_type, row.key_blob, str(req.get("type") or ""), blob):
         return {"ok": False, "why": "key not registered for this account"}
-    row.last_used = utcnow()
-    db.session.commit()
-    return {"ok": True, "uid": user.id, "epoch": user.auth_epoch or 0, "name": user.username,
+    # Not "last used" yet: paramiko asks this before it checks the signature (and for a client's
+    # unsigned "would this key do?"), so anyone holding the public key gets this far. auth_done
+    # stamps it once the session has really started.
+    return {"ok": True, "uid": user.id, "epoch": user.auth_epoch or 0, "name": user.username, "fp": fp,
             "detail": "key %s (%s)" % (row.label or sc.KEY_TYPES.get(row.key_type, row.key_type), fp)}
 
 
@@ -364,7 +406,7 @@ def _h_auth_kbd(_app, req, spawn):
     slot, _left = account_guard.account_reserve(name, now)
     if slot is None:
         return _kbd_fail(ip, name, now, None, "sign-ins for this name are paused after repeated failures")
-    why = _kbd_refusal(user, req, now)
+    why = _kbd_refusal(user, req)
     if why:
         return _kbd_fail(ip, name, now, slot, why)
     account_guard.account_release(slot)
@@ -372,11 +414,11 @@ def _h_auth_kbd(_app, req, spawn):
     return {"ok": True, "uid": user.id, "epoch": user.auth_epoch or 0, "name": user.username}
 
 
-def _kbd_refusal(user, req, now):
+def _kbd_refusal(user, req):
     """Why this password and code do not sign `user` in (for the audit row), or None when they do."""
     from panel.security.auth import check_password, dummy_password_check
     password = req.get("password") if isinstance(req.get("password"), str) else ""
-    why = user_refusal(user, now) if user is not None else None
+    why = user_refusal(user) if user is not None else None
     if user is None or not user.is_active:
         dummy_password_check(password)          # the same time spent whether the name exists or not
         return why or "no such user"
@@ -440,10 +482,15 @@ def _h_auth_fail(_app, req, _spawn):
 
 
 def _h_auth_done(_app, req, _spawn):
+    from panel.core.clock import utcnow
     from panel.db.models import User, db
     user = db.session.get(User, int(req.get("uid") or 0))
     if user is None:
         return {"ok": False}
+    row = _session_key(user, req)
+    if row is not None:
+        row.last_used = utcnow()
+        db.session.commit()
     method = "key" if req.get("method") == "publickey" else "password and code"
     _sftp_audit(_ip(req), user, "sftp_login", target=user.username,
            detail="%s: %s" % (method, str(req.get("detail") or "")[:300]))
@@ -460,13 +507,26 @@ def _h_session_end(_app, req, _spawn):
     return {"ok": True}
 
 
+def _session_key(user, req):
+    """The SftpKey row a key session signed in with (its fingerprint `fp`), or None (gone, or no key)."""
+    from panel.db.models import SftpKey
+    fp = str(req.get("fp") or "")
+    return SftpKey.query.filter_by(user_id=user.id, fingerprint=fp).first() if fp else None
+
+
 def _session_user(req):
-    """(the user a signed-in SFTP session belongs to, None), or (None, why) when it may not go on."""
+    """(the user a signed-in SFTP session belongs to, None), or (None, why) when it may not go on.
+
+    A session signed in with a key ends once that key is removed from the Account page: removing a
+    key someone else holds must cut them off, not leave them until the idle or absolute limit.
+    """
     from panel.db.models import User, db
     user = db.session.get(User, int(req.get("uid") or 0))
     if user is None or (user.auth_epoch or 0) != req.get("epoch"):
         return None, "signed out"
-    why = user_refusal(user, time.time())
+    if req.get("fp") and _session_key(user, req) is None:
+        return None, "the key it signed in with was removed"
+    why = user_refusal(user)
     return (None, why) if why else (user, None)
 
 

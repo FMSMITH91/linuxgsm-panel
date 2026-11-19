@@ -116,6 +116,8 @@ _up249 = _run249(_name249, (
     _SETTLE249 + _resp249() +
     "global.window = global; window.MOUNT = ''; window.CSRF = 'c'; window.SIGNED_IN = true;\n"
     "global.addEventListener = () => {};\n"
+    # A lost piece is sent again after pauses (part261 drives those): no real wait here.
+    "global.setTimeout = (f) => setImmediate(f);\n"
     "global.location = {pathname: '/s', search: ''};\n"
     "global.document = {addEventListener(){}, querySelectorAll(){ return []; }, querySelector(){ return null; }};\n"
     "const sent = []; let drop = -1;\n"
