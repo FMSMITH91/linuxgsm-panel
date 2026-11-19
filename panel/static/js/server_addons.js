@@ -192,7 +192,7 @@
   // What a row says before Install: the legacy warning and the game's own note.
   function installNotes(a, box) {
     if (a.legacy) {
-      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4, World at War and Soldier of Fortune 2. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
+      box.appendChild(node('div', 'small text-warning', T('Legacy, opt-in: B3 is an older admin bot, kept for Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4, World at War, Soldier of Fortune 2, Wolfenstein: Enemy Territory, ET: Legacy and Quake 3 Arena. It is built on this host from one pinned version of its source and runs as locked down as every add-on, but it gets fewer fixes than newer tools. Install it only if you want it.')));
     }
     if (a.note) box.appendChild(node('div', 'small text-secondary', a.note));
   }

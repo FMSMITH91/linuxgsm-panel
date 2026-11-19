@@ -34,7 +34,7 @@ THE ADD-ONS
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
     two plugin questions its first start would ask are answered in their own files.
-    B3 (cod, coduo, cod2, cod4, codwaw, sof2; wet, q3, etl, csgo and ins built in, each behind its
+    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet, q3, etl; csgo and ins built in, each behind its
     own switch: B3_LATER_GAMES): legacy, opt-in. Built on
     the host from addon_images/b3 (a Containerfile: FMSMITH91/big-brother-bot at one commit, its
     dependencies by hash), with one of this server's databases from the Databases tab (never one
@@ -68,15 +68,15 @@ LIVE_PORT_GAMES = ("wet", "etl")
 # in docs/addons.md: Arma 3 and Chivalry: Medieval Warfare (their RCON is not set up by LinuxGSM's
 # configs, so nothing on the host says where B3 would reach it). Switching one on also adds its name to
 # the card's legacy warning (server_addons.js installNotes, and its es/fr text).
-# Wolfenstein: Enemy Territory (wetserver) was offered and is switched off again: B3 at 1b96587f asked
-# `dumpuser <slot>` for a player's cl_guid, and these Quake 3 engines' dumpuser takes only a player's name
-# (ET: Legacy's sv_ccmds.c SV_DumpUser_f -> SV_GetPlayerByName), so no human player was ever authorized
-# on wet, etl or q3 (VPS round D, F-D1). B3_COMMIT has the fork's fix (its PR #25); wet, etl and q3 go on
-# once a VPS round has seen a real player authorized at it. wet's parser, RCON setting, log path and live
-# port are all kept below.
-B3_WET = False
-B3_Q3 = False
-B3_ETL = False
+# Wolfenstein: Enemy Territory, ET: Legacy and Quake 3: B3 at 1b96587f asked `dumpuser <slot>` for a
+# player's cl_guid, and these Quake 3 engines' dumpuser takes only a player's name (ET: Legacy's sv_ccmds.c
+# SV_DumpUser_f -> SV_GetPlayerByName), so no human player was ever authorized there (VPS round D, F-D1).
+# B3_COMMIT has the fork's fix (its PR #25), and VPS round E saw real protocol-client joins authorized at it
+# on all three (colour-coded names and names with spaces too), so they are on. CS:GO and Insurgency were
+# never tested on the VPS and stay off.
+B3_WET = True
+B3_Q3 = True
+B3_ETL = True
 B3_CSGO = False
 B3_INS = False
 # Each one's B3 parser (b3/parsers/<name>.py at B3_COMMIT), and whether it is offered.
@@ -255,6 +255,8 @@ _LOG_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 _MARK_INSTALLED = "ADDON_INSTALLED"
 _MARK_REMOVED = "ADDON_REMOVED"
 _MARK_STARTED = "ADDON_STARTED"
+# The line logs_sh prints between a log file's tail and the journal's newer lines (split_journal).
+JOURNAL_MARK = "ADDON_JOURNAL"
 _FAIL_MARKS = {
     "ADDON_NO_USER_MANAGER": "The account's user manager didn't start, so the add-on can't run as it.",
     "ADDON_PULL_FAILED": "Couldn't download the add-on's image. Check that this host can reach its registry.",
@@ -1158,17 +1160,29 @@ def action_sh(addon_id, action):
 def logs_sh(user, addon_id, cfg=""):
     """The add-on's last LOG_LINES lines, after secrets_sh's line (`cfg`: the game's config, game_cfg).
 
-    Its own log file if it keeps one (B3's b3.log), else its own journal lines (without Podman's
-    event lines), else the newest file in its Log folder.
+    Its own log file if it keeps one (B3's b3.log), then, after a JOURNAL_MARK line, its journal's
+    lines from after that file's last write (split_journal); else its own journal lines (without
+    Podman's event lines), else the newest file in its Log folder. A B3 that dies checking b3.ini
+    writes only to the journal, so b3.log alone still ended with the last clean shutdown (VPS round
+    E, O-E1). The journal's lines start a second after the file's last write, so a line written to
+    both at once is not shown twice.
     """
     a = CATALOG[addon_id]
     own = shlex.quote("%s/%s" % (addon_dir(user, addon_id), a["log_file"])) if a["log_file"] else "''"
     log_dir = shlex.quote(addon_dir(user, addon_id) + "/Log")
-    return (_ENV + secrets_sh(user, addon_id, cfg) + "{ if [ -n %s ] && [ -f %s ]; then tail -n %d %s; else "
+    newer = ("m=$(stat -c %%Y %s 2>/dev/null) && j=$(t0=$((m + 1)); %s) && printf '\\n%s\\n%%s\\n' \"$j\"; "
+             % (own, _journal_sh(addon_id, LOG_LINES, "short-iso", since=True), JOURNAL_MARK))
+    return (_ENV + secrets_sh(user, addon_id, cfg) + "{ if [ -n %s ] && [ -f %s ]; then tail -n %d %s; %selse "
             "%s || { f=$(ls -1t %s 2>/dev/null | head -n 1); [ -n \"$f\" ] && tail -n %d %s/\"$f\"; }; fi; } "
             "| tail -c %d; true"
-            % (own, own, LOG_LINES, own, _journal_sh(addon_id, LOG_LINES, "short-iso"), log_dir, LOG_LINES,
+            % (own, own, LOG_LINES, own, newer, _journal_sh(addon_id, LOG_LINES, "short-iso"), log_dir, LOG_LINES,
                log_dir, LOG_BYTES))
+
+
+def split_journal(log):
+    """(the log file's text, the journal's newer lines or "") from what logs_sh printed after secrets_sh's line."""
+    head, mark, journal = (log or "").rpartition("\n%s\n" % JOURNAL_MARK)
+    return (head.rstrip("\n"), journal.rstrip("\n")) if mark else (log or "", "")
 
 
 def remove_sh(user, addon_id):

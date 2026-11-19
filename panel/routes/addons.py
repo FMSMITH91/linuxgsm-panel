@@ -12,6 +12,7 @@ import base64
 import json
 import re
 import threading
+import time
 from datetime import datetime, timezone
 
 from flask import jsonify
@@ -34,6 +35,7 @@ _UNKNOWN = "This server can't run that add-on."
 _NO_DB = "Choose one of this server's databases for the add-on."
 _DB_TAKEN = "Another add-on already uses that database. Each add-on needs its own."
 _BUSY = "The add-on is already being installed. Wait for it to finish."
+_BUSY_START = "The add-on's last start is still being watched. Wait a few seconds and try again."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
 _NO_LOG = "Couldn't find the game's log (games_mp.log). Start the server once so it writes one, then install again."
 _NO_LOG_NAMED = "Couldn't find the game's log ({log}). Start the server once so it writes one, then install again."
@@ -60,6 +62,8 @@ _STARTING = "Starting the add-on. It is watched for 30 seconds to see that it st
 _START_DIED = ("The add-on started but stopped again within 30 seconds, so it was left stopped. Its last log lines "
                "are below.")
 _NOT_DONE = {"start": "The add-on didn't start. Its log says why.", "stop": "The add-on didn't stop."}
+# Above the journal's lines that are newer than the add-on's own log file (a start that died before writing to it).
+_JOURNAL_NEWER = "Newer lines from the add-on's journal, written after the last line of its log file:"
 _REMOVED = {True: "The add-on was removed. Its database is kept in the Databases tab.",
             False: "The add-on was removed, with its data."}
 _NOT_REMOVED = "The add-on couldn't be removed completely. Try again."
@@ -453,6 +457,41 @@ def _start_steps(gs, addon_id):
     return _with_reason(said, "", err) if mark != "ADDON_DIED" else said, _masked(gs, tail, _ad.read_secrets(out)[0])
 
 
+def _stop_in_watch(gs_id, addon_id, on):
+    """Mark (or unmark) a running Start's watch as stopped from the card; False when no Start is being watched."""
+    with _JOBS_LOCK:
+        job = _JOBS.get((gs_id, addon_id)) or {}
+        if not (job.get("running") and job.get("kind") == "start"):
+            return False
+        job["stopped"] = on
+        return True
+
+
+def _await_start(gs_id, addon_id):
+    """Wait, at most SETTLE_SECONDS, for a watched Start to see the card's Stop and end.
+
+    The watch notices within its 2-second poll; until then a Start sent after the Stop was refused as busy.
+    """
+    end = time.monotonic() + _ad.SETTLE_SECONDS
+    while time.monotonic() < end:
+        with _JOBS_LOCK:
+            if not (_JOBS.get((gs_id, addon_id)) or {}).get("running"):
+                return
+        time.sleep(0.5)
+
+
+def _start_said(gs_id, addon_id, why, tail):
+    """(why, tail, the audit's words) for a Start's outcome.
+
+    A watch that saw the add-on stop because the card's Stop asked for it (VPS round E, O-E2) is not a failure.
+    """
+    with _JOBS_LOCK:
+        stopped = why == _START_DIED and (_JOBS.get((gs_id, addon_id)) or {}).get("stopped")
+    if stopped:
+        return "", "", "stopped from the card during the start's watch"
+    return why, tail, "done" if not why else "failed: %s" % why
+
+
 def _start_worker(app, gs_id, born, addon_id, who):
     """Run the card's Start in a thread and audit it; a failure stays on the job (the card's error and log tail)."""
     with app.app_context():
@@ -460,9 +499,9 @@ def _start_worker(app, gs_id, born, addon_id, who):
         try:
             gs = claim_row(GameServer, gs_id, born)
             if gs is not None:
-                why, tail = _start_steps(gs, addon_id)
+                why, tail, said = _start_said(gs_id, addon_id, *_start_steps(gs, addon_id))
                 log_action(None, "addon_start", target=gs.name, actor=who, server=gs, success=not why,
-                           detail="%s %s" % (addon_id, "done" if not why else "failed: %s" % why))
+                           detail="%s %s" % (addon_id, said))
         except Exception:
             why = _log_and_generic("add-on start failed")
         finally:
@@ -476,8 +515,9 @@ def _start_worker(app, gs_id, born, addon_id, who):
 def _start_answer(app, gs, addon_id):
     """Start the add-on in the background, watched as an install's start is (or refuse: a job is running)."""
     with _JOBS_LOCK:
-        if (_JOBS.get((gs.id, addon_id)) or {}).get("running"):
-            return _say(409, _BUSY)
+        job = _JOBS.get((gs.id, addon_id)) or {}
+        if job.get("running"):
+            return _say(409, _BUSY_START if job.get("kind") == "start" else _BUSY)
         _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": "start"}
     threading.Thread(target=_start_worker, daemon=True,
                      args=(app, gs.id, row_birth(gs), addon_id, current_user.username)).start()
@@ -495,9 +535,14 @@ def _clear_job(gs_id, addon_id):
 def _action_answer(app, gs, addon_id, action):
     if action == "start":
         return _start_answer(app, gs, addon_id)
+    watched = _stop_in_watch(gs.id, addon_id, True)     # before the stop, so the watch can't see it first
     out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
                                           timeout=_ad.ACTION_TIMEOUT)
     ok = rc == 0
+    if watched and ok:
+        _await_start(gs.id, addon_id)
+    elif watched:
+        _stop_in_watch(gs.id, addon_id, False)
     why = "" if ok else _with_reason(_NOT_DONE[action], out, err)
     if ok:
         _clear_job(gs.id, addon_id)
@@ -529,6 +574,9 @@ def _logs_answer(gs, addon_id):
     if rc != 0:
         return _say(200, "Couldn't read the add-on's log: the host did not answer. Try again.")
     rcon, log = _ad.read_secrets(out)
+    log, journal = _ad.split_journal(log)
+    if journal:
+        log = "%s\n\n%s\n%s" % (log, i18n.tr(_JOURNAL_NEWER), journal)
     return jsonify({"success": True, "log": _masked(gs, log, rcon)})
 
 

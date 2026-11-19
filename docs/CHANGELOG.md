@@ -34,11 +34,14 @@ dated section below lists what that day's releases changed, newest first; the nu
   version of its source and uses one of the server's databases. An add-on that stops again right
   after its first start is reported with its own last log lines. Nothing is installed until you
   install an add-on; it needs Ubuntu 24.04 or newer.
-- **B3 for Call of Duty 4, World at War and Soldier of Fortune 2.** The add-on now builds B3 v2.0.0
-  (plus later parser fixes), which refuses commands to players it has not authenticated. It is
-  offered for Call of Duty 4 (CoD4x), World at War and Soldier of Fortune 2 as well, each tested
-  against the server LinuxGSM installs, and it uses the port the game really listens on. On Soldier
-  of Fortune 2 B3 has no private messages, and the card says so.
+- **B3 for Call of Duty 4, World at War, Soldier of Fortune 2, Enemy Territory, ET: Legacy and Quake 3.**
+  The add-on now builds B3 v2.0.0 (plus later parser fixes), which refuses commands to players it
+  has not authenticated. It is offered for Call of Duty 4 (CoD4x), World at War, Soldier of Fortune
+  2, Wolfenstein: Enemy Territory, ET: Legacy and Quake 3 Arena as well, each tested against the
+  server LinuxGSM installs with players joining, and it uses the port the game really listens on. On
+  Soldier of Fortune 2, Enemy Territory and ET: Legacy B3 has no private messages, and the card says
+  so. Enemy Territory and Quake 3 need `g_logsync 1` in the server's config, and ET: Legacy a
+  `g_log` line, as the Add-ons guide explains.
 - **B3's settings on its card.** An installed B3 has a folded settings section: geolocation off,
   offline (a player's country, from DB-IP's free database on the host, so no player address leaves
   it) or online (a city, from ipwho.is), and B3's own plugins, each switched on or off. Applying them
@@ -94,7 +97,9 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **An add-on that stops again after Start says why.** The add-on card's Start now watches the add-on
   for 30 seconds, as an install does. If it stops or restarts in that time, it is left stopped and the
   card shows why, with the lines it logged during that start, instead of a bare "Failed". Those lines,
-  and the add-on's Log, show the game's RCON password and the database's masked.
+  and the add-on's Log, show the game's RCON password and the database's masked. The Log also shows
+  the journal's lines newer than the add-on's own log file, where such a start's reason is. A Stop
+  during the 30 seconds is reported as stopped, and a Start right after it works.
 - **A game download that fails LinuxGSM's checksum ends as a failed install.** The install now checks
   that the server's executable is where LinuxGSM's own start looks for it, so an archive that failed
   its MD5 check is no longer reported as installed. It downloads once more, then says which file

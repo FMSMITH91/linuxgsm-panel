@@ -792,7 +792,7 @@ c6ab4344 A failed dump upload says whether an earlier dump was put back.
 7f487832 Add-ons in containers: IW4MAdmin and B3.
 2973d843 Add-ons run locked down, and only for those you allow.
 62b554cb A shorter README.
-ce2ff817 B3 for Call of Duty 4, World at War and Soldier of Fortune 2.
+b464ff5b B3 for Call of Duty 4, World at War, Soldier of Fortune 2, Enemy Territory, ET: Legacy and Quake 3.
 e8916ec3 B3's settings on its card.
 1c15d4ab Add-on updates.
 05ad287a A game download that fails LinuxGSM's checksum ends as a failed install.
