@@ -500,7 +500,7 @@ check("i18n: no template text is welded to a {{ }}, guarded with a name, or writ
       "entry or not", not _dynr63,
       "; ".join("%r in %s" % (_k, sorted(_v)) for _k, _v in sorted(_dynr63.items())[:6]))
 _jsr63 = _i18n63.scan_js(_JS63)
-_miss63 = {lang: sorted(k for k in list(_found63) + list(_jsr63) if k not in cat)
+_miss63 = {lang: sorted(k for k in list(_found63) + list(_jsr63) if not _i18n63.in_catalog(k, cat))
            for lang, cat in (("es", _ES63), ("fr", _FR63))}
 check("i18n: every string the templates and scripts show is in the French catalog as well as the "
       "Spanish one", not _miss63["es"] and not _miss63["fr"], repr({k: v[:6] for k, v in _miss63.items()}))

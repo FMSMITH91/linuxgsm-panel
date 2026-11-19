@@ -1327,10 +1327,16 @@ def emphasis_split_js(js_dir=JS_DIR):
 def missing_js(lang="es", js_dir=JS_DIR, translation_dir=TRANSLATION_DIR):
     """{string: {filename}} for JS user-visible text with no entry in `lang`'s catalog."""
     catalog = load_catalog(lang, translation_dir)
-    # A marked text is found by its whole self first ("✓ Saved" is a key of its own), then without
-    # the mark (_js_unmark): either one in the catalog reaches the page.
-    return {t: w for t, w in scan_js(js_dir).items()
-            if t not in catalog and not any("%s %s" % (m, t) in catalog for m in "✓✗✅❌")}
+    return {t: w for t, w in scan_js(js_dir).items() if not in_catalog(t, catalog)}
+
+
+def in_catalog(text, catalog):
+    """Whether a scanned text reaches the page translated: as a key, or as the rest of a marked key.
+
+    A marked text is found by its whole self first ("✓ Saved" is a key of its own), then without the
+    mark (_js_unmark, which is how scan_js reports it): either one in the catalog is enough.
+    """
+    return text in catalog or any("%s %s" % (m, text) in catalog for m in "✓✗✅❌")
 
 
 def load_catalog(lang, translation_dir=TRANSLATION_DIR):
