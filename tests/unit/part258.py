@@ -7,8 +7,8 @@
    switch off no month update is offered and the card says the switch is off.
 3. The start limit: an operator's start, Apply or Update clears it first; a start that still hits it says so.
 4. Uninstall: the account's tmux and JVM folders in /tmp go (helper and remote form), only real folders it owns.
-5. B3's later games (q3, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
-   console.log), the TCP RCON forward and b3.ini.
+5. B3's later games (q3, etl, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
+   console.log, ET: Legacy's g_log), the TCP RCON forward, the live port and b3.ini.
 6. The own-plugins folder: off by default; on, a read-only mount and external_plugins_dir; the card asks again.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; every host call is a recorder.
@@ -329,9 +329,10 @@ def _remote_tmp258():
 
 # ── 5. B3's later games ─────────────────────────────────────────────────────────────────────────
 def _later_games258():
-    eq("later games: q3, csgo and ins have their parsers but are off until switched on",
+    eq("later games: q3, etl, csgo and ins have their parsers but are off until switched on",
        (_ad258.B3_LATER_GAMES, [_ad258.offered(g) for g in ("q3", "csgo", "ins", "etl", "arma3", "cmw")]),
-       ((("q3", "q3", False), ("csgo", "csgo", False), ("ins", "insurgency", False)), [[], [], [], [], [], []]))
+       ((("q3", "q3", False), ("etl", "et", False), ("csgo", "csgo", False), ("ins", "insurgency", False)),
+        [[], [], [], [], [], []]))
     eq("later games: RCON settings, logs, TCP RCON and SourceMod folders",
        ([_ad258.RCON_SETTING[g] for g in ("q3", "csgo", "ins")], [_ad258.game_log_name(g) for g in ("q3", "csgo")],
         _ad258.RCON_TCP_GAMES, sorted(_ad258.SOURCEMOD_DIR)),
@@ -372,6 +373,141 @@ def _probe_csgo258():
     eq("probe (bash): CS:GO's console.log in its game folder, its rcon_password (no set), and SourceMod's folder",
        (after["logdir"], _ad258.game_rcon("csgo", after["rcon_lines"]), before["sourcemod"], after["sourcemod"]),
        ("serverfiles/csgo", (_RC258, ""), False, True))
+
+
+def _etl258():
+    eq("ET: Legacy: rconpassword in its etmain config, and a live port as Enemy Territory (its start passes none)",
+       (_ad258.RCON_SETTING.get("etl"), _ad258.game_cfg("etl", "etlserver"), "etl" in _ad258.LIVE_PORT_GAMES,
+        _ad258.game_port("etl", 27960, [27961]), _ad258.game_port("etl", 27960, [])[0]),
+       ("rconpassword", "serverfiles/etmain/etlserver.cfg", True, (27961, ""), None))
+    mark = "//legacy.cfg"
+    eq("ET: Legacy's g_log: the config runs top to bottom, legacy.cfg's lines where it is exec'd, the last one wins",
+       [_ad258.etl_g_log(t) for t in (
+           "",
+           'set g_log "early.log"\nexec legacy.cfg\n%s\nset g_log ""' % mark,
+           'exec legacy.cfg\nset g_log "etserver.log"\n%s\nset g_log ""' % mark,
+           'exec "legacy"\n%s\nseta g_log games.log' % mark,
+           'set g_log "mine.log"\n%s\nset g_log ""' % mark,
+           'SET G_LOG "Up.log" // note\r\nexec legacy.cfg\n%s\n' % mark)],
+       ["", "", "etserver.log", "games.log", "mine.log", "Up.log"])
+    eq("ET: Legacy's g_log: only a plain file name is read",
+       [_ad258.plain_log_name(x) for x in ("etserver.log", "logs/etserver.log", ".hidden", "", "../x")],
+       [True, False, False, False, False])
+
+
+def _write258(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def _probe_etl258():
+    home = os.path.join(_TMP258, "etl-home")
+    etmain, legacy = (os.path.join(home, "serverfiles", d) for d in ("etmain", "legacy"))
+    for d in (etmain, legacy):
+        os.makedirs(d, exist_ok=True)
+    cfg = ('set logfile "2"\nset g_log "early.log"\nset rconpassword "%s"\n// MOD CFG\nexec legacy.cfg\n'
+           'exec mapvotecycle.cfg\n' % _RC258)
+    _write258(os.path.join(etmain, "etlserver.cfg"), cfg)
+    _write258(os.path.join(etmain, "legacy.cfg"), 'set g_log ""                // the game\'s own\nset g_logSync "1"\n')
+    sh = _ad258.probe_sh("b3", "etlserver", 7, "etl", 0).replace('cd "$HOME"', "cd %s" % home)
+    got = [_ad258.parse_probe(_bash258(sh).stdout, "etl")]
+    _write258(os.path.join(etmain, "etlserver.cfg"), cfg + 'set g_log "etserver.log"\n')
+    got.append(_ad258.parse_probe(_bash258(sh).stdout, "etl"))
+    open(os.path.join(legacy, "etserver.log"), "w").close()
+    got.append(_ad258.parse_probe(_bash258(sh).stdout, "etl"))
+    _write258(os.path.join(etmain, "etlserver.cfg"), cfg)
+    _write258(os.path.join(legacy, "legacy.cfg"), 'set g_log "fsgame.log"\n')
+    open(os.path.join(legacy, "fsgame.log"), "w").close()
+    got.append(_ad258.parse_probe(_bash258(sh).stdout, "etl"))
+    eq("probe (bash): ET: Legacy's g_log above exec legacy.cfg is undone; below it, its file in serverfiles/legacy "
+       "once written; the fs_game folder's legacy.cfg runs first; rconpassword from serverfiles/etmain",
+       ([(p["logdir"], p["log_name"], p["log_found"]) for p in got], _ad258.game_rcon("etl", got[2]["rcon_lines"])),
+       ([("serverfiles/legacy", "", False), ("serverfiles/legacy", "etserver.log", False),
+         ("serverfiles/legacy", "etserver.log", True), ("serverfiles/legacy", "fsgame.log", True)], (_RC258, "")))
+
+
+_ETLPROBE258 = ("os=24.04\npodman=podman version 4.9.3\nuid=1004\ngid=1005\nrcon.b64=%s\nports= 21070 21071 21072\n"
+                "udp=%s\nglog.b64=%s\nlogs.b64=%s\n")
+
+
+def _etl_answer258(udp, glog, logs, extra=""):
+    return _ETLPROBE258 % (_ad258._b64('set rconpassword "%s"' % _RC258), udp, _ad258._b64(glog),
+                           _ad258._b64(logs)) + extra
+
+
+def _etl_try258(ids, udp, glog, logs):
+    """One ET: Legacy B3 install with this probe answer -> (status, the audit's detail, the install shell or None)."""
+    probe = _etl_answer258(udp, glog, logs)
+    calls = _host258(lambda sh: probe if "glog.b64" in sh else "ADDON_INSTALLED\n")
+    code = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/install" % ids["etl"],
+                                     json={"database_id": ids["etldb"], "geolocation": "off"}).status_code
+    _p9_drain()
+    inst = next((c for c in calls if c[0] == "sh" and "podman build" in c[1]), None)
+    _p9_restore_all()
+    _p9_arm(who="part258")
+    return code, _p9_audit("addon_install").detail, inst
+
+
+_GLOG258 = 'exec legacy.cfg\nset g_log "%s"\n//legacy.cfg\nset g_log ""\n'
+
+
+def _install_etl258(ids):
+    games = _ad258.CATALOG["b3"]["games"]
+    games["etl"] = "et"
+    try:
+        said = [_etl_try258(ids, *a) for a in (
+            ("27961", 'set g_log "early.log"\nexec legacy.cfg\n//legacy.cfg\nset g_log ""\n', "early.log\n"),
+            ("27961", _GLOG258 % "logs/etl.log", "etconsole.log\n"),
+            ("27961", _GLOG258 % "etserver.log", "etconsole.log\n"),
+            ("", _GLOG258 % "etserver.log", "etconsole.log\netserver.log\n"),
+            ("27961", _GLOG258 % "etserver.log", "etconsole.log\netserver.log\n"))]
+    finally:
+        games.pop("etl", None)
+    refusals = [(d, inst) for _c, d, inst in said[:4]]
+    code, _d, inst = said[4]
+    stdin = (inst or ("", "", ""))[2] or ""
+    unit = next((t for p, t in _puts258((inst or ("", ""))[1]).items() if p.endswith(".container")), "")
+    eq("install (ET: Legacy, switched on): no g_log says what to add and where; a folder in g_log, a log not "
+       "written yet and a stopped server are refused, each saying so",
+       [("set g_log \"etserver.log\" below the line exec legacy.cfg" in refusals[0][0],
+         "serverfiles/etmain/etlserver.cfg" in refusals[0][0]), "plain file name" in refusals[1][0],
+        "(serverfiles/legacy/etserver.log)" in refusals[2][0], "Start the game server first" in refusals[3][0],
+        [i for _d, i in refusals]],
+       [(True, True), True, True, True, [None, None, None, None]])
+    eq("install (ET: Legacy): B3's et parser on g_log's file in serverfiles/legacy (mounted read-only), RCON "
+       "over UDP to the port the server really listens on",
+       (code, "Volume=/home/etlp258/serverfiles/legacy:/gamelog:ro" in unit, "-U,27961" in unit,
+        "parser: et\n" in stdin, "game_log: /gamelog/etserver.log\n" in stdin, "port: 27961\n" in stdin,
+        "rcon_password: %s\n" % _RC258 in stdin),
+       (202, True, True, True, True, True, True))
+    with _p9.test_request_context():
+        note = _ra258._b3_fields(_types258.SimpleNamespace(game_type="etl"), {})["note"]
+    eq("ET: Legacy's row says B3's replies are public", "On ET: Legacy, B3 has no private messages" in note, True)
+
+
+def _apply_etl258(ids):
+    meta = {"kind": "b3", "image": _ad258.CATALOG["b3"]["image"], "commit": _ad258.B3_COMMIT, "geolocation": "off",
+            "plugins": ["tk"], "database": "gs%d_b3" % ids["etl"], "port": None, "game_port": 27961}
+
+    def answer(sh):
+        if "restart lgsm-addon-b3" in sh:
+            return "ADDON_INSTALLED\n"
+        return _etl_answer258("27961", _GLOG258 % "etserver.log", "etserver.log\n", "installed=1\nmeta.b3=%s\n"
+                              "state.b3=active\nb3ini.b64=%s\ngeoini.b64=\n" % (
+                                  _ad258._b64(_json258.dumps(meta)), _ad258._b64(_B3INI258)))
+    calls = _host258(answer)
+    games = _ad258.CATALOG["b3"]["games"]
+    games["etl"] = "et"
+    try:
+        code = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/settings" % ids["etl"],
+                                         json={"geolocation": "off", "plugins": ["tk"]}).status_code
+        _p9_drain()
+    finally:
+        games.pop("etl", None)
+    sh = next((c[1] for c in calls if c[0] == "sh" and "restart lgsm-addon-b3" in c[1]), "")
+    unit = next((t for p, t in _puts258(sh).items() if p.endswith(".container")), "")
+    eq("apply (ET: Legacy): the unit keeps the game log's folder, serverfiles/legacy",
+       (code, "Volume=/home/etlp258/serverfiles/legacy:/gamelog:ro" in unit), (202, True))
 
 
 _CSPROBE258 = ("os=24.04\npodman=podman version 4.9.3\nuid=1004\ngid=1005\nlogdir=%s\nrcon.b64=%s\n"
@@ -565,9 +701,10 @@ def _row_geo_off258(ids):
 # ── the fixture ─────────────────────────────────────────────────────────────────────────────────
 def _fixture258():
     ids = {"cod2": _p9_new_server(P9_HOST, "cod2p258", "cod2", 28965, name="p258-cod2"),
-           "csgo": _p9_new_server(P9_HOST, "csgop258", "csgo", 27015, name="p258-csgo")}
+           "csgo": _p9_new_server(P9_HOST, "csgop258", "csgo", 27015, name="p258-csgo"),
+           "etl": _p9_new_server(P9_HOST, "etlp258", "etl", 27960, name="p258-etl")}
     with _p9.app_context():
-        for key, db_key in (("cod2", "cod2db"), ("csgo", "db")):
+        for key, db_key in (("cod2", "cod2db"), ("csgo", "db"), ("etl", "etldb")):
             row = _GD258(remote_id=P9_HOST, game_server_id=ids[key], name="gs%d_b3" % ids[key], secret=_enc258(_DBV258))
             _db258.session.add(row)
             _db258.session.commit()
@@ -577,13 +714,13 @@ def _fixture258():
 
 def _drop258(ids):
     with _p9.app_context():
-        for key in ("cod2", "csgo"):
+        for key in ("cod2", "csgo", "etl"):
             _GD258.query.filter_by(game_server_id=ids[key]).delete()
         _db258.session.commit()
-    for key in ("cod2", "csgo"):
+    for key in ("cod2", "csgo", "etl"):
         _p9_delete_server(ids[key])
     with _ra258._JOBS_LOCK:
-        for key in ("cod2", "csgo"):
+        for key in ("cod2", "csgo", "etl"):
             _ra258._JOBS.pop((ids[key], "b3"), None)
 
 
@@ -598,10 +735,13 @@ try:
     _later_games258()
     _probe_q3_258()
     _probe_csgo258()
+    _etl258()
+    _probe_etl258()
     _card_checks258()
     _ids258 = _fixture258()
     try:
-        for _step258 in (lambda ids: _limit_route258(ids["cod2"]), _row_geo_off258, _install_csgo258, _own258):
+        for _step258 in (lambda ids: _limit_route258(ids["cod2"]), _row_geo_off258, _install_csgo258, _install_etl258,
+                         _apply_etl258, _own258):
             _p9_restore_all()
             _p9_arm(who="part258")
             _step258(_ids258)
