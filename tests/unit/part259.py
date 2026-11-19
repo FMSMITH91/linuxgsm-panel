@@ -398,23 +398,26 @@ def _close259(pair):
             _logging259.getLogger("p259").debug("close", exc_info=True)
 
 
-def _own_address259():
-    """This host's own IPv4 address on an interface other than loopback, or None (asked of the kernel only)."""
-    import fcntl as _fcntl259
-    import struct as _struct259
-    s = _socket259.socket(_socket259.AF_INET, _socket259.SOCK_DGRAM)
-    try:
-        for _i, name in _socket259.if_nameindex():
-            try:
-                raw = _fcntl259.ioctl(s.fileno(), 0x8915, _struct259.pack("256s", name[:15].encode()))  # SIOCGIFADDR
-            except OSError:
-                continue                       # no IPv4 address on this interface
-            addr = _socket259.inet_ntoa(raw[20:24])
-            if not addr.startswith("127."):
-                return addr
-    finally:
-        s.close()
-    return None
+def _listening259(port):
+    """The local addresses listening on TCP `port`, read from /proc/net/tcp and tcp6 (no socket is opened)."""
+    import ipaddress as _ip259
+    out = []
+    for table, width in (("/proc/net/tcp", 8), ("/proc/net/tcp6", 32)):
+        try:
+            with open(table, encoding="ascii") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            cols = row.split()
+            addr, _sep, hexport = cols[1].partition(":")
+            if cols[3] != "0A" or int(hexport, 16) != port or len(addr) != width:
+                continue
+            raw = bytes.fromhex(addr)
+            # Each 32-bit word is in host (little-endian) order.
+            raw = b"".join(raw[i:i + 4][::-1] for i in range(0, len(raw), 4))
+            out.append(str(_ip259.ip_address(raw)))
+    return sorted(out)
 
 
 def _until259(cond, limit=10.0):
@@ -425,6 +428,14 @@ def _until259(cond, limit=10.0):
             return False
         _time259.sleep(0.1)
     return True
+
+
+def _sftp_listing259(sftp, path):
+    """sorted(sftp.listdir(path)), or the error's class name."""
+    try:
+        return sorted(sftp.listdir(path))
+    except Exception as exc:  # noqa: BLE001 - the error is the result
+        return type(exc).__name__
 
 
 def _read259(path):
@@ -526,15 +537,8 @@ else:
             _time259.sleep(0.1)
         eq("sftp end to end: the service starts and listens on 127.0.0.1 only",
            (_br259.status()["state"], _br259.status()["bound"]), ("running", [["127.0.0.1", _E2E259.port]]))
-        _lan259 = _own_address259()
-        if _lan259 is None:
-            skip("sftp end to end: nothing answers on this host's own non-loopback address", "no such address here")
-        else:
-            _probe_lan = _socket259.socket()
-            _probe_lan.settimeout(3)
-            eq("sftp end to end: nothing answers on this host's own non-loopback address (not bound to all)",
-               _probe_lan.connect_ex((_lan259, _E2E259.port)) != 0, True)
-            _probe_lan.close()
+        eq("sftp end to end: the kernel lists exactly one listener on the port, 127.0.0.1 (never 0.0.0.0 or ::)",
+           _listening259(_E2E259.port), ["127.0.0.1"])
         _since259 = _last_audit_id259()
 
         # ── sign-in by key ──
@@ -553,7 +557,7 @@ else:
         if _p1[0]:
             _s = _p1[1]
             eq("sftp paths: .. cannot climb above the top folder or out of a server's folder",
-               (sorted(_s.listdir("/Alpha One/../..")), sorted(_s.listdir("/Alpha One/serverfiles/../../.."))),
+               (_sftp_listing259(_s, "/Alpha One/../.."), _sftp_listing259(_s, "/Alpha One/serverfiles/../../..")),
                (["Alpha One"], ["Alpha One"]))
             check("sftp paths: an absolute host path is not reachable (it names no server's folder)",
                   _sftp_err259(_s.listdir, _OUTSIDE).startswith(("FileNotFoundError", "PermissionError", "IOError")),
@@ -737,6 +741,15 @@ else:
         _ag259.reset_throttle()
         _app259._LOGIN_FAILS.clear()
         _app259._LOGIN_FAILS[_auth259.throttle_key("127.0.0.1")] = [_time259.time()] * _app259.LOGIN_MAX_FAILS
+        _raw259 = _socket259.create_connection(("127.0.0.1", _E2E259.port), timeout=10)
+        _raw259.settimeout(10)
+        try:
+            _banner259 = _raw259.recv(64)
+        except OSError:
+            _banner259 = b""
+        _raw259.close()
+        eq("sftp sign-in: an address over the sign-in throttle is closed before the SSH banner",
+           _banner259.startswith(b"SSH-"), False)
         _p5 = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
         eq("sftp sign-in: an address over the sign-in throttle is turned away before it signs in", _p5[0], None)
         _close259(_p5) if _p5[0] else None

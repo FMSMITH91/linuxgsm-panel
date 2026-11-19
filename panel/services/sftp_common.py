@@ -31,7 +31,7 @@ IPC_FD_ENV = "LGSM_PANEL_SFTP_IPC_FD"
 ENABLED_KEY = "sftp_enabled"
 BIND_KEY = "sftp_bind"
 PORT_KEY = "sftp_port"
-PASSWORD_KEY = "sftp_password_auth"
+KBD_SIGNIN_KEY = "sftp_password_auth"
 CAP_KEY = "sftp_max_upload_mb"
 HOST_KEY_KEY = "sftp_host_key"
 
@@ -59,7 +59,7 @@ def settings(cfg):
         "enabled": cfg.get(ENABLED_KEY) is True,
         "bind": bind if bind in BIND_CHOICES else None,
         "port": port_or(cfg.get(PORT_KEY), DEFAULT_PORT),
-        "password": cfg.get(PASSWORD_KEY) is True,
+        "password": cfg.get(KBD_SIGNIN_KEY) is True,
         "cap_mb": cap_or(cfg.get(CAP_KEY), RECOMMENDED_CAP_MB),
     }
 
@@ -150,7 +150,7 @@ def parse_form(form, tailscale_up):
     if cap is None:
         return None, "The upload size limit must be a whole number of MiB from 1 to 1048576."
     return {ENABLED_KEY: form.get("sftp_enabled") == "on", BIND_KEY: bind, PORT_KEY: port,
-            PASSWORD_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap}, None
+            KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap}, None
 
 
 # ── The service's host key ─────────────────────────────────────────────────────────────────────

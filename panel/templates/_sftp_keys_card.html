@@ -1,6 +1,7 @@
 {# The Account page's SFTP card (panel/routes/sftp_settings.py): this account's own SSH keys for the
    panel's SFTP service, how to connect, and which servers' folders it will see. Adding a key asks a
    stale sign-in for the password first (data-step-up); both changes are audited. #}
+{% from "_fold.html" import fold %}
 {% set sk = sftp_account_card(current_user) %}
 <div class="card" id="sec-sftp">
   <div class="card-header"><i class="bi bi-folder-symlink"></i> SFTP</div>
@@ -44,6 +45,8 @@
     {% endif %}
 
     {% if sk.key_rows|length < sk.max_keys %}
+    {# Folded once a key is there: adding another is the rare case, and the card stays short on a phone. #}
+    {% call fold('Add a key', open_=not sk.key_rows) %}
     <form method="POST" action="{{ url_for('account_sftp_key_add') }}" autocomplete="off"
           data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
       <label class="form-label small mb-1" for="sftp-key">Public key (the one line in your .pub file)</label>
@@ -57,6 +60,7 @@
       <div class="small text-secondary mt-1">Ed25519 is recommended; ECDSA works too, and RSA of 3072 bits or more.</div>
       <div class="small text-secondary"><span>To make one:</span> <code data-no-i18n>ssh-keygen -t ed25519</code></div>
     </form>
+    {% endcall %}
     {% endif %}
   </div>
 </div>
