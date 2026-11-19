@@ -274,15 +274,14 @@ class _PacedBody:
         return self._paced(self._f.readlines, *args)
 
 
-class _Deadlines:
+class _DeadlinesMixin:
     """The whole-request deadlines (see the module docstring), mixed into _protocol's class with a timeout.
 
     `_timeout` is eventlet.Timeout (a class, so reading it from the instance does not bind it) and
-    `_limits` the {idle, header, body_grace, body_rate} seconds; _protocol sets both on the class.
+    `_limits` the {idle, header, body_grace, body_rate} seconds; _protocol sets both on the class it
+    builds, which is the only class this is mixed into.
     """
 
-    _timeout = None
-    _limits = None
     _deadline = None
 
     def setup(self):
@@ -364,7 +363,7 @@ def _protocol(base, timeout=None, limits=None):
             return "LinuxGSM Panel"
     if timeout is None:
         return _Protocol
-    return type("_TimedProtocol", (_Deadlines, _Protocol), {"_timeout": timeout, "_limits": limits})
+    return type("_TimedProtocol", (_DeadlinesMixin, _Protocol), {"_timeout": timeout, "_limits": limits})
 
 
 # A connection with no request in progress (before its first request line, or kept alive between
