@@ -79,7 +79,7 @@ def _read(gs, addon_id):
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=60, selfname=gs.lgsm_name)
     if rc != 0:
         return None
-    p = _ad.parse_probe(out)
+    p = _ad.parse_probe(out, gs.game_type)
     found = _ad.parse_status(out)["addons"].get(addon_id)
     p["meta"] = found["meta"] if found else None
     kv = _ad.kv_lines(out)

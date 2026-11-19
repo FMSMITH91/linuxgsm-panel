@@ -40,6 +40,12 @@ _NO_LOG_NAMED = "Couldn't find the game's log ({log}). Start the server once so 
 _NO_RCON = "The server's config sets no RCON password. Set one, then install again."
 _NO_CONSOLE_LOG = ("Couldn't find the game's console.log. Add -condebug to the server's start parameters (its LinuxGSM "
                    "config's startparameters), restart the server, then install again.")
+# ET: Legacy writes a game log only once g_log names one; the panel leaves the operator's config as it is.
+_NO_G_LOG = ("ET: Legacy writes no game log until g_log names one. In the server's config ({cfg}), add the line "
+             "set g_log \"etserver.log\" below the line exec legacy.cfg (ET: Legacy's legacy.cfg sets g_log to \"\"), "
+             "restart the server, then install again.")
+_G_LOG_PLAIN = ("Set g_log in the server's config to a plain file name, such as \"etserver.log\" (no folder), restart "
+                "the server, then install again.")
 _NO_SOURCEMOD = ("B3 needs SourceMod on this game server. Install Metamod: Source and SourceMod (LinuxGSM's "
                  "mods-install), restart the server, then install again.")
 _NO_PORT = "No free port was found on this host for the add-on's page or relays."
@@ -120,11 +126,12 @@ def _addon_rows(gs, found):
     return rows
 
 
-# SoF2's and vanilla ET's B3 parsers have no private message: every reply is said to the whole server
-# (vps-b3 rounds 3 and 3d).
+# SoF2's and ET's B3 parsers have no private message: every reply is said to the whole server (vps-b3
+# rounds 3 and 3d; ET: Legacy uses the same et parser).
 _PUBLIC_REPLIES = {"sof2": "On Soldier of Fortune 2, B3 has no private messages: every reply is said in public chat.",
                    "wet": "On Wolfenstein: Enemy Territory, B3 has no private messages: every reply is said in public "
-                          "chat."}
+                          "chat.",
+                   "etl": "On ET: Legacy, B3 has no private messages: every reply is said in public chat."}
 
 
 def _b3_fields(gs, meta):
@@ -186,12 +193,28 @@ def _taken(p, addon_id):
     return {(a.get("meta") or {}).get("database") for k, a in p["addons"].items() if k != addon_id}
 
 
-def _no_log(game_type):
-    """What to do when the game's log was not found: start the server once, or (Source) add -condebug."""
-    name = _ad.game_log_name(game_type)
+def _no_log(gs, p):
+    """What to do when the game's log was not found: start the server once, (Source) add -condebug, or set g_log."""
+    if gs.game_type in _ad.G_LOG_DIR:
+        return _no_g_log(gs, p["log_name"])
+    name = _ad.game_log_name(gs.game_type)
     if name == "console.log":
         return _NO_CONSOLE_LOG
     return _NO_LOG if name == "games_mp.log" else i18n.Sentence(_NO_LOG_NAMED, log=name)
+
+
+def _no_g_log(gs, name):
+    """What to do when ET: Legacy's log was not found: set g_log, make it a plain file name, or start the server."""
+    if not name:
+        return i18n.Sentence(_NO_G_LOG, cfg=_ad.game_cfg(gs.game_type, gs.lgsm_name))
+    if not _ad.plain_log_name(name):
+        return _G_LOG_PLAIN
+    return i18n.Sentence(_NO_LOG_NAMED, log="%s/%s" % (_ad.G_LOG_DIR[gs.game_type], name))
+
+
+def _log_refusal(gs, p):
+    """Why the game's log can't be read ("" when it can): it is there, in a folder the unit can name."""
+    return "" if p["log_found"] and _ad.log_dir(gs.short_name, p["logdir"]) else _no_log(gs, p)
 
 
 def _host_refusal(gs, p, need_ports):
@@ -202,8 +225,9 @@ def _host_refusal(gs, p, need_ports):
     p["game_port"], why = _ad.game_port(gs.game_type, gs.port, p.get("udp") or [])
     if why:
         return why
-    if not _ad.log_dir(gs.short_name, p["logdir"]):
-        return _no_log(gs.game_type)
+    why = _log_refusal(gs, p)
+    if why:
+        return why
     if gs.game_type in _ad.SOURCEMOD_DIR and not p.get("sourcemod"):
         return _NO_SOURCEMOD
     if not p["rcon"]:
@@ -263,7 +287,8 @@ def _settings(gs, plan, p):
         return _ad.iw4madmin_settings(gs.game_type, p["game_port"], p["rcon"]), _ad.iw4madmin_files(), (p["rcon"],)
     r = plan["db"]
     secret = decrypt_secret(r.secret) or ""
-    ini = _ad.b3_ini(gs.game_type, p["game_port"], p["rcon"], r.name, secret, plan["geolocation"])
+    ini = _ad.b3_ini(gs.game_type, p["game_port"], p["rcon"], r.name, secret, plan["geolocation"],
+                     log_name=p["log_name"])
     files = _ad.build_files(plan["id"])
     if _ad.geo_mode(plan["geolocation"]) != _ad.GEO_OFF:
         files[_ad.B3_GEO_INI] = _ad.geolocation_ini("", plan["geolocation"])
@@ -338,7 +363,7 @@ def _install_steps(gs, plan, who):
         timeout=60, selfname=gs.lgsm_name)
     if rc != 0:
         return _with_reason("Couldn't read the server's account on the host: it did not answer.", "", err), ""
-    p = dict(_ad.parse_probe(out), addons=_ad.parse_status(out)["addons"])
+    p = dict(_ad.parse_probe(out, gs.game_type), addons=_ad.parse_status(out)["addons"])
     p["rcon"], p["rcon_why"] = _ad.game_rcon(gs.game_type, p["rcon_lines"])
     why = _install_refusal(gs, plan, p) or _runtime(gs, p)
     if not why and _ad.geo_mode(plan["geolocation"]) == _ad.GEO_OFFLINE:

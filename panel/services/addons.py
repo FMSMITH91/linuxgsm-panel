@@ -34,8 +34,8 @@ THE ADD-ONS
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
     two plugin questions its first start would ask are answered in their own files.
-    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet; q3, csgo and ins built in, each behind its own
-    switch: B3_LATER_GAMES): legacy, opt-in. Built on
+    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet; q3, etl, csgo and ins built in, each behind its
+    own switch: B3_LATER_GAMES): legacy, opt-in. Built on
     the host from addon_images/b3 (a Containerfile: FMSMITH91/big-brother-bot at one commit, its
     dependencies by hash), with one of this server's databases from the Databases tab (never one
     another add-on uses). Its geolocation is off unless chosen: offline (a country, from DB-IP's
@@ -57,18 +57,24 @@ B3 = "b3"
 # Games whose LinuxGSM start command passes no port, so the port in the game's config may not be the one
 # it listens on (Wolfenstein: Enemy Territory binds 0.0.0.0:27960 unless the instance's startparameters set
 # net_port: vps-b3 round 3). An add-on for one needs the server running at install, to read the real port.
-LIVE_PORT_GAMES = ("wet",)
+# LinuxGSM's ET: Legacy start passes no port either (its server.cfg sets net_port, which the engine reads
+# only after its socket is open, as Enemy Territory's does).
+LIVE_PORT_GAMES = ("wet", "etl")
 # More B3 games, built in and each switched on after its own test against LinuxGSM's server (the
-# vps checklist): Quake 3 Arena (q3server, the id 1.32c build), Counter-Strike: Global Offensive and
-# Insurgency (Source engine: B3 needs SourceMod on the server and its console.log from -condebug, and
-# speaks RCON over TCP). Not offered, each for its reason in docs/addons.md: ET: Legacy (B3's et parser
-# reads neither its status rows nor its chat lines), Arma 3 and Chivalry: Medieval Warfare (their RCON
-# is not set up by LinuxGSM's configs, so nothing on the host says where B3 would reach it).
+# vps checklist): Quake 3 Arena (q3server, the id 1.32c build), ET: Legacy (etlserver: B3's et parser, which
+# reads its status rows and chat since B3_COMMIT; it writes a game log only once the operator sets g_log:
+# G_LOG_DIR), Counter-Strike: Global Offensive and Insurgency (Source engine: B3 needs SourceMod on the
+# server and its console.log from -condebug, and speaks RCON over TCP). Not offered, each for its reason
+# in docs/addons.md: Arma 3 and Chivalry: Medieval Warfare (their RCON is not set up by LinuxGSM's
+# configs, so nothing on the host says where B3 would reach it). Switching one on also adds its name to
+# the card's legacy warning (server_addons.js installNotes, and its es/fr text).
 B3_Q3 = False
+B3_ETL = False
 B3_CSGO = False
 B3_INS = False
 # Each one's B3 parser (b3/parsers/<name>.py at B3_COMMIT), and whether it is offered.
-B3_LATER_GAMES = (("q3", "q3", B3_Q3), ("csgo", "csgo", B3_CSGO), ("ins", "insurgency", B3_INS))
+B3_LATER_GAMES = (("q3", "q3", B3_Q3), ("etl", "et", B3_ETL), ("csgo", "csgo", B3_CSGO),
+                  ("ins", "insurgency", B3_INS))
 # Games whose RCON is TCP on the game port (Source's), forwarded with -T; the others' is UDP (-U).
 RCON_TCP_GAMES = ("csgo", "ins")
 # Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
@@ -210,7 +216,8 @@ B3_OWN_PLUGINS = "Data/extplugins"
 _B3_EXT_DIR = {False: "@b3/extplugins", True: "@conf/extplugins"}
 # The config folder a game's RCON password is read from, by game type (LinuxGSM's servercfgdir:
 # serverfiles/main; uo for United Offensive, base for SoF2, etmain for ET).
-_CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain", "q3": "baseq3", "csgo": "csgo/cfg", "ins": "insurgency/cfg"}
+_CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain", "etl": "etmain", "q3": "baseq3", "csgo": "csgo/cfg",
+            "ins": "insurgency/cfg"}
 # The game's log file and where to look for it, by game type (default: games_mp.log, which every CoD
 # writes under its own folder in the home, or under serverfiles for cod4server). SoF2 1.02a/1.03 takes
 # LinuxGSM's `g_log "date"` as a file name (~/.sof2/base/date); ET's is serverfiles/etmain/etserver.log.
@@ -219,6 +226,20 @@ _CFG_DIR = {"coduo": "uo", "sof2": "base", "wet": "etmain", "q3": "baseq3", "csg
 _GAME_LOG = {"sof2": (".sof2", "date"), "wet": ("serverfiles", "etserver.log"), "q3": (".q3a", "games.log"),
              "csgo": ("serverfiles/csgo", "console.log"), "ins": ("serverfiles/insurgency", "console.log")}
 _LOG_DEFAULT = ("serverfiles .callofduty* .cod*", "games_mp.log")
+# Games whose log is the file g_log names, which their default configs leave empty: the folder it is
+# written to. ET: Legacy writes it under fs_homepath/fs_game: LinuxGSM's start sets fs_homepath to
+# serverfiles, and fs_game defaults to legacy (LinuxGSM's own gamelogdir for etlserver). The panel
+# never sets g_log itself: the install says what to add to the operator's config (etl_g_log).
+G_LOG_DIR = {"etl": "serverfiles/legacy"}
+# The probe's lines for etl_g_log: the server's config's g_log lines and its `exec legacy.cfg`, then this
+# line, then legacy.cfg's own g_log lines (ET: Legacy ships it with g_log "", and LinuxGSM's server.cfg
+# execs it near its end).
+_LEGACY_MARK = "//legacy.cfg"
+_G_LOG_GREP = r'^[[:space:]]*((set[asu]?[[:space:]]+)?g_log[[:space:]]|exec[[:space:]]+"?legacy(\.cfg)?"?([[:space:]]|$))'
+_G_LOG_RE = re.compile(r'^[ \t]*(?:set[asu]?[ \t]+)?g_log[ \t]+(?:"([^"\r\n]*)|([^ \t\r\n]*))', re.I)
+_EXEC_LEGACY_RE = re.compile(r'^[ \t]*exec[ \t]+"?legacy(?:\.cfg)?"?(?:[ \t]|$)', re.I)
+# A g_log the add-on reads: a plain file name in G_LOG_DIR's folder (it goes into b3.ini's game_log).
+_LOG_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 
 # What the host prints, read by the parsers below.
 _MARK_INSTALLED = "ADDON_INSTALLED"
@@ -247,8 +268,8 @@ _RCON_RE = {name: re.compile(r'^[ \t]*(?:seta?[ \t]+)?%s[ \t]+(?:"([^"\r\n]*)"|(
 # RCON test passed on LinuxGSM's codserver config, which sets only that) and United Offensive is
 # CoD1's engine; CoD2 is taken as rcon_password like the later engines (not yet seen on a box).
 RCON_SETTING = {"cod": "rconpassword", "coduo": "rconpassword", "cod2": "rcon_password", "cod4": "rcon_password",
-                "codwaw": "rcon_password", "sof2": "rconpassword", "wet": "rconpassword", "q3": "rconpassword",
-                "csgo": "rcon_password", "ins": "rcon_password"}
+                "codwaw": "rcon_password", "sof2": "rconpassword", "wet": "rconpassword", "etl": "rconpassword",
+                "q3": "rconpassword", "csgo": "rcon_password", "ins": "rcon_password"}
 _START_FIRST = ("Start the game server first: its start command sets no port, so the add-on reads the port it really "
                 "listens on, then install again.")
 _RCON_RENAME = ("This game ignores rconpassword. In the server's config, rename it to rcon_password, restart the "
@@ -261,6 +282,45 @@ _STATES = ("active", "activating", "deactivating", "inactive", "failed", "reload
 def game_log_name(game_type):
     """The game log's file name B3 or IW4MAdmin reads, by game type (games_mp.log unless _GAME_LOG says)."""
     return _GAME_LOG.get(game_type, _LOG_DEFAULT)[1]
+
+
+def game_cfg(game_type, selfname):
+    """The game's own config as LinuxGSM installs it, relative to the home (where its RCON password is read)."""
+    return "serverfiles/%s/%s.cfg" % (_CFG_DIR.get(game_type, "main"), selfname)
+
+
+def etl_g_log(lines):
+    """The g_log ET: Legacy's server ends up with, from the probe's lines ("" when the server writes no game log).
+
+    The lines are the server's config's g_log and `exec legacy.cfg` lines in their order, then
+    _LEGACY_MARK, then legacy.cfg's own g_log lines. A config runs top to bottom, legacy.cfg's lines
+    run where it is exec'd, and the last value set wins: a g_log above LinuxGSM's `exec legacy.cfg`
+    is cleared again by the g_log "" that ET: Legacy's legacy.cfg ships with.
+    """
+    rows = (lines or "").splitlines()
+    cut = rows.index(_LEGACY_MARK) if _LEGACY_MARK in rows else len(rows)
+    legacy = _g_log_set(rows[cut + 1:], None)
+    value = ""
+    for row in rows[:cut]:
+        if _EXEC_LEGACY_RE.match(row):
+            value = value if legacy is None else legacy
+        else:
+            value = _g_log_set([row], value)
+    return value
+
+
+def _g_log_set(rows, value):
+    """The value the last g_log line of `rows` sets, else `value`."""
+    for row in rows:
+        m = _G_LOG_RE.match(row)
+        if m:
+            value = m.group(1) if m.group(1) is not None else m.group(2)
+    return value
+
+
+def plain_log_name(name):
+    """Whether a g_log value is a plain file name the add-on can read (no folder, no leading dot)."""
+    return bool(_LOG_NAME_RE.fullmatch(name or ""))
 
 
 def game_port(game_type, configured, udp):
@@ -362,6 +422,25 @@ _ENV = ('export XDG_RUNTIME_DIR="/run/user/$(id -u)"; '
         'HOME=$(getent passwd "$(id -un)" | cut -d: -f6); export HOME; cd "$HOME" || exit 1; ')
 
 
+def _log_sh(game_type, cfg):
+    """The probe's lines that find the game's log (see probe_sh): logdir=, or a G_LOG_DIR game's glog.b64= and logs.b64=.
+
+    For a G_LOG_DIR game: its config's g_log and `exec legacy.cfg` lines, _LEGACY_MARK, then the g_log
+    lines of the legacy.cfg the game runs (its fs_game folder's first, as the game looks there first,
+    else the one beside the config), and the file names in G_LOG_DIR's folder.
+    """
+    if game_type not in G_LOG_DIR:
+        where, name = _GAME_LOG.get(game_type, _LOG_DEFAULT)
+        return ('l=$(find %s -maxdepth 3 -type f -name %s -printf "%%T@ %%h\\n" '
+                '2>/dev/null | sort -nr | head -n 1 | cut -d" " -f2-); echo "logdir=$l"; ' % (where, shlex.quote(name)))
+    folder, grep = G_LOG_DIR[game_type], shlex.quote(_G_LOG_GREP)
+    legacy = " ".join(shlex.quote(d + "/legacy.cfg") for d in (folder, cfg.rsplit("/", 1)[0]))
+    return ('echo "glog.b64=$({ grep -iE %s %s; echo %s; for f in %s; do [ -f "$f" ] && { grep -iE %s "$f"; break; }; '
+            'done; } 2>/dev/null | head -c 4000 | base64 -w0)"; '
+            'echo "logs.b64=$(find %s -maxdepth 1 -type f -printf "%%f\\n" 2>/dev/null | head -c 8000 | base64 -w0)"; '
+            % (grep, shlex.quote(cfg), shlex.quote(_LEGACY_MARK), legacy, grep, shlex.quote(folder)))
+
+
 def probe_sh(addon_id, selfname, server_id, game_type, nports):
     """The install's first read, as the account: the host, the game's log folder, RCON, free ports.
 
@@ -370,26 +449,25 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     logdir= (the folder of the newest game log, game_log_name: games_mp.log
     under serverfiles, or the game's own folder in the home: LinuxGSM sets fs_homepath only for
     cod4server, so CoD1 and United Offensive write under ~/.callofduty, CoD2 under ~/.callofduty2 and
-    World at War under ~/.codwaw; SoF2's under ~/.sof2, ET's under serverfiles), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
+    World at War under ~/.codwaw; SoF2's under ~/.sof2, ET's under serverfiles; for ET: Legacy, whose
+    log g_log names, glog.b64= and logs.b64= instead: _log_sh), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
     game_rcon picks the game's own), ports= (the first `nports` free host ports from PORT_BASE + the
     server id), installed=1 when the add-on is already there, and for a Source game sourcemod=1 when
     SourceMod is installed (SOURCEMOD_DIR).
     """
-    cfg = "serverfiles/%s/%s.cfg" % (_CFG_DIR.get(game_type, "main"), selfname)
-    where, name = _GAME_LOG.get(game_type, _LOG_DEFAULT)
+    cfg = game_cfg(game_type, selfname)
     ports = " ".join(str(PORT_BASE + int(server_id) + i) for i in range(_PORT_TRIES))
     return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; '
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
-            'l=$(find %s -maxdepth 3 -type f -name %s -printf "%%T@ %%h\\n" '
-            '2>/dev/null | sort -nr | head -n 1 | cut -d" " -f2-); echo "logdir=$l"; '
+            + _log_sh(game_type, cfg) +
             'echo "rcon.b64=$(grep -iE "^[[:space:]]*(seta?[[:space:]]+)?rcon_?password[[:space:]]" %s 2>/dev/null '
             '| head -c 4000 | base64 -w0)"; '
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
             'echo "ports=$f"; echo "udp=$(ss -Hulnp 2>/dev/null | grep -F "users:((" | awk \'{print $4}\' '
             '| sed "s/.*://" | sort -un | tr "\\n" " ")"; [ -f %s ] && echo installed=1; %strue'
-            % (where, shlex.quote(name), shlex.quote(cfg), ports, int(nports),
+            % (shlex.quote(cfg), ports, int(nports),
                shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE)),
                "[ -d %s ] && echo sourcemod=1; " % shlex.quote(SOURCEMOD_DIR[game_type])
                if game_type in SOURCEMOD_DIR else ""))
@@ -408,16 +486,28 @@ def log_dir(user, rel):
     return "/home/%s/%s" % (user, rel)
 
 
-def parse_probe(out):
-    """What probe_sh found: {os, podman, splice, ids, logdir, rcon, ports, installed} (rcon decoded and parsed).
+def _probe_log(kv, game_type):
+    """(the game log's folder, its file name, whether it is there) from the probe's lines (see parse_probe)."""
+    if game_type not in G_LOG_DIR:
+        return kv.get("logdir", ""), game_log_name(game_type), bool(kv.get("logdir"))
+    name = etl_g_log(_unb64(kv.get("glog.b64", "")))
+    return G_LOG_DIR[game_type], name, plain_log_name(name) and name in _unb64(kv.get("logs.b64", "")).splitlines()
 
-    ids is (uid, gid), or None unless both are plain numbers above 0.
+
+def parse_probe(out, game_type=""):
+    """What probe_sh found for `game_type`: {os, podman, splice, ids, logdir, log_name, log_found, rcon_lines, ...}.
+
+    ids is (uid, gid), or None unless both are plain numbers above 0. logdir is the game log's folder
+    (relative to the home), log_name its file name (B3's game_log), log_found whether it is there. For
+    a G_LOG_DIR game the folder is fixed, and the name is the g_log the server ends up with (etl_g_log):
+    found when it is a plain file name and that file is in the folder.
     """
     kv = kv_lines(out)
     ids = (kv.get("uid", ""), kv.get("gid", ""))
     ids = (int(ids[0]), int(ids[1])) if all(x.isdecimal() and 0 < int(x) < 2 ** 31 for x in ids) else None
+    logdir, name, found = _probe_log(kv, game_type)
     return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "splice": kv.get("splice") == "1", "ids": ids,
-            "logdir": kv.get("logdir", ""), "rcon_lines": _unb64(kv.get("rcon.b64", "")),
+            "logdir": logdir, "log_name": name, "log_found": found, "rcon_lines": _unb64(kv.get("rcon.b64", "")),
             "ports": [int(p) for p in kv.get("ports", "").split() if p.isdecimal()],
             "udp": [int(p) for p in kv.get("udp", "").split() if p.isdecimal() and 0 < int(p) < 65536],
             "installed": kv.get("installed") == "1", "sourcemod": kv.get("sourcemod") == "1"}
@@ -529,8 +619,10 @@ def b3_plugins(geolocation, chosen=B3_PLUGINS):
     return ("admin",) + tuple(p for p in B3_SWITCHABLE if p in chosen) + geo     # geolocation before what needs it
 
 
-def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation, chosen=B3_PLUGINS):
+def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation, chosen=B3_PLUGINS, log_name=None):
     """b3.ini for one server, as text (it holds the RCON and database passwords).
+
+    `log_name` is the game log's file name when the probe read it (parse_probe), else game_log_name's.
 
     The database is reached at 127.0.0.1:3306 inside the container, which network() forwards. The
     panel's database names and passwords are letters, digits and - _ . only
@@ -543,7 +635,7 @@ def b3_ini(game_type, game_port, rcon, db_name, db_secret, geolocation, chosen=B
         "bot_name: b3", "bot_prefix: ^0(^2b3^0)^7:", "time_format: %I:%M%p %Z %m/%d/%y", "time_zone: UTC",
         "log_level: 20", "logfile: @conf/b3.log", "disabled_plugins:", "external_plugins_dir: %s" % _B3_EXT_DIR[False],
         "", "[server]", "rcon_password: %s" % rcon, "port: %d" % int(game_port),
-        "game_log: /gamelog/%s" % game_log_name(game_type), "public_ip: 127.0.0.1", "rcon_ip: 127.0.0.1",
+        "game_log: /gamelog/%s" % (log_name or game_log_name(game_type)), "public_ip: 127.0.0.1", "rcon_ip: 127.0.0.1",
         "punkbuster: off",
         "delay: 0.33", "lines_per_second: 50",
         "", "[update]", "channel: skip",

@@ -46,5 +46,8 @@
   "A plugin in this folder is someone else's code: it runs inside B3's container, with B3's database and RCON access, and the panel doesn't check it. Load only plugins you trust. The folder is mounted read-only, and the container keeps its other limits.": "Un plugin de ce dossier est le code de quelqu'un d'autre : il s'exécute dans le conteneur de B3, avec l'accès de B3 à sa base de données et à RCON, et le panneau ne le vérifie pas. Ne chargez que des plugins de confiance. Le dossier est monté en lecture seule, et le conteneur garde ses autres limites.",
   "Load my own plugins from the add-on's {dir} folder": "Charger mes propres plugins depuis le dossier {dir} du module",
   "Load your own B3 plugins": "Charger vos propres plugins B3",
-  "Turn on and restart": "Activer et redémarrer"
+  "Turn on and restart": "Activer et redémarrer",
+  "ET: Legacy writes no game log until g_log names one. In the server's config ({cfg}), add the line set g_log \"etserver.log\" below the line exec legacy.cfg (ET: Legacy's legacy.cfg sets g_log to \"\"), restart the server, then install again.": "ET: Legacy n’écrit aucun journal de jeu tant que g_log n’en nomme pas un. Dans la configuration du serveur ({cfg}), ajoutez la ligne set g_log \"etserver.log\" sous la ligne exec legacy.cfg (le legacy.cfg d’ET: Legacy met g_log à \"\"), redémarrez le serveur, puis réinstallez.",
+  "Set g_log in the server's config to a plain file name, such as \"etserver.log\" (no folder), restart the server, then install again.": "Dans la configuration du serveur, donnez à g_log un simple nom de fichier, comme \"etserver.log\" (sans dossier), redémarrez le serveur, puis réinstallez.",
+  "On ET: Legacy, B3 has no private messages: every reply is said in public chat.": "Sur ET: Legacy, B3 n’a pas de messages privés : chaque réponse est dite dans le chat public."
 }
