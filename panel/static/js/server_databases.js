@@ -503,7 +503,8 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
   // Load when the section is first shown (server_files.js: a click, a #hash, or the section a viewer
   // without VIEW_FILES opens on), or when the page opened on it before this script ran.
   document.addEventListener('sfsub:shown', function (e) { if (e.detail === 'databases') void window.dbLoad(false); });
-  if (window._uis_sfOnView && window._uis_sfOnView('databases')) void window.dbLoad(false);
+  var onView = document.querySelector('[data-sfsub-btn="databases"]');
+  if (onView && onView.classList.contains('active')) void window.dbLoad(false);
 })();
 
 // Move account, and a super admin's choice of a database server on another machine (over Tailscale).

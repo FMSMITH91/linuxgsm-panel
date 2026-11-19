@@ -388,5 +388,6 @@
   document.addEventListener('sfsub:shown', function (e) {
     if (e.detail === 'databases') st.loaded = false;
     if (e.detail === 'addons') void window.adLoad(false); });
-  if (window._uis_sfOnView && window._uis_sfOnView('addons')) void window.adLoad(false);
+  var onView = document.querySelector('[data-sfsub-btn="addons"]');
+  if (onView && onView.classList.contains('active')) void window.adLoad(false);
 })();
