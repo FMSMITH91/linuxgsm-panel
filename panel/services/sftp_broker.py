@@ -279,7 +279,7 @@ def _as_request(ip):
     return current_app.test_request_context("/", environ_base={"REMOTE_ADDR": ip if ip != "unknown" else ""})
 
 
-def _audit(ip, user, action, target="", detail="", success=True, actor=None, server=None):
+def _sftp_audit(ip, user, action, target="", detail="", success=True, actor=None, server=None):
     """log_action, with the client's address as the row's address."""
     from panel.security.auth import log_action
     with _as_request(ip):
@@ -420,7 +420,7 @@ def _kbd_fail(ip, name, now, slot, why):
     from panel.routes.auth_routes import _note_lockout
     _authlog(ip)
     who = name or "(blank)"
-    _audit(ip, None, "sftp_login_failed", target=who, actor=who, detail="password: %s" % why, success=False)
+    _sftp_audit(ip, None, "sftp_login_failed", target=who, actor=who, detail="password: %s" % why, success=False)
     with _as_request(ip):
         g._login_slot = slot
         _note_lockout(who, ip, now)
@@ -434,7 +434,7 @@ def _h_auth_fail(_app, req, _spawn):
     _authlog(ip)
     who = name or "(blank)"
     reason = str(req.get("why") or "no accepted key")[:200]
-    _audit(ip, None, "sftp_login_failed", target=who, actor=who, detail="key: %s" % reason, success=False)
+    _sftp_audit(ip, None, "sftp_login_failed", target=who, actor=who, detail="key: %s" % reason, success=False)
     return {"ok": True}
 
 
@@ -444,7 +444,7 @@ def _h_auth_done(_app, req, _spawn):
     if user is None:
         return {"ok": False}
     method = "key" if req.get("method") == "publickey" else "password and code"
-    _audit(_ip(req), user, "sftp_login", target=user.username,
+    _sftp_audit(_ip(req), user, "sftp_login", target=user.username,
            detail="%s: %s" % (method, str(req.get("detail") or "")[:300]))
     return {"ok": True}
 
@@ -525,7 +525,7 @@ def _h_audit(_app, req, _spawn):
     gs = db.session.get(GameServer, int(req.get("sid") or 0))
     if user is None or gs is None:
         return {"ok": False}
-    _audit(_ip(req), user, action, target=gs.name, detail=_audit_safe(str(req.get("detail") or ""), 2000),
+    _sftp_audit(_ip(req), user, action, target=gs.name, detail=_audit_safe(str(req.get("detail") or ""), 2000),
            success=bool(req.get("success")), server=gs)
     return {"ok": True}
 

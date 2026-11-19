@@ -165,7 +165,9 @@ from panel.ops.debug_report import network as _pb_dr_net, _src_systemd as _pb_dr
 from panel.ops.debug_report import install as _pb_dr_inst  # noqa: E402
 from panel.ops.ssh_manager import cron as _pb_cron, files as _pb_files  # noqa: E402
 from panel.ops import terminal_session as _pb_term  # noqa: E402
-_R40_PB_WATCHED = (_so, _pb_backup, _pb_ts, _pb_dr_net, _pb_dr_sysd, _pb_dr_inst, _pb_cron, _pb_files, _pb_term)
+from panel.services import sftp_backend as _pb_sftp_bk, sftp_broker as _pb_sftp_br  # noqa: E402
+_R40_PB_WATCHED = (_so, _pb_backup, _pb_ts, _pb_dr_net, _pb_dr_sysd, _pb_dr_inst, _pb_cron, _pb_files, _pb_term,
+                   _pb_sftp_bk, _pb_sftp_br)
 for _pb_mod in _R40_PB_WATCHED:
     if getattr(_pb_mod, "subprocess", None) is not None:
         _pb_mod.subprocess = _PbTrip(_pb_mod.subprocess, _pb_mod.__name__)

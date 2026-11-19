@@ -398,6 +398,19 @@ def _close259(pair):
             _logging259.getLogger("p259").debug("close", exc_info=True)
 
 
+def _own_address259():
+    """This host's own IPv4 address on a non-loopback interface, or None (no packet is sent)."""
+    s = _socket259.socket(_socket259.AF_INET, _socket259.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))           # a UDP connect only picks the source address
+        addr = s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return None if addr.startswith("127.") or addr == "0.0.0.0" else addr  # nosec B104 - compared only
+
+
 def _until259(cond, limit=10.0):
     """Wait (at most `limit` seconds) for `cond()` to hold; whether it did."""
     end = _time259.monotonic() + limit
@@ -467,6 +480,13 @@ else:
             _tf_user = _User259(username="p259_2fa", password_hash=_ed_user.password_hash, is_active=True,
                                 totp_secret=_enc259(_secret259), totp_enabled=True)
             _tf_user.groups.append(_grp)
+            _grp_nv = _Grp259(name="p259_editonly", description="", is_default=False)
+            _grp_nv.set_permissions([_auth259.EDIT_FILES])
+            _grp_nv.game_servers.append(_gsa)
+            _db259.session.add(_grp_nv)
+            _nv_user = _User259(username="p259_noview", password_hash=_ed_user.password_hash, is_active=True)
+            _nv_user.groups.append(_grp_nv)
+            _db259.session.add(_nv_user)
             _nofa_user = _User259(username="p259_nofa", password_hash=_ed_user.password_hash, is_active=True)
             _nofa_user.groups.append(_grp)
             _off_user = _User259(username="p259_off", password_hash=_ed_user.password_hash, is_active=False)
@@ -476,7 +496,7 @@ else:
             _K1, _L1 = _ed25519_259()
             _K2, _L2 = _ed25519_259()
             _KX, _LX = _ed25519_259()      # registered to nobody
-            for _uid, _line in ((_ed_user.id, _L1), (_off_user.id, _L2), (_nofa_user.id, _L2)):
+            for _uid, _line in ((_ed_user.id, _L1), (_off_user.id, _L2), (_nofa_user.id, _L2), (_nv_user.id, _L2)):
                 _pk = _sc259.parse_public_key(_line)[0]
                 _db259.session.add(_Key259(user_id=_uid, label="k", key_type=_pk.key_type, key_blob=_pk.blob_b64,
                                            fingerprint=_pk.fingerprint))
@@ -500,6 +520,15 @@ else:
             _time259.sleep(0.1)
         eq("sftp end to end: the service starts and listens on 127.0.0.1 only",
            (_br259.status()["state"], _br259.status()["bound"]), ("running", [["127.0.0.1", _E2E259.port]]))
+        _lan259 = _own_address259()
+        if _lan259 is None:
+            skip("sftp end to end: nothing answers on this host's own non-loopback address", "no such address here")
+        else:
+            _probe_lan = _socket259.socket()
+            _probe_lan.settimeout(3)
+            eq("sftp end to end: nothing answers on this host's own non-loopback address (not bound to all)",
+               _probe_lan.connect_ex((_lan259, _E2E259.port)) != 0, True)
+            _probe_lan.close()
         _since259 = _last_audit_id259()
 
         # ── sign-in by key ──
@@ -533,11 +562,15 @@ else:
             _bio = _io259.BytesIO()
             eq("sftp paths: a link that stays inside the folder still works",
                _sftp_err259(_s.getfo, "/Alpha One/inside-link.cfg", _bio) + " " + _bio.getvalue().decode(), "ok hostname p259\n")
-            eq("sftp paths: readlink names an inside link's target in the tree, and refuses an outward one",
-               (_sftp_err259(lambda p: _io259.StringIO(_s.readlink(p)).read(), "/Alpha One/inside-link.cfg"),
-                _s.readlink("/Alpha One/inside-link.cfg") if _sftp_err259(_s.readlink, "/Alpha One/inside-link.cfg") == "ok"
-                else None, _sftp_err259(_s.readlink, "/Alpha One/escape.txt")[:15]),
-               ("ok", "/Alpha One/server.cfg", "PermissionError"))
+            _rl = {}
+            for _k, _p in (("inside", "/Alpha One/inside-link.cfg"), ("outward", "/Alpha One/escape.txt"),
+                           ("not a link", "/Alpha One/server.cfg")):
+                try:
+                    _rl[_k] = _s.readlink(_p)
+                except Exception as _e:  # noqa: BLE001 - the error is the result
+                    _rl[_k] = type(_e).__name__
+            eq("sftp paths: readlink names an inside link's target in the tree, refuses an outward one and a non-link",
+               _rl, {"inside": "/Alpha One/server.cfg", "outward": "PermissionError", "not a link": "OSError"})
             eq("sftp paths: no link can be made over SFTP", _sftp_err259(_s.symlink, "/etc", "/Alpha One/l")[:13],
                "OSError: Link")
             check("sftp paths: writing through an outward link is refused and nothing lands outside",
@@ -633,6 +666,18 @@ else:
                   _sftp_err259(_s.listdir, "/").startswith("PermissionError"), _sftp_err259(_s.listdir, "/"))
         _close259(_p1)
 
+        # ── edit_files without view_files ──
+        _pnv = _connect259("p259_noview", pkey=_K2, host_key=_HK259)
+        if _pnv[0]:
+            eq("sftp authz: edit_files alone shows the folder, but reading it needs view_files too",
+               (_pnv[1].listdir("/"), _sftp_err259(_pnv[1].listdir, "/Alpha One")[:15],
+                _sftp_err259(_pnv[1].putfo, _io259.BytesIO(b"w"), "/Alpha One/write-only.txt")),
+               (["Alpha One"], "PermissionError", "ok"))
+        else:
+            check("sftp authz: edit_files alone shows the folder, but reading it needs view_files too", False,
+                  repr(_pnv[1]))
+        _close259(_pnv)
+
         # ── sign-in by password and code ──
         _since_k = _last_audit_id259()
         _code = _otp259.TOTP(_secret259).now()
@@ -707,10 +752,10 @@ else:
         with _p9.app_context():
             for _row in _GS259.query.filter(_GS259.game_type.in_(("p259", "p259b"))).all():
                 _db259.session.delete(_row)
-            for _row in _Grp259.query.filter_by(name="p259_edit").all():
+            for _row in _Grp259.query.filter(_Grp259.name.in_(("p259_edit", "p259_editonly"))).all():
                 _db259.session.delete(_row)
             for _row in _User259.query.filter(_User259.username.in_(("p259_ed", "p259_2fa", "p259_nofa",
-                                                                     "p259_off"))).all():
+                                                                     "p259_off", "p259_noview"))).all():
                 _db259.session.delete(_row)
             _db259.session.commit()
 
