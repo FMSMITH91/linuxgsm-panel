@@ -488,12 +488,12 @@ window.confirmDialog = function(opts){
   var closed = false;
   function close(){ closed = true; ov.remove(); document.removeEventListener('keydown', onKey); }
   // Cancel, Escape or a click beside the card: closed without confirming (opts.onCancel, once).
-  function cancel(){ if(closed) return; close(); if(opts.onCancel) opts.onCancel(); }
-  function onKey(e){ if(e.key === 'Escape') cancel(); }
+  function dismiss(){ if(closed) return; close(); if(opts.onCancel) opts.onCancel(); }
+  function onKey(e){ if(e.key === 'Escape') dismiss(); }
   document.addEventListener('keydown', onKey);
   // Escape closes this dialog only: inside a Bootstrap modal the key would also reach the modal,
   // which closes itself on it (and with it whatever was typed there).
-  ov.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ e.stopPropagation(); cancel(); } });
+  ov.addEventListener('keydown', function(e){ if(e.key === 'Escape'){ e.stopPropagation(); dismiss(); } });
   var api = {
     close: close,
     // nosemgrep - okHtml is this button's OWN markup, captured above; the message uses textContent.
@@ -508,8 +508,8 @@ window.confirmDialog = function(opts){
     close(); if (opts.onConfirm) opts.onConfirm(val, api);
   }
   okBtn.onclick = submit;
-  ov.querySelector('[data-cd="cancel"]').onclick = cancel;
-  ov.addEventListener('click', function(e){ if(e.target === ov) cancel(); });
+  ov.querySelector('[data-cd="cancel"]').onclick = dismiss;
+  ov.addEventListener('click', function(e){ if(e.target === ov) dismiss(); });
   if (input) {
     input.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); submit(); } });
     setTimeout(function(){ input.focus(); }, 50);
