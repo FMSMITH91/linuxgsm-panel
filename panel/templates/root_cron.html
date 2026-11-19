@@ -51,12 +51,16 @@
     {% for r in jobs %}
     <div class="border-bottom py-2">
       <div class="small"><code class="rc-schedule" data-no-i18n>{{ r.schedule }}</code> <code class="rc-command" data-no-i18n>{{ r.command }}</code></div>
+      {% if r.stdin is not none %}<div class="small text-warning rc-stdin"><span>Cron gives this command the text after its first unescaped % as standard input (each further % a new line), so it can be deleted here but not edited:</span> <code data-no-i18n>{{ r.stdin }}</code></div>{% endif %}
+      {% if r.mixed %}<div class="small text-warning rc-mixed">This command has two backslashes in a row, which cron on Debian and Ubuntu reads as one and other crons as two, so it can be deleted here but not edited.</div>{% endif %}
+      {% set editable = r.stdin is none and not r.mixed %}
       <details class="mt-1">
-        <summary class="small">Edit or delete</summary>
+        <summary class="small">{% if editable %}Edit or delete{% else %}Delete{% endif %}</summary>
         <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off">
           <input type="hidden" name="n" value="{{ r.n }}">
           <input type="hidden" name="was" value="{{ r.raw }}">
           <input type="hidden" name="sha" value="{{ sha }}">
+          {% if editable %}
           <div class="col-sm-4">
             <label class="form-label small mb-1" for="rc-s{{ r.n }}">Schedule</label>
             <input type="text" id="rc-s{{ r.n }}" name="schedule" class="form-control form-control-sm font-monospace" maxlength="100" value="{{ r.schedule }}" spellcheck="false">
@@ -65,9 +69,10 @@
             <label class="form-label small mb-1" for="rc-c{{ r.n }}">Command</label>
             <input type="text" id="rc-c{{ r.n }}" name="command" class="form-control form-control-sm font-monospace" maxlength="1000" value="{{ r.command }}" spellcheck="false">
           </div>
+          {% endif %}
           {{ confirm_fields('rc-e' ~ r.n) }}
           <div class="col-sm-auto d-flex gap-2">
-            <button type="submit" name="op" value="save" class="btn btn-sm btn-primary"><i class="bi bi-save"></i> Save</button>
+            {% if editable %}<button type="submit" name="op" value="save" class="btn btn-sm btn-primary"><i class="bi bi-save"></i> Save</button>{% endif %}
             <button type="submit" name="op" value="delete" class="btn btn-sm btn-outline-danger" formnovalidate><i class="bi bi-trash"></i> Delete</button>
           </div>
         </form>
@@ -91,7 +96,7 @@
         {{ confirm_fields('rc-a') }}
         <div class="col-sm-auto"><button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Add</button></div>
       </form>
-      <div class="small text-secondary mt-1">Schedule: minute hour day month weekday (such as <code>30 4 * * *</code>, every day at 04:30), or @reboot, @hourly, @daily, @weekly, @monthly, @yearly. A % in the command is kept as a %.</div>
+      <div class="small text-secondary mt-1">Schedule: minute hour day month weekday (such as <code>30 4 * * *</code>, every day at 04:30), or @reboot, @hourly, @daily, @weekly, @monthly, @yearly. A % in the command is kept as a %, and a \% (the way crontabs write one) also runs as a %.</div>
     </details>
 
     {% set others = rows|rejectattr('kind', 'equalto', 'job')|rejectattr('kind', 'equalto', 'blank')|list %}

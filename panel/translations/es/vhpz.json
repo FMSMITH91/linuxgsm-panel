@@ -14,5 +14,6 @@
   "the start parameters move Project Zomboid's folder (cachedir or user.home)": "los parámetros de inicio mueven la carpeta de Project Zomboid (cachedir o user.home)",
   "the start parameters use a shell expansion the panel does not read": "los parámetros de inicio usan una expansión del shell que el panel no lee",
   "the {what} in the start parameters is not used: {why}": "no se usa {what} de los parámetros de inicio: {why}",
-  "whether the game account can become root could not be checked": "no se pudo comprobar si la cuenta del juego puede convertirse en root"
+  "whether the game account can become root could not be checked": "no se pudo comprobar si la cuenta del juego puede convertirse en root",
+  "the start parameters, with the settings they name put in, are longer than a server can be started with": "los parámetros de inicio, con los ajustes que nombran ya sustituidos, son más largos de lo que admite el arranque de un servidor"
 }

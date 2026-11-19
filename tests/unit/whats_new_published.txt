@@ -853,3 +853,6 @@ e759bc4d Restoring a backup from another panel: cancelling the password check no
 cd1a6df6 Files & Config opens its Databases or Add-ons section loaded.
 b54bc73b OWASP notes in Settings match the switch after a reload.
 c0a5f0f0 More Backups and Files & Config messages are translated.
+e3dcb968 A root cron job written with \% runs whole.
+bec3e3c2 A LinuxGSM start line that repeats a long setting no longer stalls the panel.
+a10bd030 World reset sees two more ways a LinuxGSM config can change a setting.

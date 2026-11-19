@@ -50,7 +50,7 @@
   "Edit or delete": "Editar o eliminar",
   "Add a job": "Añadir una tarea",
   "Schedule: minute hour day month weekday (such as": "Programación: minuto hora día mes día de la semana (por ejemplo",
-  ", every day at 04:30), or @reboot, @hourly, @daily, @weekly, @monthly, @yearly. A % in the command is kept as a %.": ", cada día a las 04:30), o @reboot, @hourly, @daily, @weekly, @monthly, @yearly. Un % en el comando se mantiene como %.",
+  ", every day at 04:30), or @reboot, @hourly, @daily, @weekly, @monthly, @yearly. A % in the command is kept as a %, and a \\% (the way crontabs write one) also runs as a %.": ", cada día a las 04:30), o @reboot, @hourly, @daily, @weekly, @monthly, @yearly. Un % en el comando se mantiene como %, y un \\% (como se escribe en un crontab) también se ejecuta como %.",
   "Variables and comments, kept as they are": "Variables y comentarios, se mantienen tal cual",
   "A line here is not one the panel can read, so it will not save a change until that line is fixed from a shell.": "Una línea de aquí no es una que el panel pueda leer, así que no guardará ningún cambio hasta que esa línea se corrija desde una shell.",
   "Written by the panel": "Escrito por el panel",
@@ -102,5 +102,8 @@
   "Root's crontab could not be saved on this host.": "No se pudo guardar el crontab de root en este host.",
   "Root's crontab is for the panel owner only.": "El crontab de root es solo para el propietario del panel.",
   "Password incorrect. Nothing was changed.": "Contraseña incorrecta. No se cambió nada.",
-  "That authenticator code didn't match. Nothing was changed.": "Ese código de autenticación no coincide. No se cambió nada."
+  "That authenticator code didn't match. Nothing was changed.": "Ese código de autenticación no coincide. No se cambió nada.",
+  "Cron gives this command the text after its first unescaped % as standard input (each further % a new line), so it can be deleted here but not edited:": "Cron pasa a este comando, como entrada estándar, el texto que sigue a su primer % sin escapar (cada % siguiente es una nueva línea), así que aquí se puede eliminar pero no editar:",
+  "This command has two backslashes in a row, which cron on Debian and Ubuntu reads as one and other crons as two, so it can be deleted here but not edited.": "Este comando tiene dos barras invertidas seguidas, que el cron de Debian y Ubuntu lee como una y otros cron como dos, así que aquí se puede eliminar pero no editar.",
+  "The command has two backslashes in a row, which cron on Debian and Ubuntu reads as one and other crons as two, so it cannot be saved as typed. Change it from a shell.": "El comando tiene dos barras invertidas seguidas, que el cron de Debian y Ubuntu lee como una y otros cron como dos, así que no se puede guardar tal como se escribió. Cámbialo desde una shell."
 }
