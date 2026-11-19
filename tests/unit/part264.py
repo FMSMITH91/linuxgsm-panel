@@ -184,7 +184,7 @@ def _drain264(so, limit=20):
                 return "eof", got
             got += len(part)
     except _socket264.timeout:
-        pass
+        pass  # no byte for 5 s: the server still holds the connection open, reported below
     except OSError:
         return "reset", got
     return "open", got
