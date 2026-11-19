@@ -456,10 +456,12 @@ def _sftp_err259(fn, *a):
         return "%s: %s" % (type(exc).__name__, exc)
 
 
+_runner259 = None
+_E2E_UP259 = False
+_s = None
 if not _E2E:
     skip("sftp end to end: the service, signed in by key and by password and code", _why_skip259)
 else:
-    _runner259 = None
     try:
         import pyotp as _otp259
         from panel.core.config import encrypt_secret as _enc259
@@ -540,7 +542,13 @@ else:
         eq("sftp end to end: the kernel lists exactly one listener on the port, 127.0.0.1 (never 0.0.0.0 or ::)",
            _listening259(_E2E259.port), ["127.0.0.1"])
         _since259 = _last_audit_id259()
+        _E2E_UP259 = True
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the setup ran to its end", False, repr(_exc259))
 
+
+if _E2E_UP259:
+    try:
         # ── sign-in by key ──
         _p1 = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
         _top259 = sorted(_p1[1].listdir("/")) if _p1[0] else repr(_p1[1])
@@ -552,130 +560,157 @@ else:
         check("sftp end to end: the sign-in is audited with the key and the address",
               len(_sl259) == 1 and _sl259[0][0] == "p259_ed" and "key" in _sl259[0][2] and _sl259[0][3] == "127.0.0.1",
               repr(_sl259))
+        _s = _p1[1] if _p1[0] else None
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the sign-in by key ran to their end", False, repr(_exc259))
 
+
+if _E2E_UP259 and _s is not None:
+    try:
         # ── paths that try to leave the folder ──
-        if _p1[0]:
-            _s = _p1[1]
-            eq("sftp paths: .. cannot climb above the top folder or out of a server's folder",
-               (_sftp_listing259(_s, "/Alpha One/../.."), _sftp_listing259(_s, "/Alpha One/serverfiles/../../..")),
-               (["Alpha One"], ["Alpha One"]))
-            check("sftp paths: an absolute host path is not reachable (it names no server's folder)",
-                  _sftp_err259(_s.listdir, _OUTSIDE).startswith(("FileNotFoundError", "PermissionError", "IOError")),
-                  _sftp_err259(_s.listdir, _OUTSIDE))
-            eq("sftp paths: a server the user may not edit is not reachable by name",
-               _sftp_err259(_s.listdir, "/Bravo")[:17], "FileNotFoundError")
-            check("sftp paths: a link inside the folder that leads out is refused (folder and file)",
-                  _sftp_err259(_s.listdir, "/Alpha One/escape").startswith("PermissionError")
-                  and _sftp_err259(lambda p: _s.open(p).read(), "/Alpha One/escape.txt").startswith("PermissionError"),
-                  _sftp_err259(_s.listdir, "/Alpha One/escape") + " | "
-                  + _sftp_err259(lambda p: _s.open(p).read(), "/Alpha One/escape.txt"))
-            _bio = _io259.BytesIO()
-            eq("sftp paths: a link that stays inside the folder still works",
-               _sftp_err259(_s.getfo, "/Alpha One/inside-link.cfg", _bio) + " " + _bio.getvalue().decode(), "ok hostname p259\n")
-            _rl = {}
-            for _k, _p in (("inside", "/Alpha One/inside-link.cfg"), ("outward", "/Alpha One/escape.txt"),
-                           ("not a link", "/Alpha One/server.cfg")):
-                try:
-                    _rl[_k] = _s.readlink(_p)
-                except Exception as _e:  # noqa: BLE001 - the error is the result
-                    _rl[_k] = type(_e).__name__
-            eq("sftp paths: readlink names an inside link's target in the tree, refuses an outward one and a non-link",
-               _rl, {"inside": "/Alpha One/server.cfg", "outward": "PermissionError", "not a link": "OSError"})
-            eq("sftp paths: no link can be made over SFTP", _sftp_err259(_s.symlink, "/etc", "/Alpha One/l")[:13],
-               "OSError: Link")
-            check("sftp paths: writing through an outward link is refused and nothing lands outside",
-                  _sftp_err259(_s.putfo, _io259.BytesIO(b"x"), "/Alpha One/escape/new.txt").startswith("PermissionError")
-                  and not os.path.exists(os.path.join(_OUTSIDE, "new.txt")), os.listdir(_OUTSIDE))
+        eq("sftp paths: .. cannot climb above the top folder or out of a server's folder",
+           (_sftp_listing259(_s, "/Alpha One/../.."), _sftp_listing259(_s, "/Alpha One/serverfiles/../../..")),
+           (["Alpha One"], ["Alpha One"]))
+        check("sftp paths: an absolute host path is not reachable (it names no server's folder)",
+              _sftp_err259(_s.listdir, _OUTSIDE).startswith(("FileNotFoundError", "PermissionError", "IOError")),
+              _sftp_err259(_s.listdir, _OUTSIDE))
+        eq("sftp paths: a server the user may not edit is not reachable by name",
+           _sftp_err259(_s.listdir, "/Bravo")[:17], "FileNotFoundError")
+        check("sftp paths: a link inside the folder that leads out is refused (folder and file)",
+              _sftp_err259(_s.listdir, "/Alpha One/escape").startswith("PermissionError")
+              and _sftp_err259(lambda p: _s.open(p).read(), "/Alpha One/escape.txt").startswith("PermissionError"),
+              _sftp_err259(_s.listdir, "/Alpha One/escape") + " | "
+              + _sftp_err259(lambda p: _s.open(p).read(), "/Alpha One/escape.txt"))
+        _bio = _io259.BytesIO()
+        eq("sftp paths: a link that stays inside the folder still works",
+           _sftp_err259(_s.getfo, "/Alpha One/inside-link.cfg", _bio) + " " + _bio.getvalue().decode(), "ok hostname p259\n")
+        _rl = {}
+        for _k, _p in (("inside", "/Alpha One/inside-link.cfg"), ("outward", "/Alpha One/escape.txt"),
+                       ("not a link", "/Alpha One/server.cfg")):
+            try:
+                _rl[_k] = _s.readlink(_p)
+            except Exception as _e:  # noqa: BLE001 - the error is the result
+                _rl[_k] = type(_e).__name__
+        eq("sftp paths: readlink names an inside link's target in the tree, refuses an outward one and a non-link",
+           _rl, {"inside": "/Alpha One/server.cfg", "outward": "PermissionError", "not a link": "OSError"})
+        eq("sftp paths: no link can be made over SFTP", _sftp_err259(_s.symlink, "/etc", "/Alpha One/l")[:13],
+           "OSError: Link")
+        check("sftp paths: writing through an outward link is refused and nothing lands outside",
+              _sftp_err259(_s.putfo, _io259.BytesIO(b"x"), "/Alpha One/escape/new.txt").startswith("PermissionError")
+              and not os.path.exists(os.path.join(_OUTSIDE, "new.txt")), os.listdir(_OUTSIDE))
 
-            # ── the file manager's rules ──
-            _rules259 = {
-                "delete serverfiles (an empty folder)": _sftp_err259(_s.rmdir, "/Alpha One/serverfiles"),
-                "rename the LinuxGSM tree away": _sftp_err259(_s.rename, "/Alpha One/lgsm", "/Alpha One/lgsm2"),
-                "write ~/.ssh/authorized_keys": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"),
-                                                             "/Alpha One/.ssh/authorized_keys"),
-                "write ~/.bashrc": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/Alpha One/.bashrc"),
-                "a name with a control character": _sftp_err259(_s.mkdir, "/Alpha One/bad\x07name"),
-                "a name ending in a space": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/Alpha One/x.cfg "),
-                "write at the top level": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/top.txt"),
-                "the console log": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/Alpha One/log/console/p259server-console.log"),
-            }
-            eq("sftp rules: the web file manager's refusals hold over SFTP",
-               sorted(k for k, v in _rules259.items() if v == "ok"), [])
-            _chmods = (_sftp_err259(_s.chmod, "/Alpha One/lgsm", 0o700), _sftp_err259(_s.chmod, "/Alpha One/server.cfg", 0o4755),
-                       _sftp_err259(_s.chown, "/Alpha One/server.cfg", 0, 0))
-            eq("sftp rules: a protected folder's permissions are not changed; setuid is dropped; the owner never changes",
-               (_chmods[0][:15], _chmods[1], os.stat(os.path.join(_HOME_A, "server.cfg")).st_mode & 0o7777,
-                _chmods[2][:15], os.stat(os.path.join(_HOME_A, "lgsm")).st_mode & 0o777 != 0o700),
-               ("PermissionError", "ok", 0o755, "PermissionError", True))
-            _cfg_path = "/Alpha One/lgsm/config-lgsm/p259server/p259server.cfg"
-            _cfg_disk = os.path.join(_HOME_A, "lgsm", "config-lgsm", "p259server", "p259server.cfg")
-            _lts = _sftp_err259(_s.putfo, _io259.BytesIO(b'logtimestamp="on"\n'), _cfg_path)
-            eq("sftp rules: a LinuxGSM config that turns logtimestamp on is refused whole (nothing written)",
-               (_lts != "ok", os.path.exists(_cfg_disk)), (True, False))
-            eq("sftp rules: ...and one that does not is written (a new file in lgsm/ is an upload, not a reserved name)",
-               (_sftp_err259(_s.putfo, _io259.BytesIO(b'maxplayers="8"\n'), _cfg_path), _read259(_cfg_disk)),
-               ("ok", b'maxplayers="8"\n'))
-            _lts2 = _sftp_err259(_s.putfo, _io259.BytesIO(b'logtimestamp="on"\n'), _cfg_path)
-            eq("sftp rules: ...and overwriting it with logtimestamp on leaves it exactly as it was",
-               (_lts2 != "ok", _read259(_cfg_disk)), (True, b'maxplayers="8"\n'))
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the path checks ran to their end", False, repr(_exc259))
 
-            # ── writes, the cap, and their audit rows ──
-            _since_w = _last_audit_id259()
-            _data = os.urandom(300 * 1024)
-            _put = _sftp_err259(_s.putfo, _io259.BytesIO(_data), "/Alpha One/upload.bin")
-            eq("sftp writes: an upload lands as the game account's file, byte for byte",
-               (_put, _read259(os.path.join(_HOME_A, "upload.bin")) == _data), ("ok", True))
-            _bio = _io259.BytesIO()
-            _s.getfo("/Alpha One/upload.bin", _bio)
-            eq("sftp writes: ...and reads back the same", _bio.getvalue() == _data, True)
-            _big = _sftp_err259(_s.putfo, _io259.BytesIO(b"\0" * (1024 * 1024 + 1)), "/Alpha One/big.bin")
-            _over = _sftp_err259(_s.putfo, _io259.BytesIO(b"\1" * (1024 * 1024 + 1)), "/Alpha One/upload.bin")
-            eq("sftp writes: an upload past the size limit (1 MiB here) is refused and leaves nothing behind",
-               (_big != "ok", os.path.exists(os.path.join(_HOME_A, "big.bin")),
-                sorted(n for n in os.listdir(_HOME_A) if "panel-sftp" in n)), (True, False, []))
-            eq("sftp writes: a refused overwrite leaves the old file exactly as it was",
-               (_over != "ok", _read259(os.path.join(_HOME_A, "upload.bin")) == _data), (True, True))
-            eq("sftp writes: mkdir, rename and delete work in the folder",
-               [_sftp_err259(_s.mkdir, "/Alpha One/maps"), _sftp_err259(_s.rename, "/Alpha One/upload.bin",
-                                                                         "/Alpha One/maps/u.bin"),
-                _sftp_err259(_s.remove, "/Alpha One/maps/u.bin"), _sftp_err259(_s.rmdir, "/Alpha One/maps")],
-               ["ok"] * 4)
-            eq("sftp writes: rename never replaces a file that is there",
-               (_sftp_err259(_s.rename, "/Alpha One/inside-link.cfg", "/Alpha One/server.cfg")[:7],
-                _read259(os.path.join(_HOME_A, "server.cfg"))), ("OSError", b"hostname p259\n"))
-            _rows = {a: _audits259(a, _since_w) for a in ("upload_file", "create_folder", "rename_file", "delete_file")}
-            check("sftp writes: each upload, mkdir, rename and delete is audited, about the server, from the address",
-                  all(r and all(x[4] == _GSA and x[3] == "127.0.0.1" and x[2].startswith("SFTP: ") for x in r)
-                      for r in _rows.values())
-                  and any("upload.bin (307200 bytes)" in x[2] and x[1] for x in _rows["upload_file"])
-                  and any("big.bin" in x[2] and "size limit" in x[2] and not x[1] for x in _rows["upload_file"])
-                  and any("upload.bin -> maps/u.bin" in x[2] for x in _rows["rename_file"]), repr(_rows))
-            eq("sftp writes: a read is not audited", _audits259("read_file", _since_w), [])
 
-            # ── a permission removed mid-session ──
-            _held = _s.open("/Alpha One/server.cfg", "r")
-            with _p9.app_context():
-                _g = _db259.session.get(_Grp259, _GRP)
-                _g.set_permissions([_auth259.VIEW_FILES])
-                _db259.session.commit()
-            eq("sftp authz: with edit_files taken away, the next listing shows no folder",
-               _s.listdir("/"), [])
-            _time259.sleep(1.2)
-            check("sftp authz: ...and a file already open stops reading",
-                  _sftp_err259(_held.read, 4).startswith("PermissionError"), _sftp_err259(_held.read, 4))
-            with _p9.app_context():
-                _g = _db259.session.get(_Grp259, _GRP)
-                _g.set_permissions([_auth259.VIEW_FILES, _auth259.EDIT_FILES])
-                _db259.session.commit()
-            eq("sftp authz: given back, the folder is there again", _s.listdir("/"), ["Alpha One"])
-            with _p9.app_context():
-                _u = _db259.session.get(_User259, _ED)
-                _u.auth_epoch = (_u.auth_epoch or 0) + 1      # "sign out everywhere"
-                _db259.session.commit()
-            check("sftp authz: signing out everywhere ends the SFTP session's access at once",
-                  _sftp_err259(_s.listdir, "/").startswith("PermissionError"), _sftp_err259(_s.listdir, "/"))
+if _E2E_UP259 and _s is not None:
+    try:
+        # ── the file manager's rules ──
+        _rules259 = {
+            "delete serverfiles (an empty folder)": _sftp_err259(_s.rmdir, "/Alpha One/serverfiles"),
+            "rename the LinuxGSM tree away": _sftp_err259(_s.rename, "/Alpha One/lgsm", "/Alpha One/lgsm2"),
+            "write ~/.ssh/authorized_keys": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"),
+                                                         "/Alpha One/.ssh/authorized_keys"),
+            "write ~/.bashrc": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/Alpha One/.bashrc"),
+            "a name with a control character": _sftp_err259(_s.mkdir, "/Alpha One/bad\x07name"),
+            "a name ending in a space": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/Alpha One/x.cfg "),
+            "write at the top level": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/top.txt"),
+            "the console log": _sftp_err259(_s.putfo, _io259.BytesIO(b"k"), "/Alpha One/log/console/p259server-console.log"),
+        }
+        eq("sftp rules: the web file manager's refusals hold over SFTP",
+           sorted(k for k, v in _rules259.items() if v == "ok"), [])
+        _chmods = (_sftp_err259(_s.chmod, "/Alpha One/lgsm", 0o700), _sftp_err259(_s.chmod, "/Alpha One/server.cfg", 0o4755),
+                   _sftp_err259(_s.chown, "/Alpha One/server.cfg", 0, 0))
+        eq("sftp rules: a protected folder's permissions are not changed; setuid is dropped; the owner never changes",
+           (_chmods[0][:15], _chmods[1], os.stat(os.path.join(_HOME_A, "server.cfg")).st_mode & 0o7777,
+            _chmods[2][:15], os.stat(os.path.join(_HOME_A, "lgsm")).st_mode & 0o777 != 0o700),
+           ("PermissionError", "ok", 0o755, "PermissionError", True))
+        _cfg_path = "/Alpha One/lgsm/config-lgsm/p259server/p259server.cfg"
+        _cfg_disk = os.path.join(_HOME_A, "lgsm", "config-lgsm", "p259server", "p259server.cfg")
+        _lts = _sftp_err259(_s.putfo, _io259.BytesIO(b'logtimestamp="on"\n'), _cfg_path)
+        eq("sftp rules: a LinuxGSM config that turns logtimestamp on is refused whole (nothing written)",
+           (_lts != "ok", os.path.exists(_cfg_disk)), (True, False))
+        eq("sftp rules: ...and one that does not is written (a new file in lgsm/ is an upload, not a reserved name)",
+           (_sftp_err259(_s.putfo, _io259.BytesIO(b'maxplayers="8"\n'), _cfg_path), _read259(_cfg_disk)),
+           ("ok", b'maxplayers="8"\n'))
+        _lts2 = _sftp_err259(_s.putfo, _io259.BytesIO(b'logtimestamp="on"\n'), _cfg_path)
+        eq("sftp rules: ...and overwriting it with logtimestamp on leaves it exactly as it was",
+           (_lts2 != "ok", _read259(_cfg_disk)), (True, b'maxplayers="8"\n'))
+
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the file-name rules ran to their end", False, repr(_exc259))
+
+
+if _E2E_UP259 and _s is not None:
+    try:
+        # ── writes, the cap, and their audit rows ──
+        _since_w = _last_audit_id259()
+        _data = os.urandom(300 * 1024)
+        _put = _sftp_err259(_s.putfo, _io259.BytesIO(_data), "/Alpha One/upload.bin")
+        eq("sftp writes: an upload lands as the game account's file, byte for byte",
+           (_put, _read259(os.path.join(_HOME_A, "upload.bin")) == _data), ("ok", True))
+        _bio = _io259.BytesIO()
+        _s.getfo("/Alpha One/upload.bin", _bio)
+        eq("sftp writes: ...and reads back the same", _bio.getvalue() == _data, True)
+        _big = _sftp_err259(_s.putfo, _io259.BytesIO(b"\0" * (1024 * 1024 + 1)), "/Alpha One/big.bin")
+        _over = _sftp_err259(_s.putfo, _io259.BytesIO(b"\1" * (1024 * 1024 + 1)), "/Alpha One/upload.bin")
+        eq("sftp writes: an upload past the size limit (1 MiB here) is refused and leaves nothing behind",
+           (_big != "ok", os.path.exists(os.path.join(_HOME_A, "big.bin")),
+            sorted(n for n in os.listdir(_HOME_A) if "panel-sftp" in n)), (True, False, []))
+        eq("sftp writes: a refused overwrite leaves the old file exactly as it was",
+           (_over != "ok", _read259(os.path.join(_HOME_A, "upload.bin")) == _data), (True, True))
+        eq("sftp writes: mkdir, rename and delete work in the folder",
+           [_sftp_err259(_s.mkdir, "/Alpha One/maps"), _sftp_err259(_s.rename, "/Alpha One/upload.bin",
+                                                                     "/Alpha One/maps/u.bin"),
+            _sftp_err259(_s.remove, "/Alpha One/maps/u.bin"), _sftp_err259(_s.rmdir, "/Alpha One/maps")],
+           ["ok"] * 4)
+        eq("sftp writes: rename never replaces a file that is there",
+           (_sftp_err259(_s.rename, "/Alpha One/inside-link.cfg", "/Alpha One/server.cfg")[:7],
+            _read259(os.path.join(_HOME_A, "server.cfg"))), ("OSError", b"hostname p259\n"))
+        _rows = {a: _audits259(a, _since_w) for a in ("upload_file", "create_folder", "rename_file", "delete_file")}
+        check("sftp writes: each upload, mkdir, rename and delete is audited, about the server, from the address",
+              all(r and all(x[4] == _GSA and x[3] == "127.0.0.1" and x[2].startswith("SFTP: ") for x in r)
+                  for r in _rows.values())
+              and any("upload.bin (307200 bytes)" in x[2] and x[1] for x in _rows["upload_file"])
+              and any("big.bin" in x[2] and "size limit" in x[2] and not x[1] for x in _rows["upload_file"])
+              and any("upload.bin -> maps/u.bin" in x[2] for x in _rows["rename_file"]), repr(_rows))
+        eq("sftp writes: a read is not audited", _audits259("read_file", _since_w), [])
+
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the write checks ran to their end", False, repr(_exc259))
+
+
+if _E2E_UP259 and _s is not None:
+    try:
+        # ── a permission removed mid-session ──
+        _held = _s.open("/Alpha One/server.cfg", "r")
+        with _p9.app_context():
+            _g = _db259.session.get(_Grp259, _GRP)
+            _g.set_permissions([_auth259.VIEW_FILES])
+            _db259.session.commit()
+        eq("sftp authz: with edit_files taken away, the next listing shows no folder",
+           _s.listdir("/"), [])
+        _time259.sleep(1.2)
+        check("sftp authz: ...and a file already open stops reading",
+              _sftp_err259(_held.read, 4).startswith("PermissionError"), _sftp_err259(_held.read, 4))
+        with _p9.app_context():
+            _g = _db259.session.get(_Grp259, _GRP)
+            _g.set_permissions([_auth259.VIEW_FILES, _auth259.EDIT_FILES])
+            _db259.session.commit()
+        eq("sftp authz: given back, the folder is there again", _s.listdir("/"), ["Alpha One"])
+        with _p9.app_context():
+            _u = _db259.session.get(_User259, _ED)
+            _u.auth_epoch = (_u.auth_epoch or 0) + 1      # "sign out everywhere"
+            _db259.session.commit()
+        check("sftp authz: signing out everywhere ends the SFTP session's access at once",
+              _sftp_err259(_s.listdir, "/").startswith("PermissionError"), _sftp_err259(_s.listdir, "/"))
         _close259(_p1)
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the permission checks ran to their end", False, repr(_exc259))
 
+
+if _E2E_UP259:
+    try:
         # ── edit_files without view_files ──
         _pnv = _connect259("p259_noview", pkey=_K2, host_key=_HK259)
         if _pnv[0]:
@@ -755,29 +790,32 @@ else:
         _close259(_p5) if _p5[0] else None
         _app259._LOGIN_FAILS.clear()
         _ag259.reset_throttle()
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the sign-in checks ran to their end", False, repr(_exc259))
 
-    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure, never the suite's
-        check("sftp end to end: the block ran to its end", False, repr(_exc259))
-    finally:
-        # ── off: nothing listens ──
-        _REAL_RESTART259()
-        if _runner259 is not None:
+
+if _E2E:
+    # ── off: nothing listens ──
+    _REAL_RESTART259()
+    if _runner259 is not None:
+        _runner259.join(15)
+        _alive259 = _runner259.is_alive()
+        _listeners259 = _listening259(_E2E259.port)
+        if _alive259 and _br259._STATE.get("proc") is not None:
+            _br259._STATE["proc"].kill()          # a stop that did not stop: end it, so the run goes on
             _runner259.join(15)
-            _probe = _socket259.socket()
-            _probe.settimeout(3)
-            eq("sftp service: stopped, nothing listens on its port any more",
-               _probe.connect_ex(("127.0.0.1", _E2E259.port)) != 0 and not _runner259.is_alive(), True)
-            _probe.close()
-        _logging259.getLogger("panel.auth").removeHandler(_Capture259.handler)
-        with _p9.app_context():
-            for _row in _GS259.query.filter(_GS259.game_type.in_(("p259", "p259b"))).all():
-                _db259.session.delete(_row)
-            for _row in _Grp259.query.filter(_Grp259.name.in_(("p259_edit", "p259_editonly"))).all():
-                _db259.session.delete(_row)
-            for _row in _User259.query.filter(_User259.username.in_(("p259_ed", "p259_2fa", "p259_nofa",
-                                                                     "p259_off", "p259_noview"))).all():
-                _db259.session.delete(_row)
-            _db259.session.commit()
+        eq("sftp service: stopped, nothing listens on its port any more (and its loop ended)",
+           (_listeners259, _alive259), ([], False))
+    _logging259.getLogger("panel.auth").removeHandler(_Capture259.handler)
+    with _p9.app_context():
+        for _row in _GS259.query.filter(_GS259.game_type.in_(("p259", "p259b"))).all():
+            _db259.session.delete(_row)
+        for _row in _Grp259.query.filter(_Grp259.name.in_(("p259_edit", "p259_editonly"))).all():
+            _db259.session.delete(_row)
+        for _row in _User259.query.filter(_User259.username.in_(("p259_ed", "p259_2fa", "p259_nofa",
+                                                                 "p259_off", "p259_noview"))).all():
+            _db259.session.delete(_row)
+        _db259.session.commit()
 
 # ── put everything back ──
 _p9_restore_all()
