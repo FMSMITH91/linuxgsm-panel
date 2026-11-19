@@ -6,6 +6,7 @@
    first); it is the unpacked database's; a page with no link and sum says so; with the Outside services
    switch off no month update is offered and the card says the switch is off.
 3. The start limit: an operator's start, Apply or Update clears it first; a start that still hits it says so.
+   The card's Start is watched for the settle time; one that dies says so with its log.
 4. Uninstall: the account's tmux and JVM folders in /tmp go (helper and remote form), only real folders it owns.
 5. B3's later games (q3, etl, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
    console.log, ET: Legacy's g_log), the TCP RCON forward, the live port and b3.ini.
@@ -231,19 +232,66 @@ def _limit_sh258():
        _ad258.install_outcome("ADDON_START_LIMIT\nADDON_START_FAILED\n", 25)[1], _ad258.START_LIMIT)
 
 
-def _limit_route258(sid):
-    _p9_patch_sm("shell_as_game_user", lambda server, user, sh, **_k: ("ADDON_START_LIMIT\n", "", 1))
+# The card's Start under bash: a systemctl whose answers the `mode` file beside it picks; sleep returns at once.
+_WATCH258 = """#!/bin/bash
+mode=$(cat "%s/mode")
+echo "$*" >> "%s/watch.log"
+case "$mode:$*" in
+  limit:*"show -p Result"*) echo start-limit-hit ;;
+  limit:*" start "*) exit 1 ;;
+  dies:*"is-active"*) echo activating ;;
+  dies:*"NRestarts"*) echo 2 ;;
+  *"is-active"*) echo active ;;
+  *"NRestarts"*) echo 0 ;;
+esac
+exit 0
+"""
+_CRASH258 = "b3: bad b3.ini line 3"
+
+
+def _start_watch_sh258():
+    d = os.path.join(_TMP258, "watch")
+    os.makedirs(d, exist_ok=True)
+    for name, text in (("systemctl", _WATCH258 % (d, d)), ("journalctl", "#!/bin/bash\necho '%s'\n" % _CRASH258),
+                       ("sleep", "#!/bin/bash\nexit 0\n")):
+        _write258(os.path.join(d, name), text)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(os.path.join(d, name), 0o700)  # nosec B103 - this part's own stub, its owner only
+    sh = _ad258.start_sh("u258", "b3").replace('cd "$HOME"', "cd %s" % _TMP258)
+    got = {}
+    for mode in ("ok", "dies", "limit"):
+        _write258(os.path.join(d, "mode"), mode)
+        _write258(os.path.join(d, "watch.log"), "")
+        r = _bash258(sh, path_first=d)
+        with open(os.path.join(d, "watch.log"), encoding="utf-8") as fh:
+            stopped = "--user stop lgsm-addon-b3.service" in fh.read()
+        got[mode] = (_ad258.start_outcome(r.stdout, r.returncode), stopped)
+    eq("Start (bash): watched as an install's start is: up for the settle time is started; one that restarts is "
+       "stopped and says ADDON_DIED with its log; one refused for the start limit says so with its log",
+       got, {"ok": ((True, "", ""), False), "dies": ((False, "ADDON_DIED", _CRASH258 + "\n"), True),
+             "limit": ((False, "ADDON_START_LIMIT", _CRASH258 + "\n"), False)})
+
+
+def _start_route258(sid):
     _p9_patch(_ra258, "game_account_write_refusal", lambda remote, user, reading=False: None)
-    refused = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/start" % sid).get_json() or {}
-    with _ra258._JOBS_LOCK:
-        _ra258._JOBS[(sid, "b3")] = {"running": False, "why": "an earlier failure", "tail": "", "kind": "settings"}
-    _p9_patch_sm("shell_as_game_user", lambda server, user, sh, **_k: ("", "", 0))
-    ok = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/start" % sid).get_json() or {}
-    with _ra258._JOBS_LOCK:
-        left = (sid, "b3") in _ra258._JOBS
-    eq("Start (route): a start refused for the limit says so; a start that works clears an earlier job's error",
-       ("more than 5 times in 10 minutes" in (refused.get("error") or ""), ok.get("success"), left),
-       (True, True, False))
+    _p9_patch(_ra258, "threading", _p9_threading(_P9Thread))
+
+    def start(out, rc):
+        _p9_patch_sm("shell_as_game_user", lambda server, user, sh, **_k: (out, "", rc))
+        r = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/start" % sid)
+        _p9_drain()
+        with _ra258._JOBS_LOCK:
+            job = dict(_ra258._JOBS.get((sid, "b3")) or {})
+        return r.status_code, (r.get_json() or {}).get("started"), job, _p9_audit("addon_start")
+    died = start("ADDON_DIED\ntail.b64=%s\n" % _ad258._b64("%s; db %s\n" % (_CRASH258, _DBV258)), 26)
+    limit = start("ADDON_START_FAILED\nADDON_START_LIMIT\n", 25)
+    ok = start("ADDON_STARTED\n", 0)
+    eq("Start (route): runs in the background and is watched; one that dies says so on the card with its log (the "
+       "database password masked) and is audited as failed; one refused for the limit says so; one that stays up "
+       "clears the earlier error",
+       (died[:2], died[2].get("why"), _CRASH258 in died[2].get("tail", ""), _DBV258 in died[2].get("tail", ""),
+        died[3].success, "more than 5 times in 10 minutes" in (limit[2].get("why") or ""), ok[2], ok[3].success),
+       ((202, True), _ra258._START_DIED, True, False, False, True, {}, True))
 
 
 # ── 4. /tmp at uninstall ────────────────────────────────────────────────────────────────────────
@@ -729,6 +777,7 @@ try:
     _dbip258()
     _geo_off258()
     _limit_sh258()
+    _start_watch_sh258()
     _helper_tmp258()
     _helper_release258()
     _remote_tmp258()
@@ -740,7 +789,7 @@ try:
     _card_checks258()
     _ids258 = _fixture258()
     try:
-        for _step258 in (lambda ids: _limit_route258(ids["cod2"]), _row_geo_off258, _install_csgo258, _install_etl258,
+        for _step258 in (lambda ids: _start_route258(ids["cod2"]), _row_geo_off258, _install_csgo258, _install_etl258,
                          _apply_etl258, _own258):
             _p9_restore_all()
             _p9_arm(who="part258")
