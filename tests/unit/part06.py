@@ -2400,18 +2400,23 @@ def _inst_stops():
             + _inst_shfn_raw("_on_first_parent_line"))
 
 
+# What _gitc calls on a root run to settle who owns the tree (CI runs the unit suite as root).
+_GITC_NEEDS = ("_panel_ids", "_panel_cannot_write", "_r26a_fixed_target", "_r42i_tree_owner")
+
+
 def _inst_shfn(name):
     """Return one shell function out of install.sh, whole.
 
-    install.sh's file-placement helpers come first when its body uses them, and its required-stop
-    code when it applies a stop: a function run on its own would otherwise call a name never defined.
+    install.sh's file-placement helpers come first when its body uses them, its required-stop code
+    when it applies a stop, and _gitc's owner helpers before _gitc: a function run on its own would
+    otherwise call a name never defined.
     """
     _fn = _inst_shfn_raw(name)
-    _pre = ""
+    _pre = "".join(_inst_shfn_raw(n) for n in _GITC_NEEDS) if name == "_gitc" else ""
     if name not in _STOP_NAMES and any(n in _fn for n in ("_apply_update_stop", "_signed_then_stop")):
-        _pre = _inst_placement() + _inst_stops()
+        _pre += _inst_placement() + _inst_stops()
     elif name not in _PLACEMENT_NAMES and any(n in _fn for n in _PLACEMENT_NAMES):
-        _pre = _inst_placement()
+        _pre += _inst_placement()
     return _pre + _fn
 
 

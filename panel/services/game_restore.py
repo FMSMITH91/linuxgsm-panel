@@ -154,8 +154,10 @@ _GRS_KEEP_REAL = " ".join('"$HR/%s"' % k for k in KEEP)
 # Every KEEP path and every folder above one (lgsm for lgsm/backup): none may be a symlink (_grs_walks).
 # Not the sign-in paths: the restore neither clears, moves nor writes through them, so one that is a
 # link (a dotfile kept elsewhere) is left as it is rather than refusing the restore.
-_GRS_KEEP_CHAIN = " ".join(sorted({"/".join(k.split("/")[:i + 1]) for k in KEEP if k not in _GRS_LOGIN
-                                   for i in range(k.count("/") + 1)}))
+# A folder ABOVE a sign-in path is in it though (~/.config, ~/.local, ~/.local/share): the switch walks into
+# it entry by entry (entries), and through a link that walk would move what the link points at.
+_GRS_KEEP_CHAIN = " ".join(sorted({"/".join(k.split("/")[:i]) for k in KEEP for i in range(1, k.count("/") + 2)
+                                   if i <= k.count("/") or k not in _GRS_LOGIN}))
 # Inodes left over once the archive is unpacked, as MARGIN is for bytes.
 INODE_MARGIN = 1000
 # A line every HEARTBEAT seconds while a long step runs (a read of the whole archive, the extraction), so a
@@ -334,11 +336,10 @@ def putback_script(user, name, t0):
     return leftovers_script(user)
 
 
-# The folders above a KEEP path that are not KEEP themselves (lgsm): the switch moves their entries one
-# by one; and the KEEP entries at the top of the home and inside such a folder, which it never moves.
-_GRS_KEEP_PARENTS = tuple(sorted({k.split("/")[0] for k in KEEP if "/" in k}))
-_GRS_KEEP_TOP = tuple(k for k in KEEP if "/" not in k)
-_GRS_KEEP_SUB = tuple(sorted({k.split("/", 1)[1] for k in KEEP if "/" in k}))
+# The folders above a KEEP path that are not KEEP themselves (lgsm; .config, .local and .local/share for the
+# user manager's folders): the switch walks into each, at any depth, and moves its entries one by one.
+_GRS_KEEP_ABOVE = tuple(sorted({"/".join(k.split("/")[:i]) for k in KEEP for i in range(1, k.count("/") + 1)}
+                               - set(KEEP)))
 # How long the switch waits for a LinuxGSM command of the account (one cron started before the crontab
 # was set aside) to end: polls of 2 seconds.
 _GRS_LGSM_POLLS = 60
@@ -363,22 +364,22 @@ def _grs_work_paths():
 def _grs_switch_functions():
     """Shell functions for the switch-over and its undo.
 
-    entries DIR: the home-relative names a switch moves out of DIR (everything but KEEP; inside lgsm,
-    entry by entry), NUL-separated. moveall SRC DST: each of them renamed from SRC into DST (the same
-    filesystem: WORK_DIR is in the home and no KEEP path is a link), a folder made writable first, as
-    a rename into another folder must update its "..". undo: the switch reversed from wherever it
+    entries DIR: the home-relative names a switch moves out of DIR (everything but KEEP; inside a folder
+    above a KEEP path, entry by entry, at any depth: lgsm/, .config/, .local/share/), NUL-separated.
+    moveall SRC DST: each of them renamed from SRC into DST (the same filesystem: WORK_DIR is in the
+    home and no KEEP path is a link), a folder made writable first, as a rename into another folder
+    must update its "..". undo: the switch reversed from wherever it
     stopped ($st names the step): what came from the staging folder (names in $nm) set aside into $F,
     the home's own content moved back from $O. LinuxGSM's own links were moved as links, so they come
     back as they were.
     """
-    parents = "|".join(_GRS_KEEP_PARENTS)
-    top = "|".join(_GRS_KEEP_TOP)
-    sub = "|".join(_GRS_KEEP_SUB)
+    # `entries DIR [PREFIX/]`: PREFIX is the folder below DIR being walked (empty at the top). A KEEP
+    # path is never named; a real folder above one is walked into; anything else is named whole.
     entries_fn = (
-        'entries() { local e f n; for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$e" ] || [ -L "$e" ] || continue; '
-        'n=${e##*/}; case "$n" in %s) for f in "$e"/* "$e"/.[!.]* "$e"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; '
-        'case "${f##*/}" in %s) continue;; esac; printf "%%s\\0" "$n/${f##*/}"; done;; %s) ;; '
-        '*) printf "%%s\\0" "$n";; esac; done; }' % (parents, sub, top)
+        'entries() { local e r; for e in "$1/${2:-}"* "$1/${2:-}".[!.]* "$1/${2:-}"..?*; do '
+        '[ -e "$e" ] || [ -L "$e" ] || continue; r="${2:-}${e##*/}"; case "$r" in %s) continue;; '
+        '%s) if [ -d "$e" ] && [ ! -L "$e" ]; then entries "$1" "$r/"; continue; fi;; esac; '
+        'printf "%%s\\0" "$r"; done; }' % ("|".join(KEEP), "|".join(_GRS_KEEP_ABOVE))
     )
     moveall_fn = (
         'moveall() { local r; while IFS= read -r -d "" r; do case "$r" in */*) mkdir -p -- "$2/${r%/*}";; esac; '
@@ -552,8 +553,9 @@ _GRS_VET_REFUSALS = (
                 "rebuild (outside the home, or a backup or lock folder), so it cannot be restored "
                 "faithfully"),
     ("HOLDFAIL", "the archive could not be set aside while the pre-restore backup runs"),
-    ("KEEPLINK", "the backup, lock or tmp folder, ~/.ssh or the panel's cron folder (or a folder above one) "
-                 "is a symbolic link, so the restore could not keep it apart from what it clears"),
+    ("KEEPLINK", "the backup, lock or tmp folder, ~/.ssh, the panel's cron folder, or a folder above one of "
+                 "these or above the account's service folders (~/.config, ~/.local) is a symbolic link, so the "
+                 "restore could not keep it apart from what it clears"),
 )
 
 

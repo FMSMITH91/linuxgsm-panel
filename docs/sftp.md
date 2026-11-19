@@ -51,8 +51,11 @@ service's **host key fingerprint**.
 
 Each user adds their key on their **Account** page → **SFTP**: paste the one line of the `.pub`
 file (an Ed25519 key is recommended: `ssh-keygen -t ed25519`). ECDSA keys work, and RSA keys of
-3072 bits or more. Adding a key asks for your password again if you signed in a while ago. Each
-added or removed key is recorded in the audit log.
+3072 bits or more. Adding a key asks for your password, and your authenticator code when you use
+two-factor authentication, every time: a key signs in without your browser session, so a borrowed
+session must not be enough to add one. Each added or removed key is recorded in the audit log and
+shown in your account's recent security changes. Changing your password, "Sign out everywhere", an
+administrator's password reset and deactivating the account remove your keys: add yours again after.
 
 In FileZilla (Site Manager → New site):
 
@@ -86,7 +89,9 @@ in with a password at all. Backup codes are not accepted over SFTP.
   cannot be made over SFTP.
 - The file manager's rules apply: the LinuxGSM folder, `serverfiles`, the script and the account's
   own start-up files are never deleted or renamed; `~/.ssh`, `~/.bashrc` and the other sign-in files
-  are never written; LinuxGSM's own `_default.cfg` is never written; a LinuxGSM config that would
+  are never written, nor the services the account starts by itself (`~/.config/systemd`,
+  `~/.local/share/systemd`, `~/.config/environment.d`, `~/.config/containers`) or the folders above
+  them; LinuxGSM's own `_default.cfg` is never written; a LinuxGSM config that would
   switch `logtimestamp` on is refused whole (it freezes the live console); the live console's log and
   its folders are never changed; names with control characters, text-direction characters or spaces
   at either end are refused.

@@ -310,9 +310,12 @@ def _s212_backup_new_and_old():
     head = {}
     if ok:
         head = _json212.loads(path.read_bytes()[len(_bk212._ENC_MAGIC):].split(b"\n", 1)[0])
-    check("backup kdf: a new encrypted archive's header records scrypt N=2^17, r=8, p=1",
-          ok and (head.get("kdf"), head.get("n"), head.get("r"), head.get("p")) == ("scrypt", 2 ** 17, 8, 1),
-          repr(head))
+    # r31: version 2, AES-256-GCM under Argon2id at OWASP's first listed configuration (the magic is the
+    # same length as version 1's, so the header is read at the same offset).
+    check("backup kdf: a new encrypted archive's header records Argon2id m=47104, t=1, p=1 and AES-256-GCM",
+          ok and path.read_bytes().startswith(_bk212._ENC_MAGIC2)
+          and (head.get("kdf"), head.get("m"), head.get("t"), head.get("p"), head.get("cipher"))
+          == ("argon2id", 47104, 1, 1, "aes-256-gcm"), repr(head))
     check("backup kdf: ...and the restore's decrypt opens it with the passphrase, and not without it",
           ok and _opens212(path) == (True, "") and not _opens212(path, _K212_WRONG)[0])
     plain = (_bk212.BACKUP_DIR / plain_name).read_bytes() if plain_ok else b""

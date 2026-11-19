@@ -361,9 +361,9 @@ with _p9.app_context():
     _db259.session.commit()
     _OWNER259, _OTHER259 = _owner259.id, _other259.id
 _O259 = _p9_client(_OWNER259)
-_add259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LED259, "label": "laptop"})
-_dup259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LED259})
-_small259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LRS2K259})
+_add259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LED259, "label": "laptop", "password": _PW259})
+_dup259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LED259, "password": _PW259})
+_small259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LRS2K259, "password": _PW259})
 with _p9.app_context():
     _keys259 = [(k.label, k.key_type, k.user_id) for k in _Key259.query.filter_by(user_id=_OWNER259)]
     _kadd259 = [(r.success, r.detail) for r in _AL259.query.filter_by(action="sftp_key_add", user_id=_OWNER259)]
@@ -376,12 +376,24 @@ check("sftp keys: every add is audited, refusals as failures",
 _stale259 = _p9_client(_OWNER259)
 with _stale259.session_transaction() as _s259:
     _s259["_auth_at"] = _time259.time() - 86400
-_stale_add259 = _stale259.post("/account/sftp-keys/add", data={"public_key": _LEC259})
+# r31: the password on the form every time, as the API token's mint (a fresh sign-in is not enough).
+_nopw_add259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LEC259})
+_badpw_add259 = _O259.post("/account/sftp-keys/add", data={"public_key": _LEC259, "password": _PW259 + "x"})
 with _p9.app_context():
     _n_after259 = _Key259.query.filter_by(user_id=_OWNER259).count()
-eq("sftp keys: adding a key asks a stale sign-in for the password again (nothing added)",
-   (_stale_add259.status_code, "reauth" in (_stale_add259.headers.get("Location") or ""), _n_after259),
-   (302, True, 1))
+    _why259 = [r.detail for r in _AL259.query.filter_by(action="sftp_key_add", user_id=_OWNER259, success=False)
+               .order_by(_AL259.id.desc()).limit(2)]
+eq("sftp keys r31: adding a key needs the account password on the form, even in a fresh session (none, or a "
+   "wrong one, adds nothing and is audited as refused)",
+   (_nopw_add259.status_code, _badpw_add259.status_code, _n_after259, _why259),
+   (302, 302, 1, ["refused: wrong password", "refused: wrong password"]))
+_stale_add259 = _stale259.post("/account/sftp-keys/add", data={"public_key": _LEC259, "password": _PW259})
+with _p9.app_context():
+    _n_stale259 = _Key259.query.filter_by(user_id=_OWNER259).count()
+    _Key259.query.filter_by(user_id=_OWNER259, key_type=_sc259.parse_public_key(_LEC259)[0].key_type).delete()
+    _db259.session.commit()
+eq("sftp keys r31: ...and with it, a sign-in past the step-up window adds one (the password is the proof)",
+   (_stale_add259.status_code, _n_stale259), (302, 2))
 _x259 = _p9_client(_OTHER259).post("/account/sftp-keys/%d/remove" % _kid259)
 with _p9.app_context():
     _still259 = _Key259.query.filter_by(id=_kid259).count()
@@ -737,6 +749,27 @@ if _E2E_UP259 and _s is not None:
             sorted(n for n in os.listdir(_HOME_A) if "panel-sftp" in n)), (True, False, []))
         eq("sftp writes: a refused overwrite leaves the old file exactly as it was",
            (_over != "ok", _read259(os.path.join(_HOME_A, "upload.bin")) == _data), (True, True))
+        # r31: a file opened for APPEND. sftp-server writes such a handle's data at the end whatever offset
+        # is sent, so writes "at offset 0" over and over grew the file past the cap and the free space,
+        # which were judged on the offsets. 100 KiB to start, then twelve writes of 100 KiB at offset 0.
+        with open(os.path.join(_HOME_A, "grow.bin"), "wb") as _fh259:
+            _fh259.write(b"g" * 102400)
+        _app_errs259 = []
+        _app259 = _s.open("/Alpha One/grow.bin", "a")
+        try:
+            for _i259 in range(12):
+                _w259 = _sftp_err259(lambda: (_app259.seek(0), _app259.write(b"a" * 102400), _app259.flush()))
+                if _w259 != "ok":
+                    _app_errs259.append(_w259)
+                    break
+        finally:
+            _sftp_err259(_app259.close)
+        _grow_size259 = os.path.getsize(os.path.join(_HOME_A, "grow.bin"))
+        check("sftp writes r31: a file opened for append is held to the size limit by what is written, not by the "
+              "offsets sent (writes at offset 0 again and again stop at 1 MiB)",
+              bool(_app_errs259) and _grow_size259 <= 1024 * 1024,
+              "errors=%r size=%d" % (_app_errs259, _grow_size259))
+        _sftp_err259(_s.remove, "/Alpha One/grow.bin")
         eq("sftp writes: mkdir, rename and delete work in the folder",
            [_sftp_err259(_s.mkdir, "/Alpha One/maps"), _sftp_err259(_s.rename, "/Alpha One/upload.bin",
                                                                      "/Alpha One/maps/u.bin"),

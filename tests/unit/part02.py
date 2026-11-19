@@ -722,7 +722,8 @@ try:
     _epath = _bk._safe_path(_ename)
     check("backup/enc: the .enc name still resolves through _safe_path", _epath is not None)
     _eblob = _epath.read_bytes()
-    check("backup/enc: it carries the format header", _eblob.startswith(_bk._ENC_MAGIC))
+    check("backup/enc: it carries the format header (version 2: AES-256-GCM under Argon2id)",
+          _eblob.startswith(_bk._ENC_MAGIC2))
     # The point of the whole feature: nothing readable is left in the file.
     check("backup/enc: the archive is no longer an openable tar",
           not _bk._is_readable_tar(_epath), "it still opens as a tar — it is not encrypted")
@@ -981,8 +982,9 @@ try:
     check("backup/enc: set_passphrase refuses a passphrase under the minimum", _short_ok)
     check("backup/enc: ...and refusing it did not change what is stored",
           not _fakecfg.get("backup_passphrase"))
+    # 15: OWASP Authentication Cheat Sheet, "Implement Proper Password Strength Controls" (no MFA).
     check("backup/enc: the route and the helper share one minimum, so they cannot drift",
-          _bk.MIN_PASSPHRASE_LEN == 12)
+          _bk.MIN_PASSPHRASE_LEN == 15)
 finally:
     _bk.load_config, _bk.update_config = _o_load, _o_upd
 

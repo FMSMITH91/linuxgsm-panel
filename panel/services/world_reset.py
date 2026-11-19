@@ -223,8 +223,13 @@ _WWR_OTHER_LINE = re.compile(r'^ *([A-Za-z_][A-Za-z0-9_]*)="([^"\\`]*)"(?:[ \t]+
 
 # Where bash evaluates arithmetic inside double quotes, and so sets any variable an expression there
 # names (`key=2`, `key+=1`, `key++`), or whose value is such an expression: $((…)), $[…], an array
-# subscript ${a[…]} and a substring offset or length ${a:off:len}.
-_WWR_ARITH = re.compile(r"\$\(\(|\$\[|\$\{[^}]*\[|\$\{[^}:]*:(?![-=+?])")
+# subscript ${a[…]} and a substring offset or length ${a:off:len}. In a parameter expansion only the
+# name comes between `${` and that `[` or `:` (a name, a digit, or a special parameter, `$` among
+# them), so each gap stops at the next `$` (a `$` straight after `${` is the name `$`): a gap running
+# on to the next `}` was scanned again from every `${`, so a value of many `${` and no `}` took
+# quadratic time, holding the hub (review 1119 A04). Linear now; the matches differ only on text
+# bash refuses as a bad substitution, which sets nothing.
+_WWR_ARITH = re.compile(r"\$\(\(|\$\[|\$\{\$?[^}$]*\[|\$\{\$?[^}:$]*:(?![-=+?])")
 
 
 def _wwr_names_only(line, key):

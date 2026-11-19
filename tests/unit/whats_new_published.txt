@@ -808,3 +808,12 @@ de047a6a The host page no longer asks sudo every five minutes.
 b27c1f45 An add-on that stops again after Start says why.
 ae0ddd0b SFTP for every user, with their own login.
 509b3519 A private key pasted where a key path belongs is no longer written to the log.
+be5d95bf Idle connections can no longer take the panel down.
+5e23fa5a An update never runs git as root in the panel's own checkout.
+1acdc972 Adding an SFTP key asks for your password, and taking an account back removes its keys.
+77764b94 The file browser and SFTP no longer write the services a game account starts by itself.
+7c7a73d9 An SFTP upload opened for appending is held to the size limit.
+ea935a8b Public SSH opened by a logged firewall rule reads as open.
+a7701af8 A crafted LinuxGSM config line no longer stalls the panel.
+6966fcf1 Encrypted backups use AES-256-GCM.
+015b6f6b A backup passphrase needs 15 characters.

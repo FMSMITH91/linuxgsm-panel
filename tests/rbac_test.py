@@ -4300,7 +4300,8 @@ _MUT_NO_PERM_OK = {
     # The caller's OWN Telegram chat for alerts (telegram_link): link, check and unlink act on the
     # caller's own row only; a code links the account that asked for it, nobody else's.
     "account_telegram_link", "account_telegram_check", "account_telegram_unlink",
-    # The caller's OWN SFTP keys: add (step-up) and remove look the row up by id AND the caller's user id.
+    # The caller's OWN SFTP keys: add (proved with the password and, with 2FA on, a code) and remove look
+    # the row up by id AND the caller's user id.
     "account_sftp_key_add", "account_sftp_key_remove",
     # The panel owner handing over the panel: the caller's OWN flag is the gate (owner.is_owner,
     # refused with a 403 for anyone else), confirmed with their password and a live 2FA code.

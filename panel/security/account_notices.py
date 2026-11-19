@@ -10,7 +10,8 @@ pointer to "Sign out everywhere" and the password change; and on their Account p
 changes as a list. Both read the audit log (one indexed query), so a change made in a borrowed
 session, or by an admin, reaches the person it concerns. The panel-wide channels (Telegram, Discord,
 ntfy, through notifications.notify and its per-event switches) carry only admin-level events: a
-lockout, a change to an administrator's password, 2FA or API token, and required-2FA enforcement.
+lockout, a change to an administrator's password, 2FA, API token or SFTP keys, and required-2FA
+enforcement.
 Their messages name the account and the event; a lockout also names the address, as the existing
 admin_login and admin_bruteforce alerts do.
 """
@@ -43,6 +44,10 @@ _CHANGES = {
     "owner_transferred": ("Panel ownership transferred",
                           "Since you last signed in: ownership of this panel was transferred ({when}, "
                           "from {ip})."),
+    "sftp_key_add": ("SFTP key added",
+                     "Since you last signed in: an SFTP key was added to your account ({when}, from {ip})."),
+    "sftp_key_remove": ("SFTP key removed",
+                        "Since you last signed in: an SFTP key was removed from your account ({when}, from {ip})."),
     "push_subscribe": ("Alerts turned on for a new device",
                        "Since you last signed in: alerts were turned on for a new device ({when}, from {ip})."),
     "telegram_link": ("A Telegram chat was linked for alerts",

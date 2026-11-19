@@ -933,10 +933,32 @@ _post_update_scheme_hint() {
     fi
 }
 
-# Run git inside PANEL_DIR as the repo's owner. When the panel self-updates on a
-# root/system-service install, this script runs as root but the checkout is owned
-# by the service user — git refuses that ("detected dubious ownership") unless we
-# operate as the owner. As root we can sudo -u <owner> without a password.
+# Run git inside PANEL_DIR as the account that owns the tree, never as root in a tree another account
+# controls. When the panel self-updates on a root/system-service install, this script runs as root
+# but the checkout is owned by the service user, so git runs as that user (root needs no password
+# for sudo -u).
+#
+# Who that is comes from PANEL_DIR itself, judged without following it (_r42i_tree_owner), not from
+# PANEL_DIR/.git. The account was `stat -c %U` of the .git entry, tested with `-d` on every call, and
+# an empty answer or "root" ran plain git as root. The panel account owns PANEL_DIR, so it could
+# rename .git away for the instant of that test (or, with fs.protected_hardlinks=0, put a hard link to
+# a root-owned symlink there, which reads as root's), and root then ran git in a tree the panel
+# controls. git's own ownership check did not stop it: as root it also trusts the uid in SUDO_UID
+# (git-config(1), safe.directory), and the helper keeps SUDO_UID set to the panel's uid for the
+# installer. With .git gone, git walked up and used a repository in the panel's home instead. So
+# the panel's own config and hooks (core.hooksPath, a reference-transaction hook) ran as root on the
+# next fetch or reset — on a self-update the panel can ask for at will. Now:
+#   * the tree's owner, when it is not root, runs every call, whatever .git is at that moment;
+#   * GIT_CEILING_DIRECTORIES stops git at PANEL_DIR, so a missing .git is an error, never a walk up
+#     into the panel user's home;
+#   * root runs git only in a directory it has OPENED without following a link and found root's,
+#     whose .git is a real directory that is root's too (no account but root can make either), from
+#     inside that directory (fchdir) with GIT_DIR set to it, and with SUDO_UID/SUDO_GID/SUDO_USER
+#     removed, so nothing swapped in after the owner was judged is used;
+#   * when the owner cannot be settled (no PANEL_USER for a link the panel made, an operator's link
+#     whose target cannot be confirmed), git does not run.
+# OWASP has no cheat sheet for this (OS privilege separation; the CI/CD Security Cheat Sheet covers
+# pipelines, not an installer's own git); the authority is git-config(1), safe.directory.
 #
 # gc.autoDetach=false: a command that leaves many loose objects starts `git gc --auto`, which by
 # default forks into the background and keeps deleting loose objects after git returns. The update's
@@ -945,13 +967,46 @@ _post_update_scheme_hint() {
 # (deploy of 9b455f4b, 2026-11-18). In the foreground, gc finishes before this function returns.
 # Newer git runs `git maintenance run --auto` instead, which reads maintenance.autoDetach first.
 _gitc() {
-    local owner=""
-    [[ -d "${PANEL_DIR}/.git" ]] && owner="$(stat -c '%U' "${PANEL_DIR}/.git" 2>/dev/null || echo)"
-    if [[ "$(id -u)" -eq 0 ]] && [[ -n "${owner}" ]] && [[ "${owner}" != "root" ]]; then
-        sudo -u "${owner}" git -c gc.autoDetach=false -c maintenance.autoDetach=false -C "${PANEL_DIR}" "$@"
-    else
-        git -c gc.autoDetach=false -c maintenance.autoDetach=false -C "${PANEL_DIR}" "$@"
+    local -a gitv=(git -c gc.autoDetach=false -c maintenance.autoDetach=false)
+    local owner dir="${PANEL_DIR}" ceil
+    ceil="$(dirname -- "${PANEL_DIR}")"
+    if [[ "$(id -u)" -ne 0 ]]; then
+        GIT_CEILING_DIRECTORIES="${ceil}" "${gitv[@]}" -C "${dir}" "$@"
+        return
     fi
+    owner="$(_r42i_tree_owner)"
+    # An operator's link (root made it, its target beyond the panel user's reach): git runs in that
+    # target, named directly, so a link swapped in after this point is never followed.
+    if [[ -L "${PANEL_DIR}" ]] && [[ "${owner}" != "${PANEL_USER:-}" ]]; then
+        dir="$(_r26a_fixed_target "${PANEL_DIR}")" && ceil="$(dirname -- "${dir}")" || owner=""
+    fi
+    case "${owner}" in
+        "")
+            echo "git was not run in ${PANEL_DIR}: who owns it could not be settled." >&2
+            return 1 ;;
+        root)
+            python3 -I - "${dir}" "${gitv[@]}" "$@" <<'GITC_ROOT_PY'
+import os, stat, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    if os.fstat(fd).st_uid != 0:
+        raise PermissionError(1, "the folder is not root's")
+    os.fchdir(fd)
+    gd = os.lstat(".git")
+    if not stat.S_ISDIR(gd.st_mode) or gd.st_uid != 0:
+        raise PermissionError(1, "its .git is not a folder of root's")
+except OSError as e:
+    sys.stderr.write("git was not run as root in %s: %s\n" % (sys.argv[1], e.strerror or e))
+    sys.exit(1)
+env = {k: v for k, v in os.environ.items()
+       if k not in ("SUDO_UID", "SUDO_GID", "SUDO_USER", "GIT_CEILING_DIRECTORIES", "GIT_COMMON_DIR")}
+env.update(GIT_DIR=".git", GIT_WORK_TREE=".")
+os.execvpe(sys.argv[2], sys.argv[2:], env)
+GITC_ROOT_PY
+            ;;
+        *)
+            sudo -u "${owner}" env GIT_CEILING_DIRECTORIES="${ceil}" "${gitv[@]}" -C "${dir}" "$@" ;;
+    esac
 }
 
 # The branch's remote-tracking ref is always named IN FULL (refs/remotes/origin/<branch>), both
@@ -1863,6 +1918,8 @@ PRIOEOF
 # only, so a host kept whatever unit it was first given, and any change to the text below would
 # never have reached an existing install. Two unit layouts: a system service run as PANEL_USER
 # (root installs) and a systemd --user service (per-user installs).
+# LimitNOFILE (both layouts) bounds the descriptors the web server's connections can take
+# (panel/core/wsgi_serve.py); an update rewrites the unit, so existing installs get it too.
 render_service_unit() {
     if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
         cat <<SERVICEEOF
@@ -1882,6 +1939,10 @@ ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# Descriptors: the web server holds at most 1,024 connections (eventlet's pool), so this leaves the
+# panel's own work (SSH, consoles, the database) room however many are open. Without it the
+# soft limit was 1,024 for everything, and idle connections alone could use it up.
+LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target
@@ -1903,6 +1964,10 @@ ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# Descriptors: the web server holds at most 1,024 connections (eventlet's pool), so this leaves the
+# panel's own work (SSH, consoles, the database) room however many are open. Without it the
+# soft limit was 1,024 for everything, and idle connections alone could use it up.
+LimitNOFILE=8192
 
 [Install]
 WantedBy=default.target

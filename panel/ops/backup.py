@@ -50,10 +50,24 @@ _MEMBERS = ("panel.db", "config.json", "secret_key", "cred_key")
 # the machine — cloud sync, a copy onto a laptop, an off-box rsync. Encrypting it means the file
 # alone is worthless.
 #
-# Layout: b"LGSMBK1\n" | one-line JSON header (KDF params + salt) | b"\n" | Fernet token.
-# The header is plaintext BY DESIGN — restore needs the salt before it can derive anything, and
-# scrypt params must be readable so a future cost increase can still open today's archives.
+# Layout (version 2, every archive written since 2026-11-19):
+#   b"LGSMBK2\n" | one-line JSON header (cipher, KDF and its parameters, salt) | b"\n" | 12-byte nonce |
+#   AES-256-GCM ciphertext and tag, with everything before the nonce as the associated data.
+# OWASP Cryptographic Storage Cheat Sheet, "Algorithms" (AES, ideally a 256-bit key) and "Cipher Modes"
+# (authenticated modes, GCM first; CBC only with a separate MAC, which is what Fernet is); the key is
+# derived from the passphrase with Argon2id at the first configuration the Password Storage Cheat
+# Sheet lists ("Argon2id": m=47104 KiB, t=1, p=1). The header is plaintext BY DESIGN (restore needs
+# the salt and parameters before it can derive anything, and a later cost increase must still open
+# today's archives) and authenticated: a changed header fails the tag like a changed byte of data.
+# Version 1 (b"LGSMBK1\n", a Fernet token under scrypt) is only read, so every older archive restores.
 _ENC_MAGIC = b"LGSMBK1\n"
+_ENC_MAGIC2 = b"LGSMBK2\n"
+_GCM_NONCE = 12
+_ARGON_M, _ARGON_T, _ARGON_P = 47104, 1, 1
+# The most a version-2 header may ask for, read before anything is derived (the header is part of the
+# file, which can be uploaded): at most twice the memory, and at most four times the work (m·t), of
+# what this panel writes; OWASP's other listed configurations (19 MiB t=2 ... 7 MiB t=5) are inside it.
+_ARGON_MAX_M, _ARGON_MAX_T, _ARGON_MAX_P = 2 * _ARGON_M, 5, 2
 
 # What the restore page asks next, as a field of the route's answer ("needs"), never read off the
 # message. The page found these refusals by their English words (/passphrase/, /safety copy/) —
@@ -102,6 +116,19 @@ def _derive_key(passphrase, salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P):
     return base64.urlsafe_b64encode(raw)
 
 
+def _argon2id(passphrase_bytes, salt, m, t, p):
+    """The raw 32-byte Argon2id output (argon2-cffi); the call run off the eventlet hub."""
+    from argon2.low_level import Type, hash_secret_raw
+    return hash_secret_raw(passphrase_bytes, salt, time_cost=t, memory_cost=m, parallelism=p, hash_len=32,
+                           type=Type.ID)
+
+
+def _derive_key2(passphrase, salt, m=_ARGON_M, t=_ARGON_T, p=_ARGON_P):
+    """Argon2id(passphrase) -> a 256-bit AES key, derived on a worker thread (run_off_hub) as scrypt is."""
+    from panel.security.auth import run_off_hub   # lazy: auth pulls in the models and Flask
+    return run_off_hub(_argon2id, passphrase.encode("utf-8"), salt, m, t, p)
+
+
 def _is_readable_tar(path):
     """True if `path` opens as a gzip tar.
 
@@ -125,50 +152,43 @@ def _encrypt_archive(plain_path, dest_path, passphrase):
     Whole-file, so the archive is held in memory once — fine for a panel DB (metrics are pruned;
     these run to single-digit MB).
     """
-    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     salt = os.urandom(16)
-    key = _derive_key(passphrase, salt)
+    key = _derive_key2(passphrase, salt)
     with open(plain_path, "rb") as f:
         blob = f.read()
-    header = json.dumps({"kdf": "scrypt", "n": _SCRYPT_N, "r": _SCRYPT_R, "p": _SCRYPT_P,
-                         "salt": base64.b64encode(salt).decode()},
+    header = json.dumps({"cipher": "aes-256-gcm", "kdf": "argon2id", "m": _ARGON_M, "t": _ARGON_T,
+                         "p": _ARGON_P, "salt": base64.b64encode(salt).decode()},
                         separators=(",", ":"), sort_keys=True).encode("utf-8")
+    aad = _ENC_MAGIC2 + header + b"\n"
+    nonce = os.urandom(_GCM_NONCE)
     with open(dest_path, "wb") as f:
-        f.write(_ENC_MAGIC)
-        f.write(header)
-        f.write(b"\n")
-        f.write(Fernet(key).encrypt(blob))
+        f.write(aad)
+        f.write(nonce)
+        f.write(AESGCM(key).encrypt(nonce, blob, aad))
     os.chmod(dest_path, 0o600)
 
 
 def _decrypt_archive(src_path, dest_path, passphrase):
     """Decrypt to `dest_path`. Returns (ok, message).
 
-    A wrong passphrase is reported as such and never raises — Fernet authenticates, so a tampered
-    archive fails here too rather than being unpacked over the live install.
+    A wrong passphrase is reported as such and never raises — both formats authenticate (GCM's tag,
+    Fernet's HMAC), so a tampered archive fails here too rather than being unpacked over the live install.
     """
-    from cryptography.fernet import Fernet, InvalidToken
     try:
         with open(src_path, "rb") as f:
             body = f.read()
     except OSError:
         return False, "Could not read the backup archive."
-    refusal, params, token = _parse_enc_header(body)
+    v2 = body.startswith(_ENC_MAGIC2)
+    refusal, params, token = _parse_enc_header2(body) if v2 else _parse_enc_header(body)
     if params is None:
         return False, refusal
     if not passphrase:
         return False, _R16C_LOCKED_NO_KEY
-    salt, n, r, p = params
-    try:
-        key = _derive_key(passphrase, salt, n=n, r=r, p=p)
-        plain = Fernet(key).decrypt(token)
-    except InvalidToken:
-        # Fernet authenticates, so a wrong key and a modified archive raise the same thing and
-        # genuinely cannot be told apart without the key. Say both rather than guess.
-        return False, _R16C_KEY_DID_NOT_OPEN
-    except Exception:
-        _log.exception("backup decrypt failed")
-        return False, "The backup could not be decrypted."
+    ok, plain = (_open_v2 if v2 else _open_v1)(passphrase, params, token)
+    if not ok:
+        return False, plain
     try:
         with open(dest_path, "wb") as f:
             f.write(plain)
@@ -176,6 +196,70 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     except OSError:
         return False, "Could not write the decrypted archive."
     return True, ""
+
+
+def _open_v2(passphrase, params, token):
+    """(True, the archive's bytes) for a version-2 file, else (False, why)."""
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    salt, m, t, p, aad = params
+    try:
+        key = _derive_key2(passphrase, salt, m=m, t=t, p=p)
+        return True, AESGCM(key).decrypt(token[:_GCM_NONCE], token[_GCM_NONCE:], aad)
+    except InvalidTag:
+        # A wrong key and a changed archive (header included) fail the same tag, and cannot be told
+        # apart without the key. Say both rather than guess.
+        return False, _R16C_KEY_DID_NOT_OPEN
+    except Exception:
+        _log.exception("backup decrypt failed")
+        return False, "The backup could not be decrypted."
+
+
+def _open_v1(passphrase, params, token):
+    """(True, the archive's bytes) for a version-1 file (Fernet under scrypt), else (False, why)."""
+    from cryptography.fernet import Fernet, InvalidToken
+    salt, n, r, p = params
+    try:
+        return True, Fernet(_derive_key(passphrase, salt, n=n, r=r, p=p)).decrypt(token)
+    except InvalidToken:
+        # Fernet authenticates, so a wrong key and a modified archive raise the same thing.
+        return False, _R16C_KEY_DID_NOT_OPEN
+    except Exception:
+        _log.exception("backup decrypt failed")
+        return False, "The backup could not be decrypted."
+
+
+def _argon_params_ok(m, t, p, salt):
+    """Whether a version-2 header's Argon2id parameters are inside the bound (_ARGON_MAX_*), and its salt."""
+    if not (1 <= p <= _ARGON_MAX_P and 8 * p <= m <= _ARGON_MAX_M and 1 <= t <= _ARGON_MAX_T):
+        return False
+    return m * t <= 4 * _ARGON_M * _ARGON_T and 16 <= len(salt) <= 64
+
+
+def _parse_enc_header2(body):
+    """A version-2 archive's (refusal, (salt, m, t, p, aad), nonce + ciphertext); None and why when refused.
+
+    The bound (_ARGON_MAX_*) is checked before anything is derived: the header decides the cost.
+    """
+    rest = body[len(_ENC_MAGIC2):]
+    nl = rest.find(b"\n")
+    if nl < 0:
+        return "The encrypted backup's header is damaged.", None, None
+    try:
+        head = json.loads(rest[:nl].decode("utf-8"))
+        salt = base64.b64decode(head["salt"])
+        m, t, p = int(head["m"]), int(head["t"]), int(head["p"])
+    except Exception:
+        return "The encrypted backup's header is damaged.", None, None
+    if head.get("kdf") != "argon2id" or head.get("cipher") != "aes-256-gcm":
+        return "This backup uses an encryption scheme this panel does not know.", None, None
+    if not _argon_params_ok(m, t, p, salt):
+        return ("The encrypted backup's header asks for parameters this panel will not use.",
+                None, None)
+    token = rest[nl + 1:]
+    if len(token) < _GCM_NONCE + 16:
+        return "The encrypted backup's header is damaged.", None, None
+    return "", (salt, m, t, p, body[:len(_ENC_MAGIC2) + nl + 1]), token
 
 
 def _parse_enc_header(body):
@@ -253,7 +337,11 @@ def get_passphrase():
     return value
 
 
-MIN_PASSPHRASE_LEN = 12
+# OWASP Authentication Cheat Sheet, "Implement Proper Password Strength Controls": without MFA, a
+# password shorter than 15 characters is weak, and nothing but this passphrase stands between a copied
+# archive and every secret in it. A fixed floor (it was 12); one set before keeps working, and the
+# Backups card says when it is shorter than this (get_settings' passphrase_short).
+MIN_PASSPHRASE_LEN = 15
 
 
 def set_passphrase(passphrase):
@@ -743,7 +831,8 @@ def _archive_members_refusal(src):
 # Written in pieces to a part file in BACKUP_DIR (a dot-name no listing or prune matches), then, once
 # whole, checked as restore_backup checks one before it is listed: a plain archive's members
 # (_archive_members_refusal) and its database's rows (_restore_db_refusal), and an encrypted one's
-# header (_parse_enc_header; its contents need the passphrase, which restore asks for). Then it is
+# header (_parse_enc_header2, or _parse_enc_header for a version-1 file; its contents need the
+# passphrase, which restore asks for). Then it is
 # moved under a name this panel generates (_claim_archive_name, kind "upload"). Never a name or a
 # path from the browser.
 UPLOAD_MAX = 512 * 1024 * 1024        # an encrypted archive is decrypted whole in memory at restore
@@ -868,8 +957,9 @@ def upload_refusal(path):
             head = f.read(8192)
     except OSError:
         return "Could not read the backup archive.", False
-    if head.startswith(_ENC_MAGIC):
-        refusal, params, _token = _parse_enc_header(head)
+    if head.startswith(_ENC_MAGIC) or head.startswith(_ENC_MAGIC2):
+        parse = _parse_enc_header2 if head.startswith(_ENC_MAGIC2) else _parse_enc_header
+        refusal, params, _token = parse(head)
         return (refusal or "", True) if params is None else ("", True)
     return (_upload_bomb_refusal(path) or _archive_members_refusal(path) or _restore_db_refusal(path)), False
 
@@ -1434,7 +1524,25 @@ def get_settings():
             "keep_days": max(MIN_KEEP_DAYS, min(MAX_KEEP_DAYS, keep)),
             # Whether one is set — NEVER the passphrase itself. It is the only thing standing
             # between a leaked archive and every secret in it, so it does not travel to a browser.
-            "encrypt": bool(cfg.get("backup_passphrase"))}
+            "encrypt": bool(cfg.get("backup_passphrase")),
+            "passphrase_short": _passphrase_short(cfg)}
+
+
+def _passphrase_short(cfg):
+    """Whether the configured passphrase (one set while the floor was lower) is under MIN_PASSPHRASE_LEN.
+
+    Decrypted only when the key file is there: decrypting without it would CREATE a new cred_key
+    (the debug report's _passphrase_state reads it the same way).
+    """
+    from panel.core import config as _cfgmod
+    stored = cfg.get("backup_passphrase") or ""
+    if not stored or _cfgmod._key_missing(_cfgmod.CRED_KEY_FILE):
+        return False
+    try:
+        value = decrypt_secret(stored)
+    except Exception:  # noqa: BLE001 - a note on the card, never a reason to fail the settings read
+        return False
+    return bool(value) and len(value) < MIN_PASSPHRASE_LEN
 
 
 def set_settings(enabled=None, keep_days=None):

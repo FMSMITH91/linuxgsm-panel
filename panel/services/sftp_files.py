@@ -186,6 +186,11 @@ class Files:
                 bk.P_READ if info["readable"] else 0), info["mode"])
         else:
             handle = backend.open(real, _flags_to_pflags(flags), info["mode"])
+            if flags & _os.O_APPEND:
+                # sftp-server writes an O_APPEND handle's data at the file's end whatever offset the
+                # client sends, so the cap and the free space are counted from the size at open plus
+                # every byte written (WriteHandle.write), never from the offsets.
+                info["append_from"] = (a or {}).get("size", 0)
         return WriteHandle(vfs, path, target, backend, handle, info)
 
     def _limit(self, backend, real, existing):
@@ -424,6 +429,7 @@ class WriteHandle(_Handle):
         self.stage = stage
         self.high = len(stage) if stage is not None else 0
         self.failed = None
+        self.appended = 0
 
     def write(self, offset, data):
         """Write `data` at `offset` (pipelined; a failure is reported on a later write or the close)."""
@@ -432,10 +438,12 @@ class WriteHandle(_Handle):
         if not self.allowed():
             self.failed = DENIED_NOW
             return (SFTP_PERMISSION_DENIED, DENIED_NOW)
-        end = offset + len(data)
+        append_from = self.info.get("append_from")
+        end = offset + len(data) if append_from is None else append_from + self.appended + len(data)
         self.failed = self._size_problem(end)
         if self.failed:
             return (SFTP_FAILURE, self.failed)
+        self.appended += len(data)
         self.high = max(self.high, end)
         try:
             if self.stage is not None:

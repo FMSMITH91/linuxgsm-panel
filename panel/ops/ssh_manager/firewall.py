@@ -17,15 +17,42 @@ from panel.ops.ssh_manager import (_core, hosts)  # noqa: E402,F401  (module obj
 # ─── Remote Firewall Management (UFW) ─────────────────────────
 
 
+# The attributes ufw prints after the From column, in parentheses and comma-separated: the rule's
+# logging (`ufw allow log 22/tcp`, `log-all`) and, in a numbered listing, "out" for an outbound
+# rule. ufw 0.36's get_status (backend_iptables.py): "%-26s %-12s%-26s%s%s" of To, the action and
+# direction, From, " (<attribs>)" and " # <comment>".
+_UFW_ATTRIBS = frozenset({"log", "log-all", "out"})
+
+
+def _split_ufw_attribs(rule):
+    """(`rule` without ufw's trailing attributes, the logging attribute or "").
+
+    Only a last parenthesised group made of those words is one: "(v6)" is the family, not an attribute.
+    """
+    t = rule.rstrip()
+    at = t.rfind("(")
+    if not t.endswith(")") or at < 0:
+        return rule, ""
+    words = [w.strip().lower() for w in t[at + 1:-1].split(",")]
+    if not words or not all(w in _UFW_ATTRIBS for w in words):
+        return rule, ""
+    return t[:at], next((w for w in words if w != "out"), "")
+
+
 def _parse_ufw_rule(detail):
     """Parse one `ufw status numbered` rule line into structured fields.
 
     Structured so the UI can show clean columns instead of the raw string. Handles the optional
-    `on <iface>` clause, the `# comment` suffix, and the `(v6)` family markers.
+    `on <iface>` clause, the `# comment` suffix, the `(v6)` family markers and the `(log)` /
+    `(log-all)` attributes after the From column (`log`: the rule's logging, "" for none).
     """
     # The comment first: "(v6)" typed in a hand-made comment filed an IPv4 rule under IPv6 (the panel's
     # own comments cannot hold parentheses), and the comment lost the text (review 1107 lead).
     rule, _sep, comment = detail.partition("#")
+    # Then the attributes, which ufw prints after From: left in, From read "Anywhere (log)", so a public
+    # rule with logging was not read as public anywhere (open public SSH read "off", and a close that
+    # left the logged rule in place read back as done). Review 1119 A03.
+    rule, log = _split_ufw_attribs(rule)
     v6 = "(v6)" in rule
     s = rule.replace("(v6)", " ")
     comment = comment.strip()
@@ -54,7 +81,7 @@ def _parse_ufw_rule(detail):
         frm = ""
     return {
         "v6": v6, "to": to.strip(), "action": action, "direction": direction,
-        "from": frm.strip(), "iface": iface, "comment": comment,
+        "from": frm.strip(), "iface": iface, "comment": comment, "log": log,
     }
 
 

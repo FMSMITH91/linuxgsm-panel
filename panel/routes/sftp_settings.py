@@ -5,9 +5,14 @@ off, where it listens, its port, the upload size limit and whether a password wi
 code may sign in. Saving restarts the service (services/sftp_broker.restart). Values outside the
 recommendation are saved, with a note (owner rule: editable, the recommendation shown beside it).
 
-Account > SFTP: each user's own public keys. Adding one asks a stale sign-in for the password again
-(OWASP Authentication Cheat Sheet, "Re-authentication After Risk Events": a new credential is one)
-and is audited; so is removing one.
+Account > SFTP: each user's own public keys. Adding one asks for the account password and, with 2FA
+on, a current authenticator (or backup) code, every time, as minting an API token does: a key signs
+in with no session and outlives the one it was added from, so a stolen session cookie must not be
+enough to leave one behind (OWASP Authentication Cheat Sheet, "Require Re-authentication for
+Sensitive Features" and "Re-authentication After Risk Events": adding a trusted device). Every path
+that takes an account back removes the account's keys (User.revoke_outliving_credentials). Adding
+and removing are audited, appear in the account's own security notices, and raise the
+credential_change alert for an administrator's account (account_notices).
 """
 from flask import current_app, flash, jsonify, redirect, request, url_for
 from flask_login import current_user, login_required
@@ -15,6 +20,8 @@ from flask_login import current_user, login_required
 from panel.core import i18n
 from panel.core.config import load_config, update_config
 from panel.db.models import SftpKey, db
+from panel.routes._shared import REAUTH_BLOCKED_MSG, reauth_password
+from panel.security import account_notices
 from panel.security.account_guard import step_up_required
 from panel.security.auth import log_action, superadmin_required
 from panel.services import sftp_broker, sftp_common as sc
@@ -60,9 +67,9 @@ def register(app):
 
     @app.route("/account/sftp-keys/add", methods=["POST"])
     @login_required
-    @step_up_required       # a new way to sign in to this account
     def account_sftp_key_add():
-        """Add one public key to the signed-in account."""
+        """Add one public key to the signed-in account, proved with the password (and the code with 2FA on)."""
+        u = current_user._get_current_object()
         parsed, why = sc.parse_public_key(request.form.get("public_key"), request.form.get("label"))
         if why is None and current_user.sftp_keys.count() >= sc.MAX_KEYS_PER_USER:
             why = i18n.Sentence("An account can hold {n} SFTP keys. Remove one first.", n=sc.MAX_KEYS_PER_USER)
@@ -70,14 +77,18 @@ def register(app):
             why = "That key is already on your account."
         if why:
             flash(i18n.tr(why), "danger")
-            log_action(current_user, "sftp_key_add", target=current_user.username,
-                       detail="refused: %s" % why, success=False)
+        # The proof is checked LAST, as the API-token mint does: a one-time backup code is never
+        # spent on a request that is refused for another reason.
+        refused = str(why) if why else _key_add_proof_refusal(u)
+        if refused:
+            log_action(u, "sftp_key_add", target=u.username, detail="refused: %s" % refused, success=False)
             return redirect(url_for("account", _anchor=_ACCOUNT_ANCHOR))
         db.session.add(SftpKey(user_id=current_user.id, label=parsed.label, key_type=parsed.key_type,
                                key_blob=parsed.blob_b64, fingerprint=parsed.fingerprint))
         db.session.commit()
         log_action(current_user, "sftp_key_add", target=current_user.username,
                    detail="%s %s %s" % (sc.KEY_TYPES[parsed.key_type], parsed.fingerprint, parsed.label))
+        account_notices.alert_credential_change(u, "SFTP key added (%s)" % parsed.fingerprint)
         flash(i18n.tr("SFTP key added."), "success")
         return redirect(url_for("account", _anchor=_ACCOUNT_ANCHOR))
 
@@ -92,7 +103,31 @@ def register(app):
         db.session.delete(row)
         db.session.commit()
         log_action(current_user, "sftp_key_remove", target=current_user.username, detail=detail)
+        account_notices.alert_credential_change(current_user, "SFTP key removed (%s)" % row.fingerprint)
         return jsonify({"success": True, "message": i18n.tr("SFTP key removed.")})
+
+
+def _key_add_proof_refusal(u):
+    """Why the form's password and code do not allow adding a key (for the audit row), or None.
+
+    The same proof, budget and order as the API-token mint (auth_routes.account_api_token_generate):
+    the password first under the shared per-account re-authentication budget, then the code, which
+    is spent (single use) only once the password has passed. The flash saying why is already queued.
+    """
+    from panel.routes.auth_routes import _auth_token_totp_refusal
+    pw = reauth_password(u, request.form.get("password", ""))
+    if pw == "throttled":
+        flash(REAUTH_BLOCKED_MSG, "danger")
+        return "too many wrong passwords or codes"
+    if pw != "ok":
+        flash(i18n.tr("Password incorrect — no SFTP key was added."), "danger")
+        return "wrong password"
+    if not u.totp_enabled:
+        return None
+    why = _auth_token_totp_refusal(u, (request.form.get("totp_code") or "").strip(), own_mismatch=True)
+    if why == "wrong authenticator code":
+        flash(i18n.tr("That authenticator code didn't match — no SFTP key was added."), "danger")
+    return why
 
 
 def change_note(before, after):

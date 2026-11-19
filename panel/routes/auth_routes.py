@@ -324,11 +324,13 @@ def _auth_token_refused(u, why):
     return redirect(url_for("account"))
 
 
-def _auth_token_totp_refusal(u, code):
+def _auth_token_totp_refusal(u, code, own_mismatch=False):
     """Check the API-token mint's authenticator (or backup) code for a 2FA account.
 
     Returns None when the code is good (its reserved budget slot handed back), else the audit
-    reason for the refusal — the flash telling the user why has already been queued.
+    reason for the refusal — the flash telling the user why has already been queued, except for a
+    code that does not match when `own_mismatch` is set: the caller (sftp_settings, adding a key)
+    says that one in its own words.
     """
     # The code is under the same per-account budget as the password: a failure keeps
     # its slot, a match gives it back below.
@@ -350,7 +352,8 @@ def _auth_token_totp_refusal(u, code):
     elif u.use_backup_code(code):
         ok_2fa = True
     if not ok_2fa:
-        flash("That authenticator code didn't match — no API token was minted.", "danger")
+        if not own_mismatch:
+            flash("That authenticator code didn't match — no API token was minted.", "danger")
         return "wrong authenticator code"
     reauth_release(u, _stamp)
     return None
@@ -554,8 +557,9 @@ def _register_sign_out_everywhere(app):
         # every UserSession row and left it working. app.py's note that "cookie theft is also
         # recoverable via sign out everywhere" was not true while one existed. Minting one
         # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-        # could leave themselves a key that survived the victim's whole recovery.
-        user.revoke_api_token()
+        # could leave themselves a key that survived the victim's whole recovery. An SFTP key is the
+        # same kind of credential (no epoch, no session), so the account's keys go with it.
+        user.revoke_outliving_credentials()
         db.session.commit()
         if keep is None:
             # A legacy login (cookie from before per-session tracking) has no row to keep, so give

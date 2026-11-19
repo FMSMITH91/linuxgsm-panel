@@ -795,6 +795,10 @@ ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# Descriptors: the web server holds at most 1,024 connections (eventlet's pool), so this leaves the
+# panel's own work (SSH, consoles, the database) room however many are open. Without it the
+# soft limit was 1,024 for everything, and idle connections alone could use it up.
+LimitNOFILE=8192
 
 [Install]
 WantedBy=multi-user.target
@@ -814,6 +818,10 @@ ExecStart=${PANEL_DIR}/venv/bin/python $(panel_file app.py)
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# Descriptors: the web server holds at most 1,024 connections (eventlet's pool), so this leaves the
+# panel's own work (SSH, consoles, the database) room however many are open. Without it the
+# soft limit was 1,024 for everything, and idle connections alone could use it up.
+LimitNOFILE=8192
 
 [Install]
 WantedBy=default.target

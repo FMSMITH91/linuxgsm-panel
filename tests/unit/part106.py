@@ -96,13 +96,14 @@ _out106 = _js106(_name106, (
     ("function _r29c_bkEditing(", "function _r29c_bkSetIdle(", "var _r29j_bkUntyped", "function _r29c_bkFieldIn(",
      "function _r25c_bkUnread(", "var _r30c_bkSaving", "function _r30c_bkSave(",
      "function loadBackups(", "function bkRenderGames(", "function bkRenderFullSchedule(",
-     "function _r20cIntervalOption(", "function bkShowEncState(", "function _r29c_bkPassDone(",
+     "function _r20cIntervalOption(", "function bkShowEncState(", "function _bkShowShortNote(", "function _r29c_bkPassDone(",
      "function saveBackupPassphrase(", "function clearBackupPassphrase(", "function setGameSchedule("), (
     "  const out = {}, $ = id => document.getElementById(id);\n"
     "  const pass = $('bk-pass'), kp = $('bk-keep'), fk = $('fb-keep');\n"
     "  const refresh = async (focus) => { document.activeElement = focus || null; loadBackups(); await settle(); };\n"
-    # the passphrase: kept while focused AND after focus left it (typed, then Save pressed)
-    "  pass.value = 'typed-in-p106'; await refresh(pass); out.passFocused = pass.value;\n"
+    # the passphrase: kept while focused AND after focus left it (typed, then Save pressed); 15
+    # characters at least, or Save refuses it before anything is sent (r31's floor)
+    "  pass.value = 'typed-in-p106-pass'; await refresh(pass); out.passFocused = pass.value;\n"
     "  await refresh(null); out.passBlurred = pass.value;\n"
     "  saveBackupPassphrase(null); await settle(); out.passSaved = pass.value;\n"
     "  pass.value = 'typed-again'; clearBackupPassphrase(null); await settle(); out.passCleared = pass.value;\n"
@@ -142,7 +143,7 @@ if _out106 is not None:
     check("Backups card: a refresh leaves the passphrase being typed alone, focused or not (every refresh "
           "cleared it, a dozen in the two minutes after Back up now); saving it, or turning encryption "
           "off, still clears the box",
-          _out106.get("passFocused") == "typed-in-p106" and _out106.get("passBlurred") == "typed-in-p106"
+          _out106.get("passFocused") == "typed-in-p106-pass" and _out106.get("passBlurred") == "typed-in-p106-pass"
           and _out106.get("passSaved") == "" and _out106.get("passCleared") == "", repr(_out106))
     check("Backups card: the global Keep box, the game-backup Keep box and the interval select keep a "
           "typed value while focused (rewritten, no `change` fired and the value was not saved); "
