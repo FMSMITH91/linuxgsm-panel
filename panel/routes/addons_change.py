@@ -125,11 +125,10 @@ def _unit(gs, addon_id, p, meta, geo, own=False):
     return unit, _ad.relay_units(addon_id, relay_list), net, web
 
 
-def _secrets(gs, addon_id, meta, p):
-    """The values to mask in what the host prints: the RCON password and the database's."""
-    rcon, _why = _ad.game_rcon(gs.game_type, p["rcon_lines"])
+def _secrets(gs, meta, p, b3ini):
+    """The values to mask in what the host prints: the RCON passwords (game config, b3.ini) and the database's."""
     r, _h, _p = _db_of(gs, meta)
-    return (rcon, (decrypt_secret(r.secret) or "") if r is not None else "")
+    return _ad.rcon_values(p["rcon_lines"], b3ini) + [(decrypt_secret(r.secret) or "") if r is not None else ""]
 
 
 def _b3_files(b3ini, geoini, choice):
@@ -195,7 +194,7 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
                              "old_image": meta.get("image", ""), "dirs": [_ad.B3_OWN_PLUGINS] if own else []})
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=_ad.INSTALL_TIMEOUT,
                                            selfname=gs.lgsm_name, stdin_text=new_ini)
-    secrets = _secrets(gs, addon_id, meta, p)
+    secrets = _secrets(gs, meta, p, b3ini)
     ok, said, tail = _ad.install_outcome(_ad.scrub(out or "", secrets), rc)
     return ("", "") if ok else (said, _ad.scrub(tail, secrets))
 

@@ -433,16 +433,24 @@ def _install_answer(app, gs, addon_id):
 
 
 # ── start, stop, remove, logs ─────────────────────────────────────────────────────────────────
+def _masked(gs, text, rcon):
+    """`text` with the server's database passwords and the RCON passwords `rcon` masked (scrub).
+
+    The RCON ones are what the same shell read (_ad.read_secrets): the game config's and b3.ini's.
+    """
+    secrets = [decrypt_secret(r.secret) or "" for r in GameDatabase.query.filter_by(game_server_id=gs.id).all()]
+    return _ad.scrub(text, secrets + rcon)
+
+
 def _start_steps(gs, addon_id):
     """The card's Start and its watch: ("", "") when the add-on stays up, else (why, its log's last lines, masked)."""
-    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.start_sh(gs.short_name, addon_id),
-                                          timeout=_ad.ACTION_TIMEOUT + _ad.SETTLE_SECONDS)
+    sh = _ad.start_sh(gs.short_name, addon_id, _ad.game_cfg(gs.game_type, gs.lgsm_name))
+    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=_ad.ACTION_TIMEOUT + _ad.SETTLE_SECONDS)
     ok, mark, tail = _ad.start_outcome(out, rc)
     if ok:
         return "", ""
     said = {"ADDON_START_LIMIT": _ad.START_LIMIT, "ADDON_DIED": _START_DIED}.get(mark, _NOT_DONE["start"])
-    secrets = [decrypt_secret(r.secret) or "" for r in GameDatabase.query.filter_by(game_server_id=gs.id).all()]
-    return _with_reason(said, "", err) if mark != "ADDON_DIED" else said, _ad.scrub(tail, secrets)
+    return _with_reason(said, "", err) if mark != "ADDON_DIED" else said, _masked(gs, tail, _ad.read_secrets(out)[0])
 
 
 def _start_worker(app, gs_id, born, addon_id, who):
@@ -516,12 +524,12 @@ def _remove_answer(gs, addon_id):
 
 
 def _logs_answer(gs, addon_id):
-    out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.logs_sh(gs.short_name, addon_id),
-                                           timeout=30)
+    sh = _ad.logs_sh(gs.short_name, addon_id, _ad.game_cfg(gs.game_type, gs.lgsm_name))
+    out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=30)
     if rc != 0:
         return _say(200, "Couldn't read the add-on's log: the host did not answer. Try again.")
-    secrets = [decrypt_secret(r.secret) or "" for r in GameDatabase.query.filter_by(game_server_id=gs.id).all()]
-    return jsonify({"success": True, "log": _ad.scrub(out or "", secrets)})
+    rcon, log = _ad.read_secrets(out)
+    return jsonify({"success": True, "log": _masked(gs, log, rcon)})
 
 
 def _account_refusal(gs, what, reading):

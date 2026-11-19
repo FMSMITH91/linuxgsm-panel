@@ -452,6 +452,11 @@ def _log_sh(game_type, cfg):
             % (grep, shlex.quote(cfg), shlex.quote(_LEGACY_MARK), legacy, grep, shlex.quote(folder)))
 
 
+# The game config's RCON password lines (either name, with or without set/seta), at most 4000 bytes, base64.
+_RCON_LINES_SH = ('grep -iE "^[[:space:]]*(seta?[[:space:]]+)?rcon_?password[[:space:]]" %s 2>/dev/null '
+                  '| head -c 4000 | base64 -w0')
+
+
 def probe_sh(addon_id, selfname, server_id, game_type, nports):
     """The install's first read, as the account: the host, the game's log folder, RCON, free ports.
 
@@ -472,13 +477,12 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; '
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
             + _log_sh(game_type, cfg) +
-            'echo "rcon.b64=$(grep -iE "^[[:space:]]*(seta?[[:space:]]+)?rcon_?password[[:space:]]" %s 2>/dev/null '
-            '| head -c 4000 | base64 -w0)"; '
+            'echo "rcon.b64=$(%s)"; '
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
             'echo "ports=$f"; echo "udp=$(ss -Hulnp 2>/dev/null | grep -F "users:((" | awk \'{print $4}\' '
             '| sed "s/.*://" | sort -un | tr "\\n" " ")"; [ -f %s ] && echo installed=1; %strue'
-            % (shlex.quote(cfg), ports, int(nports),
+            % (_RCON_LINES_SH % shlex.quote(cfg), ports, int(nports),
                shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE)),
                "[ -d %s ] && echo sourcemod=1; " % shlex.quote(SOURCEMOD_DIR[game_type])
                if game_type in SOURCEMOD_DIR else ""))
@@ -1116,15 +1120,17 @@ def install_outcome(out, rc):
     return False, "The install didn't finish on the host.", tail
 
 
-def start_sh(user, addon_id):
+def start_sh(user, addon_id, cfg=""):
     """The card's Start, as the account: the start limit cleared, the start, then the install's watch (_settle_sh).
 
-    Ends with ADDON_STARTED. A start systemd refuses prints ADDON_START_FAILED (with ADDON_START_LIMIT
+    Its first line is secrets_sh's (`cfg`: the game's config, game_cfg), so a failure's tail is masked
+    without another read. Ends with ADDON_STARTED. A start systemd refuses prints ADDON_START_FAILED (with ADDON_START_LIMIT
     when its start limit refused it) and the log's tail; one that stops or restarts within
     SETTLE_SECONDS is stopped, and prints ADDON_DIED and the tail. Without the watch, a crash loop it
     set off ended as a bare "failed": systemd's last result there is exit-code, not start-limit-hit.
     """
-    return (_ENV + "{ %s; } || { echo ADDON_START_FAILED; %s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; "
+    return (_ENV + secrets_sh(user, addon_id, cfg)
+            + "{ %s; } || { echo ADDON_START_FAILED; %s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; "
             "echo; exit 25; }; %secho %s"
             % (_fresh_start_sh(addon_id, "start"), _tail_sh(user, addon_id), _settle_sh(user, addon_id), _MARK_STARTED))
 
@@ -1149,8 +1155,8 @@ def action_sh(addon_id, action):
     return _ENV + "systemctl --user stop %s.service" % unit_name(addon_id)
 
 
-def logs_sh(user, addon_id):
-    """The add-on's last LOG_LINES lines.
+def logs_sh(user, addon_id, cfg=""):
+    """The add-on's last LOG_LINES lines, after secrets_sh's line (`cfg`: the game's config, game_cfg).
 
     Its own log file if it keeps one (B3's b3.log), else its own journal lines (without Podman's
     event lines), else the newest file in its Log folder.
@@ -1158,7 +1164,7 @@ def logs_sh(user, addon_id):
     a = CATALOG[addon_id]
     own = shlex.quote("%s/%s" % (addon_dir(user, addon_id), a["log_file"])) if a["log_file"] else "''"
     log_dir = shlex.quote(addon_dir(user, addon_id) + "/Log")
-    return (_ENV + "{ if [ -n %s ] && [ -f %s ]; then tail -n %d %s; else "
+    return (_ENV + secrets_sh(user, addon_id, cfg) + "{ if [ -n %s ] && [ -f %s ]; then tail -n %d %s; else "
             "%s || { f=$(ls -1t %s 2>/dev/null | head -n 1); [ -n \"$f\" ] && tail -n %d %s/\"$f\"; }; fi; } "
             "| tail -c %d; true"
             % (own, own, LOG_LINES, own, _journal_sh(addon_id, LOG_LINES, "short-iso"), log_dir, LOG_LINES,
@@ -1212,9 +1218,63 @@ def remove_outcome(out, rc):
     return (rc == 0 and _MARK_REMOVED in (out or "")), kv.get("others") == "1"
 
 
+# Shown in place of a secret.
+_MASK = "\u2022" * 8
+# An RCON password setting and its value, as a config, b3.ini, a JSON file or a command line writes it:
+# `rcon_password: v`, `rconpassword=v`, `"rcon_password": "v"`, `set rconpassword "v w"`, `+set rcon_password v`.
+_RCON_SET_RE = re.compile(r'(rcon_?password"?[ \t]*[:=][ \t]*|\bseta?[ \t]+"?rcon_?password"?[ \t]+)'
+                          r'("[^"\r\n]*"|[^\s"]+)', re.I)
+# b3.ini's RCON password lines (ConfigParser: `key: value` or `key = value`).
+_INI_RCON_RE = re.compile(r"^[ \t]*rcon_?password[ \t]*[:=]([^\r\n]*)", re.I | re.M)
+_SECRETS_MARK = "ADDON_SECRETS"
+
+
 def scrub(text, secrets):
-    """`text` with every secret in `secrets` (non-empty) replaced by a mask."""
-    for s in secrets:
-        if s:
-            text = text.replace(s, "•" * 8)
-    return text
+    """`text` with every secret in `secrets` (non-empty) replaced by a mask, and every RCON setting's value.
+
+    The second pass (_RCON_SET_RE) masks a value written as an RCON password setting even when the
+    value itself was not read (a failed read, or a setting the panel did not know of).
+    """
+    for s in sorted({x for x in secrets if x}, key=len, reverse=True):
+        text = text.replace(s, _MASK)
+    return _RCON_SET_RE.sub(lambda m: m.group(1) + _MASK, text)
+
+
+def secrets_sh(user, addon_id, cfg):
+    """Shell printing, as one first line, the RCON passwords a log of this add-on may echo (read_secrets).
+
+    `ADDON_SECRETS rcon.b64=<the game config's RCON lines> b3rcon.b64=<b3.ini's>`, base64: the config's
+    lines as the install's probe reads them (`cfg`, relative to the home; none when empty), and for
+    B3 its b3.ini's, which the operator may have changed. Read on the shell the Start or Log runs.
+    """
+    game = _RCON_LINES_SH % shlex.quote(cfg) if cfg else "true"
+    ini = ('grep -iE "^[[:space:]]*rcon_?password[[:space:]]*[:=]" %s 2>/dev/null | head -c 4000 | base64 -w0'
+           % shlex.quote("%s/%s" % (addon_dir(user, B3), CATALOG[B3]["settings"])) if addon_id == B3 else "true")
+    return "printf '%s rcon.b64=%%s b3rcon.b64=%%s\\n' \"$(%s)\" \"$(%s)\"; " % (_SECRETS_MARK, game, ini)
+
+
+def rcon_values(cfg_lines, ini_text=""):
+    """Every RCON password value the game config's lines and b3.ini's text set (either setting name).
+
+    A b3.ini value is taken whole and as B3 reads it (ConfigParser ends it at a `;` after a blank).
+    """
+    found = [m.group(1) if m.group(1) is not None else m.group(2)
+             for name in ("rcon_password", "rconpassword") for m in _RCON_RE[name].finditer(cfg_lines or "")]
+    for m in _INI_RCON_RE.finditer(ini_text or ""):
+        value = m.group(1).strip()
+        found += [value, re.split(r"\s;", value)[0].rstrip()]
+    return [v for v in dict.fromkeys(found) if v]
+
+
+def read_secrets(out):
+    """(the RCON passwords secrets_sh's first line names, the rest of `out`).
+
+    Without that line as the first one (the read failed), nothing is taken out and the whole of
+    `out` is the rest: scrub's second pass still masks a value written as an RCON setting.
+    """
+    first, _nl, rest = (out or "").partition("\n")
+    words = first.strip().split(" ")
+    if words[0] != _SECRETS_MARK:
+        return [], out or ""
+    kv = dict(w.split("=", 1) for w in words[1:] if "=" in w)
+    return rcon_values(_unb64(kv.get("rcon.b64", "")), _unb64(kv.get("b3rcon.b64", ""))), rest
