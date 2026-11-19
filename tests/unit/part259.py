@@ -798,12 +798,12 @@ if _E2E:
     # ── off: nothing listens ──
     _REAL_RESTART259()
     if _runner259 is not None:
-        _runner259.join(15)
+        _until259(lambda: not _runner259.is_alive(), 15)
         _alive259 = _runner259.is_alive()
         _listeners259 = _listening259(_E2E259.port)
         if _alive259 and _br259._STATE.get("proc") is not None:
             _br259._STATE["proc"].kill()          # a stop that did not stop: end it, so the run goes on
-            _runner259.join(15)
+            _until259(lambda: not _runner259.is_alive(), 15)
         eq("sftp service: stopped, nothing listens on its port any more (and its loop ended)",
            (_listeners259, _alive259), ([], False))
     _logging259.getLogger("panel.auth").removeHandler(_Capture259.handler)
