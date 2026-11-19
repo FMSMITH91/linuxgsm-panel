@@ -752,6 +752,16 @@ def _podman_args(addon_id, relay_list):
     return "PodmanArgs=" + " ".join(args)
 
 
+def _volumes(user, addon_id, logdir, own_plugins):
+    """The unit's Volume= lines: the add-on's folders, the game log read-only, and B3's own plugins read-only."""
+    base = addon_dir(user, addon_id)
+    vols = ["Volume=%s/%s:%s" % (base, d, at) for d, at in CATALOG[addon_id]["mounts"]]
+    vols.append("Volume=%s:/gamelog:ro" % logdir)
+    if own_plugins and addon_id == B3:
+        vols.append("Volume=%s/%s:/data/extplugins:ro" % (base, B3_OWN_PLUGINS))
+    return vols
+
+
 def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None, own_plugins=False):
     """The add-on's Quadlet unit text (~/.config/containers/systemd/<unit>.container).
 
@@ -761,11 +771,8 @@ def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None, own_plug
     cannot change the code it runs from there.
     """
     a = CATALOG[addon_id]
-    base = addon_dir(user, addon_id)
     needs = ["%s%s-%s.socket" % (UNIT_PREFIX, addon_id, r[0]) for r in relay_list]
-    vols = ["Volume=%s/%s:%s" % (base, d, at) for d, at in a["mounts"]] + ["Volume=%s:/gamelog:ro" % logdir]
-    if own_plugins and addon_id == B3:
-        vols.append("Volume=%s/%s:/data/extplugins:ro" % (base, B3_OWN_PLUGINS))
+    vols = _volumes(user, addon_id, logdir, own_plugins)
     lines = [
         "# Written by linuxgsm-panel: the %s add-on of this game server. The panel rewrites it." % a["name"],
         "[Unit]", "Description=%s (linuxgsm-panel add-on)" % a["name"],
@@ -910,9 +917,10 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
                _settle_sh(user, addon_id), _MARK_INSTALLED))
 
 
-def _dirs(d, a, files):
-    """The add-on's folders to make, quoted: its mounts', the build folder, and each file's own."""
-    rels = [m for m, _at in a["mounts"]] + [BUILD_DIR] + sorted({os.path.dirname(r) for r in (files or {})} - {""})
+def _dirs(d, a, files, extra=()):
+    """The add-on's folders to make, quoted: its mounts', the build folder, each file's own, and `extra`."""
+    rels = ([m for m, _at in a["mounts"]] + [BUILD_DIR] + sorted({os.path.dirname(r) for r in (files or {})} - {""})
+            + list(extra))
     return " ".join(shlex.quote("%s/%s" % (d, r)) for r in rels)
 
 
@@ -935,7 +943,7 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     rebuild, settings, old_image = how.get("rebuild", False), how.get("settings", False), how.get("old_image", "")
     a = CATALOG[addon_id]
     d = addon_dir(user, addon_id)
-    folders = _dirs(d, a, files) + "".join(" " + shlex.quote("%s/%s" % (d, x)) for x in how.get("dirs", ()))
+    folders = _dirs(d, a, files, how.get("dirs", ()))
     unit = unit_name(addon_id)
     q = "/home/%s/%s" % (user, QUADLET_DIR)
     uu = "/home/%s/%s" % (user, USER_UNIT_DIR)

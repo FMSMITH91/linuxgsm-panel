@@ -405,17 +405,28 @@ def _install_answer(app, gs, addon_id):
 
 
 # ── start, stop, remove, logs ─────────────────────────────────────────────────────────────────
+def _action_reason(action, out, err):
+    """Why a start or stop failed: systemd's start limit in its own words, else the host's."""
+    if action == "start" and "ADDON_START_LIMIT" in (out or ""):
+        return _with_reason(_ad.START_LIMIT, "", err)
+    return _with_reason(_NOT_DONE[action], out, err)
+
+
+def _clear_job(gs_id, addon_id):
+    """Forget a finished job's failure: it no longer describes an add-on that runs now."""
+    with _JOBS_LOCK:
+        job = _JOBS.get((gs_id, addon_id))
+        if job is not None and not job.get("running"):
+            _JOBS.pop((gs_id, addon_id), None)
+
+
 def _action_answer(gs, addon_id, action):
     out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
                                           timeout=_ad.ACTION_TIMEOUT)
     ok = rc == 0
-    said = _ad.START_LIMIT if action == "start" and "ADDON_START_LIMIT" in (out or "") else _NOT_DONE[action]
-    why = "" if ok else _with_reason(said, "" if said is _ad.START_LIMIT else out, err)
+    why = "" if ok else _action_reason(action, out, err)
     if ok:
-        with _JOBS_LOCK:   # an earlier job's failure no longer describes an add-on that runs now
-            job = _JOBS.get((gs.id, addon_id))
-            if job is not None and not job.get("running"):
-                _JOBS.pop((gs.id, addon_id), None)
+        _clear_job(gs.id, addon_id)
     log_action(current_user, "addon_start" if action == "start" else "addon_stop", target=gs.name, server=gs, success=ok,
                detail="%s %s" % (addon_id, "done" if ok else "failed (rc %s): %s" % (rc, why)))
     if not ok:

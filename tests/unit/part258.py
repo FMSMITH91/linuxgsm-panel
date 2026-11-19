@@ -392,21 +392,25 @@ def _host258(answer):
     return calls
 
 
+def _csgo_try258(ids, logdir, sm):
+    """One CS:GO B3 install with this probe answer -> (status, the audit's detail, the install shell or None)."""
+    probe = _CSPROBE258 % (logdir, _ad258._b64('rcon_password "%s"' % _RC258), sm)
+    calls = _host258(lambda sh: probe if "-maxdepth 3 -type f -name" in sh else "ADDON_INSTALLED\n")
+    code = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/install" % ids["csgo"],
+                                     json={"database_id": ids["db"], "geolocation": "off"}).status_code
+    _p9_drain()
+    inst = next((c for c in calls if c[0] == "sh" and "podman build" in c[1]), None)
+    _p9_restore_all()
+    _p9_arm(who="part258")
+    return code, _p9_audit("addon_install").detail, inst
+
+
 def _install_csgo258(ids):
     games = _ad258.CATALOG["b3"]["games"]
     games["csgo"] = "csgo"
     try:
-        said = []
-        for logdir, sm in (("serverfiles/csgo", ""), ("", "sourcemod=1\n"), ("serverfiles/csgo", "sourcemod=1\n")):
-            probe = _CSPROBE258 % (logdir, _ad258._b64('rcon_password "%s"' % _RC258), sm)
-            calls = _host258(lambda sh, pr=probe: pr if "-maxdepth 3 -type f -name" in sh else "ADDON_INSTALLED\n")
-            code = _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/install" % ids["csgo"],
-                                             json={"database_id": ids["db"], "geolocation": "off"}).status_code
-            _p9_drain()
-            inst = next((c for c in calls if c[0] == "sh" and "podman build" in c[1]), None)
-            said.append((code, _p9_audit("addon_install").detail, inst))
-            _p9_restore_all()
-            _p9_arm(who="part258")
+        said = [_csgo_try258(ids, logdir, sm) for logdir, sm in (("serverfiles/csgo", ""), ("", "sourcemod=1\n"),
+                                                                  ("serverfiles/csgo", "sourcemod=1\n"))]
     finally:
         games.pop("csgo", None)
     (_c1, no_sm, inst1), (_c2, no_log, inst2), (code3, _d3, inst3) = said

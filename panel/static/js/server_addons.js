@@ -153,7 +153,7 @@
   }
 
   // The operator's own plugins folder: off unless turned on; the warning sits beside the switch.
-  var OWN_WARN = 'A plugin in this folder is someone else\'s code: it runs inside B3\'s container, with B3\'s database and RCON access, and the panel doesn\'t check it. Load only plugins you trust. The folder is mounted read-only, and the container keeps its other limits.';
+  function ownWarn() { return T('A plugin in this folder is someone else\'s code: it runs inside B3\'s container, with B3\'s database and RCON access, and the panel doesn\'t check it. Load only plugins you trust. The folder is mounted read-only, and the container keeps its other limits.'); }
   function ownPlugins(a, fold) {
     var w = node('div', 'form-check small mt-2');
     var cb = node('input', 'form-check-input');
@@ -165,7 +165,7 @@
     w.appendChild(cb);
     w.appendChild(l);
     fold.appendChild(w);
-    fold.appendChild(node('div', 'small text-warning', T(OWN_WARN)));
+    fold.appendChild(node('div', 'small text-warning', ownWarn()));
   }
 
   // An add-on that needs a database while the server has none free: Install shows, disabled, with why
@@ -352,7 +352,7 @@
     // Turning the own-plugins folder on is asked once more, with the warning.
     if (ownOn && !row(id).own_plugins) {
       window.confirmDialog({title: T('Load your own B3 plugins'), icon: 'exclamation-triangle', confirmClass: 'btn-warning',
-        confirmLabel: T('Turn on and restart'), bodyText: T(OWN_WARN), onConfirm: go});
+        confirmLabel: T('Turn on and restart'), bodyText: ownWarn(), onConfirm: go});
       return;
     }
     go();
