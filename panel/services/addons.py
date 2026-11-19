@@ -34,7 +34,7 @@ THE ADD-ONS
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
     two plugin questions its first start would ask are answered in their own files.
-    B3 (cod, coduo, cod2, cod4, codwaw, sof2, wet; q3, etl, csgo and ins built in, each behind its
+    B3 (cod, coduo, cod2, cod4, codwaw, sof2; wet, q3, etl, csgo and ins built in, each behind its
     own switch: B3_LATER_GAMES): legacy, opt-in. Built on
     the host from addon_images/b3 (a Containerfile: FMSMITH91/big-brother-bot at one commit, its
     dependencies by hash), with one of this server's databases from the Databases tab (never one
@@ -68,12 +68,18 @@ LIVE_PORT_GAMES = ("wet", "etl")
 # in docs/addons.md: Arma 3 and Chivalry: Medieval Warfare (their RCON is not set up by LinuxGSM's
 # configs, so nothing on the host says where B3 would reach it). Switching one on also adds its name to
 # the card's legacy warning (server_addons.js installNotes, and its es/fr text).
+# Wolfenstein: Enemy Territory (wetserver) was offered and is switched off again: B3 at B3_COMMIT asks
+# `dumpuser <slot>` for a player's cl_guid, and these Quake 3 engines' dumpuser takes only a player's name
+# (ET: Legacy's sv_ccmds.c SV_DumpUser_f -> SV_GetPlayerByName), so no human player is ever authorized
+# on wet, etl or q3 (VPS round D, F-D1). On again once a B3 fork commit with that fixed has been tested;
+# wet's parser, RCON setting, log path and live port are all kept below.
+B3_WET = False
 B3_Q3 = False
 B3_ETL = False
 B3_CSGO = False
 B3_INS = False
 # Each one's B3 parser (b3/parsers/<name>.py at B3_COMMIT), and whether it is offered.
-B3_LATER_GAMES = (("q3", "q3", B3_Q3), ("etl", "et", B3_ETL), ("csgo", "csgo", B3_CSGO),
+B3_LATER_GAMES = (("wet", "et", B3_WET), ("q3", "q3", B3_Q3), ("etl", "et", B3_ETL), ("csgo", "csgo", B3_CSGO),
                   ("ins", "insurgency", B3_INS))
 # Games whose RCON is TCP on the game port (Source's), forwarded with -T; the others' is UDP (-U).
 RCON_TCP_GAMES = ("csgo", "ins")
@@ -127,8 +133,8 @@ CATALOG = {
         "source": "https://github.com/FMSMITH91/big-brother-bot",
         # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
         # and 3b). United Offensive is CoD1's engine and log: B3's cod parser. World at War is cod5.
-        "games": dict({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2",
-                       "wet": "et"}, **{g: parser for g, parser, on in B3_LATER_GAMES if on}),
+        "games": dict({"cod": "cod", "coduo": "cod", "cod2": "cod2", "cod4": "cod4", "codwaw": "cod5", "sof2": "sof2"},
+                      **{g: parser for g, parser, on in B3_LATER_GAMES if on}),
         # geoip: DB-IP's country database, put there by the panel (services/geoip.py), read-only inside.
         "mounts": (("Data", "/data"), ("geoip", "/geoip:ro")),
         "env": ("TZ=Etc/UTC", "HOME=/data"),
