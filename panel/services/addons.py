@@ -74,14 +74,15 @@ RCON_TCP_GAMES = ("csgo", "ins")
 # Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
 # folder LinuxGSM's mods-install puts it in.
 SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
-# FMSMITH91/big-brother-bot master on 2026-11-18 (the merge of its PR #23: commands refused to a player B3
-# has not authenticated, and a guard on group changes; #22 and #21 CoD4x and vanilla ET; #19 the geolocation
-# services, #20 the offline .mmdb lookup): the B3 the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
-# Containerfile's ARG together.
-B3_COMMIT = "7e73484988c11d61563fd4a4ab6f92733964fbf8"
-# The fork's release that commit is: its annotated tag v2.0.0 is on it. The build checks the commit, not the
-# tag; the source tree says 2.0.0dev because the release workflow stamps the version into its wheel only.
-# A newer pin that is not a release keeps this number beside its own short commit.
+# FMSMITH91/big-brother-bot master on 2026-11-19 (the merge of its PR #24: the q3 parser reads `ip:port` status
+# rows; the et parser reads ET: Legacy's status and chat, and asks `dumpuser` for a player's cl_guid, which no ET
+# server writes to its game log), on top of v2.0.0 (#23: commands refused to a player B3 has not authenticated;
+# #22 and #21 CoD4x and vanilla ET; #19 and #20 geolocation): the B3 the add-on builds. Renovate proposes the
+# branch's newest commit (.github/renovate.json), in this line and the Containerfile's ARG together.
+B3_COMMIT = "1b96587fe567c5ca635e43a4daa59d174b7abe29"
+# The fork's last release, v2.0.0 (an annotated tag on 7e734849); this pin is two parser fixes past it and has
+# no tag of its own, so the card shows this number beside the pin's short commit. The build checks the commit,
+# not a tag.
 B3_RELEASE = "2.0.0"
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.

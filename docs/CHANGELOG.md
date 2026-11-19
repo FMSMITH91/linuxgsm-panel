@@ -35,7 +35,9 @@ dated section below lists what that day's releases changed, newest first; the nu
   after its first start is reported with its own last log lines. Nothing is installed until you
   install an add-on; it needs Ubuntu 24.04 or newer.
 - **B3 for Call of Duty 4, World at War, Soldier of Fortune 2 and Enemy Territory.** The add-on now
-  builds B3 v2.0.0, which refuses commands to players it has not authenticated, and is offered for Call of Duty 4 (CoD4x), World at War, Soldier of Fortune 2 and Wolfenstein: Enemy
+  builds B3 v2.0.0 (plus two later parser fixes), which refuses commands to players it has not
+  authenticated and, on Enemy Territory, asks the server for each player's GUID. It is offered for Call of
+  Duty 4 (CoD4x), World at War, Soldier of Fortune 2 and Wolfenstein: Enemy
   Territory as well, each tested against the server LinuxGSM installs, and it uses the port the game
   really listens on. On Soldier of Fortune 2 and Enemy Territory B3 has no private messages, and the
   card says so.
