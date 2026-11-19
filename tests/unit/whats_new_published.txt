@@ -817,3 +817,16 @@ ea935a8b Public SSH opened by a logged firewall rule reads as open.
 a7701af8 A crafted LinuxGSM config line no longer stalls the panel.
 6966fcf1 Encrypted backups use AES-256-GCM.
 015b6f6b A backup passphrase needs 15 characters.
+1b085615 SFTP keeps working after a slow answer from the panel.
+4c7a66bf An SFTP upload cut off part way leaves nothing behind.
+1e466288 Add-on Remove waits for an install or update to finish.
+2f57d96e The Databases tab no longer cuts off an add-on's database.
+0ccbf916 GMod content updates for every content game.
+c914813f A config file with a setting written twice opens in the text editor only.
+bdd80725 Installs that needed a last fix finish.
+e1256264 A failed update's rollback says when the panel folder is incomplete.
+03950269 A password check no longer sends you away from the page.
+0924c6a1 Uploads survive a dropped connection.
+e8b3b2ab Manage add-ons opens the Add-ons tab.
+a16f140f The B3 add-on keeps its base image and Python packages current.
+ece743b7 SFTP settings save while Tailscale is down.
