@@ -55,6 +55,8 @@ from panel.security import account_guard as _ag263, privileged as _pv263
 from panel.services import addons as _ad263, game_config_form as _gcf263, host_reboot as _hr263
 from panel.services import reboot_words as _rw263, sftp_backend as _bk263, sftp_broker as _br263
 from panel.services import sftp_common as _sc263, sftp_files as _sf263, sftp_server as _ss263
+# A stored hash no password can match (a test user that signs in only by key).
+_NO_LOGIN263 = "!"
 
 _trips263 = len(_P9_TRIPPED)
 _TMP263 = _tf263.mkdtemp(prefix="p263-")
@@ -355,7 +357,7 @@ def _key_user263():
     k = _sc263.host_key_from_text(_sc263.new_host_key_text())
     pk = _sc263.parse_public_key("%s %s p263" % (k.get_name(), k.get_base64()))[0]
     with _p9.app_context():
-        u = _User263(username="p260_sftp", password_hash="x", is_active=True)
+        u = _User263(username="p260_sftp", password_hash=_NO_LOGIN263, is_active=True)
         _db263.session.add(u)
         _db263.session.flush()
         _db263.session.add(_Key263(user_id=u.id, label="k", key_type=pk.key_type, key_blob=pk.blob_b64,

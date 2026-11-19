@@ -543,7 +543,7 @@ class PanelSftpServer(SFTPServer):
                 f.close()
             except Exception:  # noqa: BLE001 - one file's close must not keep the rest open
                 _log.debug("closing a file left open at the end of an SFTP session", exc_info=True)
-        self.file_table = {}
+        self.file_table.clear()
         super().finish_subsystem()
 
     def _process(self, t, request_number, msg):
