@@ -26,7 +26,7 @@ _ACCOUNT_ACTIONS = frozenset({
     # An account's alert devices (Web Push): turned on, off or removed, and test alerts.
     "push_subscribe", "push_unsubscribe", "push_test",
     # SFTP sign-ins (with the address, and for a failure the name that was tried) and SFTP keys.
-    "sftp_login", "sftp_login_failed", "sftp_key_add", "sftp_key_remove",
+    "sftp_login", "sftp_login_failed", "sftp_key_add", "sftp_key_remove", "sftp_session_closed",
 })
 
 

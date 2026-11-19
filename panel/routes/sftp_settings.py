@@ -97,7 +97,8 @@ def change_note(before, after):
     words = []
     if before["enabled"] != after["enabled"]:
         words.append("SFTP service %s" % ("on" if after["enabled"] else "off"))
-    for key, label in (("bind", "address"), ("port", "port"), ("cap_mb", "upload limit MiB")):
+    for key, label in (("bind", "address"), ("port", "port"), ("cap_mb", "upload limit MiB"),
+                       ("idle_min", "idle timeout min")):
         if before[key] != after[key]:
             words.append("SFTP %s %s -> %s" % (label, before[key], after[key]))
     if before["password"] != after["password"]:
@@ -113,6 +114,12 @@ def notes(s):
     if s["password"]:
         out.append("Password and code sign-in is on. The recommended setting is SSH keys only: a key "
                    "cannot be guessed.")
+    if s["idle_min"] == 0:
+        out.append("Idle SFTP sessions are never closed. OWASP recommends closing a session after 15 to 30 "
+                   "minutes without activity.")
+    elif s["idle_min"] > sc.OWASP_IDLE_MAX_MINUTES:
+        out.append(i18n.Sentence("The idle timeout is longer than the 30 minutes OWASP recommends at most "
+                                 "({minutes} minutes).", minutes=s["idle_min"]))
     if s["cap_mb"] > sc.RECOMMENDED_CAP_MB:
         out.append(i18n.Sentence("The upload size limit is above the recommended {mib} MiB.",
                                  mib=sc.RECOMMENDED_CAP_MB))
@@ -133,6 +140,7 @@ def settings_card():
         "ipv6": sc.host_has_ipv6(), "status": sftp_broker.status(),
         "fingerprint": sc.host_fingerprint(decrypt_secret(stored)) if stored else "",
         "default_port": sc.DEFAULT_PORT, "recommended_cap": sc.RECOMMENDED_CAP_MB,
+        "recommended_idle": sc.RECOMMENDED_IDLE_MINUTES, "idle_outside": sc.idle_outside_owasp(s["idle_min"]),
         "notes": notes(s), "all_warning": ALL_ADDRESSES_WARNING,
     }
 

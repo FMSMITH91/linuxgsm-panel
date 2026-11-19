@@ -62,6 +62,13 @@
           <div class="small text-secondary mt-1"><span>Recommended:</span> <span data-no-i18n>{{ sf.recommended_cap }}</span> <span>MiB. OWASP recommends a size limit on uploads.</span></div>
           {% if sf.s.cap_mb > sf.recommended_cap %}<div class="small text-warning">Above the recommended limit.</div>{% endif %}
         </div>
+        <div class="col-sm-6">
+          <label class="form-label small mb-1" for="sftp-idle">Close an idle session after (minutes)</label>
+          <input type="number" id="sftp-idle" name="sftp_idle_minutes" min="0" max="1440" class="form-control form-control-sm"
+                 value="{{ sf.s.idle_min }}" required>
+          <div class="small text-secondary mt-1"><span>Recommended:</span> <span data-no-i18n>{{ sf.recommended_idle }}</span> <span>minutes. OWASP recommends 15 to 30 minutes without activity (2 to 5 for high-value applications). 0 never closes one.</span></div>
+          {% if sf.idle_outside %}<div class="small text-warning" id="sftp-idle-note">Outside OWASP's recommendation.</div>{% endif %}
+        </div>
       </div>
 
       <div class="form-check form-switch mt-3 mb-0">

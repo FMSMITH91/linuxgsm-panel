@@ -33,6 +33,7 @@ BIND_KEY = "sftp_bind"
 PORT_KEY = "sftp_port"
 KBD_SIGNIN_KEY = "sftp_password_auth"
 CAP_KEY = "sftp_max_upload_mb"
+IDLE_KEY = "sftp_idle_minutes"
 HOST_KEY_KEY = "sftp_host_key"
 
 BIND_TAILSCALE, BIND_LOOPBACK, BIND_ALL = "tailscale", "loopback", "all"
@@ -47,6 +48,15 @@ CAP_MIN_MB, CAP_MAX_MB = 1, 1024 * 1024
 # A write is refused when it would leave less than this free on the game host's filesystem: the
 # backup upload keeps the same headroom (ops/backup.py _UPLOAD_SLACK).
 FREE_SPACE_SLACK = 256 * 1024 * 1024
+# OWASP Session Management Cheat Sheet, "Session Expiration" (read 2026-11-19): "Common idle timeouts ranges
+# are 2-5 minutes for high-value applications and 15-30 minutes for low risk applications", enforced
+# server-side, the session invalidated when it expires. An SFTP session is a sign-in like a web session; its
+# activity is the client's SFTP requests (a listing, a read, a write), so a transfer in progress is activity
+# and an idle FileZilla window is not. 15 minutes, the start of the low-risk range: an SFTP client sits idle
+# between transfers far more than a browser tab sits between clicks. 0 never closes an idle session.
+RECOMMENDED_IDLE_MINUTES = 15
+OWASP_IDLE_MAX_MINUTES = 30
+IDLE_MIN_MINUTES, IDLE_MAX_MINUTES = 0, 24 * 60
 # Keys one account may hold.
 MAX_KEYS_PER_USER = 20
 
@@ -61,7 +71,24 @@ def settings(cfg):
         "port": port_or(cfg.get(PORT_KEY), DEFAULT_PORT),
         "password": cfg.get(KBD_SIGNIN_KEY) is True,
         "cap_mb": cap_or(cfg.get(CAP_KEY), RECOMMENDED_CAP_MB),
+        "idle_min": idle_or(cfg.get(IDLE_KEY), RECOMMENDED_IDLE_MINUTES),
     }
+
+
+def idle_or(value, default):
+    """`value` as an idle timeout in whole minutes within IDLE_MIN_MINUTES..IDLE_MAX_MINUTES, else `default`."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        return default
+    return n if IDLE_MIN_MINUTES <= n <= IDLE_MAX_MINUTES else default
+
+
+def idle_outside_owasp(minutes):
+    """Whether an idle timeout is outside what OWASP recommends: off (0), or longer than 30 minutes."""
+    return minutes == 0 or minutes > OWASP_IDLE_MAX_MINUTES
 
 
 def port_or(value, default):
@@ -149,8 +176,11 @@ def parse_form(form, tailscale_up):
     cap = cap_or(form.get("sftp_max_upload_mb"), None)
     if cap is None:
         return None, "The upload size limit must be a whole number of MiB from 1 to 1048576."
+    idle = idle_or(form.get("sftp_idle_minutes"), None)
+    if idle is None:
+        return None, "The idle timeout must be a whole number of minutes from 0 to 1440."
     return {ENABLED_KEY: form.get("sftp_enabled") == "on", BIND_KEY: bind, PORT_KEY: port,
-            KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap}, None
+            KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap, IDLE_KEY: idle}, None
 
 
 # ── The service's host key ─────────────────────────────────────────────────────────────────────

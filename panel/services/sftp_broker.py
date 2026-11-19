@@ -127,7 +127,7 @@ def spawn_config(app):
         return None, "Waiting for this host's Tailscale address."
     key = sc.ensure_host_key(update_config, load_config, encrypt_secret, decrypt_secret)
     return {"ok": True, "binds": binds, "port": s["port"], "password": s["password"],
-            "cap_mb": s["cap_mb"], "host_key": key, "choice": choice}, None
+            "cap_mb": s["cap_mb"], "idle_min": s["idle_min"], "host_key": key, "choice": choice}, None
 
 
 def tailscale_ips():
@@ -449,6 +449,16 @@ def _h_auth_done(_app, req, _spawn):
     return {"ok": True}
 
 
+def _h_session_end(_app, req, _spawn):
+    from panel.db.models import User, db
+    user = db.session.get(User, int(req.get("uid") or 0))
+    if user is None:
+        return {"ok": False}
+    _sftp_audit(_ip(req), user, "sftp_session_closed", target=user.username,
+                detail=str(req.get("why") or "")[:200])
+    return {"ok": True}
+
+
 def _session_user(req):
     """(the user a signed-in SFTP session belongs to, None), or (None, why) when it may not go on."""
     from panel.db.models import User, db
@@ -532,4 +542,4 @@ def _h_audit(_app, req, _spawn):
 
 _HANDLERS = {"hello": _h_hello, "ready": _h_ready, "conn": _h_conn, "auth_key": _h_auth_key,
              "auth_kbd": _h_auth_kbd, "auth_fail": _h_auth_fail, "auth_done": _h_auth_done,
-             "servers": _h_servers, "authz": _h_authz, "audit": _h_audit}
+             "servers": _h_servers, "authz": _h_authz, "audit": _h_audit, "session_end": _h_session_end}

@@ -70,6 +70,10 @@ _def259 = _sc259.settings({})
 eq("sftp settings: off by default, keys only, the default port and the recommended cap",
    (_def259["enabled"], _def259["password"], _def259["port"], _def259["cap_mb"], _def259["bind"]),
    (False, False, 2222, _sc259.RECOMMENDED_CAP_MB, None))
+eq("sftp settings: an idle session is closed after 15 minutes by default (OWASP's 15-30 for most applications)",
+   (_def259["idle_min"], _sc259.idle_or("abc", 15), _sc259.idle_or(-1, 15), _sc259.idle_or(1441, 15),
+    [_sc259.idle_outside_owasp(m) for m in (0, 2, 15, 30, 31)]),
+   (15, 15, 15, 15, [True, False, False, False, True]))
 eq("sftp settings: the first choice offered is Tailscale when it is up, else 127.0.0.1",
    (_sc259.default_bind(True), _sc259.default_bind(False)), ("tailscale", "loopback"))
 _TS259 = ["100.101.102.103", "fd7a:115c:a1e0::1", "192.0.2.7"]
@@ -135,6 +139,7 @@ eq("sftp service: tailscale chosen but down waits, binding nothing", _tw259,
 eq("sftp service: no choice saved is 127.0.0.1 without Tailscale, the tailnet with it",
    ((_u259 or {}).get("binds"), (_u_ts259 or {}).get("binds")),
    (["127.0.0.1"], ["100.101.102.103", "fd7a:115c:a1e0::1"]))
+eq("sftp service: the service is started with the idle timeout in force", (_l259 or {}).get("idle_min"), 15)
 eq("sftp service: password sign-in stays off under every choice unless switched on (keys only)",
    [(s or {}).get("password") for s in (_a259, _a4_259, _l259, _t259, _u259)], [False] * 5)
 check("sftp service: the host key is Ed25519, made once and kept encrypted in config.json",
@@ -167,7 +172,8 @@ _A259 = _p9_client(P9_ADMIN)
 
 
 def _save259(**form):
-    base = {"sftp_enabled": "on", "sftp_bind": "loopback", "sftp_port": "2222", "sftp_max_upload_mb": "4096"}
+    base = {"sftp_enabled": "on", "sftp_bind": "loopback", "sftp_port": "2222", "sftp_max_upload_mb": "4096",
+            "sftp_idle_minutes": "15"}
     base.update(form)
     return _A259.post("/settings/sftp", data={k: v for k, v in base.items() if v is not None})
 
@@ -210,6 +216,29 @@ with _p9.app_context():
 check("sftp card: each save is audited with what changed", _row259 is not None
       and "SFTP upload limit MiB 4096 -> 9000" in (_row259.detail or "")
       and "password and code sign-in allowed" in (_row259.detail or ""), getattr(_row259, "detail", None))
+_flashed259()
+_save259(sftp_idle_minutes="45")
+_f45 = _flashed259()
+_save259(sftp_idle_minutes="0")
+_f0 = _flashed259()
+_save259(sftp_idle_minutes="20")
+_f20 = _flashed259()
+_save259(sftp_idle_minutes="1441")
+_fbad = _flashed259()
+eq("sftp card: the idle timeout saves inside and outside OWASP's range, a note only outside, never a refusal",
+   (_sc259.settings(_cfg259.load_config())["idle_min"], any("longer than the 30 minutes" in m for m in _f45),
+    any("never closed" in m for m in _f0), any("OWASP" in m and "idle" in m.lower() for m in _f20),
+    any("whole number of minutes" in m for m in _fbad)),
+   (20, True, True, False, True))
+_save259(sftp_idle_minutes="45")
+_html_idle259 = _A259.get("/settings").get_data(as_text=True)
+check("sftp card: the field shows the value in force, the recommended 15 minutes and OWASP's range beside it",
+      'name="sftp_idle_minutes"' in _html_idle259 and 'value="45"' in _html_idle259
+      and "OWASP recommends 15 to 30 minutes without activity" in _html_idle259
+      and 'id="sftp-idle-note"' in _html_idle259, _html_idle259[:0])
+_save259(sftp_idle_minutes="15")
+eq("sftp card: ...and no note at the recommended value",
+   'id="sftp-idle-note"' in _A259.get("/settings").get_data(as_text=True), False)
 _html259 = _A259.get("/settings").get_data(as_text=True)
 check("sftp card: the Settings page shows the card, the three choices and the warning",
       'id="sec-sftp"' in _html259 and 'value="tailscale"' in _html259 and 'value="all"' in _html259
@@ -342,6 +371,7 @@ class _E2E259:
     """The service running for this block: its port, the audit capture, and the homes."""
 
     port = 0
+    idle_port = 0
     homes = {}
     log_lines = []
 
@@ -792,6 +822,39 @@ if _E2E_UP259:
         _ag259.reset_throttle()
     except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
         check("sftp end to end: the sign-in checks ran to their end", False, repr(_exc259))
+
+
+# ── the idle timeout, on a second service whose limit is three seconds ──
+if _E2E_UP259:
+    try:
+        _REAL_RESTART259()
+        _until259(lambda: not _runner259.is_alive(), 15)
+        _E2E259.idle_port = _free_port259()
+        _spawn_idle259 = dict(_SPAWN259, port=_E2E259.idle_port, idle_min=0.05)
+        _runner_idle259 = _th259.Thread(target=_br259.run_once, args=(_p9, _spawn_idle259), daemon=True)
+        _runner_idle259.start()
+        _until259(lambda: _br259.status()["bound"] == [["127.0.0.1", _E2E259.idle_port]], 30)
+        _since_i = _last_audit_id259()
+        _E2E259.port = _E2E259.idle_port
+        _busy = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
+        _idle = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
+        for _i in range(9):                  # a request every half second, for 4.5 s
+            _sftp_listing259(_busy[1], "/")
+            _time259.sleep(0.5)
+        _busy_alive = bool(_busy[0]) and _busy[0].get_transport().is_active()
+        _idle_closed = bool(_idle[0]) and _until259(lambda: not _idle[0].get_transport().is_active(), 6)
+        eq("sftp idle: a session with no SFTP request past the timeout is closed; one making requests is not",
+           (_idle_closed, _busy_alive), (True, True))
+        _closed_rows = _audits259("sftp_session_closed", _since_i)
+        check("sftp idle: the close is audited, with the user, the address and why",
+              len(_closed_rows) == 1 and _closed_rows[0][0] == "p259_ed" and _closed_rows[0][3] == "127.0.0.1"
+              and "no SFTP request" in _closed_rows[0][2], repr(_closed_rows))
+        _close259(_busy)
+        _close259(_idle)
+        _REAL_RESTART259()
+        _until259(lambda: not _runner_idle259.is_alive(), 15)
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the idle checks ran to their end", False, repr(_exc259))
 
 
 if _E2E:

@@ -53,6 +53,7 @@ _log = logging.getLogger("panel.sftp")
 
 MAX_AUTH_TRIES = 6           # OpenSSH's MaxAuthTries default
 LOGIN_GRACE = 60             # seconds to sign in (OpenSSH's LoginGraceTime is 120)
+IDLE_POLL = 1.0              # how often a signed-in connection's idle time is looked at
 MAX_CONNECTIONS = 64
 MAX_UNAUTH_PER_ADDRESS = 10
 STAGE_MAX = 1024 * 1024      # a LinuxGSM config is checked whole before it is written: at most this
@@ -110,6 +111,7 @@ class Connection(ServerInterface):
         self.last_why = ""
         self.who = ""
         self.user = None            # {"uid", "epoch", "name", "method", "detail"} once signed in
+        self.last_activity = time.monotonic()   # the last SFTP request (PanelSftpServer._process)
         self._pending = None
         self._kbd_name = None
 
@@ -463,7 +465,8 @@ class PanelSftpServer(SFTPServer):
     def _process(self, t, request_number, msg):
         # A file's CLOSE answers with its close(): paramiko answers OK whatever close() found, and an
         # upload's last failure (a write the host refused, a LinuxGSM config refused whole) is only
-        # known there. Everything else is paramiko's own handling.
+        # known there. Everything else is paramiko's own handling. Every request is the session's activity.
+        self.server.conn.last_activity = time.monotonic()
         if t != CMD_CLOSE:
             return super()._process(t, request_number, msg)
         handle = msg.get_binary()
@@ -586,11 +589,27 @@ class Service:
                 self._report_failure(conn)
                 return True
             self._signed_in(ip)
+            conn.last_activity = time.monotonic()
             while t.is_active():
-                time.sleep(1)
+                time.sleep(IDLE_POLL)
+                if self._idle_too_long(conn):
+                    self._close_idle(conn, t)
             return False
         finally:
             t.close()
+
+    def _idle_too_long(self, conn):
+        """Whether the signed-in session has made no SFTP request for longer than the idle timeout."""
+        limit = float(self.cfg.get("idle_min") or 0) * 60
+        return limit > 0 and time.monotonic() - conn.last_activity > limit
+
+    def _close_idle(self, conn, t):
+        """End an idle session on the server's side, and have the panel audit it (OWASP: invalidate it)."""
+        u = conn.signed_in()
+        if u is not None:
+            self.panel.ask({"op": "session_end", "uid": u["uid"], "ip": conn.ip,
+                            "why": "closed after %s min with no SFTP request" % _minutes(self.cfg.get("idle_min"))})
+        t.close()
 
     def _report_failure(self, conn):
         """A connection that tried a credential and never signed in: one failed sign-in for the panel."""
@@ -647,6 +666,12 @@ class Service:
             _core.register_pin_app(app)
             self._db_app = app
         return self._db_app
+
+
+def _minutes(value):
+    """An idle timeout for the audit row: whole minutes as they are, a fraction (a test's) to one place."""
+    v = float(value or 0)
+    return "%d" % v if v == int(v) else "%.1f" % v
 
 
 def _plain_ip(ip):
