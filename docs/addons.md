@@ -141,7 +141,8 @@ says so, since the Databases tab sets one up first.
 
 An install, Apply, Update or Start that stops again within 30 seconds is reported on the card and left stopped. The
 card shows the lines it logged during that start: B3's `b3.log` if that start wrote to it, then the add-on's journal
-from that start on (a B3 that stops while reading `b3.ini` says why only there). Install and remove ask for the password when the sign-in is older than the confirmation window.
+from that start on (a B3 that stops while reading `b3.ini` says why only there). Install, Update, Apply (a settings change) and remove ask for the password when the sign-in is older than the
+confirmation window.
 Every install, start, stop and remove is audited.
 
 Removing an add-on deletes its container, image, unit and files: for B3 that is its whole folder, its settings and
