@@ -93,6 +93,9 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **An add-on that stops again after Start says why.** The add-on card's Start now watches the add-on
+  for 30 seconds, as an install does. If it stops or restarts in that time, it is left stopped and the
+  card shows why, with its last log lines, instead of a bare "Failed".
 - **A game download that fails LinuxGSM's checksum ends as a failed install.** The install now checks
   that the server's executable is where LinuxGSM's own start looks for it, so an archive that failed
   its MD5 check is no longer reported as installed. It downloads once more, then says which file

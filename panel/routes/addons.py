@@ -56,6 +56,9 @@ _NO_PREPARE = "Couldn't ready the server's account for containers (subordinate i
 _NO_GEOIP = "Couldn't put the country database in the add-on's folder."
 _STARTED = "Installing the add-on. Downloading or building its image takes a few minutes."
 _DONE = {"start": "The add-on was started.", "stop": "The add-on was stopped."}
+_STARTING = "Starting the add-on. It is watched for 30 seconds to see that it stays up."
+_START_DIED = ("The add-on started but stopped again within 30 seconds, so it was left stopped. Its last log lines "
+               "are below.")
 _NOT_DONE = {"start": "The add-on didn't start. Its log says why.", "stop": "The add-on didn't stop."}
 _REMOVED = {True: "The add-on was removed. Its database is kept in the Databases tab.",
             False: "The add-on was removed, with its data."}
@@ -430,11 +433,47 @@ def _install_answer(app, gs, addon_id):
 
 
 # ── start, stop, remove, logs ─────────────────────────────────────────────────────────────────
-def _action_reason(action, out, err):
-    """Why a start or stop failed: systemd's start limit in its own words, else the host's."""
-    if action == "start" and "ADDON_START_LIMIT" in (out or ""):
-        return _with_reason(_ad.START_LIMIT, "", err)
-    return _with_reason(_NOT_DONE[action], out, err)
+def _start_steps(gs, addon_id):
+    """The card's Start and its watch: ("", "") when the add-on stays up, else (why, its log's last lines, masked)."""
+    out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.start_sh(gs.short_name, addon_id),
+                                          timeout=_ad.ACTION_TIMEOUT + _ad.SETTLE_SECONDS)
+    ok, mark, tail = _ad.start_outcome(out, rc)
+    if ok:
+        return "", ""
+    said = {"ADDON_START_LIMIT": _ad.START_LIMIT, "ADDON_DIED": _START_DIED}.get(mark, _NOT_DONE["start"])
+    secrets = [decrypt_secret(r.secret) or "" for r in GameDatabase.query.filter_by(game_server_id=gs.id).all()]
+    return _with_reason(said, "", err) if mark != "ADDON_DIED" else said, _ad.scrub(tail, secrets)
+
+
+def _start_worker(app, gs_id, born, addon_id, who):
+    """Run the card's Start in a thread and audit it; a failure stays on the job (the card's error and log tail)."""
+    with app.app_context():
+        why, tail = "", ""
+        try:
+            gs = claim_row(GameServer, gs_id, born)
+            if gs is not None:
+                why, tail = _start_steps(gs, addon_id)
+                log_action(None, "addon_start", target=gs.name, actor=who, server=gs, success=not why,
+                           detail="%s %s" % (addon_id, "done" if not why else "failed: %s" % why))
+        except Exception:
+            why = _log_and_generic("add-on start failed")
+        finally:
+            with _JOBS_LOCK:     # a start that stays up leaves no job: an earlier failure no longer applies
+                if why:
+                    _JOBS[(gs_id, addon_id)] = {"running": False, "why": why, "tail": tail, "kind": "start"}
+                else:
+                    _JOBS.pop((gs_id, addon_id), None)
+
+
+def _start_answer(app, gs, addon_id):
+    """Start the add-on in the background, watched as an install's start is (or refuse: a job is running)."""
+    with _JOBS_LOCK:
+        if (_JOBS.get((gs.id, addon_id)) or {}).get("running"):
+            return _say(409, _BUSY)
+        _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": "start"}
+    threading.Thread(target=_start_worker, daemon=True,
+                     args=(app, gs.id, row_birth(gs), addon_id, current_user.username)).start()
+    return jsonify({"success": True, "started": True, "message": i18n.tr(_STARTING)}), 202
 
 
 def _clear_job(gs_id, addon_id):
@@ -445,14 +484,16 @@ def _clear_job(gs_id, addon_id):
             _JOBS.pop((gs_id, addon_id), None)
 
 
-def _action_answer(gs, addon_id, action):
+def _action_answer(app, gs, addon_id, action):
+    if action == "start":
+        return _start_answer(app, gs, addon_id)
     out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
                                           timeout=_ad.ACTION_TIMEOUT)
     ok = rc == 0
-    why = "" if ok else _action_reason(action, out, err)
+    why = "" if ok else _with_reason(_NOT_DONE[action], out, err)
     if ok:
         _clear_job(gs.id, addon_id)
-    log_action(current_user, "addon_start" if action == "start" else "addon_stop", target=gs.name, server=gs, success=ok,
+    log_action(current_user, "addon_stop", target=gs.name, server=gs, success=ok,
                detail="%s %s" % (addon_id, "done" if ok else "failed (rc %s): %s" % (rc, why)))
     if not ok:
         return _say(200, why)
@@ -561,7 +602,7 @@ def register(app):
             return _say(403, _DENIED)
         if action not in _DONE:
             return _say(404, _UNKNOWN)
-        return _guarded(server_id, addon_id, lambda gs: _action_answer(gs, addon_id, action))
+        return _guarded(server_id, addon_id, lambda gs: _action_answer(app, gs, addon_id, action))
 
     @app.route("/api/server/<int:server_id>/addons/<addon_id>/remove", methods=["POST"])
     @login_required

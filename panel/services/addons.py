@@ -244,6 +244,7 @@ _LOG_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 # What the host prints, read by the parsers below.
 _MARK_INSTALLED = "ADDON_INSTALLED"
 _MARK_REMOVED = "ADDON_REMOVED"
+_MARK_STARTED = "ADDON_STARTED"
 _FAIL_MARKS = {
     "ADDON_NO_USER_MANAGER": "The account's user manager didn't start, so the add-on can't run as it.",
     "ADDON_PULL_FAILED": "Couldn't download the add-on's image. Check that this host can reach its registry.",
@@ -1090,6 +1091,27 @@ def install_outcome(out, rc):
         if mark in (out or ""):
             return False, said, tail
     return False, "The install didn't finish on the host.", tail
+
+
+def start_sh(user, addon_id):
+    """The card's Start, as the account: the start limit cleared, the start, then the install's watch (_settle_sh).
+
+    Ends with ADDON_STARTED. A start systemd refuses prints ADDON_START_FAILED (with ADDON_START_LIMIT
+    when its start limit refused it) and the log's tail; one that stops or restarts within
+    SETTLE_SECONDS is stopped, and prints ADDON_DIED and the tail. Without the watch, a crash loop it
+    set off ended as a bare "failed": systemd's last result there is exit-code, not start-limit-hit.
+    """
+    return (_ENV + "{ %s; } || { echo ADDON_START_FAILED; %s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; "
+            "echo; exit 25; }; %secho %s"
+            % (_fresh_start_sh(addon_id, "start"), _tail_sh(user, addon_id), _settle_sh(user, addon_id), _MARK_STARTED))
+
+
+def start_outcome(out, rc):
+    """(ok, the mark that says why not: ADDON_START_LIMIT, ADDON_DIED or "", log tail) from what start_sh printed."""
+    tail = _unb64(kv_lines(out).get("tail.b64", ""))
+    if rc == 0 and _MARK_STARTED in (out or ""):
+        return True, "", ""
+    return False, next((m for m in ("ADDON_START_LIMIT", "ADDON_DIED") if m in (out or "")), ""), tail
 
 
 def action_sh(addon_id, action):

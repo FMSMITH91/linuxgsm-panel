@@ -10,7 +10,7 @@
     active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
     failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'
   };
-  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…'};
+  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…'};
 
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }

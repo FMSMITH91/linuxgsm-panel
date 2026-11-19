@@ -121,9 +121,9 @@ systemd's). An add-on that needs a database while the server has none free shows
 with the reason beside it and an **Open Databases** button; when the host has no database server yet, the reason
 says so, since the Databases tab sets one up first.
 
-An install that stops again within 30 seconds is reported with its last log lines and left stopped. Install and
-remove ask for the password when the sign-in is older than the confirmation window. Every install, start, stop and
-remove is audited.
+An install, Apply, Update or Start that stops again within 30 seconds is reported on the card with its last log lines
+and left stopped. Install and remove ask for the password when the sign-in is older than the confirmation window.
+Every install, start, stop and remove is audited.
 
 Removing an add-on deletes its container, image, unit and files: for B3 that is its whole folder, its settings and
 any plugin settings you edited included. Its database is kept. Removing the last one also

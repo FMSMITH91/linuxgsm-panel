@@ -49,5 +49,7 @@
   "Turn on and restart": "Activer et redémarrer",
   "ET: Legacy writes no game log until g_log names one. In the server's config ({cfg}), add the line set g_log \"etserver.log\" below the line exec legacy.cfg (ET: Legacy's legacy.cfg sets g_log to \"\"), restart the server, then install again.": "ET: Legacy n’écrit aucun journal de jeu tant que g_log n’en nomme pas un. Dans la configuration du serveur ({cfg}), ajoutez la ligne set g_log \"etserver.log\" sous la ligne exec legacy.cfg (le legacy.cfg d’ET: Legacy met g_log à \"\"), redémarrez le serveur, puis réinstallez.",
   "Set g_log in the server's config to a plain file name, such as \"etserver.log\" (no folder), restart the server, then install again.": "Dans la configuration du serveur, donnez à g_log un simple nom de fichier, comme \"etserver.log\" (sans dossier), redémarrez le serveur, puis réinstallez.",
-  "On ET: Legacy, B3 has no private messages: every reply is said in public chat.": "Sur ET: Legacy, B3 n’a pas de messages privés : chaque réponse est dite dans le chat public."
+  "On ET: Legacy, B3 has no private messages: every reply is said in public chat.": "Sur ET: Legacy, B3 n’a pas de messages privés : chaque réponse est dite dans le chat public.",
+  "Starting the add-on. It is watched for 30 seconds to see that it stays up.": "Démarrage du module complémentaire. Il est surveillé pendant 30 secondes pour vérifier qu’il reste en marche.",
+  "The add-on started but stopped again within 30 seconds, so it was left stopped. Its last log lines are below.": "Le module complémentaire a démarré mais s’est de nouveau arrêté en moins de 30 secondes ; il a donc été laissé arrêté. Ses dernières lignes de journal sont ci-dessous."
 }

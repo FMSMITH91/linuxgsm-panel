@@ -49,5 +49,7 @@
   "Turn on and restart": "Activar y reiniciar",
   "ET: Legacy writes no game log until g_log names one. In the server's config ({cfg}), add the line set g_log \"etserver.log\" below the line exec legacy.cfg (ET: Legacy's legacy.cfg sets g_log to \"\"), restart the server, then install again.": "ET: Legacy no escribe ningún registro de juego hasta que g_log nombra uno. En la configuración del servidor ({cfg}), añade la línea set g_log \"etserver.log\" debajo de la línea exec legacy.cfg (el legacy.cfg de ET: Legacy pone g_log a \"\"), reinicia el servidor y vuelve a instalar.",
   "Set g_log in the server's config to a plain file name, such as \"etserver.log\" (no folder), restart the server, then install again.": "Pon en g_log, en la configuración del servidor, un nombre de archivo simple, como \"etserver.log\" (sin carpeta), reinicia el servidor y vuelve a instalar.",
-  "On ET: Legacy, B3 has no private messages: every reply is said in public chat.": "En ET: Legacy, B3 no tiene mensajes privados: cada respuesta se dice en el chat público."
+  "On ET: Legacy, B3 has no private messages: every reply is said in public chat.": "En ET: Legacy, B3 no tiene mensajes privados: cada respuesta se dice en el chat público.",
+  "Starting the add-on. It is watched for 30 seconds to see that it stays up.": "Iniciando el complemento. Se vigila durante 30 segundos para comprobar que sigue en marcha.",
+  "The add-on started but stopped again within 30 seconds, so it was left stopped. Its last log lines are below.": "El complemento se inició pero volvió a detenerse en menos de 30 segundos, así que se dejó detenido. Sus últimas líneas de registro están debajo."
 }
