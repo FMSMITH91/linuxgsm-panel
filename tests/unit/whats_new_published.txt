@@ -836,3 +836,20 @@ de00616e Slow connections can no longer fill up the panel.
 d7292006 Block tells the truth about an address held by a logged deny rule.
 ec95fd0b The file browser and SFTP no longer write the tmpfiles lines a game account applies at start.
 a346c7b0 A LinuxGSM start line naming many settings no longer stalls the panel.
+3dfc8f17 A failed SFTP key signature is logged and counted.
+d747c7a9 SFTP sign-ins no longer wait behind a slow host.
+d3a0c295 An SFTP write into an existing file cut off by a disconnect is logged as a change.
+7d06ffb9 Removing an add-on blocks other add-on actions until it ends, and deletes the image it ran.
+541b7136 Add-on actions wait for a host reboot.
+98b7a99b Update and Apply on an add-on say "try again", not "install again".
+756832f5 Uninstalling a server waits for a scheduled wipe or an add-on job.
+b1f97b9c Database password resets and deletes wait for an add-on install.
+cd927e3e Uploads keep going when a piece is still being written.
+286c6549 New folder can make ~/.config.
+11636604 A JSON config keeps its form when a key repeats where the form shows no field.
+07be204d A panel updated onto a tooling-only commit shows its release's full name.
+e759bc4d Restoring a backup from another panel: cancelling the password check no longer locks the passphrase dialog.
+471aed3f The password check runs nothing once it is cancelled.
+cd1a6df6 Files & Config opens its Databases or Add-ons section loaded.
+b54bc73b OWASP notes in Settings match the switch after a reload.
+c0a5f0f0 More Backups and Files & Config messages are translated.

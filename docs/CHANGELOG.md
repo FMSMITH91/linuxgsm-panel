@@ -14,11 +14,46 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **SFTP sign-ins no longer wait behind a slow host.** When file requests to a host that stopped answering
+  fill the panel's slots, other requests are told the panel is busy, and sign-ins keep working; a sign-in the
+  panel could not answer in time, or one that ends at once, is no longer counted as a failure.
+- **An SFTP write into an existing file cut off by a disconnect is logged as a change.** The audit row says
+  the file was written in place, not that the upload was refused.
+- **Removing an add-on blocks other add-on actions until it ends, and deletes the image it ran.** An install,
+  update or start pressed meanwhile is refused, and an add-on not updated before removal no longer leaves its
+  older image behind.
+- **Add-on actions wait for a host reboot.** Installing, updating, applying settings, starting or stopping an
+  add-on is refused while the panel is stopping the host's servers to reboot it.
+- **Update and Apply on an add-on say "try again", not "install again".**
+- **Uninstalling a server waits for a scheduled wipe or an add-on job.** It is refused while either runs, and
+  a restore or wipe that falls due during an uninstall waits for it.
+- **Database password resets and deletes wait for an add-on install.**
+- **Uploads keep going when a piece is still being written.** A backup or database dump upload waits for the
+  previous piece instead of giving up after about 40 seconds, and a long-running game backup finish is no
+  longer forgotten.
+- **New folder can make ~/.config.** The file browser and SFTP can create an empty ~/.config or ~/.local/share
+  (needed by games such as Unity titles); unit folders inside them stay protected.
+- **A JSON config keeps its form when a key repeats where the form shows no field.**
+- **A panel updated onto a tooling-only commit shows its release's full name.**
+- **Restoring a backup from another panel: cancelling the password check no longer locks the passphrase
+  dialog.** Restore can be pressed again, and the passphrase typed is kept.
+- **The password check runs nothing once it is cancelled.** Pressing Cancel while the password was being
+  checked no longer lets the action go ahead when the check returns. The dialog now says "Confirm" for
+  actions, and keeps "Confirm and save" for the forms that save what was typed.
+- **Files & Config opens its Databases or Add-ons section loaded.** A member who can only manage databases or
+  add-ons no longer lands on a section stuck on "Loading…".
+- **OWASP notes in Settings match the switch after a reload.** A switch or field the browser brings back on a
+  reload now shows the right note.
+- **More Backups and Files & Config messages are translated.** Fifteen status messages, such as "Use at least
+  15 characters", are now in Spanish and French.
 - **The Firewall page shows a rule's logging again.** A rule with logging shows ufw's `log` or `log-all` beside where it applies, and is no longer shown merged
   with the same rule without logging.
 
 ### Security
 
+- **A failed SFTP key signature is logged and counted.** A sign-in that offers a registered key with a
+  signature that does not verify is now written to the audit log and auth.log at once and counts against the
+  address, like a wrong password; asking whether a key would do is not counted.
 - **Slow connections can no longer fill up the panel.** A request now has to arrive whole in set times: its headers within 40 seconds of its first byte, and a
   body at a steady minimum rate after a minute's grace. A client sending one byte at a time used to keep
   its connection for as long as it liked, and about a thousand of them stopped the panel answering
