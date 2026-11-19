@@ -6,8 +6,10 @@
 # `python -m panel.services.sftp_server`), and without this nothing of it was measured. coverage.py
 # passes these settings to each child in COVERAGE_PROCESS_CONFIG, with data_file and source made
 # absolute, so a child started in another directory still writes beside the others for
-# `coverage combine`. The patch needs a configuration FILE (not command-line options) and parallel
-# data files, which it turns on itself; parallel is set here as well so it reads as it runs.
+# `coverage combine`. CI sets COVERAGE_FILE to a directory outside the checkout, so no data file
+# appears in the tree while the suites read it. The patch needs a configuration FILE (not
+# command-line options) and parallel data files, which it turns on itself; parallel is set here as
+# well so it reads as it runs.
 # patch = _exit: the SFTP service ends with os._exit(0) (sftp_server._die), which skips the exit
 # handlers that save a process's data; the patch saves it first.
 # coverage.py 7.17.2 docs: "Measuring subprocesses" (subprocess.html) and "[run] patch" (config.html).

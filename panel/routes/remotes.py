@@ -380,13 +380,14 @@ def _register_remote_edit(app):
 def _edit_user_or_key_refusal(remote, new_user):
     """Why edit_remote refuses its SSH user or its credential before any field changes, or None.
 
-    SECURITY: the username reaches `sudo -u <user>` and SSH commands, so it is held to LINUX_USER_RE.
-    Key text in the key PATH field is refused, never repeated (validation.key_text_problem).
+    Key text in the key PATH field is refused first, whatever else the form holds, and never repeated
+    (validation.key_text_problem). SECURITY: the username reaches `sudo -u <user>` and SSH commands,
+    so it is held to LINUX_USER_RE.
     """
-    if not LINUX_USER_RE.match(new_user):
-        return "SSH user must be a valid Linux username."
     why = key_text_problem(_edited("auth_method", remote.auth_method), request.form.get("credential", "").strip())
-    return i18n.tr(why) if why else None
+    if why:
+        return i18n.tr(why)
+    return None if LINUX_USER_RE.match(new_user) else "SSH user must be a valid Linux username."
 
 
 def _r36c_delete_refused(remote):
