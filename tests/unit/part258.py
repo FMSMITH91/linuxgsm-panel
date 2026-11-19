@@ -8,6 +8,8 @@
 3. The start limit: an operator's start, Apply or Update clears it first; a start that still hits it says so.
    The card's Start is watched for the settle time; one that dies says so with its log, the journal's lines
    from this start included (b3.log may still end with an earlier clean shutdown).
+   Its tail, and the Log, mask the RCON passwords the same shell read (the game config's and b3.ini's), and
+   with no read, any value written as an RCON setting.
 4. Uninstall: the account's tmux and JVM folders in /tmp go (helper and remote form), only real folders it owns.
 5. B3's later games (wet, q3, etl, csgo, ins): off by default; switched on, the probe, the refusals (SourceMod,
    console.log, ET: Legacy's g_log), the TCP RCON forward, the live port and b3.ini.
@@ -37,7 +39,7 @@ from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit
 from unit.part257 import _HARNESS257
 from panel.core import outside_services as _os258
 from panel.core.config import encrypt_secret as _enc258
-from panel.db.models import AuditLog as _AL258, GameDatabase as _GD258, db as _db258
+from panel.db.models import AuditLog as _AL258, GameDatabase as _GD258, GameServer as _GS258, db as _db258
 from panel.ops import system_ops as _so258
 from panel.routes import addons as _ra258, addons_change as _ch258
 from panel.security import journal_forget_sh as _jf258, privileged as _pv258
@@ -348,6 +350,77 @@ def _start_route258(sid):
        (died[:2], died[2].get("why"), _CRASH258 in died[2].get("tail", ""), _DBV258 in died[2].get("tail", ""),
         died[3].success, "more than 5 times in 10 minutes" in (limit[2].get("why") or ""), ok[2], ok[3].success),
        ((202, True), _ra258._START_DIED, True, False, False, True, {}, True))
+
+
+# The card's Start and Log, run for real under bash in a throwaway home: the RCON passwords the same shell read
+# are masked, the game config's and b3.ini's (an operator's edit, cut where B3 ends it); with that first line
+# lost, a value written as an RCON setting still is.
+_GAMEPW258 = "p258-cfg-" + "rconvalue"
+_INIPW258 = "p258-ini-" + "rconvalue"
+_SETPW258 = "p258-set-" + "rconvalue"
+_B3LOG258 = ("RCON sending (127.0.0.1:28960) %s\nconnecting as %s\nconfig: rcon_password: %s\n"
+             "exec: set rconpassword \"%s\"\n" % (_GAMEPW258, _INIPW258, _SETPW258, _SETPW258))
+
+
+def _rcon_home258(sid):
+    """The cod2 server's config, and its B3's b3.ini and b3.log, in a throwaway home -> (home, B3's folder, user)."""
+    with _p9.app_context():
+        gs = _db258.session.get(_GS258, sid)
+        user, cfg = gs.short_name, _ad258.game_cfg(gs.game_type, gs.lgsm_name)
+    home = os.path.join(_TMP258, "rconhome")
+    data = os.path.join(home, "b3")
+    os.makedirs(os.path.dirname(os.path.join(home, cfg)), exist_ok=True)
+    os.makedirs(os.path.join(data, "Data"), exist_ok=True)
+    _write258(os.path.join(home, cfg), 'seta rcon_password "%s"\n' % _GAMEPW258)
+    _write258(os.path.join(data, "Data", "b3.ini"), "[server]\nrcon_password: %s ; set by hand\n" % _INIPW258)
+    _write258(os.path.join(data, "Data", "b3.log"), _B3LOG258)
+    when = _tm258.time() + 3600
+    os.utime(os.path.join(data, "Data", "b3.log"), (when, when))
+    for name, text in (("systemctl", _WATCH258 % (home, home)), ("journalctl", "#!/bin/bash\nexit 0\n"),
+                       ("sleep", "#!/bin/bash\nexit 0\n")):
+        _write258(os.path.join(home, name), text)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(os.path.join(home, name), 0o700)  # nosec B103 - this part's own stub, its owner only
+    _write258(os.path.join(home, "mode"), "dies")
+    return home, data, user
+
+
+def _rcon_run258(sid, lost):
+    """(the failed Start's tail, the Log's text) with the route's shells run under bash; `lost`: their first line dropped."""
+    home, data, user = _rcon_home258(sid)
+    real = _ad258.addon_dir(user, "b3")
+
+    def shell(server, u, sh, **_k):
+        r = _bash258(sh.replace('cd "$HOME"', "cd %s" % home).replace(real, data), path_first=home)
+        return (r.stdout.partition("\n")[2] if lost else r.stdout), r.stderr, r.returncode
+    _p9_patch(_ra258, "game_account_write_refusal", lambda remote, user, reading=False: None)
+    _p9_patch(_ra258, "threading", _p9_threading(_P9Thread))
+    _p9_patch_sm("shell_as_game_user", shell)
+    _p9_client(P9_ADMIN).post("/api/server/%d/addons/b3/start" % sid)
+    _p9_drain()
+    with _ra258._JOBS_LOCK:
+        tail = (_ra258._JOBS.pop((sid, "b3"), None) or {}).get("tail", "")
+    log = (_p9_client(P9_ADMIN).get("/api/server/%d/addons/b3/logs" % sid).get_json() or {}).get("log", "")
+    return tail, log
+
+
+def _rcon_mask258(sid):
+    shown = []
+    for lost in (False, True):
+        for text in _rcon_run258(sid, lost):
+            shown.append(("RCON sending" in text, "ADDON_SECRETS" in text, _GAMEPW258 in text, _INIPW258 in text,
+                          _SETPW258 in text, "rcon_password: " + _ad258._MASK in text))
+    seen = (True, False, False, False, False, True)
+    eq("Start's tail and the Log (route, bash): the game config's RCON password and b3.ini's (as B3 reads it) are "
+       "masked; the shell's own first line is not shown", shown[:2], [seen, seen])
+    lost = (True, False, True, True, False, True)
+    eq("Start's tail and the Log with that read lost: a value written as an RCON setting (rcon_password: v, set "
+       "rconpassword \"v\") is still masked", shown[2:], [lost, lost])
+    with _p9.app_context():
+        got = _ch258._secrets(_types258.SimpleNamespace(id=sid), {}, {"rcon_lines": 'set rcon_password "%s"' % _GAMEPW258},
+                              "[server]\nrcon_password: %s ; set by hand\n" % _INIPW258)
+    eq("Apply/Update mask b3.ini's RCON password too, whole and as B3 reads it, with the game config's",
+       [x for x in got if x], [_GAMEPW258, _INIPW258 + " ; set by hand", _INIPW258])
 
 
 # ── 4. /tmp at uninstall ────────────────────────────────────────────────────────────────────────
@@ -858,8 +931,8 @@ try:
     _card_checks258()
     _ids258 = _fixture258()
     try:
-        for _step258 in (lambda ids: _start_route258(ids["cod2"]), _row_geo_off258, _install_csgo258, _install_etl258,
-                         _apply_etl258, _own258):
+        for _step258 in (lambda ids: _start_route258(ids["cod2"]), lambda ids: _rcon_mask258(ids["cod2"]),
+                         _row_geo_off258, _install_csgo258, _install_etl258, _apply_etl258, _own258):
             _p9_restore_all()
             _p9_arm(who="part258")
             _step258(_ids258)
