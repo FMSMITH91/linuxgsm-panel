@@ -20,6 +20,7 @@ Settings → **SFTP**:
 | Listen on | **This host's Tailscale address** (offered only while Tailscale is up), **only this host** (127.0.0.1), or **all addresses** (0.0.0.0, and :: when the host has IPv6) | Tailscale; 127.0.0.1 without Tailscale |
 | Port | The TCP port | 2222 (the default) |
 | Largest upload (MiB) | A single file larger than this is refused | 4096 |
+| Absolute session limit (hours) | A session ends this long after sign-in, whatever it does: it opens nothing new after it, a file already open may finish for up to an hour, then the session is closed and the user signs in again. Until set, the panel's own sign-in limit (Settings → Sessions & Security) | 8 (OWASP: 4 to 8 hours) |
 | Close an idle session after (minutes) | A session that has made no SFTP request (a listing, a read, a write) for this long is closed by the service; 0 never closes one | 15 (OWASP: 15 to 30 minutes for most applications, 2 to 5 for high-value ones) |
 | Also allow the account password with an authenticator code | Lets an account with two-factor authentication sign in with its password and its current code instead of a key | Off: SSH keys only |
 
@@ -95,6 +96,9 @@ in with a password at all. Backup codes are not accepted over SFTP.
   disk, is refused.
 - Every upload, delete, rename, new folder and permission change is recorded in the audit log, about
   that server, with your address. Reads are not recorded.
+- A session ends at its absolute limit (8 hours by default, the panel's own sign-in limit): after it, a new
+  listing, open, rename or delete is refused with "This SFTP session has reached its time limit"; a file already
+  open can finish for up to an hour; then the session is closed, recorded in the audit log, and you sign in again.
 - A session with no SFTP request for the idle timeout (15 minutes by default) is closed by the service and
   recorded in the audit log; a transfer in progress is activity. Most clients reconnect when you next click.
 - Permissions are checked again on every request: when an administrator removes your access, signs
@@ -162,6 +166,9 @@ rates RSA-3072 at the 128-bit security of Ed25519 and P-256, and RSA-2048 at 112
 - OWASP Session Management Cheat Sheet: "Session Expiration" (idle 15 to 30 minutes for most applications, 2 to 5
   for high-value ones, enforced on the server, the session invalidated). An SFTP session is mapped to a web
   session; its activity is its SFTP requests, so an open but unused client is idle and a long transfer is not.
+  "Absolute Timeout" (every session gets one, regardless of activity; 4 to 8 hours as the example): the
+  panel's own sign-in limit, with an hour's grace for a file already open (the recommended 4 GiB upload over a
+  10 Mbit/s link).
 - OWASP Path Traversal Prevention Cheat Sheet: "Validate the Resolved Path", "Symbolic Links and
   Race Conditions" (files are reached as the game account, so a link can only reach what that account
   can).
