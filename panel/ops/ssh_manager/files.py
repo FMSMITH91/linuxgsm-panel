@@ -134,15 +134,24 @@ def _r21b_real_home(hq):
 # HostbasedAuthentication read (.rhosts, .shosts), Kerberos' .k5login and the .k5users ksu reads,
 # bash's start-up and logout files with what the distributions' own ~/.bashrc sources (Debian and
 # Ubuntu: ~/.bash_aliases; Fedora and RHEL: every file in ~/.bashrc.d), and the variables pam_env
-# reads at sign-in. A key or a line put there opens a shell as the
-# account outside the panel, with no audit, that outlives the grant it was made with. The file
-# browser never writes, uploads, creates or renames onto one: a write judged on the path RESOLVED on
-# the host (_login_guard), where the inside-the-home check is made, a create or rename by the name it
-# lands at (those refuse any link on the way). Not listed: crontabs (in /var/spool/cron,
-# outside every home already), ~/.config/autostart (only a desktop session reads it, and a game host
-# has none) and ~/.config/systemd/user (a user manager starts only for a session or with lingering,
-# which game accounts are not given).
-_LOGIN_DIRS = (".ssh", ".bashrc.d")
+# reads at sign-in. And what the account's own systemd user manager starts by itself: its units
+# and drop-ins (~/.config/systemd and ~/.local/share/systemd: systemd.unit(5), "User Unit Search
+# Path"; generators beside them), the environment it gives every service (~/.config/environment.d,
+# environment.d(5)), and Podman's Quadlet files and settings (~/.config/containers: a .container
+# file with WantedBy= is started at boot with no symlink to make, podman-systemd.unit(5)). An add-on
+# turns lingering on for its account (addon-account-prepare), so that manager runs from boot with
+# nobody signed in. A key, a line or a unit put there opens a shell or runs code as the account
+# outside the panel, with no audit, that outlives the grant it was made with. The file browser and
+# the SFTP service never write, upload, create or rename onto one, nor make or rename a folder
+# above one (~/.config, ~/.local, ~/.local/share: a folder renamed into place would bring its own
+# units): a write judged on the path RESOLVED on the host (_login_guard), where the
+# inside-the-home check is made, a create or rename by the name it lands at (those refuse any link
+# on the way). Not listed: crontabs (in /var/spool/cron, outside every home already) and
+# ~/.config/autostart (only a desktop session reads it, and a game host has none).
+_LOGIN_DIRS = (".ssh", ".bashrc.d", ".config/systemd", ".config/environment.d", ".config/containers",
+               ".local/share/systemd")
+# Every folder above a sign-in folder (.config for .config/systemd): itself, not what else it holds.
+_LOGIN_ABOVE = tuple(sorted({"/".join(d.split("/")[:i]) for d in _LOGIN_DIRS for i in range(1, d.count("/") + 1)}))
 _LOGIN_FILES = (".bashrc", ".profile", ".bash_profile", ".bash_login", ".bash_logout", ".bash_aliases",
                 ".pam_environment", ".rhosts", ".shosts", ".k5login", ".k5users")
 _LOGIN_MARK = "__LOGIN_FILE__"
@@ -151,9 +160,14 @@ LOGIN_FILE_REFUSED = ("This path controls signing in to the game server's accoun
 
 
 def _is_login_path(rel):
-    """Whether `rel` (relative to the game account's home) names a sign-in path, as written."""
+    """Whether `rel` (relative to the game account's home) names a sign-in path, as written.
+
+    A sign-in file, anything in or at a sign-in folder (a prefix match on whole components), or a
+    folder above one.
+    """
     r = _pp.normpath(str(rel or "").lstrip("/"))
-    return r.split("/", 1)[0] in _LOGIN_DIRS or r in _LOGIN_FILES
+    return (r in _LOGIN_FILES or r in _LOGIN_ABOVE
+            or any(r == d or r.startswith(d + "/") for d in _LOGIN_DIRS))
 
 
 def _login_guard(hq, var):
@@ -163,7 +177,7 @@ def _login_guard(hq, var):
     to ~/.ssh, or a home under a linked /home, is judged by where the write really lands.
     """
     q = _core._quote
-    pats = "|".join([f"{q(d)}|{q(d)}/*" for d in _LOGIN_DIRS] + [q(f) for f in _LOGIN_FILES])
+    pats = "|".join([f"{q(d)}|{q(d)}/*" for d in _LOGIN_DIRS] + [q(f) for f in _LOGIN_FILES + _LOGIN_ABOVE])
     return (f'lr=${{{var}#{hq}/}}; case "${var}" in "$h"/*) lr=${{{var}#"$h"/}} ;; esac; '
             f'case "$lr" in {pats}) echo {_LOGIN_MARK}; exit 13 ;; esac; ')
 

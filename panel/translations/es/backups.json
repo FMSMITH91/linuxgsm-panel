@@ -42,7 +42,7 @@
   "No safety copy": "Sin copia de seguridad previa",
   "Off, one copied backup hands over the database and both encryption keys, including every stored SSH credential. On, the file is useless to anyone without the passphrase. Applies to new backups; existing ones keep whatever they were written with.": "Desactivado, basta con copiar una sola copia de seguridad para entregar la base de datos y las dos claves de cifrado, incluidas todas las credenciales SSH guardadas. Activado, el archivo no sirve de nada sin la contraseña. Se aplica a las copias nuevas; las existentes conservan el cifrado con el que se crearon.",
   "Passphrase needed": "Se necesita la contraseña",
-  "Passphrase — at least 12 characters": "Contraseña: al menos 12 caracteres",
+  "Passphrase — at least 15 characters": "Contraseña: al menos 15 caracteres",
   "Restore anyway": "Restaurar de todos modos",
   "Schedule": "Programación",
   "Scheduled Tasks": "Tareas programadas",
@@ -135,5 +135,6 @@
   "✓ Schedule saved": "✓ Programación guardada",
   "Blank = use the default above. Between {min} and {max}.": "En blanco = usar el valor por defecto de arriba. Entre {min} y {max}.",
   "Your servers are on more than one host — free disk is shown per server below.": "Tus servidores están en más de un host — el disco libre se muestra por servidor abajo.",
-  "Backing up…": "Haciendo copia…"
+  "Backing up…": "Haciendo copia…",
+  "Your passphrase is shorter than the 15 characters OWASP recommends. New backups still use it; enter a longer one to replace it.": "Tu contraseña tiene menos de los 15 caracteres que recomienda OWASP. Las nuevas copias la siguen usando; escribe una más larga para sustituirla."
 }

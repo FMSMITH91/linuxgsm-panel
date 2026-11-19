@@ -211,8 +211,9 @@ def cmd_reset_password(args):
         # every UserSession row and left it working. app.py's note that "cookie theft is also
         # recoverable via sign out everywhere" was not true while one existed. Minting one
         # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-        # could leave themselves a key that survived the victim's whole recovery.
-        u.revoke_api_token()
+        # could leave themselves a key that survived the victim's whole recovery. An SFTP key is the
+        # same kind of credential (no epoch, no session), so the account's keys go with it.
+        u.revoke_outliving_credentials()
         db.session.commit()
         print("Password reset for '%s' (existing sessions revoked)." % _tty_safe(username))
 
@@ -378,7 +379,7 @@ def _set_flag(username, field, value, label):
             from panel.db.models import UserSession
             UserSession.query.filter_by(user_id=u.id).delete(synchronize_session=False)
             u.auth_epoch = (u.auth_epoch or 0) + 1
-            u.revoke_api_token()
+            u.revoke_outliving_credentials()   # the API token and the SFTP keys
             # ...and its alert devices: a deactivated account is pushed nothing (push_alerts).
             from panel.services.push_alerts import drop_user
             drop_user(u.id)

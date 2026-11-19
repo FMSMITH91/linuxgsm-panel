@@ -10,6 +10,40 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.19] — 2026-11-19
+
+### Security
+
+- **Idle connections can no longer take the panel down.** A connection that sends nothing is closed after 30 seconds, and one that stops part-way through a
+  request after 60. Out of file descriptors, the web server now waits for connections to close instead
+  of ending the panel, and the service has room for 8,192 of them; about a thousand idle connections
+  used to stop the panel, again after every restart. The live console and terminal stay connected.
+- **An update never runs git as root in the panel's own checkout.** On a self-update the installer, running as root, ran git as root when the checkout's `.git` was
+  missing or read as root's for a moment, which the panel's own account could arrange, and git then used
+  that account's git settings and hooks. git now always runs as the account that owns the checkout,
+  never looks above it, and root runs it only in a folder that is root's; otherwise it does not run.
+- **Adding an SFTP key asks for your password, and taking an account back removes its keys.** A key needs your password, and your authenticator code with two-factor authentication on, every time
+  it is added. Adding and removing one show in your account's recent security changes and alert on an
+  administrator's account. Changing the password, "Sign out everywhere", an administrator's reset,
+  deactivation and `manage.py reset-password` or `deactivate` remove the account's keys, so a key added
+  from a stolen session no longer outlives them.
+- **The file browser and SFTP no longer write the services a game account starts by itself.** `~/.config/systemd`, `~/.local/share/systemd`, `~/.config/environment.d` and Podman's
+  `~/.config/containers` (and the folders above them) are refused like `~/.ssh`: an add-on keeps its
+  account's services running from boot, so a file put there would run as that account after your access
+  to the server ended. A game restore keeps the account's own copies and takes none from the archive.
+- **An SFTP upload opened for appending is held to the size limit.** Writes to a file opened for appending are counted from the file's size, so they stop at the upload
+  limit and before the disk fills, whatever offsets the client sends.
+- **Public SSH opened by a logged firewall rule reads as open.** A rule with logging (`ufw allow log 22/tcp`) was not read as public anywhere, so the Network tab said
+  public SSH was off, and Disable public SSH or Close port said done while the port stayed open. Such
+  rules are now read as they are, and the panel names one that is still in the way.
+- **A crafted LinuxGSM config line no longer stalls the panel.** A config value of many `${` with no closing `}` took seconds to read on every world reset check,
+  holding up every other page; it is now read in a few milliseconds.
+- **Encrypted backups use AES-256-GCM.** New encrypted panel backups are written with AES-256-GCM under a key derived from the passphrase with
+  Argon2id, the options OWASP recommends, and the header is protected too. Backups encrypted before
+  still restore, and upload as before.
+- **A backup passphrase needs 15 characters.** OWASP's length for a password with no second factor. A passphrase set before keeps working; the
+  Backups card says when yours is shorter, so you can replace it.
+
 ## [2026.11.18] — 2026-11-18
 
 ### Added

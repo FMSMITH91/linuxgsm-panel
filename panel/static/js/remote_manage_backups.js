@@ -87,7 +87,7 @@ function loadBackups(){
     // Bounds come from the server, so the number box and the clamp behind it cannot disagree.
     bkApplyLimits(d.limits);
     if(s.keep_days) _r29c_bkSetIdle('bk-keep', s.keep_days);
-    bkShowEncState(s.encrypt===true);
+    bkShowEncState(s.encrypt===true, s.passphrase_short===true);
     var tb=document.getElementById('bk-tbody'); if(!tb) return;
     bkRenderList(d, tb);
     // ── Full (game server files) backup section ──
@@ -805,10 +805,11 @@ function _bkAskPassphrase(name, btn){
     }});
 }
 
-function bkShowEncState(on){
+function bkShowEncState(on, short){
   var badge=document.getElementById('bk-enc-status');
   if(badge){ badge.textContent = on?'On':'Off'; badge.className = 'badge '+(on?'bg-success':'bg-secondary'); }
   var off=document.getElementById('bk-pass-off'); if(off) off.style.display = on?'':'none';
+  _bkShowShortNote(on && short);
   var box=document.getElementById('bk-pass');
   // Never repopulated from the server — it is never sent there. NOT cleared here: this runs on every
   // refresh of the card, a dozen of them after a "Back up now", and wiped a passphrase mid-typing.
@@ -817,12 +818,14 @@ function bkShowEncState(on){
   // A placeholder cannot wrap, so it has to fit the box: at 375px the field holds ~267px, and
   // "Set a new passphrase to replace the current one" needed 293px in English (more in es/fr).
   if(box) box.placeholder = on ? 'Enter a new passphrase to change it'
-                               : 'Passphrase — at least 12 characters';
+                               : 'Passphrase — at least 15 characters';
 }
+// A passphrase set while the floor was 12: still used, with a note (never a block) to replace it.
+function _bkShowShortNote(show){ var sh=document.getElementById('bk-pass-short'); if(sh) sh.style.display = show?'':'none'; }
 function _r29c_bkPassDone(){ var box=document.getElementById('bk-pass'); if(box) box.value=''; }
 function saveBackupPassphrase(btn){
   var box=document.getElementById('bk-pass'); var pass=(box&&box.value)||'';
-  if(pass.length<12){ bkMsg('✗ Use at least 12 characters','text-danger'); if(box) box.focus(); return; }
+  if(pass.length<15){ bkMsg('✗ Use at least 15 characters','text-danger'); if(box) box.focus(); return; }
   confirmDialog({title:'Encrypt new backups', icon:'shield-lock', confirmLabel:'Turn on encryption',
     bodyText:'From now on every new backup is encrypted with this passphrase.\n\nWrite it down somewhere other than this machine FIRST. There is no reset and no recovery — if you lose it, every backup written with it is permanently unreadable, including the one you would restore from.',
     onConfirm:function(){

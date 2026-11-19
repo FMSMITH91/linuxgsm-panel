@@ -35,6 +35,28 @@ recommends ("Only Support Strong Protocols", "Only Support Strong Ciphers"): TLS
 only with forward-secret AEAD suites (ECDHE with AES-GCM or ChaCha20-Poly1305), no CBC. Python's
 default server list also offered two TLS 1.2 ECDHE-ECDSA CBC suites.
 
+Idle and slow connections are closed, and running out of descriptors does not end the server
+(OWASP Denial of Service Cheat Sheet, "Network attacks > Rate limiting": a request-read timeout
+against slow clients, an absolute connection timeout, a load limit). eventlet's defaults were
+`socket_timeout=None` and `keepalive=True`: a connection that sent nothing waited in readline for
+ever, holding a green thread and a descriptor, so about a thousand idle TCP connections (no account
+needed) used the process's 1,024 descriptors, accept() raised EMFILE, eventlet re-raised it out of
+server(), and the process ended; Restart=always brought it back for the same connections to take
+down again. Now:
+  * IDLE_SECONDS: how long a connection may sit with no request (a new one before its first request
+    line, a kept-alive one between requests) before it is closed;
+  * io_seconds(): every read and write after that (headers, a body, a polling request, the TLS
+    handshake, a WebSocket's upgrade) gives up after this long with no progress. It is longer than
+    Socket.IO's own heartbeat window (socket_hooks.LIMITS: a ping every ping_interval, answered
+    within ping_timeout). Once a WebSocket is open, engineio sets that window as the socket's
+    timeout itself (engineio socket.py _websocket_handler), and the browser answers every ping, so a
+    live console or terminal is not cut by either.
+  * the listening socket's accept() (_Listener) waits and tries again on EMFILE, ENFILE, ENOBUFS and
+    ENOMEM instead of ending the server, and on the errors Linux passes up from a connection that
+    failed before it was accepted (accept(2), "Error handling"), which eventlet also took as the end;
+  * the pool of connections stays eventlet's 1,024, and the unit sets LimitNOFILE (install.sh), so
+    that pool can never take every descriptor the panel's own work needs.
+
 eventlet is imported inside serve(), never at module level: importing panel must not import eventlet
 (EVENTLET_NO_GREENDNS has to be set first).
 """
@@ -42,6 +64,7 @@ import errno
 import logging
 import ssl
 import sys
+import time
 
 _log = logging.getLogger("panel.wsgi")
 
@@ -154,8 +177,75 @@ def _protocol(base):
     return _Protocol
 
 
-def serve(app, host, port, ssl_args=None):
-    """Serve `app` on host:port until the process ends; `ssl_args` holds certfile/keyfile for TLS."""
+# A connection with no request in progress (before its first request line, or kept alive between
+# two) is closed after this many seconds.
+IDLE_SECONDS = 30
+# Socket.IO's heartbeat window (ping_interval + ping_timeout) is multiplied by this for io_seconds(),
+# so a WebSocket answering every ping always reads well inside it: 45 s -> 60 s with the panel's own.
+_IO_OVER_HEARTBEAT = 4 / 3
+# accept() errors that are a full process or system (descriptors, buffers, memory): wait, then retry.
+_ACCEPT_STARVED = frozenset({errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM})
+# accept() errors of one connection that failed before it was taken (accept(2): Linux passes pending
+# network errors up from accept; treat them as EAGAIN), and the ones eventlet ends server() on.
+_ACCEPT_ONE_FAILED = frozenset({errno.ECONNABORTED, errno.EPROTO, errno.ENOPROTOOPT, errno.EHOSTDOWN,
+                                errno.ENONET, errno.EHOSTUNREACH, errno.EOPNOTSUPP, errno.ENETUNREACH,
+                                errno.ENETDOWN, errno.EPERM, errno.ECONNRESET, errno.EPIPE, errno.ENOTCONN,
+                                errno.ETIMEDOUT})
+_STARVED_WAIT_MAX = 1.0
+_STARVED_LOG_EVERY = 60.0
+
+
+def io_seconds(limits=None):
+    """The read/write timeout for a connection: Socket.IO's heartbeat window times _IO_OVER_HEARTBEAT."""
+    if limits is None:
+        from panel.ops.socket_hooks import LIMITS
+        limits = LIMITS
+    return (limits["ping_interval"] + limits["ping_timeout"]) * _IO_OVER_HEARTBEAT
+
+
+class _Listener:
+    """The listening socket, with an accept() that never ends the server over one connection or a full table.
+
+    Everything but accept() is the socket's own (eventlet reads getsockname, family, close).
+    """
+
+    def __init__(self, sock, sleep):
+        self._sock = sock
+        self._sleep = sleep
+        self._logged = 0.0
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+    def accept(self):
+        """The next connection; out of descriptors or memory it waits (up to 1 s, doubling) and tries again."""
+        wait = 0.05
+        while True:
+            try:
+                return self._sock.accept()
+            except OSError as e:
+                if e.errno in _ACCEPT_ONE_FAILED:
+                    continue
+                if e.errno not in _ACCEPT_STARVED:
+                    raise
+                self._starved(e)
+                self._sleep(wait)
+                wait = min(wait * 2, _STARVED_WAIT_MAX)
+
+    def _starved(self, e):
+        """One warning a minute at most while accept() is starved: the log stays readable under a flood."""
+        now = time.monotonic()
+        if now - self._logged >= _STARVED_LOG_EVERY:
+            self._logged = now
+            _log.warning("web server: cannot accept a connection (%s); waiting for one to close",
+                         errno.errorcode.get(e.errno, e.errno))
+
+
+def serve(app, host, port, ssl_args=None, idle_seconds=IDLE_SECONDS, io_timeout=None):
+    """Serve `app` on host:port until the process ends; `ssl_args` holds certfile/keyfile for TLS.
+
+    `idle_seconds` and `io_timeout` (default io_seconds()) are the two connection timeouts above.
+    """
     import eventlet
     import eventlet.green.socket
     import eventlet.green.ssl
@@ -167,5 +257,6 @@ def serve(app, host, port, ssl_args=None):
     if ssl_args:
         ctx = tls_context(ssl_args["certfile"], ssl_args["keyfile"], eventlet.green.ssl)
         sock = ctx.wrap_socket(sock, server_side=True)
-    eventlet.wsgi.server(sock, app, log=_TracebacksOnly(), log_output=True, debug=False,
-                         protocol=_protocol(eventlet.wsgi.HttpProtocol))
+    eventlet.wsgi.server(_Listener(sock, eventlet.sleep), app, log=_TracebacksOnly(), log_output=True,
+                         debug=False, protocol=_protocol(eventlet.wsgi.HttpProtocol),
+                         keepalive=idle_seconds, socket_timeout=io_seconds() if io_timeout is None else io_timeout)

@@ -1579,7 +1579,6 @@
     "endpoint": "account_sftp_key_add",
     "guards": [
       "utils.py:decorated_view",
-      "account_guard.py:wrapped",
       "view:account_sftp_key_add"
     ],
     "methods": [

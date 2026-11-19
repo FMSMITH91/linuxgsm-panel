@@ -42,7 +42,7 @@
   "No safety copy": "Aucune copie de sécurité",
   "Off, one copied backup hands over the database and both encryption keys, including every stored SSH credential. On, the file is useless to anyone without the passphrase. Applies to new backups; existing ones keep whatever they were written with.": "Désactivé, une seule sauvegarde copiée livre la base de données et les deux clés de chiffrement, y compris chaque identifiant SSH enregistré. Activé, le fichier est inutilisable sans la phrase secrète. S'applique aux nouvelles sauvegardes ; les existantes conservent le chiffrement avec lequel elles ont été créées.",
   "Passphrase needed": "Phrase secrète requise",
-  "Passphrase — at least 12 characters": "Phrase secrète — au moins 12 caractères",
+  "Passphrase — at least 15 characters": "Phrase secrète — au moins 15 caractères",
   "Restore anyway": "Restaurer quand même",
   "Schedule": "Planification",
   "Scheduled Tasks": "Tâches planifiées",
@@ -135,5 +135,6 @@
   "✓ Schedule saved": "✓ Planification enregistrée",
   "Blank = use the default above. Between {min} and {max}.": "Vide = utiliser la valeur par défaut ci-dessus. Entre {min} et {max}.",
   "Your servers are on more than one host — free disk is shown per server below.": "Vos serveurs sont sur plusieurs hôtes — l'espace libre est indiqué par serveur ci-dessous.",
-  "Backing up…": "Sauvegarde…"
+  "Backing up…": "Sauvegarde…",
+  "Your passphrase is shorter than the 15 characters OWASP recommends. New backups still use it; enter a longer one to replace it.": "Votre phrase secrète fait moins des 15 caractères recommandés par OWASP. Les nouvelles sauvegardes l'utilisent encore ; saisissez-en une plus longue pour la remplacer."
 }

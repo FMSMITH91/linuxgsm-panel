@@ -247,4 +247,5 @@ _ins_left186 = _INS186.count("stat -c '%U' \"${PANEL_DIR}\"") + _INS186.count("s
 check("install.sh/uninstall.sh: no step takes the tree's account from PANEL_DIR's entry any more "
       "(every one asks _r42i_tree_owner; uninstall.sh's _conf_read reads a link as the panel user)",
       _ins_left186 == 0 and "stat -c '%U' \"${PANEL_DIR}\"" not in _UNI186
-      and _INS186.count("$(_r42i_tree_owner)") == 7, repr(_ins_left186))
+      # 8: _gitc asks it too since review 1119 (it read the owner from .git's entry).
+      and _INS186.count("$(_r42i_tree_owner)") == 8, repr(_ins_left186))

@@ -361,7 +361,7 @@
       <div class="d-flex gap-2 flex-wrap align-items-center">
         <input type="password" id="bk-pass" class="form-control form-control-sm mw-r22"
                autocomplete="new-password" aria-label="Backup passphrase"
-               placeholder="Passphrase — at least 12 characters">
+               placeholder="Passphrase — at least 15 characters">
         <button class="btn btn-primary btn-sm" data-action="saveBackupPassphrase" data-args='["@self"]'>
           <i class="bi bi-lock"></i> Encrypt new backups
         </button>
@@ -370,6 +370,7 @@
           Turn off
         </button>
       </div>
+      <div class="small text-warning mt-1" id="bk-pass-short" data-start-hidden>Your passphrase is shorter than the 15 characters OWASP recommends. New backups still use it; enter a longer one to replace it.</div>
       <div class="small text-warning mt-2 mb-0">
         <i class="bi bi-exclamation-triangle-fill"></i>
         Keep it somewhere other than this machine. There is no reset: lose the passphrase and every

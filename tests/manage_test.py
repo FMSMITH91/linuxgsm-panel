@@ -74,7 +74,7 @@ from panel.ops import system_ops as _so  # noqa: E402
 _so._check_sudo = lambda force=False: False   # never probe real sudo (pam_faillock)
 
 import manage  # noqa: E402   (creates its own app at import, exactly as the CLI does)
-from panel.db.models import db, User, UserSession  # noqa: E402
+from panel.db.models import db, SftpKey, User, UserSession  # noqa: E402
 from panel.security import auth  # noqa: E402
 
 # Fixture passwords: plain words, past the 15 characters a password without 2FA needs. No real credential.
@@ -374,6 +374,18 @@ try:
               exited and "no active superadmin" in msg, msg[:70])
         check("lockout: ...and the account is left untouched, not half-changed" , intact)
 
+    # Deactivating an account removes its SFTP keys too (reactivating it must not bring them back).
+    _deact_id = seed(username="cli_deact", admin=False)
+    with manage.app.app_context():
+        db.session.add(SftpKey(user_id=_deact_id, label="mt", key_type="ssh-ed25519", key_blob="AAAA",
+                               fingerprint="SHA256:mt-deact"))
+        db.session.commit()
+    exited, msg = raises_exit(manage._set_flag, "cli_deact", "is_active", False, "deactivated")
+    with manage.app.app_context():
+        _deact_keys = SftpKey.query.filter_by(user_id=_deact_id).count()
+    check("deactivate r31: deactivating an account removes its SFTP keys", not exited and _deact_keys == 0,
+          "exited=%s keys=%d %s" % (exited, _deact_keys, msg[:60]))
+
     # With a second admin present the same operation is allowed.
     second_id = seed(username="cli_admin2", admin=True)
     exited, msg = raises_exit(manage._set_flag, "cli_admin2", "is_superadmin", False, "demoted")
@@ -394,6 +406,8 @@ try:
         before = db.session.get(User, admin_id)
         old_hash, old_epoch = before.password_hash, (before.auth_epoch or 0)
         db.session.add(UserSession(user_id=admin_id, sid="mt-reset-a"))
+        db.session.add(SftpKey(user_id=admin_id, label="mt", key_type="ssh-ed25519", key_blob="AAAA",
+                               fingerprint="SHA256:mt-reset"))
         db.session.commit()
     manage.cmd_reset_password(Args(username="cli_admin", password=_PW_RESET))  # nosec B106 - test fixture
     with manage.app.app_context():
@@ -408,6 +422,9 @@ try:
         check("reset: ...and the account's session rows are cleared, as deactivate clears them (they "
               "listed as live sessions, the suspect device among them, until they idled out)",
               _rows_left == 0, "%d rows left" % _rows_left)
+        _keys_left = SftpKey.query.filter_by(user_id=admin_id).count()
+        check("reset r31: ...and the account's SFTP keys are removed (a key added from a stolen session "
+              "signs in with no session, so it outlived the reset)", _keys_left == 0, "%d keys left" % _keys_left)
 
     exited, msg = raises_exit(manage.cmd_reset_password,
                               Args(username="cli_admin", password="weak"))  # nosec B106 - test fixture

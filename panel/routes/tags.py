@@ -479,8 +479,9 @@ def _pw_sign_out_others(u):
     # every UserSession row and left it working. app.py's note that "cookie theft is also
     # recoverable via sign out everywhere" was not true while one existed. Minting one
     # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-    # could leave themselves a key that survived the victim's whole recovery.
-    u.revoke_api_token()
+    # could leave themselves a key that survived the victim's whole recovery. An SFTP key is the
+    # same kind of credential (no epoch, no session), so the account's keys go with it.
+    u.revoke_outliving_credentials()
     from panel.db.models import UserSession
     # Carry this device's "remember me" across the re-login (see _remember_this_device).
     _remember = _remember_this_device(u)

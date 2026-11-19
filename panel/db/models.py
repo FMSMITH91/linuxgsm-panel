@@ -475,6 +475,18 @@ class User(UserMixin, db.Model):
         self.api_token = None
         self.api_token_expires = None
 
+    def revoke_outliving_credentials(self):
+        """Revoke what signs in without a session: the API token and every SFTP key. -> keys removed.
+
+        Neither carries auth_epoch, so the epoch bump that ends every session does not reach them.
+        Every path that takes an account back (a password change or reset, sign out everywhere,
+        deactivation, manage.py reset-password and deactivate) calls this, so a credential added
+        from a stolen session does not outlive the recovery (OWASP Authentication Cheat Sheet,
+        "Re-authentication After Risk Events": invalidate sessions and rotate tokens).
+        """
+        self.revoke_api_token()
+        return SftpKey.query.filter_by(user_id=self.id).delete(synchronize_session=False)
+
     @property
     def has_api_token(self):
         return bool(self.api_token)

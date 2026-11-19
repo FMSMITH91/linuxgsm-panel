@@ -684,7 +684,7 @@ def _apply_profile_fields(user):
         from panel.db.models import UserSession
         UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         user.auth_epoch = (user.auth_epoch or 0) + 1
-        user.revoke_api_token()
+        user.revoke_outliving_credentials()   # the API token and the SFTP keys
         # Its alert devices too: an offboarded account's phone gets no more alerts (push_alerts also
         # checks is_active when it sends, for any other way an account is switched off).
         from panel.services.push_alerts import drop_user
@@ -724,8 +724,9 @@ def _apply_resets(user, _pending_audit):
         # every UserSession row and left it working. app.py's note that "cookie theft is also
         # recoverable via sign out everywhere" was not true while one existed. Minting one
         # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-        # could leave themselves a key that survived the victim's whole recovery.
-        user.revoke_api_token()
+        # could leave themselves a key that survived the victim's whole recovery. An SFTP key is the
+        # same kind of credential (no epoch, no session), so the account's keys go with it.
+        user.revoke_outliving_credentials()
         # The password now belongs to two people: the admin who saw it, and its owner.
         user.must_change_password = True
         # DEFERRED, not written here. log_action commits, and a commit in the middle of a

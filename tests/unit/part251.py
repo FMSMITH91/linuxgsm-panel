@@ -15,11 +15,16 @@ from unit.part05 import _root
 _INSTALL251 = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 _FN251 = _re251.search(r"(?ms)^_gitc\(\) \{\n.*?^\}\n", _INSTALL251)
 _BODY251 = _FN251.group(0) if _FN251 else ""
-_GIT_CALLS251 = _re251.findall(r"\bgit (?:-c \S+ )*-C \"\$\{PANEL_DIR\}\"", _BODY251)
+# r31: _gitc builds git's command once, in the `gitv` array, and every run (as itself, as the tree's
+# owner through sudo, as root through the no-follow helper) is "${gitv[@]}"; no other `git` word is run.
+_GITV251 = _re251.search(r"local -a gitv=\(([^)]*)\)", _BODY251)
+_RUNS251 = _re251.findall(r'"\$\{gitv\[@\]\}"', _BODY251)
+_BARE251 = [ln for ln in _BODY251.splitlines()
+            if _re251.search(r"(^|[\s;(])git\s", ln.split("#")[0]) and "gitv=(" not in ln]
 
-check("install.sh _gitc: both of its git calls (as the checkout's owner, and as itself) run with "
-      "gc.autoDetach=false and maintenance.autoDetach=false, so a background gc never deletes objects under the chown that follows",
-      len(_GIT_CALLS251) == 2 and all("-c gc.autoDetach=false" in c and "-c maintenance.autoDetach=false" in c
-                                      for c in _GIT_CALLS251),
-      repr(_GIT_CALLS251))
-
+check("install.sh _gitc: every one of its git runs (as itself, as the checkout's owner, and as root) uses the one "
+      "command with gc.autoDetach=false and maintenance.autoDetach=false, so a background gc never deletes objects "
+      "under the chown that follows",
+      bool(_GITV251) and "-c gc.autoDetach=false" in _GITV251.group(1)
+      and "-c maintenance.autoDetach=false" in _GITV251.group(1) and len(_RUNS251) == 3 and not _BARE251,
+      "gitv=%r runs=%d bare=%r" % (_GITV251 and _GITV251.group(1), len(_RUNS251), _BARE251))
