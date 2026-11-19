@@ -47,8 +47,8 @@ from panel.core.panel_state import (_console_backlog, _console_offsets, _console
     r36j_route_job, register_server_state)
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _console_rows, _console_send_failure,
     _drain_action_output, _host_timezone_cached, _json_int, _server_action_buttons,
-    _console_window_place, _console_window_whole, _r20b_audit_on_raise, _r39a_wipe_running, grs_or_wipe_sentence, grs_restore_running,
-    game_account_write_refusal, grs_or_account_refusal)
+    _console_window_place, _console_window_whole, _r20b_audit_on_raise, grs_restore_running,
+    game_account_write_refusal, grs_or_account_refusal, uninstall_or_wipe_sentence)
 
 # ── State and constants this module OWNS ───────────────────────────────────────────────────────
 # These lived in app.py until the split left it as their only definition and this file as their
@@ -1563,9 +1563,9 @@ def _r39a_wipe_refused(gs, action):
     install replacing the server's files, or a Run now of a `restart`/`update` line, in the middle
     of LinuxGSM's wipe or the backup before it started the server while its files were going.
     """
-    if not _r39a_wipe_running(gs.id):
+    why = uninstall_or_wipe_sentence(gs.id, gs.name)
+    if why is None:
         return None
-    why = grs_or_wipe_sentence(gs.id, gs.name)
     log_action(current_user, action, target=gs.name, detail="refused: %s" % why, success=False,
                server=gs)
     return jsonify({"success": False, "message": i18n.tr(why)}), 409

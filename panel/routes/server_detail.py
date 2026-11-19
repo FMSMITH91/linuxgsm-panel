@@ -44,7 +44,7 @@ from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_s
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
     _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, _r39a_wipe_running, grs_restore_running,
-    game_account_write_refusal,
+    game_account_write_refusal, uninstall_running, uninstall_sentence,
     lg265_refresh_commands, lg265_schedule_gained)
 
 
@@ -533,6 +533,8 @@ def _r39a_wipe_refusal(server_id, name, action):
     went. Asked by the routes, the bulk bar and the chat bots here, and again by the background run
     once it has registered (the wipe waits on that registration: wipe_schedule._r39a_other_work).
     """
+    if uninstall_running(server_id):     # every action: the account is about to be deleted
+        return uninstall_sentence(name, action)
     if action in _R39A_WIPE_SAFE_ACTIONS or not _r39a_wipe_running(server_id):
         return None
     if grs_restore_running(server_id):

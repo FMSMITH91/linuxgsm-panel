@@ -251,10 +251,9 @@ def start(app, gs, addon_id, kind):
         if choice is None:
             return _ra._say(400, _BAD_SETTINGS)
     with _ra._JOBS_LOCK:
-        job = _ra._JOBS.get((gs.id, addon_id)) or {}
-        if job.get("running"):
-            return _ra._say(409, _ra.busy_sentence(job))
-        _ra._JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": kind}
+        job = _ra.claim_job(gs.id, addon_id, kind)
+    if job is not None:
+        return _ra._say(409, _ra.busy_sentence(job))
     detail = "%s: started" % addon_id + ("" if choice is None else ", geolocation %s, plugins %s, own plugins %s"
                                          % (choice[0], " ".join(choice[1]) or "none", "on" if choice[2] else "off"))
     log_action(current_user, "addon_update" if kind == "update" else "addon_settings", target=gs.name, server=gs,

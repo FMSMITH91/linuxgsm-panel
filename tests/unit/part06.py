@@ -716,6 +716,10 @@ try:
     _hh = _ilu.module_from_spec(_spec_h2)
     _spec_h2.loader.exec_module(_hh)
     _hh.SSHD_CONFIG = os.path.join(_hdir, "sshd_config")
+    # The drop-in too, from the first call: left at the real /etc/ssh/sshd_config.d/ path until the
+    # Include checks below, a regression reading every sshd_config as Include-style would have
+    # written the machine's own drop-in (as root on CI) from these first calls.
+    _hh.SSHD_HARDENING_DROPIN = os.path.join(_hdir, "sshd_config.d", "00-panel-first-calls.conf")
     open(_hh.SSHD_CONFIG, "w").write(
         "# a comment\n#ClientAliveInterval 120\nClientAliveCountMax 9\nPort 22\n")
     os.chmod(_hh.SSHD_CONFIG, 0o600)
@@ -737,6 +741,8 @@ try:
     check("sshd hardening: unrelated lines are left alone", "Port 22" in _cfg, _cfg)
     check("sshd hardening: the file keeps the mode it had",
           _stat.S_IMODE(os.stat(_hh.SSHD_CONFIG).st_mode) == 0o600)
+    check("sshd hardening: ...and an sshd_config with no Include gets no drop-in",
+          not os.path.lexists(_hh.SSHD_HARDENING_DROPIN), _hh.SSHD_HARDENING_DROPIN)
 
     # ── the WRITE is not the measurement; sshd -T is ───────────────────────────────────────────
     # sshd_config(5): "for each keyword, the first obtained value will be used". Ubuntu 22.04/24.04
@@ -1188,6 +1194,14 @@ for _bad in (["serve", "modern", "../../etc", "http", "5000"],
 # `git pull` rewrites. A verb that accepted a path would be the same hole with validation bolted on.
 _dbr_conf = _helper.PANEL_CONF
 _dbr_dbm = _helper.DBM_PATH
+# The launchers too: a refusal that regressed went on to a real `systemd-run --unit=panel-db-repair`
+# (a real unit as root on CI) or forked this process into a detached child stopping the panel,
+# before the check could go red. Recorded instead, so a launch that should not happen is named.
+_dbr_saved = {_n: getattr(_helper, _n) for _n in ("_job_launcher_available", "_launch_job", "_fork_detached")}
+_dbr_launched = []
+_helper._job_launcher_available = lambda: False
+_helper._launch_job = lambda *a, **k: _dbr_launched.append(("job",) + a) or 99
+_helper._fork_detached = lambda *a, **k: _dbr_launched.append(("fork",) + a[1:]) or 99
 try:
     import tempfile as _tf_dbr
     _dbr_dir = _tf_dbr.mkdtemp()
@@ -1227,9 +1241,12 @@ try:
     _helper.DBM_PATH = os.path.join(_dbr_dir, "not-installed.py")
     check("helper: db-repair refuses when db_maintenance is not installed root-owned",
           _helper.do_panel_db_repair([], None) == 1)
+    check("helper: ...and none of those refusals launched a job or forked", not _dbr_launched, repr(_dbr_launched))
 finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
+    for _n, _v in _dbr_saved.items():
+        setattr(_helper, _n, _v)
 
 # ── ...and it runs as the database directory's owner, not as root ──────────────────────────────
 # It ran as root and nothing handed the result back: repair() CREATES every file it leaves (the
@@ -2340,22 +2357,30 @@ _rtp_fn = _inst[_rtp_at:_inst.index("\n}\n", _rtp_at) + 3]
 _rtp_dir = _tempfile.mkdtemp(prefix="rtp-")
 
 
-def _rtp_run(owner, gone=False):
-    """Run install.sh's root_tools_present over four files that `stat` says `owner` owns -> its exit status."""
-    files = [os.path.join(_rtp_dir, n) for n in ("helper", "dbm", "installer", "panel.conf")]
+_RTP_NAMES = ("helper", "dbm", "installer", "panel.conf")
+
+
+def _rtp_run(odd="", gone=False):
+    """Run install.sh's root_tools_present over the four files -> its exit status.
+
+    `stat` says root owns each, but the panel user owns the one named `odd`: one owner for all four
+    could not tell a check of each file from a check of the first.
+    """
+    files = [os.path.join(_rtp_dir, n) for n in _RTP_NAMES]
     for f in files:
         open(f, "w").close()
     if gone:
         os.remove(files[1])
     env = dict(os.environ, HELPER_DST=files[0], DBM_DST=files[1], INSTALLER_DST=files[2], PANEL_CONF=files[3],
-               RTP_OWNER=owner)
-    sh = 'stat() { [ "$1 $2" = "-c %U" ] && echo "$RTP_OWNER"; }\n' + _rtp_fn + "root_tools_present\n"
+               RTP_ODD=os.path.join(_rtp_dir, odd) if odd else "")
+    sh = ('stat() { [ "$1 $2" = "-c %U" ] || return 1; if [ "$3" = "$RTP_ODD" ]; then echo lgsmpanel; '
+          'else echo root; fi; }\n' + _rtp_fn + "root_tools_present\n")
     return _sp.run(["bash", "-c", sh], env=env, capture_output=True, text=True, check=False).returncode  # nosec B603 B607
 
 
-check("install.sh: and it requires each of them to be root-owned (run: a panel-owned set is refused, a "
-      "missing one too; a root-owned set passes)",
-      [_rtp_run("lgsmpanel"), _rtp_run("root", gone=True), _rtp_run("root")] == [1, 1, 0])
+check("install.sh: and it requires each of them to be root-owned (run: any ONE of the four panel-owned is "
+      "refused, a missing one too; a root-owned set passes)",
+      [_rtp_run(n) for n in _RTP_NAMES] + [_rtp_run(gone=True), _rtp_run()] == [1, 1, 1, 1, 1, 0])
 _shutil.rmtree(_rtp_dir, ignore_errors=True)
 
 # ── Root's copy of a boundary file comes from the object store, not the working tree ──────────
@@ -3264,11 +3289,26 @@ _su_sb = _tempfile.mkdtemp(prefix="selfupdate-")
 
 
 def _f2b_loop_words(text):
-    """Return the words of uninstall.sh's `for _f2b_f in ...; do` list (continuations joined)."""
+    """Return the words of uninstall.sh's `for _f2b_f in ...; do` list (continuations joined, comments dropped)."""
     at = text.find("for _f2b_f in ")
     if at < 0:
         return []
-    return text[at + len("for _f2b_f in "):text.find("; do", at)].replace("\\\n", " ").split()
+    lines = text[at + len("for _f2b_f in "):text.find("; do", at)].split("\n")
+    # A `#` that starts a word comments out the rest of its line: a path named only there is not removed.
+    return [w for ln in lines for w in re.sub(r"(?:^|\s)#.*$", " ", ln.rstrip("\\")).split()]
+
+
+def _f2b_lines_outside_loop(text):
+    """The code lines of a script that name /etc/fail2ban outside the removal loop's own lines.
+
+    Comment lines aside; the reload is no path. A whole-file "is the kept file named anywhere"
+    test let `rm -f /etc/fail2ban/jail.d/zz-panel-*.local` (or `rm -rf /etc/fail2ban/jail.d`)
+    outside the loop delete the kept SSH-port jail with the check green.
+    """
+    at = text.find("for _f2b_f in ")
+    loop = text[at:text.find("; do", at) + 4] if at >= 0 else ""
+    return [ln.strip() for ln in text.replace(loop, "", 1).splitlines()
+            if "/etc/fail2ban" in ln and not ln.lstrip().startswith("#")]
 
 
 try:
@@ -4471,8 +4511,13 @@ try:
               _sync_src[:200])
         _sync_mark = os.path.join(_sync_home, "calls.log")
 
-        def _sync_run(groups, sudo_reply="User steam is not allowed to run sudo on h.", cas=None):
-            """Run the real loop over one sandbox account whose `id -nG` answers `groups`."""
+        def _sync_run(groups, sudo_reply="User steam is not allowed to run sudo on h.", cas=None, refusal=""):
+            """Run the real loop over one sandbox account whose `id -nG` answers `groups`.
+
+            `refusal` is what the helper's enrolment check answers (empty: the account may join). It
+            is a shim like the rest: left out, the call was "command not found", which reads as no
+            refusal, so a check refusing every account still passed the positive control.
+            """
             if os.path.exists(_sync_mark):
                 os.remove(_sync_mark)
             # usermod/gpasswd are called with >/dev/null 2>&1, so the shims record to a file.
@@ -4482,8 +4527,9 @@ try:
                      "sudo() { printf '%%s' %s; }\n"
                      "usermod() { echo \"USERMOD $*\" >> %s; return 0; }\n"
                      "gpasswd() { echo \"GPASSWD $*\" >> %s; return 0; }\n"
+                     "enrolment_refusal() { printf '%%s' %s; }\n"
                      % (_su_shlex.quote(groups), _su_shlex.quote(sudo_reply),
-                        _su_shlex.quote(_sync_mark), _su_shlex.quote(_sync_mark)))
+                        _su_shlex.quote(_sync_mark), _su_shlex.quote(_sync_mark), _su_shlex.quote(refusal)))
             _rr = _su_run((cas or _cas) + "\n" + _sync_src + "\nsync_game_user_group\n",
                           "RUN_AS_ROOT=1\nGAME_GROUP=lgsmpanel-games\nPANEL_USER=lgsmpanel\n",
                           extra=_shim)
@@ -4504,7 +4550,12 @@ try:
               "calls=%r out=%r" % (_calls, _out[-200:]))
         _out, _calls = _sync_run("steam")
         check("install.sh: ...and a plain game account is still enrolled (positive control)",
-              "USERMOD -aG lgsmpanel-games steam" in _calls and "GPASSWD" not in _calls,
+              "USERMOD -aG lgsmpanel-games steam" in _calls and "GPASSWD" not in _calls
+              and "command not found" not in _out,
+              "calls=%r out=%r" % (_calls, _out[-200:]))
+        _out, _calls = _sync_run("steam", refusal="its uid is a system account's")
+        check("install.sh: ...but not one the helper's enrolment check refuses, and it is told why",
+              "USERMOD" not in _calls and "Not enrolling 'steam'" in _out and "system account" in _out,
               "calls=%r out=%r" % (_calls, _out[-200:]))
         # ...but one the helper could not VERIFY (SSSD restarting during the update, say) keeps its
         # membership and is told the truth: "unknown" never takes a grant back. Treating it as
@@ -4771,12 +4822,20 @@ try:
     check("uninstall.sh: removes every fail2ban file the panel OWNS, by its own name in the removal loop",
           sorted(_f2b_loop) == sorted(_f2b_owned) and not [w for w in _f2b_loop if set(w) & set("*?[")],
           "loop: %s; not removed: %s" % (_f2b_loop, _f2b_missing))
-    check("uninstall.sh: ...and never deletes the operator's own jail.local, nor the SSH-port jail it keeps; "
+    _f2b_outside = _f2b_lines_outside_loop(_un_txt)
+    check("uninstall.sh: ...and never deletes the operator's own jail.local, nor the SSH-port jail it keeps: no "
+          "code line outside the removal loop names /etc/fail2ban (a glob or a whole folder there would); "
           "each kept file is still one privileged.py writes",
-          not [t for t in _F2B_KEPT if t in _un_txt] and set(_F2B_KEPT) <= set(_f2b_all), repr(sorted(_F2B_KEPT)))
-    check("uninstall.sh: (control) the loop reader takes a glob as a word, and ignores a comment",
+          not _f2b_outside and set(_F2B_KEPT) <= set(_f2b_all), repr((_f2b_outside, sorted(_F2B_KEPT))))
+    check("uninstall.sh: (control) a removal outside the loop is named, a comment line is not",
+          _f2b_lines_outside_loop("for _f2b_f in /a \\\n  /b; do\n  rm -f /etc/fail2ban/jail.d/zz-panel-*.local\n"
+                                  "  # rm /etc/fail2ban/jail.local\ndone\n")
+          == ["rm -f /etc/fail2ban/jail.d/zz-panel-*.local"], "")
+    check("uninstall.sh: (control) the loop reader takes a glob as a word, and leaves out a path named only in a "
+          "comment inside the list",
           _f2b_loop_words("    for _f2b_f in /etc/fail2ban/jail.d/zz-panel-*.local \\\n"
-                          "                  /x/y; do  # /etc/fail2ban/jail.local\n")
+                          "                  # /etc/fail2ban/jail.local\n"
+                          "                  /x/y; do  # /z\n")
           == ["/etc/fail2ban/jail.d/zz-panel-*.local", "/x/y"], "")
     check("uninstall.sh: ...and reloads fail2ban so it stops watching the deleted log",
           "fail2ban-client reload" in _un_txt)
@@ -6750,9 +6809,10 @@ _rh_js = open(os.path.join(_root, "panel", "static", "js", "manage_remotes.js"),
 # find(), not index(): a renamed function or heading must fail the checks below by name.
 _rh_fn = _rh_js[_rh_js.find("function removeRemote(btn){"):] if "function removeRemote(btn){" in _rh_js else ""
 _rh_fn = _rh_fn[:_rh_fn.find("\n}\n")]
-_rh_note = ("Nothing on the host itself is changed: its game servers keep running, and the gamedig "
-            "tool and weekly cron the panel installed there stay. The “Removing a host” section "
-            "of the install guide (docs/install.md) says how to remove them.")
+_rh_note = ("Nothing on the host itself is changed: its game servers and their add-ons (B3, IW4MAdmin) keep "
+            "running, and the gamedig tool and weekly cron the panel installed there stay. Remove add-ons on the "
+            "Add-ons tab of each server first if they should stop. The “Removing a host” section of the install "
+            "guide (docs/install.md) says how to remove the rest.")
 _rh_readme = open(os.path.join(_root, "docs", "install.md"), encoding="utf-8").read()
 _rh_sec = (_rh_readme[_rh_readme.find("\n### Removing a host\n"):]
            if "\n### Removing a host\n" in _rh_readme else "")
@@ -6778,11 +6838,23 @@ check("delete host: both lists of what stays on a forgotten host name its add-on
 # The add-on routes that ask for the password (step_up_needed() in the view): the security page's step-up list
 # and the manage_addons row name each one's action, so a route that starts to ask is a doc change too.
 _rh_addons = open(os.path.join(_root, "panel", "routes", "addons.py"), encoding="utf-8").read()
-_rh_su_acts = sorted(m.group(1) for m in re.finditer(
-    r'@app\.route\("/api/server/<int:server_id>/addons/<addon_id>/(\w+)", methods=\["POST"\]\)(.*?)(?=\n    @app\.route|\Z)',
-    _rh_addons, re.S) if "step_up_needed()" in m.group(2))
+# Every add-on route, whatever its methods, the generic /<action> one included (it is named "<action>",
+# which the list below never holds): read only as POST routes with a literal last word, the generic
+# route could start to ask for the password with this check green.
+_rh_blocks = [(m.group(1) or "(list)", m.group(2)) for m in re.finditer(
+    r'@app\.route\("/api/server/<int:server_id>/addons(?:/<addon_id>/([\w<>]+))?"[^)]*\)(.*?)(?=\n    @app\.route|\Z)',
+    _rh_addons, re.S)]
+_rh_su_acts = sorted(a for a, body in _rh_blocks if "step_up_needed()" in body)
+check("docs: (premise) every step_up_needed() call in routes/addons.py was read inside one of its routes",
+      len(_rh_blocks) >= 7 and sum(b.count("step_up_needed()") for _a, b in _rh_blocks)
+      == _rh_addons.count("step_up_needed()") > 0, repr([a for a, _b in _rh_blocks]))
 _rh_words = {"install": ("installing", "install"), "update": ("updating", "update"),
              "settings": ("changing the settings of", "change their settings"), "remove": ("removing", "remove")}
+def _rh_has_words(words, text):
+    """Whether `words` stand in `text` as whole words (a substring test found "install" in "installs")."""
+    return re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(words), text) is not None
+
+
 _rh_sf = open(os.path.join(_root, "docs", "security-features.md"), encoding="utf-8").read()
 _rh_sf = _rh_sf[_rh_sf.find("High-risk actions ask for the password again"):]
 _rh_sf = _rh_sf[:_rh_sf.find("\n")]
@@ -6791,21 +6863,49 @@ _rh_perm = [ln for ln in open(os.path.join(_root, "docs", "permissions.md"), enc
 check("docs: each add-on action that asks for the password (install, update, settings, remove) is in the "
       "security page's step-up list and in the manage_addons permission row",
       _rh_su_acts == ["install", "remove", "settings", "update"] and _rh_perm
-      and all(_rh_words[a][0] in _rh_sf.split("an add-on;")[0].rsplit(";", 1)[-1] for a in _rh_su_acts)
-      and all(_rh_words[a][1] in _rh_perm[0] for a in _rh_su_acts), repr((_rh_su_acts, _rh_perm)))
+      and all(_rh_has_words(_rh_words[a][0], _rh_sf.split("an add-on;")[0].rsplit(";", 1)[-1]) for a in _rh_su_acts)
+      and all(_rh_has_words(_rh_words[a][1], _rh_perm[0]) for a in _rh_su_acts), repr((_rh_su_acts, _rh_perm)))
+check("docs: (control) an action is found as whole words: \"install\" is not in \"installs Podman\"",
+      not _rh_has_words("install", "update, start and remove them. Installing the first installs Podman")
+      and _rh_has_words("install", "install, update"), "")
 _rh_cmd = re.search(r"```bash\n(.*?)```", _rh_sec, re.S)
 _rh_sb = _tempfile.mkdtemp(prefix="rmhost-")
+
+
+def _rh_code(cmd):
+    """The shell text without its comments: a `#` that starts a word, outside quotes, to the line's end."""
+    out, quote, i = [], None, 0
+    while i < len(cmd):
+        c = cmd[i]
+        if quote is None and c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+            i = cmd.find("\n", i) if "\n" in cmd[i:] else len(cmd)
+            continue
+        if quote is None and c in "'\"":
+            quote = c
+        elif c == quote:
+            quote = None
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _rh_unsafe(cmd, root):
     """List what in the rewritten doc block could reach past the sandbox `root` (nothing runs if any).
 
-    An absolute path outside it (bar /dev/null), the home folder, or a word that runs other text.
+    An absolute path outside it once `..` is resolved (bar /dev/null), a path that starts at an
+    expansion (`$X/etc`), a relative climb (`cd`, `..`), the home folder, or a word that runs other
+    text. Comments are dropped as the shell drops them (a quoted `#` is no comment).
     """
-    code = re.sub(r"(^|\s)#[^\n]*", r"\1", cmd)
+    code = _rh_code(cmd)
     bad = [p for p in re.findall(r"(?<![\w.$~-])/[^\s\"';|&)]*", code)
-           if not p.startswith(root + "/") and p != "/dev/null"]
-    return bad + re.findall(r"~|\$HOME\b|\$\{HOME\}|\b(?:eval|exec|source)\b", code)
+           if not _os_path_inside(p, root) and p != "/dev/null"]
+    return bad + re.findall(r"~|\$HOME\b|\$\{HOME\}|\b(?:eval|exec|source|cd|pushd)\b|\$\{?\w+\}?/"
+                            r"|(?<![\w.])\.\.(?=/|\s|$|;)", code)
+
+
+def _os_path_inside(p, root):
+    """Whether absolute path `p`, with its `..` resolved, is under `root`."""
+    return os.path.normpath(p).startswith(root.rstrip("/") + "/")
 
 
 try:
@@ -6836,8 +6936,9 @@ try:
         _bad = _rh_unsafe(_cmd, _r)
         if _bad:
             return _r, NS(returncode=98, stderr="not run, it reaches past the sandbox: %s" % _bad)
+        os.makedirs(_r + "/work", exist_ok=True)     # its own cwd: never the checkout's
         _p = _sh_sub.run([_shutil.which("bash") or "/bin/bash", "-c", "set -uo pipefail\nsudo() { \x22$@\x22; }\n" + _cmd],
-                         capture_output=True, text=True, check=False,
+                         capture_output=True, text=True, check=False, cwd=_r + "/work",
                          env={"PATH": _rh_bin, "HOME": _rh_sb, "LC_ALL": "C"})
         return _r, _p
 
@@ -6859,7 +6960,10 @@ try:
     check("delete host: (control) a doc line reaching past the sandbox is refused before anything runs",
           [_rh_unsafe(_c, "/sb") for _c in ("sudo rm -rf /opt/x\n", "rm -f ~/.bashrc\n", "rm -f $HOME/x\n",
                                              "eval \"$x\"\n", "rm -f /sb/etc/x 2>/dev/null  # /root/y\n")]
-          == [["/opt/x"], ["~"], ["$HOME"], ["eval"], []], "")
+          == [["/opt/x"], ["~"], ["$HOME"], ["eval"], []]
+          and all(_rh_unsafe(_c, "/sb") for _c in ("X=; sudo rm -rf $X/etc/x\n", "rm -rf /sb/usr/../../etc/x\n",
+                                                    "echo \"n #1\"; sudo rm -rf /opt/x\n", "cd ../..; rm -rf etc/x\n",
+                                                    "rm -rf ../../etc/x\n")), "")
 finally:
     _shutil.rmtree(_rh_sb, ignore_errors=True)
 
@@ -7297,60 +7401,141 @@ _ps06 = _ilu.module_from_spec(_ps06_spec)
 _ps06_spec.loader.exec_module(_ps06)
 
 
+def _ci_path_entry(text):
+    """One `paths:` entry as (pattern, excluded): quotes and a trailing comment dropped, a leading `!` read."""
+    e = re.sub(r"\s+#.*$", "", text).strip().strip("'\"")
+    return (e[1:], True) if e.startswith("!") else (e, False)
+
+
+def _ci_paths_key(s):
+    """None when stripped line `s` is no `paths:` key; else its value, a trailing comment dropped ("" opens a block list)."""
+    m = re.match(r"paths:(?:[ \t]+(.*))?$", s)
+    return None if m is None else re.sub(r"(?:^|\s+)#.*$", "", m.group(1) or "").strip()
+
+
+def _ci_flow_paths(value):
+    """A `paths:` key's own value: a flow list's entries, or, for anything else, one entry no file matches."""
+    if value.startswith("[") and value.endswith("]"):
+        return [_ci_path_entry(e) for e in value[1:-1].split(",") if e.strip()]
+    return [("\0unreadable paths: " + value, False)]
+
+
+def _ci_in_list(s, ind, indent):
+    """Whether stripped line `s`, at indent `ind`, still belongs to a block list under a key at `indent`."""
+    return not s or s.startswith("#") or (s.startswith("- ") and ind >= indent)
+
+
+def _ci_on_path_lists(on):
+    """Return each `paths:` list of an `on:` block (a paths-ignore list is not one), in order, as [(pattern, excluded)].
+
+    Block entries at the key's indent or deeper, a flow list (`paths: ['a/*', 'b']`), and a comment
+    after the key. Read as one shape only, any other gave [] and the workflow passed as unfiltered; a
+    list that cannot be read, or one with no entries, comes back as one entry no file matches, so
+    every install it should watch is named.
+    """
+    lists, cur, indent = [], None, 0
+    for ln in on.replace("\r\n", "\n").splitlines():
+        s, ind = ln.strip(), len(ln) - len(ln.lstrip())
+        if cur is not None and _ci_in_list(s, ind, indent):
+            cur.extend([_ci_path_entry(s[2:])] if s.startswith("- ") else [])
+            continue
+        cur, value = None, _ci_paths_key(s)
+        if value == "":
+            cur, indent = [], ind
+            lists.append(cur)
+        elif value is not None:
+            lists.append(_ci_flow_paths(value))
+    return [lst or [("\0an empty paths list", False)] for lst in lists]
+
+
 def _ci_on_paths(on):
-    """Return the entries of an `on:` block's `paths:` lists (a paths-ignore list is not one), comments dropped."""
-    entries, indent = [], None
-    for ln in on.splitlines():
-        s = ln.strip()
-        if indent is not None and (not s or s.startswith("#")):
-            continue
-        if indent is not None and len(ln) - len(ln.lstrip()) > indent and s.startswith("- "):
-            entries.append(s[2:].split(" #")[0].strip().strip("'\""))
-            continue
-        indent = len(ln) - len(ln.lstrip()) if s == "paths:" else None
-    return entries
+    """Return the patterns of an `on:` block's `paths:` lists, in order (an excluding `!` entry keeps its `!`)."""
+    return [("!" if neg else "") + pat for lst in _ci_on_path_lists(on) for pat, neg in lst]
+
+
+def _ci_watched(path, entries):
+    """Whether one `paths:` list runs the workflow for a change to `path`: the last entry matching it decides."""
+    hit = False
+    for pat, neg in entries:
+        if _ps06._glob_re(pat).match(path):
+            hit = not neg
+    return hit
+
+
+_CI_JOB_KEY = r"^  ([A-Za-z_][\w-]*):[ \t]*(?:#[^\n]*)?$"
+_CI_INSTALL = r"-r (\.github/ci-requirements[^\s]*\.txt)"
 
 
 def _ci_jobs_watch(w):
-    """Return [(job, its -r installs, the on: paths entries, its own scope=( ... ) entries)] for a workflow.
+    """Return [(job, its -r installs, the on: paths lists, its own scope=( ... ) entries)] for a workflow.
 
-    `on: paths` is matched the way GitHub does (`*` within one name: pr_scope's _glob_re); a scope list is a
-    bash `[[ $f == $g ]]` pattern, where `*` crosses `/` (fnmatch).
+    `on: paths` is matched the way GitHub does (`*` within one name: pr_scope's _glob_re; `!` excludes;
+    each trigger's list on its own); a scope list is a bash `[[ $f == $g ]]` pattern, where `*`
+    crosses `/` (fnmatch). A `jobs:` line or a job's key line may end in a comment, and CRLF is read.
     """
+    w = w.replace("\r\n", "\n")
     on = w[:w.index("\npermissions:")] if "\npermissions:" in w else w
-    parts = re.split(r"^  ([A-Za-z_][\w-]*):[ \t]*$", w.split("\njobs:\n", 1)[1] if "\njobs:\n" in w else "",
-                     flags=re.M)
+    head = re.search(r"^jobs:[ \t]*(?:#[^\n]*)?$", w, re.M)
+    parts = re.split(_CI_JOB_KEY, w[head.end():] if head else "", flags=re.M)
     out = []
     for job, block in zip(parts[1::2], parts[2::2]):
-        scope = [e for t in re.findall(r"\n\s+scope=\(\n(.*?)\n\s+\)\n", block, re.S) for e in re.findall(
-            r"'([^']+)'", "\n".join(ln for ln in t.splitlines() if not ln.strip().startswith("#")))]
-        out.append((job, sorted(set(re.findall(r"-r (\.github/ci-requirements[^\s]*\.txt)", block))),
-                    _ci_on_paths(on), scope if "scope=(" in block else None))
+        # A scope list closes on its own `)` line, a comment after it allowed: read only as a bare `)`,
+        # a `)  # end` ran the list on to a later `)` and took every quoted word between as an entry.
+        scope = [e for t in re.findall(r"\n[ \t]+scope=\(\n(.*?)\n[ \t]+\)[ \t]*(?:#[^\n]*)?\n", block, re.S)
+                 for e in re.findall(r"'([^']+)'", "\n".join(ln for ln in t.splitlines()
+                                                              if not ln.strip().startswith("#")))]
+        out.append((job, sorted(set(re.findall(_CI_INSTALL, block))), _ci_on_path_lists(on),
+                    scope if "scope=(" in block else None))
     return out
 
 
 def _ci_unwatched_of(name, w):
     """List `name: file` for each pinned file a job installs that one of the filters it runs under misses."""
     bad = []
-    for job, installs, on_paths, scope in _ci_jobs_watch(w):
+    for job, installs, on_lists, scope in _ci_jobs_watch(w):
         for u in installs:
-            if on_paths and not any(_ps06._glob_re(e).match(u) for e in on_paths):
+            if any(not _ci_watched(u, lst) for lst in on_lists):
                 bad.append("%s %s: %s (on: paths)" % (name, job, u))
             if scope is not None and not any(_fnm06.fnmatchcase(u, e) for e in scope):
                 bad.append("%s %s: %s (scope)" % (name, job, u))
     return bad
 
 
-_ci_unwatched, _ci_judged = [], []
+def _ci_split_gaps(name, w):
+    """Name a workflow whose jobs were not all read: its jobs' installs must be all of its installs."""
+    jobs = _ci_jobs_watch(w)
+    whole = set(re.findall(_CI_INSTALL, w))
+    read = {u for _j, inst, _o, _s in jobs for u in inst}
+    has_jobs = re.search(r"^jobs:", w.replace("\r\n", "\n"), re.M) is not None
+    return ["%s: %s" % (name, sorted(whole - read) or "no job read")] if whole != read or (has_jobs and not jobs) else []
+
+
+_ci_unwatched, _ci_judged, _ci_gaps = [], [], []
 for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
     _w = open(_wf, encoding="utf-8").read()
     for _job, _inst06, _onp, _sc in _ci_jobs_watch(_w):
         _ci_judged += [(os.path.basename(_wf), _u) for _u in _inst06 if _onp or _sc is not None]
     _ci_unwatched += _ci_unwatched_of(os.path.basename(_wf), _w)
+    _ci_gaps += _ci_split_gaps(os.path.basename(_wf), _w)
 check("workflows: a path-filtered workflow runs when a pinned tool file it installs changes (its on: paths "
-      "or its scope step's list; fuzz.yml's atheris.txt is judged)",
-      ("fuzz.yml", ".github/ci-requirements/atheris.txt") in _ci_judged and not _ci_unwatched,
-      repr((_ci_unwatched, _ci_judged)))
+      "or its scope step's list; fuzz.yml's atheris.txt is judged), and every workflow's jobs were read (their "
+      "installs are all of its installs)",
+      ("fuzz.yml", ".github/ci-requirements/atheris.txt") in _ci_judged and not _ci_unwatched and not _ci_gaps,
+      repr((_ci_unwatched, _ci_gaps, _ci_judged)))
+_ci_ctl2 = ("on:\r\n  push:\r\n    paths:   # the watched files\r\n    - '.github/**'\r\n    - '!.github/ci-requirements/**'\r\n"
+            "  pull_request:\r\n    paths: ['.github/**', 'x']\r\npermissions: {}\r\njobs:  # all\r\n  a:  # job\r\n"
+            "    steps:\r\n      - run: |\r\n          scope=(\r\n            'z/**'\r\n          )  # end\r\n"
+            "          for g in '.github/**'; do :; done\r\n          x=(\r\n          )\r\n"
+            "          pip install -r .github/ci-requirements/x.txt\r\n")
+eq("workflows: (control) a paths key with a comment, entries at the key's indent, a flow list, a `!` exclusion "
+   "applied in order, CRLF, a commented jobs: and job line, and a scope list closed by `)  # end` are all read",
+   (_ci_on_paths(_ci_ctl2.split("permissions:")[0]), _ci_unwatched_of("d.yml", _ci_ctl2), _ci_split_gaps("d.yml", _ci_ctl2)),
+   ([".github/**", "!.github/ci-requirements/**", ".github/**", "x"],
+    ["d.yml a: .github/ci-requirements/x.txt (on: paths)", "d.yml a: .github/ci-requirements/x.txt (scope)"], []))
+eq("workflows: (control) a paths list that cannot be read, or has no entries, watches nothing (named, not passed)",
+   [_ci_watched(".github/ci-requirements/x.txt", _l) for _l in
+    _ci_on_path_lists("on:\n  push:\n    paths: &anchor\n  pull_request:\n    paths:\n    paths-ignore:\n      - a\n")],
+   [False, False])
 _ci_ctl = ("on:\n  push:\n    paths:\n      - '.github/*'\n    paths-ignore:\n      - '.github/ci-requirements/**'\n"
            "permissions: {}\njobs:\n  a:\n    steps:\n      - run: |\n          scope=(\n            # '.github/ci-requirements/x.txt'\n"
            "            'z/**'\n          )\n          pip install -r .github/ci-requirements/x.txt\n"
@@ -7745,8 +7930,12 @@ check("install.sh: ...with SCRIPT_PATH only as a fallback, still shebang-checked
 # tailscale_mount, and left Serve running — with PrefixMiddleware then no longer prefixing URLs
 # for a panel still served under the prefix.
 _ts_tpl = open(os.path.join(_root, "panel", "templates", "tailscale.html"), encoding="utf-8").read()
-check("tailscale.html: disableServe does not hardcode the mount",
-      "action: 'disable', mount: '/'" not in _ts_tpl)
+# The handlers live in tailscale.js (the template only loads it): read there, a hardcoded mount put
+# back could never turn this red.
+_ts_js = open(os.path.join(_root, "panel", "static", "js", "tailscale.js"), encoding="utf-8").read()
+check("tailscale.js: disableServe does not hardcode the mount; it sends the button's",
+      "action: 'disable', mount: '/'" not in _ts_js and "action: 'disable', mount: mount" in _ts_js
+      and "js/tailscale.js" in _ts_tpl)
 check("tailscale.html: the Mount Point field shows the route's default mount, not a fixed /",
       "value=\"{{ serve_default_mount }}\"" in _ts_tpl)
 # The template reads two names only the route supplies; Jinja renders a forgotten one as a silent
@@ -7907,9 +8096,10 @@ check("tailscale.html: ...while a read pref says Yes / No (control)",
       "Yes" in _ts_ar_row(True) and "No" in _ts_ar_row(False)
       and "Yes" not in _ts_ar_row(False), "%s | %s" % (_ts_ar_row(True), _ts_ar_row(False)))
 # Both serve handlers take the clicked button; enableServe used the implicit global `event`.
-check("tailscale.html: enableServe/disableServe receive @self rather than reading global event",
-      "var btn = event.target" not in _ts_tpl
-      and _ts_tpl.count("""data-args='["@self"]'""") >= 2)
+check("tailscale.js: enableServe/disableServe receive @self rather than reading global event",
+      "event.target" not in "\n".join(_l for _l in _ts_js.splitlines() if not _l.lstrip().startswith("//"))
+      and "function enableServe(btn)" in _ts_js and "function disableServe(btn)" in _ts_js
+      and all(("""data-action="%s" data-args='["@self"]'""" % _h) in _ts_tpl for _h in ("enableServe", "disableServe")))
 
 # ── Vendored front-end libraries match their manifest ─────────────────────────────────────────
 # panel/static/vendor/ holds ~650KB of third-party browser code: Bootstrap, its icons, Chart.js and the

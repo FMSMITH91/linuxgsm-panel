@@ -3181,25 +3181,7 @@ def _host_users(acc, host, total_delta):
     return users
 
 
-def metrics_for_game(sample, short_name, game_port):
-    """One game's slice of a host_live_metrics() sample, shaped like server_live_metrics()."""
-    m = dict(sample["host"])
-    m.update(sample["users"].get(short_name or "",
-                                 {"game_cpu_percent": 0.0, "game_ram_mb": 0, "game_procs": 0,
-                                  "game_uptime_secs": 0, "game_ram_percent": 0.0}))
-    # cron_port, not int(): a loaded row is never type-checked, and one GameServer whose port reads
-    # as text (a restored backup, a hand edit — SQLite keeps it) raised out of
-    # monitoring._query_host_metrics, which calls this outside its try, and through ex.map took the
-    # dashboard's metrics for EVERY host, and every history sample, down with it.
-    try:
-        _port = cron_port(game_port)
-    except ValueError:
-        _port = None
-    m["port_open"] = bool(_port) and _port in sample["ports"]
-    return m
-
-
-def server_live_metrics(server, short_name=None, game_port=None, force=False, max_age=None):
+def server_live_metrics(server, short_name=None, game_port=None, force=False, max_age=None, game_type=None):
     """One-round-trip live metrics for polling.
 
     Reports both whole-VPS figures (CPU%% via /proc/stat delta, RAM, disk, load, uptime) AND — when
@@ -3211,6 +3193,10 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False, ma
 
     `max_age`: answer from a sample taken up to that many seconds ago instead (the /stats poll shares
     one sample per poll period between its viewers). Without it, _LIVE_METRICS_TTL.
+
+    `game_type`: port_open also counts the ports that game listens on instead of its own
+    (portscan.listen_ports), the same rule the host scan applies. Not in the cache key: one server's
+    row has one game type, and every caller passes it.
     """
     _now = time.time()
     _ck = (getattr(server, "id", None), short_name, game_port)
@@ -3243,7 +3229,7 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False, ma
         _hit = None if force else _live_hit(_ck, _now, max_age)
         if _hit is not None:
             return _hit
-        out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port), timeout=15, sudo=False)
+        out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port, game_type), timeout=15, sudo=False)
         m = _parse_game_sample(out)
         if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
             _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
@@ -3285,8 +3271,12 @@ _GAME_SAMPLE_AWK = (
 )
 
 
-def _game_sample_cmd(short_name, game_port):
-    """server_live_metrics' one command; `short_name` and `game_port` are already validated."""
+def _game_sample_cmd(short_name, game_port, game_type=None):
+    """server_live_metrics' one command; `short_name` and `game_port` are already validated.
+
+    PORT counts the listening sockets on any of the ports `game_type` may listen on for `game_port`
+    (portscan.listen_ports), so above 0 means the game is up by the same rule as game_port_listening.
+    """
     if short_name:
         parts = [f"ps -u {short_name} -o pid=,rss=,etimes= 2>/dev/null | awk '{_GAME_SAMPLE_AWK}'"]
     else:
@@ -3299,7 +3289,9 @@ def _game_sample_cmd(short_name, game_port):
         "echo UPTIME $(awk '{print int($1)}' /proc/uptime)",
     ]
     if game_port:
-        parts.append(f"echo PORT $(ss -H -ltnu 'sport = :{game_port}' 2>/dev/null | wc -l)")
+        from panel.ops.ssh_manager import portscan as _ps   # at call time: portscan imports this module
+        match = " or ".join(f"sport = :{int(p)}" for p in _ps.listen_ports(game_type, game_port))
+        parts.append(f"echo PORT $(ss -H -ltnu '( {match} )' 2>/dev/null | wc -l)")
     return " ; ".join(parts)
 
 

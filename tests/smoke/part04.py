@@ -128,7 +128,7 @@ try:
                                          "game_ram_mb": 2048, "game_uptime_secs": 900}},
                 "ports": set()}
 
-    def _count_server(remote, short_name=None, game_port=None, force=False):
+    def _count_server(remote, short_name=None, game_port=None, force=False, game_type=None):
         _srv_calls.append(short_name)
         raise AssertionError("the sampler queried a SERVER, not its host")
 

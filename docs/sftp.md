@@ -113,7 +113,10 @@ in with a password at all. Backup codes are not accepted over SFTP.
   recorded in the audit log; a transfer in progress is activity. Most clients reconnect when you next click.
 - Permissions are checked again on every request: when an administrator removes your access, signs
   you out everywhere or deactivates your account, the next request is refused. A file already open
-  stops working within a second.
+  stops working within a second. When the panel cannot answer that check (it is busy, or waiting on
+  a host that stopped answering), an open file goes on for up to 5 seconds on its last answer, then
+  fails with "try again"; a refusal is never put off. One host's checks use at most a quarter of the
+  panel's answer slots, so a host that stopped answering does not hold up the others.
 
 ## Signing in safely
 

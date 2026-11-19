@@ -676,8 +676,11 @@ def _check_json_field_types():
         for _route, _body in (("rename-path", {"path": _v, "new_name": "x.txt"}),
                               ("create-path", {"dir": _v, "name": "x.txt", "kind": "file"})):
             r = c.post("/api/server/%d/%s" % (gid, _route), json=_body)
-            check("%s with path=%r is refused before the host, not a 500" % (_route, _v),
-                  r.status_code < 500 and (r.get_json() or {}).get("success") is False,
+            # Pinned to the type gate's own answer: the fixture host never answers, so a request that
+            # got past a missing type gate was refused anyway (409, the game-account check closing),
+            # and "any refusal" passed with the gate deleted.
+            check("%s with path=%r is a 400 'Invalid path', refused before the host, not a 500" % (_route, _v),
+                  r.status_code == 400 and (r.get_json() or {}).get("message") == "Invalid path",
                   "got %d %s" % (r.status_code, r.get_data(as_text=True)[:80]))
     for _v in (10 ** 30, 2 ** 63, -1, 0):
         r = c.post("/api/remote/%d/databases/endpoint" % remote_id, json={"endpoint_id": _v})

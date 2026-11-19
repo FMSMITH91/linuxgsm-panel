@@ -24,7 +24,7 @@ from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.db.models import GameDatabase, GameServer, HostDatabaseServer, claim_row, db, row_birth
 from panel.ops import ssh_manager as _sm
 from panel.routes import addons_change as _change, databases_net as _net
-from panel.routes._shared import _reboot_holds, game_account_write_refusal
+from panel.routes._shared import _reboot_holds, game_account_write_refusal, uninstall_running
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
 from panel.services import addons as _ad, reboot_words as _rw
@@ -38,6 +38,9 @@ _BUSY = "The add-on is already being installed. Wait for it to finish."
 _BUSY_START = "The add-on's last start is still being watched. Wait a few seconds and try again."
 _BUSY_REMOVE = "The add-on is still being installed, updated or started. Wait for it to finish, then remove it."
 _BUSY_REMOVING = "The add-on is being removed. Wait for it to finish."
+_BUSY_UPDATE = "The add-on is being updated. Wait for it to finish."
+_BUSY_SETTINGS = "The add-on's settings are being applied. Wait for it to finish."
+_BUSY_UNINSTALL = "This server is being uninstalled, with its add-ons."
 # For the Databases tab and the uninstall: an add-on job on the server is still running.
 ADDON_BUSY = "An add-on is being installed, updated or removed on this server. Try again once it has finished."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
@@ -134,11 +137,41 @@ def _databases(gs, found):
 
 def busy_sentence(job):
     """The 409 sentence for an add-on job already running (`job`: its _JOBS entry)."""
-    return {"start": _BUSY_START, "remove": _BUSY_REMOVING}.get(job.get("kind"), _BUSY)
+    return {"start": _BUSY_START, "remove": _BUSY_REMOVING, "update": _BUSY_UPDATE, "settings": _BUSY_SETTINGS,
+            "other": ADDON_BUSY, "uninstall": _BUSY_UNINSTALL}.get(job.get("kind"), _BUSY)
+
+
+def claim_job(gs_id, addon_id, kind):
+    """Register add-on `addon_id`'s job of `kind` on server `gs_id`. -> None, or the running job that refuses it.
+
+    The caller holds _JOBS_LOCK. Besides the add-on's own job, a remove and the other add-ons'
+    jobs on the server exclude each other: a remove that finds no other add-on's folder purges the
+    account's containers and turns its user manager off, under an install of another add-on still
+    in its first steps, and an install begun during the remove's account release loses its user
+    manager. A start being watched is not counted (its add-on is installed, so no purge runs).
+    Nothing is registered while the server is being uninstalled (which asks job_running after it
+    registers, so the two never both go on).
+    """
+    if uninstall_running(gs_id):
+        return {"kind": "uninstall"}
+    own = _JOBS.get((gs_id, addon_id)) or {}
+    if own.get("running"):
+        return own
+    if _other_job_excludes(gs_id, addon_id, kind):
+        return {"kind": "other"}
+    _JOBS[(gs_id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": kind}
+    return None
+
+
+def _other_job_excludes(gs_id, addon_id, kind):
+    """Whether another add-on's running job on server `gs_id` refuses this one: a remove on either side."""
+    return any(sid == gs_id and other != addon_id and j.get("running")
+               and (j.get("kind") == "remove" or (kind == "remove" and j.get("kind") != "start"))
+               for (sid, other), j in _JOBS.items())
 
 
 def job_running(gs_id):
-    """Whether an add-on install, update or settings change is running on server `gs_id` (the reboot census).
+    """Whether an add-on install, update, settings change or remove is running on server `gs_id` (the reboot census).
 
     Not a start being watched: that is 30 seconds, and a reboot starts the add-on again anyway.
     """
@@ -487,10 +520,9 @@ def _install_answer(app, gs, addon_id):
         return refused
     db_id, geolocation = choice
     with _JOBS_LOCK:
-        job = _JOBS.get((gs.id, addon_id)) or {}
-        if job.get("running"):
-            return _say(409, busy_sentence(job))
-        _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": ""}
+        job = claim_job(gs.id, addon_id, "install")
+    if job is not None:
+        return _say(409, busy_sentence(job))
     r = db.session.get(GameDatabase, db_id) if db_id is not None else None
     log_action(current_user, "addon_install", target=gs.name, server=gs,
                detail="%s: started%s%s" % (addon_id, ", database %s" % r.name if r is not None else "",
@@ -579,10 +611,9 @@ def _start_worker(app, gs_id, born, addon_id, who):
 def _start_answer(app, gs, addon_id):
     """Start the add-on in the background, watched as an install's start is (or refuse: a job is running)."""
     with _JOBS_LOCK:
-        job = _JOBS.get((gs.id, addon_id)) or {}
-        if job.get("running"):
-            return _say(409, busy_sentence(job))
-        _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": "start"}
+        job = claim_job(gs.id, addon_id, "start")
+    if job is not None:
+        return _say(409, busy_sentence(job))
     threading.Thread(target=_start_worker, daemon=True,
                      args=(app, gs.id, row_birth(gs), addon_id, current_user.username)).start()
     return jsonify({"success": True, "started": True, "message": i18n.tr(_STARTING)}), 202
@@ -623,21 +654,22 @@ def _remove_answer(gs, addon_id):
     # The remove is a job itself while it runs, so an install, update, settings change or start
     # begun meanwhile is refused too (it would write the unit back, or lose its folder to rm -rf).
     with _JOBS_LOCK:
-        job = _JOBS.get((gs.id, addon_id)) or {}
-        if job.get("running"):
-            return _say(409, _BUSY_REMOVING if job.get("kind") == "remove" else _BUSY_REMOVE)
-        _JOBS[(gs.id, addon_id)] = {"running": True, "why": "", "tail": "", "kind": "remove"}
+        job = claim_job(gs.id, addon_id, "remove")
+    if job is not None:
+        return _say(409, {"remove": _BUSY_REMOVING, "other": ADDON_BUSY, "uninstall": _BUSY_UNINSTALL}
+                    .get(job.get("kind"), _BUSY_REMOVE))
     try:
         out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
                                               timeout=_ad.ACTION_TIMEOUT)
+        removed, others = _ad.remove_outcome(out, rc)
+        if removed and not others:
+            # The account runs no add-on any more: its user manager need not linger. Best-effort,
+            # and still part of the job: an install begun before it ends would lose its user manager.
+            _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name, "keep"], timeout=90)
     finally:
         with _JOBS_LOCK:
             _JOBS.pop((gs.id, addon_id), None)
-    removed, others = _ad.remove_outcome(out, rc)
     why = "" if removed else _with_reason(_NOT_REMOVED, "", err)
-    if removed and not others:
-        # The account runs no add-on any more: its user manager need not linger. Best-effort.
-        _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name, "keep"], timeout=90)
     log_action(current_user, "addon_remove", target=gs.name, server=gs, success=removed,
                detail="%s %s" % (addon_id, "removed" if removed else "not removed (rc %s): %s" % (rc, why)))
     if not removed:

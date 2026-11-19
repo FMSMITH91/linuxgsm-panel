@@ -65,12 +65,14 @@
           .catch(function(){ if (!gone) api.error(t('Incorrect.')); });
       }});
   }
-  // window.stepUpThen(go, totp, cancelled): run go() once this sign-in may do a high-risk action,
+  // window.stepUpThen(go, totp, cancelled, form): run go() once this sign-in may do a high-risk action,
   // asking for the password in place first when the server says it is needed. For a page's own
   // fetch() to a step_up_required route, so the page (and what was typed in it) stays put; a fetch
   // sent without it still meets the 403 + X-Reauth-Required that panel.js turns into the confirm
   // page. `cancelled` (optional) runs when the password dialog is closed without confirming, for a
-  // control that already shows the unsaved change (a switch) to show the saved state again.
+  // control that already shows the unsaved change (a switch) to show the saved state again. `form`
+  // (optional, true): go() sends a form's typed fields (panel.js's ajax data-step-up forms), so the
+  // dialog uses the form-save words.
   function stepUp(go, totp, cancelled, form){
     fetch(mp() + '/api/auth/ping?step_up=1', {cache: 'no-store'})
       .then(function(r){ return r.ok ? r.json() : {}; })
@@ -78,7 +80,7 @@
       .then(function(d){ if (d && d.step_up === true) confirmThen(go, totp, cancelled, form); else go(); })
       .catch(function(){ go(); });
   }
-  window.stepUpThen = function(go, totp, cancelled){ stepUp(go, totp, cancelled, false); };
+  window.stepUpThen = function(go, totp, cancelled, form){ stepUp(go, totp, cancelled, form === true); };
   document.addEventListener('submit', function(e){
     var form = e.target;
     if (!form || !form.hasAttribute || !form.hasAttribute('data-step-up')) return;

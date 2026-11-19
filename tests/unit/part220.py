@@ -133,7 +133,7 @@ def _all220(name, conds, detail=""):
 
 
 def _queries220(client):
-    """Statements one GET of the sessions list runs."""
+    """(statements, status, rows listed) for one GET of the sessions list."""
     n = [0]
 
     def _count(*_a):
@@ -142,10 +142,10 @@ def _queries220(client):
         engine = _db220.engine
     _sa_event220.listen(engine, "after_cursor_execute", _count)
     try:
-        client.get("/api/account/sessions", headers=_XHR220)
+        r = client.get("/api/account/sessions", headers=_XHR220)
     finally:
         _sa_event220.remove(engine, "after_cursor_execute", _count)
-    return n[0]
+    return n[0], r.status_code, len(_p9_json(r).get("sessions") or [])
 
 
 def _s220_queries():
@@ -156,8 +156,10 @@ def _s220_queries():
     for remember in (False, True, True):
         _login220("p220_many", remember=remember)
     four = _queries220(c)
+    # Each count is of a real listing (a 200 with one row, then four): a refused or empty answer costs
+    # the same few statements both times, and passed.
     eq("sessions list: four rows cost the same queries as one (the end times are worked out, not looked up)",
-       four, one)
+       (four[1:], four[0] == one[0], one[1:]), ((200, 4), True, (200, 1)))
 
 
 _ENDING_JS220 = r"""

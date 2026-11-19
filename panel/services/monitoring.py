@@ -533,7 +533,7 @@ def _query_host_metrics(work, want_map=True):
         return [(row[0], None, getattr(remote, "id", None), "") for row in games]
     out = []
     for sid, short_name, port, game_type, query_type, *status in games:
-        m = metrics_for_game(sample, short_name, port)
+        m = metrics_for_game(sample, short_name, port, game_type)
         mp = ""
         if want_map and _map_wanted(m, status):
             try:
@@ -554,7 +554,7 @@ def _query_server_metrics(work):
     """
     remote, sid, short_name, port, game_type, query_type, remote_id, *status = work
     try:
-        m = server_live_metrics(remote, short_name, port)
+        m = server_live_metrics(remote, short_name, port, game_type=game_type)
     except Exception:
         return sid, None, remote_id, ""
     mp = ""

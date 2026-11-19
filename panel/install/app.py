@@ -747,7 +747,7 @@ def _live_run_state(gs, remote):
     anyway. An SSH blip returns the all-zero default dict; ram_total is 0 only in that case
     (`free -b` never fails on a reachable host), so it is the sentinel for "don't claim to know"."""
     try:
-        m = _sm.server_live_metrics(remote, gs.short_name, gs.port)
+        m = _sm.server_live_metrics(remote, gs.short_name, gs.port, game_type=gs.game_type)
     except Exception:
         _log.debug("live run-state check failed", exc_info=True)
         return None

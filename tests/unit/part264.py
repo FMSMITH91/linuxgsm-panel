@@ -42,7 +42,7 @@ from panel.ops import socket_hooks
 
 app = Flask("p264")
 app.add_url_rule("/ok", "ok", lambda: "fine")
-app.add_url_rule("/big", "big", lambda: "x" * (8 << 20))
+app.add_url_rule("/big", "big", lambda: "x" * (64 << 20))
 
 
 def up():
@@ -169,6 +169,27 @@ def _trickle264(port, data, gap, limit, head=b""):
         so.close()
 
 
+def _drain264(so, limit=20):
+    """Read what is left on a stalled answer's socket: ("eof" | "reset" | "open", bytes read).
+
+    "open" when the server neither finished nor closed it within `limit` s: it was still waiting on
+    the client, or kept the connection after sending the whole answer.
+    """
+    got, t0 = 0, _time264.monotonic()
+    so.settimeout(5)
+    try:
+        while _time264.monotonic() - t0 < limit:
+            part = so.recv(1 << 20)
+            if not part:
+                return "eof", got
+            got += len(part)
+    except _socket264.timeout:
+        pass
+    except OSError:
+        return "reset", got
+    return "open", got
+
+
 # Headers a byte every 0.4 s: each read makes progress well inside the 3 s read timeout, so only the
 # 2.5 s header deadline ends it.
 _HEADERS264 = b"GET /ok HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Pad: " + b"a" * 200 + b"\r\n\r\n"
@@ -191,17 +212,21 @@ try:
                 if not _part264:
                     break
                 _slow_app264 += _part264
-        # A client that asks for 8 MB and never reads: the write times out after the 3 s read timeout.
+        # A client that asks for 64 MB and stops reading: the write times out after the 3 s read timeout.
+        # 64 MB, past any send buffer plus receive window (Linux's default send-buffer ceiling is 4 MB, and a
+        # host tuned past 8 MB queued all of an 8 MB answer at once, so no write ever stalled).
         _stall264 = _socket264.socket()
         _stall264.setsockopt(_socket264.SOL_SOCKET, _socket264.SO_RCVBUF, 4096)
         _stall264.connect(("127.0.0.1", _srv_d264.port))
         _stall264.sendall(b"GET /big HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
         _time264.sleep(5)
+        _stall_end264 = _drain264(_stall264)
         _stall264.close()
         _own264 = _trickle264(_srv_d264.port, b"", 0.1, 5, head=b"GET /own HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
         _after_d264 = _get_ok264(_srv_d264.port)
     else:
         _hdr264 = _body264 = _own264 = ("not ready", b"")
+        _stall_end264 = ("not ready", 0)
         _slow_app264 = _after_d264 = b"not ready"
 finally:
     _err_d264 = _srv_d264.stop()
@@ -216,9 +241,13 @@ check("web server r32: a body sent below the minimum rate is answered (400) and 
 check("web server r32: a body sent at once and read by a route that spends 4 s on it, in pieces too small to earn "
       "that time at the minimum rate, arrives whole (only time spent waiting for the client counts)",
       _slow_app264.startswith(b"HTTP/1.1 200") and _slow_app264.endswith(b"got 1000"), _slow_app264[-120:])
-check("web server r32: a client that stops reading an 8 MB answer leaves no traceback and no error in the log "
+check("web server r32: a client that stops reading a 64 MB answer leaves no traceback and no error in the log "
       "(it logged one ERROR traceback per connection per read timeout)",
       _err_d264.count("A response failed") == 1 and "TimeoutError: timed out" not in _err_d264, _err_d264[-800:])
+check("web server r32: ...and the server did end that answer at its write timeout: the client, reading again, "
+      "finds the connection closed with less than the whole answer (not an answer still waiting on it, nor one "
+      "sent in full because nothing stalled)",
+      _stall_end264[0] in ("eof", "reset") and _stall_end264[1] < (64 << 20), repr(_stall_end264))
 check("web server r32: ...while a timeout of the panel's own inside a streamed answer is still logged in full",
       "A response failed" in _err_d264 and "an SSH read of the panel's own timed out" in _err_d264,
       "own=%r log=%s" % (_own264[0], _err_d264[-400:]))

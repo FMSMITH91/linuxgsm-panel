@@ -1519,8 +1519,10 @@ def _release_name(commit, date_ver):
     a release signed before names were saved, or an unreadable one, shows the date as before.
 
     A commit that changes nothing a panel runs (CI, tooling) is signed with no name and no GitHub
-    Release, so the code running is that of the nearest named commit before it on main: the name
-    is the first one found walking back the first parents of the same date (_named_same_day).
+    Release, and with main/<sha>.inherit saying so; the code running is that of the nearest named
+    commit before it on main: the name is the first one found walking back the first parents of the
+    same date past such commits (_named_same_day). A commit signed with neither (its release was not
+    published, or it was signed before the marker existed) may run new code, so it shows the date.
     """
     sha, _, rc = _git(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], timeout=10)
     sha = sha.strip()
@@ -1540,11 +1542,12 @@ def _release_name(commit, date_ver):
 def _named_same_day(sha, date_ver):
     """The first of `sha` and its first-parent ancestors committed on `date_ver` that has a saved name, or None.
 
-    One listing of the saved names and one walk of the day's first parents (git stops at the
-    day's start; the walk also ends at the first commit of another date), so a day with many
-    commits still costs three git calls.
+    Only commits marked tooling-only (main/<sha>.inherit) are walked past: any other unnamed commit
+    ends the walk with None. One listing of the saved names and one walk of the day's first parents
+    (git stops at the day's start; the walk also ends at the first commit of another date), so a
+    day with many commits still costs three git calls.
     """
-    names = _saved_release_names()
+    names, inherit = _saved_release_names()
     m = re.fullmatch(r"([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})", date_ver or "")
     if not names or m is None:
         return None
@@ -1557,13 +1560,20 @@ def _named_same_day(sha, date_ver):
             return None
         if cand in names:
             return cand
+        if cand not in inherit:
+            return None         # signed without a name, not marked tooling-only: new code, the date
     return None
 
 
 def _saved_release_names():
-    """The commits (full shas) whose release name tools/sign-release.sh saved; empty when none can be read."""
+    """(commits with a saved release name, commits marked tooling-only) from tools/sign-release.sh, as full shas.
+
+    Both empty when the listing cannot be read.
+    """
     out, _, rc = _git(["ls-tree", "--name-only", "%s:%s" % (_RELEASE_SIG_REF, _DEFAULT_BRANCH)], timeout=10)
-    return {n[:-5] for n in out.splitlines() if n.endswith(".name")} if rc == 0 else set()
+    entries = out.splitlines() if rc == 0 else []
+    return ({n[:-5] for n in entries if n.endswith(".name")},
+            {n[:-8] for n in entries if n.endswith(".inherit")})
 
 
 def _version_file():

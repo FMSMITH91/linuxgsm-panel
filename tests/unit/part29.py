@@ -44,18 +44,34 @@ def _wf29(name):
     return _read29(".github", "workflows", name)
 
 
+# A job's key line, as GitHub reads one: an id of letters, digits, `_` and `-` that starts with a
+# letter or `_`, quoted or not, and a comment may follow it (`  py313:  # the 3.13 leg`). The old
+# reader took only `[a-z-]` with nothing after the colon, so a job named `build_x` or `py313`, or one
+# with a trailing comment, was in no gate built on it (each job's own permissions, Harden-Runner
+# first, the egress table, the fuzz guards) and those gates stayed green.
+_JOB_KEY29 = r"""^  (["']?)(%s)\1:[ \t]*(?:#[^\n]*)?$"""
+_JOB_ID29 = r"[A-Za-z_][A-Za-z0-9_-]*"
+
+
 def _job29(text, job):
-    """A job's block: from its `  <job>:` line to the next line at the jobs' own indent."""
-    m = _re29.search(r"^  %s:\n" % _re29.escape(job), text, _re29.M)
+    """A job's block: from its `  <job>:` line to the next line at the jobs' indent or a top-level one."""
+    m = _re29.search(_JOB_KEY29 % _re29.escape(job), text, _re29.M)
     if m is None:
         return ""
-    nxt = _re29.search(r"^  \S", text[m.end():], _re29.M)
+    nxt = _re29.search(r"^(?:  )?\S", text[m.end():], _re29.M)
     return text[m.start():m.end() + nxt.start()] if nxt else text[m.start():]
 
 
 def _jobs29(text):
-    """The names of a workflow's jobs."""
-    return _re29.findall(r"^  ([a-z][a-z-]*):\n", text[text.find("\njobs:\n"):], _re29.M)
+    """The ids of a workflow's jobs: every key two spaces in under `jobs:`, comment lines left out."""
+    body = _code29(text)
+    at = _re29.search(r"^jobs:[ \t]*(?:#[^\n]*)?$", body, _re29.M)
+    if at is None:
+        return []
+    rest = body[at.end():]
+    top = _re29.search(r"^\S", rest, _re29.M)   # the next top-level key ends the jobs
+    return [m.group(2) for m in _re29.finditer(_JOB_KEY29 % _JOB_ID29, rest[:top.start()] if top else rest,
+                                                _re29.M)]
 
 
 def _steps29(job_text):

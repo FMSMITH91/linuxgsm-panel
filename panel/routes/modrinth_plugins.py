@@ -51,6 +51,7 @@ UNREADABLE = "The plugins folder could not be read from the server, so it is not
 EXISTS = ("A file named {name} is already in the plugins folder. Remove it first to install this "
           "build in its place.")
 _MDR_BAD_FILE = "That is not a plugin file in this server's plugins folder."
+_MDR_NAME_TAKEN = "A file named {name} is already in the plugins folder. Remove one of the two first."
 _MDR_BAD_ACTION = "That change does not fit this plugin file."
 _MDR_INSTALLED = "Installed {name}. It loads when the server next starts."
 _MDR_CHANGED = "Done. The change takes effect when the server next starts."
@@ -139,7 +140,7 @@ def _mdr_install(gs, project_id):
     if not ok and msg == _sm.UPLOAD_EXISTS:
         return _mdr_refuse(gs, "install", detail + " (name taken)", EXISTS, 409)
     reply = ({"success": True, "name": plan["filename"], "message": i18n.tr(_MDR_INSTALLED, name=plan["filename"])}
-             if ok else {"success": False, "message": _sm.write_failure_reason(msg) or "Failed"})
+             if ok else {"success": False, "message": i18n.tr(_sm.write_failure_reason(msg) or "Failed")})
     with _r42r_audit_after(reply):      # the plugin is on the server by now (_r42r_audit_after)
         _mdr_audit(gs, "install", detail, ok)
     return jsonify(reply)
@@ -169,6 +170,13 @@ def _mdr_change(gs, action, name, new_name):
             ok, msg = _sm.rename_path(gs.remote, gs.short_name, rel, new_name, selfname=gs.lgsm_name)
     detail = name if new_name is None else "%s -> %s" % (name, new_name)
     reply = {"success": True, "message": i18n.tr(_MDR_CHANGED)}
+    if not ok and action != "remove" and msg == _sm.RENAME_EXISTS:
+        # rename_path's sentinel for a name already taken (an install wrote Foo.jar beside a
+        # Foo.jar.disabled): it was shown as it is, "__RENAME_EXISTS__".
+        reply = {"success": False, "conflict": True, "message": i18n.tr(_MDR_NAME_TAKEN, name=new_name)}
+        with _r42r_audit_after(reply):
+            _mdr_audit(gs, action, detail + " (name taken)", False)
+        return jsonify(reply), 409
     if not ok:
         # delete_path can answer with the host's own output; only its fixed refusals are shown.
         said = _sm.delete_failure_reason(msg) if action == "remove" else msg

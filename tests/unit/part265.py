@@ -55,7 +55,7 @@ global.fetch = function(url, init){ sent.push([url, JSON.parse(init.body)]); ret
 """ + _cut249(bk, "function _bkStepUp(") + "\n" + _cut249(bk, "function _bkAskPassphrase(") + r"""
 _bkAskPassphrase('other.tar.gz', null);
 const ov = document.body.children[document.body.children.length - 1];
-const input = ov.querySelector('#cd-input'), ok = ov.querySelector('[data-cd="ok"]');
+const input = ov.querySelector('[data-cd="input"]'), ok = ov.querySelector('[data-cd="ok"]');
 input.value = '""" + _TYPED265 + r"""'; (input.listeners.input || []).forEach(f => f());
 const typed = !ok.disabled;
 ok.onclick();
@@ -83,7 +83,7 @@ def _ready_empty265():
 let api = null;
 confirmDialog({title: 'x', requirePassword: true, onConfirm: function(v, a){ api = a; }});
 const ov = document.body.children[document.body.children.length - 1];
-const input = ov.querySelector('#cd-input'), ok = ov.querySelector('[data-cd="ok"]');
+const input = ov.querySelector('[data-cd="input"]'), ok = ov.querySelector('[data-cd="ok"]');
 input.value = 'x'; (input.listeners.input || []).forEach(f => f()); ok.onclick();
 input.value = ''; api.ready();
 console.log(JSON.stringify({disabled: ok.disabled, spinner: /spinner/.test(ok.innerHTML), label: ok.textContent}));
@@ -117,7 +117,7 @@ const docL = {}; document.addEventListener = (tp, f) => { (docL[tp] = docL[tp] |
   async function run(cancelMidway){
     window.stepUpThen(() => { went++; }, false, () => { cancels++; }); await settle();
     const ov = document.body.children[document.body.children.length - 1];
-    const input = ov.querySelector('#cd-input'), ok = ov.querySelector('[data-cd="ok"]');
+    const input = ov.querySelector('[data-cd="input"]'), ok = ov.querySelector('[data-cd="ok"]');
     input.value = 'pw'; (input.listeners.input || []).forEach(f => f()); ok.onclick();
     if (cancelMidway) ov.querySelector('[data-cd="cancel"]').onclick();
     pending(); await settle();

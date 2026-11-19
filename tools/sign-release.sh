@@ -25,9 +25,10 @@
 #      left alone. A failure here is reported, never fatal: the signing goes on, without a name;
 #   5. commits <branch>/<sha>.sig to the branch release-signatures (created, with no history, when
 #      it does not exist yet), with <branch>/<sha>.name (the release's tag, which panels show) only
-#      when step 4's release exists, through a private index: your checkout, its index and HEAD are
-#      not touched. The commit is signed like any other (git commit-tree -S). A re-run after a
-#      failed release publishes it and adds the name;
+#      when step 4's release exists, or <branch>/<sha>.inherit for a commit that changes nothing a
+#      panel runs (a panel on it shows the release before it), through a private index: your
+#      checkout, its index and HEAD are not touched. The commit is signed like any other (git
+#      commit-tree -S). A re-run after a failed release publishes it and adds the name;
 #   6. pushes that branch, and for main starts the deploy of <sha> (gh workflow run deploy.yml),
 #      unless <sha> itself changes only paths CI does not run for (ci.yml's paths-ignore): its
 #      deploy would wait 20 minutes for checks that never come, and then fail.
@@ -253,8 +254,13 @@ publish_release() {   # publish_release <commit> <previous signed commit or ""> 
     RELEASED="${tag}"
 }
 RELEASED=""
+# A tooling-only commit is marked as such (<branch>/<sha>.inherit): a panel on it shows the name of
+# the release before it (system_ops._named_same_day, install.sh _release_name). A commit with
+# neither a name nor this mark (its release not published) shows its date, never an older name.
+INHERIT=0
 if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
    && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]] && ! reaches_panels "${SHA}"; then
+    INHERIT=1
     echo "sign-release: ${SHA:0:12} changes nothing a panel runs (docs, tests or tooling): signed, no release page."
 elif [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_DEPLOY:-}" != "1" ]] \
    && [[ "${SIGN_RELEASE_NO_RELEASE:-}" != "1" ]]; then
@@ -275,10 +281,12 @@ NAME="${RELEASED}"
 export GIT_INDEX_FILE="${TMP}/index"
 HAVE_SIG=0
 HAVE_NAME=0
+HAVE_INHERIT=0
 if [[ -n "${PARENT}" ]]; then
     git read-tree "${PARENT}"
     git cat-file -e "${PARENT}:${BRANCH}/${SHA}.sig" 2>/dev/null && HAVE_SIG=1
     git cat-file -e "${PARENT}:${BRANCH}/${SHA}.name" 2>/dev/null && HAVE_NAME=1
+    git cat-file -e "${PARENT}:${BRANCH}/${SHA}.inherit" 2>/dev/null && HAVE_INHERIT=1
 else
     git read-tree --empty
 fi
@@ -292,6 +300,11 @@ if [[ -n "${NAME}" ]] && [[ "${HAVE_NAME}" -eq 0 ]]; then
     NBLOB="$(printf '%s\n' "${NAME}" | git hash-object -w --stdin)"
     git update-index --add --cacheinfo "100644,${NBLOB},${BRANCH}/${SHA}.name"
     ADDED="${ADDED:+${ADDED} and }named (${NAME})"
+fi
+if [[ "${INHERIT}" -eq 1 ]] && [[ "${HAVE_INHERIT}" -eq 0 ]]; then
+    IBLOB="$(printf 'tooling only\n' | git hash-object -w --stdin)"
+    git update-index --add --cacheinfo "100644,${IBLOB},${BRANCH}/${SHA}.inherit"
+    ADDED="${ADDED:+${ADDED} and }marked tooling-only"
 fi
 if [[ -z "${ADDED}" ]]; then
     echo "sign-release: ${BRANCH}/${SHA}.sig is already on ${SIG_BRANCH}; nothing to commit."

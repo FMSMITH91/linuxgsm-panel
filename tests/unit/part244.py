@@ -231,8 +231,23 @@ _nets244 = [ln.split() for ln in _run244.stdout.splitlines() if ln.startswith("N
 _dev244 = [ln.replace(":", " ", 1).split() for ln in _read244("/proc/net/dev").splitlines()[2:]]
 eq("host sample: one NETIF line per /proc/net/dev interface, its received and sent bytes",
    [n[1] for n in _nets244], [d[0] for d in _dev244])
-check("host sample: the disk line is df's figures for /, and an answered ss says so (PORTS)",
-      _host244["disk_total"] > 0 and _acc244["ports_read"] is (bool(_acc244["ports"])), repr(_acc244["ports_read"]))
+# Judged against `ss` run on its own, not against the sample's own port list: "read is bool(ports)"
+# also held when ss printed nothing and the sample read nothing.
+_ss244 = _sp244.run(["bash", "-c", "ss -H -ltnu 2>/dev/null"], capture_output=True, text=True,  # nosec B603 B607
+                    timeout=30, check=False).stdout
+_ss_ports244 = {int(ln.split()[4].rsplit(":", 1)[1]) for ln in _ss244.splitlines()
+                if len(ln.split()) > 4 and ln.split()[4].rsplit(":", 1)[-1].isdecimal()}
+# Other suites open and close loopback listeners meanwhile, so the two lists are compared by overlap,
+# not equality: a long-lived listener is in both.
+check("host sample: the disk line is df's figures for /, the scan is read (PORTS) exactly when `ss` run "
+      "on its own answers, and then its ports are ss's",
+      _host244["disk_total"] > 0 and _acc244["ports_read"] is bool(_ss244.strip())
+      and (not _ss_ports244 or bool(_acc244["ports"] & _ss_ports244)),
+      repr((_acc244["ports_read"], sorted(_acc244["ports"]), _ss244[:300])))
+eq("host sample: (control) PORTS marks a scan that answered; none, or PORTS 0, is a read that did not happen",
+   [(_a["ports_read"], sorted(_a["ports"])) for _a in
+    (_core244._parse_host_sample(_o)[1] for _o in ("PORT 22\nPORT 8080\nPORTS 3\n", "", "PORTS 0\n"))],
+   [(True, [22, 8080]), (False, []), (False, [])])
 
 # Shared both ways with the port scan.
 _sent244, _sent_ids244 = [], []

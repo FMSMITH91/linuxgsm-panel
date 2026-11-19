@@ -94,11 +94,38 @@ _LISTENS_ALSO_ON = {"vh": (1,)}
 
 def game_port_listening(game_type, port, ports):
     """Whether a game whose port is `port` is listening, by a scan's set of listening `ports`."""
-    if port in ports:
-        return True
+    return any(p in ports for p in listen_ports(game_type, port))
+
+
+def listen_ports(game_type, port):
+    """The ports any one of which listening means a game whose port is `port` is up: its own first.
+
+    The one place the _LISTENS_ALSO_ON offsets are applied, so the host scan (game_port_listening)
+    and the per-server live sample (_core._game_sample_cmd) cannot disagree about a server: they did
+    once, and a crossplay Valheim read online on the dashboard and offline on its own page.
+    """
+    if not isinstance(port, int) or isinstance(port, bool):
+        return (port,)
     offsets = _LISTENS_ALSO_ON.get((game_type or "").lower(), ())
-    return (isinstance(port, int) and not isinstance(port, bool)
-            and any(port + off in ports for off in offsets))
+    return (port,) + tuple(port + off for off in offsets if 0 < port + off <= 65535)
+
+
+def metrics_for_game(sample, short_name, game_port, game_type=None):
+    """One game's slice of a host_live_metrics() sample, shaped like server_live_metrics()."""
+    m = dict(sample["host"])
+    m.update(sample["users"].get(short_name or "",
+                                 {"game_cpu_percent": 0.0, "game_ram_mb": 0, "game_procs": 0,
+                                  "game_uptime_secs": 0, "game_ram_percent": 0.0}))
+    # cron_port, not int(): a loaded row is never type-checked, and one GameServer whose port reads
+    # as text (a restored backup, a hand edit — SQLite keeps it) raised out of
+    # monitoring._query_host_metrics, which calls this outside its try, and through ex.map took the
+    # dashboard's metrics for EVERY host, and every history sample, down with it.
+    try:
+        _port = _core.cron_port(game_port)
+    except ValueError:
+        _port = None
+    m["port_open"] = bool(_port) and game_port_listening(game_type, _port, sample["ports"])
+    return m
 
 
 def _invalidate_port_scan(remote_id):

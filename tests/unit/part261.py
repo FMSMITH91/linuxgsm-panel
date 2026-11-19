@@ -525,11 +525,9 @@ class _Js261:
         return bool(uses) and all(self.guarded(u, seen) for u in uses)
 
 
-# The push card's two posts are bare on purpose: the card reads data-reauth (set when the page was
-# rendered outside the confirmation window) and sends the browser to the re-auth page itself before the
-# permission prompt. The check after the gate holds that read in place ahead of each post.
-_OWN_REAUTH261 = {"/account/push/subscribe": "push_alerts.js: the card's data-reauth, before the browser prompt",
-                  "/account/telegram/link": "push_alerts.js: the card's data-reauth, before the link post"}
+# The push card's two posts (alerts on this device, Telegram link): read from data-…-url attributes, and
+# sent through stepUpThen like every other caller, so a page left open past the window asks in place.
+_PUSH_POSTS261 = {"/account/push/subscribe", "/account/telegram/link"}
 # Step-up routes no page script or form sends a changing request to (grepped: no URL text, no url_for), kept
 # as API routes. Taking one off when a page starts to call it is checked below.
 _NO_PAGE261 = {"/api/remote/<int:remote_id>/firewall/close": "the Firewall tab deletes a rule by number instead",
@@ -553,7 +551,7 @@ def _gate261():
         if not hit or method == "GET":
             continue
         seen_rules.update(hit)
-        if not js.guarded(scope) and hit[0] not in _OWN_REAUTH261:
+        if not js.guarded(scope):
             bare.append("%s:%d %s (%s)" % (f, line, hit[0], scope[1] or scope[0]))
     return js, rules, bare, seen_rules
 
@@ -688,15 +686,6 @@ def _unseen261(rules, seen, formed, sent):
                   and not any(_re261.fullmatch(_rule_re261(r), u) for u in sent))
 
 
-def _reauth_first261(src, attr):
-    """Whether the click handler that posts to `attr` sends a stale page to re-auth (data-reauth) before it."""
-    at = src.find("getAttribute('%s')" % attr)
-    start = src.rfind("addEventListener('click', function () {", 0, at)
-    body = src[start:at] if at > 0 and start >= 0 else ""
-    first = body.find("getAttribute('data-reauth') === '1'")
-    return first >= 0 and "goSameSite(" in body[first:first + 160] and "return;" in body[first:first + 220]
-
-
 if _G261 is not None:
     _sent261 = [u.split(" ")[0] for r in (_TOP261, _DB261) if r for u in (r.get("ran") or [])]
     _formed261 = {_form_ep249(tag, ep) for _f, ep, tag, _b in _FORMS249 if _HAS_SU249.search(tag)}
@@ -711,11 +700,9 @@ if _G261 is not None:
           "concrete URL accounts for its rule",
           _unseen261([("/api/x/<int:a>/y", "ep_x")], set(), set(), []) == ["/api/x/<int:a>/y"]
           and _unseen261([("/api/x/<int:a>/y", "ep_x")], set(), set(), ["/api/x/7/y"]) == [], "")
-    check("step-up gate: the push card's two bare posts are found by the gate (a URL read from a data-…-url "
-          "attribute) and each is preceded by the card's own re-auth step (data-reauth)",
-          set(_OWN_REAUTH261) <= _seen261
-          and all(_reauth_first261(_js249("push_alerts.js"), a) for a in ("data-subscribe-url", "data-link-url")),
-          repr(sorted(set(_OWN_REAUTH261) - _seen261)))
+    check("step-up gate: the push card's two posts are found by the gate (a URL read from a data-…-url "
+          "attribute), so the check that no step-up route is fetched outside a step-up helper covers them",
+          _PUSH_POSTS261 <= _seen261, repr(sorted(_PUSH_POSTS261 - _seen261)))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

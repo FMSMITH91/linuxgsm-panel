@@ -54,7 +54,7 @@
   "Delete failed": "La suppression a échoué",
   "Delete failed.": "La suppression a échoué.",
   "Delete remote": "Supprimer l'hôte distant",
-  "Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The “Removing a host” section of the install guide (docs/install.md) says how to remove them.": "Rien n'est modifié sur l'hôte lui-même : ses serveurs de jeu continuent de tourner, et l'outil gamedig et la tâche cron hebdomadaire que le panneau y a installés restent en place. La section « Removing a host » du guide d'installation (docs/install.md) explique comment les retirer.",
+  "Nothing on the host itself is changed: its game servers and their add-ons (B3, IW4MAdmin) keep running, and the gamedig tool and weekly cron the panel installed there stay. Remove add-ons on the Add-ons tab of each server first if they should stop. The “Removing a host” section of the install guide (docs/install.md) says how to remove the rest.": "Rien n'est modifié sur l'hôte lui-même : ses serveurs de jeu et leurs modules complémentaires (B3, IW4MAdmin) continuent de tourner, et l'outil gamedig et la tâche cron hebdomadaire que le panneau y a installés restent en place. Si les modules complémentaires doivent s'arrêter, supprimez-les d'abord dans l'onglet Modules complémentaires de chaque serveur. La section « Removing a host » du guide d'installation (docs/install.md) explique comment retirer le reste.",
   "Delete request failed.": "La demande de suppression a échoué.",
   "Delete scheduled task": "Supprimer la tâche planifiée",
   "Detach Ubuntu Pro": "Détacher Ubuntu Pro",

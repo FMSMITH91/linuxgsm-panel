@@ -118,7 +118,7 @@ def _pck_own_process(gs, remote):
     (ram_total 0) is a failed read, never a "no".
     """
     try:
-        m = _sm.server_live_metrics(remote, gs.short_name, gs.port)
+        m = _sm.server_live_metrics(remote, gs.short_name, gs.port, game_type=gs.game_type)
     except Exception:  # noqa: BLE001 - paramiko raises where the other transports return ""
         _log.info("port check: the server's own processes could not be read", exc_info=True)
         return None

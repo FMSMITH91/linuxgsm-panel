@@ -350,7 +350,8 @@ console.log(JSON.stringify({held: held, ran: calls.filter(function(c){ return c[
 var sent = [];
 function _submitAjaxForm(f){ sent.push(f.name); }
 function form(name, attrs){ return {name: name, hasAttribute: function(a){ return a in attrs; },
-                                    getAttribute: function(a){ return a in attrs ? attrs[a] : null; }}; }
+                                    getAttribute: function(a){ return a in attrs ? attrs[a] : null; },
+                                    querySelector: function(){ return null; }}; }
 """ + _js_fns221("panel.js", ("_ajaxStepUp",)).split("\nwindow.ajaxForm")[0] + r"""
 _ajaxStepUp(form('host', {'data-step-up': '', 'data-step-up-totp': '0'})); _ajaxStepUp(form('tag', {}));
 var held = sent.slice(); gate.run = true; _ajaxStepUp(form('host', {'data-step-up': '', 'data-step-up-totp': '1'}));

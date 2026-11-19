@@ -135,6 +135,72 @@ __import__("atexit").register(__import__("shutil").rmtree, _R13D_ULOG_DIR, True)
 
 results = []
 
+# ── an exception in a thread or green thread is a result too ───────────────────────────────────
+# A worker a route under test starts (threading.Thread, eventlet.spawn) that dies on a NameError
+# printed its traceback to stderr and was never counted: the check asserted only the HTTP answer,
+# and the run exited 0. Each one is recorded here, with the last check recorded before it (the code
+# after that check started it), and part15 fails the run on any left in the list. A part that ends
+# a thread with an exception on purpose takes its own entry back out (part15's probe does).
+thread_errors = []
+
+
+def _r33t_note(where, exc_type, exc, detail=""):
+    thread_errors.append("%s: %s: %s (after check %r)%s" % (
+        where, getattr(exc_type, "__name__", exc_type), exc, results[-1][1] if results else None, detail))
+
+
+def _r33t_thread_hook(args):
+    if not issubclass(args.exc_type, SystemExit):     # a thread's sys.exit() ends it quietly, as threading does
+        _r33t_note("thread %s" % getattr(args.thread, "name", "?"), args.exc_type, args.exc_value)
+    _R33T_HOOKS[0](args)
+
+
+def _r33t_install_hooks():
+    """Record every uncaught exception of a thread (green or real) or a green thread, then print it as before."""
+    import threading as _thr
+    _R33T_HOOKS[0] = _thr.excepthook
+    _thr.excepthook = _r33t_thread_hook
+    try:
+        from eventlet import patcher as _ev_patcher
+        from eventlet.hubs import hub as _ev_hub
+    except ImportError:
+        return
+    from greenlet import GreenletExit
+    _ev_patcher.original("threading").excepthook = _r33t_thread_hook
+
+    def _wrap(name):
+        real = getattr(_ev_hub.BaseHub, name)
+
+        def _recording(self, *a):
+            exc_info = a[-1]
+            if exc_info and not issubclass(exc_info[0], (GreenletExit, KeyboardInterrupt)):
+                _r33t_note("green thread (%s)" % name, exc_info[0], exc_info[1])
+            return real(self, *a)
+        setattr(_ev_hub.BaseHub, name, _recording)
+    for _name in ("squelch_exception", "squelch_generic_exception", "squelch_timer_exception"):
+        _wrap(_name)
+
+
+_R33T_HOOKS = [None]
+_r33t_install_hooks()
+
+# ── a part that raises SystemExit ends the run as a FAILURE ─────────────────────────────────────
+# importlib.import_module lets SystemExit through, so a part calling sys.exit(0) (or exit()) ended
+# the run with exit 0: no tally, no "every part ran" gate, and none of the later parts. part15, the
+# last part, marks the run as having reached its end; leaving without that mark is a failure.
+ran_to_end = [False]
+
+
+def _r33t_exit_guard():
+    if not ran_to_end[0]:
+        sys.stdout.write("\nFAIL  unit suite: the run ended before its last part (a part raised SystemExit, "
+                         "so nothing after it ran and no tally was made)\n")
+        sys.stdout.flush()
+        os._exit(1)
+
+
+__import__("atexit").register(_r33t_exit_guard)
+
 # ── the eventlet hub, swept at every check() ────────────────────────────────────────────────────
 # This suite is monkey-patched (importing app runs eventlet.monkey_patch()), so every green wait —
 # os.read on a pipe, a socket, a subprocess — files a listener with the hub for the greenlet that

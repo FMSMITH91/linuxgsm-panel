@@ -285,7 +285,7 @@ function El(id){ this.id = id; this.style = {}; this.classList = {list: [], add:
 El.prototype.addEventListener = function(t, f){ this.listeners[t] = f; };
 El.prototype.focus = function(){}; El.prototype.remove = function(){};
 El.prototype.appendChild = function(n){ this.child = n; };
-var parts = {'#cd-input': new El('cd-input'), '[data-cd="ok"]': new El('ok'), '#cd-err': new El('cd-err'),
+var parts = {'[data-cd="input"]': new El('cd-input'), '[data-cd="ok"]': new El('ok'), '[data-cd="err"]': new El('cd-err'),
              '[data-cd="cancel"]': new El('cancel'), '[data-cd-body]': new El('body')};
 var ov = new El('ov'); ov.querySelector = function(s){ return parts[s] || null; };
 global.window = global; global.setTimeout = function(){};
@@ -296,10 +296,10 @@ global.escapeHtml = function(s){ return String(s); }; global.t = function(s){ re
 """ + fns + "\n" + dialog + r"""
 var api = null;
 confirmDialog({title: 'x', requirePassword: true, onConfirm: function(v, a){ api = a; }});
-var start = parts['#cd-err'].style.display, html = ov.innerHTML;
-parts['#cd-input'].value = 'pw'; parts['#cd-input'].listeners.input(); parts['[data-cd="ok"]'].onclick();
+var start = parts['[data-cd="err"]'].style.display, html = ov.innerHTML;
+parts['[data-cd="input"]'].value = 'pw'; parts['[data-cd="input"]'].listeners.input(); parts['[data-cd="ok"]'].onclick();
 api.error('Wrong password');
-var shown = parts['#cd-err'].style.display, text = parts['#cd-err'].textContent;
+var shown = parts['[data-cd="err"]'].style.display, text = parts['[data-cd="err"]'].textContent;
 confirmDialog({title: 'y', bodyNode: {}});
 console.log(JSON.stringify({start: start, shown: shown, text: text,
   attr: /style=/.test(html), overlay: ov.className, body: parts['[data-cd-body]'].classList.list}));

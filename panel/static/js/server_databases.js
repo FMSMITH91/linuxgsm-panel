@@ -195,11 +195,13 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     var line = hostLine(d), h = el('db-host');
     h.textContent = line.text + (d.setup_error ? (line.text ? ' ' : '') + d.setup_error : '');
     h.className = 'small mb-2 text-break ' + (line.warn || d.setup_error ? 'text-warning' : 'text-secondary');
-    show('db-host', !!h.textContent);
     show('db-setup', d.state === 'none');
     show('db-setup-can', d.can.setup);
     show('db-setup-ask', !d.can.setup);
     hostLinks(h, d);
+    // Decided after the links (their labels count): a host with no database server has no line, and a
+    // super admin's "Use a database server on another machine" is then the only thing on it.
+    show('db-host', !!h.textContent.trim());
     drawLogin(d);
   }
 

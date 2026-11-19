@@ -8690,6 +8690,8 @@ _R21D_STDLIB_OK = {
     # The runner tracks every temp path the suite makes: process-wide by nature.
     "tests/unit_test.py:tempfile.mkdtemp", "tests/unit_test.py:tempfile.mkstemp",
     "tests/unit_test.py:tempfile._mkstemp_inner",
+    # part01 records every uncaught exception of a thread for part15 to fail the run on: process-wide by nature.
+    "tests/unit/part01.py:_thr.excepthook",
     # terminal_session imports pwd inside panel_account/sudo_hint/_login_shell, and _core inside
     # enrol_game_user: the module is the only seam.
     "tests/unit/part06.py:_pwd6.getpwuid", "tests/unit/part06.py:_pwd7.getpwuid",

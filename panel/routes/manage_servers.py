@@ -5,7 +5,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from types import SimpleNamespace
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
-from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows, r36j_route_job)
+from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows, r36j_route_job, r36j_route_jobs)
 from panel.db.models import (_NO_BIRTH, GameServer, RemoteServer, RowReplaced, claim_row,
     db, row_birth, row_label, same_row)
 from panel.ops import (backup as bk)
@@ -43,7 +43,7 @@ from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _pr
     resolve_free_port)
 from panel.routes import databases as _dbr
 from panel.routes._shared import (INVALID_ACCOUNT_NAME, _looks_installed, _notify_servers_changed,
-    _r39a_wipe_running, _record_game_clock, grs_or_wipe_sentence, privileged_accounts)
+    _r39a_wipe_running, _record_game_clock, grs_or_wipe_sentence, privileged_accounts, UNINSTALL_EXCLUDES)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -2344,7 +2344,7 @@ def _poll_for_game_port(remote, gs):
             if live is None:
                 continue
             scan_read = True
-            if gs.port and gs.port in live:
+            if gs.port and _sm.game_port_listening(gs.game_type, gs.port, live):
                 really_up = True
                 break
     except Exception:
@@ -2466,7 +2466,7 @@ def _rescan_started(remote, gs, started):
     really_up, s_rc, start_out = started
     live = _listening_now(remote)
     if live is not None:
-        really_up = gs.port in live
+        really_up = _sm.game_port_listening(gs.game_type, gs.port, live)
         gs.status = "online" if really_up else "offline"
         db.session.commit()
     return really_up, s_rc, start_out
@@ -2723,6 +2723,9 @@ def _uninstall_other_work(server_id, name):
         return grs_or_wipe_sentence(server_id, name)
     if job_running(server_id):
         return ADDON_BUSY
+    if UNINSTALL_EXCLUDES.intersection(r36j_route_jobs(server_id)):
+        return i18n.Sentence("Another action on '{name}' is still running (a start or stop, a mods change or a "
+                             "scheduled task run now). Try again once it has finished.", name=name)
     return None
 
 

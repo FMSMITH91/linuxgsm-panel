@@ -336,26 +336,26 @@ def _register_remote_edit(app):
         new_user = _edited("ssh_user", remote.username)
         _bad = _edit_user_or_key_refusal(remote, new_user)
         if _bad:
-            return _form_err(_bad, "manage_remotes")
+            return _edit_refused(_bad, "manage_remotes")
         new_name = _edited("name", remote.name)
         if not SAFE_LABEL_RE.match(new_name):
-            return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
+            return _edit_refused("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
         remote.name = new_name
         # Canonical before it is judged or compared: `[2001:db8::5]` is that address, and the
         # stored host is in this form (models.RemoteServer._canonical_host).
         new_host = canonical_host(_edited("host", remote.host))
         if not remote.is_local and not HOST_RE.match(new_host):
-            return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
+            return _edit_refused("Host must be a valid hostname or IP address.", "manage_remotes")
         new_port = _port_or(request.form.get("ssh_port"), None)
         if new_port is None:
-            return _form_err(i18n.tr("SSH port must be a number between {lo} and {hi}.", lo=MIN_PORT,
-                                     hi=MAX_PORT), "manage_remotes")
+            return _edit_refused(i18n.tr("SSH port must be a number between {lo} and {hi}.", lo=MIN_PORT,
+                                         hi=MAX_PORT), "manage_remotes")
         # Before anything on the row changes: a delegated admin may not move where, or as whom,
         # the panel signs in on its own credentials. See _delegated_retarget_refusal.
         # ...nor onto another row's host (409).
         _refused, _code = _r36c_retarget_refusal(remote, new_host, new_port, new_user)
         if _refused:
-            return _form_err(_refused, "manage_remotes", code=_code)
+            return _edit_refused(_refused, "manage_remotes", code=_code)
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
         if (new_host, new_port) != (remote.host, remote.port):
@@ -366,15 +366,26 @@ def _register_remote_edit(app):
         remote.username = new_user
         _bad_auth = _apply_edited_auth(remote)
         if _bad_auth:
-            return _form_err(_bad_auth, "manage_remotes")
+            return _edit_refused(_bad_auth, "manage_remotes")
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
         # A changed address or port is asked again as it is stored (r36j_commit): an add or a
         # migration may have taken it since _r36c_retarget_refusal asked.
         _same = r36j_commit(new_host, new_port, own_id=remote.id, ask=_moved)
         if _same:
-            return _form_err(_same, "manage_remotes", code=409)
+            return _edit_refused(_same, "manage_remotes", code=409)
         log_action(current_user, "edit_remote", target=remote.name, remote=remote)
         return _form_ok(i18n.tr("Remote '{name}' updated.", name=remote.name), "manage_remotes")
+
+
+def _edit_refused(message, endpoint, **kw):
+    """_form_err for edit_remote, with the row's unsaved edits dropped first.
+
+    A refusal after some fields were set (the name, the address) left them dirty in the session,
+    and the audit row of a 403 (account_security's access-denied hook) committed them: the page
+    said the edit was refused while the host list showed the new name.
+    """
+    db.session.rollback()
+    return _form_err(message, endpoint, **kw)
 
 
 def _edit_user_or_key_refusal(remote, new_user):

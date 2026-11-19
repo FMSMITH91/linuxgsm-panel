@@ -129,7 +129,7 @@ _pc_sid248 = _p9_new_server(P9_HOST, "p248pc", "csgo", 42480, name="p248-pc", st
 _pc248 = {"bg": [], "metrics": None, "reads": 0}
 
 
-def _pc_metrics248(remote, user, port):
+def _pc_metrics248(remote, user, port, game_type=None):
     _pc248["reads"] += 1
     return _pc248["metrics"]
 

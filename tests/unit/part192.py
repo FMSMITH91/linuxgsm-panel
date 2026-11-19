@@ -196,18 +196,45 @@ def _walk1400_192(blocks, names, live=True):
         if prelude.startswith("@media"):
             sub = live and _media1400_192(prelude)
         elif prelude.startswith("@container") and names is not None:
-            sub = live and (prelude.split()[1:2] or [""])[0] in names
+            sub = live and _container_reached192(prelude, names)
         yield from _walk1400_192(body, names, sub)
+
+
+# Stands in `names` for "some reached rule declares a container": an @container with no name queries
+# the nearest container of any name, so it is reached whenever any container is.
+_ANY_CONTAINER192 = "*"
+
+
+def _container_reached192(prelude, names):
+    """Whether an @container prelude can match, given the container names reached rules declare."""
+    word = (prelude.split()[1:2] or [""])[0]
+    if word.startswith("style("):
+        return True                          # every element is a style container
+    if word.startswith("(") or word in ("not", "") or word.startswith("scroll-state("):
+        return _ANY_CONTAINER192 in names    # unnamed: the nearest container, whatever its name
+    return word in names
+
+
+def _container_names192(decl):
+    """Every container name a rule's declarations give, plus _ANY_CONTAINER192 when it makes one."""
+    out = set()
+    if decl.get("container-name"):
+        out.update(decl["container-name"].split())
+    if decl.get("container"):
+        out.update(decl["container"].split("/")[0].split())
+        out.add(_ANY_CONTAINER192)
+    if decl.get("container-type", "normal").strip() != "normal":
+        out.add(_ANY_CONTAINER192)
+    out.discard("none")
+    return out
 
 
 def _wide_actions192(css):
     """List the rules a 1400px-or-wider screen reaches that style the Actions cell (bar the toggle's reset)."""
     names = set()
     for live, _p, body in _walk1400_192(css, None):
-        decl = _decls192(body)
-        for key in ("container", "container-name"):
-            if live and decl.get(key):
-                names.add(decl[key].split("/")[0].split()[0])
+        if live:
+            names |= _container_names192(_decls192(body))
     return [p for live, p, _b in _walk1400_192(css, names)
             if live and "col-actions" in p and p != ".col-actions .dash-more-btn"]
 
@@ -258,7 +285,12 @@ check("panel.css dashboard table on a desktop: below 1400px the buttons wrap to 
 _WIDE_PLANTS192 = ("@media (width >= 1400px) { .dash-srv-table td.col-actions { width: 10rem } }",
                    "@media (min-width: 1200px) { .dash-srv-table td.col-actions { width: 10rem } }",
                    ".dash-srv-table td.col-actions { width: 10rem }",
-                   "@supports (display: grid) { .dash-srv-table .col-actions .btn { margin: 0 } }")
+                   "@supports (display: grid) { .dash-srv-table .col-actions .btn { margin: 0 } }",
+                   # an unnamed query, under an unnamed container; and one naming the second of two names
+                   ".table-responsive { container-type: inline-size } "
+                   + "@container (width > 50rem) { .dash-srv-table td.col-actions { width: 10rem } }",
+                   ".table-responsive { container: dmbtab dmbwide / inline-size } "
+                   + "@container dmbwide (width > 50rem) { .dash-srv-table td.col-actions { width: 10rem } }")
 check("panel.css dashboard table on a desktop: (control) the 1400px-and-up reader reads each media "
       "query form, and a rule for the Actions cell that a wide screen reaches is caught, top level included",
       [_media1400_192(q) for q in (_WIDE192, _MID192, _MID4_192, _MOB192, "@media (min-width: 1400px)",

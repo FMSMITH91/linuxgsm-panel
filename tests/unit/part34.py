@@ -319,7 +319,7 @@ def _section_map34(shell, local, ids):
     games = [(ids["gmod"], "gmodsrv34", 27015, "gmod", None), (ids["cod"], "codsrv34", 28960, "cod", None)]
     _set34(_mon34, "host_live_metrics", lambda remote, force=False: {"host": {"ram_total": 8000}})
     _set34(_mon34, "metrics_for_game",
-           lambda sample, short, port: {"game_procs": 1, "ram_total": 8000, "game_cpu_percent": 1})
+           lambda sample, short, port, game_type=None: {"game_procs": 1, "ram_total": 8000, "game_cpu_percent": 1})
     maps = [row[3] for row in _mon34._query_host_metrics((NS(id=local.id), games))]
     check("B map: after one player poll the dashboard's map lookup runs NO gamedig: the poll's own "
           "reply carried it, sanitised as game_map sanitises (no angle brackets)",
@@ -584,7 +584,7 @@ def _section_sampler34():
     _set34(_mon34, "host_live_metrics",
            lambda remote, force=False: {"host": {"ram_total": 8000}})
     _set34(_mon34, "metrics_for_game",
-           lambda sample, short, port: {"game_procs": 1, "ram_total": 8000, "ram_used": 100,
+           lambda sample, short, port, game_type=None: {"game_procs": 1, "ram_total": 8000, "ram_used": 100,
                                         "disk_total": 10, "disk_used": 1, "cpu_percent": 3,
                                         "game_cpu_percent": 1, "game_ram_mb": 10})
     _mon34._record_metric_samples(_app34)

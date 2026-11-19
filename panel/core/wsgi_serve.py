@@ -59,8 +59,9 @@ one byte every few seconds made progress on every read, so it kept its connectio
     live console or terminal is not cut by any of these;
   * PER_SOURCE_CONNECTIONS: one source (an IPv6 one by its /64) holds at most this many connections;
     a further one is closed as soon as it is accepted (_SourceCap). Loopback is not counted: behind
-    Tailscale Serve or a proxy on the box every viewer arrives on it, and the proxy keeps its own
-    per-client limits;
+    Tailscale Serve or a proxy on the box every viewer arrives on it. Those viewers are not capped
+    per client (docs/THREAT-MODEL.md, Residual risks: the cap acts before headers are read, and a
+    proxy may reuse one connection for many clients); the deadlines below still apply to them;
   * a client that stops reading an answer, or stalls its body, is ClientStalled, which the log treats
     like a client that hung up (_client_hung_up): nothing is logged for it, as for a reset;
   * the listening socket's accept() (_Listener) waits and tries again on EMFILE, ENFILE, ENOBUFS and
@@ -188,21 +189,34 @@ class _ClientWrites:
     failed response's traceback, so a client that asked for a large answer and never read it put one
     ERROR traceback in the log per connection per minute: no account needed, and a phone that slept
     mid-download read as a panel fault. Raised outside the `except`, so the chain holds nothing else.
+
+    Once stalled, nothing more is tried: the buffer still held what the client never read, and the
+    end of the request flushed it twice more (the handler's finish, then the writer's close), each
+    waiting io_seconds() again, so a stalled client held its connection for three timeouts.
     """
 
     def __init__(self, fileobj):
         self._f = fileobj
+        self._stalled = False
 
     def __getattr__(self, name):
         return getattr(self._f, name)
 
-    @staticmethod
-    def _call(fn, *args):
-        try:
-            return fn(*args)
-        except TimeoutError:
-            pass    # raised again below, outside the except, so the chain holds nothing else
+    def _call(self, fn, *args):
+        if not self._stalled:
+            try:
+                return fn(*args)
+            except TimeoutError:
+                self._stalled = True    # raised below, outside the except, so the chain holds nothing else
         raise ClientStalled("the client stopped reading the response")
+
+    def close(self):
+        """Close the writer; after a stall, drop what the client never read instead of waiting to send it."""
+        if self._stalled:
+            raw = getattr(self._f, "raw", None)
+            if raw is not None:
+                raw.close()     # a closed raw stream makes the buffered close a no-op (no flush)
+        return self._f.close()
 
     def write(self, data):
         """The buffered writer's write, ClientStalled on a timeout."""
@@ -215,6 +229,9 @@ class _ClientWrites:
     def flush(self):
         """The buffered writer's flush, ClientStalled on a timeout."""
         return self._call(self._f.flush)
+
+
+_STALLED = object()     # _PacedBody._paced's read that timed out
 
 
 class _PacedBody:
@@ -246,6 +263,14 @@ class _PacedBody:
         return self._grace + self._got / self._rate - self._waited
 
     def _paced(self, fn, *args):
+        """Call the read `fn` inside the budget; a stall of either kind is ClientStalled, and ends the connection.
+
+        The socket's own timeout (io_seconds()) usually fires before a budget that has grown past it
+        (a client that sent at a fair rate, then stopped). That plain TimeoutError left the connection
+        open, so eventlet's discard of the unread body read the timed-out socket again and logged a
+        warning naming the client's request, one per stalled connection. Any other failed read also
+        closes the connection: the socket is never read again.
+        """
         left = self.budget()
         started = time.monotonic()
         try:
@@ -253,11 +278,16 @@ class _PacedBody:
                 raise ClientStalled("the client sent its request body too slowly")
             with self._timeout(left, ClientStalled("the client sent its request body too slowly")):
                 data = fn(*args)
-        except ClientStalled:
+        except TimeoutError:          # ClientStalled (the budget) or the socket's own timeout
+            data = _STALLED
+        except OSError:
             self._handler.close_connection = 1
             raise
         finally:
             self._waited += time.monotonic() - started
+        if data is _STALLED:
+            self._handler.close_connection = 1
+            raise ClientStalled("the client sent its request body too slowly")   # outside the except: no chain
         self._got += sum(map(len, data)) if isinstance(data, list) else len(data or b"")
         return data
 
@@ -383,7 +413,8 @@ BODY_MIN_RATE = 500
 # browser opens at most 6 HTTP/1.1 connections to a host plus a Socket.IO socket per open tab, so a
 # household or office behind one address, several people with several tabs, stays well inside it.
 # Loopback (Tailscale Serve, a reverse proxy on the box, where every viewer arrives as 127.0.0.1 or
-# ::1) is not counted: the proxy holds its own per-client limits, and capping it would cap everyone.
+# ::1) is not counted: capping it would cap everyone, and the residual risk (no per-client cap behind
+# a proxy or Funnel) is in docs/THREAT-MODEL.md.
 # An IPv6 source is counted by its /64, the block one subscriber is given.
 PER_SOURCE_CONNECTIONS = 64
 # Socket.IO's heartbeat window (ping_interval + ping_timeout) is multiplied by this for io_seconds(),

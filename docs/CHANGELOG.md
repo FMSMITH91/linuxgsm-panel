@@ -14,6 +14,18 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **Valheim on crossplay shows as running on its own page.** The server page, the dashboard's per-host figures and the check after a start now count Valheim's port + 1, as the server list already did, so a crossplay server is no longer saved as offline while players are on it.
+- **SFTP transfers keep going when the panel is briefly busy.** An open file whose permission re-check could not be answered no longer fails as "no longer have permission": it goes on for a few seconds, then asks you to try again. One host that stops answering no longer slows everyone else's SFTP.
+- **Add-on remove waits for its cleanup.** A remove counts as running until the account's user manager has been released, and a remove and another add-on's install on the same server can't run at the same time. While an update or a settings change runs, a second action names it.
+- **Nothing starts while a server is being uninstalled.** Start, mods changes, Run now and add-on installs are refused during an uninstall, and an uninstall waits for them.
+- **Plugin enable/disable onto a taken name says so.** It showed an internal code; a failed plugin install is now shown in your language.
+- **A refused host edit saves nothing.** A refused edit no longer keeps the new name.
+- **The version shown after an unpublished release is its date.** A panel on a commit whose release was not published shows that commit's date instead of the previous release's name.
+- **Host delete says add-ons keep running.** The confirmation now says the servers' add-ons stay on the host and where to remove them first.
+- **Databases on another machine can be chosen on a host with no database server.** The Databases tab hid a super admin's "Use a database server on another machine" on a host with no MariaDB or MySQL yet, and on one the panel could not sign in to yet. It shows now.
+- **The backup passphrase box is no longer filled with your sign-in password.** Password managers offered the panel login for "Backup passphrase", and with the password confirmation open on top, its "Password" label pointed at the passphrase box underneath.
+- **Add and edit forms say what you typed is kept when your password is asked again.** Add user, Edit user, Add group and the host forms showed the general "This action needs your password again" wording.
+- **The alerts card follows the browser.** Turning alerts off in another tab, or blocking or allowing notifications in the browser, now shows on the Account page when you come back to it. Turning alerts on or linking Telegram on a page left open for a while asks for your password on the page instead of leaving it.
 - **SFTP sign-ins no longer wait behind a slow host.** When file requests to a host that stopped answering
   fill the panel's slots, other requests are told the panel is busy, and sign-ins keep working; a sign-in the
   panel could not answer in time, or one that ends at once, is no longer counted as a failure.
@@ -66,6 +78,7 @@ dated section below lists what that day's releases changed, newest first; the nu
   `++port`) that another line evaluates as arithmetic, and bash 5.3's `${ command; }` and `${| command; }`,
   which run in the config's own shell, can each change a setting with no `port=` in sight. The world reset
   now counts such a line as possibly setting it and refuses to judge the world from that setting.
+- **Stalled uploads no longer write a log line each.** A request body that stalls after a fair start now closes the connection quietly, and a client that stops reading an answer is no longer waited for three times.
 - **A failed SFTP key signature is logged and counted.** A sign-in that offers a registered key with a
   signature that does not verify is now written to the audit log and auth.log at once and counts against the
   address, like a wrong password; asking whether a key would do is not counted.
