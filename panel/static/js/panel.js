@@ -396,7 +396,8 @@ window.toast = function(msg, kind){
 //   requireText:  a string the user must TYPE exactly before Confirm enables (type-to-confirm).
 //   requirePassword: true -> show a password field; Confirm passes its value to onConfirm and the
 //                    dialog STAYS OPEN so the caller can verify server-side, then call api.close()
-//                    on success or api.error('…') to re-prompt. onConfirm(value, api).
+//                    on success, api.error('…') to re-prompt, or api.ready() to let Confirm be
+//                    pressed again with the field kept. onConfirm(value, api).
 //   requireLabel: label shown above the input.
 //   requirePlaceholder: placeholder for the password field. Defaults to "Your account password",
 //                    which is wrong for any gate that is not the account password (e.g. a backup
@@ -498,7 +499,10 @@ window.confirmDialog = function(opts){
     close: close,
     // nosemgrep - okHtml is this button's OWN markup, captured above; the message uses textContent.
     error: function(m){ if(errEl){ errEl.textContent = m || (window.t ? t('Incorrect.') : 'Incorrect.'); errEl.style.display=''; } okBtn.disabled=false; okBtn.innerHTML=okHtml; if(input){ input.value=''; input.focus(); } },
-    busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; }
+    busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; },
+    // Back to ready with what was typed kept: for a caller whose own step was abandoned (a password
+    // dialog on top of this one, cancelled), so Confirm can be pressed again. error() clears the field.
+    ready: function(){ okBtn.disabled = !!(input && !input.value); okBtn.innerHTML=okHtml; }
   };
   _cdGateConfirm(opts, input, okBtn, errEl);
   function submit(){

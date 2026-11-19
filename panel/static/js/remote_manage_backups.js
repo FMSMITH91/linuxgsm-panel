@@ -797,7 +797,8 @@ function _bkAskPassphrase(name, btn){
     requireLabel:'Backup passphrase',
     requirePlaceholder:'The passphrase this backup was written with',
     bodyText:'This backup is encrypted, and this panel\'s configured passphrase does not open it — it was written by another panel, or before the passphrase was changed.',
-    // The passphrase dialog stays open under the password one, so a cancelled confirmation keeps what was typed.
+    // The passphrase dialog stays open under the password one, so a cancelled confirmation keeps what
+    // was typed, and api.ready() (the cancel hook below) puts its Restore back from busy.
     onConfirm:function(val, api){ _bkStepUp(function(){
       fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({name:name, passphrase:val})})
@@ -815,7 +816,7 @@ function _bkAskPassphrase(name, btn){
           else api.error(d.message||'Could not restore.');
         })
         .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
-    }); }});
+    }, function(){ api.ready(); }); }});
 }
 
 function bkShowEncState(on, short){
