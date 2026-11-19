@@ -305,7 +305,7 @@ try:
                 break
         _time260.sleep(1.0)
         _alive_mid260 = _srv_f260.proc.poll() is None
-        _starved260 = _get_ok260(_srv_f260.port)
+        _get_ok260(_srv_f260.port)   # a request while every descriptor is held: it may wait or fail, the server must stay up
         for _so260 in _held260:
             _so260.close()
         _deadline260 = _time260.monotonic() + 15
@@ -620,7 +620,7 @@ def _units_restore260():
                 sb.read(".local/share/systemd/user/own2.service"),
                 [n for n in planted if os.path.lexists(os.path.join(sb.home, n))], sb.read(".config/app/settings.ini"))
     except Exception as e:  # noqa: BLE001 - recorded as the check's failure, not a crash of the part
-        return ("raised %r" % e,)
+        return ("raised %r" % e, None, None, None, None)
     finally:
         sb.gone()
 
