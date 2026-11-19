@@ -52,6 +52,7 @@ import re
 import shlex
 
 from panel import REPO_ROOT
+from panel.security.journal_forget_sh import account_tmp_sh, orphan_journals_sh
 
 # Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
 # rewritten by `git pull` on every self-update, so a helper living there would be panel-writable
@@ -1866,8 +1867,8 @@ def _addon_release_remote(a):
     Lingering off, then the account's user manager stopped (waited for, at most
     ADDON_MANAGER_STOP_TIMEOUT seconds) and its failed state cleared; then, for a uid of at least
     ADDON_FORGET_MIN_UID, Podman's two /tmp folders when they are real folders it owns and, with
-    `forget` (an uninstall), its user journal files: rotated first only when an active
-    user-<uid>.journal is there (rotation is system-wide). Prints linger=off, manager=stopped or
+    `forget` (an uninstall), its user journal files (rotated first only when an active
+    user-<uid>.journal is there: rotation is system-wide) and its tmux and JVM folders in /tmp. Prints linger=off, manager=stopped or
     manager=stop-failed, then forgotten=<count>.
     """
     forget = ("j=''; for f in /var/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\".journal; do "
@@ -1875,7 +1876,7 @@ def _addon_release_remote(a):
               "for f in /var/log/journal/*/user-\"$uid\".journal /var/log/journal/*/user-\"$uid\"@*.journal* "
               "/run/log/journal/*/user-\"$uid\".journal /run/log/journal/*/user-\"$uid\"@*.journal*; do "
               "if [ -f \"$f\" ] && [ ! -L \"$f\" ]; then rm -f -- \"$f\" && n=$((n + 1)); fi; done; "
-              if a[1] == "forget" else "")
+              + orphan_journals_sh(ADDON_FORGET_MIN_UID) + account_tmp_sh() if a[1] == "forget" else "")
     return ("u=%s; uid=$(id -u \"$u\") || exit 1; loginctl disable-linger \"$u\" || exit 1; echo linger=off; "
             "if timeout %d systemctl stop \"user@$uid.service\"; then m=stopped; else m=stop-failed; fi; "
             "systemctl reset-failed \"user@$uid.service\" 2>/dev/null; echo \"manager=$m\"; n=0; "

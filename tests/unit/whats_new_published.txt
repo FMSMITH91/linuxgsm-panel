@@ -792,3 +792,17 @@ c6ab4344 A failed dump upload says whether an earlier dump was put back.
 7f487832 Add-ons in containers: IW4MAdmin and B3.
 2973d843 Add-ons run locked down, and only for those you allow.
 62b554cb A shorter README.
+b464ff5b B3 for Call of Duty 4, World at War, Soldier of Fortune 2, Enemy Territory, ET: Legacy and Quake 3.
+e8916ec3 B3's settings on its card.
+1c15d4ab Add-on updates.
+05ad287a A game download that fails LinuxGSM's checksum ends as a failed install.
+65e9f4e7 Retrying an install after an interrupted download works.
+8532c003 Uninstalling no longer brings back an empty journal for an earlier account.
+4b103565 Add-ons install on a per-user panel.
+5886749f A failed add-on step says why.
+64a98f83 The Install button stays visible when an add-on needs a database.
+5313066c Removing B3 says what goes with it.
+05702714 Your own B3 plugins, if you choose.
+de047a6a The host page no longer asks sudo every five minutes.
+3181e4e9 An uninstalled server's tmux folder no longer passes to the next account.
+b27c1f45 An add-on that stops again after Start says why.

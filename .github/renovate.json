@@ -20,7 +20,10 @@
     "with the default timestamp-required a digest update would wait on minimumReleaseAge forever, so",
     "docker updates are raised without one (Renovate docs, minimumReleaseAgeBehaviour).",
     "tests/unit/part19.py and part242.py gate that every pin is matched and that each manager reads",
-    "only its own files."
+    "only its own files.",
+    "The add-ons' pins (panel/services/addons.py): B3's source commit, which follows",
+    "FMSMITH91/big-brother-bot master (git-refs, in addons.py and the B3 Containerfile together),",
+    "and IW4MAdmin's image, the digest of its `latest` tag. Both are checked daily (packageRules)."
   ],
   "enabledManagers": [
     "custom.regex",
@@ -48,6 +51,33 @@
         "# renovate: datasource=(?<datasource>docker)\\n\\s+[A-Z_]*IMAGE: '(?<depName>[a-z0-9./_-]+):(?<currentValue>[A-Za-z0-9._-]+)@(?<currentDigest>sha256:[0-9a-f]{64})'"
       ],
       "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The B3 add-on's source: FMSMITH91/big-brother-bot master, pinned by commit",
+      "managerFilePatterns": [
+        "/^panel/services/addons\\.py$/",
+        "/^panel/addon_images/b3/Containerfile$/"
+      ],
+      "matchStrings": [
+        "(?:B3_COMMIT = \"|ARG B3_COMMIT=)(?<currentDigest>[0-9a-f]{40})"
+      ],
+      "currentValueTemplate": "master",
+      "depNameTemplate": "big-brother-bot",
+      "packageNameTemplate": "https://github.com/FMSMITH91/big-brother-bot",
+      "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
+      "description": "The IW4MAdmin add-on's image: the digest of its latest tag",
+      "managerFilePatterns": [
+        "/^panel/services/addons\\.py$/"
+      ],
+      "matchStrings": [
+        "IW4MADMIN_IMAGE = \"(?<depName>ghcr\\.io/raidmax/iw4madmin)@(?<currentDigest>sha256:[0-9a-f]{64})\""
+      ],
+      "currentValueTemplate": "latest",
+      "datasourceTemplate": "docker"
     }
   ],
   "dockerfile": {
@@ -89,6 +119,23 @@
         "/^gcr\\.io/oss-fuzz-base//"
       ],
       "groupName": "ClusterFuzzLite images"
+    },
+    {
+      "description": "The add-ons' pins are checked every day; B3's fork is this project's own, so its commits need no waiting period",
+      "matchDepNames": [
+        "big-brother-bot",
+        "ghcr.io/raidmax/iw4madmin"
+      ],
+      "schedule": [
+        "* 0-5 * * *"
+      ]
+    },
+    {
+      "description": "B3's fork: no release-age wait (a commit to master is the release)",
+      "matchDepNames": [
+        "big-brother-bot"
+      ],
+      "minimumReleaseAge": "0 days"
     }
   ],
   "dependencyDashboard": {

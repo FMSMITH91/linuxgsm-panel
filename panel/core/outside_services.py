@@ -21,6 +21,7 @@ GAME_ICONS = "outside_game_icons"
 STEAM_WORKSHOP = "outside_steam_workshop"
 MODRINTH = "outside_modrinth"
 PUBLIC_IP = "outside_public_ip"
+DBIP = "outside_dbip"
 # The breached-password check (Have I Been Pwned's range API) keeps the key it was built with.
 BREACH_CHECK = "breach_check_online"
 
@@ -56,6 +57,9 @@ SERVICES = (
      "note": "Off: no search or install from Modrinth; your own uploads still work."},
     {"key": PUBLIC_IP, "label": "Public address lookup (api.ipify.org, OpenDNS)",
      "note": "Off: a host behind a router shows its own address, not the public one."},
+    {"key": DBIP, "label": "Country database for B3 (db-ip.com)",
+     "note": "Only for a B3 add-on with offline geolocation: the panel downloads DB-IP's free country database "
+             "once a month; no player address is sent. Off: no download, and B3 keeps the copy it has."},
 )
 KEYS = tuple(s["key"] for s in SERVICES)
 

@@ -443,7 +443,7 @@ try:
           "auto-install ran %r times — up to 90 minutes spent on a host that may already hold "
           "the files" % (sum(1 for _cmd in _lv_none_cmds if "auto-install" in _cmd),))
     check("install step 4: ...and does not wipe the download it never looked at",
-          not any("lgsm/tmp" in _cmd for _cmd in _lv_none_cmds),
+          not any("lgsm/tmp" in _cmd and "auto-install" not in _cmd for _cmd in _lv_none_cmds),
           "the cached archive is deleted on the strength of a read that failed")
     check("install step 4: ...nor blame a corrupt download it never saw",
           _lv_none is not None and "may be corrupt" not in _lv_none[2],

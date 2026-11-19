@@ -2536,6 +2536,28 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/addons/<addon_id>/settings": {
+    "endpoint": "api_server_addon_settings",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_settings"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/<addon_id>/update": {
+    "endpoint": "api_server_addon_update",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_update"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/autostart": {
     "endpoint": "api_server_autostart",
     "guards": [

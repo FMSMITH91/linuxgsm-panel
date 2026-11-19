@@ -2008,7 +2008,65 @@ def classify_install_failure(output):
         return ("os_unsupported", i18n.Sentence(
             "LinuxGSM does not support this game on {os}. It caps this one at an older Ubuntu release; the "
             "game picker marks those.", os=m.group(1).strip()))
-    return None
+    return _checksum_cause(text)
+
+
+def _checksum_cause(text):
+    """The download_checksum cause, from LinuxGSM's own checksum report in `text`, or None."""
+    bad_sum = lgsm_checksum_failure(text)
+    if not bad_sum:
+        return None
+    return ("download_checksum", i18n.Sentence(
+        "LinuxGSM's download of {file} failed its {kind} check twice: the file it got has the checksum "
+        "{got}, and LinuxGSM expects {want}. LinuxGSM stopped before installing any game files. Try "
+        "again later; if it keeps failing, the file on LinuxGSM's download server or the checksum in "
+        "LinuxGSM needs a fix from LinuxGSM.",
+        file=bad_sum[0], kind=bad_sum[1], got=bad_sum[2], want=bad_sum[3]))
+
+
+# The line the install's own command prints after LinuxGSM ends (manage_servers._game_files_command).
+LGSM_EXIT_MARK = "__LGSM_EXIT__="
+_LGSM_EXIT_RE = re.compile(r"__LGSM_EXIT__=(\d{1,3})\b")
+# LinuxGSM's fn_dl_hash (core_dl.sh) on a mismatch: "<file> returned MD5 checksum: <sum>", then
+# "expected MD5 checksum: <sum>", then core_exit.sh with exit code 1.
+_LGSM_SUM_GOT_RE = re.compile(
+    r"(?m)^[ \t]{0,8}(\S{1,200}) returned (MD5|SHA1|SHA256|SHA512) checksum: ([0-9A-Fa-f]{0,128})")
+_LGSM_SUM_WANT_RE = re.compile(r"expected (MD5|SHA1|SHA256|SHA512) checksum: ([0-9A-Fa-f]{1,128})")
+
+
+def lgsm_exit_status(output):
+    """The exit status LinuxGSM ended with, from the install command's LGSM_EXIT_MARK line, or None.
+
+    LinuxGSM's own meaning (core_exit.sh, install_complete.sh): 0 "Install Complete!", 1 "Install
+    Failed!" (a FAIL was the last thing it logged), 2 completed with errors, 3 with warnings. None
+    when the line is missing: the command did not finish, or the transport lost its output.
+    """
+    found = _LGSM_EXIT_RE.findall(output or "")
+    return int(found[-1]) if found else None
+
+
+def lgsm_checksum_failure(output):
+    """The report LinuxGSM prints for a download that failed its checksum: (file, kind, got, expected), or None."""
+    text = terminal.strip_escapes(output or "")
+    got = _LGSM_SUM_GOT_RE.search(text)
+    want = _LGSM_SUM_WANT_RE.search(text)
+    if not got or not want:
+        return None
+    return (got.group(1), got.group(2), got.group(3) or "(empty)", want.group(2))
+
+
+def lgsm_fail_lines(output, most=2):
+    """The last FAIL lines LinuxGSM printed in `output`, as one tidy line ("" when it printed none).
+
+    LinuxGSM prints a failure two ways (core_messages.sh): a whole "[ FAIL ] ..." line
+    (fn_print_fail_nl), or " ... FAIL" ending the step's own line (fn_print_fail_eol_nl).
+    """
+    lines = []
+    for raw in terminal.strip_escapes(output or "").replace("\r", "\n").split("\n"):
+        line = " ".join(raw.split())
+        if "[ FAIL ]" in line or line.endswith("... FAIL"):
+            lines.append(line[:300])
+    return " / ".join(lines[-most:])
 
 
 def parse_missing_deps(output):

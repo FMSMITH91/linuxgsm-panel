@@ -217,7 +217,7 @@ def _died_route255(ids):
     check("first start (route): an add-on that died after its start is audited as not installed",
           row.success is False and "stopped again within 30 seconds" in row.detail, repr(row.detail))
     st = _p9_client(P9_ADMIN).get("/api/server/%d/addons" % sid).get_json(silent=True) or {}
-    a = (st.get("addons") or [{}])[0]
+    a = next((x for x in st.get("addons") or [] if x.get("id") == "iw4madmin"), {})
     check("first start (route): the card shows why and the last log lines, the RCON password masked",
           "stopped again" in a.get("error", "") and "FTL Failed" in a.get("tail", "") and _RC255 not in a.get("tail", "x"),
           repr(a)[:300])
@@ -468,12 +468,12 @@ def _b3_geo255(ids):
     unit = _unit_of255(puts)
     services = [t for p, t in sorted(puts.items()) if p.endswith(".service")]
     eq("B3 geolocation on: the plugins listed, each service through its own relay, nothing else reachable",
-       [code, "geolocation:\n" in ini, "location: @conf/conf/plugin_location.ini" in ini,
+       [code, "geolocation: @conf/conf/plugin_geolocation.ini\n" in ini, "location: @conf/conf/plugin_location.ini" in ini,
         _net_line255(unit).endswith(",-T,3306:3306,-T,443:21010"),
         "--add-host=ipwho.is:127.0.0.1" in unit, "ipapi.co" in unit, len(services),
         [x.rsplit(" ", 1)[-1].strip() for x in services], "Requires=lgsm-addon-b3-geo1.socket" in unit],
        [202, True, True, True, True, False, 1, ["ipwho.is:443"], True])
-    check("B3 geolocation on: the audit says so", "geolocation on" in _audit_started255(), _audit_started255())
+    check("B3 geolocation on: the audit says so", "geolocation online" in _audit_started255(), _audit_started255())
     _p9_patch(_ra255, "_db_target", lambda r: ("100.70.1.2", 3307))
     code, _sh, ini, puts = _b3_install255(ids, False, "ports= 21012\n")
     unit = _unit_of255(puts)

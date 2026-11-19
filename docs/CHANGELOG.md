@@ -34,9 +34,32 @@ dated section below lists what that day's releases changed, newest first; the nu
   version of its source and uses one of the server's databases. An add-on that stops again right
   after its first start is reported with its own last log lines. Nothing is installed until you
   install an add-on; it needs Ubuntu 24.04 or newer.
+- **B3 for Call of Duty 4, World at War, Soldier of Fortune 2, Enemy Territory, ET: Legacy and Quake 3.**
+  The add-on now builds B3 v2.0.0 (plus later parser fixes), which refuses commands to players it
+  has not authenticated. It is offered for Call of Duty 4 (CoD4x), World at War, Soldier of Fortune
+  2, Wolfenstein: Enemy Territory, ET: Legacy and Quake 3 Arena as well, each tested against the
+  server LinuxGSM installs with players joining, and it uses the port the game really listens on. On
+  Soldier of Fortune 2, Enemy Territory and ET: Legacy B3 has no private messages, and the card says
+  so. Enemy Territory and Quake 3 need `g_logsync 1` in the server's config, and ET: Legacy a
+  `g_log` line, as the Add-ons guide explains.
+- **B3's settings on its card.** An installed B3 has a folded settings section: geolocation off,
+  offline (a player's country, from DB-IP's free database on the host, so no player address leaves
+  it) or online (a city, from ipwho.is), and B3's own plugins, each switched on or off. Applying them
+  rewrites only those settings and restarts B3; your other edits are kept. The panel's host downloads
+  DB-IP's database once a month, checks it, and it can be turned off in Outside services.
+- **Add-on updates.** The Add-ons tab says when an add-on has a newer version (or, for offline
+  geolocation, a newer month of its country database), and Update installs it and restarts the
+  add-on, keeping its data, settings and database.
+- **Your own B3 plugins, if you choose.** B3's settings can load plugins from a folder in the
+  add-on's Data. It is off by default, warns that such a plugin is someone else's code running inside
+  B3's container with its database and RCON access, asks for the password, and is recorded in the
+  audit log; the folder is mounted read-only.
 
 ### Changed
 
+- **The host page no longer asks sudo every five minutes.** With the panel's helper installed (or the
+  panel running as root) it knows it can run its privileged actions without trying `sudo -n true`,
+  which the helper's narrow grant refuses and sudo logged as "a password is required" each time.
 - **The panel asks game servers for their player counts less often when nobody needs them.** With no
   page showing the counts and no player alert set, the count is refreshed every 90 seconds instead of
   every 45; a page that shows the counts, "notify when empty", "server full" and "new player record"
@@ -71,6 +94,33 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Fixed
 
+- **An add-on that stops again after Start says why.** The add-on card's Start now watches the add-on
+  for 30 seconds, as an install does. If it stops or restarts in that time, it is left stopped and the
+  card shows why, with the lines it logged during that start, instead of a bare "Failed". Those lines,
+  and the add-on's Log, show the game's RCON password and the database's masked. The Log also shows
+  the journal's lines newer than the add-on's own log file, where such a start's reason is. A Stop
+  during the 30 seconds is reported as stopped, and a Start right after it works.
+- **A game download that fails LinuxGSM's checksum ends as a failed install.** The install now checks
+  that the server's executable is where LinuxGSM's own start looks for it, so an archive that failed
+  its MD5 check is no longer reported as installed. It downloads once more, then says which file
+  failed, with its checksum and the one LinuxGSM expects; another LinuxGSM failure is shown in
+  LinuxGSM's own words.
+- **Retrying an install after an interrupted download works.** Every game download now starts with
+  LinuxGSM's download folder emptied, so a partial file left by a connection reset no longer fails
+  every later try, and a failed install leaves no multi-gigabyte partial behind.
+- **Uninstalling no longer brings back an empty journal for an earlier account.** journald
+  re-created an empty user journal for a deleted account at every rotation; the uninstall now
+  removes those too, and only those, on the panel's host and on remote hosts.
+- **Add-ons install on a per-user panel.** The server's account is put in the panel's game group
+  before it is readied for containers, which the readying needs; an account that can reach root is
+  still refused.
+- **A failed add-on step says why.** The host's own words (the helper's, apt's or systemd's) follow
+  the panel's sentence, on the add-on and in the audit log, and the "Installing the add-on" line
+  clears when the install ends.
+- **The Install button stays visible when an add-on needs a database.** It shows disabled, with the
+  reason beside it and an Open Databases button, and says so when the host has no database server yet.
+- **Removing B3 says what goes with it.** The confirmation says its folder, settings and edited plugin
+  settings are deleted and its database is kept.
 - **No restart in the middle of a restore.** Installing, renewing or removing the HTTPS certificate
   waits while a game server is restored or the panel's host is being rebooted.
 - **A rolled-back update keeps the breached-password list.**
@@ -139,6 +189,10 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **An uninstalled server's tmux folder no longer passes to the next account.** Uninstalling a game
+  server now also removes its account's `/tmp/tmux-<uid>` and Java `/tmp/hsperfdata_<account>`
+  folders (only real folders that account owns), so a new account given the same user id doesn't
+  inherit them.
 - **Let's Encrypt certificates must be opened to the panel at install.** The panel copies a certbot
   certificate only when the installer was run with `PANEL_TLS_LE_NAMES=<name>`, so another service's
   certificate on the same host keeps its private key root's. If you already load one through Settings,

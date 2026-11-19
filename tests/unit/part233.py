@@ -95,10 +95,10 @@ def _basics233():
        (_osv233.parse_form({_osv233.UPDATE_CHECK: "on"}), sorted(k for k, v in parsed.items() if v),
         sorted(parsed) == sorted(_osv233.KEYS)),
        ({}, sorted([_osv233.UPDATE_CHECK, _osv233.MODRINTH]), True))
-    eq("outside services: seven switches, the confirm step on the update check and the breached-password "
+    eq("outside services: eight switches, the confirm step on the update check and the breached-password "
        "check only",
        (len(_osv233.SERVICES), sorted(s["key"] for s in _osv233.SERVICES if s.get("confirm"))),
-       (7, sorted([_osv233.UPDATE_CHECK, _osv233.BREACH_CHECK])))
+       (8, sorted([_osv233.UPDATE_CHECK, _osv233.BREACH_CHECK])))
 
 
 # ── 2. the Settings card and its save ────────────────────────────────────────────────────────────
