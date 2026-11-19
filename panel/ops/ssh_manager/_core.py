@@ -22,7 +22,7 @@ paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core import outside_services as _outside
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
-from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4
+from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, checked_key_path, global_ipv4, oserror_text
 from panel.security import privileged as _priv
 from panel.ops import live_read as _live
 from panel.ops import netdev as _netdev
@@ -1301,6 +1301,8 @@ def _connect_client(client, server):
         raise ConnectionError(f"Connection to {server.host}:{server.port} timed out.")
     except socket.gaierror:
         raise ConnectionError(f"Cannot resolve hostname: {server.host}")
+    except OSError as e:   # a key file's error repeats the "path" (key text, once): validation.oserror_text
+        raise ConnectionError("SSH connection failed: " + oserror_text(e)) from None
     except Exception as e:
         raise ConnectionError(f"SSH connection failed: {e}")
 
@@ -1360,7 +1362,7 @@ def key_login_kwargs(cred):
     the agent is never consulted (the panel runs as a service, and an agent that happens to be
     reachable is not a credential anybody configured for this host).
     """
-    if cred:
+    if checked_key_path(cred):   # key text pasted for a path raises KeyTextNotPath (validation)
         return {"key_filename": cred, "allow_agent": False, "look_for_keys": False}
     return {"key_filename": os.path.expanduser("~/.ssh/id_rsa"), "allow_agent": False,
             "look_for_keys": True}

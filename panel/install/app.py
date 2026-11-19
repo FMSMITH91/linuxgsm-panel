@@ -117,7 +117,7 @@ from panel.security.auth import (ALL_PERMISSIONS, R17C_MAX_ROW_ID, accessible_re
     authorize_after_body, audit_username, client_ip, configure_proxy_trust, get_user_permissions,
     init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
-    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
+    DATA_DIR, DB_ENGINE_OPTIONS, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     harden_data_permissions, read_setup_token, remove_setup_token,
     autoblock_host_ids, _r13a_cfg_text, _r15a_cfg_int)
 from panel.services import notifications
@@ -1617,9 +1617,8 @@ def create_app():
     app.config["SECRET_KEY"] = get_secret_key()
     app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    # Wait up to 15s for a locked SQLite DB instead of failing immediately with
-    # "database is locked" — the eventlet workers can briefly contend on writes.
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"timeout": 15}}
+    # The lock wait and hidden bound values: see config.DB_ENGINE_OPTIONS.
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = dict(DB_ENGINE_OPTIONS)
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
     # Idle session timeout (sliding — refreshed on each request). 8h by default so a
     # forgotten browser doesn't stay logged in overnight; configurable.

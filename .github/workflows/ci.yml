@@ -482,7 +482,12 @@ jobs:
 
       - name: Measure
         if: steps.scope.outputs.skip != 'true' && (steps.reuse.outputs.reuse != 'true' || steps.take.outcome != 'success')
-        # --parallel-mode + combine: each suite is its own process, and smoke/rbac fork threads.
+        # Parallel data files + combine: each suite is its own process, and smoke/rbac fork threads.
+        # The settings are .github/coveragerc's (--rcfile): the source, the omitted trees, parallel,
+        # and patch = subprocess + _exit, so the Python processes a suite starts (the SFTP service is
+        # one) are measured too. COVERAGE_FILE puts every data file, the children's included, outside
+        # the checkout: the unit suite reads every file in the tree (a child's .coverage.* written
+        # there mid-run failed its UTF-8 check), and combine reads them all from that one directory.
         # || true on the suites themselves — the gate job decides pass/fail, this one only measures.
         #
         # TIMED PER SUITE, and that is not decoration. This job takes far longer than the same
@@ -492,13 +497,14 @@ jobs:
         # to one that is merely slow, so without a per-suite number there is nothing to reason
         # from. The totals land in the step summary next to the coverage report.
         run: |
+          export COVERAGE_FILE="${RUNNER_TEMP}/coverage-data/.coverage"
+          mkdir -p "${RUNNER_TEMP}/coverage-data"
           echo "| suite | seconds |" > /tmp/suite_times.md
           echo "| --- | ---: |" >> /tmp/suite_times.md
           for suite in unit template_actions smoke rbac manage setup_wizard perf_budget input_validation url_map; do
             _t0=$SECONDS
             rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
-            python -m coverage run --parallel-mode --source=. \
-              --omit="./tests/*,./tools/*,./.venv/*" "tests/${suite}_test.py" >/dev/null 2>&1 || true
+            python -m coverage run --rcfile=.github/coveragerc "tests/${suite}_test.py" >/dev/null 2>&1 || true
             # Both places on purpose: the step summary is for a human skimming the run, the
             # stdout copy is what `gh run view --log` can actually retrieve. The first version of
             # this wrote only the summary, and the numbers turned out to be unreadable from the
@@ -508,11 +514,11 @@ jobs:
           # Timed as well, and separately from the suites: if the suites are not where the job's
           # time goes, it is in these three (combine/xml/report over many statements and several
           # parallel data files). Measure rather than guess.
-          _c0=$SECONDS; python -m coverage combine
+          _c0=$SECONDS; python -m coverage combine --rcfile=.github/coveragerc
           echo "| \`combine\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
-          _c0=$SECONDS; python -m coverage xml -o coverage.xml
+          _c0=$SECONDS; python -m coverage xml --rcfile=.github/coveragerc -o coverage.xml
           echo "| \`xml\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
-          _c0=$SECONDS; python -m coverage report --sort=miss > coverage.txt
+          _c0=$SECONDS; python -m coverage report --rcfile=.github/coveragerc --sort=miss > coverage.txt
           echo "| \`report\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
           {
             echo '### Coverage'

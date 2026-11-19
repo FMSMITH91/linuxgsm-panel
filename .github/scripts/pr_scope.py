@@ -94,12 +94,14 @@ _OTHER_LOCKS = (".github/ci-requirements/**", ".github/ci-requirements-checks/**
 # the installer-side shell scripts and lists (the panel they drive is served from the checkout).
 _NOT_IN_A_BROWSER = ("tests/**", "tools/**", ".github/scripts/**", "install.sh", "panel/install/*.sh",
                      "panel/install/update-stops")
+# coverage.py's settings for the coverage job alone (ci.yml's Measure step, --rcfile).
+_COVERAGE_CONFIG = (".github/coveragerc",)
 JOB_WORKFLOW = {"coverage": ".github/workflows/ci.yml", "js coverage": ".github/workflows/ci.yml",
                 "lighthouse": ".github/workflows/lighthouse.yml"}
 JOB_IRRELEVANT = {
     "coverage": _SCANNER_AND_BOT + _OTHER_LOCKS,
-    "js coverage": _SCANNER_AND_BOT + _OTHER_LOCKS + _NOT_IN_A_BROWSER,
-    "lighthouse": _SCANNER_AND_BOT + _OTHER_LOCKS + _NOT_IN_A_BROWSER,
+    "js coverage": _SCANNER_AND_BOT + _OTHER_LOCKS + _NOT_IN_A_BROWSER + _COVERAGE_CONFIG,
+    "lighthouse": _SCANNER_AND_BOT + _OTHER_LOCKS + _NOT_IN_A_BROWSER + _COVERAGE_CONFIG,
 }
 # Put back: what each job installs or runs from inside an otherwise irrelevant directory.
 _JOB_KEEP = {

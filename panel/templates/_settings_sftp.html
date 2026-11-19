@@ -1,0 +1,93 @@
+{# Settings > SFTP (panel/routes/sftp_settings.py, panel/services/sftp_broker.py). Its own form, outside
+   the Settings form: saving restarts the SFTP service. Values outside the recommendation are saved with
+   a note, never refused. The recommendations, with their sources, are in docs/sftp.md. #}
+{% set sf = sftp_settings_card() %}
+<div class="card mt-3" id="sec-sftp">
+  <div class="card-header"><i class="bi bi-folder-symlink"></i> SFTP</div>
+  <div class="card-body">
+    <div class="small mb-2" id="sftp-state">
+      {% if not sf.s.enabled %}<span class="badge bg-secondary">Off</span> Users cannot sign in to SFTP.
+      {% elif sf.status.state == 'running' %}<span class="badge bg-success">On</span> <span>Listening on</span>
+        {% for b in sf.listening %}<code data-no-i18n>{{ b }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+      {% elif sf.status.state == 'starting' %}<span class="badge bg-info">Starting</span>
+      {% elif sf.status.state == 'waiting' %}<span class="badge bg-warning text-dark">Waiting</span> <span>{{ t(sf.status.error) }}</span>
+      {% else %}<span class="badge bg-danger">Not running</span> <span>{{ t(sf.status.error) }}</span>{% endif %}
+      {% if sf.status.detail %}<code class="d-block text-break" data-no-i18n>{{ sf.status.detail }}</code>{% endif %}
+    </div>
+    {% if sf.fingerprint %}
+    <div class="small mb-2"><span>Host key</span> <code class="text-break" data-no-i18n>{{ sf.fingerprint }}</code>
+      <div class="text-secondary">An SFTP client shows this on its first connection: check it matches before trusting the server.</div></div>
+    {% endif %}
+    <details id="sftp-change"{% if not sf.s.enabled %} open{% endif %}>
+    <summary class="small fw-semibold mb-2">Change the SFTP settings</summary>
+    <form method="POST" action="{{ url_for('sftp_settings_save') }}"
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+      <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" role="switch" id="sftp-enabled" name="sftp_enabled" {% if sf.s.enabled %}checked{% endif %}>
+        <label class="form-check-label small" for="sftp-enabled">SFTP service on</label>
+      </div>
+      <div class="small text-secondary mb-2">Each user signs in with their own panel account and sees one folder for each server they may edit files on.</div>
+
+      <fieldset class="mb-2">
+        <legend class="form-label small mb-1">Listen on</legend>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="sftp_bind" id="sftp-bind-ts" value="tailscale"
+                 {% if sf.bind == 'tailscale' %}checked{% endif %}{% if not sf.tailscale_up %} disabled{% endif %}>
+          <label class="form-check-label small" for="sftp-bind-ts"><span>This host's Tailscale address</span>{% if sf.tailscale_ip %} <code data-no-i18n>{{ sf.tailscale_ip }}</code>{% endif %}</label>
+          <div class="small text-secondary">{% if sf.tailscale_up %}Recommended: only devices on your tailnet can reach it.{% else %}Tailscale is not up on this host.{% endif %}</div>
+        </div>
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="radio" name="sftp_bind" id="sftp-bind-lo" value="loopback" {% if sf.bind == 'loopback' %}checked{% endif %}>
+          <label class="form-check-label small" for="sftp-bind-lo"><span>Only this host</span> <code data-no-i18n>127.0.0.1</code></label>
+          <div class="small text-secondary">For your own VPN or an SSH tunnel to this host.</div>
+        </div>
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="radio" name="sftp_bind" id="sftp-bind-all" value="all" {% if sf.bind == 'all' %}checked{% endif %}>
+          <label class="form-check-label small" for="sftp-bind-all"><span>All addresses</span> <code data-no-i18n>0.0.0.0{% if sf.ipv6 %}, ::{% endif %}</code></label>
+          <div class="small text-warning" id="sftp-all-warning">{{ t(sf.all_warning) }}</div>
+        </div>
+      </fieldset>
+
+      <div class="row g-2">
+        <div class="col-sm-6">
+          <label class="form-label small mb-1" for="sftp-port">Port</label>
+          <input type="number" id="sftp-port" name="sftp_port" min="1" max="65535" class="form-control form-control-sm"
+                 value="{{ sf.s.port }}" required>
+          <div class="small text-secondary mt-1"><span>Default:</span> <span data-no-i18n>{{ sf.default_port }}</span></div>
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small mb-1" for="sftp-cap">Largest upload (MiB)</label>
+          <input type="number" id="sftp-cap" name="sftp_max_upload_mb" min="1" max="1048576" class="form-control form-control-sm"
+                 value="{{ sf.s.cap_mb }}" required>
+          <div class="small text-secondary mt-1"><span>Recommended:</span> <span data-no-i18n>{{ sf.recommended_cap }}</span> <span>MiB. OWASP recommends a size limit on uploads.</span></div>
+          {% if sf.s.cap_mb > sf.recommended_cap %}<div class="small text-warning">Above the recommended limit.</div>{% endif %}
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small mb-1" for="sftp-idle">Close an idle session after (minutes)</label>
+          <input type="number" id="sftp-idle" name="sftp_idle_minutes" min="0" max="1440" class="form-control form-control-sm"
+                 value="{{ sf.s.idle_min }}" required>
+          <div class="small text-secondary mt-1"><span>Recommended:</span> <span data-no-i18n>{{ sf.recommended_idle }}</span> <span>minutes. OWASP recommends 15 to 30 minutes without activity (2 to 5 for high-value applications). 0 never closes one.</span></div>
+          {% if sf.idle_outside %}<div class="small text-warning" id="sftp-idle-note">Outside OWASP's recommendation.</div>{% endif %}
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small mb-1" for="sftp-absolute">Absolute session limit (hours)</label>
+          <input type="number" id="sftp-absolute" name="sftp_absolute_hours" min="1" max="168" class="form-control form-control-sm"
+                 value="{{ sf.s.absolute_h }}" required>
+          <div class="small text-secondary mt-1">OWASP: 4–8 hours.</div>
+          <div class="small text-secondary">After it, a session opens nothing new; a file already open may finish for up to an hour, then the user signs in again.</div>
+          {% if sf.absolute_past %}<div class="small text-warning" id="sftp-absolute-note">Longer than OWASP recommends.</div>{% endif %}
+        </div>
+      </div>
+
+      <div class="form-check form-switch mt-3 mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="sftp-password" name="sftp_password_auth" {% if sf.s.password %}checked{% endif %}>
+        <label class="form-check-label small" for="sftp-password">Also allow the account password with an authenticator code</label>
+      </div>
+      <div class="small text-secondary">Only for accounts with two-factor authentication. Recommended: off, SSH keys only. OWASP recommends limiting what can be guessed; a key cannot be.</div>
+      {% if sf.s.password %}<div class="small text-warning">On: outside the recommendation.</div>{% endif %}
+
+      <button type="submit" class="btn btn-sm btn-primary mt-3"><i class="bi bi-save"></i> Save SFTP settings</button>
+    </form>
+    </details>
+  </div>
+</div>

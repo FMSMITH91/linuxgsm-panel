@@ -17,6 +17,12 @@ from panel.core import cred_keyring as _kr
 DATA_DIR = HERE / "data"
 CONFIG_FILE = DATA_DIR / "config.json"
 DB_PATH = DATA_DIR / "panel.db"
+# SQLAlchemy engine options for every app that opens DB_PATH. timeout: wait up to 15 s for a locked
+# SQLite file rather than failing at once with "database is locked" (the eventlet workers briefly
+# contend on writes). hide_parameters: a database error's message, and so every traceback that logs
+# it, otherwise lists the statement's bound values, and those include session ids, token digests,
+# password hashes and other secrets (OWASP Logging Cheat Sheet, "Data to exclude").
+DB_ENGINE_OPTIONS = {"connect_args": {"timeout": 15}, "hide_parameters": True}
 SECRET_FILE = DATA_DIR / "secret_key"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -56,6 +56,7 @@ The panel never runs as root, serves HTTPS by default, hashes passwords with Arg
 - [configuration.md](configuration.md): `config.json` settings, production deployment, the nginx block, Headscale.
 - [https.md](https.md): the ways to serve the panel over HTTPS, and bans behind a proxy or tunnel.
 - [addons.md](addons.md): admin tools (IW4MAdmin, B3) in locked-down containers beside a game server.
+- [sftp.md](sftp.md): the built-in SFTP service: each user signs in with their own account and sees the servers they may edit.
 - [permissions.md](permissions.md): every permission, the panel owner, the Databases manager.
 - [security-features.md](security-features.md): passwords, 2FA, sessions, encryption at rest, and recovering a locked-out panel.
 - [PRIVACY.md](PRIVACY.md), [THREAT-MODEL.md](THREAT-MODEL.md), [NTFY-SELF-HOST.md](NTFY-SELF-HOST.md) and the [security policy](../.github/SECURITY.md).

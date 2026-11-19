@@ -400,11 +400,11 @@ else:
 _tm223 = _read223("docs", "THREAT-MODEL.md")
 _ptr223 = sorted({p for p in _re223.findall(r"`((?:panel|tools|tests|docs|\.github)/[A-Za-z0-9_./-]+)`", _tm223)})
 _missing223 = [p for p in _ptr223 if not os.path.exists(os.path.join(_root, p.rstrip("/")))]
-check("threat model: docs/THREAT-MODEL.md answers the four questions, covers TB1-TB8 with STRIDE tables, says "
+check("threat model: docs/THREAT-MODEL.md answers the four questions, covers TB1-TB9 with STRIDE tables, says "
       "the response to each residual risk, and every file it points at exists; SECURITY.md links to it",
       all(q in _tm223 for q in ("What are we working on?", "What can go wrong?", "What are we going to do about it?",
                                 "Did we do a good enough job?"))
-      and all("### TB%d:" % i in _tm223 for i in range(1, 9)) and _tm223.count("| STRIDE |") == 8
+      and all("### TB%d:" % i in _tm223 for i in range(1, 10)) and _tm223.count("| STRIDE |") == 9
       and "## Residual risks" in _tm223 and len(_ptr223) >= 25 and not _missing223
       and "](../docs/THREAT-MODEL.md)" in _read223(".github", "SECURITY.md"),
       repr((_missing223, len(_ptr223))))

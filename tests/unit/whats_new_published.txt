@@ -806,3 +806,5 @@ e8916ec3 B3's settings on its card.
 de047a6a The host page no longer asks sudo every five minutes.
 3181e4e9 An uninstalled server's tmux folder no longer passes to the next account.
 b27c1f45 An add-on that stops again after Start says why.
+ae0ddd0b SFTP for every user, with their own login.
+509b3519 A private key pasted where a key path belongs is no longer written to the log.

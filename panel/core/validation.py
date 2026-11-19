@@ -61,6 +61,77 @@ SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}\Z""")
 # `is_local`, never by an edit.
 EDITABLE_AUTH_METHODS = ("key", "password", "tailscale")
 
+# A KEY login's credential is the PATH of a private key file on the panel host, never the key's
+# text. Pasting the key itself is an easy mistake, and it used to reach paramiko as a file name:
+# open() failed, and the FileNotFoundError, whose message is the "path", i.e. the whole private
+# key, was logged with its traceback into the system journal. OWASP Logging Cheat Sheet, "Data to
+# exclude": encryption keys and other primary secrets are not recorded. So text that cannot be a
+# path is refused before anything opens it, and the refusal never repeats it.
+_PATH_MAX = 4096    # Linux PATH_MAX, terminating NUL included
+_NAME_MAX = 255     # Linux NAME_MAX: the longest single path component
+KEY_TEXT_REFUSED = ("The key field takes the path of a private key file on the panel host (for "
+                    "example /home/panel/.ssh/id_ed25519), not the key itself. Nothing was sent or "
+                    "saved. Put the key in a file the panel's account can read and enter its path.")
+
+
+def key_text_problem(auth_method, credential):
+    """KEY_TEXT_REFUSED when a key login's credential looks like key text, not a path; else None.
+
+    Key text: a PEM or OpenSSH header (`-----BEGIN`), a line break or any other control character,
+    or a length no file name can have. A password is not judged here: any text may be one.
+    """
+    if auth_method != "key" or not credential:
+        return None
+    if "-----BEGIN" in credential or any(ord(c) < 32 or ord(c) == 127 for c in credential):
+        return KEY_TEXT_REFUSED
+    if len(credential) >= _PATH_MAX or any(len(p) > _NAME_MAX for p in credential.split("/")):
+        return KEY_TEXT_REFUSED
+    return None
+
+
+class KeyTextNotPath(ValueError):
+    """A key login's stored credential is key text, not a path; refused before anything opens it.
+
+    A row edited before the forms refused key text can hold one. Opened as a file name, it came back
+    as an OSError whose message is the whole key, and that reached the journal and the page.
+    """
+
+    def __init__(self):
+        """The one fixed sentence; nothing of the credential is in it."""
+        super().__init__("The stored SSH key path for this host holds key text, not a path, so it "
+                         "was not used. Edit the host and enter the path of the key file on the "
+                         "panel host.")
+
+
+def checked_key_path(credential):
+    """`credential` (a key path, or "") as given; KeyTextNotPath when it is key text (key_text_problem)."""
+    if key_text_problem("key", credential):
+        raise KeyTextNotPath()
+    return credential
+
+
+def oserror_text(exc):
+    """What may be said of an OSError: its text, or the OS's sentence alone when it names a file.
+
+    A file error's message repeats the file name it was given, and a key file's "name" was the whole
+    private key when key text reached paramiko. Socket errors name no file and read as they are.
+    """
+    if getattr(exc, "filename", None) is None:
+        return str(exc)
+    return "the key file could not be read (%s)." % (exc.strerror or type(exc).__name__)
+
+
+def exc_label(exc):
+    """`exc` named by its class, and an OSError's errno name: never its message.
+
+    An exception raised while opening a key or signing in can carry the credential itself (see
+    oserror_text). OWASP Logging Cheat Sheet, "Data to exclude": keys and passwords are not
+    recorded. So those paths log this label beside a fixed sentence, and no traceback.
+    """
+    import errno
+    code = errno.errorcode.get(getattr(exc, "errno", None) or -1) if isinstance(exc, OSError) else None
+    return "%s (%s)" % (type(exc).__name__, code) if code else type(exc).__name__
+
 # ── IP addresses and networks ─────────────────────────────────────────────
 # ipaddress parses an IPv6 ZONE ID (the scope after '%') and keeps it VERBATIM. 'fe80::1%x y',
 # 'fe80::1%$(id)' and 'fe80::1%' + a newline + 'FAKE' all parse, and str() hands the text back with

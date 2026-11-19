@@ -767,6 +767,26 @@ def _r16d_name_of(x):
     return str(getattr(x, "id", "") or getattr(x, "attr", "") or getattr(x, "value", ""))
 
 
+def _check_db_errors_hide_bound_values():
+    """A database error names no bound value: the panel's engine runs with hide_parameters.
+
+    Its message, and every traceback logged with it, otherwise lists the statement's values (session
+    ids, token digests, password hashes). OWASP Logging Cheat Sheet, "Data to exclude".
+    """
+    from sqlalchemy import text as _sql_text
+    bound = "iv-bound-value-0001"
+    said = ""
+    with app.app_context():
+        try:
+            db.session.execute(_sql_text("INSERT INTO iv_no_such_table VALUES (:v)"), {"v": bound})
+        except Exception as e:  # noqa: BLE001 - the error's text is what is checked
+            said = str(e)
+        db.session.rollback()
+        hidden = db.engine.hide_parameters
+    check("db errors: a failing statement's error names none of its bound values (hide_parameters)",
+          bool(said) and bound not in said and hidden, said[:300])
+
+
 def _check_no_port_parsed_with_int_or():
     """No port is parsed with _int_or, the parser without a range."""
     # ── Structural: a port field must go through the bounded parser ──────────────────────────
@@ -855,6 +875,7 @@ try:
     _check_json_field_types()
     _check_tailscale_control_server(c)
     _check_no_port_parsed_with_int_or()
+    _check_db_errors_hide_bound_values()
 
 except Exception as exc:                      # a crash in the harness is a failure, not a pass
     import traceback

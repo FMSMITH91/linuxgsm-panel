@@ -16,7 +16,8 @@ from panel.security.account_guard import step_up_required
 from panel.core import i18n
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, canonical_host, LINUX_USER_RE, MAX_PORT,
-    MIN_PORT, SAFE_LABEL_RE, _port_or, host_key_fingerprint_arg, host_key_sha256, ip_address_or_none)
+    MIN_PORT, SAFE_LABEL_RE, _port_or, host_key_fingerprint_arg, host_key_sha256, ip_address_or_none,
+    key_text_problem)
 from panel.core.panel_state import (forget_rows)
 from panel.routes import databases as _dbr
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
@@ -246,7 +247,7 @@ def _register_remote_list(app):
         is_local = request.form.get("is_local") == "1"
 
         _bad = (_add_remote_field_error(name, ssh_port, lgsm_user, ssh_user)
-                or _add_remote_target_error(is_local, host, auth_method))
+                or _add_remote_target_error(is_local, host, auth_method, credential))
         if _bad:
             return _form_err(_bad, "manage_remotes")
         _refused = _delegated_add_refusal(is_local, auth_method)
@@ -333,9 +334,9 @@ def _register_remote_edit(app):
         # user, and the guards below are all `if new_x and …`, which an empty string skips. A
         # remote with host "" is unreachable and its game servers unmanageable.
         new_user = _edited("ssh_user", remote.username)
-        # SECURITY: validate the username field (it reaches `sudo -u <user>` / SSH commands).
-        if not LINUX_USER_RE.match(new_user):
-            return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
+        _bad = _edit_user_or_key_refusal(remote, new_user)
+        if _bad:
+            return _form_err(_bad, "manage_remotes")
         new_name = _edited("name", remote.name)
         if not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
@@ -374,6 +375,19 @@ def _register_remote_edit(app):
             return _form_err(_same, "manage_remotes", code=409)
         log_action(current_user, "edit_remote", target=remote.name, remote=remote)
         return _form_ok(i18n.tr("Remote '{name}' updated.", name=remote.name), "manage_remotes")
+
+
+def _edit_user_or_key_refusal(remote, new_user):
+    """Why edit_remote refuses its SSH user or its credential before any field changes, or None.
+
+    Key text in the key PATH field is refused first, whatever else the form holds, and never repeated
+    (validation.key_text_problem). SECURITY: the username reaches `sudo -u <user>` and SSH commands,
+    so it is held to LINUX_USER_RE.
+    """
+    why = key_text_problem(_edited("auth_method", remote.auth_method), request.form.get("credential", "").strip())
+    if why:
+        return i18n.tr(why)
+    return None if LINUX_USER_RE.match(new_user) else "SSH user must be a valid Linux username."
 
 
 def _r36c_delete_refused(remote):
@@ -703,8 +717,11 @@ def _r36c_retarget_refusal(remote, new_host, new_port, new_user):
     return (why, 409) if why else (None, None)
 
 
-def _add_remote_target_error(is_local, host, auth_method):
-    """Why the add form's host or sign-in method is refused, or None; the local branch sets its own.
+def _add_remote_target_error(is_local, host, auth_method, credential=""):
+    """Why the add form's host, sign-in method or key path is refused, or None; the local branch sets its own.
+
+    Key text pasted into the key PATH field is refused before anything opens it or logs it, and the
+    refusal never repeats it (validation.key_text_problem).
 
     Whether another row already is that host is asked by the caller under a claim (r36j_host_claim),
     after the delegated-admin refusal: asked here, before it, a refused request still learned it.
@@ -719,7 +736,8 @@ def _add_remote_target_error(is_local, host, auth_method):
     # non-local path — the branch below hardcodes auth_method="local" on purpose.
     if not is_local and auth_method not in EDITABLE_AUTH_METHODS:
         return "Unknown authentication method."
-    return None
+    why = key_text_problem(auth_method, credential)
+    return i18n.tr(why) if why else None
 
 
 def _add_local_remote(name, lgsm_user):

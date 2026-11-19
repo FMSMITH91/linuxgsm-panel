@@ -231,7 +231,8 @@ def _backup_refs(db_file, ring, refs):
     path = os.path.abspath(db_file + ".backup")
     if not os.path.exists(path):
         return True
-    eng = create_engine("sqlite:///file:%s?mode=ro&uri=true" % quote(path), poolclass=NullPool)
+    eng = create_engine("sqlite:///file:%s?mode=ro&uri=true" % quote(path), poolclass=NullPool,
+                        hide_parameters=True)
     try:
         with eng.connect() as conn:
             return all(_backup_column_refs(conn, ring, refs, tname, cname) for tname, _pk, cname in _text_columns())
