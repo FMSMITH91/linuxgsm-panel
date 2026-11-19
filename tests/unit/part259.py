@@ -246,10 +246,12 @@ check("sftp card: the Settings page shows the card, the three choices and the wa
 _saved_auth259 = _p9_client(P9_ADMIN)
 with _saved_auth259.session_transaction() as _s259:
     _s259["_auth_at"] = _time259.time() - 86400
+_cap_before259 = _sc259.settings(_cfg259.load_config())["cap_mb"]
 eq("sftp card: a stale sign-in confirms its password before saving (step-up)",
-   _saved_auth259.post("/settings/sftp", data={"sftp_bind": "loopback", "sftp_port": "2222",
+   _saved_auth259.post("/settings/sftp", data={"sftp_bind": "loopback", "sftp_port": "2222", "sftp_idle_minutes": "15",
                                                 "sftp_max_upload_mb": "1"}).status_code, 302)
-eq("sftp card: ...and the stale post changed nothing", _sc259.settings(_cfg259.load_config())["cap_mb"], 9000)
+eq("sftp card: ...and the stale post (a valid form) changed nothing",
+   (_cap_before259 != 1, _sc259.settings(_cfg259.load_config())["cap_mb"]), (True, _cap_before259))
 
 # The fail2ban jail: the SFTP port is banned on too, only while it listens on every address.
 _put_cfg259(sftp_enabled=True, sftp_bind="all", sftp_port=2201)
