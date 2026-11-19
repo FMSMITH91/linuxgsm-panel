@@ -867,3 +867,76 @@ check("B3 image: ...the id changes with the base digest and with a build file, i
       "(control), and a missing build file still gives an id instead of stopping the panel's start",
       _bid261["base"] != _bid261["real"] and _bid261["lock"] != _bid261["real"] and _bid261["copy"] == _bid261["real"]
       and len(_bid261["missing"]) == 8 and _bid261["missing"] != _bid261["lock"], repr(_bid261))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 8. The backup routes that ask for step-up: restore, upload, delete, settings — asked in place
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _backup_callers261():
+    """Each backup caller sends nothing while stepUpThen holds, sends once it runs, and a cancel reads back."""
+    src = "\n".join(_cut249(_js249(f), "function %s(" % n) for f, names in (
+        ("server_backup_restore.js", ("_grsStepUp", "uploadBkPicked", "_uploadBkNow", "restoreBk")),
+        ("remote_manage_backups.js", ("_bkStepUp", "saveBackupSettings", "_saveBackupSettingsNow", "restoreGameBackup",
+                                      "deleteBackup", "saveBackupPassphrase", "clearBackupPassphrase")))
+        for n in names)
+    prog = r"""
+var calls = [], gate = {run: false}, cancels = [];
+var window = {STEP_UP_TOTP: false, toast: function(){},
+  stepUpThen: function(go, totp, cancelled){ calls.push(['stepUp', totp]); if (gate.run) go(); else if (cancelled) cancels.push(cancelled); },
+  backupUpload: function(file, base){ calls.push(['upload', base]); return {then: function(){ return {catch: function(){}}; }}; }};
+var MOUNT = '', serverId = 5, SERVER_NAME = 'gs';
+var chain = {then: function(){ return chain; }, catch: function(){ return chain; }};
+function fetch(url, init){ calls.push(['fetch', url, (init || {}).method || 'GET']); return chain; }
+function _r30c_bkSave(url, body){ calls.push(['fetch', url, 'POST']); return chain; }
+var reads = 0; function loadBackups(){ reads++; } function fbSummary(){} function bkMsg(){} function bkReconcile(){ return ''; }
+function el(){ return {value: '7', checked: true, disabled: false, innerHTML: '', getAttribute: function(){ return 'x'; },
+                       focus: function(){}, className: '', textContent: ''}; }
+var els = {'bk-pass': {value: 'a-long-passphrase'}};
+var document = {getElementById: function(id){ return els[id] = els[id] || el(); }};
+function confirmDialog(o){ o.onConfirm(); }
+function t(s){ return s; } function tf(s){ return s; }
+""" + src + r"""
+function act(){
+  uploadBkPicked({files: [{name: 'b.tar.gz'}]}); restoreBk(el()); saveBackupSettings(); restoreGameBackup(el());
+  deleteBackup('p.tar.gz', el()); saveBackupPassphrase(el()); clearBackupPassphrase(el());
+}
+act(); var held = calls.slice(); calls = [];
+cancels.forEach(function(f){ f(); });
+var readsAfterCancel = reads; gate.run = true; act();
+console.log(JSON.stringify({held: held, readsAfterCancel: readsAfterCancel,
+  ran: calls.filter(function(c){ return c[0] !== 'stepUp'; }).map(function(c){ return c[1] + ' ' + (c[2] || ''); })}));
+"""
+    return _node221("step-up js (backup routes)", prog)
+
+
+_bkc261 = _backup_callers261()
+if _bkc261 is not None:
+    eq("step-up (node): a game server's backup upload and restore (Files & Config and the host page), a panel backup's "
+       "delete and the backup settings and passphrase only ask stepUpThen while it holds, then send to their routes",
+       (_bkc261.get("held"), _bkc261.get("ran")),
+       ([["stepUp", False]] * 7,
+        ["/api/panel/backup/game/5/upload ", "/api/panel/backup/game/5/restore POST", "/api/panel/backup/settings POST",
+         "/api/panel/backup/game/x/restore POST", "/api/panel/backup/delete POST", "/api/panel/backup/settings POST",
+         "/api/panel/backup/settings POST"]))
+    eq("step-up (node): ...and a cancelled password dialog after a settings switch was flipped reads the stored "
+       "settings back (once), so the card shows what is saved", _bkc261.get("readsAfterCancel"), 1)
+
+_CDJS261 = (_DOM249 + r"""
+""" + _cut249(_js249("panel.js"), "function _cdHost(") + "\n" + _cut249(_js249("panel.js"), "window.confirmDialog = function(")
+            + r"""
+function escapeHtml(s){ return String(s); } function _cdInputHtml(){ return ''; } function _cdFillBody(){}
+function _cdGateConfirm(){}
+const seen = [];
+function open(){ confirmDialog({title: 'x', onConfirm: () => seen.push('confirm'), onCancel: () => seen.push('cancel')});
+  return document.body.children[document.body.children.length - 1]; }
+let ov = open(); ov.querySelector('[data-cd="cancel"]').onclick(); ov.querySelector('[data-cd="cancel"]').onclick();
+ov = open(); ov.querySelector('[data-cd="ok"]').onclick();
+ov = open(); (ov.listeners.keydown || []).forEach(f => f({key: 'Escape', stopPropagation(){}}));
+confirmDialog({title: 'no hook', onConfirm: () => seen.push('confirm2')});
+document.body.children[document.body.children.length - 1].querySelector('[data-cd="cancel"]').onclick();
+console.log(JSON.stringify(seen));
+""")
+_cd261 = _run249("confirm dialog (node): the cancel hook", _CDJS261)
+if _cd261 is not None:
+    eq("confirm dialog (node): Cancel calls onCancel once (a second press does nothing), Confirm never does, Escape "
+       "does, and a dialog without the hook cancels quietly", _cd261, ["cancel", "confirm", "cancel"])
