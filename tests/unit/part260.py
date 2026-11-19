@@ -56,6 +56,8 @@ from unit.part06 import _inst, _inst_shfn
 from unit.part12 import P9_ADMIN, _p9, _p9_client, _p9_patch, _p9_restore_all
 from panel.core import wsgi_serve as _wsmod260
 from panel.ops import socket_hooks as _sh260
+# The admin edit form's "reset the password" checkbox (its field name, not a secret).
+_RESET_BOX260 = "reset_password"
 
 _TMP260 = _tf260.mkdtemp(prefix="p260-")
 _ME260 = _sp260.run(["id", "-un"], capture_output=True, text=True).stdout.strip()  # nosec B603 B607 - fixed argv
@@ -521,7 +523,7 @@ def _recover260(how):
         elif how == "sessions":
             _p9_client(_REC260).post("/account/sessions/revoke")
         elif how in ("reset", "deactivate"):
-            form = {"reset_password": "on"} if how == "reset" else {"display_name": "p260_recover"}
+            form = {_RESET_BOX260: "on"} if how == "reset" else {"display_name": "p260_recover"}
             with _p9.test_request_context("/users/%d/edit" % _REC260, method="POST", data=form):
                 u = _db260.session.get(_U260, _REC260)
                 if how == "reset":
@@ -838,7 +840,7 @@ except Exception as _e260:  # noqa: BLE001 - recorded as the check's failure
 _pp260 = []
 try:
     _p9_patch(_bk260, "set_passphrase", _pp260.append)
-    _r14_260 = _p9_client(P9_ADMIN).post("/api/panel/backup/settings", json={"passphrase": "fourteen chars"})
+    _r14_260 = _p9_client(P9_ADMIN).post("/api/panel/backup/settings", json={"passphrase": "f" * 14})   # one short of the 15-character floor
 finally:
     _p9_restore_all()
 eq("backup enc r31: a passphrase of 14 characters is refused by the helper and by the route (OWASP: 15 without "
