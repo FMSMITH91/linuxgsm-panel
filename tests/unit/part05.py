@@ -7016,12 +7016,36 @@ finally:
 # .ssh/id_ed25519` dropped to the operator's account and handed its private key to the panel user,
 # lgsm-command ran that account's scripts as it, and the destroy verbs would `userdel -r` it. Driven
 # through validate(), the dispatcher's own check, with the invoking account set by SUDO_UID.
-_ga_verbs = ["content-dir-create", "content-game-present", "content-script-present",
-             "content-game-remove", "content-cron-write", "content-cron-remove",
-             "content-grant-read", "gmod-mount-read", "renice-users", "crontab-list",
-             "user-lock-password", "steam-dumps-sweep", "game-backup-read", "game-file-read",
-             "game-dir-tar", "lgsm-command", "user-delete", "user-delete-force",
-             "user-kill-processes", "user-remove-home"]
+_GA_CHECKS = (_helper.v_game_account, _helper.v_destroyable_user)
+
+
+def _ga_check_of(validator):
+    """The per-argument check a VERBS validator applies (a Rest applies its own to each argument)."""
+    return validator.check if isinstance(validator, _helper.Rest) else validator
+
+
+def _ga_slots(verb):
+    """The argument slots of `verb` that must name an account inside the game group."""
+    return [i for i, v in enumerate(_helper.VERBS[verb][0]) if _ga_check_of(v) in _GA_CHECKS]
+
+
+# Every verb the helper has with such a slot, read from its own table: a hand-written list missed six
+# (addon-account-prepare/-release, cron-run-now, crontab-remove, db-import, journal-cron-account).
+_ga_verbs = sorted(v for v in _helper.VERBS if _ga_slots(v))
+# The verbs that take an account with v_managed_user (uid 0 refused, nothing else) instead, each for a
+# reason: user-create makes the account, so it is not in the group yet; gameuser-group is what puts it
+# there. Any other verb moved to v_managed_user would act on the operator's own account.
+_GA_MANAGED_OK = {"gameuser-group": "enrols an account into the game group",
+                  "user-create": "creates the account, before it is in the group"}
+_ga_managed = sorted(v for v, spec in _helper.VERBS.items() if v not in _ga_verbs
+                     and any(_ga_check_of(x) is _helper.v_managed_user for x in spec[0]))
+eq("helper: every verb that names an account checks it against the game group, but the reasoned "
+   "v_managed_user ones (a verb moved to v_managed_user would reach the operator's account)",
+   _ga_managed, sorted(_GA_MANAGED_OK))
+check("helper: ...the per-account verbs are read from VERBS itself, the six once missed among them (control)",
+      len(_ga_verbs) >= 26 and {"addon-account-prepare", "addon-account-release", "cron-run-now", "crontab-remove",
+                                "db-import", "journal-cron-account", "game-file-read", "renice-users"} <= set(_ga_verbs),
+      repr(_ga_verbs))
 _ga_users = {"lgsmpanel": 990, "ubuntu": 1000, "cssserver": 1001, "deployer": 1002, "alice": 1003}
 _ga_groups = {"sudo": ["ubuntu"], "lgsmpanel-games": ["cssserver"]}
 
@@ -7043,13 +7067,13 @@ def _ga_pwuid(uid):
 
 
 def _ga_args(verb, who):
-    """The verb's sample arguments with every ACCOUNT slot naming `who`."""
+    """The verb's sample arguments with every ACCOUNT slot naming `who` (a Rest slot: `who` alone)."""
     _a = list(_VERB_SAMPLES[verb])
-    if verb == "renice-users":
-        return [_a[0], who]
-    if verb == "content-grant-read":
-        return [who, _a[1], who] + _a[3:]
-    return [who] + _a[1:]
+    for _i in _ga_slots(verb):
+        if isinstance(_helper.VERBS[verb][0][_i], _helper.Rest):
+            return _a[:_i] + [who]
+        _a[_i] = who
+    return _a
 
 
 def _ga_refused(verb, who):
