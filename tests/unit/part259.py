@@ -213,7 +213,7 @@ eq("sftp card: saving 'all addresses' stores it, restarts the service, and warns
    (_r259.status_code, _sc259.settings(_cfg259.load_config())["bind"], len(_restarts259),
     any("reachable from the internet" in m for m in _f259)), (302, "all", 1, True))
 check("sftp card: the warning names the firewall as the operator's to open, and keys as the default",
-      "does not open the port in the firewall" in _ss259.__doc__ + _br259.__doc__ + " ".join(_f259)
+      "does not open the port in the firewall" in " ".join(_f259)
       and "limited to SSH keys" in " ".join(_f259), repr(_f259))
 _save259(sftp_bind="loopback")
 eq("sftp card: no warning for 127.0.0.1", any("reachable from the internet" in m for m in _flashed259()), False)

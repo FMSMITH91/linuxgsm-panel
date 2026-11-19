@@ -610,11 +610,17 @@ def _sign_repo247():
     return sb, key, bare, dev, gh
 
 
+# One fixed committer date for every commit here: sign-release names a release from the commit's UTC
+# day, so commits made on the real clock either side of midnight UTC got two days' names (no ".2").
+_DAY247 = "2026-03-04T12:00:%02d+00:00"
+
+
 def _commit247(dev, n):
     with open(os.path.join(dev, "panel", "x%d.py" % n), "w", encoding="utf-8") as fh:
         fh.write("X = %d\n" % n)
     _git247("-C", dev, "add", ".")
-    _git247("-C", dev, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "c%d" % n)
+    _git247("-C", dev, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "c%d" % n,
+            env=dict(_ENV142, GIT_COMMITTER_DATE=_DAY247 % n, GIT_AUTHOR_DATE=_DAY247 % n))
     _git247("-C", dev, "push", "-q", "origin", "main")
     return _git247("-C", dev, "rev-parse", "HEAD")
 
