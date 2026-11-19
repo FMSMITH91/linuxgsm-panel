@@ -85,12 +85,14 @@ class _Panel267:
         return {"ok": True}
 
 
+# The service settings' password sign-in switch (a yes/no, not a secret).
+_PWSWITCH267 = "password"
 _ACCEPTED267 = {"ok": True, "uid": 1, "epoch": 0, "name": "u267", "fp": "SHA256:k267"}
 
 
 def _service267(panel):
     svc = object.__new__(_ss267.Service)
-    svc.panel, svc.cfg, svc.host_key = panel, {"password": False}, _HOST_KEY267
+    svc.panel, svc.cfg, svc.host_key = panel, {_PWSWITCH267: False}, _HOST_KEY267
     svc._lock, svc._conns, svc._unauth, svc._db_app = _th267.Lock(), 0, {}, None
     return svc
 
