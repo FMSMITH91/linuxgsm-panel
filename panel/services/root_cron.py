@@ -163,7 +163,7 @@ def stored_command(typed):
 
 
 def rows(text):
-    """Each line of root's crontab as {n, kind, raw, schedule, command, mixed, stdin}; kind as root_cron_line_kind.
+    r"""Each line of root's crontab as {n, kind, raw, schedule, command, mixed, stdin}; kind as root_cron_line_kind.
 
     `command` is what cron runs; `stdin` what cron gives it as standard input (text after a bare `%`),
     else None; `mixed` that the command holds `\\`, which crons read differently, so `command` is the

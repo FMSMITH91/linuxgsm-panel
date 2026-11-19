@@ -1,4 +1,4 @@
-"""Part 268 of the unit suite: review pass 33's security fixes in world reset and the root cron page.
+r"""Part 268 of the unit suite: review pass 33's security fixes in world reset and the root cron page.
 
 1. World reset's start parameters are bounded: past what a server can be started with (131,072
    characters, before or after the settings are put in) they are refused, and building them stops at
@@ -6,7 +6,7 @@
 2. A value of only `--port` / `++ port` counts as possibly setting port (another line's arithmetic
    would decrement or increment it), and so does bash 5.3's `${ cmd; }` / `${| cmd; }`, which runs in
    the config's own shell.
-3. Root cron: a command typed with `\\%` (the crontab way) is stored so that cron runs it whole and the
+3. Root cron: a command typed with `\%` (the crontab way) is stored so that cron runs it whole and the
    page shows what cron runs; two backslashes in a row (which Debian's and cronie's cron read
    differently) are refused; a job holding them, or a bare `%` feeding it standard input, is shown
    with a note and offers Delete only.
