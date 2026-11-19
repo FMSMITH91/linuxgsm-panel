@@ -1152,9 +1152,10 @@ global.fetch = (url) => Promise.resolve({ok: true, json: () => Promise.resolve({
 global.confirmDialog = o => { opts = o; }; global.t = s => s;
 global.document = {createElement: () => ({appendChild(){}, style: {}}), addEventListener(){}};
 """ + _js249("step_up_form.js") + r"""
-(async () => { const cb = () => 1; let went = 0;
+(async () => { let cancels = 0; const cb = () => { cancels++; }; let went = 0;
   window.stepUpThen(() => { went++; }, false, cb); await settle();
-  console.log(JSON.stringify({passed: !!opts && opts.onCancel === cb, went})); })();
+  if (opts && opts.onCancel) opts.onCancel();
+  console.log(JSON.stringify({passed: cancels === 1, went})); })();
 """)
 _su261 = _run249("step-up form (node): the cancel hook passed on", _SUJS261)
 if _su261 is not None:
