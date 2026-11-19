@@ -399,16 +399,22 @@ def _close259(pair):
 
 
 def _own_address259():
-    """This host's own IPv4 address on a non-loopback interface, or None (no packet is sent)."""
+    """This host's own IPv4 address on an interface other than loopback, or None (asked of the kernel only)."""
+    import fcntl as _fcntl259
+    import struct as _struct259
     s = _socket259.socket(_socket259.AF_INET, _socket259.SOCK_DGRAM)
     try:
-        s.connect(("192.0.2.1", 9))           # a UDP connect only picks the source address
-        addr = s.getsockname()[0]
-    except OSError:
-        return None
+        for _i, name in _socket259.if_nameindex():
+            try:
+                raw = _fcntl259.ioctl(s.fileno(), 0x8915, _struct259.pack("256s", name[:15].encode()))  # SIOCGIFADDR
+            except OSError:
+                continue                       # no IPv4 address on this interface
+            addr = _socket259.inet_ntoa(raw[20:24])
+            if not addr.startswith("127."):
+                return addr
     finally:
         s.close()
-    return None if addr.startswith("127.") or addr == "0.0.0.0" else addr  # nosec B104 - compared only
+    return None
 
 
 def _until259(cond, limit=10.0):
@@ -671,8 +677,9 @@ else:
         if _pnv[0]:
             eq("sftp authz: edit_files alone shows the folder, but reading it needs view_files too",
                (_pnv[1].listdir("/"), _sftp_err259(_pnv[1].listdir, "/Alpha One")[:15],
-                _sftp_err259(_pnv[1].putfo, _io259.BytesIO(b"w"), "/Alpha One/write-only.txt")),
-               (["Alpha One"], "PermissionError", "ok"))
+                _sftp_err259(lambda p: _pnv[1].putfo(_io259.BytesIO(b"w"), p, confirm=False), "/Alpha One/write-only.txt"),
+                _read259(os.path.join(_HOME_A, "write-only.txt"))),
+               (["Alpha One"], "PermissionError", "ok", b"w"))
         else:
             check("sftp authz: edit_files alone shows the folder, but reading it needs view_files too", False,
                   repr(_pnv[1]))
