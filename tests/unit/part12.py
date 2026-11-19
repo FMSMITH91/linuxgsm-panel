@@ -3987,9 +3987,10 @@ check("docs: SECURITY.md shows the helper's Defaults! line exactly as install.sh
 # reads the host over SSH. A part that renders the page without stubbing them left that thread to run
 # at the next hub switch, after its own stubs were gone: against the fixture address for real, or
 # into a later part's tripwire. From here on _shared's Thread records such a thread instead of
-# starting it, names the part that asked for it (part250 checks the list is empty), and forgets the
-# rate limit, so the next render that misses its stub is named too. A part that tests the resolvers
-# themselves (part18) swaps _shared.threading for part12's queue first, and is not recorded.
+# starting it, names the part that asked for it (part15, which runs last, checks the list is empty;
+# part250 holds the control), and forgets the rate limit, so the next render that misses its stub is
+# named too. A part that tests the resolvers themselves (part18) swaps _shared.threading for part12's
+# queue first, and is not recorded.
 _p9_over_cls = __import__("unit.part10", fromlist=["_Over"])._Over   # (part10's module-object stand-in)
 P9_RESOLVER_THREADS = []
 
@@ -4034,8 +4035,8 @@ _p9_sh.threading = _p9_over_cls(_p9_real_threading, Thread=_p9_resolver_thread)
 # ── which request ran with the transport tripwire off (review 1118 T13/T14) ───────────────────────
 # A part that ends on "nothing reached a real transport" proves it only for what ran ARMED: a route
 # driven after a bare _p9_restore_all() records no trip whatever it reaches. Every request on this
-# app notes the part that sent it when the real get_connection is in place; part250 checks that no part
-# holding such a check sent one.
+# app notes the part that sent it when the real get_connection is in place; part15 (which runs last)
+# checks that no part holding such a check sent one, and part250 holds the control.
 P9_UNARMED_REQUESTS = []
 
 

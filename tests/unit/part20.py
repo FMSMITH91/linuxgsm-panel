@@ -509,15 +509,26 @@ def _p20_dependencies():
     _p20_real_pins()
 
 
+def _p20_lock_pins():
+    """Read every name==version line of the checkout's requirements.txt, by plain splitting (not _PIN_RE)."""
+    with open(os.path.join(SO.install_dir(), "requirements.txt"), encoding="utf-8") as f:
+        lines = [ln for ln in f.read().splitlines() if ln[:1].isalnum() and "==" in ln]
+    return [(ln.split("==", 1)[0].split("[", 1)[0], ln.split("==", 1)[1].split()[0].split(";", 1)[0])
+            for ln in lines]
+
+
 def _p20_real_pins():
-    # 29 pins since invoke, simple-websocket, wsproto, h11 and pycparser left the lock (requirements.in).
+    # Every pin of the lock, by name and version: a count floor let a parser that dropped a few
+    # (marker or wrapped lines) pass.
     try:
         real = HD._pins()
     except (OSError, ValueError) as exc:          # a failed parse fails the check below, by name
         real = [("raised", type(exc).__name__, None)]
+    want = _p20_lock_pins()
     check("debug report deps: the checkout's requirements.txt parses into its pins",
-          len(real) >= 25 and any(n == "greenlet" and v and m is None for n, v, m in real),
-          repr(real[:3]))
+          [(n, v) for n, v, _m in real] == want
+          and any(n == "greenlet" and v and m is None for n, v, m in real),
+          repr(sorted(set(want) ^ {(n, v) for n, v, _m in real})[:6]))
 
 
 _ANY4 = ".".join(["0"] * 4)    # the wildcard bind, as config.json and app.config carry it
