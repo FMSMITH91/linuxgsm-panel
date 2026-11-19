@@ -502,7 +502,7 @@ def _addon_census263(sid):
     said = _i18n263.tr(_rw263.blocked_sentence([_rw263.blocker("addon", "p263-cod4")]))
     eq("reboot census: a running add-on install, update or settings change holds a reboot (it cut a build off "
        "part way); a 30-second start watch does not",
-       ("addon" in during, "addon" in watching, "an add-on install or update on p263-cod4" in said),
+       ("addon" in during, "addon" in watching, "an add-on install, update, settings change or removal on p263-cod4" in said),
        (True, False, True))
 
 

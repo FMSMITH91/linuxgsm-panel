@@ -54,7 +54,7 @@
   "Delete failed": "El borrado falló",
   "Delete failed.": "El borrado falló.",
   "Delete remote": "Eliminar host remoto",
-  "Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The “Removing a host” section of the install guide (docs/install.md) says how to remove them.": "No se cambia nada en el propio host: sus servidores de juego siguen funcionando, y la herramienta gamedig y el cron semanal que el panel instaló allí se quedan. La sección «Removing a host» de la guía de instalación (docs/install.md) explica cómo quitarlos.",
+  "Nothing on the host itself is changed: its game servers and their add-ons (B3, IW4MAdmin) keep running, and the gamedig tool and weekly cron the panel installed there stay. Remove add-ons on the Add-ons tab of each server first if they should stop. The “Removing a host” section of the install guide (docs/install.md) says how to remove the rest.": "No se cambia nada en el propio host: sus servidores de juego y sus complementos (B3, IW4MAdmin) siguen funcionando, y la herramienta gamedig y el cron semanal que el panel instaló allí se quedan. Si los complementos deben detenerse, quítalos antes en la pestaña Complementos de cada servidor. La sección «Removing a host» de la guía de instalación (docs/install.md) explica cómo quitar el resto.",
   "Delete request failed.": "La solicitud de borrado falló.",
   "Delete scheduled task": "Eliminar tarea programada",
   "Detach Ubuntu Pro": "Desvincular Ubuntu Pro",

@@ -596,14 +596,17 @@ try:
           and "/api/server/%d/mc-lists/ops" % mc_server in _anypages,
           repr([(p, small_st.get(p), large_st.get(p)) for p in _anypages]))
     _addonpages = sorted(p for p in paths if "/addons" in p)
-    # ...and the list page's 200 is its answer (the offered add-ons), not a refusal said with a 200.
+    # ...and each page's 200 is its answer (the offered add-ons; the log), not a refusal said with a 200:
+    # the log page answers "the host did not answer" with a 200 too, and the sweep then measured that.
     _addonlist = c.get("/api/server/%d/addons" % addon_server).get_json() or {}
+    _addonlog = c.get("/api/server/%d/addons/b3/logs" % addon_server).get_json() or {}
     check("perf: ...and both add-on pages answered 200 in both sweeps (each read the add-on state of a server "
-          "an add-on is offered for, not a 404 for another game)",
+          "an add-on is offered for, not a 404 for another game), each with its own answer, not a refusal",
           _addonpages == ["/api/server/%d/addons" % addon_server, "/api/server/%d/addons/b3/logs" % addon_server]
           and all(small_st.get(p) == 200 and large_st.get(p) == 200 for p in _addonpages)
-          and _addonlist.get("success") is True and len(_addonlist.get("addons") or []) == 2,
-          repr(([(p, small_st.get(p), large_st.get(p)) for p in _addonpages], _addonlist)))
+          and _addonlist.get("success") is True and len(_addonlist.get("addons") or []) == 2
+          and _addonlog.get("success") is True and "log" in _addonlog,
+          repr(([(p, small_st.get(p), large_st.get(p)) for p in _addonpages], _addonlist, _addonlog)))
     _check_the_sweep_ran({p: n for p, n in small.items() if small_st.get(p) == 200},
                          {p: n for p, n in large.items() if large_st.get(p) == 200})
     grew = _pages_that_grew(small, large)

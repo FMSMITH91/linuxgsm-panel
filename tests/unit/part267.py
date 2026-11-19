@@ -666,12 +666,13 @@ def _commit267(repo, msg, at):
 
 
 def _names267(repo, names):
-    """Save main/<sha>.name for each (sha, name) on the signatures ref, as tools/sign-release.sh does."""
+    """Save main/<sha>.name for each (sha, name), main/<sha>.inherit where name is None, as tools/sign-release.sh does."""
     idx = os.path.join(_TMP267, "sig-index")
     for sha, name in names:
-        blob = _sp267.run(["git", "-C", repo, "hash-object", "-w", "--stdin"], input=name + "\n", text=True,  # nosec B603 B607
-                          capture_output=True, check=False, env=dict(os.environ, **_GIT_ENV267)).stdout.strip()
-        _git267(repo, "update-index", "--add", "--cacheinfo", "100644,%s,main/%s.name" % (blob, sha), GIT_INDEX_FILE=idx)
+        blob = _sp267.run(["git", "-C", repo, "hash-object", "-w", "--stdin"], input=(name or "tooling only") + "\n",  # nosec B603 B607
+                          text=True, capture_output=True, check=False, env=dict(os.environ, **_GIT_ENV267)).stdout.strip()
+        entry = "main/%s.%s" % (sha, "inherit" if name is None else "name")
+        _git267(repo, "update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blob, entry), GIT_INDEX_FILE=idx)
     tree = _git267(repo, "write-tree", GIT_INDEX_FILE=idx)
     _git267(repo, "update-ref", _so267._RELEASE_SIG_REF, _git267(repo, "commit-tree", tree, "-m", "signatures"))
 
@@ -694,7 +695,8 @@ def _release_names267():
     fourth = _commit267(repo, "release 2026.11.19.4", _DAY267 + 7200)
     tooling = _commit267(repo, "CI only", _DAY267 + 9000)
     tooling2 = _commit267(repo, "tooling only", _DAY267 + 9600)
-    _names267(repo, [(older, "2026.11.18.2"), (third, "2026.11.19.3"), (fourth, "2026.11.19.4")])
+    _names267(repo, [(older, "2026.11.18.2"), (third, "2026.11.19.3"), (fourth, "2026.11.19.4"),
+                     (tooling, None), (tooling2, None)])
     saved_dir = _so267.PANEL_DIR
     _so267.PANEL_DIR = repo
     try:

@@ -8,7 +8,7 @@ Held here:
 * off unless the key is exactly true (a hand-edited "true" string does not switch it on);
 * on: DEBUG records of 'panel' and 'notifications' reach the file, with time, level and logger;
 * the file is the owner's alone (0600), capped at 5 MB with 3 older files kept;
-* attaching twice adds nothing; the journal (stderr) still gets WARNING and up only.
+* attaching twice adds nothing; the journal (stderr) still gets INFO and up only; DEBUG goes only to the file.
 """
 import logging
 import os

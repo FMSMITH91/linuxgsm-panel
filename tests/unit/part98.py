@@ -141,13 +141,18 @@ def _socket_second_move98():
 # The adversarial review's F3: with sshd moved off 22 under socket activation, `sshd -T` still prints
 # `port 22`. Unioned in, that counted as served, so a leftover `22/tcp ALLOW` read as another way in
 # and the rule for the port sshd really serves could be marked warn and deleted.
-def _r26j_served98(show, sshd_t="port 22\n", stored=2222):
-    """(_sshd_current_ports, _fwssh_served_ports, protected_host_ports) for one host."""
+def _r26j_served98(show, sshd_t="port 22\n", stored=2222, web=None):
+    """(_sshd_current_ports, _fwssh_served_ports, protected_host_ports) for one host.
+
+    `web` is the panel's web port _panel_web_port answers (None: not the panel's host). The stand-in
+    takes the real signature: written `lambda server: None`, its one call (with ts_running=) raised,
+    protected_host_ports swallowed that, and its web-port third never ran.
+    """
     _p9_patch(_p9_core, "run_privileged", lambda server, verb, args=(), **k: (
         (sshd_t, "", 0) if verb == "sshd-effective-config" else ("", "p98: unread", 1)))
     _p9_patch(_p9_core, "run_command", lambda server, cmd, **k: (
         show if "systemctl show ssh.socket" in cmd else ("", "p98: unexpected command", 1)))
-    _p9_patch(_fw98, "_panel_web_port", lambda server: None)
+    _p9_patch(_fw98, "_panel_web_port", lambda server, ts_running=None: web)
     srv = NS(id=-9810, name="p98", host="p98-key.example.invalid", port=stored, is_local=False,
              auth_method="key")
     return (_hosts98._sshd_current_ports(srv), sorted(_fw98._fwssh_served_ports(srv)),
@@ -160,16 +165,18 @@ def _r26j_socket_replaces98():
            "socket, sshd_config elsewhere": _r26j_served98(sock, sshd_t="port 2022\n"),
            "inactive": _r26j_served98(("ActiveState=inactive\nListen=0.0.0.0:2222 (Stream)\n", "", 0),
                                       stored=22),
-           "unread": _r26j_served98(("", "Failed to connect to bus", 1), stored=22)}
+           "unread": _r26j_served98(("", "Failed to connect to bus", 1), stored=22),
+           "the panel's host": _r26j_served98(sock, web=8443)}
     check("ssh ports: on a socket-activated host ssh.socket's ports REPLACE `sshd -T`'s (it still says "
           "22 after sshd moved off it, so a leftover 22/tcp ALLOW counted as another way in and the "
           "served port's rule lost its protection, and sshd_config's ignored port was kept from game "
           "servers); an inactive or unread socket reads `sshd -T` (controls). The move's drop-in still "
-          "keeps both (the socket second-move check)",
+          "keeps both (the socket second-move check); on the panel's own host its web port is kept too",
           got == {"socket": (["2222"], [2222], [22, 2222]),
                   "socket, sshd_config elsewhere": (["2222"], [2222], [22, 2222]),
                   "inactive": (["22"], [22], [22]),
-                  "unread": (["22"], [22], [22])}, repr(got))
+                  "unread": (["22"], [22], [22]),
+                  "the panel's host": (["2222"], [2222], [22, 2222, 8443])}, repr(got))
 
 
 def _socket_parse98():

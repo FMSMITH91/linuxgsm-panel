@@ -176,6 +176,13 @@ HANDLER_SLOTS = 16          # file requests (authz, servers) answered at once; o
 SIGN_IN_SLOTS = 8           # sign-in and audit requests answered at once, beside the file requests
 SIGN_IN_OPS = frozenset(("conn", "auth_key", "auth_kbd", "auth_fail", "auth_done", "session_end", "audit"))
 BUSY = "The panel is busy answering other SFTP requests; try again in a moment."
+# Permission checks for servers on one host that run at once. A check can wait minutes on a host
+# that stopped answering (the account probe over SSH), and the service's retries would otherwise
+# fill every file-request slot with that one host, so every other host's users were refused too.
+HOST_SLOTS = HANDLER_SLOTS // 4
+HOST_BUSY = "The panel is still waiting on this server's host for earlier requests; try again in a moment."
+_HOST_ASKS = {}             # remote id -> permission checks running for it
+_HOST_ASKS_LOCK = threading.Lock()
 
 
 def serve(app, sock, spawn):
@@ -583,10 +590,34 @@ def _h_authz(_app, req, _spawn):
         return {"ok": False, "gone": True}
     if not req.get("write") and not (user.is_superadmin or VIEW_FILES in get_user_permissions(user)):
         return {"ok": False, "reason": "Reading files needs the view_files permission too."}
-    refusal = account_refusal(gs, bool(req.get("write")))
+    if not _host_claim(gs.remote_id):
+        return {"ok": False, "busy": True, "reason": HOST_BUSY}
+    try:
+        refusal = account_refusal(gs, bool(req.get("write")))
+    finally:
+        _host_release(gs.remote_id)
     if refusal:
         return {"ok": False, "reason": refusal}
     return dict(ok=True, **describe(gs))
+
+
+def _host_claim(rid):
+    """Count one more permission check on host `rid`; False (nothing counted) when HOST_SLOTS already run."""
+    with _HOST_ASKS_LOCK:
+        if _HOST_ASKS.get(rid, 0) >= HOST_SLOTS:
+            return False
+        _HOST_ASKS[rid] = _HOST_ASKS.get(rid, 0) + 1
+        return True
+
+
+def _host_release(rid):
+    """One permission check on host `rid` has ended."""
+    with _HOST_ASKS_LOCK:
+        left = _HOST_ASKS.get(rid, 0) - 1
+        if left > 0:
+            _HOST_ASKS[rid] = left
+        else:
+            _HOST_ASKS.pop(rid, None)
 
 
 def account_refusal(gs, write):

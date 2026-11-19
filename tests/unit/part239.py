@@ -36,7 +36,7 @@ from unit.part05 import _helper as _h239, _root
 from unit.part12 import (P9_ADMIN, P9_HOST, P9_LOCAL, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
                          _p9_patch, _p9_restore_all)
 from panel.core import config as _cfg239
-from panel.db.models import User as _U239, db as _db239
+from panel.db.models import AuditLog as _AL239, User as _U239, db as _db239
 from panel.ops import backup as _bk239
 from panel.ops.ssh_manager import _core as _core239
 from panel.ops.ssh_manager import cron as _cron239
@@ -310,14 +310,26 @@ def _set_on239(on):
     _cfg239.update_config(lambda cfg: cfg.update({_rc239.ENABLED_KEY: on}))
 
 
+def _denials_since239(since_id):
+    """The (detail, success) of every access_denied row written after audit row `since_id`, oldest first."""
+    with _p9.app_context():
+        return [(r.detail, r.success) for r in _AL239.query.filter(
+            _AL239.action == "access_denied", _AL239.id > since_id).order_by(_AL239.id).all()]
+
+
 def _owner_only239():
     other = _p9_client(_other_super239())
+    with _p9.app_context():
+        mark = _db239.session.query(_db239.func.max(_AL239.id)).scalar() or 0
     got = [other.get("/root-cron/%d" % P9_HOST).status_code,
            other.post("/root-cron/%d/change" % P9_HOST, data={"op": "add", "password": _GOOD239}).status_code,
            other.post("/root-cron/switch", data={"on": "1", "password": _GOOD239}).status_code]
-    row = _p9_audit("access_denied")
-    eq("root cron: another superadmin is refused the page, a change and the switch (403), audited",
-       (got, row.success, "root" in row.detail), ([403, 403, 403], False, True))
+    # Every refusal's own row, counted since the mark: the newest row alone (the switch's) said nothing
+    # of whether the page's and the change's refusals were written.
+    eq("root cron: another superadmin is refused the page, a change and the switch (403), each audited",
+       (got, _denials_since239(mark)),
+       ([403, 403, 403], [("refused: the root cron page", False), ("refused: a change to root's crontab", False),
+                          ("refused: the root cron switch", False)]))
     page = other.get("/settings").get_data(as_text=True)
     check("Settings: another superadmin sees the Schedules card but not the root cron switch",
           'id="sec-schedules"' in page and 'id="sch-root-cron"' not in page, page[:200])

@@ -356,7 +356,8 @@ def _register_server_stats(app):
         gs = get_game(server_id)
         remote = gs.remote
         try:
-            m = _sm.server_live_metrics(remote, gs.short_name, gs.port, max_age=_stats_max_age(gs))
+            m = _sm.server_live_metrics(remote, gs.short_name, gs.port, max_age=_stats_max_age(gs),
+                                        game_type=gs.game_type)
         except Exception:
             # An unreachable host is an expected condition, not a server error — return
             # 200 with an error field (the poller handles it) so it doesn't log a console

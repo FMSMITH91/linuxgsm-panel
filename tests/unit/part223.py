@@ -10,7 +10,7 @@
   found, and each finds the break it exists for when the code it guards is broken.
 * tools/sbom.py writes CycloneDX 1.6 for the lockfiles, and sign-release.sh attaches it to the
   release it publishes (the whole script, on a local repository with a stand-in GitHub CLI).
-* docs/THREAT-MODEL.md answers the OWASP cheat sheet's four questions, covers the eight trust
+* docs/THREAT-MODEL.md answers the OWASP cheat sheet's four questions, covers the nine trust
   boundaries, and every file it points at exists; SECURITY.md links to it.
 
 Nothing here touches the network or the checkout's data/.
@@ -111,12 +111,50 @@ _AUDIT223 = {
 
 
 def _egress223(job_text):
-    """("block", [hosts]) or ("audit", []) or (None, []) for a job's Harden-Runner step."""
-    m = _re223.search(r"egress-policy: (audit|block)\n((?:          allowed-endpoints: >\n)?(?:            \S+\n)*)",
-                      job_text)
+    """("block", [hosts]) or ("audit", [hosts]) or (None, []) for a job's Harden-Runner step.
+
+    The hosts are every word of `allowed-endpoints`, wherever it sits in the step's `with:` and in
+    any YAML spelling (inline, `>`, `|`, several to a line). Read as one host per line at exactly
+    twelve spaces, a line holding two hosts, or a deeper indent, ended the list there, and every host
+    after it went unjudged.
+    """
+    m = _re223.search(r"^( *)egress-policy: (audit|block)[ \t]*$", job_text, _re223.M)
     if not m:
         return None, []
-    return m.group(1), _re223.findall(r"^            (\S+)$", m.group(2), _re223.M)
+    return m.group(2), _endpoints223(job_text, m.start(), len(m.group(1)))
+
+
+def _endpoints223(job_text, at, indent):
+    """The words of `allowed-endpoints` in the `with:` block whose keys sit at `indent` around `at`."""
+    lines = job_text.splitlines()
+    here = job_text.count("\n", 0, at)
+
+    def _inside(ln):
+        return not ln.strip() or len(ln) - len(ln.lstrip(" ")) >= indent
+
+    lo, hi = here, here
+    while lo > 0 and _inside(lines[lo - 1]):
+        lo -= 1
+    while hi + 1 < len(lines) and _inside(lines[hi + 1]):
+        hi += 1
+    block = lines[lo:hi + 1]
+    for i, ln in enumerate(block):
+        k = _re223.match(r"^ {%d}allowed-endpoints:(.*)$" % indent, ln)
+        if k is None:
+            continue
+        value = k.group(1).strip()
+        if value[:1] in ">|":
+            value = " ".join(x for x in _takewhile223(block[i + 1:], indent))
+        return value.strip("'\"").split()
+    return []
+
+
+def _takewhile223(lines, indent):
+    """The lines of a block scalar under a key at `indent`: blank ones, or ones indented deeper."""
+    for ln in lines:
+        if ln.strip() and len(ln) - len(ln.lstrip(" ")) <= indent:
+            return
+        yield ln
 
 
 def _egress_bad223():

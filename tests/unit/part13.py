@@ -1936,7 +1936,7 @@ try:
           == [(_R10, 1, "a", 1, "gmod", None, 3, None)], "")
     _maps10 = []
     _mon10.game_map = lambda r, sn, gt, port, qt: (_maps10.append(sn) or "de_dust2")
-    _mon10.server_live_metrics = lambda r, sn, port: {"game_procs": 2 if sn == "run" else 0,
+    _mon10.server_live_metrics = lambda r, sn, port, game_type=None: {"game_procs": 2 if sn == "run" else 0,
                                                       "ram_total": 8}
     _qm_run10 = _mon10._query_server_metrics((_R10, 1, "run", 27015, "css", None, 3))
     _qm_idle10 = _mon10._query_server_metrics((_R10, 2, "idle", 27016, "css", None, 3))
@@ -4445,7 +4445,7 @@ try:
         # Is the game running at all? A failed read is None, not "stopped".
         _lrs_hits10 = []
 
-        def _slm_down10(remote, short, port, force=False):
+        def _slm_down10(remote, short, port, force=False, game_type=None):
             _lrs_hits10.append(short)
             raise ConnectionError("down")
 

@@ -402,6 +402,9 @@ window.toast = function(msg, kind){
 //   requirePlaceholder: placeholder for the password field. Defaults to "Your account password",
 //                    which is wrong for any gate that is not the account password (e.g. a backup
 //                    passphrase), so those pass their own.
+//   requireAutocomplete: the password field's autocomplete. Defaults to "current-password" (the
+//                    account password); a gate asking for anything else passes "new-password", so a
+//                    password manager does not fill the sign-in password into it.
 //   bodyNode:     a DOM node to place in the body instead of text (interactive dialog content).
 //                 NOTE: the overlay is REMOVED before onConfirm runs (see submit() below), so read
 //                 any state out of the node you passed in — `body.querySelector(...)` — never via
@@ -409,15 +412,20 @@ window.toast = function(msg, kind){
 //                 upload dialogs got this wrong and their "Replace existing file" ticks silently
 //                 did nothing. A detached node keeps its .checked, so the reference still works.
 // Dismiss via Cancel / backdrop / Esc; only Confirm runs onConfirm.
-// The typed-confirmation / password field, for confirmDialog ('' when the dialog has none).
+// The typed-confirmation / password field, for confirmDialog ('' when the dialog has none). Each
+// dialog's field has its own id: two dialogs can be open at once (the step-up password over the
+// backup passphrase), and a shared id would point the top one's label at the field underneath.
+// The dialog itself finds its field and message by data-cd, inside its own overlay.
 function _cdInputHtml(opts){
   var inputHtml = '';
   if (opts.requireText || opts.requirePassword) {
+    _cdInputHtml.n = (_cdInputHtml.n || 0) + 1;
+    var id = 'cd-input-' + _cdInputHtml.n;
     inputHtml = '<div class="mb-3">'
-      + (opts.requireLabel ? '<label class="form-label small" for="cd-input">' + escapeHtml(opts.requireLabel) + '</label>' : '')
-      + '<input type="' + (opts.requirePassword ? 'password' : 'text') + '" class="form-control" id="cd-input"'
-      + (opts.requirePassword ? ' autocomplete="current-password" placeholder="' + escapeHtml(opts.requirePlaceholder || 'Your account password') + '"' : ' autocomplete="off" autocapitalize="off" spellcheck="false"') + '>'
-      + '<div class="small text-danger mt-1" id="cd-err"></div>'
+      + (opts.requireLabel ? '<label class="form-label small" for="' + id + '">' + escapeHtml(opts.requireLabel) + '</label>' : '')
+      + '<input type="' + (opts.requirePassword ? 'password' : 'text') + '" class="form-control" id="' + id + '" data-cd="input"'
+      + (opts.requirePassword ? ' autocomplete="' + escapeHtml(opts.requireAutocomplete || 'current-password') + '" placeholder="' + escapeHtml(opts.requirePlaceholder || 'Your account password') + '"' : ' autocomplete="off" autocapitalize="off" spellcheck="false"') + '>'
+      + '<div class="small text-danger mt-1" data-cd="err"></div>'
       + '</div>';
   }
   return inputHtml;
@@ -481,8 +489,8 @@ window.confirmDialog = function(opts){
     + '</div></div></div>';
   _cdHost().appendChild(ov);
   _cdFillBody(ov, opts);
-  var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
-      errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML, okText = okBtn.textContent;
+  var input = ov.querySelector('[data-cd="input"]'), okBtn = ov.querySelector('[data-cd="ok"]'),
+      errEl = ov.querySelector('[data-cd="err"]'), okHtml = okBtn.innerHTML, okText = okBtn.textContent;
   // Hidden until api.error shows it (display ''): set through the CSSOM, as a style attribute in
   // the markup above would be refused by the page policy.
   if (errEl) errEl.style.display = 'none';
@@ -647,8 +655,11 @@ function _ajaxFormSucceeded(form, res){
 // (step_up_form.js's window.stepUpThen), so what was typed is sent, not lost on the confirm page.
 function _ajaxStepUp(form){
   var go = function(){ _submitAjaxForm(form); };
-  if (form.hasAttribute('data-step-up') && window.stepUpThen) window.stepUpThen(go, form.getAttribute('data-step-up-totp') === '1');
-  else go();
+  if (!form.hasAttribute('data-step-up') || !window.stepUpThen) { go(); return; }
+  // A form with fields to fill in (Add user, Edit group) gets the form-save words: what was typed is
+  // kept, and the button saves. A button-only form (Delete, Revoke) is an action and gets its words.
+  var typed = !!form.querySelector('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea');
+  window.stepUpThen(go, form.getAttribute('data-step-up-totp') === '1', null, typed);
 }
 window.ajaxForm = function(form){
   var msg = form.getAttribute('data-confirm');

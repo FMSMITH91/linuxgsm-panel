@@ -1,0 +1,10 @@
+{
+  "The add-on is being updated. Wait for it to finish.": "El complemento se está actualizando. Espera a que termine.",
+  "The add-on's settings are being applied. Wait for it to finish.": "Se están aplicando los ajustes del complemento. Espera a que termine.",
+  "'{name}' is being uninstalled — '{action}' was not run.": "'{name}' se está desinstalando: no se ejecutó '{action}'.",
+  "This server is being uninstalled, with its add-ons.": "Este servidor se está desinstalando, junto con sus complementos.",
+  "Another action on '{name}' is still running (a start or stop, a mods change or a scheduled task run now). Try again once it has finished.": "Otra acción sobre '{name}' sigue en curso (un inicio o una parada, un cambio de mods o una tarea programada ejecutada ahora). Inténtalo de nuevo cuando haya terminado.",
+  "A file named {name} is already in the plugins folder. Remove one of the two first.": "Ya hay un archivo llamado {name} en la carpeta de plugins. Quita uno de los dos primero.",
+  "an add-on install, update, settings change or removal on {name}": "una instalación, actualización, cambio de ajustes o eliminación de un complemento en {name}",
+  "'{name}' is being uninstalled. Nothing was changed.": "'{name}' se está desinstalando. No se cambió nada."
+}

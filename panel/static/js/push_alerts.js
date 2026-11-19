@@ -113,16 +113,55 @@
       cannot(ios && !window.navigator.standalone ? 'ios' : 'unsupported');
       return;
     }
-    if (Notification.permission === 'denied') { cannot('blocked'); return; }
 
-    existing(scope).then(function (sub) {
-      if (!sub || !sameKey(sub, key)) { show(false); return null; }
-      return endpointHash(sub.endpoint).then(function (h) {
-        var mine = known.indexOf(h) >= 0;
-        show(mine);
-        if (mine) markThisDevice(h);
+    // What this browser holds now. Read when the page is drawn and again whenever it comes back into
+    // view or the browser's notification setting changes: alerts turned off in another tab, or
+    // notifications blocked or allowed in the browser's settings, would otherwise leave the card saying
+    // what was true when the page was drawn. Nothing is read while a button's request is running.
+    function read() {
+      if (btnOn.disabled || btnOff.disabled) return;
+      if (Notification.permission === 'denied') {
+        btnOff.classList.add('d-none'); btnTest.classList.add('d-none'); cannot('blocked'); return;
+      }
+      existing(scope).then(function (sub) {
+        if (!sub || !sameKey(sub, key)) { show(false); return null; }
+        return endpointHash(sub.endpoint).then(function (h) {
+          var mine = known.indexOf(h) >= 0;
+          show(mine);
+          if (mine) markThisDevice(h);
+        });
+      }).catch(function () { show(false); });
+    }
+    read();
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') read(); });
+    window.addEventListener('pageshow', function (e) { if (e.persisted) read(); });
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({name: 'notifications'})
+        .then(function (p) { p.addEventListener('change', read); })
+        .catch(function () { /* a browser that does not report this permission: the reads above still run */ });
+    }
+
+    // Storing the subscription needs a recent sign-in (step_up_required). data-reauth is the answer when
+    // the page was drawn; a page left open past the window asks for the password here (stepUpThen),
+    // so the refusal does not send the tab away with the browser's half of the subscription left
+    // behind. Closing that dialog takes the browser's half back.
+    function store(sub) {
+      return new Promise(function (resolve) {
+        function post() { resolve(postJson(el.getAttribute('data-subscribe-url'), sub.toJSON()).then(function (res) { return stored(sub, res); })); }
+        function dropped() { resolve(sub.unsubscribe().then(function () { show(false); btnOn.disabled = false; })); }
+        if (window.stepUpThen) window.stepUpThen(post, window.STEP_UP_TOTP === true, dropped); else post();
       });
-    }).catch(function () { show(false); });
+    }
+    function stored(sub, res) {
+      if (res.status === 200 && res.d.success) { window.location.reload(); return null; }
+      // Not stored: take the browser's half back too, so the card tells the truth.
+      return sub.unsubscribe().then(function () {
+        if (res.d.error === 'reauth_required') { goSameSite(el.getAttribute('data-reauth-url')); return; }
+        notice(res.d, 'danger');
+        show(false);
+        btnOn.disabled = false;
+      });
+    }
 
     btnOn.addEventListener('click', function () {
       if (el.getAttribute('data-reauth') === '1') {
@@ -146,18 +185,7 @@
             return reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: keyBytes(key)})
               .catch(function (e) { e.pushService = true; throw e; });
           })
-          .then(function (sub) {
-            return postJson(el.getAttribute('data-subscribe-url'), sub.toJSON()).then(function (res) {
-              if (res.status === 200 && res.d.success) { window.location.reload(); return null; }
-              // Not stored: take the browser's half back too, so the card tells the truth.
-              return sub.unsubscribe().then(function () {
-                if (res.d.error === 'reauth_required') { goSameSite(el.getAttribute('data-reauth-url')); return; }
-                notice(res.d, 'danger');
-                show(false);
-                btnOn.disabled = false;
-              });
-            });
-          });
+          .then(store);
       }).catch(function (e) {
         say(e && e.pushService ? 'pushsvc' : 'failed'); btnOn.classList.remove('d-none'); btnOn.disabled = false;
       });
@@ -231,6 +259,11 @@
     btn.addEventListener('click', function () {
       if (push && push.getAttribute('data-reauth') === '1') { goSameSite(push.getAttribute('data-reauth-url')); return; }
       btn.disabled = true;
+      // A page left open past the recent-sign-in window: the password is asked for here first.
+      if (window.stepUpThen) window.stepUpThen(link, window.STEP_UP_TOTP === true, function () { btn.disabled = false; });
+      else link();
+    });
+    function link() {
       postJson(box.getAttribute('data-link-url'), {}).then(function (res) {
         btn.disabled = false;
         if (res.d.error === 'reauth_required' && push) { goSameSite(push.getAttribute('data-reauth-url')); return; }
@@ -244,7 +277,7 @@
         show('wait');
         setTimeout(function () { check(TG_CHECKS); }, TG_CHECK_MS);
       }, function () { btn.disabled = false; });
-    });
+    }
   }
 
   var cardEl = document.getElementById('sec-push');

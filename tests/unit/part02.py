@@ -3615,8 +3615,8 @@ _app_mod = _sys2.modules["app"]   # app is loaded (from app import above); not `
 _lrs_orig = _sm_core.server_live_metrics
 try:
     _lrs = {"m": {}}
-    _sm_core.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
-    _gsx, _rx = NS(short_name="gmodserver", port=27015), NS()
+    _sm_core.server_live_metrics = lambda r, s=None, p=None, force=False, game_type=None: _lrs["m"]
+    _gsx, _rx = NS(short_name="gmodserver", port=27015, game_type="gmod"), NS()
 
     _lrs["m"] = {"ram_total": 0, "port_open": False, "game_procs": 0}      # the failed sample
     check("_live_run_state: an all-zero sample is 'unknown', not 'stopped'",

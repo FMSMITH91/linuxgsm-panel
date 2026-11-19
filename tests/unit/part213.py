@@ -389,7 +389,11 @@ def _s213_backup_archive():
 
 # ── 5. through the app ───────────────────────────────────────────────────────────────────────────
 def _s213_routes():
-    live = _cfg213._cred_keyring()
+    # The run's ring, read from the run's own key file: CRED_KEY_FILE still points at the backup
+    # check's throwaway file here (each _use_files213 is undone only by the final _p9_restore_all),
+    # and a ring read through it was written back over the run's key below, so every value part12
+    # had encrypted read as "" for every part after this one.
+    live = _kr213.read_ring(_LIVE_KEY213)
     keyf = _use_files213("routes")
     fkey = _Fernet213.generate_key()
     keyf.write_bytes(_kr213.KeyRing(live.current, live.keys, [fkey.decode()]).to_bytes())
@@ -476,3 +480,9 @@ finally:
 
 check("part213: nothing it drove reached a real transport",
       len(_P9_TRIPPED) == _trips213, repr(_P9_TRIPPED[_trips213:][:6]))
+with _p9.app_context():
+    _host213 = _RS213.query.filter_by(name="p9-host").first()
+    _host_read213 = str(_host213.host) if _host213 is not None else None
+check("part213: a secret part12 encrypted under the run's key ring before this part still reads after it "
+      "(p9-host's address), so the parts after it test real values, not \"\"",
+      _host_read213 == "192.0.2.10", repr(_host_read213))

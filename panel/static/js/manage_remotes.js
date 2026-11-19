@@ -735,14 +735,15 @@ function removeRemote(btn){
   confirmDialog({
     title: 'Delete remote', icon: 'trash', confirmLabel: 'Delete', confirmClass: 'btn-danger',
     // What stays on the host is said here, before the click: the delete forgets the host and never
-    // connects to it, so the gamedig tree and weekly root cron the panel installed there remain.
+    // connects to it, so the gamedig tree and weekly root cron the panel installed there remain, and
+    // the add-ons keep running as their game accounts' user services (docs/install.md says so too).
     // Its own line, one literal, so the whole sentence is one catalog entry. A block <span>, not a
     // <p>: confirmDialog puts the body inside a <p> already, and a <p> in a <p> is closed early by
     // the parser, leaving a stray empty paragraph behind the text.
     body: tfHtml('Delete {name}? This removes it and all of its game servers from the panel.',
                  {name: {html: '<strong data-no-i18n>' + escapeHtml(name) + '</strong>'}})
       + '<span class="d-block small text-muted mt-2">'
-      + 'Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The “Removing a host” section of the install guide (docs/install.md) says how to remove them.'
+      + 'Nothing on the host itself is changed: its game servers and their add-ons (B3, IW4MAdmin) keep running, and the gamedig tool and weekly cron the panel installed there stay. Remove add-ons on the Add-ons tab of each server first if they should stop. The “Removing a host” section of the install guide (docs/install.md) says how to remove the rest.'
       + '</span>',
     requirePassword: true,
     requireLabel: 'Enter your account password to confirm:',

@@ -483,8 +483,11 @@ panel_version() {
 # HEAD's release name (2026.11.16.2) when its signing saved one, else the date version `$1`: the
 # same rule as _release_name in panel/ops/system_ops.py. tools/sign-release.sh saves main/<sha>.name
 # on release-signatures (fetched into RELEASE_SIG_REF); a commit that changes nothing a panel runs
-# gets none, so the first named commit walking back HEAD's first parents of the same date is the
-# release running. Only a name of that date (with or without a suffix) is printed.
+# gets none, and main/<sha>.inherit instead, so the first named commit walking back HEAD's first
+# parents of the same date, past such commits only, is the release running. Any other unnamed
+# commit (its release not published) may run new code and prints the date. Only a name of that
+# date (with or without a suffix) is printed. The listing is matched with `case`, not a here-string
+# (bash writes one over 64 KiB to a temporary file, which a full /tmp loses silently).
 _release_name() {
     local ver="$1" names day cand ct name
     local ref="${RELEASE_SIG_REF:-refs/linuxgsm-panel/release-signatures}:${DEFAULT_BRANCH:-main}"
@@ -492,13 +495,17 @@ _release_name() {
     [[ "${ver}" =~ ^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})$ && -n "${names}" ]] || { echo "${ver}"; return 0; }
     day="$(date -u -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" +%s 2>/dev/null)" \
         || { echo "${ver}"; return 0; }
+    names=$'\n'"${names}"$'\n'
     while IFS=' ' read -r cand ct; do
-        [[ "$(_epoch_version "${ct}")" == "${ver}" ]] || break
-        if [[ "${cand}" =~ ^[0-9a-f]{40}$ ]] && grep -qxF -- "${cand}.name" <<<"${names}"; then
-            name="$(_gitc cat-file blob "${ref}/${cand}.name" 2>/dev/null | tr -d '[:space:]')" || name=""
-            [[ "${name}" =~ ^${ver//./\\.}(\.[0-9]{1,3})?$ ]] && { echo "${name}"; return 0; }
-            break
-        fi
+        [[ "$(_epoch_version "${ct}")" == "${ver}" && "${cand}" =~ ^[0-9a-f]{40}$ ]] || break
+        case "${names}" in
+            *$'\n'"${cand}.name"$'\n'*)
+                name="$(_gitc cat-file blob "${ref}/${cand}.name" 2>/dev/null | tr -d '[:space:]')" || name=""
+                [[ "${name}" =~ ^${ver//./\\.}(\.[0-9]{1,3})?$ ]] && { echo "${name}"; return 0; }
+                break ;;
+            *$'\n'"${cand}.inherit"$'\n'*) ;;
+            *) break ;;
+        esac
     done < <(_gitc log --first-parent --no-show-signature --format='%H %ct' "--since=@${day}" HEAD -- 2>/dev/null)
     echo "${ver}"
 }

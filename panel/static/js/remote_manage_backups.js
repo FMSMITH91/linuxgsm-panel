@@ -795,7 +795,7 @@ function _bkAskPassphrase(name, btn){
   confirmDialog({title:'Passphrase needed', icon:'shield-lock', confirmLabel:'Restore',
     confirmClass:'btn-danger', requirePassword:true,
     requireLabel:'Backup passphrase',
-    requirePlaceholder:'The passphrase this backup was written with',
+    requirePlaceholder:'The passphrase this backup was written with', requireAutocomplete:'new-password',
     bodyText:'This backup is encrypted, and this panel\'s configured passphrase does not open it — it was written by another panel, or before the passphrase was changed.',
     // The passphrase dialog stays open under the password one, so a cancelled confirmation keeps what
     // was typed, and api.ready() (the cancel hook below) puts its Restore back from busy.

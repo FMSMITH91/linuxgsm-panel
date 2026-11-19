@@ -47,7 +47,7 @@ from panel.services import sftp_backend as bk
 from panel.services import sftp_common as sc
 # Defined in sftp_files, never here: this module runs as __main__, and a class it defined would be a
 # different class from the one the other modules import by name, so their raise would escape its except.
-from panel.services.sftp_files import CUT_OFF, DENIED, Files, Refused, WriteHandle
+from panel.services.sftp_files import CUT_OFF, DENIED, NO_ANSWER, Files, Refused, Unanswered, WriteHandle
 
 _log = logging.getLogger("panel.sftp")
 
@@ -331,8 +331,8 @@ class VirtualSftp(SFTPServerInterface):
         reply = self.service.panel.ask({"op": "authz", "uid": u["uid"], "epoch": u["epoch"], "fp": u["fp"],
                                         "folder": folder, "write": bool(write), "ip": self.conn.ip})
         if not reply.get("ok"):
-            if reply.get("busy"):
-                raise Refused(SFTP_FAILURE, reply.get("reason") or DENIED)
+            if reply.get("busy") or "ok" not in reply:   # busy, or {}: the panel gave no verdict
+                raise Unanswered(SFTP_FAILURE, reply.get("reason") or NO_ANSWER)
             if reply.get("gone"):
                 raise Refused(SFTP_NO_SUCH_FILE, "No such file")
             raise Refused(SFTP_PERMISSION_DENIED, reply.get("reason") or DENIED)

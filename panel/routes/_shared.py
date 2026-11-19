@@ -599,6 +599,29 @@ def _r39a_wipe_running(sid):
     return bool(_R39A_WIPE_KINDS.intersection(r36j_route_jobs(sid)))
 
 
+UNINSTALL_KIND = "uninstall"
+# The kinds that register on a server and then ask uninstall_running, which the uninstall in turn
+# refuses beside: each side registers before it asks, so two that start together never both go on.
+UNINSTALL_EXCLUDES = frozenset(("mods", "cron", "action", "queued"))
+
+
+def uninstall_running(sid):
+    """Whether server `sid` is being uninstalled now (its account stopped, emptied and deleted).
+
+    A start, a mods change, a Run now or an add-on job begun meanwhile ran inside an account seconds
+    from `userdel`: a game left running under a deleted uid holding its port, or an add-on's user
+    manager switched back on after the uninstall's release.
+    """
+    return UNINSTALL_KIND in r36j_route_jobs(sid)
+
+
+def uninstall_sentence(name, action=None):
+    """The refusal of `action` (a LinuxGSM action), or of a change, on server `name` while it is being uninstalled."""
+    if action is None:
+        return i18n.Sentence("'{name}' is being uninstalled. Nothing was changed.", name=name)
+    return i18n.Sentence("'{name}' is being uninstalled — '{action}' was not run.", name=name, action=action)
+
+
 def grs_restore_running(sid):
     """Whether server `sid` is being restored from one of its backups now (routes/game_restore)."""
     return GRS_KIND in r36j_route_jobs(sid)
@@ -619,6 +642,13 @@ def grs_or_wipe_sentence(sid, name):
     if grs_restore_running(sid):
         return i18n.Sentence("'{name}' is being restored from a backup. Try again once it has finished.", name=name)
     return i18n.Sentence("A scheduled wipe of '{name}' is running. Try again once it has finished.", name=name)
+
+
+def uninstall_or_wipe_sentence(sid, name):
+    """Why a change is refused on server `sid` now (its uninstall, restore or scheduled wipe running), else None."""
+    if uninstall_running(sid):
+        return uninstall_sentence(name)
+    return grs_or_wipe_sentence(sid, name) if _r39a_wipe_running(sid) else None
 
 
 def _r39a_backup_held(sid, wipe_ok=False):
@@ -1253,7 +1283,7 @@ def _settle_queued_action(app, gs):
         # wipe, beside a queued restart's stop and start, and brought back up a server queued to
         # stop.
         with r36j_route_job(gs.id, "queued"):
-            if _r39a_wipe_running(gs.id) or _backup_in_progress(gs.id):
+            if _r39a_wipe_running(gs.id) or _backup_in_progress(gs.id) or uninstall_running(gs.id):
                 return          # stays queued for the next tick
             _run_queued_action(app, gs)
     # 'pending' (players on / unknown): leave the flags, retry next tick

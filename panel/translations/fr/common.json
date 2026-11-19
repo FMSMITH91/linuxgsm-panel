@@ -931,6 +931,5 @@
   "it is root": "c'est root",
   "it is the account the panel signs in to this host as": "c'est le compte avec lequel le panneau se connecte à cet hôte",
   "it is the panel's own account": "c'est le propre compte du panneau",
-  "What's new in this update:": "Nouveautés de cette mise à jour :",
-  "an add-on install or update on {name}": "une installation ou une mise à jour de module complémentaire sur {name}"
+  "What's new in this update:": "Nouveautés de cette mise à jour :"
 }

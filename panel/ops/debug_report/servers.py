@@ -119,9 +119,10 @@ def _port_word(gs, st, now):
     hit = st["scan"].get(gs.remote_id)
     if not (isinstance(hit, tuple) and len(hit) == 2):
         return "port scan: none since panel start"
-    ttl = mod("panel.ops.ssh_manager.portscan")._PORT_SCAN_TTL
-    return "port %s (scan %s ago)" % ("listening" if gs.port in (hit[1] or ()) else "NOT listening",
-                                     ago(now - (hit[0] - ttl)))
+    ps = mod("panel.ops.ssh_manager.portscan")
+    up = ps.game_port_listening(gs.game_type, gs.port, hit[1] or ())
+    return "port %s (scan %s ago)" % ("listening" if up else "NOT listening",
+                                     ago(now - (hit[0] - ps._PORT_SCAN_TTL)))
 
 
 def _players_word(gs_id, st, now):

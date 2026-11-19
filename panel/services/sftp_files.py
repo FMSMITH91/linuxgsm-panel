@@ -49,7 +49,14 @@ STAGE_MAX = 1024 * 1024
 MAX_OPEN_FILES = 64          # open files per session
 WRITE_FAILED = "The write failed."
 AUTHZ_HOLD = 1.0             # seconds an open file's reads and writes reuse the last permission answer
+# Seconds past the last "yes" an open file goes on while the panel answers "busy" or not at all. A
+# full answer pool (one host that stopped answering holds slots for minutes) used to read as a
+# revoked permission and abort every open transfer. A definite "no" still ends it at once, and
+# after this long without an answer the file fails closed, with the busy reason, not "no longer
+# have permission".
+AUTHZ_GRACE = 5.0
 DENIED = "Permission denied"
+NO_ANSWER = "The panel did not answer the permission check in time; try again in a moment."
 
 
 class Refused(Exception):
@@ -63,6 +70,10 @@ class Refused(Exception):
     def answer(self):
         """The (code, text) pair the SFTP server sends as the status."""
         return (self.code, self.text)
+
+
+class Unanswered(Refused):
+    """The panel answered "busy" or not at all: no verdict either way, so nothing is granted."""
 
 
 def _refused(code, text):
@@ -346,23 +357,30 @@ class _Handle(SFTPHandle):
         self.vfs, self.path, self.target = vfs, path, target
         self.backend, self.handle, self.write_mode = backend, handle, write
         self._checked = 0.0
+        self._granted = time.monotonic()    # the open was granted by the panel's answer
         self._lock = threading.Lock()
         self.closed = False
         vfs.open_count += 1
 
-    def allowed(self):
-        """Whether the user may still use this file: the panel's answer, at most AUTHZ_HOLD old."""
+    def refusal(self):
+        """None while the user may still use this file (the panel's answer, at most AUTHZ_HOLD old), else (code, text).
+
+        An answer the panel could not give (busy, or none in time) keeps the last "yes" for
+        AUTHZ_GRACE; past that the file is refused with that reason. A "no" refuses at once.
+        """
         now = time.monotonic()
         if now - self._checked < AUTHZ_HOLD:
-            return True
+            return None
         try:
             got = self.vfs.ask_folder(self.vfs.split(self.path)[0], self.write_mode)
+        except Unanswered as exc:
+            return None if now - self._granted < AUTHZ_GRACE else (SFTP_FAILURE, exc.text)
         except Refused:
-            return False
+            return (SFTP_PERMISSION_DENIED, DENIED_NOW)
         if got.key != self.target.key:
-            return False
-        self._checked = now
-        return True
+            return (SFTP_PERMISSION_DENIED, DENIED_NOW)
+        self._checked = self._granted = now
+        return None
 
     def stat(self):
         """The open file's attributes."""
@@ -389,8 +407,9 @@ class ReadHandle(_Handle):
 
     def read(self, offset, length):
         """Up to `length` bytes at `offset`."""
-        if not self.allowed():
-            return (SFTP_PERMISSION_DENIED, DENIED_NOW)
+        refused = self.refusal()
+        if refused:
+            return refused
         try:
             return self.reader.read(offset, length)
         except bk.BackendError as exc:
@@ -437,9 +456,10 @@ class WriteHandle(_Handle):
         """Write `data` at `offset` (pipelined; a failure is reported on a later write or the close)."""
         if self.failed:
             return (SFTP_FAILURE, self.failed)
-        if not self.allowed():
-            self.failed = DENIED_NOW
-            return (SFTP_PERMISSION_DENIED, DENIED_NOW)
+        refused = self.refusal()
+        if refused:
+            self.failed = refused[1]
+            return refused
         append_from = self.info.get("append_from")
         end = offset + len(data) if append_from is None else append_from + self.appended + len(data)
         self.failed = self._size_problem(end)
@@ -473,8 +493,9 @@ class WriteHandle(_Handle):
         """Read back what an upload opened read-write has written."""
         if not self.info["readable"]:
             return (SFTP_PERMISSION_DENIED, "This file was opened for writing.")
-        if not self.allowed():
-            return (SFTP_PERMISSION_DENIED, DENIED_NOW)
+        refused = self.refusal()
+        if refused:
+            return refused
         if self.stage is not None:
             return bytes(self.stage[offset:offset + length])
         try:
