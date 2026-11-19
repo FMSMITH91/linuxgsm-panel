@@ -46,7 +46,7 @@ _TARGET = r"\((?:[^()]|\([^()]*\))*\)"
 # "[" in a release note). Link words that hold a "[" themselves are taken from the last one.
 _IMAGE_RE = re.compile(r"!\[[^\[\]]*\]" + _TARGET)
 _LINK_RE = re.compile(r"\[([^\[\]]*)\]" + _TARGET)
-_TAG_RE = re.compile(r"<[^>]*>")
+_TAG_RE = re.compile(r"<[^<>]*>")
 _MARK_RE = re.compile(r"\*\*|__|`")
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SPACE_RE = re.compile(r"\s+")
