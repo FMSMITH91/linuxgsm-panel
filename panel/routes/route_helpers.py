@@ -17,8 +17,7 @@ import json
 import os
 import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
-    _port_or, bind_host_error, can_bind_address, canonical_host, key_text_problem, password_problem,
-    username_problem)
+    _port_or, bind_host_error, can_bind_address, canonical_host, password_problem, username_problem)
 from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error, r36j_commit,
     r36j_host_claim)
 from panel.ops.serve_upkeep import (_remove_serve_leftovers, with_leftover_note)
@@ -540,11 +539,9 @@ def _setup_add_remote(state, data):
     # the PANEL HOST — so a "remote" named anything, at any address, became a host the terminal and
     # every panel-host refusal treated as this machine. The field checks keep a name, user or host
     # out of the row (and out of the SSH test) that the Hosts page would refuse.
+    # ...key text in the key PATH field included, which never reaches paramiko or a log.
     refusal = (_add_remote_field_error(name, ssh_port, lgsm_user, ssh_user)
-               or _add_remote_target_error(False, host, auth_method))
-    # Key text in the key PATH field never reaches paramiko or a log (validation.key_text_problem).
-    _key_text = key_text_problem(auth_method, credential)
-    refusal = refusal or (i18n.tr(_key_text) if _key_text else None)
+               or _add_remote_target_error(False, host, auth_method, credential))
     if not name or not host:
         flash("Name and host are required.", "danger")
     elif ssh_port is None:

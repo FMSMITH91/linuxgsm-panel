@@ -22,7 +22,7 @@ paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core import outside_services as _outside
 from panel.core.config import decrypt_secret
 from panel.core.stdin_chunks import stdin_bytes as _stdin_bytes, stdin_pieces as _stdin_pieces, write_channel_stdin
-from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, global_ipv4, key_text_problem
+from panel.core.validation import HOST_RE as _HOST_RE, canonical_host, checked_key_path, global_ipv4, oserror_text
 from panel.security import privileged as _priv
 from panel.ops import live_read as _live
 from panel.ops import netdev as _netdev
@@ -100,33 +100,6 @@ class HostKeyMismatch(ConnectionError):
 
     Possibly MITM, or the box was reinstalled. Raised instead of silently trusting the new key.
     """
-
-
-class KeyTextNotPath(ValueError):
-    """A key login's stored credential is key text, not a path; refused before anything opens it.
-
-    A row edited before the forms refused key text can hold one. Opened as a file name, it came back
-    as an OSError whose message is the whole key, and that reached the journal and the page.
-    """
-
-    def __init__(self):
-        """The one fixed sentence; nothing of the credential is in it."""
-        super().__init__("The stored SSH key path for this host holds key text, not a path, so it "
-                         "was not used. Edit the host and enter the path of the key file on the "
-                         "panel host.")
-
-
-def exc_label(exc):
-    """`exc` named by its class, and an OSError's errno name: never its message.
-
-    An exception raised while opening a key or signing in can carry the credential itself: an
-    OSError's message repeats the file name it was given, which was the whole private key when key
-    text reached paramiko. OWASP Logging Cheat Sheet, "Data to exclude": keys and passwords are not
-    recorded. So these paths log this label, a fixed sentence beside it, and no traceback.
-    """
-    import errno
-    code = errno.errorcode.get(getattr(exc, "errno", None) or -1) if isinstance(exc, OSError) else None
-    return "%s (%s)" % (type(exc).__name__, code) if code else type(exc).__name__
 
 
 class _PinPolicy:
@@ -1328,14 +1301,8 @@ def _connect_client(client, server):
         raise ConnectionError(f"Connection to {server.host}:{server.port} timed out.")
     except socket.gaierror:
         raise ConnectionError(f"Cannot resolve hostname: {server.host}")
-    except OSError as e:
-        # A file error is the key file's: its message repeats the "path", so only the OS's own
-        # sentence is kept, and the chain (which holds the original) is dropped. Socket errors carry
-        # no file name and read as before.
-        if getattr(e, "filename", None) is None:
-            raise ConnectionError(f"SSH connection failed: {e}") from None
-        raise ConnectionError("SSH connection failed: the key file could not be read (%s)."
-                              % (e.strerror or type(e).__name__)) from None
+    except OSError as e:   # a key file's error repeats the "path" (key text, once): validation.oserror_text
+        raise ConnectionError("SSH connection failed: " + oserror_text(e)) from None
     except Exception as e:
         raise ConnectionError(f"SSH connection failed: {e}")
 
@@ -1395,9 +1362,7 @@ def key_login_kwargs(cred):
     the agent is never consulted (the panel runs as a service, and an agent that happens to be
     reachable is not a credential anybody configured for this host).
     """
-    if key_text_problem("key", cred):
-        raise KeyTextNotPath()
-    if cred:
+    if checked_key_path(cred):   # key text pasted for a path raises KeyTextNotPath (validation)
         return {"key_filename": cred, "allow_agent": False, "look_for_keys": False}
     return {"key_filename": os.path.expanduser("~/.ssh/id_rsa"), "allow_agent": False,
             "look_for_keys": True}

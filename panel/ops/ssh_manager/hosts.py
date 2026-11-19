@@ -11,7 +11,8 @@ import time
 from panel.ops.ssh_manager import _lazy
 paramiko = _lazy.LazyModule("paramiko")   # imported at first use: see _lazy
 from panel.core.config import decrypt_secret
-from panel.core.validation import canonical_ip, host_key_sha256, ip_address_or_none, ip_network_or_none
+from panel.core.validation import (KeyTextNotPath, canonical_ip, exc_label, host_key_sha256, ip_address_or_none,
+                                   ip_network_or_none)
 from panel.security import privileged as _priv
 from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -6786,13 +6787,13 @@ def _ssh_test_failure(exc, host, port):
         return f"Connection to {host}:{port} timed out. Is the host reachable?"
     if isinstance(exc, socket.gaierror):
         return f"Cannot resolve hostname: {host}"
-    if isinstance(exc, _core.KeyTextNotPath):
+    if isinstance(exc, KeyTextNotPath):
         return i18n.Sentence(str(exc))   # the panel's own fixed sentence, in the viewer's language
     # Don't surface the raw exception text to the browser — it can carry internal detail
     # (key paths, host internals). Nor the log: an OSError from opening the key repeats the "path",
     # which was the whole private key when key text reached it, and a traceback (exc_info) printed
-    # it into the journal. A fixed sentence and the exception's class only (_core.exc_label).
-    _core._log.warning("ssh_test_connection failed: %s", _core.exc_label(exc))
+    # it into the journal. A fixed sentence and the exception's class only (validation.exc_label).
+    _core._log.warning("ssh_test_connection failed: %s", exc_label(exc))
     return "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 

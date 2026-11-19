@@ -88,6 +88,50 @@ def key_text_problem(auth_method, credential):
         return KEY_TEXT_REFUSED
     return None
 
+
+class KeyTextNotPath(ValueError):
+    """A key login's stored credential is key text, not a path; refused before anything opens it.
+
+    A row edited before the forms refused key text can hold one. Opened as a file name, it came back
+    as an OSError whose message is the whole key, and that reached the journal and the page.
+    """
+
+    def __init__(self):
+        """The one fixed sentence; nothing of the credential is in it."""
+        super().__init__("The stored SSH key path for this host holds key text, not a path, so it "
+                         "was not used. Edit the host and enter the path of the key file on the "
+                         "panel host.")
+
+
+def checked_key_path(credential):
+    """`credential` (a key path, or "") as given; KeyTextNotPath when it is key text (key_text_problem)."""
+    if key_text_problem("key", credential):
+        raise KeyTextNotPath()
+    return credential
+
+
+def oserror_text(exc):
+    """What may be said of an OSError: its text, or the OS's sentence alone when it names a file.
+
+    A file error's message repeats the file name it was given, and a key file's "name" was the whole
+    private key when key text reached paramiko. Socket errors name no file and read as they are.
+    """
+    if getattr(exc, "filename", None) is None:
+        return str(exc)
+    return "the key file could not be read (%s)." % (exc.strerror or type(exc).__name__)
+
+
+def exc_label(exc):
+    """`exc` named by its class, and an OSError's errno name: never its message.
+
+    An exception raised while opening a key or signing in can carry the credential itself (see
+    oserror_text). OWASP Logging Cheat Sheet, "Data to exclude": keys and passwords are not
+    recorded. So those paths log this label beside a fixed sentence, and no traceback.
+    """
+    import errno
+    code = errno.errorcode.get(getattr(exc, "errno", None) or -1) if isinstance(exc, OSError) else None
+    return "%s (%s)" % (type(exc).__name__, code) if code else type(exc).__name__
+
 # ── IP addresses and networks ─────────────────────────────────────────────
 # ipaddress parses an IPv6 ZONE ID (the scope after '%') and keeps it VERBATIM. 'fe80::1%x y',
 # 'fe80::1%$(id)' and 'fe80::1%' + a newline + 'FAKE' all parse, and str() hands the text back with

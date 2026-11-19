@@ -247,13 +247,9 @@ def _register_remote_list(app):
         is_local = request.form.get("is_local") == "1"
 
         _bad = (_add_remote_field_error(name, ssh_port, lgsm_user, ssh_user)
-                or _add_remote_target_error(is_local, host, auth_method))
+                or _add_remote_target_error(is_local, host, auth_method, credential))
         if _bad:
             return _form_err(_bad, "manage_remotes")
-        # Key text pasted into the key PATH field is refused before anything opens it or logs it.
-        _key_text = key_text_problem(auth_method, credential)
-        if _key_text:
-            return _form_err(i18n.tr(_key_text), "manage_remotes")
         _refused = _delegated_add_refusal(is_local, auth_method)
         if _refused:
             return _form_err(_refused, "manage_remotes", code=403)
@@ -331,12 +327,6 @@ def _register_remote_edit(app):
         # the row, change its SSH user or turn its sudo off — the row every panel-host action and
         # every game server on this machine runs through.
         remote = get_host_remote(remote_id)
-        # Key text in the key PATH field: refused before any field of the row changes, and never
-        # repeated (validation.key_text_problem).
-        _key_text = key_text_problem(_edited("auth_method", remote.auth_method),
-                                     request.form.get("credential", "").strip())
-        if _key_text:
-            return _form_err(i18n.tr(_key_text), "manage_remotes")
         # A BLANK field is not an edit. `.get(key, default)` only falls back when the key is
         # ABSENT, and the edit form posts all three of these every time — without `required`,
         # unlike the add form above it (panel/templates/manage_remotes.html:25/29 have it, :193/:197 do
@@ -344,9 +334,9 @@ def _register_remote_edit(app):
         # user, and the guards below are all `if new_x and …`, which an empty string skips. A
         # remote with host "" is unreachable and its game servers unmanageable.
         new_user = _edited("ssh_user", remote.username)
-        # SECURITY: validate the username field (it reaches `sudo -u <user>` / SSH commands).
-        if not LINUX_USER_RE.match(new_user):
-            return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
+        _bad = _edit_user_or_key_refusal(remote, new_user)
+        if _bad:
+            return _form_err(_bad, "manage_remotes")
         new_name = _edited("name", remote.name)
         if not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
@@ -385,6 +375,18 @@ def _register_remote_edit(app):
             return _form_err(_same, "manage_remotes", code=409)
         log_action(current_user, "edit_remote", target=remote.name, remote=remote)
         return _form_ok(i18n.tr("Remote '{name}' updated.", name=remote.name), "manage_remotes")
+
+
+def _edit_user_or_key_refusal(remote, new_user):
+    """Why edit_remote refuses its SSH user or its credential before any field changes, or None.
+
+    SECURITY: the username reaches `sudo -u <user>` and SSH commands, so it is held to LINUX_USER_RE.
+    Key text in the key PATH field is refused, never repeated (validation.key_text_problem).
+    """
+    if not LINUX_USER_RE.match(new_user):
+        return "SSH user must be a valid Linux username."
+    why = key_text_problem(_edited("auth_method", remote.auth_method), request.form.get("credential", "").strip())
+    return i18n.tr(why) if why else None
 
 
 def _r36c_delete_refused(remote):
@@ -714,8 +716,11 @@ def _r36c_retarget_refusal(remote, new_host, new_port, new_user):
     return (why, 409) if why else (None, None)
 
 
-def _add_remote_target_error(is_local, host, auth_method):
-    """Why the add form's host or sign-in method is refused, or None; the local branch sets its own.
+def _add_remote_target_error(is_local, host, auth_method, credential=""):
+    """Why the add form's host, sign-in method or key path is refused, or None; the local branch sets its own.
+
+    Key text pasted into the key PATH field is refused before anything opens it or logs it, and the
+    refusal never repeats it (validation.key_text_problem).
 
     Whether another row already is that host is asked by the caller under a claim (r36j_host_claim),
     after the delegated-admin refusal: asked here, before it, a refused request still learned it.
@@ -730,7 +735,8 @@ def _add_remote_target_error(is_local, host, auth_method):
     # non-local path — the branch below hardcodes auth_method="local" on purpose.
     if not is_local and auth_method not in EDITABLE_AUTH_METHODS:
         return "Unknown authentication method."
-    return None
+    why = key_text_problem(auth_method, credential)
+    return i18n.tr(why) if why else None
 
 
 def _add_local_remote(name, lgsm_user):
