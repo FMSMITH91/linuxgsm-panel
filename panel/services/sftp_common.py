@@ -201,14 +201,18 @@ def _tailnet_addresses(ips):
 TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))  # NOSONAR - Tailscale's fixed ranges
 
 
-def parse_form(form, tailscale_up):
+def parse_form(form, tailscale_up, saved_bind=None):
     """(changes for config.json, refusal or None) from the Settings card's form.
 
     Out-of-range numbers are refused, never quietly changed. Values outside the recommendation are
-    saved (the card shows a note beside them).
+    saved (the card shows a note beside them). The Tailscale address is refused while Tailscale is
+    down only as a new choice for a service that is on: the saved choice is kept as it is (the
+    service waits for Tailscale), so turning the service off or changing its port still saves.
     """
     bind = (form.get("sftp_bind") or "").strip()
-    if bind not in BIND_CHOICES or (bind == BIND_TAILSCALE and not tailscale_up):
+    enabled = form.get("sftp_enabled") == "on"
+    if bind not in BIND_CHOICES or (bind == BIND_TAILSCALE and not tailscale_up and enabled
+                                    and saved_bind != BIND_TAILSCALE):
         return None, "Choose where the SFTP service listens."
     port = port_or(form.get("sftp_port"), None)
     if port is None:
@@ -225,7 +229,7 @@ def parse_form(form, tailscale_up):
     if idle > absolute * 60:
         return None, ("The idle timeout cannot be longer than the absolute session limit. Shorten the "
                       "idle timeout or lengthen the limit.")
-    return {ENABLED_KEY: form.get("sftp_enabled") == "on", BIND_KEY: bind, PORT_KEY: port,
+    return {ENABLED_KEY: enabled, BIND_KEY: bind, PORT_KEY: port,
             KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap, IDLE_KEY: idle,
             ABSOLUTE_KEY: absolute}, None
 

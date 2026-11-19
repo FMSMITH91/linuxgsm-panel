@@ -45,11 +45,11 @@ def register(app):
     @step_up_required       # who can reach the game servers' files, and how they sign in
     def sftp_settings_save():
         """Save the SFTP card and restart the service with it."""
-        changes, why = sc.parse_form(request.form, bool(sftp_broker.tailscale_ips()))
+        before = sc.settings(load_config())
+        changes, why = sc.parse_form(request.form, bool(sftp_broker.tailscale_ips()), before["bind"])
         if why:
             flash(i18n.tr(why), "danger")
             return redirect(url_for("panel_settings", _anchor=_SETTINGS_ANCHOR))
-        before = sc.settings(load_config())
         update_config(lambda cfg: cfg.update(changes))
         after = sc.settings(load_config())
         if after["enabled"]:
