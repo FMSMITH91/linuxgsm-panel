@@ -21,7 +21,7 @@ from unit.part12 import P9_ADMIN, P9_GS, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9
     _p9_restore_all, _p9_new_server, _p9_delete_server, _p9_flashes
 from unit.part221 import _JS_EXTRA221, _JS_STUBS221, _node221
 from unit.part226 import _db_setup226, _db_teardown226
-from unit.part249 import _DOM249, _SETTLE249, _cut249, _js249, _resp249, _run249
+from unit.part249 import _DOM249, _FORMS249, _HAS_SU249, _SETTLE249, _cut249, _form_ep249, _js249, _resp249, _run249
 
 _TRIP261 = len(_P9_TRIPPED)
 _TYPED261 = "typed-pw"          # what the node tests type into the database server form
@@ -114,6 +114,69 @@ def _concat261(node):
         return None
     left, right = _concat261(node["left"]), _concat261(node["right"])
     return (left or [_HOLE261]) + (right or [_HOLE261]) if (left or right) else None
+
+
+def _has_call261(node):
+    """Whether a '+' chain has a call of a named function among its operands (`secBase() + '/x'`)."""
+    if node.get("type") == "CallExpression":
+        return (node.get("callee") or {}).get("type") == "Identifier"
+    return node.get("type") == "BinaryExpression" and node.get("operator") == "+" and (
+        _has_call261(node["left"]) or _has_call261(node["right"]))
+
+
+def _alts261(node, resolve):
+    """Every reading of a '+' chain: a call of a URL helper gives one per URL it returns, other parts a hole."""
+    if node.get("type") == "CallExpression" and (node.get("callee") or {}).get("type") == "Identifier":
+        got = resolve(node["callee"]["name"])
+        return [list(p) for p in got] if got else None
+    if node.get("type") != "BinaryExpression" or node.get("operator") != "+":
+        one = _concat261(node)
+        return [one] if one else None
+    left, right = _alts261(node["left"], resolve), _alts261(node["right"], resolve)
+    if not (left or right):
+        return None
+    return [a + b for a in (left or [[_HOLE261]]) for b in (right or [[_HOLE261]])]
+
+
+def _returned261(parents):
+    """Whether the value at the bottom of `parents` is what its function returns (a ?: or || branch counts)."""
+    k = len(parents) - 1
+    while k >= 0 and parents[k].get("type") in ("ConditionalExpression", "LogicalExpression"):
+        k -= 1
+    return k >= 0 and parents[k].get("type") == "ReturnStatement"
+
+
+def _param_of261(name, parents):
+    """(the function's key, the position) when `name` is a parameter of the function around it, else None."""
+    for k in range(len(parents) - 1, -1, -1):
+        fn = parents[k]
+        if fn["type"] not in _FN_TYPES261:
+            continue
+        params = [p.get("name") for p in fn.get("params", [])]
+        if name in params:
+            key = _fn_key261(fn, parents[k - 1] if k else {}, parents[:k])
+            return (key, params.index(name)) if key else None
+        if name in _decls261(fn)[1]:
+            return None
+    return None
+
+
+def _tail261(arg):
+    """(the literal pieces before it, the identifier) when a URL argument ends in a bare name, else None."""
+    if arg.get("type") == "Identifier":
+        return [], arg["name"]
+    if arg.get("type") == "BinaryExpression" and arg.get("operator") == "+" \
+            and (arg.get("right") or {}).get("type") == "Identifier":
+        return _concat261(arg["left"]) or [_HOLE261], arg["right"]["name"]
+    return None
+
+
+def _attr_urls261(tpl):
+    """{data-…-url attribute: the endpoints the templates fill it with (url_for)}."""
+    out = {}
+    for attr, ep in _re261.findall(r'\b(data-[\w-]+-url)="\{\{\s*url_for\(\s*[\'"](\w+)', tpl):
+        out.setdefault(attr, set()).add(ep)
+    return out
 
 
 def _before_query261(pieces):
@@ -296,8 +359,13 @@ class _Js261:
         self.sites, self.refs, self.strings = [], {}, set()
         self.failed, self.calls, self.url_fns, self.trees = [], [], {}, []
         self.prefix_fns, self.arg_sites = {}, []
+        # Shapes read since review 1120: a call of a URL helper inside a '+' chain (deferred until every
+        # helper is known), a function whose fetched URL ends in its own parameter (and the functions that
+        # hand theirs on to it), and a URL read from a data-…-url attribute the templates fill.
+        self.deferred, self.param_fns, self.forwards, self.param_args, self.attr_sites = [], {}, [], [], []
         tpl = "".join(_read261(os.path.join(_TPL261, t)) for t in sorted(os.listdir(_TPL261)) if t.endswith(".html"))
         self.actions = set(_re261.findall(r'data-action="([\w$.]+)"', tpl))
+        self.attr_urls = _attr_urls261(tpl)
         for name in sorted(n for n in os.listdir(_JS261) if n.endswith(".js")):
             self._parse(esprima, name)
         self._resolve()
@@ -313,19 +381,46 @@ class _Js261:
 
     def _resolve(self):
         """Calls of a URL-returning helper are that route's sites; a base helper's argument joins its base."""
+        for f, node, parents in self.deferred:
+            for pieces in _alts261(node, lambda n, ps=parents: self.url_fns.get(_key261(n, ps))) or []:
+                self._site(f, node, parents, pieces)
         for f, line, callee, method, scope in self.calls:
-            if callee in self.url_fns:
-                self.sites.append((f, line, self.url_fns[callee], method, scope))
+            for url in self.url_fns.get(callee, []):
+                self.sites.append((f, line, url, method, scope))
         for f, line, callee, pieces, method, scope in self.arg_sites:
             url = _url_pieces261(self.prefix_fns[callee] + pieces) if callee in self.prefix_fns else None
             if url:
                 self.sites.append((f, line, url, method, scope))
+        self._resolve_params()
+
+    def _resolve_params(self):
+        """A literal handed to a function whose fetched URL ends in that parameter is a site of prefix + literal.
+
+        Guarded where the chain passes a step-up helper on the way to its fetch, else where the literal is.
+        """
+        known = dict(self.param_fns)
+        for _round in range(4):            # a chain of hand-ons is short; four rounds reach every one here
+            for fn, at, callee, pos, prefix, inner in self.forwards:
+                if (callee, pos) in known and (fn, at) not in known:
+                    pre, method, guard = known[(callee, pos)]
+                    known[(fn, at)] = (pre + prefix, method, guard or inner)
+        for f, line, callee, pos, pieces, scope in self.param_args:
+            if (callee, pos) in known:
+                pre, method, guard = known[(callee, pos)]
+                url = _url_pieces261(pre + pieces)
+                if url:
+                    self.sites.append((f, line, url, method, ("helper", None) if guard else scope))
 
     def _visit(self, f, node, parents):
         up = parents[-1] if parents else {}
         kind = node["type"]
-        if kind in ("Literal", "TemplateLiteral", "BinaryExpression") and _concat261(up) is None:
+        if kind == "BinaryExpression" and _concat261(up) is None and _has_call261(node) \
+                and not _has_call261(up if up.get("type") == "BinaryExpression" else {}):
+            self.deferred.append((f, node, list(parents)))
+        elif kind in ("Literal", "TemplateLiteral", "BinaryExpression") and _concat261(up) is None:
             self._site(f, node, parents, _concat261(node))
+        if kind == "CallExpression":
+            self._call_args(f, node, parents)
         if kind == "Literal" and isinstance(node.get("value"), str):
             self.strings.add(node["value"])
             self.actions.update(_re261.findall(r'data-action="([\w$.]+)"', node["value"]))
@@ -344,6 +439,32 @@ class _Js261:
         if key:
             self.refs.setdefault(key, []).append(_use_kind261(node, up, parents))
 
+    def _call_args(self, f, call, parents):
+        """Note a fetch whose URL ends in a parameter, a parameter handed on, a literal argument, a data-…-url read."""
+        callee = _callee_name261(call)
+        args = call.get("arguments") or []
+        if callee == "getAttribute" and args[:1] and isinstance(args[0].get("value"), str):
+            for ep in sorted(self.attr_urls.get(args[0]["value"], ())):
+                up = parents[-1] if parents else {}
+                self.attr_sites.append((f, call["loc"]["start"]["line"], ep,
+                                        _fetch_method261(call, parents) if up.get("type") == "CallExpression"
+                                        else None, _scope261(parents)))
+        key = "fetch" if callee == "fetch" else (
+            _key261(call["callee"]["name"], parents) if (call.get("callee") or {}).get("type") == "Identifier" else None)
+        if not key:
+            return
+        inner = _scope261(parents)[0] == "helper"
+        for pos, arg in enumerate(args):
+            tail = _tail261(arg)
+            owner = _param_of261(tail[1], parents + [call]) if tail else None
+            if owner and key == "fetch" and pos == 0:
+                self.param_fns[owner] = (tail[0], _init_method261(args[1] if len(args) > 1 else None), inner)
+            elif owner and key != "fetch":
+                self.forwards.append((owner[0], owner[1], key, pos, tail[0], inner))
+            pieces = _concat261(arg)
+            if pieces and key != "fetch":
+                self.param_args.append((f, arg["loc"]["start"]["line"], key, pos, pieces, _scope261(parents)))
+
     def _helpers(self, f, node, parents, pieces):
         """Note a base-plus-argument call (`api('/x')`) and a function returning a base plus its argument."""
         up = parents[-1] if parents else {}
@@ -351,7 +472,7 @@ class _Js261:
                 and up["callee"].get("type") == "Identifier":
             self.arg_sites.append((f, node["loc"]["start"]["line"], _key261(up["callee"]["name"], parents),
                                    pieces, _fetch_method261(up, parents[:-1]), _scope261(parents)))
-        name = _scope261(parents)[1] if up.get("type") == "ReturnStatement" else None
+        name = _scope261(parents)[1] if _returned261(parents) else None
         if name and pieces[-1] == _HOLE261 and len(pieces) > 1:
             self.prefix_fns[name] = pieces[:-1]
         return up, name
@@ -364,7 +485,7 @@ class _Js261:
         if not url or _form_action261(up):
             return
         if returned_by:
-            self.url_fns[returned_by] = url
+            self.url_fns.setdefault(returned_by, []).append(url)
             return
         self.sites.append((f, node["loc"]["start"]["line"], url, _fetch_method261(node, parents), _scope261(parents)))
 
@@ -383,6 +504,20 @@ class _Js261:
         return bool(uses) and all(self.guarded(u, seen) for u in uses)
 
 
+# The push card's two posts are bare on purpose: the card reads data-reauth (set when the page was
+# rendered outside the confirmation window) and sends the browser to the re-auth page itself before the
+# permission prompt. The check after the gate holds that read in place ahead of each post.
+_OWN_REAUTH261 = {"/account/push/subscribe": "push_alerts.js: the card's data-reauth, before the browser prompt",
+                  "/account/telegram/link": "push_alerts.js: the card's data-reauth, before the link post"}
+# Step-up routes no page script or form sends a changing request to (grepped: no URL text, no url_for), kept
+# as API routes. Taking one off when a page starts to call it is checked below.
+_NO_PAGE261 = {"/api/remote/<int:remote_id>/firewall/close": "the Firewall tab deletes a rule by number instead",
+               "/api/remote/<int:remote_id>/game-port/<int:port>/open": "Sync ports opens a server's ports",
+               "/api/remote/<int:remote_id>/run-updates": "the host page runs os-update/start and polls it",
+               "/api/server-management/os-update-run": "the panel host's updates run as a host's os-update",
+               "/api/server-management/reboot": "the Power card reboots through /api/remote/<id>/reboot"}
+
+
 def _gate261():
     """Every changing fetch of a step-up route goes through a step-up helper."""
     try:
@@ -393,12 +528,14 @@ def _gate261():
     js = _Js261(_esprima261)
     rules = _step_up_rules261()
     bare, seen_rules = [], set()
-    for f, line, url, method, scope in js.sites:
-        hit = [r for r, ep in rules if _matches261(url, _sample261(r))]
+    sites = [(f, line, [r for r, ep in rules if _matches261(url, _sample261(r))], method, scope)
+             for f, line, url, method, scope in js.sites]
+    sites += [(f, line, [r for r, e in rules if e == ep], method, scope) for f, line, ep, method, scope in js.attr_sites]
+    for f, line, hit, method, scope in sites:
         if not hit or method == "GET":
             continue
         seen_rules.update(hit)
-        if not js.guarded(scope):
+        if not js.guarded(scope) and hit[0] not in _OWN_REAUTH261:
             bare.append("%s:%d %s (%s)" % (f, line, hit[0], scope[1] or scope[0]))
     return js, rules, bare, seen_rules
 
@@ -442,7 +579,7 @@ console.log(JSON.stringify({held: held, line: line, after: els['ts-wait-7'].inne
 """
     got = _node221("step-up js (pass 31)", _JS_STUBS221 + _JS_EXTRA221 + src + "\n" + act)
     if got is None:
-        return
+        return None
     eq("step-up (node): the Tailscale finalize, Sync ports and the panel backup's restore (first try, without a "
        "safety copy, with a passphrase) only ask stepUpThen while it holds, then send once it runs them",
        (got.get("held"), got.get("ran")),
@@ -452,6 +589,7 @@ console.log(JSON.stringify({held: held, line: line, after: els['ts-wait-7'].inne
           "setup button that asks again; once the finalize is sent the button is gone",
           'data-action="_tsFinalize"' in got.get("line", "") and "Finish setup" in got.get("line", "")
           and "_tsFinalize" not in got.get("after", "x"), repr(got))
+    return got
 
 
 _DBJS261 = r"""
@@ -495,7 +633,7 @@ def _databases261():
     return _run249("step-up (node): the database pages", prog)
 
 
-_top_level261()
+_TOP261 = _top_level261()
 _DB261 = _databases261()
 if _DB261 is not None:
     eq("step-up (node): the database server choice (Save, Clear), the Databases tab's reset, delete and restore, the "
@@ -511,6 +649,47 @@ if _DB261 is not None:
         "/api/server/5/databases/7/delete", "/api/remote/4/databases/9/delete"])
     eq("step-up (node): ...the database server Save sends the typed address and admin login",
        _DB261.get("save"), dict(kind="external", address="192.0.2.7", port=3306, user="root", password=_TYPED261))
+
+
+def _rule_re261(rule):
+    """A regex for the concrete URLs of `rule` (each <converter> one path segment)."""
+    return "".join("[^/]+" if p == "\x01" else _re261.escape(p) for p in _re261.split("(\x01)", _sample261(rule)))
+
+
+def _unseen261(rules, seen, formed, sent):
+    """The step-up rules nothing accounts for: no JS site the gate read, no data-step-up form, no node send."""
+    return sorted(r for r, ep in rules if r not in seen and ep not in formed and r not in _NO_PAGE261
+                  and not any(_re261.fullmatch(_rule_re261(r), u) for u in sent))
+
+
+def _reauth_first261(src, attr):
+    """Whether the click handler that posts to `attr` sends a stale page to re-auth (data-reauth) before it."""
+    at = src.find("getAttribute('%s')" % attr)
+    start = src.rfind("addEventListener('click', function () {", 0, at)
+    body = src[start:at] if at > 0 and start >= 0 else ""
+    first = body.find("getAttribute('data-reauth') === '1'")
+    return first >= 0 and "goSameSite(" in body[first:first + 160] and "return;" in body[first:first + 220]
+
+
+if _G261 is not None:
+    _sent261 = [u.split(" ")[0] for r in (_TOP261, _DB261) if r for u in (r.get("ran") or [])]
+    _formed261 = {_form_ep249(tag, ep) for _f, ep, tag, _b in _FORMS249 if _HAS_SU249.search(tag)}
+    _left261 = _unseen261(_rules261, _seen261, _formed261, _sent261)
+    check("step-up gate: every step-up route is accounted for (a page fetch the gate read, a form carrying "
+          "data-step-up, a send the node checks above saw wait for stepUpThen, or listed as sent by no page)",
+          not _left261 and _sent261, "unaccounted: %s" % _left261)
+    check("step-up gate: ...each route listed as sent by no page is a step-up route no page now sends",
+          set(_NO_PAGE261) <= {r for r, _e in _rules261} and not set(_NO_PAGE261) & _seen261,
+          repr(sorted(set(_NO_PAGE261) - {r for r, _e in _rules261}) + sorted(set(_NO_PAGE261) & _seen261)))
+    check("step-up gate: (control) a step-up route with no caller, form or node send is reported, and a "
+          "concrete URL accounts for its rule",
+          _unseen261([("/api/x/<int:a>/y", "ep_x")], set(), set(), []) == ["/api/x/<int:a>/y"]
+          and _unseen261([("/api/x/<int:a>/y", "ep_x")], set(), set(), ["/api/x/7/y"]) == [], "")
+    check("step-up gate: the push card's two bare posts are found by the gate (a URL read from a data-…-url "
+          "attribute) and each is preceded by the card's own re-auth step (data-reauth)",
+          set(_OWN_REAUTH261) <= _seen261
+          and all(_reauth_first261(_js249("push_alerts.js"), a) for a in ("data-subscribe-url", "data-link-url")),
+          repr(sorted(set(_OWN_REAUTH261) - _seen261)))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
