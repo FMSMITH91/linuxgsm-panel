@@ -532,7 +532,7 @@ def from_channel(client, command, name, window=4 * 1024 * 1024):
     """A Backend over a new paramiko channel running `command` on a remote host; owns `client`."""
     chan = client.get_transport().open_session(window_size=window, max_packet_size=32768)
     chan.settimeout(REPLY_TIMEOUT)
-    chan.exec_command(command)
+    chan.exec_command(command)  # nosec B601 - remote_shell: fixed paths, the account quoted by game_user_cmd
 
     def _close():
         try:

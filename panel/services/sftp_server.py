@@ -47,7 +47,7 @@ from panel.services import sftp_backend as bk
 from panel.services import sftp_common as sc
 # Defined in sftp_files, never here: this module runs as __main__, and a class it defined would be a
 # different class from the one the other modules import by name, so their raise would escape its except.
-from panel.services.sftp_files import AUTHZ_HOLD, DENIED, Files, Refused  # noqa: F401 - AUTHZ_HOLD for readers
+from panel.services.sftp_files import DENIED, Files, Refused
 
 _log = logging.getLogger("panel.sftp")
 
