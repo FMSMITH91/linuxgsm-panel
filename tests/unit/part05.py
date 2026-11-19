@@ -7016,7 +7016,42 @@ finally:
 # .ssh/id_ed25519` dropped to the operator's account and handed its private key to the panel user,
 # lgsm-command ran that account's scripts as it, and the destroy verbs would `userdel -r` it. Driven
 # through validate(), the dispatcher's own check, with the invoking account set by SUDO_UID.
-_GA_CHECKS = (_helper.v_game_account, _helper.v_destroyable_user)
+_GA_CHECKS = (_helper.v_game_account, _helper.v_destroyable_user, _helper.v_db_account)
+# The account checks by name, and every validator that wraps one, each with what it may name. Matching
+# validators by identity alone missed v_db_account (db-sizes, db-dump): a wrapper is in neither set, so
+# a new one fails the classification check below until it is placed here.
+_GA_BASE = ("v_username", "v_managed_user", "v_game_account", "v_destroyable_user")
+_GA_WRAPPERS = {"v_db_account": "a game account (in _GA_CHECKS), or - for the root-only archive",
+                "v_r23a_operator_self": "only the account that invoked the helper, its own rule"}
+_GA_SHAPE_ONLY = {("content-grant-read", 1): "a group name, checked later against the account's primary group"}
+
+
+def _ga_account_names(fn, seen=None):
+    """Return the account checks (by name) a validator reaches through the helper's own functions."""
+    seen = set() if seen is None else seen
+    code = getattr(fn, "__code__", None)
+    if code is None or fn in seen:
+        return set()
+    seen.add(fn)
+    out = {n for n in code.co_names if n in _GA_BASE}
+    for n in code.co_names:
+        sub = getattr(_helper, n, None)
+        if n not in _GA_BASE and getattr(sub, "__module__", None) == _helper.__name__ and callable(sub):
+            out |= _ga_account_names(sub, seen)
+    return out
+
+
+def _ga_unclassified(verbs):
+    """List (verb, slot, validator) for each slot taking an account through an unclassified check."""
+    bad = []
+    for verb, spec in verbs.items():
+        for i, v in enumerate(spec[0]):
+            name = getattr(_ga_check_of(v), "__name__", "")
+            if name == "v_username" and (verb, i) not in _GA_SHAPE_ONLY:
+                bad.append((verb, i, name))
+            elif name not in _GA_BASE and name not in _GA_WRAPPERS and _ga_account_names(_ga_check_of(v)):
+                bad.append((verb, i, name))
+    return bad
 
 
 def _ga_check_of(validator):
@@ -7042,10 +7077,26 @@ _ga_managed = sorted(v for v, spec in _helper.VERBS.items() if v not in _ga_verb
 eq("helper: every verb that names an account checks it against the game group, but the reasoned "
    "v_managed_user ones (a verb moved to v_managed_user would reach the operator's account)",
    _ga_managed, sorted(_GA_MANAGED_OK))
-check("helper: ...the per-account verbs are read from VERBS itself, the six once missed among them (control)",
-      len(_ga_verbs) >= 26 and {"addon-account-prepare", "addon-account-release", "cron-run-now", "crontab-remove",
-                                "db-import", "journal-cron-account", "game-file-read", "renice-users"} <= set(_ga_verbs),
+check("helper: ...the per-account verbs are read from VERBS itself, the six once missed among them, and the "
+      "two whose account goes through the v_db_account wrapper (control)",
+      len(_ga_verbs) >= 28 and {"addon-account-prepare", "addon-account-release", "cron-run-now", "crontab-remove",
+                                "db-import", "journal-cron-account", "game-file-read", "renice-users",
+                                "db-sizes", "db-dump"} <= set(_ga_verbs),
       repr(_ga_verbs))
+eq("helper: every validator that wraps an account check (a call to v_game_account, v_managed_user, "
+   "v_destroyable_user or v_username, however deep) is classified, and v_username names an account nowhere",
+   _ga_unclassified(_helper.VERBS), [])
+
+
+def _ga_wrap05(s):
+    """Stand in for a new wrapper over the operator-reaching check (the control below)."""
+    return _helper.v_managed_user(s)
+
+
+eq("helper: ...(control) a new wrapper, and a v_username slot with no reason, are each reported",
+   _ga_unclassified({"x-verb": ([_helper.v_username, _helper.Rest(_ga_wrap05)], None, None),
+                     "content-grant-read": _helper.VERBS["content-grant-read"]}),
+   [("x-verb", 0, "v_username"), ("x-verb", 1, "_ga_wrap05")])
 _ga_users = {"lgsmpanel": 990, "ubuntu": 1000, "cssserver": 1001, "deployer": 1002, "alice": 1003}
 _ga_groups = {"sudo": ["ubuntu"], "lgsmpanel-games": ["cssserver"]}
 
