@@ -25,11 +25,21 @@ has:
 
 ### More games for B3
 
-Quake 3 Arena, Counter-Strike: Global Offensive and Insurgency are built in and each switched on once it has been
-tested against LinuxGSM's own server (until then the Add-ons tab doesn't offer B3 for them):
+Quake 3 Arena, ET: Legacy, Counter-Strike: Global Offensive and Insurgency are built in and each switched on once it
+has been tested against LinuxGSM's own server (until then the Add-ons tab doesn't offer B3 for them). A game that is
+switched on joins the list above and the card's legacy warning.
 
 - **Quake 3 Arena** (B3's `q3` parser): RCON `rconpassword`, the log `~/.q3a/baseq3/games.log` (the game's default
   `g_log` under its home path).
+- **ET: Legacy** (B3's `et` parser, as for Enemy Territory): RCON `rconpassword`. ET: Legacy writes a game log only
+  when `g_log` names one, and LinuxGSM's config doesn't set it, so add it yourself: in the server's config
+  (`serverfiles/etmain/etlserver.cfg`), put `set g_log "etserver.log"` **below** the line `exec legacy.cfg` (ET:
+  Legacy's own `legacy.cfg` sets `g_log ""`, so a line above it is undone), then restart the server. The log is
+  written to `serverfiles/legacy/`. The panel doesn't change your config: until the log is there, the install says
+  what to set. Use a plain file name (no folder). If you rename the log later, B3 keeps reading the old one: change
+  `game_log` in its `Data/b3.ini` to match and restart it. As on Enemy Territory, B3 has no private messages: every
+  reply is said in public chat, and the server must be running when you install, so the add-on reads the port it
+  really listens on.
 - **Counter-Strike: Global Offensive** and **Insurgency** (B3's `csgo` and `insurgency` parsers): B3 needs
   SourceMod on the server (install Metamod: Source and SourceMod with LinuxGSM's `mods-install`), and reads
   `console.log`, which the server writes only when its start parameters (the LinuxGSM config's `startparameters`)
@@ -38,10 +48,6 @@ tested against LinuxGSM's own server (until then the Add-ons tab doesn't offer B
 
 Not offered:
 
-- **ET: Legacy**: B3's `et` parser reads neither ET: Legacy's `status` rows (they end with an extra
-  `lastConnectTime` column, so no player matches and each check drops them all) nor its chat lines (the name and
-  the text carry colour codes, so no `!` command is seen). Its default config also sets no `g_log`, so it writes
-  no game log.
 - **Arma 3**: B3's `arma3` parser gets everything over BattlEye RCon, whose password and port live in BattlEye's
   own config file. LinuxGSM's `arma3server` neither writes that file nor names its folder (`bepath` is empty), so
   nothing on the host says where B3 would reach it.
