@@ -598,17 +598,25 @@ def _r16d_module_file65(dotted):
     return None
 
 
+def _r16d_import_names65(node):
+    """{local name: (file, NAME or None)} one import statement binds (a relative import: none)."""
+    import ast as _ast
+    if isinstance(node, _ast.Import):
+        return {_a.asname: (_r16d_module_file65(_a.name), None) for _a in node.names if _a.asname}
+    if not (isinstance(node, _ast.ImportFrom) and node.module and not node.level):
+        return {}
+    out = {}
+    for _a in node.names:
+        _sub = _r16d_module_file65("%s.%s" % (node.module, _a.name))
+        out[_a.asname or _a.name] = (_sub, None) if _sub else (_r16d_module_file65(node.module), _a.name)
+    return out
+
+
 def _r16d_imports65(tree):
     """{local name: (file, NAME or None)}: a module imported under a name, or one NAME taken from one."""
-    import ast as _ast
     out = {}
     for _n in tree.body:
-        if isinstance(_n, _ast.Import):
-            out.update({_a.asname: (_r16d_module_file65(_a.name), None) for _a in _n.names if _a.asname})
-        elif isinstance(_n, _ast.ImportFrom) and _n.module and not _n.level:
-            for _a in _n.names:
-                _sub = _r16d_module_file65("%s.%s" % (_n.module, _a.name))
-                out[_a.asname or _a.name] = (_sub, None) if _sub else (_r16d_module_file65(_n.module), _a.name)
+        out.update(_r16d_import_names65(_n))
     return {_k: _v for _k, _v in out.items() if _v[0]}
 
 
@@ -623,6 +631,12 @@ def _r16d_resolve65(rel, ref, imports):
     return "%s:%s" % (rel, ref)
 
 
+def _r16d_panel_files65():
+    """Every panel/**/*.py (panel/install/app.py is under panel/), sorted."""
+    return sorted(os.path.join(_d, _f) for _d, _s, _fs in os.walk(os.path.join(_ROOT65, "panel"))
+                  for _f in _fs if _f.endswith(".py"))
+
+
 def _r16d_found_tables65():
     """({"<file>:<NAME>": keys}, [tables a game_type is looked up in whose keys the source cannot give]).
 
@@ -631,10 +645,7 @@ def _r16d_found_tables65():
     add-on CATALOG, keyed by add-on id with each game list inside) must be a listed table instead.
     """
     tables, refs = {}, set()
-    _files = sorted(   # panel/install/app.py is under panel/
-        os.path.join(_d, _f) for _d, _s, _fs in os.walk(os.path.join(_ROOT65, "panel"))
-        for _f in _fs if _f.endswith(".py"))
-    for _path in _files:
+    for _path in _r16d_panel_files65():
         _rel = os.path.relpath(_path, _ROOT65)
         with open(_path, encoding="utf-8") as fh:
             _tables, _used, _tree = _r16d_scan65(fh.read())
@@ -671,23 +682,31 @@ def _r16d_runtime_keys65(table):
     return None
 
 
-def _r16d_check_tables65(names):
-    """Every listed and every found game_type table holds only shortnames; the finder's control."""
-    tables, (found, unread) = _r15f_tables65(), _r16d_found_tables65()
-    built = {t: _r16d_runtime_keys65(t) for t in unread if t not in _R16D_LISTED65}
-    dead = {t: sorted(set(keys) - names)
-            for t, keys in list(tables.items()) + list(found.items()) + [b for b in built.items() if b[1]]
-            if set(keys) - names}
-    check("game tables: every key of every table keyed by game_type is a LinuxGSM shortname — a key "
-          "that is none (hl2mp, spigot, mcbe, vmc, unturned, ...) can never match a server; the tables "
-          "are the listed ones and every module-level one a game_type is looked up in",
-          not dead and len(tables) == 14 and len(found) >= 12 and _R16D_MUST_FIND65 <= set(found),
-          repr((dead, sorted(found))))
+def _r16d_dead_keys65(names, tables):
+    """{table: its keys that are no shortname} over [(table, keys or None)]."""
+    return {t: sorted(set(keys) - names) for t, keys in tables if keys and set(keys) - names}
+
+
+def _r16d_check_unread65(tables, unread, built):
+    """A looked-up table with no literal keys is read as imported, or judged as its listed table."""
     check("game tables: ...a table looked up by game_type that the source builds by code is read as imported "
           "(world_reset.GAMES, WIPE_GAMES, COD_GAMES), and the add-on CATALOG's game lists as a listed table",
           not [t for t in unread if built.get(t) is None and _R16D_LISTED65.get(t) not in tables]
           and {"panel/services/world_reset.py:GAMES", "panel/services/cod_mods.py:COD_GAMES"} <= set(built)
           and "panel/services/addons.py:CATALOG" in unread, repr((unread, sorted(built))))
+
+
+def _r16d_check_tables65(names):
+    """Every listed and every found game_type table holds only shortnames; the finder's control."""
+    tables, (found, unread) = _r15f_tables65(), _r16d_found_tables65()
+    built = {t: _r16d_runtime_keys65(t) for t in unread if t not in _R16D_LISTED65}
+    dead = _r16d_dead_keys65(names, list(tables.items()) + list(found.items()) + list(built.items()))
+    check("game tables: every key of every table keyed by game_type is a LinuxGSM shortname — a key "
+          "that is none (hl2mp, spigot, mcbe, vmc, unturned, ...) can never match a server; the tables "
+          "are the listed ones and every module-level one a game_type is looked up in",
+          not dead and len(tables) == 14 and len(found) >= 12 and _R16D_MUST_FIND65 <= set(found),
+          repr((dead, sorted(found))))
+    _r16d_check_unread65(tables, unread, built)
     _ctl = _r16d_game_tables65(
         'A = frozenset(("7dtd", "sm"))\nB = {"at": 1, "data": 2}\nC: dict = {"gmod": 1}\nD = ("x",)\n'
         'def f(e, gs, game_type):\n    t = 600 if e["game_type"] in A else 180\n'

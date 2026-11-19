@@ -417,7 +417,6 @@ def _r21d_running_items15(match):
 def _r21d_all_frames15():
     """The innermost frame of every real thread and every live green thread."""
     import gc as _gc15
-    import sys as _sys15
     import greenlet as _gl15
     return list(_sys15._current_frames().values()) + [
         g.gr_frame for g in _gc15.get_objects()
