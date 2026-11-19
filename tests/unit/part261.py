@@ -93,25 +93,31 @@ def _walk261(node, parents, visit):
     parents.pop()
 
 
+def _template_pieces261(node):
+    """A template literal's text, a hole for each ${...}."""
+    out = []
+    for i, q in enumerate(node["quasis"]):
+        out.append(q["value"]["cooked"])
+        if i < len(node["expressions"]):
+            out.append(_HOLE261)
+    return out
+
+
 def _concat261(node):
     """The pieces of a '+' chain of strings (a hole per computed part), or None if no literal is in it."""
-    if node.get("type") == "Literal" and isinstance(node.get("value"), str):
-        return [node["value"]]
-    if node.get("type") == "TemplateLiteral":
-        out = []
-        for i, q in enumerate(node["quasis"]):
-            out.append(q["value"]["cooked"])
-            if i < len(node["expressions"]):
-                out.append(_HOLE261)
-        return out
-    if node.get("type") == "BinaryExpression" and node.get("operator") == "+":
-        left, right = _concat261(node["left"]), _concat261(node["right"])
-        return (left or [_HOLE261]) + (right or [_HOLE261]) if (left or right) else None
-    return None
+    kind = node.get("type")
+    if kind == "Literal":
+        return [node["value"]] if isinstance(node.get("value"), str) else None
+    if kind == "TemplateLiteral":
+        return _template_pieces261(node)
+    if kind != "BinaryExpression" or node.get("operator") != "+":
+        return None
+    left, right = _concat261(node["left"]), _concat261(node["right"])
+    return (left or [_HOLE261]) + (right or [_HOLE261]) if (left or right) else None
 
 
-def _url_pieces261(pieces):
-    """The pieces up to the query string, holes merged; None unless it reads like a path."""
+def _before_query261(pieces):
+    """The pieces up to the query string, neighbouring holes merged into one."""
     out = []
     for p in pieces:
         if p != _HOLE261 and "?" in p:
@@ -119,8 +125,13 @@ def _url_pieces261(pieces):
             break
         if not (p == _HOLE261 and out and out[-1] == _HOLE261):
             out.append(p)
+    return out
+
+
+def _url_pieces261(pieces):
+    """The pieces of a URL path ending in literal text, or None (a helper's `base + path` names no route)."""
+    out = _before_query261(pieces)
     text = "".join(p for p in out if p != _HOLE261)
-    # A computed tail (a helper's `base + path`) names no route: its callers' own strings are read instead.
     if not out or out[-1] == _HOLE261 or out[-1].endswith("/") or text.count("/") < 2:
         return None
     return out
@@ -135,48 +146,58 @@ def _callee_name261(call):
     return ""
 
 
-def _fetch_method261(node, parents):
-    """The method of the fetch() whose first argument is `node`, 'GET' without one, None when not a fetch."""
-    call = parents[-1] if parents else {}
-    if call.get("type") != "CallExpression" or _callee_name261(call) != "fetch" or call["arguments"][:1] != [node]:
+def _init_method261(init):
+    """The method a fetch() init object names: 'GET' without one, None when it cannot be read."""
+    if init is None:
+        return "GET"
+    if init.get("type") != "ObjectExpression":
         return None
-    init = call["arguments"][1] if len(call["arguments"]) > 1 else None
-    for prop in (init or {}).get("properties", []) or []:
+    for prop in init.get("properties") or []:
         key = prop.get("key") or {}
         if (key.get("name") or key.get("value")) == "method":
             val = prop.get("value") or {}
             return str(val.get("value")).upper() if val.get("type") == "Literal" else None
-    return "GET" if init is None or init.get("type") == "ObjectExpression" else None
+    return "GET"
+
+
+def _fetch_method261(node, parents):
+    """The method of the fetch() whose first argument is `node`, None when it is not one."""
+    call = parents[-1] if parents else {}
+    if call.get("type") != "CallExpression" or _callee_name261(call) != "fetch" or call["arguments"][:1] != [node]:
+        return None
+    return _init_method261(call["arguments"][1] if len(call["arguments"]) > 1 else None)
 
 
 _FN_TYPES261 = ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression")
 _DECLS261 = {}
 
 
+def _declared261(node, names):
+    """Add to `names` what `node` declares in the function around it (a nested function's body is its own)."""
+    if node["type"] == "VariableDeclarator" and node["id"].get("type") == "Identifier":
+        names.add(node["id"]["name"])
+    if node["type"] == "FunctionDeclaration" and node.get("id"):
+        names.add(node["id"]["name"])
+    return node["type"] not in _FN_TYPES261
+
+
+def _own_walk261(node, visit):
+    """Call visit(node) for every AST dict below `node`, not entering a node for which it answers False."""
+    if isinstance(node, list):
+        for item in node:
+            _own_walk261(item, visit)
+    elif isinstance(node, dict) and "type" in node and visit(node):
+        for key, val in node.items():
+            if key not in ("range", "loc"):
+                _own_walk261(val, visit)
+
+
 def _decls261(fn):
     """(params, names declared in `fn`'s own body): var/let/const and function declarations, not nested ones."""
     if id(fn) not in _DECLS261:
-        params = {p.get("name") for p in fn.get("params", [])}
         names = set()
-
-        def visit(node):
-            if isinstance(node, list):
-                for item in node:
-                    visit(item)
-                return
-            if not isinstance(node, dict) or "type" not in node:
-                return
-            if node["type"] == "VariableDeclarator" and node["id"].get("type") == "Identifier":
-                names.add(node["id"]["name"])
-            if node["type"] in _FN_TYPES261:
-                if node["type"] == "FunctionDeclaration" and node.get("id"):
-                    names.add(node["id"]["name"])
-                return
-            for key, val in node.items():
-                if key not in ("range", "loc") and isinstance(val, (dict, list)):
-                    visit(val)
-        visit(fn.get("body"))
-        _DECLS261[id(fn)] = (params, names)
+        _own_walk261(fn.get("body"), lambda n: _declared261(n, names))
+        _DECLS261[id(fn)] = ({p.get("name") for p in fn.get("params", [])}, names)
     return _DECLS261[id(fn)]
 
 
@@ -198,13 +219,12 @@ def _fn_key261(fn, parent, outer):
         return _key261(fn["id"]["name"], outer)
     if parent.get("type") == "VariableDeclarator" and parent.get("init") is fn:
         return _key261(parent["id"].get("name"), outer)
-    if parent.get("type") == "AssignmentExpression" and parent.get("right") is fn:
-        left = parent["left"]
-        if left.get("type") == "Identifier":
-            return _key261(left["name"], outer)
-        if left.get("type") == "MemberExpression" and not left.get("computed"):
-            return left["property"].get("name")
-    return None
+    if parent.get("type") != "AssignmentExpression" or parent.get("right") is not fn:
+        return None
+    left = parent["left"]
+    if left.get("type") == "Identifier":
+        return _key261(left["name"], outer)
+    return left["property"].get("name") if left.get("type") == "MemberExpression" and not left.get("computed") else None
 
 
 def _names261(node):
@@ -221,6 +241,12 @@ def _fallback261(parents, k):
             and "stepUpThen" in _names261(up["test"]))
 
 
+def _helper_arg261(node, up):
+    """Whether `node` is handed straight to a step-up helper (stepUpThen, _xxStepUp)."""
+    return (up.get("type") == "CallExpression" and any(node is a for a in up.get("arguments", []))
+            and bool(_STEP_UP_NAME261.search(_callee_name261(up))))
+
+
 def _scope261(parents):
     """('helper', None) inside a step-up helper's callback, ('fn', name) in a named function, ('top', None)."""
     for k in range(len(parents) - 1, -1, -1):
@@ -230,13 +256,37 @@ def _scope261(parents):
         if fn["type"] not in _FN_TYPES261:
             continue
         up = parents[k - 1] if k else {}
-        if up.get("type") == "CallExpression" and fn in up.get("arguments", []) \
-                and _STEP_UP_NAME261.search(_callee_name261(up)):
+        if _helper_arg261(fn, up):
             return ("helper", None)
         name = _fn_key261(fn, up, parents[:k])
         if name:
             return ("fn", name)
     return ("top", None)
+
+
+def _not_a_use261(node, up, parents):
+    """Whether this identifier names something rather than using it (a declaration, a key, an assignment target)."""
+    t = up.get("type")
+    own_prop = t == "MemberExpression" and up.get("property") is node and not up.get("computed")
+    called = len(parents) > 1 and parents[-2].get("type") == "CallExpression" and parents[-2].get("callee") is up
+    return (t in _FN_TYPES261 or (own_prop and not called)
+            or (t in ("VariableDeclarator", "Property", "AssignmentExpression")
+                and any(node is up.get(k) for k in ("id", "key", "left"))))
+
+
+def _use_kind261(node, up, parents):
+    """The scope a use of a function runs in: a helper's, its caller's, or an entry point's ('top')."""
+    if _helper_arg261(node, up):
+        return ("helper", None)
+    if (up.get("type") == "CallExpression" and up.get("callee") is node) or up.get("type") == "MemberExpression":
+        return _scope261(parents)
+    return ("top", None)            # handed to a listener, a timer or a data-action: an entry point
+
+
+def _form_action261(up):
+    """Whether a URL is set as a form's action (the form carries data-step-up itself: part249's gate)."""
+    return ((up.get("type") == "AssignmentExpression" and (up["left"].get("property") or {}).get("name") == "action")
+            or (up.get("type") == "CallExpression" and _callee_name261(up) == "setAttribute"))
 
 
 class _Js261:
@@ -248,21 +298,24 @@ class _Js261:
         self.prefix_fns, self.arg_sites = {}, []
         tpl = "".join(_read261(os.path.join(_TPL261, t)) for t in sorted(os.listdir(_TPL261)) if t.endswith(".html"))
         self.actions = set(_re261.findall(r'data-action="([\w$.]+)"', tpl))
-        for name in sorted(os.listdir(_JS261)):
-            if not name.endswith(".js"):
-                continue
-            try:
-                tree = _to_dict261(esprima.parseScript(_read261(os.path.join(_JS261, name)), {"loc": True}))
-            except Exception as e:  # noqa: BLE001 - a file that does not parse is reported by name
-                self.failed.append("%s: %s" % (name, e))
-                continue
-            self.trees.append(tree)         # kept: the local names are keyed by their function's id()
-            _walk261(tree, [], lambda n, p, f=name: self._visit(f, n, p))
-        # A function that only returns a route's URL: each call of it is that route's site.
+        for name in sorted(n for n in os.listdir(_JS261) if n.endswith(".js")):
+            self._parse(esprima, name)
+        self._resolve()
+
+    def _parse(self, esprima, name):
+        try:
+            tree = _to_dict261(esprima.parseScript(_read261(os.path.join(_JS261, name)), {"loc": True}))
+        except Exception as e:  # noqa: BLE001 - a file that does not parse is reported by name
+            self.failed.append("%s: %s" % (name, e))
+            return
+        self.trees.append(tree)         # kept: the local names are keyed by their function's id()
+        _walk261(tree, [], lambda n, p, f=name: self._visit(f, n, p))
+
+    def _resolve(self):
+        """Calls of a URL-returning helper are that route's sites; a base helper's argument joins its base."""
         for f, line, callee, method, scope in self.calls:
             if callee in self.url_fns:
                 self.sites.append((f, line, self.url_fns[callee], method, scope))
-        # ...and one returning a base plus its argument (`api('/' + id + '/delete')`): the two joined.
         for f, line, callee, pieces, method, scope in self.arg_sites:
             url = _url_pieces261(self.prefix_fns[callee] + pieces) if callee in self.prefix_fns else None
             if url:
@@ -270,62 +323,44 @@ class _Js261:
 
     def _visit(self, f, node, parents):
         up = parents[-1] if parents else {}
-        if node["type"] in ("Literal", "TemplateLiteral", "BinaryExpression") and _concat261(up or {}) is None:
-            pieces = _concat261(node)
-            if pieces:
-                self._site(f, node, parents, pieces)
-        if node["type"] == "Literal" and isinstance(node.get("value"), str):
+        kind = node["type"]
+        if kind in ("Literal", "TemplateLiteral", "BinaryExpression") and _concat261(up) is None:
+            self._site(f, node, parents, _concat261(node))
+        if kind == "Literal" and isinstance(node.get("value"), str):
             self.strings.add(node["value"])
             self.actions.update(_re261.findall(r'data-action="([\w$.]+)"', node["value"]))
-        if node["type"] == "Identifier":
-            self._ref(node, up, parents)
-        if node["type"] == "CallExpression" and (node.get("callee") or {}).get("type") == "Identifier":
+        if kind == "Identifier" and not _not_a_use261(node, up, parents):
+            own = up.get("type") == "MemberExpression" and up.get("property") is node
+            key = node["name"] if own else _key261(node["name"], parents)
+            if key:
+                self.refs.setdefault(key, []).append(_use_kind261(node, up, parents))
+        if kind == "CallExpression" and (node.get("callee") or {}).get("type") == "Identifier":
             self.calls.append((f, node["loc"]["start"]["line"], _key261(node["callee"]["name"], parents),
                                _fetch_method261(node, parents), _scope261(parents)))
 
-    def _site(self, f, node, parents, pieces):
-        url = _url_pieces261(pieces)
+    def _helpers(self, f, node, parents, pieces):
+        """Note a base-plus-argument call (`api('/x')`) and a function returning a base plus its argument."""
         up = parents[-1] if parents else {}
         if up.get("type") == "CallExpression" and up["arguments"][:1] == [node] \
                 and up["callee"].get("type") == "Identifier":
             self.arg_sites.append((f, node["loc"]["start"]["line"], _key261(up["callee"]["name"], parents),
                                    pieces, _fetch_method261(up, parents[:-1]), _scope261(parents)))
-        if up.get("type") == "ReturnStatement" and pieces[-1] == _HOLE261 and len(pieces) > 1:
-            name = _scope261(parents)[1]
-            if name:
-                self.prefix_fns[name] = pieces[:-1]
-        # A form's action: the form carries data-step-up itself (part249's template gate).
-        if (up.get("type") == "AssignmentExpression" and (up["left"].get("property") or {}).get("name") == "action") \
-                or (up.get("type") == "CallExpression" and _callee_name261(up) == "setAttribute"):
-            return
-        if url and up.get("type") == "ReturnStatement":
-            name = _scope261(parents)[1]
-            if name:
-                self.url_fns[name] = url
-                return
-        if url:
-            self.sites.append((f, node["loc"]["start"]["line"], url, _fetch_method261(node, parents),
-                               _scope261(parents)))
+        name = _scope261(parents)[1] if up.get("type") == "ReturnStatement" else None
+        if name and pieces[-1] == _HOLE261 and len(pieces) > 1:
+            self.prefix_fns[name] = pieces[:-1]
+        return up, name
 
-    def _ref(self, node, up, parents):
-        """Record a use of a name: called, handed straight to a step-up helper, or anything else."""
-        t = up.get("type")
-        if t in _FN_TYPES261 or (t == "VariableDeclarator" and up.get("id") is node) \
-                or (t == "MemberExpression" and up.get("property") is node and not up.get("computed")
-                    and not (len(parents) > 1 and parents[-2].get("type") == "CallExpression"
-                             and parents[-2].get("callee") is up)) \
-                or (t == "Property" and up.get("key") is node) \
-                or (t == "AssignmentExpression" and up.get("left") is node):
+    def _site(self, f, node, parents, pieces):
+        if not pieces:
             return
-        if t == "CallExpression" and node in up.get("arguments", []) and _STEP_UP_NAME261.search(_callee_name261(up)):
-            kind = ("helper", None)
-        elif (t == "CallExpression" and up.get("callee") is node) or t == "MemberExpression":
-            kind = _scope261(parents)
-        else:
-            kind = ("top", None)            # handed to a listener, a timer or a data-action: an entry point
-        key = node["name"] if t == "MemberExpression" and up.get("property") is node else _key261(node["name"], parents)
-        if key:
-            self.refs.setdefault(key, []).append(kind)
+        up, returned_by = self._helpers(f, node, parents, pieces)
+        url = _url_pieces261(pieces)
+        if not url or _form_action261(up):
+            return
+        if returned_by:
+            self.url_fns[returned_by] = url
+            return
+        self.sites.append((f, node["loc"]["start"]["line"], url, _fetch_method261(node, parents), _scope261(parents)))
 
     def guarded(self, scope, seen=None):
         """Whether code in `scope` runs only after a step-up helper said go."""

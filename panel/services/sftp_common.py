@@ -201,6 +201,13 @@ def _tailnet_addresses(ips):
 TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))  # NOSONAR - Tailscale's fixed ranges
 
 
+def _bind_allowed(bind, tailscale_up, enabled, saved_bind):
+    """Whether the card may save `bind`: Tailscale while it is down only as the saved choice or with the service off."""
+    if bind not in BIND_CHOICES:
+        return False
+    return bind != BIND_TAILSCALE or tailscale_up or not enabled or saved_bind == BIND_TAILSCALE
+
+
 def parse_form(form, tailscale_up, saved_bind=None):
     """(changes for config.json, refusal or None) from the Settings card's form.
 
@@ -211,8 +218,7 @@ def parse_form(form, tailscale_up, saved_bind=None):
     """
     bind = (form.get("sftp_bind") or "").strip()
     enabled = form.get("sftp_enabled") == "on"
-    if bind not in BIND_CHOICES or (bind == BIND_TAILSCALE and not tailscale_up and enabled
-                                    and saved_bind != BIND_TAILSCALE):
+    if not _bind_allowed(bind, tailscale_up, enabled, saved_bind):
         return None, "Choose where the SFTP service listens."
     port = port_or(form.get("sftp_port"), None)
     if port is None:
