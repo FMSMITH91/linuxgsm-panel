@@ -70,6 +70,12 @@ _def259 = _sc259.settings({})
 eq("sftp settings: off by default, keys only, the default port and the recommended cap",
    (_def259["enabled"], _def259["password"], _def259["port"], _def259["cap_mb"], _def259["bind"]),
    (False, False, 2222, _sc259.RECOMMENDED_CAP_MB, None))
+eq("sftp settings: the absolute limit is the web sign-in's own until set (8 h, or what Settings holds), 1-168 h",
+   (_def259["absolute_h"], _sc259.settings({"session_absolute_hours": 6})["absolute_h"],
+    _sc259.settings({"session_absolute_hours": 6, "sftp_absolute_hours": 3})["absolute_h"],
+    _sc259.absolute_or("0", 8), _sc259.absolute_or(169, 8), _sc259.absolute_or("x", 8),
+    [_sc259.absolute_past_owasp(h) for h in (4, 8, 9)], _sc259.ABSOLUTE_GRACE_MINUTES),
+   (8, 6, 3, 8, 8, 8, [False, False, True], 60))
 eq("sftp settings: an idle session is closed after 15 minutes by default (OWASP's 15-30 for most applications)",
    (_def259["idle_min"], _sc259.idle_or("abc", 15), _sc259.idle_or(-1, 15), _sc259.idle_or(1441, 15),
     [_sc259.idle_outside_owasp(m) for m in (0, 2, 15, 30, 31)]),
@@ -140,6 +146,8 @@ eq("sftp service: no choice saved is 127.0.0.1 without Tailscale, the tailnet wi
    ((_u259 or {}).get("binds"), (_u_ts259 or {}).get("binds")),
    (["127.0.0.1"], ["100.101.102.103", "fd7a:115c:a1e0::1"]))
 eq("sftp service: the service is started with the idle timeout in force", (_l259 or {}).get("idle_min"), 15)
+eq("sftp service: ...and the absolute limit and the grace for an open transfer",
+   ((_l259 or {}).get("absolute_h"), (_l259 or {}).get("absolute_grace_min")), (8, 60))
 eq("sftp service: password sign-in stays off under every choice unless switched on (keys only)",
    [(s or {}).get("password") for s in (_a259, _a4_259, _l259, _t259, _u259)], [False] * 5)
 check("sftp service: the host key is Ed25519, made once and kept encrypted in config.json",
@@ -173,7 +181,7 @@ _A259 = _p9_client(P9_ADMIN)
 
 def _save259(**form):
     base = {"sftp_enabled": "on", "sftp_bind": "loopback", "sftp_port": "2222", "sftp_max_upload_mb": "4096",
-            "sftp_idle_minutes": "15"}
+            "sftp_idle_minutes": "15", "sftp_absolute_hours": "8"}
     base.update(form)
     return _A259.post("/settings/sftp", data={k: v for k, v in base.items() if v is not None})
 
@@ -230,6 +238,28 @@ eq("sftp card: the idle timeout saves inside and outside OWASP's range, a note o
     any("never closed" in m for m in _f0), any("OWASP" in m and "idle" in m.lower() for m in _f20),
     any("whole number of minutes" in m for m in _fbad)),
    (20, True, True, False, True))
+_save259(sftp_absolute_hours="12")
+_fa12 = _flashed259()
+_save259(sftp_absolute_hours="169")
+_fa169 = _flashed259()
+_save259(sftp_absolute_hours="8", sftp_idle_minutes="600")
+_fa_idle = _flashed259()
+_abs_now259 = _sc259.settings(_cfg259.load_config())["absolute_h"]
+_save259(sftp_absolute_hours="6")
+_fa6 = _flashed259()
+eq("sftp card: the absolute limit saves past OWASP's 8 h with a note, refuses 169 h and an idle longer than it",
+   (_abs_now259, any("longer than the 8 hours OWASP" in m for m in _fa12), any("from 1 to 168" in m for m in _fa169),
+    any("idle timeout cannot be longer than the absolute" in m for m in _fa_idle),
+    _sc259.settings(_cfg259.load_config())["absolute_h"], any("8 hours OWASP" in m for m in _fa6)),
+   (12, True, True, True, 6, False))
+_save259(sftp_absolute_hours="12")
+_html_abs259 = _A259.get("/settings").get_data(as_text=True)
+check("sftp card: the absolute field shows the value in force, OWASP's 4-8 hours and the note past it",
+      'name="sftp_absolute_hours"' in _html_abs259 and 'value="12"' in _html_abs259
+      and "OWASP: 4–8 hours." in _html_abs259 and 'id="sftp-absolute-note"' in _html_abs259, _html_abs259[:0])
+_save259(sftp_absolute_hours="8")
+eq("sftp card: ...and no absolute note at 8 hours",
+   'id="sftp-absolute-note"' in _A259.get("/settings").get_data(as_text=True), False)
 _save259(sftp_idle_minutes="45")
 _html_idle259 = _A259.get("/settings").get_data(as_text=True)
 check("sftp card: the field shows the value in force, the recommended 15 minutes and OWASP's range beside it",
@@ -374,6 +404,7 @@ class _E2E259:
 
     port = 0
     idle_port = 0
+    abs_port = 0
     homes = {}
     log_lines = []
 
@@ -857,6 +888,48 @@ if _E2E_UP259:
         _until259(lambda: not _runner_idle259.is_alive(), 15)
     except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
         check("sftp end to end: the idle checks ran to their end", False, repr(_exc259))
+
+
+# ── the absolute limit, on a third service: 5.4 s, and a 3 s grace for a file still open ──
+if _E2E_UP259:
+    try:
+        _E2E259.abs_port = _free_port259()
+        _spawn_abs259 = dict(_SPAWN259, port=_E2E259.abs_port, idle_min=0, absolute_h=0.0015,
+                             absolute_grace_min=0.05)
+        _runner_abs259 = _th259.Thread(target=_br259.run_once, args=(_p9, _spawn_abs259), daemon=True)
+        _runner_abs259.start()
+        _until259(lambda: _br259.status()["bound"] == [["127.0.0.1", _E2E259.abs_port]], 30)
+        _since_a = _last_audit_id259()
+        _E2E259.port = _E2E259.abs_port
+        _plain = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
+        _xfer = _connect259("p259_ed", pkey=_K1, host_key=_HK259)
+        _t_signed = _time259.monotonic()
+        _slow = _xfer[1].open("/Alpha One/slow.bin", "w", bufsize=0)   # each write sent and answered
+        _late = {}
+        while _time259.monotonic() - _t_signed < 7.0:          # a write every half second, past the limit
+            _late["write"] = _sftp_err259(_slow.write, b"x" * 1024)
+            if _time259.monotonic() - _t_signed > 6.0 and "list" not in _late:
+                _late["list"] = _sftp_err259(_xfer[1].listdir, "/")[:15]
+                _late["open"] = _sftp_err259(lambda p: _xfer[1].open(p, "w").close(), "/Alpha One/new.bin")[:15]
+            _time259.sleep(0.5)
+        _plain_closed = not _plain[0].get_transport().is_active() if _plain[0] else None
+        eq("sftp absolute: past the limit a session opens and lists nothing new, while its open file still writes",
+           (_late.get("list"), _late.get("open"), _late.get("write")), ("PermissionError", "PermissionError", "ok"))
+        eq("sftp absolute: a session with nothing open is closed at the limit", _plain_closed, True)
+        _xfer_open_at_limit = _xfer[0].get_transport().is_active() if _xfer[0] else None
+        _xfer_closed = bool(_xfer[0]) and _until259(lambda: not _xfer[0].get_transport().is_active(), 6)
+        eq("sftp absolute: ...one with a file open goes on past it, and is closed when the grace runs out",
+           (_xfer_open_at_limit, _xfer_closed), (True, True))
+        _abs_rows = sorted(r[2] for r in _audits259("sftp_session_closed", _since_a))
+        check("sftp absolute: both closes are audited as the absolute limit, the cut one with its open transfer",
+              len(_abs_rows) == 2 and all("absolute limit" in r for r in _abs_rows)
+              and sum("transfer still open" in r for r in _abs_rows) == 1, repr(_abs_rows))
+        _close259(_plain)
+        _close259(_xfer)
+        _REAL_RESTART259()
+        _until259(lambda: not _runner_abs259.is_alive(), 15)
+    except Exception as _exc259:  # noqa: BLE001 - a crash is this block's failure
+        check("sftp end to end: the absolute-limit checks ran to their end", False, repr(_exc259))
 
 
 if _E2E:

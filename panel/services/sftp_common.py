@@ -34,6 +34,7 @@ PORT_KEY = "sftp_port"
 KBD_SIGNIN_KEY = "sftp_password_auth"
 CAP_KEY = "sftp_max_upload_mb"
 IDLE_KEY = "sftp_idle_minutes"
+ABSOLUTE_KEY = "sftp_absolute_hours"
 HOST_KEY_KEY = "sftp_host_key"
 
 BIND_TAILSCALE, BIND_LOOPBACK, BIND_ALL = "tailscale", "loopback", "all"
@@ -57,6 +58,15 @@ FREE_SPACE_SLACK = 256 * 1024 * 1024
 RECOMMENDED_IDLE_MINUTES = 15
 OWASP_IDLE_MAX_MINUTES = 30
 IDLE_MIN_MINUTES, IDLE_MAX_MINUTES = 0, 24 * 60
+# The same Cheat Sheet's "Absolute Timeout": "All sessions should implement an absolute timeout, regardless of
+# session activity", with 4-8 hours as its example for a working day. The panel's own sign-in already has this
+# setting (core/session_policy: `session_absolute_hours`, default 8, 1-168, a note past OWASP's 8), so the SFTP
+# one takes the same range, the same note and, until it is set, the web sign-in's own value.
+# When it passes, the session takes no new request but lets a file already open finish, for at most
+# ABSOLUTE_GRACE_MINUTES: an hour is what an upload of the recommended 4 GiB cap needs over a 10 Mbit/s uplink
+# (4 GiB / 1.25 MB/s ≈ 57 min), the slow end of a home connection; anything longer is cut, as a web session
+# past its limit is.
+ABSOLUTE_GRACE_MINUTES = 60
 # Keys one account may hold.
 MAX_KEYS_PER_USER = 20
 
@@ -72,7 +82,32 @@ def settings(cfg):
         "password": cfg.get(KBD_SIGNIN_KEY) is True,
         "cap_mb": cap_or(cfg.get(CAP_KEY), RECOMMENDED_CAP_MB),
         "idle_min": idle_or(cfg.get(IDLE_KEY), RECOMMENDED_IDLE_MINUTES),
+        "absolute_h": absolute_or(cfg.get(ABSOLUTE_KEY), _web_absolute_hours(cfg)),
     }
+
+
+def _web_absolute_hours(cfg):
+    """The panel's own sign-in absolute limit (Settings → Sessions & Security), the SFTP one's default."""
+    from panel.core import session_policy
+    return session_policy.absolute_hours(cfg)
+
+
+def absolute_or(value, default):
+    """`value` as an absolute limit in whole hours within the web sign-in's own range (1-168), else `default`."""
+    from panel.core import session_policy
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return default
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        return default
+    return n if session_policy.ABSOLUTE_MIN_HOURS <= n <= session_policy.ABSOLUTE_MAX_HOURS else default
+
+
+def absolute_past_owasp(hours):
+    """Whether an absolute limit is longer than OWASP's 8 hours (the web sign-in's own note)."""
+    from panel.core import session_policy
+    return hours > session_policy.OWASP_ABSOLUTE_MAX_HOURS
 
 
 def idle_or(value, default):
@@ -179,8 +214,15 @@ def parse_form(form, tailscale_up):
     idle = idle_or(form.get("sftp_idle_minutes"), None)
     if idle is None:
         return None, "The idle timeout must be a whole number of minutes from 0 to 1440."
+    absolute = absolute_or(form.get("sftp_absolute_hours"), None)
+    if absolute is None:
+        return None, "The absolute session limit must be a whole number of hours from 1 to 168."
+    if idle > absolute * 60:
+        return None, ("The idle timeout cannot be longer than the absolute session limit. Shorten the "
+                      "idle timeout or lengthen the limit.")
     return {ENABLED_KEY: form.get("sftp_enabled") == "on", BIND_KEY: bind, PORT_KEY: port,
-            KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap, IDLE_KEY: idle}, None
+            KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap, IDLE_KEY: idle,
+            ABSOLUTE_KEY: absolute}, None
 
 
 # ── The service's host key ─────────────────────────────────────────────────────────────────────

@@ -127,7 +127,8 @@ def spawn_config(app):
         return None, "Waiting for this host's Tailscale address."
     key = sc.ensure_host_key(update_config, load_config, encrypt_secret, decrypt_secret)
     return {"ok": True, "binds": binds, "port": s["port"], "password": s["password"],
-            "cap_mb": s["cap_mb"], "idle_min": s["idle_min"], "host_key": key, "choice": choice}, None
+            "cap_mb": s["cap_mb"], "idle_min": s["idle_min"], "absolute_h": s["absolute_h"],
+            "absolute_grace_min": sc.ABSOLUTE_GRACE_MINUTES, "host_key": key, "choice": choice}, None
 
 
 def tailscale_ips():

@@ -98,7 +98,7 @@ def change_note(before, after):
     if before["enabled"] != after["enabled"]:
         words.append("SFTP service %s" % ("on" if after["enabled"] else "off"))
     for key, label in (("bind", "address"), ("port", "port"), ("cap_mb", "upload limit MiB"),
-                       ("idle_min", "idle timeout min")):
+                       ("idle_min", "idle timeout min"), ("absolute_h", "absolute limit h")):
         if before[key] != after[key]:
             words.append("SFTP %s %s -> %s" % (label, before[key], after[key]))
     if before["password"] != after["password"]:
@@ -120,6 +120,9 @@ def notes(s):
     elif s["idle_min"] > sc.OWASP_IDLE_MAX_MINUTES:
         out.append(i18n.Sentence("The idle timeout is longer than the 30 minutes OWASP recommends at most "
                                  "({minutes} minutes).", minutes=s["idle_min"]))
+    if sc.absolute_past_owasp(s["absolute_h"]):
+        out.append(i18n.Sentence("The absolute SFTP session limit is longer than the 8 hours OWASP recommends at "
+                                 "most ({hours} hours).", hours=s["absolute_h"]))
     if s["cap_mb"] > sc.RECOMMENDED_CAP_MB:
         out.append(i18n.Sentence("The upload size limit is above the recommended {mib} MiB.",
                                  mib=sc.RECOMMENDED_CAP_MB))
@@ -141,6 +144,7 @@ def settings_card():
         "fingerprint": sc.host_fingerprint(decrypt_secret(stored)) if stored else "",
         "default_port": sc.DEFAULT_PORT, "recommended_cap": sc.RECOMMENDED_CAP_MB,
         "recommended_idle": sc.RECOMMENDED_IDLE_MINUTES, "idle_outside": sc.idle_outside_owasp(s["idle_min"]),
+        "absolute_past": sc.absolute_past_owasp(s["absolute_h"]), "grace_min": sc.ABSOLUTE_GRACE_MINUTES,
         "notes": notes(s), "all_warning": ALL_ADDRESSES_WARNING,
     }
 

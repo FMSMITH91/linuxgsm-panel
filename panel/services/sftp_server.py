@@ -41,7 +41,7 @@ from paramiko import (AUTH_FAILED, AUTH_SUCCESSFUL, OPEN_FAILED_ADMINISTRATIVELY
                       SFTP_BAD_MESSAGE, SFTP_FAILURE, SFTP_NO_SUCH_FILE, SFTP_OK, SFTP_OP_UNSUPPORTED,
                       SFTP_PERMISSION_DENIED, InteractiveQuery, SFTPAttributes, SFTPServer, SFTPServerInterface,
                       ServerInterface)
-from paramiko.sftp import CMD_CLOSE
+from paramiko.sftp import CMD_CLOSE, CMD_FSETSTAT, CMD_FSTAT, CMD_READ, CMD_READDIR, CMD_WRITE
 
 from panel.services import sftp_backend as bk
 from panel.services import sftp_common as sc
@@ -53,6 +53,11 @@ _log = logging.getLogger("panel.sftp")
 
 MAX_AUTH_TRIES = 6           # OpenSSH's MaxAuthTries default
 LOGIN_GRACE = 60             # seconds to sign in (OpenSSH's LoginGraceTime is 120)
+# Past its absolute limit a session may only go on with what it already has open: reads, writes and
+# closes of open files and folders. Anything new (an open, a listing, a rename) is refused.
+AFTER_LIMIT = frozenset((CMD_READ, CMD_WRITE, CMD_CLOSE, CMD_FSTAT, CMD_FSETSTAT, CMD_READDIR))
+ABSOLUTE_REFUSED = ("This SFTP session has reached its time limit. Files already open can finish; sign in "
+                    "again for anything else.")
 IDLE_POLL = 1.0              # how often a signed-in connection's idle time is looked at
 MAX_CONNECTIONS = 64
 MAX_UNAUTH_PER_ADDRESS = 10
@@ -112,6 +117,8 @@ class Connection(ServerInterface):
         self.who = ""
         self.user = None            # {"uid", "epoch", "name", "method", "detail"} once signed in
         self.last_activity = time.monotonic()   # the last SFTP request (PanelSftpServer._process)
+        self.signed_in_at = None                # when sign-in succeeded (the absolute limit counts from it)
+        self.filesystems = []                   # each sftp subsystem's VirtualSftp, for its open files
         self._pending = None
         self._kbd_name = None
 
@@ -171,6 +178,15 @@ class Connection(ServerInterface):
                          "method": "keyboard-interactive", "detail": "password and authenticator code"}
         return AUTH_SUCCESSFUL
 
+    def past_absolute(self):
+        """Whether the session has passed its absolute limit (counted from sign-in)."""
+        hours = float(self.service.cfg.get("absolute_h") or 0)
+        return hours > 0 and self.signed_in_at is not None and time.monotonic() - self.signed_in_at > hours * 3600
+
+    def open_files(self):
+        """How many files this connection has open across its SFTP sessions."""
+        return sum(fs.open_count for fs in list(self.filesystems))
+
     def signed_in(self):
         """The signed-in user (paramiko has accepted a credential), or None."""
         t = getattr(self, "transport", None)
@@ -218,6 +234,7 @@ class VirtualSftp(SFTPServerInterface):
         self.backends = {}          # sid -> (Target.key, Backend, real home)
         self.lock = threading.Lock()
         self.open_count = 0
+        server.filesystems.append(self)
 
     # ── session ──
     def session_started(self):
@@ -467,6 +484,8 @@ class PanelSftpServer(SFTPServer):
         # upload's last failure (a write the host refused, a LinuxGSM config refused whole) is only
         # known there. Everything else is paramiko's own handling. Every request is the session's activity.
         self.server.conn.last_activity = time.monotonic()
+        if t not in AFTER_LIMIT and self.server.conn.past_absolute():
+            return self._send_status(request_number, SFTP_PERMISSION_DENIED, ABSOLUTE_REFUSED)
         if t != CMD_CLOSE:
             return super()._process(t, request_number, msg)
         handle = msg.get_binary()
@@ -589,11 +608,12 @@ class Service:
                 self._report_failure(conn)
                 return True
             self._signed_in(ip)
-            conn.last_activity = time.monotonic()
+            conn.last_activity = conn.signed_in_at = time.monotonic()
             while t.is_active():
                 time.sleep(IDLE_POLL)
-                if self._idle_too_long(conn):
-                    self._close_idle(conn, t)
+                why = self._close_reason(conn)
+                if why:
+                    self._close_session(conn, t, why)
             return False
         finally:
             t.close()
@@ -603,12 +623,30 @@ class Service:
         limit = float(self.cfg.get("idle_min") or 0) * 60
         return limit > 0 and time.monotonic() - conn.last_activity > limit
 
-    def _close_idle(self, conn, t):
-        """End an idle session on the server's side, and have the panel audit it (OWASP: invalidate it)."""
+    def _close_reason(self, conn):
+        """Why the session must end now (idle, or at its absolute limit), or None.
+
+        Past the absolute limit a session takes no new request (PanelSftpServer._process) and ends as soon
+        as no file is open, or ABSOLUTE_GRACE_MINUTES after the limit whatever is open.
+        """
+        if self._idle_too_long(conn):
+            return "closed after %s min with no SFTP request" % _minutes(self.cfg.get("idle_min"))
+        if not conn.past_absolute():
+            return None
+        hours = _minutes(self.cfg.get("absolute_h"))
+        if conn.open_files() == 0:
+            return "closed at its absolute limit of %s h" % hours
+        over = time.monotonic() - conn.signed_in_at - float(self.cfg.get("absolute_h")) * 3600
+        if over > float(self.cfg.get("absolute_grace_min") or 0) * 60:
+            return ("closed at its absolute limit of %s h, with a transfer still open %s min after it"
+                    % (hours, _minutes(self.cfg.get("absolute_grace_min"))))
+        return None
+
+    def _close_session(self, conn, t, why):
+        """End the session on the server's side, and have the panel audit why (OWASP: invalidate it)."""
         u = conn.signed_in()
         if u is not None:
-            self.panel.ask({"op": "session_end", "uid": u["uid"], "ip": conn.ip,
-                            "why": "closed after %s min with no SFTP request" % _minutes(self.cfg.get("idle_min"))})
+            self.panel.ask({"op": "session_end", "uid": u["uid"], "ip": conn.ip, "why": why})
         t.close()
 
     def _report_failure(self, conn):

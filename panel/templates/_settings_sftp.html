@@ -69,6 +69,14 @@
           <div class="small text-secondary mt-1"><span>Recommended:</span> <span data-no-i18n>{{ sf.recommended_idle }}</span> <span>minutes. OWASP recommends 15 to 30 minutes without activity (2 to 5 for high-value applications). 0 never closes one.</span></div>
           {% if sf.idle_outside %}<div class="small text-warning" id="sftp-idle-note">Outside OWASP's recommendation.</div>{% endif %}
         </div>
+        <div class="col-sm-6">
+          <label class="form-label small mb-1" for="sftp-absolute">Absolute session limit (hours)</label>
+          <input type="number" id="sftp-absolute" name="sftp_absolute_hours" min="1" max="168" class="form-control form-control-sm"
+                 value="{{ sf.s.absolute_h }}" required>
+          <div class="small text-secondary mt-1">OWASP: 4–8 hours.</div>
+          <div class="small text-secondary">After it, a session opens nothing new; a file already open may finish for up to an hour, then the user signs in again.</div>
+          {% if sf.absolute_past %}<div class="small text-warning" id="sftp-absolute-note">Longer than OWASP recommends.</div>{% endif %}
+        </div>
       </div>
 
       <div class="form-check form-switch mt-3 mb-0">
