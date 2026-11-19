@@ -274,6 +274,66 @@ class _PacedBody:
         return self._paced(self._f.readlines, *args)
 
 
+class _Deadlines:
+    """The whole-request deadlines (see the module docstring), mixed into _protocol's class with a timeout.
+
+    `_timeout` is eventlet.Timeout (a class, so reading it from the instance does not bind it) and
+    `_limits` the {idle, header, body_grace, body_rate} seconds; _protocol sets both on the class.
+    """
+
+    _timeout = None
+    _limits = None
+    _deadline = None
+
+    def setup(self):
+        """The base's setup, with a client write that stalls past its timeout read as a hang-up."""
+        super().setup()
+        self.wfile = _ClientWrites(self.wfile)
+
+    def handle_one_request(self):
+        """One request: the next request's first byte within idle seconds, then its headers within header seconds."""
+        if not self._first_byte():
+            self.close_connection = 1
+            return
+        # From the request's first byte to the end of its headers: one deadline for the lot.
+        self._deadline = self._timeout(self._limits["header"],
+                                       ClientStalled("the client sent its request too slowly"))
+        try:
+            super().handle_one_request()
+        finally:
+            self._end_deadline()
+
+    def _first_byte(self):
+        """Wait (idle seconds at most, a TLS handshake included) for the next request's first byte."""
+        peek = getattr(self.rfile, "peek", None)
+        if peek is None or self.rfile.closed:
+            return True
+        try:
+            with self._timeout(self._limits["idle"], ClientStalled("no request")):
+                return bool(peek(1))
+        except OSError:
+            # Gone, reset, a failed handshake, or silent for the idle time: nothing to answer.
+            return False
+
+    def _end_deadline(self):
+        if self._deadline is not None:
+            self._deadline.cancel()
+            self._deadline = None
+
+    def get_environ(self):
+        """The base's environ, with the body read through _PacedBody and the header deadline ended."""
+        # The request's headers are in: the app's time is not the client's. The body is read from
+        # here on through _PacedBody (wsgi.input and eventlet.input are the same Input).
+        self._end_deadline()
+        raw = getattr(self, "rfile")   # set by the base handler's setup()
+        setattr(self, "rfile", _PacedBody(raw, self, self._timeout, self._limits["body_grace"],
+                                          self._limits["body_rate"]))
+        try:
+            return super().get_environ()
+        finally:
+            setattr(self, "rfile", raw)
+
+
 def _protocol(base, timeout=None, limits=None):
     """Eventlet's HttpProtocol, refusing a request line that names no HTTP version (see the module).
 
@@ -287,57 +347,6 @@ def _protocol(base, timeout=None, limits=None):
     also has whole-request deadlines rather than per-read ones (see the module docstring).
     """
     class _Protocol(base):
-        _deadline = None
-
-        def setup(self):
-            super().setup()
-            if timeout is not None:
-                self.wfile = _ClientWrites(self.wfile)
-
-        def handle_one_request(self):
-            if timeout is None:
-                super().handle_one_request()
-                return
-            if not self._first_byte():
-                self.close_connection = 1
-                return
-            # From the request's first byte to the end of its headers: one deadline for the lot.
-            self._deadline = timeout(limits["header"], ClientStalled("the client sent its request too slowly"))
-            try:
-                super().handle_one_request()
-            finally:
-                self._end_deadline()
-
-        def _first_byte(self):
-            """Wait (idle seconds at most, a TLS handshake included) for the next request's first byte."""
-            peek = getattr(self.rfile, "peek", None)
-            if peek is None or self.rfile.closed:
-                return True
-            try:
-                with timeout(limits["idle"], ClientStalled("no request")):
-                    return bool(peek(1))
-            except OSError:
-                # Gone, reset, a failed handshake, or silent for the idle time: nothing to answer.
-                return False
-
-        def _end_deadline(self):
-            if self._deadline is not None:
-                self._deadline.cancel()
-                self._deadline = None
-
-        def get_environ(self):
-            # The request's headers are in: the app's time is not the client's. The body is read from
-            # here on through _PacedBody (wsgi.input and eventlet.input are the same Input).
-            if timeout is None:
-                return super().get_environ()
-            self._end_deadline()
-            rfile = self.rfile
-            self.rfile = _PacedBody(rfile, self, timeout, limits["body_grace"], limits["body_rate"])
-            try:
-                return super().get_environ()
-            finally:
-                self.rfile = rfile
-
         def parse_request(self):
             if not super().parse_request():
                 return False
@@ -353,7 +362,9 @@ def _protocol(base, timeout=None, limits=None):
         def version_string(self):
             """The panel's own Server value, not the standard library's name and Python version."""
             return "LinuxGSM Panel"
-    return _Protocol
+    if timeout is None:
+        return _Protocol
+    return type("_TimedProtocol", (_Deadlines, _Protocol), {"_timeout": timeout, "_limits": limits})
 
 
 # A connection with no request in progress (before its first request line, or kept alive between
@@ -521,7 +532,7 @@ class _SourceCap:
             self._refusals = 0
 
     def waitall(self):
-        """The pool's own waitall (eventlet calls it when the server ends)."""
+        """Wait for every greenthread in the pool: eventlet calls this when the server ends."""
         return self._pool.waitall()
 
 

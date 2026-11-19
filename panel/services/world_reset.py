@@ -250,6 +250,7 @@ class _WwrLine:
     holds arithmetic (_WWR_ARITH) or `${!` (a variable reached through another's value), so it may set
     any key; `sets` the names its value sets with `${key:=…}` or holds as assignment-shaped text.
     """
+
     __slots__ = ("text", "other", "opaque", "sets")
 
     def __init__(self, text):

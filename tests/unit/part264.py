@@ -228,7 +228,6 @@ eq("web server r32: ...and the server answers the next request", _after_d264, b"
 # The panel's own TLS: a handshake trickled a byte every 0.3 s (a record header promising 16,000 bytes,
 # then its body) is closed at the 1 s idle time, which covers everything before the request's first byte.
 from panel.services.certs import _ensure_self_signed_cert as _mkcert264  # noqa: E402
-from unit.part241 import _client241  # noqa: E402
 
 _CERT264 = os.path.join(_TMP264, "cert.pem")
 _KEY264 = os.path.join(_TMP264, "key.pem")
@@ -240,8 +239,12 @@ except (OSError, ValueError) as _e264:   # the TLS check below then names it ins
 
 
 def _tls_wrap264(raw):
-    """A client that trusts only this part's certificate (part241's _client241)."""
-    return _client241(_CERT264).wrap_socket(raw, server_hostname="p264.localhost")
+    """A client that trusts only this part's certificate, at the library's default (TLS 1.2 or newer)."""
+    ctx = _ssl264.SSLContext(_ssl264.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = _ssl264.TLSVersion.TLSv1_2
+    ctx.load_verify_locations(_CERT264)
+    ctx.verify_flags |= _ssl264.VERIFY_X509_PARTIAL_CHAIN
+    return ctx.wrap_socket(raw, server_hostname="p264.localhost")
 
 
 _srv_s264 = _Server264("tls", (_CERT264, _KEY264), wrap=_tls_wrap264) if not _mkcert_err264 else None
