@@ -339,10 +339,11 @@
               if (d.success === false) { done(refused(d)); return; }
               // The view is read again, so a lifted ban, a kick or a warning shows in it (and Unban is not
               // offered twice); B3's answer is said once it is drawn (also when that read fails: the action was done).
-              window.b3pPlayer(pid).then(function () {
+              var said = function () {
                 say(d.message || '', d.warning ? 'text-warning' : 'text-success');
                 done(true);
-              });
+              };
+              window.b3pPlayer(pid).then(said, said);
             }).catch(function () { failed(); done(false); });
           };
           if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();
