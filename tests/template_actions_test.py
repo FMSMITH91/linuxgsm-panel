@@ -2163,7 +2163,7 @@ check(not _bad_targets,
       "; ".join(_bad_targets[:5]))
 
 # ── 0h. nothing the Content-Security-Policy silently kills ────────────────────────────────────
-# script-src is 'self' plus a per-request nonce, with NO 'unsafe-inline'. Two things therefore do
+# script-src is a per-request nonce (+ 'strict-dynamic'), with NO 'unsafe-inline'. Two things therefore do
 # not run, and neither reports anything a user would see:
 #
 #   * an inline handler — onclick="foo()". A nonce does not help; inline handlers need

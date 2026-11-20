@@ -150,10 +150,10 @@ def _read222(*rel):
 def _s222_style_policy():
     src = _read222("panel", "install", "app.py")
     csp = src[src.index("    def _csp():"):src.index("    @app.after_request")]
-    _all222("csp: <style> blocks need 'self' or the nonce (style-src-elem), no style attribute is allowed "
-            "(style-src-attr 'none'), and style-src, the fallback for older browsers, is the same 'self' + nonce",
-            [csp.count("style-src-elem 'self' 'nonce-%s'; ") == 1, csp.count("style-src-attr 'none'; ") == 1,
-             "style-src 'self' 'nonce-%s'; " in csp, csp.count("'nonce-%s'") == 3, "unsafe-inline" not in csp], csp[-500:])
+    _all222("csp: <style> blocks need the nonce (style-src-elem), no style attribute is allowed "
+            "(style-src-attr 'none'), and style-src, the fallback for older browsers, is the same nonce",
+            [csp.count("style-src-elem 'nonce-%s'; ") == 1, csp.count("style-src-attr 'none'; ") == 1,
+             "style-src 'nonce-%s'; " in csp, csp.count("'nonce-%s'") == 3, "unsafe-inline" not in csp], csp[-500:])
     tdir = _os222.path.join(REPO_ROOT, "panel", "templates")
     bare, seen = [], 0
     for name in sorted(_os222.listdir(tdir)):

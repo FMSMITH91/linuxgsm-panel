@@ -14,7 +14,7 @@ var STYLE_NONCE = (document.currentScript && document.currentScript.nonce) || ''
 
 // Run fn with every <style> element it creates carrying this page's nonce. xterm's DOM renderer
 // makes two <style> blocks in Terminal.open() (its theme and its cell size), and the page policy's
-// style-src-elem accepts only 'self' and the nonce, so without it the terminal draws unstyled.
+// style-src-elem accepts only the nonce, so without it the terminal draws unstyled.
 // Scoped to the call: the original createElement is back as soon as fn returns or throws.
 function withStyleNonce(fn) {
   var make = document.createElement;
