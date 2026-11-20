@@ -44,7 +44,7 @@ _trips257 = len(_P9_TRIPPED)
 _TMP257 = _tf257.mkdtemp(prefix="p257-")
 _RC257 = "p257-rcon-" + "value"            # the game's RCON password in these checks
 _DBV257 = "Dbv257" + "abcdefghijklmnopq"   # a database's password in these checks
-_PIN257 = "178baced305535f06149b1e4361e63253cd10aee"
+_PIN257 = "7da5ac8685c34665cb10670810656a3bf99fcf91"
 _MONTH257 = "2026-11"
 
 
@@ -77,7 +77,7 @@ def _catalog257():
        "commit, maxminddb in its hashed lock",
        (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
         bool(m), "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
-       (_PIN257, [_PIN257], "2.0.2dev (178baced)", True, True))
+       (_PIN257, [_PIN257], "2.0.2dev (7da5ac86)", True, True))
 
 
 def _probe_sof2_257():

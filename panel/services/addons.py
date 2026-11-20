@@ -101,7 +101,7 @@ SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfile
 # events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3
 # the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and
 # the Containerfile's ARG together.
-B3_COMMIT = "178baced305535f06149b1e4361e63253cd10aee"
+B3_COMMIT = "7da5ac8685c34665cb10670810656a3bf99fcf91"
 # A development commit after v2.0.1: a 2.0.2 tag is planned on it. The card shows this label beside the
 # short commit until B3 itself says what runs (its health.json). Only a label: the build checks the
 # commit, not a tag, and the image's tag is the commit and build id, so a new label alone offers no update.

@@ -190,7 +190,7 @@ def _age(doc, now):
 
 
 def running_version(doc):
-    """What B3 says runs ("2.0.2dev (178baced)"), from health.json; "" when it doesn't say both."""
+    """What B3 says runs ("2.0.2dev (7da5ac86)"), from health.json; "" when it doesn't say both."""
     b3 = (doc or {}).get("b3")
     b3 = b3 if isinstance(b3, dict) else {}
     version, commit = b3.get("version"), b3.get("commit")

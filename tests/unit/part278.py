@@ -49,7 +49,7 @@ from panel.services import chat_privacy as _cp278, monitoring as _mon278, notifi
 
 _trips278 = len(_P9_TRIPPED)
 _TMP278 = _tf278.mkdtemp(prefix="p278-")
-_PIN278 = "178baced305535f06149b1e4361e63253cd10aee"
+_PIN278 = "7da5ac8685c34665cb10670810656a3bf99fcf91"
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -61,7 +61,7 @@ def _pin278():
     stage2 = cf.split("\nFROM ${BASE_IMAGE}\n", 1)[-1]
     eq("b3 pin: addons.py and the Containerfile build the same commit, labelled 2.0.2dev with its short commit",
        (_ad278.B3_COMMIT, _re278.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re278.M), _ad278.CATALOG["b3"]["version"]),
-       (_PIN278, [_PIN278], "2.0.2dev (178baced)"))
+       (_PIN278, [_PIN278], "2.0.2dev (7da5ac86)"))
     check("b3 pin: the running image keeps the commit (ENV B3_COMMIT in the second stage, after its ARG), so "
           "--version and health.json name it",
           _re278.search(r"^ARG B3_COMMIT\n(?:.*\n)*?ENV B3_COMMIT=\$\{B3_COMMIT\}$", stage2, _re278.M) is not None, stage2[:300])
@@ -101,7 +101,7 @@ def _card278():
     eq("b3 card: health.json read into lines (B3's own reason without its control character, RCON not known yet, "
        "players), and the version B3 says it runs", (fresh["health"], fresh["version"], fresh["stale_minutes"]),
        ({"healthy": False, "reason": "RCON: Bad rconpassword.", "game_log": True, "rcon": None, "database": True,
-         "humans": 3, "bots": 1}, "2.0.2dev (178baced)", None))
+         "humans": 3, "bots": 1}, "2.0.2dev (7da5ac86)", None))
     late = _b3c278.card(_st278(_health278(), _WRITTEN278 + 121), "active")
     slow = _b3c278.card(_st278(_health278(), _WRITTEN278 + 121, ini="[b3]\nhealth_interval: 90\n"), "active")
     eq("b3 card: past two health intervals on the host's clock B3 is not answering (no health line); with "
@@ -111,7 +111,7 @@ def _card278():
     eq("b3 card: no file, an empty or failed read, or a file that isn't B3's schema 1 is no measurement: neither a "
        "health line nor \"not answering\", and the pin's version",
        [(c["health"], c["stale_minutes"], c.get("version", _ad278.CATALOG["b3"]["version"])) for c in blind],
-       [(None, None, "2.0.2dev (178baced)")] * 5)
+       [(None, None, "2.0.2dev (7da5ac86)")] * 5)
     stopped = _b3c278.card(_st278(_health278(), _WRITTEN278 + 9999, exit_code="230"), "failed")
     eq("b3 card: a stopped B3 says its exit code in words (230: invalid settings) and is not called \"not "
        "answering\"; a running one, or an exit code B3 doesn't define, says none",
@@ -121,7 +121,7 @@ def _card278():
        (True, None, None, "", "", [220, 221, 222, 223, 230, 231, 232, 233]))
     bad = _health278(b3={"version": "x; rm -rf", "commit": "zz"})
     eq("b3 card: a version or commit that isn't one is not shown; the pin's label is",
-       _b3c278.card(_st278(bad, _WRITTEN278), "active")["version"], "2.0.2dev (178baced)")
+       _b3c278.card(_st278(bad, _WRITTEN278), "active")["version"], "2.0.2dev (7da5ac86)")
 
 
 def _service278():
@@ -653,7 +653,7 @@ def _card_js278(row):
     # The page's own tf(): the card's lines are read with their values in.
     _write278(path, _HARNESS257.replace("ctx.window = ctx;", "ctx.window = ctx; ctx.tf = function (s, v) { return "
                                         "s.replace(/\\{(\\w+)\\}/g, function (m, k) { return k in v ? String(v[k]) : m; }); };"))
-    base = {"id": "b3", "name": "B3", "version": "2.0.2dev (178baced)", "installed": True, "state": "active",
+    base = {"id": "b3", "name": "B3", "version": "2.0.2dev (7da5ac86)", "installed": True, "state": "active",
             "legacy": True, "needs_database": True, "data_kept": True, "database": "gs7_b3", "geolocation_option": True,
             "geolocation": "off", "plugins": ["stats"], "switchable": list(_ad278.B3_SWITCHABLE),
             "geo_switchable": list(_ad278.B3_GEO_SWITCHABLE), "update": "", "b3_card": True, "alerts": True,

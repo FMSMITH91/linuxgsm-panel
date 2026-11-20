@@ -595,7 +595,7 @@ def _b3_release276():
         os.path.join(os.path.dirname(_ad276.__file__), "..", "addon_images", "b3"), _ad276.B3_BASE))
     eq("B3: the card names release 2.0.2dev with the pinned commit, and the image's tag is the commit and the build id "
        "alone (a new release label offers installed B3s no update)",
-       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2dev (178baced)", True, False))
+       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2dev (7da5ac86)", True, False))
 
 
 _settings_pending276()
