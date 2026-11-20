@@ -1,7 +1,9 @@
 """A game server's Add-ons card: admin tools in rootless containers (panel/services/addons.py).
 
 PERMISSION. Every route takes MANAGE_ADDONS (granted to no group by default) and access to the
-server (Authorization Cheat Sheet: "Deny by Default", "Validate the Permissions on Every Request").
+server (Authorization Cheat Sheet: "Deny by Default", "Validate the Permissions on Every Request"); the
+list alone also answers View add-on pages, with just the add-ons that have a web page (their Open is
+routes/addon_web.py).
 Install and remove are high-risk: a sign-in past the confirmation window confirms the password first
 (step-up). Every install, start, stop and remove is audited with the server (Logging Cheat Sheet),
 refusals included. A path that writes into, or runs code as, the game account asks first whether the
@@ -23,11 +25,11 @@ from panel.core.config import decrypt_secret
 from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.db.models import GameDatabase, GameServer, HostDatabaseServer, claim_row, db, row_birth
 from panel.ops import ssh_manager as _sm
-from panel.routes import addons_change as _change, databases_net as _net
+from panel.routes import addon_web as _web, addons_change as _change, databases_net as _net
 from panel.routes._shared import _reboot_holds, game_account_write_refusal, uninstall_running
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
-from panel.services import addons as _ad, reboot_words as _rw
+from panel.services import addon_web as _aw, addons as _ad, reboot_words as _rw
 from panel.services import addons_bluemap as _bm, b3_players as _b3p, geoip as _geoip
 
 _DENIED = "Permission denied"
@@ -111,9 +113,15 @@ def _say(status, sentence, **extra):
 
 
 def tab_access(server):
-    """For the Files & Config page (`addons_tab(server)`): whether the viewer gets the tab, and what it offers."""
+    """For the Files & Config page (`addons_tab(server)`): whether the viewer gets the tab, and what it offers.
+
+    Manage add-ons gets the whole tab. View add-on pages alone gets it only where an add-on with a web
+    page is offered, and sees just those add-ons, each with its Open button (`manage` False).
+    """
     offered = _ad.offered(getattr(server, "game_type", ""))
-    return {"view": bool(offered) and has_permission(current_user, MANAGE_ADDONS), "offered": offered}
+    manage = has_permission(current_user, MANAGE_ADDONS)
+    pages = any(k in _aw.WEB for k in offered) and _web.may_view(current_user)
+    return {"view": bool(offered) and (manage or pages), "manage": manage, "offered": offered}
 
 
 # ── reading the host ──────────────────────────────────────────────────────────────────────────
@@ -205,7 +213,14 @@ def addon_using_database(gs, name):
     return ""
 
 
+def _page_rows(gs, found):
+    """What a viewer with View add-on pages alone sees: the installed add-ons with a web page, and their state."""
+    return [{"id": k, "name": _ad.CATALOG[k]["name"], "version": _ad.CATALOG[k]["version"], "installed": True,
+             "state": found[k].get("state", ""), "web": True} for k in _ad.offered(gs.game_type) if k in found and k in _aw.WEB]
+
+
 def _addon_rows(gs, found):
+    web = _web.may_view(current_user)
     rows = []
     for k in _ad.offered(gs.game_type):
         a, got = _ad.CATALOG[k], found.get(k)
@@ -218,7 +233,8 @@ def _addon_rows(gs, found):
                           "database": meta.get("database", ""), "installing": bool(job.get("running")),
                           "job": job.get("kind", "install") if job.get("running") else "",
                           "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", ""),
-                          "update": _change.update_reason(k, meta) if got is not None else ""},
+                          "update": _change.update_reason(k, meta) if got is not None else "",
+                          "web": web and k in _aw.WEB},
                          **_extra_fields(gs, k, meta, got)))
     return rows
 
@@ -297,9 +313,11 @@ def _status_answer(gs):
         return _say(200, "Couldn't read this server's add-ons: the host did not answer. Try again.", unread=True)
     st = _ad.parse_status(out)
     _b3p.remember(gs.id, st["addons"])   # the B3 players section reads B3's database by this name
+    if not has_permission(current_user, MANAGE_ADDONS):
+        return jsonify({"success": True, "manage": False, "addons": _page_rows(gs, st["addons"])})
     why = _ad.runtime_refusal(st["os"], st["podman"])
     rows, dbs = _addon_rows(gs, st["addons"]), _databases(gs, st["addons"])
-    return jsonify({"success": True, "addons": rows, "databases": dbs, "podman": st["podman"],
+    return jsonify({"success": True, "manage": True, "addons": rows, "databases": dbs, "podman": st["podman"],
                     "db_host": _db_host_state(gs, rows, dbs), "runtime_error": i18n.tr(why) if why else ""})
 
 
@@ -827,15 +845,19 @@ def _guarded(server_id, addon_id, answer, reading=False):
 
 
 def register(app):
-    """Register the Add-ons card's routes and the template's `addons_tab(server)`."""
+    """Register the Add-ons card's routes, its pages' proxy (addon_web) and the template's `addons_tab(server)`."""
     app.jinja_env.globals["addons_tab"] = tab_access
+    _web.register(app)
 
     @app.route("/api/server/<int:server_id>/addons")
     @login_required
     @server_access_required
     def api_server_addons(server_id):
-        """The add-ons this server can run, which are installed and running, and its databases."""
-        if not has_permission(current_user, MANAGE_ADDONS):
+        """The add-ons this server can run, which are installed and running, and its databases.
+
+        With View add-on pages and not Manage add-ons: only the installed add-ons with a web page.
+        """
+        if not (has_permission(current_user, MANAGE_ADDONS) or _web.may_view(current_user)):
             return _say(403, _DENIED)
         return _guarded(server_id, None, _status_answer, reading=True)
 

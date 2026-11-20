@@ -2604,6 +2604,17 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/addons/<addon_id>/web": {
+    "endpoint": "api_server_addon_web",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_addon_web"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/addons/b3/players/search": {
     "endpoint": "api_server_b3_players_search",
     "guards": [

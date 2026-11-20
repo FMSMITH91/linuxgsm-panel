@@ -8,8 +8,8 @@ has:
 - no added capability and no new privileges;
 - a read-only system, a 1 GB memory cap and a 512-process cap;
 - the game's log folder mounted read-only;
-- a web page, when the add-on has one, listening on `127.0.0.1` only. Reach it with an SSH tunnel
-  (`ssh -L <port>:127.0.0.1:<port>`) or over Tailscale.
+- a web page, when the add-on has one, listening on `127.0.0.1` only; no port is opened for it. The card's
+  **Open** shows it through the panel (see [Web pages](#web-pages)).
 
 ## The add-ons
 
@@ -137,12 +137,13 @@ BlueMap's command-line build renders the world, keeps watching it for changes, a
   **Update available**; Update fetches that version's client file and restarts BlueMap with it. A game
   version newer than the pinned BlueMap supports waits for the panel's next BlueMap pin (BlueMap's log says
   what it can't read).
-- **The web page.** It listens on `127.0.0.1:<port>` on the game's host only (the card shows the port and
-  the SSH tunnel to use); nothing is opened in any firewall. The panel doesn't serve the page itself, so
-  who can see the map is whoever can log in to the host for the tunnel; on the panel, only users with
-  *Manage add-ons* (given to no group by default) see the add-on and its port. The page holds no personal
-  data: BlueMap's command-line build has no connection to the game, so the map shows no players, and its
-  web server keeps no access log. Its usage report (`metrics`) is off.
+- **The web page.** It listens on `127.0.0.1:<port>` on the game's host only; nothing is opened in any
+  firewall. **Open** on the card shows the map through the panel (see [Web pages](#web-pages)), for users
+  with *View add-on pages* or *Manage add-ons* (each given to no group by default). The page holds no
+  personal data: BlueMap's command-line build has no connection to the game, so the map shows no players,
+  and its web server keeps no access log. Its usage report (`metrics`) is off. Shown through the panel,
+  the map keeps no settings between visits (BlueMap's own setting `useCookies` is turned off on the way,
+  since the page can't use the browser's storage there).
 - **Resource use.** Rendering is CPU and disk heavy. BlueMap renders with one thread (its own default),
   and the container runs at a lower CPU priority than the game (`Nice=10`) with the add-ons' 1 GB memory
   cap (Java gets 60% of it). The first render of a big world can take a long time; after it, only changed regions
@@ -154,6 +155,41 @@ BlueMap's command-line build renders the world, keeps watching it for changes, a
   so the new version writes its own page (BlueMap's release notes ask for this).
 - **Remove** deletes the add-on's whole folder: the rendered map, its settings and the client file. The
   world is never touched.
+
+### Web pages
+
+IW4MAdmin's webfront and BlueMap's map listen on the game host's `127.0.0.1` only. **Open** on the add-on's
+card (shown while it is running) opens the page in a new tab, through the panel, from your phone as from a
+desktop, for the panel's own host and for remote ones alike. No port is opened on any host or firewall, and
+nothing changes in Tailscale.
+
+- **Who.** *View add-on pages* (or *Manage add-ons*) and access to the server. With *View add-on pages*
+  alone, the server's Add-ons tab lists only the installed add-ons that have a page, each with Open.
+- **How it reaches the page.** Only `127.0.0.1:<port>` on that server's host, the port in the add-on's
+  record when you pressed Open, checked to be in that server's range of add-on ports and listened on by the
+  server's own account: a socket on the panel's own host, a forwarded channel on the panel's SSH
+  connection to a remote host (`direct-tcpip`; the host's sshd must allow TCP forwarding, its default), or
+  `ssh -W` for a Tailscale host. Never an address from the browser.
+- **The link.** Open makes a link only for you, that server and that add-on (a random 256-bit value, kept
+  by the panel only as its hash and never written to a log). It works while your sign-in does: signing
+  out, a password change, "sign out everywhere", a removed permission or server access, or your session
+  ending stops it on its next request (an open IW4MAdmin page within 30 seconds). It also ends after the
+  panel's idle timeout without use, and at the panel's absolute sign-in limit after you opened it. The page
+  sends no referrer. The address is in your browser's history; it is useless once it has ended.
+- **Kept apart from the panel.** The page is the add-on's own HTML and script, so it runs in a sandbox
+  (`Content-Security-Policy: sandbox allow-scripts allow-forms`, without `allow-same-origin`): the browser
+  treats it as a site of its own, so it can't read the panel's cookies, storage or pages, and its requests
+  carry no panel cookie. The panel's cookies, Authorization and forwarding headers are never passed to the
+  add-on; the add-on's cookies (IW4MAdmin's own sign-in) are kept by the panel for that link and never
+  reach your browser, and a `Clear-Site-Data` or framing header from it is dropped.
+- **What it changes.** Addresses from the site's root in the page (IW4MAdmin's `<base href="/">`, its
+  `/css/` and `/js/`) are put under the link's path, and a short script gives the page in-memory stand-ins
+  for the browser storage a sandboxed page is refused. An address IW4MAdmin builds in its own script from
+  the site's root can still miss; its pages and live updates use relative ones.
+- **IW4MAdmin** takes one connection at a time (its own limit), so the panel sends it one request at a time;
+  its live page uses a WebSocket, which the panel passes on (only for IW4MAdmin). Sign in to IW4MAdmin itself
+  as before (its own accounts).
+- **Opening is audited** (who, which server and add-on); so is a refused link (once per link).
 
 ### Updates
 

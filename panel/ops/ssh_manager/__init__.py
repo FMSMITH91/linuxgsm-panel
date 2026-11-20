@@ -13,6 +13,7 @@ in comments, so each file is a subject rather than an arbitrary slice:
     portscan  the cached listening-port scan
     ufweval   whether ufw would accept one connection: the lock-out guards' one evaluator
     bedrock   Minecraft Bedrock's player count, read from its console log
+    tunnel    a byte stream to a port on a host's loopback (an add-on's web page)
 
 WHY THE PACKAGE RESOLVES NAMES DYNAMICALLY, AND WHY THAT IS THE WHOLE POINT.
 
@@ -39,9 +40,9 @@ Do not "optimise" this into `from ._core import *`. It would restore the fast pa
 disconnect the tests.
 """
 from panel.ops.ssh_manager import (_core, cron, game, firewall, hosts, files, gmod, portscan,  # noqa: F401,E402
-                                   ufweval, bedrock)
+                                   ufweval, bedrock, tunnel)
 
-_MODULES = (_core, cron, game, firewall, hosts, files, gmod, portscan, ufweval, bedrock)
+_MODULES = (_core, cron, game, firewall, hosts, files, gmod, portscan, ufweval, bedrock, tunnel)
 
 
 def __getattr__(name):

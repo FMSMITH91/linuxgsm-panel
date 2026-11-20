@@ -336,6 +336,7 @@ def _addon_card267():
             "function button(label, icon, act){ made.push(act); return {}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoStatus(){} function settingsFold(){}\n"
             "var BM = {status: function(){}, updateWords: function(){ return ''; }};\n"
+            "var WEB = {open: function(){}};\n"
             + _cut47(src, "var JOB = {") + "\n" + _cut47(src, "function installedRow(") + "\n"
             "function acts(a){ made = []; installedRow(a, node()); return made; }\n"
             "console.log(JSON.stringify({remove: acts({id: 'b3', state: 'active', installing: true, job: 'remove'}),"

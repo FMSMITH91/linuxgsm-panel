@@ -66,7 +66,7 @@
     if (a.database) box.appendChild(node('div', 'small text-secondary text-break', TF('Database {db}.', {db: a.database})));
     if (a.port) {
       box.appendChild(node('div', 'small text-secondary text-break',
-        TF('Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).', {port: a.port})));
+        TF('Its web page listens on 127.0.0.1:{port} on this host only; Open shows it through the panel.', {port: a.port})));
     }
     if (a.geolocation_option) geoStatus(a, box);
     if (a.eula_url) BM.status(a, box);
@@ -80,6 +80,7 @@
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
     if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
+    WEB.open(a, bar);
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
     if (a.update) bar.appendChild(button(T('Update'), 'bi-arrow-up-circle', 'adUpdate', [a.id], 'btn-outline-primary'));
@@ -160,6 +161,47 @@
     return {updateWords: updateWords, status: status, eula: eula, installBody: installBody, installWords: installWords,
       removeWords: removeWords};
   })();
+
+  // An add-on's web page, opened through the panel (routes/addon_web.py) in a new tab: a form post (CSRF
+  // token, no referrer) the panel answers with the page's link. A viewer with View add-on pages alone gets
+  // only these rows.
+  var WEB = (function () {
+    function open(a, bar) {
+      if (a.web && a.state === 'active') bar.appendChild(button(T('Open'), 'bi-box-arrow-up-right', 'adOpen', [a.id], 'btn-outline-primary'));
+    }
+    function go(id) {
+      var f = node('form');
+      f.method = 'post';
+      f.action = api('/' + encodeURIComponent(id) + '/web');
+      f.target = '_blank';
+      f.rel = 'noopener noreferrer';
+      var t = node('input');
+      t.type = 'hidden';
+      t.name = 'csrf_token';
+      t.value = window.CSRF || '';
+      f.appendChild(t);
+      f.hidden = true;
+      document.body.appendChild(f);
+      if (window.ensureCsrfFields) window.ensureCsrfFields(f);   // the current token, as panel.js gives every POST form
+      f.submit();
+      f.remove();
+      return true;
+    }
+    function viewerRows(d, list) {
+      if (!(d.addons || []).length) list.appendChild(node('div', 'small text-secondary', T('No add-on with a web page is installed on this server.')));
+      (d.addons || []).forEach(function (a) {
+        var box = node('div', 'ad-row');
+        box.appendChild(rowHead(a));
+        var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
+        open(a, bar);
+        if (a.state !== 'active') bar.appendChild(node('span', 'small text-secondary', T('Its page opens once the add-on is running.')));
+        box.appendChild(bar);
+        list.appendChild(box);
+      });
+    }
+    return {open: open, go: go, viewerRows: viewerRows};
+  })();
+  window.adOpen = WEB.go;
 
   function geoStatus(a, box) {
     var GEO_SAID = {off: 'Geolocation is off.',
@@ -330,6 +372,7 @@
     show('ad-runtime', !!d.runtime_error);
     var list = el('ad-list');
     list.textContent = '';
+    if (d.manage === false) { WEB.viewerRows(d, list); return; }
     (d.addons || []).forEach(function (a) { list.appendChild(addonRow(a, d)); });
     var busy = (d.addons || []).some(function (a) { return a.installing; });
     // An install this page started has ended: its "Installing the add-on" line goes, and the row says

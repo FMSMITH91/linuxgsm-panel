@@ -1199,8 +1199,8 @@ for _gh_rel, _gh_src in _gh_modules:
     _gh_ssh_found += len(_gh_ssh_argv_problems(_gh_src.replace("ssh_destination(", "ssh_dest_off("), "x"))
 check("GHSA-hh39 gate G4: every system-ssh argv takes its destination from ssh_destination, after `--`",
       not _gh_ssh_bad, "; ".join(_gh_ssh_bad[:4]))
-check("GHSA-hh39 gate G4: ...and it found the four ssh argvs there are (the Tailscale transport, two "
-      "downloads, the terminal)", _gh_ssh_found == 4, "%d found" % _gh_ssh_found)
+check("GHSA-hh39 gate G4: ...and it found the five ssh argvs there are (the Tailscale transport, two "
+      "downloads, the terminal, an add-on page's tunnel)", _gh_ssh_found == 5, "%d found" % _gh_ssh_found)
 check("GHSA-hh39 gate G4 CONTROL: the old spelling fails it, and the new one passes",
       _gh_ssh_argv_problems('a = ["ssh", "-p", "22", f"{s.username}@{h}", cmd]\n', "x.py")
       and _gh_ssh_argv_problems('a = ["ssh", "-p", "22", _core.ssh_destination(u, h), cmd]\n', "x.py")

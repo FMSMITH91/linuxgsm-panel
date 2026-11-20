@@ -5988,10 +5988,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (MANAGE_ADDONS and server access; install and remove with step-up).
 # 317, was 314: panel/routes/sftp_settings.py's SFTP card save and the Account page's two key routes.
 # 314, was 312: panel/routes/addons.py's update and B3 settings (MANAGE_ADDONS and server access, step-up).
-# 320, was 317: panel/routes/addons_b3.py's B3 players section: search, one player and the latest penalties
-# (MANAGE_ADDONS and server access, read-only).
-check("register_routes: every one of the 320 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 320,
+# 321, was 317: panel/routes/addons_b3.py's B3 players section: search, one player and the latest penalties
+# (MANAGE_ADDONS and server access, read-only), and panel/routes/addon_web.py's Open of an add-on's web page
+# (View add-on pages or Manage add-ons, and server access); the page's proxy is WSGI middleware, not a view.
+check("register_routes: every one of the 321 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 321,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

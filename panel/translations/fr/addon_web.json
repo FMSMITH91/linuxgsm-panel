@@ -1,0 +1,16 @@
+{
+  "Open a server's add-on web pages (IW4MAdmin, BlueMap) through the panel, without managing the add-ons": "Ouvrir les pages web des modules d'un serveur (IW4MAdmin, BlueMap) via le panneau, sans gérer les modules",
+  "This add-on has no web page.": "Ce module n'a pas de page web.",
+  "The add-on isn't running. Start it on its card, then open its page.": "Le module ne tourne pas. Démarrez-le sur sa carte, puis ouvrez sa page.",
+  "The add-on's page isn't listening where its record says. Stop and start the add-on on its card, then open its page.": "La page du module n'écoute pas là où son enregistrement l'indique. Arrêtez puis démarrez le module sur sa carte, puis ouvrez sa page.",
+  "Couldn't read the add-on on its host: the host did not answer. Try again.": "Impossible de lire le module sur son hôte : l'hôte n'a pas répondu. Réessayez.",
+  "This page's link has ended. Open the add-on's page again from its server's Add-ons tab.": "Le lien de cette page a expiré. Rouvrez la page du module depuis l'onglet Modules complémentaires de son serveur.",
+  "You can no longer open this page: your sign-in has ended, or your access to the server or its add-on pages was removed.": "Vous ne pouvez plus ouvrir cette page : votre session a pris fin, ou votre accès au serveur ou aux pages de ses modules a été retiré.",
+  "The add-on's page didn't answer. Check that the add-on is running, then open its page again.": "La page du module n'a pas répondu. Vérifiez que le module tourne, puis rouvrez sa page.",
+  "The add-on's page is busy. Try again in a moment.": "La page du module est occupée. Réessayez dans un instant.",
+  "That request can't be passed on to the add-on's page.": "Cette requête ne peut pas être transmise à la page du module.",
+  "Its web page listens on 127.0.0.1:{port} on this host only; Open shows it through the panel.": "Sa page web n'écoute que sur 127.0.0.1:{port} de cet hôte ; Ouvrir l'affiche via le panneau.",
+  "No add-on with a web page is installed on this server.": "Aucun module avec une page web n'est installé sur ce serveur.",
+  "Its page opens once the add-on is running.": "Sa page s'ouvre une fois le module démarré.",
+  "An add-on's web page listens on this host's own address only (127.0.0.1); no port is opened for it. Open shows it through the panel, in a new tab, kept apart from the panel's own pages: it can't read the panel's sign-in or act for you on the panel. The link works only while you are signed in and may open add-on pages.": "La page web d'un module n'écoute que sur l'adresse propre de cet hôte (127.0.0.1) ; aucun port n'est ouvert pour elle. Ouvrir l'affiche via le panneau, dans un nouvel onglet, à l'écart des pages du panneau : elle ne peut ni lire votre session du panneau ni agir pour vous sur le panneau. Le lien ne fonctionne que tant que vous êtes connecté et pouvez ouvrir les pages des modules."
+}
