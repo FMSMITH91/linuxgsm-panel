@@ -12,7 +12,7 @@
 # renovate: BASE_IMAGE follows python:3.12-slim's digest, with addons.py's B3_BASE (.github/renovate.json)
 ARG BASE_IMAGE=docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 # renovate: B3_COMMIT follows FMSMITH91/big-brother-bot master (.github/renovate.json)
-ARG B3_COMMIT=920d736648e2544714ee58a74e556fbbb3881892
+ARG B3_COMMIT=7da5ac8685c34665cb10670810656a3bf99fcf91
 
 FROM ${BASE_IMAGE} AS source
 ARG B3_COMMIT

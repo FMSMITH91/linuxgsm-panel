@@ -96,7 +96,7 @@ SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfile
 # log), on top of v2.0.0 (#23: commands refused to a player B3 has not authenticated;
 # #22 and #21 CoD4x and vanilla ET; #19 and #20 geolocation): the B3 the add-on builds. Renovate proposes the
 # branch's newest commit (.github/renovate.json), in this line and the Containerfile's ARG together.
-B3_COMMIT = "920d736648e2544714ee58a74e556fbbb3881892"
+B3_COMMIT = "7da5ac8685c34665cb10670810656a3bf99fcf91"
 # The fork's last release, v2.0.0 (an annotated tag on 7e734849); this pin is three parser fixes past it and has
 # no tag of its own, so the card shows this number beside the pin's short commit. The build checks the commit,
 # not a tag.
