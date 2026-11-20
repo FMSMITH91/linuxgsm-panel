@@ -456,6 +456,7 @@ def _os_check239(a):
     # Six hours past the 04:00 slot, not the wall clock: a run within a minute after 04:00 made "a minute ago"
     # fall before the slot, so the check was due again and "not again a minute later" failed.
     now = _sc239.last_slot((4, 0), _time239.time()) + 6 * 3600
+    real_now = _time239.time()      # daily_backup_tick reads the wall clock itself
     eq("OS update check: off means never; on, the first pass in a process runs at once, then at the set time",
        (_osu239._os_check_due(now),), (False,))
     _cfg239.update_config(lambda c: c.update({_sc239.OS_CHECK: True}))
@@ -471,7 +472,7 @@ def _os_check239(a):
         _osu239._os_update_state["last_run"] = saved_last
     eq("OS update check: due at once in a new process, not again a minute later, due once the set time has "
        "passed since the last check", (first, just_ran, missed), (True, False, True))
-    _backup_tick239(now)
+    _backup_tick239(real_now)
     eq("schedules: how often each loop runs is said in its own unit (90 s is 90 seconds, not '1 minutes')",
        [str(_sc239.every_words(n)) for n in (2, 90, 60, 120, 3600, 7200, 86400, None)],
        ["Every 2 seconds", "Every 90 seconds", "Every minute", "Every 2 minutes", "Every hour", "Every 2 hours",
