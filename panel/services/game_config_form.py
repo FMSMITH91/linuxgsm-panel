@@ -875,7 +875,7 @@ def audit_detail(changed, limit=60):
     """
     parts = []
     for f, old, new in changed:
-        if f["secret"] or (f["kind"] != "bool" and _cmpc.is_secret_name(f["key"])):
+        if f["secret"] or (f.get("kind") != "bool" and _cmpc.is_secret_name(f["key"])):
             parts.append("%s: changed (hidden)" % f["key"])
         else:
             parts.append("%s: %s -> %s" % (f["key"], _gcf_clip(old, limit), _gcf_clip(new, limit)))
