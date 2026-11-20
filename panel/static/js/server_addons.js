@@ -199,9 +199,9 @@
         list.appendChild(box);
       });
     }
+    window.adOpen = go;
     return {open: open, go: go, viewerRows: viewerRows};
   })();
-  window.adOpen = WEB.go;
 
   // B3's own parts of the card (services/b3_control.py): what it says of itself (health.json, or its exit
   // code in words), and in the settings fold the alerts switch for its bans and kicks (saved at once, no
@@ -288,18 +288,18 @@
       }
       return {actions: !!cb.checked, purge_aliases_days: n};
     }
+    // The alerts switch's change: saved at once, and put back when the panel refuses it.
+    window.adB3Alerts = function (cb) {
+      var on = !!cb.checked;
+      return postJson(api('/b3/alerts'), {enabled: on}).then(function (res) {
+        var ok = res.ok && res.d.success !== false;
+        if (!ok) cb.checked = !on;
+        say((ok ? '✓ ' : '✗ ') + (res.d.message || res.d.error || T('Failed')), ok ? 'text-success' : 'text-danger');
+        return ok;
+      }).catch(function () { cb.checked = !on; return failed(); });
+    };
     return {status: status, settings: settings, body: body, alerts: alertsSwitch};
   })();
-
-  window.adB3Alerts = function (cb) {
-    var on = !!cb.checked;
-    return postJson(api('/b3/alerts'), {enabled: on}).then(function (res) {
-      var ok = res.ok && res.d.success !== false;
-      if (!ok) cb.checked = !on;
-      say((ok ? '✓ ' : '✗ ') + (res.d.message || res.d.error || T('Failed')), ok ? 'text-success' : 'text-danger');
-      return ok;
-    }).catch(function () { cb.checked = !on; return failed(); });
-  };
 
   function geoStatus(a, box) {
     if (a.b3_card) B3S.status(a, box);   // B3's own lines first: B3 is the add-on with geolocation
