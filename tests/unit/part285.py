@@ -4,16 +4,21 @@
    or span cut in two is escaped as plain text, and an escape is never cut from its character.
 2. Settings > HTTPS certificate, Let's Encrypt: the auto-renew switch is saved only with a certificate
    put in, never by a refused request, and the install's audit row names it and a change to it.
+3. The SSH pool: the liveness probe of one host's pooled client runs outside the lock every host's
+   connection takes, so a host stalling a key re-exchange holds up only its own callers.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; Discord's HTTP post is a
 stand-in. Nothing reaches a host, /etc or data/.
 """
 import json as _json285
+import eventlet as _ev285
+from eventlet import event as _evt285, semaphore as _sem285
 from types import SimpleNamespace as _NS285
 
 from unit.part01 import check, eq
 from unit.part12 import P9_ADMIN, _p9_arm, _p9_audit, _p9_client, _p9_patch, _p9_restore_all
 from panel.ops import system_ops as _so285
+from panel.ops.ssh_manager import _core as _core285
 from panel.routes import tls_cert as _tls285
 from panel.services import notifications as _n285, tls_own as _own285
 
@@ -105,3 +110,90 @@ eq("tls auto-renew: with a certificate put in, the switch is saved, and the inst
                             (_le_off285, _le_same285)],
    [(False, [("letsencrypt", "panel.example.com")], "auto-renew turned off"),
     (True, [("letsencrypt", "panel.example.com")], "auto-renew on")])
+
+
+# ── 3. The SSH pool's liveness probe ─────────────────────────────────────────────────────────────
+class _Transport285:
+    """A pooled client's transport: send_ignore waits on `gate` (a stalled key re-exchange) when given."""
+
+    def __init__(self, gate=None):
+        self.gate = gate
+
+    def is_active(self):
+        return True
+
+    def send_ignore(self):
+        if self.gate is not None:
+            self.gate.wait()
+
+
+class _Client285:
+    def __init__(self, gate=None):
+        self.transport = _Transport285(gate)
+
+    def get_transport(self):
+        return self.transport
+
+    def close(self):
+        """Nothing to close: no socket was opened."""
+
+
+def _host285(name):
+    return _NS285(id=None, username="p285", host=name, port=22, auth_method="password", is_local=False)
+
+
+def _pool_probe285():
+    """(the quick host's client while the stalled host's probe waits, the stalled host's client afterwards).
+
+    The stalled host's probe waits on an event set only after the quick host's lookup has had two
+    seconds: through the lock, the quick lookup would wait for the whole stall.
+    """
+    gate = _evt285.Event()
+    slow, quick = _Client285(gate), _Client285()
+    keys = [_core285._conn_key("p285", h, 22) for h in ("p285-stalled.example", "p285-quick.example")]
+    _p9_patch(_core285, "_conn_lock", _sem285.Semaphore(1))
+    _p9_patch(_core285, "_open_client", lambda server: (_ for _ in ()).throw(ConnectionError("p285: no new client")))
+    _core285._connections.update(zip(keys, (slow, quick)))
+    got = None
+    try:
+        stalled = _ev285.spawn(_core285.get_connection, _host285("p285-stalled.example"))
+        _ev285.sleep(0)
+        with _ev285.Timeout(2, False):
+            got = _core285.get_connection(_host285("p285-quick.example"))
+        gate.send(True)
+        return got is quick, stalled.wait() is slow
+    finally:
+        if not gate.ready():
+            gate.send(True)
+        for k in keys:
+            _core285._connections.pop(k, None)
+        _p9_restore_all()
+
+
+eq("ssh pool: a host whose pooled connection stalls (a key re-exchange it never finishes) does not hold up "
+   "another host's connection, and its own caller still gets its client", _pool_probe285(), (True, True))
+
+
+class _DeadTransport285(_Transport285):
+    def is_active(self):
+        return False
+
+
+def _pool_dead285():
+    """(the client get_connection answers, what the pool holds after) for a pooled client whose transport is dead."""
+    dead, fresh = _Client285(), _Client285()
+    dead.transport = _DeadTransport285()
+    key = _core285._conn_key("p285", "p285-dead.example", 22)
+    _p9_patch(_core285, "_open_client", lambda server: fresh)
+    _p9_patch(_core285, "_keep_warm", lambda client: None)
+    _core285._connections[key] = dead
+    try:
+        got = _core285.get_connection(_host285("p285-dead.example"))
+        return got is fresh, _core285._connections.get(key) is fresh
+    finally:
+        _core285._connections.pop(key, None)
+        _p9_restore_all()
+
+
+eq("ssh pool (control): a pooled client whose transport is dead is dropped and replaced by a new one",
+   _pool_dead285(), (True, True))

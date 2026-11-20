@@ -1264,22 +1264,32 @@ def _live_pooled_client(key, force_new):
     """The pool's client for `key` when it is still alive, else None — a dead one is dropped.
 
     Always None under force_new, which leaves the pooled entry for _pool_client to replace.
+
+    The probe (send_ignore) runs OUTSIDE _conn_lock. It is network I/O on one host's connection:
+    paramiko holds a user message while a key re-exchange is in progress, for up to 30 s
+    (clear_to_send_timeout), and a remote that starts one and never finishes held the lock every
+    host's connection takes for that long, on each call (OWASP Denial of Service Cheat Sheet: one
+    client's slowness must not hold a resource every other request needs). Only that host's own
+    callers wait on it now. The entry is dropped only while it still holds the client probed, so a
+    replacement another caller pooled meanwhile is kept.
     """
+    if force_new:
+        return None
     with _conn_lock:
-        if not force_new and key in _connections:
-            conn = _connections[key]
-            try:
-                transport = conn.get_transport()
-                if transport and transport.is_active():
-                    transport.send_ignore()
-                    return conn
-            except Exception:  # nosec B110
-                _log.debug("probing a possibly-dead cached client → reconnect below", exc_info=True)
-            try:
-                conn.close()
-            except Exception:  # nosec B110
-                _log.debug("already closed / unusable; nothing to clean up", exc_info=True)
+        conn = _connections.get(key)
+    if conn is None:
+        return None
+    try:
+        transport = conn.get_transport()
+        if transport and transport.is_active():
+            transport.send_ignore()
+            return conn
+    except Exception:  # nosec B110
+        _log.debug("probing a possibly-dead cached client → reconnect below", exc_info=True)
+    with _conn_lock:
+        if _connections.get(key) is conn:
             del _connections[key]
+    _close_quietly(conn)
     return None
 
 
