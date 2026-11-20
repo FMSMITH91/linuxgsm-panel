@@ -191,6 +191,15 @@ def _read227(*parts):
         return fh.read()
 
 
+def _b3_renovate227():
+    """Renovate's built-in dockerfile manager stays off B3's build file."""
+    rules = _json227.loads(_read227(".github", "renovate.json")).get("packageRules") or []
+    off = [r for r in rules if r.get("matchManagers") == ["dockerfile"] and r.get("enabled") is False
+           and r.get("matchFileNames") == ["panel/addon_images/b3/Containerfile"] and len(r) == 4]
+    eq("ci images: Renovate's built-in dockerfile manager is off for B3's build file (it read the tagless base "
+       "digest as python:latest), so only the custom 3.12-slim manager proposes its base", len(off), 1)
+
+
 def _docker_pins227():
     """The fuzz image's base pin and the Renovate manager that keeps it current."""
     froms = _unpinned_froms227(_read227(".clusterfuzzlite", "Dockerfile"))
@@ -203,11 +212,6 @@ def _docker_pins227():
        "dockerfile manager reads that file alone; Dependabot has no docker entry to propose it twice",
        (froms, reads, "package-ecosystem: \"docker\"" in _read227(".github", "dependabot.yml")),
        ([], [".clusterfuzzlite/Dockerfile"], False))
-    rules = _json227.loads(_read227(".github", "renovate.json")).get("packageRules") or []
-    off = [r for r in rules if r.get("matchManagers") == ["dockerfile"] and r.get("enabled") is False
-           and r.get("matchFileNames") == ["panel/addon_images/b3/Containerfile"] and len(r) == 4]
-    eq("ci images: Renovate's built-in dockerfile manager is off for B3's build file (it read the tagless base "
-       "digest as python:latest), so only the custom 3.12-slim manager proposes its base", len(off), 1)
     eq("ci images: ...and a FROM by digest alone, or by tag alone, is caught (control)",
        len(_unpinned_froms227("FROM gcr.io/a/b@sha256:%s\nFROM gcr.io/a/b:v1\nFROM gcr.io/a/b:v1@sha256:%s\n"
                               % ("a" * 64, "b" * 64))), 2)
@@ -272,7 +276,7 @@ def _cleanup227():
 
 
 try:
-    for _section227 in (_adds227, _edits227, _parse227, _docker_pins227, _wide_grant227):
+    for _section227 in (_adds227, _edits227, _parse227, _docker_pins227, _b3_renovate227, _wide_grant227):
         _arm227()
         try:
             _section227()
