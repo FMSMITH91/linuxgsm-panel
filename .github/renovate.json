@@ -169,6 +169,16 @@
         "big-brother-bot"
       ],
       "minimumReleaseAge": "0 days"
+    },
+    {
+      "description": "B3's build file: only the custom manager above (python:3.12-slim, kept equal with addons.py). The built-in dockerfile manager reads its tagless ARG BASE_IMAGE digest as python:latest and proposed a different Python (#598).",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchFileNames": [
+        "panel/addon_images/b3/Containerfile"
+      ],
+      "enabled": false
     }
   ],
   "dependencyDashboard": {
