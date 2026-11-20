@@ -875,3 +875,5 @@ c96af566 A LinuxGSM settings save is bounded.
 c5fb6ea0 The Discord bot shows LinuxGSM's output as text.
 2d3afa39 Release notes with a long run of < no longer stall the panel.
 82b2e090 Game config audit rows hide more secrets.
+0051cbfe A chunked request can no longer run the panel out of memory.
+d7e455c5 A database restore on the panel's machine no longer hangs on a planted pipe.

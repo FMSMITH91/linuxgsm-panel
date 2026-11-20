@@ -8517,7 +8517,10 @@ def _db_import_child(pw, client, port, name, secret):
         dfd = os.open(os.path.join(os.path.realpath(pw.pw_dir), DB_DUMP_DIR),
                       os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            fd = os.open(name + ".sql.gz", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+            # O_NONBLOCK: the game account owns this name, and a FIFO put there blocked a plain open
+            # for ever (the root helper waiting on this child with it). Judged by what was OPENED,
+            # below; a regular file reads the same either way. The remote form refuses it with rc 4 too.
+            fd = os.open(name + ".sql.gz", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
         finally:
             os.close(dfd)
     except FileNotFoundError:

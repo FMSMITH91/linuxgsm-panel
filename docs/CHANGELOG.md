@@ -14,6 +14,14 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ### Security
 
+- **A chunked request can no longer run the panel out of memory.** The web server now refuses a request
+  sent with `Transfer-Encoding` (411, or 400 for anything but plain `chunked`) before it reaches the panel,
+  which could never read such a body. Anyone who could reach the port, without signing in, could make the
+  panel hold everything sent on one connection for up to a minute, hundreds of MB at a time, and each
+  malformed one wrote a log line. A body is also capped in size where it is read.
+- **A database restore on the panel's machine no longer hangs on a planted pipe.** A named pipe that the
+  game account put in place of a dump made Restore wait for 30 minutes and left a root process behind for
+  every click. It is now refused at once as "not a regular file", as it already was on other machines.
 - **One game account's jq settings no longer decide other servers' player counts.** The player poller asks
   every server of a host in one command run as one game account; the jq it runs there now ignores that
   account's own `~/.jq`, which could set the player counts, names and lists shown for the other servers.
