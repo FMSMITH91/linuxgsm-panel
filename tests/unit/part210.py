@@ -334,6 +334,7 @@ def _cookie210():
     later[0] = _time210.time() + _scookie210._REISSUE_SECONDS + 1
     old = c.get("/api/auth/ping")
     again = c.get("/api/auth/ping")
+    _signed_at210 = later[0]
     later[0] = None
     eq("session cookie: a poll with a cookie signed moments ago sends no Set-Cookie; one 5 minutes old is re-sent "
        "(the idle timeout still slides), and the re-sent one is new again",
@@ -347,10 +348,15 @@ def _cookie210():
        "viewer, so the browser keeps its cache)",
        (st.status_code, "Set-Cookie" in st.headers, "cookie" in st.headers.get("Vary", "").lower()),
        (200, False, False))
-    later[0] = None
+    # On the clock the client's cookie was signed by (review 1123): back on the real one, that cookie read as
+    # signed in the future, was dropped as a bad signature, and the switch ran on an empty, anonymous session.
+    later[0] = _signed_at210
     lang = c.get("/set-language/fr?ajax=1")
-    eq("session cookie: a request that changes the session (a language switch) sends it at once",
-       "Set-Cookie" in lang.headers, True)
+    with c.session_transaction() as sess:
+        still = sess.get("_user_id") is not None
+    later[0] = None
+    eq("session cookie: a request that changes the session (a language switch) sends it at once, on the "
+       "signed-in session", ("Set-Cookie" in lang.headers, still), (True, True))
     _p9_restore_all()
     _p9_arm(who="part210")
 

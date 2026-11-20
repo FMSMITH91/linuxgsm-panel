@@ -54,7 +54,10 @@ def _r42m_down(as_game_word, own=False):
         if "pgrep" in cmd:
             return "IDLE", "", 0
         _r42m_lock_calls.append((cmd[:30], sudo))
-        as_game = (cmd.startswith("sudo -u r42mgame bash -c ") and not sudo) or (own and not sudo)
+        # The sudo line when the game is another account's; the bare line, never the sudo one, when it is the
+        # panel's own (review 1123: any non-sudo line answered then, `sudo -u <itself>` included, which a host
+        # refuses).
+        as_game = not sudo and (cmd.startswith("sudo -u r42mgame bash -c ") != own)
         return (as_game_word if as_game else "LGSM_LOCK_unread"), "", 0
 
     _p9_patch_sm("_run_local", _run_local)

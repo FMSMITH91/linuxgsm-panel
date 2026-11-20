@@ -223,7 +223,11 @@ class AddonWebProxy:
         _aw.revoke(token)
 
     def still_allowed(self, token):
-        """Whether `token`'s link may still be used (asked during a WebSocket, without noting a use)."""
+        """Whether `token`'s link may still be used (asked during a WebSocket).
+
+        Each ask notes a use (lookup does), so an open WebSocket keeps the link's idle time fresh; the
+        panel sign-in's own expiry, which _why_not reads through live_session_user, still ends it.
+        """
         with self.app.app_context():
             link = _aw.lookup(token, session_idle_limits()[0], session_absolute_limits()[0])
             return link is not None and not self._why_not(link, db.session.get(GameServer, link.server_id))

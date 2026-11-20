@@ -1175,9 +1175,22 @@ check("clock.aware_utcnow() is timezone-aware, for libraries that require it",
 # Source gate: the deprecated spellings must not come back. A single `datetime.utcnow()` reintroduced
 # in a later PR would be invisible again the day CPython removes it.
 _root = _UNIT_ROOT
-# Split so these patterns do not match their own source line — this file is inside the walk.
-_BAD_NOW = r"\.utc" + r"now\s*\("
-_BAD_TS = r"\.utc" + r"fromtimestamp\s*\("
+# Read as code (review 1123): a line skip for any line naming "clock" also passed
+# `x_clock = datetime.utcnow()`. Now every call of either helper counts unless its receiver is
+# panel.core.clock itself: `clock`, `_clock`, `_clock212`, or `mod("panel.core.clock")`. Comments and
+# strings that name the old spelling are not calls.
+_R35T_DEPRECATED_UTC = ("utc" + "now", "utc" + "fromtimestamp")
+_R35T_CLOCK_RECV = _re.compile(r"(?:^|\.)_?clock\d*$|\(['\"]panel\.core\.clock['\"]\)$")
+
+
+def _r35t_old_utc_calls(text):
+    """Line numbers of the calls in `text` to datetime's deprecated UTC helpers (clock's are not)."""
+    return [_n.lineno for _n in _smg_ast.walk(_smg_ast.parse(text))
+            if isinstance(_n, _smg_ast.Call) and isinstance(_n.func, _smg_ast.Attribute)
+            and _n.func.attr in _R35T_DEPRECATED_UTC
+            and not _R35T_CLOCK_RECV.search(_smg_ast.unparse(_n.func.value))]
+
+
 _offenders = []
 for _dirpath, _dirnames, _files in os.walk(_root):
     _dirnames[:] = [d for d in _dirnames
@@ -1186,14 +1199,18 @@ for _dirpath, _dirnames, _files in os.walk(_root):
         if not _f.endswith(".py") or _f == "clock.py":
             continue
         _fp = os.path.join(_dirpath, _f)
-        for _i, _line in enumerate(open(_fp, encoding="utf-8", errors="replace"), 1):
-            _code = _line.split("#", 1)[0]          # a comment may legitimately name the old spelling
-            if "clock" in _code:                    # clock.utcnow() is the replacement, not the target
-                continue
-            # The deprecated spellings are attribute access on datetime: datetime.utcnow(),
-            # _dt.utcnow(), datetime.datetime.utcfromtimestamp(). A bare utcnow() is clock's.
-            if _re.search(_BAD_NOW, _code) or _re.search(_BAD_TS, _code):
-                _offenders.append("%s:%d" % (os.path.relpath(_fp, _root), _i))
+        _offenders += ["%s:%d" % (os.path.relpath(_fp, _root), _i)
+                       for _i in _r35t_old_utc_calls(open(_fp, encoding="utf-8", errors="replace").read())]
+_r35t_utc_ctl = [_r35t_old_utc_calls(_c) for _c in (
+    "t0_clock = datetime.datetime." + _R35T_DEPRECATED_UTC[0] + "()",
+    "self.clock_at = datetime." + _R35T_DEPRECATED_UTC[1] + "(x)",
+    "_dt." + _R35T_DEPRECATED_UTC[0] + "()",
+    "a = mod('panel.core.clock')." + _R35T_DEPRECATED_UTC[0] + "()",
+    "b = _clock212." + _R35T_DEPRECATED_UTC[0] + "()\nc = clock." + _R35T_DEPRECATED_UTC[0] + "()",
+    "# datetime." + _R35T_DEPRECATED_UTC[0] + "()\nx = 'datetime." + _R35T_DEPRECATED_UTC[0] + "()'")]
+check("...the deprecated-UTC reader takes a call on datetime beside a name holding 'clock', and not "
+      "panel.core.clock's own nor a comment or string naming the old spelling (control)",
+      _r35t_utc_ctl == [[1], [1], [1], [], [], []], repr(_r35t_utc_ctl))
 check("no module calls the datetime UTC helpers that are scheduled for removal",
       not _offenders, ", ".join(_offenders[:5]))
 
@@ -8780,14 +8797,22 @@ def _r22d_imported_module(expr):
 
     Eventlet's `patcher.original("os")` and its `sys.modules["__original_module_os"]` key are the
     unpatched module itself, which every user of the original shares (tpool, `_core._real_subprocess`).
+    `sys.modules.get("os")` is the same read as the subscript, under either key (review 1123).
     """
     if isinstance(expr, _smg_ast.Call):
         _fn = getattr(expr.func, "id", getattr(expr.func, "attr", ""))
-        return (_fn in ("__import__", "import_module", "original")
-                and (_r22d_str_arg(expr) or "").split(".")[0] in _R21D_STDLIB)
+        return ((_fn in ("__import__", "import_module", "original") or _r35t_modules_get(expr))
+                and _r34t_unoriginal(_r22d_str_arg(expr) or "").split(".")[0] in _R21D_STDLIB)
     return (isinstance(expr, _smg_ast.Subscript) and getattr(expr.value, "attr", "") == "modules"
             and isinstance(expr.slice, _smg_ast.Constant)
             and _r34t_unoriginal(expr.slice.value).split(".")[0] in _R21D_STDLIB)
+
+
+def _r35t_modules_get(call):
+    """Is `call` a `<x>.modules.get(…)` read, as `sys.modules.get("os")` is."""
+    _f = call.func
+    return (isinstance(_f, _smg_ast.Attribute) and _f.attr == "get"
+            and getattr(_f.value, "attr", getattr(_f.value, "id", "")) == "modules")
 
 
 def _r34t_unoriginal(key):
@@ -8869,7 +8894,7 @@ def _r23d_std_module_name(expr):
     if isinstance(expr, _smg_ast.Attribute):
         return "urllib.request" if expr.attr == "request" else expr.attr
     if isinstance(expr, _smg_ast.Call):
-        return _r22d_str_arg(expr)
+        return (_r34t_unoriginal(_r22d_str_arg(expr) or "") or None) if _r35t_modules_get(expr) else _r22d_str_arg(expr)
     return _r34t_unoriginal(getattr(expr.slice, "value", "")) or None
 
 
@@ -8921,10 +8946,13 @@ _r21d_std_ctl = [_r21d_stdlib_stubs(_smg_ast.parse(_c)) for _c in (
     "import atexit, shutil\natexit.register(shutil.rmtree, d, True)",
     # Eventlet's original (unpatched) module, by its patcher and by its sys.modules key.
     "from eventlet import patcher\npatcher.original('os').geteuid = f",
-    "sys.modules['__original_module_subprocess'].run = f")]
+    "sys.modules['__original_module_subprocess'].run = f",
+    # ...and by sys.modules.get, under either key (review 1123).
+    "import sys\nsys.modules.get('pwd').getpwnam = f", "sys.modules.get('__original_module_os').geteuid = f",
+    "import sys\n_patch(sys.modules.get('os').path, 'isfile', f)")]
 check("tests: no test sets an attribute on a stdlib module other than sys/builtins (it would stand in for "
       "every module and thread); each listed exception still exists, and the reader finds each spelling "
       "and each (module, name, value) patcher whatever its name (control)",
       not _r21d_std_hits and _R21D_STDLIB_OK <= _r21d_std_seen
-      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 8 + [False] * 2 + [True] * 2,
+      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 8 + [False] * 2 + [True] * 5,
       repr((_r21d_std_hits, sorted(_R21D_STDLIB_OK - _r21d_std_seen), _r21d_std_ctl)))

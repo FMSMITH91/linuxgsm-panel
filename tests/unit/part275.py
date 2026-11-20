@@ -29,7 +29,7 @@ import time as _time275
 import types as _types275
 
 from unit.part01 import check, eq, skip
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client,
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client,
                          _p9_delete_server, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part203 import _vh203
 from panel.ops.ssh_manager import _core as _core275, cron as _cron275, files as _files275
@@ -136,7 +136,11 @@ _CFG_LINES275 = ['# slots="0"', 'slots="1"', '  slots = "2"', 'slotsx="3"', '\ti
 
 
 def _cfg_posts275(bodies):
-    """POST each settings map to the config route: ([answers], [written texts], [edit_config audit rows])."""
+    """POST each settings map to the config route: ([answers], [written texts], [(newest edit_config row, rows it added)]).
+
+    The count, not only the newest row (review 1123): two posts refused for the same reason left the second
+    reading the first's row when the second wrote none.
+    """
     writes, audits = [], []
     _p9_arm(who="part275")
     _p9_patch(_files275, "_read_instance_cfg_lines", lambda *a, **k: list(_CFG_LINES275))
@@ -148,8 +152,9 @@ def _cfg_posts275(bodies):
     try:
         c = _p9_client(P9_ADMIN)
         for body in bodies:
+            before = _p9_audit_count("edit_config")
             answers.append(_p9_json(c.post("/api/server/%d/config" % P9_GS, json={"settings": body})))
-            audits.append(_p9_audit("edit_config"))
+            audits.append((_p9_audit("edit_config"), _p9_audit_count("edit_config") - before))
     finally:
         _p9_restore_all()
     return answers, writes, audits
@@ -163,8 +168,8 @@ _cfg_ans275, _cfg_writes275, _cfg_audits275 = _cfg_posts275(
 eq("config save r34 (the route): 1001 settings, or 1 MiB and more of text, are refused whole with the reason, "
    "audited as refused, and nothing is written",
    [(a.get("success"), a.get("message")) for a in _cfg_ans275[:2]]
-   + [(r.success, _files275.LGSM_CONFIG_TOO_BIG in r.detail) for r in _cfg_audits275[:2]],
-   [(False, _files275.LGSM_CONFIG_TOO_BIG)] * 2 + [(False, True)] * 2)
+   + [(r.success, _files275.LGSM_CONFIG_TOO_BIG in r.detail, n) for r, n in _cfg_audits275[:2]],
+   [(False, _files275.LGSM_CONFIG_TOO_BIG)] * 2 + [(False, True, 1)] * 2)
 eq("config save r34 (the route): ...1000 settings are still saved (each new key appended once), and a save "
    "still rewrites every uncommented line of a key, keeps comments and look-alike keys, and skips a bad name",
    ([a.get("success") for a in _cfg_ans275[2:]], len(_cfg_writes275),

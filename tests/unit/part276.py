@@ -246,6 +246,29 @@ def _authz_burst276():
                                                               1, 1))
 
 
+def _verdict_kept276():
+    """A refresh the host does not answer keeps the fresh verdict it would have replaced (review 1123)."""
+    why = "it is uid 0 (root)"
+    asked = []
+    _p9_patch(_sh276, "privileged_accounts", lambda remote, users: (asked.append(users), None)[1])
+    got = []
+    try:
+        for cached in (why, ""):
+            with _sh276._ACCOUNT_VERDICTS_LOCK:
+                _sh276._ACCOUNT_VERDICTS[_KEY276] = (_time276.monotonic() + _sh276._ACCOUNT_REFRESH_AHEAD / 2, cached)
+                until = _sh276._ACCOUNT_VERDICTS[_KEY276][0]
+            ans = _sh276.game_account_write_refusal(_REMOTE276, "vh276")
+            with _sh276._ACCOUNT_VERDICTS_LOCK:
+                got.append((None if ans is None else str(ans), _sh276._ACCOUNT_VERDICTS.get(_KEY276, (None,))[0] == until))
+    finally:
+        _p9_restore_all()
+        with _sh276._ACCOUNT_VERDICTS_LOCK:
+            _sh276._ACCOUNT_VERDICTS.pop(_KEY276, None)
+    eq("account verdict: a refresh the host does not answer keeps the verdict still fresh (a root account stays "
+       "refused as root, a plain one allowed; never \"couldn't check\"), and its expiry does not move",
+       (got, len(asked)), ([(str(_sh276._privileged_write_msg("vh276", why)), True), (None, True)], 2))
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 5. The remote release's process test and a process that exits during it
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -513,9 +536,12 @@ def _nags276():
             + "console.log(JSON.stringify(ul.children.map(li => li.children[2].textContent)));\n")
     got = _node221("reboot dialog: every blocker kind", prog)
     if got is not None:
+        # One phrase per kind first (review 1123): a failed run's {"node failed": ...} or a short list zipped
+        # to nothing and passed.
+        ok = isinstance(got, list) and len(got) == len(kinds)
         eq("reboot dialog: every kind of work the server names as blocking a reboot (mods, scheduled tasks, wipes, "
            "queued stops, add-on jobs among them) has its own phrase, none the bare 'work is running'",
-           [k for k, said in zip(kinds, got) if said == "work is running"], [])
+           (ok, [k for k, said in zip(kinds, got) if said == "work is running"] if ok else got), (True, []))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -603,6 +629,7 @@ _card276()
 _sftp_rate276()
 _verdict_flight276()
 _authz_burst276()
+_verdict_kept276()
 _forget_live276()
 _relink276()
 _idt3_slot276()

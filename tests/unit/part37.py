@@ -248,6 +248,85 @@ def _f5_justification():
           "missing %r" % missing)
 
 
+# Raw streams the panel opens to a host's port (review 1123): the add-on page proxy speaks HTTP/1.1 over
+# one of tunnel.py's three, with a path taken from the browser's request, and no rule above sees a byte
+# written onto a socket. Each is listed with what bounds it in codeql-config.yml; hosts._tcp_reachable
+# only connects (no byte is sent), and is named there as not HTTP.
+_RAW_REVIEWED37 = {
+    ("panel/ops/ssh_manager/tunnel.py", "_local", "socket.create_connection"),
+    ("panel/ops/ssh_manager/tunnel.py", "_paramiko", "open_channel direct-tcpip"),
+    ("panel/ops/ssh_manager/tunnel.py", "_ssh_cli_argv", "ssh -W"),
+    ("panel/ops/ssh_manager/hosts.py", "_tcp_reachable", "socket.create_connection"),
+}
+
+
+def _raw_kind37(node):
+    """What raw stream a node opens: a TCP connect, an SSH direct-tcpip channel, or an ssh -W argv; else None.
+
+    An argv's `-W` counts when a computed host:port follows it (ping's `-W 3` and dpkg-query's `-W -f=…` do not).
+    """
+    if isinstance(node, _ast37.Call):
+        return _raw_call37(node)
+    if isinstance(node, _ast37.List) and any(isinstance(a, _ast37.Constant) and a.value == "-W"
+                                              and not isinstance(b, _ast37.Constant)
+                                              for a, b in zip(node.elts, node.elts[1:])):
+        return "ssh -W"
+    return None
+
+
+def _raw_call37(call):
+    """The raw stream a call opens ('socket.create_connection', 'open_channel direct-tcpip'), or None."""
+    name = _callee37(call.func)
+    if name.split(".")[-1] == "create_connection" and not name.endswith("websocket.create_connection"):
+        return "socket.create_connection"
+    first = call.args[0] if call.args else None
+    if name.split(".")[-1] == "open_channel" and isinstance(first, _ast37.Constant) and first.value == "direct-tcpip":
+        return "open_channel direct-tcpip"
+    return None
+
+
+def _raw_sites37(source, rel):
+    """(rel, enclosing function, kind) for every raw stream opened in source."""
+    sites, todo = set(), [(_ast37.parse(source), "<module>")]
+    while todo:
+        node, func = todo.pop()
+        for child in _ast37.iter_child_nodes(node):
+            kind = _raw_kind37(child)
+            if kind:
+                sites.add((rel, func, kind))
+            todo.append((child, child.name if isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef)) else func))
+    return sites
+
+
+def _raw_tripwire():
+    """The shipped code's raw streams are exactly the reviewed ones, each named in the justification."""
+    found = set()
+    for f in _shipped_py37():
+        found |= _raw_sites37(open(f, encoding="utf-8").read(), _rel37(f))
+    text = _read29(".github", "codeql", "codeql-config.yml")
+    comment = "\n".join(ln for ln in text[:text.find("query-filters:")].splitlines() if ln.lstrip().startswith("#"))
+    named = sorted({"%s.%s" % (os.path.splitext(os.path.basename(r))[0], fn) for r, fn, _k in _RAW_REVIEWED37})
+    check("outbound streams: every raw stream the shipped code opens to a host's port (TCP connect, SSH "
+          "direct-tcpip, ssh -W) is a reviewed one, and codeql-config.yml names each with the add-on page proxy",
+          found == _RAW_REVIEWED37 and all(n in comment for n in named) and "addon_web" in comment,
+          "new: %r gone: %r unnamed: %r" % (sorted(found - _RAW_REVIEWED37), sorted(_RAW_REVIEWED37 - found),
+                                            [n for n in named if n not in comment]))
+
+
+def _raw_controls():
+    """The raw-stream scanner finds each kind, and not the look-alikes."""
+    probes = {"c": "import socket\ndef a(h):\n    return socket.create_connection((h, 1))\n",
+              "p": "def b(t):\n    return t.open_channel('direct-tcpip', ('127.0.0.1', 1), ('127.0.0.1', 0))\n",
+              "w": "def d(p):\n    return ['ssh', '-W', '%s:%d' % ('127.0.0.1', p), 'h']\n",
+              "no": ("import websocket\ndef e(u):\n    return websocket.create_connection(u), ['ping', '-W', '3', u], "
+                     "['dpkg-query', '-W', '-f=x'], t.open_channel('session')\n")}
+    got = {k: _raw_sites37(v, "probe.py") for k, v in probes.items()}
+    check("outbound streams: (control) the scanner finds a TCP connect, a direct-tcpip channel and an ssh -W "
+          "argv, and not a WebSocket, ping's -W, dpkg-query's -W or a session channel",
+          got == {"c": {("probe.py", "a", "socket.create_connection")}, "p": {("probe.py", "b", "open_channel direct-tcpip")},
+                  "w": {("probe.py", "d", "ssh -W")}, "no": set()}, repr(got))
+
+
 # ── F6: the CodeQL model pack ────────────────────────────────────────────────────────────────────
 _PACK37 = os.path.join(_root, ".github", "codeql", "extensions", "linuxgsm-panel-python")
 _SIO_ROWS37 = [
@@ -1309,6 +1388,8 @@ def _f7_crash_handlers():
 _f5_tripwire()
 _f5_controls()
 _f5_justification()
+_raw_tripwire()
+_raw_controls()
 _ROWS37 = _f6_pack()
 _f6_shapes(_ROWS37)
 _f6_entry_points(_ROWS37)

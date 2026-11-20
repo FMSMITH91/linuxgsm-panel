@@ -33,7 +33,7 @@ import types as _ty207
 
 from unit.part01 import check, eq
 from unit.part05 import _helper, _root
-from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_restore_all
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_restore_all, _p9_seeded_default_group
 from panel.db.models import (GameDatabase as _GD207, GameServer as _GS207, HostDatabaseServer as _HD207,
                              RemoteServer as _RS207, db as _db207)
 from panel.ops.ssh_manager import _core as _smc207, databases as _dbs207
@@ -383,6 +383,22 @@ def _p207_no_dump_import(_dd):
         _os207.makedirs(_dd, exist_ok=True)
 
 
+def _no_sandbox207():
+    """A client without --sandbox still imports and is not handed it, through both copies of db-import.
+
+    The import must have run: argv.1 is written only by the import call, so an import that never ran
+    read as "not handed it" too. Both copies (review 1123: only the helper's was run, so the remote
+    form's help-text probe could hand every client --sandbox), and no `--sandbox=<v>` either.
+    """
+    for side, run in (("helper", _h), ("remote", _r)):
+        _reset(help="no such option here\n")
+        res = run("db-import", *_VERB_ARGS["db-import"])
+        argv = (_rec("argv.1") or "").splitlines()
+        check("db-import (%s): a client without --sandbox still imports, and is not handed it" % side,
+              res[0] == 0 and argv[-1:] == ["gs12_lp"] and not any(a.startswith("--sandbox") for a in argv),
+              repr((res, argv)))
+
+
 try:
     # db-create: a free name is made, as the panel's statements, signed in with the login file.
     for _side, _run in (("helper", _h), ("remote", _r)):
@@ -577,13 +593,7 @@ try:
               _rec("def.1") == _helper.db_defaults_text("gs12_lp", _PW) and _argv[0].startswith("--defaults-extra-file=")
               and "--sandbox" in _argv and "--protocol=tcp" in _argv and "--host=127.0.0.1" in _argv
               and "--port=3306" in _argv, repr((_rec("def.1"), _argv)))
-    _reset(help="no such option here\n")
-    _res = _h("db-import", *_VERB_ARGS["db-import"])
-    _argv = (_rec("argv.1") or "").splitlines()
-    # The import must have run: argv.1 is written only by the import call, so an import that never
-    # ran read as "not handed it" too.
-    check("db-import (helper): a client without --sandbox still imports, and is not handed it",
-          _res[0] == 0 and _argv[-1:] == ["gs12_lp"] and "--sandbox" not in _argv, repr((_res, _argv)))
+    _no_sandbox207()
     _reset()
     _h("db-import", *_VERB_ARGS["db-import"])
     eq("db-import (helper): the import runs after the drop to the game account", (_rec("drops") or "").split(), [_ACCT])
@@ -978,8 +988,12 @@ _want_tr = [_auth207.ALL_PERMISSIONS[_auth207.MANAGE_DATABASES]] + [getattr(_dbs
                                                                      if k.startswith("S_")]
 eq("permission + sentences: the label and every service sentence are translated in es and fr",
    [(lang, t[:40]) for lang in _cats for t in _want_tr if t not in _cats[lang]], [])
+# Read from the seeder itself (review 1123): a grep of models.py for "manage_databases" passed a seed that
+# named the permission through auth.MANAGE_DATABASES.
+_seed207 = _p9_seeded_default_group()
 check("permission: no group is given it by default (the seeded Everyone group holds two view permissions)",
-      "manage_databases" not in open(_os207.path.join(_root, "panel", "db", "models.py"), encoding="utf-8").read())
+      len(_seed207) == 1 and _seed207[0][0] is True and "view_servers" in _seed207[0][1]
+      and _auth207.MANAGE_DATABASES not in _seed207[0][1], repr(_seed207))
 
 _sh207.rmtree(_T, ignore_errors=True)
 _p9_restore_all()

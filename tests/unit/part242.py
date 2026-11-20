@@ -291,15 +291,84 @@ check("renovate: its image manager reads scorecard.yml's recorded image as one d
       and _img_hits242 == [{"datasource": "docker", "depName": _pin242.group(1), "currentValue": _pin242.group(2),
                             "currentDigest": _pin242.group(3)}], repr(_img_hits242))
 
-_gha242 = [_js_re242(p) for p in (_rn242.get("github-actions") or {}).get("managerFilePatterns", [])]
-_files242 = []
-for _dp242, _dirs242, _fns242 in os.walk(os.path.join(_root, ".github")):
-    _files242 += [os.path.relpath(os.path.join(_dp242, _f), _root).replace(os.sep, "/") for _f in _fns242]
-_gha_read242 = sorted(f for f in _files242 if any(r.search(f) for r in _gha242))
-check("renovate: the github-actions manager reads the two ClusterFuzzLite copies and no other file under "
-      ".github (the workflows' actions are Dependabot's)",
+# What a built-in manager really reads (review 1123): Renovate ADDS the configured managerFilePatterns to
+# the manager's own defaults, which cannot be removed (docs/usage/configuration-options.md,
+# "managerFilePatterns"); the defaults below are lib/modules/manager/<name>/index.ts's defaultConfig
+# (renovatebot/renovate main, read 2026-11-20). So a manager reads every file its defaults or the
+# configured patterns match, less the files a packageRule turns it off for (enabled: false). Judged on
+# the configured patterns alone, the dockerfile manager "read one file" while it read B3's Containerfile
+# (#598), and the github-actions manager "read no workflow" while it read every one.
+_RN_DEFAULTS242 = {
+    "github-actions": ["/(^|/)(workflow-templates|\\.(?:github|gitea|forgejo)/(?:workflows|actions))/.+\\.ya?ml$/",
+                       "/(^|/)action\\.ya?ml$/"],
+    "dockerfile": ["/(^|/|\\.)([Dd]ocker|[Cc]ontainer)file$/", "/(^|/)([Dd]ocker|[Cc]ontainer)file[^/]*$/"],
+}
+
+
+def _rn_files242():
+    """Every file of the checkout, as repository paths (what Renovate's managers match against)."""
+    out = []
+    for dp, dirs, fns in os.walk(_root):
+        dirs[:] = [d for d in dirs if d not in (".git", ".claude", "node_modules", ".venv", "venv", "__pycache__", "data")]
+        out += [os.path.relpath(os.path.join(dp, f), _root).replace(os.sep, "/") for f in fns]
+    return out
+
+
+def _rn_name_re242(pattern):
+    """A packageRule matchFileNames entry as a regex: `/re/` as written, else a glob (`**` crosses folders)."""
+    if len(pattern) > 1 and pattern.startswith("/") and pattern.endswith("/"):
+        return _js_re242(pattern)
+    return _re242.compile("".join(".*" if t == "**" else "[^/]*" if t == "*" else _re242.escape(t)
+                                  for t in _re242.split(r"(\*\*|\*)", pattern)) + r"\Z")
+
+
+def _rn_names_match242(names, path):
+    """Whether a matchFileNames list matches `path`, as Renovate reads a pattern list.
+
+    docs/usage/string-pattern-matching.md: with positive patterns, at least one must match; with
+    negative ones (`!` first), none may.
+    """
+    pos = [_rn_name_re242(n) for n in names if not n.startswith("!")]
+    neg = [_rn_name_re242(n[1:]) for n in names if n.startswith("!")]
+    return bool(names) and (not pos or any(r.match(path) for r in pos)) and not any(r.match(path) for r in neg)
+
+
+def _rn_off242(cfg, manager):
+    """The matchFileNames lists of the packageRules that only turn `manager` off for those files."""
+    return [r.get("matchFileNames") or [] for r in cfg.get("packageRules") or [] if r.get("enabled") is False
+            and manager in (r.get("matchManagers") or [])
+            and set(r) <= {"description", "matchManagers", "matchFileNames", "enabled"}]
+
+
+def _rn_reach242(cfg, manager, files):
+    """The files `manager` reads under renovate config `cfg`: its defaults plus the configured, less the ones turned off."""
+    pats = [_js_re242(p) for p in _RN_DEFAULTS242[manager] + ((cfg.get(manager) or {}).get("managerFilePatterns") or [])]
+    off = _rn_off242(cfg, manager)
+    return sorted(f for f in files if any(p.search(f) for p in pats) and not any(_rn_names_match242(n, f) for n in off))
+
+
+_files242 = _rn_files242()
+_gha_read242 = _rn_reach242(_rn242, "github-actions", _files242)
+check("renovate: the github-actions manager reads the two ClusterFuzzLite copies and no other file (its built-in "
+      "patterns read every workflow, so a packageRule turns it off there: the workflows' actions are Dependabot's)",
       _gha_read242 == [".github/actions/cflite-build-fuzzers/action.yml", ".github/actions/cflite-run-fuzzers/action.yml"],
       repr(_gha_read242))
+_dock_read242 = _rn_reach242(_rn242, "dockerfile", _files242)
+check("renovate: the dockerfile manager reads the fuzz image's Dockerfile and no other file (its built-in "
+      "patterns read every Dockerfile and Containerfile; B3's, and any added later, are turned off)",
+      _dock_read242 == [".clusterfuzzlite/Dockerfile"], repr(_dock_read242))
+_rn_ctl242 = [_rn_reach242(_c, _m, [".github/workflows/ci.yml", ".github/actions/cflite-x/action.yml", "Containerfile",
+                                    "panel/x/Dockerfile", ".clusterfuzzlite/Dockerfile"])
+              for _m, _c in (("github-actions", {}), ("dockerfile", {}),
+                             ("github-actions", {"packageRules": [{"matchManagers": ["github-actions"], "enabled": False,
+                                                                   "matchFileNames": [".github/workflows/**"]}]}),
+                             ("dockerfile", {"packageRules": [{"matchManagers": ["dockerfile"], "enabled": False,
+                                                               "matchFileNames": ["!.clusterfuzzlite/Dockerfile"]}]}))]
+check("renovate: (control) with nothing configured each manager reads what its defaults match; a rule turning it "
+      "off by a folder glob takes those files off, and one with only a negation takes every file but that one",
+      _rn_ctl242 == [[".github/actions/cflite-x/action.yml", ".github/workflows/ci.yml"],
+                     [".clusterfuzzlite/Dockerfile", "Containerfile", "panel/x/Dockerfile"],
+                     [".github/actions/cflite-x/action.yml"], [".clusterfuzzlite/Dockerfile"]], repr(_rn_ctl242))
 
 _rules242 = _rn242.get("packageRules") or []
 _group242 = [r for r in _rules242 if r.get("groupName")]

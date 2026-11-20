@@ -490,6 +490,17 @@ def _sweep_case183(sid, **o):
         _values = (dict(_EXE183, startparameters=_LATEST183, extraparams="") if sid == _fctr_sid183
                    else dict(_MCV183))
         _p9_patch_sm("lgsm_cfg_texts", lambda *a, **k: o["cfg"] if "cfg" in o else _cfg_texts183(o.get("values", _values)))
+        # The sweep logs a server's exception and goes on (review 1123): recorded here, so a check reading "it
+        # waits, nothing stopped" can tell a wait from a crash that left the same state behind.
+        _one = _wr183._cmpd_one
+
+        def _one_recorded(*a, **k):
+            try:
+                return _one(*a, **k)
+            except Exception as exc:
+                got["raised"] = repr(exc)
+                raise
+        _p9_patch(_wr183, "_cmpd_one", _one_recorded)
         try:
             _wr183.sweep(_p9, now=_NOW183)
         except Exception as exc:  # noqa: BLE001 - recorded, and named by the check that reads it
@@ -612,7 +623,9 @@ check("world reset sweep: server.properties (or Factorio's config) that could no
       "waiting with the server untouched, never guessing a name",
       _unreadprops183["cmds"] == [] and _unreadprops183["entry"].get("pending_since")
       and "could not be read" in (_unreadprops183["entry"].get("wait") or "")
-      and _badcfg183["cmds"] == [] and _badcfg183["entry"].get("pending_since"), repr((_unreadprops183, _badcfg183)))
+      and _badcfg183["cmds"] == [] and _badcfg183["entry"].get("pending_since")
+      and "LinuxGSM config could not be read" in (_badcfg183["entry"].get("wait") or "")
+      and "raised" not in _unreadprops183 and "raised" not in _badcfg183, repr((_unreadprops183, _badcfg183)))
 check("world reset sweep: an empty server.properties (read, but nothing in it) is refused, never read as `world`",
       _emptyprops183["cmds"] == [] and _last183(_emptyprops183).get("ok") is False
       and "server.properties is empty" in (_last183(_emptyprops183).get("detail") or ""), repr(_emptyprops183))
@@ -651,6 +664,7 @@ _stlocked183 = _sweep_case183(_mc_sid183, status=lambda: ("__WWR_LOCKED__\n", ""
 check("world reset sweep: a state that did not come back, or a LinuxGSM backup/update running, waits with "
       "nothing stopped",
       _stunread183["cmds"] == ["status"] and _stunread183["entry"].get("pending_since")
+      and "could not be read" in (_stunread183["entry"].get("wait") or "") and "raised" not in _stunread183
       and _stlocked183["cmds"] == ["status"] and "backup or update" in (_stlocked183["entry"].get("wait") or ""),
       repr((_stunread183, _stlocked183)))
 

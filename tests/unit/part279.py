@@ -30,7 +30,7 @@ import threading as _th279
 
 from unit.part01 import check, eq
 from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_audit_count, _p9_client, _p9_delete_server,
-                         _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
+                         _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_seeded_default_group)
 from panel.core import i18n as _i18n279
 from panel.db import models as _m279
 from panel.ops.ssh_manager import tunnel as _tun279
@@ -504,7 +504,8 @@ def _r_proxy279(ctx, res):
     res["jar"] = opened[-1][2].sent if opened else b""
     r = fresh.get("/addon-web/" + ctx["token"])
     res["slash"] = (r.status_code, r.headers.get("Location"))
-    res["unknown"] = (fresh.get("/addon-web/" + "B" * 43 + "/").status_code, len(opened))
+    dialled = len(opened)       # before the request: an unknown link dials nothing (review 1123)
+    res["unknown"] = (fresh.get("/addon-web/" + "B" * 43 + "/").status_code, len(opened) - dialled)
     res["put"] = fresh.open(loc, method="PUT").status_code
     res["ws_bluemap"] = fresh.get(loc, headers={"Upgrade": "websocket", "Connection": "Upgrade"}).status_code
     res["other"] = fresh.get("/login").status_code
@@ -603,7 +604,7 @@ check("proxy: the add-on's own cookie (from its Set-Cookie) goes back to it on t
       and b"session=panel" not in _rt279.get("jar", b""), _rt279.get("jar", b"")[:300].decode("latin-1"))
 check("proxy: a link without its trailing slash is redirected to it (BlueMap's relative paths need it)",
       _rt279.get("slash", (0, ""))[0] == 308 and str(_rt279["slash"][1]).endswith("/"), repr(_rt279.get("slash")))
-eq("proxy: an unknown link is a 404 and nothing is dialled", _rt279.get("unknown", (0, 0))[0], 404)
+eq("proxy: an unknown link is a 404 and nothing is dialled", _rt279.get("unknown", (0, -1)), (404, 0))
 eq("proxy: a method other than GET, HEAD, POST (or a preflight) is refused; a WebSocket to BlueMap too",
    (_rt279.get("put"), _rt279.get("ws_bluemap")), (405, 400))
 eq("proxy: every other path still goes to the panel itself", _rt279.get("other"), 200)
@@ -694,9 +695,14 @@ def _tab279():
 _tb279 = _tab279()
 eq("tab: View add-on pages alone gets the Add-ons tab where an add-on with a page is offered, without managing; "
    "not where none is", ((_tb279[0]["view"], _tb279[0]["manage"]), _tb279[1]["view"]), ((True, False), False))
+# Each claim read (review 1123): the label and the seeded group were never looked at.
+_seed279 = _p9_seeded_default_group()
 check("permission: View add-on pages is grantable, labelled, opens Files & Config, and in no group the panel made",
-      _auth279.VIEW_ADDON_PAGES in _auth279.ALL_PERMISSIONS and _auth279.VIEW_ADDON_PAGES in _auth279.FILES_PAGE_PERMS,
-      "")
+      _auth279.VIEW_ADDON_PAGES in _auth279.ALL_PERMISSIONS and _auth279.VIEW_ADDON_PAGES in _auth279.FILES_PAGE_PERMS
+      and bool(str(_auth279.ALL_PERMISSIONS.get(_auth279.VIEW_ADDON_PAGES) or "").strip())
+      and len(_seed279) == 1 and "view_servers" in (_seed279[0][1] or ())
+      and _auth279.VIEW_ADDON_PAGES not in _seed279[0][1], repr((_auth279.ALL_PERMISSIONS.get(_auth279.VIEW_ADDON_PAGES),
+                                                                  _seed279)))
 
 
 # ── 3. the card ───────────────────────────────────────────────────────────────────────────────────

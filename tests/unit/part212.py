@@ -176,8 +176,8 @@ def _s212_cost_bound():
 # ── 4. a password over MAX_PASSWORD_BYTES is never hashed ──────────────────────────────────────
 def _s212_length_bound():
     most = _auth212.MAX_PASSWORD_BYTES
-    over = "Aa1!" + "x" * most
     at_most = "Aa1!" + "x" * (most - 4)
+    over = at_most + "x"            # one byte over, as the check says (review 1123: it was four)
     over_uid = _user212("p212_over", _argon_at212(over, 8192, 1))
     most_uid = _user212("p212_atmax", _argon_at212(at_most, 8192, 1))
     with _p9.app_context():

@@ -159,12 +159,15 @@ def _rollback_hold_checks41():
         _sweep41()
         for _k, s in _server_pages41():
             downs.setdefault(s, minute)
+    # The design's 12 min (720 s) and the monitor's 3 min window as literals (review 1123): measured
+    # against the constants, the bound moved with them and nothing pinned the 12 minutes.
     check("alerts (real sweeps): after a rollback, an Autostart server LinuxGSM's monitor brings back "
           "6 min later pages nothing; one it never brings back pages 'went offline unexpectedly' "
-          "once, only after the monitor has had NOT_BACK_AFTER to bring it back",
+          "once, only after the monitor has had NOT_BACK_AFTER (12 min) to bring it back",
           _all41(not h.running("fctrserver"), _server_pages41() == [("server_down", "fctrserver")],
-                 downs.get("fctrserver", 0) * 60 >= HR.NOT_BACK_AFTER + _mon41._EXPECT_OFFLINE_WINDOW),
-          repr((downs, _NOTES41)))
+                 HR.NOT_BACK_AFTER == 720 and _mon41._EXPECT_OFFLINE_WINDOW == 180,
+                 downs.get("fctrserver", 0) * 60 >= 720 + 180),
+          repr((downs, HR.NOT_BACK_AFTER, _mon41._EXPECT_OFFLINE_WINDOW, _NOTES41)))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
