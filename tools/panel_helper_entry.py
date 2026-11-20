@@ -23,12 +23,21 @@ WHEN THE BYTECODE IS USED
       * both files are regular files;
       * the pyc's magic number is this interpreter's, its flags say "checked hash", and its source
         hash is the hash of the code file's bytes as read here.
-    Otherwise the code file is compiled from source, exactly as the helper ran before this file.
+    When only the bytecode fails a test (missing, stale, another interpreter's, or a pyc that is not
+    root's alone), the code file's bytes, already read through the checked descriptor, are compiled
+    instead. Nothing is ever read again by its path.
 
     PEP 552's hash (SipHash with a fixed key) tells a STALE pyc from a current one; it says nothing
     about a forged one. What keeps a forged pyc out is the ownership test: only root can write any
     file here, as only root could write the helper before. A pyc compiled by another Python version,
     after a release upgrade for instance, fails the magic test and the source is compiled instead.
+
+WHEN NOTHING RUNS
+    When a directory on the way or the code file itself fails the ownership test, or the code file
+    cannot be read, the entry runs nothing: it writes why to stderr and exits 1 (fail securely). A
+    file someone other than root could have changed is never run with root's rights. Re-running
+    install.sh as root puts the files back, or places the helper whole when the directories above
+    LIB_DIR are not root's alone.
 """
 import marshal
 import os
@@ -113,31 +122,33 @@ def bytecode(data, source):
 
 
 def _trusted_read(lib_dir, uid, top):
-    """(source, code or None) read through checked descriptors; raises OSError or Untrusted."""
+    """Return (source, code or None), both read through checked descriptors.
+
+    Raises OSError or Untrusted when the directories or the code file fail; the pyc is optional, so
+    any failure reading or checking it only gives None.
+    """
     dfd = open_dir(lib_dir, uid, top)
     try:
         source = read_file(dfd, CODE, uid)
         try:
-            return source, bytecode(read_file(dfd, BYTECODE, uid), source)
+            data = read_file(dfd, BYTECODE, uid)
         except (OSError, Untrusted):
             return source, None
+        return source, bytecode(data, source)
     finally:
         os.close(dfd)
 
 
 def load(lib_dir=LIB_DIR, uid=ROOT_UID, top=TOP):
-    """(code object, True when it came from the bytecode). OSError when the code file is unreadable."""
-    path = os.path.join(lib_dir, CODE)
-    try:
-        source, code = _trusted_read(lib_dir, uid, top)
-    except (OSError, Untrusted):
-        source, code = None, None
+    """Return (code object, True when it came from the bytecode).
+
+    Raises OSError or Untrusted, and then nothing may run: there is no fallback to the code file's
+    path. Without usable bytecode it compiles the source bytes the checked read returned.
+    """
+    source, code = _trusted_read(lib_dir, uid, top)
     if code is not None:
         return code, True
-    if source is None:
-        with open(path, "rb") as fh:   # as the helper was run before: by its path
-            source = fh.read()
-    return compile(source, path, "exec", dont_inherit=True), False
+    return compile(source, os.path.join(lib_dir, CODE), "exec", dont_inherit=True), False
 
 
 def run_code(code, entry_file):
@@ -155,11 +166,20 @@ def run_code(code, entry_file):
     exec(code, main.__dict__)  # nosec B102  # pylint: disable=exec-used
 
 
-if __name__ == "__main__":
+def start(entry_file, lib_dir=LIB_DIR, uid=ROOT_UID, top=TOP):
+    """Load the helper's code and run it; exit 1 with a message, running nothing, when it is refused."""
     try:
-        _code = load()[0]
-    except OSError as _exc:
-        sys.stderr.write("panel-helper: its code at %s could not be read (%s); re-run install.sh "
-                         "as root\n" % (os.path.join(LIB_DIR, CODE), type(_exc).__name__))
+        code = load(lib_dir, uid, top)[0]
+    except Untrusted as exc:
+        sys.stderr.write("panel-helper: refusing to run its code at %s: %s; re-run install.sh as root\n"
+                         % (os.path.join(lib_dir, CODE), exc))
         sys.exit(1)
-    run_code(_code, os.path.abspath(__file__))
+    except OSError as exc:
+        sys.stderr.write("panel-helper: its code at %s could not be read (%s); re-run install.sh "
+                         "as root\n" % (os.path.join(lib_dir, CODE), type(exc).__name__))
+        sys.exit(1)
+    run_code(code, entry_file)
+
+
+if __name__ == "__main__":
+    start(os.path.abspath(__file__))

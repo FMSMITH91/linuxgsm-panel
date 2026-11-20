@@ -125,6 +125,13 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Release notes with a long run of `<` no longer stall the panel.**
 - **Game config audit rows hide more secrets.** Steam server tokens (`gslt`, `sv_setsteamaccount`), webhook,
   auth and salt settings are shown as password fields, and their values never appear in the audit log.
+- **The privileged helper refuses to run code someone other than root could have changed.** When a
+  folder above the helper's code, or the code file itself, is not root's alone, the helper now stops with
+  a message to re-run install.sh as root; it used to run that file with root's rights. On a machine whose
+  folders fail that check, the installer places the helper whole, so it keeps working.
+- **gamedig's dependency `http2-wrapper` is 2.2.4, not 2.2.1.** Only the lockfile moved. It fixes
+  GHSA-vf8w-mh23-8cqj (an HTTP/2 session could be reused for another domain), which gamedig does not
+  reach: it never asks for HTTP/2.
 
 ## [2026.11.19] — 2026-11-19
 

@@ -2113,6 +2113,7 @@ _r16d_wrap_ts_handles()
 # with part255's stand-ins and node; imports part01, 12, 47, 221 and 255.
 # part282 (review pass 35, runtime fixes) drives part12's app, bash over part190's restore sandbox, part278's B3
 # stand-ins and node; imports part01, 05, 12, 47, 190, 221, 247, 272 and 278.
+# part284 (the helper's entry fails securely) runs the entry and install_helper_code over scratch trees; imports part01, 245.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2132,7 +2133,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248", "part249",
     "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262", "part263",
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
-    "part279", "part281", "part280", "part282", "part15")
+    "part279", "part281", "part280", "part282", "part284", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
