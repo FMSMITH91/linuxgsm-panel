@@ -534,6 +534,7 @@ def _root_cron_latin1_276():
     _p9_patch(_core276, "run_privileged", priv)
     _p9_patch(_core276, "helper_present", lambda recheck=False: True)
     _p9_patch(_rc276, "host_opened", lambda is_local, helper: True)
+
     def _put_back(cfg):
         cfg[_rc276.ENABLED_KEY] = was
 

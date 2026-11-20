@@ -74,6 +74,8 @@ WEB = {
     _ad.IW4MADMIN: {"connections": 1, "websocket": True, "settings_json": False},
     _ad.BLUEMAP: {"connections": 6, "websocket": False, "settings_json": True},
 }
+# Each id mapped to itself: a route turns the URL's text into this constant before anything uses it.
+WEB_IDS = {k: k for k in WEB}
 
 # OWASP HTTP Headers Cheat Sheet / CSP Cheat Sheet: the page runs in a sandbox with an opaque origin
 # (no allow-same-origin), loads only from this address, may not be framed and sends no referrer.
