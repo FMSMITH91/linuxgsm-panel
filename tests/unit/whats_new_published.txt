@@ -908,7 +908,7 @@ f3d67f8e BlueMap's card shows the render threads its config/core.conf sets.
 f4e7b063 A cfg setting repeated under a later heading is one field in the Settings form.
 0a6f9093 An idTech3 Kick or Ban whose player list could not be read says so.
 5f8ef7aa B3 penalty alerts have their own push title and text.
-6e9c7bc6 A setting saved with quotes, `$` or a backslash no longer blocks world resets.
+d7d9c9e0 A setting saved with quotes, $ or a backslash no longer blocks world resets.
 5b94ebb2 Root's crontab refused for its size says so.
 140e71ad The database browser no longer shows a "Show all" that does nothing.
 760c86ec A server's Backup and a queued stop or restart no longer run together.
