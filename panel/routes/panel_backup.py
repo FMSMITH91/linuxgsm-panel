@@ -42,7 +42,7 @@ class _FullBackupTally:
         self.failures = []      # every failure, for the recorded summary
         self.alertable = []     # the subset whose servers aren't muted by a tag, for the alert
         self.queued = []
-        self.held = []          # skipped while its scheduled wipe or a queued stop/restart ran
+        self.held = []          # skipped while a job that holds a backup ran (_shared._R39A_BACKUP_HOLD_KINDS)
         self.in_flight = []     # already being archived by the maintenance menu's Backup button
         self.keep_unread = False   # config.json unreadable: pruned to the maximum, not the setting
 
@@ -63,7 +63,8 @@ class _FullBackupTally:
             (", %d failed" % self.fail_n) if self.fail_n else "",
             (", %d skipped (players online)" % self.skip_n) if self.skip_n else "")
         if self.held:
-            summary += (", %d skipped (a scheduled wipe or a queued stop or restart was running: %s)"
+            summary += (", %d skipped (a scheduled wipe, a restore from a backup, a queued stop or restart, or an "
+                        "uninstall was running: %s)"
                         % (len(self.held), ", ".join(self.held)))
         if self.failures:
             summary += " — " + "; ".join(self.failures)

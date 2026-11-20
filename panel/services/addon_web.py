@@ -206,11 +206,16 @@ def revoke_user(user_id):
 
 
 def gate(remote_id, port, addon_id):
-    """The semaphore that holds requests to one add-on's page to the connections it takes at once."""
+    """The semaphore that holds requests to one add-on's page to the connections it takes at once.
+
+    Keyed by the add-on too: a port freed by one add-on and taken by another (the servers' port
+    windows overlap) gets the new add-on's own number of connections, not the first one's.
+    """
+    key = (remote_id, port, addon_id)
     with _GATES_LOCK:
-        g = _GATES.get((remote_id, port))
+        g = _GATES.get(key)
         if g is None:
-            g = _GATES[(remote_id, port)] = threading.BoundedSemaphore(WEB[addon_id]["connections"])
+            g = _GATES[key] = threading.BoundedSemaphore(WEB[addon_id]["connections"])
         return g
 
 

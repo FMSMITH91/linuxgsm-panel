@@ -627,12 +627,19 @@ def status_sh():
 
 
 def _world_status_sh(k):
-    """status_sh's extra lines for add-on `k` when it reads the world: its folder's size and the game's version."""
+    """status_sh's extra lines for add-on `k` when it reads the world: its folder's size, the game's version, threads.
+
+    threads.<k> is render-thread-count as config/core.conf sets it (BlueMap reads it at each start; the
+    operator may raise it there), so the card shows the value instead of the install's default.
+    """
     if CATALOG[k]["reads"] != "world":
         return ""
     from panel.services import addons_bluemap as _bm     # it imports world_reset, which needs ssh_manager
+    conf = shlex.quote("%s/%s/config/core.conf" % (HOME_DIR, k))
     return ('echo "disk.%s=$(timeout 5 nice -n 19 du -sk --one-file-system -- %s 2>/dev/null | cut -f1)"; %s'
-            % (k, shlex.quote("%s/%s" % (HOME_DIR, k)), _bm.version_sh("mcver." + k)))
+            "echo \"threads.%s=$(grep -m1 -E '^[[:space:]]*render-thread-count[[:space:]]*[:=]' %s 2>/dev/null "
+            "| head -c 200 | sed -E 's/^[^:=]*[:=][[:space:]]*//; s/[^0-9-].*//')\"; "
+            % (k, shlex.quote("%s/%s" % (HOME_DIR, k)), _bm.version_sh("mcver." + k), k, conf))
 
 
 def _b3_status_sh(k):
@@ -643,10 +650,16 @@ def _b3_status_sh(k):
     return _b3c.status_sh("%s/%s" % (HOME_DIR, k))
 
 
-def parse_status(out):
-    """What status_sh found: {os, podman, addons: {id: {meta dict, state, disk_kb, mc_version}}} for the installed ones.
+def _whole(text, most):
+    """The whole number from 1 to `most` that `text` spells, or None."""
+    return int(text) if text.isdecimal() and len(text) <= len(str(most)) and 0 < int(text) <= most else None
 
-    disk_kb is None when it was not read (an add-on that does not read the world, or a slow du). An
+
+def parse_status(out):
+    """What status_sh found: {os, podman, addons: {id: {meta dict, state, disk_kb, mc_version, render_threads}}}.
+
+    Only the installed add-ons are listed. disk_kb is None when it was not read (an add-on that does not
+    read the world, or a slow du); render_threads None when core.conf sets no whole number from 1 to 1024. An
     installed B3 also has "b3": b3_control.parse_status's {health, exit, svc, now}.
     """
     kv = kv_lines(out)
@@ -659,11 +672,12 @@ def parse_status(out):
         except ValueError:
             meta = {}
         state = kv.get("state." + k, "")
-        disk = kv.get("disk." + k, "")
+        disk, threads = kv.get("disk." + k, ""), kv.get("threads." + k, "")
         found[k] = {"meta": meta if isinstance(meta, dict) else {},
                     "state": state if state in _STATES else "unknown",
                     "disk_kb": int(disk) if disk.isdecimal() and len(disk) < 16 else None,
-                    "mc_version": kv.get("mcver." + k, "")}
+                    "mc_version": kv.get("mcver." + k, ""),
+                    "render_threads": _whole(threads, 1024)}
     if B3 in found:
         from panel.services import b3_control as _b3c     # it imports this module
         found[B3]["b3"] = _b3c.parse_status(kv, _unb64)
@@ -1233,9 +1247,11 @@ def _relays_gone_sh(user, addon_id):
 def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None, how=None):
     """A settings change or an update, as the account: rewrite, restart, watch. Ends like install_sh.
 
-    Writes the record, `files` and, with how["settings"], the settings file from stdin (b3.ini holds the
-    passwords); with how["rebuild"], pulls or builds the image again. The relay units are replaced by
-    `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
+    Writes `files` and, with how["settings"], the settings file from stdin (b3.ini holds the passwords);
+    with how["rebuild"], pulls or builds the image again. The record is written only once the image (and
+    how["extra"]'s file) is there, so a failed Update keeps the record that names the image still in use
+    and the card offers Update again; a settings reload writes it before it exits. The relay units are
+    replaced by `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
     how["dirs"] are more folders of the add-on to make (B3's own-plugins folder, when it is mounted).
     how["extra"] is shell run before the image (BlueMap's client file: addons_bluemap.client_sh).
     Its data, settings and database stay. how["old_image"], when the update moved it, is removed afterwards.
@@ -1253,8 +1269,8 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     q = "/home/%s/%s" % (user, QUADLET_DIR)
     uu = "/home/%s/%s" % (user, USER_UNIT_DIR)
     secret = shlex.quote("%s/%s" % (d, a["settings"]))
-    early = [_put_sh("%s/%s" % (d, META_FILE), meta_text)]
-    early += [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())]
+    early = [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())] or ["true"]
+    record = "%s || { echo ADDON_WRITE_FAILED; exit 21; }; " % _put_sh("%s/%s" % (d, META_FILE), meta_text)
     late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
     late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
     stdin, move = _settings_io(secret, settings)
@@ -1262,15 +1278,15 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     # The user manager first: B3's check runs Podman, which needs it, before anything is written.
     return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
-            "%s%s%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; %s%s%s"
+            "%s%s%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; %s%s%s%s"
             "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "systemctl --user daemon-reload && { %s; } "
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%s%secho %s"
             % (folders, shlex.quote(q), shlex.quote(uu), stdin, how.get("check", ""), move, " && ".join(early),
-               how.get("reload", ""), how.get("extra", ""),
-               _image_sh(addon_id, shlex.quote(d)) if rebuild else "", _relays_gone_sh(user, addon_id),
+               how.get("extra", ""), _image_sh(addon_id, shlex.quote(d)) if rebuild else "", record,
+               how.get("reload", ""), _relays_gone_sh(user, addon_id),
                " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), drop,
                _MARK_INSTALLED))

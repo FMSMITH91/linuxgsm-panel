@@ -9944,6 +9944,8 @@ _ANCHOR_LINE_PARSERS = {
     "_LATEST_VERSION_RE",
     # One line of a LinuxGSM config (split at \n), another key's plain `key="value"` line.
     "_WWR_OTHER_LINE",
+    # The same line with backslash escapes in the value (world_reset._wwr_sets_any, per line).
+    "_WWR_ESCAPED_LINE",
     # The database client's error line in a db-query answer (re.M): reported, never acted on.
     "_ERROR_RE",
     # A cron schedule, built with `+`: _validate_cron refuses CR, LF and NUL and rejoins the fields on

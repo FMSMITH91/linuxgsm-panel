@@ -91,7 +91,8 @@ eq("release notes: a release that added no entry says so; the first release poin
 
 # ── 2. the tag ─────────────────────────────────────────────────────────────────────────────────
 _sign217 = open(_TOOL217, encoding="utf-8").read()
-_tagfn217 = _re217.search(r"^release_tag\(\) \{.*?^\}\n", _sign217, _re217.M | _re217.S)
+# release_tag with tag_commit, the remote read it calls (it fails when the remote does not answer).
+_tagfn217 = _re217.search(r"^tag_commit\(\) \{.*?^\}\nrelease_tag\(\) \{.*?^\}\n", _sign217, _re217.M | _re217.S)
 
 
 def _tag217(repo, sha, remote):
@@ -198,6 +199,10 @@ if _HAVE217:
           _r0.returncode == 0 and "release create" not in _gh0 and "workflow run deploy.yml" in _gh0,
           "rc=%s %s" % (_r0.returncode, _gh0[-300:]))
     _log2 = os.path.join(_SB217, "gh2.log")
+    # The release made above has its tag on the remote, as GitHub makes it with the release (the stand-in
+    # makes none): an existing release is taken as this commit's only while its tag names this commit.
+    _git217("-C", _rd217, "tag", _tag1, _rs217)
+    _git217("-C", _rd217, "push", "-q", "origin", "refs/tags/" + _tag1)
     _r2 = _signed_run217(_rd217, _rs217, _log2, _KEY217, _gh217, FAKEGH_VIEW_RC="0")
     _gh2 = open(_log2, encoding="utf-8").read() if os.path.exists(_log2) else ""
     _log3 = os.path.join(_SB217, "gh3.log")

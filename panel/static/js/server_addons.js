@@ -113,7 +113,9 @@
       if (a.mc_version) lines.push(TF('Renders the world as Minecraft {version}.', {version: a.mc_version}));
       if (a.disk_kb != null) lines.push(TF('Disk used: {size}.', {size: sizeWords(a.disk_kb)}));
       if (a.eula_by) lines.push(TF('Mojang\'s EULA accepted by {who} on {when}.', {who: a.eula_by, when: whenWords(a.eula_at)}));
-      lines.push(TF('Render threads: {n} (render-thread-count in the add-on\'s config/core.conf; Stop and Start it after a change).', {n: a.render_threads || 1}));
+      lines.push(a.render_threads
+        ? TF('Render threads: {n} (render-thread-count in the add-on\'s config/core.conf; Stop and Start it after a change).', {n: a.render_threads})
+        : T('Render threads: as render-thread-count in the add-on\'s config/core.conf sets them; Stop and Start it after a change.'));
       lines.forEach(function (t) { box.appendChild(node('div', 'small text-secondary text-break', t)); });
     }
     function eula(a, box) {

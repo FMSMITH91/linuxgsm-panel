@@ -251,10 +251,13 @@ def _extra_fields(gs, k, meta, got):
 
 
 def _bluemap_fields(meta, got):
-    """The row fields of BlueMap: Mojang's EULA (its link; who accepted it and when), the version, the disk it takes."""
+    """The row fields of BlueMap: Mojang's EULA (its link; who accepted it and when), the version, disk, threads.
+
+    render_threads is what config/core.conf sets (None when it was not read as a whole number).
+    """
     fields = {"geolocation_option": False, "eula_url": _bm.EULA_URL, "eula_by": str(meta.get("eula_accepted_by") or ""),
               "eula_at": str(meta.get("eula_accepted_at") or ""), "mc_version": str(meta.get("mc_version") or ""),
-              "disk_kb": (got or {}).get("disk_kb"), "render_threads": _bm.RENDER_THREADS}
+              "disk_kb": (got or {}).get("disk_kb"), "render_threads": (got or {}).get("render_threads")}
     fields.update(_game_update(meta, got))
     return fields
 

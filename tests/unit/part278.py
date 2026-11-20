@@ -422,8 +422,11 @@ def _socket278():
        ["appeal", "", None, None, None, None, None, "Ünïcode ok", None])
 
 
-def _socket_stub278(reply, resolve=None, name="Snake"):
-    """Stub the host: the socket call answers `reply`; the player list `resolve`; B3's database one name row."""
+def _socket_stub278(reply, resolve=None, name="Snake", namesakes=()):
+    """Stub the host: the socket call answers `reply`; the player list `resolve`; B3's database one name row.
+
+    `namesakes` are the other stored names B3's database answers for the identity check.
+    """
     seen = {"socket": [], "resolve": []}
 
     def shell(server, user, sh, timeout=30, selfname=None, scope=False, stdin_text=None):
@@ -437,7 +440,8 @@ def _socket_stub278(reply, resolve=None, name="Snake"):
     _p9_patch(_ra278, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_act278, "step_up_needed", lambda: False)
     _p9_patch(_dbr278, "_restore_target", lambda gs, r: type("T", (), {"flavor": "mariadb", "port": 3306, "address": ""})())
-    _p9_patch(_dd278, "run", lambda *a, **k: dict(_dd278.parse(_xml273([(("name",), [(name,)])])), rc=0))
+    sets = [(("name",), [(name,)]), (("name",), [(n,) for n in namesakes])]
+    _p9_patch(_dd278, "run", lambda *a, **k: dict(_dd278.parse(_xml273(sets)), rc=0))
     return seen
 
 

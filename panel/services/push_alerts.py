@@ -77,6 +77,8 @@ _TEXT = {
     "twofa_enforced": ("Two-factor setup required", ""),
     "ip_banned": ("IP banned on the panel login", ""),
     "ban_spike": ("Login attack in progress", ""),
+    # No player's name: a lock screen shows the push (the alert channels carry B3's own words).
+    "b3_penalty": ("B3 penalised a player", "{server}: B3 banned, temporarily banned or kicked a player."),
 }
 _OPEN_PANEL = "Open the panel for details."
 _ACCOUNT_TITLE = "Your account changed"

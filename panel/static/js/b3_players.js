@@ -337,8 +337,12 @@
             postJson(url, {reason: reason}).then(function (d) {
               st.busy = false;
               if (d.success === false) { done(refused(d)); return; }
-              say(d.message || '', d.warning ? 'text-warning' : 'text-success');
-              done(true);
+              // The view is read again, so a lifted ban, a kick or a warning shows in it (and Unban is not
+              // offered twice); B3's answer is said once it is drawn (also when that read fails: the action was done).
+              window.b3pPlayer(pid).then(function () {
+                say(d.message || '', d.warning ? 'text-warning' : 'text-success');
+                done(true);
+              });
             }).catch(function () { failed(); done(false); });
           };
           if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();

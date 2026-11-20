@@ -13,8 +13,11 @@ HOW. The request is one JSON line on stdin to a client inside B3's own container
 `actor` "panel:<username>", which B3 writes to b3.log and events.jsonl beside the command; who may act
 is decided here, never by that label. A kick or a warning needs the player's slot: it is found by the
 name B3 stored for that B3 id in the game's own player list (one console read, the moderation buttons'
-own lookup), and only a name that one listed player has is used. B3 then answers which player it acted
-on; another one (the slot changed hands in between) is said and audited.
+own lookup), and only a name that one listed player has is used. B3's command takes a slot, not a B3
+id, so the identity is checked BEFORE B3 is asked: when another B3 player's stored name is one the
+listed player's name can also mean (the same read of B3's database), the listed player may be that
+other one and nothing is sent. B3 then answers which player it acted on; another one (the slot
+changed hands in between) is said and audited.
 
 AUDIT (Logging Cheat Sheet, "Which events to log"; "Data to exclude"). Every action and every refusal
 past the permission check writes an audit row with the server: what, the player's B3 id, the slot, and
@@ -43,6 +46,8 @@ S_NEED_REASON = "A warning needs a reason."
 S_NOT_ONLINE = ("That player isn't on the game server now, or another player there has the same name, so B3 can't "
                 "be told which slot to act on.")
 S_NO_ID = "B3 has no player with that B3 id."
+S_NAMESAKE = ("Another B3 player has the same name as the one on the game server, so the panel can't tell whether "
+              "that is this B3 player. Nothing was sent to B3.")
 S_NO_SLOT = "B3 sees no player on that slot now."
 S_REFUSED = "B3 refused it ({code}): {message}"
 S_DONE = {"unban": "B3 lifted the player's bans ({n}).", "kick": "B3 kicked the player.",
@@ -81,7 +86,7 @@ def _send(gs, cmd, args):
 
 def _slot_of(gs, client_id):
     """(the slot of B3 player `client_id` in the game's own list, None) or (None, (status, sentence))."""
-    got, bad = _r3._read(gs, [_b3.name_statement(client_id)], 1)
+    got, bad = _r3._read(gs, [_b3.name_statement(client_id), _b3.namesakes_statement(client_id)], 2)
     if bad:
         return None, bad
     rows = _b3.records(got[0])
@@ -90,7 +95,19 @@ def _slot_of(gs, client_id):
     name = _b3.plain(rows[0].get("name")).strip()
     hit = _sm._resolve_from_console(gs.remote, gs.short_name, gs.game_type, name, gs.lgsm_name) if name else None
     num = _b3c.slot((hit or {}).get("num"))
-    return (num, None) if num else (None, (409, S_NOT_ONLINE))
+    if not num:
+        return None, (409, S_NOT_ONLINE)
+    return (None, (409, S_NAMESAKE)) if _namesake(gs, hit, _b3.records(got[1])) else (num, None)
+
+
+def _namesake(gs, hit, others):
+    """Whether the listed player `hit` may be another B3 player: one of `others` (stored names) it can be read as.
+
+    A full read (NAMESAKES_MAX + 1 rows) counts as one: the rest were not looked at.
+    """
+    if len(others) > _b3.NAMESAKES_MAX:
+        return True
+    return any(_sm.console_name_matches(gs.game_type, [hit], _b3.plain(r.get("name")).strip()) for r in others)
 
 
 def _said(action, state, got):
@@ -124,6 +141,13 @@ def _answer(gs, action, client_id, num, sent):
     return jsonify({"success": True, "message": i18n.tr(i18n.Sentence(S_DONE[action], n=n))})
 
 
+def _no_slot_why(bad):
+    """The audit row's words for _slot_of's refusal `bad` (status, sentence)."""
+    if bad[1] is S_NAMESAKE:
+        return "another B3 player has that name"
+    return "not listed" if bad[0] == 409 else "not read"
+
+
 def _act(gs, action, client_id):
     reason = _b3c.clean_reason(_json_body().get("reason"), required=action == "warn")
     if reason is None:
@@ -135,8 +159,7 @@ def _act(gs, action, client_id):
         return _answer(gs, action, client_id, None, _send(gs, "unban", dict(extra, client_id=client_id)))
     num, bad = _slot_of(gs, client_id)
     if bad:
-        _audit(gs, action, False, "B3 player @%d: no slot (%s)" % (client_id, "not listed" if bad[0] == 409 else
-                                                                   "not read"))
+        _audit(gs, action, False, "B3 player @%d: no slot (%s)" % (client_id, _no_slot_why(bad)))
         return _r3._say(*bad)
     return _answer(gs, action, client_id, num, _send(gs, action, dict(extra, cid=num)))
 

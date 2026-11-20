@@ -597,8 +597,8 @@ try:
     for _side, _run in (("helper", _h), ("remote", _r)):
         _reset()
         _res = _run("db-import", *_VERB_ARGS["db-import"])
-        check("db-import (%s): a dump that is a link is refused, nothing fed to the client" % _side,
-              _res[0] != 0 and not [s for s in _sqls() if s], repr((_res, _sqls())))
+        check("db-import (%s): a dump that is a link is refused as no dump (rc 4, both sides alike), nothing fed "
+              "to the client" % _side, _res[0] == 4 and not [s for s in _sqls() if s], repr((_res, _sqls())))
 
     _p207_dump_presence(_dd)
 

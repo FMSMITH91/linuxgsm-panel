@@ -266,6 +266,15 @@ def _edit(lines, op, n, was, line):
 
 
 def _invalid(new):
-    """Why `new` is not a crontab the panel will install: the first bad line, or its size."""
-    bad = next((r["n"] for r in rows(new) if r["kind"] == "other"), None)
+    """Why `new` is not a crontab the panel will install: the first bad line, or its size.
+
+    The bad line is the first one the install's own check refuses (root_cron_line_kind ""), not
+    rows()'s "other": a line with a byte that is not UTF-8 is "other" there for display, yet a comment
+    holding one is installed as it is, and blaming it hid that the crontab was too big. The size is
+    said first, as the install's check says it.
+    """
+    if _priv.root_crontab_problem(new) in ("too long", "too many lines"):
+        return TOO_BIG
+    lines = new.split("\n")[:-1] if new else []
+    bad = next((n for n, line in enumerate(lines, 1) if _priv.root_cron_line_kind(line) == ""), None)
     return TOO_BIG if bad is None else i18n.Sentence(BAD_LINE, n=bad)

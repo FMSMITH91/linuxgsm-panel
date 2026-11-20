@@ -303,14 +303,17 @@ function dbmEditorField(c, cell, isNew) {
     }).catch(function () { if (n === asked.rows) failed(); });
   }
 
-  function cellNode(c, cell, ri, ci) {
+  // keyed: the row has a key, so its whole value can be read (/cell). A read-only table's rows (a view,
+  // no primary key, a binary key) have none: their cut values say where to read them instead.
+  function cellNode(c, cell, ri, ci, keyed) {
     var td = node('td', 'dbm-cell');
     if (cell.null) { td.appendChild(node('span', 'text-secondary fst-italic', 'NULL')); return raw(td); }
     if (c.binary) { td.appendChild(node('span', 'text-secondary', TF('binary, {n} bytes', {n: cell.binary == null ? '?' : cell.binary}))); return td; }
     td.appendChild(raw(node('span', 'dbm-text', cell.text)));
     if (cell.more) {
       td.appendChild(document.createTextNode('… '));
-      td.appendChild(button(T('Show all'), 'btn-link p-0 align-baseline small', 'dbmShowAll', [ri, ci]));
+      td.appendChild(keyed ? button(T('Show all'), 'btn-link p-0 align-baseline small', 'dbmShowAll', [ri, ci])
+        : node('span', 'small text-secondary', T('Too long to show here: use the SQL box.')));
     }
     return td;
   }
@@ -331,7 +334,7 @@ function dbmEditorField(c, cell, isNew) {
         td.appendChild(button(T('Delete'), 'btn-outline-danger py-0', 'dbmDeleteRow', [ri]));
         tr.appendChild(td);
       }
-      r.cells.forEach(function (cell, ci) { tr.appendChild(cellNode(t.columns[ci], cell, ri, ci)); });
+      r.cells.forEach(function (cell, ci) { tr.appendChild(cellNode(t.columns[ci], cell, ri, ci, !!r.key)); });
       body.appendChild(tr);
     });
     tbl.appendChild(body);

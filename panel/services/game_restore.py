@@ -483,7 +483,9 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
     waited for (CRONFAIL, LGSMBUSY refuse). Then the switch (_grs_switch): RESTORED, or ROLLEDBACK
     (nothing changed), or ROLLBACKFAIL (the home's own content is in the aside folder it names). On
     every exit (the trap): a switch a signal cut short is undone, the crontab put back, the staging
-    folder removed and every held archive put back under its own name and time.
+    folder removed and every held archive put back under its own name and time. A switch already noted
+    as done is kept: a signal during its clean-up finishes removing the aside copy (and, cut again,
+    leaves $st saying done for the recovery sweep, which keeps the restore), never moves it back.
     """
     ext = _GRS_NAME.match(name).group(2)
     a_line, h_line = _grs_paths(name)
@@ -491,7 +493,8 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
     lines = ["set -o pipefail"] + _grs_head(user, selfname) + _grs_home_lines(user) + [
         "t0=%d" % int(t0), "SELF=%s" % _q(selfname), a_line, h_line, _grs_work_paths(), _grs_work_lock(_M["LOCKED"]),
     ] + _grs_switch_functions() + [_grs_relink()] + _grs_heartbeat(
-        '[ -f "$st" ] && [ ! -f "$st.failed" ] && undo; %s; [ -f "$st" ] || rm -rf -- "$S"; rm -f -- "$nm"; %s; '
+        'case "$(cat "$st" 2>/dev/null)" in done) rm -rf -- "$O" "$S" && rm -f -- "$st";; "") ;; '
+        '*) [ -f "$st.failed" ] || undo;; esac; %s; [ -f "$st" ] || rm -rf -- "$S"; rm -f -- "$nm"; %s; '
         % (_grs_put_cron(), _grs_putback_leftovers())) + [
         'if [ -z "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
         'if [ ! -s "$B"/%s ]; then echo %s; exit 5; fi' % (_q(undo), _M["NOUNDO"]),

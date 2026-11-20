@@ -168,12 +168,20 @@ ssh-keygen -Y verify -f "${TMP}/signers" -I release -n "${NS}" -s "${TMP}/msg.si
     < "${TMP}/msg" >/dev/null 2>&1 \
     || die "the signature does not verify against release-signers; is ${KEY} the release key?"
 
+tag_commit() {     # tag_commit <tag> <remote>: the commit the remote's tag names, "" when there is none
+    local refs
+    # A remote that does not answer fails here: read as "no such tag", the day's first name was given
+    # to a second commit while another commit's release already had it.
+    refs="$(git ls-remote --tags "$2" "refs/tags/$1" "refs/tags/$1^{}")" || return 1
+    printf '%s\n' "${refs}" | awk '{print $1}' | tail -n 1
+}
 release_tag() {    # release_tag <commit> <remote>: YYYY.M.D, or .2, .3... when that tag is another commit's
     local base tag at n=1
     base="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%-m.%-d "$1")" || return 1
     tag="${base}"
-    while at="$(git ls-remote --tags "$2" "refs/tags/${tag}" "refs/tags/${tag}^{}" | awk '{print $1}' | tail -n 1)" \
-          && [[ -n "${at}" ]] && [[ "${at}" != "$1" ]]; do
+    while :; do
+        at="$(tag_commit "${tag}" "$2")" || return 1
+        [[ -n "${at}" ]] && [[ "${at}" != "$1" ]] || break
         n=$(( n + 1 )); tag="${base}.${n}"
     done
     printf '%s\n' "${tag}"
@@ -229,6 +237,14 @@ publish_release() {   # publish_release <commit> <previous signed commit or ""> 
     tag="$(release_tag "$1" "${REMOTE}")" \
         || { echo "sign-release: could not name the release." >&2; return 1; }
     if "${GH[@]}" release view "${tag}" >/dev/null 2>&1; then
+        # Taken as this commit's only while its tag names this commit: another commit's release (or
+        # one with no tag yet) would give this commit that release's name on every panel, for good.
+        local at
+        at="$(tag_commit "${tag}" "${REMOTE}")" || { echo "sign-release: could not read tag ${tag}." >&2; return 1; }
+        if [[ "${at}" != "$1" ]]; then
+            echo "sign-release: release ${tag} exists but its tag is not $1; not named." >&2
+            return 1
+        fi
         echo "sign-release: release ${tag} already exists; left as it is."
         RELEASED="${tag}"
         return 0

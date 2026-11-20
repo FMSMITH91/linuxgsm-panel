@@ -493,10 +493,11 @@ def _kinds_text(arch):
     return ", ".join("%d %s" % (n, k) for k, n in sorted(kinds.items())) or "none"
 
 
-# The prefix _FullBackupTally.summary writes (panel/routes/panel_backup.py), the held clause too.
+# The prefix _FullBackupTally.summary writes (panel/routes/panel_backup.py), the held clause too: its
+# list of jobs grew (a restore, an uninstall), so only its start is read, which a recorded older run has too.
 _FULL_COUNTS_RE = re.compile(r"^(\d+) server\(s\) backed up(?:, (\d+) failed)?"
                              r"(?:, (\d+) skipped \(players online\))?"
-                             r"(?:, (\d+) skipped \(a scheduled wipe or a queued stop or restart)?")
+                             r"(?:, (\d+) skipped \(a scheduled wipe)?")
 # The installed servers the scheduled sweep backs up (installed, with a host), and what the
 # unattended runs recorded. Static SQL; ids and game types only, never a name.
 _SCHED_SERVERS_SQL = ("SELECT id, game_type FROM game_server WHERE installed = 1 AND remote_id IS "
@@ -528,7 +529,7 @@ def _full_counts_text(m):
         return "outcome not recorded in counts"
     counts = "%s backed up, %s failed, %s skipped" % (m.group(1), m.group(2) or 0, m.group(3) or 0)
     if m.group(4):
-        counts += ", %s held by a scheduled wipe or a queued stop or restart" % m.group(4)
+        counts += ", %s held by a scheduled wipe, a restore, a queued stop or restart, or an uninstall" % m.group(4)
     return counts
 
 

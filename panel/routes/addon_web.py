@@ -256,10 +256,20 @@ class AddonWebProxy:
         sock = _client_socket(environ)
         lines = ["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade"]
         lines += ["%s: %s" % (k, v) for k, v in head.headers if k.lower() in _aw.SWITCH_HEADERS]
-        sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
-        _http.splice(sock, stream, head.rest, still_allowed=lambda: self.still_allowed(token))
-        from eventlet import wsgi as _ewsgi     # only reached under eventlet's server (_client_socket)
-        _ewsgi.WSGI_LOCAL.already_handled = True
+        try:
+            if sock is None:
+                raise OSError("no browser socket to switch")
+            sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+        except OSError:
+            # The browser went (or there is no socket to hand over): close the add-on's stream now
+            # instead of leaving it open until the add-on drops the idle WebSocket.
+            _http.close_both(sock, stream)
+            _log.info("add-on page: the browser left before the WebSocket began")
+        else:
+            _http.splice(sock, stream, head.rest, still_allowed=lambda: self.still_allowed(token))
+        if sock is not None:
+            from eventlet import wsgi as _ewsgi     # only reached under eventlet's server (_client_socket)
+            _ewsgi.WSGI_LOCAL.already_handled = True
         return []
 
 
