@@ -225,140 +225,242 @@ def _wwr_props(gs):
 _WWR_CFG_CMD = re.compile(r"^[ \t]*(source|\.|eval)([ \t]|$)")
 # The keys linuxgsm.sh fn_reload_startparameters reads again with sed, which keeps a trailing comment.
 _WWR_RELOADED = ("startparameters", "preexecutable")
-# Another key's plain line: `other="value"`, a trailing comment allowed (bash drops it when sourcing).
-_WWR_OTHER_LINE = re.compile(r'^ *([A-Za-z_][A-Za-z0-9_]*)="([^"\\`]*)"(?:[ \t]+#.*)?$')
-# The same with backslash escapes in the value: what the panel's own Settings save writes for a value
-# holding " $ ` or \ (ssh_manager/files.py _cfg_dq_escape). An escaped character is literal there.
-_WWR_ESCAPED_LINE = re.compile(r'^ *[A-Za-z_][A-Za-z0-9_]*="(?:[^"\\`]|\\.)*"(?:[ \t]+#.*)?$')
-# One backslash escape: what it escapes is literal (\$ is a dollar sign, never an expansion).
-_WWR_ESCAPE = re.compile(r"\\.")
+# A shell name: what an assignment sets, and what ${name} / $name expands.
+_WWR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# What $ may be followed by as a plain expansion: a name, or one positional digit.
+_WWR_DOLLAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]")
+# The ${name<op>word} operators read: a default or an alternative value, neither of which sets anything.
+_WWR_BRACE_OPS = (":-", ":+", "-", "+")
+# Characters a $(…) command may hold outside quotes and expansions. No `;`, `#`, `<`, `>`, `(`, `{` or
+# backtick: none appears in LinuxGSM's own configs, and without them a command cannot run on past the
+# line (a comment, a here-document, a compound command or a case pattern's `)`), so where it ends is
+# where bash ends it.
+_WWR_SUB_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 \t-+_./:%=,@[]&|!")
+# How deep ${…} and $(…) may nest: LinuxGSM's own configs nest two deep. Deeper is refused, which also
+# bounds the recursion.
+_WWR_NEST_MAX = 8
 
 
-# Where bash evaluates arithmetic inside double quotes, and so sets any variable an expression there
-# names (`key=2`, `key+=1`, `key++`), or whose value is such an expression: $((…)), $[…], an array
-# subscript ${a[…]} and a substring offset or length ${a:off:len}. In a parameter expansion only the
-# name comes between `${` and that `[` or `:` (a name, a digit, or a special parameter, `$` among
-# them), so each gap stops at the next `$` (a `$` straight after `${` is the name `$`): a gap running
-# on to the next `}` was scanned again from every `${`, so a value of many `${` and no `}` took
-# quadratic time, holding the hub (review 1119 A04). Linear now; the matches differ only on text
-# bash refuses as a bad substitution, which sets nothing.
-_WWR_ARITH = re.compile(r"\$\(\(|\$\[|\$\{\$?[^}$]*\[|\$\{\$?[^}:$]*:(?![-=+?])")
+class _WwrRefused(Exception):
+    """A config line holds a form the reader does not understand."""
 
 
-# The words of a config line: runs of name characters. A key is named on a line when one of them IS
-# the key (the boundary _wwr_cfg_key's word test had: no name character on either side).
-_WWR_WORD = re.compile(r"[A-Za-z0-9_]+")
-# `${key=…}` / `${key:=…}` in a value: the names it sets.
-_WWR_DEFAULT_SET = re.compile(r"\$\{([A-Za-z0-9_]+):?=")
-# Assignment-shaped text in a value (`key=2`, `key+=1`, `key++`, `--key`, `++ key`): the names it would set
-# if another line evaluated it as arithmetic. The lookbehind starts a name only at a name's first character.
-# A prefix `--`/`++` needs nothing after the name: a value of only `--port`, evaluated as arithmetic by
-# another line, decrements port (review 1121 A04); bash allows blanks between the operator and the name.
-# The operator after a name is only looked at, never taken, so `x --port` names both x and port.
-_WWR_ASSIGNED = re.compile(r"(?:\+\+|--)[ \t]*([A-Za-z0-9_]+)|(?<![A-Za-z0-9_])([A-Za-z0-9_]+)(?=[ \t]*"
-                           r"(?:\+\+|--|(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)))")
-# Bash 5.3's `${ cmd; }` and `${| cmd; }` (a blank, tab, newline or `|` straight after `${`) run the command in
-# the CURRENT shell, so it can set any variable (`${ printf -v port %s 2; }`) with no `key=` text at all.
-_WWR_FUNSUB = re.compile(r"\$\{[ \t\n|]")
-# A `${name@P}` transform: prompt expansion evaluates the value again, so `$((…))` or (bash 5.3) `${ …; }`
-# assembled out of other values runs there and may set any variable.
-_WWR_PROMPT = "@P}"
-# A command in a line that is not a plain assignment which evaluates arithmetic or sets a variable whose
-# name it may take from a value: `let`, `(( ))`, `[[ ]]` (its -eq family is arithmetic), declare /
-# typeset / local (`-i` makes later plain assignments arithmetic), export / readonly / printf -v / read /
-# readarray / mapfile / unset (all take a name that `"$p"` can supply). Only at a command's start.
-_WWR_SETTER_CMD = re.compile(r"(?:^|[;&|(){}!]|\b(?:then|do|else))[ \t]*(?:\(\(|\[\[|(?:let|declare|typeset|local"
-                             r"|export|readonly|printf|read|readarray|mapfile|unset)(?![A-Za-z0-9_]))")
+class _WwrLineReader:
+    """The names one config line assigns, read left to right once; raises _WwrRefused for any other form.
 
-
-def _wwr_opaque_text(text):
-    """Whether `text` (a value, or a whole line) holds an expansion that may set a variable it does not name."""
-    return (bool(_WWR_ARITH.search(text)) or "${!" in text or bool(_WWR_FUNSUB.search(text))
-            or _WWR_PROMPT in text)
-
-
-def _wwr_sets_any(line):
-    r"""Whether config `line` may set a key it never names, so no value read from the config can be trusted.
-
-    Naming is what _wwr_indexed_key follows, and bash can set a key through a name assembled from other
-    values: `p="port"`, `b="${p}=2"`, `d="$((b))"` sets port to 2 with no line that sets port by name
-    (arithmetic evaluates b's VALUE), as does `${b@P}` over `b="${a}((${p}=2))"`, `${!p:=2}`, bash 5.3's
-    `${ printf -v $p 2; }`, and a command such as `printf -v "$p" 2` or `declare -i d` before `d="$b"`.
-    Any such line, wherever it is and whatever it names, refuses the whole read (review 1122 A04): the
-    value bash uses is then not one the panel can see.
+    An allow-list (review pass 36): a line is read only when it is a run of statements joined by `&&` or
+    `||`, each an assignment `name=word` or a `[ -n word ]` / `[ -z word ]` test, with an optional
+    trailing `# comment`. A word is plain characters, '…', "…", a backslash escape, $name, ${name},
+    ${name:-word} / ${name:+word} (and without the colon), and $(…) — a command substitution runs in a
+    subshell, so it sets nothing in the config's shell. Anything else (arithmetic, ${!x}, ${x@P},
+    ${x:=…}, a subscript or offset, bash 5.3's ${ cmd; }, a backtick, a command such as printf -v,
+    declare or read, a line continued on the next) is refused, so a construct the reader does not model
+    can never set a setting it cannot see: such a line fails the whole read, closed.
     """
-    if _wwr_opaque_text(_WWR_ESCAPE.sub("", line)):
-        return True
-    if _WWR_OTHER_LINE.match(line) or _WWR_ESCAPED_LINE.match(line):
-        return False      # one plain assignment: its words are a value, not a command
-    return bool(_WWR_SETTER_CMD.search(line))
-
-
-class _WwrLine:
-    """What _wwr_cfg_key needs from one non-comment config line, worked out once for every key it names.
-
-    `other` is the key of another key's plain line (_WWR_OTHER_LINE), else None; `opaque` that its value
-    holds arithmetic (_WWR_ARITH), `${!` (a variable reached through another's value), a `${x@P}`
-    transform or bash 5.3's `${ cmd; }` / `${| cmd; }` (_WWR_FUNSUB), so it may set any key; `sets` the names its value sets with
-    `${key:=…}` or holds as assignment-shaped text.
-    """
-
-    __slots__ = ("text", "other", "opaque", "sets")
 
     def __init__(self, text):
-        self.text = text
-        m = _WWR_OTHER_LINE.match(text)
-        self.other = m.group(1) if m else None
-        value = m.group(2) if m else ""
-        self.opaque = bool(m) and _wwr_opaque_text(value)
-        self.sets = (set(_WWR_DEFAULT_SET.findall(value)) | {a or b for a, b in _WWR_ASSIGNED.findall(value)}
-                     if m else set())
+        self.text, self.at, self.depth = text, 0, 0
 
-    def names_only(self, key):
-        """See _wwr_names_only."""
-        return self.other is not None and self.other != key and not self.opaque and key not in self.sets
+    def _refuse(self):
+        raise _WwrRefused(self.text)
+
+    def _char(self, ahead=0):
+        return self.text[self.at + ahead:self.at + ahead + 1]
+
+    def _blanks(self):
+        start = self.at
+        while self._char() in (" ", "\t"):
+            self.at += 1
+        return self.at > start
+
+    def names(self):
+        """The names the line assigns, in order (a test assigns none)."""
+        names = []
+        self._blanks()
+        while True:
+            name = self._statement()
+            if name:
+                names.append(name)
+            blank = self._blanks()
+            if self.at >= len(self.text) or (blank and self._char() == "#"):
+                return names
+            if self.text[self.at:self.at + 2] not in ("&&", "||"):
+                self._refuse()
+            self.at += 2
+            self._blanks()
+
+    def _statement(self):
+        if self.text.startswith("[ ", self.at):
+            self.at += 1
+            self._test()
+            return None
+        m = _WWR_NAME_RE.match(self.text, self.at)
+        if not m or self.text[m.end():m.end() + 1] != "=":
+            self._refuse()
+        self.at = m.end() + 1
+        self._word()
+        return m.group()
+
+    def _test(self):
+        """`[ -n word ]` or `[ -z word ]`, after its `[` (LinuxGSM's own `[ -n "${LGSM_LOGDIR}" ]`)."""
+        self._blanks()
+        if self.text[self.at:self.at + 2] not in ("-n", "-z"):
+            self._refuse()
+        self.at += 2
+        if not self._blanks():
+            self._refuse()
+        self._word()
+        if not self._blanks() or self._char() != "]":
+            self._refuse()
+        self.at += 1
+
+    def _word(self):
+        if self._char() == "#":
+            self._refuse()      # a word starting with # is a comment to bash
+        while self.at < len(self.text):
+            c = self._char()
+            if c in (" ", "\t", "&", "|"):
+                return          # the caller reads what follows (a blank, && or ||)
+            if c in ";<>(){}`":
+                self._refuse()
+            self._piece(c, quoted=False)
+
+    def _piece(self, c, quoted):
+        """One quote, escape, expansion or plain character, starting at `c`."""
+        if c == '"' and not quoted:
+            self._double()
+        elif c == "'" and not quoted:
+            self._single()
+        elif c == "\\":
+            if self.at + 1 >= len(self.text):
+                self._refuse()  # a line continued on the next
+            self.at += 2
+        elif c == "$":
+            self._dollar(quoted)
+        elif c == "`":
+            self._refuse()
+        else:
+            self.at += 1
+
+    def _single(self):
+        end = self.text.find("'", self.at + 1)
+        if end < 0:
+            self._refuse()
+        self.at = end + 1
+
+    def _double(self):
+        self.at += 1
+        while self.at < len(self.text):
+            c = self._char()
+            if c == '"':
+                self.at += 1
+                return
+            self._piece(c, quoted=True)
+        self._refuse()
+
+    def _nest(self, step):
+        self.depth += step
+        if self.depth > _WWR_NEST_MAX:
+            self._refuse()
+
+    def _dollar(self, quoted):
+        nxt = self._char(1)
+        if nxt == "{":
+            self._brace(quoted)
+        elif nxt == "(":
+            if self._char(2) == "(":
+                self._refuse()  # $((…)): arithmetic
+            self._command()
+        elif _WWR_DOLLAR_NAME_RE.match(nxt):
+            self.at = _WWR_DOLLAR_NAME_RE.match(self.text, self.at + 1).end()
+        elif nxt in ("", " ", "\t") or (quoted and nxt == '"'):
+            self.at += 1        # a lone $ is a dollar sign
+        else:
+            self._refuse()
+
+    def _brace(self, quoted):
+        """${name}, ${name:-word}, ${name:+word}, ${name-word} or ${name+word}."""
+        self._nest(1)
+        m = _WWR_NAME_RE.match(self.text, self.at + 2)
+        if not m:
+            self._refuse()
+        self.at = m.end()
+        if self._char() != "}":
+            op = self.text[self.at:self.at + 2] if self._char() == ":" else self._char()
+            if op not in _WWR_BRACE_OPS:
+                self._refuse()
+            self.at += len(op)
+            self._brace_word(quoted)
+        self.at += 1
+        self._nest(-1)
+
+    def _brace_word(self, quoted):
+        """The word of ${name:-word}, up to (not past) its `}`.
+
+        Inside double quotes a single quote there is a literal character, as in LinuxGSM's own
+        "${x:+ -x '${x}'}". A `}` between two of them, or a double quote, is refused: whether bash ends
+        the expansion there is not something this reader decides.
+        """
+        apostrophes = 0
+        while self._char() != "}" or apostrophes % 2:
+            c = self._char()
+            if not c or c in "{}" or (quoted and c == '"'):
+                self._refuse()
+            if quoted and c == "'":
+                apostrophes += 1
+                self.at += 1
+            else:
+                self._piece(c, quoted)
+
+    def _command(self):
+        """$(…): quotes, expansions and _WWR_SUB_CHARS only, up to its `)`."""
+        self._nest(1)
+        self.at += 2
+        while self._char() != ")":
+            c = self._char()
+            if c not in ("'", '"', "\\", "$") and c not in _WWR_SUB_CHARS:
+                self._refuse()  # also the end of the line: an unclosed $(
+            self._piece(c, quoted=False)
+        self.at += 1
+        self._nest(-1)
 
 
-def _wwr_names_only(line, key):
-    """Whether `line` is another key's plain line in which `key` is only named or expanded, never set.
-
-    Inside double quotes bash sets a variable through `${key:=…}` / `${key=…}` and through anything
-    evaluated as arithmetic (_WWR_ARITH), where `key=2`, `key+=1`, `key++` or `--key` sets it; a
-    `$(…)` command substitution runs in a subshell and sets nothing here, but bash 5.3's `${ cmd; }`
-    and `${| cmd; }` run in the current shell and may set anything (_WWR_FUNSUB). So the line counts
-    only with none of those, no `${!ref…}` (a variable reached through another's value), and no
-    assignment-shaped `key=` or `--key` text: such a value, evaluated as arithmetic by another line,
-    would set the key there.
-    A plain mention (`-port ${port}`, the option named like its key) is only text.
-    """
-    return _WwrLine(line).names_only(key)
+def _wwr_assigned(line):
+    """The names config `line` assigns, or None when the line is in a form the reader does not understand."""
+    try:
+        return _WwrLineReader(line).names()
+    except _WwrRefused:
+        return None
 
 
 def _wwr_cfg_index(texts):
-    """Each config text's non-comment lines, by the names they hold: [{name: [_WwrLine, ...]}], one per text.
+    """Each config text's assignments by the name they set: ([{name: [line, ...]}, one per text], refused).
 
-    Built once per read: looking each key up by scanning every line (and judging a line that names many
-    keys once per key) cost the number of names a start parameter expands times the config's size, and
-    the game account writes both (review 1120 A04), on the wipe ticker's greenlet.
+    `refused` is True when any non-comment line is in a form _WwrLineReader does not understand. Built
+    once per read, in one pass over each line (review 1120 A04: the game account writes the config, and
+    this runs on the wipe ticker's greenlet).
     """
     index = []
     for text in texts:
         by_name = {}
         for ln in text.split("\n"):
-            if ln.lstrip(" \t").startswith("#"):
+            if not ln.strip(" \t") or ln.lstrip(" \t").startswith("#"):
                 continue
-            facts = None
-            for name in set(_WWR_WORD.findall(ln)):
-                if facts is None:
-                    facts = _WwrLine(ln)
-                by_name.setdefault(name, []).append(facts)
+            names = _wwr_assigned(ln)
+            if names is None:
+                return index, True
+            for name in set(names):
+                by_name.setdefault(name, []).append(ln)
         index.append(by_name)
-    return index
+    return index, False
 
 
 def _wwr_cfg_key(texts, key):
     """One setting from the instance's LinuxGSM config texts: _wwr_indexed_key over their one index."""
-    return _wwr_indexed_key(_wwr_cfg_index(texts), key)
+    index, refused = _wwr_cfg_index(texts)
+    if refused:
+        return None, _WWR_NOT_READ
+    return _wwr_indexed_key(index, key)
 
 
 def _wwr_indexed_key(index, key):
@@ -370,22 +472,20 @@ def _wwr_indexed_key(index, key):
     LAST file in that order where grep finds `^[[:blank:]]*key=`, through
     `eval key="$(sed -nr 's/^ *key=(.*)$/\1/p' file)"`, which takes the FIRST such line of the file
     and skips a tab-indented one grep found. The panel's own merge (_parse_cfg) takes the last line
-    and reads other forms, so here every non-comment line naming the key must be LinuxGSM's plain
-    form, `key="value"` indented by spaces at most and nothing after it, and a file may hold it once.
-    Then the files' last value is what both the sourcing and the reload use.
+    and reads other forms, so here every line that assigns the key must be LinuxGSM's plain form,
+    `key="value"` indented by spaces at most and nothing after it, and a file may hold it once.
+    Then the files' last value is what both the sourcing and the reload use. A line that only names
+    or expands the key (`-port ${port}`) does not assign it: _WwrLineReader reads what each line
+    assigns, and refuses every form through which bash could assign a name the line does not spell.
 
-    Two forms are not counted as setting the key, since bash cannot set it through them: another
-    key's plain line (`other="..."`, no backslash or backtick) whose value only names the key or
-    expands it (`-port ${port}`; _wwr_names_only), with no `${key:=…}`, `${key=…}`, arithmetic or
-    `key=` text; and, for a key
-    the reload does not re-read, a `# comment` after the closing quote (LinuxGSM's own
-    `serverpassword="" # Minimum password length is 5.`).
+    For a key the reload does not re-read, a `# comment` after the closing quote is allowed (LinuxGSM's
+    own `serverpassword="" # Minimum password length is 5.`).
     """
     tail = "" if key in _WWR_RELOADED else r"(?:[ \t]+#.*)?"
     plain = re.compile(r'^ *%s="([^"\\`]*)"%s$' % (key, tail))
     found = ""
     for by_name in index:
-        vals = [plain.match(ln.text) for ln in by_name.get(key, ()) if not ln.names_only(key)]
+        vals = [plain.match(ln) for ln in by_name.get(key, ())]
         if not all(vals):
             return None, i18n.Sentence("the LinuxGSM config sets {key} in a form the panel cannot read the way "
                                        "LinuxGSM does (only key=\"value\" lines, indented by spaces at most)", key=key)
@@ -395,17 +495,21 @@ def _wwr_indexed_key(index, key):
     return found, None
 
 
+# A config line outside the forms _WwrLineReader reads.
+_WWR_NOT_READ = i18n.Sentence("the LinuxGSM config has a line that is not a plain assignment the panel reads, and "
+                              "could set a setting through a name built from other values (arithmetic, an indirect "
+                              "or prompt expansion, or a command such as printf -v)")
+
+
 def cfg_values(texts, keys):
     """`keys` from the instance's LinuxGSM config texts (lgsm_cfg_texts): ({key: value}, None) or (None, why)."""
     lines = [ln for text in texts for ln in text.split("\n") if not ln.lstrip(" \t").startswith("#")]
     if any(_WWR_CFG_CMD.match(ln) for ln in lines):
         return None, i18n.Sentence("the LinuxGSM config loads another file or runs eval, which the panel does not "
                                    "follow")
-    if any(_wwr_sets_any(ln) for ln in lines):
-        return None, i18n.Sentence("the LinuxGSM config may set a setting through a name built from other values "
-                                   "(arithmetic, an indirect or prompt expansion, or a command such as printf -v), "
-                                   "which the panel does not follow")
-    index = _wwr_cfg_index(texts)
+    index, refused = _wwr_cfg_index(texts)
+    if refused:
+        return None, _WWR_NOT_READ
     values = {}
     for key in keys:
         values[key], why = _wwr_indexed_key(index, key)

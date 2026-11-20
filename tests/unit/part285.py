@@ -6,6 +6,9 @@
    put in, never by a refused request, and the install's audit row names it and a change to it.
 3. The SSH pool: the liveness probe of one host's pooled client runs outside the lock every host's
    connection takes, so a host stalling a key re-exchange holds up only its own callers.
+4. World reset reads a LinuxGSM config by an allow-list: a line in any form the reader does not model
+   (getopts or wait -p naming a variable from a value, which the old per-construct refusals missed)
+   refuses the plan, and the line forms in LinuxGSM's own configs still plan.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; Discord's HTTP post is a
 stand-in. Nothing reaches a host, /etc or data/.
@@ -16,6 +19,7 @@ from eventlet import event as _evt285, semaphore as _sem285
 from types import SimpleNamespace as _NS285
 
 from unit.part01 import check, eq
+from unit.part275 import _bash_port275, _vh_plan275
 from unit.part12 import P9_ADMIN, _p9_arm, _p9_audit, _p9_client, _p9_patch, _p9_restore_all
 from panel.ops import system_ops as _so285
 from panel.ops.ssh_manager import _core as _core285
@@ -197,3 +201,29 @@ def _pool_dead285():
 
 eq("ssh pool (control): a pooled client whose transport is dead is dropped and replaced by a new one",
    _pool_dead285(), (True, True))
+
+
+# ── 4. World reset's config reader ───────────────────────────────────────────────────────────────
+# Each sets port through a variable named by another value, with no line spelling `port=`: builtins
+# that write the variable they are given (getopts, bash 5.1's wait -p) were not among the commands the
+# old per-construct refusals listed.
+_UNMODELLED285 = ('p="port"\ngetopts "a" "$p"\n', 'p="port"\ntrue & wait -p "$p"\n')
+eq("world reset allow-list: bash changes port through each of these configs (bash itself)",
+   [_bash_port275(c) != "2456" for c in _UNMODELLED285], [True] * len(_UNMODELLED285))
+eq("world reset allow-list (the caller): Valheim's plan is refused for each, saying the line is not a plain "
+   "assignment", [(plan, "not a plain assignment" in str(why)) for plan, why in map(_vh_plan275, _UNMODELLED285)],
+   [(None, True)] * len(_UNMODELLED285))
+# Line forms taken from LinuxGSM's own config-default files (lgsm/config-default/config-lgsm/*/_default.cfg);
+# qlserver's $(…) line sets executable there, a key this plan reads in the plain form only, so it sets
+# another name here.
+_LGSM_LINES285 = (
+    '[ -n "${LGSM_LOGDIR}" ] && logdir="${LGSM_LOGDIR}" || logdir="${rootdir}/log"\n'
+    "steampass=''\n"
+    'serverbin=$([ "$(uname -m)" == "x86_64" ] && echo -e "./run_server_x64.sh" || echo -e "./run_server_x86.sh")\n'
+    'workshoploadmods="${workshopmods:+ -workshop \'${workshopmods}\'}"\n'
+    'backupdate="$(date \'+%Y-%m-%d-%H:%M:%S\')"\n'
+    'serverpassword="" # Minimum password length is 5.\n')
+_lgsm285 = _vh_plan275(_LGSM_LINES285)
+check("world reset allow-list (control): Valheim's plan is still made beside the line forms LinuxGSM's own configs "
+      "use (a [ -n ] test, single quotes, $(…), ${x:+…} with quotes inside, a trailing comment)",
+      bool(_lgsm285[0]) and _lgsm285[1] is None, repr(_lgsm285)[:300])
