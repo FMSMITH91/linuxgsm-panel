@@ -2064,12 +2064,18 @@ def _batch_body(queries, host, short=frozenset()):
     in it: the caller hands it to node on stdin (`node -`), so sudo does not log it. The end marker is
     printed whenever the run got as far as asking (no `gamedig` command at all is every target
     unknown, as before), and NOT when node could not load gamedig: see _BATCH_NO_LIB.
+
+    HOME is `/` for the whole body. The batch runs as ONE game account but reports on every server of
+    the host, and jq sources `$HOME/.jq` into every program it runs (falling back to the passwd home
+    when HOME is unset), so that account's `~/.jq` could redefine `length` or `type` and decide the
+    player counts, names and lists read for the other accounts' servers. `/.jq` is root's to create.
+    node gets the same HOME, so a bare `require` could never fall back to `~/.node_modules` either.
     """
     import json as _json
     targets = [[int(key), gdtype, host, int(port), _target_wait_ms(gdtype, port, short)]
                for key, gdtype, port in queries]
     groups = (len(queries) + _BATCH_PARALLEL - 1) // _BATCH_PARALLEL
-    return (f"g=$(command -v gamedig) || {{ echo {_BATCH_END}; exit 0; }}; "
+    return (f"export HOME=/; g=$(command -v gamedig) || {{ echo {_BATCH_END}; exit 0; }}; "
             f"timeout -k 5 {groups * _BATCH_TARGET_TIMEOUT + 5} node - "
             f"\"$g\" {_core._quote(_json.dumps(targets, separators=(',', ':')))} {_BATCH_PARALLEL} "
             f"{_BATCH_TARGET_TIMEOUT * 1000} 2>/dev/null | jq -c {_core._quote(_batch_target_filter())} "

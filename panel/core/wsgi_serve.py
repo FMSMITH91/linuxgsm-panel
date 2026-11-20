@@ -30,6 +30,28 @@ _TracebacksOnly. Anyone who could reach the port could add them at will. OWASP L
 protect the log from being flooded by an unauthenticated client; Error Handling Cheat Sheet: a
 malformed request is the client's error, answered without detail. Nothing is logged for it.
 
+A request that carries Transfer-Encoding is refused the same way, before the app (_transfer_coding_answer):
+411 Length Required for `chunked` alone, 400 for any other coding or a Content-Length beside it, and the
+connection closed. No such body could ever reach a route: eventlet de-chunks but does not set
+wsgi.input_terminated, so werkzeug hands the app an empty stream for a body with no Content-Length, and
+engineio reads exactly CONTENT_LENGTH bytes (0 without one). What the server did with that body was the
+danger. eventlet discarded it after the answer through an unbounded readline: a chunk-size line with no
+newline was buffered whole, so one connection with no account grew the process by twice what it could
+send in the body's time budget (a 300 MiB line took it from 44 MB to 650 MB). A malformed chunk size, or
+a client that hung up mid-chunk, logged a warning naming the client's request, one per connection. And a
+coding other than exactly `chunked` (`gzip, chunked`, two headers) was read as no body at all, so its
+bytes were parsed as the next request on the connection, the desync behind request smuggling. OWASP
+Denial of Service Cheat Sheet, "Input validation" (limit total request size, prevent input based resource
+allocation); OWASP WSTG-INJT-16 "HTTP Request Smuggling", "Remediation" (strict RFC-compliant parsing;
+read or reject a body, and close the connection when in doubt); ASVS 5.0 V4.2.1 (message boundaries);
+RFC 9112 section 6.3 (400 and close when chunked is not the final coding). Behind a proxy that forwards a
+body of unknown length as chunked (an HTTP/2 upload with no content-length), that body was already
+empty to the app; browsers give an upload's length, which the proxy forwards as Content-Length.
+
+Defence in depth, should a chunked body ever reach the reader again: a readline with no size reads at
+most _LINE_MAX bytes, and a line that fills it with no newline ends the connection (BodyRefused); a body
+with no Content-Length is read to _UNSIZED_BODY_MAX bytes at most (_PacedBody).
+
 The panel's own TLS (tls_context) offers what the OWASP Transport Layer Security Cheat Sheet
 recommends ("Only Support Strong Protocols", "Only Support Strong Ciphers"): TLS 1.3, and TLS 1.2
 only with forward-secret AEAD suites (ECDHE with AES-GCM or ChaCha20-Poly1305), no CBC. Python's
@@ -107,6 +129,14 @@ class ClientStalled(TimeoutError):
     """
 
 
+class BodyRefused(ClientStalled):
+    """The client sent more body than the server reads: a line past _LINE_MAX, or an unsized body past its cap.
+
+    A ClientStalled, so it ends the connection the same quiet way: the client's request is not logged,
+    and eventlet's discard of the rest stops at once.
+    """
+
+
 def _client_hung_up(exc):
     """Whether `exc` and every exception in its chain is the client going away or stalling.
 
@@ -166,6 +196,28 @@ TLS12_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL:!eNULL"
 
 # The answer to a request line the server will not read (no HTTP version): no body, nothing logged.
 _BAD_REQUEST = b"HTTP/1.0 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+# The answer to a chunked request: send the body's length instead (RFC 9110 section 15.5.12).
+_LENGTH_REQUIRED = b"HTTP/1.0 411 Length Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+# The longest line a readline with no size returns: eventlet's own MAX_HEADER_LINE.
+_LINE_MAX = 8192
+# The most a body with no Content-Length is read to (eventlet's discard reads 16 KiB at a time).
+_UNSIZED_BODY_MAX = 64 << 10
+
+
+def _transfer_coding_answer(headers):
+    """The refusal for a request carrying Transfer-Encoding, None when it carries none (see the module).
+
+    411 for `chunked` alone with no Content-Length: the client can send the same body with its length.
+    400 for anything else (another coding, chunked not last, two headers, a Content-Length beside it),
+    whose body's length cannot be known (RFC 9112 section 6.3).
+    """
+    values = headers.get_all("transfer-encoding")
+    if not values:
+        return None
+    codings = [c.strip().lower() for c in ",".join(values).split(",")]
+    if codings == ["chunked"] and headers.get("content-length") is None:
+        return _LENGTH_REQUIRED
+    return _BAD_REQUEST
 
 
 def tls_context(certfile, keyfile, ssl_module=ssl):
@@ -244,14 +296,19 @@ class _PacedBody:
     counts: a route that reads a piece and then spends a minute on it (an upload copied on over SSH)
     loses nothing. Past the budget the read raises ClientStalled (werkzeug answers the request as a
     client disconnect) and the connection is closed, never kept alive to read the rest.
+
+    Bounded in size as well as time: a readline with no size reads at most _LINE_MAX bytes, and with
+    `limit` (a body with no Content-Length) no more than that many bytes are read in all. Either one
+    overrun is BodyRefused, and the connection is closed.
     """
 
-    def __init__(self, rfile, handler, timeout, grace, rate):
+    def __init__(self, rfile, handler, timeout, grace, rate, limit=None):
         self._f = rfile
         self._handler = handler
         self._timeout = timeout
         self._grace = grace
         self._rate = rate
+        self._limit = limit
         self._waited = 0.0
         self._got = 0
 
@@ -289,15 +346,29 @@ class _PacedBody:
             self._handler.close_connection = 1
             raise ClientStalled("the client sent its request body too slowly")   # outside the except: no chain
         self._got += sum(map(len, data)) if isinstance(data, list) else len(data or b"")
+        if self._limit is not None and self._got > self._limit:
+            self._refuse()
         return data
+
+    def _refuse(self):
+        """End the connection over a body larger than the server reads."""
+        self._handler.close_connection = 1
+        raise BodyRefused("the client sent more request body than the server reads")
 
     def read(self, *args):
         """The buffered reader's read, inside the body's time budget."""
         return self._paced(self._f.read, *args)
 
-    def readline(self, *args):
-        """The buffered reader's readline, inside the body's time budget."""
-        return self._paced(self._f.readline, *args)
+    def readline(self, size=None):
+        """The buffered reader's readline, inside the body's time budget; _LINE_MAX bytes when no size is given."""
+        if size is not None and size >= 0:
+            if self._limit is not None:     # an unsized body: no single line past what is left of the cap
+                size = min(size, max(self._limit - self._got, 0) + 1)
+            return self._paced(self._f.readline, size)
+        line = self._paced(self._f.readline, _LINE_MAX)
+        if len(line) >= _LINE_MAX and not line.endswith(b"\n"):
+            self._refuse()
+        return line
 
     def readlines(self, *args):
         """The buffered reader's readlines, inside the body's time budget."""
@@ -355,8 +426,9 @@ class _DeadlinesMixin:
         # here on through _PacedBody (wsgi.input and eventlet.input are the same Input).
         self._end_deadline()
         raw = getattr(self, "rfile")   # set by the base handler's setup()
+        unsized = None if self.headers.get("content-length") is not None else _UNSIZED_BODY_MAX
         setattr(self, "rfile", _PacedBody(raw, self, self._timeout, self._limits["body_grace"],
-                                          self._limits["body_rate"]))
+                                          self._limits["body_rate"], unsized))
         try:
             return super().get_environ()
         finally:
@@ -364,7 +436,7 @@ class _DeadlinesMixin:
 
 
 def _protocol(base, timeout=None, limits=None):
-    """Eventlet's HttpProtocol, refusing a request line that names no HTTP version (see the module).
+    """Eventlet's HttpProtocol, refusing a request line that names no HTTP version, and Transfer-Encoding (see the module).
 
     The other malformed request lines (no method, an unknown protocol, a version past HTTP/1.x) were
     already refused by the standard library's parse_request, but each wrote two lines to stderr, and
@@ -380,10 +452,14 @@ def _protocol(base, timeout=None, limits=None):
             if not super().parse_request():
                 return False
             if self.request_version == "HTTP/0.9" or not hasattr(self.headers, "get_all"):
-                self.wfile.write(_BAD_REQUEST)
-                self.close_connection = True
-                return False
-            return True
+                answer = _BAD_REQUEST
+            else:
+                answer = _transfer_coding_answer(self.headers)
+            if answer is None:
+                return True
+            self.wfile.write(answer)
+            self.close_connection = True
+            return False
 
         def log_message(self, *_args):
             """Nothing: the standard library's line for a request line it refused (see above)."""

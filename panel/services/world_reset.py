@@ -255,14 +255,44 @@ _WWR_ASSIGNED = re.compile(r"(?:\+\+|--)[ \t]*([A-Za-z0-9_]+)|(?<![A-Za-z0-9_])(
 # Bash 5.3's `${ cmd; }` and `${| cmd; }` (a blank, tab, newline or `|` straight after `${`) run the command in
 # the CURRENT shell, so it can set any variable (`${ printf -v port %s 2; }`) with no `key=` text at all.
 _WWR_FUNSUB = re.compile(r"\$\{[ \t\n|]")
+# A `${name@P}` transform: prompt expansion evaluates the value again, so `$((…))` or (bash 5.3) `${ …; }`
+# assembled out of other values runs there and may set any variable.
+_WWR_PROMPT = "@P}"
+# A command in a line that is not a plain assignment which evaluates arithmetic or sets a variable whose
+# name it may take from a value: `let`, `(( ))`, `[[ ]]` (its -eq family is arithmetic), declare /
+# typeset / local (`-i` makes later plain assignments arithmetic), export / readonly / printf -v / read /
+# readarray / mapfile / unset (all take a name that `"$p"` can supply). Only at a command's start.
+_WWR_SETTER_CMD = re.compile(r"(?:^|[;&|(){}!]|\b(?:then|do|else))[ \t]*(?:\(\(|\[\[|(?:let|declare|typeset|local"
+                             r"|export|readonly|printf|read|readarray|mapfile|unset)(?![A-Za-z0-9_]))")
+
+
+def _wwr_opaque_text(text):
+    """Whether `text` (a value, or a whole line) holds an expansion that may set a variable it does not name."""
+    return (bool(_WWR_ARITH.search(text)) or "${!" in text or bool(_WWR_FUNSUB.search(text))
+            or _WWR_PROMPT in text)
+
+
+def _wwr_sets_any(line):
+    r"""Whether config `line` may set a key it never names, so no value read from the config can be trusted.
+
+    Naming is what _wwr_indexed_key follows, and bash can set a key through a name assembled from other
+    values: `p="port"`, `b="${p}=2"`, `d="$((b))"` sets port to 2 with no line that sets port by name
+    (arithmetic evaluates b's VALUE), as does `${b@P}` over `b="${a}((${p}=2))"`, `${!p:=2}`, bash 5.3's
+    `${ printf -v $p 2; }`, and a command such as `printf -v "$p" 2` or `declare -i d` before `d="$b"`.
+    Any such line, wherever it is and whatever it names, refuses the whole read (review 1122 A04): the
+    value bash uses is then not one the panel can see.
+    """
+    if _wwr_opaque_text(line):
+        return True
+    return not _WWR_OTHER_LINE.match(line) and bool(_WWR_SETTER_CMD.search(line))
 
 
 class _WwrLine:
     """What _wwr_cfg_key needs from one non-comment config line, worked out once for every key it names.
 
     `other` is the key of another key's plain line (_WWR_OTHER_LINE), else None; `opaque` that its value
-    holds arithmetic (_WWR_ARITH), `${!` (a variable reached through another's value) or bash 5.3's
-    `${ cmd; }` / `${| cmd; }` (_WWR_FUNSUB), so it may set any key; `sets` the names its value sets with
+    holds arithmetic (_WWR_ARITH), `${!` (a variable reached through another's value), a `${x@P}`
+    transform or bash 5.3's `${ cmd; }` / `${| cmd; }` (_WWR_FUNSUB), so it may set any key; `sets` the names its value sets with
     `${key:=…}` or holds as assignment-shaped text.
     """
 
@@ -273,8 +303,7 @@ class _WwrLine:
         m = _WWR_OTHER_LINE.match(text)
         self.other = m.group(1) if m else None
         value = m.group(2) if m else ""
-        self.opaque = bool(m) and (bool(_WWR_ARITH.search(value)) or "${!" in value
-                                   or bool(_WWR_FUNSUB.search(value)))
+        self.opaque = bool(m) and _wwr_opaque_text(value)
         self.sets = (set(_WWR_DEFAULT_SET.findall(value)) | {a or b for a, b in _WWR_ASSIGNED.findall(value)}
                      if m else set())
 
@@ -361,9 +390,14 @@ def _wwr_indexed_key(index, key):
 
 def cfg_values(texts, keys):
     """`keys` from the instance's LinuxGSM config texts (lgsm_cfg_texts): ({key: value}, None) or (None, why)."""
-    if any(_WWR_CFG_CMD.match(ln) for text in texts for ln in text.split("\n")):
+    lines = [ln for text in texts for ln in text.split("\n") if not ln.lstrip(" \t").startswith("#")]
+    if any(_WWR_CFG_CMD.match(ln) for ln in lines):
         return None, i18n.Sentence("the LinuxGSM config loads another file or runs eval, which the panel does not "
                                    "follow")
+    if any(_wwr_sets_any(ln) for ln in lines):
+        return None, i18n.Sentence("the LinuxGSM config may set a setting through a name built from other values "
+                                   "(arithmetic, an indirect or prompt expansion, or a command such as printf -v), "
+                                   "which the panel does not follow")
     index = _wwr_cfg_index(texts)
     values = {}
     for key in keys:

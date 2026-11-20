@@ -36,6 +36,7 @@ import re
 import unicodedata
 
 from panel.core import i18n
+from panel.services import lgsm_cfg_form as _cmpc
 
 # A file with more fields than this is offered in the raw editor only.
 MAX_FIELDS = 2000
@@ -75,14 +76,15 @@ _GCF_TOGGLE_HELP = re.compile(
 # A key is secret when, lower-cased with its separators removed, it CONTAINS one of the substrings
 # (rcon_password, rconpassword, ServerPassword, wsapikey, auth_token), or when one of its WORDS
 # (split on anything not a letter or digit, and between a lower-case letter and a capital) is one
-# of the words: AdminKey, sv_pass, rcon. "key" and "pass" are whole words only, so keyboard_layout,
-# passive_mobs and monkey_mode are not secret. A key matched only by a word is still not secret
+# of the words: AdminKey, sv_pass, rcon, auth, salt. "key" and "pass" are whole words only, so keyboard_layout,
+# passive_mobs and monkey_mode are not secret. Steam's server token is secret by name (gslt, and Source's
+# sv_setsteamaccount, which takes one), and so is a webhook (its URL is its secret). A key matched only by a word is still not secret
 # when another of its words says it is a port, an address or a switch: rcon.port,
 # broadcast-rcon-to-ops and RCONEnabled are not secrets. A switch (true/false) is never masked: its
 # value is only on or off.
 _GCF_SECRET_SUBSTR = ("password", "passwd", "passphrase", "secret", "token", "apikey", "authkey",
-                      "privatekey")
-_GCF_SECRET_WORDS = frozenset({"pass", "pwd", "key", "rcon"})
+                      "privatekey", "gslt", "steamaccount", "webhook")
+_GCF_SECRET_WORDS = frozenset({"pass", "pwd", "key", "rcon", "auth", "salt"})
 _GCF_NOT_SECRET_WORDS = frozenset({"port", "ip", "address", "enable", "enabled", "broadcast", "timeout",
                                    "log", "logging"})
 _GCF_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -864,10 +866,16 @@ def _gcf_field_id(raw_id, count):
 
 
 def audit_detail(changed, limit=60):
-    """`key: old -> new` per changed field for the audit row; a secret field's values never appear."""
+    """`key: old -> new` per changed field for the audit row; a secret field's values never appear.
+
+    Secret here is the form's own test OR the LinuxGSM settings form's (lgsm_cfg_form.is_secret_name),
+    which is broader: a field the form still shows as text (`passive_mobs`) is only "changed (hidden)" in
+    the row, since a log viewer need not see the files (OWASP Logging Cheat Sheet, data to exclude:
+    access tokens, passwords, keys). A switch is only on or off, never hidden.
+    """
     parts = []
     for f, old, new in changed:
-        if f["secret"]:
+        if f["secret"] or (f.get("kind") != "bool" and _cmpc.is_secret_name(f["key"])):
             parts.append("%s: changed (hidden)" % f["key"])
         else:
             parts.append("%s: %s -> %s" % (f["key"], _gcf_clip(old, limit), _gcf_clip(new, limit)))

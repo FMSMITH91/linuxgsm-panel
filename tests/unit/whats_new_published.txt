@@ -869,3 +869,11 @@ f8888854 Databases on another machine can be chosen on a host with no database s
 a8dff0ac Add and edit forms say what you typed is kept when your password is asked again.
 32306c04 The alerts card follows the browser.
 73ae1d10 Stalled uploads no longer write a log line each.
+3dc087cc One game account's jq settings no longer decide other servers' player counts.
+c96af566 A LinuxGSM settings save is bounded.
+1adf0e29 World reset refuses a config that can change a setting indirectly.
+c5fb6ea0 The Discord bot shows LinuxGSM's output as text.
+2d3afa39 Release notes with a long run of < no longer stall the panel.
+82b2e090 Game config audit rows hide more secrets.
+0051cbfe A chunked request can no longer run the panel out of memory.
+d7e455c5 A database restore on the panel's machine no longer hangs on a planted pipe.

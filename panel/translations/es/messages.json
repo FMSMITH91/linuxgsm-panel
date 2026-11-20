@@ -69,6 +69,7 @@
   "Could not read the backup archive.": "No se pudo leer el archivo de la copia de seguridad.",
   "Could not read the config — the host did not answer.": "No se pudo leer la configuración: el host no respondió.",
   "Could not read the current config — nothing has been changed.": "No se pudo leer la configuración actual: no se ha cambiado nada.",
+  "That is more settings, or more text, than one save takes — nothing has been changed.": "Son más ajustes, o más texto, de los que admite un solo guardado: no se ha cambiado nada.",
   "Could not read the game config — the host did not answer.": "No se pudo leer la configuración del juego: el host no respondió.",
   "Could not read this host's firewall afterwards, so whether public SSH changed is unknown — check the host and try again.": "No se pudo leer después el cortafuegos de este host, así que no se sabe si cambió el SSH público: comprueba el host y vuelve a intentarlo.",
   "Could not read this server's LinuxGSM config, so the current alert settings are unknown. Nothing has been changed — try again when the host answers.": "No se pudo leer la configuración de LinuxGSM de este servidor, así que no se conocen los ajustes de alertas actuales. No se ha cambiado nada: vuelve a intentarlo cuando el host responda.",

@@ -44,17 +44,24 @@ _CMPC_HELP_MAX, _CMPC_HEADING_MAX = 2000, 120
 
 # Settings whose value is a credential, by name: passwords (serverpassword, rconpassword,
 # betapassword, ntfypassword), tokens (telegramtoken, gotifytoken), keys (wsapikey,
-# pushoveruserkey), the Steam server token (gslt), webhooks, which carry their own secret, and salts.
-_CMPC_SECRET_RE = re.compile(r"pass|token|secret|key|gslt|webhook|salt|auth", re.I)
+# pushoveruserkey), the Steam server token (gslt, and Source's sv_setsteamaccount, which takes one),
+# webhooks, which carry their own secret, and salts. The game config form's audit row asks the same
+# test (is_secret_name), so a value this form hides is never written there either.
+_CMPC_SECRET_RE = re.compile(r"pass|token|secret|key|gslt|webhook|salt|auth|steamaccount", re.I)
 # Not named as secrets, but a server's start line is where a password or a GSLT is often written
 # inline (`+rcon_password x`); `details` hides it for the same reason (_DTL_CMDLINE_HIDDEN).
 _CMPC_MASK_ALSO = frozenset({"startparameters", "extraparams"})
 MASK = "********"
 
 
+def is_secret_name(key):
+    """Whether a setting's NAME says it holds a credential (_CMPC_SECRET_RE), whichever file it is in."""
+    return isinstance(key, str) and bool(_CMPC_SECRET_RE.search(key))
+
+
 def is_secret(key):
     """Whether setting `key` holds a credential, so a viewer who may not see secrets never gets it."""
-    return bool(_CMPC_SECRET_RE.search(key or "")) or key in _CMPC_MASK_ALSO
+    return is_secret_name(key) or key in _CMPC_MASK_ALSO
 
 
 def _cmpc_heading(body):
