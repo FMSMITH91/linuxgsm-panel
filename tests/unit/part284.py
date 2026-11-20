@@ -132,6 +132,7 @@ def _section_installer284():
     check("helper entry: install_helper_code says why the helper is placed whole",
           "is not root's alone, so the helper is placed whole" in out, out[-300:])
 
+
 try:
     _section_refusals284()
     _section_optional_pyc284()
