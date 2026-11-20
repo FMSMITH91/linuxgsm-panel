@@ -134,6 +134,7 @@ def _card276():
             "function button(label, icon, act){ made.push(act); return {}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoSelect(){ return node(); }\n"
             "function ownPlugins(){} function geoStatus(){} function creditLine(){}\n"
+            + _cut47(src, "function updateWords(") + "\nvar BM = {updateWords: updateWords, status: function(){}};\n"
             + _cut47(src, "function settingsFold(") + "\n" + _cut47(src, "function installedRow(") + "\n"
             "function pick(m){ return m === 'adSettings' || m.indexOf('Update the add-on first') === 0"
             " || m.indexOf('Up to date') === 0 || m.indexOf('Update available') === 0; }\n"

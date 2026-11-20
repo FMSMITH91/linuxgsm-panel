@@ -433,8 +433,10 @@ def _get_page_paths(admin_id, mc_server, addon_server):
 # The GET rules the sweep cannot request (no row id stands in for a name, a token or a file).
 # Pinned, so a new page the sweep skips fails by name instead of dropping out unseen.
 _r41t_unswept = []
+# The B3 player page needs a B3 client id, which the sweep has no way to know.
 _r41t_unswept_known = {"/api/i18n/<lang>", "/api/panel/backup/download/<path:name>", "/game-icon/<script>",
-                       "/invite/<token>", "/set-language/<lang>"}
+                       "/invite/<token>", "/set-language/<lang>",
+                       "/api/server/<int:server_id>/addons/b3/players/<int:client_id>"}
 
 
 def _signed_in_client(user_id):
@@ -600,9 +602,10 @@ try:
     # the log page answers "the host did not answer" with a 200 too, and the sweep then measured that.
     _addonlist = c.get("/api/server/%d/addons" % addon_server).get_json() or {}
     _addonlog = c.get("/api/server/%d/addons/b3/logs" % addon_server).get_json() or {}
-    check("perf: ...and both add-on pages answered 200 in both sweeps (each read the add-on state of a server "
+    check("perf: ...and the add-on pages answered 200 in both sweeps (each read the add-on state of a server "
           "an add-on is offered for, not a 404 for another game), each with its own answer, not a refusal",
-          _addonpages == ["/api/server/%d/addons" % addon_server, "/api/server/%d/addons/b3/logs" % addon_server]
+          _addonpages == ["/api/server/%d/addons" % addon_server, "/api/server/%d/addons/b3/logs" % addon_server,
+                          "/api/server/%d/addons/b3/penalties" % addon_server]
           and all(small_st.get(p) == 200 and large_st.get(p) == 200 for p in _addonpages)
           and _addonlist.get("success") is True and len(_addonlist.get("addons") or []) == 2
           and _addonlog.get("success") is True and "log" in _addonlog,
