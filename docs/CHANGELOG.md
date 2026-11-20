@@ -36,8 +36,42 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **A new permission: View add-on pages.** It opens a server's add-on pages without managing the add-ons; given to
   no group by default.
 
+### Changed
+
+- **B3 2.0.2, on Python 3.15.** B3 is built from its 2.0.2 release on Python 3.15 (Debian 13), and its card names
+  it 2.0.2. An installed B3 is offered Update once; its data, settings and database stay.
+
 ### Fixed
 
+- **A failed add-on Update is offered again.** The add-on's record now changes only once its new image (and
+  BlueMap's client file) is on the host, so a pull or build that fails no longer reads "Up to date" and blocks the
+  retry and B3's settings.
+- **B3 Kick and Warn refuse when the name could mean another B3 player.** B3 acts on a slot, so when another B3
+  player is stored under the name the game lists, nothing is sent and the panel says why. After an Unban, Kick or
+  Warn the player's view is read again.
+- **BlueMap's card shows the render threads its config/core.conf sets.**
+- **An SFTP upload over an existing file keeps 256 MiB free on the game host.** The upload is written beside the
+  file, so the old file's size no longer counts as free space.
+- **A cfg setting repeated under a later heading is one field in the Settings form.** Saving it changes the last
+  line, the one the game reads.
+- **An idTech3 Kick or Ban whose player list could not be read says so.** Before, it said the player had left.
+- **B3 penalty alerts have their own push title and text.**
+- **A setting saved with quotes, `$` or a backslash no longer blocks world resets.** The Settings tab writes such a
+  value with backslash escapes, which the world reset read as a command.
+- **Root's crontab refused for its size says so.** Before, it said a valid comment line was not a cron job.
+- **The database browser no longer shows a "Show all" that does nothing.** On views and tables without a usable
+  key it says to use the SQL box.
+- **A server's Backup and a queued stop or restart no longer run together.** A Backup started while a queued stop
+  or restart runs is refused with why, and the queued one waits for a running Backup. The full backup's summary
+  names every job that holds a backup.
+- **A restore interrupted while removing the old files keeps the restore.**
+- **Restoring a database from a dump that is a link says "no dump" on the panel host too.**
+- **The add-on card names the version installed until you update.** While an update waited, the card showed the
+  new version as if it were already installed; it now shows the installed one and "Update available:" with the
+  version Update installs.
+- **Removing the last add-on leaves no empty folders in the game account's home.** The `.config`, `.local/share`,
+  `.local` and `.cache` folders the first add-on install made are removed with the last add-on when empty; a
+  folder that was there before, or holds anything, stays.
 - **B3 settings wait for a pending update.** Applying B3's settings while a newer add-on version is waiting is
   refused with "Update the add-on first", and the card shows that in place of Apply; before, B3 stopped and stayed
   down until Update.

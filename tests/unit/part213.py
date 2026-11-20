@@ -319,13 +319,28 @@ def _s213_rotate(app):
     check("rotate: ...and while the pass is part-way through",
           all((any(v.startswith("enc:v2:%s:" % new.current) for v in mid),
                any(v.startswith("enc:v2:%s:" % old) for v in mid), _all_read213(mid))))
+    # Pruning passes while stored values still name the old key (their writes held back, as in
+    # _s213_prune): the old AES key is neither marked nor dropped (review 1123: run with prune off,
+    # the claim below held whatever pruning did with an AES key).
+    real = _ar213._reencrypt_column
+    _ar213._reencrypt_column = lambda *a: None
+    try:
+        _pass213(app, prune=True)
+        _pass213(app, prune=True)
+    finally:
+        _ar213._reencrypt_column = real
+    held = _cfg213._cred_keyring()
     _pass213(app)
     after = _values213(app)
     plain_after = [_cfg213.decrypt_secret(v) for v in after]
+    _pass213(app, prune=True)
+    marked = _cfg213._cred_keyring()
     check("rotate: after the pass every value is under the new key and reads the same; the old key "
-          "stays until two passes find it unused",
+          "stays until two passes find it unused (pruning passes while values still use it keep it unmarked; "
+          "the first that finds it unused only marks it)",
           all((all(new.is_current(v) for v in after), plain_after == [_cfg213.decrypt_secret(v) for v in before],
-               old in _cfg213._cred_keyring().keys)))
+               old in held.keys, old not in held.unused, old in marked.keys, old in marked.unused)),
+          repr((sorted(held.keys), held.unused, sorted(marked.keys), marked.unused)))
 
 
 # ── 4. backups ───────────────────────────────────────────────────────────────────────────────────

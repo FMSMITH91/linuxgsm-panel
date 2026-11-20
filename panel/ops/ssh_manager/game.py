@@ -1000,17 +1000,21 @@ def _resolve_from_console(server, user, game_type, name, selfname):
     if not (name or "").strip():
         return None
     listed = console_player_list(server, user, game_type, selfname=selfname) or []
-    if game_engine(game_type) == "idtech3":
-        hits = _r18b_idt3_matches(listed, name)
-    else:
-        # Source/GoldSrc: gamedig's valve protocol shows the name exactly as the console does (it
-        # strips nothing), so only the same name is the same player. Colour-stripping here made a
-        # departed "Bob" resolve to a connected "^1Bob" (or, with gamedig's wider stripping,
-        # "^_^ Bob"), and a ban by name then banned THAT player's SteamID, fleet-wide with scope
-        # "all".
-        want = name.strip()
-        hits = [p for p in listed if (p.get("name") or "").strip() == want]
+    hits = console_name_matches(game_type, listed, name)
     return hits[0] if len(hits) == 1 else None
+
+
+def console_name_matches(game_type, listed, name):
+    """The players of a console list (`listed`) that the name `name`, as a list on screen shows it, can mean."""
+    if game_engine(game_type) == "idtech3":
+        return _r18b_idt3_matches(listed, name)
+    # Source/GoldSrc: gamedig's valve protocol shows the name exactly as the console does (it
+    # strips nothing), so only the same name is the same player. Colour-stripping here made a
+    # departed "Bob" resolve to a connected "^1Bob" (or, with gamedig's wider stripping,
+    # "^_^ Bob"), and a ban by name then banned THAT player's SteamID, fleet-wide with scope
+    # "all".
+    want = (name or "").strip()
+    return [p for p in listed if want and (p.get("name") or "").strip() == want]
 
 
 def _r18b_idt3_matches(listed, name):
@@ -1105,6 +1109,8 @@ def _mod_valve_cmd(action, target, steamid, resolve):
 # CoD, banned) whoever took the slot, while the audit row named the player who had left.
 IDT3_SLOT_MOVED = ("That player is no longer in that slot (they left, or someone else joined in it). "
                    "Refresh the player list and try again.")
+IDT3_LIST_UNREAD = ("Couldn't read the player list from the game's console just now, so the panel can't check who "
+                    "is in that slot. Try again.")
 
 
 def _idt3_slot_holds(listed, slot, name):
@@ -1122,8 +1128,12 @@ def _idt3_slot(num, resolve, target, listing):
     if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
         p = resolve()
         slot = _sanitize_slotnum(p.get("num")) if p else None
-    elif (target or "").strip() and listing is not None and not _idt3_slot_holds(listing() or [], slot, target):
-        return None, IDT3_SLOT_MOVED
+    elif (target or "").strip() and listing is not None:
+        listed = listing()
+        if listed is None:      # the console was not read: no measurement of who holds the slot
+            return None, IDT3_LIST_UNREAD
+        if not _idt3_slot_holds(listed, slot, target):
+            return None, IDT3_SLOT_MOVED
     if slot is None:
         return None, "Couldn't find that player on the server."
     return slot, None

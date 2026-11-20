@@ -90,11 +90,24 @@ paths-ignore:
 #                                      query rebuilt from that match. _connect_checked resolves the host
 #                                      once and refuses the connect when any answer is not a public
 #                                      unicast address (address_refused). No redirect is followed.
+# One more speaks HTTP over a raw stream rather than through an HTTP client, so the query never sees it:
+#   addon_web (routes/addon_web.py      The add-on page proxy: a request of a signed-in user's browser,
+#   _ask, services/addon_web_http       relayed as HTTP/1.1 to 127.0.0.1 on the add-on's
+#   send_request)                      host only, at the port its record names when the link is made, in
+#                                      the server's own window of add-on ports (never one from the request).
+#                                      The request target is the browser's path and query after
+#                                      upstream_target refused anything but URL characters; only GET, HEAD
+#                                      and POST are passed on, with the headers upstream_headers allows.
+#                                      Its streams, tests/unit/part37.py's raw-stream list, all to that
+#                                      loopback address: tunnel._local (socket.create_connection on the
+#                                      panel's own host), tunnel._paramiko (an SSH direct-tcpip channel)
+#                                      and tunnel._ssh_cli_argv (ssh -W, Tailscale hosts). Not HTTP and
+#                                      sending nothing: hosts._tcp_reachable, the SSH-address reach test.
 # The three HTTP requests in notifications and the ones in game_icons, modrinth, steam_workshop,
 # breached_passwords and webpush refuse every redirect; geoip follows one only to db-ip.com's two hosts,
 # addons_bluemap only to piston-meta.mojang.com.
 # The three others use urlopen, which follows one, but only from GitHub's own fixed hosts. Of the fourteen, only webpush takes a host and path from a
-# request, and only one parse_endpoint accepts as a known push service. The ntfy server is the one host
+# request (the add-on page proxy above takes a path, never a host), and only one parse_endpoint accepts as a known push service. The ntfy server is the one host
 # an admin chooses: it is stored in config.json and read back later, a flow neither SSRF query traces,
 # so _NTFY_URL_RE bounds it.
 query-filters:

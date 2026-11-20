@@ -44,7 +44,7 @@ _trips257 = len(_P9_TRIPPED)
 _TMP257 = _tf257.mkdtemp(prefix="p257-")
 _RC257 = "p257-rcon-" + "value"            # the game's RCON password in these checks
 _DBV257 = "Dbv257" + "abcdefghijklmnopq"   # a database's password in these checks
-_PIN257 = "7da5ac8685c34665cb10670810656a3bf99fcf91"
+_PIN257 = "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
 _MONTH257 = "2026-11"
 
 
@@ -73,11 +73,11 @@ def _catalog257():
     req, cf = _read257("panel", "addon_images", "b3", "requirements.txt"), _read257("panel", "addon_images", "b3",
                                                                                    "Containerfile")
     m = _re257.search(r"^maxminddb==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", req, _re257.M)
-    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.2dev with its short "
+    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.2 with its short "
        "commit, maxminddb in its hashed lock",
        (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
         bool(m), "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
-       (_PIN257, [_PIN257], "2.0.2dev (7da5ac86)", True, True))
+       (_PIN257, [_PIN257], "2.0.2 (7c3bbe8c)", True, True))
 
 
 def _probe_sof2_257():
@@ -508,12 +508,12 @@ def _renovate257():
     base = _ad257.B3_BASE.split("@")[1]
     eq("Renovate: B3's commit in addons.py and the Containerfile (git-refs, master), IW4MAdmin's digest (docker, "
        "latest), BlueMap's (docker, v5) and the B3 image's base digest in addons.py and the Containerfile (docker, "
-       "3.12-slim), each matched once, checked daily",
+       "3.15-slim), each matched once, checked daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
        ({"git-refs master": [("panel/services/addons.py", _PIN257), ("panel/addon_images/b3/Containerfile", _PIN257)],
          "docker latest": [("panel/services/addons.py", _ad257.IW4MADMIN_IMAGE.split("@")[1])],
          "docker v5": [("panel/services/addons.py", _ad257.BLUEMAP_IMAGE.split("@")[1])],
-         "docker 3.12-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},
+         "docker 3.15-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},
         ["big-brother-bot", "docker.io/library/python", "ghcr.io/bluemap-minecraft/bluemap", "ghcr.io/raidmax/iw4madmin"]))
 
 

@@ -2093,7 +2093,7 @@ _r16d_wrap_ts_handles()
 # part275 (review pass 34's second security set: the player batch's jq HOME, a settings save's bounds, world reset's
 # names built from values, Discord's fenced action output, release-note tags, the form's audit row) drives part12's
 # app, bash and jq; imports part01, 12 and 203.
-# imports part01, 05, 29 and 223. part274 (review pass 34's security fixes: Transfer-Encoding refused, the body reader's
+# part274 (review pass 34's security fixes: Transfer-Encoding refused, the body reader's
 # bounds, db-import's FIFO) runs the web server on loopback and the helper's main(); imports part01 and 05.
 # part276 (review pass 34, runtime fixes) drives part12's app, bash over part190's restore sandbox and node over
 # panel/static/js; imports part01, 12, 47, 190, 219 and 221.
@@ -2109,6 +2109,10 @@ _r16d_wrap_ts_handles()
 # part281 (review pass 35's security fixes: backup/dump account refusals, the add-on proxy's Fetch Metadata, audit
 # address and sign-in binding, the nonce-only page policy, Discord's escaped text) drives part12's app with part279's
 # member, session client and scripted tunnel; imports part01, 12 and 279.
+# part280 (B3 2.0.2 on Python 3.15, the card's installed version, Remove's empty folders) drives part12's app, bash
+# with part255's stand-ins and node; imports part01, 12, 47, 221 and 255.
+# part282 (review pass 35, runtime fixes) drives part12's app, bash over part190's restore sandbox, part278's B3
+# stand-ins and node; imports part01, 05, 12, 47, 190, 221, 247, 272 and 278.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2128,7 +2132,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248", "part249",
     "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262", "part263",
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
-    "part279", "part281", "part15")
+    "part279", "part281", "part280", "part282", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2373,15 +2377,16 @@ def _r14d_noted_imports(text):
     out = {}
     for _seg in _re.split(r"(?:^|(?<=[.;])\s+)(?=part\d{2,}\b)", flat):
         _m = _re.match(r"(part\d{2,})\b", _seg)
-        _l = _re.search(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d{2,}(?:(?:\s*,\s*|\s+and\s+|,\s+and\s+)"
-                        r"(?:part)?\d{2,})*)", _seg)
-        if _m and _l:
-            out[_m.group(1)] = set(_re.findall(r"\d{2,}", _l.group(1)))
-        elif _m and _re.search(r"\bimport(?:s|ing)\b[^.;]*?(?<!\d)\d{2,}\b", _seg):
+        _ls = [_x.group(1) for _x in _re.finditer(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d{2,}(?:(?:\s*,\s*|"
+                                                  r"\s+and\s+|,\s+and\s+)(?:part)?\d{2,})*)", _seg)]
+        if _m and len(_ls) == 1:
+            out[_m.group(1)] = set(_re.findall(r"\d{2,}", _ls[0]))
+        elif _m and (_ls or _re.search(r"\bimport(?:s|ing)\b[^.;]*?(?<!\d)\d{2,}\b", _seg)):
             # A note that names imports in a wording the reader does not take ("imports parts 01
             # and 12") was dropped silently, not judged (review 1011e): named instead. The digits
             # may follow "part" ("imports from part01"): a word boundary before them read only
-            # the bare-number wording (review 1012a).
+            # the bare-number wording (review 1012a). A note with two lists is named too: only its first
+            # was compared, so a stray second list passed whatever it said (review 1123).
             out[_m.group(1)] = {"unreadable: " + _seg[:80]}
     return out
 
@@ -2438,9 +2443,9 @@ check("unit suite: ...the note reader takes a list across lines, and not a part 
       "(control)", _ctl_r14d == {"part57": {"01", "12", "20"}, "part20": {"01"}}, repr(_ctl_r14d))
 _ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 comes after part70, "
                                  "whose app it imports. part72 (x) imports from part01 and part12. "
-                                 "part73 (x) imports nothing but part01.")
+                                 "part73 (x) imports nothing but part01. part74 (x) imports part01. imports part05.")
 check("unit suite: ...and a note listing imports in a wording it cannot read is named, not dropped "
-      "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73"]
+      "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73", "part74"]
       and all(next(iter(_v)).startswith("unreadable") for _v in _ctl2_r14d.values()), repr(_ctl2_r14d))
 _ctl4_r14d = _r14d_noted_imports("# part99 (x) imports part01 and 87.\n# part100 (x) imports part01, 99 "
                                  "and 100.\n# part101 (x) imports from part100.")

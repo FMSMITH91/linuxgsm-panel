@@ -93,6 +93,12 @@ RECENT_SQL = ("SELECT p.id, p.type, p.duration, p.inactive, p.reason, p.keyword,
 SCHEMA_SQL = "SELECT data_value FROM data WHERE data_key = ?"
 # One player's name as B3 stored it, for a kick or a warning (the slot is found by it in the game's list).
 NAME_SQL = "SELECT name FROM clients WHERE id = ?"
+# The other players whose stored name holds that player's: a name in the game's list can be any of
+# them, so a kick or a warning by that name could reach another B3 id. A superset (LIKE, the name's
+# own % and _ as wildcards); the caller keeps the ones the listed name can mean.
+NAMESAKES_SQL = ("SELECT c.name FROM clients c JOIN clients t ON t.id = ? WHERE c.id <> t.id"
+                 " AND c.name LIKE CONCAT('%', t.name, '%') LIMIT 21")
+NAMESAKES_MAX = 20
 
 
 def schema_statement():
@@ -110,6 +116,11 @@ def schema_of(statement):
 def name_statement(client_id):
     """The read of one player's stored name."""
     return {"sql": NAME_SQL, "params": [str(int(client_id))], "cap": 1}
+
+
+def namesakes_statement(client_id):
+    """The read of other players whose stored name holds this one's (NAMESAKES_SQL), at most NAMESAKES_MAX + 1."""
+    return {"sql": NAMESAKES_SQL, "params": [str(int(client_id))], "cap": NAMESAKES_MAX + 1}
 
 
 def clean_query(q):

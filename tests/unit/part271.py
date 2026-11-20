@@ -63,7 +63,8 @@ eq("workflow reader: a job id with a digit, an underscore or a capital, one whos
    "comment, a quoted one, and a jobs: line with a comment are all read; a key after jobs is not",
    _jobs29(_WF271), ["py_X9", "b2", "q1"])
 eq("workflow reader: ...and each such job's block is found, ending before the next job or top-level key",
-   [_job29(_WF271, j) for j in ("b2", "q1")], ["  b2:  # a note\n    runs-on: b\n", "  \"q1\":\n    runs-on: c\n"])
+   [_job29(_WF271, j) for j in ("b2", "q1")],
+   ["  b2:  # a note\n    runs-on: b\n  # a comment between jobs\n", "  \"q1\":\n    runs-on: c\n"])
 _EGR271 = ("    steps:\n      - name: Harden Runner\n        uses: x\n        with:\n          egress-policy: block\n"
            "          allowed-endpoints: >\n            github.com:443 one.example:443\n"
            "              two.example:443\n      - uses: y\n        with:\n          z: three.example:443\n")

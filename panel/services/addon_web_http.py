@@ -183,8 +183,14 @@ def splice(client, upstream, first=b"", still_allowed=None, recheck=None):
     """
     recheck = _aw.RECHECK_SECONDS if recheck is None else recheck
     done = threading.Event()
-    if first:
-        client.sendall(first)
+    try:
+        if first:
+            client.sendall(first)
+    except OSError:
+        # The browser went before the splice began: the add-on's stream is closed with it, not left
+        # open until the add-on drops the idle WebSocket.
+        close_both(client, upstream)
+        return
     up = threading.Thread(target=_pump, args=(upstream.recv, client.sendall, done), daemon=True)
     up.start()
     down = threading.Thread(target=_pump, args=(client.recv, upstream.sendall, done), daemon=True)
@@ -217,6 +223,13 @@ def _pump(src_recv, dst_send, done):
         pass                      # either side dropping the connection ends the splice
     finally:
         done.set()
+
+
+def close_both(client, upstream):
+    """Close the browser's socket and the add-on's stream (either may already be closed, or None)."""
+    for end in (upstream, client):
+        if end is not None:
+            _close(end)
 
 
 def _close(conn):

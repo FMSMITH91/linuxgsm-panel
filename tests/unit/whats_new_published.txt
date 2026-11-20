@@ -898,3 +898,19 @@ fe544850 Open an add-on's web page from the panel.
 57ed9a07 B3 checks its settings before Apply, and its card says how it is.
 60869c21 Unban, kick and warn through B3 from the panel.
 5e4d8f4f Alerts when B3 bans or kicks a player.
+38b98457 B3 2.0.2, on Python 3.15.
+fdad12f3 The add-on card names the version installed until you update.
+e7bcbe71 Removing the last add-on leaves no empty folders in the game account's home.
+cbab1b33 A failed add-on Update is offered again.
+f3c3a616 B3 Kick and Warn refuse when the name could mean another B3 player.
+f3d67f8e BlueMap's card shows the render threads its config/core.conf sets.
+7c05a81c An SFTP upload over an existing file keeps 256 MiB free on the game host.
+f4e7b063 A cfg setting repeated under a later heading is one field in the Settings form.
+0a6f9093 An idTech3 Kick or Ban whose player list could not be read says so.
+5f8ef7aa B3 penalty alerts have their own push title and text.
+d7d9c9e0 A setting saved with quotes, $ or a backslash no longer blocks world resets.
+5b94ebb2 Root's crontab refused for its size says so.
+140e71ad The database browser no longer shows a "Show all" that does nothing.
+760c86ec A server's Backup and a queued stop or restart no longer run together.
+6fb8bcb1 A restore interrupted while removing the old files keeps the restore.
+1f68ec77 Restoring a database from a dump that is a link says "no dump" on the panel host too.

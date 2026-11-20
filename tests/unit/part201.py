@@ -68,10 +68,10 @@ def _s201(text):
 
 
 def _data201(players=3, cap=10, name="My Bedrock", level="Bedrock level", version=7, tail=b"",
-             flags=b"\x00\x00\x01\x00"):
-    """The ServerData v7 bytes as BDS writes them, in the NetherNet field order."""
-    return (bytes([version]) + _s201(name) + _vi201(2225) + _s201("1.26.63") + _s201(level)
-            + _vi201(players) + _vi201(cap) + _vi201(0) + flags + _s201("00112233aabbccdd") + _vi201(4) + tail)
+             flags=b"\x00\x00\x01\x00", texts=("1.26.63", "00112233aabbccdd")):
+    """The ServerData v7 bytes as BDS writes them, in the NetherNet field order (`texts`: game version, nonce)."""
+    return (bytes([version]) + _s201(name) + _vi201(2225) + _s201(texts[0]) + _s201(level)
+            + _vi201(players) + _vi201(cap) + _vi201(0) + flags + _s201(texts[1]) + _vi201(4) + tail)
 
 
 def _reply201(data=None, packet_id=1, length_delta=0, text_delta=0, text=None):
@@ -116,11 +116,20 @@ _bad201 = {
     "a name that is not UTF-8": _reply201(_data201(name=b"\xff\xfe")),
     "a varint longer than five bytes": _reply201(_data201()[:1] + b"\x80" * 6 + b"\x00"),
     "an uppercase outer hex": _REAL201.upper(),
-    "more than the host reads": _REAL201 + "00" * 2048,
+    "bytes past the datagram's end": _REAL201 + "00" * 2048,
+    # Well-formed in every field, four strings at the longest a reply allows, and over the 2048 bytes the
+    # host reads (review 1123: the case above failed its HMAC, so it was no reply with or without the cap).
+    "more than the host reads": _reply201(_data201(name="n" * 256, level="l" * 256, texts=("v" * 256, "c" * 256))),
     "nothing": "",
 }
 eq("bedrock query: a reply that is not well-formed is no reply, never a count (each case)",
    {k: _bd201.lan_reply(v) for k, v in _bad201.items()}, {k: None for k in _bad201})
+_big201 = _reply201(_data201(name="n" * 256, level="l" * 256, texts=("v" * 256, "c" * 256)))
+_near201 = _reply201(_data201(name="n" * 256, level="l" * 256, texts=("v" * 256, "00112233aabbccdd")))
+check("bedrock query: (control) the over-cap case is over 2048 bytes only because of its size: the same reply "
+      "with three long strings, under the cap, decodes",
+      len(_big201) // 2 > _bd201._LAN_REPLY_MAX >= len(_near201) // 2
+      and _bd201.lan_reply(_near201) == (3, 10, "n" * 120, "l" * 120), repr((len(_big201) // 2, len(_near201) // 2)))
 check("bedrock query: the reply checks hold the strict reads (a hostile reply of the right size is no count)",
       _bd201.lan_reply(_flip201(_REAL201, 175)) is None and _bd201.lan_reply(None) is None, "")
 _req201 = _bd201._lan_payload(bytes.fromhex(_bd201._LAN_REQUEST_HEX))

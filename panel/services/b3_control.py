@@ -190,13 +190,20 @@ def _age(doc, now):
 
 
 def running_version(doc):
-    """What B3 says runs ("2.0.2dev (7da5ac86)"), from health.json; "" when it doesn't say both."""
+    """What B3 says runs ("2.0.2dev (7da5ac86)"), from health.json; "" when it doesn't say both.
+
+    B3 built from the pinned commit is named by the pin's release label ("2.0.2 (7c3bbe8c)"): its source
+    tree says the development number the release build replaces (addons.B3_RELEASE). Any other commit
+    (an image not updated yet) is shown as B3 itself says.
+    """
     b3 = (doc or {}).get("b3")
     b3 = b3 if isinstance(b3, dict) else {}
     version, commit = b3.get("version"), b3.get("commit")
     if not (isinstance(version, str) and _VERSION_RE.fullmatch(version)
             and isinstance(commit, str) and _COMMIT_RE.fullmatch(commit)):
         return ""
+    if _ad.B3_COMMIT.startswith(commit):            # the full id, or the short one (7 or more)
+        return _ad.CATALOG[_ad.B3]["version"]
     return "%s (%s)" % (version, commit[:8])
 
 
@@ -205,7 +212,8 @@ def card(b3st, state):
 
     health: the lines to show, or None (no measurement). stale_minutes: set while the unit runs and the
     file is older than two health intervals. exit_reason: while the unit is not running and its last exit
-    is one of B3's codes. version: what B3 says runs, else the pin's label (the catalog's).
+    is one of B3's codes. version: what B3 says runs, only when it says it (else the row keeps the
+    installed image's version: the pin's label would name an update not made yet).
     """
     doc, svc = b3st.get("health"), b3st.get("svc") or service_settings("")
     fields = {"b3_card": True, "health": None, "stale_minutes": None, "exit_reason": "",
@@ -216,7 +224,9 @@ def card(b3st, state):
         fields["exit_reason"] = i18n.tr(why) if why else ""
     if doc is None:
         return fields
-    fields["version"] = running_version(doc) or _ad.CATALOG[_ad.B3]["version"]
+    ran = running_version(doc)
+    if ran:
+        fields["version"] = ran
     age = _age(doc, b3st.get("now"))
     if state == "active" and age is not None and age > 2 * svc["health_interval"]:
         fields["stale_minutes"] = max(1, age // 60)

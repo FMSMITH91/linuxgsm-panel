@@ -29,7 +29,7 @@
     showing such a line but never offering it for edit.
 14. The start port check reads a crossplay Valheim's port + 1, as every other port reader does since
     review pass 33 (up on 2457 only, it was "not listening" and the start went ahead blind).
-15. B3's card shows release 2.0.2dev (the label of the pinned commit) and an installed B3 is told
+15. B3's card shows release 2.0.2 (the label of the pinned commit) and an installed B3 is told
     it is up to date; the image's tag is the commit and build id alone, so the label offers no update.
 
 Nothing here reaches a host.
@@ -244,6 +244,29 @@ def _authz_burst276():
        "that answers: none is answered busy, and the host is asked once",
        (sorted(str(r) for _i, r in got[0]), got[1], got[2]), (["{'ok': True, 'sid': 276}"] * (_br276.HOST_SLOTS + 2),
                                                               1, 1))
+
+
+def _verdict_kept276():
+    """A refresh the host does not answer keeps the fresh verdict it would have replaced (review 1123)."""
+    why = "it is uid 0 (root)"
+    asked = []
+    _p9_patch(_sh276, "privileged_accounts", lambda remote, users: (asked.append(users), None)[1])
+    got = []
+    try:
+        for cached in (why, ""):
+            with _sh276._ACCOUNT_VERDICTS_LOCK:
+                _sh276._ACCOUNT_VERDICTS[_KEY276] = (_time276.monotonic() + _sh276._ACCOUNT_REFRESH_AHEAD / 2, cached)
+                until = _sh276._ACCOUNT_VERDICTS[_KEY276][0]
+            ans = _sh276.game_account_write_refusal(_REMOTE276, "vh276")
+            with _sh276._ACCOUNT_VERDICTS_LOCK:
+                got.append((None if ans is None else str(ans), _sh276._ACCOUNT_VERDICTS.get(_KEY276, (None,))[0] == until))
+    finally:
+        _p9_restore_all()
+        with _sh276._ACCOUNT_VERDICTS_LOCK:
+            _sh276._ACCOUNT_VERDICTS.pop(_KEY276, None)
+    eq("account verdict: a refresh the host does not answer keeps the verdict still fresh (a root account stays "
+       "refused as root, a plain one allowed; never \"couldn't check\"), and its expiry does not move",
+       (got, len(asked)), ([(str(_sh276._privileged_write_msg("vh276", why)), True), (None, True)], 2))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -513,9 +536,12 @@ def _nags276():
             + "console.log(JSON.stringify(ul.children.map(li => li.children[2].textContent)));\n")
     got = _node221("reboot dialog: every blocker kind", prog)
     if got is not None:
+        # One phrase per kind first (review 1123): a failed run's {"node failed": ...} or a short list zipped
+        # to nothing and passed.
+        ok = isinstance(got, list) and len(got) == len(kinds)
         eq("reboot dialog: every kind of work the server names as blocking a reboot (mods, scheduled tasks, wipes, "
            "queued stops, add-on jobs among them) has its own phrase, none the bare 'work is running'",
-           [k for k, said in zip(kinds, got) if said == "work is running"], [])
+           (ok, [k for k, said in zip(kinds, got) if said == "work is running"] if ok else got), (True, []))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -593,9 +619,9 @@ def _b3_release276():
     b3 = _ad276.CATALOG["b3"]
     tag = "localhost/lgsm-addon-b3:%s-%s" % (_ad276.B3_COMMIT[:12], _ad276.build_id(
         os.path.join(os.path.dirname(_ad276.__file__), "..", "addon_images", "b3"), _ad276.B3_BASE))
-    eq("B3: the card names release 2.0.2dev with the pinned commit, and the image's tag is the commit and the build id "
+    eq("B3: the card names release 2.0.2 with the pinned commit, and the image's tag is the commit and the build id "
        "alone (a new release label offers installed B3s no update)",
-       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2dev (7da5ac86)", True, False))
+       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2 (7c3bbe8c)", True, False))
 
 
 _settings_pending276()
@@ -603,6 +629,7 @@ _card276()
 _sftp_rate276()
 _verdict_flight276()
 _authz_burst276()
+_verdict_kept276()
 _forget_live276()
 _relink276()
 _idt3_slot276()

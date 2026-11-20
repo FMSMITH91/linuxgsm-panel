@@ -215,8 +215,9 @@ def addon_using_database(gs, name):
 
 def _page_rows(gs, found):
     """What a viewer with View add-on pages alone sees: the installed add-ons with a web page, and their state."""
-    return [{"id": k, "name": _ad.CATALOG[k]["name"], "version": _ad.CATALOG[k]["version"], "installed": True,
-             "state": found[k].get("state", ""), "web": True} for k in _ad.offered(gs.game_type) if k in found and k in _aw.WEB]
+    return [{"id": k, "name": _ad.CATALOG[k]["name"], "version": _change.shown_version(k, found[k].get("meta") or {})[0],
+             "installed": True, "state": found[k].get("state", ""), "web": True}
+            for k in _ad.offered(gs.game_type) if k in found and k in _aw.WEB]
 
 
 def _addon_rows(gs, found):
@@ -227,7 +228,8 @@ def _addon_rows(gs, found):
         meta = (got or {}).get("meta") or {}
         with _JOBS_LOCK:
             job = dict(_JOBS.get((gs.id, k)) or {})
-        rows.append(dict({"id": k, "name": a["name"], "version": a["version"], "source": a["source"],
+        version, pending = _change.shown_version(k, meta, got is not None)
+        rows.append(dict({"id": k, "name": a["name"], "version": version, "version_new": pending, "source": a["source"],
                           "legacy": a["legacy"], "needs_database": a["database"], "data_kept": a["data_kept"],
                           "installed": got is not None, "state": (got or {}).get("state", ""), "port": meta.get("port"),
                           "database": meta.get("database", ""), "installing": bool(job.get("running")),
@@ -249,10 +251,13 @@ def _extra_fields(gs, k, meta, got):
 
 
 def _bluemap_fields(meta, got):
-    """The row fields of BlueMap: Mojang's EULA (its link; who accepted it and when), the version, the disk it takes."""
+    """The row fields of BlueMap: Mojang's EULA (its link; who accepted it and when), the version, disk, threads.
+
+    render_threads is what config/core.conf sets (None when it was not read as a whole number).
+    """
     fields = {"geolocation_option": False, "eula_url": _bm.EULA_URL, "eula_by": str(meta.get("eula_accepted_by") or ""),
               "eula_at": str(meta.get("eula_accepted_at") or ""), "mc_version": str(meta.get("mc_version") or ""),
-              "disk_kb": (got or {}).get("disk_kb"), "render_threads": _bm.RENDER_THREADS}
+              "disk_kb": (got or {}).get("disk_kb"), "render_threads": (got or {}).get("render_threads")}
     fields.update(_game_update(meta, got))
     return fields
 

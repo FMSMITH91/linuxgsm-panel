@@ -223,7 +223,11 @@ class AddonWebProxy:
         _aw.revoke(token)
 
     def still_allowed(self, token):
-        """Whether `token`'s link may still be used (asked during a WebSocket, without noting a use)."""
+        """Whether `token`'s link may still be used (asked during a WebSocket).
+
+        Each ask notes a use (lookup does), so an open WebSocket keeps the link's idle time fresh; the
+        panel sign-in's own expiry, which _why_not reads through live_session_user, still ends it.
+        """
         with self.app.app_context():
             link = _aw.lookup(token, session_idle_limits()[0], session_absolute_limits()[0])
             return link is not None and not self._why_not(link, db.session.get(GameServer, link.server_id))
@@ -256,10 +260,20 @@ class AddonWebProxy:
         sock = _client_socket(environ)
         lines = ["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade"]
         lines += ["%s: %s" % (k, v) for k, v in head.headers if k.lower() in _aw.SWITCH_HEADERS]
-        sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
-        _http.splice(sock, stream, head.rest, still_allowed=lambda: self.still_allowed(token))
-        from eventlet import wsgi as _ewsgi     # only reached under eventlet's server (_client_socket)
-        _ewsgi.WSGI_LOCAL.already_handled = True
+        try:
+            if sock is None:
+                raise OSError("no browser socket to switch")
+            sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+        except OSError:
+            # The browser went (or there is no socket to hand over): close the add-on's stream now
+            # instead of leaving it open until the add-on drops the idle WebSocket.
+            _http.close_both(sock, stream)
+            _log.info("add-on page: the browser left before the WebSocket began")
+        else:
+            _http.splice(sock, stream, head.rest, still_allowed=lambda: self.still_allowed(token))
+        if sock is not None:
+            from eventlet import wsgi as _ewsgi     # only reached under eventlet's server (_client_socket)
+            _ewsgi.WSGI_LOCAL.already_handled = True
         return []
 
 

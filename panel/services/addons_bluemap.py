@@ -31,8 +31,12 @@ MOJANG'S CLIENT FILE AND ITS LICENCE
 
 THE VERSION, AND A GAME UPDATE
     The world's version is the one the server logged at its last start (serverfiles/logs/latest.log,
-    "Starting minecraft server version X"). After the game is updated, that line names a newer version
-    than the add-on's record, and the card offers Update: the new client file, the unit with the new -v.
+    "Starting minecraft server version X"). That log is replaced at each start and by a rotation, and a
+    fresh one may not hold the line yet, so version_sh then reads the server jar's own version.json
+    (Mojang's server jar and its bundler carry one, "id"), and last the newest rotated logs
+    (logs/*.log.gz). LinuxGSM keeps no record of the version it installed that the panel could read.
+    After the game is updated, the version read names a newer one than the add-on's record, and the
+    card offers Update: the new client file, the unit with the new -v.
 
 PRIVACY
     BlueMap's CLI has no connection to the game, so its map shows no players and no addresses. Its
@@ -75,11 +79,19 @@ _LEVEL_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+-]{0,63}")
 _PROPS = "serverfiles/server.properties"
 _LATEST_LOG = "serverfiles/logs/latest.log"
 _STARTING = "Starting minecraft server version "
+# The server jars version_sh reads version.json from, in this order: LinuxGSM's Minecraft (vanilla) jar,
+# the name Mojang's download has, then any other jar in serverfiles (Paper, Purpur, Fabric's launcher).
+_JARS = ("serverfiles/minecraft_server.jar", "serverfiles/server.jar", "serverfiles/*.jar")
+# The rotated logs read last (newest first), at most this many: each is decompressed until its first line.
+_ROTATED_MAX = 5
+# version.json out of a jar, by unzip, else Python's zipfile (a host may have either).
+_ZIP_READ = ("import sys,zipfile; "
+             "sys.stdout.write(zipfile.ZipFile(sys.argv[1]).read('version.json')[:4000].decode('utf-8','replace'))")
 
 NO_WORLD = ("Couldn't find the world folder ({world}). Start the Minecraft server once so it creates its world, "
             "then install again.")
-NO_VERSION = ("Couldn't read the world's Minecraft version from the server's log (serverfiles/logs/latest.log). Start "
-              "the Minecraft server once, then install again.")
+NO_VERSION = ("Couldn't read the world's Minecraft version from the server's logs (serverfiles/logs) or its server "
+              "jar. Start the Minecraft server once, then install again.")
 BAD_LEVEL = ("BlueMap can't use this world's name (level-name in server.properties: {why}). Use letters, digits and "
              ". _ + - only, then install again.")
 BAD_LEVEL_CHARS = "it holds a character other than letters, digits and . _ + -"
@@ -88,8 +100,8 @@ BAD_LEVEL_CHARS = "it holds a character other than letters, digits and . _ + -"
 AGAIN = {
     NO_WORLD: ("Couldn't find the world folder ({world}). Start the Minecraft server once so it creates its world, "
                "then try again."),
-    NO_VERSION: ("Couldn't read the world's Minecraft version from the server's log (serverfiles/logs/latest.log). "
-                 "Start the Minecraft server once, then try again."),
+    NO_VERSION: ("Couldn't read the world's Minecraft version from the server's logs (serverfiles/logs) or its "
+                 "server jar. Start the Minecraft server once, then try again."),
     BAD_LEVEL: ("BlueMap can't use this world's name (level-name in server.properties: {why}). Use letters, digits "
                 "and . _ + - only, then try again."),
 }
@@ -109,7 +121,7 @@ def world_sh():
     props.b64 holds only the lines that mention "level" (server.properties also holds the RCON password);
     a level-name continued on a next line then ends in a backslash, which level_name refuses. dirs.b64
     is the names of serverfiles' folders (the world and a Bukkit server's _nether/_the_end); mcver the
-    version the server logged at its last start.
+    world's Minecraft version (version_sh).
     """
     return ('echo "props.b64=$(grep -ai level %s 2>/dev/null | head -c 4000 | base64 -w0)"; '
             'echo "dirs.b64=$(find serverfiles -mindepth 1 -maxdepth 1 -type d -printf "%%f\\n" 2>/dev/null '
@@ -118,9 +130,23 @@ def world_sh():
 
 
 def version_sh(key="mcver"):
-    """Shell printing `<key>=` and the version the server logged at its last start ("" when none)."""
-    return ('echo "%s=$(grep -m1 -aoE %s %s 2>/dev/null | head -n 1 | sed "s/.* //")"; '
-            % (key, shlex.quote(_STARTING + "[0-9A-Za-z._-]+"), shlex.quote(_LATEST_LOG)))
+    """Shell printing `<key>=` and the world's Minecraft version ("" when none could be read).
+
+    In order: the line the server logged at its last start (latest.log); the server jar's version.json
+    "id" (_JARS; unzip, else python3, 5 seconds each); the newest rotated logs (_ROTATED_MAX). Every read
+    is the game account's own file, bounded, and the caller keeps only a plain version (mc_version).
+    """
+    line = shlex.quote(_STARTING + "[0-9A-Za-z._-]+")
+    jar = ('{ timeout 5 unzip -p "$j" version.json 2>/dev/null || timeout 5 python3 -c %s "$j" 2>/dev/null; } '
+           '| head -c 4000 | grep -m1 -oE \'"id"[[:space:]]*:[[:space:]]*"[^"]{1,32}"\' | sed -E \'s/.*"([^"]*)"$/\\1/\''
+           % shlex.quote(_ZIP_READ))
+    rotated = ("ls -t serverfiles/logs/ 2>/dev/null | grep -E '^[0-9A-Za-z._-]+\\.log\\.gz$' | head -n %d"
+               % _ROTATED_MAX)
+    return ('_mcv=$(grep -m1 -aoE %s %s 2>/dev/null | head -n 1 | sed "s/.* //"); '
+            '[ -n "$_mcv" ] || for j in %s; do [ -f "$j" ] || continue; _mcv=$(%s); [ -n "$_mcv" ] && break; done; '
+            '[ -n "$_mcv" ] || for g in $(%s); do _mcv=$(timeout 5 zcat -- "serverfiles/logs/$g" 2>/dev/null '
+            '| grep -m1 -aoE %s | sed "s/.* //"); [ -n "$_mcv" ] && break; done; echo "%s=$_mcv"; '
+            % (line, shlex.quote(_LATEST_LOG), " ".join(_JARS), jar, rotated, line, key))
 
 
 def mc_version(text):

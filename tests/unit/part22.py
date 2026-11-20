@@ -1290,11 +1290,16 @@ def _preformatted_log_calls():
 
 
 def _log_message_arg(n, methods):
-    """The message argument of a call on a logger-named receiver, or None for any other node."""
+    """The message argument of a call on a logger-named receiver, or None for any other node.
+
+    The receiver may be a logger fetched inline, `logging.getLogger("panel").warning(...)` (review 1123:
+    a Call has no name, so that form was never read).
+    """
     if not (isinstance(n, _ast22.Call) and isinstance(n.func, _ast22.Attribute)
             and n.func.attr in methods):
         return None
     recv = n.func.value
+    recv = recv.func if isinstance(recv, _ast22.Call) else recv
     name = getattr(recv, "id", None) or getattr(recv, "attr", None) or ""
     args = n.args[1:] if n.func.attr == "log" else n.args
     return args[0] if "log" in name.lower() and args else None
@@ -1312,8 +1317,11 @@ def _is_prebuilt_log(n, methods):
 _pf22 = _preformatted_log_calls()
 check("R24: no logging call in app.py or panel/ pre-formats its message (the counter keys by "
       "template, so a value formatted in first would be stored)", not _pf22, repr(_pf22[:10]))
-check("R24: ...the gate recognises one (positive control)", _is_prebuilt_log(
-    _ast22.parse('_log.warning(f"host {h} down")').body[0].value, {"warning"}))
+check("R24: ...the gate recognises one, on a named logger and on one fetched inline (positive control)",
+      [_is_prebuilt_log(_ast22.parse(_c).body[0].value, {"warning"}) for _c in (
+          '_log.warning(f"host {h} down")', 'logging.getLogger("panel").warning(f"host {h} down")',
+          'getLogger(__name__).warning("host %s down" % h)', 'logging.getLogger("panel").warning("host %s down", h)')]
+      == [True, True, True, False])
 
 
 # ══ app.py: the boot record (R4, R19, R20) ══════════════════════════════════════════════════════

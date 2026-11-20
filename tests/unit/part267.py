@@ -669,7 +669,7 @@ def _commit267(repo, msg, at):
 
 def _names267(repo, names):
     """Save main/<sha>.name for each (sha, name), main/<sha>.inherit where name is None, as tools/sign-release.sh does."""
-    idx = os.path.join(_TMP267, "sig-index")
+    idx = os.path.join(_TMP267, os.path.basename(repo) + "-sig-index")     # one per repository: blobs are its own
     for sha, name in names:
         blob = _sp267.run(["git", "-C", repo, "hash-object", "-w", "--stdin"], input=(name or "tooling only") + "\n",  # nosec B603 B607
                           text=True, capture_output=True, check=False, env=dict(os.environ, **_GIT_ENV267)).stdout.strip()
@@ -689,6 +689,52 @@ def _installer_label267(repo):
     return r.stdout.strip().split(" · ")[0]
 
 
+def _release_name_walk267(repo, ver):
+    """(install.sh's _release_name for `ver` at the repo's HEAD, how many saved names it read with cat-file)."""
+    log = os.path.join(_TMP267, "catfile.log")
+    prog = ("set -euo pipefail\n" + "".join(_shfn267(n) for n in ("_gitc", "_epoch_version", "_r42i_tree_owner",
+                                                                  "_release_name"))
+            + 'eval "_gitc_real() $(declare -f _gitc | tail -n +2)"\n'
+            + '_gitc() { [[ "$1" != cat-file ]] || echo x >>"$CATLOG"; _gitc_real "$@"; }\n'
+            + '_release_name "$1"\n')
+    r = _sp267.run(["bash", "-c", prog, "walk", ver], capture_output=True, text=True, check=False, timeout=60,  # nosec B603 B607
+                   env=dict(os.environ, PANEL_DIR=repo, CATLOG=log, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                            GIT_CEILING_DIRECTORIES=_TMP267))
+    try:
+        with open(log, encoding="utf-8") as fh:
+            reads = len(fh.read().split())
+        os.remove(log)
+    except OSError:
+        reads = 0
+    return r.stdout.strip(), reads
+
+
+def _skewed_walk267():
+    """Both readers' walks stop at a commit of another date, whatever its place in the history.
+
+    A tooling-only commit of 2026-11-20 whose parent carries a later committer date (a skewed clock)
+    and a saved name of that later day: `--since` keeps the parent in the walk, so only the stop at a
+    commit of another date keeps its name off; the caller's own date test would hide the walk's answer,
+    so the walk is read directly (review 1123).
+    """
+    repo = os.path.join(_TMP267, "skew")
+    _sp267.run(["git", "init", "-q", "-b", "main", repo], capture_output=True, check=False)  # nosec B603 B607
+    later = _commit267(repo, "release 2026.11.21.1", _DAY267 + 2 * 86400 + 60)
+    child = _commit267(repo, "tooling, clock behind its parent", _DAY267 + 86400 + 120)
+    _names267(repo, [(later, "2026.11.21.1"), (child, None)])
+    saved_dir = _so267.PANEL_DIR
+    _so267.PANEL_DIR = repo
+    try:
+        saved = _so267._saved_release_names()
+        py = _so267._named_same_day(child, "2026.11.20")
+    finally:
+        _so267.PANEL_DIR = saved_dir
+    # The premise first: both marks are read, so only the date stop can keep the parent's name off.
+    eq("release name: both readers' walks stop at a commit of another date, a parent dated later included (the "
+       "app's walk answers no commit; install.sh's reads no saved name and prints the date)",
+       (saved == ({later}, {child}), py, _release_name_walk267(repo, "2026.11.20")), (True, None, ("2026.11.20", 0)))
+
+
 def _release_names267():
     repo = os.path.join(_TMP267, "rel")
     _sp267.run(["git", "init", "-q", "-b", "main", repo], capture_output=True, check=False)  # nosec B603 B607
@@ -706,9 +752,10 @@ def _release_names267():
         installer = _installer_label267(repo)
         nextday = _commit267(repo, "tooling the next day", _DAY267 + 86400 + 60)
         unmarked = (_so267.version_for_commit(nextday), _installer_label267(repo))
-        # Marked tooling-only, so both readers walk past it into the day before: only their stop
-        # at another day's commit keeps the previous day's name off it. Unmarked, the walk ended
-        # at the commit itself and never reached that stop.
+        # Marked tooling-only, so both readers walk past it toward the day before. Three things keep
+        # that day's name off it: git's --since limit, the walk's stop at a commit of another date,
+        # and the name's own date test; any one is enough here, so this reads the outcome, and
+        # _skewed_walk267 reads the stop. Unmarked, the walk ended at the commit itself.
         _names267(repo, [(nextday, None)])
         lone = _so267.version_for_commit(nextday)
         installer_lone = _installer_label267(repo)
@@ -740,6 +787,7 @@ def _main267():
     _wwr_lines267()
     _busy_pieces267()
     _release_names267()
+    _skewed_walk267()
     check("part267: no check reached a real transport", len(_P9_TRIPPED) == _trips267,
           repr(_P9_TRIPPED[_trips267:][:4]))
 

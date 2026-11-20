@@ -1284,8 +1284,11 @@ def _settle_queued_action(app, gs):
         # (_r39a_backup_held): unregistered, a scheduled wipe started its backup, or LinuxGSM's
         # wipe, beside a queued restart's stop and start, and brought back up a server queued to
         # stop.
+        # A Backup button's run registers "action" before its database dump, and its tail (which
+        # _backup_in_progress reads) only goes in after the dump: "action" holds this run back too.
         with r36j_route_job(gs.id, "queued"):
-            if _r39a_wipe_running(gs.id) or _backup_in_progress(gs.id) or uninstall_running(gs.id):
+            if (_r39a_wipe_running(gs.id) or _backup_in_progress(gs.id) or uninstall_running(gs.id)
+                    or "action" in r36j_route_jobs(gs.id)):
                 return          # stays queued for the next tick
             _run_queued_action(app, gs)
     # 'pending' (players on / unknown): leave the flags, retry next tick

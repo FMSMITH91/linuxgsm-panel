@@ -336,7 +336,9 @@ check("world reset sweep (mcb): start parameters, a non-default executabledir, o
           for g in (_mparams191, _mexedir191, _mnoname191)), repr((_mparams191, _mexedir191, _mnoname191)))
 _munread191 = _sweep_case183(_mcb_sid191, values=None, read=_reads191((_MCB_PROPS191, None)))
 check("world reset sweep (mcb): a LinuxGSM config that could not be read waits, nothing stopped",
-      _munread191["cmds"] == [] and _munread191["entry"].get("pending_since"), repr(_munread191))
+      _munread191["cmds"] == [] and _munread191["entry"].get("pending_since")
+      and "LinuxGSM config could not be read" in (_munread191["entry"].get("wait") or "") and "raised" not in _munread191,
+      repr(_munread191))
 _mplayers191 = _sweep_case183(_mcb_sid191, values=dict(_MCBV191), read=_reads191((_MCB_PROPS191, None)), players=2)
 check("world reset sweep (mcb): with 'wait until empty' on, players online keep it waiting with nothing stopped",
       _mplayers191["cmds"] == ["status"] and _mplayers191["players_asked"] == 1

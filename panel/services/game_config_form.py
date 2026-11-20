@@ -695,19 +695,21 @@ def parse(rel, content):
 
 
 def _gcf_last_only(fmt, fields, rel):
-    """The fields with a key repeated in its section shown once: the last, the one the game reads.
+    """The fields with a key repeated shown once: the last, the one the game reads.
 
     A .properties file, a Source / idTech cfg and a plain key=value file take the last of two lines
     setting one key, so a field for the first changed text the game ignores and the save still said
-    "Saved" (a rotated RCON password stayed the old one). Cfg keys compare without case (Source
-    cvars). An .ini keeps every line: Unreal reads a repeated key as an array (ServerPackages,
-    ServerActors), each line its own value.
+    "Saved" (a rotated RCON password stayed the old one). A key=value file's key is one per
+    `[section]`. A cfg's key is one per FILE, without case (Source cvars): its `// .... Title .... //`
+    headings only group the form's fields, and the game reads the file's last line for the key
+    whichever heading it is under. An .ini keeps every line: Unreal reads a repeated key as an array
+    (ServerPackages, ServerActors), each line its own value.
     """
     if fmt == "kv" and _gcf_ext(rel) == ".ini":
         return fields
 
     def name(f):
-        return f["section"], (f["key"] if fmt == "kv" else f["key"].lower())
+        return (f["section"], f["key"]) if fmt == "kv" else ("", f["key"].lower())
     last = {name(f): n for n, f in enumerate(fields)}
     return [f for n, f in enumerate(fields) if last[name(f)] == n]
 

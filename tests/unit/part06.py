@@ -6841,23 +6841,52 @@ check("delete host: both lists of what stays on a forgotten host name its add-on
       and "loginctl disable-linger" in _rh_sec and "add-ons (B3, IW4MAdmin)" in _rh_secmd
       and "Add-ons tab" in _rh_secmd, repr((_rh_sec[:200], _rh_secmd[:200])))
 # The add-on routes that ask for the password (step_up_needed() in the view): the security page's step-up list
-# and the manage_addons row name each one's action, so a route that starts to ask is a doc change too.
-_rh_addons = open(os.path.join(_root, "panel", "routes", "addons.py"), encoding="utf-8").read()
-# Every add-on route, whatever its methods, the generic /<action> one included (it is named "<action>",
-# which the list below never holds): read only as POST routes with a literal last word, the generic
-# route could start to ask for the password with this check green.
-_rh_blocks = [(m.group(1) or "(list)", m.group(2)) for m in re.finditer(
-    r'@app\.route\("/api/server/<int:server_id>/addons(?:/<addon_id>/([\w<>]+))?"[^)]*\)(.*?)(?=\n    @app\.route|\Z)',
-    _rh_addons, re.S)]
-_rh_su_acts = sorted(a for a, body in _rh_blocks if "step_up_needed()" in body)
-check("docs: (premise) every step_up_needed() call in routes/addons.py was read inside one of its routes",
-      len(_rh_blocks) >= 7 and sum(b.count("step_up_needed()") for _a, b in _rh_blocks)
-      == _rh_addons.count("step_up_needed()") > 0, repr([a for a, _b in _rh_blocks]))
-_rh_words = {"install": ("installing", "install"), "update": ("updating", "update"),
-             "settings": ("changing the settings of", "change their settings"), "remove": ("removing", "remove")}
+# and the manage_addons row name each one's action, so a route that starts to ask is a doc change too. Every
+# panel/routes/addons*.py, read as code (review 1123: only addons.py was read, so B3's unban/kick/warn route
+# asked with no doc naming it). A route's action is its path's last word: "<action>" for the generic route,
+# "(list)" for the bare /addons one; stacked routes each name theirs.
+
+
+def _rh_route_paths(fn):
+    """The paths of a view's `@app.route(...)` decorators."""
+    return [d.args[0].value for d in fn.decorator_list if isinstance(d, _ast.Call) and getattr(d.func, "attr", "") == "route"
+            and d.args and isinstance(d.args[0], _ast.Constant)]
+
+
+def _rh_step_ups(node):
+    """How many step_up_needed() calls `node` holds."""
+    return sum(1 for c in _ast.walk(node) if isinstance(c, _ast.Call) and getattr(c.func, "id", "") == "step_up_needed")
+
+
+_rh_blocks, _rh_su_total = [], 0
+for _rh_f in sorted(glob.glob(os.path.join(_root, "panel", "routes", "addons*.py"))):
+    _rh_tree = _ast.parse(open(_rh_f, encoding="utf-8").read())
+    _rh_su_total += _rh_step_ups(_rh_tree)
+    _rh_blocks += [(re.sub(r"^.*/addons$", "(list)", _pth).rsplit("/", 1)[-1], _rh_step_ups(_fn))
+                   for _fn in _ast.walk(_rh_tree) if isinstance(_fn, _ast.FunctionDef)
+                   for _pth in _rh_route_paths(_fn) if "/addons" in _pth]
+_rh_su_acts = sorted({a for a, n in _rh_blocks if n})
+check("docs: (premise) every step_up_needed() call in routes/addons*.py was read inside one of its routes",
+      len(_rh_blocks) >= 12 and _rh_su_total > 0
+      and _rh_su_total == sum(_rh_step_ups(_fn) for _rh_f in glob.glob(os.path.join(_root, "panel", "routes", "addons*.py"))
+                              for _fn in _ast.walk(_ast.parse(open(_rh_f, encoding="utf-8").read()))
+                              if isinstance(_fn, _ast.FunctionDef) and _rh_route_paths(_fn)),
+      repr(sorted(_rh_blocks)))
+# {action: (words in the security page's step-up list, words in the manage_addons row, the list's clause that holds them)}
+_rh_words = {"install": ("installing", "install", "an add-on"), "update": ("updating", "update", "an add-on"),
+             "settings": ("changing the settings of", "change their settings", "an add-on"),
+             "remove": ("removing", "remove", "an add-on"), "unban": ("unbanning", "unbanning", "through B3"),
+             "kick": ("kicking", "kicking", "through B3"), "warn": ("warning", "warning", "through B3")}
+
+
 def _rh_has_words(words, text):
     """Whether `words` stand in `text` as whole words (a substring test found "install" in "installs")."""
     return re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(words), text) is not None
+
+
+def _rh_clause(marker):
+    """The clause of the security page's step-up list (between semicolons) that holds `marker`, or ""."""
+    return next((c for c in _rh_sf.split(";") if marker in c), "")
 
 
 _rh_sf = open(os.path.join(_root, "docs", "security-features.md"), encoding="utf-8").read()
@@ -6865,10 +6894,10 @@ _rh_sf = _rh_sf[_rh_sf.find("High-risk actions ask for the password again"):]
 _rh_sf = _rh_sf[:_rh_sf.find("\n")]
 _rh_perm = [ln for ln in open(os.path.join(_root, "docs", "permissions.md"), encoding="utf-8").read().splitlines()
             if ln.startswith("| `manage_addons` |")]
-check("docs: each add-on action that asks for the password (install, update, settings, remove) is in the "
-      "security page's step-up list and in the manage_addons permission row",
-      _rh_su_acts == ["install", "remove", "settings", "update"] and _rh_perm
-      and all(_rh_has_words(_rh_words[a][0], _rh_sf.split("an add-on;")[0].rsplit(";", 1)[-1]) for a in _rh_su_acts)
+check("docs: each add-on action that asks for the password (install, update, settings, remove; B3's unban, kick "
+      "and warn) is in the security page's step-up list and in the manage_addons permission row",
+      _rh_su_acts == ["install", "kick", "remove", "settings", "unban", "update", "warn"] and _rh_perm
+      and all(_rh_has_words(_rh_words[a][0], _rh_clause(_rh_words[a][2])) for a in _rh_su_acts)
       and all(_rh_has_words(_rh_words[a][1], _rh_perm[0]) for a in _rh_su_acts), repr((_rh_su_acts, _rh_perm)))
 check("docs: (control) an action is found as whole words: \"install\" is not in \"installs Podman\"",
       not _rh_has_words("install", "update, start and remove them. Installing the first installs Podman")
@@ -6886,7 +6915,8 @@ def _rh_code(cmd):
     """
     out, quote, i = [], None, 0
     while i < len(cmd):
-        if quote is None and cmd[i] == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+        # After an unescaped blank only: `a\ #` is one word `a #`, and bash runs the rest of the line.
+        if quote is None and cmd[i] == "#" and (not out or out[-1] in (" ", "\t", "\n", ";", "&", "|", "(")):
             i = cmd.find("\n", i) if "\n" in cmd[i:] else len(cmd)
             continue
         piece, quote = _rh_step(cmd, i, quote)
@@ -6920,8 +6950,22 @@ def _rh_unsafe(cmd, root):
     bad = [m.group(0) for m in re.finditer(r"(?<![\w.$~])/[^\s\"';|&)<>{},]*", code)
            if not _os_path_inside(m.group(0), root)
            and not (m.group(0) == "/dev/null" and code[max(m.start() - 1, 0)] == ">")]
-    return bad + re.findall(r"~|\$HOME\b|\$\{|\b(?:eval|exec|source|cd|pushd)\b|\$\w+/"
-                            r"|(?<![\w.])\.\.(?=/|\s|$|;)", code)
+    return bad + _rh_escapes(cmd) + re.findall(
+        r"~|\$HOME\b|\$\{|\b(?:eval|exec|source|cd|pushd)\b|\$\w+/|(?<![\w.])\.\.(?=/|\s|$|;)"
+        # Text that builds a path the rewrite never sees (review 1123): an ANSI-C `$'\x2f…'`, a command
+        # substitution other than the doc's own `$(readlink "$l")`, a backtick, or a quote glued to a path
+        # piece (`/sb/a/.''./.''./etc` is `..` to bash).
+        r"|\$'|\$\((?!readlink \"\$l\"\))|`|[/.]['\"]|['\"][/.]", code)
+
+
+def _rh_escapes(cmd):
+    r"""Each backslash escape outside single quotes: `\.\.` is `..` and `\/` a slash to bash, never to the rewrite."""
+    out, quote, i = [], None, 0
+    while i < len(cmd):
+        piece, quote = _rh_step(cmd, i, quote)
+        out += [piece] if len(piece) == 2 and piece[0] == "\\" else []
+        i += len(piece)
+    return out
 
 
 def _os_path_inside(p, root):
@@ -6990,10 +7034,18 @@ try:
     _rh_ctl34 = [_rh_unsafe(_c, "/sb") for _c in (
         "sudo rm -rf \"${X:-/opt/x}\"\n", "sudo rm -rf ${X-/etc/x}\n", "rm -rf {/sb/a,/opt/b}\n",
         "rm -f /sb/x>/opt/y\n", "echo \"a\\\" # \"; sudo rm -rf /opt/x\n", "echo $'a\\' # '; sudo rm -rf /opt/x\n",
-        "sudo rm -f /dev/null\n", "rm -f /sb/a >/dev/null 2>&1\n", "echo 'a\\' # '; rm -rf /sb/b\n")]
+        "sudo rm -f /dev/null\n",
+        # ...and the review-1123 shapes: an escaped blank before `#`, quotes and escapes that make `..`, an
+        # ANSI-C slash, a printf'd path in a substitution or backticks.
+        "echo a\\ # ; sudo rm -rf /opt/x\n", "rm -rf /sb/a/.''./.''./etc\n", "X=\\.\\.; rm -rf /sb/$X\\/$X\\/etc\n",
+        "rm -rf $'\\x2fopt'\n", "rm -rf \"$(printf '\\x2fopt')\"\n", "rm -rf `printf /opt`\n",
+        "rm -rf $(cat list)\n", "rm -rf $'list'\n",
+        "rm -f /sb/a >/dev/null 2>&1\n", "echo 'a\\' # '; rm -rf /sb/b\n",
+        "case \"$(readlink \"$l\")\" in /sb/g/*) rm -f \"$l\" ;; esac\n")]
     check("delete host: (control) ...a ${...} default, a brace list, a path glued to a redirect, a quote ended "
           "past an escaped one, and /dev/null as rm's own operand are refused; a >/dev/null redirect is not",
-          [bool(_b) for _b in _rh_ctl34] == [True] * 7 + [False] * 2, repr(_rh_ctl34))
+          [bool(_b) for _b in _rh_ctl34] == [True] * 15 + [False] * 3
+          and "; sudo rm" in _rh_code("echo a\\ # ; sudo rm\n"), repr(_rh_ctl34))
 finally:
     _shutil.rmtree(_rh_sb, ignore_errors=True)
 
@@ -7406,9 +7458,28 @@ check("workflows: every tool pin file is a pip-compile lockfile beside its .in, 
 # vulnerable package slides past it: it is path-filtered.
 _ci_dep_blocks = re.split(r"\n(?=  - package-ecosystem: )", _ci_dep)
 _ci_npm = [_b for _b in _ci_dep_blocks if '- package-ecosystem: "npm"' in _b]
+
+
+def _ci_on_block(w):
+    """Return a workflow's top-level `on:` block, its key line to the next top-level key ("" without one).
+
+    Taken as the text before `permissions:`, a workflow with `permissions:` above `on:` read as having
+    no path filter at all (review 1123).
+    """
+    out = None
+    for ln in w.replace("\r\n", "\n").split("\n"):
+        if out is None:
+            out = [ln] if re.match(r"""(?:on|"on"|'on'):""", ln) else None
+        elif ln[:1] in ("", " ", "\t", "#"):
+            out.append(ln)
+        else:
+            break
+    return "\n".join(out or [])
+
+
 _ci_dr = open(os.path.join(_root, ".github", "workflows", "dependency-review.yml"),
               encoding="utf-8").read()
-_ci_dr_on = _ci_dr[:_ci_dr.index("\npermissions:")] if "\npermissions:" in _ci_dr else ""
+_ci_dr_on = _ci_on_block(_ci_dr)
 check("dependabot: tools/gamedig's lockfile has an npm entry with a cooldown, gamedig majors ignored",
       len(_ci_npm) == 1 and 'directory: "/tools/gamedig"' in _ci_npm[0]
       and re.search(r"\n    cooldown:\n      default-days: [1-9]", _ci_npm[0]) is not None
@@ -7495,7 +7566,8 @@ def _ci_watched(path, entries):
 
 
 _CI_JOB_KEY = r"^  ([A-Za-z_][\w-]*):[ \t]*(?:#[^\n]*)?$"
-_CI_INSTALL = r"-r (\.github/ci-requirements[^\s]*\.txt)"
+# Quoted or not, and across a folded or backslash-continued line break (review 1123: a quoted path dropped out).
+_CI_INSTALL = r"""-r(?:\s|\\\n)+['"]?(\.github/ci-requirements[^\s'"]*\.txt)"""
 
 
 def _ci_jobs_watch(w):
@@ -7506,7 +7578,7 @@ def _ci_jobs_watch(w):
     crosses `/` (fnmatch). A `jobs:` line or a job's key line may end in a comment, and CRLF is read.
     """
     w = w.replace("\r\n", "\n")
-    on = w[:w.index("\npermissions:")] if "\npermissions:" in w else w
+    on = _ci_on_block(w)
     head = re.search(r"^jobs:[ \t]*(?:#[^\n]*)?$", w, re.M)
     parts = re.split(_CI_JOB_KEY, w[head.end():] if head else "", flags=re.M)
     out = []
@@ -7527,7 +7599,7 @@ def _ci_unwatched_of(name, w):
     A trigger's paths-ignore list misses a file it matches: GitHub skips the run for a change to it.
     """
     w = w.replace("\r\n", "\n")
-    ignores = _ci_on_path_lists(w[:w.index("\npermissions:")] if "\npermissions:" in w else w, "paths-ignore")
+    ignores = _ci_on_path_lists(_ci_on_block(w), "paths-ignore")
     return ["%s %s: %s (%s)" % (name, job, u, why) for job, installs, on_lists, scope in _ci_jobs_watch(w)
             for u in installs for why in _ci_misses(u, on_lists, ignores, scope)]
 
@@ -7548,6 +7620,23 @@ def _ci_split_gaps(name, w):
     return ["%s: %s" % (name, sorted(whole - read) or "no job read")] if whole != read or (has_jobs and not jobs) else []
 
 
+def _ci_on_first(w):
+    """Whether workflow text `w` has a top-level `on:` block, above its top-level `permissions:` if it has one."""
+    keys = [ln.split(":")[0].strip("'\"") for ln in w.replace("\r\n", "\n").split("\n") if ln[:1] not in ("", " ", "\t", "#")]
+    return bool(_ci_on_block(w)) and "on" in keys and keys.index("on") < (keys + ["permissions"]).index("permissions")
+
+
+_ci_wf_all = sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*")))
+_ci_wf_odd = [os.path.basename(_f) for _f in _ci_wf_all
+              if not _f.endswith(".yml") or not _ci_on_first(open(_f, encoding="utf-8").read())]
+# Every workflow gate here (and in part19, 26, 29, 42, 223) globs *.yml; GitHub loads *.yaml too. Many
+# readers also take `on:` as the text before `permissions:`: each workflow's `on:` comes first.
+check("workflows: every file in .github/workflows is a .yml workflow with a top-level on: block above its "
+      "permissions: (the gates glob *.yml, and some read the text above permissions: as on:)",
+      len(_ci_wf_all) >= 20 and not _ci_wf_odd, repr(_ci_wf_odd))
+eq("workflows: (control) a .yaml workflow, one with permissions: above on:, and one with no on: are named",
+   [_ci_on_first(_t) for _t in ("name: x\non:\n  push:\npermissions: {}\njobs:\n", "permissions: {}\non: push\n",
+                                "name: x\njobs:\n  on:\n", "\"on\": [push]\njobs:\n")], [True, False, False, True])
 _ci_unwatched, _ci_judged, _ci_gaps = [], [], []
 for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
     _w = open(_wf, encoding="utf-8").read()
@@ -7597,6 +7686,13 @@ eq("workflows: (control) a trigger whose paths-ignore list matches a pinned file
     for _ig in ("'.github/ci-requirements/**'", "'.github/ci-requirements/**'\n      - '!.github/ci-requirements/x.txt'",
                 "docs/**")],
    [["i.yml a: .github/ci-requirements/x.txt (on: paths-ignore)"], [], []])
+eq("workflows: (control) the on: block is read where it stands, below a top-level permissions: too, and an install "
+   "is read quoted or with its path on the next (folded or continued) line (review 1123)",
+   [_ci_unwatched_of("p.yml", "name: x\npermissions: {}\non:\n  pull_request:\n    paths: ['docs/**']\njobs:\n  a:\n"
+                     "    steps:\n      - run: pip install " + _in + "\n")
+    for _in in ("-r .github/ci-requirements/x.txt", "-r '.github/ci-requirements/x.txt'",
+                "-r\n          \".github/ci-requirements/x.txt\"", "-r \\\n          .github/ci-requirements/x.txt")],
+   [["p.yml a: .github/ci-requirements/x.txt (on: paths)"]] * 4)
 
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
@@ -9944,6 +10040,8 @@ _ANCHOR_LINE_PARSERS = {
     "_LATEST_VERSION_RE",
     # One line of a LinuxGSM config (split at \n), another key's plain `key="value"` line.
     "_WWR_OTHER_LINE",
+    # The same line with backslash escapes in the value (world_reset._wwr_sets_any, per line).
+    "_WWR_ESCAPED_LINE",
     # The database client's error line in a db-query answer (re.M): reported, never acted on.
     "_ERROR_RE",
     # A cron schedule, built with `+`: _validate_cron refuses CR, LF and NUL and rejoins the fields on
@@ -12007,19 +12105,28 @@ _seen6 = []
 # disconnect in the run (a traceback each time). _hooks is keyed (module, qualname) since #416, so
 # the cleanup is checked as the whole table being what it was, not by looking for one key.
 _hooks_saved6 = dict(_hooks_mod._hooks)
-_hooks_mod.add_disconnect_hook(lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
-def _second_hook(sid): _seen6.append(sid)
-_hooks_mod.add_disconnect_hook(_second_hook)
-_hooks_mod.run_disconnect_hooks("sid-1")
-check("socket: a hook that raises does not stop the ones after it", _seen6 == ["sid-1"],
-      f"the second hook did not run: {_seen6}")
-_hooks_mod.add_disconnect_hook(_second_hook)          # same function, registered twice
-_seen6.clear()
-_hooks_mod.run_disconnect_hooks("sid-2")
-check("socket: registering the same hook twice does not run it twice", _seen6 == ["sid-2"],
-      f"ran {len(_seen6)} times: {_seen6}")
-_hooks_mod._hooks.clear()
-_hooks_mod._hooks.update(_hooks_saved6)
+
+
+def _second_hook(sid):
+    _seen6.append(sid)
+
+
+# In a finally (review 1123): if run_disconnect_hooks ever lets the raise through, the part stops here,
+# and the raising hook must not stay registered for every later part's disconnects.
+try:
+    _hooks_mod.add_disconnect_hook(lambda sid: (_ for _ in ()).throw(RuntimeError("boom")))
+    _hooks_mod.add_disconnect_hook(_second_hook)
+    _hooks_mod.run_disconnect_hooks("sid-1")
+    check("socket: a hook that raises does not stop the ones after it", _seen6 == ["sid-1"],
+          f"the second hook did not run: {_seen6}")
+    _hooks_mod.add_disconnect_hook(_second_hook)          # same function, registered twice
+    _seen6.clear()
+    _hooks_mod.run_disconnect_hooks("sid-2")
+    check("socket: registering the same hook twice does not run it twice", _seen6 == ["sid-2"],
+          f"ran {len(_seen6)} times: {_seen6}")
+finally:
+    _hooks_mod._hooks.clear()
+    _hooks_mod._hooks.update(_hooks_saved6)
 check("socket: (cleanup) the hooks registered above are gone again",
       _hooks_mod._hooks == _hooks_saved6,
       "left: %r" % sorted(set(_hooks_mod._hooks) - set(_hooks_saved6), key=repr))
@@ -13488,7 +13595,9 @@ check("terminal: a character split across two reads survives intact",
 
 # (d) Teardown must not depend on the audit bookkeeping: _sid_host[sid] is written AFTER
 # open_session returns, and the session is registered BEFORE the transport opens.
-_cna7 = _htr_src7.partition("def _close_and_audit")[2].split("\n    @", 1)[0]
+# To the next top-level def (review 1123): _close_and_audit is top-level, and "\n    @" ran on through the
+# functions after it, so a pop moved into a later one still read as inside it.
+_cna7 = _htr_src7.partition("\ndef _close_and_audit")[2].split("\ndef ", 1)[0]
 _cna_code7 = "\n".join(_l for _l in _cna7.splitlines() if not _l.lstrip().startswith("#"))
 check("terminal: a disconnect tears the session down before consulting the audit map",
       "close_for_sid" in _cna_code7 and "_sid_host.pop" in _cna_code7
@@ -13504,8 +13613,11 @@ _reset7 = [_ln.strip() for _ln in _ht_js7.splitlines()
            if "opened" in _ln and "= false" in _ln.replace("=false", "= false")
            and not _ln.lstrip().startswith(("//", "*"))
            and not _ln.lstrip().startswith("var ")]
+# ...and the guard itself is there (review 1123): with the latch deleted nothing assigns false either.
+_conn7 = re.sub(r"//[^\n]*", "", _handler_body6("connect") or "")
 check("terminal: the reconnect guard is never cleared",
-      not _reset7,
+      not _reset7 and re.search(r"if\s*\(\s*opened\s*\)\s*return\b", _conn7) is not None
+      and re.search(r"\bopened\s*=\s*true\b", _conn7) is not None,
       "`opened` is reset at %r, so socket.io's own reconnect re-fires the connect handler and "
       "silently opens a SECOND shell while the status line says to reload" % (_reset7,))
 
@@ -13569,6 +13681,12 @@ check("terminal: register() runs the revocation sweep on a timer",
 # instead of hanging the suite.
 _ctty_saved7 = _tsmod7._login_shell
 _tsmod7._login_shell = lambda: "/bin/bash"
+# A real `bash -l` starts below: in a throwaway HOME with history off and no user scope (review 1123), so
+# it reads no profile of the developer's and its SIGHUP teardown writes nothing to their ~/.bash_history.
+_ctty_scope7, _ctty_env7 = _tsmod7._user_scope_argv, {_k: os.environ.get(_k) for _k in ("HOME", "HISTFILE")}
+_ctty_home7 = _tempfile.mkdtemp(prefix="ctty-home-")
+_tsmod7._user_scope_argv = lambda: []
+os.environ.update(HOME=_ctty_home7, HISTFILE=os.devnull)
 _ctty_out7 = []
 # ...and with SIGINT IGNORED in this process, on purpose. An ignored disposition survives fork and
 # exec and bash hands it to every job, so a panel started with it ignored (from a script, with `&`)
@@ -13596,6 +13714,14 @@ try:
     _t0_7 = _time.time()
     while _time.time() - _t0_7 < 5 and not "".join(_ctty_out7):
         _time.sleep(0.2)
+    try:
+        with open("/proc/%d/environ" % _ctty_sess7._proc.pid, "rb") as _fh7:
+            _ctty_shell_env7 = set(_fh7.read().split(b"\0"))
+    except OSError:
+        _ctty_shell_env7 = set()
+    check("terminal: (setup) the test's login shell runs in a throwaway HOME with history off",
+          {("HOME=" + _ctty_home7).encode(), ("HISTFILE=" + os.devnull).encode()} <= _ctty_shell_env7,
+          "HOME/HISTFILE of the shell: %r" % sorted(_e for _e in _ctty_shell_env7 if _e.startswith((b"HOME=", b"HISTFILE="))))
     # A SOURCE gate, deliberately, and the reason is worth stating: no behavioural probe on this
     # machine can tell the fix from its absence. setsid detaches the child from any controlling
     # terminal, but a session leader that then OPENS a tty acquires it — so bash and dash both end
@@ -13661,6 +13787,13 @@ finally:
         _tsmod7.close_for_sid("ctty-sid", "test over")
     except Exception:
         pass  # cleanup only
+    _tsmod7._user_scope_argv = _ctty_scope7
+    for _k7, _v7 in _ctty_env7.items():
+        if _v7 is None:
+            os.environ.pop(_k7, None)
+        else:
+            os.environ[_k7] = _v7
+    _shutil.rmtree(_ctty_home7, ignore_errors=True)
 
 # ── the update card's count and its list must be the same set ─────────────────────────────────
 # Reported from a live panel: "Update available: v0.10.0-alpha (1 commit behind)" with no commits

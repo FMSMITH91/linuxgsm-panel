@@ -1,0 +1,11 @@
+{
+  "Render threads: as render-thread-count in the add-on's config/core.conf sets them; Stop and Start it after a change.": "Fils de rendu : ceux que fixe render-thread-count dans config/core.conf du module ; arrêtez-le et démarrez-le après un changement.",
+  "Couldn't read the player list from the game's console just now, so the panel can't check who is in that slot. Try again.": "Impossible de lire maintenant la liste des joueurs dans la console du jeu : le panneau ne peut donc pas vérifier qui occupe cet emplacement. Réessayez.",
+  "Another B3 player has the same name as the one on the game server, so the panel can't tell whether that is this B3 player. Nothing was sent to B3.": "Un autre joueur B3 porte le même nom que celui du serveur de jeu : le panneau ne peut donc pas savoir s'il s'agit de ce joueur B3. Rien n'a été envoyé à B3.",
+  "B3 penalised a player": "B3 a sanctionné un joueur",
+  "{server}: B3 banned, temporarily banned or kicked a player.": "{server} : B3 a banni, banni temporairement ou expulsé un joueur.",
+  "Too long to show here: use the SQL box.": "Trop long pour être affiché ici : utilisez la zone SQL.",
+  "A queued stop or restart of '{name}' is running — '{action}' was not run. Try again once it has finished.": "Un arrêt ou un redémarrage en attente de « {name} » est en cours : « {action} » n'a pas été exécuté. Réessayez une fois qu'il est terminé.",
+  "Couldn't read the world's Minecraft version from the server's logs (serverfiles/logs) or its server jar. Start the Minecraft server once, then install again.": "Impossible de lire la version Minecraft du monde dans les journaux du serveur (serverfiles/logs) ni dans son jar de serveur. Démarrez le serveur Minecraft une fois, puis réinstallez.",
+  "Couldn't read the world's Minecraft version from the server's logs (serverfiles/logs) or its server jar. Start the Minecraft server once, then try again.": "Impossible de lire la version Minecraft du monde dans les journaux du serveur (serverfiles/logs) ni dans son jar de serveur. Démarrez le serveur Minecraft une fois, puis réessayez."
+}

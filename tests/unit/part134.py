@@ -342,9 +342,13 @@ finally:
 _NP134 = {k: _parse134(h) for k, (_s, h) in _nf134.items()}
 _np134 = _NP134.get("plain")
 _form_names134 = _np134.names if _np134 else set()
-check("notifications: every field the save route reads is still in the form, folded or not",
-      bool(_SAVE_NAMES134) and _SAVE_NAMES134 <= _form_names134 | {"event_" + k for k in _nt134.EVENTS},
-      repr(sorted(_SAVE_NAMES134 - _form_names134)))
+# ...the alert-event switches too (review 1123): the save reads `"event_" + k` for every key in EVENTS, so
+# a missing switch turns that alert off at each save. The union on the right let them pass unread.
+_ev_names134 = {"event_" + k for k in _nt134.EVENTS}
+check("notifications: every field the save route reads is still in the form, folded or not, each alert "
+      "event's switch included",
+      bool(_SAVE_NAMES134) and len(_ev_names134) >= 10 and _SAVE_NAMES134 | _ev_names134 <= _form_names134,
+      repr(sorted((_SAVE_NAMES134 | _ev_names134) - _form_names134)))
 check("notifications: the setup help and the command bots are folded on a panel that does not use them",
       _np134 is not None and _np134.folded.get("tg-cmd") is True and _np134.folded.get("dc-cmd") is True
       and _np134.folded.get("notifications-discord_bot_token") is True

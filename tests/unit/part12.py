@@ -273,6 +273,35 @@ def _p9_audit_count(action):
         return AuditLog.query.filter_by(action=action).count()
 
 
+def _p9_seeded_default_group():
+    """[(is_default, permissions)] of each group the fresh-install seeder (models._ensure_default_group) makes.
+
+    Driven on stand-ins for Group and the session, so nothing is written: a permission added to the seed in
+    any spelling is read, where a grep of models.py for its name was not (review 1123).
+    """
+    from panel.db import models as _models
+    made = []
+
+    class _Seeded:
+        query = NS(filter_by=lambda **_kw: NS(first=lambda: None))       # no group yet: a fresh install
+
+        def __init__(self, **kw):
+            self.kw, self.perms = kw, None
+            made.append(self)
+
+        def set_permissions(self, perms):
+            self.perms = set(perms)
+
+    saved = (_models.Group, _models.db)
+    _models.Group = _Seeded
+    _models.db = NS(session=NS(add=lambda _g: None, commit=lambda: None))
+    try:
+        _models._ensure_default_group()
+    finally:
+        _models.Group, _models.db = saved
+    return [(g.kw.get("is_default"), g.perms) for g in made]
+
+
 def _p9_row(sid):
     with _p9.app_context():
         gs = db.session.get(GameServer, sid) if sid is not None else None

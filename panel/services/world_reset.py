@@ -227,6 +227,11 @@ _WWR_CFG_CMD = re.compile(r"^[ \t]*(source|\.|eval)([ \t]|$)")
 _WWR_RELOADED = ("startparameters", "preexecutable")
 # Another key's plain line: `other="value"`, a trailing comment allowed (bash drops it when sourcing).
 _WWR_OTHER_LINE = re.compile(r'^ *([A-Za-z_][A-Za-z0-9_]*)="([^"\\`]*)"(?:[ \t]+#.*)?$')
+# The same with backslash escapes in the value: what the panel's own Settings save writes for a value
+# holding " $ ` or \ (ssh_manager/files.py _cfg_dq_escape). An escaped character is literal there.
+_WWR_ESCAPED_LINE = re.compile(r'^ *[A-Za-z_][A-Za-z0-9_]*="(?:[^"\\`]|\\.)*"(?:[ \t]+#.*)?$')
+# One backslash escape: what it escapes is literal (\$ is a dollar sign, never an expansion).
+_WWR_ESCAPE = re.compile(r"\\.")
 
 
 # Where bash evaluates arithmetic inside double quotes, and so sets any variable an expression there
@@ -282,9 +287,11 @@ def _wwr_sets_any(line):
     Any such line, wherever it is and whatever it names, refuses the whole read (review 1122 A04): the
     value bash uses is then not one the panel can see.
     """
-    if _wwr_opaque_text(line):
+    if _wwr_opaque_text(_WWR_ESCAPE.sub("", line)):
         return True
-    return not _WWR_OTHER_LINE.match(line) and bool(_WWR_SETTER_CMD.search(line))
+    if _WWR_OTHER_LINE.match(line) or _WWR_ESCAPED_LINE.match(line):
+        return False      # one plain assignment: its words are a value, not a command
+    return bool(_WWR_SETTER_CMD.search(line))
 
 
 class _WwrLine:

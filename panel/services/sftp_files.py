@@ -146,6 +146,15 @@ def _mode_attrs(attr):
     return {"mode": attr.st_mode & 0o777}
 
 
+def _room_of(a, cfg, flags):
+    """The file attributes whose size an upload may count as room: `a` for an in-place write, else None.
+
+    A staged upload (a new file, O_TRUNC, a LinuxGSM config) is written beside the file, which keeps
+    its bytes until the close, so the old size is not free while it is written.
+    """
+    return a if a is not None and not cfg and not flags & _os.O_TRUNC else None
+
+
 class Files:
     """The service's file operations: open, and the changes (remove, rmdir, mkdir, rename, chattr)."""
 
@@ -180,10 +189,11 @@ class Files:
         if why:
             vfs.audit(target, "upload_file", "refused: %s: %s" % (rel, why), success=False)
             raise _refused(SFTP_PERMISSION_DENIED, why)
+        cfg = _rawlts_cfg_path(posixpath.join("/home", target.user, rel))
         info = {"rel": rel, "real": real, "existed": a is not None, "old": a or {},
-                "limit": self._limit(backend, real, a),
+                "limit": self._limit(backend, real, _room_of(a, cfg, flags)),
                 "readable": (flags & 3) == _os.O_RDWR, "mode": _mode_attrs(attr) if a is None else {}}
-        if _rawlts_cfg_path(posixpath.join("/home", target.user, rel)):
+        if cfg:
             # A LinuxGSM config: nothing reaches the host until the whole file has been checked.
             info["staged_to"] = _staged_name(real)
             return WriteHandle(vfs, path, target, backend, None, info,

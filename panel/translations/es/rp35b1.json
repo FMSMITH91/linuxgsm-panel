@@ -1,0 +1,11 @@
+{
+  "Render threads: as render-thread-count in the add-on's config/core.conf sets them; Stop and Start it after a change.": "Hilos de renderizado: los que fija render-thread-count en config/core.conf del complemento; detenlo e inícialo tras un cambio.",
+  "Couldn't read the player list from the game's console just now, so the panel can't check who is in that slot. Try again.": "No se pudo leer ahora la lista de jugadores de la consola del juego, así que el panel no puede comprobar quién está en esa ranura. Inténtalo de nuevo.",
+  "Another B3 player has the same name as the one on the game server, so the panel can't tell whether that is this B3 player. Nothing was sent to B3.": "Otro jugador de B3 tiene el mismo nombre que el del servidor de juego, así que el panel no puede saber si es este jugador de B3. No se envió nada a B3.",
+  "B3 penalised a player": "B3 sancionó a un jugador",
+  "{server}: B3 banned, temporarily banned or kicked a player.": "{server}: B3 vetó, vetó temporalmente o expulsó a un jugador.",
+  "Too long to show here: use the SQL box.": "Demasiado largo para mostrarlo aquí: use el cuadro SQL.",
+  "A queued stop or restart of '{name}' is running — '{action}' was not run. Try again once it has finished.": "Se está ejecutando una detención o un reinicio en cola de '{name}': no se ejecutó '{action}'. Inténtalo de nuevo cuando haya terminado.",
+  "Couldn't read the world's Minecraft version from the server's logs (serverfiles/logs) or its server jar. Start the Minecraft server once, then install again.": "No se pudo leer la versión de Minecraft del mundo en los registros del servidor (serverfiles/logs) ni en su jar de servidor. Inicia el servidor de Minecraft una vez y vuelve a instalar.",
+  "Couldn't read the world's Minecraft version from the server's logs (serverfiles/logs) or its server jar. Start the Minecraft server once, then try again.": "No se pudo leer la versión de Minecraft del mundo en los registros del servidor (serverfiles/logs) ni en su jar de servidor. Inicia el servidor de Minecraft una vez y vuelve a intentarlo."
+}

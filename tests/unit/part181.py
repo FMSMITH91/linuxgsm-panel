@@ -122,7 +122,8 @@ _sum181 = (_fb181["summary"] or [""])[-1]
 check("A09: \"Back up game servers now\" (disconnect players) reports a server its scheduled wipe held as "
       "skipped for that, by name, never as \"skipped (players online)\"",
       _fb181.get("status") == 200 and "skipped (players online)" not in _sum181
-      and "1 skipped (a scheduled wipe or a queued stop or restart was running: p181-held)" in _sum181
+      and "1 skipped (a scheduled wipe, a restore from a backup, a queued stop or restart, or an uninstall was "
+      "running: p181-held)" in _sum181
       and "p181h" not in _fb181["ran"], repr((_fb181, _sum181)))
 check("A09: ...and queues it to back up once that is over, in that mode too (players were not what stopped it)",
       _fb181.get("pending") is True and _h181 in _fb181["queued"] and "will back up once empty: p181-held" in _sum181

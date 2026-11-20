@@ -197,20 +197,22 @@ def _b3_renovate227():
     off = [r for r in rules if r.get("matchManagers") == ["dockerfile"] and r.get("enabled") is False
            and r.get("matchFileNames") == ["panel/addon_images/b3/Containerfile"] and len(r) == 4]
     eq("ci images: Renovate's built-in dockerfile manager is off for B3's build file (it read the tagless base "
-       "digest as python:latest), so only the custom 3.12-slim manager proposes its base", len(off), 1)
+       "digest as python:latest), so only the custom 3.15-slim manager proposes its base", len(off), 1)
 
 
 def _docker_pins227():
     """The fuzz image's base pin and the Renovate manager that keeps it current."""
     froms = _unpinned_froms227(_read227(".clusterfuzzlite", "Dockerfile"))
     pats = (_json227.loads(_read227(".github", "renovate.json")).get("dockerfile") or {}).get("managerFilePatterns")
-    # Renovate's patterns are JavaScript regexes between slashes; the body reads the same in Python.
+    # Renovate's patterns are JavaScript regexes between slashes; the body reads the same in Python. The
+    # configured pattern names the file; what the manager reads in all (its built-in patterns are added to
+    # this one) is part242's (review 1123: read from this list alone, the B3 Containerfile went unseen).
     rx = [_re227.compile(p[1:-1]) for p in pats or []]
-    reads = [f for f in (".clusterfuzzlite/Dockerfile", ".github/workflows/ci.yml", "Dockerfile")
+    names = [f for f in (".clusterfuzzlite/Dockerfile", ".github/workflows/ci.yml", "Dockerfile")
              if any(r.search(f) for r in rx)]
     eq("ci images: the fuzz image's FROM is tag@sha256 (Renovate can propose its digest) and Renovate's "
-       "dockerfile manager reads that file alone; Dependabot has no docker entry to propose it twice",
-       (froms, reads, "package-ecosystem: \"docker\"" in _read227(".github", "dependabot.yml")),
+       "dockerfile manager is pointed at that file; Dependabot has no docker entry to propose it twice",
+       (froms, names, "package-ecosystem: \"docker\"" in _read227(".github", "dependabot.yml")),
        ([], [".clusterfuzzlite/Dockerfile"], False))
     eq("ci images: ...and a FROM by digest alone, or by tag alone, is caught (control)",
        len(_unpinned_froms227("FROM gcr.io/a/b@sha256:%s\nFROM gcr.io/a/b:v1\nFROM gcr.io/a/b:v1@sha256:%s\n"

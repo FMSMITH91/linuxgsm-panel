@@ -5,7 +5,8 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (clock, terminal)
-from panel.core.panel_state import (_cron_restart_pending, _install_jobs, _install_lock, r36j_route_job)
+from panel.core.panel_state import (_cron_restart_pending, _install_jobs, _install_lock, r36j_route_job,
+                                     r36j_route_jobs)
 from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
     CustomCommand, GameServer, GlobalBan, RemoteServer, User, claim_row, db, row_birth, row_label,
     still_held)
@@ -532,9 +533,17 @@ def _r39a_wipe_refusal(server_id, name, action):
     Backup in the middle started the server while its files were going, or archived them as they
     went. Asked by the routes, the bulk bar and the chat bots here, and again by the background run
     once it has registered (the wipe waits on that registration: wipe_schedule._r39a_other_work).
+
+    A Backup also waits for a queued stop or restart being run ("queued", _shared._settle_queued_action),
+    as every other backup does (_shared._R39A_BACKUP_HOLD_KINDS): LinuxGSM's backup starts the server
+    again after archiving, so a server queued to stop came back up. The queued run in turn waits for
+    this run's "action" registration, so of the two that start together at least one waits.
     """
     if uninstall_running(server_id):     # every action: the account is about to be deleted
         return uninstall_sentence(name, action)
+    if action == "backup" and "queued" in r36j_route_jobs(server_id):
+        return i18n.Sentence("A queued stop or restart of '{name}' is running — '{action}' was not run. Try again "
+                             "once it has finished.", name=name, action=action)
     if action in _R39A_WIPE_SAFE_ACTIONS or not _r39a_wipe_running(server_id):
         return None
     if grs_restore_running(server_id):

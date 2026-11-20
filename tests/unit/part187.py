@@ -54,7 +54,10 @@ def _r42m_down(as_game_word, own=False):
         if "pgrep" in cmd:
             return "IDLE", "", 0
         _r42m_lock_calls.append((cmd[:30], sudo))
-        as_game = (cmd.startswith("sudo -u r42mgame bash -c ") and not sudo) or (own and not sudo)
+        # The sudo line when the game is another account's; the bare line, never the sudo one, when it is the
+        # panel's own (review 1123: any non-sudo line answered then, `sudo -u <itself>` included, which a host
+        # refuses).
+        as_game = not sudo and (cmd.startswith("sudo -u r42mgame bash -c ") != own)
         return (as_game_word if as_game else "LGSM_LOCK_unread"), "", 0
 
     _p9_patch_sm("_run_local", _run_local)
@@ -322,7 +325,8 @@ _r42m_m_mixed = _r42m_manual(2, 1, ["r42m-alpha", "r42m-beta"])
 _r42m_m_none = _r42m_manual(3, 0, [])
 check("debug report r42m: a manual full backup whose one server was held by its scheduled wipe says 1 held, "
       "not '0 backed up, 0 failed, 0 skipped' alone, and names no server",
-      "0 backed up, 0 failed, 0 skipped, 1 held by a scheduled wipe or a queued stop or restart" in _r42m_m_held
+      "0 backed up, 0 failed, 0 skipped, 1 held by a scheduled wipe, a restore, a queued stop or restart, or an "
+      "uninstall" in _r42m_m_held
       and "r42m-alpha" not in _r42m_m_held, _r42m_m_held)
 check("debug report r42m: held servers are counted beside the players-online skips; a run with none held "
       "reads as before",

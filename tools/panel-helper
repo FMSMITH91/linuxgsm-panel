@@ -48,6 +48,7 @@ USAGE
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
 import base64
+import errno
 import fcntl
 import filecmp
 import glob
@@ -8523,7 +8524,12 @@ def _db_import_child(pw, client, port, name, secret):
             fd = os.open(name + ".sql.gz", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dfd)
         finally:
             os.close(dfd)
-    except FileNotFoundError:
+    except OSError as exc:
+        # No dump, or a link where the dump or its folder should be (O_NOFOLLOW: ELOOP; a linked
+        # folder's name read as a file: ENOTDIR): "no dump", rc 4, as the remote form's `[ ! -L ]`
+        # says it, not "restore failed". Nothing is read through a link either way.
+        if not isinstance(exc, FileNotFoundError) and exc.errno not in (errno.ELOOP, errno.ENOTDIR):
+            raise
         print("panel-db: no dump of that database in the server's files")
         return 4
     st = os.fstat(fd)
