@@ -171,6 +171,7 @@ try:
     _p9_patch(_sf184, "write_file", _rec184("write_file", (True, "")))
     _p9_patch(_sf184, "delete_path", _rec184("delete_path", (True, "")))
     _p9_patch(_sf184, "browse_dir", _rec184("browse_dir", {"path": "", "entries": []}))
+    _p9_patch(_pb184, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_pb184, "list_game_backups", _rec184("list_game_backups", _BK184))
     _p9_patch(_pb184, "stream_game_backup", lambda *a, **k: iter([b"abc"]))
     _p9_patch(_pb184, "delete_game_backup", _rec184("delete_game_backup", True))

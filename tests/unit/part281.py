@@ -191,7 +191,7 @@ def _bearer281(ctx, res):
     reads0 = len(ctx["reads"])
     r = _p9.test_client().post("/api/server/%d/addons/%s/web" % (ctx["sid"], _ad281.BLUEMAP),
                                headers={"Authorization": "Bearer " + token})
-    res["bearer"] = (r.status_code, r.headers.get("Location"), _rw281._NO_SIGN_IN in r.get_data(as_text=True),
+    res["bearer"] = (r.status_code, r.headers.get("Location"), "only from a browser signed in" in r.get_data(as_text=True),
                      len(ctx["reads"]) - reads0, _p9_audit("addon_web_refused").detail)
     # A link bound to a login id with no session (what a Bearer user's or an older cookie's id is).
     bare = _aw281.mint("%d:%d" % (ctx["member"][0], epoch), ctx["member"][0],
