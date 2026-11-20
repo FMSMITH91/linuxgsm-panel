@@ -9,8 +9,10 @@
     "digest when the tag moves, never another tag: the Scorecard tag follows the action's version,",
     "which Dependabot updates.",
     "Everything else stays with Dependabot (.github/dependabot.yml, which has no docker entry), so",
-    "the two never propose the same update: the github-actions manager reads the two local action",
-    "files only, never a workflow.",
+    "the two never propose the same update. Renovate adds the managerFilePatterns set here to each",
+    "built-in manager's own (which read every workflow and every Dockerfile or Containerfile), so",
+    "packageRules turn the github-actions manager off for the workflows and the dockerfile manager",
+    "off for B3's Containerfile.",
     "Each pinned download is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
     "line directly above the VERSION (the release tag) and SHA256 lines. The",
     "github-release-attachments datasource finds the asset the current sha256 belongs to and",
@@ -177,6 +179,16 @@
       ],
       "matchFileNames": [
         "panel/addon_images/b3/Containerfile"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The workflows' actions are Dependabot's: Renovate's built-in github-actions patterns read every workflow, so this manager is off there and reads only the two ClusterFuzzLite action copies",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchFileNames": [
+        ".github/workflows/**"
       ],
       "enabled": false
     }
