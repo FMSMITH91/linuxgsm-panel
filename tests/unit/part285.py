@@ -11,11 +11,14 @@
    refuses the plan, and the line forms in LinuxGSM's own configs still plan.
 5. The helper's entry: an OSError from the checked read (the code file, or a directory on the way, is a
    symlink) refuses, exit 1, and runs nothing; the code file is never read again by its path.
+6. The Account page's recent security changes are the account's own, matched by its id: an account
+   created with, or renamed to, a freed name is not shown the previous holder's events.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; Discord's HTTP post is a
 stand-in; the helper's entry runs over this part's own scratch trees, this account standing in for
 root. Nothing reaches a host, /etc or data/.
 """
+import datetime as _dt285
 import json as _json285
 import os
 import shutil as _sh285
@@ -28,7 +31,9 @@ from unit.part01 import check, eq
 from unit.part245 import _install245
 from unit.part275 import _bash_port275, _vh_plan275
 from unit.part284 import _code284, _entry284
-from unit.part12 import P9_ADMIN, _p9_arm, _p9_audit, _p9_client, _p9_patch, _p9_restore_all
+from unit.part12 import P9_ADMIN, _p9, _p9_arm, _p9_audit, _p9_client, _p9_patch, _p9_restore_all
+from panel.db.models import AuditLog as _Audit285, User as _User285, db as _db285
+from panel.security import auth as _auth285
 from panel.ops import system_ops as _so285
 from panel.ops.ssh_manager import _core as _core285
 from panel.routes import tls_cert as _tls285
@@ -292,3 +297,99 @@ eq("helper entry: a code file, or a directory on the way, that is a link fails t
    {"code link": (1, False, False, True), "dir link": (1, False, False, True)})
 eq("helper entry (control): the same tree read through its real directory runs the code", _eo285["control"],
    (0, "RAN285", True))
+
+
+# ── 6. Recent security changes, by account ───────────────────────────────────────────────────────
+# A stored hash no password matches: these accounts are only signed in through the test client.
+_NOHASH285 = "!p285"
+
+
+def _ago285(minutes):
+    """Now plus `minutes`, as the audit log and the user table store a time (naive UTC)."""
+    return _dt285.datetime.now(_dt285.timezone.utc).replace(tzinfo=None) + _dt285.timedelta(minutes=minutes)
+
+
+def _user285(name, created=0):
+    """A new account named `name`, created `created` minutes from now; its id."""
+    with _p9.app_context():
+        u = _User285(username=name, password_hash=_NOHASH285, display_name=name, is_active=True,
+                     created_at=_ago285(created))
+        _db285.session.add(u)
+        _db285.session.commit()
+        return u.id
+
+
+def _drop_user285(uid):
+    with _p9.app_context():
+        u = _db285.session.get(_User285, uid)
+        if u is not None:
+            _db285.session.delete(u)
+            _db285.session.commit()
+
+
+def _audit_as285(uid, action):
+    """The real writer's row for `action` on account `uid`, as its own route writes it (target: the username)."""
+    with _p9.app_context():
+        u = _db285.session.get(_User285, uid)
+        _auth285.log_action(u, action, target=u.username)
+
+
+def _legacy285(name, action, minutes):
+    """A row from before AuditLog.target_user_id existed (no id), `minutes` from now, about the name `name`."""
+    with _p9.app_context():
+        _db285.session.add(_Audit285(username=name, action=action, target=name, success=True, ip_address="192.0.2.85",
+                                     timestamp=_ago285(minutes)))
+        _db285.session.commit()
+
+
+def _shown285(uid):
+    """The labels of the Account page's "Recent security changes" for account `uid`."""
+    page = _p9_client(uid).get("/account").get_data(as_text=True)
+    head, _sep, rest = page.partition('id="acct-changes"')
+    return [] if not _sep else [li.split("</span>")[0] for li in rest.split("</ul>")[0].split("<li><span>")[1:]]
+
+
+def _rename285(uid, name):
+    """Rename account `uid` to `name` through the Users page's edit route; its status."""
+    return _p9_client(P9_ADMIN).post("/users/%d/edit" % uid, data={"username": name, "is_active": "on",
+                                                                 "display_name": "p285 renamed"},
+                                     headers={"X-Requested-With": "XMLHttpRequest"}).status_code
+
+
+def _account_history285():
+    got = {}
+    _p9_arm(who="part285")
+    first = _user285("p285-alice")
+    made = [first]
+    try:
+        _audit_as285(first, "password_changed")
+        got["own"] = _shown285(first)
+        _drop_user285(first)
+        _legacy285("p285-alice", "2fa_disabled", -30)       # the old holder's, from before the column
+        again = _user285("p285-alice")
+        made.append(again)
+        got["recreated"] = _shown285(again)
+        bob = _user285("p285-bob", created=-60)            # older than carol's row: only the rename bounds it
+        made.append(bob)
+        _legacy285("p285-carol", "password_changed", -30)   # a deleted carol's, from before the column
+        got["renamed"] = (_rename285(bob, "p285-carol"), _shown285(bob))
+        _legacy285("p285-carol", "2fa_enabled", 1)           # written since bob holds the name
+        got["legacy since"] = _shown285(bob)
+        dave = _user285("p285-dave")
+        made.append(dave)
+        _audit_as285(dave, "password_changed")
+        got["own renamed"] = (_rename285(dave, "p285-dave2"), _shown285(dave))
+        return got
+    finally:
+        _p9_restore_all()
+        for uid in made:
+            _drop_user285(uid)
+
+
+_hist285 = _account_history285()
+eq("account history: an account created with a freed name, or renamed to one, is not shown the previous "
+   "holder's security events (by id, and an older row only since the account took the name)",
+   (_hist285["recreated"], _hist285["renamed"]), ([], (200, [])))
+eq("account history (control): an account's own events are shown, by id and from an older row written since it "
+   "took the name, and still after it is renamed", (_hist285["own"], _hist285["legacy since"], _hist285["own renamed"]),
+   (["Password changed"], ["Two-factor authentication turned on"], (200, ["Password changed"])))

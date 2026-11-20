@@ -85,16 +85,42 @@ def alert_credential_change(user, what, was_admin=False):
         db.session.rollback()
 
 
+def _name_since(user):
+    """Since when `user` has held its current username: its creation, or the rename that gave it the name.
+
+    Rows written before AuditLog.target_user_id existed name the account only by username, and a
+    name freed by a deletion or a rename can be given to another account. Such a row is shown to
+    the account holding the name only when it is newer than this, so a new or renamed account never
+    reads the previous holder's history (an account renamed back loses its own older rows instead).
+    """
+    from sqlalchemy import func
+    from panel.db.models import AuditLog
+    renamed = (AuditLog.query.with_entities(func.max(AuditLog.timestamp))
+               .filter(AuditLog.action == "rename_user", AuditLog.detail == "renamed to '%s'" % user.username)
+               .scalar())
+    return max([t for t in (user.created_at, renamed) if t is not None], default=None)
+
+
 def _rows(user, since, limit):
-    """The audit rows of security changes to `user` after `since`, newest first."""
+    """The audit rows of security changes to `user` after `since`, newest first.
+
+    Matched by the account's id (AuditLog.target_user_id); a row from before that column existed by
+    the name, and only since the account has held it (_name_since).
+    """
     from sqlalchemy import and_, or_
     from panel.db.models import AuditLog
     from panel.security.auth import audit_username
     name = user.username
+    named_since = _name_since(user)
+    legacy = and_(AuditLog.target_user_id.is_(None),
+                  or_(and_(AuditLog.target == name, AuditLog.success.is_(True)),
+                      and_(AuditLog.action == "login_locked", AuditLog.username == audit_username(name))))
+    if named_since is not None:
+        legacy = and_(legacy, AuditLog.timestamp >= named_since)
+    mine = and_(AuditLog.target_user_id == user.id,
+                or_(AuditLog.success.is_(True), AuditLog.action == "login_locked"))
     return (AuditLog.query.with_entities(AuditLog.action, AuditLog.timestamp, AuditLog.ip_address)
-            .filter(AuditLog.timestamp > since, AuditLog.action.in_(tuple(_CHANGES)),
-                    or_(and_(AuditLog.target == name, AuditLog.success.is_(True)),
-                        and_(AuditLog.action == "login_locked", AuditLog.username == audit_username(name))))
+            .filter(AuditLog.timestamp > since, AuditLog.action.in_(tuple(_CHANGES)), or_(mine, legacy))
             .order_by(AuditLog.timestamp.desc()).limit(limit).all())
 
 
