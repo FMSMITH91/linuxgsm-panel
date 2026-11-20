@@ -140,6 +140,13 @@ def _dump_answer(gs, r):
 def _download_answer(gs, r):
     """GET: the dump in the server's files, streamed as the game account reads it."""
     rel = "%s/%s.sql.gz" % (_DUMP_DIR, r.name)
+    # The read runs as the game account, so it asks what every read of that account's files asks:
+    # for a row bound to the host's sudo login, a link it planted at this name would hand over ~/.ssh.
+    why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
+    if why is not None:
+        log_action(current_user, "db_dump_download", target=gs.name, server=gs, success=False,
+                   detail="database %s not downloaded (refused: %s)" % (r.name, why))
+        return _say(409, why)
     info = _sm.stat_path(gs.remote, gs.short_name, rel)
     if not info or info.get("type") != "f":
         return _say(404, "There is no dump of this database in the server's files yet. Make one first.")

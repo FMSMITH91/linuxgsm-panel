@@ -28,7 +28,7 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _r12c_json
 from panel.core.validation import (_attachment_header)
 from panel.routes._shared import (_button_backup_running, _json_int, _marked_backup, _record_full_clock,
     _r20b_audit_on_raise, _r23a_not_while_panel_host_reboots, _record_game_clock,
-    _lg264_bk_status, _r39a_backup_held, _R39A_BACKUP_HELD)
+    _lg264_bk_status, _r39a_backup_held, _R39A_BACKUP_HELD, game_account_write_refusal)
 from panel.security.account_guard import step_up_required
 from panel.security import owner as _owner
 
@@ -634,6 +634,22 @@ def _register_game_backup_files(app):
             return None, True
         return next((b for b in listing if b.get("name") == name), None), False
 
+    def _bk_account_refused(gs, action, name, reading):
+        """The translated root-capable-account refusal for a backup download or delete (audited), else None.
+
+        An archive is LinuxGSM's tar of the account's home, ~/.ssh and shell history included, and
+        the listing, the read and the `rm` all run as that account: for a legacy row bound to the
+        host's sudo login, a download handed its private keys to anyone holding DOWNLOAD_BACKUP.
+        The file browser refuses that account for the same reads and writes. Asked before the
+        listing, which runs as the account too.
+        """
+        why = game_account_write_refusal(gs.remote, gs.short_name, reading=reading)
+        if why is None:
+            return None
+        log_action(current_user, action, target=gs.name, detail="refused: %s: %s" % (str(name)[:120], why),
+                   success=False, server=gs)
+        return i18n.tr(why)
+
     # What to say when the listing could not be read — the wording the per-server card already
     # uses (panel/static/js/server_files.js), so the two do not contradict each other.
     _BK_UNREADABLE = ("Couldn't read this server's backups — the host didn't answer. "
@@ -649,6 +665,9 @@ def _register_game_backup_files(app):
         """Delete one game-server backup archive."""
         gs = get_game(server_id)
         name = _json_body().get("name") or ""
+        refused = _bk_account_refused(gs, "game_backup_delete", name, False)
+        if refused is not None:
+            return jsonify({"success": False, "message": refused}), 409
         match, unreadable = _find_game_backup(gs, name)
         if unreadable:
             # str(): `name` is whatever the JSON body carried, and this is the one path that
@@ -682,7 +701,12 @@ def _register_game_backup_files(app):
         from disk.
         """
         gs = get_game(server_id)
-        match, unreadable = _find_game_backup(gs, request.args.get("name") or "")
+        name = request.args.get("name") or ""
+        refused = _bk_account_refused(gs, "game_backup_download", name, True)
+        if refused is not None:
+            # Plain text, as the unreadable answer below: this is a link the browser follows.
+            return Response(refused + "\n", status=409, mimetype="text/plain")
+        match, unreadable = _find_game_backup(gs, name)
         if unreadable:
             # 503, not 404: "no such backup" is a claim about the host's backup directory, and we
             # never read it. It used to be a TypeError — Werkzeug's HTML 500 page where a file
