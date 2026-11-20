@@ -10,6 +10,24 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.20] — 2026-11-20
+
+### Security
+
+- **One game account's jq settings no longer decide other servers' player counts.** The player poller asks
+  every server of a host in one command run as one game account; the jq it runs there now ignores that
+  account's own `~/.jq`, which could set the player counts, names and lists shown for the other servers.
+- **A LinuxGSM settings save is bounded.** One save takes at most 1000 settings and 1 MiB of text and is
+  applied in a single pass, so a crafted request can no longer hold up every other page for seconds.
+- **World reset refuses a config that can change a setting indirectly.** A config line that uses arithmetic,
+  `${x@P}` or a command such as `printf -v` or `declare -i` with a name built from other values now stops
+  the reset, instead of the panel judging the world folder from a value the server does not use.
+- **The Discord bot shows LinuxGSM's output as text.** The last output line it repeats after a failed or
+  postponed action is posted in a code block, so links and headings in it are not rendered.
+- **Release notes with a long run of `<` no longer stall the panel.**
+- **Game config audit rows hide more secrets.** Steam server tokens (`gslt`, `sv_setsteamaccount`), webhook,
+  auth and salt settings are shown as password fields, and their values never appear in the audit log.
+
 ## [2026.11.19] — 2026-11-19
 
 ### Fixed
