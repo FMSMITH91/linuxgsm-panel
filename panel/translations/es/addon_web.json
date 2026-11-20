@@ -1,0 +1,16 @@
+{
+  "Open a server's add-on web pages (IW4MAdmin, BlueMap) through the panel, without managing the add-ons": "Abrir las páginas web de los complementos de un servidor (IW4MAdmin, BlueMap) a través del panel, sin gestionar los complementos",
+  "This add-on has no web page.": "Este complemento no tiene página web.",
+  "The add-on isn't running. Start it on its card, then open its page.": "El complemento no está en marcha. Inícialo en su tarjeta y luego abre su página.",
+  "The add-on's page isn't listening where its record says. Stop and start the add-on on its card, then open its page.": "La página del complemento no escucha donde indica su registro. Detén e inicia el complemento en su tarjeta y luego abre su página.",
+  "Couldn't read the add-on on its host: the host did not answer. Try again.": "No se pudo leer el complemento en su host: el host no respondió. Inténtalo de nuevo.",
+  "This page's link has ended. Open the add-on's page again from its server's Add-ons tab.": "El enlace de esta página ha caducado. Vuelve a abrir la página del complemento desde la pestaña Complementos de su servidor.",
+  "You can no longer open this page: your sign-in has ended, or your access to the server or its add-on pages was removed.": "Ya no puedes abrir esta página: tu sesión ha terminado o se ha retirado tu acceso al servidor o a las páginas de sus complementos.",
+  "The add-on's page didn't answer. Check that the add-on is running, then open its page again.": "La página del complemento no respondió. Comprueba que el complemento está en marcha y vuelve a abrir su página.",
+  "The add-on's page is busy. Try again in a moment.": "La página del complemento está ocupada. Inténtalo de nuevo en un momento.",
+  "That request can't be passed on to the add-on's page.": "Esa petición no se puede pasar a la página del complemento.",
+  "Its web page listens on 127.0.0.1:{port} on this host only; Open shows it through the panel.": "Su página web escucha solo en 127.0.0.1:{port} de este host; Abrir la muestra a través del panel.",
+  "No add-on with a web page is installed on this server.": "No hay ningún complemento con página web instalado en este servidor.",
+  "Its page opens once the add-on is running.": "Su página se abre cuando el complemento está en marcha.",
+  "An add-on's web page listens on this host's own address only (127.0.0.1); no port is opened for it. Open shows it through the panel, in a new tab, kept apart from the panel's own pages: it can't read the panel's sign-in or act for you on the panel. The link works only while you are signed in and may open add-on pages.": "La página web de un complemento escucha solo en la dirección propia de este host (127.0.0.1); no se abre ningún puerto para ella. Abrir la muestra a través del panel, en una pestaña nueva, separada de las páginas del propio panel: no puede leer tu sesión del panel ni actuar por ti en el panel. El enlace solo funciona mientras tengas la sesión iniciada y puedas abrir páginas de complementos."
+}

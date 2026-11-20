@@ -578,9 +578,12 @@ try:
               and "--sandbox" in _argv and "--protocol=tcp" in _argv and "--host=127.0.0.1" in _argv
               and "--port=3306" in _argv, repr((_rec("def.1"), _argv)))
     _reset(help="no such option here\n")
-    _h("db-import", *_VERB_ARGS["db-import"])
-    check("db-import (helper): a client without --sandbox is not handed it",
-          "--sandbox" not in (_rec("argv.1") or ""), _rec("argv.1"))
+    _res = _h("db-import", *_VERB_ARGS["db-import"])
+    _argv = (_rec("argv.1") or "").splitlines()
+    # The import must have run: argv.1 is written only by the import call, so an import that never
+    # ran read as "not handed it" too.
+    check("db-import (helper): a client without --sandbox still imports, and is not handed it",
+          _res[0] == 0 and _argv[-1:] == ["gs12_lp"] and "--sandbox" not in _argv, repr((_res, _argv)))
     _reset()
     _h("db-import", *_VERB_ARGS["db-import"])
     eq("db-import (helper): the import runs after the drop to the game account", (_rec("drops") or "").split(), [_ACCT])

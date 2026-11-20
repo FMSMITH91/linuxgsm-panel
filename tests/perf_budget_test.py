@@ -405,7 +405,9 @@ def _get_page_paths(admin_id, mc_server, addon_server):
             "<int:user_id>": str(admin_id), "<int:group_id>": "1", "<int:tag_id>": "1",
             "<int:cmd_id>": "1", "<int:ban_id>": "1", "<int:db_id>": "1",
             # An add-on id is a catalog name, not a row: the first one stands in for the add-on routes.
-            "<addon_id>": "b3"}
+            "<addon_id>": "b3",
+            # A B3 player id is a row of B3's own database, not the panel's: any id stands in.
+            "<int:client_id>": "1"}
     with app.app_context():
         paths = []
         for rule in app.url_map.iter_rules():
@@ -600,9 +602,14 @@ try:
     # the log page answers "the host did not answer" with a 200 too, and the sweep then measured that.
     _addonlist = c.get("/api/server/%d/addons" % addon_server).get_json() or {}
     _addonlog = c.get("/api/server/%d/addons/b3/logs" % addon_server).get_json() or {}
-    check("perf: ...and both add-on pages answered 200 in both sweeps (each read the add-on state of a server "
-          "an add-on is offered for, not a 404 for another game), each with its own answer, not a refusal",
-          _addonpages == ["/api/server/%d/addons" % addon_server, "/api/server/%d/addons/b3/logs" % addon_server]
+    # The B3 players section's two GET pages (penalties, one player) are swept too; B3 is not installed on the
+    # seeded server, so theirs is the "not installed" sentence, still a 200 the sweep measures.
+    check("perf: ...and the add-on pages answered 200 in both sweeps (each read the add-on state of a server "
+          "an add-on is offered for, not a 404 for another game), the list and the log each with its own answer, "
+          "not a refusal",
+          _addonpages == ["/api/server/%d/addons" % addon_server, "/api/server/%d/addons/b3/logs" % addon_server,
+                          "/api/server/%d/addons/b3/penalties" % addon_server,
+                          "/api/server/%d/addons/b3/players/1" % addon_server]
           and all(small_st.get(p) == 200 and large_st.get(p) == 200 for p in _addonpages)
           and _addonlist.get("success") is True and len(_addonlist.get("addons") or []) == 2
           and _addonlog.get("success") is True and "log" in _addonlog,

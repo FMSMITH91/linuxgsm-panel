@@ -3225,9 +3225,9 @@ try:
     # request is sent until it answers — on success, on a refusal, and when the request fails.
     _csp_js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))), "panel", "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
-    _csp_fn = _csp_js.split("function changeSshPort(){", 1)[-1].split("\nfunction ", 1)[0]
-    _csp_then = _csp_fn.split(".then(function(d){", 1)[-1].split(".catch(", 1)[0]
-    _csp_catch = _csp_fn.split(".catch(", 1)[-1]
+    _csp_fn = _csp_js.partition("function changeSshPort(){")[2].split("\nfunction ", 1)[0]
+    _csp_then = _csp_fn.partition(".then(function(d){")[2].split(".catch(", 1)[0]
+    _csp_catch = _csp_fn.partition(".catch(")[2]
     check("ssh port (page): the button is disabled before the request and re-enabled on every answer",
           "querySelectorAll('[data-action=\"changeSshPort\"]')" in _csp_fn
           and "busy(true)" in _csp_fn and _csp_fn.index("busy(true)") < _csp_fn.index("fetch(")

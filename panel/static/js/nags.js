@@ -99,7 +99,10 @@ function _rbBlockersList(players){
       self_update: 'a panel update is running', restore: 'a restore is running',
       full_backup: 'a full backup is running',
       db_repair: 'a database repair is starting',
-      game_restore: 'a game server restore is running'}[b.kind] || 'work is running');
+      game_restore: 'a game server restore is running',
+      mods: 'a mod install or removal is running', cron: 'a scheduled task is running',
+      wipe: 'a scheduled wipe is running', queued: 'a queued stop or restart is waiting',
+      addon: 'an add-on install, update, settings change or removal is running'}[b.kind] || 'work is running');
     if (b.panel) li.replaceChild(_rbEl('strong', null, 'the panel'), li.firstChild);
     ul.appendChild(li);
   });

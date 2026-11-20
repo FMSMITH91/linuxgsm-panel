@@ -54,11 +54,15 @@ _JOB_ID29 = r"[A-Za-z_][A-Za-z0-9_-]*"
 
 
 def _job29(text, job):
-    """A job's block: from its `  <job>:` line to the next line at the jobs' indent or a top-level one."""
+    """A job's block: from its `  <job>:` line to the next line at the jobs' indent or a top-level one.
+
+    A comment at column 0 does not end it (YAML lets one sit between two steps): ended there, every
+    line of the job after it went unread by the gates that check what a job must not hold.
+    """
     m = _re29.search(_JOB_KEY29 % _re29.escape(job), text, _re29.M)
     if m is None:
         return ""
-    nxt = _re29.search(r"^(?:  )?\S", text[m.end():], _re29.M)
+    nxt = _re29.search(r"^(?:  \S|[^\s#])", text[m.end():], _re29.M)
     return text[m.start():m.end() + nxt.start()] if nxt else text[m.start():]
 
 

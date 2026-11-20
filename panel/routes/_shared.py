@@ -581,13 +581,15 @@ def _button_backup_running(sid):
 # What a backup and a queued stop/restart do not run beside: LinuxGSM's scheduled wipe (routes/
 # wipe_schedule registers "wipe" for its whole try), a restore from a backup (routes/game_restore
 # registers "restore" for its whole run: it stops the server, takes its own backup and replaces the
-# files) and a queued stop/restart being run ("queued", _settle_queued_action). Each side registers
-# before it asks about the other, so of two that start together at least one sees the other and waits.
+# files) and a queued stop/restart being run ("queued", _settle_queued_action). A backup also waits
+# for an uninstall ("uninstall", manage_servers), which kills its tar and deletes the account under
+# it; the uninstall in turn refuses beside a running backup. Each side registers (or marks) before it
+# asks about the other, so of two that start together at least one sees the other and waits.
 GRS_KIND = "restore"
 _R39A_WIPE_KINDS = frozenset(("wipe", GRS_KIND))
-_R39A_BACKUP_HOLD_KINDS = frozenset(("wipe", GRS_KIND, "queued"))
-_R39A_BACKUP_HELD = i18n.Sentence("a scheduled wipe, a restore from a backup, or a queued stop or restart of "
-                                  "this server is running")
+_R39A_BACKUP_HOLD_KINDS = frozenset(("wipe", GRS_KIND, "queued", "uninstall"))
+_R39A_BACKUP_HELD = i18n.Sentence("a scheduled wipe, a restore from a backup, a queued stop or restart, or an "
+                                  "uninstall of this server is running")
 
 
 def _r39a_wipe_running(sid):
@@ -2615,8 +2617,17 @@ def privileged_accounts(remote, users):
 # asked again next time, and the write is refused meanwhile (fail closed — "couldn't check" must
 # never read as "it's a plain account"). A minute is short enough that an account put into sudo on
 # the host is refused within it, and the refusal needs the host's own root to have happened.
+#
+# One probe per key at a time: callers that find no fresh verdict while another is asking wait for
+# its answer, and a verdict in its last _ACCOUNT_REFRESH_AHEAD seconds is refreshed by ONE caller
+# while the others keep reading it. Without that, every open SFTP file on a host missed together
+# each minute, each ran its own probe, and the per-host cap on concurrent checks refused new opens
+# on a host that was answering.
 _ACCOUNT_VERDICT_TTL = 60.0
+_ACCOUNT_REFRESH_AHEAD = 10.0
+_ACCOUNT_PROBE_WAIT = 60.0    # how long a caller waits on another's probe before "couldn't check"
 _ACCOUNT_VERDICTS = {}        # (remote id, host, login, account) -> (expires at, why or "")
+_ACCOUNT_PROBING = {}         # the same key -> threading.Event set when its probe has ended
 _ACCOUNT_VERDICTS_LOCK = threading.Lock()
 
 
@@ -2634,13 +2645,10 @@ def game_account_write_refusal(remote, user, now=None, reading=False):
     now = time.monotonic() if now is None else now
     key = (getattr(remote, "id", None), getattr(remote, "host", None),
            getattr(remote, "username", None), user)
-    why = _cached_account_verdict(key, now)
-    if why is not None:
-        return _privileged_write_msg(user, why, reading) if why else None
-    verdict = privileged_accounts(remote, [user])
+    why = _account_verdict(remote, user, key, now)
     # Every refusal is an i18n.Sentence: English in the audit row, translated whole by the route
     # that shows it. One sentence per case — "reads"/"writes" were spliced into a shared one.
-    if verdict is None:
+    if why is None:
         if reading:
             return i18n.Sentence(
                 "Couldn't check whether the '{user}' account can become root on this host, and the "
@@ -2652,9 +2660,43 @@ def game_account_write_refusal(remote, user, now=None, reading=False):
             "panel only writes files or scheduled tasks as an account it has confirmed is not an "
             "administrator or root account. Nothing was changed; try again when the host answers.",
             user=user)
-    why = verdict.get(user) or ""
-    _store_account_verdict(key, now, why)
     return _privileged_write_msg(user, why, reading) if why else None
+
+
+def _account_verdict(remote, user, key, now):
+    """The why for `key` ("" for a plain account), cached or asked once; None when the host couldn't be asked."""
+    fresh, probing, lead = _account_probe_turn(key, now)
+    if probing is None:
+        return fresh
+    if not lead:                                # another caller is asking, and nothing fresh is cached
+        probing.wait(_ACCOUNT_PROBE_WAIT)
+        return _cached_account_verdict(key, now)
+    try:
+        verdict = privileged_accounts(remote, [user])
+        if verdict is None:
+            return fresh                        # a refresh the host didn't answer keeps the fresh verdict
+        why = verdict.get(user) or ""
+        _store_account_verdict(key, now, why)
+        return why
+    finally:
+        with _ACCOUNT_VERDICTS_LOCK:
+            if _ACCOUNT_PROBING.get(key) is probing:
+                del _ACCOUNT_PROBING[key]
+        probing.set()
+
+
+def _account_probe_turn(key, now):
+    """(the fresh cached why or None, the probe's Event or None when the cache answers, whether this caller probes)."""
+    with _ACCOUNT_VERDICTS_LOCK:
+        hit = _ACCOUNT_VERDICTS.get(key)
+        fresh = hit[1] if hit is not None and hit[0] > now else None
+        probing = _ACCOUNT_PROBING.get(key)
+        if fresh is not None and (probing is not None or hit[0] - now > _ACCOUNT_REFRESH_AHEAD):
+            return fresh, None, False
+        if probing is not None:
+            return fresh, probing, False
+        probing = _ACCOUNT_PROBING[key] = threading.Event()
+        return fresh, probing, True
 
 
 def _cached_account_verdict(key, now):

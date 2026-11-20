@@ -7389,8 +7389,12 @@ finally:
 _sf_src = open(os.path.join(_root, "panel", "routes", "server_files.py"), encoding="utf-8").read()
 check("console read: all four console reads go through it",
       _sf_src.count("read_as_game_user(") == 4, "found %d" % _sf_src.count("read_as_game_user("))
-check("console read: ...and none of them is a bare run_command on the log any more",
-      "run_command(\n                                    remote, f\"stat -c%s" not in _sf_src)
+# By its syntax tree, whatever its spelling: the text test matched one historical line-break and
+# indentation of one call, so any other spelling of a bare run_command passed.
+_sf_runs = [_n.lineno for _n in _smg_ast.walk(_smg_ast.parse(_sf_src)) if isinstance(_n, _smg_ast.Call)
+            and getattr(_n.func, "id", getattr(_n.func, "attr", "")) == "run_command"]
+check("console read: ...and none of them is a bare run_command on the log any more (server_files.py "
+      "calls run_command nowhere)", not _sf_runs, repr(_sf_runs))
 
 # ── restart flags: a read that could not happen is not "nothing pending" ───────────────────────
 from panel.services import monitoring as _mon                                      # noqa: E402
@@ -8692,6 +8696,10 @@ _R21D_STDLIB_OK = {
     "tests/unit_test.py:tempfile._mkstemp_inner",
     # part01 records every uncaught exception of a thread for part15 to fail the run on: process-wide by nature.
     "tests/unit/part01.py:_thr.excepthook",
+    "tests/unit/part01.py:_ev_patcher.original('threading').excepthook",
+    # green_dns resolves through eventlet's original socket module in a native thread: that module
+    # is the only seam, and part193 puts every name back in its finally.
+    "tests/unit/part193.py:_real193.getaddrinfo", "tests/unit/part193.py:_real193.*",
     # terminal_session imports pwd inside panel_account/sudo_hint/_login_shell, and _core inside
     # enrol_game_user: the module is the only seam.
     "tests/unit/part06.py:_pwd6.getpwuid", "tests/unit/part06.py:_pwd7.getpwuid",
@@ -8768,14 +8776,24 @@ def _r21d_is_stdlib_module(expr, aliases):
 
 
 def _r22d_imported_module(expr):
-    """Is `expr` a stdlib module fetched by name: `__import__("pwd")`, `import_module(…)`, `sys.modules[…]`?"""
+    """Is `expr` a stdlib module fetched by name: `__import__("pwd")`, `import_module(…)`, `sys.modules[…]`?
+
+    Eventlet's `patcher.original("os")` and its `sys.modules["__original_module_os"]` key are the
+    unpatched module itself, which every user of the original shares (tpool, `_core._real_subprocess`).
+    """
     if isinstance(expr, _smg_ast.Call):
         _fn = getattr(expr.func, "id", getattr(expr.func, "attr", ""))
-        return (_fn in ("__import__", "import_module")
+        return (_fn in ("__import__", "import_module", "original")
                 and (_r22d_str_arg(expr) or "").split(".")[0] in _R21D_STDLIB)
     return (isinstance(expr, _smg_ast.Subscript) and getattr(expr.value, "attr", "") == "modules"
             and isinstance(expr.slice, _smg_ast.Constant)
-            and str(expr.slice.value).split(".")[0] in _R21D_STDLIB)
+            and _r34t_unoriginal(expr.slice.value).split(".")[0] in _R21D_STDLIB)
+
+
+def _r34t_unoriginal(key):
+    """A sys.modules key without eventlet's `__original_module_` prefix."""
+    key = str(key)
+    return key[len("__original_module_"):] if key.startswith("__original_module_") else key
 
 
 def _r21d_names_stdlib(expr, aliases):
@@ -8852,7 +8870,7 @@ def _r23d_std_module_name(expr):
         return "urllib.request" if expr.attr == "request" else expr.attr
     if isinstance(expr, _smg_ast.Call):
         return _r22d_str_arg(expr)
-    return str(getattr(expr.slice, "value", "")) or None
+    return _r34t_unoriginal(getattr(expr.slice, "value", "")) or None
 
 
 def _r23d_std_submodule(expr, aliases):
@@ -8900,10 +8918,13 @@ _r21d_std_ctl = [_r21d_stdlib_stubs(_smg_ast.parse(_c)) for _c in (
     # ...through the module that holds it, and not a panel module that shares a stdlib name (review 1016b).
     "from unittest import mock\nmock.patch('panel.ops.system_ops.os.replace', f)",
     "from unittest import mock\nmock.patch('panel.core.http._wants_json', f)",
-    "import atexit, shutil\natexit.register(shutil.rmtree, d, True)")]
+    "import atexit, shutil\natexit.register(shutil.rmtree, d, True)",
+    # Eventlet's original (unpatched) module, by its patcher and by its sys.modules key.
+    "from eventlet import patcher\npatcher.original('os').geteuid = f",
+    "sys.modules['__original_module_subprocess'].run = f")]
 check("tests: no test sets an attribute on a stdlib module other than sys/builtins (it would stand in for "
       "every module and thread); each listed exception still exists, and the reader finds each spelling "
       "and each (module, name, value) patcher whatever its name (control)",
       not _r21d_std_hits and _R21D_STDLIB_OK <= _r21d_std_seen
-      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 8 + [False] * 2,
+      and [bool(_c) for _c in _r21d_std_ctl] == [True] * 15 + [False] * 6 + [True] * 8 + [False] * 2 + [True] * 2,
       repr((_r21d_std_hits, sorted(_R21D_STDLIB_OK - _r21d_std_seen), _r21d_std_ctl)))

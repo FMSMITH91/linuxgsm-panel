@@ -38,7 +38,7 @@ from panel.core.config import encrypt_secret as _enc255
 from panel.db.models import GameDatabase as _GD255, db as _db255
 from panel.routes import addons as _ra255
 from panel.security import privileged as _pv255
-from panel.services import addons as _ad255
+from panel.services import addons as _ad255, addons_bluemap as _bm255
 
 _trips255 = len(_P9_TRIPPED)
 _TMP255 = _tf255.mkdtemp(prefix="p255-")
@@ -74,7 +74,9 @@ def _lock255():
     eq("lock: the probe's answer is read", [_ad255.parse_probe("splice=1\n")["splice"], _ad255.parse_probe("")["splice"]],
        [True, False])
     for aid in _ad255.ADDON_IDS:
-        unit = _ad255.quadlet("u", aid, "/home/u/serverfiles/main", _ad255.network(28960, None, [], False), 21001)
+        reads = (_bm255.World(("/home/u/serverfiles/world:/app/world:ro",), "1.21.4") if aid == _ad255.BLUEMAP
+                 else "/home/u/serverfiles/main")      # BlueMap reads the world, the others the game log
+        unit = _ad255.quadlet("u", aid, reads, _ad255.network(28960, None, [], False), 21001)
         check("lock: the %s unit has no host network, no added capability and its DNS off" % aid,
               "--dns=none" in unit and not any(x in unit for x in ("Network=host", "AddCapability", "--privileged",
                                                                    "--cap-add")), unit[:120])

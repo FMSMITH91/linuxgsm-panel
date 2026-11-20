@@ -55,6 +55,7 @@ EVENTS = {
     "twofa_enforced":     ("An administrator without 2FA is made to set it up (Settings switch)", True),
     "ip_banned":          ("fail2ban bans an IP on the panel login", False),
     "ban_spike":          ("A burst of fail2ban bans (attack wave)", True),
+    "b3_penalty":         ("B3 bans, temporarily bans or kicks a player (per server, set on its B3 card)", True),
 }
 
 # A Discord webhook MUST live on Discord — never let an admin-set (or tampered) URL become an SSRF

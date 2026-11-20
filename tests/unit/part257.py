@@ -44,7 +44,7 @@ _trips257 = len(_P9_TRIPPED)
 _TMP257 = _tf257.mkdtemp(prefix="p257-")
 _RC257 = "p257-rcon-" + "value"            # the game's RCON password in these checks
 _DBV257 = "Dbv257" + "abcdefghijklmnopq"   # a database's password in these checks
-_PIN257 = "920d736648e2544714ee58a74e556fbbb3881892"
+_PIN257 = "7da5ac8685c34665cb10670810656a3bf99fcf91"
 _MONTH257 = "2026-11"
 
 
@@ -73,11 +73,11 @@ def _catalog257():
     req, cf = _read257("panel", "addon_images", "b3", "requirements.txt"), _read257("panel", "addon_images", "b3",
                                                                                    "Containerfile")
     m = _re257.search(r"^maxminddb==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", req, _re257.M)
-    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.0 with its short "
+    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.2dev with its short "
        "commit, maxminddb in its hashed lock",
        (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
         bool(m), "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
-       (_PIN257, [_PIN257], "2.0.0 (920d7366)", True, True))
+       (_PIN257, [_PIN257], "2.0.2dev (7da5ac86)", True, True))
 
 
 def _probe_sof2_257():
@@ -337,7 +337,9 @@ def _settings257(ids):
     eq("settings: b3.ini goes back on stdin with only the panel's plugin lines changed (the operator's plugin and the "
        "password kept), no rebuild, a restart watched, audited",
        (ok.status_code, _ad257.b3_ini_plugins(stdin), "myext: @conf/myext.ini" in stdin,
-        "rcon_password: %s" % _RC257 in stdin, "/panel-addons/b3/Data/b3.ini.new && mv" in re_[1], "podman build" in re_[1],
+        "rcon_password: %s" % _RC257 in stdin,
+        "/panel-addons/b3/Data/b3.ini.new || {" in re_[1] and "/panel-addons/b3/Data/b3.ini.new /home/" in re_[1],
+        "podman build" in re_[1],
         _RC257 in re_[1], _p9_audit("addon_settings").success),
        (202, ["admin", "afk", "tk"], True, True, True, False, False, True))
 
@@ -394,6 +396,9 @@ const posts = [], dialogs = [];
 function El(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.attrs = {}; this.className = '';
   this._text = ''; this.style = {}; this.disabled = false; this.id = ''; this.checked = false; this.value = ''; }
 El.prototype.appendChild = function (c) { this.children.push(c); return c; };
+El.prototype.insertBefore = function (c, ref) { const i = this.children.indexOf(ref);
+  if (i < 0) this.children.push(c); else this.children.splice(i, 0, c); return c; };
+Object.defineProperty(El.prototype, 'lastChild', {get() { return this.children[this.children.length - 1] || null; }});
 Object.defineProperty(El.prototype, 'textContent', {
   get() { return this._text + this.children.map(function (c) { return c.textContent; }).join(''); },
   set(v) { this._text = String(v); this.children = []; }});
@@ -502,13 +507,14 @@ def _renovate257():
     daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
     base = _ad257.B3_BASE.split("@")[1]
     eq("Renovate: B3's commit in addons.py and the Containerfile (git-refs, master), IW4MAdmin's digest (docker, "
-       "latest) and the B3 image's base digest in addons.py and the Containerfile (docker, 3.12-slim), each matched "
-       "once, checked daily",
+       "latest), BlueMap's (docker, v5) and the B3 image's base digest in addons.py and the Containerfile (docker, "
+       "3.12-slim), each matched once, checked daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
        ({"git-refs master": [("panel/services/addons.py", _PIN257), ("panel/addon_images/b3/Containerfile", _PIN257)],
          "docker latest": [("panel/services/addons.py", _ad257.IW4MADMIN_IMAGE.split("@")[1])],
+         "docker v5": [("panel/services/addons.py", _ad257.BLUEMAP_IMAGE.split("@")[1])],
          "docker 3.12-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},
-        ["big-brother-bot", "docker.io/library/python", "ghcr.io/raidmax/iw4madmin"]))
+        ["big-brother-bot", "docker.io/library/python", "ghcr.io/bluemap-minecraft/bluemap", "ghcr.io/raidmax/iw4madmin"]))
 
 
 # ── 7. the remote form of addon-account-release ─────────────────────────────────────────────────

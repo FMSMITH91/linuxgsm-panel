@@ -1,0 +1,13 @@
+{
+  "Update the add-on first, then apply its settings.": "Actualiza primero el complemento y después aplica sus ajustes.",
+  "That player is no longer in that slot (they left, or someone else joined in it). Refresh the player list and try again.": "Ese jugador ya no está en esa plaza (se fue, o alguien más entró en ella). Actualiza la lista de jugadores e inténtalo de nuevo.",
+  "This table's primary key holds binary values, which the page can't send back exactly: it is read-only here. Use the SQL box to change it.": "La clave primaria de esta tabla contiene valores binarios, que la página no puede devolver con exactitud: aquí es de solo lectura. Use el cuadro SQL para cambiarla.",
+  "'{name}' is being backed up. Try again once the backup has finished.": "'{name}' se está respaldando. Inténtalo de nuevo cuando termine la copia de seguridad.",
+  "a mod install or removal is running": "se está instalando o quitando un mod",
+  "a scheduled task is running": "se está ejecutando una tarea programada",
+  "a scheduled wipe is running": "se está ejecutando un borrado programado",
+  "a queued stop or restart is waiting": "hay una parada o un reinicio en cola esperando",
+  "an add-on install, update, settings change or removal is running": "se está instalando, actualizando, cambiando los ajustes o quitando un complemento",
+  "Up to date (checked just now).": "Al día (comprobado ahora mismo).",
+  "New versions of an add-on come with panel updates: after one, its card offers Update, and nothing changes until you press it.": "Las versiones nuevas de un complemento llegan con las actualizaciones del panel: después de una, su tarjeta ofrece Actualizar, y nada cambia hasta que lo pulses."
+}

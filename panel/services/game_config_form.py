@@ -685,11 +685,31 @@ def parse(rel, content):
         fields = _gcf_parse_json(content)
     else:
         fields = None
+    if fields and fmt in ("kv", "cfg"):
+        fields = _gcf_last_only(fmt, fields, rel)
     if not fields or len(fields) > MAX_FIELDS:
         return None, []
     for f in fields:
         _gcf_classify(fmt, f)
     return fmt, fields
+
+
+def _gcf_last_only(fmt, fields, rel):
+    """The fields with a key repeated in its section shown once: the last, the one the game reads.
+
+    A .properties file, a Source / idTech cfg and a plain key=value file take the last of two lines
+    setting one key, so a field for the first changed text the game ignores and the save still said
+    "Saved" (a rotated RCON password stayed the old one). Cfg keys compare without case (Source
+    cvars). An .ini keeps every line: Unreal reads a repeated key as an array (ServerPackages,
+    ServerActors), each line its own value.
+    """
+    if fmt == "kv" and _gcf_ext(rel) == ".ini":
+        return fields
+
+    def name(f):
+        return f["section"], (f["key"] if fmt == "kv" else f["key"].lower())
+    last = {name(f): n for n, f in enumerate(fields)}
+    return [f for n, f in enumerate(fields) if last[name(f)] == n]
 
 
 def _gcf_kind(fmt, f):

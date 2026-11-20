@@ -38,6 +38,7 @@ import re
 from panel.core import i18n
 from panel.db.models import GameServer, db
 from panel.ops import ssh_manager as _sm
+from panel.ops.ssh_manager import portscan as _ps
 from panel.services import game_ports as _gp
 
 _log = logging.getLogger("panel")
@@ -95,7 +96,8 @@ def _pck_running_claimant(gs, ports):
                                       GameServer.status == "online")
               .order_by(GameServer.name, GameServer.id).all())
     for other in others:
-        theirs = {other.port, other.query_port}
+        # A crossplay Valheim listens on its port + 1 (portscan.listen_ports): that one is held too.
+        theirs = set(_ps.listen_ports(other.game_type, _pck_port(other.port))) | {other.port, other.query_port}
         hit = next((p for p in ports if p in theirs), None)
         if hit is not None:
             return other.name, hit
@@ -146,20 +148,26 @@ def _pck_refusal(gs, remote, action="start"):
     port = start_port(gs)
     if port is None:
         return None
-    ports = [port] + [p for p in (_pck_port(gs.query_port),) if p and p != port]
+    mine = _ps.listen_ports(gs.game_type, port)
+    ports = list(mine) + [p for p in (_pck_port(gs.query_port),) if p and p not in mine]
     hit = _pck_running_claimant(gs, ports)
     if hit:
         return PortBusy("Port {port} is in use by {name}, which is running. Stop it first, or start anyway.",
                         port=hit[1], name=hit[0])
+    return _pck_live_refusal(gs, remote, action, mine)
+
+
+def _pck_live_refusal(gs, remote, action, mine):
+    """The answer when one of `mine` (every port the game listens on) is listening on the host now, else None."""
     live = _pck_listening(remote)
     if not live:
         if live is None:
             _log.info("port check: no listening ports read for %s; starting without the check",
                       gs.name)
         return None
-    if port in live:
-        return _pck_live_hit(gs, remote, action, port)
-    return None
+    # Every port the game listens on: a crossplay Valheim is up on its port + 1 only.
+    hit = next((p for p in mine if p in live), None)
+    return _pck_live_hit(gs, remote, action, hit) if hit is not None else None
 
 
 def _pck_live_hit(gs, remote, action, port):

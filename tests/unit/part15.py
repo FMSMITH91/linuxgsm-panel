@@ -23,7 +23,7 @@ import time as _time15
 
 from eventlet.timeout import Timeout as _EvTimeout15  # noqa: E402 - a timed-out green join raises it
 
-from unit.part01 import SO, check, ran_to_end as _ran_to_end15, thread_errors as _te15
+from unit.part01 import SO, check, thread_errors as _te15
 from unit.part05 import _root
 from unit.part06 import _inst_shfn
 
@@ -549,19 +549,45 @@ check("unit suite: no non-daemon thread, real or green, is left for interpreter 
       not _nd15, "still running: %s" % _nd15)
 
 # ── no thread or green thread died uncounted ─────────────────────────────────────────────────
-# part01 records each uncaught exception of a thread (real or green) and of a green thread, and
-# this is where a run with one fails. A probe of each kind proves the recording is still on.
+# part01 records each uncaught exception of a thread (green or real) and of a green thread, and the
+# runner fails a run with one just before its tally (part01.thread_gate). A probe of each kind proves
+# the recording is still on: a green thread (the patched threading's hook), a real OS thread (the
+# original threading's hook), a green thread ended by a timer (squelch_timer_exception) and one
+# resumed by the fd listener after a blocked read (squelch_exception, the common path).
+import socket as _sock15  # noqa: E402 - monkey-patched: a green socket pair
+
 _te_before15 = len(_te15)
 _thr15.Thread(target=lambda: (_ for _ in ()).throw(ValueError("p15 thread probe")), name="p15-probe").start()
 _time15.sleep(0)
 for _t15 in [t for t in _thr15.enumerate() if t.name == "p15-probe"]:
     _t15.join(5)
+_real15 = _ev15.patcher.original("threading").Thread(
+    target=lambda: (_ for _ in ()).throw(ValueError("p15 real probe")), name="p15-real-probe")
+_real15.start()
+_real15.join(5)
 _ev15.spawn(lambda: (_ for _ in ()).throw(ValueError("p15 green probe")))
 _ev15.sleep(0.05)
+_sa15, _sb15 = _sock15.socketpair()
+
+
+def _blocked15():
+    _sa15.recv(1)
+    raise ValueError("p15 listener probe")
+
+
+try:
+    _ev15.spawn(_blocked15)
+    _ev15.sleep(0)
+    _sb15.send(b"x")
+    _ev15.sleep(0.05)
+finally:
+    _sa15.close()
+    _sb15.close()
 _te_probes15 = _te15[_te_before15:]
 del _te15[_te_before15:]
-check("unit suite: (control) an exception ending a thread, and one ending a green thread, are each recorded",
-      len(_te_probes15) == 2 and all("p15 " in _e and "probe" in _e for _e in _te_probes15), repr(_te_probes15))
-check("unit suite: no thread or green thread a part started ended in an uncaught exception (its traceback "
-      "went to stderr, and the run still exited 0)", not _te15, "\n".join(_te15[:6]))
-_ran_to_end15[0] = True     # the last line of the last part: part01's exit guard lets the run end now
+check("unit suite: (control) an exception ending a green thread, a real thread, a green thread run by a timer "
+      "and one resumed after a blocked read is each recorded",
+      len(_te_probes15) == 4 and all("p15 " in _e and "probe" in _e for _e in _te_probes15)
+      and any("thread p15-real-probe" in _e for _e in _te_probes15)
+      and any("(squelch_exception)" in _e and "listener" in _e for _e in _te_probes15)
+      and any("(squelch_timer_exception)" in _e for _e in _te_probes15), repr(_te_probes15))

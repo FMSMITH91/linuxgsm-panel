@@ -840,5 +840,6 @@ var SF_CAN = {{ fpm|tojson }};
 {% if mods_kind(server.game_type) in ("arma", "fctr", "mc", "mcb") and not install_failed %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_game_mods.js') }}"></script>{% endif %}
 {% if wipe_supported(server.game_type) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/wipe_schedule.js') }}"></script>{% endif %}
 {% if not install_failed and db_tab().view %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_databases.js') }}"></script>{% endif %}
+{% if not install_failed and addons_tab(server).view and 'b3' in addons_tab(server).offered %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/b3_players.js') }}"></script>{% endif %}
 {% if not install_failed and addons_tab(server).view %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_addons.js') }}"></script>{% endif %}
 {% endblock %}

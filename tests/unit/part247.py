@@ -625,10 +625,24 @@ def _commit247(dev, n):
     return _git247("-C", dev, "rev-parse", "HEAD")
 
 
+def _commit_file247(dev, rel, text, n):
+    """Commit one file `rel` of the rig's clone (the fixed day, second `n`), pushed; its sha."""
+    os.makedirs(os.path.dirname(os.path.join(dev, rel)), exist_ok=True)
+    with open(os.path.join(dev, rel), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    _git247("-C", dev, "add", ".")
+    _git247("-C", dev, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "f%d" % n,
+            env=dict(_ENV142, GIT_COMMITTER_DATE=_DAY247 % n, GIT_AUTHOR_DATE=_DAY247 % n))
+    _git247("-C", dev, "push", "-q", "origin", "main")
+    return _git247("-C", dev, "rev-parse", "HEAD")
+
+
 def _sign247(rig, sha, **extra):
     sb, key, _bare, dev, gh = rig
+    # PYTHON: the interpreter sign-release judges a commit's paths with (it imports the panel's
+    # own rules), this suite's own, which has the panel's packages.
     env = dict(_ENV142, SIGN_RELEASE_KEY=key, FAKEGH_LOG=os.path.join(sb, "gh.log"), FAKEGH_BARE=rig[2],
-               SIGN_RELEASE_GH="bash %s" % _shlex247.quote(gh), **extra)
+               SIGN_RELEASE_GH="bash %s" % _shlex247.quote(gh), PYTHON=sys.executable, **extra)
     return _run142(["bash", os.path.join(_root, "tools", "sign-release.sh"), "--yes", sha], cwd=dev, env=env,
                    input="")
 
@@ -665,6 +679,33 @@ def _s247_sign_release():
           "free name of that day (.2 after the release above)",
           r_c.returncode == 0 and c_named[0] and bool(b_named[1]) and c_named[1] == b_named[1] + ".2",
           "%s %s | %s" % (b_named, c_named, r_c.stderr[-300:]))
+    _s247_sign_inherit(rig)
+
+
+def _inherit247(rig, sha):
+    """Whether release-signatures holds main/<sha>.inherit (the tooling-only mark)."""
+    return _run142(["git", "--git-dir", rig[2], "cat-file", "-e",
+                    "release-signatures:main/%s.inherit" % sha]).returncode == 0
+
+
+def _s247_sign_inherit(rig):
+    """A commit that changes only what the commit's own update-paths.txt calls noise is marked tooling-only."""
+    dev, log = rig[3], os.path.join(rig[0], "gh.log")
+    rules = _commit_file247(dev, ".github/update-paths.txt", "runtime panel/\nnoise tests/\nnoise .github/\n", 10)
+    _sign247(rig, rules, SIGN_RELEASE_NO_RELEASE="1")
+    tooling = _commit_file247(dev, "tests/x.py", "X = 1\n", 11)
+    with open(log, encoding="utf-8") as fh:
+        seen = len(fh.read().splitlines())
+    r_t = _sign247(rig, tooling)
+    with open(log, encoding="utf-8") as fh:
+        created = [ln for ln in fh.read().splitlines()[seen:] if ln.startswith("release create")]
+    held = _commit_file247(dev, "tests/y.py", "Y = 1\n", 12)
+    r_h = _sign247(rig, held, SIGN_RELEASE_NO_RELEASE="1")
+    eq("sign-release: a commit that changes only tests (noise in its update-paths.txt) is signed and marked "
+       "tooling-only (main/<sha>.inherit), with no name and no GitHub release made",
+       (r_t.returncode, _named247(rig, tooling), _inherit247(rig, tooling), created), (0, (True, None), True, []))
+    eq("sign-release: ...and one signed with SIGN_RELEASE_NO_RELEASE gets no mark (its release is held, not "
+       "tooling-only) (control)", (r_h.returncode, _named247(rig, held), _inherit247(rig, held)), (0, (True, None), False))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

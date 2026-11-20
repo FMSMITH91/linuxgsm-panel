@@ -89,6 +89,9 @@ EDIT_DATABASE_DATA = "edit_database_data"
 # as its account. Installing one installs Podman on the host through the helper and reads the game's
 # RCON password, so it is granted to no group by default; a superadmin holds every permission.
 MANAGE_ADDONS = "manage_addons"
+# ...and opening an installed add-on's own web page through the panel (routes/addon_web.py): IW4MAdmin's
+# webfront, BlueMap's map. Granted to no group by default; Manage add-ons opens them too.
+VIEW_ADDON_PAGES = "view_addon_pages"
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
@@ -130,6 +133,8 @@ ALL_PERMISSIONS = {
                          "Manage a server's databases with it)"),
     MANAGE_ADDONS: ("Manage a server's add-ons: install, start, stop and remove admin tools that run in "
                     "containers beside the game as its account, and read their logs"),
+    VIEW_ADDON_PAGES: ("Open a server's add-on web pages (IW4MAdmin, BlueMap) through the panel, without "
+                       "managing the add-ons"),
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",
@@ -885,6 +890,32 @@ def _user_for_cookie_id(s):
     if not user.is_active:
         return None, None
     return user, sid
+
+
+def live_session_user(cookie_id):
+    """The active user login id `cookie_id` names while that sign-in is still live, else None.
+
+    For a link bound to a sign-in (an add-on's page, routes/addon_web.py), asked on each of its
+    requests, which carry no panel cookie: the account active and its auth epoch unchanged (a password
+    change or "sign out everywhere" moves it), and, for an id with a session, that session's row still
+    there (logout deletes it) and not expired. A database error is a None: a revocation check that
+    could not look says no. Nothing is written (the sign-in's last use is the panel's pages' to note).
+    """
+    s = str(cookie_id or "")
+    if ":" not in s:
+        return None
+    try:
+        user, sid = _user_for_cookie_id(s)
+        if user is None or not sid:
+            return user
+        from panel.db.models import UserSession
+        sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
+        return None if sess is None or sess.is_expired(utcnow()) else user
+    except Exception:
+        db.session.rollback()
+        with suppress(Exception):
+            current_app.logger.warning("live_session_user: could not verify a sign-in, refusing", exc_info=True)
+        return None
 
 
 def _drop_expired_session(sess):
@@ -2118,7 +2149,7 @@ def _fpm_can_edit():
 # MANAGE_DATABASES and MANAGE_ADDONS too: their Databases and Add-ons tabs are only on this page, and a
 # database or add-on manager may hold nothing else here.
 FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP, RESTORE_BACKUP, MANAGE_DATABASES,
-                    MANAGE_ADDONS)
+                    MANAGE_ADDONS, VIEW_ADDON_PAGES)
 
 
 def files_access(user, perms=None):

@@ -66,30 +66,246 @@
     if (a.database) box.appendChild(node('div', 'small text-secondary text-break', TF('Database {db}.', {db: a.database})));
     if (a.port) {
       box.appendChild(node('div', 'small text-secondary text-break',
-        TF('Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).', {port: a.port})));
+        TF('Its web page listens on 127.0.0.1:{port} on this host only; Open shows it through the panel.', {port: a.port})));
     }
     if (a.geolocation_option) geoStatus(a, box);
+    if (a.eula_url) BM.status(a, box);
     if (a.update) {
-      box.appendChild(node('div', 'small text-warning', a.update === 'geoip'
-        ? T('Update available: a newer month of the country database.') : T('Update available: a newer version of the add-on.')));
+      box.appendChild(node('div', 'small text-warning', BM.updateWords(a)));
+    } else {
+      // Said, not left blank: the card compared the add-on with the panel's own version when it loaded.
+      box.appendChild(node('div', 'small text-secondary', T('Up to date (checked just now).')));
     }
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
     if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
+    WEB.open(a, bar);
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
     if (a.update) bar.appendChild(button(T('Update'), 'bi-arrow-up-circle', 'adUpdate', [a.id], 'btn-outline-primary'));
     bar.appendChild(button(T('Log'), 'bi-journal-text', 'adLog', [a.id]));
     bar.appendChild(button(T('Remove'), 'bi-trash', 'adRemove', [a.id], 'btn-outline-danger'));
     box.appendChild(bar);
-    if (a.geolocation_option) settingsFold(a, box);
+    if (a.geolocation_option) settingsFold(a, box, bar);
   }
 
-  var GEO_SAID = {off: 'Geolocation is off.',
-    offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
-    online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'};
+  // BlueMap's parts of the card, in one closure: its lines on an installed row (the Minecraft version it renders,
+  // the disk it takes, who accepted Mojang's EULA, its render threads), Mojang's EULA at install (the admin ticks
+  // it, never assumed), and its words in the Install, Update and Remove texts.
+  var BM = (function () {
+    function updateWords(a) {
+      if (a.update === 'geoip') return T('Update available: a newer month of the country database.');
+      if (a.update === 'game') return TF('Update available: the server now runs Minecraft {version}, and BlueMap needs that version\'s client file.', {version: a.mc_version_now || ''});
+      return T('Update available: a newer version of the add-on.');
+    }
+    function sizeWords(kb) {
+      return kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : Math.max(1, Math.round(kb / 1024)) + ' MB';
+    }
+    function whenWords(iso) {
+      var d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+    }
+    function status(a, box) {
+      var lines = [];
+      if (a.mc_version) lines.push(TF('Renders the world as Minecraft {version}.', {version: a.mc_version}));
+      if (a.disk_kb != null) lines.push(TF('Disk used: {size}.', {size: sizeWords(a.disk_kb)}));
+      if (a.eula_by) lines.push(TF('Mojang\'s EULA accepted by {who} on {when}.', {who: a.eula_by, when: whenWords(a.eula_at)}));
+      lines.push(TF('Render threads: {n} (render-thread-count in the add-on\'s config/core.conf; Stop and Start it after a change).', {n: a.render_threads || 1}));
+      lines.forEach(function (t) { box.appendChild(node('div', 'small text-secondary text-break', t)); });
+    }
+    function eula(a, box) {
+      var w = node('div', 'form-check small mt-1');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-eula-' + a.id;
+      var l = node('label', 'form-check-label', T('I accept Mojang\'s EULA: BlueMap needs Minecraft\'s client file, which this host downloads from Mojang.'));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      box.appendChild(w);
+      var link = node('a', 'small d-inline-block mb-1', T('Read Mojang\'s EULA'));
+      link.href = a.eula_url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      box.appendChild(link);
+      box.appendChild(node('div', 'small text-secondary', T('BlueMap shows the world, read-only, as a 3D map on a web page on this host (127.0.0.1). Its first render takes a while and uses CPU and disk, below the game\'s priority.')));
+    }
+    // Whether Install may go on: for BlueMap, only once the EULA is ticked (else it says so and goes to the box).
+    function ticked(a) {
+      var cb = el('ad-eula-' + a.id);
+      if (!a.eula_url || (cb && cb.checked)) return true;
+      say(T('Tick that you accept Mojang\'s EULA first: BlueMap can\'t draw the map without Minecraft\'s client file.'), 'text-danger');
+      if (cb) cb.focus();
+      return false;
+    }
+    // The install's body: the database, the geolocation, Mojang's EULA accepted; null when it can't go yet.
+    function installBody(a) {
+      var sel = el('ad-db-' + a.id), geo = el('ad-geo-' + a.id), body = {};
+      if ((a.needs_database && (!sel || !sel.value)) || !ticked(a)) return null;
+      if (a.eula_url) body.accept_eula = true;
+      if (a.needs_database) body.database_id = Number.parseInt(sel.value, 10);
+      if (geo) body.geolocation = geo.value;
+      return body;
+    }
+    function installWords(a) {
+      return a.eula_url
+        ? T('This installs Podman on the host if it is not there, readies the server\'s account for containers, downloads BlueMap\'s image and Minecraft\'s client file from Mojang, and starts rendering the world, which it reads read-only.')
+        : T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads or builds the add-on\'s image. The add-on reads the server\'s RCON password and game log.');
+    }
+    function removeWords(a) {
+      if (a.data_kept) return T('This stops the add-on and deletes its container, image and folder: its settings and any plugin settings you edited go with it. Its database is kept in the Databases tab.');
+      if (a.eula_url) return T('This stops BlueMap and deletes its container, image and files: its settings, the rendered map and Minecraft\'s client file. The world itself is not touched.');
+      return T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.');
+    }
+    return {updateWords: updateWords, status: status, eula: eula, installBody: installBody, installWords: installWords,
+      removeWords: removeWords};
+  })();
+
+  // An add-on's web page, opened through the panel (routes/addon_web.py) in a new tab: a form post (CSRF
+  // token, no referrer) the panel answers with the page's link. A viewer with View add-on pages alone gets
+  // only these rows.
+  var WEB = (function () {
+    function open(a, bar) {
+      if (a.web && a.state === 'active') bar.appendChild(button(T('Open'), 'bi-box-arrow-up-right', 'adOpen', [a.id], 'btn-outline-primary'));
+    }
+    function go(id) {
+      var f = node('form');
+      f.method = 'post';
+      f.action = api('/' + encodeURIComponent(id) + '/web');
+      f.target = '_blank';
+      f.rel = 'noopener noreferrer';
+      var t = node('input');
+      t.type = 'hidden';
+      t.name = 'csrf_token';
+      t.value = window.CSRF || '';
+      f.appendChild(t);
+      f.hidden = true;
+      document.body.appendChild(f);
+      if (window.ensureCsrfFields) window.ensureCsrfFields(f);   // the current token, as panel.js gives every POST form
+      f.submit();
+      f.remove();
+      return true;
+    }
+    function viewerRows(d, list) {
+      if (!(d.addons || []).length) list.appendChild(node('div', 'small text-secondary', T('No add-on with a web page is installed on this server.')));
+      (d.addons || []).forEach(function (a) {
+        var box = node('div', 'ad-row');
+        box.appendChild(rowHead(a));
+        var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
+        open(a, bar);
+        if (a.state !== 'active') bar.appendChild(node('span', 'small text-secondary', T('Its page opens once the add-on is running.')));
+        box.appendChild(bar);
+        list.appendChild(box);
+      });
+    }
+    window.adOpen = go;
+    return {open: open, go: go, viewerRows: viewerRows};
+  })();
+
+  // B3's own parts of the card (services/b3_control.py): what it says of itself (health.json, or its exit
+  // code in words), and in the settings fold the alerts switch for its bans and kicks (saved at once, no
+  // Apply) and its service settings (Panel actions, purge_aliases_days). B3's reason is its own English
+  // text, shown as it wrote it.
+  var B3S = (function () {
+    function known(v, yes, no) { return v === true ? T(yes) : (v === false ? T(no) : T('not yet')); }
+    function healthLines(h, box) {
+      if (h.healthy) box.appendChild(node('div', 'small text-success', T('B3 is healthy.')));
+      else {
+        var w = node('div', 'small text-warning', T('B3 reports a problem:') + ' ');
+        var r = node('span', null, h.reason || '?');   // i18n-ignore: B3's own words
+        r.setAttribute('data-no-i18n', '');
+        w.appendChild(r);
+        box.appendChild(w);
+      }
+      var parts = [TF('Game log: {s}', {s: known(h.game_log, 'read', 'not read')}),
+        TF('RCON: {s}', {s: known(h.rcon, 'working', 'failing')}),
+        TF('Database: {s}', {s: known(h.database, 'connected', 'lost')})];
+      if (h.humans != null) parts.push(TF('Players: {n} ({bots} bots)', {n: h.humans, bots: h.bots || 0}));
+      box.appendChild(node('div', 'small text-secondary', parts.join(' · ')));   // i18n-ignore: a separator
+    }
+    function alertsSwitch(a, box) {
+      var w = node('div', 'form-check small mt-1');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-b3-alerts';
+      cb.checked = !!a.alerts;
+      cb.setAttribute('data-action', 'adB3Alerts');
+      cb.setAttribute('data-on', 'change');
+      cb.setAttribute('data-args', JSON.stringify(['@self']));
+      var l = node('label', 'form-check-label', T('Alert me when B3 bans, temporarily bans or kicks a player on this server (saved at once)'));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      box.appendChild(w);
+      box.appendChild(node('div', 'small text-secondary', T('Sent to your alert channels (Settings, Notifications); players\' names only with Include details on.')));
+    }
+    function status(a, box) {
+      if (a.exit_reason) box.appendChild(node('div', 'small text-warning', a.exit_reason));
+      if (a.stale) box.appendChild(node('div', 'small text-warning', a.stale));
+      if (a.health) healthLines(a.health, box);
+    }
+    function settings(a, fold) {
+      var w = node('div', 'form-check small mt-2');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-actions-' + a.id;
+      cb.checked = !!a.actions;
+      var l = node('label', 'form-check-label', T('Panel actions: unban, kick and warn from the B3 players section'));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      fold.appendChild(w);
+      fold.appendChild(node('div', 'small text-secondary', T('Turns on B3\'s control socket: a file in its folder that only the server\'s account can open, no network port. Each action also takes the Ban or Kick players permission, asks for your password when your sign-in is old, and is in the audit log.')));
+      var wrap = node('div', 'mt-2');
+      var lab = node('label', 'form-label small mb-0', T('Forget earlier names and IP addresses not seen for (days)'));
+      lab.htmlFor = 'ad-purge-' + a.id;
+      var inp = node('input', 'form-control form-control-sm fx-12');
+      inp.type = 'number';
+      inp.id = 'ad-purge-' + a.id;
+      inp.min = String((a.purge_bounds || [1])[0]);
+      inp.max = String((a.purge_bounds || [1, 3650])[1]);
+      inp.step = '1';
+      inp.placeholder = String(a.purge_example || 365);
+      inp.setAttribute('data-no-i18n', '');
+      if (a.purge_aliases_days) inp.value = String(a.purge_aliases_days);
+      wrap.appendChild(lab);
+      wrap.appendChild(inp);
+      wrap.appendChild(node('div', 'small text-secondary', TF('Optional; empty keeps them for good. B3 keeps each player\'s last name and address, and their penalties. OWASP\'s Logging Cheat Sheet (Disposal of logs) sets no number of days: keep personal data only as long as you need it ({n} is an example).', {n: a.purge_example || 365})));
+      fold.appendChild(wrap);
+    }
+    // The Apply body's B3 service settings, or null (and why, beside the field) when the days are not a whole number in range.
+    function days(inp) {
+      var raw = String(inp.value || '').trim(), n = raw === '' ? null : Number(raw);
+      return n === null || (Number.isInteger(n) && n >= Number(inp.min) && n <= Number(inp.max)) ? n : undefined;
+    }
+    function body(id) {
+      var cb = el('ad-actions-' + id), inp = el('ad-purge-' + id), n = days(inp);
+      if (n === undefined) {
+        say(TF('Days: a whole number from {lo} to {hi}, or empty.', {lo: inp.min, hi: inp.max}), 'text-danger');
+        if (inp.focus) inp.focus();
+        return null;
+      }
+      return {actions: !!cb.checked, purge_aliases_days: n};
+    }
+    // The alerts switch's change: saved at once, and put back when the panel refuses it.
+    window.adB3Alerts = function (cb) {
+      var on = !!cb.checked;
+      return postJson(api('/b3/alerts'), {enabled: on}).then(function (res) {
+        var ok = res.ok && res.d.success !== false;
+        if (!ok) cb.checked = !on;
+        say((ok ? '✓ ' : '✗ ') + (res.d.message || res.d.error || T('Failed')), ok ? 'text-success' : 'text-danger');
+        return ok;
+      }).catch(function () { cb.checked = !on; return failed(); });
+    };
+    return {status: status, settings: settings, body: body, alerts: alertsSwitch};
+  })();
+
   function geoStatus(a, box) {
+    if (a.b3_card) B3S.status(a, box);   // B3's own lines first: B3 is the add-on with geolocation
+    var GEO_SAID = {off: 'Geolocation is off.',
+      offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
+      online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'};
     box.appendChild(node('div', 'small text-secondary', T(GEO_SAID[a.geolocation] || GEO_SAID.off)));
     if (a.geolocation === 'offline') {
       if (a.geoip_off) box.appendChild(node('div', 'small text-warning', a.geoip_off));
@@ -125,9 +341,12 @@
   }
 
   // B3's settings, folded: geolocation and its plugins. Apply rewrites only those in b3.ini and restarts it.
-  function settingsFold(a, box) {
+  // B3's row also gets Players, before Remove: its players and penalties, read from its database (b3_players.js).
+  function settingsFold(a, box, bar) {
+    bar.insertBefore(button(T('Players'), 'bi-people', 'b3pOpen', []), bar.lastChild);
     var fold = node('details', 'mt-2');
     fold.appendChild(node('summary', 'small', T('B3 settings')));
+    if (a.b3_card) B3S.alerts(a, fold);
     fold.appendChild(geoSelect(a, 'ad-set-geo-' + a.id, a.geolocation));
     var grid = node('div', 'd-flex flex-wrap gap-2 mt-2');
     var on = a.plugins || [];
@@ -148,10 +367,14 @@
     fold.appendChild(node('div', 'small text-secondary mt-2', T('B3\'s plugins. Admin is always on.')));
     fold.appendChild(grid);
     ownPlugins(a, fold);
+    if (a.b3_card) B3S.settings(a, fold);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-2');
-    bar.appendChild(button(T('Apply and restart'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
+    // With a new image pending, Apply would name an image the host doesn't have yet: Update comes first.
+    if (a.update === 'image') bar.appendChild(node('div', 'small text-warning', T('Update the add-on first, then apply its settings.')));
+    else bar.appendChild(button(T('Apply'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
     fold.appendChild(bar);
     fold.appendChild(node('div', 'small text-secondary mt-1', T('Only these settings are rewritten in b3.ini; your other edits there and in its conf folder are kept.')));
+    fold.appendChild(node('div', 'small text-secondary', T('B3 checks the new settings before it uses them, and a refusal changes nothing. A change to plugin settings alone is reloaded without a restart; anything else restarts B3.')));
     box.appendChild(fold);
   }
 
@@ -205,6 +428,7 @@
     var free = (d.databases || []).filter(function (x) { return !x.used_by; });
     if (a.needs_database && !free.length) { noDatabaseRow(a, d, box); return; }
     if (a.geolocation_option) box.appendChild(geoSelect(a, 'ad-geo-' + a.id, 'off'));
+    if (a.eula_url) BM.eula(a, box);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.needs_database) bar.appendChild(dbSelect(a, d.databases || []));
     var b = button(T('Install'), 'bi-download', 'adInstall', [a.id], 'btn-primary');
@@ -250,6 +474,7 @@
     show('ad-runtime', !!d.runtime_error);
     var list = el('ad-list');
     list.textContent = '';
+    if (d.manage === false) { WEB.viewerRows(d, list); return; }
     (d.addons || []).forEach(function (a) { list.appendChild(addonRow(a, d)); });
     var busy = (d.addons || []).some(function (a) { return a.installing; });
     // An install this page started has ended: its "Installing the add-on" line goes, and the row says
@@ -291,12 +516,10 @@
   function row(id) { return ((st.d && st.d.addons) || []).filter(function (a) { return a.id === id; })[0] || {}; }
 
   window.adInstall = function (id) {
-    var a = row(id), sel = el('ad-db-' + id), geo = el('ad-geo-' + id), body = {};
-    if (st.busy || (a.needs_database && (!sel || !sel.value))) return;
-    if (a.needs_database) body.database_id = Number.parseInt(sel.value, 10);
-    if (geo) body.geolocation = geo.value;
+    var a = row(id), body = st.busy ? null : BM.installBody(a);
+    if (!body) return;
     window.confirmDialog({title: T('Install the add-on'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Install'),
-      bodyText: T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads or builds the add-on\'s image. The add-on reads the server\'s RCON password and game log.'),
+      bodyText: BM.installWords(a),
       onConfirm: function () {
         stepUp(function () {
           st.busy = true;
@@ -316,8 +539,7 @@
   window.adRemove = function (id) {
     if (st.busy) return;
     window.confirmDialog({title: T('Remove the add-on'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Remove'),
-      bodyText: row(id).data_kept ? T('This stops the add-on and deletes its container, image and folder: its settings and any plugin settings you edited go with it. Its database is kept in the Databases tab.')
-        : T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.'),
+      bodyText: BM.removeWords(row(id)),
       onConfirm: function () {
         stepUp(function () {
           st.busy = true;
@@ -346,11 +568,13 @@
     var plugins = Array.prototype.filter.call(document.querySelectorAll('[data-ad-plugin="' + id + '"]'),
       function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
     var own = el('ad-own-' + id), ownOn = !!(own && own.checked);
+    var svc = el('ad-actions-' + id) ? B3S.body(id) : {};
+    if (!svc) return;
     var go = function () {
       stepUp(function () {
         st.busy = true;
         say(T('Applying the settings…'));
-        postJson(api('/' + id + '/settings'), {geolocation: geo.value, plugins: plugins, own_plugins: ownOn}).then(after).catch(failed);
+        postJson(api('/' + id + '/settings'), Object.assign({geolocation: geo.value, plugins: plugins, own_plugins: ownOn}, svc)).then(after).catch(failed);
       });
     };
     // Turning the own-plugins folder on is asked once more, with the warning.

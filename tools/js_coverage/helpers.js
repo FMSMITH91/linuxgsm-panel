@@ -214,7 +214,8 @@
   // label full of them is read once, not once for every mark.
   function confirmAnswer(card, inp, password) {
     if (inp.type === 'password') return password || '';
-    var lab = card.querySelector('label[for="cd-input"]');
+    // Each dialog's field has its own id (cd-input-<n>), so its label is found by that id.
+    var lab = inp.id ? card.querySelector('label[for="' + inp.id + '"]') : null;
     var m = lab && /\(([^()]+)\)|[“"']([^“”"']+)[”"']/.exec(lab.textContent);
     return m ? (m[1] || m[2]) : '';
   }
@@ -224,7 +225,7 @@
     document.querySelectorAll('[data-cd="ok"]').forEach(function (ok) {
       var card = ok.closest('.card');
       var cancel = card && card.querySelector('[data-cd="cancel"]');
-      var inp = card && card.querySelector('#cd-input');
+      var inp = card && card.querySelector('[data-cd="input"]');
       if (accept && inp && !inp.value) {
         setValue(inp, confirmAnswer(card, inp, password));
         inp.dispatchEvent(new Event('input', {bubbles: true}));

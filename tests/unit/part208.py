@@ -483,6 +483,10 @@ try:
 
     _R208["lgsm_backup"] = _lgsm208("backup")
     _R208["lgsm_update"] = _lgsm208("update")
+    # The backups above ran _marked_backup with no caller to write the outcome over its "running" mark, as
+    # every real caller does: cleared here, or the uninstall below is refused as beside a running backup.
+    for _sid208 in (_SID208, _OTHER208):
+        _sh208._game_backup_status.pop(_sid208, None)
 
     # ── 10. delete: confirmed by name ─────────────────────────────────────────────────────────────
     _S208.reset()

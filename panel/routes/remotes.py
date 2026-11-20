@@ -340,7 +340,6 @@ def _register_remote_edit(app):
         new_name = _edited("name", remote.name)
         if not SAFE_LABEL_RE.match(new_name):
             return _edit_refused("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
-        remote.name = new_name
         # Canonical before it is judged or compared: `[2001:db8::5]` is that address, and the
         # stored host is in this form (models.RemoteServer._canonical_host).
         new_host = canonical_host(_edited("host", remote.host))
@@ -356,6 +355,7 @@ def _register_remote_edit(app):
         _refused, _code = _r36c_retarget_refusal(remote, new_host, new_port, new_user)
         if _refused:
             return _edit_refused(_refused, "manage_remotes", code=_code)
+        remote.name = new_name
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
         if (new_host, new_port) != (remote.host, remote.port):
@@ -364,7 +364,11 @@ def _register_remote_edit(app):
         remote.host = new_host
         remote.port = new_port
         remote.username = new_user
-        _bad_auth = _apply_edited_auth(remote)
+        # Nothing flushed until r36j_commit: a query that flushed the edited row opened SQLite's write
+        # transaction, held across the fingerprint check's SSH sign-in, and every other writer (and,
+        # through the blocking busy handler, the whole hub) waited on it.
+        with db.session.no_autoflush:
+            _bad_auth = _apply_edited_auth(remote)
         if _bad_auth:
             return _edit_refused(_bad_auth, "manage_remotes")
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"

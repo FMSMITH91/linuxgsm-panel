@@ -335,6 +335,8 @@ def _addon_card267():
             "function node(t, c, x){ return {appendChild: function(){}}; }\n"
             "function button(label, icon, act){ made.push(act); return {}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoStatus(){} function settingsFold(){}\n"
+            "var BM = {status: function(){}, updateWords: function(){ return ''; }};\n"
+            "var WEB = {open: function(){}};\n"
             + _cut47(src, "var JOB = {") + "\n" + _cut47(src, "function installedRow(") + "\n"
             "function acts(a){ made = []; installedRow(a, node()); return made; }\n"
             "console.log(JSON.stringify({remove: acts({id: 'b3', state: 'active', installing: true, job: 'remove'}),"
@@ -703,7 +705,11 @@ def _release_names267():
         labels = [_so267.version_for_commit(c) for c in (tooling2, tooling, fourth, third)]
         installer = _installer_label267(repo)
         nextday = _commit267(repo, "tooling the next day", _DAY267 + 86400 + 60)
-        _names267(repo, [(older, "2026.11.18.2"), (third, "2026.11.19.3"), (fourth, "2026.11.19.4")])
+        unmarked = (_so267.version_for_commit(nextday), _installer_label267(repo))
+        # Marked tooling-only, so both readers walk past it into the day before: only their stop
+        # at another day's commit keeps the previous day's name off it. Unmarked, the walk ended
+        # at the commit itself and never reached that stop.
+        _names267(repo, [(nextday, None)])
         lone = _so267.version_for_commit(nextday)
         installer_lone = _installer_label267(repo)
     finally:
@@ -712,8 +718,10 @@ def _release_names267():
        "before it on the same day (2026.11.19.4, the first one met), as the update card, What's new and the bots read "
        "it; the named commits keep their own", labels, ["2026.11.19.4", "2026.11.19.4", "2026.11.19.4", "2026.11.19.3"])
     eq("release name: ...install.sh's \"Update complete\" label follows the same rule", installer, "2026.11.19.4")
-    eq("release name: a commit whose day has no named release before it shows the date (another day's name is never "
-       "borrowed)", (lone, installer_lone), ("2026.11.20", "2026.11.20"))
+    eq("release name: a tooling-only commit whose day has no named release before it shows the date (another day's "
+       "name is never borrowed)", (lone, installer_lone), ("2026.11.20", "2026.11.20"))
+    eq("release name: ...and so does an unmarked commit of that day, which may run new code (control)",
+       unmarked, ("2026.11.20", "2026.11.20"))
 
 
 def _main267():

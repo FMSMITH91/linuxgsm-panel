@@ -916,6 +916,8 @@ def _run190(host, refusal=None):
 _n_audit190 = _p9_audit_count("game_backup_restore")
 _h = _Host190()
 _w190 = {"ok": _run190(_h)}
+# What each run left held, read before the next run on the same server (whose own end clears it).
+_held_after190 = {"ok": dict(_held190)}
 _w190["vet_refused"] = _run190(_Host190(vet="__GRS_BAD__ name"))
 _w190["backup_failed"] = _run190(_Host190(backup=False))
 _w190["late_fail"] = _run190(_Host190(restore="__GRS_SWITCHING__\n__GRS_ROLLBACKFAIL__ /home/x/lgsm/tmp/panel-restore-old-1"))
@@ -926,6 +928,7 @@ _w190["rootcap"] = _run190(_Host190(), refusal=_i18n190.Sentence("p190 root-capa
 _lost_h190 = _Host190(restore="")
 _lost_h190.recover = "__GRS_RECUNDONE__\n__GRS_UPREADY__"
 _w190["lost"] = _run190(_lost_h190)
+_held_after190["lost"] = dict(_held190)
 _w190["stage_fail"] = _run190(_Host190(restore="__GRS_STAGING__\n__GRS_STAGEFAIL__ 2 tar: Unexpected EOF in archive"))
 _held_mid190 = dict(_h.held_seen) if hasattr(_h, "held_seen") else {}
 
@@ -959,15 +962,15 @@ eq("run: an account that can become root is refused in the run too, before the c
 check("run: the undo is the archive the backup path names, not a newer upload in the listing",
       "restore p190-2026-11-13-000000.tar.zst" in _w190["ok"][3] and "11-14" not in _w190["ok"][3], _w190["ok"][3])
 check("run: while the archive is held, config.json names it (and none is left once the run ends)",
-      (_held_mid190.get(str(P9_GS)) or {}).get("name") == _LIST190[0]["name"] and not _held190,
-      repr((_held_mid190, _held190)))
+      (_held_mid190.get(str(P9_GS)) or {}).get("name") == _LIST190[0]["name"] and not _held_after190["ok"],
+      repr((_held_mid190, _held_after190["ok"])))
 eq("run: an archive that would not unpack into the staging folder restores nothing and starts the server again",
    (_w190["stage_fail"][0], "Not restored: nothing was changed." in _w190["stage_fail"][3],
     "could not be unpacked into a staging folder" in _w190["stage_fail"][3]),
    (["vet", "stop", "backup", "restore", "start"], True, True))
 eq("run: a restore whose answer was lost keeps the server held and asks the recovery script until it settles: "
    "no start, the outcome named, the record gone",
-   (_w190["lost"][0], "answer was lost" in _w190["lost"][3], "undone" in _w190["lost"][3], bool(_held190)),
+   (_w190["lost"][0], "answer was lost" in _w190["lost"][3], "undone" in _w190["lost"][3], bool(_held_after190["lost"])),
    (["vet", "stop", "backup", "restore", "recover"], True, True, False))
 eq("run: every outcome writes an audit row", _p9_audit_count("game_backup_restore") - _n_audit190, 10)
 
@@ -1315,7 +1318,8 @@ except _ToolsMissing190 as _e:
     skip("crafted upload ids", str(_e))
 finally:
     _p9_restore_all()
-    _bu190._uploads.clear()
+    # By import, as section 6's finally does: a skip there leaves _bu190 unbound.
+    __import__("panel.routes.backup_upload", fromlist=["_uploads"])._uploads.clear()
     _sh190.rmtree(_cbdir190, ignore_errors=True)
 
 if "helpers" in _craft190:

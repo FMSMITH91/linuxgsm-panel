@@ -6,7 +6,7 @@ passwords unmasked (fn_info_messages_password_strip skips DETAILS), and that cut
 them from a VIEW_CONSOLE-only member. Held here:
 
 * the reply carries the whole output, to the page's (scrolling) dialog;
-* a member without MANAGE_SERVERS gets every labelled secret, its value anywhere else and the
+* a member without VIEW_FILES gets every labelled secret, its value anywhere else and the
   start command line masked; an administrator gets the output as LinuxGSM printed it;
 * the audit row is masked whoever ran it; the form route's flash (the session cookie) stays short.
 """
@@ -80,7 +80,7 @@ check("details reply: the whole output reaches the dialog, not its first 600 cha
       "(one ended at 'Memory' on a lone 'S')",
       len(_as_admin145) > 2000 and _as_admin145.rstrip().endswith("the end: rc-p145-bravo was here"),
       repr((len(_as_admin145), _as_admin145[-80:])))
-check("details reply: an administrator (MANAGE_SERVERS, who can open the configs) sees it unmasked",
+check("details reply: an administrator (VIEW_FILES, who can open the configs) sees it unmasked",
       all(s in _as_admin145 for s in _SECRETS145), repr([s for s in _SECRETS145 if s not in _as_admin145]))
 check("details reply: a VIEW_CONSOLE-only member gets the whole output with every secret masked",
       not [s for s in _SECRETS145 if s in _as_viewer145] and "the end: ******** was here" in _as_viewer145

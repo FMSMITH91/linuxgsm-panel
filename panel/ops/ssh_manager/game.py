@@ -1100,17 +1100,45 @@ def _mod_valve_cmd(action, target, steamid, resolve):
     return "banid 0 %s kick; writeid" % sid, None
 
 
-def _mod_idtech3_cmd(action, num, resolve, game_type=""):
-    """(console command, None) for an idTech3 kick or ban by slot number, or (None, why).
+# What a kick or ban answers when the slot posted no longer holds the player named: idTech3 hands a
+# freed slot to the next player who joins, so a list on screen that is a minute old kicked (or, on
+# CoD, banned) whoever took the slot, while the audit row named the player who had left.
+IDT3_SLOT_MOVED = ("That player is no longer in that slot (they left, or someone else joined in it). "
+                   "Refresh the player list and try again.")
 
-    The ban is the game's own (_R15B_IDT3_BAN); moderate() has already refused a game with none.
+
+def _idt3_slot_holds(listed, slot, name):
+    """True when the console list, read now, has a player `name` can mean in slot `slot`."""
+    here = [p for p in listed if _sanitize_slotnum(p.get("num")) == slot]
+    return bool(here) and bool(_r18b_idt3_matches(here, name))
+
+
+def _idt3_slot(num, resolve, target, listing):
+    """(slot, None) for _mod_idtech3_cmd, or (None, why).
+
+    The posted slot while it still holds `target`, else the slot the console list gives the name.
     """
     slot = _sanitize_slotnum(num)
     if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
         p = resolve()
         slot = _sanitize_slotnum(p.get("num")) if p else None
+    elif (target or "").strip() and listing is not None and not _idt3_slot_holds(listing() or [], slot, target):
+        return None, IDT3_SLOT_MOVED
     if slot is None:
         return None, "Couldn't find that player on the server."
+    return slot, None
+
+
+def _mod_idtech3_cmd(action, num, resolve, game_type="", target="", listing=None):
+    """(console command, None) for an idTech3 kick or ban by slot number, or (None, why).
+
+    The ban is the game's own (_R15B_IDT3_BAN); moderate() has already refused a game with none.
+    With a player's name (`target`) beside the slot, `listing()` reads the console's player list
+    now and the slot is used only while it still holds that player.
+    """
+    slot, why = _idt3_slot(num, resolve, target, listing)
+    if why:
+        return None, why
     if action == "kick":
         return "clientkick %d" % slot, None
     ban = _R15B_IDT3_BAN.get((game_type or "").lower())
@@ -1163,12 +1191,15 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
     def resolve():
         return _resolve_from_console(server, user, game_type, target, selfname)
 
+    def listing():
+        return console_player_list(server, user, game_type, selfname=selfname)
+
     if action == "say":
         cmd, why = _mod_say_cmd(message)
     elif eng == "valve":
         cmd, why = _mod_valve_cmd(action, target, steamid, resolve)
     elif eng == "idtech3":
-        cmd, why = _mod_idtech3_cmd(action, num, resolve, game_type)
+        cmd, why = _mod_idtech3_cmd(action, num, resolve, game_type, target, listing)
     elif eng == "minecraft":
         cmd, why = _mod_minecraft_cmd(action, target)
     else:

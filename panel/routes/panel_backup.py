@@ -545,11 +545,12 @@ def _register_game_backup(app):
                        success=False, server=gs)
             return jsonify({"success": False, "message": i18n.tr(_why)}), 409
         if _r39a_backup_held(server_id):
-            # Its scheduled wipe (or a queued stop/restart) is running: LinuxGSM's backup would
+            # Its scheduled wipe (or a restore, a queued stop/restart or an uninstall) is running:
+            # LinuxGSM's backup would
             # archive files as the wipe deleted them, its stop and start racing the wipe's. The
             # worker's own run asks again under its mark (_shared._marked_backup).
-            _why = i18n.Sentence("A scheduled wipe, a restore from a backup, or a queued stop or restart of "
-                                 "{name} is running. Try again once it has finished.", name=gs.name)
+            _why = i18n.Sentence("A scheduled wipe, a restore from a backup, a queued stop or restart, or an "
+                                 "uninstall of {name} is running. Try again once it has finished.", name=gs.name)
             log_action(current_user, "game_backup", target=gs.name, detail="refused: %s" % _why,
                        success=False, server=gs)
             return jsonify({"success": False, "message": i18n.tr(_why)}), 409

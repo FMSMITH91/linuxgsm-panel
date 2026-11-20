@@ -12,6 +12,62 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ## [2026.11.20] — 2026-11-20
 
+### Added
+
+- **BlueMap: a live 3D map of your Minecraft world.** A new add-on for vanilla and Paper servers (Files & Config → Add-ons) draws the world as a 3D map on a
+  web page you open from its card. It reads the world read-only and reaches no network;
+  it installs only after you tick that you accept Mojang's EULA for Minecraft's client file, which the host downloads,
+  and it offers an Update when the game moves to another Minecraft version.
+- **B3's players and penalties in the Add-ons tab.** An installed B3 has a Players button: search its players by name, earlier name, B3 id or GUID, open one to see their aliases, connections, warnings, kicks and bans with the admin and reason, or list the latest penalties. It reads B3's own database; IP addresses and GUIDs show only with the Manage a server's databases permission, and each look is in the audit log.
+- **B3 checks its settings before Apply, and its card says how it is.** Apply has B3 check the new settings first and changes nothing when B3 refuses them, showing B3's reason;
+  a change to plugin settings alone is reloaded without a restart. The card shows B3's health (game log, RCON,
+  database, players), "not answering" when it stops reporting, why it stopped in words, and the version it runs.
+  B3 is no longer restarted after an admin's `!die` or invalid settings. B3 is updated to 2.0.2dev (Update on its card).
+- **Unban, kick and warn through B3 from the panel.** With Panel actions turned on in B3 settings, a player's view in the B3 players section can unban, kick and
+  warn; B3 does it itself, so its records stay right. Each takes the Ban or Kick players permission as well,
+  confirms your password when your sign-in is old, and is in the audit log without the reason or the player's name.
+- **Alerts when B3 bans or kicks a player.** A switch on B3's card sends B3's bans, temporary bans and kicks on that server to your alert channels; players'
+  names are in them only when Include details is on. B3 can also forget players' earlier names and addresses
+  after a number of days you choose (off unless set).
+- **Open an add-on's web page from the panel.** IW4MAdmin's webfront and BlueMap's map now open in a new tab from
+  the add-on's card, through the panel, on a phone as on a desktop and for remote hosts too, with no port opened
+  and no SSH tunnel. The page runs sandboxed, apart from the panel's own pages, behind a link that works only while
+  you are signed in and allowed to open it.
+- **A new permission: View add-on pages.** It opens a server's add-on pages without managing the add-ons; given to
+  no group by default.
+
+### Fixed
+
+- **B3 settings wait for a pending update.** Applying B3's settings while a newer add-on version is waiting is
+  refused with "Update the add-on first", and the card shows that in place of Apply; before, B3 stopped and stayed
+  down until Update.
+- **The add-ons card says when an add-on is up to date.** An installed add-on with no update waiting shows "Up to
+  date", and the card's help says new versions arrive with panel updates.
+- **SFTP transfers no longer stall a short-handed panel.** An open file whose permission check goes unanswered asks
+  again once a second instead of once per packet, and several transfers to one host are no longer refused for a
+  moment each minute.
+- **An add-on remove is recorded even when the host drops at its last step.** It said the host was unreachable and
+  left no audit row although the add-on was gone.
+- **A game restore keeps files behind a symlink.** Restoring a backup whose folder or file sat where the server now
+  has a symlink to something the backup lacks no longer deletes it.
+- **Kick and ban on Call of Duty and Quake III act on the right player.** If the slot changed hands since the list
+  was read, the action is refused instead of hitting whoever joined.
+- **A setting written twice in a config file is edited where the game reads it.** The Settings form shows it once,
+  as the last line.
+- **Database tables keyed by binary values are read-only in the editor.** Edits and deletes there matched no row or
+  the wrong one.
+- **Backups and uninstalls no longer overlap.** A backup waits while its server is being uninstalled, and the
+  uninstall waits for a running backup.
+- **The reboot dialog says what is blocking.** Mod installs, scheduled tasks, wipes, queued stops and add-on jobs
+  were listed as "work is running".
+- **The root cron page opens on hosts with non-UTF-8 cron files.** It showed an error page.
+- **Start sees a crossplay Valheim server that is already up.** The port check before a start now reads the
+  port + 1 a crossplay Valheim listens on, as the rest of the panel does.
+- **Remote hosts with IPv6 off in the kernel can rate-limit SSH again.** The panel never recognised the kernel's
+  IPv6 answer from a remote host, so such a limit was refused as if IPv6 were on.
+- **Editing a host no longer freezes the panel while its key is checked.** Changing a host's name and address with
+  a fingerprint held the database locked for the whole SSH check.
+
 ### Security
 
 - **A chunked request can no longer run the panel out of memory.** The web server now refuses a request

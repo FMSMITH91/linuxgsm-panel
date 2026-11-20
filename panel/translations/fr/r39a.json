@@ -4,6 +4,6 @@
   "a queued stop or restart of {name}": "un arrêt ou redémarrage en file d'attente de {name}",
   "A scheduled wipe of '{name}' is running — '{action}' was not run. Try again once it has finished.": "Un wipe planifié de « {name} » est en cours : « {action} » n'a pas été exécuté. Réessayez une fois qu'il est terminé.",
   "A scheduled wipe of '{name}' is running. Try again once it has finished.": "Un wipe planifié de « {name} » est en cours. Réessayez une fois qu'il est terminé.",
-  "a scheduled wipe, a restore from a backup, or a queued stop or restart of this server is running": "un wipe planifié, une restauration depuis une sauvegarde ou un arrêt ou redémarrage en file d'attente de ce serveur est en cours",
-  "A scheduled wipe, a restore from a backup, or a queued stop or restart of {name} is running. Try again once it has finished.": "Un wipe planifié, une restauration depuis une sauvegarde ou un arrêt ou redémarrage en file d'attente de {name} est en cours. Réessayez une fois qu'il est terminé."
+  "a scheduled wipe, a restore from a backup, a queued stop or restart, or an uninstall of this server is running": "un wipe planifié, une restauration depuis une sauvegarde, un arrêt ou redémarrage en file d'attente ou une désinstallation de ce serveur est en cours",
+  "A scheduled wipe, a restore from a backup, a queued stop or restart, or an uninstall of {name} is running. Try again once it has finished.": "Un wipe planifié, une restauration depuis une sauvegarde, un arrêt ou redémarrage en file d'attente ou une désinstallation de {name} est en cours. Réessayez une fois qu'il est terminé."
 }

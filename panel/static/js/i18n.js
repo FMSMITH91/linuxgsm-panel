@@ -118,14 +118,20 @@ window.tfn = function(n, one, many, vals){
     if (en === undefined) return text;
     return text.slice(0, text.length - text.trimStart().length) + en + text.slice(text.trimEnd().length);
   }
+  // The translation of `key`: the whole text's, else, for a text that opens with a status mark, the
+  // mark followed by the rest's translation; undefined when neither is in the catalog.
+  function i18nMarked(key){
+    var v = i18nLookup(key);
+    if (v !== undefined) return v;
+    var mark = MARK.exec(key);
+    return (mark && i18nLookup(mark[2]) !== undefined) ? mark[1] + i18nLookup(mark[2]) : undefined;
+  }
   function tText(node){
     var en = node.__i18nEn, cur = node.nodeValue;
     if (en === undefined || (cur !== en && cur !== node.__i18nW)){ en = node.__i18nEn = i18nEnglish(cur); }
     var key = en.replace(/\s+/g, ' ').trim();
     if (!key) return;
-    var v = i18nLookup(key);
-    var mark = (v === undefined) ? MARK.exec(key) : null;
-    if (mark && i18nLookup(mark[2]) !== undefined) v = mark[1] + i18nLookup(mark[2]);
+    var v = i18nMarked(key);
     // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon). Measured with
     // trim, not /\s*$/: as written, that unanchored search may start at every blank of a run and
     // read the run to its end from each (whether it does is up to the engine's optimiser; trim's
@@ -142,7 +148,8 @@ window.tfn = function(n, one, many, vals){
     var pk = '__i18nA_' + a, wk = '__i18nW_' + a, en = el[pk];
     if (en === undefined || (cur !== en && cur !== el[wk])){ en = el[pk] = i18nEnglish(cur); }
     var key = en.replace(/\s+/g, ' ').trim(); if (!key) return;
-    var v = i18nLookup(key);
+    // A marked tooltip or placeholder ('✓ Saved') as a marked text node: the mark kept, the rest looked up.
+    var v = i18nMarked(key);
     var out = (v !== undefined) ? v : en;
     el[wk] = out;
     if (cur !== out) el.setAttribute(a, out);

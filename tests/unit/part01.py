@@ -139,8 +139,10 @@ results = []
 # A worker a route under test starts (threading.Thread, eventlet.spawn) that dies on a NameError
 # printed its traceback to stderr and was never counted: the check asserted only the HTTP answer,
 # and the run exited 0. Each one is recorded here, with the last check recorded before it (the code
-# after that check started it), and part15 fails the run on any left in the list. A part that ends
-# a thread with an exception on purpose takes its own entry back out (part15's probe does).
+# after that check started it), and the runner fails the run on any left in the list just before
+# its tally (thread_gate), so one that dies during the runner's own steps after the last part counts
+# too. A part that ends a thread with an exception on purpose takes its own entry back out (part15's
+# probes do).
 thread_errors = []
 
 
@@ -186,16 +188,34 @@ _r33t_install_hooks()
 
 # ── a part that raises SystemExit ends the run as a FAILURE ─────────────────────────────────────
 # importlib.import_module lets SystemExit through, so a part calling sys.exit(0) (or exit()) ended
-# the run with exit 0: no tally, no "every part ran" gate, and none of the later parts. part15, the
-# last part, marks the run as having reached its end; leaving without that mark is a failure.
+# the run with exit 0: no tally, no "every part ran" gate, and none of the later parts. The runner
+# marks the run as having reached its end as it exits (run_exit_code), after the tally and the
+# runner's own steps; leaving without that mark is a failure.
 ran_to_end = [False]
+
+
+def thread_gate():
+    """Fail the run on any uncaught exception a thread or green thread ended in; the runner's last check."""
+    check("unit suite: no thread or green thread a part started ended in an uncaught exception (its traceback "
+          "went to stderr, and the run still exited 0)", not thread_errors, "\n".join(thread_errors[:6]))
+
+
+def run_exit_code(all_results, failed):
+    """The run's exit status: 0 only with results and none failed. Marks the run as having reached its end."""
+    ran_to_end[0] = True
+    return 0 if all_results and failed == 0 else 1
 
 
 def _r33t_exit_guard():
     if not ran_to_end[0]:
-        sys.stdout.write("\nFAIL  unit suite: the run ended before its last part (a part raised SystemExit, "
-                         "so nothing after it ran and no tally was made)\n")
+        # The guard cannot tell why the run stopped: say what is known, and point at the traceback.
+        sys.stdout.write("\nFAIL  unit suite: the run ended before it reached its end (an uncaught exception, "
+                         "SystemExit or an interrupt: see any traceback above), so no tally was made\n")
         sys.stdout.flush()
+        # os._exit skips the exit handlers registered before this one (they run after it): the
+        # update-log folder and logging's flush are done here instead.
+        __import__("shutil").rmtree(_R13D_ULOG_DIR, True)
+        __import__("logging").shutdown()
         os._exit(1)
 
 

@@ -3689,6 +3689,7 @@ for _page, _incs in _includes.items():
         _included_by.setdefault(_i, set()).add(_page)
 
 _unreachable = []
+_INCLUDE_FLAGS = {"show_clear_console"}     # set only by an includer's {% with %}
 for _tpl in sorted(TEMPLATES.glob("*.html")):
     _src = _tpl.read_text(encoding="utf-8")
     if _tpl.name in _included_by:
@@ -3699,7 +3700,11 @@ for _tpl in sorted(TEMPLATES.glob("*.html")):
     # flag the includer sets. server_files.html includes _server_actions.html but never sets
     # show_clear_console, so its Clear Console button does not render there and its handler is
     # not needed. Demanding the script anyway would report a button that does not exist.
-    _set_here = set(re.findall(r"\{%-?\s*with\s+([A-Za-z_]\w*)\s*=", _src))
+    # Only a flag that exists to be set by an includer (_INCLUDE_FLAGS) skips a button the page
+    # does not set it for: any other bare guard (`maintenance`, a route's render argument; `fw_games`,
+    # the page's own {% set %}) renders on the page, and was skipped too, so a handler behind one
+    # was checked on no page at all.
+    _set_here = set(re.findall(r"\{%-?\s*(?:with|set)\s+([A-Za-z_]\w*)\s*=", _src))
     for _inc in _includes.get(_tpl.name, ()):
         _ip = TEMPLATES / _inc
         if not _ip.exists():
@@ -3728,7 +3733,7 @@ for _tpl in sorted(TEMPLATES.glob("*.html")):
             _guard = _stack[-1] if _stack else None
             # Only a BARE variable is treated as a page-supplied flag; an expression is about the
             # loop or the data, not about which page included the partial.
-            if _guard and re.fullmatch(r"[A-Za-z_]\w*", _guard) and _guard not in _set_here:
+            if _guard in _INCLUDE_FLAGS and _guard not in _set_here:
                 continue        # cannot render on this page
             _actions.add(_m.group(1))
     for _act in sorted(_actions):
@@ -3745,6 +3750,11 @@ check(len(_defs) >= 50, "js: the handler-definition scan found the functions",
 check(not _unreachable,
       "js: every page's data-action handlers live in a script that page loads",
       "; ".join(_unreachable[:5]))
+check(all(re.search(r"\{%-?\s*if\s+" + _f + r"\s*-?%\}", "".join((TEMPLATES / _i).read_text(encoding="utf-8")
+                                                                  for _i in _included_by))
+          for _f in _INCLUDE_FLAGS),
+      "js: (control) each include flag the handler check may skip still guards a partial's button",
+      repr(sorted(_INCLUDE_FLAGS)))
 
 # ── report ──
 # c is True (pass), False (fail) or None (skipped — the check did not run; see skip()).
