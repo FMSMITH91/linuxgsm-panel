@@ -91,15 +91,7 @@ def _read(gs, statements, want):
     r, why = _database(gs)
     if why:
         return None, (200, why)
-    statements = list(statements)
-    if len(statements) + 1 <= _sm_priv.DB_QUERY_MAX_STATEMENTS:
-        ans = _ddr._query(gs, r, "ro", [_b3.schema_statement()] + statements)
-    else:
-        ans = _ddr._query(gs, r, "ro", [_b3.schema_statement()])
-        if not _ddr._problem(gs, ans) and not (ans.get("error") or {}).get("code"):
-            rest = _ddr._query(gs, r, "ro", statements)
-            ans = rest if (_ddr._problem(gs, rest) or (rest.get("error") or {}).get("code")) else \
-                dict(rest, statements=list(ans.get("statements") or [])[:1] + list(rest.get("statements") or []))
+    ans = _ask(gs, r, list(statements))
     bad = _ddr._problem(gs, ans)
     if bad:
         return None, bad
@@ -115,6 +107,23 @@ def _read(gs, statements, want):
         return None, (200, i18n.Sentence(S_SCHEMA_OTHER, layout=layout) if layout else S_SCHEMA_NONE)
     return ans["statements"][1:], None
 
+
+def _failed(gs, ans):
+    """Whether a db-query answer did not work, or a statement in it failed."""
+    return bool(_ddr._problem(gs, ans)) or bool((ans.get("error") or {}).get("code"))
+
+
+def _ask(gs, r, statements):
+    """The layout read, then `statements`, as one answer: in one call when the helper's cap allows, else two."""
+    if len(statements) + 1 <= _sm_priv.DB_QUERY_MAX_STATEMENTS:
+        return _ddr._query(gs, r, "ro", [_b3.schema_statement()] + statements)
+    head = _ddr._query(gs, r, "ro", [_b3.schema_statement()])
+    if _failed(gs, head):
+        return head
+    rest = _ddr._query(gs, r, "ro", statements)
+    if _failed(gs, rest):
+        return rest
+    return dict(rest, statements=list(head.get("statements") or [])[:1] + list(rest.get("statements") or []))
 
 def _search_answer(gs):
     body = _json_body()

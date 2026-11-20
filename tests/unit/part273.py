@@ -258,6 +258,10 @@ def _guid_route273(sid, uid):
           and "ABCDEF0123" in run.get("params", []) and "guid" not in d.get("players", [{}])[0], repr((st, d, run))[:400])
 
 
+def _reads273(seen):
+    """The statements a route sent, past the layout read, across its calls."""
+    return [st["sql"] for run in seen["runs"] for st in run[3] if st["sql"] != _b3_273.SCHEMA_SQL]
+
 def _player_routes273(sid, uid):
     def answer(statements):
         if len(statements) == 2:     # the table layout's read, then one
@@ -271,7 +275,7 @@ def _player_routes273(sid, uid):
     seen = _stubs273(sid, answer)
     r = _p9_client(uid).get("/api/server/%d/addons/b3/players/12" % sid)
     d = (r.get_json(silent=True) or {}).get("player") or {}
-    sql = [s["sql"] for run in seen["runs"] for s in run[3] if s["sql"] != _b3_273.SCHEMA_SQL]
+    sql = _reads273(seen)
     eq("b3 players route: one player, for a masked viewer: four reads, the address count and no address, its "
        "penalty as B3's", (r.status_code, len(sql), d.get("address_count"), "ip" in d, d.get("penalties", [{}])[0].get("admin")),
        (200, 4, 4, False, "B3"))
