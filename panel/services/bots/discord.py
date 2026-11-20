@@ -83,7 +83,8 @@ def _dc_literal(body):
     """Show `body` exactly as written: in a code block, with no backtick left to close it.
 
     For the text a player controls: their names (!players) and the console tail (!console), which on
-    most engines carries in-game chat. allowed_mentions stops that pinging anyone, but Discord still
+    most engines carries in-game chat (notifications.discord_plain escapes the rest of a reply and keeps
+    a block made here as it is). allowed_mentions stops that pinging anyone, but Discord still
     rendered the rest of its markdown in the bot's own message, so a player named
     `[Panel login expired](https://evil.example/login)`, or one saying `# Re-authenticate at ...` in
     chat, had the operator's bot post a clickable masked link or a headline in the admin channel.

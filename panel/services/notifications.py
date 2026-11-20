@@ -877,6 +877,24 @@ def telegram_set_commands(token, clear=False):
 # server could pick a name that mass-pings the operator's Discord every time an admin ran
 # `!players`. An empty `parse` turns every mention in the body into inert text.
 _DISCORD_NO_MENTIONS = {"parse": []}
+# Discord renders a message's markdown, so a value the panel did not write (a server or host name, a
+# reason LinuxGSM printed, a player's name in a B3 alert) could post a masked link, a heading or a
+# quote in the operator's own channel: `[Sign in again](https://evil.example)`. discord_plain shows
+# such text as written. Discord takes a backslash before any punctuation as "this character, not
+# markdown"; the inline marks (> included) are escaped everywhere, the line marks (#, -, +) where a line starts.
+# Code is left as it is: Discord renders nothing inside it (no link, heading or quote), so a block
+# made by bots/discord._dc_literal (no backtick inside, so nothing can end it early) and an inline
+# span like the help's `!status` need no escaping. Both are found left to right, as Discord pairs them.
+_DC_INLINE_RE = re.compile(r"([\\*_~`|\[\]<>])")
+_DC_LINE_START_RE = re.compile(r"(?m)^([ \t]*)([#+-])")
+_DC_CODE_RE = re.compile(r"(```\n[^`]*\n```|`[^`\n]+`)")
+
+
+def discord_plain(text):
+    """The text with Discord's markdown neutralised, so it is shown exactly as written (code blocks kept)."""
+    parts = _DC_CODE_RE.split(text or "")
+    return "".join(part if i % 2 else _DC_LINE_START_RE.sub(r"\1\\\2", _DC_INLINE_RE.sub(r"\\\1", part))
+                   for i, part in enumerate(parts))
 
 
 def send_discord(webhook, text):
@@ -888,7 +906,7 @@ def send_discord(webhook, text):
     url = _discord_api_url(webhook)
     if not url:
         return False, "that isn't a valid discord.com webhook URL"
-    ok, reason = _post(url, json.dumps({"content": text[:1900],
+    ok, reason = _post(url, json.dumps({"content": discord_plain(text)[:1900],
                                         "allowed_mentions": _DISCORD_NO_MENTIONS}).encode(),
                        {"Content-Type": "application/json"}, provider="discord")
     if ok:
@@ -1015,14 +1033,15 @@ def discord_bot_send(bot_token, channel_id, text):
     """Post a message to a channel as the bot (the command bot's reply path). Returns (ok, detail).
 
     The token rides only in the Authorization header; the URL is built on the constant discord.com
-    host with a charset-checked channel id, so this can't become an SSRF sink.
+    host with a charset-checked channel id, so this can't become an SSRF sink. The text is shown as
+    written (discord_plain): a server or host name in a reply is not rendered as markdown.
     """
     url = _discord_bot_message_url((channel_id or "").strip())
     if not url:
         return False, "the channel ID is missing or malformed"
     if not _valid_discord_bot_token(bot_token):
         return False, "the bot token is missing or malformed"
-    body = json.dumps({"content": text[:1900],
+    body = json.dumps({"content": discord_plain(text)[:1900],
                        "allowed_mentions": _DISCORD_NO_MENTIONS}).encode()
     ok, reason = _post(url, body, {"Content-Type": "application/json",
                                    "Authorization": "Bot %s" % bot_token}, provider="discord")
