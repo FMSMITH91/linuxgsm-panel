@@ -2,7 +2,9 @@
 // a search of B3's players, one player's history and B3's latest penalties, read from B3's own
 // database. It opens from B3's row (server_addons.js's Players button). Every value is set with
 // textContent: names, aliases and reasons are what players and admins typed in the game. The search
-// text goes in a POST body, never the address.
+// text goes in a POST body, never the address. With B3's Panel actions on, a player's view also offers
+// Unban, Kick and Warn (routes/addons_b3_actions.py): B3 itself does them; each confirms first, and a
+// sign-in past the confirmation window confirms the password in a dialog (step_up_form.js).
 (function () {
   'use strict';
   var st = {mode: '', q: '', after: '', kind: 'all', before: 0, busy: false};
@@ -180,7 +182,36 @@
     if (p.addresses_more) box.appendChild(node('div', 'small text-secondary', T('Older addresses are not shown.')));
   }
 
-  function drawPlayer(p, masked) {
+  function activeBan(p) {
+    return (p.penalties || []).some(function (x) { return (x.type === 'Ban' || x.type === 'TempBan') && x.state === 'active'; });
+  }
+
+  // Unban (an active ban), Kick and Warn, as this viewer may; with Panel actions off, the line that says where to turn them on.
+  function actionBar(p, acts, box) {
+    if (!acts || !(acts.unban || acts.kick)) return;
+    section(box, T('Actions'));
+    if (!acts.on) {
+      box.appendChild(node('div', 'small text-secondary', T('Panel actions are off: turn them on in B3 settings on its card to unban, kick or warn from here.')));
+      return;
+    }
+    var reason = node('input', 'form-control form-control-sm fx-12 mb-1');
+    reason.id = 'b3p-reason';
+    reason.maxLength = 100;
+    reason.autocomplete = 'off';
+    reason.setAttribute('aria-label', T('Reason, said in the game by B3'));
+    reason.placeholder = T('Reason, said in the game by B3');
+    box.appendChild(reason);
+    var bar = node('div', 'd-flex flex-wrap gap-2');
+    if (acts.unban && activeBan(p)) bar.appendChild(button(T('Unban'), 'bi-unlock', 'b3pAct', ['unban', p.id], 'btn-outline-primary'));
+    if (acts.kick) {
+      bar.appendChild(button(T('Kick'), 'bi-box-arrow-right', 'b3pAct', ['kick', p.id], 'btn-outline-warning'));
+      bar.appendChild(button(T('Warn'), 'bi-exclamation-triangle', 'b3pAct', ['warn', p.id], 'btn-outline-warning'));
+    }
+    box.appendChild(bar);
+    box.appendChild(node('div', 'small text-secondary mt-1', T('Kick and Warn reach the player only while they are on the server: the panel finds their slot by name in the game\'s player list.')));
+  }
+
+  function drawPlayer(p, masked, acts) {
     var box = el('b3p-player');
     box.textContent = '';
     show('b3p-list', false);
@@ -200,6 +231,7 @@
     if (!(p.penalties || []).length) box.appendChild(node('div', 'small text-secondary', T('No warnings, kicks or bans.')));
     (p.penalties || []).forEach(function (x) { box.appendChild(penaltyRow(x, false)); });
     if (p.penalties_more) box.appendChild(node('div', 'small text-secondary', T('Older penalties are not shown.')));
+    actionBar(p, acts, box);
     if (st.mode) box.appendChild(button(T('Back to the list'), 'bi-arrow-left', 'b3pBack', [], 'btn-outline-secondary mt-2'));
     show('b3p-player', true);
     say('');
@@ -275,9 +307,43 @@
     return getJson(api('/players/' + Number.parseInt(id, 10))).then(function (d) {
       st.busy = false;
       if (d.success === false) return refused(d);
-      drawPlayer(d.player || {}, d.masked);
+      drawPlayer(d.player || {}, d.masked, d.actions);
       return true;
     }).catch(failed);
+  };
+
+  var ASK = {unban: 'B3 lifts this player\'s active bans.', kick: 'B3 kicks this player from the server now.',
+    warn: 'B3 warns this player in the game. Its warnings add up to kicks and temporary bans.'};
+  var TITLE = {unban: 'Unban the player', kick: 'Kick the player', warn: 'Warn the player'};
+
+  window.b3pAct = function (action, id) {
+    if (st.busy || !ASK[action]) return Promise.resolve(false);
+    var r = el('b3p-reason'), reason = r ? r.value.trim() : '', pid = Number.parseInt(id, 10);
+    if (action === 'warn' && !reason) {
+      say(T('A warning needs a reason.'), 'text-danger');
+      if (r) r.focus();
+      return Promise.resolve(false);
+    }
+    return new Promise(function (done) {
+      window.confirmDialog({title: T(TITLE[action]), icon: 'person-x', confirmClass: 'btn-warning', confirmLabel: T(TITLE[action]),
+        bodyText: T(ASK[action]),
+        onConfirm: function () {
+          var go = function () {
+            st.busy = true;
+            say(T('Asking B3…'));
+            // Each route written out whole, here where the password was confirmed (the step-up gate reads them).
+            var url = action === 'unban' ? api('/players/' + pid + '/unban')
+              : (action === 'kick' ? api('/players/' + pid + '/kick') : api('/players/' + pid + '/warn'));
+            postJson(url, {reason: reason}).then(function (d) {
+              st.busy = false;
+              if (d.success === false) { done(refused(d)); return; }
+              say(d.message || '', d.warning ? 'text-warning' : 'text-success');
+              done(true);
+            }).catch(function () { failed(); done(false); });
+          };
+          if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go();
+        }});
+    });
   };
 
   window.b3pBack = function () {

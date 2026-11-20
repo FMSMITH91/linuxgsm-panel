@@ -203,7 +203,106 @@
   })();
   window.adOpen = WEB.go;
 
+  // B3's own parts of the card (services/b3_control.py): what it says of itself (health.json, or its exit
+  // code in words), and in the settings fold the alerts switch for its bans and kicks (saved at once, no
+  // Apply) and its service settings (Panel actions, purge_aliases_days). B3's reason is its own English
+  // text, shown as it wrote it.
+  var B3S = (function () {
+    function known(v, yes, no) { return v === true ? T(yes) : (v === false ? T(no) : T('not yet')); }
+    function healthLines(h, box) {
+      if (h.healthy) box.appendChild(node('div', 'small text-success', T('B3 is healthy.')));
+      else {
+        var w = node('div', 'small text-warning', T('B3 reports a problem:') + ' ');
+        var r = node('span', null, h.reason || '?');   // i18n-ignore: B3's own words
+        r.setAttribute('data-no-i18n', '');
+        w.appendChild(r);
+        box.appendChild(w);
+      }
+      var parts = [TF('Game log: {s}', {s: known(h.game_log, 'read', 'not read')}),
+        TF('RCON: {s}', {s: known(h.rcon, 'working', 'failing')}),
+        TF('Database: {s}', {s: known(h.database, 'connected', 'lost')})];
+      if (h.humans != null) parts.push(TF('Players: {n} ({bots} bots)', {n: h.humans, bots: h.bots || 0}));
+      box.appendChild(node('div', 'small text-secondary', parts.join(' · ')));   // i18n-ignore: a separator
+    }
+    function alertsSwitch(a, box) {
+      var w = node('div', 'form-check small mt-1');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-b3-alerts';
+      cb.checked = !!a.alerts;
+      cb.setAttribute('data-action', 'adB3Alerts');
+      cb.setAttribute('data-on', 'change');
+      cb.setAttribute('data-args', JSON.stringify(['@self']));
+      var l = node('label', 'form-check-label', T('Alert me when B3 bans, temporarily bans or kicks a player on this server (saved at once)'));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      box.appendChild(w);
+      box.appendChild(node('div', 'small text-secondary', T('Sent to your alert channels (Settings, Notifications); players\' names only with Include details on.')));
+    }
+    function status(a, box) {
+      if (a.exit_reason) box.appendChild(node('div', 'small text-warning', a.exit_reason));
+      if (a.stale) box.appendChild(node('div', 'small text-warning', a.stale));
+      if (a.health) healthLines(a.health, box);
+    }
+    function settings(a, fold) {
+      var w = node('div', 'form-check small mt-2');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-actions-' + a.id;
+      cb.checked = !!a.actions;
+      var l = node('label', 'form-check-label', T('Panel actions: unban, kick and warn from the B3 players section'));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      fold.appendChild(w);
+      fold.appendChild(node('div', 'small text-secondary', T('Turns on B3\'s control socket: a file in its folder that only the server\'s account can open, no network port. Each action also takes the Ban or Kick players permission, asks for your password when your sign-in is old, and is in the audit log.')));
+      var wrap = node('div', 'mt-2');
+      var lab = node('label', 'form-label small mb-0', T('Forget earlier names and IP addresses not seen for (days)'));
+      lab.htmlFor = 'ad-purge-' + a.id;
+      var inp = node('input', 'form-control form-control-sm fx-12');
+      inp.type = 'number';
+      inp.id = 'ad-purge-' + a.id;
+      inp.min = String((a.purge_bounds || [1])[0]);
+      inp.max = String((a.purge_bounds || [1, 3650])[1]);
+      inp.step = '1';
+      inp.placeholder = String(a.purge_example || 365);
+      inp.setAttribute('data-no-i18n', '');
+      if (a.purge_aliases_days) inp.value = String(a.purge_aliases_days);
+      wrap.appendChild(lab);
+      wrap.appendChild(inp);
+      wrap.appendChild(node('div', 'small text-secondary', TF('Optional; empty keeps them for good. B3 keeps each player\'s last name and address, and their penalties. OWASP\'s Logging Cheat Sheet (Disposal of logs) sets no number of days: keep personal data only as long as you need it ({n} is an example).', {n: a.purge_example || 365})));
+      fold.appendChild(wrap);
+    }
+    // The Apply body's B3 service settings, or null (and why, beside the field) when the days are not a whole number in range.
+    function days(inp) {
+      var raw = String(inp.value || '').trim(), n = raw === '' ? null : Number(raw);
+      return n === null || (Number.isInteger(n) && n >= Number(inp.min) && n <= Number(inp.max)) ? n : undefined;
+    }
+    function body(id) {
+      var cb = el('ad-actions-' + id), inp = el('ad-purge-' + id), n = days(inp);
+      if (n === undefined) {
+        say(TF('Days: a whole number from {lo} to {hi}, or empty.', {lo: inp.min, hi: inp.max}), 'text-danger');
+        if (inp.focus) inp.focus();
+        return null;
+      }
+      return {actions: !!cb.checked, purge_aliases_days: n};
+    }
+    return {status: status, settings: settings, body: body, alerts: alertsSwitch};
+  })();
+
+  window.adB3Alerts = function (cb) {
+    var on = !!cb.checked;
+    return postJson(api('/b3/alerts'), {enabled: on}).then(function (res) {
+      var ok = res.ok && res.d.success !== false;
+      if (!ok) cb.checked = !on;
+      say((ok ? '✓ ' : '✗ ') + (res.d.message || res.d.error || T('Failed')), ok ? 'text-success' : 'text-danger');
+      return ok;
+    }).catch(function () { cb.checked = !on; return failed(); });
+  };
+
   function geoStatus(a, box) {
+    if (a.b3_card) B3S.status(a, box);   // B3's own lines first: B3 is the add-on with geolocation
     var GEO_SAID = {off: 'Geolocation is off.',
       offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
       online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'};
@@ -247,6 +346,7 @@
     bar.insertBefore(button(T('Players'), 'bi-people', 'b3pOpen', []), bar.lastChild);
     var fold = node('details', 'mt-2');
     fold.appendChild(node('summary', 'small', T('B3 settings')));
+    if (a.b3_card) B3S.alerts(a, fold);
     fold.appendChild(geoSelect(a, 'ad-set-geo-' + a.id, a.geolocation));
     var grid = node('div', 'd-flex flex-wrap gap-2 mt-2');
     var on = a.plugins || [];
@@ -267,12 +367,14 @@
     fold.appendChild(node('div', 'small text-secondary mt-2', T('B3\'s plugins. Admin is always on.')));
     fold.appendChild(grid);
     ownPlugins(a, fold);
+    if (a.b3_card) B3S.settings(a, fold);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-2');
     // With a new image pending, Apply would name an image the host doesn't have yet: Update comes first.
     if (a.update === 'image') bar.appendChild(node('div', 'small text-warning', T('Update the add-on first, then apply its settings.')));
-    else bar.appendChild(button(T('Apply and restart'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
+    else bar.appendChild(button(T('Apply'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
     fold.appendChild(bar);
     fold.appendChild(node('div', 'small text-secondary mt-1', T('Only these settings are rewritten in b3.ini; your other edits there and in its conf folder are kept.')));
+    fold.appendChild(node('div', 'small text-secondary', T('B3 checks the new settings before it uses them, and a refusal changes nothing. A change to plugin settings alone is reloaded without a restart; anything else restarts B3.')));
     box.appendChild(fold);
   }
 
@@ -466,11 +568,13 @@
     var plugins = Array.prototype.filter.call(document.querySelectorAll('[data-ad-plugin="' + id + '"]'),
       function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
     var own = el('ad-own-' + id), ownOn = !!(own && own.checked);
+    var svc = el('ad-actions-' + id) ? B3S.body(id) : {};
+    if (!svc) return;
     var go = function () {
       stepUp(function () {
         st.busy = true;
         say(T('Applying the settings…'));
-        postJson(api('/' + id + '/settings'), {geolocation: geo.value, plugins: plugins, own_plugins: ownOn}).then(after).catch(failed);
+        postJson(api('/' + id + '/settings'), Object.assign({geolocation: geo.value, plugins: plugins, own_plugins: ownOn}, svc)).then(after).catch(failed);
       });
     };
     // Turning the own-plugins folder on is asked once more, with the warning.

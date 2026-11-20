@@ -2615,6 +2615,50 @@
       "POST"
     ]
   },
+  "POST /api/server/<int:server_id>/addons/b3/alerts": {
+    "endpoint": "api_server_b3_alerts",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_b3_alerts"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/b3/players/<int:client_id>/kick": {
+    "endpoint": "api_server_b3_player_action",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_b3_player_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/b3/players/<int:client_id>/unban": {
+    "endpoint": "api_server_b3_player_action",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_b3_player_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/server/<int:server_id>/addons/b3/players/<int:client_id>/warn": {
+    "endpoint": "api_server_b3_player_action",
+    "guards": [
+      "utils.py:decorated_view[server_access]",
+      "auth.py:decorated_function[server_access]",
+      "view:api_server_b3_player_action"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/server/<int:server_id>/addons/b3/players/search": {
     "endpoint": "api_server_b3_players_search",
     "guards": [

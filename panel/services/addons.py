@@ -93,19 +93,19 @@ RCON_TCP_GAMES = ("csgo", "ins")
 # Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
 # folder LinuxGSM's mods-install puts it in.
 SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
-# FMSMITH91/big-brother-bot master on 2026-11-19 (the merge of its PR #25: the Quake 3 engine parsers ask
-# `dumpuser` by the slot's name from `status`, colour codes cleaned and quoted, and by the slot number only when
-# that name is unsafe to send or not unique; the reply is accepted only when its name, and its IP when both show
-# one, is that slot's. Before it, PR #24: the q3 parser reads `ip:port` status rows; the et parser reads ET:
-# Legacy's status and chat, and asks `dumpuser` for a player's cl_guid, which no ET server writes to its game
-# log), on top of v2.0.0 (#23: commands refused to a player B3 has not authenticated;
-# #22 and #21 CoD4x and vanilla ET; #19 and #20 geolocation): the B3 the add-on builds. Renovate proposes the
-# branch's newest commit (.github/renovate.json), in this line and the Containerfile's ARG together.
-B3_COMMIT = "920d736648e2544714ee58a74e556fbbb3881892"
-# The fork's release at the pin: v2.0.1, an annotated tag on exactly B3_COMMIT (2026-11-19). The card shows this
-# number beside the pin's short commit. Only a label: the build checks the commit, not a tag, and the image's tag
-# is the commit and build id, so a new number alone offers no update.
-B3_RELEASE = "2.0.1"
+# FMSMITH91/big-brother-bot master on 2026-11-19: v2.0.1 (the Quake 3 engine parsers asking `dumpuser` by
+# the slot's name, ET: Legacy's status and chat, CoD4x and vanilla ET, commands refused to a player B3 has
+# not authenticated, geolocation) and the service interface the panel uses on top of it: `--check-config`
+# (exit 230), `--version` with the commit (from the image's B3_COMMIT), fixed exit codes 220-223 and
+# 230-233 (b3/exitcodes.py), health.json, the `data` table's b3_schema_version, purge_aliases_days,
+# events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3
+# the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and
+# the Containerfile's ARG together.
+B3_COMMIT = "178baced305535f06149b1e4361e63253cd10aee"
+# A development commit after v2.0.1: a 2.0.2 tag is planned on it. The card shows this label beside the
+# short commit until B3 itself says what runs (its health.json). Only a label: the build checks the
+# commit, not a tag, and the image's tag is the commit and build id, so a new label alone offers no update.
+B3_RELEASE = "2.0.2dev"
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
 IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
@@ -162,7 +162,7 @@ CATALOG = {
         # its synchronous ProcessExit shutdown outlasted Podman's wait and it was killed (137).
         "stop_signal": "SIGINT", "stop_timeout": 30, "success_exit": None,
         "database": False, "build": None, "legacy": False, "log_file": None,
-        "data_kept": False, "reads": "log", "command": (), "nice": 0,
+        "data_kept": False, "reads": "log", "command": (), "nice": 0, "no_restart": None,
     },
     B3: {
         "name": "B3 (Big Brother Bot)",
@@ -184,6 +184,9 @@ CATALOG = {
         "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": None,
         "database": True, "build": "b3", "legacy": True, "log_file": "Data/b3.log",
         "data_kept": True, "reads": "log", "command": (), "nice": 0,
+        # B3's exit codes (b3/exitcodes.py) that a restart can't mend: 222 an admin's !die in the game,
+        # 230 invalid settings. Not 233 (the database not reached at start): that one may come back.
+        "no_restart": "222 230",
     },
     BLUEMAP: {
         "name": "BlueMap",
@@ -207,7 +210,7 @@ CATALOG = {
         # The image's `java -jar cli.jar` takes these, then the Minecraft version: render, watch, serve.
         "command": ("-r", "-u", "-w", "-v"),
         # Rendering is CPU heavy and the game shares the host: below the game's priority.
-        "nice": 10,
+        "nice": 10, "no_restart": None,
     },
 }
 ADDON_IDS = tuple(sorted(CATALOG))
@@ -609,7 +612,7 @@ def status_sh():
         meta = shlex.quote("%s/%s/%s" % (HOME_DIR, k, META_FILE))
         rows.append('[ -f %s ] && { echo "meta.%s=$(head -c 4000 %s | base64 -w0)"; '
                     'echo "state.%s=$(systemctl --user is-active %s.service 2>/dev/null | head -n 1)"; %s}; '
-                    % (meta, k, meta, k, unit_name(k), _world_status_sh(k)))
+                    % (meta, k, meta, k, unit_name(k), _world_status_sh(k) + _b3_status_sh(k)))
     return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; ' + "".join(rows) + "true")
 
@@ -623,10 +626,19 @@ def _world_status_sh(k):
             % (k, shlex.quote("%s/%s" % (HOME_DIR, k)), _bm.version_sh("mcver." + k)))
 
 
+def _b3_status_sh(k):
+    """status_sh's extra lines for B3: its health file, its last exit status and its service settings (b3_control)."""
+    if k != B3:
+        return ""
+    from panel.services import b3_control as _b3c     # it imports this module
+    return _b3c.status_sh("%s/%s" % (HOME_DIR, k))
+
+
 def parse_status(out):
     """What status_sh found: {os, podman, addons: {id: {meta dict, state, disk_kb, mc_version}}} for the installed ones.
 
-    disk_kb is None when it was not read (an add-on that does not read the world, or a slow du).
+    disk_kb is None when it was not read (an add-on that does not read the world, or a slow du). An
+    installed B3 also has "b3": b3_control.parse_status's {health, exit, svc, now}.
     """
     kv = kv_lines(out)
     found = {}
@@ -643,6 +655,9 @@ def parse_status(out):
                     "state": state if state in _STATES else "unknown",
                     "disk_kb": int(disk) if disk.isdecimal() and len(disk) < 16 else None,
                     "mc_version": kv.get("mcver." + k, "")}
+    if B3 in found:
+        from panel.services import b3_control as _b3c     # it imports this module
+        found[B3]["b3"] = _b3c.parse_status(kv, _unb64)
     return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "addons": found}
 
 
@@ -817,20 +832,34 @@ def _into_section(lines, name, new, at_end):
     return lines[:end] + new + lines[end:]
 
 
-def b3_ini_apply(text, geolocation, chosen, own_plugins=False):
+def b3_ini_apply(text, geolocation, chosen, own_plugins=False, service=None):
     """`text` (b3.ini) with the [plugins] lines the panel owns set to `chosen` and the geolocation mode.
 
     Every other line is kept as it was: the passwords, the operator's own settings, comments, and the
     [plugins] lines of plugins the panel does not offer (an operator's external plugin). The owned lines
     are dropped where they were and the ones turned on are written at the end of [plugins], which is
     added when the file has none. [b3] external_plugins_dir is the panel's too: the own-plugins folder
-    with `own_plugins`, else B3's own.
+    with `own_plugins`, else B3's own. With `service` ({actions, purge}), [b3] control_socket is written
+    only while Panel actions is on (else removed: B3 then opens no socket) and purge_aliases_days only
+    when it is set (else removed: B3 keeps aliases for good, its default).
     """
     lines = _ini_lines(text)
     keep = [ln for ln, sec in zip(lines, _sections(lines)) if not (sec == "plugins" and _ini_key(ln) in _B3_OWNED)]
-    keep = _ini_set(keep, "b3", {"external_plugins_dir": _B3_EXT_DIR[bool(own_plugins)]})
+    want = {"external_plugins_dir": _B3_EXT_DIR[bool(own_plugins)]}
+    if service is not None:
+        keep = _b3_service(keep, service, want)
+    keep = _ini_set(keep, "b3", want)
     return "\n".join(_into_section(keep, "plugins", [b3_plugin_line(p) for p in b3_plugins(geolocation, chosen)],
                                    at_end=True)) + "\n"
+
+
+def _b3_service(lines, service, want):
+    """`lines` without [b3]'s control_socket / purge_aliases_days while off; `want` gets them while on."""
+    from panel.services import b3_control as _b3c     # it imports this module
+    on = {"control_socket": _b3c.SOCKET_LINE if service.get("actions") else None,
+          "purge_aliases_days": int(service["purge"]) if service.get("purge") else None}
+    want.update({k: v for k, v in on.items() if v is not None})
+    return [ln for ln, sec in zip(lines, _sections(lines)) if not (sec == "b3" and on.get(_ini_key(ln), 1) is None)]
 
 
 def _ini_set(lines, section, want):
@@ -1010,9 +1039,15 @@ def _exec_lines(a, logdir):
 
 
 def _service_extra(a):
-    """The [Service] lines an add-on adds: the exit status its stop ends with, and a lower CPU priority."""
+    """The [Service] lines an add-on adds: the exit status its stop ends with, a lower CPU priority, no restart on some exits.
+
+    RestartPreventExitStatus= keeps Restart=always from starting again an add-on that exited with a code
+    no restart can mend (B3's invalid settings, or its !die): the unit stays failed with that code, which
+    the card says in words, instead of five restarts into the start limit.
+    """
     return ((["SuccessExitStatus=%s" % a["success_exit"]] if a["success_exit"] else [])
-            + (["Nice=%d" % a["nice"]] if a["nice"] else []))
+            + (["Nice=%d" % a["nice"]] if a["nice"] else [])
+            + (["RestartPreventExitStatus=%s" % a["no_restart"]] if a.get("no_restart") else []))
 
 
 def _put_sh(path, text):
@@ -1170,6 +1205,10 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     how["dirs"] are more folders of the add-on to make (B3's own-plugins folder, when it is mounted).
     how["extra"] is shell run before the image (BlueMap's client file: addons_bluemap.client_sh).
     Its data, settings and database stay. how["old_image"], when the update moved it, is removed afterwards.
+    how["check"] (B3's settings check, b3_control.check_sh) runs after the new settings file is written
+    beside the old one and before anything is moved into place; it exits on a refusal. how["reload"]
+    (b3_control.reload_sh) runs once the files are in place and, when B3 can take them without a restart,
+    reloads it and exits before the unit is touched.
     """
     how = how or {}
     rebuild, settings, old_image = how.get("rebuild", False), how.get("settings", False), how.get("old_image", "")
@@ -1184,21 +1223,31 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     early += [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())]
     late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
     late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
-    stdin = ("cat > %s.new && mv -f -T %s.new %s && " % (secret, secret, secret)) if settings else ""
+    stdin, move = _settings_io(secret, settings)
     drop = ("podman rmi %s >/dev/null 2>&1; " % shlex.quote(old_image)) if old_image and old_image != a["image"] else ""
+    # The user manager first: B3's check runs Podman, which needs it, before anything is written.
     return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
-            "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
-            "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; %s%s"
+            "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
+            "%s%s%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; %s%s%s"
             "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "systemctl --user daemon-reload && { %s; } "
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%s%secho %s"
-            % (folders, shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early), how.get("extra", ""),
+            % (folders, shlex.quote(q), shlex.quote(uu), stdin, how.get("check", ""), move, " && ".join(early),
+               how.get("reload", ""), how.get("extra", ""),
                _image_sh(addon_id, shlex.quote(d)) if rebuild else "", _relays_gone_sh(user, addon_id),
                " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), drop,
                _MARK_INSTALLED))
+
+
+def _settings_io(secret, settings):
+    """(the shell writing the settings file from stdin beside the old one, the shell moving it into place); ("", "") without."""
+    if not settings:
+        return "", ""
+    return ("cat > %s.new || { echo ADDON_WRITE_FAILED; exit 21; }; " % secret,
+            "mv -f -T %s.new %s && " % (secret, secret))
 
 
 def b3_conf_read_sh(user):

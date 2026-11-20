@@ -895,3 +895,6 @@ bfb58a58 The reboot dialog says what is blocking.
 14e35216 Editing a host no longer freezes the panel while its key is checked.
 fe544850 Open an add-on's web page from the panel.
 9265be91 A new permission: View add-on pages.
+57ed9a07 B3 checks its settings before Apply, and its card says how it is.
+60869c21 Unban, kick and warn through B3 from the panel.
+5e4d8f4f Alerts when B3 bans or kicks a player.

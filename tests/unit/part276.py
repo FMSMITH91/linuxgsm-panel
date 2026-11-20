@@ -29,7 +29,7 @@
     showing such a line but never offering it for edit.
 14. The start port check reads a crossplay Valheim's port + 1, as every other port reader does since
     review pass 33 (up on 2457 only, it was "not listening" and the start went ahead blind).
-15. B3's card shows release 2.0.1 (the fork's tag on the pinned commit) and an installed B3 is told
+15. B3's card shows release 2.0.2dev (the label of the pinned commit) and an installed B3 is told
     it is up to date; the image's tag is the commit and build id alone, so the label offers no update.
 
 Nothing here reaches a host.
@@ -82,7 +82,7 @@ def _apply276(sid, image, kind):
     try:
         with _p9.app_context():
             gs = _db276.session.get(_GS276, sid)
-            why, _tail = _ch276._change_steps(gs, "b3", "p276", kind, ("off", list(_ad276.B3_PLUGINS), False))
+            why, _tail = _ch276._change_steps(gs, "b3", "p276", kind, ("off", list(_ad276.B3_PLUGINS), False, False, None))
     finally:
         _p9_restore_all()
     return why, len(shells)
@@ -593,9 +593,9 @@ def _b3_release276():
     b3 = _ad276.CATALOG["b3"]
     tag = "localhost/lgsm-addon-b3:%s-%s" % (_ad276.B3_COMMIT[:12], _ad276.build_id(
         os.path.join(os.path.dirname(_ad276.__file__), "..", "addon_images", "b3"), _ad276.B3_BASE))
-    eq("B3: the card names release 2.0.1 with the pinned commit, and the image's tag is the commit and the build id "
+    eq("B3: the card names release 2.0.2dev with the pinned commit, and the image's tag is the commit and the build id "
        "alone (a new release label offers installed B3s no update)",
-       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.1 (920d7366)", True, False))
+       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2dev (178baced)", True, False))
 
 
 _settings_pending276()

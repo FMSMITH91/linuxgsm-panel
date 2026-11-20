@@ -149,15 +149,18 @@ def _answers273():
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 2. The routes
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-def _xml273(sets):
-    """The client's XML answer for `sets` ([(columns, rows)] one per statement), with the verb's own marks."""
+def _xml273(sets, layout="1"):
+    """The client's XML answer for `sets` ([(columns, rows)] one per statement), with the verb's own marks.
+
+    Every read starts with B3's table layout (data.b3_schema_version): `layout`, or no row for None.
+    """
     def resultset(stmt, cols, rows):
         body = "".join("<row>%s</row>" % "".join(
             '<field name="%s" xsi:nil="true" />' % c if v is None else '<field name="%s">%s</field>' % (c, v)
             for c, v in zip(cols, r)) for r in rows)
         return '<resultset statement="%s" xmlns:xsi="x">%s</resultset>\n' % (stmt, body)
     out = resultset(_pv273.DB_QUERY_CONN_SQL, ["panel_conn"], [["7"]])
-    for cols, rows in sets:
+    for cols, rows in [(("data_value",), [(layout,)] if layout is not None else [])] + list(sets):
         out += resultset("EXECUTE panel_s", cols, rows) + resultset(_pv273.DB_QUERY_ROWS_SQL, ["panel_rows"], [["-1"]])
     return out
 
@@ -219,7 +222,7 @@ def _search_routes273(sid):
     eq("b3 players route: a search answers the players found, read from B3's own database in a READ ONLY db-query",
        (st, [p.get("name") for p in d.get("players", [])], run[1], run[2]), (200, ["Snake"], _DBNAME273, "ro"))
     check("b3 players route: ...the text is a bound value, escaped for LIKE, never in the statement",
-          "Sna!%ke%" in run[3][0].get("params", []) and "Sna" not in run[3][0].get("sql", ""), repr(run[3])[:300])
+          "Sna!%ke%" in run[3][1].get("params", []) and "Sna" not in run[3][1].get("sql", ""), repr(run[3])[:300])
     a = _p9_audit("b3_player_search")
     check("b3 players route: ...one audit row with the server, saying what kind of search found how many, never the "
           "text (personal data stays out of the log)",
@@ -240,7 +243,7 @@ def _search_routes273(sid):
 def _guid_route273(sid, uid):
     seen = _stubs273(sid, _xml273([(_PLAYER_COLS273, [("2", "Snake", "12", "1", "1700500000", "")])]))
     st, d = _post273(_p9_client(uid), sid, {"q": "ABCDEF0123"})
-    run = seen["runs"][0][3][0] if seen["runs"] else {}
+    run = seen["runs"][0][3][1] if seen["runs"] else {}
     check("b3 players route: a viewer with Manage add-ons but not Manage a server's databases gets the masked "
           "statement (no GUID selected, a GUID only whole) and is told so",
           st == 200 and d.get("masked") is True and run.get("sql") == _b3_273.SEARCH_SQL[(False, False)]
@@ -249,7 +252,7 @@ def _guid_route273(sid, uid):
 
 def _player_routes273(sid, uid):
     def answer(statements):
-        if len(statements) == 1:
+        if len(statements) == 2:     # the table layout's read, then one
             return _xml273([(("id",), [])])
         return _xml273([(("id", "name", "connections", "time_add", "time_edit", "grp", "level"),
                          [("12", "Snake", "3", "1", "2", "Admin", "40")]),
@@ -260,7 +263,7 @@ def _player_routes273(sid, uid):
     seen = _stubs273(sid, answer)
     r = _p9_client(uid).get("/api/server/%d/addons/b3/players/12" % sid)
     d = (r.get_json(silent=True) or {}).get("player") or {}
-    sql = [s["sql"] for s in seen["runs"][0][3]] if seen["runs"] else []
+    sql = [s["sql"] for s in seen["runs"][0][3][1:]] if seen["runs"] else []
     eq("b3 players route: one player, for a masked viewer: four reads, the address count and no address, its "
        "penalty as B3's", (r.status_code, len(sql), d.get("address_count"), "ip" in d, d.get("penalties", [{}])[0].get("admin")),
        (200, 4, 4, False, "B3"))
@@ -316,7 +319,7 @@ def _penalty_routes273(sid):
     c = _p9_client(P9_ADMIN)
     r = c.get("/api/server/%d/addons/b3/penalties?kind=bans&before=40" % sid)
     d = r.get_json(silent=True) or {}
-    params = seen["runs"][0][3][0].get("params") if seen["runs"] else []
+    params = seen["runs"][0][3][1].get("params") if seen["runs"] else []
     eq("b3 players route: the latest penalties, bans only, after a given id: the kinds and the mark bound",
        (r.status_code, [(x.get("id"), x.get("player"), x.get("state")) for x in d.get("penalties", [])], params),
        (200, [(31, "Snake", "expired")], ["Ban", "TempBan", None, None, "40", "40"]))

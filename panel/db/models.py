@@ -817,6 +817,9 @@ class GameServer(db.Model):
     # and the box can never disagree about it. The UI converts to and from the viewer's clock.
     daily_restart_at = db.Column(db.String(5), default="05:00")
     notify_when_empty = db.Column(db.Boolean, default=False)  # one-shot: alert once this server hits 0 players
+    # Alerts for the bans, temp bans and kicks this server's B3 add-on writes to its events.jsonl (off
+    # unless turned on, on the B3 card: services/b3_events.py).
+    b3_alerts = db.Column(db.Boolean, default=False)
     peak_players = db.Column(db.Integer, default=0)  # highest player count seen (for the new-record alert)
     restart_pending = db.Column(db.Boolean, default=False)  # a mod change needs a restart to load it
     backup_pending = db.Column(db.Boolean, default=False)   # queued to back up once players leave
@@ -1105,7 +1108,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
     "db_browse", "db_row_insert", "db_row_update", "db_row_delete", "db_sql", "db_dump_download", "db_upload",
     "addon_install", "addon_start", "addon_stop", "addon_remove", "addon_refused", "addon_settings", "addon_update",
-    "b3_player_search", "b3_player_view", "b3_penalties_view",
+    "b3_player_search", "b3_player_view", "b3_penalties_view", "b3_unban", "b3_kick", "b3_warn", "b3_alerts_set",
     "addon_web_opened", "addon_web_refused",
 })
 AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
@@ -1904,6 +1907,7 @@ _LIGHT_MIGRATIONS = {
     ("game_server", "lgc_ts3_query"): "ALTER TABLE game_server ADD COLUMN lgc_ts3_query VARCHAR(8)",
     # NULL on upgrade: no port was saved while a server ran before this column existed.
     ("game_server", "pending_port"): "ALTER TABLE game_server ADD COLUMN pending_port INTEGER",
+    ("game_server", "b3_alerts"): "ALTER TABLE game_server ADD COLUMN b3_alerts BOOLEAN DEFAULT 0",
     # NULL on upgrade, then backfilled once by _backfill_audit_object_ids (see there).
     ("audit_log", "game_server_id"): "ALTER TABLE audit_log ADD COLUMN game_server_id INTEGER",
     ("host_sample", "net_rx_kbps"): "ALTER TABLE host_sample ADD COLUMN net_rx_kbps FLOAT",

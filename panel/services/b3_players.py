@@ -35,6 +35,9 @@ CACHE_SECONDS = 60      # how long the B3 add-on's database name is reused witho
 TYPES = ("Ban", "TempBan", "Kick", "Warning", "Notice")
 KINDS = {"all": ("Ban", "TempBan", "Kick", "Warning"), "bans": ("Ban", "TempBan")}
 TABLES_MISSING = 1146   # ER_NO_SUCH_TABLE: B3 creates its tables at its first start
+# The layout of B3's tables these statements are written for: B3 stores it as data.b3_schema_version at
+# every start (b3/storage/common.py SCHEMA_VERSION) and raises it whenever a table changes.
+SCHEMA = "1"
 
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _ID_RE = re.compile(r"@?([0-9]{1,10})\Z")
@@ -84,6 +87,29 @@ RECENT_SQL = ("SELECT p.id, p.type, p.duration, p.inactive, p.reason, p.keyword,
               " p.admin_id, a.name AS admin, p.client_id, c.name AS player FROM penalties p"
               " LEFT JOIN clients c ON c.id = p.client_id LEFT JOIN clients a ON a.id = p.admin_id"
               " WHERE p.type IN (?, ?, ?, ?) AND (? IS NULL OR p.id < ?) ORDER BY p.id DESC LIMIT 16")
+
+
+# Which table layout B3's database has (the first statement of every read: routes/addons_b3.py).
+SCHEMA_SQL = "SELECT data_value FROM data WHERE data_key = ?"
+# One player's name as B3 stored it, for a kick or a warning (the slot is found by it in the game's list).
+NAME_SQL = "SELECT name FROM clients WHERE id = ?"
+
+
+def schema_statement():
+    """The read of data.b3_schema_version, first in every read of B3's database."""
+    return {"sql": SCHEMA_SQL, "params": ["b3_schema_version"], "cap": 2}
+
+
+def schema_of(statement):
+    """The layout schema_statement's answer names: its one value (at most 16 characters), or "" for none."""
+    rows = records(statement)
+    value = rows[0].get("data_value") if len(rows) == 1 else None
+    return value[:16] if isinstance(value, str) else ""
+
+
+def name_statement(client_id):
+    """The read of one player's stored name."""
+    return {"sql": NAME_SQL, "params": [str(int(client_id))], "cap": 1}
 
 
 def clean_query(q):
@@ -241,19 +267,21 @@ def detail(statements, unmask, now):
 
 
 # ── which database is B3's ────────────────────────────────────────────────────────────────────────
-# server id -> (monotonic time, the B3 add-on's database name, "" when B3 is not installed). Filled by
-# the Add-ons tab's own status read too, so opening the players section after the tab asks the host
-# nothing more.
+# server id -> (monotonic time, the B3 add-on's database name, "" when B3 is not installed, whether
+# b3.ini turns its control socket on). Filled by the Add-ons tab's own status read too, so opening the
+# players section after the tab asks the host nothing more.
 _DB = {}
 _DB_LOCK = threading.Lock()
 
 
 def remember(gs_id, found, now=None):
     """Note B3's database on server `gs_id` from addons.parse_status()'s add-ons (`found`)."""
-    meta = (found.get(_ad.B3) or {}).get("meta") or {}
+    got = found.get(_ad.B3) or {}
+    meta = got.get("meta") or {}
     name = meta.get("database") if isinstance(meta.get("database"), str) else ""
+    actions = (((got.get("b3") or {}).get("svc") or {}).get("actions")) is True
     with _DB_LOCK:
-        _DB[gs_id] = (time.monotonic() if now is None else now, name)
+        _DB[gs_id] = (time.monotonic() if now is None else now, name, actions)
     return name
 
 
@@ -265,6 +293,16 @@ def database_name(gs_id, now=None):
     if got is None or now - got[0] >= CACHE_SECONDS:
         return None
     return got[1]
+
+
+def actions_on(gs_id, now=None):
+    """Whether B3's control socket is on (Panel actions) on server `gs_id` while the note is fresh, else None."""
+    now = time.monotonic() if now is None else now
+    with _DB_LOCK:
+        got = _DB.get(gs_id)
+    if got is None or now - got[0] >= CACHE_SECONDS:
+        return None
+    return got[2]
 
 
 def forget(gs_id):

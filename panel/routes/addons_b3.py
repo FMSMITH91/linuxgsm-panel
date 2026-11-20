@@ -16,9 +16,11 @@ AUDIT. A search, a player opened and the latest-penalties list each write an aud
 server (Logging Cheat Sheet, "Which events to log": access to sensitive data): what was looked at
 (a player by B3 id, the kind of search and how many it found), never the text searched for.
 
-ACTIONS. None: B3 takes a ban back only through its own commands, said by an admin in the game (or
-its own database rows changed behind it); the panel has no way to talk to B3 itself, so this section
-reads and changes nothing.
+TABLE LAYOUT. Every read starts with data.b3_schema_version (B3 writes it at each start); anything
+but "1", the layout these statements are written for, is refused with a sentence, unread.
+
+ACTIONS. Unban, kick and warn go through B3 itself, over its control socket, while B3's Panel actions
+setting is on (routes/addons_b3_actions.py): the reads here never change anything.
 """
 import re
 import time
@@ -44,6 +46,10 @@ S_UNREAD = "B3's database answer could not be read. Try again."
 S_BAD_QUERY = "Type a name, an alias, a B3 id (@12) or a GUID: up to {n} characters."
 S_BAD_PAGE = "That page mark is not one this list gave."
 S_NO_PLAYER = "There is no player with that B3 id in B3's database."
+S_SCHEMA_NONE = ("B3's database doesn't say which table layout it has: B3 2.0.2 or newer writes it when it starts. "
+                 "Update B3 on its card and start it, then open Players again.")
+S_SCHEMA_OTHER = ("B3's database has table layout {layout}, which this panel doesn't read (it reads layout 1). "
+                  "Update the panel.")
 _BEFORE_RE = re.compile(r"[0-9]{1,10}")   # ASCII digits only: str.isdigit() also takes "²", which int() refuses
 
 
@@ -74,11 +80,15 @@ def _database(gs):
 
 
 def _read(gs, statements, want):
-    """(the `want` finished statements, None) or (None, (status, sentence)) for a read of B3's database."""
+    """(the `want` finished statements, None) or (None, (status, sentence)) for a read of B3's database.
+
+    The table layout is read first, in the same call: a layout other than b3_players.SCHEMA is refused
+    before any of `statements` is looked at.
+    """
     r, why = _database(gs)
     if why:
         return None, (200, why)
-    ans = _ddr._query(gs, r, "ro", statements)
+    ans = _ddr._query(gs, r, "ro", [_b3.schema_statement()] + list(statements))
     bad = _ddr._problem(gs, ans)
     if bad:
         return None, bad
@@ -87,9 +97,12 @@ def _read(gs, statements, want):
         return None, (200, S_NO_TABLES)
     if code:
         return None, (502, i18n.Sentence(S_DB_ERROR, code=code))
-    if len(ans.get("statements") or []) < want:
+    if len(ans.get("statements") or []) < want + 1:
         return None, (502, S_UNREAD)
-    return ans["statements"], None
+    layout = _b3.schema_of(ans["statements"][0])
+    if layout != _b3.SCHEMA:
+        return None, (200, i18n.Sentence(S_SCHEMA_OTHER, layout=layout) if layout else S_SCHEMA_NONE)
+    return ans["statements"][1:], None
 
 
 def _search_answer(gs):
@@ -123,7 +136,8 @@ def _player_answer(gs, client_id):
         return _say(404, S_NO_PLAYER)
     log_action(current_user, "b3_player_view", target=gs.name, server=gs,
                detail="B3 player @%d opened%s" % (client_id, ", addresses and GUID shown" if show else ""))
-    return jsonify({"success": True, "player": p, "masked": not show})
+    from panel.routes import addons_b3_actions as _act   # it imports this module
+    return jsonify({"success": True, "player": p, "masked": not show, "actions": _act.offered(gs)})
 
 
 def _penalties_answer(gs):
@@ -160,6 +174,9 @@ def register(app):
         if not has_permission(current_user, MANAGE_ADDONS):
             return _say(403, _DENIED)
         return _ra._guarded(server_id, _ad.B3, lambda gs: _player_answer(gs, client_id), reading=True)
+
+    from panel.routes import addons_b3_actions   # it imports this module
+    addons_b3_actions.register(app)
 
     @app.route("/api/server/<int:server_id>/addons/b3/penalties")
     @login_required

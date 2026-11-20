@@ -22,7 +22,7 @@ import re
 import shlex
 import time
 
-from panel.services import notifications
+from panel.services import b3_events, notifications
 from panel.ops import system_ops as so
 from panel.core.clock import utcnow
 from panel.core.config import _r15a_cfg_int, load_config
@@ -1131,6 +1131,8 @@ def _monitor_pass():
     _by_remote = {}
     for _gs in GameServer.query.filter_by(installed=True).all():
         _by_remote.setdefault(_gs.remote_id, []).append(_gs)
+    # B3's bans and kicks are read after the commit below; which servers, before it (no reload of every row).
+    b3_watch = b3_events.watched(_by_remote, probes)
     status_changed = False
     for remote in remotes:
         probe = probes.get(remote.id) or {"reachable": False}
@@ -1142,6 +1144,7 @@ def _monitor_pass():
         except Exception:
             db.session.rollback()
             _log.debug("monitor: persisting server status failed", exc_info=True)
+    b3_events.sweep(b3_watch)
 
 
 def _probe_hosts(remotes, flag_hosts=None):

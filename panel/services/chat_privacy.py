@@ -18,7 +18,9 @@ from panel.core.validation import replace_text_ips
 # The alerts whose text names a person or an address: who signed in and from where, the attacked
 # account and the attacker's address, a banned IP, the account a change was made to or by.
 PERSONAL_EVENTS = frozenset({"admin_login", "admin_bruteforce", "account_locked", "ip_banned",
-                             "account_change", "credential_change", "twofa_enforced"})
+                             "account_change", "credential_change", "twofa_enforced",
+                             # players' and admins' names, from a B3 add-on's events.jsonl
+                             "b3_penalty"})
 BRIEF_BODY = "Details are in the panel's Audit log."
 ADDRESS_MASK = "[address]"
 

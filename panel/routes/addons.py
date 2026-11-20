@@ -30,7 +30,7 @@ from panel.routes._shared import _reboot_holds, game_account_write_refusal, unin
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
 from panel.services import addon_web as _aw, addons as _ad, reboot_words as _rw
-from panel.services import addons_bluemap as _bm, b3_players as _b3p, geoip as _geoip
+from panel.services import addons_bluemap as _bm, b3_control as _b3c, b3_players as _b3p, geoip as _geoip
 
 _DENIED = "Permission denied"
 _UNKNOWN = "This server can't run that add-on."
@@ -242,7 +242,7 @@ def _addon_rows(gs, found):
 def _extra_fields(gs, k, meta, got):
     """The row fields of one add-on's own: B3's settings, BlueMap's licence, version and disk use."""
     if k == _ad.B3:
-        return _b3_fields(gs, meta)
+        return _b3_fields(gs, meta, got)
     if k == _ad.BLUEMAP:
         return _bluemap_fields(meta, got)
     return {"geolocation_option": False}
@@ -278,18 +278,26 @@ _PUBLIC_REPLIES = {"sof2": "On Soldier of Fortune 2, B3 has no private messages:
                    "etl": "On ET: Legacy, B3 has no private messages: every reply is said in public chat."}
 
 
-def _b3_fields(gs, meta):
-    """B3's row fields: its geolocation and plugins as set, what the card may switch, its notes and credit."""
+def _b3_fields(gs, meta, got=None):
+    """B3's row fields: its geolocation and plugins as set, what the card may switch, its notes and credit.
+
+    An installed B3 also gets what it says of itself (b3_control.card: health, an exit code in words, the
+    version it runs, Panel actions and purge_aliases_days as b3.ini sets them) and whether this server
+    sends alerts for its bans and kicks.
+    """
     geo = _ad.geo_mode(meta.get("geolocation"))
-    return {"geolocation_option": True, "geolocation": geo, "geo_modes": list(_ad.GEO_MODES),
-            "plugins": [x for x in meta.get("plugins") or _ad.B3_PLUGINS if isinstance(x, str)],
-            "switchable": list(_ad.B3_SWITCHABLE), "geo_switchable": list(_ad.B3_GEO_SWITCHABLE),
-            "own_plugins": meta.get("own_plugins") is True, "own_plugins_dir": _ad.B3_OWN_PLUGINS,
-            "geoip": meta.get("geoip", "") if geo == _ad.GEO_OFFLINE else "",
-            "credit": _geoip.CREDIT,
-            # Offline needs DB-IP's database: with its Outside services switch off, the card says so.
-            "geoip_off": "" if _geoip.download_allowed() else i18n.tr(_geoip.OFF),
-            "note": i18n.tr(_PUBLIC_REPLIES[gs.game_type]) if gs.game_type in _PUBLIC_REPLIES else ""}
+    own = _b3c.card(got["b3"], got.get("state", "")) if got is not None and "b3" in got else {}
+    if own.get("stale_minutes"):
+        own["stale"] = i18n.tr(_b3c.stale_sentence(own["stale_minutes"]))
+    return dict({"geolocation_option": True, "geolocation": geo, "geo_modes": list(_ad.GEO_MODES),
+                 "plugins": [x for x in meta.get("plugins") or _ad.B3_PLUGINS if isinstance(x, str)],
+                 "switchable": list(_ad.B3_SWITCHABLE), "geo_switchable": list(_ad.B3_GEO_SWITCHABLE),
+                 "own_plugins": meta.get("own_plugins") is True, "own_plugins_dir": _ad.B3_OWN_PLUGINS,
+                 "geoip": meta.get("geoip", "") if geo == _ad.GEO_OFFLINE else "",
+                 "credit": _geoip.CREDIT, "alerts": bool(getattr(gs, "b3_alerts", False)),
+                 # Offline needs DB-IP's database: with its Outside services switch off, the card says so.
+                 "geoip_off": "" if _geoip.download_allowed() else i18n.tr(_geoip.OFF),
+                 "note": i18n.tr(_PUBLIC_REPLIES[gs.game_type]) if gs.game_type in _PUBLIC_REPLIES else ""}, **own)
 
 
 def _db_host_state(gs, rows, dbs):

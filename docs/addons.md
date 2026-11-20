@@ -79,7 +79,7 @@ Not offered:
 
 ### B3's settings
 
-An installed B3 has a folded **B3 settings** section on its row: **Apply and restart** rewrites only these, in
+An installed B3 has a folded **B3 settings** section on its row: **Apply** rewrites only these, in
 `b3.ini` and `conf/plugin_geolocation.ini`, and keeps every other edit you made there and in `conf/`.
 
 - **Geolocation**, off by default:
@@ -103,12 +103,48 @@ An installed B3 has a folded **B3 settings** section on its row: **Apply and res
   1. copy its `.py` file (or its folder) and its `.ini` into `Data/extplugins` in the add-on's folder
      (`~/panel-addons/b3/` in the server's home);
   2. add its line under `[plugins]` in `Data/b3.ini`, for example `myplugin: @conf/extplugins/plugin_myplugin.ini`;
-  3. press **Apply and restart**.
+  3. press **Apply**.
 
   Turned off again, the folder is no longer mounted and B3 looks in its own (empty) one; its files stay, and B3
   logs that it could not load a plugin still listed in `[plugins]`. Apply sets `external_plugins_dir` in `[b3]`.
 
+- **Panel actions**, off by default: lets the B3 players section unban, kick and warn through B3 itself
+  (see below). Apply writes `control_socket: @conf/b3.sock` in `[b3]`: B3 then opens a Unix socket in its folder
+  (`Data/b3.sock`, mode 0600, and B3 checks that the caller is its own account); turned off, the line is removed and
+  B3 opens none. No network port is opened.
+- **Forget earlier names and IP addresses not seen for (days)**, empty by default (B3 keeps them for good): B3's
+  `purge_aliases_days`. B3 deletes a player's earlier names and addresses (its `aliases` and `ipaliases` tables) not
+  seen for that many days, at its start and every day at 04:17; each player's last name and address, and their
+  penalties, are kept. A whole number from 1 to 3650. OWASP's Logging Cheat Sheet ("Disposal of logs") sets no
+  number of days: keep personal data only as long as you need it (365 is an example).
+
+**Apply** first has B3 check the new settings (`b3_run.py --check-config`, in the image that will run, with the new
+files copied into a folder of their own and mounted read-only, in a container with no network): if B3 refuses them,
+nothing is changed or restarted and the card shows B3's first `ERROR:` line. When only plugin settings changed (the
+same `b3.ini`, geolocation mode and own-plugins folder), B3 reloads its plugins' settings without a restart (through
+its control socket when Panel actions is on, else `SIGHUP`), and the card names any plugin that kept its previous
+settings. Anything else, or a `b3.ini` edited by hand since B3 started, restarts it.
+
 IP Geolocation by DB-IP (<https://db-ip.com>), licensed under CC BY 4.0.
+
+### What B3's card shows
+
+- **Health**, from the `health.json` B3 rewrites every `health_interval` seconds (60 by default): whether B3 is
+  healthy (or its own reason why not), whether it reads the game log, whether RCON works, whether its database is
+  connected, and the players on the server. A file older than two intervals while B3 runs reads "B3 is not
+  answering". When the file can't be read, the card shows no health line rather than a guess.
+- **Why it stopped**: B3's exit code in words (220 an error, 221 its own `!restart`, 222 an admin's `!die`, 223 an
+  error while starting, 230 invalid settings, 231 the game log unreadable, 232 RCON, 233 the database unreachable at
+  start). B3 isn't started again after 222 or 230 (`RestartPreventExitStatus`): no restart can mend those. After 233
+  it is, every 30 seconds.
+- **Its version**: what B3 says it runs (its release and commit), else the panel's pin, with the commit.
+- **Alerts for its bans and kicks** (off by default, per server): when B3 bans, temporarily bans or kicks a player,
+  the panel's alert channels (Settings → Notifications) say so, while their **B3 penalties** event is on. The
+  panel reads what B3 added to its `events.jsonl` once a minute (one read as the game account, only for servers with
+  the switch on, following B3's rotation to `events.jsonl.1`); what B3 wrote before the switch was turned on, or while
+  the panel was down, isn't sent. Players' and admins' names are personal data: they are in an alert only when
+  **Include details** is on in Notifications, and the panel never writes them to its own log. More than three in one
+  minute come as one count.
 
 ### BlueMap
 
@@ -213,8 +249,21 @@ from the Databases tab) and changes nothing:
   and every warning, kick, ban and notice (up to 100) with its reason, the admin who gave it ("B3" for B3
   itself), when, how long, and whether it is active, expired or lifted.
 - **Latest penalties** and **Bans only**: the newest warnings, kicks and bans first, 15 at a time (**Older** for the next 15); a search shows 15 players at a time too.
+- **Unban**, **Kick** and **Warn**, on a player's view, while B3's **Panel actions** setting is on. B3 does them itself
+  (its control socket), so its own records, its warnings' count and its in-game messages stay right. Unban lifts
+  the player's active bans; Kick and Warn reach the player only while they are on the server: the panel finds their
+  slot by the name B3 stored, in the game's own player list, and acts only when exactly one listed player has it.
+  B3 answers which player it acted on, and the panel says so if the slot changed hands in between. A reason (at
+  most 100 characters, no colour code) is optional except for a warning; B3 says it in the game.
 
-Who sees what: the section takes `manage_addons`, like the rest of the Add-ons tab. A player's IP addresses and
+Before anything else, every read checks the table layout B3 records in its `data` table (`b3_schema_version`):
+only layout 1 is read; an older B3 that doesn't record it is asked to update first.
+
+Who sees what: the section takes `manage_addons`, like the rest of the Add-ons tab. Unban also takes
+`ban_player`, and Kick and Warn `kick_player` (or the `moderate_server` umbrella); each asks for the password when the
+sign-in is older than the confirmation window, and each is in the audit log with the player's B3 id, the slot and
+B3's answer, never the reason or a name. B3 records the panel user as the `actor` (`panel:<username>`) in its own
+`b3.log` and `events.jsonl`. A player's IP addresses and
 GUID are personal data, so they are shown only to someone who also holds `manage_databases` (who can already
 read B3's tables in the Databases manager); for anyone else the panel doesn't read them, shows how many earlier
 addresses there are, and searches a GUID only whole. Each search, player opened and penalties list is in the
@@ -225,9 +274,8 @@ commands run, in a read-only transaction: no port is opened, and the database re
 statement is fixed, with the search text as a bound value; a search uses only indexed columns, and every list is
 capped. B3 makes its tables at its first start: until then the section says so.
 
-Lifting a ban is B3's own job: an admin types B3's `!unban` (or its other commands) in the game. The panel has
-no way to send B3 a command, and changing B3's rows behind its back would leave its running state out of step,
-so the section has no unban button.
+The panel never changes B3's rows itself: that would leave B3's running state out of step. Its actions go through
+B3.
 
 ## Network
 

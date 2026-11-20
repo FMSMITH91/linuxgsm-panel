@@ -44,7 +44,7 @@ _trips257 = len(_P9_TRIPPED)
 _TMP257 = _tf257.mkdtemp(prefix="p257-")
 _RC257 = "p257-rcon-" + "value"            # the game's RCON password in these checks
 _DBV257 = "Dbv257" + "abcdefghijklmnopq"   # a database's password in these checks
-_PIN257 = "920d736648e2544714ee58a74e556fbbb3881892"
+_PIN257 = "178baced305535f06149b1e4361e63253cd10aee"
 _MONTH257 = "2026-11"
 
 
@@ -73,11 +73,11 @@ def _catalog257():
     req, cf = _read257("panel", "addon_images", "b3", "requirements.txt"), _read257("panel", "addon_images", "b3",
                                                                                    "Containerfile")
     m = _re257.search(r"^maxminddb==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", req, _re257.M)
-    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.1 with its short "
+    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.2dev with its short "
        "commit, maxminddb in its hashed lock",
        (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
         bool(m), "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
-       (_PIN257, [_PIN257], "2.0.1 (920d7366)", True, True))
+       (_PIN257, [_PIN257], "2.0.2dev (178baced)", True, True))
 
 
 def _probe_sof2_257():
@@ -337,7 +337,7 @@ def _settings257(ids):
     eq("settings: b3.ini goes back on stdin with only the panel's plugin lines changed (the operator's plugin and the "
        "password kept), no rebuild, a restart watched, audited",
        (ok.status_code, _ad257.b3_ini_plugins(stdin), "myext: @conf/myext.ini" in stdin,
-        "rcon_password: %s" % _RC257 in stdin, "/panel-addons/b3/Data/b3.ini.new && mv" in re_[1], "podman build" in re_[1],
+        "rcon_password: %s" % _RC257 in stdin, "/panel-addons/b3/Data/b3.ini.new || {" in re_[1] and "/panel-addons/b3/Data/b3.ini.new /home/" in re_[1], "podman build" in re_[1],
         _RC257 in re_[1], _p9_audit("addon_settings").success),
        (202, ["admin", "afk", "tk"], True, True, True, False, False, True))
 
