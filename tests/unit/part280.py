@@ -147,6 +147,9 @@ def _card_js280():
 
 
 # ── 4. Remove's empty folders ───────────────────────────────────────────────────────────────────
+# The stand-in tools' answer for the RCON value: an invented word, not a credential.
+_STAND_IN280 = "x"
+
 def _bash280(sh, home, stdin=""):
     run, bindir, log = os.path.join(home, "..", "run"), os.path.join(_TMP280, "bin"), os.path.join(home, "..", "tools.log")
     os.makedirs(run, exist_ok=True)
@@ -158,7 +161,7 @@ def _bash280(sh, home, stdin=""):
         sh = sh.replace('"/run/user/$(id -u)"', run).replace("/home/u280", home)
         return _sp280.run(["bash", "-c", sh], input=stdin, capture_output=True, text=True, timeout=60,  # nosec B603 B607
                           check=False, env={"PATH": bindir + ":/usr/bin:/bin", "S255_LOG": log, "S255_STATE": "active",
-                                            "S255_NR": "0", "S255_SECRET": "x", "S255_UNIT": "/nonexistent",
+                                            "S255_NR": "0", "S255_SECRET": _STAND_IN280, "S255_UNIT": "/nonexistent",
                                             "S255_START": "ok", "S255_NOFIELD": ""})
     finally:
         bus.close()
