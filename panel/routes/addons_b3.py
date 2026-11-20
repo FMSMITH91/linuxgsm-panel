@@ -33,6 +33,7 @@ from panel.core.http import _json_body
 from panel.db.models import GameDatabase
 from panel.ops import ssh_manager as _sm
 from panel.routes import addons as _ra, databases_data as _ddr
+from panel.security import privileged as _sm_priv
 from panel.security.auth import MANAGE_ADDONS, MANAGE_DATABASES, has_permission, log_action, server_access_required
 from panel.services import addons as _ad, b3_players as _b3
 
@@ -82,13 +83,23 @@ def _database(gs):
 def _read(gs, statements, want):
     """(the `want` finished statements, None) or (None, (status, sentence)) for a read of B3's database.
 
-    The table layout is read first, in the same call: a layout other than b3_players.SCHEMA is refused
-    before any of `statements` is looked at.
+    The table layout is read first: a layout other than b3_players.SCHEMA is refused before any of
+    `statements` is looked at. It goes in the same call when that stays within the helper's statement
+    cap (privileged.DB_QUERY_MAX_STATEMENTS), else in a call of its own just before: a player's view
+    is four reads, and five in one call were refused (rc 2) on a real host.
     """
     r, why = _database(gs)
     if why:
         return None, (200, why)
-    ans = _ddr._query(gs, r, "ro", [_b3.schema_statement()] + list(statements))
+    statements = list(statements)
+    if len(statements) + 1 <= _sm_priv.DB_QUERY_MAX_STATEMENTS:
+        ans = _ddr._query(gs, r, "ro", [_b3.schema_statement()] + statements)
+    else:
+        ans = _ddr._query(gs, r, "ro", [_b3.schema_statement()])
+        if not _ddr._problem(gs, ans) and not (ans.get("error") or {}).get("code"):
+            rest = _ddr._query(gs, r, "ro", statements)
+            ans = rest if (_ddr._problem(gs, rest) or (rest.get("error") or {}).get("code")) else \
+                dict(rest, statements=list(ans.get("statements") or [])[:1] + list(rest.get("statements") or []))
     bad = _ddr._problem(gs, ans)
     if bad:
         return None, bad

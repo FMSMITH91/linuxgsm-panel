@@ -179,8 +179,16 @@ def _stubs273(sid, answer, status_db=_DBNAME273):
 
     def run(remote, target, name, pw, mode, statements):
         seen["runs"].append((target, name, mode, statements))
+        if len(statements) > _pv273.DB_QUERY_MAX_STATEMENTS:
+            return {"rc": 2}      # what the real helper does: a call past its statement cap is refused
         got = answer(statements) if callable(answer) else answer
-        return dict(_dd273.parse(got), rc=0)
+        ans = dict(_dd273.parse(got), rc=0)
+        sets = list(ans.get("statements") or [])
+        if statements and statements[0].get("sql") != _b3_273.SCHEMA_SQL:
+            sets = sets[1:]       # a call without the layout read gets no layout answer
+        elif len(statements) == 1:
+            sets = sets[:1]       # the layout read on its own
+        return dict(ans, statements=sets)
     _p9_patch(_dd273, "run", run)
     _b3_273.forget(sid)
     return seen
@@ -263,10 +271,13 @@ def _player_routes273(sid, uid):
     seen = _stubs273(sid, answer)
     r = _p9_client(uid).get("/api/server/%d/addons/b3/players/12" % sid)
     d = (r.get_json(silent=True) or {}).get("player") or {}
-    sql = [s["sql"] for s in seen["runs"][0][3][1:]] if seen["runs"] else []
+    sql = [s["sql"] for run in seen["runs"] for s in run[3] if s["sql"] != _b3_273.SCHEMA_SQL]
     eq("b3 players route: one player, for a masked viewer: four reads, the address count and no address, its "
        "penalty as B3's", (r.status_code, len(sql), d.get("address_count"), "ip" in d, d.get("penalties", [{}])[0].get("admin")),
        (200, 4, 4, False, "B3"))
+    eq("b3 players route: ...in calls the host's helper takes (at most its statement cap each; the layout read "
+       "on its own when it would not fit beside the four)",
+       [len(run[3]) for run in seen["runs"]], [1, 4])
     check("b3 players route: ...the masked statements ran (no IP address or GUID read)",
           sql[:1] == [_b3_273.CLIENT_SQL[False]] and sql[2:3] == [_b3_273.ADDRESSES_SQL[False]], repr(sql))
     a = _p9_audit("b3_player_view")
@@ -276,7 +287,7 @@ def _player_routes273(sid, uid):
     big = _p9_client(uid).get("/api/server/%d/addons/b3/players/%d" % (sid, _b3_273.ID_MAX + 1))
     eq("b3 players route: an id past B3's column is no player (404) without asking the database",
        (big.status_code, len(seen["runs"])), (404, runs))
-    _p9_patch(_dd273, "run", lambda *a, **k: dict(_dd273.parse(_xml273([(("id",), [])] * 4)), rc=0))
+    _stubs273(sid, _xml273([(("id",), [])] * 4))
     gone = _p9_client(uid).get("/api/server/%d/addons/b3/players/77" % sid)
     eq("b3 players route: an id B3 does not have is said as such (404), not an empty player",
        (gone.status_code, (gone.get_json(silent=True) or {}).get("error")), (404, _rb273.S_NO_PLAYER))
