@@ -9,17 +9,25 @@
 4. World reset reads a LinuxGSM config by an allow-list: a line in any form the reader does not model
    (getopts or wait -p naming a variable from a value, which the old per-construct refusals missed)
    refuses the plan, and the line forms in LinuxGSM's own configs still plan.
+5. The helper's entry: an OSError from the checked read (the code file, or a directory on the way, is a
+   symlink) refuses, exit 1, and runs nothing; the code file is never read again by its path.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; Discord's HTTP post is a
-stand-in. Nothing reaches a host, /etc or data/.
+stand-in; the helper's entry runs over this part's own scratch trees, this account standing in for
+root. Nothing reaches a host, /etc or data/.
 """
 import json as _json285
+import os
+import shutil as _sh285
+import tempfile as _tf285
 import eventlet as _ev285
 from eventlet import event as _evt285, semaphore as _sem285
 from types import SimpleNamespace as _NS285
 
 from unit.part01 import check, eq
+from unit.part245 import _install245
 from unit.part275 import _bash_port275, _vh_plan275
+from unit.part284 import _code284, _entry284
 from unit.part12 import P9_ADMIN, _p9_arm, _p9_audit, _p9_client, _p9_patch, _p9_restore_all
 from panel.ops import system_ops as _so285
 from panel.ops.ssh_manager import _core as _core285
@@ -227,3 +235,60 @@ _lgsm285 = _vh_plan275(_LGSM_LINES285)
 check("world reset allow-list (control): Valheim's plan is still made beside the line forms LinuxGSM's own configs "
       "use (a [ -n ] test, single quotes, $(…), ${x:+…} with quotes inside, a trailing comment)",
       bool(_lgsm285[0]) and _lgsm285[1] is None, repr(_lgsm285)[:300])
+
+
+# ── 5. The helper's entry: an OSError from the checked read ──────────────────────────────────────
+_T285 = _tf285.mkdtemp(prefix="lgsm-unit-p285-")
+
+
+def _entry_tree285(name):
+    """A tree install_helper_code filled with a stand-in helper: (top, lib, the marker it creates when run)."""
+    top = os.path.join(_T285, name)
+    lib = os.path.join(top, "lib")
+    os.makedirs(lib)
+    marker = os.path.join(top, "ran")
+    helper = os.path.join(top, "stand-in-helper")
+    with open(helper, "w", encoding="utf-8") as fh:
+        fh.write(_code284(marker, "RAN285"))
+    _install245(lib, helper)
+    return top, lib, marker
+
+
+def _entry_oserror285():
+    """{case: (rc, ran, a marker made, "could not be read" said)} for a code file and a directory that are links.
+
+    "code link": panel-helper-code.py is a link to planted code (which makes its own marker) and its pyc
+    is gone. "dir link": the entry is given a directory on the way that links to the real one. The
+    checked read opens with O_NOFOLLOW, so each is an OSError (ELOOP); read again by its path, the
+    code would run.
+    """
+    got = {}
+    top, lib, marker = _entry_tree285("code-link")
+    planted = os.path.join(top, "planted.py")
+    with open(planted, "w", encoding="utf-8") as fh:
+        fh.write(_code284(os.path.join(top, "planted-ran"), "PLANTED285"))
+    os.remove(os.path.join(lib, "panel-helper-code.pyc"))
+    os.remove(os.path.join(lib, "panel-helper-code.py"))
+    os.symlink(planted, os.path.join(lib, "panel-helper-code.py"))
+    rc, out, err = _entry284(top, lib)
+    got["code link"] = (rc, bool(out.strip()), os.path.exists(marker) or os.path.exists(os.path.join(top, "planted-ran")),
+                        "could not be read" in err)
+    top, lib, marker = _entry_tree285("dir-link")
+    os.symlink(lib, os.path.join(top, "lib-link"))
+    rc, out, err = _entry284(top, os.path.join(top, "lib-link"))
+    got["dir link"] = (rc, bool(out.strip()), os.path.exists(marker), "could not be read" in err)
+    rc, out, _err = _entry284(top, lib)
+    got["control"] = (rc, out.strip(), os.path.exists(marker))
+    return got
+
+
+try:
+    _eo285 = _entry_oserror285()
+finally:
+    _sh285.rmtree(_T285, ignore_errors=True)
+eq("helper entry: a code file, or a directory on the way, that is a link fails the checked read (OSError): "
+   "exit 1, saying it could not be read, and neither the code nor what the link names runs",
+   {k: v for k, v in _eo285.items() if k != "control"},
+   {"code link": (1, False, False, True), "dir link": (1, False, False, True)})
+eq("helper entry (control): the same tree read through its real directory runs the code", _eo285["control"],
+   (0, "RAN285", True))
