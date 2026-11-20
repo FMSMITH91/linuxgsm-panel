@@ -345,7 +345,7 @@ def _legacy285(name, action, minutes):
 def _shown285(uid):
     """The labels of the Account page's "Recent security changes" for account `uid`."""
     page = _p9_client(uid).get("/account").get_data(as_text=True)
-    head, _sep, rest = page.partition('id="acct-changes"')
+    _head, _sep, rest = page.partition('id="acct-changes"')
     return [] if not _sep else [li.split("</span>")[0] for li in rest.split("</ul>")[0].split("<li><span>")[1:]]
 
 
