@@ -342,7 +342,8 @@ def _answer(start_response, stream, head, method, raw_rest, link, prefix, gate):
         raise _Refusal(502, _NO_ANSWER)
     ctype = head.get("Content-Type")
     kind = _aw.rewrites(ctype, raw_rest, link.addon_id)
-    headers = _aw.kept_response_headers(head.headers, prefix, link.port) + _aw.page_headers(ctype)
+    headers = (_aw.kept_response_headers(head.headers, prefix, link.port)
+               + _aw.page_headers(ctype, addon_id=link.addon_id))
     status = _status(head)
     if kind and method != "HEAD" and head.status not in (204, 304):
         return _rewritten(start_response, (stream, head, gate), method, kind, prefix, headers)
