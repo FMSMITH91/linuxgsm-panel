@@ -241,6 +241,16 @@ _WWR_SUB_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 _WWR_NEST_MAX = 8
 
 
+# Assignment-shaped text in a line (`key=2`, `key+=1`, `key++`, `--key`, `++ key`): the names it would set if
+# it were ever evaluated as arithmetic, by LinuxGSM's own scripts or a later reload. A key named so is read
+# as set in a form the panel does not read, so a value of only `--port` keeps port from being read (review
+# 1121 A04). The lookbehind starts a name only at a name's first character; a prefix `--`/`++` needs nothing
+# after the name, and bash allows blanks between it and the name. The operator after a name is only looked
+# at, never taken, so `x --port` names both x and port.
+_WWR_ASSIGNED = re.compile(r"(?:\+\+|--)[ \t]*([A-Za-z0-9_]+)|(?<![A-Za-z0-9_])([A-Za-z0-9_]+)(?=[ \t]*"
+                           r"(?:\+\+|--|(?:[-+*/%&|^]|<<|>>|\*\*)?=(?!=)))")
+
+
 class _WwrRefused(Exception):
     """A config line holds a form the reader does not understand."""
 
@@ -436,7 +446,9 @@ def _wwr_assigned(line):
 def _wwr_cfg_index(texts):
     """Each config text's assignments by the name they set: ([{name: [line, ...]}, one per text], refused).
 
-    `refused` is True when any non-comment line is in a form _WwrLineReader does not understand. Built
+    A line counts for each name it assigns and each name its assignment-shaped text names (_WWR_ASSIGNED);
+    only a key's own plain line can then be read for it. `refused` is True when any non-comment line is
+    in a form _WwrLineReader does not understand. Built
     once per read, in one pass over each line (review 1120 A04: the game account writes the config, and
     this runs on the wipe ticker's greenlet).
     """
@@ -449,7 +461,7 @@ def _wwr_cfg_index(texts):
             names = _wwr_assigned(ln)
             if names is None:
                 return index, True
-            for name in set(names):
+            for name in set(names) | {a or b for a, b in _WWR_ASSIGNED.findall(ln)}:
                 by_name.setdefault(name, []).append(ln)
         index.append(by_name)
     return index, False
