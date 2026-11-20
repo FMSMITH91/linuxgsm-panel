@@ -93,19 +93,21 @@ RCON_TCP_GAMES = ("csgo", "ins")
 # Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
 # folder LinuxGSM's mods-install puts it in.
 SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
-# FMSMITH91/big-brother-bot master on 2026-11-19: v2.0.1 (the Quake 3 engine parsers asking `dumpuser` by
-# the slot's name, ET: Legacy's status and chat, CoD4x and vanilla ET, commands refused to a player B3 has
-# not authenticated, geolocation) and the service interface the panel uses on top of it: `--check-config`
-# (exit 230), `--version` with the commit (from the image's B3_COMMIT), fixed exit codes 220-223 and
-# 230-233 (b3/exitcodes.py), health.json, the `data` table's b3_schema_version, purge_aliases_days,
-# events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3
-# the add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and
-# the Containerfile's ARG together.
-B3_COMMIT = "7da5ac8685c34665cb10670810656a3bf99fcf91"
-# A development commit after v2.0.1: a 2.0.2 tag is planned on it. The card shows this label beside the
-# short commit until B3 itself says what runs (its health.json). Only a label: the build checks the
-# commit, not a tag, and the image's tag is the commit and build id, so a new label alone offers no update.
-B3_RELEASE = "2.0.2dev"
+# FMSMITH91/big-brother-bot's v2.0.2 release (its signed tag v2.0.2 points at this commit, 2026-11-20): the Quake 3
+# engine parsers asking `dumpuser` by the slot's name, ET: Legacy's status and chat, CoD4x and vanilla ET, commands
+# refused to a player B3 has not authenticated, geolocation, and the service interface the panel uses on top of it:
+# `--check-config` (exit 230), `--version` with the commit (from the image's B3_COMMIT), fixed exit codes 220-223
+# and 230-233 (b3/exitcodes.py), health.json, the `data` table's b3_schema_version, purge_aliases_days,
+# events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3 the
+# add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
+# Containerfile's ARG together.
+B3_COMMIT = "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
+# The release B3_COMMIT is. The tree at that commit still says 2.0.2dev (b3/__init__.py's __version__: the release
+# build sets the number in the artifacts it publishes, b3-2.0.2 wheel and installer, not in the tagged source), so
+# B3 built from source reports "2.0.2dev" in its health.json; the card names the release instead whenever the
+# commit B3 reports is this one (b3_control.running_version). Only a label: the build checks the commit, not a tag,
+# and the image's tag is the commit and build id, so a new label alone offers no update.
+B3_RELEASE = "2.0.2"
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
 IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
@@ -113,9 +115,9 @@ IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8a
 # digest as its v5.29 and latest tags then), by its multi-arch index digest. Renovate proposes the v5 tag's new
 # digest, so a new 5.x release is offered and a major release with new configs is not.
 BLUEMAP_IMAGE = "ghcr.io/bluemap-minecraft/bluemap@sha256:bb49bfdef996c6fd9cf68c8c6a2b79189e6711fa90ae4d43cf22d81a6811301e"
-# python:3.12-slim (Debian 13) on 2026-11-18, by its multi-arch index digest: the build's base. Renovate
+# python:3.15-slim (3.15.2, Debian 13) on 2026-11-20, by its multi-arch index digest: the build's base. Renovate
 # proposes the tag's new digest here and in the Containerfile's ARG BASE_IMAGE together (.github/renovate.json).
-B3_BASE = "docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
+B3_BASE = "docker.io/library/python@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928"
 # The files of an add-on's build folder (panel/addon_images/<build>/) that go to the host.
 BUILD_FILES = ("Containerfile", "requirements.txt", "entrypoint.sh")
 _IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addon_images")
@@ -222,6 +224,13 @@ USER_UNIT_DIR = ".config/systemd/user"
 UNIT_PREFIX = "lgsm-addon-"
 META_FILE = "addon.json"
 BUILD_DIR = "build"
+# The folders of the account's home that an add-on's setup can be the first to make: the Quadlet and unit
+# folders are under ~/.config, Podman's storage under ~/.local/share and its cache under ~/.cache. The first
+# install writes which of them were not there yet to MADE_FILE in HOME_DIR; removing the last add-on removes
+# those, deepest first, and only while empty (rmdir), so a folder that was there before, or holds anything,
+# stays.
+HOME_PARENTS = (".local/share", ".local", ".config", ".cache")
+MADE_FILE = ".made"
 # The packages the runtime needs on Ubuntu (all in universe): Podman, newuidmap/newgidmap for the
 # user namespace, and pasta for the container's own network. Ubuntu 24.04 ships Podman 4.9 (Quadlet
 # and pasta), 26.04 ships 5.7; 22.04's 3.4 has neither, so it is refused.
@@ -1167,7 +1176,7 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None, ext
     late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
     late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
     secret = shlex.quote("%s/%s" % (d, a["settings"]))
-    return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
+    return (_ENV + "umask 077; " + _made_sh(user) + "mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
             "cat > %s.new && mv -f -T %s.new %s && %s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "i=0; while [ ! -S \"$XDG_RUNTIME_DIR/bus\" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done; "
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
@@ -1181,6 +1190,31 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None, ext
                _image_sh(addon_id, shlex.quote(d)), " && ".join(late), _fresh_start_sh(addon_id, "start"), unit,
                _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), _MARK_INSTALLED))
+
+
+def _made_sh(user):
+    """Shell writing MADE_FILE (once: the first install's): which of HOME_PARENTS the account's home lacks.
+
+    A link counts as there. Runs before anything of the install is made, so what it lists is what this
+    setup makes. A later install keeps the file the first one wrote.
+    """
+    h, home = "/home/%s" % user, "/home/%s/%s" % (user, HOME_DIR)
+    m = shlex.quote("%s/%s" % (home, MADE_FILE))
+    return ("{ mkdir -p %s && if [ ! -e %s ]; then for p in %s; do [ -e %s/\"$p\" ] || [ -L %s/\"$p\" ] "
+            "|| printf '%%s\\n' \"$p\"; done > %s.new && mv -f -T %s.new %s; fi; } "
+            "|| { echo ADDON_WRITE_FAILED; exit 20; }; "
+            % (shlex.quote(home), m, " ".join(HOME_PARENTS), shlex.quote(h), shlex.quote(h), m, m, m))
+
+
+def _made_cleanup_sh(user):
+    """Shell removing, deepest first and only while empty, the folders `$made` (MADE_FILE's text) lists.
+
+    Only names in HOME_PARENTS are acted on, each matched as a whole line: the file is in the account's
+    own home, so its text is checked against that list, never used as a path.
+    """
+    h = "/home/%s" % user
+    return ("for p in %s; do printf '%%s\\n' \"$made\" | grep -qxF -- \"$p\" && rmdir -- %s/\"$p\" 2>/dev/null; "
+            "done; " % (" ".join(HOME_PARENTS), shlex.quote(h)))
 
 
 def _dirs(d, a, files, extra=()):
@@ -1349,7 +1383,8 @@ def remove_sh(user, addon_id):
     The folder goes through `podman unshare`, so a file the container made as one of its own users
     (a subordinate id) goes too. A built image's leftover build layers go with `podman image prune`.
     When it was the account's last add-on, Podman's own storage and files go too (`podman system
-    reset`, then what it leaves: see _podman_purge_sh).
+    reset`, then what it leaves: see _podman_purge_sh), and so do the home's folders the first install made
+    (MADE_FILE), each only while empty.
     Prints ADDON_REMOVED and others=0/1 (whether another add-on is left).
     The image the unit runs goes as well as the catalog's: an add-on not updated since the catalog's
     image changed runs an older one, which would otherwise stay while another add-on is left.
@@ -1357,6 +1392,7 @@ def remove_sh(user, addon_id):
     unit = unit_name(addon_id)
     d = shlex.quote(addon_dir(user, addon_id))
     home = shlex.quote("/home/%s/%s" % (user, HOME_DIR))
+    made = shlex.quote("/home/%s/%s/%s" % (user, HOME_DIR, MADE_FILE))
     quadlet = shlex.quote("/home/%s/%s/%s.container" % (user, QUADLET_DIR, unit))
     relay_glob = "/home/%s/%s/%s%s-*" % (user, USER_UNIT_DIR, UNIT_PREFIX, addon_id)
     return (_ENV + "img=$(sed -n 's/^Image=//p' %s 2>/dev/null | head -n 1); "
@@ -1367,10 +1403,14 @@ def remove_sh(user, addon_id):
             "case \"$img\" in ''|-*) ;; *) podman rmi -- \"$img\" >/dev/null 2>&1 ;; esac; "
             "podman image prune -f >/dev/null 2>&1; "
             "podman unshare rm -rf -- %s 2>/dev/null || rm -rf -- %s; "
-            "[ -e %s ] && exit 30; rmdir %s 2>/dev/null; "
-            "if [ -d %s ]; then echo others=1; else %secho others=0; fi; echo %s"
+            "[ -e %s ] && exit 30; made=''; "
+            "if [ -z \"$(find %s -mindepth 1 -maxdepth 1 ! -name %s 2>/dev/null | head -n 1)\" ]; then "
+            "made=$(head -c 256 %s 2>/dev/null); rm -f -- %s %s.new; fi; rmdir %s 2>/dev/null; "
+            "if [ -d %s ]; then echo others=1; else %s%secho others=0; fi; echo %s"
             % (quadlet, unit, quadlet, relay_glob, unit,
-               shlex.quote(CATALOG[addon_id]["image"]), d, d, d, home, home, _podman_purge_sh(user), _MARK_REMOVED))
+               shlex.quote(CATALOG[addon_id]["image"]), d, d, d, home, shlex.quote(MADE_FILE + "*"), made, made, made, home,
+               home,
+               _podman_purge_sh(user), _made_cleanup_sh(user), _MARK_REMOVED))
 
 
 def _podman_purge_sh(user):

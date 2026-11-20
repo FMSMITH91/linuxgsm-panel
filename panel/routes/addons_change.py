@@ -74,6 +74,27 @@ def update_reason(addon_id, meta, month=None):
     return ""
 
 
+# The longest version label a record may hold to be shown (the catalog's are under 40 characters).
+_VERSION_MAX = 64
+
+
+def shown_version(addon_id, meta, installed=True):
+    """(the version the card names an add-on by, the pending one or "") from its record.
+
+    The installed image's own label (the record's `version`, written by the install or the last update)
+    while the catalog's image is another; the catalog's label when they are the same image, or when it is
+    not installed (`installed` False: the version Install would put there). The pending
+    one is the catalog's label while an image update waits. A record's label that is not plain text of
+    at most _VERSION_MAX characters is not shown ("").
+    """
+    pin = _ad.CATALOG[addon_id]["version"]
+    if not installed or (meta.get("image") or "") == _ad.CATALOG[addon_id]["image"]:
+        return pin, ""
+    had = meta.get("version")
+    ok = isinstance(had, str) and 0 < len(had) <= _VERSION_MAX and had.isprintable()
+    return (had if ok else ""), pin
+
+
 def settings_choice(body):
     """(geolocation, plugins, own plugins on, panel actions on, purge days or None) from a settings post, or None.
 

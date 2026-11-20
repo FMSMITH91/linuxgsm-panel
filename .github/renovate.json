@@ -24,7 +24,7 @@
     "The add-ons' pins (panel/services/addons.py): B3's source commit, which follows",
     "FMSMITH91/big-brother-bot master (git-refs, in addons.py and the B3 Containerfile together),",
     "IW4MAdmin's image, the digest of its `latest` tag, and the B3 image's base, the digest of",
-    "python:3.12-slim (B3_BASE in addons.py and ARG BASE_IMAGE in the B3 Containerfile together;",
+    "python:3.15-slim (B3_BASE in addons.py and ARG BASE_IMAGE in the B3 Containerfile together;",
     "written by digest alone, as podman takes it, so the tag Renovate follows is the manager's",
     "currentValueTemplate), and BlueMap's image, the digest of its `v5` tag (a new 5.x release, never",
     "a new major one). All four are checked daily (packageRules). The B3 image's Python",
@@ -99,7 +99,7 @@
     },
     {
       "customType": "regex",
-      "description": "The B3 add-on image's base: the digest of python:3.12-slim, in addons.py and the B3 Containerfile together",
+      "description": "The B3 add-on image's base: the digest of python:3.15-slim, in addons.py and the B3 Containerfile together",
       "managerFilePatterns": [
         "/^panel/services/addons\\.py$/",
         "/^panel/addon_images/b3/Containerfile$/"
@@ -107,7 +107,7 @@
       "matchStrings": [
         "(?:B3_BASE = \"|ARG BASE_IMAGE=)(?<depName>docker\\.io/library/python)@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
-      "currentValueTemplate": "3.12-slim",
+      "currentValueTemplate": "3.15-slim",
       "datasourceTemplate": "docker"
     }
   ],
@@ -171,7 +171,7 @@
       "minimumReleaseAge": "0 days"
     },
     {
-      "description": "B3's build file: only the custom manager above (python:3.12-slim, kept equal with addons.py). The built-in dockerfile manager reads its tagless ARG BASE_IMAGE digest as python:latest and proposed a different Python (#598).",
+      "description": "B3's build file: only the custom manager above (python:3.15-slim, kept equal with addons.py). The built-in dockerfile manager reads its tagless ARG BASE_IMAGE digest as python:latest and proposed a different Python (#598).",
       "matchManagers": [
         "dockerfile"
       ],

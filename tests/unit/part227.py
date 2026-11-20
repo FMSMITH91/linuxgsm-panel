@@ -197,7 +197,7 @@ def _b3_renovate227():
     off = [r for r in rules if r.get("matchManagers") == ["dockerfile"] and r.get("enabled") is False
            and r.get("matchFileNames") == ["panel/addon_images/b3/Containerfile"] and len(r) == 4]
     eq("ci images: Renovate's built-in dockerfile manager is off for B3's build file (it read the tagless base "
-       "digest as python:latest), so only the custom 3.12-slim manager proposes its base", len(off), 1)
+       "digest as python:latest), so only the custom 3.15-slim manager proposes its base", len(off), 1)
 
 
 def _docker_pins227():

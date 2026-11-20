@@ -19,8 +19,8 @@ has:
   its folder, so it needs no Databases-tab database. Its anti-cheat and profanity plugins start off.
 - **B3** (Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4 / CoD4x, World at War, Soldier of
   Fortune 2, Wolfenstein: Enemy Territory, ET: Legacy and Quake 3 Arena): **legacy and opt-in.** It's built on the
-  host from one pinned commit of FMSMITH91/big-brother-bot, with hash-pinned dependencies, and it needs one of the
-  server's own databases from the Databases tab. On Soldier of Fortune 2, Enemy Territory and ET: Legacy B3 has no
+  host from one pinned commit of FMSMITH91/big-brother-bot (its v2.0.2 release), on `python:3.15-slim` by digest,
+  with hash-pinned dependencies, and it needs one of the server's own databases from the Databases tab. On Soldier of Fortune 2, Enemy Territory and ET: Legacy B3 has no
   private messages: every reply is said in public chat.
 
 - **BlueMap** (Minecraft Java: LinuxGSM's vanilla `mcserver` and Paper `pmcserver`): a live 3D map of the
@@ -137,7 +137,8 @@ IP Geolocation by DB-IP (<https://db-ip.com>), licensed under CC BY 4.0.
   error while starting, 230 invalid settings, 231 the game log unreadable, 232 RCON, 233 the database unreachable at
   start). B3 isn't started again after 222 or 230 (`RestartPreventExitStatus`): no restart can mend those. After 233
   it is, every 30 seconds.
-- **Its version**: what B3 says it runs (its release and commit), else the panel's pin, with the commit.
+- **Its version**: what B3 says it runs (its release and commit), else the installed image's version. B3 built
+  from the pinned commit is named by its release (2.0.2): the source tree itself says 2.0.2dev.
 - **Alerts for its bans and kicks** (off by default, per server): when B3 bans, temporarily bans or kicks a player,
   the panel's alert channels (Settings → Notifications) say so, while their **B3 penalties** event is on. The
   panel reads what B3 added to its `events.jsonl` once a minute (one read as the game account, only for servers with
@@ -234,7 +235,8 @@ nothing changes in Tailscale.
 
 The card shows **Update available** when the panel's pinned version is newer than the installed one (a new
 IW4MAdmin or BlueMap image digest or B3 commit), for an offline B3 when a newer month of the country database
-is out, or for BlueMap when the game now runs another Minecraft version.
+is out, or for BlueMap when the game now runs another Minecraft version. Until you update, the card names the
+version installed, and the one Update installs: **Update available: 2.0.2 (7c3bbe8c)**.
 **Update** downloads or builds the new image, writes the unit again and restarts the add-on; its data, settings
 and database are kept. It asks for the password like Install, and it is audited. A start, Apply or Update you ask
 for clears the unit's start limit first (5 starts in 10 minutes, kept against a crash loop), so a run of changes
@@ -313,7 +315,9 @@ Every install, start, stop and remove is audited.
 
 Removing an add-on deletes its container, image, unit and files: for B3 that is its whole folder, its settings and
 any plugin settings you edited included. Its database is kept. Removing the last one also
-removes the account's Podman storage (its base images and Podman's own folders) and turns lingering off; the
+removes the account's Podman storage (its base images and Podman's own folders), then `~/.config`,
+`~/.local/share`, `~/.local` and `~/.cache` when the first add-on install made them and they are empty (a folder
+that was there before, or holds anything, stays), and turns lingering off; the
 account's own journal is kept. Uninstalling the server also deletes the account's user journal, and its tmux and
 Java folders in `/tmp` (`/tmp/tmux-<uid>`, `/tmp/hsperfdata_<account>`), so an account later given the same user
 id can't read the old add-ons' lines or inherit the old tmux socket folder. The add-on's folder is in the game account's home,

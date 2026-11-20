@@ -1,6 +1,6 @@
 # B3 (Big Brother Bot) add-on: the runtime dependencies of FMSMITH91/big-brother-bot at the commit the
 # add-on builds (its own requirements.txt). requirements.txt beside this is the hashed lock pip-compile
-# makes from it, on Python 3.12 (the add-on image's base).
+# makes from it, on Python 3.15 (the add-on image's base).
 pymysql>=1.0
 python-dateutil>=2.8
 feedparser>=6.0

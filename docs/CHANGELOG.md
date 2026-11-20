@@ -36,8 +36,19 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **A new permission: View add-on pages.** It opens a server's add-on pages without managing the add-ons; given to
   no group by default.
 
+### Changed
+
+- **B3 2.0.2, on Python 3.15.** B3 is built from its 2.0.2 release on Python 3.15 (Debian 13), and its card names
+  it 2.0.2. An installed B3 is offered Update once; its data, settings and database stay.
+
 ### Fixed
 
+- **The add-on card names the version installed until you update.** While an update waited, the card showed the
+  new version as if it were already installed; it now shows the installed one and "Update available:" with the
+  version Update installs.
+- **Removing the last add-on leaves no empty folders in the game account's home.** The `.config`, `.local/share`,
+  `.local` and `.cache` folders the first add-on install made are removed with the last add-on when empty; a
+  folder that was there before, or holds anything, stays.
 - **B3 settings wait for a pending update.** Applying B3's settings while a newer add-on version is waiting is
   refused with "Update the add-on first", and the card shows that in place of Apply; before, B3 stopped and stayed
   down until Update.

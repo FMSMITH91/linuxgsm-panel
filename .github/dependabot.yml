@@ -78,7 +78,7 @@ updates:
         patterns: ["*"]
 
   # The B3 add-on image's Python dependencies: panel/addon_images/b3/requirements.txt is pip-compile's
-  # hashed lock of requirements.in beside it, compiled on Python 3.12 (the image's base), so Dependabot
+  # hashed lock of requirements.in beside it, compiled on Python 3.15 (the image's base), so Dependabot
   # re-runs pip-compile on that Python, the whole set resolved together and the hashes regenerated.
   # Daily, as Renovate checks the image's base and B3's commit (.github/renovate.json, which runs no
   # pip manager, so the two never propose the same update). The image installs wheels only.

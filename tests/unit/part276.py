@@ -29,7 +29,7 @@
     showing such a line but never offering it for edit.
 14. The start port check reads a crossplay Valheim's port + 1, as every other port reader does since
     review pass 33 (up on 2457 only, it was "not listening" and the start went ahead blind).
-15. B3's card shows release 2.0.2dev (the label of the pinned commit) and an installed B3 is told
+15. B3's card shows release 2.0.2 (the label of the pinned commit) and an installed B3 is told
     it is up to date; the image's tag is the commit and build id alone, so the label offers no update.
 
 Nothing here reaches a host.
@@ -593,9 +593,9 @@ def _b3_release276():
     b3 = _ad276.CATALOG["b3"]
     tag = "localhost/lgsm-addon-b3:%s-%s" % (_ad276.B3_COMMIT[:12], _ad276.build_id(
         os.path.join(os.path.dirname(_ad276.__file__), "..", "addon_images", "b3"), _ad276.B3_BASE))
-    eq("B3: the card names release 2.0.2dev with the pinned commit, and the image's tag is the commit and the build id "
+    eq("B3: the card names release 2.0.2 with the pinned commit, and the image's tag is the commit and the build id "
        "alone (a new release label offers installed B3s no update)",
-       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2dev (7da5ac86)", True, False))
+       (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2 (7c3bbe8c)", True, False))
 
 
 _settings_pending276()

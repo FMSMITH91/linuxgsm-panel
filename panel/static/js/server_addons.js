@@ -97,6 +97,8 @@
     function updateWords(a) {
       if (a.update === 'geoip') return T('Update available: a newer month of the country database.');
       if (a.update === 'game') return TF('Update available: the server now runs Minecraft {version}, and BlueMap needs that version\'s client file.', {version: a.mc_version_now || ''});
+      // The version the update installs, beside the installed one the row's name shows.
+      if (a.version_new) return TF('Update available: {version}', {version: a.version_new});
       return T('Update available: a newer version of the add-on.');
     }
     function sizeWords(kb) {
@@ -444,7 +446,7 @@
 
   function rowHead(a) {
     var head = node('div', 'd-flex flex-wrap gap-2 align-items-center');
-    var name = node('strong', null, a.name + ' ' + a.version);
+    var name = node('strong', null, a.version ? a.name + ' ' + a.version : a.name);
     name.setAttribute('data-no-i18n', '');
     head.appendChild(name);
     head.appendChild(node('span', a.state === 'active' ? 'badge text-bg-success' : 'badge text-bg-secondary', stateWord(a)));

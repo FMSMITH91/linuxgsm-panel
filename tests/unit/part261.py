@@ -1016,11 +1016,11 @@ def _b3_lock_python261():
 
 
 _dep261 = _read261(os.path.join(_root, ".github", "dependabot.yml"))
-eq("dependabot: the B3 image's Python lock (pip-compile's, on the image's Python 3.12) has a daily pip entry with "
+eq("dependabot: the B3 image's Python lock (pip-compile's, on the image's Python 3.15) has a daily pip entry with "
    "the week's cooldown, grouped into one pull request — it had no update path at all",
-   (_dependabot_b3_261(_dep261), _b3_lock_python261(), "python:3.12-slim" in
+   (_dependabot_b3_261(_dep261), _b3_lock_python261(), "python:3.15-slim" in
     _read261(os.path.join(_root, "panel", "addon_images", "b3", "Containerfile"))),
-   (("pip", "daily", 7, True), "3.12", True))
+   (("pip", "daily", 7, True), "3.15", True))
 eq("dependabot: ...and the reader finds no entry when the folder is not named (control)",
    _dependabot_b3_261(_dep261.replace('directory: "/panel/addon_images/b3"', 'directory: "/x"')), None)
 
@@ -1034,7 +1034,7 @@ def _build_ids261():
     tmp = _tf261.mkdtemp(prefix="p261-b3-")
     try:
         out = {"real": _ad261.build_id(real, _ad261.B3_BASE),
-               "base": _ad261.build_id(real, _ad261.B3_BASE.replace("5e2b", "0000"))}
+               "base": _ad261.build_id(real, _ad261.B3_BASE.rsplit(":", 1)[0] + ":" + "0" * 64)}   # any other digest
         for name in _ad261.BUILD_FILES:
             _sh261.copy(os.path.join(real, name), os.path.join(tmp, name))
         out["copy"] = _ad261.build_id(tmp, _ad261.B3_BASE)
