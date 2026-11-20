@@ -914,3 +914,5 @@ d7d9c9e0 A setting saved with quotes, $ or a backslash no longer blocks world re
 760c86ec A server's Backup and a queued stop or restart no longer run together.
 6fb8bcb1 A restore interrupted while removing the old files keeps the restore.
 1f68ec77 Restoring a database from a dump that is a link says "no dump" on the panel host too.
+5b124bac The privileged helper refuses to run code someone other than root could have changed.
+b5818a79 gamedig's dependency http2-wrapper is 2.2.4, not 2.2.1.
