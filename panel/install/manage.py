@@ -47,7 +47,7 @@ with warnings.catch_warnings():
     # the CLI enforces the SAME rule as the web forms, which is the point of sharing it.
     from panel.core.validation import password_problem, username_problem   # noqa: E402
     from panel.db.models import db, User                     # noqa: E402
-    from panel.security import auth                                      # noqa: E402
+    from panel.security import account_notices, auth                     # noqa: E402
     from panel.security import owner as _owner_mod                       # noqa: E402
     from panel.db.models import NO_SELF_HEAL_ENV                         # noqa: E402
 
@@ -107,6 +107,26 @@ def _tty_safe(value):
     """
     return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii")
                    for c in str(value))
+
+
+def _record(u, action, detail, alert=None, was_admin=False):
+    """Audit a change made here to account `u`, and raise the credential-change alert when it is one.
+
+    The web paths do both for the same changes; one made from the shell is still a change to an
+    account's credentials or privileges (OWASP Logging Cheat Sheet, "Which events to log"), and the
+    account holder and the other administrators hear of it the same way. The alert is queued; the
+    command waits for it before it exits (_flush_alerts).
+    """
+    auth.log_action(None, action, target=u.username, detail="%s (manage.py)" % detail, actor="manage.py")
+    if alert:
+        account_notices.alert_credential_change(u, "%s (manage.py)" % alert, was_admin=was_admin)
+
+
+def _flush_alerts(timeout=15.0):
+    """Wait, up to `timeout` seconds each, for the alerts this command queued to be handed on."""
+    from panel.services import notifications, push_alerts
+    notifications.flush(timeout)
+    push_alerts.flush(timeout)
 
 
 def _require_user(username):
@@ -215,6 +235,8 @@ def cmd_reset_password(args):
         # same kind of credential (no epoch, no session), so the account's keys go with it.
         u.revoke_outliving_credentials()
         db.session.commit()
+        _record(u, "reset_user_password", "password reset from the recovery CLI; sessions, API token and SFTP "
+                "keys revoked", alert="password reset from the recovery CLI")
         print("Password reset for '%s' (existing sessions revoked)." % _tty_safe(username))
 
 
@@ -234,6 +256,8 @@ def cmd_create_admin(args):
                  display_name=username, is_superadmin=True, is_active=True)
         db.session.add(u)
         db.session.commit()
+        _record(u, "add_user", "a superadmin, created from the recovery CLI",
+                alert="superadmin account created from the recovery CLI")
         print("Superadmin '%s' created." % _tty_safe(username))
         _ensure_owner()
 
@@ -348,6 +372,7 @@ def cmd_disable_2fa(args):
     with app.app_context():
         username = _resolve_username(args.username, default_sole_admin=False)
         u = _require_user(username)
+        _was_on = bool(u.totp_enabled)
         u.totp_enabled = False
         u.totp_secret = None
         # ...and its backup codes, which no longer apply — the two web paths that disable 2FA both
@@ -355,6 +380,9 @@ def cmd_disable_2fa(args):
         # in panel.db is the kind of divergence that only becomes reachable later.
         u.backup_codes = ""
         db.session.commit()
+        _record(u, "2fa_reset", "two-factor authentication removed from the recovery CLI"
+                + ("" if _was_on else " (it was not on)"),
+                alert="two-factor authentication removed from the recovery CLI" if _was_on else None)
         print("Two-factor auth disabled for '%s'." % _tty_safe(username))
 
 
@@ -370,6 +398,8 @@ def _set_flag(username, field, value, label):
                      "active superadmin the owner first:  manage.py set-owner <username>"
                      % (_tty_safe(username), label))
         _was_active = bool(u.is_active)
+        _was_admin = account_notices._admin_level(u)
+        _before = getattr(u, field)
         setattr(u, field, value)
         if field == "is_active" and _was_active and not value:
             # Same reasoning as the /users edit form: load_user() is what stops the sessions
@@ -390,6 +420,9 @@ def _set_flag(username, field, value, label):
             sys.exit("Refusing — that would leave no active superadmin. "
                      "Create or promote another admin first.")
         db.session.commit()
+        if bool(_before) != bool(value):
+            _record(u, "edit_user", "%s from the recovery CLI" % label, alert=label + " from the recovery CLI",
+                    was_admin=_was_admin)
         print("'%s' %s." % (_tty_safe(username), label))
         if value:
             _ensure_owner()     # promote / activate can make the first active superadmin
@@ -403,6 +436,9 @@ def _ensure_owner():
     from panel.db.models import _ensure_one_owner
     if _ensure_one_owner():
         db.session.commit()
+        auth.log_action(None, "owner_transferred", target=_owner_mod.owner().username,
+                        detail="the panel had no owner; given to the oldest active superadmin (manage.py)",
+                        actor="manage.py")
         print("The panel had no owner; '%s' is now the owner." % _tty_safe(_owner_mod.owner().username))
     else:
         db.session.rollback()
@@ -513,7 +549,10 @@ def main():
         pp.set_defaults(func=(lambda a, f=field, v=val, lb=lbl: _set_flag(a.username, f, v, lb)))
 
     args = p.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    finally:
+        _flush_alerts()
 
 
 if __name__ == "__main__":

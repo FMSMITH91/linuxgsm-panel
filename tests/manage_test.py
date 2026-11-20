@@ -176,6 +176,70 @@ def _said(fn, *a):
     return exited, msg, out.getvalue()
 
 
+def _cli_alerts(run):
+    """(the alerts `run` raised, as (event, body)), with notify a recorder; the change itself is real."""
+    from panel.services import notifications as _nt
+    got, saved = [], _nt.notify
+    _nt.notify = lambda event, title, body="", **k: got.append((event, body))
+    try:
+        run()
+    finally:
+        _nt.notify = saved
+    return got
+
+
+def _cli_audit(target):
+    """(action, actor, detail) of every audit row about account `target`, oldest first."""
+    from panel.db.models import AuditLog
+    with manage.app.app_context():
+        return [(r.action, r.username, r.detail) for r in
+                AuditLog.query.filter_by(target=target).order_by(AuditLog.id).all()]
+
+
+def _check_audit_and_alerts():
+    """Each credential or privilege change from the CLI writes an audit row and raises the alert the web path does."""
+    seed(username="cli_aud_admin", admin=True)
+    seed(username="cli_aud_2fa", admin=True, totp=True)
+    seed(username="cli_aud_user", admin=False)
+    alerts = _cli_alerts(lambda: (
+        _said(manage.cmd_reset_password, Args(username="cli_aud_admin", password=_PW_RESET)),
+        _said(manage.cmd_disable_2fa, Args(username="cli_aud_2fa")),
+        _said(manage._set_flag, "cli_aud_user", "is_superadmin", True, "promoted to superadmin"),
+        _said(manage._set_flag, "cli_aud_user", "is_superadmin", False, "demoted from superadmin"),
+        _said(manage._set_flag, "cli_aud_user", "is_active", False, "deactivated"),
+        _said(manage._set_flag, "cli_aud_user", "is_active", True, "activated"),
+        _said(manage.cmd_create_admin, Args(username="cli_aud_new", password=_PW_NEW))))
+    rows = {n: [(a, who) for a, who, _d in _cli_audit(n)] for n in ("cli_aud_admin", "cli_aud_2fa", "cli_aud_user",
+                                                                     "cli_aud_new")}
+    check("audit: a password reset, a 2FA removal, promote/demote/deactivate/activate and create-admin from the CLI "
+          "each write an audit row by manage.py",
+          rows == {"cli_aud_admin": [("reset_user_password", "manage.py")], "cli_aud_2fa": [("2fa_reset", "manage.py")],
+                   "cli_aud_user": [("edit_user", "manage.py")] * 4, "cli_aud_new": [("add_user", "manage.py")]},
+          repr(rows))
+    check("alerts: the reset, the 2FA removal, the promotion, the demotion and the new superadmin raise the "
+          "credential-change alert naming the account; a plain account's (de)activation does not",
+          [b.split(":")[0] for e, b in alerts if e == "credential_change"]
+          == ["cli_aud_admin", "cli_aud_2fa", "cli_aud_user", "cli_aud_user", "cli_aud_new"]
+          and all("(manage.py)" in b for _e, b in alerts), repr(alerts))
+    with manage.app.app_context():
+        from panel.security import account_notices as _an
+        told = [label for label, _w, _ip in _an.recent_changes(User.query.filter_by(username="cli_aud_admin").one())]
+    check("audit: the account holder's Account page lists the CLI's password reset",
+          told == ["Password reset by an administrator"], repr(told))
+    _kept = _cli_alerts(lambda: _said(manage._set_flag, "cli_aud_user", "is_active", True, "activated"))
+    check("audit (control): a flag set to the value it already has writes no row and raises nothing",
+          len(_cli_audit("cli_aud_user")) == 4 and _kept == [], repr(_kept))
+    flushed, saved_argv, saved_flush = [], sys.argv, manage._flush_alerts
+    manage._flush_alerts = lambda *a: flushed.append(True)
+    sys.argv = ["manage.py", "list-users"]
+    try:
+        _said(manage.main)
+    finally:
+        sys.argv, manage._flush_alerts = saved_argv, saved_flush
+    check("alerts: the CLI waits for queued alerts before it exits (they are sent in the background)",
+          flushed == [True], repr(flushed))
+
+
 def _check_site_domain():
     """set-site-domain: the address browsers use, set from the shell, audited; a bad value refused."""
     shapes = {v: manage._site_domain_arg(v) for v in (
@@ -233,9 +297,11 @@ def _check_set_owner():
     with manage.app.app_context():
         from panel.db.models import AuditLog
         rows = [(r.username, r.target, r.detail) for r in AuditLog.query.filter_by(action="owner_transferred")]
-    check("set-owner: audited under both accounts, naming the two and the command",
-          rows == [("manage.py", n, "ownership moved from 'cli_admin' to 'cli_new' (manage.py set-owner)")
-                   for n in ("cli_admin", "cli_new")], repr(rows))
+    check("set-owner: audited under both accounts, naming the two and the command; the owner the CLI gave the "
+          "first superadmin earlier is audited too",
+          rows == [("manage.py", "cli_admin", "the panel had no owner; given to the oldest active superadmin "
+                    "(manage.py)")] + [("manage.py", n, "ownership moved from 'cli_admin' to 'cli_new' (manage.py "
+                                        "set-owner)") for n in ("cli_admin", "cli_new")], repr(rows))
     exited, msg = raises_exit(manage._set_flag, "cli_admin", "is_superadmin", False, "demoted from superadmin")
     check("owner: once set-owner has moved it, the old owner can be demoted", not exited, msg[:90])
     exited, msg, out = _said(manage.cmd_set_owner, Args(username="cli_new"))
@@ -552,6 +618,7 @@ try:
     _check_owner()
     _check_site_domain()
     _check_tty_safe()
+    _check_audit_and_alerts()
 
 except BaseException:
     # BaseException, not Exception: the finally below ends in sys.exit(), which REPLACES an

@@ -69,10 +69,14 @@ def _admin_level(user):
     return bool(get_user_permissions(user) & {USE_TERMINAL, MANAGE_USERS, MANAGE_GROUPS})
 
 
-def alert_credential_change(user, what):
-    """For an administrator's account: a `credential_change` alert on the panel-wide channels."""
+def alert_credential_change(user, what, was_admin=False):
+    """For an administrator's account: a `credential_change` alert on the panel-wide channels.
+
+    `was_admin`: the account was administrator-level before the change (a demotion or deactivation
+    the alert reports has taken that away by now).
+    """
     try:
-        if _admin_level(user):
+        if was_admin or _admin_level(user):
             from panel.services import notifications
             notifications.notify("credential_change", "Administrator account changed",
                                  "%s: %s" % (user.username, what))
