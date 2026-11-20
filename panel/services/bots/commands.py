@@ -126,7 +126,7 @@ def _join_capped(rows):
 
     The cap above was written for all four variable-length builders and applied to exactly one of
     them (_console_text). The other three built unbounded bodies, and on Discord the end of that
-    is discord_bot_send's bare `text[:1900]` — a hard slice, no ellipsis, mid-word, mid-row. A
+    is discord_bot_send's cut at 1,900 characters (discord_content) — no ellipsis, mid-word, mid-row. A
     panel with ~45 servers answered `!servers` with a list that stopped part-way through a name and
     was missing roughly the last ten, with nothing saying so; an admin scanning it for a server
     that was down read that as "not installed".
