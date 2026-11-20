@@ -15,10 +15,16 @@ dated section below lists what that day's releases changed, newest first; the nu
 ### Added
 
 - **BlueMap: a live 3D map of your Minecraft world.** A new add-on for vanilla and Paper servers (Files & Config → Add-ons) draws the world as a 3D map on a
-  web page on the game's host (127.0.0.1, through an SSH tunnel). It reads the world read-only and reaches no network;
+  web page you open from its card. It reads the world read-only and reaches no network;
   it installs only after you tick that you accept Mojang's EULA for Minecraft's client file, which the host downloads,
   and it offers an Update when the game moves to another Minecraft version.
 - **B3's players and penalties in the Add-ons tab.** An installed B3 has a Players button: search its players by name, earlier name, B3 id or GUID, open one to see their aliases, connections, warnings, kicks and bans with the admin and reason, or list the latest penalties. It reads B3's own database and changes nothing; IP addresses and GUIDs show only with the Manage a server's databases permission, and each look is in the audit log.
+- **Open an add-on's web page from the panel.** IW4MAdmin's webfront and BlueMap's map now open in a new tab from
+  the add-on's card, through the panel, on a phone as on a desktop and for remote hosts too, with no port opened
+  and no SSH tunnel. The page runs sandboxed, apart from the panel's own pages, behind a link that works only while
+  you are signed in and allowed to open it.
+- **A new permission: View add-on pages.** It opens a server's add-on pages without managing the add-ons; given to
+  no group by default.
 
 ### Fixed
 

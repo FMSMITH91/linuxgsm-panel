@@ -893,3 +893,5 @@ bfb58a58 The reboot dialog says what is blocking.
 54906eb5 Start sees a crossplay Valheim server that is already up.
 340279d2 Remote hosts with IPv6 off in the kernel can rate-limit SSH again.
 14e35216 Editing a host no longer freezes the panel while its key is checked.
+fe544850 Open an add-on's web page from the panel.
+9265be91 A new permission: View add-on pages.
