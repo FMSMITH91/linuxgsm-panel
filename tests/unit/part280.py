@@ -150,6 +150,7 @@ def _card_js280():
 # The stand-in tools' answer for the RCON value: an invented word, not a credential.
 _STAND_IN280 = "x"
 
+
 def _bash280(sh, home, stdin=""):
     run, bindir, log = os.path.join(home, "..", "run"), os.path.join(_TMP280, "bin"), os.path.join(home, "..", "tools.log")
     os.makedirs(run, exist_ok=True)
