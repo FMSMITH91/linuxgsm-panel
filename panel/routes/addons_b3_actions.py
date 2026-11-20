@@ -159,7 +159,6 @@ def _alerts_answer(server_id):
 
 def register(app):
     """Register the actions' routes (called by routes/addons_b3.py's register)."""
-
     # One route per action, each written out (a page's fetch names the whole path the step-up gate reads).
     @app.route("/api/server/<int:server_id>/addons/b3/players/<int:client_id>/unban", methods=["POST"],
                defaults={"action": "unban"})

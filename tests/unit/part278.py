@@ -203,7 +203,8 @@ def _bin278():
 def _bash278(d, sh, mode="ok", stdin=None):
     with open(os.path.join(d, "mode"), "w", encoding="utf-8") as fh:
         fh.write(mode)
-    env = dict(os.environ, PATH=os.path.join(d, "bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin"))
+    # A fixed environment, not this process's: the script sees only the stand-ins and the system's tools.
+    env = {"PATH": os.path.join(d, "bin") + ":/usr/local/bin:/usr/bin:/bin", "HOME": d, "LC_ALL": "C.UTF-8"}
     r = _sp278.run(["bash", "-c", sh + "echo SHELL_WENT_ON"], input=stdin, capture_output=True, text=True,  # nosec B603 B607
                    timeout=60, env=env, check=False)
     return r.stdout, r.returncode

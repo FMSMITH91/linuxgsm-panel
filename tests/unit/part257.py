@@ -337,7 +337,9 @@ def _settings257(ids):
     eq("settings: b3.ini goes back on stdin with only the panel's plugin lines changed (the operator's plugin and the "
        "password kept), no rebuild, a restart watched, audited",
        (ok.status_code, _ad257.b3_ini_plugins(stdin), "myext: @conf/myext.ini" in stdin,
-        "rcon_password: %s" % _RC257 in stdin, "/panel-addons/b3/Data/b3.ini.new || {" in re_[1] and "/panel-addons/b3/Data/b3.ini.new /home/" in re_[1], "podman build" in re_[1],
+        "rcon_password: %s" % _RC257 in stdin,
+        "/panel-addons/b3/Data/b3.ini.new || {" in re_[1] and "/panel-addons/b3/Data/b3.ini.new /home/" in re_[1],
+        "podman build" in re_[1],
         _RC257 in re_[1], _p9_audit("addon_settings").success),
        (202, ["admin", "afk", "tk"], True, True, True, False, False, True))
 
