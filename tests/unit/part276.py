@@ -534,12 +534,15 @@ def _root_cron_latin1_276():
     _p9_patch(_core276, "run_privileged", priv)
     _p9_patch(_core276, "helper_present", lambda recheck=False: True)
     _p9_patch(_rc276, "host_opened", lambda is_local, helper: True)
+    def _put_back(cfg):
+        cfg[_rc276.ENABLED_KEY] = was
+
     try:
         r = _p9_client(P9_ADMIN).get("/root-cron/%d" % P9_HOST)
         page = r.get_data(as_text=True)
     finally:
         _p9_restore_all()
-        _cfg276.update_config(lambda cfg: cfg.update({_rc276.ENABLED_KEY: was}))
+        _cfg276.update_config(_put_back)
     kinds = [(row["kind"], row["raw"]) for row in _rc276.rows(_rc276.parse_read(priv(None, "")[0])["text"])]
     eq("root cron page: a crontab and a cron.d file holding Latin-1 bytes render (they made the page a 500), each "
        "such byte shown as U+FFFD; the job line holding one is shown, never offered for edit, and the plain job "

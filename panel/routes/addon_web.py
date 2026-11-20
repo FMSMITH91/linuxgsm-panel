@@ -69,7 +69,9 @@ def _refuse(gs, addon_id, status, sentence, why):
 
 def _open(server_id, addon_id):
     gs = get_game(server_id)
-    if addon_id not in _aw.WEB or addon_id not in _ad.offered(gs.game_type):
+    # The id the shell sees is the catalog's own constant, looked up by the URL's text, never the text itself.
+    addon_id = next((k for k in _aw.WEB if k == addon_id), None)
+    if addon_id is None or addon_id not in _ad.offered(gs.game_type):
         return _page(404, _NO_PAGE)
     why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
     if why:
