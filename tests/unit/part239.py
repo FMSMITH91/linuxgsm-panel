@@ -453,7 +453,9 @@ def _schedules239():
 
 def _os_check239(a):
     """The OS check and the backup tick follow what was saved; the card renders; then the keys are cleared."""
-    now = _time239.time()
+    # Six hours past the 04:00 slot, not the wall clock: a run within a minute after 04:00 made "a minute ago"
+    # fall before the slot, so the check was due again and "not again a minute later" failed.
+    now = _sc239.last_slot((4, 0), _time239.time()) + 6 * 3600
     eq("OS update check: off means never; on, the first pass in a process runs at once, then at the set time",
        (_osu239._os_check_due(now),), (False,))
     _cfg239.update_config(lambda c: c.update({_sc239.OS_CHECK: True}))
