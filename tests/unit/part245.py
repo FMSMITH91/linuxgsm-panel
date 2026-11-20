@@ -5,8 +5,8 @@
   entry then runs the helper from that bytecode with the same output as the helper run whole, and
   as the __main__ module with the path sudo ran as its __file__.
 * The entry falls back to compiling the code file for every bytecode it must not trust: stale,
-  unchecked or timestamp-based, another magic number, a symbolic link, a file or directory others
-  may write, another owner.
+  unchecked or timestamp-based, another magic number, a symbolic link, a pyc others may write; files
+  of another owner are refused (part284 covers the refusals through the entry).
 * Root's readers of the helper's functions (can_already_sudo, enrolment_refusal) load the code file
   when the helper is split, and the Diagnostics comparison follows both layouts.
 * app._ban_watch_tick reads the panel jail only when fail2ban's files or the panel's auth.log
@@ -58,8 +58,8 @@ def _fn245(name):
     return _INS245[i + 1:_INS245.index("\n}\n", i) + 3] if i >= 0 else "%s() { exit 97; }\n" % name
 
 
-# `install` without chown (a non-root run cannot give files to root), honouring -m; H_SUDO empty.
-_SHIM245 = ('H_SUDO=""\ninstall() { local m=0755; while [[ "$1" == -* ]]; do case "$1" in -m) m="$2"; shift 2 ;; '
+# `install` without chown (a non-root run cannot give files to root), honouring -m; H_SUDO empty; info echoes.
+_SHIM245 = ('H_SUDO=""\ninfo() { echo "$*"; }\ninstall() { local m=0755; while [[ "$1" == -* ]]; do case "$1" in -m) m="$2"; shift 2 ;; '
             '-o|-g) shift 2 ;; *) shift ;; esac; done; cp -- "$1" "$2" && chmod "$m" "$2"; }\n')
 
 
@@ -81,10 +81,10 @@ def _install245(lib, helper=_HELPER245):
     """install.sh's install_helper_code into `lib`, from staged copies as install_root_tools passes them."""
     _sh245.copy(helper, os.path.join(lib, ".stage-panel-helper"))
     _sh245.copy(_ENTRY_SRC245, os.path.join(lib, ".stage-panel-helper-entry"))
-    script = ('%sHELPER_DIR=%s\nHELPER_DST="${HELPER_DIR}/panel-helper"\nHELPER_CODE="${HELPER_DIR}/panel-helper-code.py"\n'
+    script = ('%sHELPER_DIR=%s\nHELPER_TRUST_TOP=%s\nHELPER_DST="${HELPER_DIR}/panel-helper"\nHELPER_CODE="${HELPER_DIR}/panel-helper-code.py"\n'
               '%s\ninstall_helper_code "${HELPER_DIR}/.stage-panel-helper" '
               '"${HELPER_DIR}/.stage-panel-helper-entry"; echo "rc=$?"'
-              % (_SHIM245, lib, _fn245("install_helper_code").replace(
+              % (_SHIM245, lib, os.path.dirname(lib), _fn245("install_helper_code").replace(
                   "/usr/bin/python3", _PY245)))
     return _bash245(script)
 
@@ -189,16 +189,19 @@ def _section_fallbacks245():
              ("another interpreter's magic number", _magic245),
              ("a pyc that is a symbolic link", _symlink245),
              ("a pyc others may write", _chmod245("panel-helper-code.pyc", "o+w")),
-             ("a pyc its group may write", _chmod245("panel-helper-code.pyc", "g+w")),
-             ("a code file others may write", _chmod245("panel-helper-code.py", "o+w")),
-             ("a directory on the way its group may write", _chmod245("", "g+w")))
+             ("a pyc its group may write", _chmod245("panel-helper-code.pyc", "g+w")))
     got = {why: _variant245("v%d" % i, fn) for i, (why, fn) in enumerate(cases)}
     eq("helper code: the entry compiles the code file instead of trusting the bytecode for every case it "
        "must not trust, and the helper still loads", got, {why: (False, True) for why, _fn in cases})
     top, lib = _tree245("owner")
     _install245(lib)
-    eq("helper code: files owned by another account than the one the entry expects (root) are not trusted",
-       _E245.load(lib, _UID245 + 1, top)[1], False)
+    raised = []
+    try:
+        _E245.load(lib, _UID245 + 1, top)
+    except _E245.Untrusted:
+        raised.append("Untrusted")
+    eq("helper code: files owned by another account than the one the entry expects (root) are refused",
+       raised, ["Untrusted"])
     raised = []
     try:
         _E245.open_dir(lib, _UID245, os.path.join(top, "lib", "elsewhere"))

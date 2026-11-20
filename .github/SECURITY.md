@@ -224,10 +224,13 @@ rule names, unchanged) holds `tools/panel_helper_entry.py`, a small entry under 
 checked-hash pyc (PEP 552). The entry reads nothing from its environment or arguments. It uses the
 bytecode only when every directory from `/` down and both files are owned by root with no group or
 other write bit and are not symbolic links (checked through open file descriptors), and the pyc's
-magic number is this Python's and its source hash matches the code file; in every other case it
-compiles the code file, as the helper ran before. The hash only tells a stale pyc from a current one;
-the ownership test is what keeps out a planted one, as it keeps out a changed helper. Where the split
-cannot be placed, install.sh puts the helper whole at `panel-helper` as before.
+magic number is this Python's and its source hash matches the code file; when only the pyc fails, it
+compiles the code bytes it read through that checked descriptor (never re-reading the file by path).
+When a directory on the way or the code file fails the ownership test, it runs nothing: it exits 1
+with a message to re-run install.sh as root (fail securely). The hash only tells a stale pyc from a
+current one; the ownership test is what keeps out a planted one, as it keeps out a changed helper.
+Where the split cannot be placed, or the directories above it fail the entry's own check at install,
+install.sh puts the helper whole at `panel-helper` as before.
 
 It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management, the sshd port
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and

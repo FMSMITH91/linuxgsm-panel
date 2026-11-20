@@ -3033,7 +3033,8 @@ PYEOF
 # names holds tools/panel_helper_entry.py, a small root-owned entry, and the helper's code sits
 # beside it with bytecode root compiled here (a checked-hash pyc, PEP 552). The entry uses that
 # bytecode only when the directory chain and both files are root-owned and writable by nobody else
-# and the pyc's source hash matches the code file; otherwise it compiles the code file, as before.
+# and the pyc's source hash matches the code file; otherwise it compiles the code it read. When the
+# directory chain or the code file fails that test it runs nothing and exits 1.
 # The grant does not change: sudo still runs one command, ${HELPER_DST}.
 #
 # Order: the code, then its bytecode, then the entry. Until the last step the old helper at
@@ -3041,6 +3042,7 @@ PYEOF
 # $1 = staged tools/panel-helper, $2 = staged tools/panel_helper_entry.py. Fails when any step does,
 # and the caller then places tools/panel-helper at ${HELPER_DST} whole, as before the entry.
 HELPER_CODE="${HELPER_DIR}/panel-helper-code.py"
+HELPER_TRUST_TOP="/"   # where the entry's ownership walk starts (TOP in tools/panel_helper_entry.py)
 install_helper_code() {
     local pyc_stage="${HELPER_DIR}/.stage-panel-helper-code.pyc" rc=0
     ${H_SUDO} rm -f "${pyc_stage}" 2>/dev/null || true
@@ -3054,8 +3056,24 @@ py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile=sys.argv[3], doraise=Tr
 ' "$1" "${pyc_stage}" "${HELPER_CODE}") >/dev/null 2>&1 || rc=1
     if [[ "${rc}" -eq 0 ]]; then
         ${H_SUDO} install -o root -g root -m 0644 "$1" "${HELPER_CODE}" 2>/dev/null \
-            && ${H_SUDO} install -o root -g root -m 0644 "${pyc_stage}" "${HELPER_CODE}c" 2>/dev/null \
-            && ${H_SUDO} install -o root -g root -m 0755 "$2" "${HELPER_DST}" 2>/dev/null || rc=1
+            && ${H_SUDO} install -o root -g root -m 0644 "${pyc_stage}" "${HELPER_CODE}c" 2>/dev/null || rc=1
+    fi
+    # The entry runs nothing when a directory from / down or the code file is not root's alone
+    # (tools/panel_helper_entry.py, "WHEN NOTHING RUNS"). Its own check, run here on the placed code
+    # file before the entry goes in, keeps a host whose directories fail it (a group-writable
+    # /usr/local, say) from getting an entry that refuses every call: it gets the helper whole.
+    if [[ "${rc}" -eq 0 ]] && ! (cd / && ${H_SUDO} /usr/bin/python3 -I -B -c '
+import importlib.machinery as m, importlib.util as u, os, sys
+loader = m.SourceFileLoader("panel_helper_entry", sys.argv[1])
+entry = u.module_from_spec(u.spec_from_loader(loader.name, loader))
+loader.exec_module(entry)
+entry.load(sys.argv[2], os.geteuid(), sys.argv[3])
+' "$2" "${HELPER_DIR}" "${HELPER_TRUST_TOP:-/}") >/dev/null 2>&1; then
+        info "A directory above ${HELPER_DIR} is not root's alone, so the helper is placed whole."
+        rc=1
+    fi
+    if [[ "${rc}" -eq 0 ]]; then
+        ${H_SUDO} install -o root -g root -m 0755 "$2" "${HELPER_DST}" 2>/dev/null || rc=1
     fi
     ${H_SUDO} rm -f "${pyc_stage}" 2>/dev/null || true
     return "${rc}"
