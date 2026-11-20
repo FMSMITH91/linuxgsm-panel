@@ -1,6 +1,6 @@
 """Part 236 of the unit suite: the strict style policy (no style attributes anywhere).
 
-The page policy is style-src 'self' + the nonce, style-src-elem the same, style-src-attr 'none' (OWASP
+The page policy is style-src the nonce only, style-src-elem the same, style-src-attr 'none' (OWASP
 Content Security Policy Cheat Sheet, "Strict Policy"; CSP Level 3 style-src-attr). A browser refuses
 every style attribute on such a page: in a template, in markup a script builds, and from
 setAttribute('style', ...) or .style.cssText. A property set through the CSSOM (el.style.width = ...)
@@ -186,10 +186,10 @@ def _s236_header():
               and n.value not in ("csp_nonce", "")]
     parts = [n.value for n in sorted(consts, key=lambda n: (n.lineno, n.col_offset))]
     csp = "".join(parts).replace("%s", "n236")
-    eq("header: a page's policy allows styles from the panel and this request's nonce only, and no style "
+    eq("header: a page's policy allows styles and scripts with this request's nonce only, and no style "
        "attribute at all (no 'unsafe-inline' or 'unsafe-hashes' anywhere)",
-       ["style-src 'self' 'nonce-n236'; " in csp, "style-src-elem 'self' 'nonce-n236'; " in csp,
-        "style-src-attr 'none'; " in csp, "script-src 'self' 'nonce-n236'; " in csp, "unsafe-inline" in csp,
+       ["style-src 'nonce-n236'; " in csp, "style-src-elem 'nonce-n236'; " in csp,
+        "style-src-attr 'none'; " in csp, "script-src 'nonce-n236' 'strict-dynamic'; " in csp, "unsafe-inline" in csp,
         "unsafe-hashes" in csp], [True, True, True, True, False, False])
 
 

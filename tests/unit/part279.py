@@ -414,6 +414,29 @@ def _member279(perms):
         return u.id, grp.id
 
 
+def _session_client279(uid):
+    """A test client signed in as `uid` the way a browser is: its login id names a per-device session row.
+
+    An add-on page link is bound to that row (routes/addon_web.py refuses a login with none), so the
+    client that presses Open needs one. The row records no client (ip and User-Agent empty), so the
+    loader's "strong" check falls back to the Flask session's own binding, as for a row made outside a
+    request. _drop_member279 deletes it with the user.
+    """
+    from panel.core.clock import utcnow
+    with _p9.app_context():
+        u = _m279.db.session.get(_m279.User, uid)
+        row = _m279.UserSession(user_id=uid, sid=os.urandom(16).hex(), created_at=utcnow(), last_seen=utcnow())
+        _m279.db.session.add(row)
+        _m279.db.session.commit()
+        login_id = "%d:%d:%s" % (uid, u.auth_epoch or 0, row.sid)
+    c = _p9.test_client()
+    with c.session_transaction() as s:
+        s["_user_id"] = login_id
+        s["_fresh"] = True
+        s.permanent = True
+    return c
+
+
 def _drop_member279(uid, gid):
     with _p9.app_context():
         _m279.UserSession.query.filter_by(user_id=uid).delete()
@@ -536,7 +559,7 @@ def _routes279():
     ctx["plain"] = _member279([_auth279.VIEW_SERVERS])
     ctx["port"] = _ad279.PORT_BASE + ctx["sid"]
     try:
-        ctx["c"], ctx["fresh"] = _p9_client(ctx["viewer"][0]), _p9.test_client()   # the link's page: no panel cookie
+        ctx["c"], ctx["fresh"] = _session_client279(ctx["viewer"][0]), _p9.test_client()   # the link's page: no cookie
         for step in (_r_open279, _r_proxy279, _r_revoke279, _r_list279):
             try:
                 step(ctx, res)

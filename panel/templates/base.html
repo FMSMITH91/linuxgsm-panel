@@ -40,12 +40,12 @@
        width — reflowing the page (large CLS). Preload URL matches the CSS request. -->
   <link rel="preload" as="font" type="font/woff2" crossorigin
         href="{{ url_for('static', filename='vendor/bootstrap-icons/fonts/bootstrap-icons.woff2') }}?dd67030699838ea613ee6dbda90effa6">
-  <link href="{{ asset_url('vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
+  <link href="{{ asset_url('vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet" nonce="{{ csp_nonce }}">
   <!-- Icon CSS is render-blocking on purpose: the min-width reservation that keeps icons
        from shifting layout depends on the ::before content this sheet defines, so deferring
        it reintroduces a large CLS on icon-heavy pages. The preloaded font keeps it fast. -->
-  <link rel="stylesheet" href="{{ asset_url('vendor/bootstrap-icons/bootstrap-icons.min.css') }}">
-  <link rel="stylesheet" href="{{ asset_url('css/panel.css') }}">
+  <link rel="stylesheet" href="{{ asset_url('vendor/bootstrap-icons/bootstrap-icons.min.css') }}" nonce="{{ csp_nonce }}">
+  <link rel="stylesheet" href="{{ asset_url('css/panel.css') }}" nonce="{{ csp_nonce }}">
   {# The brand accent is per-install, so it stays inline — and AFTER the stylesheet above,
      which is what lets it win the cascade over the defaults in it. #}
   <style nonce="{{ csp_nonce }}">

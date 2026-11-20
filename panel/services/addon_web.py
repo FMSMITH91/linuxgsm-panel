@@ -69,20 +69,37 @@ JAR_BYTES = 16 * 1024
 # Per add-on: how many connections the page takes at once (IW4MAdmin's Kestrel takes one at a time:
 # WebfrontCore/Program.cs at the pinned image, MaxConcurrentConnections from MaxConcurrentRequests,
 # default 1; an upgraded WebSocket is not counted), whether it needs a WebSocket (IW4MAdmin's pages
-# are Blazor Server, whose live updates and buttons run over SignalR), and its own rewrite.
+# are Blazor Server, whose live updates and buttons run over SignalR), its own rewrite, and whether its
+# script must evaluate strings (`eval`: BlueMap's web app does, through vue-i18n's message compiler,
+# `new Function(...)`, and without 'unsafe-eval' the map never loads; see _csp).
 WEB = {
-    _ad.IW4MADMIN: {"connections": 1, "websocket": True, "settings_json": False},
-    _ad.BLUEMAP: {"connections": 6, "websocket": False, "settings_json": True},
+    _ad.IW4MADMIN: {"connections": 1, "websocket": True, "settings_json": False, "eval": False},
+    _ad.BLUEMAP: {"connections": 6, "websocket": False, "settings_json": True, "eval": True},
 }
 # Each id mapped to itself: a route turns the URL's text into this constant before anything uses it.
 WEB_IDS = {k: k for k in WEB}
 
 # OWASP HTTP Headers Cheat Sheet / CSP Cheat Sheet: the page runs in a sandbox with an opaque origin
 # (no allow-same-origin), loads only from this address, may not be framed and sends no referrer.
-_CSP = ("sandbox allow-scripts allow-forms; default-src 'self'; script-src 'self' 'unsafe-inline'; "
+_CSP = ("sandbox allow-scripts allow-forms; default-src 'self'; script-src 'self' 'unsafe-inline'%s; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
         "connect-src 'self'; worker-src 'self' blob:; media-src 'self' data: blob:; object-src 'none'; "
         "frame-src 'none'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'")
+
+
+def _csp(addon_id=None):
+    """The policy for `addon_id`'s page (None: the proxy's own answers, a refusal or a redirect).
+
+    'unsafe-eval' only where the add-on's page needs it (WEB "eval"). OWASP's CSP Cheat Sheet advises
+    against it: it lets the page's script turn a string into code. What contains it here is the sandbox
+    WITHOUT allow-same-origin, kept for every add-on: the page has an opaque origin, so code it evaluates
+    runs as that origin and reaches nothing of the panel's (no cookie, storage, page or same-origin
+    request), exactly as the add-on's own script already does. It changes what the add-on's page can do
+    to itself, not what it can do to the panel; 'unsafe-inline' is already there for the same pages.
+    """
+    return _CSP % (" 'unsafe-eval'" if WEB.get(addon_id, {}).get("eval") else "")
+
+
 _PERMISSIONS = ("camera=(), microphone=(), geolocation=(), usb=(), payment=(), serial=(), "
                 "accelerometer=(), gyroscope=(), magnetometer=()")
 # Answers a browser may keep (revalidated on each use): the map's tiles, scripts and styles.
@@ -246,16 +263,23 @@ def upstream_target(raw_path, query):
 
 
 # ── the answer ───────────────────────────────────────────────────────────────────────────────────
-def page_headers(ctype, websocket=False):
-    """The headers every proxied answer carries (see the module docstring)."""
-    out = [("Content-Security-Policy", _CSP), ("Referrer-Policy", "no-referrer"),
+def page_headers(ctype, websocket=False, addon_id=None):
+    """The headers every proxied answer carries (see the module docstring); the policy is `addon_id`'s."""
+    out = [("Content-Security-Policy", _csp(addon_id)), ("Referrer-Policy", "no-referrer"),
            ("X-Content-Type-Options", "nosniff"), ("Permissions-Policy", _PERMISSIONS),
            ("X-Robots-Tag", "noindex, nofollow"), ("X-Frame-Options", "DENY")]
     if websocket:
         return out
-    # The page's origin is opaque, so to the browser everything it loads from here is cross-origin: a
-    # module script, a fetch and a texture need CORS, a plain <img> or stylesheet needs CORP.
-    out += [("Access-Control-Allow-Origin", "*"), ("Cross-Origin-Resource-Policy", "cross-origin"),
+    # The page's origin is opaque, so to the browser everything it loads from here is cross-origin, and
+    # its module scripts, fetches and textures are CORS requests sent with `Origin: null`. So CORS allows
+    # exactly that origin, not `*` (OWASP HTML5 Security Cheat Sheet, "Cross Origin Resource Sharing":
+    # only the origins that need it): an ordinary page on another site can't read an answer. No
+    # Cross-Origin-Resource-Policy: `same-site` and `same-origin` refuse the opaque page's own <script>,
+    # stylesheet and <img> loads (measured in headless Brave), and leaving it out is narrower than
+    # `cross-origin` (a cross-origin page that requires CORP can't embed these files). A panel page can't
+    # load them either way: the proxy refuses a panel page's request (routes/addon_web.py), and the
+    # panel's policy takes no script or stylesheet without its nonce.
+    out += [("Access-Control-Allow-Origin", "null"),
             ("Cross-Origin-Opener-Policy", "same-origin"),
             ("Cache-Control", "private, no-cache" if _CACHEABLE.match(ctype or "") else "no-store")]
     return out

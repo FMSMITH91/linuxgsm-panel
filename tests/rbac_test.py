@@ -4792,6 +4792,8 @@ _AX_ACTION_FROM_CALLER = {
     "_read_refused",            # server_files' read routes pass browse_files / read_file /
                                 # upload_check / list_cron — the refusal of a read as a
                                 # root-capable account
+    "_bk_account_refused",      # panel_backup's game backup download / delete pass game_backup_download /
+                                # game_backup_delete: the refusal of a root-capable account
     "_create_refused",          # server_files' create-path passes create_file / create_folder,
     "_create_answer",           # by the kind it was asked for
     "_r36c_reboot_refused",     # server_files' cron, mods and GMod content POSTs pass cron_add /
@@ -4873,7 +4875,7 @@ for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROO
 # writes its row with server=gs; a name passed through a local is read from that local's
 # assignments in the calling function.
 _AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer", "_r36c_reboot_refused",
-                      "_r39a_wipe_refused"}
+                      "_r39a_wipe_refused", "_bk_account_refused"}
 _ax_passed = []
 for _f in sorted(pathlib.Path(_ROOT, "panel").rglob("*.py")):
     _tree = ast.parse(_f.read_text(encoding="utf-8"))

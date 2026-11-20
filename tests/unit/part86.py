@@ -317,6 +317,7 @@ def _unreachable_routes86(client, rid, sid):
     _p9_patch(_p9_rs, "tailnet_exempt_ips", lambda *a, **k: set())
     _p9_patch(_p9_rs, "remote_ufw_deny_ip", _down86)
     _p9_patch_sm("fwa_panel_source", _down86)     # the block's own source read, first (part136)
+    _p9_patch(_pb86, "game_account_write_refusal", lambda *a, **k: None)   # the account check: part281
     _p9_patch(_pb86, "list_game_backups", lambda *a, **k: [{"name": "p86.tar.zst"}])
     _p9_patch(_pb86, "delete_game_backup", _down86)
     calls = {

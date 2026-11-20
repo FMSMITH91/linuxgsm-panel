@@ -217,7 +217,10 @@ nothing changes in Tailscale.
   treats it as a site of its own, so it can't read the panel's cookies, storage or pages, and its requests
   carry no panel cookie. The panel's cookies, Authorization and forwarding headers are never passed to the
   add-on; the add-on's cookies (IW4MAdmin's own sign-in) are kept by the panel for that link and never
-  reach your browser, and a `Clear-Site-Data` or framing header from it is dropped.
+  reach your browser, and a `Clear-Site-Data` or framing header from it is dropped. BlueMap's page may also
+  evaluate strings as code (`'unsafe-eval'`, which its web app needs to show the map); because of the
+  sandbox, that code runs as the page's own separate site and reaches nothing of the panel's. A panel page
+  can't load the add-on's files as its own scripts or styles, and only the sandboxed page may read them.
 - **What it changes.** Addresses from the site's root in the page (IW4MAdmin's `<base href="/">`, its
   `/css/` and `/js/`) are put under the link's path, and a short script gives the page in-memory stand-ins
   for the browser storage a sandboxed page is refused. An address IW4MAdmin builds in its own script from

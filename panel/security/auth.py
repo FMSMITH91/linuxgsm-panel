@@ -897,9 +897,12 @@ def live_session_user(cookie_id):
 
     For a link bound to a sign-in (an add-on's page, routes/addon_web.py), asked on each of its
     requests, which carry no panel cookie: the account active and its auth epoch unchanged (a password
-    change or "sign out everywhere" moves it), and, for an id with a session, that session's row still
-    there (logout deletes it) and not expired. A database error is a None: a revocation check that
-    could not look says no. Nothing is written (the sign-in's last use is the panel's pages' to note).
+    change or "sign out everywhere" moves it), and that sign-in's session row still there (logout
+    deletes it) and not expired. An id with no session (a Bearer API token's user, a cookie from before
+    per-device sign-ins) is None: nothing would end it when the token is revoked or expires, or at
+    logout (OWASP Session Management Cheat Sheet, "Session Expiration"). A database error is a None: a
+    revocation check that could not look says no. Nothing is written (the sign-in's last use is the
+    panel's pages' to note).
     """
     s = str(cookie_id or "")
     if ":" not in s:
@@ -907,7 +910,7 @@ def live_session_user(cookie_id):
     try:
         user, sid = _user_for_cookie_id(s)
         if user is None or not sid:
-            return user
+            return None
         from panel.db.models import UserSession
         sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
         return None if sess is None or sess.is_expired(utcnow()) else user

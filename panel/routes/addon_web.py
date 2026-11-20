@@ -46,6 +46,8 @@ _NO_ANSWER = "The add-on's page didn't answer. Check that the add-on is running,
 _BUSY = "The add-on's page is busy. Try again in a moment."
 _REFUSED = "That request can't be passed on to the add-on's page."
 _DENIED = "Permission denied"
+_NO_SIGN_IN = ("This page opens only from a browser signed in to the panel. Sign out, sign in again, then open it from "
+               "the server's Add-ons tab.")
 
 
 def may_view(user):
@@ -73,6 +75,11 @@ def _open(server_id, addon_id):
     addon_id = _aw.WEB_IDS.get(addon_id)
     if addon_id is None or addon_id not in _ad.offered(gs.game_type):
         return _page(404, _NO_PAGE)
+    if not getattr(current_user, "_sid", None):
+        # A link lives only as long as the sign-in it is bound to, and only a per-device sign-in has a record
+        # that logout, revocation and expiry end. An API token (Bearer) or a cookie from before per-device
+        # sign-ins has none: a link made from one would outlive a revoked token or a logout.
+        return _refuse(gs, addon_id, 409, _NO_SIGN_IN, "no browser sign-in to bind the link to")
     why = game_account_write_refusal(gs.remote, gs.short_name, reading=True)
     if why:
         return _refuse(gs, addon_id, 409, why, why)
@@ -118,6 +125,22 @@ def _plain(start_response, status, sentence, lang="en"):
     return [body]
 
 
+def _asked_by_a_panel_page(environ):
+    """Whether a panel page asked for this as a script, stylesheet, image, fetch or frame (Fetch Metadata).
+
+    A proxied file is on the panel's own origin, so a panel page's CSP `'self'` would let an injected
+    `<script src>` or `<link rel=stylesheet>` load add-on content written by the game account. The link's
+    own page has an opaque origin (the sandbox), so the browser sends every request it makes as
+    `Sec-Fetch-Site: cross-site`; only a panel page sends `same-origin`. Of those, the card's Open (303) is
+    the one this serves: a top-level navigation to a document. A browser that sends no Fetch Metadata is
+    let through (nothing to tell), which leaves it to the panel's nonce-only script and style policy.
+    """
+    if environ.get("HTTP_SEC_FETCH_SITE", "").lower() != "same-origin":
+        return False
+    return (environ.get("HTTP_SEC_FETCH_MODE", "").lower() != "navigate"
+            or environ.get("HTTP_SEC_FETCH_DEST", "document").lower() != "document")
+
+
 class _Refusal(Exception):
     """A request the proxy answers itself (status, sentence)."""
 
@@ -138,6 +161,8 @@ class AddonWebProxy:
         path = environ.get("PATH_INFO", "")
         if not path.startswith(_aw.PATH_ROOT):
             return self.wsgi_app(environ, start_response)
+        if _asked_by_a_panel_page(environ):
+            return _plain(start_response, 403, _REFUSED)
         token, _slash, rest = path[len(_aw.PATH_ROOT):].partition("/")
         if not _slash and _aw.TOKEN_RE.fullmatch(token):
             start_response("308 Permanent Redirect", [("Location", environ.get("SCRIPT_NAME", "") + path + "/"),
@@ -146,7 +171,7 @@ class AddonWebProxy:
         lang = "en"
         try:
             with self.app.app_context():
-                link, server = self._authorized(token)
+                link, server = self._authorized(token, environ)
                 lang = link.lang
                 asked = self._forward(environ, start_response, token, link, server, "/" + rest)
         except _Refusal as r:
@@ -156,7 +181,7 @@ class AddonWebProxy:
         return asked
 
     # ── who is asking ──────────────────────────────────────────────────────────────────────────────
-    def _authorized(self, token):
+    def _authorized(self, token, environ):
         """(the link, its server's host row) when the link's sign-in may still use it; else _Refusal."""
         with self.app.app_context():
             link = _aw.lookup(token, session_idle_limits()[0], session_absolute_limits()[0])
@@ -165,7 +190,7 @@ class AddonWebProxy:
             gs = db.session.get(GameServer, link.server_id)
             why = self._why_not(link, gs)
             if why:
-                self._log_refusal(token, link, gs, why)
+                self._log_refusal(token, link, gs, why, environ)
                 raise _Refusal(403, _REVOKED)
             return link, gs.remote
 
@@ -180,14 +205,21 @@ class AddonWebProxy:
             return "no access to the server"
         return ""
 
-    @staticmethod
-    def _log_refusal(token, link, gs, why):
+    def _log_refusal(self, token, link, gs, why, environ):
+        """Audit a refused link once (with the address it was used from), then end it.
+
+        The link works without the panel's cookie, so this row is the one that matters when someone else
+        holds the URL (Logging Cheat Sheet, "Event attributes": the source address). log_action reads the
+        address through client_ip, which needs a request: built from this request's environ, under the same
+        proxy-trust rules as every other row. Only on this path; a request that is let through builds none.
+        """
         if not link.refusal_logged:
             link.refusal_logged = True
             from panel.db.models import User
             user = db.session.get(User, link.user_id)
-            log_action(user, "addon_web_refused", target=getattr(gs, "name", ""), server=gs, success=False,
-                       detail="%s page link refused: %s" % (link.addon_id, why))
+            with self.app.request_context(environ):
+                log_action(user, "addon_web_refused", target=getattr(gs, "name", ""), server=gs, success=False,
+                           detail="%s page link refused: %s" % (link.addon_id, why))
         _aw.revoke(token)
 
     def still_allowed(self, token):
@@ -310,7 +342,8 @@ def _answer(start_response, stream, head, method, raw_rest, link, prefix, gate):
         raise _Refusal(502, _NO_ANSWER)
     ctype = head.get("Content-Type")
     kind = _aw.rewrites(ctype, raw_rest, link.addon_id)
-    headers = _aw.kept_response_headers(head.headers, prefix, link.port) + _aw.page_headers(ctype)
+    headers = (_aw.kept_response_headers(head.headers, prefix, link.port)
+               + _aw.page_headers(ctype, addon_id=link.addon_id))
     status = _status(head)
     if kind and method != "HEAD" and head.status not in (204, 304):
         return _rewritten(start_response, (stream, head, gate), method, kind, prefix, headers)

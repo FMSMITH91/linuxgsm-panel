@@ -1869,24 +1869,28 @@ def create_app():
         return redirect(url_for("force_password_change"))
 
     # ── Security response headers ──
-    # STRICT script-src: 'self' + a per-request nonce, NO 'unsafe-inline'. Every one of our own
-    # <script> blocks carries nonce="{{ csp_nonce }}"; all event handlers are attached via the
+    # STRICT script-src (OWASP CSP Cheat Sheet, "Nonce-based Strict Policy"): a per-request nonce
+    # and 'strict-dynamic', NO 'self' and NO 'unsafe-inline'. Every one of our own <script> tags,
+    # src= ones included, carries nonce="{{ csp_nonce }}"; all event handlers are attached via the
     # delegated dispatcher in base.html (data-action), never inline on* attributes. So an injected
-    # <script>/handler without the nonce simply won't execute.
-    # Styles are split (CSP Level 3): style-src-elem is 'self' + the nonce, so an injected <style>
-    # block (the CSS-injection route that reads a page through attribute selectors) does not apply;
-    # every <style> of ours carries the nonce, and xterm's are given it (host_terminal.js).
+    # <script>/handler without the nonce simply won't execute — nor a <script src> naming a file on
+    # this origin that the panel does not vouch for (an add-on page's file under /addon-web/, which
+    # 'self' would have matched).
+    # Styles are split (CSP Level 3): style-src-elem is the nonce only, so an injected <style> or
+    # <link rel=stylesheet> (the CSS-injection route that reads a page through attribute selectors)
+    # does not apply; every <style> and stylesheet <link> of ours carries the nonce, and xterm's are
+    # given it (host_terminal.js).
     # style-src-attr is 'none': no template or script writes a style="…" attribute (unit part236
     # holds them to that); a value from data is set through the CSSOM, which CSP does not govern.
-    # style-src, the fallback for a browser without the split, is the same 'self' + nonce.
+    # style-src, the fallback for a browser without the split, is the same nonce.
     # Self-hosted assets only; nothing frames a panel page, none has a <base>, every form posts to the panel.
     # worker-src 'self': the one worker is the alerts service worker (static/push/sw.js), same origin.
     def _csp():
         nonce = getattr(g, "csp_nonce", "")
         return (
             "default-src 'self'; "
-            "script-src 'self' 'nonce-%s'; " % nonce +
-            "style-src 'self' 'nonce-%s'; style-src-elem 'self' 'nonce-%s'; " % (nonce, nonce) +
+            "script-src 'nonce-%s' 'strict-dynamic'; " % nonce +
+            "style-src 'nonce-%s'; style-src-elem 'nonce-%s'; " % (nonce, nonce) +
             "style-src-attr 'none'; img-src 'self' data:; font-src 'self' data:; "
             "connect-src 'self'; worker-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"

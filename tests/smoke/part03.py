@@ -1026,9 +1026,9 @@ _hcsp = hr.headers.get("Content-Security-Policy") or ""
 check("security header: the page CSP refuses framing, any <base> and a form posting off the panel",
       all(d in _hcsp for d in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'",
                                "object-src 'none'")) and "frame-ancestors 'self'" not in _hcsp, _hcsp)
-check("security header: the page CSP takes styles from the panel and the request's nonce only, and refuses every "
+check("security header: the page CSP takes styles with the request's nonce only, and refuses every "
       "style attribute (style-src-attr 'none'; no 'unsafe-inline' anywhere)",
-      "style-src 'self' 'nonce-" in _hcsp and "style-src-elem 'self' 'nonce-" in _hcsp
+      "style-src 'nonce-" in _hcsp and "style-src-elem 'nonce-" in _hcsp
       and "style-src-attr 'none'" in _hcsp and "unsafe-inline" not in _hcsp, _hcsp)
 check("security header: a page gets COOP and CORP same-origin and X-DNS-Prefetch-Control off, and is "
       "no-store (OWASP: no copy of a signed-in page is kept)",

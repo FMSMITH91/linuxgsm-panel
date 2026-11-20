@@ -1198,7 +1198,7 @@ _pb7_names = ("current_user", "log_action", "get_game", "GameServer", "RemoteSer
               "threading", "_button_backup_running",
               "_marked_backup", "_record_full_clock", "_record_game_clock", "run_game_backup",
               "notifications", "bk", "so", "list_game_backups", "delete_game_backup",
-              "stream_game_backup", "backup_disk_info", "_cached_player_count")
+              "stream_game_backup", "backup_disk_info", "_cached_player_count", "game_account_write_refusal")
 _pb7_saved = {k: getattr(_pb7, k) for k in _pb7_names}
 _pb7_auth_user = _p7_auth.current_user
 _pb7_log = []
@@ -1416,6 +1416,7 @@ try:
 
     # ── one archive: delete and download go only through the host's own listing ────────────────
     _pb7_deleted = []
+    _pb7.game_account_write_refusal = lambda remote, user, **k: None   # a plain game account (part281 the other)
     _pb7.list_game_backups = lambda remote, short: [{"name": "a.tar.gz", "size": 3},
                                                     {"name": "map—pack.tar.gz", "size": 6}]
     _pb7.delete_game_backup = lambda remote, short, name: (_pb7_deleted.append(name), True)[1]
