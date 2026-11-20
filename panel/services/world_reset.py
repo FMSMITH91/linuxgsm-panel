@@ -396,8 +396,8 @@ def cfg_values(texts, keys):
                                    "follow")
     if any(_wwr_sets_any(ln) for ln in lines):
         return None, i18n.Sentence("the LinuxGSM config may set a setting through a name built from other values "
-                                   "(arithmetic, ${!…}, ${…@P} or a command such as printf -v), which the panel "
-                                   "does not follow")
+                                   "(arithmetic, an indirect or prompt expansion, or a command such as printf -v), "
+                                   "which the panel does not follow")
     index = _wwr_cfg_index(texts)
     values = {}
     for key in keys:
