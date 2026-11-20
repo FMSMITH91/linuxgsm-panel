@@ -209,8 +209,8 @@ def _grs_walks():
     * a symlinked folder whose target is not itself restored: outside the home, the home itself or
       above it, or a KEEP path or above one.
     Every symlink in what is cleared is recorded: `lp` (its path, relative), `lx` (its text, exactly as
-    readlink gives it: LinuxGSM's ~/log/server link is absolute) and `lr` (a folder's resolved target,
-    else ""). restore_script puts each back after the move (_grs_relink). Then `free` (bytes) and
+    readlink gives it: LinuxGSM's ~/log/server link is absolute) and `lr` (its resolved target; for a
+    file link only one inside the home and outside KEEP, else ""). restore_script puts each back after the move (_grs_relink). Then `free` (bytes) and
     `itot`/`ifree` (the filesystem's inodes; 0 where it does not count them).
     """
     return [
@@ -222,9 +222,11 @@ def _grs_walks():
         'if [ -d "./$l" ]; then r=$(readlink -f -- "./$l" 2>/dev/null) || r=; '
         'case "$r" in "$HR"/*) ;; *) echo %s; exit 5;; esac; '
         'for kp in %s; do case "$r" in "$kp"|"$kp"/*) echo %s; exit 5;; esac; '
-        'case "$kp" in "$r"/*) echo %s; exit 5;; esac; done; fi; lp+=("$l"); lx+=("$x"); lr+=("$r"); '
+        'case "$kp" in "$r"/*) echo %s; exit 5;; esac; done; '
+        'else r=$(readlink -f -- "./$l" 2>/dev/null) || r=; case "$r" in "$HR"/*) ;; *) r=;; esac; '
+        'for kp in %s; do case "$r" in "$kp"|"$kp"/*) r=;; esac; done; fi; lp+=("$l"); lx+=("$x"); lr+=("$r"); '
         'done < <(find . -mindepth 1 "${k[@]}" -type l -printf "%%P\\0%%l\\0" 2>/dev/null)'
-        % (_M["LINKOUT"], _GRS_KEEP_REAL, _M["LINKOUT"], _M["LINKOUT"]),
+        % (_M["LINKOUT"], _GRS_KEEP_REAL, _M["LINKOUT"], _M["LINKOUT"], _GRS_KEEP_REAL),
         'free=$(df -PB1 -- "$HR" 2>/dev/null | awk \'NR==2{print $4}\')',
         'case "$free" in ""|*[!0-9]*) echo "%s 0 0"; exit 5;; esac' % _M["SPACE"],
         'read -r itot ifree <<< "$(df -Pi -- "$HR" 2>/dev/null | awk \'NR==2{print $2, $4}\')"',
@@ -369,7 +371,9 @@ def _grs_switch_functions():
     moveall SRC DST: each of them renamed from SRC into DST (the same filesystem: WORK_DIR is in the
     home and no KEEP path is a link), a folder made writable first, as a rename into another folder
     must update its "..". undo: the switch reversed from wherever it
-    stopped ($st names the step): what came from the staging folder (names in $nm) set aside into $F,
+    stopped ($st names the step): once the home's own content is all in $O ("in" and after), everything
+    in the home but KEEP set aside into $F (what came from the staging folder, and the folders and links
+    relink made, which $nm does not name: one left behind blocked moving the home's own folder back),
     the home's own content moved back from $O. LinuxGSM's own links were moved as links, so they come
     back as they were.
     """
@@ -388,10 +392,10 @@ def _grs_switch_functions():
     )
     undo_fn = (
         'undo() { local p; p=$(cat "$st" 2>/dev/null); [ -n "$p" ] || return 0; mkdir -p -- "$F" || return 1; '
-        'if { [ "$p" = in ] || [ "$p" = link ] || [ "$p" = done ]; } && [ -f "$nm" ]; then while IFS= read -r -d "" r; do '
+        'if [ "$p" = in ] || [ "$p" = link ] || [ "$p" = done ]; then while IFS= read -r -d "" r; do '
         'if [ -e "$HR/$r" ] || [ -L "$HR/$r" ]; then case "$r" in */*) mkdir -p -- "$F/${r%/*}";; esac; '
         'mv -T -- "$HR/$r" "$F/$r" || return 1; fi; '
-        'done < "$nm"; fi; echo back > "$st" || return 1; [ ! -d "$O" ] || moveall "$O" "$HR" || return 1; '
+        'done < <(entries "$HR"); fi; echo back > "$st" || return 1; [ ! -d "$O" ] || moveall "$O" "$HR" || return 1; '
         'rm -rf -- "$F" "$O"; rm -f -- "$st" "$nm" "$st.failed"; }'
     )
     return [entries_fn, moveall_fn, undo_fn]
@@ -428,15 +432,20 @@ def _grs_relink():
     The archive holds what `tar -h` found through the link: a real folder (or file) at the link's path.
     A folder's files are also stored under its target, as hard links when the target is in the home
     (GNU tar stores a second name for an inode as a link to the first), so they are already there; a
-    file that is only under the link's path is moved to the target first. Then the real entry is
-    removed and the link made again. Returns 1 on the first that fails.
+    file that is only under the link's path is moved to the target first. A target the archive does
+    not hold is made first (a folder) or gets the file (a file link), so the archive's copy at the
+    link's path is never deleted for a dangling link; a folder's target that is not a folder fails.
+    Then the real entry is removed and the link made again. Returns 1 on the first that fails.
     """
     return ('relink() { local i p r e sp tp; for ((i=${#lp[@]}-1; i>=0; i--)); do p="$HR/${lp[$i]}"; r=${lr[$i]}; '
-            'if [ -d "$p" ] && [ ! -L "$p" ] && [ -n "$r" ] && [ -d "$r" ]; then '
+            'if [ -d "$p" ] && [ ! -L "$p" ] && [ -n "$r" ]; then '
+            '{ [ -e "$r" ] || [ -L "$r" ] || mkdir -p -- "$r"; } && [ -d "$r" ] || return 1; '
             'while IFS= read -r -d "" e; do sp="$p/${e#./}"; tp="$r/${e#./}"; '
             'if [ -d "$sp" ] && [ ! -L "$sp" ]; then mkdir -p -- "$tp"; '
             'elif [ ! -e "$tp" ] && [ ! -L "$tp" ]; then mv -- "$sp" "$tp"; fi; '
-            'done < <(cd -- "$p" && find . -mindepth 1 -print0); fi; '
+            'done < <(cd -- "$p" && find . -mindepth 1 -print0); '
+            'elif [ -f "$p" ] && [ ! -L "$p" ] && [ -n "$r" ] && [ ! -e "$r" ] && [ ! -L "$r" ]; then '
+            'mkdir -p -- "${r%/*}" && mv -- "$p" "$r" || return 1; fi; '
             'if [ -e "$p" ] || [ -L "$p" ]; then rm -rf -- "$p" || return 1; fi; '
             'mkdir -p -- "${p%/*}" && ln -s -- "${lx[$i]}" "$p" || return 1; done; }')
 

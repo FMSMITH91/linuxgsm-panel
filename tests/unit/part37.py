@@ -81,6 +81,8 @@ _HTTP_REVIEWED37 = {
     ("panel/services/game_icons.py", "_cmpd_http_get", "opener.open"),
     ("panel/services/geoip.py", "_get", "build_opener"),
     ("panel/services/geoip.py", "_get", "opener.open"),
+    ("panel/services/addons_bluemap.py", "_get", "build_opener"),
+    ("panel/services/addons_bluemap.py", "_get", "opener.open"),
     ("panel/services/modrinth.py", "_mdr_http_get", "build_opener"),
     ("panel/services/modrinth.py", "_mdr_http_get", "opener.open"),
     ("panel/services/steam_workshop.py", "_wsc_http_post", "build_opener"),

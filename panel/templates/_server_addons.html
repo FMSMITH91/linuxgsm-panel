@@ -14,6 +14,26 @@
     <div id="ad-list"></div>
     <div id="ad-msg" class="small mt-1" role="status"></div>
     <pre id="ad-log" class="small border rounded p-2 mt-2 mb-0 ad-log" data-start-hidden data-no-i18n></pre>
+    {# B3's players and penalties (routes/addons_b3.py, js/b3_players.js): opened from B3's row, read from B3's own database. #}
+    {% if 'b3' in addons_tab(server).offered %}
+    <section id="b3p" class="border rounded p-2 mt-2" data-start-hidden aria-labelledby="b3p-title">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-1">
+        <h3 id="b3p-title" class="h6 mb-0"><i class="bi bi-people" aria-hidden="true"></i> B3 players and penalties</h3>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="b3pClose"><i class="bi bi-x-lg" aria-hidden="true"></i> Close</button>
+      </div>
+      <p class="small text-secondary mb-2">Read from B3's own database. Nothing here changes B3: a ban is lifted with B3's own commands in the game.</p>
+      <form id="b3p-form" class="d-flex flex-wrap gap-2 mb-2" data-action="b3pSearch" data-args='["@event"]' data-on="submit">
+        <input type="search" id="b3p-q" class="form-control form-control-sm fx-12" maxlength="36" autocomplete="off" aria-label="Search B3's players" placeholder="Name, alias, @id or GUID">
+        <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="b3pRecent" data-args='["all"]'>Latest penalties</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" data-action="b3pRecent" data-args='["bans"]'>Bans only</button>
+      </form>
+      <div id="b3p-masked" class="small text-secondary mb-1" data-start-hidden>IP addresses and GUIDs are hidden: they need the Manage a server's databases permission as well. A GUID can still be searched whole.</div>
+      <div id="b3p-msg" class="small mb-1" role="status"></div>
+      <div id="b3p-list"></div>
+      <div id="b3p-player" data-start-hidden></div>
+    </section>
+    {% endif %}
     {% call fold("How add-ons run", id="ad-help", cls="mt-2") %}
       <ul class="small mb-0">
         <li>Each add-on runs in a rootless Podman container as this server's account: no root daemon, no added privileges, a read-only system and capped memory.</li>
@@ -22,7 +42,9 @@
         <li>B3 uses one of this server's databases from the Databases tab, and no other add-on may use the same one. IW4MAdmin keeps its own database (SQLite) in its folder.</li>
         <li>An add-on's folder is in the server's home folder, so the server's backups include it.</li>
         <li>An add-on's web page listens on this host's own address only (127.0.0.1). Reach it through an SSH tunnel or Tailscale.</li>
+        <li>BlueMap reads the Minecraft world read-only and reaches nothing at all: Minecraft's client file it needs is downloaded by this host before it starts, once you accept Mojang's EULA.</li>
         <li>Removing an add-on deletes its container, image and files. A database from the Databases tab is kept; an add-on's own data goes with it.</li>
+        <li>New versions of an add-on come with panel updates: after one, its card offers Update, and nothing changes until you press it.</li>
       </ul>
     {% endcall %}
   </div>

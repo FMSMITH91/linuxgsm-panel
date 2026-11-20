@@ -657,7 +657,7 @@ check("renovate: two regex managers over the workflows (downloads first), the do
       _rn_cfg.get("enabledManagers") == ["custom.regex", "dockerfile", "github-actions"]
       and _rn_cfg.get("dockerfile") == {"managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]}
       and _rn_cfg.get("github-actions") == {"managerFilePatterns": ["/^\\.github/actions/cflite-[a-z-]+/action\\.yml$/"]}
-      and len(_rn_mgrs) == 2 and len(_rn_all) == 5
+      and len(_rn_mgrs) == 2 and len(_rn_all) == 6
       and all(_m.get("customType") == "regex" for _m in _rn_mgrs)
       and all(_m.get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"] for _m in _rn_mgrs)
       and all(len(_m.get("matchStrings") or []) == 1 for _m in _rn_mgrs)

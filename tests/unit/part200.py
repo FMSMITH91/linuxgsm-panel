@@ -148,8 +148,9 @@ eq("bedrock slots: no tally line, two of them, a malformed one, or a transport e
 _bad200 = _slots200("mcbp:OK 1\n", user="root")
 check("bedrock slots: an account name the panel refuses sends nothing", _bad200 == (("failed", None, None, None, None), []),
       repr(_bad200))
-eq("bedrock slots: a capacity that is not a plain number is no capacity",
-   _slots200("mcbp:OK 1\nmax-players=ten\n")[0][2], None)
+# The whole answer: element [2] alone is None too when the reply is thrown away as failed.
+eq("bedrock slots: a capacity that is not a plain number is no capacity, and the player count is kept",
+   _slots200("mcbp:OK 1\nmax-players=ten\n")[0], ("ok", 1, None, None, None))
 
 # ── 3. cron.player_count / player_slots: the log first, gamedig only when it is unread ──────────
 

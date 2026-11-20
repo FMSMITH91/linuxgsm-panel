@@ -26,7 +26,8 @@
     "IW4MAdmin's image, the digest of its `latest` tag, and the B3 image's base, the digest of",
     "python:3.12-slim (B3_BASE in addons.py and ARG BASE_IMAGE in the B3 Containerfile together;",
     "written by digest alone, as podman takes it, so the tag Renovate follows is the manager's",
-    "currentValueTemplate). All three are checked daily (packageRules). The B3 image's Python",
+    "currentValueTemplate), and BlueMap's image, the digest of its `v5` tag (a new 5.x release, never",
+    "a new major one). All four are checked daily (packageRules). The B3 image's Python",
     "dependencies (panel/addon_images/b3/requirements.txt, pip-compile's lock of requirements.in)",
     "stay with Dependabot, like every other pip lockfile here: Renovate runs no pip manager."
   ],
@@ -82,6 +83,18 @@
         "IW4MADMIN_IMAGE = \"(?<depName>ghcr\\.io/raidmax/iw4madmin)@(?<currentDigest>sha256:[0-9a-f]{64})\""
       ],
       "currentValueTemplate": "latest",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The BlueMap add-on's image: the digest of its v5 tag",
+      "managerFilePatterns": [
+        "/^panel/services/addons\\.py$/"
+      ],
+      "matchStrings": [
+        "BLUEMAP_IMAGE = \"(?<depName>ghcr\\.io/bluemap-minecraft/bluemap)@(?<currentDigest>sha256:[0-9a-f]{64})\""
+      ],
+      "currentValueTemplate": "v5",
       "datasourceTemplate": "docker"
     },
     {
@@ -143,6 +156,7 @@
       "matchDepNames": [
         "big-brother-bot",
         "docker.io/library/python",
+        "ghcr.io/bluemap-minecraft/bluemap",
         "ghcr.io/raidmax/iw4madmin"
       ],
       "schedule": [

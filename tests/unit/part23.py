@@ -831,6 +831,24 @@ def _servers23(ids):
     check("game servers: no server name, job text, tag, in-game name or address in it",
           not _leaks23(text), repr(_leaks23(text)))
     _jobs23(ids, res, text)
+    _valheim_port23(ids)
+
+
+def _valheim_port23(ids):
+    """A crossplay Valheim listens on its port + 1 only: the report's port word reads it as listening."""
+    panel_port = _cfg23.load_config().get("port", 5000)
+    lines = {}
+    for tag, ports in (("plus one", {panel_port + 1}), ("plus two", {panel_port + 2})):
+        _pscan23._port_scan_cache[ids["local"]] = (_NOW23[0] + _pscan23._PORT_SCAN_TTL - 4, ports)
+        try:
+            text = _text23(_section23(_s23.section_servers))
+        finally:
+            _pscan23._port_scan_cache.pop(ids["local"], None)
+        lines[tag] = next((ln for ln in text.splitlines() if ln.startswith("- gs %d · vh" % ids["f"])), "")
+    check("game servers: a Valheim whose port + 1 alone is listening reads \"port listening\" (crossplay "
+          "listens there only), and one with neither port listening reads NOT listening (control)",
+          "· port listening (scan" in lines["plus one"] and "· port NOT listening (scan" in lines["plus two"],
+          repr(lines))
 
 
 def _oserror23():

@@ -59,7 +59,8 @@ class _Ufw185:
         if self.stored_rc:
             return "", "permission denied", 1
         out, err, rc = ufw_stored_answer(self.ipv6)
-        return out + ("==> /proc/sys/net/ipv6 <==\n%s\n" % self.kernel if self.kernel else ""), err, rc
+        # Stripped, as every transport (_finish, _run_via_paramiko, _run_via_ssh_cli) returns it.
+        return (out + ("==> /proc/sys/net/ipv6 <==\n%s\n" % self.kernel if self.kernel else "")).strip(), err, rc
 
     def _listing(self):
         if self.rc:

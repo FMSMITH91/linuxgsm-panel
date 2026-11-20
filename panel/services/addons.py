@@ -41,6 +41,10 @@ THE ADD-ONS
     another add-on uses). Its geolocation is off unless chosen: offline (a country, from DB-IP's
     database in the add-on's folder, see services/geoip.py; no player address leaves the host) or
     online (a city, from ipwho.is through a relay: each player's IP address goes there).
+    BlueMap (mc, pmc): a live 3D web map of the Minecraft world, the image its author publishes
+    (ghcr.io/bluemap-minecraft/bluemap), pinned by digest. It reads the world READ-ONLY (no game log,
+    no RCON) and reaches nothing at all; Minecraft's client file it textures the map from is fetched
+    for it before its start, once the admin has accepted Mojang's EULA (services/addons_bluemap.py).
 
 The host keeps the state: ~/panel-addons/<id>/addon.json says what the panel installed. Nothing is
 installed until someone with Manage add-ons installs an add-on.
@@ -55,6 +59,7 @@ import shlex
 # ── the catalog ─────────────────────────────────────────────────────────────────────────────────
 IW4MADMIN = "iw4madmin"
 B3 = "b3"
+BLUEMAP = "bluemap"
 # Games whose LinuxGSM start command passes no port, so the port in the game's config may not be the one
 # it listens on (Wolfenstein: Enemy Territory binds 0.0.0.0:27960 unless the instance's startparameters set
 # net_port: vps-b3 round 3). An add-on for one needs the server running at install, to read the real port.
@@ -97,13 +102,17 @@ SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfile
 # #22 and #21 CoD4x and vanilla ET; #19 and #20 geolocation): the B3 the add-on builds. Renovate proposes the
 # branch's newest commit (.github/renovate.json), in this line and the Containerfile's ARG together.
 B3_COMMIT = "920d736648e2544714ee58a74e556fbbb3881892"
-# The fork's last release, v2.0.0 (an annotated tag on 7e734849); this pin is three parser fixes past it and has
-# no tag of its own, so the card shows this number beside the pin's short commit. The build checks the commit,
-# not a tag.
-B3_RELEASE = "2.0.0"
+# The fork's release at the pin: v2.0.1, an annotated tag on exactly B3_COMMIT (2026-11-19). The card shows this
+# number beside the pin's short commit. Only a label: the build checks the commit, not a tag, and the image's tag
+# is the commit and build id, so a new number alone offers no update.
+B3_RELEASE = "2.0.1"
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
 IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
+# BlueMap's `v5` image (its release 5.29 on 2026-10-10, org.opencontainers.image.revision a61e143f; the same
+# digest as its v5.29 and latest tags then), by its multi-arch index digest. Renovate proposes the v5 tag's new
+# digest, so a new 5.x release is offered and a major release with new configs is not.
+BLUEMAP_IMAGE = "ghcr.io/bluemap-minecraft/bluemap@sha256:bb49bfdef996c6fd9cf68c8c6a2b79189e6711fa90ae4d43cf22d81a6811301e"
 # python:3.12-slim (Debian 13) on 2026-11-18, by its multi-arch index digest: the build's base. Renovate
 # proposes the tag's new digest here and in the Containerfile's ARG BASE_IMAGE together (.github/renovate.json).
 B3_BASE = "docker.io/library/python@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b"
@@ -153,7 +162,7 @@ CATALOG = {
         # its synchronous ProcessExit shutdown outlasted Podman's wait and it was killed (137).
         "stop_signal": "SIGINT", "stop_timeout": 30, "success_exit": None,
         "database": False, "build": None, "legacy": False, "log_file": None,
-        "data_kept": False,
+        "data_kept": False, "reads": "log", "command": (), "nice": 0,
     },
     B3: {
         "name": "B3 (Big Brother Bot)",
@@ -174,7 +183,31 @@ CATALOG = {
         # killed it (137); that fork commit made them daemon, so no exit status is excused here.
         "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": None,
         "database": True, "build": "b3", "legacy": True, "log_file": "Data/b3.log",
-        "data_kept": True,
+        "data_kept": True, "reads": "log", "command": (), "nice": 0,
+    },
+    BLUEMAP: {
+        "name": "BlueMap",
+        "image": BLUEMAP_IMAGE,
+        "version": "v5 " + BLUEMAP_IMAGE.rsplit(":", 1)[1][:12],
+        "source": "https://github.com/BlueMap-Minecraft/BlueMap",
+        # LinuxGSM's Java servers with a world: vanilla (mcserver) and Paper (pmcserver). Not its proxies
+        # (Velocity, Waterfall: no world) nor Bedrock (BlueMap reads Java worlds only).
+        "games": {"mc": "Minecraft", "pmc": "Paper"},
+        # Its image's folders (the installation page's Docker volumes); the worlds are mounted read-only
+        # beside them (quadlet's `logdir` is then a World: services/addons_bluemap.py).
+        "mounts": (("config", "/app/config"), ("web", "/app/web"), ("data", "/app/data")),
+        # The JVM's heap: 60% of the memory cap (Java's default, 25%, is too little to render).
+        "env": ("TZ=Etc/UTC", "HOME=/app/data", "JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=60"),
+        "settings": "config/core.conf",
+        "web_port": 8100,
+        # The JVM runs its shutdown hook on SIGTERM (BlueMap saves the maps' state) and exits 143.
+        "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": "143",
+        "database": False, "build": None, "legacy": False, "log_file": None,
+        "data_kept": False, "reads": "world",
+        # The image's `java -jar cli.jar` takes these, then the Minecraft version: render, watch, serve.
+        "command": ("-r", "-u", "-w", "-v"),
+        # Rendering is CPU heavy and the game shares the host: below the game's priority.
+        "nice": 10,
     },
 }
 ADDON_IDS = tuple(sorted(CATALOG))
@@ -293,6 +326,8 @@ _FAIL_MARKS = {
     "ADDON_DIED": "The add-on was installed but stopped again within 30 seconds, so it was left stopped. "
                   "Its last log lines are below.",
     "ADDON_WRITE_FAILED": "Couldn't write the add-on's files in the server's home folder.",
+    "ADDON_CLIENT_FAILED": "Couldn't download Minecraft's client file from Mojang on this host, or it didn't match "
+                           "the checksum Mojang publishes. Check that this host can reach piston-data.mojang.com.",
 }
 START_LIMIT = _FAIL_MARKS["ADDON_START_LIMIT"]
 _B3_RCON_REFUSAL = ("B3 can't use this RCON password: it has a space at either end, or a space before a ';'. "
@@ -496,23 +531,30 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     log g_log names, glog.b64= and logs.b64= instead: _log_sh), rcon.b64= (the config's rcon_password and rconpassword lines, base64:
     game_rcon picks the game's own), ports= (the first `nports` free host ports from PORT_BASE + the
     server id), installed=1 when the add-on is already there, and for a Source game sourcemod=1 when
-    SourceMod is installed (SOURCEMOD_DIR).
+    SourceMod is installed (SOURCEMOD_DIR). An add-on that reads the world (BlueMap) reads no log and no
+    RCON password: its lines are addons_bluemap.world_sh's instead.
     """
-    cfg = game_cfg(game_type, selfname)
     ports = " ".join(str(PORT_BASE + int(server_id) + i) for i in range(_PORT_TRIES))
     return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; '
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
-            + _log_sh(game_type, cfg) +
-            'echo "rcon.b64=$(%s)"; '
+            + _game_reads_sh(addon_id, game_type, selfname) +
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
             'if ! ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then f="$f $p"; n=$((n + 1)); fi; done; '
             'echo "ports=$f"; echo "udp=$(ss -Hulnp 2>/dev/null | grep -F "users:((" | awk \'{print $4}\' '
             '| sed "s/.*://" | sort -un | tr "\\n" " ")"; [ -f %s ] && echo installed=1; %strue'
-            % (_RCON_LINES_SH % shlex.quote(cfg), ports, int(nports),
-               shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE)),
+            % (ports, int(nports), shlex.quote("%s/%s/%s" % (HOME_DIR, addon_id, META_FILE)),
                "[ -d %s ] && echo sourcemod=1; " % shlex.quote(SOURCEMOD_DIR[game_type])
                if game_type in SOURCEMOD_DIR else ""))
+
+
+def _game_reads_sh(addon_id, game_type, selfname):
+    """The probe's lines on what the add-on reads of the game: its log and RCON lines, or (BlueMap) its world."""
+    if CATALOG[addon_id]["reads"] == "world":
+        from panel.services import addons_bluemap as _bm     # it imports world_reset, which needs ssh_manager
+        return _bm.world_sh()
+    cfg = game_cfg(game_type, selfname)
+    return _log_sh(game_type, cfg) + 'echo "rcon.b64=$(%s)"; ' % (_RCON_LINES_SH % shlex.quote(cfg))
 
 
 # The game's log folder as the probe prints it, relative to the home: plain path words only, since it
@@ -556,19 +598,36 @@ def parse_probe(out, game_type=""):
 
 
 def status_sh():
-    """One read of every add-on of this account: os=, podman=, and per add-on meta.<id>= and state.<id>=."""
+    """One read of every add-on of this account: os=, podman=, and per add-on meta.<id>= and state.<id>=.
+
+    For an installed add-on that reads the world (BlueMap) also disk.<id>= (its folder's size in KiB, given
+    5 seconds at low priority, "" past them) and mcver.<id>= (the version the game logged at its last
+    start: a newer one than its record's offers Update).
+    """
     rows = []
     for k in ADDON_IDS:
         meta = shlex.quote("%s/%s/%s" % (HOME_DIR, k, META_FILE))
         rows.append('[ -f %s ] && { echo "meta.%s=$(head -c 4000 %s | base64 -w0)"; '
-                    'echo "state.%s=$(systemctl --user is-active %s.service 2>/dev/null | head -n 1)"; }; '
-                    % (meta, k, meta, k, unit_name(k)))
+                    'echo "state.%s=$(systemctl --user is-active %s.service 2>/dev/null | head -n 1)"; %s}; '
+                    % (meta, k, meta, k, unit_name(k), _world_status_sh(k)))
     return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
             'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; ' + "".join(rows) + "true")
 
 
+def _world_status_sh(k):
+    """status_sh's extra lines for add-on `k` when it reads the world: its folder's size and the game's version."""
+    if CATALOG[k]["reads"] != "world":
+        return ""
+    from panel.services import addons_bluemap as _bm     # it imports world_reset, which needs ssh_manager
+    return ('echo "disk.%s=$(timeout 5 nice -n 19 du -sk --one-file-system -- %s 2>/dev/null | cut -f1)"; %s'
+            % (k, shlex.quote("%s/%s" % (HOME_DIR, k)), _bm.version_sh("mcver." + k)))
+
+
 def parse_status(out):
-    """What status_sh found: {os, podman, addons: {id: {meta dict, state}}} for the installed ones."""
+    """What status_sh found: {os, podman, addons: {id: {meta dict, state, disk_kb, mc_version}}} for the installed ones.
+
+    disk_kb is None when it was not read (an add-on that does not read the world, or a slow du).
+    """
     kv = kv_lines(out)
     found = {}
     for k in ADDON_IDS:
@@ -579,8 +638,11 @@ def parse_status(out):
         except ValueError:
             meta = {}
         state = kv.get("state." + k, "")
+        disk = kv.get("disk." + k, "")
         found[k] = {"meta": meta if isinstance(meta, dict) else {},
-                    "state": state if state in _STATES else "unknown"}
+                    "state": state if state in _STATES else "unknown",
+                    "disk_kb": int(disk) if disk.isdecimal() and len(disk) < 16 else None,
+                    "mc_version": kv.get("mcver." + k, "")}
     return {"os": kv.get("os", ""), "podman": kv.get("podman", ""), "addons": found}
 
 
@@ -864,12 +926,14 @@ def relay_units(addon_id, relay_list):
 def network(game_port, db_port, relay_list, splice, rcon_tcp=False):
     """The container's Network= value: pasta, reaching only what it forwards to the host's loopback.
 
-    -U the game's RCON port (UDP), or -T with `rcon_tcp` (a Source game: RCON_TCP_GAMES). -T the database's port (TCP) when the database is on this host
+    -U the game's RCON port (UDP), or -T with `rcon_tcp` (a Source game: RCON_TCP_GAMES); none when `game_port` is
+    None (BlueMap reaches nothing of the game). -T the database's port (TCP) when the database is on this host
     (`db_port`, seen at 3306 inside), and each relay's (`relay_list`, from relays()). Then the lock:
     --splice-only where pasta has it, else -4 and -o 127.0.0.1 (see the module's NETWORK note).
     """
     opts = ["--splice-only"] if splice else ["-4", "-o", "127.0.0.1"]
-    opts += ["-T" if rcon_tcp else "-U", str(int(game_port))]
+    if game_port is not None:
+        opts += ["-T" if rcon_tcp else "-U", str(int(game_port))]
     if db_port:
         opts += ["-T", "3306:%d" % int(db_port)]
     for _name, _addr, cport, hport, _target in relay_list:
@@ -888,10 +952,13 @@ def _podman_args(addon_id, relay_list):
 
 
 def _volumes(user, addon_id, logdir, own_plugins):
-    """The unit's Volume= lines: the add-on's folders, the game log read-only, and B3's own plugins read-only."""
+    """The unit's Volume= lines: the add-on's folders, the game log (or BlueMap's worlds) read-only, B3's own plugins read-only."""
     base = addon_dir(user, addon_id)
     vols = ["Volume=%s/%s:%s" % (base, d, at) for d, at in CATALOG[addon_id]["mounts"]]
-    vols.append("Volume=%s:/gamelog:ro" % logdir)
+    if CATALOG[addon_id]["reads"] == "world":
+        vols += ["Volume=%s" % m for m in logdir.mounts]
+    else:
+        vols.append("Volume=%s:/gamelog:ro" % logdir)
     if own_plugins and addon_id == B3:
         vols.append("Volume=%s/%s:/data/extplugins:ro" % (base, B3_OWN_PLUGINS))
     return vols
@@ -903,7 +970,8 @@ def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None, own_plug
     `ids` is the account's (uid, gid): with keep-id they are the process's user inside, set
     explicitly because on Podman 4.9 an image's own USER wins over keep-id's default. With
     `own_plugins` (B3), the own-plugins folder is mounted read-only over its place in /data, so B3
-    cannot change the code it runs from there.
+    cannot change the code it runs from there. For an add-on that reads the world (BlueMap), `logdir`
+    is an addons_bluemap.World: its worlds' read-only mounts, and the Minecraft version its command ends with.
     """
     a = CATALOG[addon_id]
     needs = ["%s%s-%s.socket" % (UNIT_PREFIX, addon_id, r[0]) for r in relay_list]
@@ -924,13 +992,27 @@ def quadlet(user, addon_id, logdir, net, port, relay_list=(), ids=None, own_plug
     ] + (["User=%d" % ids[0], "Group=%d" % ids[1]] if ids else []) + [
         "ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=%d" % PIDS,
         "HealthCmd=none", _podman_args(addon_id, relay_list),
+    ] + _exec_lines(a, logdir) + [
         # always: an add-on that quits, even with status 0, is started again (IW4MAdmin exits 0 on a
         # fatal error); the start limit above stops a loop, and a stop from the panel never restarts.
         "", "[Service]", "Restart=always", "RestartSec=30", "TimeoutStartSec=300",
-    ] + (["SuccessExitStatus=%s" % a["success_exit"]] if a["success_exit"] else []) + [
+    ] + _service_extra(a) + [
         "", "[Install]", "WantedBy=default.target", "",
     ]
     return "\n".join(lines)
+
+
+def _exec_lines(a, logdir):
+    """The unit's Exec= line: the add-on's command (the image's own entrypoint takes it), then the World's version."""
+    if not a["command"]:
+        return []
+    return ["Exec=%s" % " ".join(a["command"] + ((logdir.version,) if a["reads"] == "world" else ()))]
+
+
+def _service_extra(a):
+    """The [Service] lines an add-on adds: the exit status its stop ends with, and a lower CPU priority."""
+    return ((["SuccessExitStatus=%s" % a["success_exit"]] if a["success_exit"] else [])
+            + (["Nice=%d" % a["nice"]] if a["nice"] else []))
 
 
 def _put_sh(path, text):
@@ -1027,13 +1109,14 @@ def _settle_sh(user, addon_id):
             % (SETTLE_SECONDS, unit, unit, unit, _tail_sh(user, addon_id)))
 
 
-def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
+def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None, extra=""):
     """The install's second step, as the account: write the files, get the image, start, watch.
 
     The settings (which hold the passwords) arrive on stdin, never on a command line; the unit, the
     relays' units (`units`), the plugin or build files (`files`, relative to the add-on's folder)
     and the panel's record are base64 here (they hold no secret). Every file is 0600 and every
-    folder 0700. Ends with ADDON_INSTALLED, or one of _FAIL_MARKS.
+    folder 0700. `extra` is shell run before the image is fetched (BlueMap's client file:
+    addons_bluemap.client_sh). Ends with ADDON_INSTALLED, or one of _FAIL_MARKS.
     """
     a = CATALOG[addon_id]
     d = addon_dir(user, addon_id)
@@ -1053,13 +1136,13 @@ def install_sh(user, addon_id, unit_text, meta_text, files=None, units=None):
             "cat > %s.new && mv -f -T %s.new %s && %s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "i=0; while [ ! -S \"$XDG_RUNTIME_DIR/bus\" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done; "
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
-            "podman system migrate >/dev/null 2>&1; %s"
+            "podman system migrate >/dev/null 2>&1; %s%s"
             "%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "systemctl --user daemon-reload && { %s; } "
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%secho %s"
-            % (dirs, shlex.quote(q), shlex.quote(uu), secret, secret, secret, " && ".join(early),
+            % (dirs, shlex.quote(q), shlex.quote(uu), secret, secret, secret, " && ".join(early), extra,
                _image_sh(addon_id, shlex.quote(d)), " && ".join(late), _fresh_start_sh(addon_id, "start"), unit,
                _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), _MARK_INSTALLED))
@@ -1085,6 +1168,7 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     passwords); with how["rebuild"], pulls or builds the image again. The relay units are replaced by
     `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
     how["dirs"] are more folders of the add-on to make (B3's own-plugins folder, when it is mounted).
+    how["extra"] is shell run before the image (BlueMap's client file: addons_bluemap.client_sh).
     Its data, settings and database stay. how["old_image"], when the update moved it, is removed afterwards.
     """
     how = how or {}
@@ -1104,13 +1188,13 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     drop = ("podman rmi %s >/dev/null 2>&1; " % shlex.quote(old_image)) if old_image and old_image != a["image"] else ""
     return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
             "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
-            "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; %s"
+            "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; %s%s"
             "%s%s || { echo ADDON_WRITE_FAILED; exit 21; }; "
             "systemctl --user daemon-reload && { %s; } "
             "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%s%secho %s"
-            % (folders, shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early),
+            % (folders, shlex.quote(q), shlex.quote(uu), stdin, " && ".join(early), how.get("extra", ""),
                _image_sh(addon_id, shlex.quote(d)) if rebuild else "", _relays_gone_sh(user, addon_id),
                " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), drop,

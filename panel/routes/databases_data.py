@@ -58,7 +58,9 @@ S_LATE = "The statement ran longer than {s} seconds and was stopped."
 S_UNREAD = "The database's answer could not be read. Nothing was changed by the panel."
 S_READONLY = {"view": "This is a view: its rows are changed in the tables it reads.",
               "no_key": "This table has no primary key, so the panel can't tell one row from another: it is read-only "
-                        "here. Use the SQL box to change it."}
+                        "here. Use the SQL box to change it.",
+              "binary_key": "This table's primary key holds binary values, which the page can't send back exactly: "
+                            "it is read-only here. Use the SQL box to change it."}
 S_UNSUPPORTED_PS = ("MySQL can't run this kind of statement from the panel's SQL box (each statement runs as a "
                     "prepared statement). For DESCRIBE use SHOW COLUMNS FROM the table.")
 

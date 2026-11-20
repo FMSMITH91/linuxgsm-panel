@@ -20,11 +20,14 @@ from types import SimpleNamespace as _NS_cmpa_
 
 from unit.part01 import check, skip
 from unit.part05 import _root
-from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _P9_TRIPPED, _p9_arm, _p9_client, _p9_patch,
-                         _p9_patch_sm, _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client,
+                         _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part47 import _cut47, _node47
 from panel.ops.ssh_manager import _core as _smc_cmpa_
 from panel.routes import _shared as _sh_cmpa_, server_detail as _sd_cmpa_
+from panel.security import auth as _auth_cmpa_
+
+_NO_LOGIN_CMPA_ = "!"      # not a hash any password produces: these accounts cannot sign in
 
 _TRIP_CMPA_START = len(_P9_TRIPPED)
 
@@ -168,6 +171,37 @@ def _clear_verdicts_cmpa_():
         _sh_cmpa_._ACCOUNT_VERDICTS.clear()
 
 
+_ONE_PERM_CMPA_ = (("files_only", _auth_cmpa_.VIEW_FILES), ("manage_only", _auth_cmpa_.MANAGE_SERVERS))
+
+
+def _one_perm_user_cmpa_(who, perm):
+    """The id of a new member whose one group grants VIEW_SERVERS and `perm` on part12's host."""
+    from panel.db.models import Group, RemoteServer, User, db
+    with _p9.app_context():
+        g = Group(name="p149_" + who, description="", is_default=False)
+        g.set_permissions([_auth_cmpa_.VIEW_SERVERS, perm])
+        g.servers.append(db.session.get(RemoteServer, P9_HOST))
+        db.session.add(g)
+        db.session.flush()
+        u = User(username="p149_" + who, password_hash=_NO_LOGIN_CMPA_, display_name=who,
+                 is_superadmin=False, is_active=True)
+        u.groups.append(g)
+        db.session.add(u)
+        db.session.commit()
+        return u.id
+
+
+def _drop_one_perm_users_cmpa_():
+    """Delete the members and groups _one_perm_user_cmpa_ made."""
+    from panel.db.models import Group, User, db
+    with _p9.app_context():
+        for u in User.query.filter(User.username.like("p149_%")).all():
+            db.session.delete(u)
+        for g in Group.query.filter(Group.name.like("p149_%")).all():
+            db.session.delete(g)
+        db.session.commit()
+
+
 try:
     _p9_arm(who="part149")
     _p9_patch(_sh_cmpa_, "privileged_accounts", lambda remote, users: {})
@@ -178,6 +212,12 @@ try:
     _reads_cmpa_.clear()
     _R_CMPA_["viewer"] = _get_cmpa_(P9_VIEWER, "script")
     _R_CMPA_["viewer_reads"] = list(_reads_cmpa_)
+    # One permission each, beside the host: the superadmin holds every permission and the viewer
+    # none of the two, so those alone could not tell VIEW_FILES from MANAGE_SERVERS.
+    for _who_cmpa_, _perm_cmpa_ in _ONE_PERM_CMPA_:
+        _reads_cmpa_.clear()
+        _R_CMPA_[_who_cmpa_] = _get_cmpa_(_one_perm_user_cmpa_(_who_cmpa_, _perm_cmpa_), "script")
+        _R_CMPA_[_who_cmpa_ + "_reads"] = len(_reads_cmpa_)
     _R_CMPA_["other"] = _p9_client(P9_ADMIN).get("/api/server/%d/log/..%%2Fetc" % P9_GS).status_code
     # ...and a one-segment name: the traversal above 404s on its slash under any rule, so it alone
     # could not tell the route's two-log limit from a plain <kind>.
@@ -196,6 +236,7 @@ try:
 finally:
     _p9_restore_all()
     _clear_verdicts_cmpa_()
+    _drop_one_perm_users_cmpa_()
 
 _st_cmpa_, _body_cmpa_ = _R_CMPA_.get("script", (None, {}))
 check("log route: the script log reads as the server's account, its path built from the row",
@@ -206,9 +247,14 @@ check("log route: the script log reads as the server's account, its path built f
       and "/home/csgoserver/log/script/csgoserver-script.log" in _R_CMPA_["script_reads"][0][1],
       repr(_R_CMPA_.get("script")) + repr(_R_CMPA_.get("script_reads")))
 check("log route: VIEW_CONSOLE alone is refused (403) and nothing is read: the file browser's "
-      "permission, MANAGE_SERVERS, not the console's",
+      "permission, VIEW_FILES, not the console's",
       _R_CMPA_.get("viewer", (None,))[0] == 403 and _R_CMPA_.get("viewer_reads") == [],
       repr((_R_CMPA_.get("viewer"), _R_CMPA_.get("viewer_reads"))))
+check("log route: VIEW_FILES alone reads the log (200, one read), and MANAGE_SERVERS without it is refused "
+      "(403) with nothing read",
+      (_R_CMPA_.get("files_only", (None,))[0], _R_CMPA_.get("files_only_reads"),
+       _R_CMPA_.get("manage_only", (None,))[0], _R_CMPA_.get("manage_only_reads")) == (200, 1, 403, 0),
+      repr([_R_CMPA_.get(k) for k in ("files_only", "files_only_reads", "manage_only", "manage_only_reads")]))
 check("log route: only the two logs it knows; any other name is not a route",
       _R_CMPA_.get("other") == 404 and _R_CMPA_.get("other1") == 404 and _R_CMPA_.get("other1_reads") == [],
       repr((_R_CMPA_.get("other"), _R_CMPA_.get("other1"), _R_CMPA_.get("other1_reads"))))

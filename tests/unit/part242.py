@@ -26,6 +26,7 @@ from unit.part01 import check
 from unit.part05 import _root
 from unit.part06 import _wf_run_block
 from unit.part29 import _job29, _jobs29, _steps29, _wf29
+from unit.part223 import _egress223
 
 _TMP242 = _tf242.mkdtemp(prefix="lgsm-unit-p242-")
 _CFL242 = (".github", "actions")
@@ -319,10 +320,14 @@ check("renovate: docker images get digest updates only (no other tag), raised wi
 
 # ── 6. the two jobs moved to block mode, and the exact hosts each may reach ────────────────────────
 def _allowed242(workflow, job):
-    """(policy, allowed endpoints) of a job's Harden-Runner step."""
-    jt = _job29(_wf29(workflow), job)
-    m = _re242.search(r"egress-policy: (\w+)\n(?:          allowed-endpoints: >\n((?:            \S+\n)*))?", jt)
-    return (m.group(1), (m.group(2) or "").split()) if m else (None, [])
+    """(policy, sorted allowed endpoints) of a job's Harden-Runner step.
+
+    Read by part223's reader, which takes every word of `allowed-endpoints` in any spelling. A
+    reader of one host per line at exactly twelve spaces stopped at a deeper-indented line or a line
+    holding two hosts, so a host added there went unread while Harden-Runner allowed it.
+    """
+    policy, hosts = _egress223(_job29(_wf29(workflow), job))
+    return policy, sorted(hosts)
 
 
 _hr242 = {"checks": _allowed242("ci.yml", "checks"), "lighthouse": _allowed242("lighthouse.yml", "lighthouse")}

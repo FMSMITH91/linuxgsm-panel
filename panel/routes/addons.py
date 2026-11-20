@@ -28,7 +28,7 @@ from panel.routes._shared import _reboot_holds, game_account_write_refusal, unin
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
 from panel.services import addons as _ad, reboot_words as _rw
-from panel.services import geoip as _geoip
+from panel.services import addons_bluemap as _bm, b3_players as _b3p, geoip as _geoip
 
 _DENIED = "Permission denied"
 _UNKNOWN = "This server can't run that add-on."
@@ -87,6 +87,8 @@ _JOURNAL_NEWER = "Newer lines from the add-on's journal, written after the last 
 _REMOVED = {True: "The add-on was removed. Its database is kept in the Databases tab.",
             False: "The add-on was removed, with its data."}
 _NOT_REMOVED = "The add-on couldn't be removed completely. Try again."
+# The audit's words for BlueMap's install: the admin accepted Mojang's EULA (a legal opt-in: Logging Cheat Sheet).
+_EULA_AUDIT = ", Mojang's EULA (%s) accepted for Minecraft's client file" % _bm.EULA_URL
 
 # (server id, add-on id) -> {"running": bool, "why": str, "tail": str}: an install in the background.
 _JOBS = {}
@@ -217,8 +219,39 @@ def _addon_rows(gs, found):
                           "job": job.get("kind", "install") if job.get("running") else "",
                           "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", ""),
                           "update": _change.update_reason(k, meta) if got is not None else ""},
-                         **(_b3_fields(gs, meta) if k == _ad.B3 else {"geolocation_option": False})))
+                         **_extra_fields(gs, k, meta, got)))
     return rows
+
+
+def _extra_fields(gs, k, meta, got):
+    """The row fields of one add-on's own: B3's settings, BlueMap's licence, version and disk use."""
+    if k == _ad.B3:
+        return _b3_fields(gs, meta)
+    if k == _ad.BLUEMAP:
+        return _bluemap_fields(meta, got)
+    return {"geolocation_option": False}
+
+
+def _bluemap_fields(meta, got):
+    """The row fields of BlueMap: Mojang's EULA (its link; who accepted it and when), the version, the disk it takes."""
+    fields = {"geolocation_option": False, "eula_url": _bm.EULA_URL, "eula_by": str(meta.get("eula_accepted_by") or ""),
+              "eula_at": str(meta.get("eula_accepted_at") or ""), "mc_version": str(meta.get("mc_version") or ""),
+              "disk_kb": (got or {}).get("disk_kb"), "render_threads": _bm.RENDER_THREADS}
+    fields.update(_game_update(meta, got))
+    return fields
+
+
+def _game_update(meta, got):
+    """The fields that offer BlueMap an Update for the game's Minecraft version ({} when there is none).
+
+    Offered when the game logged another version at its last start than the one the add-on's client file
+    is for, and no newer image is offered already: an Update fetches that version's file.
+    """
+    now = _bm.mc_version((got or {}).get("mc_version"))
+    had = str(meta.get("mc_version") or "")
+    if not (got is not None and now and had and now != had) or _change.update_reason(_ad.BLUEMAP, meta):
+        return {}
+    return {"update": "game", "mc_version_now": now}
 
 
 # SoF2's and ET's B3 parsers have no private message: every reply is said to the whole server (vps-b3
@@ -263,6 +296,7 @@ def _status_answer(gs):
     if rc != 0:
         return _say(200, "Couldn't read this server's add-ons: the host did not answer. Try again.", unread=True)
     st = _ad.parse_status(out)
+    _b3p.remember(gs.id, st["addons"])   # the B3 players section reads B3's database by this name
     why = _ad.runtime_refusal(st["os"], st["podman"])
     rows, dbs = _addon_rows(gs, st["addons"]), _databases(gs, st["addons"])
     return jsonify({"success": True, "addons": rows, "databases": dbs, "podman": st["podman"],
@@ -340,10 +374,25 @@ def _host_refusal(gs, p, need_ports):
     return "" if len(p["ports"]) >= need_ports else _NO_PORT
 
 
+def world_refusal(p, need_ports):
+    """Why the host or the world stops BlueMap: no usable world or version, no ids, no free port ("" when none).
+
+    Sets p["game_port"] to None: BlueMap reaches nothing of the game.
+    """
+    p["game_port"] = None
+    if p["world"]["why"]:
+        return p["world"]["why"]
+    if p["ids"] is None:
+        return _NO_IDS
+    return "" if len(p["ports"]) >= need_ports else _NO_PORT
+
+
 def _install_refusal(gs, plan, p):
     """Why the probe's answer stops the install ("" when it may go on)."""
     if p["installed"]:
         return _INSTALLED_ALREADY
+    if plan["id"] == _ad.BLUEMAP:
+        return _ad.runtime_refusal(p["os"], p["podman"]) or world_refusal(p, plan["ports"])
     r = plan["db"]
     if r is not None and r.name in _taken(p, plan["id"]):
         return _DB_TAKEN
@@ -398,6 +447,13 @@ def _settings(gs, plan, p):
     return ini, files, (secret, p["rcon"])
 
 
+def game_reads(gs, addon_id, p):
+    """Quadlet's `logdir`: the game log's folder, or for BlueMap its World (the worlds' mounts and the version)."""
+    if _ad.CATALOG[addon_id]["reads"] == "world":
+        return _bm.world(gs.short_name, p["world"])
+    return _ad.log_dir(gs.short_name, p["logdir"])
+
+
 def _install_texts(gs, plan, p, who):
     """(settings, files, unit, relay units, record, secrets) the install writes."""
     addon_id = plan["id"]
@@ -406,15 +462,28 @@ def _install_texts(gs, plan, p, who):
                             p["ports"][1 if web else 0:])
     local_db = plan["db_port"] if plan["db"] is not None and plan["db_host"] == "127.0.0.1" else None
     net = _ad.network(p["game_port"], local_db, relay_list, p["splice"], gs.game_type in _ad.RCON_TCP_GAMES)
-    unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
-                       p["ids"])
-    settings, files, secrets = _settings(gs, plan, p)
+    unit = _ad.quadlet(gs.short_name, addon_id, game_reads(gs, addon_id, p), net, web, relay_list, p["ids"])
+    when = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    settings, files, secrets = _settings(gs, plan, p) if addon_id != _ad.BLUEMAP else _bluemap_settings(p, who, when)
     meta = json.dumps(dict(record(addon_id, plan["geolocation"], list(_ad.B3_PLUGINS), plan.get("geoip", "")),
                            database=plan["db"].name if plan["db"] is not None else "", port=web, network=net,
-                           game_port=p["game_port"],
-                           installed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                           installed_by=who)) + "\n"
+                           game_port=p["game_port"], installed_at=when, installed_by=who,
+                           **_bluemap_record(addon_id, p, who, when))) + "\n"
     return settings, files, unit, _ad.relay_units(addon_id, relay_list), meta, secrets
+
+
+def _bluemap_settings(p, who, when):
+    """The settings BlueMap gets: (core.conf, the other config files, no secrets); core.conf records the EULA's acceptance."""
+    return _bm.core_conf(who, when), _bm.config_files(p["world"]), ()
+
+
+def _bluemap_record(addon_id, p, who, when):
+    """The record's BlueMap fields: the world and Minecraft version it renders, and who accepted Mojang's EULA when."""
+    if addon_id != _ad.BLUEMAP:
+        return {}
+    w = p["world"]
+    return {"world": w["level"], "mc_version": w["version"], "eula_url": _bm.EULA_URL, "eula_accepted_by": who,
+            "eula_accepted_at": when}
 
 
 def record(addon_id, geolocation, plugins, geoip="", own_plugins=False):
@@ -455,6 +524,38 @@ def _plan_refusal(gs, plan):
     return ""
 
 
+def probe_answer(gs, addon_id, out):
+    """The probe's answer as a dict (parse_probe's, with the RCON password the game reads, and BlueMap's world)."""
+    p = dict(_ad.parse_probe(out, gs.game_type), addons=_ad.parse_status(out)["addons"])
+    p["rcon"], p["rcon_why"] = _ad.game_rcon(gs.game_type, p["rcon_lines"])
+    if _ad.CATALOG[addon_id]["reads"] == "world":
+        p["world"] = _bm.parse_world(_ad.kv_lines(out), _ad._unb64)
+    return p
+
+
+def _fetches(gs, plan, p):
+    """What the install fetches before it writes anything (why not, or ""): B3's country database, BlueMap's client file.
+
+    For BlueMap, the client jar's address and SHA-1 from Mojang's version list (plan["client"]); the
+    game's host downloads the jar itself in install_sh (addons_bluemap.client_sh).
+    """
+    if _ad.geo_mode(plan["geolocation"]) == _ad.GEO_OFFLINE:
+        plan["geoip"], why = push_geoip(gs, plan["id"])
+        return why
+    if plan["id"] == _ad.BLUEMAP:
+        url, sha1, why = _bm.client_download(p["world"]["version"])
+        plan["client"] = (url, sha1)
+        return why
+    return ""
+
+
+def client_step(gs, addon_id, version, client, fresh_webapp=False):
+    """The install's or update's extra shell: BlueMap's client file for `version` (`client`: url, sha1), else ""."""
+    if addon_id != _ad.BLUEMAP or not client:
+        return ""
+    return _bm.client_sh(_ad.addon_dir(gs.short_name, addon_id), version, client[0], client[1], fresh_webapp)
+
+
 def _install_steps(gs, plan, who):
     """The install itself: ("", "") when the add-on runs, else (why, log tail); why is an English sentence."""
     why = _plan_refusal(gs, plan)
@@ -466,16 +567,14 @@ def _install_steps(gs, plan, who):
         timeout=60, selfname=gs.lgsm_name)
     if rc != 0:
         return _with_reason("Couldn't read the server's account on the host: it did not answer.", "", err), ""
-    p = dict(_ad.parse_probe(out, gs.game_type), addons=_ad.parse_status(out)["addons"])
-    p["rcon"], p["rcon_why"] = _ad.game_rcon(gs.game_type, p["rcon_lines"])
-    why = _install_refusal(gs, plan, p) or _runtime(gs, p)
-    if not why and _ad.geo_mode(plan["geolocation"]) == _ad.GEO_OFFLINE:
-        plan["geoip"], why = push_geoip(gs, plan["id"])
+    p = probe_answer(gs, plan["id"], out)
+    why = _install_refusal(gs, plan, p) or _runtime(gs, p) or _fetches(gs, plan, p)
     if why:
         return why, ""
     settings, files, unit, units, meta, secrets = _install_texts(gs, plan, p, who)
+    extra = client_step(gs, plan["id"], (p.get("world") or {}).get("version"), plan.get("client"))
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name,
-                                           _ad.install_sh(gs.short_name, plan["id"], unit, meta, files, units),
+                                           _ad.install_sh(gs.short_name, plan["id"], unit, meta, files, units, extra),
                                            timeout=_ad.INSTALL_TIMEOUT, selfname=gs.lgsm_name, stdin_text=settings)
     ok, said, tail = _ad.install_outcome(_ad.scrub(out or "", secrets), rc)
     return ("", "") if ok else (said, _ad.scrub(tail, secrets))
@@ -503,6 +602,9 @@ def _install_choice(gs, addon_id):
     """(database id or None, geolocation) from the request, or a refusal answer."""
     body = _json_body()
     geolocation = _ad.geo_mode(body.get("geolocation")) if addon_id == _ad.B3 else _ad.GEO_OFF
+    if addon_id == _ad.BLUEMAP and body.get("accept_eula") is not True:
+        # Accepting Mojang's EULA is the admin's own act (BlueMap's accept-download): never assumed.
+        return None, _say(400, _bm.NO_EULA)
     if not _ad.CATALOG[addon_id]["database"]:
         return (None, geolocation), None
     db_id = body.get("database_id")
@@ -525,8 +627,9 @@ def _install_answer(app, gs, addon_id):
         return _say(409, busy_sentence(job))
     r = db.session.get(GameDatabase, db_id) if db_id is not None else None
     log_action(current_user, "addon_install", target=gs.name, server=gs,
-               detail="%s: started%s%s" % (addon_id, ", database %s" % r.name if r is not None else "",
-                                           ", geolocation %s" % geolocation if geolocation != _ad.GEO_OFF else ""))
+               detail="%s: started%s%s%s" % (addon_id, ", database %s" % r.name if r is not None else "",
+                                             ", geolocation %s" % geolocation if geolocation != _ad.GEO_OFF else "",
+                                             _EULA_AUDIT if addon_id == _ad.BLUEMAP else ""))
     threading.Thread(target=_install_worker, daemon=True,
                      args=(app, gs.id, row_birth(gs), (addon_id, db_id, geolocation), current_user.username)).start()
     return jsonify({"success": True, "started": True, "message": i18n.tr(_STARTED)}), 202
@@ -665,7 +768,11 @@ def _remove_answer(gs, addon_id):
         if removed and not others:
             # The account runs no add-on any more: its user manager need not linger. Best-effort,
             # and still part of the job: an install begun before it ends would lose its user manager.
-            _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name, "keep"], timeout=90)
+            # A host lost here leaves the remove done: it is still audited and answered "removed".
+            try:
+                _sm.run_privileged(gs.remote, "addon-account-release", [gs.short_name, "keep"], timeout=90)
+            except ConnectionError:
+                _log_and_generic("add-on account release after a remove")
     finally:
         with _JOBS_LOCK:
             _JOBS.pop((gs.id, addon_id), None)
@@ -795,3 +902,6 @@ def register(app):
         if not has_permission(current_user, MANAGE_ADDONS):
             return _say(403, _DENIED)
         return _guarded(server_id, addon_id, lambda gs: _logs_answer(gs, addon_id), reading=True)
+
+    from panel.routes import addons_b3   # it imports this module: read at call time
+    addons_b3.register(app)

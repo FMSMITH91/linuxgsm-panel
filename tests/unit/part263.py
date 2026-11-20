@@ -453,6 +453,7 @@ def _addon_card263():
             "function node(t, c, x){ return {appendChild: function(){}}; }\n"
             "function button(label, icon, act){ made.push(act); return {}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoStatus(){} function settingsFold(){}\n"
+            "var BM = {status: function(){}, updateWords: function(){ return ''; }};\n"
             + _cut47(src, "function installedRow(") + "\n"
             "function acts(a){ made = []; installedRow(a, node()); return made; }\n"
             "console.log(JSON.stringify({install: acts({id: 'b3', state: 'active', installing: true, job: 'install'}),"

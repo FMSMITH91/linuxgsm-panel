@@ -35,6 +35,8 @@ import tempfile as _tf210
 import time as _time210
 from types import SimpleNamespace as NS
 
+import itsdangerous.timed as _itsd_timed210
+
 from unit.part01 import _root, check, eq, skip
 from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json,
                          _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
@@ -322,12 +324,17 @@ def _client210():
 
 def _cookie210():
     c, later = _client210(), [None]
-    _p9_patch(_scookie210, "time", NS(time=lambda: (later[0] or _time210.time())))
+    clock = NS(time=lambda: (later[0] or _time210.time()))
+    _p9_patch(_scookie210, "time", clock)
+    # The cookie's signing time comes from itsdangerous' own clock: on the real one, every cookie
+    # here (re-sent or not) was stamped about now, and "the re-sent one is new again" held for a
+    # cookie the client never replaced too. On the same clock, a kept old cookie reads 301 s old.
+    _p9_patch(_itsd_timed210, "time", clock)
     poll = c.get("/api/auth/ping")
     later[0] = _time210.time() + _scookie210._REISSUE_SECONDS + 1
     old = c.get("/api/auth/ping")
-    later[0] = None
     again = c.get("/api/auth/ping")
+    later[0] = None
     eq("session cookie: a poll with a cookie signed moments ago sends no Set-Cookie; one 5 minutes old is re-sent "
        "(the idle timeout still slides), and the re-sent one is new again",
        ("Set-Cookie" in poll.headers, "session=" in old.headers.get("Set-Cookie", ""),

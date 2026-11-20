@@ -69,9 +69,12 @@
         TF('Its web page: 127.0.0.1:{port} on this host (an SSH tunnel: ssh -L {port}:127.0.0.1:{port} <host>).', {port: a.port})));
     }
     if (a.geolocation_option) geoStatus(a, box);
+    if (a.eula_url) BM.status(a, box);
     if (a.update) {
-      box.appendChild(node('div', 'small text-warning', a.update === 'geoip'
-        ? T('Update available: a newer month of the country database.') : T('Update available: a newer version of the add-on.')));
+      box.appendChild(node('div', 'small text-warning', BM.updateWords(a)));
+    } else {
+      // Said, not left blank: the card compared the add-on with the panel's own version when it loaded.
+      box.appendChild(node('div', 'small text-secondary', T('Up to date (checked just now).')));
     }
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
@@ -83,13 +86,85 @@
     bar.appendChild(button(T('Log'), 'bi-journal-text', 'adLog', [a.id]));
     bar.appendChild(button(T('Remove'), 'bi-trash', 'adRemove', [a.id], 'btn-outline-danger'));
     box.appendChild(bar);
-    if (a.geolocation_option) settingsFold(a, box);
+    if (a.geolocation_option) settingsFold(a, box, bar);
   }
 
-  var GEO_SAID = {off: 'Geolocation is off.',
-    offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
-    online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'};
+  // BlueMap's parts of the card, in one closure: its lines on an installed row (the Minecraft version it renders,
+  // the disk it takes, who accepted Mojang's EULA, its render threads), Mojang's EULA at install (the admin ticks
+  // it, never assumed), and its words in the Install, Update and Remove texts.
+  var BM = (function () {
+    function updateWords(a) {
+      if (a.update === 'geoip') return T('Update available: a newer month of the country database.');
+      if (a.update === 'game') return TF('Update available: the server now runs Minecraft {version}, and BlueMap needs that version\'s client file.', {version: a.mc_version_now || ''});
+      return T('Update available: a newer version of the add-on.');
+    }
+    function sizeWords(kb) {
+      return kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : Math.max(1, Math.round(kb / 1024)) + ' MB';
+    }
+    function whenWords(iso) {
+      var d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+    }
+    function status(a, box) {
+      var lines = [];
+      if (a.mc_version) lines.push(TF('Renders the world as Minecraft {version}.', {version: a.mc_version}));
+      if (a.disk_kb != null) lines.push(TF('Disk used: {size}.', {size: sizeWords(a.disk_kb)}));
+      if (a.eula_by) lines.push(TF('Mojang\'s EULA accepted by {who} on {when}.', {who: a.eula_by, when: whenWords(a.eula_at)}));
+      lines.push(TF('Render threads: {n} (render-thread-count in the add-on\'s config/core.conf; Stop and Start it after a change).', {n: a.render_threads || 1}));
+      lines.forEach(function (t) { box.appendChild(node('div', 'small text-secondary text-break', t)); });
+    }
+    function eula(a, box) {
+      var w = node('div', 'form-check small mt-1');
+      var cb = node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = 'ad-eula-' + a.id;
+      var l = node('label', 'form-check-label', T('I accept Mojang\'s EULA: BlueMap needs Minecraft\'s client file, which this host downloads from Mojang.'));
+      l.htmlFor = cb.id;
+      w.appendChild(cb);
+      w.appendChild(l);
+      box.appendChild(w);
+      var link = node('a', 'small d-inline-block mb-1', T('Read Mojang\'s EULA'));
+      link.href = a.eula_url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      box.appendChild(link);
+      box.appendChild(node('div', 'small text-secondary', T('BlueMap shows the world, read-only, as a 3D map on a web page on this host (127.0.0.1). Its first render takes a while and uses CPU and disk, below the game\'s priority.')));
+    }
+    // Whether Install may go on: for BlueMap, only once the EULA is ticked (else it says so and goes to the box).
+    function ticked(a) {
+      var cb = el('ad-eula-' + a.id);
+      if (!a.eula_url || (cb && cb.checked)) return true;
+      say(T('Tick that you accept Mojang\'s EULA first: BlueMap can\'t draw the map without Minecraft\'s client file.'), 'text-danger');
+      if (cb) cb.focus();
+      return false;
+    }
+    // The install's body: the database, the geolocation, Mojang's EULA accepted; null when it can't go yet.
+    function installBody(a) {
+      var sel = el('ad-db-' + a.id), geo = el('ad-geo-' + a.id), body = {};
+      if ((a.needs_database && (!sel || !sel.value)) || !ticked(a)) return null;
+      if (a.eula_url) body.accept_eula = true;
+      if (a.needs_database) body.database_id = Number.parseInt(sel.value, 10);
+      if (geo) body.geolocation = geo.value;
+      return body;
+    }
+    function installWords(a) {
+      return a.eula_url
+        ? T('This installs Podman on the host if it is not there, readies the server\'s account for containers, downloads BlueMap\'s image and Minecraft\'s client file from Mojang, and starts rendering the world, which it reads read-only.')
+        : T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads or builds the add-on\'s image. The add-on reads the server\'s RCON password and game log.');
+    }
+    function removeWords(a) {
+      if (a.data_kept) return T('This stops the add-on and deletes its container, image and folder: its settings and any plugin settings you edited go with it. Its database is kept in the Databases tab.');
+      if (a.eula_url) return T('This stops BlueMap and deletes its container, image and files: its settings, the rendered map and Minecraft\'s client file. The world itself is not touched.');
+      return T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.');
+    }
+    return {updateWords: updateWords, status: status, eula: eula, installBody: installBody, installWords: installWords,
+      removeWords: removeWords};
+  })();
+
   function geoStatus(a, box) {
+    var GEO_SAID = {off: 'Geolocation is off.',
+      offline: 'Geolocation is offline: each player\'s country, from DB-IP\'s database on this host. No player address leaves the host.',
+      online: 'Geolocation is online: players\' IP addresses go to ipwho.is, which answers with their city.'};
     box.appendChild(node('div', 'small text-secondary', T(GEO_SAID[a.geolocation] || GEO_SAID.off)));
     if (a.geolocation === 'offline') {
       if (a.geoip_off) box.appendChild(node('div', 'small text-warning', a.geoip_off));
@@ -125,7 +200,9 @@
   }
 
   // B3's settings, folded: geolocation and its plugins. Apply rewrites only those in b3.ini and restarts it.
-  function settingsFold(a, box) {
+  // B3's row also gets Players, before Remove: its players and penalties, read from its database (b3_players.js).
+  function settingsFold(a, box, bar) {
+    bar.insertBefore(button(T('Players'), 'bi-people', 'b3pOpen', []), bar.lastChild);
     var fold = node('details', 'mt-2');
     fold.appendChild(node('summary', 'small', T('B3 settings')));
     fold.appendChild(geoSelect(a, 'ad-set-geo-' + a.id, a.geolocation));
@@ -149,7 +226,9 @@
     fold.appendChild(grid);
     ownPlugins(a, fold);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-2');
-    bar.appendChild(button(T('Apply and restart'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
+    // With a new image pending, Apply would name an image the host doesn't have yet: Update comes first.
+    if (a.update === 'image') bar.appendChild(node('div', 'small text-warning', T('Update the add-on first, then apply its settings.')));
+    else bar.appendChild(button(T('Apply and restart'), 'bi-check2-circle', 'adSettings', [a.id], 'btn-primary'));
     fold.appendChild(bar);
     fold.appendChild(node('div', 'small text-secondary mt-1', T('Only these settings are rewritten in b3.ini; your other edits there and in its conf folder are kept.')));
     box.appendChild(fold);
@@ -205,6 +284,7 @@
     var free = (d.databases || []).filter(function (x) { return !x.used_by; });
     if (a.needs_database && !free.length) { noDatabaseRow(a, d, box); return; }
     if (a.geolocation_option) box.appendChild(geoSelect(a, 'ad-geo-' + a.id, 'off'));
+    if (a.eula_url) BM.eula(a, box);
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (a.needs_database) bar.appendChild(dbSelect(a, d.databases || []));
     var b = button(T('Install'), 'bi-download', 'adInstall', [a.id], 'btn-primary');
@@ -291,12 +371,10 @@
   function row(id) { return ((st.d && st.d.addons) || []).filter(function (a) { return a.id === id; })[0] || {}; }
 
   window.adInstall = function (id) {
-    var a = row(id), sel = el('ad-db-' + id), geo = el('ad-geo-' + id), body = {};
-    if (st.busy || (a.needs_database && (!sel || !sel.value))) return;
-    if (a.needs_database) body.database_id = Number.parseInt(sel.value, 10);
-    if (geo) body.geolocation = geo.value;
+    var a = row(id), body = st.busy ? null : BM.installBody(a);
+    if (!body) return;
     window.confirmDialog({title: T('Install the add-on'), icon: 'download', confirmClass: 'btn-primary', confirmLabel: T('Install'),
-      bodyText: T('This installs Podman on the host if it is not there, readies the server\'s account for containers, and downloads or builds the add-on\'s image. The add-on reads the server\'s RCON password and game log.'),
+      bodyText: BM.installWords(a),
       onConfirm: function () {
         stepUp(function () {
           st.busy = true;
@@ -316,8 +394,7 @@
   window.adRemove = function (id) {
     if (st.busy) return;
     window.confirmDialog({title: T('Remove the add-on'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: T('Remove'),
-      bodyText: row(id).data_kept ? T('This stops the add-on and deletes its container, image and folder: its settings and any plugin settings you edited go with it. Its database is kept in the Databases tab.')
-        : T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.'),
+      bodyText: BM.removeWords(row(id)),
       onConfirm: function () {
         stepUp(function () {
           st.busy = true;

@@ -23,6 +23,11 @@ has:
   server's own databases from the Databases tab. On Soldier of Fortune 2, Enemy Territory and ET: Legacy B3 has no
   private messages: every reply is said in public chat.
 
+- **BlueMap** (Minecraft Java: LinuxGSM's vanilla `mcserver` and Paper `pmcserver`): a live 3D map of the
+  world on a web page, from the image its author publishes (`ghcr.io/bluemap-minecraft/bluemap`), pinned by
+  digest (its `v5` tag). Not for LinuxGSM's Velocity and Waterfall proxies (they have no world) or Bedrock
+  (BlueMap reads Java worlds only). See [BlueMap](#bluemap) below.
+
 ### B3 on Enemy Territory, ET: Legacy and Quake 3
 
 An earlier B3 never recognised human players on these three: it asked the server about a player by slot number
@@ -105,19 +110,93 @@ An installed B3 has a folded **B3 settings** section on its row: **Apply and res
 
 IP Geolocation by DB-IP (<https://db-ip.com>), licensed under CC BY 4.0.
 
+### BlueMap
+
+BlueMap's command-line build renders the world, keeps watching it for changes, and serves the map (`-r -u -w`).
+
+- **Mojang's EULA.** BlueMap textures the map from Minecraft's client file of the world's version, which it
+  may use only once you accept Mojang's EULA (<https://www.minecraft.net/eula>; BlueMap's own setting is
+  `accept-download` in `core.conf`). The install shows the link and a box to tick; without it the install is
+  refused, since BlueMap can't render anything without that file. The audit log records who accepted it and
+  when (the install's entry), and so do the add-on's `addon.json` and a comment in its `core.conf`.
+- **The client file.** The container reaches no network at all, so the panel fetches the file for it: the
+  panel's host reads Mojang's version list (`piston-meta.mojang.com`, the version's details checked against
+  the list's SHA-1), and the game's host downloads the client jar (`piston-data.mojang.com`, about 30 MB)
+  into the add-on's `data` folder and checks the SHA-1 Mojang publishes for it. BlueMap then starts with
+  that version (`-v`); its own attempt to reach Mojang fails, and it uses the file it was given.
+- **The world, read-only.** The world is the folder `level-name` in `serverfiles/server.properties` names
+  (`world` when unset). It is mounted read-only, and so are Paper's `<level-name>_nether` and
+  `<level-name>_the_end` beside it when the server keeps them there (vanilla and current Paper keep the
+  nether and the end inside the world). The map has three maps: Overworld, Nether (its ceiling cut away)
+  and End. The `level-name` must be letters, digits and `. _ + -` (it goes into the unit file). The
+  server must have been started once, so the world exists. A world moved elsewhere by start parameters
+  or by Paper's `world-container` isn't found, and the install says so.
+- **The game's version, and a game update.** The version is the one the server logged at its last start
+  (`Starting minecraft server version …` in `serverfiles/logs/latest.log`). One BlueMap build reads worlds
+  of Minecraft 1.13.2 to 26.3 (release 5.29). After you update the game to another version, the card shows
+  **Update available**; Update fetches that version's client file and restarts BlueMap with it. A game
+  version newer than the pinned BlueMap supports waits for the panel's next BlueMap pin (BlueMap's log says
+  what it can't read).
+- **The web page.** It listens on `127.0.0.1:<port>` on the game's host only (the card shows the port and
+  the SSH tunnel to use); nothing is opened in any firewall. The panel doesn't serve the page itself, so
+  who can see the map is whoever can log in to the host for the tunnel; on the panel, only users with
+  *Manage add-ons* (given to no group by default) see the add-on and its port. The page holds no personal
+  data: BlueMap's command-line build has no connection to the game, so the map shows no players, and its
+  web server keeps no access log. Its usage report (`metrics`) is off.
+- **Resource use.** Rendering is CPU and disk heavy. BlueMap renders with one thread (its own default),
+  and the container runs at a lower CPU priority than the game (`Nice=10`) with the add-ons' 1 GB memory
+  cap (Java gets 60% of it). The first render of a big world can take a long time; after it, only changed regions
+  are rendered again. To render faster, raise `render-thread-count` in `config/core.conf` in the add-on's
+  folder (`~/panel-addons/bluemap/`, at most the host's cores), then Stop and Start it on the card. The card
+  shows how much disk the add-on's folder takes (the map, its settings and the client file).
+- **Your edits.** The panel writes BlueMap's `core.conf`, `webserver.conf` and the three map files at
+  install only: Update keeps your edits there. After a new BlueMap image, Update deletes `web/index.html`
+  so the new version writes its own page (BlueMap's release notes ask for this).
+- **Remove** deletes the add-on's whole folder: the rendered map, its settings and the client file. The
+  world is never touched.
+
 ### Updates
 
 The card shows **Update available** when the panel's pinned version is newer than the installed one (a new
-IW4MAdmin image digest or B3 commit), or, for an offline B3, when a newer month of the country database is out.
+IW4MAdmin or BlueMap image digest or B3 commit), for an offline B3 when a newer month of the country database
+is out, or for BlueMap when the game now runs another Minecraft version.
 **Update** downloads or builds the new image, writes the unit again and restarts the add-on; its data, settings
 and database are kept. It asks for the password like Install, and it is audited. A start, Apply or Update you ask
 for clears the unit's start limit first (5 starts in 10 minutes, kept against a crash loop), so a run of changes
 doesn't leave the add-on down; if systemd still refuses a start for that limit, the card says so. The panel's pins themselves are
-proposed daily by Renovate (B3's fork `master`, IW4MAdmin's `latest` digest).
+proposed daily by Renovate (B3's fork `master`, IW4MAdmin's `latest` digest, BlueMap's `v5` digest).
+
+### B3's players and penalties
+
+An installed B3 has a **Players** button on its row. It opens a section that reads B3's own database (the one
+from the Databases tab) and changes nothing:
+
+- **Search** a player by the start of a name or of an earlier name (alias), by B3 id (`@12`), or by a whole GUID.
+  Case and accents don't matter. Names are matched from their first letter: "nake" doesn't find "Snake".
+- **Open** a player: B3 id, group, first and last seen, connections, aliases (up to 50), IP addresses (up to 50),
+  and every warning, kick, ban and notice (up to 100) with its reason, the admin who gave it ("B3" for B3
+  itself), when, how long, and whether it is active, expired or lifted.
+- **Latest penalties** and **Bans only**: the newest warnings, kicks and bans first, 15 at a time (**Older** for the next 15); a search shows 15 players at a time too.
+
+Who sees what: the section takes `manage_addons`, like the rest of the Add-ons tab. A player's IP addresses and
+GUID are personal data, so they are shown only to someone who also holds `manage_databases` (who can already
+read B3's tables in the Databases manager); for anyone else the panel doesn't read them, shows how many earlier
+addresses there are, and searches a GUID only whole. Each search, player opened and penalties list is in the
+audit log with the server: the player's B3 id and the kind of search, never the text searched for.
+
+How it reads: the Databases manager's way, signed in as B3's database account, from where that database's other
+commands run, in a read-only transaction: no port is opened, and the database refuses any write. Every
+statement is fixed, with the search text as a bound value; a search uses only indexed columns, and every list is
+capped. B3 makes its tables at its first start: until then the section says so.
+
+Lifting a ban is B3's own job: an admin types B3's `!unban` (or its other commands) in the game. The panel has
+no way to send B3 a command, and changing B3's rows behind its back would leave its running state out of step,
+so the section has no unban button.
 
 ## Network
 
-An add-on reaches only the game's RCON port (UDP, or TCP for a Source game) and its database. A database on another machine, and B3's geolocation,
+An add-on reaches only the game's RCON port (UDP, or TCP for a Source game) and its database; BlueMap reaches
+nothing at all. A database on another machine, and B3's geolocation,
 go through relays on the host's loopback.
 
 - **Ubuntu 26.04:** it reaches nothing else.

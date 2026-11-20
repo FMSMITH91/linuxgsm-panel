@@ -16,7 +16,10 @@ file in conf/ are kept. The container's limits stay as they are: the folder is m
 
 UPDATE. A new image (a pull by digest, or a build from the new commit), and for an offline B3 this
 month's country database (services/geoip.py). The card offers it when the record (addon.json) says
-another image, or an older database month, than the catalog's.
+another image, or an older database month, than the catalog's. For BlueMap, also when the game logged
+another Minecraft version than the record's: the update then fetches that version's client file
+(services/addons_bluemap.py) and writes the unit with it; after a new image its web page is written
+again (BlueMap's release notes ask for that).
 """
 import json
 import threading
@@ -32,12 +35,15 @@ from panel.db.models import GameDatabase, GameServer, claim_row, row_birth
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import log_action
 from panel.services import addons as _ad
-from panel.services import geoip as _geoip
+from panel.services import addons_bluemap as _bm, geoip as _geoip
 
 _NOT_INSTALLED = "That add-on isn't installed on this server."
 _BAD_SETTINGS = "Choose a geolocation setting, only plugins this add-on offers, and whether to load your own plugins."
 _NOT_B3 = "Only B3 has settings here."
 _NO_READ = "Couldn't read the add-on's settings on the host: it did not answer."
+# A settings change writes the catalog's image into the unit but builds nothing: with an update pending,
+# that image is not on the host, so the restart would fail and the add-on stay down until Update.
+_UPDATE_FIRST = "Update the add-on first, then apply its settings."
 _STARTED = {"settings": "Applying the settings: the add-on restarts.",
             "update": "Updating the add-on. Downloading or building its image takes a few minutes."}
 # Ports the read asks for: the add-on's page when it has none recorded, a database relay, the geolocators.
@@ -80,6 +86,8 @@ def _read(gs, addon_id):
     if rc != 0:
         return None
     p = _ad.parse_probe(out, gs.game_type)
+    if _ad.CATALOG[addon_id]["reads"] == "world":
+        p["world"] = _bm.parse_world(_ad.kv_lines(out), _ad._unb64)
     found = _ad.parse_status(out)["addons"].get(addon_id)
     p["meta"] = found["meta"] if found else None
     kv = _ad.kv_lines(out)
@@ -119,9 +127,11 @@ def _unit(gs, addon_id, p, meta, geo, own=False):
     web, free = _web_and_free(addon_id, meta, p["ports"])
     relay_list = _ad.relays(addon_id, host, port, geo, free)
     local_db = port if r is not None and host == "127.0.0.1" else None
-    net = _ad.network(_reach_port(gs, meta, p), local_db, relay_list, p["splice"], gs.game_type in _ad.RCON_TCP_GAMES)
-    unit = _ad.quadlet(gs.short_name, addon_id, _ad.log_dir(gs.short_name, p["logdir"]), net, web, relay_list,
-                       p["ids"], own_plugins=own)
+    game = None if _ad.CATALOG[addon_id]["reads"] == "world" else _reach_port(gs, meta, p)     # BlueMap: nothing
+    net = _ad.network(game, local_db, relay_list, p["splice"], gs.game_type in _ad.RCON_TCP_GAMES)
+    from panel.routes import addons as _ra   # it imports this module: read at call time
+    unit = _ad.quadlet(gs.short_name, addon_id, _ra.game_reads(gs, addon_id, p), net, web, relay_list, p["ids"],
+                       own_plugins=own)
     return unit, _ad.relay_units(addon_id, relay_list), net, web
 
 
@@ -169,8 +179,10 @@ def _geoip_for(gs, addon_id, rec, geo, kind):
     return why
 
 
-def _unit_refusal(gs, p):
-    """Why the unit can't be written now ("" when it can): installed, and the install's checks on the log and ids.
+def _unit_refusal(gs, p, addon_id="", kind=""):
+    """Why the unit can't be written now ("" when it can): installed, the install's checks on the log and ids.
+
+    For a settings change, also no new image pending (_settings_refusal).
 
     Without them a change wrote `Volume=:/gamelog:ro` (the log not found) or a unit with no
     User=/Group= (no ids), and the restart left the add-on down with only "didn't start".
@@ -178,7 +190,15 @@ def _unit_refusal(gs, p):
     from panel.routes import addons as _ra   # it imports this module: read at call time
     if p["meta"] is None:
         return _NOT_INSTALLED
-    return _ra.change_log_refusal(gs, p) or (_ra._NO_IDS if p["ids"] is None else "")
+    if "world" in p:
+        return _bm.again(_ra.world_refusal(p, 0))     # the page's port is the recorded one
+    return (_ra.change_log_refusal(gs, p) or (_ra._NO_IDS if p["ids"] is None else "")
+            or _settings_refusal(addon_id, p["meta"], kind))
+
+
+def _settings_refusal(addon_id, meta, kind):
+    """Why a settings change waits ("" when it doesn't): a new image is pending, which only Update builds."""
+    return _UPDATE_FIRST if kind == "settings" and update_reason(addon_id, meta) == "image" else ""
 
 
 def _change_steps(gs, addon_id, who, kind, choice=None):
@@ -188,13 +208,13 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
         return _NO_READ, ""
     p, b3ini, geoini = got
     meta = p["meta"]
-    why = _unit_refusal(gs, p)
+    why = _unit_refusal(gs, p, addon_id, kind)
     if why:
         return why, ""
     now = _settings_now(addon_id, meta, b3ini, choice)
     geo, own = now[0], now[2] and addon_id == _ad.B3
     rec = dict(meta, **_record(addon_id, now, meta, kind))
-    why = _geoip_for(gs, addon_id, rec, geo, kind)
+    extra, why = _fetches(gs, addon_id, p, rec, (geo, kind, meta))
     if why:
         return why, ""
     new_ini, files = _b3_files(b3ini, geoini, now) if addon_id == _ad.B3 else (None, {})
@@ -203,13 +223,41 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
     unit, units, net, web = _unit(gs, addon_id, p, meta, geo, own)
     rec.update(network=net, port=web, changed_by=who)
     sh = _ad.reconfigure_sh(gs.short_name, addon_id, unit, json.dumps(rec) + "\n", files, units,
-                            {"rebuild": kind == "update", "settings": new_ini is not None,
+                            {"rebuild": kind == "update", "settings": new_ini is not None, "extra": extra,
                              "old_image": meta.get("image", ""), "dirs": [_ad.B3_OWN_PLUGINS] if own else []})
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=_ad.INSTALL_TIMEOUT,
                                            selfname=gs.lgsm_name, stdin_text=new_ini)
     secrets = _secrets(gs, meta, p, b3ini)
     ok, said, tail = _ad.install_outcome(_ad.scrub(out or "", secrets), rc)
     return ("", "") if ok else (said, _ad.scrub(tail, secrets))
+
+
+def _fetches(gs, addon_id, p, rec, how):
+    """What a change fetches first: an offline B3's country database, BlueMap's client file. -> (extra shell, why not).
+
+    `how` is (geolocation mode, kind of change, the add-on's record before it). The extra shell is BlueMap's
+    (_client); "" for the others.
+    """
+    why = _geoip_for(gs, addon_id, rec, how[0], how[1])
+    return ("", why) if why else _client(gs, addon_id, p, rec, how[2])
+
+
+def _client(gs, addon_id, p, rec, meta):
+    """The client file BlueMap needs for the version the game runs now: (the shell that fetches it, why not or "").
+
+    Sets rec["mc_version"]. After a new image (`meta`, the record before, names another), the shell also removes
+    web/index.html, so the new BlueMap writes its own page. ("", "") for an add-on that reads no world.
+    """
+    if "world" not in p:
+        return "", ""
+    from panel.routes import addons as _ra   # it imports this module: read at call time
+    version = p["world"]["version"]
+    url, sha1, why = _bm.client_download(version)
+    if why:
+        return "", why
+    rec["mc_version"] = version
+    fresh = (meta.get("image") or "") != _ad.CATALOG[addon_id]["image"]
+    return _ra.client_step(gs, addon_id, version, (url, sha1), fresh_webapp=fresh), ""
 
 
 def _record(addon_id, now, meta, kind):

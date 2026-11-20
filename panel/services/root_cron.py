@@ -113,7 +113,17 @@ def _read_line(got, parts):
     elif head == ("root-crontab", "ok"):
         got.update(state="ok", text=body)
     elif parts[0] == "crond" and re.fullmatch(_priv.ROOT_CRON_DIR_FILE_RE, parts[1]):
-        got["crond"].append({"name": parts[1], "text": body, "panel": is_panel_file(parts[1])})
+        got["crond"].append({"name": parts[1], "text": shown(body), "panel": is_panel_file(parts[1])})
+
+
+def shown(text):
+    """`text` fit for the page: each byte that is not UTF-8 (a surrogate from _b64) shown as U+FFFD.
+
+    The page is sent as strict UTF-8, so one such byte (a Latin-1 comment, a file cut mid-character
+    at its size cap) made the whole page a 500. Only for display: the digest and the write path keep
+    the bytes as read.
+    """
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
 def is_panel_file(name):
@@ -169,24 +179,33 @@ def rows(text):
     else None; `mixed` that the command holds `\\`, which crons read differently, so `command` is the
     line's own text. A job with either is shown, and may be deleted, but not edited here: saving it
     would change what it runs.
+
+    A line holding a byte that is not UTF-8 is "other", shown with U+FFFD in its place (shown): it can't
+    go back through the page's form as it was read, so it is never offered for edit or delete.
     """
     out = []
     for n, line in enumerate((text or "").split("\n")[:-1] if text else [], 1):
-        kind = _priv.root_cron_line_kind(line)
-        row = {"n": n, "kind": kind or "other", "raw": line, "schedule": "", "command": "", "mixed": False,
-               "stdin": None}
+        readable = shown(line) == line
+        kind = _priv.root_cron_line_kind(line) if readable else None
+        row = {"n": n, "kind": kind or "other", "raw": line if readable else shown(line), "schedule": "",
+               "command": "", "mixed": False, "stdin": None}
         if kind == "job":
-            s = line.strip(" \t").replace("\t", " ")
-            if s.startswith("@"):
-                sched, _sep, cmd = s.partition(" ")
-            else:
-                fields = s.split(None, 5)
-                sched, cmd = " ".join(fields[:5]), fields[5]
-            got = cron_reads(cmd.strip(" "))
-            row.update(schedule=sched, command=cmd.strip(" ") if got is None else got[0],
-                       mixed=got is None, stdin=None if got is None else got[1])
+            row.update(_job_fields(line))
         out.append(row)
     return out
+
+
+def _job_fields(line):
+    """A job line's schedule, command, mixed and stdin, as rows() shows them."""
+    s = line.strip(" \t").replace("\t", " ")
+    if s.startswith("@"):
+        sched, _sep, cmd = s.partition(" ")
+    else:
+        fields = s.split(None, 5)
+        sched, cmd = " ".join(fields[:5]), fields[5]
+    got = cron_reads(cmd.strip(" "))
+    return {"schedule": sched, "command": cmd.strip(" ") if got is None else got[0], "mixed": got is None,
+            "stdin": None if got is None else got[1]}
 
 
 def schedule_ok(schedule):

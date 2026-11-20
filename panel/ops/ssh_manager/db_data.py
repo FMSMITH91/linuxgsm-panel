@@ -233,12 +233,18 @@ def _rows_for(statement, width, tables):
 
 
 def editable(table):
-    """Why `table` is read-only in the editor ('view', 'no_key'), or "" when its rows can be changed."""
+    """Why `table` is read-only in the editor ('view', 'no_key', 'binary_key'), or "" when its rows can be changed.
+
+    A binary key column (a BINARY(16) UUID) is read as its length, so the key sent back was that
+    number: an edit or delete matched no row, or on a VARBINARY key the row whose key is that text.
+    """
     if table["view"]:
         return "view"
     names = {c["name"] for c in table["columns"]}
     if not table["pk"] or not set(table["pk"]) <= names:
         return "no_key"
+    if any(c["binary"] for c in table["columns"] if c["name"] in table["pk"]):
+        return "binary_key"
     return ""
 
 

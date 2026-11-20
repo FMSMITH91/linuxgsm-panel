@@ -877,3 +877,19 @@ c5fb6ea0 The Discord bot shows LinuxGSM's output as text.
 82b2e090 Game config audit rows hide more secrets.
 0051cbfe A chunked request can no longer run the panel out of memory.
 d7e455c5 A database restore on the panel's machine no longer hangs on a planted pipe.
+69d4f0ba BlueMap: a live 3D map of your Minecraft world.
+45fe7651 B3's players and penalties in the Add-ons tab.
+62b5f757 B3 settings wait for a pending update.
+5ea37308 The add-ons card says when an add-on is up to date.
+98a77576 SFTP transfers no longer stall a short-handed panel.
+168ee778 An add-on remove is recorded even when the host drops at its last step.
+807e570c A game restore keeps files behind a symlink.
+2b6bd476 Kick and ban on Call of Duty and Quake III act on the right player.
+f4633f8b A setting written twice in a config file is edited where the game reads it.
+2313cc4e Database tables keyed by binary values are read-only in the editor.
+74e4dae1 Backups and uninstalls no longer overlap.
+bfb58a58 The reboot dialog says what is blocking.
+1fba4b8f The root cron page opens on hosts with non-UTF-8 cron files.
+54906eb5 Start sees a crossplay Valheim server that is already up.
+340279d2 Remote hosts with IPv6 off in the kernel can rate-limit SSH again.
+14e35216 Editing a host no longer freezes the panel while its key is checked.

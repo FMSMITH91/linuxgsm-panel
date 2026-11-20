@@ -10,9 +10,11 @@ _orphan_user_journals.
 # _orphan_user_journals, as shell): a file named user-<uid>.journal, never an archived one, for a uid of at
 # least ADDON_FORGET_MIN_UID with no passwd entry and no process (real, effective, saved or fs uid), whose
 # header holds journald's signature and counts no entries (n_entries, the 8 bytes at offset 152, all zero:
-# systemd.io JOURNAL_FILE_FORMAT). journald keeps every user journal it opened until it restarts and re-creates
-# it, empty, at each rotation (journald-manager.c manager_rotate), so a later uninstall's rotation brought
-# back an empty file for an account forgotten before.
+# systemd.io JOURNAL_FILE_FORMAT). The status files go through cat, which skips a process that exited during
+# the scan, into one awk that decides: awk reading them itself exits non-zero for a file it can't open, so a
+# vanished process read as "no process" and the journal of a uid still running was deleted. journald keeps
+# every user journal it opened until it restarts and re-creates it, empty, at each rotation (journald-manager.c
+# manager_rotate), so a later uninstall's rotation brought back an empty file for an account forgotten before.
 def orphan_journals_sh(min_uid):
     """The shell itself, for uids of at least `min_uid`."""
     return (
@@ -22,8 +24,9 @@ def orphan_journals_sh(min_uid):
         "getent passwd \"$o\" >/dev/null && continue; [ \"$(head -c 8 -- \"$f\")\" = LPKSHHRH ] || continue; "
         "[ \"$(head -c 160 -- \"$f\" | wc -c)\" -eq 160 ] || continue; "
         "[ \"$(head -c 160 -- \"$f\" | tail -c 8 | tr -d '\\000' | wc -c)\" -eq 0 ] || continue; "
+        "cat /proc/[0-9]*/status 2>/dev/null | "
         "awk -v u=\"$o\" '$1 == \"Uid:\" { for (i = 2; i <= 5; i++) if ($i == u) f = 1 } END { exit !f }' "
-        "/proc/[0-9]*/status 2>/dev/null && continue; rm -f -- \"$f\" && n=$((n + 1)); done; fi; ")
+        "&& continue; rm -f -- \"$f\" && n=$((n + 1)); done; fi; ")
 
 
 # The account's tmux socket folder (by uid) and JVM perf-data folder (by name) in /tmp, as the helper's

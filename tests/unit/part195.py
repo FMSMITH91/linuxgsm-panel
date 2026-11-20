@@ -503,6 +503,8 @@ _PU_WANT195 = {
 }
 
 # ── the checks ──────────────────────────────────────────────────────────────────────────────────
+# Each state's answer must be there and the program must have run to its end: a state whose want is
+# None (no summary element) read None from a program that threw before printing anything.
 _fb195 = _node47(_fb_prog195(_read195("panel", "static", "js", "remote_manage_backups.js")))
 _pu195 = _node47(_pu_prog195(_read195("panel", "static", "js", "remote_manage_host.js")))
 if _fb195 is None or _pu195 is None:
@@ -510,9 +512,9 @@ if _fb195 is None or _pu195 is None:
 else:
     for _k195 in _FB_STATES195:
         check("backups summary: %s draws what it drew" % _k195,
-              _fb195.get(_k195) == _FB_WANT195.get(_k195),
+              _k195 in _fb195 and "error" not in _fb195 and _fb195[_k195] == _FB_WANT195.get(_k195),
               repr((_fb195.get(_k195), _FB_WANT195.get(_k195), _fb195.get("error"))))
     for _k195 in _PU_STATES195:
         check("update card: %s draws what it drew" % _k195,
-              _pu195.get(_k195) == _PU_WANT195.get(_k195),
+              _k195 in _pu195 and "error" not in _pu195 and _pu195[_k195] == _PU_WANT195.get(_k195),
               repr((_pu195.get(_k195), _PU_WANT195.get(_k195), _pu195.get("error"))))

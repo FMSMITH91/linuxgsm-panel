@@ -461,30 +461,90 @@ check("install.sh install_deps: ...and the real lockfile takes the new path",
 
 # ── 5. CI: --no-deps everywhere requirements.txt is installed, then install.sh's check ───────────
 _wf_dir193 = _os193.path.join(_root, ".github", "workflows")
-_wf_bad193, _wf_hits193 = [], 0
-for _wf in sorted(_os193.listdir(_wf_dir193)):
-    if not _wf.endswith((".yml", ".yaml")):
-        continue
-    _wtxt = _read193(".github", "workflows", _wf)
-    _wl = _wtxt.splitlines()
-    for _i, _ln in enumerate(_wl):
-        _code = _ln.split("#", 1)[0]
-        if "pip install" not in _code or "-r panel/install/requirements.txt" not in _code:
+_REQ193 = _re193.compile(r"""(?:^|\s)(?:-r\s*|--requirement(?:=|\s+))['"]?(?:\./)?panel/install/requirements\.txt['"]?(?=\s|$)""")
+_PIP193 = _re193.compile(r"\bpip3?\s+install\b")
+
+
+def _run_block193(lines, i, ind, folded):
+    r"""The commands of the block scalar under the `run:` at line i, and the index after it.
+
+    A folded (`>`) block is one command; a literal (`|`) block is one per line, with `\`-ended lines
+    joined. Each is then split at `&&`, `||`, `;` and `|`, so one install is judged on its own words.
+    """
+    body, j = [], i + 1
+    while j < len(lines) and (not lines[j].strip() or len(lines[j]) - len(lines[j].lstrip()) > ind):
+        body.append(lines[j].strip())
+        j += 1
+    body = [b for b in body if b and not b.startswith("#")]
+    text = " ".join(body) if folded else "\n".join(body).replace("\\\n", " ")
+    return text.split("\n"), j
+
+
+def _run_cmds193(text):
+    """(line index, command) for every shell command of every `run:` in a workflow's text."""
+    lines, out, i = text.splitlines(), [], 0
+    while i < len(lines):
+        m = _re193.match(r"^(\s*)(?:-\s+)?run:\s*(.*)$", lines[i])
+        if not m:
+            i += 1
             continue
-        _wf_hits193 += 1
-        if "--no-deps" not in _code:
-            _wf_bad193.append("%s:%d installs requirements.txt without --no-deps" % (_wf, _i + 1))
+        val = m.group(2).strip()
+        if val[:1] in "|>":
+            cmds, j = _run_block193(lines, i, len(m.group(1)), val[:1] == ">")
+        else:
+            cmds, j = [val], i + 1
+        out += [(i, _re193.sub(r"(?:^|\s)#.*$", "", c)) for c in cmds]
+        i = j
+    return [(k, part) for k, c in out for part in _re193.split(r"&&|\|\||;|\|", c)]
+
+
+def _wf_nodeps193(name, text):
+    """(installs of panel/install/requirements.txt found, what is wrong with them) in one workflow."""
+    bad, hits, wl = [], 0, text.splitlines()
+    for _i, _code in _run_cmds193(text):
+        if not (_PIP193.search(_code) and _REQ193.search(_code)):
+            continue
+        hits += 1
+        if "--no-deps" not in _code.split():
+            bad.append("%s:%d installs requirements.txt without --no-deps" % (name, _i + 1))
         # The rest of this job: up to the next job key (two spaces in) or the end of the file.
-        _rest = []
-        for _l2 in _wl[_i + 1:]:
+        rest = []
+        for _l2 in wl[_i + 1:]:
             if _re193.match(r"  [A-Za-z0-9_-]+:\s*$", _l2):
                 break
-            _rest.append(_l2.split("#", 1)[0].strip())
-        if "run: bash .github/scripts/panel_pip_check.sh" not in _rest:
-            _wf_bad193.append("%s:%d: no later step of its job runs panel_pip_check.sh" % (_wf, _i + 1))
+            rest.append(_l2.split("#", 1)[0].strip())
+        if "run: bash .github/scripts/panel_pip_check.sh" not in rest:
+            bad.append("%s:%d: no later step of its job runs panel_pip_check.sh" % (name, _i + 1))
+    return hits, bad
+
+
+_wf_bad193, _wf_hits193 = [], 0
+for _wf in sorted(_os193.listdir(_wf_dir193)):
+    if _wf.endswith((".yml", ".yaml")):
+        _h193, _b193 = _wf_nodeps193(_wf, _read193(".github", "workflows", _wf))
+        _wf_hits193 += _h193
+        _wf_bad193 += _b193
 check("CI: every step installing panel/install/requirements.txt does it --no-deps, and a later step of "
       "the same job runs panel_pip_check.sh", _wf_hits193 >= 5 and not _wf_bad193,
       "%d found; %r" % (_wf_hits193, _wf_bad193))
+# The reader itself: an install written as a folded block, with --requirement or ./, on a
+# `\`-continued line, or chained after another install, is still one it judges.
+_PCK193 = "      - name: check\n        run: bash .github/scripts/panel_pip_check.sh\n"
+_ctl193 = {
+    "folded": "      - run: >-\n          python -m pip install --quiet\n          -r panel/install/requirements.txt\n",
+    "long option": "      - run: pip install --requirement=./panel/install/requirements.txt\n",
+    "continued": "      - run: |\n          pip install --quiet \\\n            -r panel/install/requirements.txt\n",
+    "chained": "      - run: pip install --no-deps x && pip install -r panel/install/requirements.txt\n",
+    "good, folded": ("      - run: >-\n          pip install --no-deps\n          -r panel/install/requirements.txt\n"
+),
+    "commented out": "      - run: |\n          # pip install -r panel/install/requirements.txt\n          true\n",
+}
+_ctl_got193 = {k: (lambda hb: (hb[0], len(hb[1])))(_wf_nodeps193("x.yml", "jobs:\n  a:\n    steps:\n" + v + _PCK193))
+               for k, v in _ctl193.items()}
+check("CI: the --no-deps gate reads an install in any spelling (folded block, --requirement=, ./, a "
+      "continued line, chained after another), and not one that is commented out (control)",
+      _ctl_got193 == {"folded": (1, 1), "long option": (1, 1), "continued": (1, 1), "chained": (1, 1),
+                      "good, folded": (1, 0), "commented out": (0, 0)}, repr(_ctl_got193))
 _df193 = _read193(".clusterfuzzlite", "Dockerfile")
 _bs193 = _read193(".clusterfuzzlite", "build.sh")
 check("fuzz image: installs requirements.txt --no-deps, bundles no dns, and turns greendns off before "

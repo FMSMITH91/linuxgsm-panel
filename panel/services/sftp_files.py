@@ -366,7 +366,10 @@ class _Handle(SFTPHandle):
         """None while the user may still use this file (the panel's answer, at most AUTHZ_HOLD old), else (code, text).
 
         An answer the panel could not give (busy, or none in time) keeps the last "yes" for
-        AUTHZ_GRACE; past that the file is refused with that reason. A "no" refuses at once.
+        AUTHZ_GRACE; past that the file is refused with that reason. A "no" refuses at once. The
+        grace is judged when the ask returns (an ask can wait the whole answer timeout), and an
+        unanswered ask counts as this second's check, so a transfer still asks once per AUTHZ_HOLD
+        while the panel is short of answers, not once per packet.
         """
         now = time.monotonic()
         if now - self._checked < AUTHZ_HOLD:
@@ -374,7 +377,11 @@ class _Handle(SFTPHandle):
         try:
             got = self.vfs.ask_folder(self.vfs.split(self.path)[0], self.write_mode)
         except Unanswered as exc:
-            return None if now - self._granted < AUTHZ_GRACE else (SFTP_FAILURE, exc.text)
+            after = time.monotonic()
+            if after - self._granted >= AUTHZ_GRACE:
+                return (SFTP_FAILURE, exc.text)
+            self._checked = after
+            return None
         except Refused:
             return (SFTP_PERMISSION_DENIED, DENIED_NOW)
         if got.key != self.target.key:

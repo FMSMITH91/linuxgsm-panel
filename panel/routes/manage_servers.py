@@ -2718,11 +2718,16 @@ def _register_uninstall_and_edit(app):
 
 def _uninstall_other_work(server_id, name):
     """Why the uninstall cannot go on beside other work on the server (a sentence), or None."""
+    from panel.routes._shared import _backup_in_progress
     from panel.routes.addons import ADDON_BUSY, job_running
     if _r39a_wipe_running(server_id):
         return grs_or_wipe_sentence(server_id, name)
     if job_running(server_id):
         return ADDON_BUSY
+    if _backup_in_progress(server_id):
+        # Its tar would be killed and a failed-backup alert sent about a server being deleted. The
+        # backup's own runs ask the other way round (_shared._R39A_BACKUP_HOLD_KINDS).
+        return i18n.Sentence("'{name}' is being backed up. Try again once the backup has finished.", name=name)
     if UNINSTALL_EXCLUDES.intersection(r36j_route_jobs(server_id)):
         return i18n.Sentence("Another action on '{name}' is still running (a start or stop, a mods change or a "
                              "scheduled task run now). Try again once it has finished.", name=name)

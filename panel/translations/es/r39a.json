@@ -4,6 +4,6 @@
   "a queued stop or restart of {name}": "una parada o reinicio en cola de {name}",
   "A scheduled wipe of '{name}' is running — '{action}' was not run. Try again once it has finished.": "Hay un borrado programado de '{name}' en curso: no se ejecutó '{action}'. Inténtalo de nuevo cuando haya terminado.",
   "A scheduled wipe of '{name}' is running. Try again once it has finished.": "Hay un borrado programado de '{name}' en curso. Inténtalo de nuevo cuando haya terminado.",
-  "a scheduled wipe, a restore from a backup, or a queued stop or restart of this server is running": "hay un borrado programado, una restauración desde una copia de seguridad o una parada o reinicio en cola de este servidor en curso",
-  "A scheduled wipe, a restore from a backup, or a queued stop or restart of {name} is running. Try again once it has finished.": "Hay un borrado programado, una restauración desde una copia de seguridad o una parada o reinicio en cola de {name} en curso. Inténtalo de nuevo cuando haya terminado."
+  "a scheduled wipe, a restore from a backup, a queued stop or restart, or an uninstall of this server is running": "hay un borrado programado, una restauración desde una copia de seguridad, una parada o reinicio en cola o una desinstalación de este servidor en curso",
+  "A scheduled wipe, a restore from a backup, a queued stop or restart, or an uninstall of {name} is running. Try again once it has finished.": "Hay un borrado programado, una restauración desde una copia de seguridad, una parada o reinicio en cola o una desinstalación de {name} en curso. Inténtalo de nuevo cuando haya terminado."
 }

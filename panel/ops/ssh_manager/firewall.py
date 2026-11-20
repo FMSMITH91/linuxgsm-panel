@@ -1269,13 +1269,14 @@ def _fwa_cut_kernel_v6(out):
     """(ufw-stored-rules' output without its trailing kernel line, whether the kernel has IPv6 or None).
 
     The verb ends with `==> /proc/sys/net/ipv6 <==` and `yes` or `no` (privileged.FWA_KERNEL_V6_PATH);
-    a panel-helper installed before that prints no such line: None, not known.
+    a panel-helper installed before that prints no such line: None, not known. The word is read
+    without its line end: every transport strips the output, so the last line never has one.
     """
     from panel.security import privileged as _priv
     text = out or ""
     mark = "==> %s <==\n" % _priv.FWA_KERNEL_V6_PATH
     at = text.rfind(mark)
-    kernel = {"yes\n": True, "no\n": False}.get(text[at + len(mark):]) if at >= 0 else None
+    kernel = {"yes": True, "no": False}.get(text[at + len(mark):].strip()) if at >= 0 else None
     return (text, None) if kernel is None else (text[:at], kernel)
 
 
@@ -1298,6 +1299,8 @@ def _fwa_split_files(text):
     from panel.security import privileged as _priv
     found, pos = {}, 0
     marks = ["==> %s <==\n" % p for p in _priv.FWA_STORED_PATHS]
+    if text.endswith(marks[-1][:-1]):
+        text += "\n"       # an empty last file, its mark's line end stripped by the transport
     # Each mark exactly once: a file that itself held another's mark line would otherwise move where
     # that file seems to start. Only root writes these files, and doubt still reads as unread.
     if any(text.count(mark) != 1 for mark in marks):

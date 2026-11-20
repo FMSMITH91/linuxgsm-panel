@@ -2095,13 +2095,20 @@ _r16d_wrap_ts_handles()
 # app, bash and jq; imports part01, 12 and 203.
 # imports part01, 05, 29 and 223. part274 (review pass 34's security fixes: Transfer-Encoding refused, the body reader's
 # bounds, db-import's FIFO) runs the web server on loopback and the helper's main(); imports part01 and 05.
+# part276 (review pass 34, runtime fixes) drives part12's app, bash over part190's restore sandbox and node over
+# panel/static/js; imports part01, 12, 47, 190, 219 and 221.
+# part277 (review pass 34's test-only fixes) runs node over panel/static/js and tools/js_coverage; imports part01, 05, 12, 29 and 47.
+# part272 (the BlueMap add-on) drives part12's app with Mojang's answers as fixtures, bash with a stand-in curl, and
+# part257's node harness over server_addons.js; imports part01, 12 and 257.
+# part273 (the Add-ons tab's B3 players section: statements, routes, page) drives part12's app and node; imports
+# part01, 05, 12, 47, 221 and 261.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
-          "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
-          "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
-          "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58", "part59", "part60", "part61", "part62", "part63", "part64",
-          "part65", "part66", "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74", "part75", "part76", "part77", "part78", "part79",
-          "part80", "part81", "part82", "part83", "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91", "part92", "part93", "part94",
-          "part95", "part96", "part97", "part98", "part99", "part100", "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
+    "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
+    "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
+    "part50", "part51", "part52", "part53", "part54", "part55", "part56", "part57", "part58", "part59", "part60", "part61", "part62", "part63", "part64",
+    "part65", "part66", "part67", "part68", "part69", "part70", "part71", "part72", "part73", "part74", "part75", "part76", "part77", "part78", "part79",
+    "part80", "part81", "part82", "part83", "part84", "part85", "part86", "part87", "part88", "part89", "part90", "part91", "part92", "part93", "part94",
+    "part95", "part96", "part97", "part98", "part99", "part100", "part101", "part102", "part103", "part104", "part105", "part106", "part107", "part108",
     "part109", "part110", "part111", "part112", "part113", "part114", "part115", "part116", "part117", "part118", "part119", "part120", "part121", "part122",
     "part123", "part124", "part125", "part126", "part127", "part128", "part129", "part130", "part131", "part132", "part133", "part134", "part135", "part136",
     "part137", "part138", "part140", "part141", "part142", "part143", "part144", "part145", "part146", "part147", "part148", "part149", "part150", "part151",
@@ -2109,11 +2116,11 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part166", "part167", "part168", "part169", "part170", "part171", "part172", "part173", "part174", "part175", "part176", "part177", "part178", "part179",
     "part180", "part181", "part182", "part183", "part184", "part185", "part186", "part187", "part188", "part189", "part191", "part192", "part193", "part194",
     "part195", "part190", "part196", "part199", "part197", "part200", "part198", "part201", "part205", "part202", "part204", "part206", "part203", "part207",
-    "part208", "part209", "part210", "part211", "part212", "part213", "part214", "part215", "part216", "part217", "part218", "part219", "part220",
-    "part221", "part222", "part223", "part224", "part225", "part226", "part227", "part228", "part229", "part230", "part231", "part232", "part233", "part234",
-    "part235", "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248",
-    "part249", "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262",
-    "part263", "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part15")
+    "part208", "part209", "part210", "part211", "part212", "part213", "part214", "part215", "part216", "part217", "part218", "part219", "part220", "part221",
+    "part222", "part223", "part224", "part225", "part226", "part227", "part228", "part229", "part230", "part231", "part232", "part233", "part234", "part235",
+    "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248", "part249",
+    "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262", "part263",
+    "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2219,7 +2226,7 @@ _r29d_last_left = tuple(getattr(sys.modules.get(_m), "_HELPER_STATE", {}).get("p
 # Counted HERE, before the controls below make temp dirs of their own: the tailscale control's dir
 # was recorded after the loop, so "no part's path was recorded" could never be true (review 1012b).
 _r16d_tmp_parts_made = len(_r15d_made_tmp) - _r16d_tmp_runner_made
-from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
+from unit.part01 import check, results, hub_leaks, hub_swept, run_exit_code, thread_gate  # noqa: E402
 
 # A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
 # a top-level name in it — `run`, `walk`, `flows`, `serve` — that directory's file. part14, part53
@@ -2238,8 +2245,7 @@ check("unit suite: every part ran as on a machine without the root helper, and l
       and _r26d_pins[0][1][0] is None and not _r28d_left and not _r28d_disk_reads,
       "parts that left the helper cache other than pinned (system_ops, _core): %r; parts whose "
       "cache was read from the disk: %r" % (_r28d_left[:6], sorted(set(_r28d_disk_reads))[:6]))
-check("unit suite: no part leaves sys.path changed for the parts after it",
-      not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
+check("unit suite: no part leaves sys.path changed for the parts after it", not _path_moved, "; ".join("%s: %s" % _pm for _pm in _path_moved))
 # part12's transport tripwire answers a host call it catches with a refusal, which a check may read as
 # "unknown" and still pass; only a part's own closing check turned a trip into a failure, and parts 93,
 # 96 and 97's Serve section had none (review 1017c). Read once more over the whole run, for the next
@@ -3329,6 +3335,7 @@ check("unit suite: every tests/unit/part*.py was imported and ran, each from its
 
 
 # ok is True (pass), False (fail) or None (skipped — the check did not run; see part01.skip).
+thread_gate()   # last, so a thread that died in the runner's own steps after the last part counts too
 passed = sum(1 for ok, _, _ in results if ok is True)
 failed = sum(1 for ok, _, _ in results if ok is False)
 skipped = [(name, detail) for ok, name, detail in results if ok is None]
@@ -3356,4 +3363,4 @@ if _r16d_tmp_parts_made <= 0 or _r15d_left or _r16d_tmp_swapped:
              if _r16d_tmp_parts_made <= 0
              else "%d of %d left: %s" % (len(_r15d_left), len(_r15d_made_tmp), _r15d_left[:5])))
     failed += 1
-sys.exit(0 if results and failed == 0 else 1)
+sys.exit(run_exit_code(results, failed))

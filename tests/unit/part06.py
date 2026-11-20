@@ -5988,8 +5988,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (MANAGE_ADDONS and server access; install and remove with step-up).
 # 317, was 314: panel/routes/sftp_settings.py's SFTP card save and the Account page's two key routes.
 # 314, was 312: panel/routes/addons.py's update and B3 settings (MANAGE_ADDONS and server access, step-up).
-check("register_routes: every one of the 317 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 317,
+# 320, was 317: panel/routes/addons_b3.py's B3 players section: search, one player and the latest penalties
+# (MANAGE_ADDONS and server access, read-only).
+check("register_routes: every one of the 320 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 320,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -6873,33 +6875,49 @@ _rh_sb = _tempfile.mkdtemp(prefix="rmhost-")
 
 
 def _rh_code(cmd):
-    """The shell text without its comments: a `#` that starts a word, outside quotes, to the line's end."""
+    r"""The shell text without its comments: a `#` that starts a word, outside quotes, to the line's end.
+
+    A backslash escapes the next character outside single quotes (so `\"` closes no double quote),
+    and `$'...'` is a quote that `\'` does not end: read without either, the rest of a line after
+    `"a\" # "` was dropped as a comment and a command on it went unjudged.
+    """
     out, quote, i = [], None, 0
     while i < len(cmd):
-        c = cmd[i]
-        if quote is None and c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
+        if quote is None and cmd[i] == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|("):
             i = cmd.find("\n", i) if "\n" in cmd[i:] else len(cmd)
             continue
-        if quote is None and c in "'\"":
-            quote = c
-        elif c == quote:
-            quote = None
-        out.append(c)
-        i += 1
+        piece, quote = _rh_step(cmd, i, quote)
+        out.append(piece)
+        i += len(piece)
     return "".join(out)
+
+
+def _rh_step(cmd, i, quote):
+    r"""The next piece of shell text at `i` (an escaped pair, `$'` or one character), and the quote open after it."""
+    c = cmd[i]
+    if c == "\\" and quote != "'" and i + 1 < len(cmd):
+        return cmd[i:i + 2], quote
+    if quote is None:
+        if cmd.startswith("$'", i):
+            return "$'", "$'"
+        return c, (c if c in "'\"" else None)
+    return c, (None if c == quote[-1] else quote)
 
 
 def _rh_unsafe(cmd, root):
     """List what in the rewritten doc block could reach past the sandbox `root` (nothing runs if any).
 
-    An absolute path outside it once `..` is resolved (bar /dev/null), a path that starts at an
-    expansion (`$X/etc`), a relative climb (`cd`, `..`), the home folder, or a word that runs other
-    text. Comments are dropped as the shell drops them (a quoted `#` is no comment).
+    An absolute path outside it once `..` is resolved (bar a `>/dev/null` redirect), a path that
+    starts at an expansion (`$X/etc`), any `${...}` (its default, `${X:-/opt/x}`, is a path the
+    rewrite never sees), a relative climb (`cd`, `..`), the home folder, or a word that runs other
+    text. A path ends at a redirect, a brace or a comma too (`/sb/x>/opt/y`, `{/sb/a,/opt/b}`).
+    Comments are dropped as the shell drops them (a quoted `#` is no comment).
     """
     code = _rh_code(cmd)
-    bad = [p for p in re.findall(r"(?<![\w.$~-])/[^\s\"';|&)]*", code)
-           if not _os_path_inside(p, root) and p != "/dev/null"]
-    return bad + re.findall(r"~|\$HOME\b|\$\{HOME\}|\b(?:eval|exec|source|cd|pushd)\b|\$\{?\w+\}?/"
+    bad = [m.group(0) for m in re.finditer(r"(?<![\w.$~])/[^\s\"';|&)<>{},]*", code)
+           if not _os_path_inside(m.group(0), root)
+           and not (m.group(0) == "/dev/null" and code[max(m.start() - 1, 0)] == ">")]
+    return bad + re.findall(r"~|\$HOME\b|\$\{|\b(?:eval|exec|source|cd|pushd)\b|\$\w+/"
                             r"|(?<![\w.])\.\.(?=/|\s|$|;)", code)
 
 
@@ -6932,7 +6950,7 @@ try:
             open(_r + os.path.dirname(_privmod.GAMEDIG_DIR) + "/panel.conf", "w").close()
         _cmd = _rh_cmd.group(1) if _rh_cmd else "exit 97\n"
         for _pre in ("/usr/local/", "/usr/bin/", "/etc/", "/var/log/"):
-            _cmd = re.sub(r"(?<![\w./-])" + re.escape(_pre), _r + _pre, _cmd)
+            _cmd = re.sub(r"(?<![\w./])" + re.escape(_pre), _r + _pre, _cmd)
         _bad = _rh_unsafe(_cmd, _r)
         if _bad:
             return _r, NS(returncode=98, stderr="not run, it reaches past the sandbox: %s" % _bad)
@@ -6964,6 +6982,15 @@ try:
           and all(_rh_unsafe(_c, "/sb") for _c in ("X=; sudo rm -rf $X/etc/x\n", "rm -rf /sb/usr/../../etc/x\n",
                                                     "echo \"n #1\"; sudo rm -rf /opt/x\n", "cd ../..; rm -rf etc/x\n",
                                                     "rm -rf ../../etc/x\n")), "")
+    # ...and the shapes that once passed: a `${...}` default, a brace list, a path glued to a
+    # redirect, an escaped quote before a `#`, a $'...' quote, and /dev/null as a target of rm.
+    _rh_ctl34 = [_rh_unsafe(_c, "/sb") for _c in (
+        "sudo rm -rf \"${X:-/opt/x}\"\n", "sudo rm -rf ${X-/etc/x}\n", "rm -rf {/sb/a,/opt/b}\n",
+        "rm -f /sb/x>/opt/y\n", "echo \"a\\\" # \"; sudo rm -rf /opt/x\n", "echo $'a\\' # '; sudo rm -rf /opt/x\n",
+        "sudo rm -f /dev/null\n", "rm -f /sb/a >/dev/null 2>&1\n", "echo 'a\\' # '; rm -rf /sb/b\n")]
+    check("delete host: (control) ...a ${...} default, a brace list, a path glued to a redirect, a quote ended "
+          "past an escaped one, and /dev/null as rm's own operand are refused; a >/dev/null redirect is not",
+          [bool(_b) for _b in _rh_ctl34] == [True] * 7 + [False] * 2, repr(_rh_ctl34))
 finally:
     _shutil.rmtree(_rh_sb, ignore_errors=True)
 
@@ -7407,9 +7434,9 @@ def _ci_path_entry(text):
     return (e[1:], True) if e.startswith("!") else (e, False)
 
 
-def _ci_paths_key(s):
-    """None when stripped line `s` is no `paths:` key; else its value, a trailing comment dropped ("" opens a block list)."""
-    m = re.match(r"paths:(?:[ \t]+(.*))?$", s)
+def _ci_paths_key(s, key="paths"):
+    """None when stripped line `s` is no `key:` key; else its value, a trailing comment dropped ("" opens a block list)."""
+    m = re.match(re.escape(key) + r":(?:[ \t]+(.*))?$", s)
     return None if m is None else re.sub(r"(?:^|\s+)#.*$", "", m.group(1) or "").strip()
 
 
@@ -7425,8 +7452,10 @@ def _ci_in_list(s, ind, indent):
     return not s or s.startswith("#") or (s.startswith("- ") and ind >= indent)
 
 
-def _ci_on_path_lists(on):
+def _ci_on_path_lists(on, key="paths"):
     """Return each `paths:` list of an `on:` block (a paths-ignore list is not one), in order, as [(pattern, excluded)].
+
+    With `key="paths-ignore"`, each paths-ignore list instead, read the same way.
 
     Block entries at the key's indent or deeper, a flow list (`paths: ['a/*', 'b']`), and a comment
     after the key. Read as one shape only, any other gave [] and the workflow passed as unfiltered; a
@@ -7439,7 +7468,7 @@ def _ci_on_path_lists(on):
         if cur is not None and _ci_in_list(s, ind, indent):
             cur.extend([_ci_path_entry(s[2:])] if s.startswith("- ") else [])
             continue
-        cur, value = None, _ci_paths_key(s)
+        cur, value = None, _ci_paths_key(s, key)
         if value == "":
             cur, indent = [], ind
             lists.append(cur)
@@ -7490,15 +7519,21 @@ def _ci_jobs_watch(w):
 
 
 def _ci_unwatched_of(name, w):
-    """List `name: file` for each pinned file a job installs that one of the filters it runs under misses."""
-    bad = []
-    for job, installs, on_lists, scope in _ci_jobs_watch(w):
-        for u in installs:
-            if any(not _ci_watched(u, lst) for lst in on_lists):
-                bad.append("%s %s: %s (on: paths)" % (name, job, u))
-            if scope is not None and not any(_fnm06.fnmatchcase(u, e) for e in scope):
-                bad.append("%s %s: %s (scope)" % (name, job, u))
-    return bad
+    """List `name: file` for each pinned file a job installs that one of the filters it runs under misses.
+
+    A trigger's paths-ignore list misses a file it matches: GitHub skips the run for a change to it.
+    """
+    w = w.replace("\r\n", "\n")
+    ignores = _ci_on_path_lists(w[:w.index("\npermissions:")] if "\npermissions:" in w else w, "paths-ignore")
+    return ["%s %s: %s (%s)" % (name, job, u, why) for job, installs, on_lists, scope in _ci_jobs_watch(w)
+            for u in installs for why in _ci_misses(u, on_lists, ignores, scope)]
+
+
+def _ci_misses(u, on_lists, ignores, scope):
+    """Which filters a job runs under miss pinned file `u`, in order: on: paths, on: paths-ignore, its scope list."""
+    return (["on: paths"] * any(not _ci_watched(u, lst) for lst in on_lists)
+            + ["on: paths-ignore"] * any(_ci_watched(u, lst) for lst in ignores)
+            + ["scope"] * (scope is not None and not any(_fnm06.fnmatchcase(u, e) for e in scope)))
 
 
 def _ci_split_gaps(name, w):
@@ -7526,12 +7561,18 @@ _ci_ctl2 = ("on:\r\n  push:\r\n    paths:   # the watched files\r\n    - '.githu
             "  pull_request:\r\n    paths: ['.github/**', 'x']\r\npermissions: {}\r\njobs:  # all\r\n  a:  # job\r\n"
             "    steps:\r\n      - run: |\r\n          scope=(\r\n            'z/**'\r\n          )  # end\r\n"
             "          for g in '.github/**'; do :; done\r\n          x=(\r\n          )\r\n"
-            "          pip install -r .github/ci-requirements/x.txt\r\n")
+            "          pip install -r .github/ci-requirements/x.txt\r\n"
+            # A job key with no comment after it: under CRLF only the normalisation splits it off.
+            "  b:\r\n    steps:\r\n      - run: pip install -r .github/ci-requirements/y.txt\r\n")
 eq("workflows: (control) a paths key with a comment, entries at the key's indent, a flow list, a `!` exclusion "
    "applied in order, CRLF, a commented jobs: and job line, and a scope list closed by `)  # end` are all read",
    (_ci_on_paths(_ci_ctl2.split("permissions:")[0]), _ci_unwatched_of("d.yml", _ci_ctl2), _ci_split_gaps("d.yml", _ci_ctl2)),
    ([".github/**", "!.github/ci-requirements/**", ".github/**", "x"],
-    ["d.yml a: .github/ci-requirements/x.txt (on: paths)", "d.yml a: .github/ci-requirements/x.txt (scope)"], []))
+    ["d.yml a: .github/ci-requirements/x.txt (on: paths)", "d.yml a: .github/ci-requirements/x.txt (scope)",
+     "d.yml b: .github/ci-requirements/y.txt (on: paths)"], []))
+eq("workflows: (control) ...under CRLF each job is read apart, with its own installs and its scope list",
+   [(_j, _i, _s) for _j, _i, _o, _s in _ci_jobs_watch(_ci_ctl2)],
+   [("a", [".github/ci-requirements/x.txt"], ["z/**"]), ("b", [".github/ci-requirements/y.txt"], None)])
 eq("workflows: (control) a paths list that cannot be read, or has no entries, watches nothing (named, not passed)",
    [_ci_watched(".github/ci-requirements/x.txt", _l) for _l in
     _ci_on_path_lists("on:\n  push:\n    paths: &anchor\n  pull_request:\n    paths:\n    paths-ignore:\n      - a\n")],
@@ -7543,8 +7584,16 @@ _ci_ctl = ("on:\n  push:\n    paths:\n      - '.github/*'\n    paths-ignore:\n  
 eq("workflows: ...on: paths is matched as GitHub does (`*` stays in one folder) and a paths-ignore entry is not a "
    "watch; a scope list's comment line is no entry and each job is judged by its own list (control)",
    (_ci_on_paths(_ci_ctl.split("permissions:")[0]), _ci_unwatched_of("c.yml", _ci_ctl)),
-   ([".github/*"], ["c.yml a: .github/ci-requirements/x.txt (on: paths)", "c.yml a: .github/ci-requirements/x.txt (scope)",
-                    "c.yml b: .github/ci-requirements/y.txt (on: paths)"]))
+   ([".github/*"], ["c.yml a: .github/ci-requirements/x.txt (on: paths)",
+                    "c.yml a: .github/ci-requirements/x.txt (on: paths-ignore)", "c.yml a: .github/ci-requirements/x.txt (scope)",
+                    "c.yml b: .github/ci-requirements/y.txt (on: paths)", "c.yml b: .github/ci-requirements/y.txt (on: paths-ignore)"]))
+eq("workflows: (control) a trigger whose paths-ignore list matches a pinned file it installs is named (GitHub "
+   "skips the run for a change to that file); a `!` entry re-includes it",
+   [_ci_unwatched_of("i.yml", "on:\n  pull_request:\n    paths-ignore:\n      - " + _ig + "\npermissions: {}\njobs:\n"
+                     "  a:\n    steps:\n      - run: pip install -r .github/ci-requirements/x.txt\n")
+    for _ig in ("'.github/ci-requirements/**'", "'.github/ci-requirements/**'\n      - '!.github/ci-requirements/x.txt'",
+                "docs/**")],
+   [["i.yml a: .github/ci-requirements/x.txt (on: paths-ignore)"], [], []])
 
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
@@ -12666,7 +12715,7 @@ finally:
 # the tick appeared and the server's own message was shown nowhere.
 _integ_js6 = open(os.path.join(_root, "panel", "static", "js", "remote_manage_host.js"),
                   encoding="utf-8").read()
-_fn6 = _integ_js6.split("function loadIntegrity()", 1)[-1].split("\nfunction ", 1)[0]
+_fn6 = _integ_js6.partition("function loadIntegrity()")[2].split("\nfunction ", 1)[0]
 check("integrity: the pane reads `verified`, not just `clean`",
       "d.verified" in _fn6,
       "loadIntegrity ignores the flag the server sets when it could not run the check")
@@ -12815,7 +12864,7 @@ _rc_code6 = "\n".join(_ln for _ln in _rc_src6.splitlines()
 # Scoped to the LOOP, not to the file: _report() clears data/ too, so searching the whole source
 # matched that copy and the gate passed with the clearing deleted from the loop — which is the
 # only place it prevents anything. Caught by mutation, which is the entire point of doing it.
-_rc_loop6 = _rc_code6.split("def _run_suites", 1)[-1].split("\ndef ", 1)[0]
+_rc_loop6 = _rc_code6.partition("def _run_suites")[2].split("\ndef ", 1)[0]
 
 # ── run-tests.sh's skip detector reads a SKIP line, not the word "skip" in a check name ─────
 # It was case-insensitive and matched "skip" anywhere before a space, so a PASSING check named
@@ -13436,7 +13485,7 @@ check("terminal: a character split across two reads survives intact",
 
 # (d) Teardown must not depend on the audit bookkeeping: _sid_host[sid] is written AFTER
 # open_session returns, and the session is registered BEFORE the transport opens.
-_cna7 = _htr_src7.split("def _close_and_audit", 1)[-1].split("\n    @", 1)[0]
+_cna7 = _htr_src7.partition("def _close_and_audit")[2].split("\n    @", 1)[0]
 _cna_code7 = "\n".join(_l for _l in _cna7.splitlines() if not _l.lstrip().startswith("#"))
 check("terminal: a disconnect tears the session down before consulting the audit map",
       "close_for_sid" in _cna_code7 and "_sid_host.pop" in _cna_code7
@@ -13471,7 +13520,7 @@ check("terminal: the socket events enforce the forced password change themselves
       "enters — a handed-over temporary password could open a shell")
 
 # (g) ...and per-host access is re-checked while the shell is live, not only when it opened.
-_input_body7 = _htr_code7.split("def on_term_input", 1)[-1].split("\n    @", 1)[0]
+_input_body7 = _htr_code7.partition("def on_term_input")[2].split("\n    @", 1)[0]
 check("terminal: host access is re-validated during a live session",
       "_still_allowed" in _input_body7
       and re.search(r"\bcan_access_remote\b", _htr_code7) is not None,
@@ -13555,7 +13604,7 @@ try:
     # So this pins the mechanism rather than pretending to observe its effect, and the checks
     # below stay as an end-to-end "the terminal works and job control functions" pass — they are
     # not a guard for THIS fix and are not labelled as one.
-    _open_local_src7 = _ts_src7.split("def _open_local", 1)[-1].split("\ndef ", 1)[0]
+    _open_local_src7 = _ts_src7.partition("def _open_local")[2].split("\ndef ", 1)[0]
     check("terminal: the local shell is given a controlling terminal before exec",
           "TIOCSCTTY" in _open_local_src7 and "preexec_fn=" in _open_local_src7,
           "setsid alone leaves the child with no controlling terminal, so there is no foreground "
@@ -13643,7 +13692,7 @@ _ucs7 = _modsrc("panel/ops/system_ops.py")
 # The function only, not the rest of the file. Both of its paths (a tracked non-default branch, and
 # the verified target) carry their own fallback, and this text reads the first match, which is the
 # non-default one: part157 drives both paths, which is what holds the verified path's fallback.
-_uc_body7 = _ucs7.split("def _compute_update_status", 1)[-1].split("\ndef ", 1)[0]
+_uc_body7 = _ucs7.partition("def _compute_update_status")[2].split("\ndef ", 1)[0]
 _uc_code7 = "\n".join(_l for _l in _uc_body7.splitlines() if not _l.lstrip().startswith("#"))
 _uc_behind7 = re.search(r'"behind":\s*len\((\w+)\)', _uc_code7)
 _uc_changes7 = re.search(r'"changes":\s*(\w+)\[', _uc_code7)
