@@ -131,8 +131,8 @@ _WF277 = ("jobs:\n  a:\n    steps:\n      - run: one\n# a note at column 0\n    
 eq("workflow reader: a job's block keeps the steps after a comment at column 0 or at the jobs' indent "
    "(review 1123), and still ends at the next job and at a top-level key",
    [_job29(_WF277, j) for j in ("a", "b")],
-   ["  a:\n    steps:\n      - run: one\n# a note at column 0\n      - run: two\n  # a note at the jobs' indent\n"
-    "      - run: three\n  # a comment before the next job\n", "  b:\n    runs-on: x\n"])
+   [("  a:\n    steps:\n      - run: one\n# a note at column 0\n      - run: two\n  # a note at the jobs' indent\n"
+     "      - run: three\n  # a comment before the next job\n"), "  b:\n    runs-on: x\n"])
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
