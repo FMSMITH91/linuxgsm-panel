@@ -75,7 +75,7 @@ def _has_body(method, status):
 
 
 def body(stream, head, method, cap=None):
-    """Yield the answer's body (de-chunked); UpstreamError past `cap` bytes or on a broken chunk."""
+    """Yield the response body, de-chunked; UpstreamError past `cap` bytes or on a broken chunk."""
     cap = _aw.MAX_RESPONSE_BODY if cap is None else cap
     if not _has_body(method, head.status):
         return

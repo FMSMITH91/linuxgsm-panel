@@ -21,7 +21,7 @@ import time
 from html import escape
 from http import HTTPStatus
 
-from flask import redirect, request
+from flask import redirect, render_template, request
 from flask_login import current_user, login_required
 
 from panel.core import i18n
@@ -55,8 +55,9 @@ def may_view(user):
 
 def _page(status, sentence):
     """A plain page saying `sentence`, in the viewer's language (the new tab's answer when Open is refused)."""
-    said = escape(i18n.tr(sentence))
-    body = '<!doctype html>\n<html lang="%s">\n<title>%s</title>\n<p>%s</p>\n' % (i18n.request_lang(), said, said)
+    # A template, so Jinja's autoescape writes both values (the sentence is the panel's own; the language
+    # is one of the supported codes).
+    body = render_template("addon_web_refused.html", lang=i18n.request_lang(), said=i18n.tr(sentence))
     return body, status, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
 
 
