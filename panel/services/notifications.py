@@ -890,11 +890,49 @@ _DC_LINE_START_RE = re.compile(r"(?m)^([ \t]*)([#+-])")
 _DC_CODE_RE = re.compile(r"(```\n[^`]*\n```|`[^`\n]+`)")
 
 
+# What a Discord message body carries at most here: Discord's limit is 2,000 characters.
+_DC_CONTENT_MAX = 1900
+# One character of escaped text: an escape (a backslash and what it escapes) or one other character.
+_DC_ESCAPED_CHAR_RE = re.compile(r"\\.|.", re.S)
+
+
+def _dc_escape(part):
+    """One piece of text outside code, with its markdown escaped."""
+    return _DC_LINE_START_RE.sub(r"\1\\\2", _DC_INLINE_RE.sub(r"\\\1", part))
+
+
 def discord_plain(text):
     """The text with Discord's markdown neutralised, so it is shown exactly as written (code blocks kept)."""
     parts = _DC_CODE_RE.split(text or "")
-    return "".join(part if i % 2 else _DC_LINE_START_RE.sub(r"\1\\\2", _DC_INLINE_RE.sub(r"\\\1", part))
-                   for i, part in enumerate(parts))
+    return "".join(part if i % 2 else _dc_escape(part) for i, part in enumerate(parts))
+
+
+def discord_content(text, limit=_DC_CONTENT_MAX):
+    """The message body both Discord senders post: discord_plain of `text`, cut to `limit` characters.
+
+    The cut is made on the escaped text without ever splitting what the escaping made. A code block or
+    span that does not fit whole is escaped as plain text instead, so a cut cannot leave an opening
+    fence or backtick whose unescaped content Discord would render as markdown (a masked link, a
+    heading); and an escape is never cut from the character it escapes.
+    """
+    out, room = [], limit
+    for i, part in enumerate(_DC_CODE_RE.split(text or "")):
+        piece = part if i % 2 else _dc_escape(part)
+        if len(piece) > room and i % 2:
+            piece = _dc_escape(part)        # a code piece cut in two is no longer code
+        if len(piece) <= room:
+            out.append(piece)
+            room -= len(piece)
+            continue
+        kept, size = [], 0
+        for m in _DC_ESCAPED_CHAR_RE.finditer(piece):
+            size += len(m.group())
+            if size > room:
+                break
+            kept.append(m.group())
+        out.append("".join(kept))
+        break
+    return "".join(out)
 
 
 def send_discord(webhook, text):
@@ -906,7 +944,7 @@ def send_discord(webhook, text):
     url = _discord_api_url(webhook)
     if not url:
         return False, "that isn't a valid discord.com webhook URL"
-    ok, reason = _post(url, json.dumps({"content": discord_plain(text)[:1900],
+    ok, reason = _post(url, json.dumps({"content": discord_content(text),
                                         "allowed_mentions": _DISCORD_NO_MENTIONS}).encode(),
                        {"Content-Type": "application/json"}, provider="discord")
     if ok:
@@ -1041,7 +1079,7 @@ def discord_bot_send(bot_token, channel_id, text):
         return False, "the channel ID is missing or malformed"
     if not _valid_discord_bot_token(bot_token):
         return False, "the bot token is missing or malformed"
-    body = json.dumps({"content": discord_plain(text)[:1900],
+    body = json.dumps({"content": discord_content(text),
                        "allowed_mentions": _DISCORD_NO_MENTIONS}).encode()
     ok, reason = _post(url, body, {"Content-Type": "application/json",
                                    "Authorization": "Bot %s" % bot_token}, provider="discord")

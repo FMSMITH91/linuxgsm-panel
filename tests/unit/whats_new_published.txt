@@ -916,3 +916,9 @@ d7d9c9e0 A setting saved with quotes, $ or a backslash no longer blocks world re
 1f68ec77 Restoring a database from a dump that is a link says "no dump" on the panel host too.
 5b124bac The privileged helper refuses to run code someone other than root could have changed.
 b5818a79 gamedig's dependency http2-wrapper is 2.2.4, not 2.2.1.
+0ca7424a Discord messages are cut without turning text back into markdown.
+fe81f221 Changes made with the recovery command are audited and alerted.
+6f8832b3 A refused Let's Encrypt request no longer changes auto-renew.
+e3da704a One host stalling its SSH connection no longer holds up the others.
+a0f2e939 World reset reads only the config lines it understands.
+4693c843 An account's recent security changes are its own.

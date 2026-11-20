@@ -1990,10 +1990,26 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
         success=success,
         game_server_id=_audit_ref(GameServer, server),
         remote_id=_audit_ref(RemoteServer, remote),
+        target_user_id=_audit_account(action, target),
     )
     db.session.add(entry)
     db.session.commit()
     _push_account_change(action, target, success)
+
+
+def _audit_account(action, target):
+    """The id of the account an account-security row is about, else None.
+
+    For account_notices' actions only, whose target is the account's username: looked up as the row
+    is written, when the name can only mean the account that holds it now. Read back by that id, a
+    later account given the same name never sees this row, with its times and addresses (OWASP Logging
+    Cheat Sheet, "Protection": the privileges to read log data are restricted).
+    """
+    from panel.security.account_notices import _CHANGES
+    if action not in _CHANGES or not target:
+        return None
+    row = User.query.with_entities(User.id).filter_by(username=str(target)).first()
+    return row[0] if row else None
 
 
 def _push_account_change(action, target, success):

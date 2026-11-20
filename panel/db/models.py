@@ -1081,6 +1081,12 @@ class AuditLog(db.Model):
     # recycled id would show one tenant's history to another.
     game_server_id = db.Column(db.Integer, nullable=True, index=True)
     remote_id = db.Column(db.Integer, nullable=True, index=True)
+    # The account an account-security row (account_notices._CHANGES) is about, by id: the Account page
+    # and the sign-in notice match it, never the name, which a renamed or newly created account can
+    # take over once freed. User ids are never handed out again (AUTOINCREMENT; id_sequence.py's rebuild
+    # of an older table starts above any id this column holds, _ID_REFS_WITHOUT_FK), so no FK and no
+    # clearing on delete. NULL on rows written before it existed (account_notices bounds those).
+    target_user_id = db.Column(db.Integer, nullable=True, index=True)
 
 
 # Which audit actions are ABOUT a game server, and which about a host — used ONCE, to backfill
@@ -1871,6 +1877,8 @@ _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, S
 _ID_REFS_WITHOUT_FK = {
     "game_server": (AuditLog.__table__.c.game_server_id, MetricSample.__table__.c.server_id),
     "remote_server": (AuditLog.__table__.c.remote_id, HostSample.__table__.c.remote_id),
+    # An account-security row names its account by id (account_notices reads it back by that id).
+    "user": (AuditLog.__table__.c.target_user_id,),
 }
 
 
@@ -1913,6 +1921,8 @@ _LIGHT_MIGRATIONS = {
     ("host_sample", "net_rx_kbps"): "ALTER TABLE host_sample ADD COLUMN net_rx_kbps FLOAT",
     ("host_sample", "net_tx_kbps"): "ALTER TABLE host_sample ADD COLUMN net_tx_kbps FLOAT",
     ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",
+    # NULL on upgrade, never backfilled: a name in an old row cannot say which account held it then.
+    ("audit_log", "target_user_id"): "ALTER TABLE audit_log ADD COLUMN target_user_id INTEGER",
     ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
     # NULL on upgrade: an invite made before the second code existed keeps working without one.
     ("invite", "code_hash"): "ALTER TABLE invite ADD COLUMN code_hash VARCHAR(255)",

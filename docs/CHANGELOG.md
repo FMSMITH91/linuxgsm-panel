@@ -132,6 +132,23 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **gamedig's dependency `http2-wrapper` is 2.2.4, not 2.2.1.** Only the lockfile moved. It fixes
   GHSA-vf8w-mh23-8cqj (an HTTP/2 session could be reused for another domain), which gamedig does not
   reach: it never asks for HTTP/2.
+- **Discord messages are cut without turning text back into markdown.** A long alert or bot reply cut to
+  Discord's length no longer leaves a code block open with its text shown as links or headings; a block
+  that does not fit whole is shown as plain text, and an escape is never cut in half.
+- **Changes made with the recovery command are audited and alerted.** Resetting a password, removing
+  two-factor authentication, creating an admin, or promoting, demoting, activating or deactivating an
+  account with `manage.py` now writes an audit row, shows on the account's Account page and sign-in notice
+  as the same change made in the panel does, and sends the administrator-account alert.
+- **A refused Let's Encrypt request no longer changes auto-renew.** The auto-renew switch is saved only when
+  the certificate is put in, and the audit log records its value and when it changed.
+- **One host stalling its SSH connection no longer holds up the others.** The check that a kept connection
+  is still alive no longer blocks connections to every other host while one host is slow to answer it.
+- **World reset reads only the config lines it understands.** A config line other than plain settings,
+  `[ -n ]` tests, quotes, `${name}` expansions and `$(…)` commands now stops the reset, so a command such as
+  `getopts` that changes a setting indirectly can no longer go unseen. LinuxGSM's own configs still reset.
+- **An account's recent security changes are its own.** An account created with, or renamed to, a name
+  another account had before is no longer shown that account's password, 2FA and sign-in events, with their
+  addresses, on its Account page or when it signs in.
 
 ## [2026.11.19] — 2026-11-19
 

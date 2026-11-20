@@ -53,8 +53,13 @@ def _flash_notes(notes):
         flash(i18n.tr(note), "warning")
 
 
-def _install_checked(checked, source, le_name=""):
-    """Put a checked pair in, audit it and restart; the refusal is flashed instead when there is one."""
+def _install_checked(checked, source, le_name="", autorenew=None):
+    """Put a checked pair in, audit it and restart; the refusal is flashed instead when there is one.
+
+    `autorenew` (Let's Encrypt only): the daily refresh switch the form sent. Saved only with an
+    installed certificate, never by a refused request, and named in the audit row with the old value
+    when it changes (OWASP Logging Cheat Sheet, "Which events to log": configuration changes).
+    """
     if checked.refusal:
         flash(i18n.tr(checked.refusal), "danger")
         log_action(current_user, "tls_cert_refused", target="panel", detail=checked.refusal[:120], success=False)
@@ -62,11 +67,22 @@ def _install_checked(checked, source, le_name=""):
     tls_own.install(checked, source, le_name)
     info = tls_own.summary(checked.chain)
     log_action(current_user, "tls_cert_install", target="panel",
-               detail="%s: %s, issuer %s, until %s, sha256 %s" % (
-                   source, info["subject"], info["issuer"], info["not_after"], info["fingerprint"][:16]))
+               detail="%s: %s, issuer %s, until %s, sha256 %s%s" % (
+                   source, info["subject"], info["issuer"], info["not_after"], info["fingerprint"][:16],
+                   _save_autorenew(autorenew)))
     _flash_notes(checked.notes)
     _restart_and_say(i18n.Sentence("Certificate for {name} saved.", name=info["subject"]))
     return _back()
+
+
+def _save_autorenew(autorenew):
+    """Save the Let's Encrypt auto-renew switch when given; the audit row's words for it ("" when not given)."""
+    if autorenew is None:
+        return ""
+    was = load_config().get("tls_le_autorenew", True) is not False
+    update_config(lambda cfg: cfg.update({"tls_le_autorenew": autorenew}))
+    now = "on" if autorenew else "off"
+    return ", auto-renew %s" % now if was == autorenew else ", auto-renew turned %s" % now
 
 
 def _le_refused(name, why):
@@ -108,12 +124,11 @@ def register(app):
             return refused
         name = (request.form.get("le_name") or "").strip().lower()
         autorenew = "le_autorenew" in request.form     # a ticked checkbox is sent, an unticked one is not
-        update_config(lambda cfg: cfg.update({"tls_le_autorenew": autorenew}))
         chain, key, why = tls_own.fetch_letsencrypt(name)
         if why:
             return _le_refused(name, why)
         return _install_checked(tls_own.check(chain, key, tls_own.panel_names(load_config(), request.host)),
-                                "letsencrypt", name)
+                                "letsencrypt", name, autorenew)
 
     @app.route("/settings/tls/remove", methods=["POST"])
     @login_required

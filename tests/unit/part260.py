@@ -26,9 +26,9 @@
    public rule with logging counted as public nowhere: open public SSH read "off", and Disable public
    SSH and Close port answered done with the port still open. The rows are written with ufw 0.36's own
    format (backend_iptables.get_status: "%-26s %-12s%-26s%s%s").
-6. World reset's reading of a LinuxGSM config line (_wwr_names_only, through _wwr_cfg_key) takes linear
-   time on a value of many `${` with no `}` (it was quadratic, on a request greenlet), and still finds
-   every arithmetic context bash has: $((…)), $[…], ${a[…]}, ${a:off} and ${$:off}.
+6. World reset's reading of a LinuxGSM config line (_wwr_assigned, through _wwr_cfg_key) takes linear
+   time on a long value (it was quadratic, on a request greenlet), and still refuses every arithmetic
+   context bash has: $((…)), $[…], ${a[…]}, ${a:off} and ${$:off}.
 7. An encrypted panel backup is written as version 2: AES-256-GCM (OWASP Cryptographic Storage Cheat
    Sheet: authenticated, GCM first, a 256-bit key) under a key Argon2id derives from the passphrase at
    the Password Storage Cheat Sheet's first configuration (m=47104 KiB, t=1, p=1), with the header as
@@ -692,22 +692,21 @@ check("ufw r31: ...nor does Close port 22", not _close260[0], str(_close260))
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 from panel.services import world_reset as _wwr260  # noqa: E402
 
-# No assignment-shaped text in any of them, so only the arithmetic scan can say so: evaluated as
-# arithmetic, `port` is itself evaluated, and a value of "port=7" sets it.
+# Evaluated as arithmetic, `port` is itself evaluated, and a value of "port=7" sets it: each of these
+# lines may set a key it never spells, so the reader refuses it.
 _ARITH260 = ['other="${a[port]}"', 'other="${a:port}"', 'other="$((port))"', 'other="$[port]"',
              'other="${$:port}"', 'other="${-:port}"', 'other="${a:-${b[port]}}"', 'other="${#a[port]}"']
-_PLAIN260 = ['other="-port ${port}"', 'other="${a:-x} ${port}"', 'other="${a:=1} -port"', 'other="$port[1]"',
-             'other="${a:-$b[1]} ${port}"']
-eq("world reset r31: every arithmetic context still counts as possibly setting the key (subscript, offset, $((…)), "
-   "$[…], the PID's and the flags' offset, one nested in a default, a length's subscript)",
-   [_wwr260._wwr_names_only(ln, "port") for ln in _ARITH260], [False] * len(_ARITH260))
-eq("world reset r31: ...and a line that only names or expands it still does not (controls)",
-   [_wwr260._wwr_names_only(ln, "port") for ln in _PLAIN260], [True] * len(_PLAIN260))
+_PLAIN260 = ['other="-port ${port}"', 'other="${a:-x} ${port}"', 'other="$port[1]"', 'other="${a:-$b[1]} ${port}"']
+eq("world reset r31: every arithmetic context is refused, as a line that may set a key it does not spell "
+   "(subscript, offset, $((…)), $[…], the PID's and the flags' offset, one nested in a default, a length's subscript)",
+   [_wwr260._wwr_assigned(ln) for ln in _ARITH260], [None] * len(_ARITH260))
+eq("world reset r31: ...and a line that only names or expands the key assigns only its own name (controls)",
+   [_wwr260._wwr_assigned(ln) for ln in _PLAIN260], [["other"]] * len(_PLAIN260))
 
 
 def _cfg_seconds260(n):
-    """The fastest of three runs of _wwr_cfg_key over a config holding a value of `n` `${` and no `}`."""
-    texts = ['port="27015"\nother="%s port"\n' % ("${" * n)]
+    """The fastest of three runs of _wwr_cfg_key over a config holding a value of `n` `${a}` expansions."""
+    texts = ['port="27015"\nother="%s port"\n' % ("${a}" * n)]
     best = None
     for _ in range(3):
         t0 = _time260.perf_counter()
@@ -720,7 +719,7 @@ def _cfg_seconds260(n):
 # Quadruple the value: linear time grows about four-fold, quadratic sixteen-fold (8,000 -> 32,000 took
 # 0.2 s -> 2.7 s before). 8 is the bar between them, with 50 ms of slack for a busy machine.
 _t1_260, _t4_260 = _cfg_seconds260(8000), _cfg_seconds260(32000)
-check("world reset r31: a config value of many `${` with no `}` is read in linear time (8,000 -> 32,000: under 8x "
+check("world reset r31: a config value of many expansions is read in linear time (8,000 -> 32,000: under 8x "
       "and 50 ms of slack; it grew sixteen-fold)", _t4_260 < 8 * _t1_260 + 0.05,
       "%.4f s -> %.4f s" % (_t1_260, _t4_260))
 
