@@ -372,18 +372,20 @@ jobs:
       # --no-deps: semgrep.txt is semgrep's whole closure except mcp, which semgrep-mcp.txt pins
       # past semgrep's own ==1.29.0 (GHSA-84m7-p3x7-pcfv; fixed in 1.30.0), and the OpenTelemetry
       # family, which semgrep-otel.txt pins past semgrep's ~=1.37.0 (GHSA-mf5v-w3w3-f6cg, fixed in
-      # 1.45.2). Together they are every package the scan needs, each hash-checked; see
-      # .github/ci-requirements/semgrep.in, which also says when to undo this.
+      # 1.45.2), and wcmatch with bracex, which semgrep-wcmatch.txt pins past semgrep's ~=8.3
+      # (GHSA-53pm-wgxf-c6qf, fixed in 11.2). Together they are every package the scan needs, each
+      # hash-checked; see .github/ci-requirements/semgrep.in, which also says when to undo this.
       - if: steps.scope.outputs.docs_only != 'true'
         run: >-
           python -m pip install --quiet --require-hashes --only-binary :all: --no-deps
           -r .github/ci-requirements/semgrep.txt
           -r .github/ci-requirements/semgrep-mcp.txt
           -r .github/ci-requirements/semgrep-otel.txt
+          -r .github/ci-requirements/semgrep-wcmatch.txt
       # --no-deps also turns off pip's check that the files are the whole closure, so a semgrep
       # bump that adds a dependency none has would install and fail later as "wrote no SARIF".
       # pip check puts it back. The only reports it may make are semgrep's pins of packages the
-      # lockfile's header leaves out with --unsafe-package (mcp, the opentelemetry family), each
+      # lockfile's header leaves out with --unsafe-package (mcp, the opentelemetry family, wcmatch), each
       # against exactly the version the semgrep-*.txt holding it installs, and only the requirements
       # that file's .in records (`# semgrep-pins:`, one line per package): a semgrep needing another
       # version, or no longer pinning one (that split can be undone), fails the job too, named.

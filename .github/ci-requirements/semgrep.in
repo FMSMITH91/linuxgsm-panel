@@ -11,9 +11,10 @@
 #     --unsafe-package=opentelemetry-instrumentation-requests \
 #     --unsafe-package=opentelemetry-instrumentation-threading --unsafe-package=opentelemetry-proto \
 #     --unsafe-package=opentelemetry-sdk --unsafe-package=opentelemetry-semantic-conventions \
-#     --unsafe-package=opentelemetry-util-http --output-file=semgrep.txt semgrep.in
-# then semgrep-mcp.txt from semgrep-mcp.in and semgrep-otel.txt from semgrep-otel.in (each header
-# says how).
+#     --unsafe-package=opentelemetry-util-http --unsafe-package=bracex --unsafe-package=wcmatch \
+#     --output-file=semgrep.txt semgrep.in
+# then semgrep-mcp.txt from semgrep-mcp.in, semgrep-otel.txt from semgrep-otel.in and
+# semgrep-wcmatch.txt from semgrep-wcmatch.in (each header says how).
 #
 # mcp is left out of semgrep.txt (--unsafe-package) and pinned on its own in semgrep-mcp.txt.
 # semgrep 1.183.0, the release semgrep.txt pins (1.179.0 to 1.182.x alike), declares mcp==1.29.0
@@ -41,9 +42,18 @@
 # semgrep scan imports the family at startup for its tracing (--trace, off by default; the job does
 # not pass it). The scan was run on both sets over this repository: identical findings.
 #
+# wcmatch is left out the same way, with bracex, and pinned in semgrep-wcmatch.txt. semgrep 1.185.0
+# (1.186.0, the newest, alike) declares wcmatch~=8.3, and every release before 11.2 has
+# GHSA-53pm-wgxf-c6qf (polynomial-time matching of names against multi-star patterns). wcmatch 11.2
+# needs bracex>=3.2, newer than the 3.0.1 semgrep's own set resolves, so bracex moves with it; semgrep
+# does not require bracex itself. semgrep uses wcmatch for its include and exclude path globs. The
+# scan was run on 8.5.2 and on 11.2 over this repository: identical findings.
+#
 # UNDO when a semgrep release allows mcp>=1.30.0: drop --unsafe-package=mcp and semgrep-mcp.in/.txt.
 # UNDO when a semgrep release allows opentelemetry-api>=1.45.2 (and the sdk and exporter with it):
-# drop the opentelemetry --unsafe-package options and semgrep-otel.in/.txt. With both gone, install
+# drop the opentelemetry --unsafe-package options and semgrep-otel.in/.txt.
+# UNDO when a semgrep release allows wcmatch>=11.2: drop --unsafe-package=bracex and
+# --unsafe-package=wcmatch and semgrep-wcmatch.in/.txt. With all three gone, install
 # semgrep.txt alone without --no-deps, and remove the job's pip-check step.
 #
 # The same split was made once before, for PyJWT (semgrep 1.178.0 pinned a vulnerable ~=2.13.0),

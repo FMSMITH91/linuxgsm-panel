@@ -10,6 +10,21 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.21] — 2026-11-21
+
+### Changed
+
+- **B3 updates are offered for B3's releases only.** The B3 add-on is updated when the fork
+  publishes a new release tag, not for each change between releases, which are the next
+  version still in development. The card keeps naming the release it builds. An installed B3 is
+  offered one Update for this change to its build file; B3 itself is unchanged.
+
+### Security
+
+- **Semgrep's CI install no longer carries a vulnerable wcmatch.** The code scanner CI runs pinned
+  wcmatch 8.5.2 (GHSA-53pm-wgxf-c6qf). wcmatch and bracex are now pinned apart at the fixed 11.2,
+  hash-checked, and the scan finds exactly what it found before. Panels never install these packages.
+
 ## [2026.11.20] — 2026-11-20
 
 ### Added

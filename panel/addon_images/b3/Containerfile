@@ -11,7 +11,7 @@
 # git and the fetched history stay in the first stage; the image keeps B3's code and its packages.
 # renovate: BASE_IMAGE follows python:3.15-slim's digest, with addons.py's B3_BASE (.github/renovate.json)
 ARG BASE_IMAGE=docker.io/library/python@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
-# renovate: B3_COMMIT follows FMSMITH91/big-brother-bot master (.github/renovate.json)
+# renovate: B3_COMMIT is FMSMITH91/big-brother-bot release v2.0.2 (.github/renovate.json, with addons.py)
 ARG B3_COMMIT=7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f
 
 FROM ${BASE_IMAGE} AS source

@@ -99,15 +99,17 @@ SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfile
 # `--check-config` (exit 230), `--version` with the commit (from the image's B3_COMMIT), fixed exit codes 220-223
 # and 230-233 (b3/exitcodes.py), health.json, the `data` table's b3_schema_version, purge_aliases_days,
 # events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3 the
-# add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
-# Containerfile's ARG together.
+# add-on builds. Renovate proposes the fork's newest release tag (.github/renovate.json): the tag and its commit in
+# these two lines, and in the Containerfile's ARG and the comment above it, together. Only releases: master between
+# them is the next version in development (its tree says 2.0.3dev after v2.0.2), not something to build.
+B3_TAG = "v2.0.2"
 B3_COMMIT = "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
 # The release B3_COMMIT is. The tree at that commit still says 2.0.2dev (b3/__init__.py's __version__: the release
 # build sets the number in the artifacts it publishes, b3-2.0.2 wheel and installer, not in the tagged source), so
 # B3 built from source reports "2.0.2dev" in its health.json; the card names the release instead whenever the
 # commit B3 reports is this one (b3_control.running_version). Only a label: the build checks the commit, not a tag,
 # and the image's tag is the commit and build id, so a new label alone offers no update.
-B3_RELEASE = "2.0.2"
+B3_RELEASE = B3_TAG[1:]
 # RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
 # 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
 IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"

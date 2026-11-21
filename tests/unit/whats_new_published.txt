@@ -922,3 +922,5 @@ fe81f221 Changes made with the recovery command are audited and alerted.
 e3da704a One host stalling its SSH connection no longer holds up the others.
 a0f2e939 World reset reads only the config lines it understands.
 4693c843 An account's recent security changes are its own.
+d93c5f77 B3 updates are offered for B3's releases only.
+fabe9069 Semgrep's CI install no longer carries a vulnerable wcmatch.
