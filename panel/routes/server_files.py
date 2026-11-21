@@ -1012,9 +1012,7 @@ def _evict_viewer(app, socketio, server_id, sid):
     except Exception:
         app.logger.debug("console: could not evict %s", sid, exc_info=True)
     try:
-        socketio.emit("console_output",
-                      {"server_id": server_id,
-                       "data": "[access to this console was revoked]"}, to=sid)
+        socketio.emit("console_output", {"server_id": server_id, "data": "[access to this console was revoked]"}, to=sid)
     except Exception:
         app.logger.debug("console: could not tell %s it was evicted", sid, exc_info=True)
 
@@ -3009,8 +3007,7 @@ def _register_console_viewers(socketio):
                 or held_at_sign_in_gate(current_user)
                 or not can_access_server(current_user, server_id)
                 or not (current_user.is_superadmin or has_permission(current_user, VIEW_CONSOLE))):
-            emit("console_output", {"server_id": server_id,
-                                    "data": "[access denied — you don't have permission to view this console]"})
+            emit("console_output", {"server_id": server_id, "data": "[access denied — you don't have permission to view this console]"})
             return
         join_room(f"console_{server_id}")
         _cred = _viewer_credential()

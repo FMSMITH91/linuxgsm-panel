@@ -284,25 +284,27 @@ def _s286_close_unlists_first():
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 3. Every event's argument is optional
 # ════════════════════════════════════════════════════════════════════════════════════════════════
+def _socket_event286(dec):
+    """The event name a decorator registers with `@socketio.on("<event>")`, or None."""
+    if not (isinstance(dec, _ast286.Call) and isinstance(dec.func, _ast286.Attribute) and dec.func.attr == "on"):
+        return None
+    if not (isinstance(dec.func.value, _ast286.Name) and dec.func.value.id == "socketio"):
+        return None
+    return dec.args[0].value if dec.args and isinstance(dec.args[0], _ast286.Constant) else None
+
+
 def _socket_handlers286():
     """(name, event, positional parameters without a default) for every @socketio.on handler under panel/."""
     found = []
     for dp, _dn, fn in _os286.walk(_os286.path.join(_ROOT286, "panel")):
-        for f in fn:
-            if not f.endswith(".py"):
-                continue
+        for f in (x for x in fn if x.endswith(".py")):
             with open(_os286.path.join(dp, f), encoding="utf-8") as fh:
                 tree = _ast286.parse(fh.read())
-            for node in _ast286.walk(tree):
-                if not isinstance(node, _ast286.FunctionDef):
-                    continue
-                for dec in node.decorator_list:
-                    if (isinstance(dec, _ast286.Call) and isinstance(dec.func, _ast286.Attribute)
-                            and dec.func.attr == "on" and isinstance(dec.func.value, _ast286.Name)
-                            and dec.func.value.id == "socketio"
-                            and dec.args and isinstance(dec.args[0], _ast286.Constant)):
-                        pos = node.args.posonlyargs + node.args.args
-                        found.append((node.name, dec.args[0].value, len(pos) - len(node.args.defaults)))
+            funcs = (n for n in _ast286.walk(tree) if isinstance(n, _ast286.FunctionDef))
+            for node in funcs:
+                pos = node.args.posonlyargs + node.args.args
+                found.extend((node.name, ev, len(pos) - len(node.args.defaults))
+                             for ev in map(_socket_event286, node.decorator_list) if ev is not None)
     return found
 
 
