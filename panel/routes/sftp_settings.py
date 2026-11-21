@@ -89,10 +89,10 @@ def register(app):
             # ...and those two are asked again once it has passed, with the insert, because the proof
             # yields: 8 keys sent together from 18 left 26 against a cap of 20, and 20 copies of one key
             # stored it once and answered 7 of the others with an IntegrityError (500), unaudited.
-            refused = _store_key(u, parsed)
-            if refused:
-                flash(i18n.tr(refused), "danger")
-                refused = str(refused)
+            not_stored = _store_key(u, parsed)
+            if not_stored:
+                flash(i18n.tr(not_stored), "danger")
+                refused = str(not_stored)
         if refused:
             log_action(u, "sftp_key_add", target=u.username, detail="refused: %s" % refused, success=False)
             return redirect(url_for("account", _anchor=_ACCOUNT_ANCHOR))
