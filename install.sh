@@ -2147,6 +2147,74 @@ _r26a_fixed_target() {
 #    inside what it removes. A subshell, so the cd never outlives it.
 # Not as the tree's owner (TREE_SUDO), as the snapshot steps are: snapshots made before TREE_SUDO
 # existed are root's, and the owner could never remove them.
+CRON_SPOOL="/var/spool/cron/crontabs"
+# Remove the crontabs of game accounts that no longer exist, when every job in one is the panel's own.
+#
+# Uninstalling a server now removes its account's crontab before the account (the helper's
+# crontab-remove), but uninstalls from before that left /var/spool/cron/crontabs/<name> behind:
+# cron logs "ORPHAN (no passwd entry)" for each every time it reads the spool, and the file keeps
+# a uid the next useradd may hand to another account. A file is removed only when its name is no
+# account, it is a plain file, and every job in it is one the panel writes for that same account:
+# its LinuxGSM lines (`cd /home/<name> && ./<script> monitor`, the older `/home/<name>/<script>
+# update`, ...), any line through its run recorder (/home/<name>/.lgsm-cron/) and its daily-restart
+# flag (/home/<name>/.restart-pending). Anything else in the file (a job someone wrote by hand)
+# keeps the whole file where it is. crontab(1)'s own temporary files (tmp.*) are never touched.
+# Root only (the spool is root's); the spool is opened without following a link, and every entry
+# is read and removed through that open directory. Never fails the run.
+ensure_no_orphan_crontabs() {
+    [[ "$(id -u)" -eq 0 ]] && [[ -d "${CRON_SPOOL}" ]] || return 0
+    local gone rc=0
+    gone="$(python3 -I - "${CRON_SPOOL}" 2>/dev/null <<'ORPHAN_CRON_PY'
+import os, pwd, re, stat, sys
+NAME = re.compile(r"[a-z_][a-z0-9_.-]{0,31}")
+CMDS = "monitor|mods-update|update|update-lgsm|m|u|ul|mu"
+REDIRECT = r"(?: *>+ */dev/null(?: +2>&1)?)?"
+
+
+def panel_job(line, user):
+    """Whether the crontab entry `line` is one the panel writes for `user`."""
+    parts = line.split(None, 1) if line.startswith("@") else line.split(None, 5)
+    if len(parts) < (2 if line.startswith("@") else 6):
+        return False
+    cmd, u = parts[-1].strip(), re.escape(user)
+    if "/home/%s/.lgsm-cron/" % user in cmd or "/home/%s/.restart-pending" % user in cmd:
+        return True
+    lgsm = r"(?:/home/%s/[\w.-]+|cd /home/%s/? *(?:&&|;) *\./[\w.-]+) (?:%s)%s" % (u, u, CMDS, REDIRECT)
+    return re.fullmatch(lgsm, cmd) is not None
+
+
+spool = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+for name in sorted(os.listdir(spool)):
+    if not NAME.fullmatch(name) or name.startswith("tmp."):
+        continue
+    try:
+        pwd.getpwnam(name)
+        continue
+    except KeyError:
+        pass
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=spool)
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                continue
+            text = fh.read(65537).decode("utf-8", "replace")
+    except OSError:
+        continue
+    jobs = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    if len(text) > 65536 or not jobs or not all(panel_job(ln, name) for ln in jobs):
+        continue
+    try:
+        os.unlink(name, dir_fd=spool)
+        print(name)
+    except OSError:
+        continue
+ORPHAN_CRON_PY
+)" || rc=$?
+    [[ "${rc}" -eq 0 ]] || warn "The crontabs of removed game accounts were not checked."
+    [[ -z "${gone}" ]] || ok "Removed the crontabs left by uninstalled game servers: $(tr '\n' ' ' <<< "${gone}")"
+    return 0
+}
+
 _r22a_prune_snapshots() {
     local _want _rootlink=0 _me
     _me="$(id -u)"
@@ -3990,6 +4058,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         ensure_password_list
         # And the modes in the tree: an earlier update's group-writable code and readable snapshots.
         ensure_tree_modes
+        ensure_no_orphan_crontabs
         # And the unit, like every other piece an install puts on the host. Not restarted for it:
         # this branch changes nothing that is running, so a new unit applies at the next restart.
         ensure_service_unit
@@ -4280,6 +4349,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_gamedig
         # Prune old snapshots, keep the most recent few (see the function for why it is careful).
         _r22a_prune_snapshots
+        ensure_no_orphan_crontabs   # crontabs of game accounts removed before uninstall removed them
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
         # If the panel has just switched to HTTPS, say so explicitly: an existing http://
@@ -4469,6 +4539,7 @@ fi
 
 install_root_tools
 install_gamedig   # player queries for game servers on this host; root-owned, like the helper
+ensure_no_orphan_crontabs   # crontabs a removed game account left (a reinstall on a used host)
 
 info "[3/4] Registering the service…"
 if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
