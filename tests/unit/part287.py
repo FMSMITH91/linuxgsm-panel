@@ -1,4 +1,4 @@
-"""Part 287 of the unit suite: the installer's file modes, core dumps, old crontabs, the unit's sandboxing.
+"""Part 287 of the unit suite: the installer's file modes, core dumps, old crontabs, the B3 image.
 
 1. Update snapshots (data/.backups/<stamp>/code.tgz, data.tgz) are written owner-only: the folder
    0700 and each archive 0600, under umask 077 inside the owner's own shell (sudo's PAM session
@@ -14,6 +14,7 @@
    other job, a live account's crontab, crontab(1)'s temporary file and a link are left alone.
 4. The threat model says why the panel's unit has no systemd sandboxing (everything it starts, the root
    helper and the game servers, would inherit it).
+5. B3's image leaves out pip, setuptools and wheel (and ensurepip's pip wheel) once B3's packages are in.
 
 HOW IT RUNS. install.sh's own text, cut out and run under bash over this part's scratch trees (a
 stand-in cron spool among them); `id` and `sudo` are stand-ins where a check needs a root run. The
@@ -24,6 +25,7 @@ Nothing here runs as another account, or reads or writes /etc, the real cron spo
 import atexit as _atexit287
 import os
 import pwd as _pwd287
+import re as _re287
 import shutil as _sh287
 import subprocess as _sp287  # nosec B404 - bash over the repo's own install.sh text, in a scratch dir
 import sys as _sys287
@@ -300,7 +302,23 @@ def _s287_threat_model():
           and all(w in row for w in ("root helper", "game server", "NoNewPrivileges", "systemd.exec(5)")), row)
 
 
-for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers, _s287_core_dumps, _s287_orphan_crontabs, _s287_threat_model):
+# ── 5. B3's image without its installer ─────────────────────────────────────────────────────────────
+def _s287_b3_no_pip():
+    with open(os.path.join(_root, "panel", "addon_images", "b3", "Containerfile"), encoding="utf-8") as fh:
+        text = fh.read()
+    final = _code_lines287(text[text.rindex("\nFROM "):]).replace("\\\n", " ")
+    runs = [ln for ln in final.splitlines() if ln.startswith("RUN ")]
+    install = [r for r in runs if "pip install" in r]
+    step = install[0] if len(install) == 1 else ""
+    check("B3 image: the RUN that installs B3's packages then uninstalls pip, setuptools and wheel, in the same layer",
+          _re287.search(r"pip install .*&& python -m pip uninstall --yes [^&]*\bpip setuptools wheel\b", step)
+          is not None, step)
+    check("B3 image: ...takes out ensurepip's bundled wheels, and fails the build if pip can still be imported",
+          "ensurepip" in step and "os.remove" in step and step.rstrip().endswith('! python -c "import pip" 2>/dev/null'),
+          step)
+
+
+for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers, _s287_core_dumps, _s287_orphan_crontabs, _s287_threat_model, _s287_b3_no_pip):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down
