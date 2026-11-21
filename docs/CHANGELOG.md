@@ -19,8 +19,34 @@ dated section below lists what that day's releases changed, newest first; the nu
   version still in development. The card keeps naming the release it builds. An installed B3 is
   offered one Update for this change to its build file; B3 itself is unchanged.
 
+### Fixed
+
+- **Old crontabs of removed game servers are cleaned up.** An update removes the crontab of a game account that no
+  longer exists when everything in it was the panel's, so cron stops logging it.
+
 ### Security
 
+- **One connection can no longer slow the panel for everyone.** Each account's live-console and terminal sockets now
+  have a message budget; extra messages are dropped and a connection that keeps flooding is closed, so other users'
+  pages, consoles and terminals stay responsive.
+- **Malformed socket messages no longer flood the log.** A connection that sends a message the server cannot read is
+  closed with one short log line (at most one a minute), instead of a full error trace for every message.
+- **Database restores, dumps and deletes run one at a time.** A second restore, dump, uploaded-dump restore or delete
+  of the same database while one is running is refused with a message saying what is running.
+- **An invite's code lockout holds under parallel guesses.** Each try is counted before the code is checked, so no
+  more codes are checked than the five tries allow.
+- **The 20-key SFTP limit and duplicate check hold for keys added at the same time.** A duplicate is now a clear,
+  logged refusal instead of an error page.
+- **Update snapshots and the panel's files are readable only by the panel's account.** Each update's snapshot of the
+  database and keys is now saved owner-only, and every install and update takes group write off the panel's files and
+  repairs older snapshots.
+- **The panel's memory stays out of crash dumps.** The panel's process can no longer be written to a core dump or read
+  by another process of its account, so its keys never land in a dump file.
+- **IW4MAdmin runs on an up-to-date .NET runtime.** The add-on is now built on the game's host from IW4MAdmin's release
+  on Microsoft's current ASP.NET Core 10 image, instead of IW4MAdmin's published image, whose runtime had known
+  security holes; the card offers installed IW4MAdmins the update, which keeps their settings and database.
+- **B3's image no longer ships pip.** The B3 add-on image leaves out the installer and its older bundled libraries; an
+  installed B3 is offered the update.
 - **Semgrep's CI install no longer carries a vulnerable wcmatch.** The code scanner CI runs pinned
   wcmatch 8.5.2 (GHSA-53pm-wgxf-c6qf). wcmatch and bracex are now pinned apart at the fixed 11.2,
   hash-checked, and the scan finds exactly what it found before. Panels never install these packages.
