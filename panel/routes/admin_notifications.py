@@ -544,12 +544,18 @@ def _invite_code_step(inv, token):
 
     OWASP Authentication Cheat Sheet, "Account Lockout": the counter belongs to the invite, not to
     an address, and the CODE_MAX_TRIES-th wrong code revokes the invite for good (logged, and the
-    administrators alerted). Counted with one conditional UPDATE, so parallel guesses cannot each
-    read the same count.
+    administrators alerted). The try is counted BEFORE the code is checked, with one conditional
+    UPDATE that takes a try only while one is left, and given back when the code is right. Counted
+    after, every request that arrived before the fifth wrong code was written had its guess checked:
+    a burst of 40 had 18 checked against a limit of 5. The login and password-confirm throttles
+    reserve their slot first in the same way.
     """
     if request.method == "GET" or "invite_code" not in request.form:
         return render_template("invite.html", invalid=False, token=token, invite=inv, ask_code=True)
+    if not _reserve_code_try(inv):
+        return _no_code_try_left(inv, token)
     if inv.code_matches(request.form.get("invite_code")):
+        _give_back_code_try(inv)
         session[_CODE_OK] = inv.id
         log_action(None, "invite_code_ok", actor="(invite)", target=inv.note or "(no note)",
                    detail="invite id %s" % inv.id)
@@ -561,12 +567,41 @@ def _invite_code_step(inv, token):
                            error=i18n.tr("That code is not right. Tries left: {n}.", n=left)), 400
 
 
-def _count_wrong_code(inv):
-    """Record one wrong code for `inv`; how many tries are left (0: the invite is now revoked)."""
+def _reserve_code_try(inv):
+    """Count one try against `inv` before its code is checked: True, or False when none is left.
+
+    A try still being checked counts, so at most CODE_MAX_TRIES codes are ever checked, however
+    many arrive at once.
+    """
+    from sqlalchemy import func, update
+    tried = func.coalesce(Invite.code_failures, 0)
+    took = db.session.execute(update(Invite).where(
+        Invite.id == inv.id, Invite.used_at.is_(None), Invite.revoked_at.is_(None),
+        tried < Invite.CODE_MAX_TRIES).values(code_failures=tried + 1)).rowcount
+    db.session.commit()
+    return bool(took)
+
+
+def _give_back_code_try(inv):
+    """A right code: the try _reserve_code_try counted is not a wrong one, so it is taken back off."""
     from sqlalchemy import update
-    db.session.execute(update(Invite).where(Invite.id == inv.id, Invite.used_at.is_(None),
-                                            Invite.revoked_at.is_(None))
-                       .values(code_failures=Invite.code_failures + 1))
+    db.session.execute(update(Invite).where(Invite.id == inv.id, Invite.code_failures > 0)
+                       .values(code_failures=Invite.code_failures - 1))
+    db.session.commit()
+
+
+def _no_code_try_left(inv, token):
+    """The answer when no try was left to take: the invite is burned, or its last tries are being checked."""
+    db.session.refresh(inv)
+    if not inv.is_usable:
+        return render_template("invite.html", invalid=True, burned=True), 404
+    return render_template("invite.html", invalid=False, token=token, invite=inv, ask_code=True,
+                           error=i18n.tr("The last tries for this code are being checked. Try again in a moment.")), 429
+
+
+def _count_wrong_code(inv):
+    """Record one wrong code for `inv` (its try already counted); how many are left (0: now revoked)."""
+    from sqlalchemy import update
     failures = db.session.query(Invite.code_failures).filter(Invite.id == inv.id).scalar() or 0
     burned = (failures >= Invite.CODE_MAX_TRIES and db.session.execute(
         update(Invite).where(Invite.id == inv.id, Invite.revoked_at.is_(None), Invite.used_at.is_(None))
