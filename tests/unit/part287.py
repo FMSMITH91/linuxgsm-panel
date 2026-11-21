@@ -66,22 +66,26 @@ def _write287(path, text, mode):
     os.chmod(path, mode)
 
 
+# The loose modes are made by the shell, as a umask-0002 update makes them (umask, then each file).
+_LOOSE_SH287 = r"""set -eu
+umask 0002
+cd "$1"
+mkdir -p linuxgsm-panel/panel linuxgsm-panel/data/.backups/20260101-000000
+echo '# app' > linuxgsm-panel/panel/app.py
+printf '#!/bin/sh\n' > linuxgsm-panel/install.sh && chmod u+x,g+x,o+x linuxgsm-panel/install.sh
+(umask 077 && echo '{}' > linuxgsm-panel/data/config.json)
+echo k > linuxgsm-panel/data/.backups/20260101-000000/data.tgz
+echo c > linuxgsm-panel/data/.backups/20260101-000000/code.tgz
+(umask 0 && echo o > outside.txt)
+ln -s "$1/outside.txt" linuxgsm-panel/panel/link
+"""
+
+
 def _loose_tree287():
     """A panel tree as a umask-0002 update leaves it: (panel dir, a file outside it a link names)."""
     top = _tf287.mkdtemp(prefix="tree-", dir=_TMP287)
-    pd = os.path.join(top, "linuxgsm-panel")
-    _write287(os.path.join(pd, "panel", "app.py"), "# app\n", 0o664)
-    _write287(os.path.join(pd, "install.sh"), "#!/bin/sh\n", 0o775)
-    _write287(os.path.join(pd, "data", "config.json"), "{}", 0o600)
-    _write287(os.path.join(pd, "data", ".backups", "20260101-000000", "data.tgz"), "k", 0o664)
-    _write287(os.path.join(pd, "data", ".backups", "20260101-000000", "code.tgz"), "c", 0o664)
-    outside = os.path.join(top, "outside.txt")
-    _write287(outside, "o", 0o666)
-    os.symlink(outside, os.path.join(pd, "panel", "link"))
-    for d in (pd, os.path.join(pd, "panel"), os.path.join(pd, "data", ".backups"),
-              os.path.join(pd, "data", ".backups", "20260101-000000")):
-        os.chmod(d, 0o775)  # nosec B103 - the loose modes under test, in this part's scratch dir
-    return pd, outside
+    _sp287.run(["bash", "-c", _LOOSE_SH287, "loose", top], check=False, timeout=30)  # nosec B603 B607 - own script
+    return os.path.join(top, "linuxgsm-panel"), os.path.join(top, "outside.txt")
 
 
 # `id` answers as a non-root account, so the run is the same whoever runs the suite (CI runs it as root).
