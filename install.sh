@@ -610,6 +610,44 @@ _chown_panel_tree() {
     return "${rc}"
 }
 
+# No group or world write anywhere in PANEL_DIR, and the update snapshots (data/.backups: a copy of
+# data/, so the database AND the key that decrypts it, side by side) readable by their owner only.
+#
+# Everything the installer writes in the tree as its owner goes through `sudo -u`, and sudo opens a
+# PAM session: on Ubuntu, pam_umask with login.defs' USERGROUPS_ENAB gives an account with its own
+# group a umask of 0002, whatever the installer's own is. So git's checkout, the extract, pip and
+# the snapshot archives were all written group-writable (code 0664, snapshots 0664 in 0775
+# folders); so is everything a per-user install writes from a login shell. Nothing outside the
+# account could reach them (the home and the tree are 0700), but a snapshot must not depend on its
+# parents to protect the master key it holds (OWASP Secrets Management Cheat Sheet, access
+# control: least privilege). The snapshots are now written under umask 077 ([1/6]); this repairs
+# what any earlier run, and this run's git and pip, left behind, so it runs after every step that
+# writes the tree, on every install and update.
+#
+# As the tree's OWNER, like TREE_SUDO, and only on what that account owns: chmod follows a link, so
+# root changing modes in a tree the panel user can rearrange while it runs would change the mode of
+# whatever a swapped-in link named. Files someone else owns (a snapshot root made before the
+# snapshot ran as the owner) are left for the prune to age out. Never fails the run: a mode it
+# could not change is reported.
+ensure_tree_modes() {
+    [[ -d "${PANEL_DIR}" ]] || return 0
+    local as_owner="" owner rc=0 backups="${PANEL_DIR}/data/.backups"
+    owner="$(id -un)"
+    if [[ "$(id -u)" -eq 0 ]]; then
+        owner="$(_r42i_tree_owner)"
+        [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner} env -C /"
+    fi
+    # -H: PANEL_DIR may be an operator's link to the tree; nothing below it is followed.
+    ${as_owner} env PATH=/usr/sbin:/usr/bin:/sbin:/bin find -H "${PANEL_DIR}" -path "${backups}" -prune \
+        -o -user "${owner}" ! -type l -perm /022 -execdir chmod go-w -- {} + 2>/dev/null || rc=1
+    if [[ -d "${backups}" ]]; then
+        ${as_owner} env PATH=/usr/sbin:/usr/bin:/sbin:/bin find -H "${backups}" \
+            -user "${owner}" ! -type l -perm /077 -execdir chmod go-rwx -- {} + 2>/dev/null || rc=1
+    fi
+    [[ "${rc}" -eq 0 ]] || warn "Some files in ${PANEL_DIR} kept a group or world permission (they could not be changed)."
+    return 0
+}
+
 # Port the panel serves on (from data/config.json), default 5000. Read through _owner_read, for
 # the reasons given there; anything that is not a JSON object with an integer port reads as 5000.
 panel_port() {
@@ -3950,6 +3988,8 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_gamedig
         # The breached-password list is the same: data/ keeps it, fetched only when missing or changed.
         ensure_password_list
+        # And the modes in the tree: an earlier update's group-writable code and readable snapshots.
+        ensure_tree_modes
         # And the unit, like every other piece an install puts on the host. Not restarted for it:
         # this branch changes nothing that is running, so a new unit applies at the next restart.
         ensure_service_unit
@@ -3987,7 +4027,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     snapshot_service_unit
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
-    ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"
+    # umask 077 inside the owner's own shell: sudo's PAM session hands the owner 0002 (see
+    # ensure_tree_modes), and a snapshot holds the database with the key that decrypts it.
+    ${TREE_SUDO:-} sh -c 'umask 077 && mkdir -p -- "$1"' sh "${BACKUP}"
     # Compressor: pigz (parallel gzip) when present — ~3.5x faster than gzip on a multi-core box for
     # the same size — else gzip -1 (fastest single-core). The level barely matters here: the payload
     # is mostly already-compressed data (git packs + screenshots), so we pick speed. pigz/gzip both
@@ -4002,7 +4044,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     # a root-only file in the tree is exactly such an unreadable file: it is left out of the
     # snapshot, which is the point — the panel can read the archive, so root must not put into it
     # what the panel could not read itself (a hard link to /etc/shadow, say).
-    ${TREE_SUDO:-} tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/code.tgz" >/dev/null || true
+    ${TREE_SUDO:-} tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} sh -c 'umask 077 && exec tee -- "$1" >/dev/null' sh "${BACKUP}/code.tgz" || true
     # `-s` only asks whether it is non-empty, and the failure this check names by name — the disk
     # filling mid-write — produces a TRUNCATED archive, which is non-empty. It passed, and the
     # rollback below then wiped PANEL_DIR and fed the truncated stream to tar. `tar -tz` reads the
@@ -4087,6 +4129,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
             fi
         fi
         [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree 2>/dev/null || true
+        ensure_tree_modes
         restore_service_unit
         svc daemon-reload || true
         if [[ "${_rb_failed}" -eq 1 ]]; then
@@ -4119,7 +4162,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
 
     if [[ -d "${PANEL_DIR}/data" ]]; then
         # Not the breached-password list: ensure_password_list fetches it again by its pin.
-        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups --exclude=./common-passwords-100k.txt -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/data.tgz" >/dev/null || true
+        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups --exclude=./common-passwords-100k.txt -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} sh -c 'umask 077 && exec tee -- "$1" >/dev/null' sh "${BACKUP}/data.tgz" || true
         # The service is stopped by now, so this die must put it back — the message promises the
         # panel is unchanged, and a panel that is down is not unchanged.
         if ! snapshot_ok "${BACKUP}/data.tgz"; then
@@ -4197,6 +4240,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     ensure_password_list   # a no-op while data/ holds the pinned list
     [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
+    ensure_tree_modes      # what git and pip just wrote, and every snapshot, as the owner
 
     # Refresh the ROOT-OWNED copies to match the code we just fetched, BEFORE the service comes
     # back up — the new code may call verbs the installed helper does not know yet, and a stale
@@ -4318,6 +4362,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     install_deps || true
     [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
+    ensure_tree_modes
     restore_service_unit
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
@@ -4460,6 +4505,7 @@ else
     # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
     install_recovery_command
 fi
+ensure_tree_modes                              # no group/world write in the tree (after the chown)
 release_tailscale_operator                     # both install kinds; a no-op unless it is the operator
 ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
 ensure_system_tuning                           # prefer RAM over swap (vm.swappiness)
