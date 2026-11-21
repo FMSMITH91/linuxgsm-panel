@@ -1,0 +1,59 @@
+# IW4MAdmin for linuxgsm-panel's Add-ons tab, built on the game's host, as the game server's account,
+# by rootless Podman (panel/services/addons.py writes this folder and runs `podman build` with the
+# three build arguments below, the same values as these defaults).
+#
+# Built here rather than pulled: the image IW4MAdmin publishes for its release carries the .NET runtime
+# of the day it was built, and is not rebuilt when Microsoft fixes that runtime. IW4MAdmin is a
+# framework-dependent .NET 10 application (its Lib/IW4MAdmin.runtimeconfig.json asks for 10.0.0 and
+# rolls forward to the newest 10.0 patch installed), so its release runs unchanged on the patched
+# runtime of the base image below.
+#
+# What the build trusts, and how each piece is checked:
+#   - the base image, by its digest (mcr.microsoft.com/dotnet/aspnet:10.0, Ubuntu 24.04);
+#   - IW4MAdmin itself: the archive its release workflow attaches to the GitHub release
+#     IW4MADMIN_TAG (the same files its own image is built from), checked against IW4MADMIN_SHA256
+#     before anything in it is used.
+# curl and unzip stay in the first stage; the image keeps the base, the release's files and the start script.
+# renovate: BASE_IMAGE follows mcr.microsoft.com/dotnet/aspnet:10.0's digest, with addons.py's IW4MADMIN_BASE
+ARG BASE_IMAGE=mcr.microsoft.com/dotnet/aspnet@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586
+# renovate: IW4MADMIN_TAG is RaidMax/IW4M-Admin's release, IW4MADMIN_SHA256 its archive's (with addons.py)
+ARG IW4MADMIN_TAG=2026.2.4.1-prerelease
+ARG IW4MADMIN_SHA256=5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e
+
+FROM ${BASE_IMAGE} AS source
+ARG IW4MADMIN_TAG
+ARG IW4MADMIN_SHA256
+# Build-only and thrown away: what ships is checked by its sha256 below, whatever versions these are.
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+# The archive is named by the release's build number, the tag without its "-prerelease" suffix.
+RUN curl -fsSL --proto '=https' --tlsv1.2 -o iw4madmin.zip \
+        "https://github.com/RaidMax/IW4M-Admin/releases/download/${IW4MADMIN_TAG}/IW4MAdmin-${IW4MADMIN_TAG%-prerelease}.zip" \
+    && printf '%s  iw4madmin.zip\n' "${IW4MADMIN_SHA256}" | sha256sum -c - \
+    && unzip -q iw4madmin.zip -d app \
+    && rm -f iw4madmin.zip app/UpdateIW4MAdmin.sh app/UpdateIW4MAdmin.ps1 app/StartIW4MAdmin.cmd
+
+FROM ${BASE_IMAGE}
+ARG IW4MADMIN_TAG
+LABEL org.opencontainers.image.title="IW4MAdmin for linuxgsm-panel" \
+      org.opencontainers.image.source="https://github.com/RaidMax/IW4M-Admin" \
+      org.opencontainers.image.version="${IW4MADMIN_TAG}"
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 IW4MADMIN_TAG=${IW4MADMIN_TAG}
+COPY --from=source /src/app /app
+# The release's own settings, plugins and translations, copied into the mounted folders on a first start
+# (the folders the panel mounts over /app/Configuration, /app/Plugins and /app/Localization start empty).
+COPY --from=source /src/app/Configuration /app_defaults/Configuration
+COPY --from=source /src/app/Plugins /app_defaults/Plugins
+COPY --from=source /src/app/Localization /app_defaults/Localization
+COPY entrypoint.sh /app/entrypoint.sh
+# The panel writes this folder 0600 and COPY keeps a file's mode: the start script must be readable
+# by the account the add-on runs as.
+RUN chmod 0755 /app/entrypoint.sh
+WORKDIR /app
+# Not root inside: the panel runs it with UserNS=keep-id and User=/Group= set to the game
+# account's ids; this is the fallback for any other runtime (the base image's own `app` user).
+USER $APP_UID
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]

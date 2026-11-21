@@ -28,8 +28,10 @@ THE NETWORK (pasta(1), podman-run(1); the cheat sheet has no rule for a containe
         pasta has no option that closes that on this release.
 
 THE ADD-ONS
-    IW4MAdmin (cod4, codwaw): the image RaidMax's own release workflow builds and pushes to
-    ghcr.io/raidmax/iw4madmin (its build_application.yml), pinned by digest. Its settings are
+    IW4MAdmin (cod4, codwaw): built on the host from addon_images/iw4madmin (a Containerfile: the
+    archive of one RaidMax/IW4M-Admin release, checked by its sha256, on Microsoft's ASP.NET Core 10
+    runtime image pinned by digest), so the runtime's security fixes reach it without a new IW4MAdmin
+    release; its own published image keeps the runtime it was built with. Its settings are
     written by the panel before the first start, so its interactive first-run setup never runs: one
     server (this one, on 127.0.0.1), the RCON password read from the game's config, the game log,
     and its built-in SQLite database in its own folder (its MySQL migrations fail on MariaDB). The
@@ -110,9 +112,18 @@ B3_COMMIT = "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
 # commit B3 reports is this one (b3_control.running_version). Only a label: the build checks the commit, not a tag,
 # and the image's tag is the commit and build id, so a new label alone offers no update.
 B3_RELEASE = B3_TAG[1:]
-# RaidMax/IW4M-Admin's `latest` image (its release 2026.2.4.1 on 2026-11-18, org.opencontainers.image.revision
-# 80bf102b, linux/amd64), by digest. Renovate proposes the tag's new digest.
-IW4MADMIN_IMAGE = "ghcr.io/raidmax/iw4madmin@sha256:72ccf1b33983cdc64071b77fca8acac49943093aa74d41ae35ffbb89d8b15a46"
+# RaidMax/IW4M-Admin's release 2026.2.4.1 (2026-02-04, its tag 2026.2.4.1-prerelease at 79fa919a: IW4MAdmin's
+# release workflow marks every release a prerelease and names the tag so), and the sha256 of the archive attached
+# to it, IW4MAdmin-2026.2.4.1.zip: the files IW4MAdmin's own image of that release is built from. Renovate
+# proposes a newer release's tag and its archive's sha256 together, here and in the Containerfile's ARGs.
+IW4MADMIN_TAG = "2026.2.4.1-prerelease"
+IW4MADMIN_SHA256 = "5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e"
+# The release's build number, the archive's name and the version the card shows.
+IW4MADMIN_VERSION = IW4MADMIN_TAG.split("-", 1)[0]
+# mcr.microsoft.com/dotnet/aspnet:10.0 (ASP.NET Core 10.0.15, Ubuntu 24.04) on 2026-11-18, by its multi-arch index
+# digest: the IW4MAdmin build's base. Renovate proposes the tag's new digest here and in the Containerfile's ARG
+# BASE_IMAGE together, so each runtime fix Microsoft ships is offered as an update.
+IW4MADMIN_BASE = "mcr.microsoft.com/dotnet/aspnet@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586"
 # BlueMap's `v5` image (its release 5.29 on 2026-10-10, org.opencontainers.image.revision a61e143f; the same
 # digest as its v5.29 and latest tags then), by its multi-arch index digest. Renovate proposes the v5 tag's new
 # digest, so a new 5.x release is offered and a major release with new configs is not.
@@ -120,20 +131,21 @@ BLUEMAP_IMAGE = "ghcr.io/bluemap-minecraft/bluemap@sha256:bb49bfdef996c6fd9cf68c
 # python:3.15-slim (3.15.2, Debian 13) on 2026-11-20, by its multi-arch index digest: the build's base. Renovate
 # proposes the tag's new digest here and in the Containerfile's ARG BASE_IMAGE together (.github/renovate.json).
 B3_BASE = "docker.io/library/python@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928"
-# The files of an add-on's build folder (panel/addon_images/<build>/) that go to the host.
-BUILD_FILES = ("Containerfile", "requirements.txt", "entrypoint.sh")
+# The files of each add-on build folder (panel/addon_images/<build>/) that go to the host.
+BUILD_FILES = {"b3": ("Containerfile", "requirements.txt", "entrypoint.sh"),
+               "iw4madmin": ("Containerfile", "entrypoint.sh")}
 _IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addon_images")
 
 
-def build_id(folder, base):
-    """A short id of what an image built on the host is made of: its base image and its build folder's files.
+def build_id(folder, base, names):
+    """A short id of what an image built on the host is made of: its base image and its build folder's files `names`.
 
-    Part of the image's tag beside the source commit, so a new base digest, a new lock of its Python
-    packages or a changed Containerfile (the automatic update pull requests among them) is offered as
-    an update to every host still running the image built before, as a new commit is.
+    Part of the image's tag beside the source commit or release, so a new base digest, a new lock of its
+    Python packages or a changed Containerfile (the automatic update pull requests among them) is offered
+    as an update to every host still running the image built before, as a new commit is.
     """
     h = hashlib.sha256(base.encode("utf-8"))
-    for name in BUILD_FILES:
+    for name in names:
         h.update(b"\0" + name.encode("ascii") + b"\0")
         try:
             with open(os.path.join(folder, name), "rb") as fh:
@@ -146,31 +158,35 @@ def build_id(folder, base):
 CATALOG = {
     IW4MADMIN: {
         "name": "IW4MAdmin",
-        "image": IW4MADMIN_IMAGE,
-        # The tag and the digest's start: a digest Renovate moves has no release name beside it.
-        "version": "latest " + IW4MADMIN_IMAGE.rsplit(":", 1)[1][:12],
+        "image": "localhost/lgsm-addon-iw4madmin:%s-%s" % (
+            IW4MADMIN_VERSION, build_id(os.path.join(_IMAGES_DIR, "iw4madmin"), IW4MADMIN_BASE, BUILD_FILES["iw4madmin"])),
+        "version": IW4MADMIN_VERSION,
         "source": "https://github.com/RaidMax/IW4M-Admin",
         # game type -> the parser IW4MAdmin matches by name (its Plugins/ScriptPlugins/Parser*.cs).
         # LinuxGSM's cod4server runs CoD4x (executable cod4x18_dedrun).
         "games": {"cod4": "CoD4x Parser", "codwaw": "Call of Duty 5: World at War Parser"},
-        # (folder in the add-on's home, where the container sees it): its image's mounts (its
-        # Dockerfile and entrypoint.sh), and /data for HOME.
+        # (folder in the add-on's home, where the container sees it): the mounts of IW4MAdmin's own image
+        # (its Dockerfile and entrypoint.sh), which addon_images/iw4madmin keeps, and /data for HOME.
         "mounts": (("Configuration", "/app/Configuration"), ("Plugins", "/app/Plugins"),
                    ("Localization", "/app/Localization"), ("Database", "/app/Database"),
                    ("Log", "/app/Log"), ("Data", "/data")),
-        "env": ("PUID=0", "PGID=0", "TZ=Etc/UTC", "HOME=/data"),
+        "env": ("TZ=Etc/UTC", "HOME=/data"),
         # The file holding the secrets (written from stdin), relative to the add-on's folder.
         "settings": "Configuration/IW4MAdminSettings.json",
         "web_port": 1624,
         # It stops gracefully on SIGINT (Application/Main.cs: Console.CancelKeyPress); on SIGTERM
         # its synchronous ProcessExit shutdown outlasted Podman's wait and it was killed (137).
         "stop_signal": "SIGINT", "stop_timeout": 30, "success_exit": None,
-        "database": False, "build": None, "legacy": False, "log_file": None,
+        "database": False, "build": "iw4madmin", "legacy": False, "log_file": None,
+        # The build's arguments, in order (the Containerfile's ARGs, the same values as their defaults).
+        "build_args": (("BASE_IMAGE", IW4MADMIN_BASE), ("IW4MADMIN_TAG", IW4MADMIN_TAG),
+                       ("IW4MADMIN_SHA256", IW4MADMIN_SHA256)),
         "data_kept": False, "reads": "log", "command": (), "nice": 0, "no_restart": None,
     },
     B3: {
         "name": "B3 (Big Brother Bot)",
-        "image": "localhost/lgsm-addon-b3:%s-%s" % (B3_COMMIT[:12], build_id(os.path.join(_IMAGES_DIR, "b3"), B3_BASE)),
+        "image": "localhost/lgsm-addon-b3:%s-%s" % (
+            B3_COMMIT[:12], build_id(os.path.join(_IMAGES_DIR, "b3"), B3_BASE, BUILD_FILES["b3"])),
         "version": "%s (%s)" % (B3_RELEASE, B3_COMMIT[:8]),
         "source": "https://github.com/FMSMITH91/big-brother-bot",
         # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
@@ -187,6 +203,7 @@ CATALOG = {
         # killed it (137); that fork commit made them daemon, so no exit status is excused here.
         "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": None,
         "database": True, "build": "b3", "legacy": True, "log_file": "Data/b3.log",
+        "build_args": (("BASE_IMAGE", B3_BASE), ("B3_COMMIT", B3_COMMIT)),
         "data_kept": True, "reads": "log", "command": (), "nice": 0,
         # B3's exit codes (b3/exitcodes.py) that a restart can't mend: 222 an admin's !die in the game,
         # 230 invalid settings. Not 233 (the database not reached at start): that one may come back.
@@ -209,7 +226,7 @@ CATALOG = {
         "web_port": 8100,
         # The JVM runs its shutdown hook on SIGTERM (BlueMap saves the maps' state) and exits 143.
         "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": "143",
-        "database": False, "build": None, "legacy": False, "log_file": None,
+        "database": False, "build": None, "legacy": False, "log_file": None, "build_args": (),
         "data_kept": False, "reads": "world",
         # The image's `java -jar cli.jar` takes these, then the Minecraft version: render, watch, serve.
         "command": ("-r", "-u", "-w", "-v"),
@@ -939,7 +956,7 @@ def build_files(addon_id):
         return {}
     base = os.path.join(_IMAGES_DIR, build)
     got = {}
-    for name in BUILD_FILES:
+    for name in BUILD_FILES[build]:
         with open(os.path.join(base, name), encoding="utf-8") as fh:
             got["%s/%s" % (BUILD_DIR, name)] = fh.read()
     return got
@@ -1086,12 +1103,12 @@ def _image_sh(addon_id, d):
     a = CATALOG[addon_id]
     if not a["build"]:
         return "podman pull -q %s >/dev/null || { echo ADDON_PULL_FAILED; exit 23; }; " % shlex.quote(a["image"])
-    return ("podman build -q --network=host --pull=missing --build-arg BASE_IMAGE=%s --build-arg B3_COMMIT=%s "
+    args = "".join("--build-arg %s=%s " % (k, shlex.quote(v)) for k, v in a["build_args"])
+    return ("podman build -q --network=host --pull=missing %s"
             "-t %s -f %s/%s/Containerfile %s/%s >/dev/null 2>%s/%s/build.log "
             "|| { echo ADDON_BUILD_FAILED; tail -n %d %s/%s/build.log | base64 -w0 | sed 's/^/tail.b64=/'; echo; "
             "exit 24; }; podman image prune -f >/dev/null 2>&1; "
-            % (shlex.quote(B3_BASE), B3_COMMIT, shlex.quote(a["image"]), d, BUILD_DIR, d, BUILD_DIR, d, BUILD_DIR,
-               TAIL_LINES, d, BUILD_DIR))
+            % (args, shlex.quote(a["image"]), d, BUILD_DIR, d, BUILD_DIR, d, BUILD_DIR, TAIL_LINES, d, BUILD_DIR))
 
 
 def _fresh_start_sh(addon_id, verb):

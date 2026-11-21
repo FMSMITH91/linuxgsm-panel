@@ -168,7 +168,7 @@ def _pieces253():
     unit = _ad253.quadlet("cod4server", "iw4madmin", "/home/cod4server/serverfiles/main", "pasta:-U,28960", 21007)
     want = ("UserNS=keep-id", "ReadOnly=true", "DropCapability=all", "NoNewPrivileges=true", "PidsLimit=512", "Pull=never",
             "PublishPort=127.0.0.1:21007:1624", "Volume=/home/cod4server/serverfiles/main:/gamelog:ro",
-            "Image=ghcr.io/raidmax/iw4madmin@sha256:", "PodmanArgs=--memory=1g", "WantedBy=default.target")
+            "Image=localhost/lgsm-addon-iw4madmin:", "PodmanArgs=--memory=1g", "WantedBy=default.target")
     eq("unit: the hardening, the pinned image and the loopback-only page are all there",
        [w for w in want if w not in unit], [])
     check("unit: no privileged mode, host network or added capability",
@@ -212,7 +212,7 @@ def _host253(probe=None, install_out="ADDON_INSTALLED\n", remove_out="others=0\n
 
     def shell(server, user, sh, timeout=30, selfname=None, scope=False, stdin_text=None):
         calls.append(("sh", sh, stdin_text))
-        if "podman pull" in sh:
+        if "podman pull" in sh or "podman build" in sh:
             return install_out, "", 0
         if "ADDON_REMOVED" in sh:
             return remove_out, "", 0
@@ -265,7 +265,7 @@ def _install_calls253(calls, ok):
 
 def _install_stdin253(calls):
     """The settings the install sent on stdin, parsed ({} when it sent none)."""
-    inst = [c[2] for c in calls if c[0] == "sh" and "podman pull" in c[1]]
+    inst = [c[2] for c in calls if c[0] == "sh" and ("podman pull" in c[1] or "podman build" in c[1])]
     return _json253.loads(inst[0]) if inst and inst[0] else {}
 
 
@@ -304,7 +304,8 @@ def _install_refused253(ids):
         row = _p9_audit("addon_install")
         check("install refused (%s): audited as failed, nothing installed or readied" % want[:40],
               row.success is False and want in row.detail and not [c for c in calls if c[0] == "verb"]
-              and not [c for c in calls if c[0] == "sh" and "podman pull" in c[1]], repr((row.detail, calls[-1:])))
+              and not [c for c in calls if c[0] == "sh" and ("podman pull" in c[1] or "podman build" in c[1])],
+              repr((row.detail, calls[-1:])))
 
 
 def _remove253(ids):
