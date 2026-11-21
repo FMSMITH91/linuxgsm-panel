@@ -168,7 +168,7 @@ def _image288():
        (froms, [r for r in runs if _re288.search(r"apt|curl|unzip|wget", r)]),
        (["${BASE_IMAGE} AS source", "${BASE_IMAGE}"], []))
     eq("image: it runs as a user that is not root, the panel's entrypoint, made readable after its 0600 copy",
-       (users, entry, runs), (["$APP_UID"], ['["/bin/sh", "/app/entrypoint.sh"]'], ["chmod 0755 /app/entrypoint.sh"]))
+       (users, entry, runs), (["1654:1654"], ['["/bin/sh", "/app/entrypoint.sh"]'], ["chmod 0755 /app/entrypoint.sh"]))
     eq("image: the release's files, and its settings, plugins and translations kept as defaults for the mounted folders",
        copies, ["--from=source /src/app /app", "--from=source /src/app/Configuration /app_defaults/Configuration",
                 "--from=source /src/app/Plugins /app_defaults/Plugins",
@@ -220,11 +220,17 @@ def _entry288():
     rc, _err, ran, app = _entry_run288("kept", {"Configuration/IW4MAdminSettings.json": "{\"mine\": 1}\n",
                                                 "Configuration/LoggingConfiguration.json": "operator logging\n",
                                                 "Plugins/Stats.dll": "operator stats\n"})
-    logging = _text288(os.path.join(app, "Configuration", "LoggingConfiguration.json"))
-    stats = _text288(os.path.join(app, "Plugins", "Stats.dll"))
-    eq("entrypoint: the operator's settings and plugins already there are never overwritten",
-       (rc, logging, stats, os.path.exists(os.path.join(app, "Plugins", "Welcome.dll")), bool(ran)),
-       (0, "operator logging\n", "operator stats\n", False, True))
+    eq("entrypoint: a folder already set up is left as it is",
+       (rc, _text288(os.path.join(app, "Configuration", "LoggingConfiguration.json")),
+        _text288(os.path.join(app, "Plugins", "Stats.dll")), os.path.exists(os.path.join(app, "Plugins", "Welcome.dll")),
+        bool(ran)), (0, "operator logging\n", "operator stats\n", False, True))
+    # Plugins without Stats.dll is filled in, and the operator's own file there is kept (cp -n): a skipped file
+    # makes Ubuntu 24.04's cp -n exit 1, which must not stop the start.
+    rc, _err, ran, app = _entry_run288("partial", {"Configuration/IW4MAdminSettings.json": "{}\n",
+                                                   "Plugins/Welcome.dll": "operator welcome\n"})
+    eq("entrypoint: a folder filled in from the defaults keeps the operator's own files there, and IW4MAdmin starts",
+       (rc, _text288(os.path.join(app, "Plugins", "Welcome.dll")), _text288(os.path.join(app, "Plugins", "Stats.dll")),
+        bool(ran)), (0, "operator welcome\n", "stats\n", True))
 
 
 # ── 5. the routes ───────────────────────────────────────────────────────────────────────────────

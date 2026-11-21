@@ -23,18 +23,20 @@ ARG IW4MADMIN_SHA256=5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a197
 FROM ${BASE_IMAGE} AS source
 ARG IW4MADMIN_TAG
 ARG IW4MADMIN_SHA256
-# Build-only and thrown away: what ships is checked by its sha256 below, whatever versions these are.
-# hadolint ignore=DL3008
+# Build-only and thrown away: what ships is checked by its sha256 below, whatever versions these are
+# (hadolint's DL3008 is off for that reason: .github/hadolint.yaml).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-# The archive is named by the release's build number, the tag without its "-prerelease" suffix.
+# The archive is named by the release's build number, the tag without its "-prerelease" suffix. Its
+# checksum goes through a file, not a pipe, so no shell option decides whether a failed check stops the build.
 RUN curl -fsSL --proto '=https' --tlsv1.2 -o iw4madmin.zip \
         "https://github.com/RaidMax/IW4M-Admin/releases/download/${IW4MADMIN_TAG}/IW4MAdmin-${IW4MADMIN_TAG%-prerelease}.zip" \
-    && printf '%s  iw4madmin.zip\n' "${IW4MADMIN_SHA256}" | sha256sum -c - \
+    && printf '%s  iw4madmin.zip\n' "${IW4MADMIN_SHA256}" > iw4madmin.zip.sha256 \
+    && sha256sum -c iw4madmin.zip.sha256 \
     && unzip -q iw4madmin.zip -d app \
-    && rm -f iw4madmin.zip app/UpdateIW4MAdmin.sh app/UpdateIW4MAdmin.ps1 app/StartIW4MAdmin.cmd
+    && rm -f iw4madmin.zip iw4madmin.zip.sha256 app/UpdateIW4MAdmin.sh app/UpdateIW4MAdmin.ps1 app/StartIW4MAdmin.cmd
 
 FROM ${BASE_IMAGE}
 ARG IW4MADMIN_TAG
@@ -54,6 +56,6 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod 0755 /app/entrypoint.sh
 WORKDIR /app
 # Not root inside: the panel runs it with UserNS=keep-id and User=/Group= set to the game
-# account's ids; this is the fallback for any other runtime (the base image's own `app` user).
-USER $APP_UID
+# account's ids; this is the fallback for any other runtime (the base image's own `app` user, APP_UID 1654).
+USER 1654:1654
 ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
