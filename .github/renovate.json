@@ -23,8 +23,9 @@
     "docker updates are raised without one (Renovate docs, minimumReleaseAgeBehaviour).",
     "tests/unit/part19.py and part242.py gate that every pin is matched and that each manager reads",
     "only its own files.",
-    "The add-ons' pins (panel/services/addons.py): B3's source commit, which follows",
-    "FMSMITH91/big-brother-bot master (git-refs, in addons.py and the B3 Containerfile together),",
+    "The add-ons' pins (panel/services/addons.py): B3's source, the newest FMSMITH91/big-brother-bot",
+    "release tag and its commit (git-tags, in addons.py and the B3 Containerfile together; master is",
+    "the next version in development, so it is never proposed),",
     "IW4MAdmin's image, the digest of its `latest` tag, and the B3 image's base, the digest of",
     "python:3.15-slim (B3_BASE in addons.py and ARG BASE_IMAGE in the B3 Containerfile together;",
     "written by digest alone, as podman takes it, so the tag Renovate follows is the manager's",
@@ -62,18 +63,19 @@
     },
     {
       "customType": "regex",
-      "description": "The B3 add-on's source: FMSMITH91/big-brother-bot master, pinned by commit",
+      "description": "The B3 add-on's source: FMSMITH91/big-brother-bot's newest release tag, pinned by tag and commit",
       "managerFilePatterns": [
         "/^panel/services/addons\\.py$/",
         "/^panel/addon_images/b3/Containerfile$/"
       ],
       "matchStrings": [
-        "(?:B3_COMMIT = \"|ARG B3_COMMIT=)(?<currentDigest>[0-9a-f]{40})"
+        "B3_TAG = \"(?<currentValue>v[0-9][^\"]*)\"\\nB3_COMMIT = \"(?<currentDigest>[0-9a-f]{40})\"",
+        "# renovate: B3_COMMIT is FMSMITH91/big-brother-bot release (?<currentValue>v[0-9][^ ]*) [^\\n]*\\nARG B3_COMMIT=(?<currentDigest>[0-9a-f]{40})"
       ],
-      "currentValueTemplate": "master",
+      "versioningTemplate": "pep440",
       "depNameTemplate": "big-brother-bot",
       "packageNameTemplate": "https://github.com/FMSMITH91/big-brother-bot",
-      "datasourceTemplate": "git-refs"
+      "datasourceTemplate": "git-tags"
     },
     {
       "customType": "regex",
@@ -166,7 +168,7 @@
       ]
     },
     {
-      "description": "B3's fork: no release-age wait (a commit to master is the release)",
+      "description": "B3's fork: no release-age wait (its releases are this project's own, tagged and signed)",
       "matchDepNames": [
         "big-brother-bot"
       ],

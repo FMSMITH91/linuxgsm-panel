@@ -490,11 +490,15 @@ def _card_checks257():
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────
 def _manager_hits257(m):
-    """[(file, digest)] a Renovate regex manager matches in the panel's own files (its JS regex read as Python's)."""
-    pat = _re257.compile(_re257.sub(r"\(\?<(?=[A-Za-z])", "(?P<", m["matchStrings"][0]))
+    """[(file, digest, tag?)] a Renovate regex manager matches in the panel's own files (JS regexes as Python's).
+
+    A match that captures a tag (currentValue) carries it as a third item.
+    """
+    pats = [_re257.compile(_re257.sub(r"\(\?<(?=[A-Za-z])", "(?P<", ms)) for ms in m["matchStrings"]]
     paths = [f.strip("/").lstrip("^").rstrip("$").replace("\\.", ".") for f in m.get("managerFilePatterns") or []]
-    return [(path, x.groupdict().get("currentDigest")) for path in paths if path.startswith("panel/")
-            for x in pat.finditer(_read257(*path.split("/")))]
+    return [(path, x.groupdict().get("currentDigest")) + ((x.group("currentValue"),) if "currentValue" in x.groupdict()
+                                                          else ())
+            for path in paths if path.startswith("panel/") for pat in pats for x in pat.finditer(_read257(*path.split("/")))]
 
 
 def _renovate257():
@@ -503,14 +507,15 @@ def _renovate257():
     for m in cfg.get("customManagers") or []:
         hits = _manager_hits257(m)
         if hits:
-            found.setdefault("%s %s" % (m.get("datasourceTemplate"), m.get("currentValueTemplate")), []).extend(hits)
+            found.setdefault("%s %s" % (m.get("datasourceTemplate"), m.get("currentValueTemplate", "tag")), []).extend(hits)
     daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
     base = _ad257.B3_BASE.split("@")[1]
-    eq("Renovate: B3's commit in addons.py and the Containerfile (git-refs, master), IW4MAdmin's digest (docker, "
+    eq("Renovate: B3's release tag and commit in addons.py and the Containerfile (git-tags), IW4MAdmin's digest (docker, "
        "latest), BlueMap's (docker, v5) and the B3 image's base digest in addons.py and the Containerfile (docker, "
        "3.15-slim), each matched once, checked daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
-       ({"git-refs master": [("panel/services/addons.py", _PIN257), ("panel/addon_images/b3/Containerfile", _PIN257)],
+       ({"git-tags tag": [("panel/services/addons.py", _PIN257, _ad257.B3_TAG),
+                           ("panel/addon_images/b3/Containerfile", _PIN257, _ad257.B3_TAG)],
          "docker latest": [("panel/services/addons.py", _ad257.IW4MADMIN_IMAGE.split("@")[1])],
          "docker v5": [("panel/services/addons.py", _ad257.BLUEMAP_IMAGE.split("@")[1])],
          "docker 3.15-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},

@@ -484,12 +484,12 @@ _sg_inst27 = [_t for _w, _t in _ci_installs if _w == "security-code.yml"
 _sg_txt27 = _read27(".github", "ci-requirements", "semgrep.txt")
 _sg_mcp27 = _read27(".github", "ci-requirements", "semgrep-mcp.txt")
 _sg_in27 = _read27(".github", "ci-requirements", "semgrep.in")
-check("semgrep: the job installs semgrep.txt, semgrep-mcp.txt and semgrep-otel.txt, hash-checked, wheels "
-      "only, --no-deps",
+check("semgrep: the job installs semgrep.txt, semgrep-mcp.txt, semgrep-otel.txt and semgrep-wcmatch.txt, "
+      "hash-checked, wheels only, --no-deps",
       len(_sg_inst27) == 1
       and [_sg_inst27[0][_i + 1] for _i, _t in enumerate(_sg_inst27[0]) if _t == "-r"]
       == [".github/ci-requirements/semgrep.txt", ".github/ci-requirements/semgrep-mcp.txt",
-          ".github/ci-requirements/semgrep-otel.txt"]
+          ".github/ci-requirements/semgrep-otel.txt", ".github/ci-requirements/semgrep-wcmatch.txt"]
       and {"--require-hashes", "--no-deps", "--only-binary"} <= set(_sg_inst27[0])
       and "-r .github/ci-requirements/semgrep-mcp.txt" in " ".join(_SG27.split()),
       repr(_sg_inst27))
@@ -517,6 +517,20 @@ _sg_drift27 = sorted(_n for _n, _v in _sg_mp27.items() if _n != "mcp" and _sg_p2
 check("semgrep: semgrep-mcp.txt is constrained by semgrep.txt, and pins nothing at another version",
       _re27.search(r"^-c semgrep\.txt$", _read27(".github", "ci-requirements", "semgrep-mcp.in"),
                    _re27.M) is not None and len(_sg_mp27) > 1 and not _sg_drift27, repr(_sg_drift27))
+# wcmatch before 11.2 has GHSA-53pm-wgxf-c6qf and semgrep declares ~=8.3, so wcmatch (with bracex,
+# which 11.2 needs newer) is compiled out of semgrep.txt and pinned in semgrep-wcmatch.txt.
+_sg_wc27 = _read27(".github", "ci-requirements", "semgrep-wcmatch.txt")
+_sg_wp27 = _sg_pins27(_sg_wc27)
+_sg_wv27 = tuple(int(_x) for _x in _re27.findall(r"\d+", _sg_wp27.get("wcmatch", "0"))[:2])
+_sg_wdrift27 = sorted(_n for _n, _v in _sg_wp27.items() if _n not in ("wcmatch", "bracex") and _sg_p27.get(_n) != _v)
+check("semgrep: wcmatch and bracex are compiled out of semgrep.txt by name; semgrep-wcmatch.txt pins a fixed "
+      "wcmatch (>= 11.2, GHSA-53pm-wgxf-c6qf) with hashes, constrained by semgrep.txt",
+      all(_re27.search(r"^#    pip-compile (?!.*--allow-unsafe).*--unsafe-package=%s " % _n, _sg_txt27, _re27.M)
+          for _n in ("bracex", "wcmatch")) and not {"wcmatch", "bracex"} & set(_sg_p27) and _sg_wv27 >= (11, 2)
+      and all(_re27.search(r"^%s==\S+ \\\n    --hash=sha256:[0-9a-f]{64}" % _n, _sg_wc27, _re27.M) for _n in ("wcmatch", "bracex"))
+      and "--unsafe-package=wcmatch" in _sg_in27 and not _sg_wdrift27
+      and _re27.search(r"^-c semgrep\.txt$", _read27(".github", "ci-requirements", "semgrep-wcmatch.in"), _re27.M) is not None,
+      repr((_sg_wp27, _sg_wdrift27)))
 # --no-deps turns off pip's check that a lockfile is the whole closure; that is how the first
 # semgrep workaround hid a vulnerable PyJWT. Two installs use it, each followed by a pip check that
 # tolerates only what its lockfile's header names with --unsafe-package: complexity.yml, whose
@@ -591,7 +605,8 @@ _SG_OTEL27 = "".join("semgrep %s has requirement %s~=1.37.0, but you have %s %s.
     _sg_p27.get("semgrep"), _n, _n, _sg_op27.get(_n))
     for _n in ("opentelemetry-api", "opentelemetry-exporter-otlp-proto-http", "opentelemetry-sdk"))
 _SG_PIN27 = "semgrep %s has requirement mcp==1.29.0, but you have mcp %s.\n" % (
-    _sg_p27.get("semgrep"), _sg_mp27.get("mcp")) + _SG_OTEL27
+    _sg_p27.get("semgrep"), _sg_mp27.get("mcp")) + _SG_OTEL27 + (
+    "semgrep %s has requirement wcmatch~=8.3, but you have wcmatch %s.\n" % (_sg_p27.get("semgrep"), _sg_wp27.get("wcmatch")))
 _sg_ok27 = _sg_pipcheck27(_SG_PIN27)
 # A clean report means semgrep no longer pins mcp, and another requirement means it needs a
 # different one: both fail, so the split is undone or its record updated (review 1015c: any

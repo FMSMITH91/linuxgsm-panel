@@ -1,0 +1,14 @@
+# wcmatch for the Semgrep job, pinned apart from semgrep.txt: see semgrep.in for why. The constraint
+# holds every other package at semgrep.txt's version, so the files install together and never
+# disagree. Regenerate after semgrep.txt (run in python:3.11-slim):
+#   pip-compile --generate-hashes --no-annotate --strip-extras \
+#     --output-file=semgrep-wcmatch.txt semgrep-wcmatch.in
+-c semgrep.txt
+# The requirement semgrep.txt's semgrep declares for wcmatch, which pip check reports against the
+# version this file installs: the Semgrep job tolerates exactly that report, and fails when it
+# changes or goes (a semgrep release that allows wcmatch>=11.2 means the split can be undone; see
+# semgrep.in). Read by the job's pip-check step; keep it in step with semgrep.txt.
+# semgrep-pins: wcmatch~=8.3
+# 11.2 is the first release with GHSA-53pm-wgxf-c6qf fixed (polynomial-time matching of names
+# against multi-star patterns); below 12 so a new major is looked at before the scan runs on it.
+wcmatch>=11.2,<12
