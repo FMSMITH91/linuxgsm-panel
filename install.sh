@@ -610,6 +610,44 @@ _chown_panel_tree() {
     return "${rc}"
 }
 
+# No group or world write anywhere in PANEL_DIR, and the update snapshots (data/.backups: a copy of
+# data/, so the database AND the key that decrypts it, side by side) readable by their owner only.
+#
+# Everything the installer writes in the tree as its owner goes through `sudo -u`, and sudo opens a
+# PAM session: on Ubuntu, pam_umask with login.defs' USERGROUPS_ENAB gives an account with its own
+# group a umask of 0002, whatever the installer's own is. So git's checkout, the extract, pip and
+# the snapshot archives were all written group-writable (code 0664, snapshots 0664 in 0775
+# folders); so is everything a per-user install writes from a login shell. Nothing outside the
+# account could reach them (the home and the tree are 0700), but a snapshot must not depend on its
+# parents to protect the master key it holds (OWASP Secrets Management Cheat Sheet, access
+# control: least privilege). The snapshots are now written under umask 077 ([1/6]); this repairs
+# what any earlier run, and this run's git and pip, left behind, so it runs after every step that
+# writes the tree, on every install and update.
+#
+# As the tree's OWNER, like TREE_SUDO, and only on what that account owns: chmod follows a link, so
+# root changing modes in a tree the panel user can rearrange while it runs would change the mode of
+# whatever a swapped-in link named. Files someone else owns (a snapshot root made before the
+# snapshot ran as the owner) are left for the prune to age out. Never fails the run: a mode it
+# could not change is reported.
+ensure_tree_modes() {
+    [[ -d "${PANEL_DIR}" ]] || return 0
+    local as_owner="" owner rc=0 backups="${PANEL_DIR}/data/.backups"
+    owner="$(id -un)"
+    if [[ "$(id -u)" -eq 0 ]]; then
+        owner="$(_r42i_tree_owner)"
+        [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner} env -C /"
+    fi
+    # -H: PANEL_DIR may be an operator's link to the tree; nothing below it is followed.
+    ${as_owner} env PATH=/usr/sbin:/usr/bin:/sbin:/bin find -H "${PANEL_DIR}" -path "${backups}" -prune \
+        -o -user "${owner}" ! -type l -perm /022 -execdir chmod go-w -- {} + 2>/dev/null || rc=1
+    if [[ -d "${backups}" ]]; then
+        ${as_owner} env PATH=/usr/sbin:/usr/bin:/sbin:/bin find -H "${backups}" \
+            -user "${owner}" ! -type l -perm /077 -execdir chmod go-rwx -- {} + 2>/dev/null || rc=1
+    fi
+    [[ "${rc}" -eq 0 ]] || warn "Some files in ${PANEL_DIR} kept a group or world permission (they could not be changed)."
+    return 0
+}
+
 # Port the panel serves on (from data/config.json), default 5000. Read through _owner_read, for
 # the reasons given there; anything that is not a JSON object with an integer port reads as 5000.
 panel_port() {
@@ -2109,6 +2147,74 @@ _r26a_fixed_target() {
 #    inside what it removes. A subshell, so the cd never outlives it.
 # Not as the tree's owner (TREE_SUDO), as the snapshot steps are: snapshots made before TREE_SUDO
 # existed are root's, and the owner could never remove them.
+CRON_SPOOL="/var/spool/cron/crontabs"
+# Remove the crontabs of game accounts that no longer exist, when every job in one is the panel's own.
+#
+# Uninstalling a server now removes its account's crontab before the account (the helper's
+# crontab-remove), but uninstalls from before that left /var/spool/cron/crontabs/<name> behind:
+# cron logs "ORPHAN (no passwd entry)" for each every time it reads the spool, and the file keeps
+# a uid the next useradd may hand to another account. A file is removed only when its name is no
+# account, it is a plain file, and every job in it is one the panel writes for that same account:
+# its LinuxGSM lines (`cd /home/<name> && ./<script> monitor`, the older `/home/<name>/<script>
+# update`, ...), any line through its run recorder (/home/<name>/.lgsm-cron/) and its daily-restart
+# flag (/home/<name>/.restart-pending). Anything else in the file (a job someone wrote by hand)
+# keeps the whole file where it is. crontab(1)'s own temporary files (tmp.*) are never touched.
+# Root only (the spool is root's); the spool is opened without following a link, and every entry
+# is read and removed through that open directory. Never fails the run.
+ensure_no_orphan_crontabs() {
+    [[ "$(id -u)" -eq 0 ]] && [[ -d "${CRON_SPOOL}" ]] || return 0
+    local gone rc=0
+    gone="$(python3 -I - "${CRON_SPOOL}" 2>/dev/null <<'ORPHAN_CRON_PY'
+import os, pwd, re, stat, sys
+NAME = re.compile(r"[a-z_][a-z0-9_.-]{0,31}")
+CMDS = "monitor|mods-update|update|update-lgsm|m|u|ul|mu"
+REDIRECT = r"(?: *>+ */dev/null(?: +2>&1)?)?"
+
+
+def panel_job(line, user):
+    """Whether the crontab entry `line` is one the panel writes for `user`."""
+    parts = line.split(None, 1) if line.startswith("@") else line.split(None, 5)
+    if len(parts) < (2 if line.startswith("@") else 6):
+        return False
+    cmd, u = parts[-1].strip(), re.escape(user)
+    if "/home/%s/.lgsm-cron/" % user in cmd or "/home/%s/.restart-pending" % user in cmd:
+        return True
+    lgsm = r"(?:/home/%s/[\w.-]+|cd /home/%s/? *(?:&&|;) *\./[\w.-]+) (?:%s)%s" % (u, u, CMDS, REDIRECT)
+    return re.fullmatch(lgsm, cmd) is not None
+
+
+spool = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+for name in sorted(os.listdir(spool)):
+    if not NAME.fullmatch(name) or name.startswith("tmp."):
+        continue
+    try:
+        pwd.getpwnam(name)
+        continue
+    except KeyError:
+        pass
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=spool)
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                continue
+            text = fh.read(65537).decode("utf-8", "replace")
+    except OSError:
+        continue
+    jobs = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    if len(text) > 65536 or not jobs or not all(panel_job(ln, name) for ln in jobs):
+        continue
+    try:
+        os.unlink(name, dir_fd=spool)
+        print(name)
+    except OSError:
+        continue
+ORPHAN_CRON_PY
+)" || rc=$?
+    [[ "${rc}" -eq 0 ]] || warn "The crontabs of removed game accounts were not checked."
+    [[ -z "${gone}" ]] || ok "Removed the crontabs left by uninstalled game servers: $(tr '\n' ' ' <<< "${gone}")"
+    return 0
+}
+
 _r22a_prune_snapshots() {
     local _want _rootlink=0 _me
     _me="$(id -u)"
@@ -3950,6 +4056,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_gamedig
         # The breached-password list is the same: data/ keeps it, fetched only when missing or changed.
         ensure_password_list
+        # And the modes in the tree: an earlier update's group-writable code and readable snapshots.
+        ensure_tree_modes
+        ensure_no_orphan_crontabs
         # And the unit, like every other piece an install puts on the host. Not restarted for it:
         # this branch changes nothing that is running, so a new unit applies at the next restart.
         ensure_service_unit
@@ -3987,7 +4096,9 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     snapshot_service_unit
     info "[1/6] Snapshotting current version + database → ${BACKUP}"
-    ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"
+    # umask 077 inside the owner's own shell: sudo's PAM session hands the owner 0002 (see
+    # ensure_tree_modes), and a snapshot holds the database with the key that decrypts it.
+    ${TREE_SUDO:-} sh -c 'umask 077 && mkdir -p -- "$1"' sh "${BACKUP}"
     # Compressor: pigz (parallel gzip) when present — ~3.5x faster than gzip on a multi-core box for
     # the same size — else gzip -1 (fastest single-core). The level barely matters here: the payload
     # is mostly already-compressed data (git packs + screenshots), so we pick speed. pigz/gzip both
@@ -4002,7 +4113,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     # a root-only file in the tree is exactly such an unreadable file: it is left out of the
     # snapshot, which is the point — the panel can read the archive, so root must not put into it
     # what the panel could not read itself (a hard link to /etc/shadow, say).
-    ${TREE_SUDO:-} tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/code.tgz" >/dev/null || true
+    ${TREE_SUDO:-} tar -C "${PANEL_DIR}" --ignore-failed-read --exclude=./venv --exclude=./data -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} sh -c 'umask 077 && exec tee -- "$1" >/dev/null' sh "${BACKUP}/code.tgz" || true
     # `-s` only asks whether it is non-empty, and the failure this check names by name — the disk
     # filling mid-write — produces a TRUNCATED archive, which is non-empty. It passed, and the
     # rollback below then wiped PANEL_DIR and fed the truncated stream to tar. `tar -tz` reads the
@@ -4087,6 +4198,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
             fi
         fi
         [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree 2>/dev/null || true
+        ensure_tree_modes
         restore_service_unit
         svc daemon-reload || true
         if [[ "${_rb_failed}" -eq 1 ]]; then
@@ -4119,7 +4231,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
 
     if [[ -d "${PANEL_DIR}/data" ]]; then
         # Not the breached-password list: ensure_password_list fetches it again by its pin.
-        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups --exclude=./common-passwords-100k.txt -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} tee "${BACKUP}/data.tgz" >/dev/null || true
+        ${TREE_SUDO:-} tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups --exclude=./common-passwords-100k.txt -cf - . 2>/dev/null | ${SNAP_GZ} | ${TREE_SUDO:-} sh -c 'umask 077 && exec tee -- "$1" >/dev/null' sh "${BACKUP}/data.tgz" || true
         # The service is stopped by now, so this die must put it back — the message promises the
         # panel is unchanged, and a panel that is down is not unchanged.
         if ! snapshot_ok "${BACKUP}/data.tgz"; then
@@ -4197,6 +4309,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     ensure_password_list   # a no-op while data/ holds the pinned list
     [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
+    ensure_tree_modes      # what git and pip just wrote, and every snapshot, as the owner
 
     # Refresh the ROOT-OWNED copies to match the code we just fetched, BEFORE the service comes
     # back up — the new code may call verbs the installed helper does not know yet, and a stale
@@ -4236,6 +4349,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
         install_gamedig
         # Prune old snapshots, keep the most recent few (see the function for why it is careful).
         _r22a_prune_snapshots
+        ensure_no_orphan_crontabs   # crontabs of game accounts removed before uninstall removed them
         echo ""
         ok "Update complete: ${FROM_VER} → ${TO_VER}"
         # If the panel has just switched to HTTPS, say so explicitly: an existing http://
@@ -4318,6 +4432,7 @@ if [[ "${IS_UPDATE}" -eq 1 ]]; then
     fi
     install_deps || true
     [[ "${RUN_AS_ROOT}" -eq 1 ]] && _chown_panel_tree
+    ensure_tree_modes
     restore_service_unit
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
@@ -4424,6 +4539,7 @@ fi
 
 install_root_tools
 install_gamedig   # player queries for game servers on this host; root-owned, like the helper
+ensure_no_orphan_crontabs   # crontabs a removed game account left (a reinstall on a used host)
 
 info "[3/4] Registering the service…"
 if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
@@ -4460,6 +4576,7 @@ else
     # Recovery command for --user installs too — this branch is non-root, so sudo writes /usr/local/bin.
     install_recovery_command
 fi
+ensure_tree_modes                              # no group/world write in the tree (after the chown)
 release_tailscale_operator                     # both install kinds; a no-op unless it is the operator
 ensure_service_tuning                          # low CPU/IO priority so the panel yields to games
 ensure_system_tuning                           # prefer RAM over swap (vm.swappiness)

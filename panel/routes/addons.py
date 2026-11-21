@@ -467,7 +467,8 @@ def _plan(gs, addon_id, db_id, geolocation):
 def _settings(gs, plan, p):
     """(the secret settings file's text, the other files, the secrets to scrub) for this add-on."""
     if plan["id"] == _ad.IW4MADMIN:
-        return _ad.iw4madmin_settings(gs.game_type, p["game_port"], p["rcon"]), _ad.iw4madmin_files(), (p["rcon"],)
+        return (_ad.iw4madmin_settings(gs.game_type, p["game_port"], p["rcon"]),
+                {**_ad.iw4madmin_files(), **_ad.build_files(plan["id"])}, (p["rcon"],))
     r = plan["db"]
     secret = decrypt_secret(r.secret) or ""
     ini = _ad.b3_ini(gs.game_type, p["game_port"], p["rcon"], r.name, secret, plan["geolocation"],

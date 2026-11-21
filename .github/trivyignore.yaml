@@ -1,0 +1,42 @@
+# Findings the "Add-on images" workflow accepts (.github/scripts/addon_images.py, Trivy --ignorefile).
+# Every entry says why and EXPIRES: on its expired_at date the finding fails the run again, so an
+# acceptance is looked at again rather than kept for good (OWASP Docker Security Cheat Sheet, rule 9;
+# ASVS 5.0 V15.1.1, risk-based remediation time frames). Each is scoped to its package (purls).
+vulnerabilities:
+  # B3's image, from its base python:3.15-slim (Debian 13): the base digest does not carry Debian's
+  # fixed zlib yet. Not on B3's path: the flaw is in zlib's gz* file API (gz_vacate), and Python's
+  # zlib and gzip modules use deflate/inflate only. Renovate proposes the base's new digest when the
+  # tag is rebuilt.
+  - id: CVE-2026-85091
+    purls:
+      - "pkg:deb/debian/zlib1g"
+    statement: "B3 base image (python:3.15-slim): gz* API only, which Python's zlib and gzip never call"
+    expired_at: 2026-12-21
+  # BlueMap's pinned image (Ubuntu 22.04). Upstream rebuilt its v5 tag on 2026-11-21 with these OS
+  # packages refreshed, and Renovate proposes that digest daily. Not reachable as deployed: apt never
+  # runs in the container; the JVM does its own TLS and the container reaches nothing outside
+  # (pasta, no DNS), so neither libssl3 nor libbrotli1 is on a live path.
+  - id: CVE-2026-109518
+    purls:
+      - "pkg:deb/ubuntu/apt"
+      - "pkg:deb/ubuntu/libapt-pkg6.0"
+    statement: "BlueMap image: apt never runs in the container"
+    expired_at: 2026-12-21
+  - id: CVE-2026-111497
+    purls:
+      - "pkg:deb/ubuntu/libbrotli1"
+    statement: "BlueMap image: the JVM does not use the system brotli; no outside traffic"
+    expired_at: 2026-12-21
+  - id: CVE-2026-84782
+    purls:
+      - "pkg:deb/ubuntu/libssl3"
+    statement: "BlueMap image: the JVM does its own TLS and the container reaches nothing outside"
+    expired_at: 2026-12-21
+  # BlueMap's bundled lz4-java: a race on a SHARED temporary folder by ANOTHER local user. The
+  # container's /tmp is its own (a private tmpfs under a read-only root) and holds one process of one
+  # account. The fix needs a BlueMap release.
+  - id: CVE-2026-106451
+    purls:
+      - "pkg:maven/at.yawk.lz4/lz4-java"
+    statement: "BlueMap image: needs another local user on a shared /tmp; the container's /tmp is private"
+    expired_at: 2026-12-21

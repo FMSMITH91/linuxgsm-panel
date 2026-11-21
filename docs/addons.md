@@ -13,8 +13,10 @@ has:
 
 ## The add-ons
 
-- **IW4MAdmin** (Call of Duty 4 / CoD4x and World at War): the image its author publishes
-  (`ghcr.io/raidmax/iw4madmin`), pinned by digest. Before the first start the panel writes its settings: this server
+- **IW4MAdmin** (Call of Duty 4 / CoD4x and World at War): built on the host from one pinned release of
+  RaidMax/IW4M-Admin (the archive attached to its GitHub release, checked by its sha256) on Microsoft's ASP.NET Core 10
+  runtime image (`mcr.microsoft.com/dotnet/aspnet:10.0`, by digest), so .NET's security fixes reach it as updates
+  even when IW4MAdmin has no new release. Before the first start the panel writes its settings: this server
   on `127.0.0.1`, the RCON password from the server's config, and the game log. It keeps its own SQLite database in
   its folder, so it needs no Databases-tab database. Its anti-cheat and profanity plugins start off.
 - **B3** (Call of Duty, United Offensive, Call of Duty 2, Call of Duty 4 / CoD4x, World at War, Soldier of
@@ -234,14 +236,15 @@ nothing changes in Tailscale.
 ### Updates
 
 The card shows **Update available** when the panel's pinned version is newer than the installed one (a new
-IW4MAdmin or BlueMap image digest or B3 commit), for an offline B3 when a newer month of the country database
+IW4MAdmin release or .NET runtime, a new BlueMap image digest, or a new B3 commit or Python base), for an offline B3 when a newer month of the country database
 is out, or for BlueMap when the game now runs another Minecraft version. Until you update, the card names the
 version installed, and the one Update installs: **Update available: 2.0.2 (7c3bbe8c)**.
 **Update** downloads or builds the new image, writes the unit again and restarts the add-on; its data, settings
 and database are kept. It asks for the password like Install, and it is audited. A start, Apply or Update you ask
 for clears the unit's start limit first (5 starts in 10 minutes, kept against a crash loop), so a run of changes
 doesn't leave the add-on down; if systemd still refuses a start for that limit, the card says so. The panel's pins themselves are
-proposed daily by Renovate (B3's fork `master`, IW4MAdmin's `latest` digest, BlueMap's `v5` digest).
+proposed daily by Renovate (B3's fork releases, IW4MAdmin's releases and the `aspnet:10.0` digest, BlueMap's `v5` digest,
+`python:3.15-slim`'s digest).
 
 ### B3's players and penalties
 

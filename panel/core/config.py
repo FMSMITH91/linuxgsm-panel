@@ -487,7 +487,36 @@ def _key_missing(path):
         return True
 
 
+# prctl(2)'s PR_SET_DUMPABLE, from <linux/prctl.h>.
+_PR_SET_DUMPABLE = 4
+_NO_DUMP = {"set": False}
+
+
+def keep_out_of_core_dumps():
+    """Mark this process not dumpable, once, before it reads a key.
+
+    A core dump of the panel would hold the Flask secret and the key ring that decrypts every stored
+    credential, in plain text (OWASP Secrets Management Cheat Sheet, "Handling Secrets in Memory",
+    names memory dumps as a way secrets leak). prctl(PR_SET_DUMPABLE, 0) stops the kernel writing
+    one for this process, and stops another process of the same account attaching to it with ptrace
+    or reading its memory through /proc. It is this process's own flag, not a resource limit: a
+    program it starts (the root helper, a game server, a terminal's shell) gets the usual setting
+    back at execve, so their crash dumps are unchanged. A systemd LimitCORE=0 would have been
+    inherited by every one of them. Linux only; anywhere prctl is missing, nothing changes.
+    """
+    if _NO_DUMP["set"]:
+        return
+    _NO_DUMP["set"] = True
+    try:
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+            _log.debug("prctl(PR_SET_DUMPABLE) refused: errno %d", ctypes.get_errno())
+    except (OSError, AttributeError):
+        _log.debug("prctl unavailable", exc_info=True)
+
+
 def get_secret_key():
+    keep_out_of_core_dumps()
     if _key_missing(SECRET_FILE):
         import secrets
         _create_key_once(SECRET_FILE, lambda: secrets.token_hex(32).encode())
@@ -578,6 +607,7 @@ def _cred_keyring():
     generate a different key and clobber the other — that would leave the first-saved secret
     encrypted with a key the file no longer holds, i.e. permanently undecryptable.
     """
+    keep_out_of_core_dumps()
     if _key_missing(CRED_KEY_FILE):
         _create_key_once(CRED_KEY_FILE, _kr.new_ring_bytes)
     return _kr.read_ring(CRED_KEY_FILE)

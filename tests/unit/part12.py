@@ -3907,7 +3907,7 @@ def _pb_between(start, end, include_end=False):
 
 
 _pb_tree = _pb_between('    TREE_SUDO=""\n', '    info "[1/6] Snapshotting')
-_pb_snap = (_pb_between('    ${TREE_SUDO:-} mkdir -p -- "${BACKUP}"', "\n", include_end=True)
+_pb_snap = (_pb_between("    ${TREE_SUDO:-} sh -c 'umask 077 && mkdir -p -- \"$1\"' sh \"${BACKUP}\"", "\n", include_end=True)
             + [ln for ln in _pb_inst.splitlines() if ln.strip().startswith("${TREE_SUDO:-} tar -C "
                                                                           '"${PANEL_DIR}" --ignore')][0]
             + "\n" + [ln for ln in _pb_inst.splitlines() if ln.strip().startswith("snapshot_ok() {")][0]

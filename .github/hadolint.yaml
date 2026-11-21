@@ -1,0 +1,10 @@
+# hadolint's settings for the add-on Containerfiles (panel/addon_images/*/Containerfile), read by
+# .github/scripts/addon_images.py in the "Add-on images" workflow. Every other rule fails the run, at
+# hadolint's own default threshold.
+ignored:
+  # DL3008, "pin versions in apt-get install": OWASP's Docker Security Cheat Sheet (rule 9) lists
+  # pinned OS package versions, but here apt installs only into a build stage that is thrown away
+  # (B3's `git ca-certificates`, to fetch its source), and what that stage produces is checked
+  # against a fixed commit id, so an unpinned git cannot change what ships. Exact Debian versions
+  # would break every build at the next point release; the base image is pinned by digest instead.
+  - DL3008
