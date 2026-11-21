@@ -141,6 +141,26 @@ def _images(p, work, results):
     return saved
 
 
+def _verdict(rc, tool):
+    return "passed" if rc == 0 else "FAILED (%s, exit %d)" % (tool, rc)
+
+
+def _scan_images(p, trivy_image, results):
+    """Pull or build every image, run Trivy's gate over each; append (label, verdict) to results."""
+    with tempfile.TemporaryDirectory(prefix="addon-scan-") as work:
+        cache = os.path.join(work, "cache")
+        os.mkdir(cache)
+        for label, tar in _images(p, work, results):
+            results.append((label, _verdict(_run(trivy_argv(trivy_image, cache, work, tar)), "Trivy")))
+
+
+def _lint(p, hadolint_image, results):
+    """Run hadolint over every build's Containerfile; append (label, verdict) to results."""
+    for b in p["builds"]:
+        with open(os.path.join(IMAGES_DIR, b, "Containerfile"), "rb") as fh:
+            results.append((b + " Containerfile", _verdict(_run(hadolint_argv(hadolint_image), stdin=fh), "hadolint")))
+
+
 def scan(trivy_image, hadolint_image):
     """Pull, build, scan and lint everything plan() names; 0 when all of it passed."""
     p = plan()
@@ -149,16 +169,8 @@ def scan(trivy_image, hadolint_image):
             print("ERROR: " + line)
         return 1
     results = []
-    with tempfile.TemporaryDirectory(prefix="addon-scan-") as work:
-        cache = os.path.join(work, "cache")
-        os.mkdir(cache)
-        for label, tar in _images(p, work, results):
-            rc = _run(trivy_argv(trivy_image, cache, work, tar))
-            results.append((label, "passed" if rc == 0 else "FAILED (Trivy, exit %d)" % rc))
-    for b in p["builds"]:
-        with open(os.path.join(IMAGES_DIR, b, "Containerfile"), "rb") as fh:
-            rc = _run(hadolint_argv(hadolint_image), stdin=fh)
-        results.append((b + " Containerfile", "passed" if rc == 0 else "FAILED (hadolint, exit %d)" % rc))
+    _scan_images(p, trivy_image, results)
+    _lint(p, hadolint_image, results)
     lines = ["| Image | Result |", "| --- | --- |"] + ["| %s | %s |" % r for r in results]
     print("\n".join(lines))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

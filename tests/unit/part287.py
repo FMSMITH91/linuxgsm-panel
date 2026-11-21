@@ -139,16 +139,11 @@ def _s287_tree_modes_owner():
 
 def _snapshot_lines287():
     """install.sh's [1/6] folder line and both archive lines, cut from install.sh as written."""
-    lines = _inst.splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.startswith('    info "[1/6] Snapshotting'))
-    mk = []
-    for ln in lines[start + 1:]:
-        if ln.strip().startswith("# Compressor"):
-            break
-        mk.append(ln)
-    code = [ln for ln in lines if "--exclude=./venv --exclude=./data -cf - ." in ln and "TREE_SUDO" in ln]
-    data = [ln for ln in lines if "--exclude=./.backups" in ln and "TREE_SUDO" in ln and "tar -C" in ln]
-    return "\n".join(mk), (code or ["exit 97"])[0], (data or ["exit 97"])[0]
+    mk = _section287('    info "[1/6] Snapshotting', "    # Compressor").split("\n", 1)[-1]
+    lines = [ln for ln in _inst.splitlines() if "TREE_SUDO" in ln and "tar -C" in ln]
+    code = [ln for ln in lines if "--exclude=./venv --exclude=./data -cf - ." in ln] + ["exit 97"]
+    data = [ln for ln in lines if "--exclude=./.backups" in ln] + ["exit 97"]
+    return mk, code[0], data[0]
 
 
 def _s287_snapshot_modes():
@@ -247,9 +242,18 @@ def _panel_jobs287(u):
             + "0 4 * * * touch /home/%s/.restart-pending\n" % u)
 
 
-def _s287_orphan_crontabs():
+def _sweep287(spool, uid):
+    """Run install.sh's ensure_no_orphan_crontabs over `spool`, with `id -u` answering `uid`."""
+    script = ("set -euo pipefail\nok() { echo \"OK $*\"; }\nwarn() { echo \"WARN $*\"; }\n"
+              'id() { case "${1:-}" in -u) echo %s ;; *) command id "$@" ;; esac; }\n' % uid
+              + "CRON_SPOOL=%s\n" % _q287(spool) + _inst_shfn("ensure_no_orphan_crontabs")
+              + "ensure_no_orphan_crontabs; echo RC=$?\n")
+    return _bash287(script)
+
+
+def _spool287(outside):
+    """A stand-in cron spool: each case's file, and a link to `outside` under an orphan's name."""
     spool = _tf287.mkdtemp(prefix="spool-", dir=_TMP287)
-    outside = os.path.join(_TMP287, "outside-crontab")
     files = {
         "p287gone": _HEADER287 + _panel_jobs287("p287gone"),          # removed
         "p287mixed": _panel_jobs287("p287mixed") + "0 1 * * * /usr/local/bin/own-backup\n",
@@ -263,17 +267,15 @@ def _s287_orphan_crontabs():
         _write287(os.path.join(spool, name), text, 0o600)
     _write287(outside, _panel_jobs287("p287link"), 0o600)
     os.symlink(outside, os.path.join(spool, "p287link"))
+    return spool
 
-    def run(uid):
-        script = ("set -euo pipefail\nok() { echo \"OK $*\"; }\nwarn() { echo \"WARN $*\"; }\n"
-                  'id() { case "${1:-}" in -u) echo %s ;; *) command id "$@" ;; esac; }\n' % uid
-                  + "CRON_SPOOL=%s\n" % _q287(spool) + _inst_shfn("ensure_no_orphan_crontabs")
-                  + "ensure_no_orphan_crontabs; echo RC=$?\n")
-        return _bash287(script)
 
-    as_user = run(4242)
+def _s287_orphan_crontabs():
+    outside = os.path.join(_TMP287, "outside-crontab")
+    spool = _spool287(outside)
+    as_user = _sweep287(spool, 4242)
     left_user = sorted(os.listdir(spool))
-    out = run(0)
+    out = _sweep287(spool, 0)
     left = set(os.listdir(spool))
     check("crontabs: a removed account's crontab holding only the panel's jobs is removed, and said",
           "p287gone" not in left and "OK Removed the crontabs left by uninstalled game servers: p287gone" in out
@@ -286,6 +288,9 @@ def _s287_orphan_crontabs():
           {_ME287, "tmp.ab12cd", "p287link"} <= left and os.path.exists(outside), repr(sorted(left)))
     check("crontabs: ...and a run that is not root reads nothing (the spool is root's)",
           "p287gone" in left_user and "RC=0" in as_user and "WARN" not in as_user, repr((left_user, as_user)))
+
+
+def _s287_orphan_callers():
     full = _code_lines287(_section287('    info "[6/6] Verifying the panel', 'ok "Update complete'))
     noop = _code_lines287(_section287("        install_gamedig\n        # The breached-password list",
                                       "        update_noop_line\n        exit 0"))
@@ -335,9 +340,15 @@ def _read287(*parts):
         return fh.read()
 
 
-def _s287_scan_workflow():
+def _wf_parts287():
+    """(the workflow's code lines, the part above `jobs:`, the jobs) of addon-images.yml."""
     wf = _code_lines287(_read287(".github", "workflows", "addon-images.yml"))
     head, _, jobs = wf.partition("\njobs:")
+    return wf, head, jobs
+
+
+def _s287_scan_workflow():
+    _, head, _ = _wf_parts287()
     cron = _re287.findall(r'cron: "([^"]+)"', head)
     paths = _re287.findall(r"^      - '([^']+)'$", head, _re287.M)
     check("image scan: the workflow runs daily, by hand, and on a pull request changing an image, a pin or the "
@@ -347,11 +358,18 @@ def _s287_scan_workflow():
           and {"panel/addon_images/**", "panel/services/addons.py", ".github/workflows/addon-images.yml",
                ".github/scripts/addon_images.py", ".github/trivyignore.yaml", ".github/hadolint.yaml"} <= set(paths),
           repr((cron, paths)))
+
+
+def _s287_scan_token():
+    wf, head, jobs = _wf_parts287()
     perms = _re287.findall(r"^\s+permissions:(.*(?:\n\s{6,}\S.*)*)", jobs, _re287.M)
     check("image scan: ...holds a read-only token and no secret, and runs the script's plan, then its scan",
           "permissions: {}" in head and len(perms) == 1 and perms[0].split("#")[0].split() == ["contents:", "read"]
           and "secrets." not in wf and "addon_images.py plan" in jobs
           and jobs.index("addon_images.py plan") < jobs.index("addon_images.py scan"), repr(perms))
+
+
+def _s287_scan_images_pinned():
     pins = _re287.findall(r"# renovate: datasource=docker\n\s+([A-Z_]+IMAGE): '([^']+)'", _read287(
         ".github", "workflows", "addon-images.yml"))
     check("image scan: ...with Trivy and hadolint by tag and digest, in the form Renovate keeps current",
@@ -406,8 +424,8 @@ def _s287_scan_accepted():
 
 
 for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers,
-               _s287_core_dumps, _s287_orphan_crontabs, _s287_threat_model, _s287_b3_no_pip,
-               _s287_scan_workflow, _s287_scan_plan, _s287_scan_accepted):
+               _s287_core_dumps, _s287_orphan_crontabs, _s287_orphan_callers, _s287_threat_model, _s287_b3_no_pip,
+               _s287_scan_workflow, _s287_scan_token, _s287_scan_images_pinned, _s287_scan_plan, _s287_scan_accepted):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down
