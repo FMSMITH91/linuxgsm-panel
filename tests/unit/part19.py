@@ -651,18 +651,20 @@ _rn_all = _rn_cfg.get("customManagers") or [{}]
 _rn_mgrs = [_m for _m in _rn_all if not all(_p.startswith("/^panel/") for _p in _m.get("managerFilePatterns") or ["x"])]
 # A second regex manager and the github-actions manager keep the pinned container images current;
 # what they match is part242's.
+# dependencyDashboard is a boolean: renovate-config-validator (44.127) rejected the object form `{"enabled": false}`
+# as a configuration error.
 check("renovate: two regex managers over the workflows (downloads first), the dockerfile manager on the "
       "fuzz image only, the github-actions manager on the two ClusterFuzzLite action copies only, no "
       "other manager, no dashboard, a release age floor",
       _rn_cfg.get("enabledManagers") == ["custom.regex", "dockerfile", "github-actions"]
       and _rn_cfg.get("dockerfile") == {"managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]}
       and _rn_cfg.get("github-actions") == {"managerFilePatterns": ["/^\\.github/actions/cflite-[a-z-]+/action\\.yml$/"]}
-      and len(_rn_mgrs) == 2 and len(_rn_all) == 6
+      and len(_rn_mgrs) == 2 and len(_rn_all) == 7
       and all(_m.get("customType") == "regex" for _m in _rn_mgrs)
       and all(_m.get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"] for _m in _rn_mgrs)
       and all(len(_m.get("matchStrings") or []) == 1 for _m in _rn_mgrs)
       and "github-release-attachments" in _rn_mgrs[0]["matchStrings"][0]
-      and _rn_cfg.get("dependencyDashboard") == {"enabled": False}
+      and _rn_cfg.get("dependencyDashboard") is False
       and _sg_re.fullmatch(r"[1-9][0-9]* days", _rn_cfg.get("minimumReleaseAge") or "") is not None,
       repr({k: _rn_cfg.get(k) for k in ("enabledManagers", "dockerfile", "github-actions", "dependencyDashboard",
                                         "minimumReleaseAge")}))

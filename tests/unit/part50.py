@@ -174,8 +174,9 @@ _SCOPED50 = {
     "zizmor.yml": ("zizmor",),
 }
 # Run in full on every pull request: a secret can be pasted into a README (Gitleaks); Dependency
-# Review takes seconds; the fuzzers have their own allowlists, which no documentation path is in.
-_ALWAYS50 = {"security.yml", "dependency-review.yml", "fuzz.yml", "cflite_pr.yml"}
+# Review takes seconds; the fuzzers and the add-on image scan have their own allowlists, which no
+# documentation path is in.
+_ALWAYS50 = {"security.yml", "dependency-review.yml", "fuzz.yml", "cflite_pr.yml", "addon-images.yml"}
 _RUN50 = "steps.scope.outputs.docs_only != 'true'"
 _DOCS50 = "steps.scope.outputs.docs_only == 'true'"
 # The jobs that skip on their OWN list (pr_scope.py --job, part169): the same wiring, on `skip`.

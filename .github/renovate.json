@@ -12,7 +12,7 @@
     "the two never propose the same update. Renovate adds the managerFilePatterns set here to each",
     "built-in manager's own (which read every workflow and every Dockerfile or Containerfile), so",
     "packageRules turn the github-actions manager off for the workflows and the dockerfile manager",
-    "off for B3's Containerfile.",
+    "off for the add-ons' Containerfiles.",
     "Each pinned download is marked in its step's env with a `# renovate: datasource=... depName=owner/repo`",
     "line directly above the VERSION (the release tag) and SHA256 lines. The",
     "github-release-attachments datasource finds the asset the current sha256 belongs to and",
@@ -26,11 +26,16 @@
     "The add-ons' pins (panel/services/addons.py): B3's source, the newest FMSMITH91/big-brother-bot",
     "release tag and its commit (git-tags, in addons.py and the B3 Containerfile together; master is",
     "the next version in development, so it is never proposed),",
-    "IW4MAdmin's image, the digest of its `latest` tag, and the B3 image's base, the digest of",
+    "IW4MAdmin's release, the newest RaidMax/IW4M-Admin release tag and the sha256 of the archive attached to",
+    "it (in addons.py and the IW4MAdmin Containerfile together; a custom datasource reads GitHub's releases",
+    "API, where each asset carries its sha256 digest: github-release-attachments maps an asset by the tag's",
+    "text, and IW4MAdmin's tags end in -prerelease while its archives do not, so it would find none), the",
+    "base of the IW4MAdmin image, the digest of mcr.microsoft.com/dotnet/aspnet:10.0 (IW4MADMIN_BASE and the",
+    "Containerfile's ARG BASE_IMAGE together), the B3 image's base, the digest of",
     "python:3.15-slim (B3_BASE in addons.py and ARG BASE_IMAGE in the B3 Containerfile together;",
-    "written by digest alone, as podman takes it, so the tag Renovate follows is the manager's",
+    "both bases written by digest alone, as podman takes them, so the tag Renovate follows is the manager's",
     "currentValueTemplate), and BlueMap's image, the digest of its `v5` tag (a new 5.x release, never",
-    "a new major one). All four are checked daily (packageRules). The B3 image's Python",
+    "a new major one). All five are checked daily (packageRules). The B3 image's Python",
     "dependencies (panel/addon_images/b3/requirements.txt, pip-compile's lock of requirements.in)",
     "stay with Dependabot, like every other pip lockfile here: Renovate runs no pip manager."
   ],
@@ -79,14 +84,30 @@
     },
     {
       "customType": "regex",
-      "description": "The IW4MAdmin add-on's image: the digest of its latest tag",
+      "description": "The IW4MAdmin add-on's release: RaidMax/IW4M-Admin's newest release tag and its archive's sha256, in addons.py and the IW4MAdmin Containerfile together",
       "managerFilePatterns": [
-        "/^panel/services/addons\\.py$/"
+        "/^panel/services/addons\\.py$/",
+        "/^panel/addon_images/iw4madmin/Containerfile$/"
       ],
       "matchStrings": [
-        "IW4MADMIN_IMAGE = \"(?<depName>ghcr\\.io/raidmax/iw4madmin)@(?<currentDigest>sha256:[0-9a-f]{64})\""
+        "IW4MADMIN_TAG = \"(?<currentValue>[0-9][0-9.]*-prerelease)\"\\nIW4MADMIN_SHA256 = \"(?<currentDigest>[0-9a-f]{64})\"",
+        "ARG IW4MADMIN_TAG=(?<currentValue>[0-9][0-9.]*-prerelease)\\nARG IW4MADMIN_SHA256=(?<currentDigest>[0-9a-f]{64})"
       ],
-      "currentValueTemplate": "latest",
+      "depNameTemplate": "RaidMax/IW4M-Admin",
+      "datasourceTemplate": "custom.iw4madmin-release",
+      "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.(?<build>\\d+)-prerelease$"
+    },
+    {
+      "customType": "regex",
+      "description": "The IW4MAdmin add-on image's base: the digest of mcr.microsoft.com/dotnet/aspnet:10.0, in addons.py and the IW4MAdmin Containerfile together",
+      "managerFilePatterns": [
+        "/^panel/services/addons\\.py$/",
+        "/^panel/addon_images/iw4madmin/Containerfile$/"
+      ],
+      "matchStrings": [
+        "(?:IW4MADMIN_BASE = \"|ARG BASE_IMAGE=)(?<depName>mcr\\.microsoft\\.com/dotnet/aspnet)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "currentValueTemplate": "10.0",
       "datasourceTemplate": "docker"
     },
     {
@@ -115,6 +136,16 @@
       "datasourceTemplate": "docker"
     }
   ],
+  "customDatasources": {
+    "iw4madmin-release": {
+      "description": "RaidMax/IW4M-Admin's releases with an IW4MAdmin-<build>.zip archive, each with that archive's sha256 (GitHub's asset digest). IW4MAdmin's release workflow marks every release a prerelease; each is one, so each counts as stable here.",
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/RaidMax/IW4M-Admin/releases?per_page=30",
+      "format": "json",
+      "transformTemplates": [
+        "($zip := function($r) { ($r.assets[$contains(name, /^IW4MAdmin-[0-9.]+\\.zip$/) and $contains($string(digest), /^sha256:[0-9a-f]{64}$/)])[0] }; $rel := [$map($$[draft = false and $exists($zip($))], function($r) { ($d := $substringAfter($zip($r).digest, \"sha256:\"); {\"version\": $r.tag_name, \"releaseTimestamp\": $r.published_at, \"isStable\": true, \"digest\": $d}) })]; {\"releases\": $rel})"
+      ]
+    }
+  },
   "dockerfile": {
     "managerFilePatterns": [
       "/^\\.clusterfuzzlite/Dockerfile$/"
@@ -158,10 +189,11 @@
     {
       "description": "The add-ons' pins are checked every day; B3's fork is this project's own, so its commits need no waiting period",
       "matchDepNames": [
+        "RaidMax/IW4M-Admin",
         "big-brother-bot",
         "docker.io/library/python",
         "ghcr.io/bluemap-minecraft/bluemap",
-        "ghcr.io/raidmax/iw4madmin"
+        "mcr.microsoft.com/dotnet/aspnet"
       ],
       "schedule": [
         "* 0-5 * * *"
@@ -175,12 +207,13 @@
       "minimumReleaseAge": "0 days"
     },
     {
-      "description": "B3's build file: only the custom manager above (python:3.15-slim, kept equal with addons.py). The built-in dockerfile manager reads its tagless ARG BASE_IMAGE digest as python:latest and proposed a different Python (#598).",
+      "description": "The add-ons' build files: only the custom managers above (B3's base, python:3.15-slim, kept equal with addons.py; IW4MAdmin's, aspnet:10.0). The built-in dockerfile manager reads a tagless ARG BASE_IMAGE digest as the image's latest tag: on B3's it read python:latest and proposed a different Python (#598).",
       "matchManagers": [
         "dockerfile"
       ],
       "matchFileNames": [
-        "panel/addon_images/b3/Containerfile"
+        "panel/addon_images/b3/Containerfile",
+        "panel/addon_images/iw4madmin/Containerfile"
       ],
       "enabled": false
     },
@@ -195,9 +228,7 @@
       "enabled": false
     }
   ],
-  "dependencyDashboard": {
-    "enabled": false
-  },
+  "dependencyDashboard": false,
   "minimumReleaseAge": "7 days",
   "labels": [
     "ci"

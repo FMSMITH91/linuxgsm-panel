@@ -114,7 +114,7 @@ def _run_install255(state, restarts, addon=_ad255.IW4MADMIN, start="ok", nofield
     bus = _socket255.socket(_socket255.AF_UNIX)
     bus.bind(os.path.join(run, "bus"))
     log = os.path.join(root, "tools.log")
-    files = _ad255.iw4madmin_files() if addon == _ad255.IW4MADMIN else _ad255.build_files(addon)
+    files = dict(_ad255.build_files(addon), **(_ad255.iw4madmin_files() if addon == _ad255.IW4MADMIN else {}))
     sh = _ad255.install_sh("u255", addon, "[Unit]\n", "{}\n", files)
     sh = sh.replace('"/run/user/$(id -u)"', run).replace("/home/u255", home)
     unit = os.path.join(home, ".config", "containers", "systemd", "lgsm-addon-%s.container" % addon)
@@ -148,7 +148,7 @@ def _settle255():
     settings = os.path.join(base, "Configuration", "IW4MAdminSettings.json")
     eq("first start: running for the whole settle time is installed, with the settings and plugin answers written",
        [rc, out.strip()[-15:], open(settings, encoding="utf-8").read() if os.path.exists(settings) else "",
-        os.path.exists(stats), "podman pull" in tools], [0, "ADDON_INSTALLED", '{"Servers": []}\n', True, True])
+        os.path.exists(stats), "podman build" in tools], [0, "ADDON_INSTALLED", '{"Servers": []}\n', True, True])
     unit = os.path.join(home, ".config", "containers", "systemd", "lgsm-addon-iw4madmin.container")
     eq("first start: the unit is written only once the image is there (a user manager coming up can't start it early)",
        ["unit-before-image" in tools, os.path.exists(unit)], [False, True])

@@ -107,6 +107,8 @@ _AUDIT223 = {
     ("scorecard.yml", "analysis"): _MAIN_ONLY223, ("sonar-main-issues.yml", "sonar-main-issues"): _MAIN_ONLY223,
     ("scorecard.yml", "image-pin"): _MAIN_ONLY223, ("scorecard.yml", "image-pulled"): _MAIN_ONLY223,
     ("deploy.yml", "deploy"): "carries no Harden-Runner at all (part42)",
+    ("addon-images.yml", "scan"): "pulls, builds and scans the add-on images through Docker's own networking, "
+                                  "as ClusterFuzzLite does (the scanner images are pinned by digest)",
 }
 
 

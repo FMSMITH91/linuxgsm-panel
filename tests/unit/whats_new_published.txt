@@ -924,3 +924,13 @@ a0f2e939 World reset reads only the config lines it understands.
 4693c843 An account's recent security changes are its own.
 d93c5f77 B3 updates are offered for B3's releases only.
 fabe9069 Semgrep's CI install no longer carries a vulnerable wcmatch.
+6a7c305d Old crontabs of removed game servers are cleaned up.
+a9c7506f One connection can no longer slow the panel for everyone.
+c36dd154 Malformed socket messages no longer flood the log.
+523b114b Database restores, dumps and deletes run one at a time.
+aabec17c An invite's code lockout holds under parallel guesses.
+0bb639b9 The 20-key SFTP limit and duplicate check hold for keys added at the same time.
+fa7126ce Update snapshots and the panel's files are readable only by the panel's account.
+fadaca3b The panel's memory stays out of crash dumps.
+b3191625 IW4MAdmin runs on an up-to-date .NET runtime.
+05eeb765 B3's image no longer ships pip.

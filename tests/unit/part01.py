@@ -2992,6 +2992,7 @@ def _iw_run(scenario, panel_dir, backup, env=None):
         "ensure_service_tuning() { :; }",
         "ensure_system_tuning() { :; }",
         "install_recovery_command() { :; }",
+        "ensure_tree_modes() { :; }",
         # The unit is refreshed at [5/6] and put back by the trap's recovery; both write /etc.
         "ensure_service_unit() { UNIT_CHANGED=0; echo 'ENSURE_UNIT'; }",
         "restore_service_unit() { echo 'RESTORE_UNIT'; }",
