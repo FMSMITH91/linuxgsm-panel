@@ -3,8 +3,8 @@
 # entrypoint.sh (its settings file must be there; the release's default settings, plugins and
 # translations fill the mounted folders when they are empty), then IW4MAdmin itself. Its user switch
 # (gosu, chown) is left out: the panel already runs the container as the game account.
-# No `set -e`: a populate step skips files already there, and Ubuntu 24.04's cp -n (coreutils 9.4)
-# then exits 1, which must not stop the start (IW4MAdmin's own script has no -e either).
+# No `set -e`, as in IW4MAdmin's own script: a populate step that skips files already there must not
+# stop the start, and cp -n's exit status for a skipped file is not settled (coreutils 9.4 warns it may change).
 set -u
 cd /app
 if [ ! -f Configuration/IW4MAdminSettings.json ]; then

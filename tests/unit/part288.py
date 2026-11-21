@@ -224,8 +224,7 @@ def _entry288():
        (rc, _text288(os.path.join(app, "Configuration", "LoggingConfiguration.json")),
         _text288(os.path.join(app, "Plugins", "Stats.dll")), os.path.exists(os.path.join(app, "Plugins", "Welcome.dll")),
         bool(ran)), (0, "operator logging\n", "operator stats\n", False, True))
-    # Plugins without Stats.dll is filled in, and the operator's own file there is kept (cp -n): a skipped file
-    # makes Ubuntu 24.04's cp -n exit 1, which must not stop the start.
+    # Plugins without Stats.dll is filled in, and the operator's own file there is kept (cp -n).
     rc, _err, ran, app = _entry_run288("partial", {"Configuration/IW4MAdminSettings.json": "{}\n",
                                                    "Plugins/Welcome.dll": "operator welcome\n"})
     eq("entrypoint: a folder filled in from the defaults keeps the operator's own files there, and IW4MAdmin starts",
