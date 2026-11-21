@@ -101,7 +101,7 @@ SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfile
 # events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3 the
 # add-on builds. Renovate proposes the branch's newest commit (.github/renovate.json), in this line and the
 # Containerfile's ARG together.
-B3_COMMIT = "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
+B3_COMMIT = "d13e8bd3e001bff46119f3a11c6d2c0456537c13"
 # The release B3_COMMIT is. The tree at that commit still says 2.0.2dev (b3/__init__.py's __version__: the release
 # build sets the number in the artifacts it publishes, b3-2.0.2 wheel and installer, not in the tagged source), so
 # B3 built from source reports "2.0.2dev" in its health.json; the card names the release instead whenever the
