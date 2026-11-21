@@ -1,4 +1,4 @@
-"""Part 287 of the unit suite: the installer's file modes, core dumps, old crontabs, the B3 image.
+"""Part 287 of the unit suite: the installer's file modes, core dumps, old crontabs, the B3 image, image scans.
 
 1. Update snapshots (data/.backups/<stamp>/code.tgz, data.tgz) are written owner-only: the folder
    0700 and each archive 0600, under umask 077 inside the owner's own shell (sudo's PAM session
@@ -15,6 +15,10 @@
 4. The threat model says why the panel's unit has no systemd sandboxing (everything it starts, the root
    helper and the game servers, would inherit it).
 5. B3's image leaves out pip, setuptools and wheel (and ensurepip's pip wheel) once B3's packages are in.
+6. The "Add-on images" workflow: daily and on a pull request touching an image or a pin, a read-only
+   token, scanner images by digest; its script scans what addons.py pins and what the panel builds,
+   refuses a Containerfile default addons.py does not pass, and gates Trivy on fixable High/Critical
+   findings; every accepted finding has a reason and an expiry date.
 
 HOW IT RUNS. install.sh's own text, cut out and run under bash over this part's scratch trees (a
 stand-in cron spool among them); `id` and `sudo` are stand-ins where a check needs a root run. The
@@ -23,6 +27,7 @@ The scan script is loaded from .github/scripts and planned over scratch fixtures
 Nothing here runs as another account, or reads or writes /etc, the real cron spool, or data/.
 """
 import atexit as _atexit287
+import importlib.util as _ilu287
 import os
 import pwd as _pwd287
 import re as _re287
@@ -318,7 +323,91 @@ def _s287_b3_no_pip():
           step)
 
 
-for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers, _s287_core_dumps, _s287_orphan_crontabs, _s287_threat_model, _s287_b3_no_pip):
+# ── 6. The add-on image scan ────────────────────────────────────────────────────────────────────────
+_AI_PATH287 = os.path.join(_root, ".github", "scripts", "addon_images.py")
+_ai_spec287 = _ilu287.spec_from_file_location("addon_images_p287", _AI_PATH287)
+_AI287 = _ilu287.module_from_spec(_ai_spec287)
+_ai_spec287.loader.exec_module(_AI287)
+
+
+def _read287(*parts):
+    with open(os.path.join(_root, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _s287_scan_workflow():
+    wf = _code_lines287(_read287(".github", "workflows", "addon-images.yml"))
+    head, _, jobs = wf.partition("\njobs:")
+    cron = _re287.findall(r'cron: "([^"]+)"', head)
+    paths = _re287.findall(r"^      - '([^']+)'$", head, _re287.M)
+    check("image scan: the workflow runs daily, by hand, and on a pull request changing an image, a pin or the "
+          "scan's own files",
+          len(cron) == 1 and _re287.fullmatch(r"\d{1,2} \d{1,2} \* \* \*", cron[0]) is not None
+          and "workflow_dispatch:" in head and "pull_request:" in head
+          and {"panel/addon_images/**", "panel/services/addons.py", ".github/workflows/addon-images.yml",
+               ".github/scripts/addon_images.py", ".github/trivyignore.yaml", ".github/hadolint.yaml"} <= set(paths),
+          repr((cron, paths)))
+    perms = _re287.findall(r"^\s+permissions:(.*(?:\n\s{6,}\S.*)*)", jobs, _re287.M)
+    check("image scan: ...holds a read-only token and no secret, and runs the script's plan, then its scan",
+          "permissions: {}" in head and len(perms) == 1 and perms[0].split("#")[0].split() == ["contents:", "read"]
+          and "secrets." not in wf and "addon_images.py plan" in jobs
+          and jobs.index("addon_images.py plan") < jobs.index("addon_images.py scan"), repr(perms))
+    pins = _re287.findall(r"# renovate: datasource=docker\n\s+([A-Z_]+IMAGE): '([^']+)'", _read287(
+        ".github", "workflows", "addon-images.yml"))
+    check("image scan: ...with Trivy and hadolint by tag and digest, in the form Renovate keeps current",
+          sorted(n for n, _ in pins) == ["HADOLINT_IMAGE", "TRIVY_IMAGE"]
+          and all(_re287.fullmatch(r"[a-z0-9./_-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}", v) for _, v in pins),
+          repr(pins))
+
+
+def _addons_fixture287(body, containerfile):
+    d = _tf287.mkdtemp(prefix="ai-", dir=_TMP287)
+    _write287(os.path.join(d, "addons.py"), body, 0o600)
+    _write287(os.path.join(d, "images", "x", "Containerfile"), containerfile, 0o600)
+    return _AI287.plan(os.path.join(d, "addons.py"), os.path.join(d, "images"))
+
+
+def _s287_scan_plan():
+    real = _AI287.plan()
+    check("image scan: on this tree it scans BlueMap's pinned image and builds B3, with nothing wrong",
+          "BLUEMAP_IMAGE" in real["upstream"] and "b3" in real["builds"] and not real["problems"], repr(real))
+    good = 'A_IMAGE = "ghcr.io/o/a@sha256:%s"\nB_IMAGE = "ghcr.io/o/b:latest"\nBASE = "docker.io/library/p@sha256:%s"\n' \
+        % ("1" * 64, "2" * 64)
+    ok = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
+    bad = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("3" * 64))
+    check("image scan: ...an image pinned by digest is scanned, one pinned by tag is not taken for a pin",
+          ok["upstream"] == {"A_IMAGE": "ghcr.io/o/a@sha256:" + "1" * 64} and ok["builds"] == ["x"]
+          and not ok["problems"], repr(ok))
+    check("image scan: ...and a Containerfile default addons.py does not pass stops the scan (it would build "
+          "another image than hosts run)",
+          bad["problems"] and "ARG BASE_IMAGE" in bad["problems"][0], repr(bad))
+    argv = _AI287.trivy_argv("t@sha256:" + "0" * 64, "/c", "/s", "x.tar")
+    gate = " ".join(argv)
+    check("image scan: Trivy fails on a fixable High or Critical vulnerability or a secret, reads the accepted "
+          "findings, and takes its databases from GitHub's registry",
+          all(f in gate for f in ("--severity HIGH,CRITICAL", "--ignore-unfixed", "--exit-code 1",
+                                  "--scanners vuln,secret", "--ignorefile /trivyignore.yaml",
+                                  "--db-repository ghcr.io/", "--java-db-repository ghcr.io/"))
+          and argv[:3] == ["docker", "run", "--rm"], gate)
+
+
+def _s287_scan_accepted():
+    text = _read287(".github", "trivyignore.yaml")
+    entries = _re287.split(r"(?m)^  - id: ", _code_lines287(text))[1:]
+    dates = [_re287.search(r"(?m)^    expired_at: (\d{4}-\d{2}-\d{2})$", e) for e in entries]
+    check("image scan: every accepted finding names its packages, says why and expires",
+          entries and all(d for d in dates)
+          and all(_re287.search(r"(?m)^    statement: \"[^\"]{20,}\"$", e) and "    purls:\n      - \"pkg:" in e
+                  for e in entries), repr(entries))
+    hl = _code_lines287(_read287(".github", "hadolint.yaml"))
+    check("image scan: hadolint turns off DL3008 alone, and says why",
+          _re287.findall(r"(?m)^  - (\S+)$", hl) == ["DL3008"] and "DL3008" in _read287(".github", "hadolint.yaml")
+          .split("- DL3008")[0], hl)
+
+
+for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers,
+               _s287_core_dumps, _s287_orphan_crontabs, _s287_threat_model, _s287_b3_no_pip,
+               _s287_scan_workflow, _s287_scan_plan, _s287_scan_accepted):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down
