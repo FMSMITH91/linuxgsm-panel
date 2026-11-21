@@ -14,8 +14,11 @@ that takes an account back removes the account's keys (User.revoke_outliving_cre
 and removing are audited, appear in the account's own security notices, and raise the
 credential_change alert for an administrator's account (account_notices).
 """
+import threading
+
 from flask import current_app, flash, jsonify, redirect, request, url_for
 from flask_login import current_user, login_required
+from sqlalchemy.exc import IntegrityError
 
 from panel.core import i18n
 from panel.core.config import load_config, update_config
@@ -28,6 +31,10 @@ from panel.services import sftp_broker, sftp_common as sc
 
 _SETTINGS_ANCHOR = "sec-sftp"
 _ACCOUNT_ANCHOR = "sec-sftp"
+# Held while a key is counted, checked for a duplicate and stored, so the cap and the duplicate check
+# hold for requests that arrive together (the proof before it yields while the password hashes).
+_KEY_ADD_LOCK = threading.Lock()
+_DUPLICATE_KEY = "That key is already on your account."
 ALL_ADDRESSES_WARNING = ("All addresses: the SFTP port is reachable from the internet, and anyone can try to "
                          "sign in. Sign-in stays limited to SSH keys unless you allow passwords below. The "
                          "panel does not open the port in the firewall: see the SFTP guide for how.")
@@ -71,21 +78,24 @@ def register(app):
         """Add one public key to the signed-in account, proved with the password (and the code with 2FA on)."""
         u = current_user._get_current_object()
         parsed, why = sc.parse_public_key(request.form.get("public_key"), request.form.get("label"))
-        if why is None and current_user.sftp_keys.count() >= sc.MAX_KEYS_PER_USER:
-            why = i18n.Sentence("An account can hold {n} SFTP keys. Remove one first.", n=sc.MAX_KEYS_PER_USER)
-        if why is None and current_user.sftp_keys.filter_by(fingerprint=parsed.fingerprint).first():
-            why = "That key is already on your account."
+        if why is None:
+            why = _key_refusal(u, parsed)
         if why:
             flash(i18n.tr(why), "danger")
-        # The proof is checked LAST, as the API-token mint does: a one-time backup code is never
-        # spent on a request that is refused for another reason.
+        # The proof is checked after the cap and the duplicate, as the API-token mint does: a one-time
+        # backup code is never spent on a request already refused for another reason.
         refused = str(why) if why else _key_add_proof_refusal(u)
+        if not refused:
+            # ...and those two are asked again once it has passed, with the insert, because the proof
+            # yields: 8 keys sent together from 18 left 26 against a cap of 20, and 20 copies of one key
+            # stored it once and answered 7 of the others with an IntegrityError (500), unaudited.
+            refused = _store_key(u, parsed)
+            if refused:
+                flash(i18n.tr(refused), "danger")
+                refused = str(refused)
         if refused:
             log_action(u, "sftp_key_add", target=u.username, detail="refused: %s" % refused, success=False)
             return redirect(url_for("account", _anchor=_ACCOUNT_ANCHOR))
-        db.session.add(SftpKey(user_id=current_user.id, label=parsed.label, key_type=parsed.key_type,
-                               key_blob=parsed.blob_b64, fingerprint=parsed.fingerprint))
-        db.session.commit()
         log_action(current_user, "sftp_key_add", target=current_user.username,
                    detail="%s %s %s" % (sc.KEY_TYPES[parsed.key_type], parsed.fingerprint, parsed.label))
         account_notices.alert_credential_change(u, "SFTP key added (%s)" % parsed.fingerprint)
@@ -105,6 +115,32 @@ def register(app):
         log_action(current_user, "sftp_key_remove", target=current_user.username, detail=detail)
         account_notices.alert_credential_change(current_user, "SFTP key removed (%s)" % row.fingerprint)
         return jsonify({"success": True, "message": i18n.tr("SFTP key removed.")})
+
+
+def _key_refusal(u, parsed):
+    """Why key `parsed` cannot be added to `u` now (the account's cap, or a duplicate), or None."""
+    if u.sftp_keys.count() >= sc.MAX_KEYS_PER_USER:
+        return i18n.Sentence("An account can hold {n} SFTP keys. Remove one first.", n=sc.MAX_KEYS_PER_USER)
+    if u.sftp_keys.filter_by(fingerprint=parsed.fingerprint).first():
+        return _DUPLICATE_KEY
+    return None
+
+
+def _store_key(u, parsed):
+    """Store key `parsed` for `u`, the cap and the duplicate asked again under _KEY_ADD_LOCK: None, or why not."""
+    with _KEY_ADD_LOCK:
+        why = _key_refusal(u, parsed)
+        if why is not None:
+            return why
+        db.session.add(SftpKey(user_id=u.id, label=parsed.label, key_type=parsed.key_type,
+                               key_blob=parsed.blob_b64, fingerprint=parsed.fingerprint))
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # The database's own unique (account, fingerprint) rule: a duplicate, not a fault.
+            db.session.rollback()
+            return _DUPLICATE_KEY
+    return None
 
 
 def _key_add_proof_refusal(u):
