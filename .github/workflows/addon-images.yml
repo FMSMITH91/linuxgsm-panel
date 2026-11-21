@@ -48,6 +48,7 @@ jobs:
     permissions:
       contents: read   # checks out the Containerfiles and the pins; nothing is written
     env:
+      # addon_images.py reads these two pins from this file (digest required); Renovate keeps them current.
       # renovate: datasource=docker
       TRIVY_IMAGE: 'aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb'
       # renovate: datasource=docker

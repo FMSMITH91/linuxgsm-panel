@@ -180,6 +180,23 @@ def scan(trivy_image, hadolint_image):
     return 0 if results and all(r[1] == "passed" for r in results) else 1
 
 
+WORKFLOW = os.path.join(ROOT, ".github", "workflows", "addon-images.yml")
+# A scanner image line in the workflow's env, where Renovate keeps the pins: name:tag@sha256:<64 hex>.
+_PIN_RE = re.compile(r"^ +(TRIVY_IMAGE|HADOLINT_IMAGE): '([a-z0-9][a-z0-9./_-]*:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64})'$",
+                     re.M)
+
+
+def scanner_images(path=WORKFLOW):
+    """The Trivy and hadolint images, read from the workflow file (None for one it does not pin by digest).
+
+    Read from the checked-out file rather than the job's environment, so the docker command is built only
+    from text in the repository, and only from a reference that names its digest.
+    """
+    with open(path, encoding="utf-8") as fh:
+        found = dict(_PIN_RE.findall(fh.read()))
+    return found.get("TRIVY_IMAGE"), found.get("HADOLINT_IMAGE")
+
+
 def main(argv):
     """Run `plan` or `scan` (see the module's docstring); the exit status."""
     if argv[1:2] == ["plan"]:
@@ -187,9 +204,9 @@ def main(argv):
         print(json.dumps(p, indent=2))
         return 1 if p["problems"] else 0
     if argv[1:2] == ["scan"]:
-        trivy, hadolint = os.environ.get("TRIVY_IMAGE", ""), os.environ.get("HADOLINT_IMAGE", "")
-        if "@sha256:" not in trivy or "@sha256:" not in hadolint:
-            print("ERROR: TRIVY_IMAGE and HADOLINT_IMAGE must each name an image by digest")
+        trivy, hadolint = scanner_images()
+        if not trivy or not hadolint:
+            print("ERROR: %s must pin TRIVY_IMAGE and HADOLINT_IMAGE, each as name:tag@sha256:<digest>" % WORKFLOW)
             return 1
         return scan(trivy, hadolint)
     print(__doc__)

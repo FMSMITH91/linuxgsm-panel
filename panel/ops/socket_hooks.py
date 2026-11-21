@@ -132,7 +132,7 @@ def _take(bucket, kind, now):
 
 
 def _conn_state(environ):
-    """This connection's budget state, kept in its environ: it goes when the connection does."""
+    """The connection's budget state, kept in its environ: it goes when the connection does."""
     st = environ.get(_STATE_KEY)
     if st is None:
         now = _clock()

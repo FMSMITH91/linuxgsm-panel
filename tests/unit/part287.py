@@ -382,6 +382,20 @@ def _s287_scan_images_pinned():
           repr(pins))
 
 
+def _s287_scan_images_from_file():
+    real = _AI287.scanner_images()
+    wf = _tf287.mkdtemp(prefix="ai-wf-", dir=_TMP287)
+    loose = os.path.join(wf, "loose.yml")
+    _write287(loose, "    env:\n      TRIVY_IMAGE: 'aquasec/trivy:0.76.2'\n"
+                     "      HADOLINT_IMAGE: 'hadolint/hadolint:v2.15.1@sha256:%s'\n" % ("a" * 64), 0o600)
+    check("image scan: the script reads the two scanner images from the workflow file by digest, not from the "
+          "job's environment, and a pin without a digest is no image",
+          real[0] and real[0].startswith("aquasec/trivy:") and real[1] and real[1].startswith("hadolint/hadolint:")
+          and _AI287.scanner_images(loose) == (None, "hadolint/hadolint:v2.15.1@sha256:" + "a" * 64)
+          and "os.environ.get(\"TRIVY_IMAGE" not in _read287(".github", "scripts", "addon_images.py"),
+          repr((real, _AI287.scanner_images(loose))))
+
+
 def _addons_fixture287(body, containerfile):
     d = _tf287.mkdtemp(prefix="ai-", dir=_TMP287)
     _write287(os.path.join(d, "addons.py"), body, 0o600)
@@ -429,7 +443,8 @@ def _s287_scan_accepted():
 
 for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers,
                _s287_core_dumps, _s287_orphan_crontabs, _s287_orphan_callers, _s287_threat_model, _s287_b3_no_pip,
-               _s287_scan_workflow, _s287_scan_token, _s287_scan_images_pinned, _s287_scan_plan, _s287_scan_accepted):
+               _s287_scan_workflow, _s287_scan_token, _s287_scan_images_pinned, _s287_scan_images_from_file,
+               _s287_scan_plan, _s287_scan_accepted):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down
