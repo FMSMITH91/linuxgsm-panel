@@ -20,6 +20,8 @@ ROWS. GameDatabase (one per database; game_server_id None once its server was re
 and the database kept) and HostDatabaseServer (one per host the panel signs in to), in
 panel/db/models.py.
 """
+import contextlib
+import functools
 import json
 import re
 import threading
@@ -60,6 +62,17 @@ _PROBES = {}
 # remote id -> {"running": bool, "why": str}: "Set up databases on this host" in the background.
 _SETUP = {}
 _SETUP_LOCK = threading.Lock()
+# Database row id -> what is being done to it now ("dump", "restore" or "delete"). One at a time per
+# database: two imports into one database interleave each other's DROP, CREATE and INSERT, and an import
+# reading the dump a dump is rewriting loads half a file, each answered as success. A second request is
+# refused (409), as a game backup restore and an add-on removal are.
+_BUSY = {}
+_BUSY_LOCK = threading.Lock()
+_BUSY_SAID = {
+    "dump": "This database is being dumped right now. Try again when that has finished.",
+    "restore": "This database is being restored right now. Try again when that has finished.",
+    "delete": "This database is being deleted right now.",
+}
 
 
 def _now():
@@ -498,6 +511,42 @@ def _confirmed(r):
     return _json_str(_json_body(), "confirm") == r.name
 
 
+@contextlib.contextmanager
+def database_claim(db_id, what):
+    """Hold database `db_id` for `what` (a _BUSY_SAID key) while the block runs.
+
+    Yields None when it is now held, or what another request is already doing to it (and then it is
+    not held, and nothing is released after).
+    """
+    with _BUSY_LOCK:
+        running = _BUSY.get(db_id)
+        if running is None:
+            _BUSY[db_id] = what
+    try:
+        yield running
+    finally:
+        if running is None:
+            with _BUSY_LOCK:
+                _BUSY.pop(db_id, None)
+
+
+def one_at_a_time(what, action):
+    """Make answer(gs, r, ...) hold database r for `what`; a request meanwhile is refused and audited as `action`."""
+    def wrap(answer):
+        @functools.wraps(answer)
+        def held(gs, r, *args):
+            with database_claim(r.id, what) as running:
+                if running is not None:
+                    said = _BUSY_SAID[running]
+                    log_action(current_user, action, target=gs.name, server=gs, success=False,
+                               detail="%s (refused: %s)" % (r.name, said))
+                    return _say(409, said)
+                return answer(gs, r, *args)
+        return held
+    return wrap
+
+
+@one_at_a_time("delete", "db_delete")
 def _delete_answer(gs, r):
     """POST {"confirm": name}: the database and its user dropped (a dump kept on the host first)."""
     if not _confirmed(r):
@@ -523,6 +572,7 @@ def _delete_answer(gs, r):
     return jsonify(reply), 200 if ok else 502
 
 
+@one_at_a_time("restore", "db_restore")
 def _restore_answer(gs, r):
     """POST {"confirm": name}: the database loaded from panel-db-dumps/<name>.sql.gz in the game's files."""
     if not _confirmed(r):

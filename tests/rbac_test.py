@@ -4780,6 +4780,8 @@ def _ax_names(expr, var):
 
 # Calls whose action is a parameter, with where the real names come from.
 _AX_ACTION_FROM_CALLER = {
+    "held",                     # databases.one_at_a_time's refusal: the decorator's second argument
+                                # (db_restore / db_dump_download / db_upload / db_delete), read below
     "_audit_backup_outcome",    # _record_backup_outcome's callers pass "scheduled_backup" /
                                 # "queued_backup", and _report_once's "scheduled_backup_overdue" /
                                 # "queued_backup_waiting"
@@ -4875,7 +4877,7 @@ for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROO
 # writes its row with server=gs; a name passed through a local is read from that local's
 # assignments in the calling function.
 _AX_SERVER_HELPERS = {"_write_refused", "_read_refused", "_create_refused", "_create_answer", "_r36c_reboot_refused",
-                      "_r39a_wipe_refused", "_bk_account_refused"}
+                      "_r39a_wipe_refused", "_bk_account_refused", "one_at_a_time"}
 _ax_passed = []
 for _f in sorted(pathlib.Path(_ROOT, "panel").rglob("*.py")):
     _tree = ast.parse(_f.read_text(encoding="utf-8"))

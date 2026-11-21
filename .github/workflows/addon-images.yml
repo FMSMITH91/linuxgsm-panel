@@ -1,0 +1,68 @@
+name: Add-on images
+
+# The container images the panel deploys for its add-ons, scanned as hosts run them: each upstream
+# image pinned by digest in panel/services/addons.py, pulled by that digest, and each image the panel
+# builds on the host (panel/addon_images/<name>/Containerfile), built here from the same pins.
+# Trivy fails the run on a High or Critical vulnerability that has a fixed version, or a secret in an
+# image; an accepted finding is an entry in .github/trivyignore.yaml with its reason and an expiry
+# date. hadolint lints each Containerfile (.github/hadolint.yaml). What runs, and how, is
+# .github/scripts/addon_images.py (OWASP Docker Security Cheat Sheet, rule 9: scan images in the
+# pipeline; OWASP Top 10 CI/CD Security Risks, CICD-SEC-3).
+#
+# TRIGGERS. Daily, because a newly published advisory changes the answer with no commit (the pinned
+# IW4MAdmin image sat unchanged for months with Critical findings nothing reported). On a pull request
+# that changes an image, a pin or this scan's own files, so a Renovate digest or base-image update is
+# scanned before it merges. By hand (workflow_dispatch), to scan main at once.
+#
+# No secret and a read-only token: every image is public, so pulls are anonymous, and nothing is
+# pushed or uploaded. The scanners run from images pinned by tag and digest (Renovate proposes new
+# digests). Harden-Runner audits rather than blocks: the pulls and builds go through Docker's own
+# networking, as ClusterFuzzLite's do.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'panel/addon_images/**'
+      - 'panel/services/addons.py'
+      - '.github/workflows/addon-images.yml'
+      - '.github/scripts/addon_images.py'
+      - '.github/trivyignore.yaml'
+      - '.github/hadolint.yaml'
+  schedule:
+    - cron: "23 7 * * *"   # daily 07:23 UTC, after security-code.yml's dependency audit
+  workflow_dispatch:
+
+# The event is part of the group, as in security-code.yml: on main the daily run shares the ref with
+# a dispatched one, and must not cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  scan:
+    name: Add-on images (Trivy, hadolint)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read   # checks out the Containerfiles and the pins; nothing is written
+    env:
+      # addon_images.py reads these two pins from this file (digest required); Renovate keeps them current.
+      # renovate: datasource=docker
+      TRIVY_IMAGE: 'aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb'
+      # renovate: datasource=docker
+      HADOLINT_IMAGE: 'hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d'
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The scan reads the tree; no step here needs the job token.
+          persist-credentials: false
+      - name: What will be scanned
+        run: python3 .github/scripts/addon_images.py plan
+      - name: Pull, build, scan and lint
+        run: python3 .github/scripts/addon_images.py scan

@@ -301,7 +301,8 @@ def _s222_counter_and_migration():
     with _p9.test_request_context("/invite/x", method="POST"):
         inv = _db222.session.get(_Inv222, iid)
         _inv_plain = _Inv222(code_hash=None)
-        lefts = [_an222._count_wrong_code(inv) for _ in range(3)]
+        # Each try is counted (reserved) before its code is checked; the wrong code then settles it.
+        lefts = [_an222._reserve_code_try(inv) and _an222._count_wrong_code(inv) for _ in range(3)]
         matches = [inv.code_matches(x) for x in ("", "12345678x", "1234567")] + [_inv_plain.code_matches("12345678")]
     eq("invite code: the counter counts down from the stored count, and junk, short input or an invite with no "
        "code never matches", (lefts, matches), ([4, 3, 2], [False, False, False, False]))

@@ -3514,7 +3514,7 @@ try:
                     "info() { echo \"INFO $*\"; }\nok() { echo \"OK $*\"; }\n"
                     "check_origin_trusted() { :; }\ninstall_root_tools() { :; }\n"
                     "write_sudoers_grant() { :; }\nwrite_terminal_sudo_grant() { :; }\n"
-                    "install_recovery_command() { :; }\n"
+                    "install_recovery_command() { :; }\nensure_tree_modes() { :; }\n"
                     "ensure_service_unit() { UNIT_CHANGED=0; }\n"
                     # the branch's last line is install.sh's own function, run as written
                     + _su_find("update_noop_line() {", "\n}\n") + "\n")

@@ -119,6 +119,7 @@ def own_target(gs, r):
     return _dbs.target_view(local, login=(r.name, r.secret)) if local is not None else None
 
 
+@_dbr.one_at_a_time("dump", "db_dump_download")
 def _dump_answer(gs, r):
     """POST: a fresh dump of the database in the server's files, ready for the download GET."""
     target = own_target(gs, r)
@@ -506,6 +507,9 @@ def _upload_piece(gs, r, uid):
     return _say(409 if state == "refused" else 502, _refused(val) if state == "refused" else _dbr._UNREAD)
 
 
+# Held for the whole finish, not only its import: the finish puts the upload in place as the
+# database's dump, the file a restore from the dump reads and a dump rewrites.
+@_dbr.one_at_a_time("restore", "db_upload")
 def _upload_finish(gs, r, uid):
     """Check the whole dump on the host, put it in place, and restore the database from it."""
     e = _get_upload(uid, r.id)
