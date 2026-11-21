@@ -1,4 +1,4 @@
-"""Part 287 of the unit suite: the installer's file modes, core dumps, old crontabs.
+"""Part 287 of the unit suite: the installer's file modes, core dumps, old crontabs, the unit's sandboxing.
 
 1. Update snapshots (data/.backups/<stamp>/code.tgz, data.tgz) are written owner-only: the folder
    0700 and each archive 0600, under umask 077 inside the owner's own shell (sudo's PAM session
@@ -12,6 +12,8 @@
 3. An update (and an install, and an up-to-date run) removes the crontab of a game account that no
    longer exists when every job in it is one the panel writes for that account; a file holding any
    other job, a live account's crontab, crontab(1)'s temporary file and a link are left alone.
+4. The threat model says why the panel's unit has no systemd sandboxing (everything it starts, the root
+   helper and the game servers, would inherit it).
 
 HOW IT RUNS. install.sh's own text, cut out and run under bash over this part's scratch trees (a
 stand-in cron spool among them); `id` and `sudo` are stand-ins where a check needs a root run. The
@@ -286,7 +288,19 @@ def _s287_orphan_crontabs():
           repr([("ensure_no_orphan_crontabs" in p) for p in (full, noop, fresh)]))
 
 
-for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers, _s287_core_dumps, _s287_orphan_crontabs):
+# ── 4. The threat model: no sandboxing in the unit, and why ─────────────────────────────────────────
+def _s287_threat_model():
+    with open(os.path.join(_root, "docs", "THREAT-MODEL.md"), encoding="utf-8") as fh:
+        tm = fh.read()
+    rows = [ln for ln in tm.splitlines() if ln.startswith("| The panel's systemd unit has no sandboxing")]
+    row = rows[0] if rows else ""
+    check("threat model: a residual-risk row says why the panel's unit has no systemd sandboxing (the helper "
+          "and the game servers it starts would inherit it), and names its authority",
+          len(rows) == 1 and tm.index(row) > tm.index("## Residual risks") and "| Accept |" in row
+          and all(w in row for w in ("root helper", "game server", "NoNewPrivileges", "systemd.exec(5)")), row)
+
+
+for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers, _s287_core_dumps, _s287_orphan_crontabs, _s287_threat_model):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down
