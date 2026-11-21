@@ -201,7 +201,7 @@ def _entry_run288(name, files):
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         os.chmod(path, 0o700)  # nosec B103 - a stand-in tool in the part's own temp dir
     script = _read288("panel", "addon_images", "iw4madmin", "entrypoint.sh")
-    script = script.replace("/app_defaults", dflt).replace("cd /app\n", "cd %s\n" % app)
+    script = script.replace("/app_defaults", dflt).replace("cd /app || exit 1\n", "cd %s || exit 1\n" % app)
     log = os.path.join(base, "dotnet.log")
     r = _sp288.run(["sh", "-c", script], capture_output=True, text=True, timeout=60, check=False,  # nosec B603 B607
                    env={"PATH": bindir + ":/usr/bin:/bin", "P288_LOG": log})

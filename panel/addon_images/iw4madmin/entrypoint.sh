@@ -6,7 +6,7 @@
 # No `set -e`, as in IW4MAdmin's own script: a populate step that skips files already there must not
 # stop the start, and cp -n's exit status for a skipped file is not settled (coreutils 9.4 warns it may change).
 set -u
-cd /app
+cd /app || exit 1
 if [ ! -f Configuration/IW4MAdminSettings.json ]; then
     echo "FATAL ERROR: IW4MAdminSettings.json not found in the mounted Configuration folder." >&2
     sleep 5
