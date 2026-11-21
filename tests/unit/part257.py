@@ -490,8 +490,10 @@ def _card_checks257():
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────
 def _manager_hits257(m):
-    """[(file, digest)] a Renovate regex manager matches in the panel's own files (its JS regexes read as Python's),
-    each with the tag it captures when it captures one."""
+    """[(file, digest, tag?)] a Renovate regex manager matches in the panel's own files (JS regexes as Python's).
+
+    A match that captures a tag (currentValue) carries it as a third item.
+    """
     pats = [_re257.compile(_re257.sub(r"\(\?<(?=[A-Za-z])", "(?P<", ms)) for ms in m["matchStrings"]]
     paths = [f.strip("/").lstrip("^").rstrip("$").replace("\\.", ".") for f in m.get("managerFilePatterns") or []]
     return [(path, x.groupdict().get("currentDigest")) + ((x.group("currentValue"),) if "currentValue" in x.groupdict()
