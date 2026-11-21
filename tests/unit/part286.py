@@ -565,7 +565,10 @@ def _s286_sftp():
     with _p9.test_request_context(), _p9.app_context():
         u = _db286.session.get(_U286, uid)
         said = _raises286(lambda: _box286.append(_sfs286._store_key(u, sc.parse_public_key(line)[0])))
-        alive = _db286.session.query(_Key286).filter_by(user_id=uid).count()
+        try:
+            alive = _db286.session.query(_Key286).filter_by(user_id=uid).count()
+        except Exception as exc:        # a session left in a failed transaction
+            alive = type(exc).__name__
     _p9_patch(_sfs286, "_key_refusal", _P9_KEYREF286)
     eq("sftp key add: a duplicate the database's own unique rule catches is the same refusal, and the session is "
        "usable after it", (said, _box286[-1:], alive), ("", ["That key is already on your account."], 1))
@@ -593,4 +596,4 @@ finally:
     _sh286._log_state.clear()
     _sh286._log_state.update(_saved_logstate286)
     _sh286._log.removeHandler(_LOGS286)
-    _SRV286._handle_eio_message.budgets.clear()
+    getattr(_SRV286._handle_eio_message, "budgets", {}).clear()     # absent when the budget was never installed
