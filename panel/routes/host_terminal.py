@@ -261,7 +261,7 @@ def _register_terminal_open(app, socketio):
         socketio.emit("term_exit", _r16c_said("reason", reason), room=sid)
 
     @socketio.on("term_open")
-    def on_term_open(data):
+    def on_term_open(data=None):
         sid = request.sid
         remote_id, remote, why = _terminal_target(data)
         if why is None and step_up_needed():
@@ -382,7 +382,7 @@ def _refused(app, socketio, sid):
 def _register_terminal_io(app, socketio):
     """Keystrokes, resizes and closes for a socket's open shell."""
     @socketio.on("term_input")
-    def on_term_input(data):
+    def on_term_input(data=None):
         if not _may_use_terminal():
             _refused(app, socketio, request.sid)
             return
@@ -393,7 +393,7 @@ def _register_terminal_io(app, socketio):
             sess.write(_term_payload(data).get("data", ""))
 
     @socketio.on("term_resize")
-    def on_term_resize(data):
+    def on_term_resize(data=None):
         if not _may_use_terminal():
             _refused(app, socketio, request.sid)
             return

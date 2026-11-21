@@ -2933,6 +2933,9 @@ def _create_console_socket(app):
     # A per-request check (app._socket_origin_allowed): same origin including the port, or
     # site_domain, or the operator's explicit list. See _socketio_cors.
     socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet", **_socket_hooks.LIMITS)
+    # Every packet is counted against a budget before it is decoded, and one the library cannot take
+    # closes its connection with one short log line (socket_hooks.install_event_budget).
+    _socket_hooks.install_event_budget(socketio)
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).
@@ -2965,6 +2968,8 @@ def _create_console_socket(app):
             return False
         with _viewers_lock:
             _socket_addrs[request.sid] = _addrs
+        # From here on the connection spends its account's event budget, shared by all of its sockets.
+        _socket_hooks.note_user(request.environ, current_user.id)
         return True   # authenticated, password their own → accept the socket
 
     from panel.security import banlist as _banlist
@@ -2979,7 +2984,7 @@ def _create_console_socket(app):
 def _register_console_viewers(socketio):
     """Joining and leaving a console's room, and the app's one disconnect handler."""
     @socketio.on("join_console")
-    def on_join_console(data):
+    def on_join_console(data=None):
         # int(), because the ROOM NAME is built from this value and the console poller emits to
         # f"console_{gs.id}" with a real int. A client that sent "3" passed the access check
         # (SQLAlchemy coerces the lookup) and then joined "console_3" as a string-derived room the
@@ -3020,7 +3025,7 @@ def _register_console_viewers(socketio):
                 _console_catchups.setdefault(server_id, {})[request.sid] = _req
 
     @socketio.on("leave_console")
-    def on_leave_console(data):
+    def on_leave_console(data=None):
         # int(), for the same reason join does it: _console_viewers is keyed by the int the join
         # handler put there, so a client that sent "3" here left the ROOM (the f-string spells the
         # same name either way) and then looked its sid up under a key that does not exist. The
