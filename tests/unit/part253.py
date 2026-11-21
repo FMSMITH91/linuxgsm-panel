@@ -263,9 +263,14 @@ def _install_calls253(calls, ok):
        ["podman", "uidmap", "passt"])
 
 
+def _image_calls253(calls):
+    """The recorded shells that get an add-on's image (an install or update: a pull or a build)."""
+    return [c for c in calls if c[0] == "sh" and ("podman pull" in c[1] or "podman build" in c[1])]
+
+
 def _install_stdin253(calls):
     """The settings the install sent on stdin, parsed ({} when it sent none)."""
-    inst = [c[2] for c in calls if c[0] == "sh" and ("podman pull" in c[1] or "podman build" in c[1])]
+    inst = [c[2] for c in _image_calls253(calls)]
     return _json253.loads(inst[0]) if inst and inst[0] else {}
 
 
@@ -304,8 +309,7 @@ def _install_refused253(ids):
         row = _p9_audit("addon_install")
         check("install refused (%s): audited as failed, nothing installed or readied" % want[:40],
               row.success is False and want in row.detail and not [c for c in calls if c[0] == "verb"]
-              and not [c for c in calls if c[0] == "sh" and ("podman pull" in c[1] or "podman build" in c[1])],
-              repr((row.detail, calls[-1:])))
+              and not _image_calls253(calls), repr((row.detail, calls[-1:])))
 
 
 def _remove253(ids):

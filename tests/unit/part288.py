@@ -150,15 +150,22 @@ def _fetch288():
 
 
 # ── 3. the image ────────────────────────────────────────────────────────────────────────────────
-def _image288():
+def _final_stage288():
+    """{KEYWORD: [its arguments]} of the Containerfile's last stage."""
     final = max(s for s, _w, _r in _INS288)
-    last = [(w, r) for s, w, r in _INS288 if s == final]
-    runs = [r for w, r in last if w == "RUN"]
-    users = [r for w, r in last if w == "USER"]
-    entry = [r for w, r in last if w == "ENTRYPOINT"]
-    copies = [r for w, r in last if w == "COPY"]
+    out = {}
+    for stage, word, rest in _INS288:
+        if stage == final:
+            out.setdefault(word, []).append(rest)
+    return out
+
+
+def _image288():
+    last = _final_stage288()
+    runs, users, entry, copies = (last.get(w, []) for w in ("RUN", "USER", "ENTRYPOINT", "COPY"))
+    froms = [r for _s, w, r in _INS288 if w == "FROM"]
     eq("image: two stages on the pinned base; the final one installs nothing (curl and unzip stay in the first)",
-       ([r for _s, w, r in _INS288 if w == "FROM"], [r for r in runs if _re288.search(r"apt|curl|unzip|wget", r)]),
+       (froms, [r for r in runs if _re288.search(r"apt|curl|unzip|wget", r)]),
        (["${BASE_IMAGE} AS source", "${BASE_IMAGE}"], []))
     eq("image: it runs as a user that is not root, the panel's entrypoint, made readable after its 0600 copy",
        (users, entry, runs), (["$APP_UID"], ['["/bin/sh", "/app/entrypoint.sh"]'], ["chmod 0755 /app/entrypoint.sh"]))
@@ -166,10 +173,9 @@ def _image288():
        copies, ["--from=source /src/app /app", "--from=source /src/app/Configuration /app_defaults/Configuration",
                 "--from=source /src/app/Plugins /app_defaults/Plugins",
                 "--from=source /src/app/Localization /app_defaults/Localization", "entrypoint.sh /app/entrypoint.sh"])
-    mounts = [at for _d, at in _ad288.CATALOG[_ad288.IW4MADMIN]["mounts"]]
-    check("image: the folders the unit mounts are the image's own (/app/Configuration, Plugins, Localization, "
-          "Database, Log and /data)", mounts == ["/app/Configuration", "/app/Plugins", "/app/Localization",
-                                                 "/app/Database", "/app/Log", "/data"], repr(mounts))
+    eq("image: the folders the unit mounts are the image's own (/app/Configuration, Plugins, Localization, "
+       "Database, Log and /data)", [at for _d, at in _ad288.CATALOG[_ad288.IW4MADMIN]["mounts"]],
+       ["/app/Configuration", "/app/Plugins", "/app/Localization", "/app/Database", "/app/Log", "/data"])
 
 
 # ── 4. the entrypoint ───────────────────────────────────────────────────────────────────────────
@@ -252,22 +258,35 @@ def _puts288(sh):
     return {path: _ad288._unb64(b64) for b64, path in _PUT288.findall(sh)}
 
 
+def _shell288(calls, *marks):
+    """(the first recorded shell holding every one of `marks`, its stdin), or ("", None)."""
+    return next((c for c in calls if all(m in c[0] for m in marks)), ("", None))
+
+
+def _built288(puts):
+    """{file name: text} of the build folder files a shell writes."""
+    return {os.path.basename(p): t for p, t in puts.items() if "/panel-addons/iw4madmin/build/" in p}
+
+
+def _record288(puts):
+    """The addon.json a shell writes, parsed ({} when it writes none)."""
+    return _json288.loads(next((t for p, t in puts.items() if p.endswith("/addon.json")), "{}"))
+
+
 def _install288(sid):
     calls = _host288(None)
     r = _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/install" % sid, json={})
     _p9_drain()
-    inst = next((c for c in calls if "lgsm-addon-iw4madmin.container" in c[0] and "ADDON_INSTALLED" in c[0]), ("", ""))
-    sh, puts = inst[0], _puts288(inst[0])
-    build = [p for p in puts if "/panel-addons/iw4madmin/build/" in p]
+    sh, stdin = _shell288(calls, "lgsm-addon-iw4madmin.container", "ADDON_INSTALLED")
+    puts = _puts288(sh)
     eq("install (route): the build folder is written and the image built from it before the unit is written",
-       (r.status_code, sorted(os.path.basename(p) for p in build),
-        [puts.get(p) for p in sorted(build)] == [_CF288, _read288("panel", "addon_images", "iw4madmin", "entrypoint.sh")],
-        "podman build" in sh and "podman pull" not in sh,
+       (r.status_code, _built288(puts), "podman build" in sh and "podman pull" not in sh,
         0 <= sh.find("podman build") < sh.find("lgsm-addon-iw4madmin.container.new")),
-       (202, ["Containerfile", "entrypoint.sh"], True, True, True))
-    rec = _json288.loads(next((t for p, t in puts.items() if p.endswith("/addon.json")), "{}"))
+       (202, {"Containerfile": _CF288, "entrypoint.sh": _read288("panel", "addon_images", "iw4madmin", "entrypoint.sh")},
+        True, True))
+    rec = _record288(puts)
     eq("install (route): the record names the built image and its release, the settings go on stdin, audited",
-       (rec.get("image"), rec.get("version"), '"DatabaseProvider": "sqlite"' in (inst[1] or ""), _RC288 in sh,
+       (rec.get("image"), rec.get("version"), '"DatabaseProvider": "sqlite"' in (stdin or ""), _RC288 in sh,
         _p9_audit("addon_install").success),
        (_ad288.CATALOG["iw4madmin"]["image"], "2026.2.4.1", True, False, True))
 
@@ -281,30 +300,35 @@ def _update288(sid):
        (row.get("update"), row.get("version"), row.get("version_new")), ("image", "latest 72ccf1b33983", "2026.2.4.1"))
     r = _p9_client(P9_ADMIN).post("/api/server/%d/addons/iw4madmin/update" % sid, json={})
     _p9_drain()
-    up = next((c for c in calls if "restart lgsm-addon-iw4madmin" in c[0]), ("", None))
-    sh, puts = up[0], _puts288(up[0])
-    rec = _json288.loads(next((t for p, t in puts.items() if p.endswith("/addon.json")), "{}"))
+    sh, stdin = _shell288(calls, "restart lgsm-addon-iw4madmin")
+    puts = _puts288(sh)
+    rec = _record288(puts)
+    wiped = _re288.search(r"\brm -[a-z]*r[a-z]* [^;|&]*panel-addons/iw4madmin", sh) is not None
     eq("update (route): it builds the new image from the build folder, records it, removes the old image, and leaves "
        "the settings file and the database alone, audited",
        (r.status_code, "podman build" in sh and "-t %s " % _ad288.CATALOG["iw4madmin"]["image"] in sh,
-        sorted(os.path.basename(p) for p in puts if "/iw4madmin/build/" in p), (rec.get("image"), rec.get("version")),
-        "podman rmi %s" % _OLD288 in sh, "IW4MAdminSettings.json" in sh, up[1],
-        _re288.search(r"\brm -[a-z]*r[a-z]* [^;|&]*panel-addons/iw4madmin", sh) is not None, _p9_audit("addon_update").success),
+        sorted(_built288(puts)), (rec.get("image"), rec.get("version")),
+        "podman rmi %s" % _OLD288 in sh, "IW4MAdminSettings.json" in sh, stdin, wiped, _p9_audit("addon_update").success),
        (202, True, ["Containerfile", "entrypoint.sh"], (_ad288.CATALOG["iw4madmin"]["image"], "2026.2.4.1"), True,
         False, None, False, True))
 
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────
+def _release_hits288(mgr):
+    """[(file, tag, sha256)] the managers `mgr` match in addons.py and the IW4MAdmin Containerfile (JS regexes as Python's)."""
+    found = []
+    for pat in [p for m in mgr for p in m.get("matchStrings") or []]:
+        rx = _re288.compile(_re288.sub(r"\(\?<(?=[A-Za-z])", "(?P<", pat))
+        for path in ("panel/services/addons.py", "panel/addon_images/iw4madmin/Containerfile"):
+            found += [(path, x.group("currentValue"), x.group("currentDigest")) for x in rx.finditer(_read288(path))]
+    return found
+
+
 def _renovate288():
     cfg = _json288.loads(_read288(".github", "renovate.json"))
     ds = (cfg.get("customDatasources") or {}).get("iw4madmin-release") or {}
     mgr = [m for m in cfg.get("customManagers") or [] if m.get("datasourceTemplate") == "custom.iw4madmin-release"]
-    found = []
-    for m in mgr:
-        for pat in m.get("matchStrings") or []:
-            rx = _re288.compile(_re288.sub(r"\(\?<(?=[A-Za-z])", "(?P<", pat))
-            for path in ("panel/services/addons.py", "panel/addon_images/iw4madmin/Containerfile"):
-                found += [(path, x.group("currentValue"), x.group("currentDigest")) for x in rx.finditer(_read288(path))]
+    found = _release_hits288(mgr)
     pin = (_ad288.IW4MADMIN_TAG, _ad288.IW4MADMIN_SHA256)
     eq("renovate: the IW4MAdmin release and its archive's sha256 are matched once each in addons.py and the "
        "Containerfile, from a custom datasource over RaidMax/IW4M-Admin's releases that keeps each archive's sha256",
