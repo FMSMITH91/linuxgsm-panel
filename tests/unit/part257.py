@@ -12,7 +12,7 @@
    lines, and an update rebuilds; the row says when an update is available.
 5. The card (server_addons.js run whole in node over a small DOM): B3's settings fold, the Update button,
    the settings post, the Remove warning.
-6. Renovate: B3's commit (addons.py and the Containerfile) and IW4MAdmin's digest, each matched, daily.
+6. Renovate: B3's commit (addons.py and the Containerfile), IW4MAdmin's release and base, each matched, daily.
 7. The remote form of addon-account-release, under bash: after its rotation, an empty journal re-created
    for a uid that is gone goes, and nothing else.
 
@@ -509,17 +509,21 @@ def _renovate257():
         if hits:
             found.setdefault("%s %s" % (m.get("datasourceTemplate"), m.get("currentValueTemplate", "tag")), []).extend(hits)
     daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
-    base = _ad257.B3_BASE.split("@")[1]
-    eq("Renovate: B3's release tag and commit in addons.py and the Containerfile (git-tags), IW4MAdmin's digest (docker, "
-       "latest), BlueMap's (docker, v5) and the B3 image's base digest in addons.py and the Containerfile (docker, "
-       "3.15-slim), each matched once, checked daily",
+    base, iwbase = _ad257.B3_BASE.split("@")[1], _ad257.IW4MADMIN_BASE.split("@")[1]
+    iw = (_ad257.IW4MADMIN_SHA256, _ad257.IW4MADMIN_TAG)
+    eq("Renovate: B3's release tag and commit in addons.py and the Containerfile (git-tags), IW4MAdmin's release tag and "
+       "archive sha256 and its base digest (aspnet 10.0) in addons.py and its Containerfile, BlueMap's (docker, v5) and "
+       "the B3 image's base digest in addons.py and the Containerfile (docker, 3.15-slim), each matched once, daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
        ({"git-tags tag": [("panel/services/addons.py", _PIN257, _ad257.B3_TAG),
                            ("panel/addon_images/b3/Containerfile", _PIN257, _ad257.B3_TAG)],
-         "docker latest": [("panel/services/addons.py", _ad257.IW4MADMIN_IMAGE.split("@")[1])],
+         "custom.iw4madmin-release tag": [("panel/services/addons.py",) + iw,
+                                          ("panel/addon_images/iw4madmin/Containerfile",) + iw],
+         "docker 10.0": [("panel/services/addons.py", iwbase), ("panel/addon_images/iw4madmin/Containerfile", iwbase)],
          "docker v5": [("panel/services/addons.py", _ad257.BLUEMAP_IMAGE.split("@")[1])],
          "docker 3.15-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},
-        ["big-brother-bot", "docker.io/library/python", "ghcr.io/bluemap-minecraft/bluemap", "ghcr.io/raidmax/iw4madmin"]))
+        ["RaidMax/IW4M-Admin", "big-brother-bot", "docker.io/library/python", "ghcr.io/bluemap-minecraft/bluemap",
+         "mcr.microsoft.com/dotnet/aspnet"]))
 
 
 # ── 7. the remote form of addon-account-release ─────────────────────────────────────────────────

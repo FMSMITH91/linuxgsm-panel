@@ -1033,16 +1033,17 @@ def _build_ids261():
     real = os.path.join(_root, "panel", "addon_images", "b3")
     tmp = _tf261.mkdtemp(prefix="p261-b3-")
     try:
-        out = {"real": _ad261.build_id(real, _ad261.B3_BASE),
-               "base": _ad261.build_id(real, _ad261.B3_BASE.rsplit(":", 1)[0] + ":" + "0" * 64)}   # any other digest
-        for name in _ad261.BUILD_FILES:
+        out = {"real": _ad261.build_id(real, _ad261.B3_BASE, _ad261.BUILD_FILES["b3"]),
+               "base": _ad261.build_id(real, _ad261.B3_BASE.rsplit(":", 1)[0] + ":" + "0" * 64,
+                                        _ad261.BUILD_FILES["b3"])}   # any other digest
+        for name in _ad261.BUILD_FILES["b3"]:
             _sh261.copy(os.path.join(real, name), os.path.join(tmp, name))
-        out["copy"] = _ad261.build_id(tmp, _ad261.B3_BASE)
+        out["copy"] = _ad261.build_id(tmp, _ad261.B3_BASE, _ad261.BUILD_FILES["b3"])
         with open(os.path.join(tmp, "requirements.txt"), "a", encoding="utf-8") as fh:
             fh.write("# bumped\n")
-        out["lock"] = _ad261.build_id(tmp, _ad261.B3_BASE)
+        out["lock"] = _ad261.build_id(tmp, _ad261.B3_BASE, _ad261.BUILD_FILES["b3"])
         os.remove(os.path.join(tmp, "entrypoint.sh"))
-        out["missing"] = _ad261.build_id(tmp, _ad261.B3_BASE)
+        out["missing"] = _ad261.build_id(tmp, _ad261.B3_BASE, _ad261.BUILD_FILES["b3"])
         out["image"] = _ad261.CATALOG[_ad261.B3]["image"]
         out["commit"] = _ad261.B3_COMMIT
         return out

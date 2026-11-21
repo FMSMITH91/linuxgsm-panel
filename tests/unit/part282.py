@@ -78,7 +78,7 @@ def _stub282(bindir, name, text):
 # 1. An Update's record is written once the image is there
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def _update_sh282(podman_rc):
-    """Run an IW4MAdmin Update's shell under bash with a podman that exits `podman_rc`: (rc, output, record)."""
+    """Run a pulled add-on's (BlueMap's) Update shell under bash with a podman that exits `podman_rc`: (rc, output, record)."""
     root = os.path.join(_TMP282, "upd%d" % podman_rc)
     home, run = os.path.join(root, "home"), os.path.join(root, "run")
     os.makedirs(run, exist_ok=True)
@@ -89,11 +89,11 @@ def _update_sh282(podman_rc):
     _stub282(bindir, "systemctl", 'case "$*" in *is-active*) echo active;; *NRestarts*) echo 0;; esac\nexit 0\n')
     _stub282(bindir, "sleep", "exit 0\n")
     _stub282(bindir, "journalctl", "exit 0\n")
-    meta = os.path.join(home, _ad282.HOME_DIR, "iw4madmin", _ad282.META_FILE)
+    meta = os.path.join(home, _ad282.HOME_DIR, "bluemap", _ad282.META_FILE)
     os.makedirs(os.path.dirname(meta), exist_ok=True)
     with open(meta, "w", encoding="utf-8") as fh:
         fh.write('{"image": "old"}\n')
-    sh = _ad282.reconfigure_sh(_U282, "iw4madmin", "UNIT", '{"image": "new"}\n', {}, {},
+    sh = _ad282.reconfigure_sh(_U282, "bluemap", "UNIT", '{"image": "new"}\n', {}, {},
                                {"rebuild": True, "old_image": "old"})
     sh = sh.replace(_ad282._ENV, "export XDG_RUNTIME_DIR=%s; cd %s || exit 1; " % (run, home))
     sh = sh.replace("/home/" + _U282, home)

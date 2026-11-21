@@ -618,7 +618,8 @@ def _valheim_port276():
 def _b3_release276():
     b3 = _ad276.CATALOG["b3"]
     tag = "localhost/lgsm-addon-b3:%s-%s" % (_ad276.B3_COMMIT[:12], _ad276.build_id(
-        os.path.join(os.path.dirname(_ad276.__file__), "..", "addon_images", "b3"), _ad276.B3_BASE))
+        os.path.join(os.path.dirname(_ad276.__file__), "..", "addon_images", "b3"), _ad276.B3_BASE,
+        _ad276.BUILD_FILES["b3"]))
     eq("B3: the card names release 2.0.2 with the pinned commit, and the image's tag is the commit and the build id "
        "alone (a new release label offers installed B3s no update)",
        (b3["version"], b3["image"] == tag, _ad276.B3_RELEASE in b3["image"]), ("2.0.2 (7c3bbe8c)", True, False))
