@@ -6430,6 +6430,7 @@ check("workflows: the coverage job holds no Codacy token, and hands its report o
       "secrets.CODACY_PROJECT_TOKEN" not in _ci_wf and "CODACY_PROJECT_TOKEN:" not in _cov_env
       and "persist-credentials: false" in _cov_job[:_cov_job.index("actions/setup-python")]
       and re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v\S+\n\s+with:\n\s+name: coverage\n"
+                    r"(?:\s+#[^\n]*\n)*\s+retention-days: \d+\n"   # kept days, not the 90-day default
                     r"\s+path: \|\n\s+coverage\.xml\n", _cov_job) is not None,
       _cov_env[-200:])
 
@@ -6789,6 +6790,7 @@ _js_job = _ci_wf[_js_job_at:] if _js_job_at >= 0 else ""
 _js_job = _js_job[:re.search(r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]).start() + 1] if re.search(
     r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]) else _js_job
 _js_up = re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v\S+\n\s+with:\n\s+name: (\S+)\n"
+                   r"(?:\s+#[^\n]*\n)*\s+retention-days: \d+\n"   # kept days, not the 90-day default
                    r"\s+path: \|\n((?:\s+\S+\n)+)", _js_job)
 _cc_dl_uses = re.findall(r"uses: (actions/download-artifact@[0-9a-f]{40})", _cc_raw)
 check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from the run that "

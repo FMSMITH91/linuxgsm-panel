@@ -10,6 +10,13 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.22] — 2026-11-22
+
+### Changed
+
+- **BlueMap runs its newest v5 image.** The add-on follows BlueMap's latest v5 build, which updates
+  its bundled libraries; an installed BlueMap is offered the Update.
+
 ## [2026.11.21] — 2026-11-21
 
 ### Changed

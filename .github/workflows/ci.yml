@@ -358,9 +358,11 @@ jobs:
     # min), the "Measure" step 961-1136 s of it (652f166c: unit 441 s, smoke 630 s). 20 had left
     # 38 s, and a timed-out run here is a failed required check like a red one. On f896aeae and
     # dfd5499c it took 1226 and 1215 s.
-    # Runs measured, fastest to slowest: 982-1226 s. tests/unit/part26 holds this limit to clear
-    # the slowest by that whole spread.
-    timeout-minutes: 30
+    # Runs measured, fastest to slowest: 1113-1697 s. (The 15 successful full runs before
+    # 2026-11-22, as the suites grew; one more on 2026-11-20 reached the old 30-minute limit with its
+    # unit suite alone at 1705 s.) tests/unit/part26 holds this limit to clear the slowest by that
+    # whole spread: 1697 + 584 s is 38 minutes, so 45.
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: read   # the scope step lists the pull request's files
@@ -544,6 +546,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage
+          # 7 days: codacy-coverage.yml downloads it as soon as this run ends.
+          retention-days: 7
           path: |
             coverage.xml
             coverage.txt
@@ -695,6 +699,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: js-coverage
+          # 7 days: read by the run that follows this one, not kept as a record.
+          retention-days: 7
           path: |
             lcov.info
             js-coverage.txt

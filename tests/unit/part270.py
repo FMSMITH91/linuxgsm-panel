@@ -213,6 +213,12 @@ const perm = new E('perm');
 Object.defineProperty(globalThis, 'navigator', {configurable: true, writable: true, value: {userAgent: 'x', platform: 'x', maxTouchPoints: 0,
   serviceWorker: {getRegistration: () => Promise.resolve(reg), register: () => Promise.resolve(reg)},
   permissions: {query: () => Promise.resolve(perm)}}});
+// Node's webcrypto digest runs on the libuv thread pool, so on a busy runner it could still be pending
+// after settle()'s fixed turns and the card was read before it was drawn (a 24.04 CI flake). The same
+// SHA-256, answered as an already-settled promise, keeps every step inside settle().
+const _hash270 = require('crypto');
+Object.defineProperty(globalThis, 'crypto', {configurable: true, writable: true, value: {subtle: {
+  digest: (alg, data) => Promise.resolve(new Uint8Array(_hash270.createHash('sha256').update(Buffer.from(data)).digest()).buffer)}}});
 window.isSecureContext = true; window.PushManager = function(){};
 window.Notification = {permission: 'granted', requestPermission: () => Promise.resolve('granted')};
 window.location = {href: 'https://panel.example/account', origin: 'https://panel.example',
