@@ -127,7 +127,7 @@ IW4MADMIN_BASE = "mcr.microsoft.com/dotnet/aspnet@sha256:12b1135f5f8b3c0a214f2a6
 # BlueMap's `v5` image (its release 5.29 on 2026-10-10, org.opencontainers.image.revision a61e143f; the same
 # digest as its v5.29 and latest tags then), by its multi-arch index digest. Renovate proposes the v5 tag's new
 # digest, so a new 5.x release is offered and a major release with new configs is not.
-BLUEMAP_IMAGE = "ghcr.io/bluemap-minecraft/bluemap@sha256:bb49bfdef996c6fd9cf68c8c6a2b79189e6711fa90ae4d43cf22d81a6811301e"
+BLUEMAP_IMAGE = "ghcr.io/bluemap-minecraft/bluemap@sha256:36e037916fa7c452bf969e70b4d16313820deeb2453f00ecf28185bc7787cab0"
 # python:3.15-slim (3.15.2, Debian 13) on 2026-11-20, by its multi-arch index digest: the build's base. Renovate
 # proposes the tag's new digest here and in the Containerfile's ARG BASE_IMAGE together (.github/renovate.json).
 B3_BASE = "docker.io/library/python@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928"
