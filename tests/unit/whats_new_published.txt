@@ -934,3 +934,4 @@ fa7126ce Update snapshots and the panel's files are readable only by the panel's
 fadaca3b The panel's memory stays out of crash dumps.
 b3191625 IW4MAdmin runs on an up-to-date .NET runtime.
 05eeb765 B3's image no longer ships pip.
+75404eac BlueMap runs its newest v5 image.
