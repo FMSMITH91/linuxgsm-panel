@@ -66,7 +66,7 @@ inputs:
     required: false
 runs:
   using: 'docker'
-  image: 'docker://gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers:ubuntu-24-04-v1@sha256:654aaf4ed425acecdbcb25d426a30565486858ccdfdf8f061dcc84f14b511323'
+  image: 'docker://gcr.io/oss-fuzz-base/clusterfuzzlite-build-fuzzers:ubuntu-24-04-v1@sha256:362b2be0e93efa6661271d329735dcfd6ff949c5e73b5c9ec2d5e6386e0e2655'
   env:
     ALLOWED_BROKEN_TARGETS_PERCENTAGE: ${{ inputs.allowed-broken-targets-percentage}}
     BAD_BUILD_CHECK: ${{ inputs.bad-build-check }}
