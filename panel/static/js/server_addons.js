@@ -167,7 +167,8 @@
   })();
 
   // An add-on's web page, opened through the panel (routes/addon_web.py) in a new tab: a form post (CSRF
-  // token, no referrer) the panel answers with the page's link. A viewer with View add-on pages alone gets
+  // token and this page as the Referer, which the panel's HTTPS CSRF check requires) the panel answers
+  // with the page's link. A viewer with View add-on pages alone gets
   // only these rows.
   var WEB = (function () {
     function open(a, bar) {
@@ -177,8 +178,11 @@
       var f = node('form');
       f.method = 'post';
       f.action = api('/' + encodeURIComponent(id) + '/web');
+      // noopener, not noreferrer: over HTTPS the panel's CSRF check needs this page as the Referer (it
+      // refuses a POST without one), and the proxy never passes a Referer on to the add-on. The panel's
+      // 303 says Referrer-Policy: no-referrer, so the add-on's page does not learn this page either.
       f.target = '_blank';
-      f.rel = 'noopener noreferrer';
+      f.rel = 'noopener';
       var t = node('input');
       t.type = 'hidden';
       t.name = 'csrf_token';

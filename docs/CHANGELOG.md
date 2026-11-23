@@ -10,6 +10,14 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.23] — 2026-11-23
+
+### Fixed
+
+- **An add-on's Open button works on panels served over HTTPS.** BlueMap's map and IW4MAdmin's web page opened
+  to a "security token has expired" message instead of the page. The add-on's page still never learns which
+  panel page opened it.
+
 ## [2026.11.22] — 2026-11-22
 
 ### Changed
