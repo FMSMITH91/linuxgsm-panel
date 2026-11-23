@@ -344,7 +344,8 @@ _REL_FORM_OK214 = _re214.compile(r"""\.rel\s*=\s*["']noopener["']""")
 def _blank_misses214(sources):
     """Every target=_blank in `sources` whose anchor (tag, or the next lines that set it up) lacks the rel.
 
-    A same-origin POST form is held to the opposite: rel="noopener" and no noreferrer (_POST_FORM214)."""
+    A same-origin POST form is held to the opposite: rel="noopener" and no noreferrer (_POST_FORM214).
+    """
     misses = []
     for path, text in sources:
         for m in _BLANK_PROP214.finditer(text):
