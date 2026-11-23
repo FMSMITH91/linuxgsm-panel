@@ -935,3 +935,4 @@ fadaca3b The panel's memory stays out of crash dumps.
 b3191625 IW4MAdmin runs on an up-to-date .NET runtime.
 05eeb765 B3's image no longer ships pip.
 75404eac BlueMap runs its newest v5 image.
+09c10d04 An add-on's Open button works on panels served over HTTPS.

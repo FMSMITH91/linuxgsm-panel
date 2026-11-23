@@ -97,7 +97,11 @@ def _open(server_id, addon_id):
                      i18n.request_lang(), session_idle_limits()[0], session_absolute_limits()[0])
     log_action(current_user, "addon_web_opened", target=gs.name, server=gs,
                detail="%s page opened through the panel" % _ad.CATALOG[addon_id]["name"])
-    return redirect(request.script_root + _aw.PATH_ROOT + token + "/", code=303)
+    resp = redirect(request.script_root + _aw.PATH_ROOT + token + "/", code=303)
+    # The card's form sends the panel page as its Referer (the HTTPS CSRF check needs it); this keeps the
+    # add-on's page from being handed that address as document.referrer when the tab follows the 303.
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
 
 
 def register(app):

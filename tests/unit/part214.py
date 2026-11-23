@@ -334,11 +334,24 @@ _REL_OK214 = _re214.compile(r"""rel\s*=\s*\\?["']noopener noreferrer\\?["']""")
 _REL_PROP_OK214 = _re214.compile(r"""\.rel\s*=\s*["']noopener noreferrer["']|setAttribute\(\s*["']rel["']\s*,\s*["']noopener noreferrer""")
 
 
+# A POST form opened in a new tab (the add-on card's Open) is the one kind that must NOT say noreferrer:
+# the panel's CSRF check refuses an HTTPS POST without a same-origin Referer, so it carries rel="noopener"
+# exactly. Its form sets method 'post' just before its target.
+_POST_FORM214 = _re214.compile(r"""\.method\s*=\s*["']post["']""", _re214.I)
+_REL_FORM_OK214 = _re214.compile(r"""\.rel\s*=\s*["']noopener["']""")
+
+
 def _blank_misses214(sources):
-    """Every target=_blank in `sources` whose anchor (tag, or the next lines that set it up) lacks the rel."""
+    """Every target=_blank in `sources` whose anchor (tag, or the next lines that set it up) lacks the rel.
+
+    A same-origin POST form is held to the opposite: rel="noopener" and no noreferrer (_POST_FORM214)."""
     misses = []
     for path, text in sources:
         for m in _BLANK_PROP214.finditer(text):
+            if _POST_FORM214.search(text[max(0, m.start() - 400):m.start()]):
+                if not _REL_FORM_OK214.search(text[m.start():m.start() + 300]):
+                    misses.append("%s:%d" % (path, text.count("\n", 0, m.start()) + 1))
+                continue
             if not _REL_PROP_OK214.search(text[m.start():m.start() + 300]):
                 misses.append("%s:%d" % (path, text.count("\n", 0, m.start()) + 1))
         for m in _BLANK_TAG214.finditer(text):
@@ -352,7 +365,8 @@ def _blank_misses214(sources):
 
 _ui214 = _ui_sources214()
 _nblank214 = sum(len(_BLANK_TAG214.findall(t)) + len(_BLANK_PROP214.findall(t)) for _, t in _ui214)
-eq("links: every target=_blank anchor in the templates and the panel's JS carries rel=\"noopener noreferrer\"",
+eq("links: every target=_blank anchor in the templates and the panel's JS carries rel=\"noopener noreferrer\" "
+   "(a POST form opened in a new tab: rel=\"noopener\" only, for the HTTPS CSRF check's Referer)",
    _blank_misses214(_ui214), [])
 check("links: ...the gate read them (at least the 20 there are today)", _nblank214 >= 20, repr(_nblank214))
 eq("links: ...and it names a tag without it, one with rel=\"noopener\" only, and a DOM-built one (control)",
@@ -361,6 +375,11 @@ eq("links: ...and it names a tag without it, one with rel=\"noopener\" only, and
                      ("v.js", "a.target = '_blank';\n a.className = 'x';"),
                      ("w.js", "a.target = '_blank';\n a.rel = 'noopener noreferrer';")]),
    ["t.html:2", "u.js:1", "v.js:1"])
+eq("links: ...a POST form opened in a new tab passes with rel=\"noopener\" and is named with noreferrer, which "
+   "would make the HTTPS CSRF check refuse it (control)",
+   _blank_misses214([("f.js", "f.method = 'post';\n f.target = '_blank';\n f.rel = 'noopener';"),
+                     ("g.js", "f.method = 'post';\n f.target = '_blank';\n f.rel = 'noopener noreferrer';")]),
+   ["g.js:2"])
 
 _EVAL214 = _re214.compile(r"""(?<![\w.])eval\s*\(|\bnew\s+Function\s*\(|\bset(?:Timeout|Interval)\s*\(\s*["'`]""")
 _evals214 = ["%s:%d" % (p, t.count("\n", 0, m.start()) + 1) for p, t in _ui214 if p.endswith(".js")

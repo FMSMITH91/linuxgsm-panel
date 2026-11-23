@@ -490,6 +490,7 @@ def _r_open279(ctx, res):
                    _p9_audit_count("addon_web_opened") - before, opened_row)
     ctx["token"], ctx["loc"] = loc[len("/addon-web/"):-1], loc
     res["token_in_audit"] = ctx["token"] in (opened_row.detail + opened_row.target)
+    res["open_referrer_policy"] = r.headers.get("Referrer-Policy")
 
 
 def _r_proxy279(ctx, res):
@@ -584,6 +585,9 @@ check("Open: an add-on that isn't running is refused with that reason, audited",
 check("Open: a running add-on sends the new tab (303) to its link, audited once with the add-on's name",
       _rt279.get("open", (0,))[:3] == (303, True, 1) and "BlueMap" in getattr(_rt279["open"][3], "detail", ""),
       repr(_rt279.get("open")))
+eq("Open: the 303 says Referrer-Policy: no-referrer, so the add-on's page is not handed the panel page that "
+   "opened it (the card's form now sends that page as its Referer, for the HTTPS CSRF check)",
+   _rt279.get("open_referrer_policy"), "no-referrer")
 check("Open: the link itself is never written to the audit log", _rt279.get("token_in_audit") is False,
       repr(_rt279.get("token_in_audit")))
 _px279 = _rt279.get("proxy", (0, "", None, None, b"", b"", None, None))
@@ -773,11 +777,45 @@ _cs279 = _card279({"success": True, "manage": True, "addons": [dict(_row279, sta
 _cv279 = _card279({"success": True, "manage": False, "addons": [{"id": "bluemap", "name": "BlueMap", "version": "v5",
                                                                   "installed": True, "state": "active", "web": True}]})
 eq("card: a running add-on with a page has Open; Open posts a form to /api/server/<id>/addons/<id>/web in a new tab, "
-   "with the CSRF token and no referrer",
+   "with the CSRF token, noopener and NOT noreferrer (over HTTPS the CSRF check refuses a POST with no Referer)",
    (_cm279.get("opens"), [(f["method"], f["action"], f["target"], f["rel"], f["fields"], f["inBody"])
                           for f in _cm279.get("forms", [])]),
-   ([["bluemap"]], [("post", "/m/api/server/7/addons/bluemap/web", "_blank", "noopener noreferrer",
+   ([["bluemap"]], [("post", "/m/api/server/7/addons/bluemap/web", "_blank", "noopener",
                      [["hidden", "csrf_token", "csrf-279"]], True)]))
+
+
+def _https_csrf279():
+    """Why the card's form must send a Referer: the panel's own CSRF check, on an HTTPS request.
+
+    The live panel is served over HTTPS (its own certificate, or behind Tailscale Serve), and flask-wtf's
+    WTF_CSRF_SSL_STRICT then refuses a POST whose Referer is missing or from another origin, even with a
+    valid token. The suites run over HTTP with CSRF off, which is how a form with rel="noreferrer" shipped
+    and failed on the owner's panel as "This page's security token has expired" (2026-11-23).
+    """
+    from flask import request as _rq
+    from flask_wtf.csrf import CSRFError, generate_csrf
+    csrf = _p9.extensions["csrf"]
+    out = []
+    for referer in (None, "https://panel.test/server/7", "https://elsewhere.test/"):
+        headers = {"Referer": referer} if referer else {}
+        with _p9.test_request_context("/api/server/7/addons/bluemap/web", base_url="https://panel.test",
+                                      method="POST", headers=headers):
+            _rq.form = _rq.parameter_storage_class({"csrf_token": generate_csrf()})
+            try:
+                csrf.protect()
+                out.append("ok")
+            except CSRFError as e:
+                out.append(e.description)
+    # part12's app is not create_app(): the panel's own setting is read from app.py, where nothing may set it
+    # (flask-wtf's default is True, OWASP's CSRF cheat sheet keeps the Origin/Referer check as defence in depth).
+    with open(os.path.join(_ROOT279, "panel", "install", "app.py"), encoding="utf-8") as fh:
+        app_sets_it = "WTF_CSRF_SSL_STRICT" in fh.read()
+    return _p9.config.get("WTF_CSRF_SSL_STRICT"), app_sets_it, out
+
+
+eq("csrf over HTTPS: the strict Referer check stays on (app.py never sets WTF_CSRF_SSL_STRICT), and with a valid "
+   "token a POST with no Referer, or one from another origin, is refused; one from the panel's own page goes through",
+   _https_csrf279(), (True, False, ["The referrer header is missing.", "ok", "The referrer does not match the host."]))
 check("card: the web page line no longer sends people to an SSH tunnel",
       "ssh -L" not in _cm279.get("text", "x") and "Open shows it through the panel" in _cm279.get("text", ""),
       _cm279.get("text", "")[:300])
