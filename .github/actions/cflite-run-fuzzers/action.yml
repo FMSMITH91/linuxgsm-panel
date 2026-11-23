@@ -79,7 +79,7 @@ inputs:
     default: false
 runs:
   using: 'docker'
-  image: 'docker://gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers:ubuntu-24-04-v1@sha256:475ec5a91d4b6a42edd0818c88099b96125f031d95a48fa1e87aa2dfa104ecdf'
+  image: 'docker://gcr.io/oss-fuzz-base/clusterfuzzlite-run-fuzzers:ubuntu-24-04-v1@sha256:0eb1efbd3812629a723051bc0b4387c5bf84e8b9c4ac7f45ea63108f9713fcf8'
   env:
     FUZZ_SECONDS: ${{ inputs.fuzz-seconds }}
     MODE: ${{ inputs.mode }}
