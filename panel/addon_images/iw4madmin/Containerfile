@@ -15,7 +15,7 @@
 #     before anything in it is used.
 # curl and unzip stay in the first stage; the image keeps the base, the release's files and the start script.
 # renovate: BASE_IMAGE follows mcr.microsoft.com/dotnet/aspnet:10.0's digest, with addons.py's IW4MADMIN_BASE
-ARG BASE_IMAGE=mcr.microsoft.com/dotnet/aspnet@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586
+ARG BASE_IMAGE=mcr.microsoft.com/dotnet/aspnet@sha256:aac50ceef10391e78a899e3d2ccd00bbafa2dcb56ccf4586cbccf00edb84fc21
 # renovate: IW4MADMIN_TAG is RaidMax/IW4M-Admin's release, IW4MADMIN_SHA256 its archive's (with addons.py)
 ARG IW4MADMIN_TAG=2026.2.4.1-prerelease
 ARG IW4MADMIN_SHA256=5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e

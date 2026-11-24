@@ -120,10 +120,10 @@ IW4MADMIN_TAG = "2026.2.4.1-prerelease"
 IW4MADMIN_SHA256 = "5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e"
 # The release's build number, the archive's name and the version the card shows.
 IW4MADMIN_VERSION = IW4MADMIN_TAG.split("-", 1)[0]
-# mcr.microsoft.com/dotnet/aspnet:10.0 (ASP.NET Core 10.0.15, Ubuntu 24.04) on 2026-11-18, by its multi-arch index
+# mcr.microsoft.com/dotnet/aspnet:10.0 (ASP.NET Core 10.0.15, Ubuntu 24.04) on 2026-11-24, by its multi-arch index
 # digest: the IW4MAdmin build's base. Renovate proposes the tag's new digest here and in the Containerfile's ARG
 # BASE_IMAGE together, so each runtime fix Microsoft ships is offered as an update.
-IW4MADMIN_BASE = "mcr.microsoft.com/dotnet/aspnet@sha256:12b1135f5f8b3c0a214f2a680ff2033dff4f684f445d6c697d9524ceeb303586"
+IW4MADMIN_BASE = "mcr.microsoft.com/dotnet/aspnet@sha256:aac50ceef10391e78a899e3d2ccd00bbafa2dcb56ccf4586cbccf00edb84fc21"
 # BlueMap's `v5` image (its release 5.29 on 2026-10-10, org.opencontainers.image.revision a61e143f; the same
 # digest as its v5.29 and latest tags then), by its multi-arch index digest. Renovate proposes the v5 tag's new
 # digest, so a new 5.x release is offered and a major release with new configs is not.
