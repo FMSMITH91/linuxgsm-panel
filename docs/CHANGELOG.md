@@ -10,6 +10,13 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.24] — 2026-11-24
+
+### Changed
+
+- **IW4MAdmin is rebuilt on Microsoft's latest .NET 10 image.** Same .NET 10.0.15 runtime, with the
+  operating-system updates Microsoft rebuilt it with. Panels running IW4MAdmin offer an Update on its card.
+
 ## [2026.11.23] — 2026-11-23
 
 ### Fixed
