@@ -3567,30 +3567,26 @@ def _fl_frame(tag, text):
 
 
 try:
-    # ── the chunked write path (files too big for one command) ─────────────────────────────────
+    # ── a large write: one command, the bytes on its stdin ─────────────────────────────────────
     _big = b"x" * 70000
     _calls = _fl_rc(("", "", 0))
-    eq("file write (large): chunked — two base64 chunks and a finishing decode, all unprivileged",
+    eq("file write (large): one command, unprivileged",
        (_F._write_file_as_user(_p8_srv(), "cs2server", "/home/cs2server/big.bin", _big), _calls),
-       ((True, ""), [False, False, False]))
+       ((True, ""), [False]))
     _calls = _fl_rc((_F._OUTSIDE_HOME, "", 9))
-    eq("file write (large): a target that resolves outside the home ON THE HOST is refused at the "
-       "first chunk, before any more is sent",
+    eq("file write (large): a target that resolves outside the home ON THE HOST is refused",
        (_F._write_file_as_user(_p8_srv(), "cs2server", "/home/cs2server/link/x", _big), len(_calls)),
        ((False, "Invalid path"), 1))
-    _calls = _fl_rc(("", "", 0), ("", "No space left on device", 1))
-    # The third call removes the chunk already staged (review 1015d: it was left as .paneltmp).
-    eq("file write (large): a failed chunk stops the write, says why and removes what was staged",
+    _calls = _fl_rc(("", "No space left on device", 1))
+    eq("file write (large): a failed write says why, in the same one command",
        (_F._write_file_as_user(_p8_srv(), "cs2server", "/home/cs2server/big.bin", _big), len(_calls)),
-       ((False, "No space left on device"), 3))
-    # ...and the third call IS that removal, not the finishing decode: a write that ignored the
-    # failed chunk and went on to finish is also 3 calls, and the repeated answer made it fail the
-    # same way (review 1016b).
-    _r25d_fl_third = _r25d_fl_cmds[2] if len(_r25d_fl_cmds) > 2 else ""
-    check("file write (large): ...the call after the failed chunk removes the staged file and "
-          "decodes nothing",
-          "rm -f" in _r25d_fl_third and ".paneltmp" in _r25d_fl_third and "base64 -d" not in _r25d_fl_third,
-          repr(_r25d_fl_cmds[2:3])[:300])
+       ((False, "No space left on device"), 1))
+    # A decode that fails part-way (a full disk) removes what it staged, inside that command (review
+    # 1015d: a partial copy was left as .paneltmp).
+    _r25d_fl_one = _r25d_fl_cmds[0] if _r25d_fl_cmds else ""
+    check("file write (large): ...the command removes its staged copy when the decode fails",
+          'base64 -d > "$p".paneltmp || { rm -f "$p".paneltmp; false; }' in _r25d_fl_one,
+          repr(_r25d_fl_cmds[:1])[:300])
 
     # ── LinuxGSM config read ───────────────────────────────────────────────────────────────────
     _fl_rc(("__LGSMP_DEFAULT_B__!!notbase64!!__LGSMP_DEFAULT_E__" + _fl_frame("COMMON", "")

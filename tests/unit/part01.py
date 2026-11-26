@@ -2357,13 +2357,13 @@ try:
           _one[-90:])
     check("upload: the single command stays well inside the 128 KB limit on one argv entry",
           len(_one) < 120000, "%d bytes" % len(_one))
-    # A file too big for one command still streams in chunks rather than being refused.
+    # The bytes ride stdin, so a large file is ONE command too, guarded like the small one.
     _wcalls.clear()
     _ok_big, _ = _sm_files._write_file_as_user(_FakeSrv(), "csgoserver", "/home/csgoserver/big.vpk", b"B" * (200 * 1024))
-    check("upload: a large file still chunks (and is not refused)",
-          _ok_big is True and len(_wcalls) > 1, "%r %d calls" % (_ok_big, len(_wcalls)))
-    check("upload: the large path guards its FIRST command, before any byte is written",
-          "realpath -m" in _wcalls[0], _wcalls[0][:110])
+    check("upload: a large file is one command as well (and is not refused)",
+          _ok_big is True and len(_wcalls) == 1, "%r %d calls" % (_ok_big, len(_wcalls)))
+    check("upload: the large write is guarded before any byte is written",
+          "realpath -m" in _wcalls[0] and len(_wcalls[0]) < 120000, _wcalls[0][:110])
 
     # The rename replaces the destination's inode, so without copying the mode across every save
     # reset the file to the umask default: LinuxGSM's 0755 launch script lost its exec bit (start
@@ -2379,8 +2379,9 @@ try:
         _sm_files._guarded = lambda u, a, inner: "p=%s; " % _sm_core._quote(a) + inner
 
         def _run_peeled(s, c, **k):
-            _r = _subp.run(["bash", "-c", c.split(" ", 3)[3]], capture_output=True, text=True)
-            return _r.stdout, _r.stderr, _r.returncode
+            _in = b"".join(k["stdin_text"]) if k.get("stdin_text") is not None else b""
+            _r = _subp.run(["bash", "-c", c.split(" ", 3)[3]], capture_output=True, input=_in)
+            return _r.stdout.decode(), _r.stderr.decode(), _r.returncode
         _sm_core.run_command = _run_peeled
         for _label, _size in (("one-shot", 64), ("chunked", 200 * 1024)):
             for _mode in (0o755, 0o600):
