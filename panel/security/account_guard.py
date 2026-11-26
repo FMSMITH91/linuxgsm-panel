@@ -185,8 +185,8 @@ def twofa_required(user):
     if getattr(user, "totp_enabled", True):
         return False
     # A customer (a member of a customer group) must, while Settings' "Require 2FA for customers"
-    # is on (the default; OWASP Multifactor Authentication Cheat Sheet: MFA for every user is the
-    # recommended option). A customer group's members reach other people's hosting.
+    # is on (the default; OWASP Multifactor Authentication Cheat Sheet, "Quick Recommendations": require
+    # MFA for all users). A customer group's members reach other people's hosting.
     if current_app.config.get("WEBSITES_CUSTOMER_2FA", True) and _in_customer_group(user):
         return True
     if not current_app.config.get("REQUIRE_2FA"):
