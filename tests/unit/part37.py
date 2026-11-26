@@ -304,14 +304,20 @@ def _raw_glued_w37(e):
     return head is not e or ":" in head.value[2:]
 
 
+def _raw_alias37(n):
+    """{local name: dotted name} one import statement binds from socket or eventlet under a name of its own."""
+    if isinstance(n, _ast37.ImportFrom) and (n.module or "").split(".")[0] in ("socket", "eventlet"):
+        return {a.asname or a.name: "%s.%s" % (n.module, a.name) for a in n.names}
+    if isinstance(n, _ast37.Import):
+        return {a.asname: a.name for a in n.names if a.asname and a.name.split(".")[0] in ("socket", "eventlet")}
+    return {}
+
+
 def _raw_aliases37(tree):
     """{local name: dotted name} for what `tree` imports from socket and eventlet under a name of its own."""
     out = {}
     for n in _ast37.walk(tree):
-        if isinstance(n, _ast37.ImportFrom) and (n.module or "").split(".")[0] in ("socket", "eventlet"):
-            out.update({a.asname or a.name: "%s.%s" % (n.module, a.name) for a in n.names})
-        elif isinstance(n, _ast37.Import):
-            out.update({a.asname: a.name for a in n.names if a.asname and a.name.split(".")[0] in ("socket", "eventlet")})
+        out.update(_raw_alias37(n))
     return out
 
 
@@ -321,18 +327,21 @@ def _raw_call37(call, aliases=None):
     Read through an import under another name (`from socket import create_connection as cc`), eventlet's
     connect included, and an open_channel whose kind is given by keyword or computed (review 1124).
     """
-    name = _callee37(call.func)
-    head, _, rest = name.partition(".")
+    head, _, rest = _callee37(call.func).partition(".")
     name = (aliases or {}).get(head, head) + ("." + rest if rest else "")
-    last = name.split(".")[-1]
-    if (last == "create_connection" and not name.endswith("websocket.create_connection")) or name == "eventlet.connect":
+    if (name.endswith(".create_connection") or name == "create_connection") and not name.endswith("websocket.create_connection"):
+        return "socket.create_connection"
+    if name == "eventlet.connect":
         return "socket.create_connection"
     if name.endswith("socket.socket"):
         return "socket.socket"
+    return "open_channel direct-tcpip" if name.split(".")[-1] == "open_channel" and _raw_tcp_kind37(call) else None
+
+
+def _raw_tcp_kind37(call):
+    """Whether an open_channel call's kind, positional or by keyword, is "direct-tcpip" or computed (unknown)."""
     kind = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "kind"), None)
-    if last == "open_channel" and kind is not None and not (isinstance(kind, _ast37.Constant) and kind.value != "direct-tcpip"):
-        return "open_channel direct-tcpip"
-    return None
+    return kind is not None and not (isinstance(kind, _ast37.Constant) and kind.value != "direct-tcpip")
 
 
 def _raw_sites37(source, rel):
@@ -350,17 +359,22 @@ def _raw_sites37(source, rel):
     return sites
 
 
-def _raw_tripwire():
-    """The shipped code's raw streams are exactly the reviewed ones, each named in the justification."""
+def _sock_checks37():
+    """The raw streams the shipped code opens, bar its own sockets, which are held to _SOCK_REVIEWED37 here."""
     found, files = set(), _shipped_py37()
     for f in files:
         found |= _raw_sites37(open(f, encoding="utf-8").read(), _rel37(f))
     socks = {x for x in found if x[2] == "socket.socket"}
-    found -= socks
     check("outbound streams: (premise) the shipped files read include the helper and its root-run entry",
           {"tools/panel-helper", "tools/panel_helper_entry.py"} <= {_rel37(f) for f in files}, "")
     check("outbound streams: every socket the shipped code makes itself is a reviewed one",
           socks == _SOCK_REVIEWED37, "new: %r gone: %r" % (sorted(socks - _SOCK_REVIEWED37), sorted(_SOCK_REVIEWED37 - socks)))
+    return found - socks
+
+
+def _raw_tripwire():
+    """The shipped code's raw streams are exactly the reviewed ones, each named in the justification."""
+    found = _sock_checks37()
     text = _read29(".github", "codeql", "codeql-config.yml")
     comment = "\n".join(ln for ln in text[:text.find("query-filters:")].splitlines() if ln.lstrip().startswith("#"))
     named = sorted({"%s.%s" % (os.path.splitext(os.path.basename(r))[0], fn) for r, fn, _k in _RAW_REVIEWED37})

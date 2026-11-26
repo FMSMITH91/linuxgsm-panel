@@ -1187,15 +1187,18 @@ _R35T_DEPRECATED_UTC = ("utc" + "now", "utc" + "fromtimestamp")
 _R35T_CLOCK_RECV = _re.compile(r"(?:^|\.)_?clock\d*$|\(['\"]panel\.core\.clock['\"]\)$")
 
 
+def _r35t_panel_bound(node):
+    """The names one import statement binds to a panel module (none for any other node)."""
+    if isinstance(node, _smg_ast.Import):
+        return {_a.asname for _a in node.names if _a.asname and _a.name.startswith("panel.")}
+    if isinstance(node, _smg_ast.ImportFrom) and (node.module or "").startswith("panel"):
+        return {_a.asname or _a.name for _a in node.names}
+    return set()
+
+
 def _r35t_panel_modules(tree):
     """The names `tree` binds to a panel module by import."""
-    names = set()
-    for _n in _smg_ast.walk(tree):
-        if isinstance(_n, _smg_ast.Import):
-            names |= {_a.asname for _a in _n.names if _a.asname and _a.name.startswith("panel.")}
-        elif isinstance(_n, _smg_ast.ImportFrom) and (_n.module or "").startswith("panel"):
-            names |= {_a.asname or _a.name for _a in _n.names}
-    return names
+    return set().union(*(_r35t_panel_bound(_n) for _n in _smg_ast.walk(tree)))
 
 
 def _r35t_old_utc_calls(text):

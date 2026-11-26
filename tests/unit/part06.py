@@ -7571,6 +7571,13 @@ def _ci_in_list(s, ind, indent):
     return not s or s.startswith("#") or (s.startswith("- ") and ind >= indent)
 
 
+def _ci_flow_mapping(s, key):
+    """A flow-mapping on: line's list (a paths list no file matches, a paths-ignore list every file matches), else None."""
+    if not re.search(r":[ \t]*\{", re.sub(r"(?:^|\s)#.*$", "", s)):
+        return None
+    return [("\0unreadable flow mapping: " + s, False)] if key == "paths" else [("**", False)]
+
+
 def _ci_on_path_lists(on, key="paths"):
     """Return each `paths:` list of an `on:` block (a paths-ignore list is not one), in order, as [(pattern, excluded)].
 
@@ -7588,9 +7595,10 @@ def _ci_on_path_lists(on, key="paths"):
         if cur is not None and _ci_in_list(s, ind, indent):
             cur.extend([_ci_path_entry(s[2:])] if s.startswith("- ") else [])
             continue
-        if re.search(r":[ \t]*\{", re.sub(r"(?:^|\s)#.*$", "", s)):
+        flow = _ci_flow_mapping(s, key)
+        if flow:
             cur = None
-            lists.append([("\0unreadable flow mapping: " + s, False)] if key == "paths" else [("**", False)])
+            lists.append(flow)
             continue
         cur, value = None, _ci_paths_key(s, key)
         if value == "":
@@ -9670,17 +9678,23 @@ import ast as _2fa_ast                                                          
 # into a helper elsewhere, or written `setattr(u, "totp_enabled", False)`, passed reading nothing.
 
 
+def _2fa_assigns(node, attr, values):
+    """Whether `node` is `x.<attr> = <one of values>`."""
+    return (isinstance(node, _2fa_ast.Assign) and isinstance(node.value, _2fa_ast.Constant) and node.value.value in values
+            and any(getattr(_t, "attr", None) == attr for _t in node.targets))
+
+
+def _2fa_setattr(node, attr, values):
+    """Whether `node` is `setattr(x, "<attr>", <one of values>)`."""
+    if not (isinstance(node, _2fa_ast.Call) and getattr(node.func, "id", None) == "setattr" and len(node.args) == 3):
+        return False
+    _k, _v = node.args[1:]
+    return isinstance(_k, _2fa_ast.Constant) and isinstance(_v, _2fa_ast.Constant) and _k.value == attr and _v.value in values
+
+
 def _2fa_sets(fn, attr, values):
     """Whether function `fn` sets attribute `attr` to one of the constants `values` (by `=` or setattr)."""
-    for _n in _2fa_ast.walk(fn):
-        if isinstance(_n, _2fa_ast.Assign) and isinstance(_n.value, _2fa_ast.Constant) and _n.value.value in values \
-                and any(getattr(_t, "attr", None) == attr for _t in _n.targets):
-            return True
-        if isinstance(_n, _2fa_ast.Call) and getattr(_n.func, "id", None) == "setattr" and len(_n.args) == 3 \
-                and all(isinstance(_x, _2fa_ast.Constant) for _x in _n.args[1:]) \
-                and _n.args[1].value == attr and _n.args[2].value in values:
-            return True
-    return False
+    return any(_2fa_assigns(_n, attr, values) or _2fa_setattr(_n, attr, values) for _n in _2fa_ast.walk(fn))
 
 
 def _2fa_paths(src, name):
