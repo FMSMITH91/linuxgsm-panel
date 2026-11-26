@@ -327,7 +327,7 @@ def _p298_guarded(site_id):
 
 @_fake298.route("/websites/<int:site_id>/start", methods=["POST"])
 def _p298_open(site_id):
-    return str(site_id)
+    return "started" if site_id else "no site"
 
 
 @_fake298.route("/websites")
