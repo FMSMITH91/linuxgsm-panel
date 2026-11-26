@@ -971,13 +971,18 @@ def _s299_cpu():
         _smw299.cpu_note("?") == _ws299.CPU_MODES["none"]), (["account", "container", "none"], True, True))
 
 
+def _floor_digests299():
+    """Every image of the floor's sites section (the pulled ones; the cache build's images are built from)."""
+    out = [_SITES299["static"]["image"], _SITES299["wpcli"]["image"], _SITES299["object_cache"]["image"]]
+    out += [e["image"] for e in _SITES299["php"].values()] + [e["image"] for e in _SITES299["wordpress"]["php"].values()]
+    out += [e["image"] for e in _SITES299["tunnel"].values()]
+    return out + [e["image"] for r in _SITES299["runtimes"].values() for e in r["versions"].values()]
+
+
 def _s299_image_scan():
     p = _AI299.plan()
     sites_up = p["sites"]["upstream"]
-    want = {_SITES299["static"]["image"], _SITES299["wpcli"]["image"], _SITES299["object_cache"]["image"]}
-    want |= {e["image"] for e in _SITES299["php"].values()} | {e["image"] for e in _SITES299["wordpress"]["php"].values()}
-    want |= {e["image"] for e in _SITES299["tunnel"].values()}
-    want |= {e["image"] for r in _SITES299["runtimes"].values() for e in r["versions"].values()}
+    want = set(_floor_digests299())
     eq("image scan (plan): every image of the catalog's sites section is pulled and scanned, the page cache's proxy is "
        "built from the catalog's values, nothing wrong on this tree",
        (set(sites_up.values()) == want, sorted(p["sites"]["builds"]), [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
@@ -995,6 +1000,9 @@ def _s299_image_scan():
        (len(build), sum(1 for f in build[0] if f == "--build-arg") if build else 0,
         any(t.endswith(os.path.join("website_images", "caddy-cache", "Containerfile")) for _l, t in _AI299.lint_targets(p))),
        (1, 5, True))
+
+
+def _s299_image_scan2():
     bad_cat = dict(_FLOOR_DOC299, sites=_bad299(("php", "8.4", "image"), "docker.io/library/php:8.4-apache"))
     d = _tf299.mkdtemp(prefix="ww2-scan-")
     try:
@@ -1062,6 +1070,10 @@ def _s299_w3_calls():
         logs = _smw299.site_logs(None, site)
     finally:
         _smw299._as_site, _smw299._ids, _smw299._secret, _smw299._core = saved
+    _w3_checks299(sent, secrets, results, logs)
+
+
+def _w3_checks299(sent, secrets, results, logs):
     bodies = "".join(b for b, _i in sent)
     stdins = "".join(i for _b, i in sent)
     decoded = "".join(_unb64_299(w) for ln in stdins.splitlines() for w in ln.split()[1:])
@@ -1083,5 +1095,5 @@ for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s29
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
-                 _s299_cache_build, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls):
+                 _s299_cache_build, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
     _step299()

@@ -690,7 +690,7 @@ def egress_proxy_source():
         return fh.read()
 
 
-def site_files(site, ids, net, token, cache_password=None, env=None, image=None, egress_hosts=(), cpu=True):
+def site_files(site, ids, net, token, cache_password=None, image=None, egress_hosts=(), cpu=True):
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
     files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
              HOME_DIR + "/" + META_FILE: json.dumps({"kind": site.kind, "image": image or image_for(site),
@@ -703,7 +703,7 @@ def site_files(site, ids, net, token, cache_password=None, env=None, image=None,
         files["%s/%s.container" % (QUADLET_DIR, GATE_UNIT)] = gate_quadlet(site, ids, _wc.static_image())
         files[CONF + "/start.sh"] = start_script(site)
         files[CONF + "/build.sh"] = build_script(site)
-        files[CONF + "/app.env"] = env_file(site, env)
+        files[CONF + "/app.env"] = env_file(site)
     else:
         files[CONF + "/apache.conf"] = apache_conf(token)
         files[CONF + "/ports.conf"] = APACHE_PORTS

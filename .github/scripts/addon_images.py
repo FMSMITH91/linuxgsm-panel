@@ -142,16 +142,24 @@ def read_sites(path=CATALOG):
     return sites if isinstance(sites, dict) else {}
 
 
+def _image_of(entry):
+    return entry.get("image") if isinstance(entry, dict) else None
+
+
+def _versioned(prefix, entries):
+    """{prefix + version: image} for {version: {"image": ...}}."""
+    return {prefix + v: _image_of(e) for v, e in (entries or {}).items()}
+
+
 def sites_images(sites):
     """{label: image} of every image the `sites` section names, as the websites pull them."""
-    out = {"sites-static": (sites.get("static") or {}).get("image"), "sites-wpcli": (sites.get("wpcli") or {}).get("image"),
-           "sites-object-cache": (sites.get("object_cache") or {}).get("image")}
-    out.update({"sites-php-%s" % v: e.get("image") for v, e in (sites.get("php") or {}).items()})
-    out.update({"sites-wordpress-php%s" % v: e.get("image")
-                for v, e in ((sites.get("wordpress") or {}).get("php") or {}).items()})
-    out.update({"sites-tunnel-%s" % n: e.get("image") for n, e in (sites.get("tunnel") or {}).items()})
-    out.update({"sites-%s-%s" % (r, v): e.get("image") for r, rt in (sites.get("runtimes") or {}).items()
-                for v, e in (rt.get("versions") or {}).items()})
+    out = {"sites-static": _image_of(sites.get("static")), "sites-wpcli": _image_of(sites.get("wpcli")),
+           "sites-object-cache": _image_of(sites.get("object_cache"))}
+    out.update(_versioned("sites-php-", sites.get("php")))
+    out.update(_versioned("sites-wordpress-php", (sites.get("wordpress") or {}).get("php")))
+    out.update(_versioned("sites-tunnel-", sites.get("tunnel")))
+    for runtime, entry in (sites.get("runtimes") or {}).items():
+        out.update(_versioned("sites-%s-" % runtime, (entry or {}).get("versions")))
     return {k: v for k, v in sorted(out.items()) if isinstance(v, str)}
 
 

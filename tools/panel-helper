@@ -3001,7 +3001,27 @@ def _web_validated(text, pw):
 # module, and installed in place of the plain release's.
 WEB_CACHE_MODULE = "github.com/caddyserver/cache-handler"
 WEB_CACHE_TAG = "localhost/lgsm-web-proxy-cache:build"
-WEB_CACHE_CONTAINERFILE = '# The websites\' web proxy with the page cache module: Caddy built by xcaddy with\n# github.com/caddyserver/cache-handler at the exact version the signed catalog names. The root helper\n# builds it on the host (website-proxy-install-cache) from its own copy of this file and takes the binary\n# out; CI builds and scans this copy. Every value comes from the catalog (sites.caddy_cache): no ARG has a\n# default. Go checks every module it downloads against the checksum database (GOSUMDB) before using it.\nARG BUILDER_IMAGE\nARG BASE_IMAGE\nFROM ${BUILDER_IMAGE} AS build\nARG CADDY_VERSION\nARG CACHE_MODULE\nARG CACHE_VERSION\nENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GONOSUMDB= GOPRIVATE=\nRUN xcaddy build "v${CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" --output /usr/bin/caddy-cache \\\n    && /usr/bin/caddy-cache list-modules | grep -qx "http.handlers.cache"\n\nFROM ${BASE_IMAGE}\nCOPY --from=build /usr/bin/caddy-cache /usr/bin/caddy\nUSER 65534:65534\nENTRYPOINT ["/usr/bin/caddy"]\nCMD ["version"]\n'
+WEB_CACHE_CONTAINERFILE = r'''# The websites' web proxy with the page cache module: Caddy built by xcaddy with
+# github.com/caddyserver/cache-handler at the exact version the signed catalog names. The root helper
+# builds it on the host (website-proxy-install-cache) from its own copy of this file and takes the binary
+# out; CI builds and scans this copy. Every value comes from the catalog (sites.caddy_cache): no ARG has a
+# default. Go checks every module it downloads against the checksum database (GOSUMDB) before using it.
+ARG BUILDER_IMAGE
+ARG BASE_IMAGE
+FROM ${BUILDER_IMAGE} AS build
+ARG CADDY_VERSION
+ARG CACHE_MODULE
+ARG CACHE_VERSION
+ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GONOSUMDB= GOPRIVATE=
+RUN xcaddy build "v${CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" --output /usr/bin/caddy-cache \
+    && /usr/bin/caddy-cache list-modules | grep -qx "http.handlers.cache"
+
+FROM ${BASE_IMAGE}
+COPY --from=build /usr/bin/caddy-cache /usr/bin/caddy
+USER 65534:65534
+ENTRYPOINT ["/usr/bin/caddy"]
+CMD ["version"]
+'''
 
 
 def v_image_digest(s):

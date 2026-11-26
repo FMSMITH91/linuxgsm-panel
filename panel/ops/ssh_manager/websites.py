@@ -483,16 +483,22 @@ def app_install_step(remote, site, step, values=None, recipe=None):
             return False, REFUSED
     values = dict(values or {})
     recipe = recipe or _wc.recipe(site.app_recipe) or {}
-    if step["type"] == "run-in-container":
-        ids, probe = _ids(remote, site)
-        if ids is None:
-            return False, FAILED
-        values.update(_uid=str(ids[0]), _gid=str(ids[1]),
-                      _network=_ws().network(site, values.get("_db_port") or (3306 if recipe.get("database") else None),
-                                             splice=probe.get("splice", False)))
+    if step["type"] == "run-in-container" and not _container_values(remote, site, recipe, values):
+        return False, FAILED
     body, stdin = _wr.step_sh(site.account, site, step, values, recipe=recipe, token=_secret(site.proxy_secret))
     ok, out = _as_site(remote, site.account, body, timeout=1800, stdin_text=stdin)
     return (True, OK_STEP) if ok else (False, _mark(out))
+
+
+def _container_values(remote, site, recipe, values):
+    """Add the account's ids and the site's network to `values` for a container step; False when unread."""
+    ids, probe = _ids(remote, site)
+    if ids is None:
+        return False
+    db_port = values.get("_db_port") or (3306 if recipe.get("database") else None)
+    values.update(_uid=str(ids[0]), _gid=str(ids[1]),
+                  _network=_ws().network(site, db_port, splice=probe.get("splice", False)))
+    return True
 
 
 def site_logs(remote, site):
