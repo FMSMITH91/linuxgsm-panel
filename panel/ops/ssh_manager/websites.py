@@ -448,25 +448,57 @@ def env_apply(remote, site):
     return (True, OK_ENV) if ok else (False, _mark(out))
 
 
+def _step_values(site, step):
+    """(the step without its secrets, values_for()'s dict) from a step that carries the job's `secrets`.
+
+    The install job passes the generated or typed admin details and the new database's name and password in
+    step["secrets"]; they become the placeholder values and travel on stdin only (websites_recipes).
+    """
+    step = dict(step)
+    sec = step.pop("secrets", None) or {}
+    from panel.services import websites_recipes as _wr
+    domains = [d.domain for d in sorted(site.domains or [], key=lambda d: (not d.is_primary, d.id or 0))]
+    admin = {"user": sec.get("admin_user", ""), "email": sec.get("admin_email", ""),
+             "password": sec.get("admin_password", ""), "site_name": site.name}
+    db = {"name": sec.get("db_name", ""), "user": sec.get("db_user", ""), "password": sec.get("db_password", "")}
+    return step, _wr.values_for(site, db=db, admin=admin if sec.get("admin_user") else None, domains=domains)
+
+
 def app_install_step(remote, site, step, values=None, recipe=None):
     """Run one install step of the site's app recipe; (ok, text). create-database is the caller's (Databases code).
 
-    `values` is websites_recipes.values_for()'s dict; the account's ids and the site's network are
-    added here for a container step.
+    `values` is websites_recipes.values_for()'s dict, or the step carries the job's `secrets` (the admin
+    details and the database's) and they are turned into it here; `recipe` defaults to the site's catalog
+    recipe. The account's ids and the site's network are added for a container step. Every secret goes on
+    the step's stdin, never on a command line.
     """
     from panel.services import websites_recipes as _wr
-    values = dict(values or {})
+    from panel.services import websites_catalog as _wc
     if step["type"] == "create-database":
         return True, OK_STEP
+    if "secrets" in step:
+        try:
+            step, values = _step_values(site, step)
+        except ValueError:
+            return False, REFUSED
+    values = dict(values or {})
+    recipe = recipe or _wc.recipe(site.app_recipe) or {}
     if step["type"] == "run-in-container":
         ids, probe = _ids(remote, site)
         if ids is None:
             return False, FAILED
         values.update(_uid=str(ids[0]), _gid=str(ids[1]),
-                      _network=_ws().network(site, values.get("_db_port"), splice=probe.get("splice", False)))
+                      _network=_ws().network(site, values.get("_db_port") or (3306 if recipe.get("database") else None),
+                                             splice=probe.get("splice", False)))
     body, stdin = _wr.step_sh(site.account, site, step, values, recipe=recipe, token=_secret(site.proxy_secret))
     ok, out = _as_site(remote, site.account, body, timeout=1800, stdin_text=stdin)
     return (True, OK_STEP) if ok else (False, _mark(out))
+
+
+def site_logs(remote, site):
+    """The site's containers' last log lines (one SSH round trip): (ok, text)."""
+    ok, out = _as_site(remote, site.account, _ws().logs_sh(site.account), timeout=60)
+    return (True, out) if ok else (False, FAILED)
 
 
 def app_undo_step(remote, site, step):

@@ -1035,10 +1035,53 @@ def _s299_cloudflare():
        True)
 
 
+def _unb64_299(word):
+    """`word` decoded from base64 when it is valid base64, else ""."""
+    import binascii
+    try:
+        return __import__("base64").b64decode(word, validate=True).decode("utf-8", "replace")
+    except (binascii.Error, ValueError):
+        return ""
+
+
+def _s299_w3_calls():
+    sent = []
+    saved = (_smw299._as_site, _smw299._ids, _smw299._secret, _smw299._core)
+    _smw299._as_site = lambda remote, acct, body, timeout=0, stdin_text=None: sent.append((body, stdin_text or "")) or (True, "")
+    _smw299._ids = lambda remote, site: ((1005, 1005), {"splice": False})
+    _smw299._secret = lambda value: _TOKEN299
+    _smw299._core = _Core299("")
+    secrets = {"admin_user": "siteowner", "admin_email": "owner@example.org", "admin_password": "Gen-" + "z" * 20,
+               "db_name": "ws5_app", "db_user": "ws5_app", "db_password": "Db-" + "q" * 24}
+    site = _site299(kind="wordpress", app_recipe="wordpress")
+    try:
+        steps = _ws299.recipe_steps("wordpress")
+        results = [_smw299.app_install_step(None, site, dict(st, secrets=dict(secrets))) for st in steps]
+        mybb = [st for st in _ws299.recipe_steps("mybb") if st["type"] == "drive-web-installer"][0]
+        results.append(_smw299.app_install_step(None, _site299(kind="php", app_recipe="mybb"), dict(mybb, secrets=dict(secrets))))
+        logs = _smw299.site_logs(None, site)
+    finally:
+        _smw299._as_site, _smw299._ids, _smw299._secret, _smw299._core = saved
+    bodies = "".join(b for b, _i in sent)
+    stdins = "".join(i for _b, i in sent)
+    decoded = "".join(_unb64_299(w) for ln in stdins.splitlines() for w in ln.split()[1:])
+    eq("install job (app_install_step, as W3 calls it with the step's secrets): every step runs, the admin and database "
+       "passwords and the token never reach a shell command line, and they do reach the steps' stdin",
+       (all(r[0] for r in results), any(x in bodies for x in (secrets["admin_password"], secrets["db_password"], _TOKEN299)),
+        secrets["admin_password"] in decoded or secrets["admin_password"] in stdins,
+        secrets["db_password"] in decoded or secrets["db_password"] in stdins),
+       (True, False, True, True))
+    eq("site logs (site_logs, the routes' log view): the site's containers' own journal lines, read as its account",
+       (logs[0], "CONTAINER_NAME=lgsm-site" in sent[-1][0], "-n 500" in sent[-1][0], "sudo" in sent[-1][0]),
+       (True, True, True, False))
+    eq("recipe_steps by name (the routes pass the site's recipe name): the catalog's steps; an unknown name has none",
+       (len(_ws299.recipe_steps("smf")), _ws299.recipe_steps("no-such-app")), (5, []))
+
+
 for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s299_generator, _s299_proxy_base,
                  _s299_proxy_modes, _s299_proxy_rules, _s299_quadlet, _s299_servers, _s299_php, _s299_app_cache_tunnel,
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
-                 _s299_cache_build, _s299_cpu, _s299_image_scan, _s299_cloudflare):
+                 _s299_cache_build, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls):
     _step299()

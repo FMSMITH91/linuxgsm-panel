@@ -776,6 +776,20 @@ def remove_sh(account, site):
             % (UNIT, GATE_UNIT, CACHE_UNIT, _MARK_REMOVED))
 
 
+LOG_LINES = 500
+
+
+def logs_sh(account, lines=LOG_LINES):
+    """Bash (as the site's account) printing the last `lines` log lines of the site's containers, oldest first.
+
+    The containers' own output (Podman's journald driver names them), with the time; nothing of the host.
+    """
+    _home(account)
+    names = " + ".join("CONTAINER_NAME=%s" % u for u in (UNIT, GATE_UNIT, CACHE_UNIT))
+    return (_ENV + "journalctl --user %s -n %d --no-pager -o short-iso 2>/dev/null | grep -v '^-- No entries --$'; true"
+            % (names, max(1, min(int(lines), 2000))))
+
+
 def probe_sh(account, site):
     """Bash that prints the site's state as key=value lines for parse_probe (one SSH round trip)."""
     _home(account)
@@ -833,10 +847,15 @@ def disk_state(used_mb, limit_mb):
 def recipe_steps(recipe):
     """A one-click app recipe's install steps, each one of the fixed step types the panel implements.
 
+    `recipe` is a catalog recipe, or its name (the signed catalog's entry is used; [] when it has none).
     Raises ValueError for a recipe websites_catalog would refuse. Each step is a copy with its index
     (`n`) and a `name` (type and index) the install job records in Website.install_steps_done.
     """
     from panel.services import websites_catalog as _wc
+    if isinstance(recipe, str):
+        recipe = _wc.recipe(recipe)
+        if recipe is None:
+            return []
     bad = _wc.recipe_problems("recipe", recipe)
     if bad:
         raise ValueError("the recipe is refused: %s" % bad[0])
