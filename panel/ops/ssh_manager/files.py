@@ -1500,7 +1500,7 @@ def read_file(server, user, relpath, max_bytes=1048576):
         f"1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
     )
     out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
-    return _read_file_reply(out, ap, _rc)
+    return _read_file_reply(out, _rc)
 
 
 # What read_file's script prints INSTEAD of a frame, and what each one tells the editor.
@@ -1512,7 +1512,7 @@ _READ_REFUSALS = {
 }
 
 
-def _decode_read_frame(framed, ap):
+def _decode_read_frame(framed):
     """The (content, error) for the base64 text between read_file's sentinels."""
     if not framed:
         return "", None          # a genuinely empty file, framed and confirmed
@@ -1522,11 +1522,12 @@ def _decode_read_frame(framed, ap):
         # UTF-8: grep -qI calls it text, and the editor still has to show something.
         return _b64.b64decode(framed, validate=True).decode("utf-8", "replace"), None
     except Exception:
-        _core._log.warning("read_file: framed body for %s was not valid base64", ap)
+        # No path in the line: it is the browser's text (OWASP Logging Cheat Sheet, "Data to exclude").
+        _core._log.warning("read_file: the framed body was not valid base64")
         return None, "Could not read that file — the host did not answer. Nothing has been changed."
 
 
-def _read_file_reply(out, ap, _rc):
+def _read_file_reply(out, _rc):
     """Turn read_file's script output into (content, error) — see read_file."""
     if _r12b_outside_home(out):
         return None, "Invalid path"
@@ -1539,7 +1540,7 @@ def _read_file_reply(out, ap, _rc):
     i = body.find(_READ_BEGIN)
     j = body.rfind(_READ_END)
     if i != -1 and j > i:
-        return _decode_read_frame(body[i + len(_READ_BEGIN):j].strip(), ap)
+        return _decode_read_frame(body[i + len(_READ_BEGIN):j].strip())
     # No frame, and none of the three sentinels above: the read never got as far as `cat`. This
     # used to `return body, None` — i.e. "" with no error — and that is destructive, not merely
     # wrong. run_command does not raise on the local or Tailscale transports; it returns
@@ -1550,7 +1551,7 @@ def _read_file_reply(out, ap, _rc):
     # The sentinel framing already distinguishes "got as far as cat" from "did not"; it just has to
     # say so. (The repo's own "empty is not a measurement", with a destructive consequence rather
     # than a merely wrong readout.)
-    _core._log.warning("read_file: no sentinel frame for %s (rc=%s) — reporting a failed read", ap, _rc)
+    _core._log.warning("read_file: no sentinel frame (rc=%s) — reporting a failed read", _rc)
     return None, "Could not read that file — the host did not answer. Nothing has been changed."
 
 

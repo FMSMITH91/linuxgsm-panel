@@ -691,6 +691,26 @@ def _s11_errors(st):
     r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id, json={"limits": {"mem_mb": 640}})
     eq("install (settings route): a site with no proxy token yet still says so (control)",
        (r.status_code, (r.get_json() or {}).get("message")), (502, _sw300.MISSING_GATE))
+    _s11_read_log(st)
+
+
+def _s11_read_log(st):
+    """A failed file read logs what failed, never the path the browser sent (it may carry forged log lines)."""
+    from panel.ops.ssh_manager import files as _files300
+    answers = ["no frame here", _files300._READ_BEGIN + "!!not base64!!" + _files300._READ_END]
+    _p9_patch(_core300, "shell_as_game_user", lambda *a, **k: (answers.pop(0), "", 0))
+    log, handler = _logging300.getLogger("panel.ssh"), _Logged300()
+    log.addHandler(handler)
+    try:
+        c = _Client300(st.cust_a.id)
+        got = [c.get("/websites/%d/files/read?path=p300-logged-name.php" % st.a.id).status_code for _i in range(2)]
+    finally:
+        log.removeHandler(handler)
+        _p9_patch(_core300, "shell_as_game_user", _bash300)
+    lines = [m for m, _e in handler.lines if m.startswith("read_file:")]
+    eq("file read (website files route): a read with no frame and one with a broken frame both fail (400) and are "
+       "logged without the path the browser sent", (got, len(lines), [m for m in lines if "p300-logged" in m]),
+       ([400, 400], 2, []))
 
 
 def _state300():
