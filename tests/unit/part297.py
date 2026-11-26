@@ -37,6 +37,7 @@ _ALLOW297 = {
         "api.codacy.com:443", "api.github.com:443", "github.com:443", "objects.githubusercontent.com:443",
         "release-assets.githubusercontent.com:443"},
     ("sonar-main-issues.yml", "sonar-main-issues"): {"api.github.com:443", "github.com:443", "sonarcloud.io:443"},
+    ("codeql-alerts.yml", "open-alerts"): {"api.github.com:443", "github.com:443"},
 }
 _lists297 = {fj: _egress223(_job29(_wf29(fj[0]), fj[1])) for fj in _ALLOW297}
 check("main-only egress: each listed main-only job blocks, allowed exactly the hosts its own runs called",
@@ -135,3 +136,57 @@ check("codacy-coverage: ...while a workflow_run with the token still uploads (co
       all(v[0] == 0 and len(v[2]) == 2 and v[2][0].startswith("REPORTER report --partial -l Python")
           and not any("api.codacy.com/" in c for c in v[1]) for v in _cc_wr297.values()),
       repr(_cc_wr297))
+
+# ── 4. codeql-alerts: a manual run on another branch judges main and posts nothing ──────────────
+# Started on a branch, it judged that branch (with no analysis of it, so red) and POSTED the verdict
+# on the branch's commit. Now it judges main's head read-only: a verdict posted on main's head from a
+# branch's copy of this file would be read by the update gate as main's own. Driven through the ref
+# step with a stand-in gh; the judge step takes the commit the ref step chose.
+_cqa_wf297 = _wf29("codeql-alerts.yml")
+_cqa_run297 = _wf_run_block(_cqa_wf297, "Resolve which ref to judge")
+_MAIN297 = "f" * 40
+
+
+def _cqa_ref297(event, run_ref, gh_ok=True, head_branch="", wr_sha=""):
+    """Run the ref step; return (exit status, its outputs, gh calls, output)."""
+    d = _tf297.mkdtemp(dir=_SB297)
+    out, log = os.path.join(d, "out"), os.path.join(d, "log")
+    open(out, "w").close()
+    _write_exe29(os.path.join(d, "gh"), '#!/bin/sh\necho "$*" >> "%s"\n%s\n'
+                 % (log, ("echo " + _MAIN297) if gh_ok else "exit 1"))
+    env = dict(os.environ, PATH=d + os.pathsep + os.environ["PATH"], GITHUB_EVENT_NAME=event,
+               GITHUB_OUTPUT=out, GITHUB_REPOSITORY="o/r", HEAD_BRANCH=head_branch,
+               WR_BRANCH=head_branch or run_ref.rsplit("/", 1)[-1], WR_SHA=wr_sha, RUN_REF=run_ref,
+               RUN_SHA="b" * 40)
+    p = _sp297.run(["bash", "-c", _cqa_run297], capture_output=True, text=True, timeout=60,  # nosec B603 B607 - the workflow's own step
+                   env=env)
+    outs = dict(ln.split("=", 1) for ln in open(out, encoding="utf-8").read().splitlines() if "=" in ln)
+    calls = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+    return p.returncode, outs, calls, p.stdout + p.stderr
+
+
+_cqa_off297 = _cqa_ref297("workflow_dispatch", "refs/heads/qual/x")
+check("codeql-alerts: a manual run on another branch judges main's head and posts no verdict",
+      _cqa_off297[0] == 0 and _cqa_off297[1].get("ref") == "refs/heads/main"
+      and _cqa_off297[1].get("sha") == _MAIN297 and _cqa_off297[1].get("post") == "false"
+      and _cqa_off297[1].get("skip") == "false" and "repos/o/r/commits/main" in _cqa_off297[2],
+      repr(_cqa_off297))
+_cqa_bad297 = _cqa_ref297("workflow_dispatch", "refs/heads/qual/x", gh_ok=False)
+check("codeql-alerts: ...and fails, judging nothing, when main's head cannot be read",
+      _cqa_bad297[0] != 0 and "sha" not in _cqa_bad297[1], repr(_cqa_bad297))
+_cqa_on297 = {"manual on main": _cqa_ref297("workflow_dispatch", "refs/heads/main"),
+              "push to main": _cqa_ref297("workflow_run", "refs/heads/main", head_branch="main", wr_sha="a" * 40)}
+check("codeql-alerts: ...while a run on main judges its own commit and posts (controls)",
+      _cqa_on297["manual on main"][1] == {"ref": "refs/heads/main", "label": "`main`", "sha": "b" * 40,
+                                          "post": "true", "skip": "false"}
+      and _cqa_on297["push to main"][1].get("sha") == "a" * 40
+      and _cqa_on297["push to main"][1].get("post") == "true"
+      and not any(v[0] or v[2] for v in _cqa_on297.values()), repr(_cqa_on297))
+_cqa_post297 = _wf_step_env(_cqa_wf297, "Fail if that ref has open code-scanning alerts")
+_cqa_pif297 = _re297.search(r"- name: Post the verdict on the judged commit\n        if: >-\n((?:          .*\n)+)",
+                            _cqa_wf297)
+check("codeql-alerts: the judge step reads the commit the ref step chose, and the verdict is posted "
+      "only when the ref step says so",
+      _cqa_post297.get("SHA") == "${{ steps.ref.outputs.sha }}" and _cqa_pif297 is not None
+      and "steps.ref.outputs.post == 'true'" in " ".join(_cqa_pif297.group(1).split()),
+      repr((_cqa_post297.get("SHA"), _cqa_pif297 and _cqa_pif297.group(1))))

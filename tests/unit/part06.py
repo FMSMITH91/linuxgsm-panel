@@ -6254,7 +6254,7 @@ try:
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
-    def _cqa_case(event_name, wr_event, head_branch, ref_name="main"):
+    def _cqa_case(event_name, wr_event, head_branch, ref_name="main", run_ref="refs/heads/main"):
         _out = os.path.join(_cqa_sb, "out-%s-%s-%s" % (event_name, wr_event, head_branch or "none"))
         open(_out, "w").close()
         _p = _sh_sub.run(["bash", "-c", _cqa_run], capture_output=True, text=True, env=dict(
@@ -6262,7 +6262,7 @@ try:
             GITHUB_EVENT_NAME=event_name, WR_EVENT=wr_event, HEAD_BRANCH=head_branch,
             # the step's own WR_BRANCH expression: head_branch || github.ref_name
             WR_BRANCH=head_branch or ref_name, WR_SHA="a" * 40, GITHUB_OUTPUT=_out,
-            GITHUB_REPOSITORY="o/r"))
+            GITHUB_REPOSITORY="o/r", RUN_REF=run_ref, RUN_SHA="b" * 40))
         _o = dict(_l.split("=", 1) for _l in open(_out).read().splitlines() if "=" in _l)
         return _p.returncode, _o.get("skip"), _o.get("ref"), _p.stdout
 
@@ -6277,9 +6277,10 @@ try:
           all(_v[0] == 0 and _v[1] == "true" and _v[2] is None
               and "is not exactly main; nothing was judged" in _v[3] for _v in _cqa_near.values()),
           repr(_cqa_near))
-    _cqa_man = _cqa_case("workflow_dispatch", "", "", ref_name="feature")
-    check("codeql-alerts: ...while a manual run is judged at the ref it was started on",
-          _cqa_man[:3] == (0, "false", "refs/heads/feature"), repr(_cqa_man))
+    # A manual run on another branch judges main read-only (part297 runs that arm).
+    _cqa_man = _cqa_case("workflow_dispatch", "", "", ref_name="main")
+    check("codeql-alerts: ...while a manual run on main is judged as main",
+          _cqa_man[:3] == (0, "false", "refs/heads/main"), repr(_cqa_man))
 finally:
     _shutil.rmtree(_cqa_sb, ignore_errors=True)
 
