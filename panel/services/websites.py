@@ -809,12 +809,14 @@ def php_build_sh(site, tag):
     """Shell (as the account) that builds a PHP site's image `tag` from its pinned base, unless it is there already.
 
     Built from the Containerfile the bundle wrote (PHP_BUILD_DIR), the base pulled by its digest; the build
-    reaches Debian's archive through the host's network (the site's own container never does). A failure
-    prints SITE_BUILD_FAILED and the build's last lines. Older builds of the site's image are removed (one
-    still in use stays until the next install).
+    reaches Debian's archive through the host's network (the site's own container never does). In Docker's
+    image format (--format docker): Podman's default OCI format ignores the Containerfile's SHELL line. A
+    failure prints SITE_BUILD_FAILED and the build's last lines. Older builds of the site's image are removed
+    (one still in use stays until the next install).
     """
     log = _q(CONF + "/image-build.log")
-    return ("podman image exists %s || { podman build -q --pull=missing --network=host --build-arg BASE_IMAGE=%s "
+    return ("podman image exists %s || { podman build -q --format docker --pull=missing --network=host "
+            "--build-arg BASE_IMAGE=%s "
             "-t %s -f %s %s > %s 2>&1 || { echo SITE_BUILD_FAILED; tail -n 20 %s; exit 24; }; }; "
             % (_q(tag), _q(php_base_for(site) or ""), _q(tag), _q(PHP_BUILD_DIR + "/Containerfile"), _q(PHP_BUILD_DIR),
                log, log)

@@ -1,0 +1,276 @@
+"""Part 306 of the unit suite: fixes the websites' third proof round on the test host (P3) turned up.
+
+F23. The PHP sites' image builds with the Podman the panel installs: in Docker's image format (Podman's default
+     OCI format ignores SHELL), and from RUN lines that are POSIX sh as well as bash.
+
+HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
+seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
+podman and systemctl first on PATH that record their argv (one JSON line each). Nothing reaches a host (part12's
+tripwire is armed).
+"""
+import json as _json306
+import os
+import re as _re306
+import shutil as _shutil306
+import subprocess as _sp306  # nosec B404 - bash over the panel's own account shells, in a scratch home
+import sys as _sys306
+import tempfile as _tf306
+from types import SimpleNamespace as _NS306
+
+from flask import g as _g306
+
+from unit.part01 import _root, eq
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from panel.core import config as _cfg306
+from panel.db.models import (GameDatabase as _GDB306, RemoteServer as _Remote306, User as _User306,
+                             Website as _Site306, WebsiteDomain as _Dom306, WebsiteProxy as _Proxy306, db as _db306)
+from panel.ops.ssh_manager import _core as _core306
+from panel.ops.ssh_manager import websites as _sw306
+from panel.routes import _shared as _shared306
+from panel.routes import websites as _w306
+from panel.services import websites as _ws306
+
+_TREE306 = _tf306.mkdtemp(prefix="lgsm-unit-p306-")
+# The real functions a section stands in for, put back by the next section that needs them.
+_REAL306 = {n: getattr(_sw306, n) for n in ("install", "_as_site", "remove", "start", "php_apply")}
+_BIN306 = os.path.join(_TREE306, "bin")
+_CALLS306 = os.path.join(_TREE306, "calls.jsonl")
+_TOKEN306 = "t" * 40
+
+# The stand-in tools: each records its argv (one JSON line) and exits 0, except `podman image exists`
+# (FAKE_IMAGE_EXISTS, default 1: not there) and whatever FAKE_RC_<tool> names.
+_FAKE306 = r'''
+import json, os, sys
+argv = sys.argv[1:]
+tool = os.path.basename(sys.argv[0])
+rc = int(os.environ.get("FAKE_RC_" + tool, "0"))
+if tool == "podman" and argv[:2] == ["image", "exists"]:
+    rc = int(os.environ.get("FAKE_IMAGE_EXISTS", "1"))
+with open(os.environ["FAKE_CALLS"], "a") as fh:
+    fh.write(json.dumps({"tool": tool, "argv": argv}) + "\n")
+sys.exit(rc)
+'''
+
+
+def _tools306():
+    os.makedirs(_BIN306, exist_ok=True)
+    for name in ("podman", "systemctl", "journalctl"):
+        path = os.path.join(_BIN306, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("#!%s\n%s" % (_sys306.executable, _FAKE306))
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+        os.chmod(path, 0o700)
+
+
+def _home306(account):
+    return os.path.join(_TREE306, "home", account)
+
+
+_RUN306 = {"env": {}, "shells": []}
+
+
+def _bash306(server, user, sh, timeout=30, selfname=None, scope=False, stdin_text=None):
+    """shell_as_game_user over a scratch home: the panel's shell in real bash, the stand-in tools first on PATH."""
+    _RUN306["shells"].append(sh)
+    if not sh.startswith(_ws306._ENV):
+        return "", "part306: not an account shell", 99
+    home = _home306(user)
+    os.makedirs(home, exist_ok=True)
+    text = 'cd "$HOME" || exit 1; ' + sh[len(_ws306._ENV):].replace("/home/%s" % user, home)
+    env = dict(os.environ, HOME=home, PATH=_BIN306 + os.pathsep + os.environ.get("PATH", ""), FAKE_CALLS=_CALLS306,
+               **_RUN306["env"])
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    r = _sp306.run(["bash", "-c", text], input=(stdin_text or "").encode(), capture_output=True, timeout=timeout,  # nosec B603 B607
+                   env=env, check=False)
+    return r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace"), r.returncode
+
+
+def _calls306(tool=None):
+    if not os.path.exists(_CALLS306):
+        return []
+    with open(_CALLS306, encoding="utf-8") as fh:
+        got = [_json306.loads(ln) for ln in fh if ln.strip()]
+    return [c for c in got if tool is None or c["tool"] == tool]
+
+
+def _reset306(**env):
+    if os.path.exists(_CALLS306):
+        os.unlink(_CALLS306)
+    _RUN306["env"] = {k: str(v) for k, v in env.items()}
+    _RUN306["shells"] = []
+
+
+def _bash_seams306(helper=None):
+    """The account's shell in real bash over its scratch home; Podman ready, the helper answering `helper`."""
+    for name in ("install", "_as_site", "remove", "start", "php_apply"):
+        _p9_patch(_sw306, name, _REAL306[name])
+    _p9_patch(_core306, "shell_as_game_user", _bash306)
+    _p9_patch(_core306, "is_local_server", lambda server: True)
+    _p9_patch(_shared306, "game_account_write_refusal", lambda remote, account: None)
+    _p9_patch(_sw306, "runtime_ready", lambda remote: "")
+    _p9_patch(_sw306, "_helper", helper or (lambda remote, verb, args=(), timeout=120, doc=None: (True, "account=present")))
+    _p9_patch(_sw306, "_ids", lambda remote, site: ((os.getuid(), os.getgid()), {
+        "splice": True, "cpu_delegated": True, "os": "24.04", "podman": "podman version 4.9.3"}))
+
+
+class _Client306:
+    def __init__(self, uid):
+        self.c = _p9_client(uid)
+
+    def get(self, *a, **k):
+        _g306.pop("_login_user", None)
+        return self.c.get(*a, **k)
+
+    def post(self, *a, **k):
+        _g306.pop("_login_user", None)
+        return self.c.post(*a, **k)
+
+
+_ROWS306 = {"sites": [], "remotes": [], "users": [], "dbs": []}
+
+
+def _rows306():
+    r = _Remote306(name="p306-host", host="127.0.0.1", port=22, username="u", auth_method="key", auth_credential="",
+                   is_local=True, public_ip="198.51.100.76")
+    su = _User306(username="p306-super", password_hash=os.urandom(8).hex(), is_superadmin=True, is_active=True)
+    _db306.session.add_all([r, su])
+    _db306.session.commit()
+    _ROWS306["remotes"].append(r.id)
+    _ROWS306["users"].append(su.id)
+    return _NS306(host=r, su=su)
+
+
+def _site306(st, name, kind="php", **kw):
+    s = _Site306(remote_id=st.host.id, name=name, kind=kind, state="running",
+                 proxy_secret=_cfg306.encrypt_secret(_TOKEN306), **dict({"php_version": "8.4"}, **kw))
+    _db306.session.add(s)
+    _db306.session.flush()
+    s.account, s.port = "ws%d" % s.id, 20000 + s.id % 900
+    _db306.session.add(_Dom306(website_id=s.id, domain="%s.example.org" % name, is_primary=True))
+    _db306.session.commit()
+    _ROWS306["sites"].append(s.id)
+    return s
+
+
+# ── F23. The PHP image's build ──────────────────────────────────────────────────────────────────
+# Syntax only bash (and not POSIX sh, which an OCI-format build runs RUN lines under) understands.
+_BASHISMS306 = ("<<<", "[[", "PIPESTATUS", "$'", "function ", "&>", "|&", "=~", "<(", ">(", "${!", "declare ", "local ",
+                "source ")
+
+
+def _run_bodies306(path):
+    """The shell text of each RUN instruction (shell form) of the Containerfile at `path`, continuations joined."""
+    lines = [ln for ln in _read306(path).split("\n") if not ln.lstrip().startswith("#")]
+    text = "\n".join(lines).replace("\\\n", " ")
+    return [m.group(1) for m in _re306.finditer(r"^RUN (?!\[)(.*)$", text, _re306.M)]
+
+
+def _posix_problems306(path):
+    """[(bash-only syntax, RUN index)] in the Containerfile at `path`; `dash -n` too where dash is installed."""
+    out = []
+    for i, body in enumerate(_run_bodies306(path)):
+        out += [(b, i) for b in _BASHISMS306 if b in body]
+        dash = _shutil306.which("dash")
+        if dash:
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+            r = _sp306.run([dash, "-n", "-c", body], capture_output=True, timeout=30, check=False)  # nosec B603
+            out += [("dash -n: %s" % r.stderr.decode("utf-8", "replace").strip()[:80], i)] if r.returncode else []
+    return out
+
+
+def _read306(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _f23_php_build(st):
+    images = os.path.join(_root, "panel", "website_images")
+    php_cf, cache_cf = os.path.join(images, "php", "Containerfile"), os.path.join(images, "caddy-cache", "Containerfile")
+    eq("F23 (php Containerfile): every RUN line is POSIX sh as well as bash, so an OCI-format build (which ignores "
+       "SHELL and runs dash) still builds it (bash's `<<<` failed: `Syntax error: redirection unexpected`)",
+       (_posix_problems306(php_cf), len(_run_bodies306(php_cf))), ([], 1))
+    eq("F23 (caddy-cache Containerfile): its RUN lines are POSIX sh too, and it sets no SHELL (control: the root "
+       "build of the page cache's proxy runs them under the builder's /bin/sh)",
+       (_posix_problems306(cache_cf), "\nSHELL " in _read306(cache_cf)), ([], False))
+    _bash_seams306()
+    site = _site306(st, "p306-php", kind="php")
+    _reset306()
+    r = _Client306(st.su.id).post("/websites/%d/update-image" % site.id)
+    builds = [c["argv"] for c in _calls306("podman") if c["argv"][:1] == ["build"]]
+    fmt = builds[0][builds[0].index("--format") + 1] if builds and "--format" in builds[0] else None
+    eq("F23 (POST /websites/<id>/update-image): the PHP image is built in Docker's image format, which keeps the "
+       "Containerfile's SHELL (bash with pipefail) on Podman 4.9.3", (r.status_code, len(builds), fmt), (200, 1, "docker"))
+    _reset306(FAKE_IMAGE_EXISTS=0)
+    r2 = _Client306(st.su.id).post("/websites/%d/update-image" % site.id)
+    eq("F23 (POST /websites/<id>/update-image): an image already built is not built again (control)",
+       (r2.status_code, [c["argv"][:1] for c in _calls306("podman") if c["argv"][:1] == ["build"]]), (200, []))
+
+
+# ── the run ─────────────────────────────────────────────────────────────────────────────────────
+def _rmtree306(path):
+    """Remove `path` whole, folders a step made read-only included."""
+    for top, dirs, _files in os.walk(path):
+        for d in dirs:
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only scratch folders
+            os.chmod(os.path.join(top, d), 0o700)
+    _shutil306.rmtree(path, ignore_errors=True)
+
+
+def _drop306(model, ids):
+    for i in ids:
+        row = _db306.session.get(model, i) if i else None
+        if row is not None:
+            _db306.session.delete(row)
+
+
+def _cleanup306():
+    _db306.session.rollback()
+    _drop306(_GDB306, _ROWS306["dbs"])
+    sites = set(_ROWS306["sites"]) | {s.id for s in _Site306.query.filter(
+        _Site306.remote_id.in_(_ROWS306["remotes"] or [0])).all()}
+    _drop306(_GDB306, [g.id for g in _GDB306.query.filter(_GDB306.website_id.in_(sorted(sites) or [0])).all()])
+    for d in _Dom306.query.filter(_Dom306.website_id.in_(sorted(sites) or [0])).all():
+        _db306.session.delete(d)
+    for p in _Proxy306.query.filter(_Proxy306.remote_id.in_(_ROWS306["remotes"] or [0])).all():
+        _db306.session.delete(p)
+    _drop306(_Site306, sorted(sites))
+    _drop306(_User306, _ROWS306["users"])
+    _drop306(_Remote306, _ROWS306["remotes"])
+    _db306.session.commit()
+    _rmtree306(_TREE306)
+
+
+def _ran306(step, st):
+    """Run one section: True when it ran to the end, else False (the traceback kept in _ran306.last)."""
+    import traceback
+    try:
+        step(st)
+        _ran306.last = ""
+        return True
+    except Exception:  # noqa: BLE001 - a section that raises is reported by name and the rest still run
+        _db306.session.rollback()
+        _ran306.last = traceback.format_exc()[-1500:]
+        return False
+
+
+_ran306.last = ""
+_SECTIONS306 = (_f23_php_build,)
+_tools306()
+_trips306 = len(_P9_TRIPPED)
+with _p9.app_context():
+    try:
+        _p9_arm(who="part306")
+        _p9_patch(_sw306, "ports_apply", lambda *a, **k: (True, _sw306.OK_PORTS))
+        _p9_patch(_sw306, "proxy_apply", lambda *a, **k: (True, _sw306.OK_APPLIED))
+        _p9_patch(_sw306, "proxy_stop", lambda *a, **k: (True, "stopped"))
+        _p9_patch(_sw306, "tunnel_apply", lambda *a, **k: (True, _sw306.OK_TUNNEL))
+        _p9_patch(_sw306, "quota_set", lambda *a, **k: (True, _sw306.OK_QUOTA))
+        _p9_patch(_sw306, "cpu_limit", lambda *a, **k: (True, "container"))
+        _st306 = _rows306()
+        for _sec306 in _SECTIONS306:
+            eq("part306: %s ran to the end" % _sec306.__name__, (_ran306(_sec306, _st306), _ran306.last), (True, ""))
+        eq("part306: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips306:], [])
+    finally:
+        _p9_restore_all()
+        _w306._STATUS.clear()
+        _cleanup306()

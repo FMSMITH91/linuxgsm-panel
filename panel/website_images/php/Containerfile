@@ -22,6 +22,9 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="PHP for linuxgsm-panel websites"
+# Every RUN line is POSIX sh as well as bash: Podman's default image format (OCI) ignores SHELL, so a build
+# without --format docker runs these lines under /bin/sh (dash on Debian). The panel builds with --format docker,
+# which keeps SHELL and so pipefail; no line relies on it or on any bash-only syntax either way.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # At most two compilers at once: a small host keeps memory for its game servers while a site is made.
 RUN apt-get update \
@@ -32,7 +35,7 @@ RUN apt-get update \
     && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
     && jobs="$(nproc)" && if [ "${jobs}" -gt 2 ]; then jobs=2; fi \
     && docker-php-ext-install -j "${jobs}" gd intl mysqli pdo_mysql zip \
-    && { grep -qx 'Zend OPcache' <<< "$(php -m)" || docker-php-ext-enable opcache; } \
+    && { php -m | grep -x 'Zend OPcache' > /dev/null || docker-php-ext-enable opcache; } \
     && apt-mark auto '.*' > /dev/null \
     && xargs -r apt-mark manual < /tmp/panel-manual > /dev/null \
     && find "$(php -r 'echo ini_get("extension_dir");')" -name '*.so' -exec ldd {} + \
@@ -41,4 +44,5 @@ RUN apt-get update \
     && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
     && rm -rf /var/lib/apt/lists/* /tmp/panel-manual \
     && mods="$(php -m)" && for m in gd intl mysqli pdo_mysql zip 'Zend OPcache'; do \
-        grep -qix "${m}" <<< "${mods}" || { echo "the PHP extension ${m} is missing" >&2; exit 1; }; done
+        printf '%s\n' "${mods}" | grep -ix "${m}" > /dev/null || { echo "the PHP extension ${m} is missing" >&2; \
+        exit 1; }; done
