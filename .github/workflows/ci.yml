@@ -244,8 +244,9 @@ jobs:
         #
         # One part of the leg (the matrix's `part`): "suites" runs everything but the unit suite in its
         # lanes; "unit i/n" runs that shard of it as the runner (RUN_TESTS_UNIT=only) and as root, both
-        # with UNIT_SHARD exported (sudo -E keeps it; the root step refuses two runs of different
-        # shards). Any other value fails the step.
+        # with UNIT_SHARD exported, and handed to the root run by `env` after sudo (26.04's sudo-rs does
+        # not keep it through -E; the root step refuses two runs of different shards). Any other value
+        # fails the step.
         env:
           PART: ${{ matrix.part }}
         run: |
@@ -268,7 +269,7 @@ jobs:
             # The step's shell is `bash -e`, and the subshell inherits it: the root run's own exit
             # status (non-zero by design, the next step judges its log) must not end the subshell
             # before the timing is written, nor become `wait`'s answer.
-            sudo -E env PATH="$PATH" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
+            sudo -E env PATH="$PATH" UNIT_SHARD="${UNIT_SHARD}" bash -c 'unset "${!SUDO_@}"; exec python tests/unit_test.py' || true
             echo "$((SECONDS - started))" > "${RUNNER_TEMP}/unit-root-seconds.txt"
           ) < /dev/null > "${RUNNER_TEMP}/unit-root.txt" 2>&1 &
           root_pid=$!
