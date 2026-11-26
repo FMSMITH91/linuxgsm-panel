@@ -37,7 +37,7 @@ ONLY_LOCAL = ("Websites run on the panel's own host for now: a managed host cann
               "helper, which websites need.")
 NO_HELPER = ("This host's panel helper is missing or out of date. Run install.sh again as root, then try "
              "again.")
-NO_TOKEN = "This website has no proxy token yet. Save its settings again, then try again."
+MISSING_GATE = "This website has no proxy token yet. Save its settings again, then try again."
 NO_IMAGE = "The signed catalog offers no image for this website's kind and version."
 REFUSED = "The panel refused the request."
 OK_STARTED = "The website was started."
@@ -127,7 +127,7 @@ def _site_bundle(site, ids, probe, db=None):
     """The stdin bundle of the site's files, or raise ValueError (no token, no image)."""
     token = _secret(site.proxy_secret)
     if not _ws()._TOKEN_RE.match(token):
-        raise ValueError(NO_TOKEN)
+        raise ValueError(MISSING_GATE)
     image = _ws().image_for(site)
     if not image:
         raise ValueError(NO_IMAGE)

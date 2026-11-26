@@ -192,8 +192,9 @@ PHP_DEFAULTS = (
     ("display_startup_errors", "Off"), ("log_errors", "On"), ("error_log", "/proc/self/fd/2"),
     ("html_errors", "Off"), ("allow_url_fopen", "Off"), ("enable_dl", "Off"), ("zend.exception_ignore_args", "On"),
     ("session.use_strict_mode", "1"), ("session.use_only_cookies", "1"), ("session.cookie_httponly", "1"),
-    ("session.cookie_secure", "1"), ("session.cookie_samesite", "Lax"), ("session.save_path", "/tmp"),
-    ("upload_tmp_dir", "/tmp"),
+    ("session.cookie_secure", "1"), ("session.cookie_samesite", "Lax"),
+    ("session.save_path", "/tmp"),  # nosec B108 - the site container's own tmpfs, not the host's /tmp
+    ("upload_tmp_dir", "/tmp"),  # nosec B108 - the site container's own tmpfs, not the host's /tmp
 )
 # ...and the hardening written after everything, which no setting of the site can undo (PHP reads
 # the last value of a key; the Advanced editor refuses both keys anyway).

@@ -2751,6 +2751,7 @@ def _web_present(pw):
 
 def _web_enrol(user, pw):
     """Home 0700, then GAME_GROUP (user-create's checks) when not a member yet; 0 or the failing rc."""
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- owner-only home
     os.chmod(pw.pw_dir, 0o700)
     if GAME_GROUP in _groups_of(user):
         return 0
@@ -3086,7 +3087,6 @@ def do_website_proxy_install_cache(args, content):
         return 1
     pw = pwd.getpwnam(WEB_PROXY_USER)
     with tempfile.TemporaryDirectory(prefix="lgsm-web-cache-") as d:
-        os.chmod(d, 0o755)
         binary = _web_cache_build(args, d)
         if not binary or not _web_has_cache(binary, pw):
             sys.stderr.write("the cache-enabled web proxy could not be built: nothing was installed\n")
