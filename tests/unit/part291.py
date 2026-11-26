@@ -6,6 +6,8 @@
    while bcrypt-era hashes remain; the upgrade layers those hashes in Argon2id, and a sign-in re-encodes them.
 3. The helper's refusal of an account a sudoers rule for ALL users covers names that rule's file and line; the
    panel's enrolment passes it on whole; install.sh's can_already_sudo still answers yes and no.
+4. The Panel Server page warns, never blocks, while the panel listens beyond loopback and the tailnet; an automatic
+   bind (the setup wizard's blank field) listens on loopback behind Tailscale Serve.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; each transport is a recorder. The helper
 reads a scratch sudoers policy, with the account and group lookups stood in.
@@ -26,9 +28,10 @@ import bcrypt as _bcrypt291
 from sqlalchemy import text as _text291
 
 from unit.part01 import _root as _root291, check
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, RemoteServer, User, _p9, _p9_arm, _p9_client, _p9_json,
-                         _p9_patch, _p9_restore_all, db)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_LOCAL, RemoteServer, User, _p9, _p9_app, _p9_arm, _p9_client,
+                         _p9_json, _p9_patch, _p9_restore_all, db)
 from panel.db import models as _models291
+from panel.ops import system_ops as _so291
 from panel.ops.ssh_manager import _core as _core291, files as _files291
 from panel.routes import server_files as _sf291
 from panel.security import account_guard as _ag291, auth as _auth291
@@ -325,7 +328,8 @@ def _cas_answer291(drop):
                   "pwd = types.SimpleNamespace(getpwnam=lambda u: types.SimpleNamespace(pw_uid=61291, pw_gid=61291))\n"
                   "grp = types.SimpleNamespace(getgrnam=lambda n: types.SimpleNamespace(gr_gid=61291))\n"
                   % (_h291.SUDOERS_FILE, _h291.SUDOERS_DIR, _h291.NSSWITCH_FILE))
-    r = _sp291.run([_sys291.executable, "-I", "-", _code291, "p291acct"], input=_cas291.group(1) if _cas291 else "",
+    feed = _cas291.group(1) if _cas291 else ""
+    r = _sp291.run([_sys291.executable, "-I", "-", _code291, "p291acct"], input=feed,  # nosec B603 - own helper copy
                    capture_output=True, text=True, timeout=60)
     return r.stdout.strip()
 
@@ -334,3 +338,64 @@ _cas_got291 = (_cas_answer291(_ALLDROP291), _cas_answer291("%admins ALL=(ALL) AL
 check("install.sh: can_already_sudo's helper question still answers yes for a rule for ALL users, and no "
       "without one (control)", _cas291 is not None and _cas_got291 == ("yes", "no"), repr(_cas_got291))
 _shutil291.rmtree(_SUD291, ignore_errors=True)
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 4. The Panel Server page warns while the panel listens beyond loopback and the tailnet
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A panel the setup wizard pinned to 0.0.0.0 went on listening on every interface after Tailscale
+# Serve was put in front of it. The wizard's blank field is automatic now (setup_wizard_test), and
+# the page says so, as a warning and never a block, whatever the stored setting: it reads the
+# address this process really listens on.
+
+
+def _manage291(bind):
+    """The Panel Server page rendered while this process listens on `bind`: (status, warning paragraph or "")."""
+    _p9.config["BOOT_BIND"] = bind
+    r = _p9_client(P9_ADMIN).get("/remote/%d/manage" % P9_LOCAL)
+    html = r.get_data(as_text=True)
+    m = _re291.search(r'<p[^>]*id="panel-bind-public-warn".*?</p>', html, _re291.S)
+    return r.status_code, (m.group(0) if m else "")
+
+
+def _quiet291(*a, **k):
+    return "", "", 0
+
+
+_ANY291 = "0.0.0.0"  # nosec B104 - addresses under test, nothing binds
+_boot_was291 = _p9.config.get("BOOT_BIND")
+_pages291 = {}
+try:
+    _p9_arm(who="part291")
+    for _n291 in ("_run", "_run_verb", "_git"):
+        _p9_patch(_so291, _n291, _quiet291)
+    _p9_patch(_core291, "run_command", _quiet291)
+    _p9_patch(_core291, "run_privileged", _quiet291)
+    for _b291 in (_ANY291, "::", "192.0.2.10", "127.0.0.1", "100.101.102.103", "fd7a:115c:a1e0::5"):
+        _so291._status_cache["data"] = None
+        _pages291[_b291] = _manage291(_b291)
+finally:
+    _p9_restore_all()
+    _so291._status_cache["data"] = None
+    _p9.config["BOOT_BIND"] = _boot_was291
+check("Panel Server page: while the panel listens on every interface or a LAN or public address it warns, "
+      "naming the address and what to choose",
+      all(_pages291.get(b, (0, ""))[0] == 200 and ("<code data-no-i18n>%s</code>" % b) in _pages291[b][1]
+          and "Localhost only" in _pages291[b][1] for b in (_ANY291, "::", "192.0.2.10")),
+      repr({b: v[1][:160] for b, v in _pages291.items()}))
+check("Panel Server page: ...and not while it listens on loopback or a Tailscale address (control); the "
+      "Apply button is there either way",
+      all(_pages291.get(b, (0, "x"))[0] == 200 and _pages291[b][1] == ""
+          for b in ("127.0.0.1", "100.101.102.103", "fd7a:115c:a1e0::5")), repr(_pages291))
+
+# The boot rule an automatic (empty) bind meets: 127.0.0.1 while Serve proxies the panel's port.
+_rb_was291 = dict(_p9_app._RESOLVED_BIND)
+try:
+    _p9_patch(_p9_app.ts, "suggest_best_bind", lambda port, *a, **k: {"bind_host": "127.0.0.1"})
+    _auto291 = _p9_app._resolved_bind({"bind_host": "", "port": 52911})
+    _kept291 = _p9_app._resolved_bind({"bind_host": _ANY291, "port": 52912})
+finally:
+    _p9_restore_all()
+    _p9_app._RESOLVED_BIND.clear()
+    _p9_app._RESOLVED_BIND.update(_rb_was291)
+check("boot: an automatic bind listens on 127.0.0.1 behind Tailscale Serve, where a stored 0.0.0.0 still wins",
+      (_auto291, _kept291) == ("127.0.0.1", _ANY291), repr((_auto291, _kept291)))

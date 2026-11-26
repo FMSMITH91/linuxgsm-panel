@@ -407,11 +407,12 @@ def _setup_welcome(state, data, cfg):
     # on this host: a well-formed IP that is not (10.0.0.51 on 10.0.0.50) passed the
     # parse and failed with EADDRNOTAVAIL on the next start.
     #
-    # nosec B104 - not a hardcoded bind: 0.0.0.0 is the DEFAULT offered when the
-    # operator leaves the field blank, and it is what a panel reached over a tailnet
-    # or a LAN has to listen on. The value is the operator's to set.
-    _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
-    _bind_err = bind_host_error(_wiz_bind, can_bind_address)
+    # A BLANK field is "automatic", stored empty: the boot then binds 127.0.0.1 while Tailscale Serve
+    # fronts the panel, its Tailscale address while Tailscale runs, else every interface so the
+    # rest of this wizard is reachable (app._resolved_bind). It stored 0.0.0.0, which outranks that
+    # rule for good, so a panel later put behind Serve went on listening on every interface.
+    _wiz_bind = (request.form.get("bind_host") or "").strip()
+    _bind_err = bind_host_error(_wiz_bind, can_bind_address) if _wiz_bind else None
     if _bind_err:
         flash(i18n.tr(_bind_err), "danger")
         return redirect("/setup")
@@ -430,7 +431,7 @@ def _setup_welcome(state, data, cfg):
     state.data = json.dumps(data)
     db.session.commit()
     _setup_log("setup_site_settings", target=_SETUP_TARGET,
-               detail="bind %s, port %s" % (_wiz_bind, _wiz_port))
+               detail="bind %s, port %s" % (_wiz_bind or "automatic", _wiz_port))
     return redirect("/setup")
 
 

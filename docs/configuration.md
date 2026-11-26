@@ -9,7 +9,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `port` | 5000 | Web server port |
-| `bind_host` | *(auto)* | Bind address — empty picks `127.0.0.1` when Tailscale Serve can proxy, else `0.0.0.0`. Set `127.0.0.1` explicitly behind a proxy |
+| `bind_host` | *(auto)* | Bind address — empty picks `127.0.0.1` when Tailscale Serve proxies the panel, else this host's Tailscale address while Tailscale runs, else `0.0.0.0`. The setup wizard stores empty when its field is left blank. Set `127.0.0.1` explicitly behind a proxy. **Panel Server → Panel binding** warns while the panel listens beyond loopback and the tailnet |
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
 | `tailscale_control_url` | *(empty: Tailscale)* | A self-hosted control server (Headscale) that new Tailscale joins use, as `https://host[:port]`. Set it on the `/tailscale` page; see [Headscale](#headscale-a-self-hosted-control-server) |
 | `trusted_proxies` | `["127.0.0.0/8", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |

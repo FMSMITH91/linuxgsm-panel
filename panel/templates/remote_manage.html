@@ -931,7 +931,16 @@
     <div class="row g-3 mt-1">
       <div class="col-md-6">
         {% set _bind = (config.bind_host if config else '0.0.0.0') or '0.0.0.0' %}
+        {% set _listens = panel_listens_publicly() %}
         <div class="small text-secondary mb-1">Panel binding <span class="text-secondary">(where the panel web server listens)</span></div>
+        {% if _listens %}
+        {# A warning, never a block: the operator may mean it (a LAN-only panel, a firewall in front). #}
+        <p class="small text-warning mb-1" id="panel-bind-public-warn"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+          <span>The panel listens where more than this machine and your tailnet can reach it:</span>
+          <code data-no-i18n>{{ _listens }}</code>
+          {% if config and config.tailscale_setup_done %}<span>Tailscale Serve already fronts it, so choose Localhost only below and apply.</span>
+          {% else %}<span>Set up Tailscale Serve, then choose Localhost only below, so only your tailnet reaches it.</span>{% endif %}</p>
+        {% endif %}
         <p class="small text-secondary mb-1">{% if config and config.tailscale_setup_done %}The panel restarts to apply — your Tailscale URL stays the same.{% else %}The panel restarts to apply; reconnect on the new address or port.{% endif %}</p>
         <div class="d-flex gap-2 flex-wrap align-items-end">
           <div>

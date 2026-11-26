@@ -1,0 +1,7 @@
+{
+  "Automatic": "Automático",
+  "Leave empty to choose automatically: localhost behind Tailscale Serve, else this machine's Tailscale address, else all interfaces. Use 127.0.0.1 behind another reverse proxy.": "Déjalo vacío para elegir automáticamente: localhost detrás de Tailscale Serve; si no, la dirección de Tailscale de esta máquina; si no, todas las interfaces. Usa 127.0.0.1 detrás de otro proxy inverso.",
+  "The panel listens where more than this machine and your tailnet can reach it:": "El panel escucha donde pueden alcanzarlo más que esta máquina y tu tailnet:",
+  "Tailscale Serve already fronts it, so choose Localhost only below and apply.": "Tailscale Serve ya está delante, así que elige Solo localhost abajo y aplica.",
+  "Set up Tailscale Serve, then choose Localhost only below, so only your tailnet reaches it.": "Configura Tailscale Serve y luego elige Solo localhost abajo, para que solo tu tailnet lo alcance."
+}
