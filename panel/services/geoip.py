@@ -11,12 +11,13 @@ WHAT AND WHY
     which CREDIT is, shown on the add-on's card and in docs/addons.md.
 
 HOW IT IS FETCHED
-    Only when a B3 add-on is set to offline geolocation (install, settings or update), and only while
-    Settings -> Outside services has DB-IP on. The panel's host asks for the page, then the file, over
-    HTTPS from those two hosts only, with a size cap on each. The file must unpack to at most
-    UNPACKED_CAP bytes, match the SHA1 the page shows for it, and end with MaxMind's metadata marker. It
-    is kept in data/geoip/ (mode 0600) for the month, so every add-on that month gets the same file from
-    one download. No player data is sent: the request carries only the panel's User-Agent.
+    Only when a B3 add-on is set to offline geolocation (install, settings, update, or the monthly
+    refresh: routes/addons_geoip.py), and only while Settings -> Outside services has DB-IP on. The
+    panel's host asks for the page, then the file, over HTTPS from those two hosts only, with a size cap
+    on each. The file must unpack to at most UNPACKED_CAP bytes, match the SHA1 the page shows for it,
+    and end with MaxMind's metadata marker. It is kept in data/geoip/ (mode 0600) for the month, so
+    every add-on that month gets the same file from one download. No player data is sent: the request
+    carries only the panel's User-Agent.
 
     OWASP Server Side Request Forgery Prevention Cheat Sheet, "Case 1" (requests only to identified and
     trusted applications), "Application layer": the URLs are the panel's own (the page's, and the file's
@@ -251,13 +252,17 @@ def latest():
     if page is None:
         return path, month, UNREACHABLE
     found = parse_page(page.decode("utf-8", "replace"))
-    if found is None:
+    # A month that has not begun is not a release DB-IP has made: the page is not read as the panel expects.
+    if found is None or found[1] > month_now():
         return path, month, UNREADABLE
-    url, new_month, sha1 = found
-    if new_month > month_now():
-        return path, month, UNREADABLE     # a month that has not begun is not a release DB-IP has made
-    if path is not None and new_month <= month:
+    if path is not None and found[1] <= month:
         return path, month, ""
+    return _download(found, path, month)
+
+
+def _download(found, path, month):
+    """latest()'s last step: the file `found` (parse_page's) fetched, checked and kept, or the kept one and why not."""
+    url, new_month, sha1 = found
     gz, _why = _get(url, GZ_CAP)
     if gz is None:
         return path, month, UNREACHABLE

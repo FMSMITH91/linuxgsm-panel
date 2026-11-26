@@ -1114,6 +1114,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
     "db_browse", "db_row_insert", "db_row_update", "db_row_delete", "db_sql", "db_dump_download", "db_upload",
     "addon_install", "addon_start", "addon_stop", "addon_remove", "addon_refused", "addon_settings", "addon_update",
+    "addon_geoip",
     "b3_player_search", "b3_player_view", "b3_penalties_view", "b3_unban", "b3_kick", "b3_warn", "b3_alerts_set",
     "addon_web_opened", "addon_web_refused",
 })
