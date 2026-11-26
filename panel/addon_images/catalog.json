@@ -297,7 +297,7 @@
           {
             "dest": "install/panel-install.yml",
             "escape": "yaml",
-            "template": "installer:\n    admin:\n        name: \"{admin_user}\"\n        password: \"{admin_password}\"\n        email: \"{admin_email}\"\n    board:\n        lang: en\n        name: \"{site_name}\"\n        description: \"\"\n    database:\n        dbms: mysqli\n        dbhost: \"{db_host_name}\"\n        dbport: {db_port}\n        dbuser: \"{db_user}\"\n        dbpasswd: \"{db_password}\"\n        dbname: \"{db_name}\"\n        table_prefix: phpbb_\n    email:\n        enabled: false\n    server:\n        cookie_secure: true\n        server_protocol: https://\n        force_server_vars: false\n        server_name: \"{domain}\"\n        server_port: 443\n        script_path: /\n    extensions: []\n",
+            "template": "installer:\n    admin:\n        name: \"{admin_user}\"\n        password: \"{admin_password}\"\n        email: \"{admin_email}\"\n    board:\n        lang: en\n        name: \"{site_name}\"\n        description: \"{site_name}\"\n    database:\n        dbms: mysqli\n        dbhost: \"{db_host_name}\"\n        dbport: {db_port}\n        dbuser: \"{db_user}\"\n        dbpasswd: \"{db_password}\"\n        dbname: \"{db_name}\"\n        table_prefix: phpbb_\n    email:\n        enabled: false\n    server:\n        cookie_secure: true\n        server_protocol: https://\n        force_server_vars: false\n        server_name: \"{domain}\"\n        server_port: 443\n        script_path: /\n    extensions: []\n",
             "type": "render-config"
           },
           {

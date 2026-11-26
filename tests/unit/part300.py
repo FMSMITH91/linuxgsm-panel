@@ -514,7 +514,7 @@ def _s7_apps(st, calls):
     del calls[:]
     su = _Client300(st.su.id)
     form = {"app": "wordpress", "name": "p300-wp", "remote_id": st.host.id, "admin_user": "siteowner",
-            "admin_email": "owner@example.org"}
+            "admin_email": "owner@example.org", "domain": "p300-wp.example.org"}
     r = su.post("/websites/install-app", json=form)
     _db300.session.expire_all()
     eq("apps: a failing step undoes the finished ones in reverse (config, download), drops the database, "
@@ -526,7 +526,7 @@ def _s7_apps(st, calls):
           ["admin_email", "admin_password", "admin_user"] in seen_secrets or any(
               "admin_password" in s for s in seen_secrets), repr(seen_secrets))
     _p9_patch(_sw300, "app_install_step", lambda remote, site, s: (True, "ok"))
-    r2 = su.post("/websites/install-app", json=dict(form, name="p300-wp2"))
+    r2 = su.post("/websites/install-app", json=dict(form, name="p300-wp2", domain="p300-wp2.example.org"))
     sid = _p9_json(r2).get("id")
     pw = _p9_json(r2).get("password") or ""
     status = su.get("/api/websites/%d" % sid)
@@ -536,8 +536,10 @@ def _s7_apps(st, calls):
        (len(pw) >= 20, r2.headers.get("Cache-Control"), pw in status.get_data(as_text=True),
         any(pw in (a.detail or "") for a in rows), (_p9_json(status).get("install") or {}).get("state")),
        (True, "no-store", False, False, "done"))
-    weak = su.post("/websites/install-app", json=dict(form, name="p300-wp3", admin_password="short"))
-    typed = su.post("/websites/install-app", json=dict(form, name="p300-wp4", admin_password="a-typed-password-p300"))
+    weak = su.post("/websites/install-app", json=dict(form, name="p300-wp3", domain="p300-wp3.example.org",
+                                                      admin_password="short"))
+    typed = su.post("/websites/install-app", json=dict(form, name="p300-wp4", domain="p300-wp4.example.org",
+                                                       admin_password="a-typed-password-p300"))
     eq("apps: a typed admin password under 15 characters is refused; a typed one is never echoed back",
        (weak.status_code, typed.status_code, _p9_json(typed).get("password")), (400, 200, ""))
 

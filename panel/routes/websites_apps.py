@@ -262,6 +262,9 @@ def _start_refusal(data):
     fields = admin_fields(data)
     if fields[4]:
         return None, _w.say(400, " ".join(i18n.tr(p) for p in fields[4]))
+    if not _w.field(data, "domain"):
+        # Every app's installer writes its address into its configuration (phpBB refuses an empty one).
+        return None, _w.say(400, "An app needs its domain.")
     remote, group, refusal = _w.add_target(data)
     name = _w.field(data, "name").lower() or recipe_name
     refusal = refusal or _w.add_refusal(remote, name, str(recipe.get("kind") or "php"))
@@ -280,9 +283,12 @@ def _start(data):
     site.app_recipe, site.app_version = recipe_name, str(recipe.get("version") or "")
     site.install_started_at, site.install_steps_done = utcnow(), "[]"
     db.session.commit()
-    if _w.field(data, "domain"):
-        from panel.routes import websites_domains
-        websites_domains.add_first(site, _w.field(data, "domain"))
+    from panel.routes import websites_domains
+    refused = websites_domains.add_first(site, _w.field(data, "domain"))
+    if refused:
+        db.session.delete(site)     # nothing is on the host yet: the install has not started
+        db.session.commit()
+        return _w.say(400, refused)
     _w.audit(site, "website_app_install", "started %s %s, admin %s%s" % (recipe_name, site.app_version, user,
                                                                          " (generated password)" if generated else ""))
     _job(site.id, state="running", step="account", error="")
