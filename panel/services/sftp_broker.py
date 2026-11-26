@@ -575,11 +575,44 @@ def editable(user):
     return {name: servers[sid] for name, sid in sc.folder_names((gs.id, gs.name) for gs in servers.values()).items()}
 
 
+def site_folders(user, taken=()):
+    """{folder name: Website} of the websites `user` may edit files on (EDIT_WEBSITE_FILES on the site).
+
+    A site's folder is its name; one that a game server's folder already has gets " (website)" after
+    it. Each maps to the site's document root, as the site's own account (describe_site).
+    """
+    from panel.security.auth import EDIT_WEBSITE_FILES
+    from panel.services import websites_access
+    out = {}
+    for site in websites_access.visible_sites(user, EDIT_WEBSITE_FILES).all():
+        name = site.name if site.name not in taken else "%s (website)" % site.name
+        out[name] = site
+    return out
+
+
 def _h_servers(_app, req, _spawn):
     user, why = _session_user(req)
     if user is None:
         return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
-    return {"ok": True, "folders": sorted(editable(user))}
+    servers = editable(user)
+    return {"ok": True, "folders": sorted(servers) + sorted(site_folders(user, servers))}
+
+
+def _site_authz(user, folder, write, taken):
+    """_h_authz's answer for a website's folder, or None when `folder` names none of the user's sites."""
+    site = site_folders(user, taken).get(folder)
+    if site is None:
+        return None
+    if not _host_claim(site.remote_id):
+        return {"ok": False, "busy": True, "reason": HOST_BUSY}
+    try:
+        from panel.routes._shared import game_account_write_refusal
+        why = game_account_write_refusal(site.remote, site.account, reading=not write)
+    finally:
+        _host_release(site.remote_id)
+    if why:
+        return {"ok": False, "reason": str(why)}
+    return dict(ok=True, **describe_site(site))
 
 
 def _h_authz(_app, req, _spawn):
@@ -587,9 +620,11 @@ def _h_authz(_app, req, _spawn):
     user, why = _session_user(req)
     if user is None:
         return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
-    gs = editable(user).get(str(req.get("folder") or ""))
+    servers = editable(user)
+    gs = servers.get(str(req.get("folder") or ""))
     if gs is None:
-        return {"ok": False, "gone": True}
+        return _site_authz(user, str(req.get("folder") or ""), bool(req.get("write")), servers) \
+            or {"ok": False, "gone": True}
     if not req.get("write") and not (user.is_superadmin or VIEW_FILES in get_user_permissions(user)):
         return {"ok": False, "reason": "Reading files needs the view_files permission too."}
     if not _host_claim(gs.remote_id):
@@ -646,6 +681,44 @@ def describe(gs):
             "home": home_of(gs), "transport": transport, "remote_id": gs.remote_id}
 
 
+def describe_site(site):
+    """How the service reaches a website's files: its account, its document root as the home, the transport.
+
+    The sid is "w<id>", never a game server's number, so neither the service's connection cache nor an
+    audit row can mistake one for the other.
+    """
+    from panel.ops.ssh_manager import _core
+    remote = site.remote
+    if _core.is_local_server(remote):
+        transport = "local"
+    elif getattr(remote, "auth_method", "") == "tailscale":
+        transport = "tailscale"
+    else:
+        transport = "paramiko"
+    return {"sid": "w%d" % site.id, "name": site.name, "user": site.account, "selfname": site.account,
+            "home": "/home/%s/site/html" % site.account, "transport": transport, "remote_id": site.remote_id}
+
+
+# An SFTP change to a website's files, as the web file manager's audit actions name it.
+_SITE_AUDIT = {"upload_file": "website_files_upload", "delete_file": "website_files_delete",
+               "rename_file": "website_files_rename", "create_folder": "website_files_mkdir",
+               "edit_file": "website_files_save"}
+
+
+def _site_audit(ip, user, req):
+    from panel.db.models import Website, db
+    from panel.routes.server_files import _audit_safe
+    from panel.routes.websites import audit_as
+    sid = str(req.get("sid") or "")
+    site = db.session.get(Website, int(sid[1:])) if sid[1:].isdecimal() else None
+    if site is None:
+        return {"ok": False}
+    with _as_request(ip):
+        audit_as(user, site, _SITE_AUDIT[req["action"]], _audit_safe(str(req.get("detail") or ""), 2000),
+                 bool(req.get("success")))
+    return {"ok": True}
+
+
 def _h_audit(_app, req, _spawn):
     from panel.db.models import GameServer, User, db
     from panel.routes.server_files import _audit_safe
@@ -653,6 +726,8 @@ def _h_audit(_app, req, _spawn):
     if action not in AUDIT_ACTIONS:
         return {"ok": False}
     user = db.session.get(User, int(req.get("uid") or 0))
+    if user is not None and str(req.get("sid") or "").startswith("w"):
+        return _site_audit(_ip(req), user, req)
     gs = db.session.get(GameServer, int(req.get("sid") or 0))
     if user is None or gs is None:
         return {"ok": False}
