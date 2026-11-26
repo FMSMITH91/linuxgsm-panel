@@ -9,8 +9,9 @@ WHAT EVERY CONFIGURATION HOLDS
     `admin off` and `persist_config off` (no admin API, nothing written back); HTTP/1.1 and HTTP/2 only
     (no HTTP/3: no UDP port to open); server timeouts against slow clients; a catch-all that aborts any
     request for a name the configuration does not hold, the bare IP included, so the panel's own name
-    and port are never reachable through the proxy. Automatic HTTPS only for the names listed, never
-    on-demand. Per site: the proxy's token header that the site's own server requires (a local account
+    and port are never reachable through the proxy (an `http://` catch-all and, outside tunnel mode, an
+    `https://` one: an unknown Host over HTTPS gets no response at all). Automatic HTTPS only for the
+    names listed, never on-demand. Per site: the proxy's token header that the site's own server requires (a local account
     reaching the loopback port directly gets 403), a body size limit, compression, security headers,
     and the server's own Server and X-Powered-By headers removed.
 
@@ -354,6 +355,10 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     for site in sorted(sites, key=lambda s: s.id or 0):
         if site.enabled:
             lines += _site_lines(site, opts, proxy, mode, secret_of)
+    if mode != "tunnel":
+        # A request over HTTPS whose Host is none of the names above (a served certificate's name, any Host):
+        # aborted too, never Caddy's empty 200 with its Server header.
+        lines += ["# Any other Host over HTTPS: the request is aborted.", "https:// {", "\tabort", "}", ""]
     lines += ["# Any other name, and the bare address: the connection is closed.", "http:// {", "\tabort", "}", ""]
     return "\n".join(lines)
 

@@ -12,6 +12,7 @@
    first install removes the account it made, never one that was already there.
 5. The certificate status names the certificate the proxy serves (the issuer the configuration uses, else the
    latest), its date read as GMT whatever the host's time zone, and the status route answers it parsed.
+6. An unknown Host over HTTPS is aborted (an https:// catch-all), outside tunnel mode.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -502,6 +503,21 @@ def _s5_route(st):
        (True, "active", {"p302.example.org": {"issuer": "local", "not_after": 1795757485}}))
 
 
+# ── 6. an unknown Host over HTTPS ───────────────────────────────────────────────────────────────
+def _s6_catch_all():
+    def tail(proxy):
+        text = _wp302.render([_site302()], proxy, None, secret_of=lambda s: _TOKEN302)
+        return [ln for ln in text.split("\n") if ln.endswith("// {")]
+    eq("proxy config: an unknown Host over HTTPS (a served certificate's name) is aborted by an https:// catch-all, "
+       "public and restricted alike; a tunnel (plain HTTP on loopback) has only its http:// one",
+       (tail(None), tail(_proxy302("restricted")), tail(_proxy302("tunnel", "cloudflare"))),
+       (["https:// {", "http:// {"], ["https:// {", "http:// {"], ["http:// {"]))
+    text = _wp302.render([_site302()], None, None, secret_of=lambda s: _TOKEN302).split("\n")
+    i = text.index("https:// {")
+    eq("proxy config: the https:// catch-all only aborts (no response, so no Server header)", text[i:i + 3],
+       ["https:// {", "\tabort", "}"])
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -519,7 +535,8 @@ def _cleanup302(st):
     _db302.session.commit()
 
 
-for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone):
+for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone,
+                 _s6_catch_all):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)
