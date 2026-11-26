@@ -84,14 +84,19 @@ def _scopes(user):
             out[perm][0].update(w.id for w in g.websites or [])
             if perm == MANAGE_WEBSITES and not g.is_customer:
                 out[perm][1].update(r.id for r in g.servers or [])
-    sites, hosts = out[MANAGE_WEBSITES]
-    if sites or hosts:
-        local = _local_host_ids()
-        hosts -= local
-        if sites:
-            sites &= {i for (i,) in db.session.query(Website.id).filter(
-                Website.id.in_(sorted(sites)), ~Website.remote_id.in_(sorted(local)))}
+    _off_panel_host(*out[MANAGE_WEBSITES])
     return out
+
+
+def _off_panel_host(sites, hosts):
+    """Take the panel's own host, and every site on it, out of a MANAGE_WEBSITES scope (in place)."""
+    if not sites and not hosts:
+        return
+    local = _local_host_ids()
+    hosts -= local
+    if sites:
+        sites &= {i for (i,) in db.session.query(Website.id).filter(
+            Website.id.in_(sorted(sites)), ~Website.remote_id.in_(sorted(local)))}
 
 
 def _scope(user, perm):

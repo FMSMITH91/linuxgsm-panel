@@ -248,17 +248,18 @@ try:
 
     # The audit log: a viewer reads the rows about a site they can reach, never another site's.
     with _p9.test_request_context("/"):
-        _auth298.log_action(None, "website_start", target="p298-row-site-a", website=_db298.session.get(_Site298, _ids["sa"]))
-        _auth298.log_action(None, "website_start", target="p298-row-site-b", website=_db298.session.get(_Site298, _ids["sb"]))
+        for _k in ("sa", "sb"):
+            _auth298.log_website_action(None, _db298.session.get(_Site298, _ids[_k]), "website_start",
+                                        detail="p298-row-" + _k)
     with _p9.app_context():
-        _T298["audit_ids"] = sorted((r.target, r.website_id) for r in _Audit298.query.filter(
-            _Audit298.target.like("p298-row-site-%")))
-    eq("websites: log_action records the site a row is about by id", _T298["audit_ids"],
-       [("p298-row-site-a", _ids["sa"]), ("p298-row-site-b", _ids["sb"])])
+        _T298["audit_ids"] = sorted((r.detail, r.target, r.website_id) for r in _Audit298.query.filter(
+            _Audit298.detail.like("p298-row-s%")))
+    eq("websites: log_website_action records the site a row is about, by name and by id", _T298["audit_ids"],
+       [("p298-row-sa", "p298-ta", _ids["sa"]), ("p298-row-sb", "p298-tb", _ids["sb"])])
     _logs = _D.get("/logs?action=website_start").get_data(as_text=True)
     check("websites: the audit log shows a viewer the rows about a site they hold a website permission on, "
-          "and not another site's", "p298-row-site-a" in _logs and "p298-row-site-b" not in _logs,
-          repr(("p298-row-site-a" in _logs, "p298-row-site-b" in _logs)))
+          "and not another site's", "p298-row-sa" in _logs and "p298-row-sb" not in _logs,
+          repr(("p298-row-sa" in _logs, "p298-row-sb" in _logs)))
 
     # A user admin cannot take over (here: delete) an account that reaches a site they cannot; one that
     # reaches only their own sites they can (control).

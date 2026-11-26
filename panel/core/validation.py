@@ -734,24 +734,34 @@ def website_domain(value):
     held to the same rules. Whether the name is the panel's own or already taken is the caller's
     question (websites_access.domain_refusal), as is whether its DNS points at the host.
     """
+    text = _domain_ascii(value)
+    if text is None or not _domain_shape_ok(text):
+        return None
+    if any(text == s or text.endswith("." + s) for s in WEBSITE_RESERVED_SUFFIXES):
+        return None
+    return text
+
+
+def _domain_ascii(value):
+    """`value` stripped, lowercased and (when it has non-ASCII letters) in punycode; None when it cannot be."""
     if not isinstance(value, str):
         return None
     text = value.strip().lower()
     if not text or len(text) > WEBSITE_DOMAIN_MAX * 4:
         return None
-    if not text.isascii():
-        try:
-            text = text.encode("idna").decode("ascii")
-        except (UnicodeError, ValueError):
-            return None
+    if text.isascii():
+        return text
+    try:
+        return text.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return None
+
+
+def _domain_shape_ok(text):
+    """Whether ASCII `text` is 2+ LDH labels, at most 253 characters, ending in a letters or xn-- label."""
     labels = text.split(".")
-    if (len(text) > WEBSITE_DOMAIN_MAX or len(labels) < 2
-            or not all(_DOMAIN_LABEL_RE.match(lb) for lb in labels)
-            or not _DOMAIN_TLD_RE.match(labels[-1])):
-        return None
-    if any(text == s or text.endswith("." + s) for s in WEBSITE_RESERVED_SUFFIXES):
-        return None
-    return text
+    return (len(text) <= WEBSITE_DOMAIN_MAX and len(labels) >= 2
+            and all(_DOMAIN_LABEL_RE.match(lb) for lb in labels) and bool(_DOMAIN_TLD_RE.match(labels[-1])))
 
 
 def website_cidr(value):

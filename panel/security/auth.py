@@ -2075,7 +2075,7 @@ def audit_username(name):
 
 
 def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
-               remote=None, website=None):
+               remote=None):
     """Write an audit log entry.
 
     `actor` overrides the recorded username — used for a failed login, where there's no
@@ -2088,12 +2088,26 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
     hosts gets the same name by default, and a server could be renamed onto any target to read
     its rows (Aikido 745379041).
 
-    `website`: the Website a row is about, so its users (a customer included) can read it through
-    audit_scope and a site's own log view, by id and never by name.
-
     Every column is cut to its model's declared size, and the detail to _AUDIT_DETAIL_MAX — see
     there for why that has to happen here and not in the callers.
     """
+    _write_audit(user, action, target, detail, success, actor,
+                 {"game_server_id": _audit_ref(GameServer, server), "remote_id": _audit_ref(RemoteServer, remote)})
+
+
+def log_website_action(user, site, action, detail="", success=True):
+    """Write an audit entry about website `site`: the target is its name and the row carries its id.
+
+    The id (AuditLog.website_id) is what lets the site's users, a customer included, read the row
+    (audit_scope, a site's own log view), never the name. Never put file contents, passwords or tokens
+    in `detail` (OWASP Logging Cheat Sheet, "Data to exclude").
+    """
+    _write_audit(user, action, getattr(site, "name", "") or "", detail, success, None,
+                 {"website_id": _audit_ref(Website, site)})
+
+
+def _write_audit(user, action, target, detail, success, actor, refs):
+    """Add and commit one AuditLog row; `refs` holds the ids of what it is about (column -> value)."""
     entry = AuditLog(
         user_id=user.id if user else None,
         username=audit_username(actor if actor else (user.username if user else "system")),
@@ -2102,10 +2116,8 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
         detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]", visible=True),
         ip_address=client_ip(),
         success=success,
-        game_server_id=_audit_ref(GameServer, server),
-        remote_id=_audit_ref(RemoteServer, remote),
-        website_id=_audit_ref(Website, website),
         target_user_id=_audit_account(action, target),
+        **refs,
     )
     db.session.add(entry)
     db.session.commit()
@@ -2383,15 +2395,16 @@ def _my_group_reach(user):
 def _group_within_reach(g, reach):
     """Whether everything group `g` grants lies within `reach` (from _my_group_reach)."""
     mine, mine_remotes, mine_commands, mine_servers = reach[:4]
-    if not set(g.get_permissions()) <= mine:
+    axes = ((set(g.get_permissions()), mine), (_row_ids(g.servers), mine_remotes),
+            (_row_ids(g.custom_commands), mine_commands), (_row_ids(g.game_servers), mine_servers))
+    if not all(granted <= held for granted, held in axes):
         return False
-    if not {r.id for r in (g.servers or [])} <= mine_remotes:
-        return False
-    if not {c.id for c in (g.custom_commands or [])} <= mine_commands:
-        return False
-    if len(reach) > 4 and not _pairs_within(_group_site_pairs(g), reach[4]):
-        return False
-    return {s.id for s in (g.game_servers or [])} <= mine_servers
+    return len(reach) <= 4 or _pairs_within(_group_site_pairs(g), reach[4])
+
+
+def _row_ids(rows):
+    """The ids of `rows` (a relationship's list, or None) as a set."""
+    return {r.id for r in (rows or [])}
 
 
 def _group_site_pairs(g):
