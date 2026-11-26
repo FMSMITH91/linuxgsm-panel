@@ -1373,8 +1373,22 @@ def _restore_failure_checks41():
     h.reboot_now()
     h.flag("fail_start", "mcserver")
     _CLOCK41.sleep(90)
-    _restore_until41(r.id, passes=80, between=lambda n: h.run("gmodserver", True) if n == 10 else None)
+    # When the summary went out (review 1124): the run reaches about boot + 21 min, so any threshold
+    # from ~4 to ~21 min gave the same summary. Each pass's clock and the summaries sent before it.
+    seen = []
+
+    def _between(n):
+        if n == 10:
+            h.run("gmodserver", True)
+        seen.append((_CLOCK41.time(), len(_bodies41("Host reboot"))))
+
+    _restore_until41(r.id, passes=80, between=_between)
     summary = "".join(_bodies41("Host reboot"))
+    sent_at = max((t for t, n in seen if n == 0), default=None) if _bodies41("Host reboot") else None
+    check("restore failures: the Autostart server's 'not brought it back' is said 12 min after the boot "
+          "(NOT_BACK_AFTER, 720 s), not before and within two passes after",
+          sent_at is not None and h.booted_at + 720 <= sent_at < h.booted_at + 720 + 2 * 15,
+          repr((h.booted_at, sent_at, seen[-3:])))
     check("restore failures: the panel tries its own start three times, then gives up",
           len(_lines41(h, "start mcserver")) == 3, repr(h.events()))
     check("restore failures: ONE summary, naming each server that did not come back and why — the "
