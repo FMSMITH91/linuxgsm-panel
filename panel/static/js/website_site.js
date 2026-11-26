@@ -337,7 +337,8 @@
       if (v != null) inp.value = String(v);
     });
     WS.el('wset-log').checked = !!s.access_log;
-    WS.el('wset-egress').checked = !!s.full_egress;
+    var eg = WS.el('wset-egress');      // a superadmin's page only
+    if (eg) eg.checked = !!s.full_egress;
     WS.el('wset-note').value = s.customer_note || '';
     window.wsEgressCheck();
   }
@@ -352,8 +353,9 @@
     document.querySelectorAll('[data-limit]').forEach(function (inp) {
       if (inp.value !== '') limits[inp.getAttribute('data-limit')] = Number(inp.value);
     });
-    var body = {limits: limits, access_log: WS.el('wset-log').checked, full_egress: WS.el('wset-egress').checked,
-      customer_note: WS.el('wset-note').value};
+    var body = {limits: limits, access_log: WS.el('wset-log').checked, customer_note: WS.el('wset-note').value};
+    var eg = WS.el('wset-egress');
+    if (eg) body.full_egress = eg.checked;
     WS.stepUp(function () { WS.say('wset-msg', WS.T('Saving…')); WS.siteAct('settings', body, 'wset-msg'); });
   };
   window.wsDelete = function () {

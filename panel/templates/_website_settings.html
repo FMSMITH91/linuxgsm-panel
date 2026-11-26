@@ -27,6 +27,7 @@
       </div>
       <div class="form-text mt-0">Off by default, for visitors' privacy. When on, their addresses are shortened.</div>
     </div>
+    {% if current_user.is_superadmin %}
     <div class="col-sm-6">
       <div class="form-check form-switch">
         <input class="form-check-input" type="checkbox" role="switch" id="wset-egress" data-action="wsEgressCheck" data-on="change">
@@ -35,6 +36,7 @@
       <div class="form-text mt-0">Off by default: the site reaches only its database (WordPress also its own update servers).</div>
       <div id="wset-egress-note" class="small text-warning" hidden>The site can then reach any address on the internet, though never this host's other services.</div>
     </div>
+    {% endif %}
     <div class="col-12"><label for="wset-note" class="form-label small mb-1">Note for administrators</label>
       <textarea id="wset-note" class="form-control form-control-sm" rows="2" maxlength="2000"></textarea></div>
     <div class="col-12 d-flex flex-wrap gap-2 align-items-center">
