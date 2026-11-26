@@ -6958,7 +6958,11 @@ def _rh_unsafe(cmd, root):
         # Text that builds a path the rewrite never sees (review 1123): an ANSI-C `$'\x2f…'`, a command
         # substitution other than the doc's own `$(readlink "$l")`, a backtick, or a quote glued to a path
         # piece (`/sb/a/.''./.''./etc` is `..` to bash).
-        r"|\$'|\$\((?!readlink \"\$l\"\))|`|[/.]['\"]|['\"][/.]", code)
+        r"|\$'|\$\((?!readlink \"\$l\"\))|`|[/.]['\"]|['\"][/.]"
+        # ...and (review 1124) any variable but the doc's own loop `$l` (`$BASH`, `$SHELL` are absolute
+        # paths bash sets), printf (`printf -v X '\x2fopt'` builds one), a `.` word (sources a file, or names
+        # the cwd), a process substitution, and a glob touching a dot (`.*.` globs to `..` without globskipdots).
+        r"|\$(?!l\b)[A-Za-z_]\w*|\bprintf\b|(?<![^\s;&|(])\.(?=[\s;&|)]|$)|[<>]\(|\.[*?\[]|[*?\]]\.", code)
 
 
 def _rh_escapes(cmd):
@@ -7028,7 +7032,7 @@ try:
     check("delete host: (control) a doc line reaching past the sandbox is refused before anything runs",
           [_rh_unsafe(_c, "/sb") for _c in ("sudo rm -rf /opt/x\n", "rm -f ~/.bashrc\n", "rm -f $HOME/x\n",
                                              "eval \"$x\"\n", "rm -f /sb/etc/x 2>/dev/null  # /root/y\n")]
-          == [["/opt/x"], ["~"], ["$HOME"], ["eval"], []]
+          == [["/opt/x"], ["~"], ["$HOME"], ["eval", "$x"], []]
           and all(_rh_unsafe(_c, "/sb") for _c in ("X=; sudo rm -rf $X/etc/x\n", "rm -rf /sb/usr/../../etc/x\n",
                                                     "echo \"n #1\"; sudo rm -rf /opt/x\n", "cd ../..; rm -rf etc/x\n",
                                                     "rm -rf ../../etc/x\n")), "")
@@ -7043,11 +7047,15 @@ try:
         "echo a\\ # ; sudo rm -rf /opt/x\n", "rm -rf /sb/a/.''./.''./etc\n", "X=\\.\\.; rm -rf /sb/$X\\/$X\\/etc\n",
         "rm -rf $'\\x2fopt'\n", "rm -rf \"$(printf '\\x2fopt')\"\n", "rm -rf `printf /opt`\n",
         "rm -rf $(cat list)\n", "rm -rf $'list'\n",
+        # ...and the review-1124 shapes: printf building a path, bash's own absolute variables, a glob that
+        # makes `..`, a file sourced with `.`, and a process substitution.
+        "printf -v X '\\x2fopt'; sudo rm -rf \"$X\"\n", "sudo rm -rf $BASH\n", "sudo rm -rf \"$SHELL\"\n",
+        "rm -rf /sb/usr/local/.*./.*./.*./etc\n", "printf 'rm -rf \\x2fopt\\n' > f; . f\n", "cat <(echo x)\n",
         "rm -f /sb/a >/dev/null 2>&1\n", "echo 'a\\' # '; rm -rf /sb/b\n",
         "case \"$(readlink \"$l\")\" in /sb/g/*) rm -f \"$l\" ;; esac\n")]
     check("delete host: (control) ...a ${...} default, a brace list, a path glued to a redirect, a quote ended "
           "past an escaped one, and /dev/null as rm's own operand are refused; a >/dev/null redirect is not",
-          [bool(_b) for _b in _rh_ctl34] == [True] * 15 + [False] * 3
+          [bool(_b) for _b in _rh_ctl34] == [True] * 21 + [False] * 3
           and "; sudo rm" in _rh_code("echo a\\ # ; sudo rm\n"), repr(_rh_ctl34))
 finally:
     _shutil.rmtree(_rh_sb, ignore_errors=True)
