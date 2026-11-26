@@ -97,7 +97,7 @@ _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), (
              ("security-code.yml", "dependency-audit"), ("security-code.yml", "sast-bandit"),
              ("security-code.yml", "sast-semgrep"), ("security.yml", "secret-scan"),
              ("sonar-new-issues.yml", "sonar-new-issues"), ("zizmor.yml", "zizmor"), ("zizmor.yml", "upload"),
-             ("codacy-alerts.yml", "open-errors")}
+             ("codacy-alerts.yml", "open-errors"), ("codacy-coverage.yml", "upload")}
 _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no pull request can show a block list " \
                 "is complete before it holds every panel's update"
 _AUDIT223 = {
@@ -106,7 +106,7 @@ _AUDIT223 = {
     ("cflite_batch.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
     ("cflite_cron.yml", "prune"): _MAIN_ONLY223, ("cflite_cron.yml", "coverage"): _MAIN_ONLY223,
     ("cflite_cleanup.yml", "cleanup"): _MAIN_ONLY223,
-    ("codacy-coverage.yml", "upload"): _MAIN_ONLY223, ("codeql-alerts.yml", "open-alerts"): _MAIN_ONLY223,
+    ("codeql-alerts.yml", "open-alerts"): _MAIN_ONLY223,
     ("scorecard.yml", "analysis"): _MAIN_ONLY223, ("sonar-main-issues.yml", "sonar-main-issues"): _MAIN_ONLY223,
     ("scorecard.yml", "image-pin"): _MAIN_ONLY223, ("scorecard.yml", "image-pulled"): _MAIN_ONLY223,
     ("deploy.yml", "deploy"): "carries no Harden-Runner at all (part42)",

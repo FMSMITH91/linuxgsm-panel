@@ -6455,7 +6455,8 @@ check("codacy-coverage: runs on CI's completion, in the `codacy` environment (no
       "record), for this repository's push and pull-request runs only",
       re.search(r"\non:\n  workflow_run:\n    workflows: \[ \x22CI\x22 \]\n    types: \[ completed \]\n",
                 _cc_code) is not None
-      and "\n    environment:\n      name: codacy\n      deployment: false\n" in _cc_job
+      and "\n    environment:\n      name: ${{ github.event_name == 'workflow_run' && 'codacy' || '' }}\n"
+          "      deployment: false\n" in _cc_job
       and "github.event.workflow_run.head_repository.full_name == github.repository" in _cc_if
       and "github.event.workflow_run.event == 'push' || "
           "github.event.workflow_run.event == 'pull_request'" in _cc_if, _cc_if)
@@ -6466,9 +6467,9 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
       and re.search(r"\n    permissions:\n      actions: read(?:[ \t]+#[^\n]*)?\n    steps:", _cc_job)
       is not None
       and "actions/checkout" not in _cc_code
-      and _cc_env.get("HEAD_SHA") == "${{ github.event.workflow_run.head_sha }}"
+      and _cc_env.get("HEAD_SHA") == "${{ github.event.workflow_run.head_sha || github.sha }}"
       and _cc_env.get("HEAD_BRANCH") == "${{ github.event.workflow_run.head_branch }}"
-      and "run-id: ${{ github.event.workflow_run.id }}" in _cc_job
+      and "run-id: ${{ github.event.workflow_run.id || inputs.ci_run_id }}" in _cc_job
       and "sha256sum -c" in _cc_job, repr(_cc_env))
 # The step's bash is run below with its env handed in by this test, so the wiring into it is
 # proved only here: WR_EVENT decides whether the exact-main check runs at all (any other value and
@@ -6484,7 +6485,7 @@ check("codacy-coverage: the step reads the workflow_run's own event, and the rep
       _cc_env.get("WR_EVENT") == "${{ github.event.workflow_run.event }}"
       and "uses: actions/download-artifact@" in _cc_dl
       and _cc_up_name is not None and _cc_dl_with.get("name") == _cc_up_name.group(1)
-      and _cc_dl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_dl_with.get("run-id") == "${{ github.event.workflow_run.id || inputs.ci_run_id }}"
       and _cc_dl_with.get("github-token") == "${{ github.token }}"
       and bool(_cc_env.get("REPORT_DIR")) and _cc_dl_with.get("path") == _cc_env.get("REPORT_DIR"),
       repr((_cc_env.get("WR_EVENT"), _cc_env.get("REPORT_DIR"), _cc_dl_with)))
@@ -6798,7 +6799,7 @@ check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from
       "finished, downloaded where the step reads it; only that download may fail",
       _js_up is not None and _cc_jsdl_with.get("name") == _js_up.group(1) == "js-coverage"
       and "lcov.info" in _js_up.group(2).split()
-      and _cc_jsdl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_jsdl_with.get("run-id") == "${{ github.event.workflow_run.id || inputs.ci_run_id }}"
       and _cc_jsdl_with.get("github-token") == "${{ github.token }}"
       and bool(_cc_env.get("JS_REPORT_DIR")) and _cc_jsdl_with.get("path") == _cc_env["JS_REPORT_DIR"]
       and "\n        continue-on-error: true\n" in _cc_jsdl
