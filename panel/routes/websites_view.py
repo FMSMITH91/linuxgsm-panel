@@ -19,7 +19,7 @@ from panel.services import websites_access as _wa
 # Global website settings (config.json websites_<key>): default, low, high (None for text and switches).
 # OWASP's recommended values are printed beside them by the page; a value outside them is saved with a
 # note (HTTP Strict Transport Security Cheat Sheet, "Examples": max-age=63072000; Transport Layer
-# Security Cheat Sheet: TLS 1.3, 1.2 where clients need it; Multifactor Authentication Cheat Sheet).
+# Security Cheat Sheet: TLS 1.3 preferred, TLS 1.2 allowed for compatibility; Multifactor Authentication Cheat Sheet).
 OPTIONS = {"hsts_max_age": (63072000, 0, 126144000), "tls_min": ("1.2", None, None), "acme_contact": ("", None, None),
            "acme_staging": (False, None, None), "local_certs": (False, None, None),
            "hsts_subdomains": (False, None, None), "hsts_preload": (False, None, None),

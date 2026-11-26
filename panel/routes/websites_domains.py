@@ -39,10 +39,9 @@ S_BAD = "That is not a domain a public website can use: letters, digits, hyphens
 S_TAKEN = "That domain is already used by a website."
 S_PANEL = "That is the panel's own address, which is never served as a website."
 S_NO_SUCH = "No such domain on this website."
-S_CERT_STAGING = ("This domain is served a Let's Encrypt test certificate, which browsers do not trust. Turn off the "
-                  "test service in the web proxy's Security settings.")
-S_CERT_LOCAL = ("This domain is served the web proxy's own local certificate, which browsers do not trust. Turn off "
-                "local certificates in the web proxy's Security settings.")
+# The domain's label already says "browsers do not trust it" (WS.CERT): the warning under it says what to do.
+S_CERT_STAGING = "Turn off the test service in the web proxy's Security settings to get a certificate browsers trust."
+S_CERT_LOCAL = "Turn off local certificates in the web proxy's Security settings to get a certificate browsers trust."
 S_CERT_EXPIRED = ("This domain's certificate has expired and was not renewed. Check that ports 80 and 443 of this "
                   "host are reachable from the internet.")
 S_CERT_SOON = ("This domain's certificate expires in {days} days and should have been renewed by now. Check that "

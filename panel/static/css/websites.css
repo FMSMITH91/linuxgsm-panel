@@ -170,10 +170,20 @@
   flex: 0 0 auto;
 }
 
+/* A site has up to ten tabs: on a phone they wrap onto a second row, so none sits out of sight behind a
+   scroll bar (at 375px the row used to end mid-word); from 768px they fit one row. */
 .ws-tabs {
+  flex-wrap: nowrap;
   overflow-x: auto;
   gap: .25rem;
   scrollbar-width: thin;
+}
+
+@media (width <= 767.98px) {
+  .ws-tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
 }
 
 .ws-tabs .nav-link {

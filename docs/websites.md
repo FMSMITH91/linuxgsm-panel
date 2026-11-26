@@ -97,7 +97,7 @@ recommended value is printed beside the field, and a value outside it shows a no
 | HSTS max-age | 63072000 seconds | 63072000 (two years) |
 | HSTS for every subdomain (includeSubDomains) | off | on, once every subdomain is served over HTTPS |
 | Ask browsers to preload HTTPS (preload) | off | in OWASP's example header, with a warning that it is hard to undo |
-| Lowest TLS version | TLS 1.2 | TLS 1.3 by default, TLS 1.2 only for compatibility |
+| Lowest TLS version | TLS 1.2 | TLS 1.3 preferred; TLS 1.2 allowed for compatibility |
 | Use the web proxy's own local certificates | off | off: a certificate authority visitors' browsers trust |
 | Use Let's Encrypt's test service | off | off (browsers do not trust its certificates) |
 | Page cache in the web proxy | off | none (not a security setting) |
@@ -109,7 +109,7 @@ recommended value is printed beside the field, and a value outside it shows a no
 Support Strong Protocols") says web applications must default to TLS 1.3 and may support TLS 1.2 for
 compatibility. With TLS 1.2 as the lowest version, every browser that has TLS 1.3 uses it, which is
 the default OWASP asks for, and the older phones, computers and crawlers a public website still gets
-visits from can connect over TLS 1.2. Choosing TLS 1.3 here turns those visitors away; the card says so.
+visits from can connect over TLS 1.2. Choosing TLS 1.3 here leaves those visitors out; the card says so.
 includeSubDomains and preload are off by default because the panel cannot know that every subdomain of
 a customer's domain is served over HTTPS; the card notes each one while it is off. Preload only goes out
 together with includeSubDomains. The page cache only takes effect on a host whose web proxy was built

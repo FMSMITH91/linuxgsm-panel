@@ -70,7 +70,7 @@
           <input type="number" id="wp-hsts" class="form-control form-control-sm" min="0" max="315360000" step="1"
                  data-action="wsOptCheck" data-on="input">
           <div class="form-text">OWASP recommends 63072000 (two years).</div>
-          <div id="wp-hsts-note" class="small text-warning" hidden>Shorter than OWASP's recommendation. It is still saved.</div>
+          <div id="wp-hsts-note" class="form-text text-warning" hidden>Shorter than OWASP's recommendation. It is still saved.</div>
         </div>
         <div class="col-sm-6">
           <label for="wp-tls" class="form-label small mb-1">Lowest TLS version</label>
@@ -78,8 +78,8 @@
             <option value="1.3">TLS 1.3</option>
             <option value="1.2">TLS 1.2</option>
           </select>
-          <div class="form-text">OWASP: TLS 1.3 by default, TLS 1.2 only for compatibility. With TLS 1.2 here, every browser that has TLS 1.3 still uses it.</div>
-          <div id="wp-tls-note" class="small text-secondary" hidden>Browsers and systems without TLS 1.3 (older phones and computers) cannot open your sites.</div>
+          <div class="form-text">OWASP: TLS 1.3 preferred; TLS 1.2 allowed for compatibility. With TLS 1.2 here, every browser that has TLS 1.3 still uses it.</div>
+          <div id="wp-tls-note" class="form-text text-warning" hidden>With TLS 1.3 only, every current browser connects; older phones and computers that lack TLS 1.3 do not.</div>
         </div>
         <div class="col-sm-6">
           <div class="form-check form-switch">
@@ -87,7 +87,7 @@
             <label class="form-check-label small" for="wp-hsts-sub">HSTS for every subdomain (includeSubDomains)</label>
           </div>
           <div class="form-text">OWASP recommends: on, once every subdomain of every site is served over HTTPS.</div>
-          <div id="wp-hsts-sub-note" class="small text-warning" hidden>Subdomains are not covered, so a subdomain reached over plain HTTP can set cookies for your sites. It is still saved.</div>
+          <div id="wp-hsts-sub-note" class="form-text text-warning" hidden>Subdomains are not covered, so a subdomain reached over plain HTTP can set cookies for your sites. It is still saved.</div>
         </div>
         <div class="col-sm-6">
           <div class="form-check form-switch">
@@ -95,8 +95,8 @@
             <label class="form-check-label small" for="wp-hsts-preload">Ask browsers to preload HTTPS (preload)</label>
           </div>
           <div class="form-text">OWASP's example header includes preload, and warns it is hard to undo: once a domain is on the browsers' list, it stays HTTPS-only.</div>
-          <div id="wp-hsts-preload-note" class="small text-warning" hidden>Preload is not requested, unlike OWASP's example. It is still saved.</div>
-          <div id="wp-hsts-preload-sub" class="small text-warning" hidden>Preload is sent only together with HSTS for every subdomain.</div>
+          <div id="wp-hsts-preload-note" class="form-text text-warning" hidden>Preload is not requested, unlike OWASP's example. It is still saved.</div>
+          <div id="wp-hsts-preload-sub" class="form-text text-warning" hidden>Preload is sent only together with HSTS for every subdomain.</div>
         </div>
         <div class="col-sm-6">
           <div class="form-check form-switch">
@@ -104,7 +104,7 @@
             <label class="form-check-label small" for="wp-local-certs">Use the web proxy's own local certificates</label>
           </div>
           <div class="form-text">For testing only. OWASP recommends: off (a certificate authority your visitors' browsers trust).</div>
-          <div id="wp-local-certs-note" class="small text-warning" hidden>Browsers do not trust these certificates: every visitor sees a warning. It is still saved.</div>
+          <div id="wp-local-certs-note" class="form-text text-warning" hidden>Browsers do not trust these certificates: every visitor sees a warning. It is still saved.</div>
         </div>
         <div class="col-sm-6">
           <div class="form-check form-switch">
@@ -140,7 +140,7 @@
             <label class="form-check-label small" for="wp-2fa">Customers must use two-factor sign-in</label>
           </div>
           <div class="form-text">OWASP recommends: on.</div>
-          <div id="wp-2fa-note" class="small text-warning" hidden>Customers can sign in with a password alone. It is still saved.</div>
+          <div id="wp-2fa-note" class="form-text text-warning" hidden>Customers can sign in with a password alone. It is still saved.</div>
         </div>
         <div class="col-6 col-sm-4">
           <label for="wp-max-sites" class="form-label small mb-1">Sites per customer</label>
