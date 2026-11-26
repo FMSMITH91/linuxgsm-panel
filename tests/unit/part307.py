@@ -1,4 +1,4 @@
-"""Part 307 of the unit suite: SFTP on one specific address, and CI's artifact retention.
+"""Part 307 of the unit suite: SFTP on one specific address, and CI's artifact retention and job order.
 
 1. SFTP "A specific address" (services/sftp_common, sftp_broker, routes/sftp_settings, ops/system_ops):
    the card lists the panel host's own addresses read with `ip -o addr` in the C locale, marks a public
@@ -9,6 +9,8 @@
    jail bans on the SFTP port for a public address and not for a private one.
 2. CI: every actions/upload-artifact step in every workflow and local action keeps its artifact for an
    explicit number of days: 7 for a run's own reports, 30 for a fuzz crash reproducer.
+3. CI: the js coverage parts are queued behind the short gamedig lockfile legs, so the unit shards (the
+   longest required jobs) are queued first at the 20-job cap; they still run when a leg fails.
 
 HOW IT RUNS. Routes on part12's app with the host's address list stood in (the broker's own reader is
 driven once through a stand-in `ip`); the running service's watcher is driven through run_once with a
@@ -342,3 +344,24 @@ check("ci artifacts: every upload-artifact step keeps its artifact 7 days (a run
       "never GitHub's 90-day default",
       sum(len(s) for s in _uploads307.values()) >= 7 and not any(_bad307.values()), repr(_uploads307))
 
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. CI: the unit shards are queued ahead of the js coverage parts
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+with open(os.path.join(_ROOT307, ".github", "workflows", "ci.yml"), encoding="utf-8") as _fh307:
+    _ci307 = _fh307.read()
+
+
+def _job307(job):
+    m = _re307.search(r"^  %s:[ \t]*$" % _re307.escape(job), _ci307, _re307.M)
+    if m is None:
+        return ""
+    nxt = _re307.search(r"^  [A-Za-z_]", _ci307[m.end():], _re307.M)
+    return _ci307[m.start():m.end() + nxt.start()] if nxt else _ci307[m.start():]
+
+
+_js307 = _job307("js-coverage")
+check("ci order: the js coverage parts wait for the gamedig lockfile legs, and run whatever those did",
+      "\n    needs: gamedig-lockfile\n" in _js307 and "\n    if: ${{ !cancelled() }}\n" in _js307, _js307[:400])
+eq("ci order: the unit shards, coverage and the gamedig legs need nothing, so they are queued at once",
+   ["\n    needs:" in _job307(j) for j in ("checks", "coverage", "gamedig-lockfile")], [False] * 3)
