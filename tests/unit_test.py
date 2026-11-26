@@ -35,7 +35,7 @@ sys.path[:0] = [os.path.join(_root, "tests"), _root, os.path.join(_root, "panel"
 # ── UNIT_SHARD=i/n runs one shard of the parts, so CI can run the shards side by side ────────────
 # tests/unit/shard.py says which parts a shard runs. Read before anything else is set up, so a
 # malformed value stops the run at once (exit 1, naming it) rather than running all or nothing.
-from unit import shard as _shard  # noqa: E402 - stdlib only: nothing ahead of eventlet changes
+_shard = importlib.import_module("unit.shard")   # stdlib only: nothing ahead of eventlet changes
 _SHARD = _shard.from_env(os.environ)
 
 # ── nothing in this suite may read or write the machine's own config.json (or its keys) ─────────
