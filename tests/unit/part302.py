@@ -13,6 +13,7 @@
 5. The certificate status names the certificate the proxy serves (the issuer the configuration uses, else the
    latest), its date read as GMT whatever the host's time zone, and the status route answers it parsed.
 6. An unknown Host over HTTPS is aborted (an https:// catch-all), outside tunnel mode.
+7. OPcache is not loaded a second time.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -518,6 +519,13 @@ def _s6_catch_all():
        ["https:// {", "\tabort", "}"])
 
 
+# ── 7-9. OPcache, a refused release, the egress guard ─────────────────────────────────────────
+def _s7_opcache():
+    ini = _ws302.php_ini(_site302(kind="php"))
+    eq("php.ini: OPcache is switched on without loading it a second time (the PHP images load it already)",
+       ("zend_extension" in ini, "opcache.enable = 1" in ini.split("\n")), (False, True))
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -536,7 +544,7 @@ def _cleanup302(st):
 
 
 for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone,
-                 _s6_catch_all):
+                 _s6_catch_all, _s7_opcache):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)

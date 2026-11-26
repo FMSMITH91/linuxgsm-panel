@@ -296,7 +296,9 @@ def _opcache_lines(site, values):
     freq = values.get("opcache.revalidate_freq", form["opcache.revalidate_freq"][0])
     mem = mem if not form["opcache.memory_consumption"][1](mem) else form["opcache.memory_consumption"][0]
     freq = freq if not form["opcache.revalidate_freq"][1](freq) else form["opcache.revalidate_freq"][0]
-    return ["; OPcache", "zend_extension = opcache", "opcache.enable = 1", "opcache.validate_timestamps = 1",
+    # No zend_extension line: the PHP images load OPcache already (docker-php-ext-opcache.ini), and a
+    # second load logs "Cannot load Zend OPcache - it was already loaded" on every PHP start.
+    return ["; OPcache", "opcache.enable = 1", "opcache.validate_timestamps = 1",
             "opcache.memory_consumption = %s" % mem, "opcache.revalidate_freq = %s" % freq]
 
 
