@@ -14,6 +14,12 @@ WHAT EVERY CONFIGURATION HOLDS
     reaching the loopback port directly gets 403), a body size limit, compression, security headers,
     and the server's own Server and X-Powered-By headers removed.
 
+WHERE IT LISTENS
+    Not here: the helper (website-proxy-apply) puts in `default_bind` with the host's own addresses at
+    each apply, leaving out the loopback, link-local and tailnet ones (Tailscale Serve holds the tailnet
+    address's 443), and refuses in words when another program holds 80 or 443 on them. Tunnel mode
+    binds 127.0.0.1 itself (TUNNEL_PORT).
+
 FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     Caddy replaces every incoming X-Forwarded-* header with its own unless the peer is a trusted proxy.
     Only exposure mode 'restricted' (the allow list) and 'tunnel' (the connector on loopback) name any:

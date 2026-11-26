@@ -68,6 +68,14 @@ listens. When the host's firewall is off, the page says so: the ports are then r
 cloud provider's own firewall is outside the panel's reach: open or close 80 and 443 there yourself.
 The panel's own address and port are never served through the web proxy.
 
+The web proxy listens only on the host's own public and local-network addresses, read again each time its
+settings are applied: never on the host's Tailscale address, where Tailscale Serve keeps port 443 for the
+panel. If another program already uses port 80 or 443 there, or the host has no address outside its
+Tailscale network, the card says which and nothing changes. When the host's address changes, save the
+card's settings again. A request for a name the proxy does not serve, over HTTP or HTTPS, gets no answer
+at all. Every apply leaves the proxy running and started at boot, and says it worked only once the proxy
+really runs; otherwise the previous settings are put back and the proxy's own error is shown.
+
 ### Security settings
 
 The same card has a folded **Security settings** section. Every value can be changed; OWASP's

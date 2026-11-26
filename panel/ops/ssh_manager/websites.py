@@ -49,6 +49,10 @@ CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so 
                       "host's internet connection and try again.")
 OK_APPLIED = "The web proxy's configuration was checked and applied."
 BAD_CONFIG = "The web proxy refused the new configuration, so the running one was kept: {why}"
+NOT_STARTED = "The web proxy did not start with the new configuration, so the previous one was put back: {why}"
+NO_BIND = ("This host has no address of its own outside its loopback and its tailnet, so the web proxy has "
+           "nowhere to listen. Nothing was changed.")
+PORT_BUSY = "Port {port} on {address} is already used by {program}, so the web proxy cannot listen there. Nothing was changed."
 OK_PROXY_STOPPED = "The web proxy was stopped: nothing listens on ports 80 and 443."
 FAILED = "That did not work on the host. Try again; if it keeps failing, look at the site's log."
 OK_PORTS = "Ports 80 and 443 are set for the web proxy's exposure mode."
@@ -261,15 +265,54 @@ def apply_doc(text, sites=(), proxy=None):
 
 
 def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
-    """Validate and apply a rendered proxy configuration, keeping the previous one on failure."""
+    """Validate and apply a rendered proxy configuration, keeping the previous one on failure.
+
+    The helper enables and restarts the proxy either way (`start_it` is kept for its callers) and says
+    applied=yes only when the proxy is really running afterwards. Its refusals come back as sentences
+    in plain words; the helper's own lines go to the panel's log, never to the page (OWASP Error
+    Handling Cheat Sheet).
+    """
     ok, out = _helper(remote, "website-proxy-apply", ["start" if start_it else "reload"], timeout=180,
                       doc=apply_doc(text, sites, proxy))
     if ok:
         return True, OK_APPLIED
-    errors = [ln[len("error="):] for ln in out.splitlines() if ln.startswith("error=")]
-    if errors:
-        return False, BAD_CONFIG.format(why=errors[-1][:200])
-    return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
+    if out in (ONLY_LOCAL, NO_HELPER):
+        return False, out
+    _core._log.warning("web proxy apply refused: %s", " | ".join(out.splitlines())[-600:])
+    return False, apply_refusal(out)
+
+
+def _plain(why):
+    """A helper error line in plain words: an older helper's raw JSON log record becomes its message."""
+    why = (why or "").strip()
+    if why.startswith("{"):
+        try:
+            rec = json.loads(why)
+        except ValueError:
+            rec = {}
+        why = ": ".join(str(rec[k]) for k in ("msg", "error") if isinstance(rec, dict) and rec.get(k)) or ""
+    return why[:200] or FAILED
+
+
+def _after(lines, key):
+    """What follows `key` on each of `lines` that starts with it."""
+    return [ln[len(key):] for ln in lines if ln.startswith(key)]
+
+
+def apply_refusal(out):
+    """The sentence for website-proxy-apply's refusal lines (bind=none, busy=, valid=no, applied=no)."""
+    from panel.core import i18n
+    lines = (out or "").splitlines()
+    kv = _ws()._ad.kv_lines(out)
+    busy = [b.split(" ", 2) for b in _after(lines, "busy=")]
+    errors = _after(lines, "error=")
+    if kv.get("bind") == "none":
+        return NO_BIND
+    if busy and len(busy[0]) == 3:
+        return i18n.Sentence(PORT_BUSY, port=busy[0][0], address=busy[0][1], program=busy[0][2])
+    if not errors:
+        return FAILED
+    return i18n.Sentence(NOT_STARTED if kv.get("applied") == "no" else BAD_CONFIG, why=_plain(errors[-1]))
 
 
 def proxy_stop(remote):

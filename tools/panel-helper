@@ -142,6 +142,8 @@ TOOLS = {
     "nft": ("/usr/sbin/nft", "/sbin/nft"),
     "setquota": ("/usr/sbin/setquota", "/sbin/setquota"),
     "openssl": ("/usr/bin/openssl", "/bin/openssl"),
+    # The web proxy's listen addresses (website-proxy-apply): `ip -j addr show`, read only.
+    "ip": ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"),
     # The page cache's proxy build (website-proxy-install-cache) and nothing else: a fixed argv over the
     # helper's own Containerfile.
     "podman": ("/usr/bin/podman",),
@@ -2962,14 +2964,171 @@ def _web_cert_file_ok(name, pem):
     return named and isinstance(pem, str) and bool(re.fullmatch(r"(?:%s)+" % _WEB_PEM_RE, pem))
 
 
+# Where the proxy listens. Tailscale Serve (and any tailnet service) holds the tailnet addresses' 443, so
+# the proxy never binds every address: each apply reads this host's own addresses NOW (they can change:
+# DHCP, a new IPv6 prefix) and binds only those outside the loopback, link-local and tailnet ranges. The
+# tunnel mode's configuration names its own loopback bind and is left as it is. No address left is a
+# refusal in words, never a proxy that binds everything.
+WEB_TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+WEB_START_POLLS = 8                 # reads of the unit's state after a start, WEB_START_POLL seconds apart
+WEB_START_POLL = 1.0
+_WEB_BIND_RE = re.compile(r"^\tdefault_bind (.+)$", re.M)
+
+
+def _web_addr_ok(ifname, info):
+    """Whether one `ip -j addr` entry is an address of this host the proxy may listen on."""
+    try:
+        addr = ipaddress.ip_address(info.get("local", ""))
+    except ValueError:
+        return False
+    if info.get("scope") != "global" or info.get("temporary") or info.get("deprecated") or ifname.startswith("tailscale"):
+        return False
+    return not (addr.is_loopback or addr.is_link_local or any(addr in n for n in WEB_TAILNET_NETS if n.version == addr.version))
+
+
+def _web_link_addrs(link):
+    """The proxy's addresses on one `ip -j addr` link (IPv6 in brackets)."""
+    ifname = str(link.get("ifname", "")) if isinstance(link, dict) else ""
+    infos = (link.get("addr_info") or []) if ifname else []
+    texts = [str(ipaddress.ip_address(i["local"])) for i in infos if isinstance(i, dict) and _web_addr_ok(ifname, i)]
+    return ["[%s]" % t if ":" in t else t for t in texts]
+
+
+def web_bind_addresses(ip_json):
+    """This host's addresses for the proxy's default_bind (IPv4 first), from `ip -j addr show` output."""
+    try:
+        links = json.loads(ip_json or "[]")
+    except ValueError:
+        return []
+    out = {a for link in (links if isinstance(links, list) else []) for a in _web_link_addrs(link)}
+    return sorted(out, key=lambda a: (":" in a, a))
+
+
+def _web_bind(text):
+    """(text, [bind addresses]) the proxy will use: the configuration's own default_bind (tunnel mode), else
+    this host's addresses put in as the first global option. ([], ...) when the host has none."""
+    m = _WEB_BIND_RE.search(text)
+    if m:
+        return text, m.group(1).split()
+    _rc, out = _run_quiet([resolve("ip"), "-j", "addr", "show"], timeout=20)
+    addrs = web_bind_addresses(out)
+    if not addrs:
+        return text, []
+    head, sep, rest = text.partition("\n{\n")
+    if not sep:                     # no global options block: one is put in after the header line
+        head, sep, rest = text.partition("\n")
+        return head + "\n{\n\tdefault_bind %s\n}\n" % " ".join(addrs) + rest, addrs
+    return head + sep + "\tdefault_bind %s\n" % " ".join(addrs) + rest, addrs
+
+
+def _web_ports(text):
+    """The TCP ports the configuration listens on: its http_port (tunnel), else 80, and 443 unless auto_https is off."""
+    m = re.search(r"^\thttp_port ([0-9]{1,5})$", text, re.M)
+    ports = [m.group(1) if m else "80"]
+    return ports if re.search(r"^\tauto_https off$", text, re.M) else ports + ["443"]
+
+
+def _web_listener(line):
+    """(port, address, program, pid) of one `ss -Hltnp` line, or None."""
+    f = line.split()
+    if len(f) < 4 or ":" not in f[3]:
+        return None
+    host, _sep, port = f[3].rpartition(":")
+    m = re.search(r'users:\(\("([^"]{1,40})",pid=([0-9]+)', line)
+    return port, host.strip("[]").split("%")[0], m.group(1) if m else "another program", m.group(2) if m else ""
+
+
+def web_port_holders(ss_out, binds, ports, own_uid):
+    """[(port, address, program)] of listeners on `ports` that collide with `binds`, from `ss -Hltnp` output.
+
+    A listener on one of the bind addresses or on a wildcard address collides; one the proxy's own user
+    holds (the running proxy, which the restart replaces) does not.
+    """
+    want = {b.strip("[]") for b in binds} | {"*", "0.0.0.0", "::"}
+    busy = []
+    for got in filter(None, map(_web_listener, (ss_out or "").splitlines())):
+        port, host, program, pid = got
+        if port in ports and host in want and not (pid and _web_pid_uid(pid) == own_uid):
+            busy.append((port, host, program))
+    return busy
+
+
+def _web_pid_uid(pid):
+    try:
+        return os.stat("/proc/" + pid).st_uid
+    except OSError:
+        return None
+
+
+def _web_unit_state():
+    """(ActiveState, SubState, NRestarts) of the proxy's unit."""
+    _rc, out = _run_quiet([resolve("systemctl"), "show", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts",
+                           WEB_PROXY_UNIT], timeout=20)
+    kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    return kv.get("ActiveState", ""), kv.get("SubState", ""), kv.get("NRestarts", "")
+
+
+def _web_running():
+    """Whether the proxy is running and stays so: two reads in a row active/running with no restart between.
+
+    A unit that is `activating (auto-restart)` (Restart=on-failure after a failed start) never passes.
+    """
+    last = None
+    for _i in range(WEB_START_POLLS):
+        state = _web_unit_state()
+        if state[:2] == ("active", "running"):
+            if last == state:
+                return True
+            last = state
+        else:
+            last = None
+        time.sleep(WEB_START_POLL)
+    return False
+
+
+_WEB_PREFIXES = re.compile(r"^(?:Error: |loading (?:new |initial )?config: |adapting config using caddyfile: )+")
+
+
+def web_plain_error(line):
+    """One of the proxy's error lines in plain words: its JSON log record's message, no file path, no JSON."""
+    text = (line or "").strip()
+    if text.startswith("{"):
+        try:
+            rec = json.loads(text)
+        except ValueError:
+            rec = None
+        if isinstance(rec, dict):
+            text = ": ".join(str(rec[k]) for k in ("msg", "error") if rec.get(k))
+    busy = re.search(r"listen tcp ([^ ]+): bind: address already in use", text)
+    if busy:
+        return "another program already listens on %s" % busy.group(1)
+    text = re.sub(r"(?:/etc/lgsm-web-proxy/)?Caddyfile(?:\.candidate)?:([0-9]+)", r"line \1", _WEB_PREFIXES.sub("", text))
+    return "".join(c for c in text if c.isprintable())[:200].strip()
+
+
+def _web_last_error(since):
+    """The proxy's last error line in its own journal since `since` (epoch), in plain words, or a fixed sentence."""
+    try:
+        _rc, out = _run_quiet([resolve("journalctl"), "--namespace=lgsm-web-proxy", "-u", WEB_PROXY_UNIT, "--since",
+                               "@%d" % since, "-n", "40", "--no-pager", "-q", "-o", "cat"], timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        out = ""
+    lines = [ln for ln in out.splitlines() if "error" in ln.lower()]
+    return web_plain_error(lines[-1]) if lines else "the proxy stopped right after it started"
+
+
 def do_website_proxy_apply(args, content):
     """Validate a rendered proxy configuration as the proxy's user, then swap it in; keep the old one on failure.
 
     stdin: {"caddyfile": text, "files": {name: PEM}} (certificates an operator supplied, the CDN's
-    origin-pull CA). The candidate is checked with `caddy validate` run as WEB_PROXY_USER; only a
-    configuration that passes replaces the running one (os.replace), then the proxy is restarted
-    (`admin off` leaves no API to reload through) or, with `start`, enabled and started. A refused
-    one changes nothing and its first error lines are printed.
+    origin-pull CA). The listen addresses are this host's own, read now (_web_bind; none prints
+    bind=none), and a port another program holds on them is refused first (busy=<port> <address>
+    <program>): nothing changes. The candidate is checked with `caddy validate` run as WEB_PROXY_USER;
+    only one that passes replaces the running file (os.replace). Then the proxy is enabled and restarted
+    (`admin off` leaves no API to reload through, and a restart is what loads a changed file), whatever
+    the argument (start, reload): an apply that leaves it running leaves it enabled. Success is printed
+    only when the unit is really running afterwards (_web_running); otherwise the previous file is put
+    back and the journal's last error line is printed in plain words (applied=no, error=).
     """
     if args[0] == "restart":       # the page cache's purge: the running configuration, restarted
         rc, _out = _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
@@ -2984,15 +3143,52 @@ def do_website_proxy_apply(args, content):
         sys.stderr.write("the web proxy is not installed\n")
         return 1
     pw = pwd.getpwnam(WEB_PROXY_USER)
+    text, binds = _web_bind(text)
+    if not binds:
+        sys.stdout.write("bind=none\n")
+        return 1
+    _rc, ss_out = _run_quiet([resolve("ss"), "-Hltnp"], timeout=20)
+    busy = web_port_holders(ss_out, binds, _web_ports(text), pw.pw_uid)
+    if busy:
+        sys.stdout.write("".join("busy=%s %s %s\n" % b for b in busy))
+        return 1
     for name, pem in files.items():
         dest = WEB_PROXY_ETC + "/" + name if name == "origin-pull-ca.pem" else WEB_PROXY_CERTS + "/" + name
         _web_write(dest, pem.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
+    old = _web_read(WEB_PROXY_CONF)
     if not _web_validated(text, pw):
         return 1
-    verb = ["enable", "--now"] if args[0] == "start" else ["restart"]
-    rc, _out = _run_quiet([resolve("systemctl")] + verb + [WEB_PROXY_UNIT], timeout=120)
-    sys.stdout.write("valid=yes\napplied=%s\n" % ("yes" if rc == 0 else "no"))
-    return rc
+    sys.stdout.write("valid=yes\nbind=%s\n" % " ".join(binds))
+    return _web_start(old, pw)
+
+
+def _web_read(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _web_start(old, pw):
+    """Enable and restart the proxy on the new file; when it does not stay running, put `old` back. 0 or 1."""
+    was_active = _web_unit_state()[0] == "active"
+    since = int(time.time()) - 1
+    systemctl = resolve("systemctl")
+    _run_quiet([systemctl, "enable", WEB_PROXY_UNIT], timeout=60)
+    _run_quiet([systemctl, "restart", WEB_PROXY_UNIT], timeout=120)
+    if _web_running():
+        sys.stdout.write("applied=yes\n")
+        return 0
+    why = _web_last_error(since)
+    if old is not None:
+        _web_write(WEB_PROXY_CONF, old, WEB_FILE_PROXY, 0, pw.pw_gid)
+    if was_active and old is not None:
+        _run_quiet([systemctl, "restart", WEB_PROXY_UNIT], timeout=120)
+    else:
+        _run_quiet([systemctl, "disable", "--now", WEB_PROXY_UNIT], timeout=120)
+    sys.stdout.write("applied=no\nerror=%s\n" % why)
+    return 1
 
 
 def _web_validated(text, pw):
@@ -3007,7 +3203,7 @@ def _web_validated(text, pw):
     if r.returncode != 0:
         os.unlink(cand)
         lines = [ln for ln in r.stderr.decode("utf-8", "replace").splitlines() if "error" in ln.lower()][-3:]
-        sys.stdout.write("valid=no\n" + "".join("error=%s\n" % ln[:300] for ln in lines))
+        sys.stdout.write("valid=no\n" + "".join("error=%s\n" % web_plain_error(ln) for ln in lines))
         return False
     os.replace(cand, WEB_PROXY_CONF)
     return True

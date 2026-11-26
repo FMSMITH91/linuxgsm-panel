@@ -1005,7 +1005,7 @@ def _web_files299(verbs):
     """Run the proxy's verbs in a scratch tree: (return codes, {file: (mode, owner)}, modes while written)."""
     d, build = _tf299.mkdtemp(prefix="wsf-p299-"), _tf299.mkdtemp(prefix="wsf-p299b-")
     names = tuple(_WEB_PATHS299) + ("pwd", "subprocess", "os", "resolve", "_web_arch", "_web_cache_build",
-                                     "_web_has_cache")
+                                     "_web_has_cache", "_web_bind", "_web_running")
     saved = {n: getattr(_H299, n) for n in names}
     spy, buf = _OsSpy299(), _io299.BytesIO()
     with _tar299.open(fileobj=buf, mode="w:gz") as tar:
@@ -1022,6 +1022,8 @@ def _web_files299(verbs):
         _H299.pwd, _H299.subprocess, _H299.os = _Pw299({"lgsmweb": 990}), _CurlSub299(buf.getvalue()), spy
         _H299.resolve, _H299._web_arch = (lambda prog: "/usr/bin/" + prog), (lambda: "amd64")
         _H299._web_cache_build, _H299._web_has_cache = (lambda _a, _d: os.path.join(build, "caddy")), (lambda _b, _p: True)
+        # The host's addresses and the unit's state are part302's to drive: here, one address and a running proxy.
+        _H299._web_bind, _H299._web_running = (lambda text: (text, ["192.0.2.10"])), (lambda: True)
         with _ctx299.redirect_stdout(_io299.StringIO()), _ctx299.redirect_stderr(_io299.StringIO()):
             rcs = [fn(_hashlib299.sha256(buf.getvalue()).hexdigest()) for fn in verbs]
         files = {}
