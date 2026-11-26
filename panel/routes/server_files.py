@@ -2952,13 +2952,16 @@ def _register_send_command(app):
         try:
             # A send that RAISES is audited too (_r20b_audit_on_raise), as the command form does: a
             # direct-SSH host that is down raises where a tailscale one answers rc -1.
-            with _r20b_audit_on_raise("send_command", detail=cmd_text, target=gs.name, server=gs):
+            # The audit rows keep the command masked (console_secrets.mask_command): a typed
+            # `rcon_password X` is read by every VIEW_LOGS holder on this server otherwise.
+            shown = _csec.mask_command(gs.id, cmd_text)
+            with _r20b_audit_on_raise("send_command", detail=shown, target=gs.name, server=gs):
                 _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10,
                                                   selfname=gs.lgsm_name)
             # _r25b_audit: the game has the command by now, so a row whose commit raises (the
             # database locked) is not a failed send — it answered 500 "request failed", as the form
             # route (server_command) did until it was given the same answer.
-            audited = _sd._r25b_audit(current_user, "send_command", target=gs.name, detail=cmd_text,
+            audited = _sd._r25b_audit(current_user, "send_command", target=gs.name, detail=shown,
                                       success=(rc == 0), server=gs)
             note = {} if audited else {"audit_unwritten": True}
             if rc != 0:

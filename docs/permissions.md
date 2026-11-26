@@ -10,7 +10,7 @@ check.
 
 | Permission | Grants |
 |------------|--------|
-| `view_servers` / `view_console` / `view_logs` | See status / console / audit logs |
+| `view_servers` / `view_console` / `view_logs` | See status / console / audit logs. A console command that sets a secret (`rcon_password X`, `sv_password X`) is kept in the audit log with its value masked |
 | `send_command` | Send raw console commands |
 | `use_terminal` | Open a shell on a host, as the account the panel uses there, which on most installs can become root: grant it only to people you would give that account |
 | `moderate_server` | Umbrella for `kick_player` + `ban_player` + `say_server` (also grantable individually) |

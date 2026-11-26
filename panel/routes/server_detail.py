@@ -27,7 +27,7 @@ from panel.security.auth import (MANAGE_SERVERS, MODERATE_SERVER, READONLY_ACTIO
     get_user_permissions, has_permission, log_action, server_access_required)
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _end_offline_window as _mon_end_offline_window,
                                        _mark_expected_offline, want_fresh_player_counts)
-from panel.services import lgsm_players as _lgp
+from panel.services import console_secrets as _csec, lgsm_players as _lgp
 from panel.services import port_check as _pck
 from panel.routes import _lgsm_update as _lgu
 import concurrent.futures
@@ -1645,16 +1645,18 @@ def _register_custom_commands(app):
         final, refused = _r18a_custom_line(cmd)
         if refused:
             return jsonify({"success": False, "message": refused}), 400
+        # The audit rows keep the sent line masked (console_secrets.mask_command), as the command
+        # form's do: a template such as `rcon_password {}` puts the typed value in it.
+        audit_detail = ("%s: %s" % (cmd.name, _csec.mask_command(gs.id, final)))[:200]
         try:
             # Audited when the send RAISES too, as the command form is (_r20b_audit_on_raise).
-            with _r20b_audit_on_raise("custom_command", detail=("%s: %s" % (cmd.name, final))[:200],
-                                      target=gs.name, server=gs):
+            with _r20b_audit_on_raise("custom_command", detail=audit_detail, target=gs.name, server=gs):
                 _, err, rc = send_console_command(gs.remote, gs.short_name, final,
                                                   timeout=10, selfname=gs.lgsm_name)
             # _r25b_audit: the command has run by now, so a row whose commit raises is not the send
             # failing (it answered 500 "custom command failed" for a command the game already had).
             audited = _r25b_audit(current_user, "custom_command", target=gs.name,
-                                  detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0), server=gs)
+                                  detail=audit_detail, success=(rc == 0), server=gs)
             note = {} if audited else {"audit_unwritten": True}
             if rc != 0:
                 # 200, not 502: Cloudflare (Tunnel, docs/https.md) swaps an origin 502 for its own
@@ -1982,12 +1984,15 @@ def _register_commands(app):
             flash(i18n.tr(CONSOLE_CONTROL_MSG), "warning")
             return redirect(url_for("server_detail", server_id=server_id))
 
+        # Masked for the audit rows and the notice, which rides in the session cookie: a typed
+        # `rcon_password X` (console_secrets.mask_command). The game is sent the command as typed.
+        shown = _csec.mask_command(gs.id, cmd_text)
         try:
             # LinuxGSM runs each instance in a tmux session owned by its own user.
             _, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
         except Exception as e:
             db.session.rollback()
-            _r25b_audit(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}",
+            _r25b_audit(current_user, "send_command", target=gs.name, detail=f"{shown} - {e}",
                         success=False, server=gs)
             flash("Failed to send that command. The audit log has the details.", "danger")
             return redirect(url_for("server_detail", server_id=server_id))
@@ -1995,13 +2000,13 @@ def _register_commands(app):
         # (server_files.api_send_command) does; this branch logged only on success, so an attempt
         # that failed left no audit row at all. Outside the send's try: a row whose commit raised
         # was reported as a failed send, for a command the game had already been given.
-        if not _r25b_audit(current_user, "send_command", target=gs.name, detail=cmd_text,
+        if not _r25b_audit(current_user, "send_command", target=gs.name, detail=shown,
                            success=(rc == 0), server=gs):
             flash(_R25B_AUDIT_UNWRITTEN, "warning")
         if rc != 0:
             flash(_console_send_failure(rc, err), "warning")
             return redirect(url_for("server_detail", server_id=server_id))
-        flash(i18n.tr("Command sent: {command}", command=cmd_text), "success")
+        flash(i18n.tr("Command sent: {command}", command=shown), "success")
         return redirect(url_for("server_detail", server_id=server_id))
 
 

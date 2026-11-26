@@ -279,3 +279,64 @@ eq("edit remote: a delegated admin may not repoint their host at a private addre
 check("edit remote (control): a delegated admin may still move their public host's SSH port with a new password",
       _ssrf290.get("edit_public_port", (0, 0))[1] == 2222, repr(_ssrf290.get("edit_public_port")))
 eq("part290 add remote: nothing reached a real transport", _ssrf290.get("trips"), 0)
+
+
+# ── 4. Console commands that set a secret are audited (and flashed) with the value masked ──────────
+def _audit_detail290(action):
+    with _p9.app_context():
+        r = _Audit290.query.filter_by(action=action).order_by(_Audit290.id.desc()).first()
+        return None if r is None else r.detail
+
+
+_cmd290 = {}
+_cc290 = None
+try:
+    _p9_arm(who="part290")
+    _trips290 = len(_P9_TRIPPED)
+    _sent290 = []
+    for _m290 in (_sf290, _sd290):
+        _p9_patch(_m290, "send_console_command", lambda remote, user, text, **k: _sent290.append(text) or ("", "", 0))
+    _p9_patch(_csec290, "_values", {P9_GS: (float("inf"), frozenset({"p290cfgvalue"}))})
+    _A290 = _p9_client(P9_ADMIN)
+    for _k290, _t290 in (("rcon", "rcon_password N3wS3cret"), ("sv", 'sv_password "p290 join"'),
+                         ("chain", "status; rcon_password Another1"), ("flag", "+sv_setsteamaccount P290TOKEN"),
+                         ("cached", "say p290cfgvalue"), ("plain", "say password reset tonight"),
+                         ("clear", 'sv_password ""'), ("status", "status")):
+        _A290.post("/api/command/%d" % P9_GS, json={"command": _t290})
+        _cmd290["api_" + _k290] = _audit_detail290("send_command")
+    _A290.post("/server/%d/command" % P9_GS, data={"command": "rcon_password FormS3cret"})
+    with _A290.session_transaction() as _s290:
+        _cmd290["flashes"] = [m for _c, m in _s290.get("_flashes", [])]
+        _s290.pop("_flashes", None)
+    _cmd290["form"] = _audit_detail290("send_command")
+    with _p9.app_context():
+        _ccr290 = _CC290(name="p290 rcon", command_template="rcon_password {}", enabled=True, scope_type="all")
+        _db290.session.add(_ccr290)
+        _db290.session.commit()
+        _cc290 = _ccr290.id
+    _A290.post("/api/server/%d/custom-command/%d" % (P9_GS, _cc290), json={"value": "CustomS3cret"})
+    _cmd290["custom"] = _audit_detail290("custom_command")
+    _cmd290["sent"] = list(_sent290)
+    _cmd290["trips"] = len(_P9_TRIPPED) - _trips290
+finally:
+    _p9_restore_all()
+    if _cc290:
+        with _p9.app_context():
+            _db290.session.delete(_db290.session.get(_CC290, _cc290))
+            _db290.session.commit()
+eq("send command: a command that sets a secret is audited with its value masked (live console route)",
+   {k: _cmd290.get("api_" + k) for k in ("rcon", "sv", "chain", "flag", "cached")},
+   {"rcon": "rcon_password ********", "sv": "sv_password ********", "chain": "status; rcon_password ********",
+    "flag": "+sv_setsteamaccount ********", "cached": "say ********"})
+eq("send command (control): ordinary commands, prose and an emptied password are audited as typed",
+   {k: _cmd290.get("api_" + k) for k in ("plain", "clear", "status")},
+   {"plain": "say password reset tonight", "clear": 'sv_password ""', "status": "status"})
+eq("send command: the command form's audit row and its 'Command sent' notice (in the session cookie) are masked",
+   (_cmd290.get("form"), [f for f in _cmd290.get("flashes", []) if "Command sent" in f]),
+   ("rcon_password ********", ["Command sent: rcon_password ********"]))
+eq("custom command: a template that sets a secret is audited with the typed value masked",
+   _cmd290.get("custom"), "p290 rcon: rcon_password ********")
+check("send command (control): the game is still sent every command exactly as typed",
+      "rcon_password N3wS3cret" in _cmd290.get("sent", []) and "rcon_password FormS3cret" in _cmd290.get("sent", [])
+      and "rcon_password CustomS3cret" in _cmd290.get("sent", []), repr(_cmd290.get("sent")))
+eq("part290 send command: nothing reached a real transport", _cmd290.get("trips"), 0)
