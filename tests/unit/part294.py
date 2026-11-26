@@ -29,6 +29,8 @@
     image and the record are in place: a failed pull leaves the running BlueMap what it uses.
 13. An add-on whose new image carries the same version label as the installed one (B3 after a base image
     or requirements change) is offered as "a newer version", not as the version it already runs.
+14. B3's namesake read selects the stored names the identity check can mean (a target stored as "^ABob"
+    finds "Bob"), and no longer every name that merely holds the target's ("Grace" for "Ace").
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -36,6 +38,7 @@ or data/.
 """
 import base64 as _b64_294
 import glob as _glob294
+import random as _random294
 import json as _json294
 import os
 import re as _re294
@@ -57,7 +60,7 @@ from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db a
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, files as _files294, game as _game294
 from panel.routes import addons as _ra294
 from panel.routes import _shared as _sh294, databases as _dbr294, server_detail as _sd294, server_files as _sf294
-from panel.services import game_restore as _grs294, lgsm_players as _lgp294
+from panel.services import b3_players as _b3p294, game_restore as _grs294, lgsm_players as _lgp294
 
 _TMP294 = _tf294.mkdtemp(prefix="p294-")
 
@@ -591,3 +594,60 @@ finally:
 eq("add-on rows: a new image with the installed version's label is offered with no version (the card says a newer "
    "version of the add-on); one with another label names it (control)", _b3rows294,
    [(_b3cat294["version"], "", "image"), ("2.0.1 (0123abcd)", _b3cat294["version"], "image")])
+
+
+# ── 14. B3's namesake read ────────────────────────────────────────────────────────────────────────
+def _sql_namesakes294(sql, target, stored):
+    """What `sql`'s WHERE selects from `stored` for `target`, its REGEXP_REPLACE and TRIM steps run in Python.
+
+    The statement's patterns are read back from its hex literals, in order; MariaDB's (?-i) flag is
+    Python's default. A statement with no such steps (the substring test it replaced) selects nothing.
+    """
+    pats = [bytes.fromhex(h).decode().replace("(?-i)", "") for h in _re294.findall(r"X'([0-9A-F]+)'", sql)]
+    side = pats[:len(pats) // 2]
+    if not side or pats != side * 2 or sql.count("TRIM(REGEXP_REPLACE(") != len(pats):
+        return None
+
+    def key(name):
+        for pat in side:
+            name = _re294.sub(pat, "", name).strip(" ")
+        return name.lower()
+    return [n for n in stored if key(n) == key(target)]
+
+
+_sql294 = _b3p294.namesakes_statement(12)["sql"]
+eq("b3 namesakes: a target stored as \"^ABob\" finds \"Bob\" and \"^aBob\" (B3 kicked one of them), not \"Bobby\"; "
+   "for \"Ace\", \"Grace\", \"Space\", \"FaceLess\" and \"aCeS\" are no namesakes (enough of them refused every Kick)",
+   [_sql_namesakes294(_sql294, "^ABob", ["Bob", "^aBob", "Bobby", "^1Bob"]),
+    _sql_namesakes294(_sql294, "Ace", ["Grace", "Space", "FaceLess", "aCeS", "ace", "^3Ace"])],
+   [["Bob", "^aBob", "^1Bob"], ["ace", "^3Ace"]])
+
+
+def _namesake_misses294(sql, rounds=20000):
+    """Generated (target, listed, stored) triples the identity check calls namesakes that `sql` would not select."""
+    rnd = _random294.Random(294)
+    codes = ["^a", "^A", "^1", "^_", "^X12345", "^X123456", "^ ", "^x1"]
+
+    def noisy(core):
+        out = "".join((rnd.choice(codes) if rnd.random() < 0.3 else "") + ch for ch in core)
+        return (" " if rnd.random() < 0.2 else "") + out + (rnd.choice(codes) if rnd.random() < 0.3 else "")
+    misses, tried = [], 0
+    for _i in range(rounds):
+        core = "".join(rnd.choice("aAb Xb1_") for _j in range(rnd.randint(1, 5)))
+        target, listed, other = noisy(core), noisy(core), noisy(core if rnd.random() < 0.7 else core + "b")
+        if "^^" in target + listed + other or not _b3p294.plain(target).strip():
+            continue        # a run of two carets: the check itself reads it two ways (the statement says so)
+        row = [{"name": listed}]
+        if len(_game294.console_name_matches("cod4", row, _b3p294.plain(target).strip())) != 1:
+            continue
+        if not _game294.console_name_matches("cod4", row, _b3p294.plain(other).strip()):
+            continue
+        tried += 1
+        if not _sql_namesakes294(sql, target, [other]):
+            misses.append((target, listed, other))
+    return tried, misses[:4]
+
+
+_tried294, _missed294 = _namesake_misses294(_sql294)
+check("b3 namesakes: over generated colour-coded names, every stored name the identity check would call a namesake of "
+      "the listed player is selected", _tried294 > 500 and not _missed294, repr((_tried294, _missed294)))
