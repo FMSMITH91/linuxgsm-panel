@@ -190,7 +190,7 @@ def end_gates(check, whole_check, whole_ran, shard, lists, root, reached):
     `lists` is (_PARTS, the parts this run imported, every tests/unit/part*.py), and `reached` the order
     gate's import reader (_r16d_parts_reached), which the split's own reader must agree with.
     """
-    parts, run, on_disk = lists
+    parts, _run, on_disk = lists
     if shard is None:
         _unsplit_gate(check, parts, on_disk)
     else:
