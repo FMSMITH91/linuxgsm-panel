@@ -14,11 +14,14 @@
    Warn, say the console could not be read when it was not, instead of "couldn't find that player".
 6. A Source/GoldSrc Kick by name is refused when the console lists two players with that name (the
    engine kicks the first match, and Steam names are not unique).
+7. A settings save rewrites only the lines it changes: a Latin-1 byte and a U+2028 or form feed inside
+   another value come back byte for byte.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
 or data/.
 """
+import base64 as _b64_294
 import os
 import shutil as _sh294
 import subprocess as _sp294  # nosec B404 - bash over this part's own scratch files
@@ -28,13 +31,13 @@ from types import SimpleNamespace as _NS294
 from unit.part01 import check, eq, skip
 from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
-from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json, _p9_new_server,
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json, _p9_new_server,
                          _p9_patch, _p9_restore_all)
 from panel.core.config import encrypt_secret as _enc294
 from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
-from panel.ops.ssh_manager import _core as _core294, cron as _cron294, game as _game294
-from panel.routes import databases as _dbr294
-from panel.services import game_restore as _grs294
+from panel.ops.ssh_manager import _core as _core294, cron as _cron294, files as _files294, game as _game294
+from panel.routes import databases as _dbr294, server_files as _sf294
+from panel.services import game_restore as _grs294, lgsm_players as _lgp294
 
 _TMP294 = _tf294.mkdtemp(prefix="p294-")
 
@@ -287,3 +290,34 @@ eq("moderation: a Source Kick by a name two connected players share is refused, 
 eq("moderation (control): a Source Kick by a name one player has, or with a console that could not be read, is "
    "sent as before", [_moderate294(_two294[:1], "css", "kick"), _moderate294(None, "css", "kick")],
    [((True, "Done."), ['kick "Bob"'])] * 2)
+
+
+# ── 7. A settings save is byte-faithful for the lines it does not change ──────────────────────────
+_CFG294 = b'servername="Caf\xe9"\nmotd="a\xe2\x80\xa8b"\nff="x\x0cy"\nmaxplayers="8"\n'
+
+
+def _cfg_save294(settings):
+    """POST `settings` to the config route over _CFG294: (answer, the bytes written or None)."""
+    writes = []
+    framed = _files294._READ_BEGIN + _b64_294.b64encode(_CFG294).decode() + _files294._READ_END
+
+    def shell(server, user, sh, **k):
+        return (framed, "", 0) if _files294._READ_BEGIN in sh else ("", "unexpected", 1)
+    try:
+        _p9_arm(who="part294")
+        _p9_patch(_core294, "shell_as_game_user", shell)
+        _p9_patch(_files294, "_write_file_as_user",
+                  lambda server, user, path, content, selfname: (writes.append(content), (True, ""))[1])
+        _p9_patch(_sf294, "_write_refused", lambda gs, action: None)
+        _p9_patch(_lgp294, "forget", lambda *a: None)
+        got = _p9_json(_p9_client(P9_ADMIN).post("/api/server/%d/config" % P9_GS, json={"settings": settings}))
+    finally:
+        _p9_restore_all()
+    return got.get("success"), (writes[0] if writes else None)
+
+
+eq("config save: the other lines come back byte for byte (a Latin-1 byte, a U+2028 and a form feed inside values); "
+   "only the changed one is rewritten", _cfg_save294({"maxplayers": "9"}),
+   (True, _CFG294.replace(b'maxplayers="8"', b'maxplayers="9"')))
+eq("config save (control): a new key is appended after the last line, with no blank line before it",
+   _cfg_save294({"new_key": "n"}), (True, _CFG294 + b'new_key="n"\n'))
