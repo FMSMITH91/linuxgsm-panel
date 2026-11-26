@@ -395,7 +395,6 @@ check("pz install: step 5 sets the random password for Project Zomboid only, and
       _pz_calls140 == [("p140pz", "pzserver")] and not hasattr(_job_css140, "lgc_note")
       and _pz_said140[:1] == [("p140pz installed and started " + str(_ms140.LGC_PZ_ADMIN_SET), False)],
       repr(_pz_said140))
-import ast as _ast140  # noqa: E402
 
 
 def _calls_in140(src, fn):
