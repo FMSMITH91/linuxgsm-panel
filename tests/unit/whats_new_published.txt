@@ -937,3 +937,4 @@ b3191625 IW4MAdmin runs on an up-to-date .NET runtime.
 75404eac BlueMap runs its newest v5 image.
 09c10d04 An add-on's Open button works on panels served over HTTPS.
 e167b67c IW4MAdmin is rebuilt on Microsoft's latest .NET 10 image.
+f81f9273 B3's image installs Debian's security updates when it is built.

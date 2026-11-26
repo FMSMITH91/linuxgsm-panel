@@ -3,7 +3,8 @@
 # `podman build` with the two build arguments below, the same values as these defaults).
 #
 # What the build trusts, and how each piece is checked:
-#   - the base image, by its digest (python:3.15-slim, Debian 13);
+#   - the base image, by its digest (python:3.15-slim, Debian 13), then Debian's security updates,
+#     each checked by apt against Debian's signing keys;
 #   - B3's source, fetched from GitHub at ONE commit: the build fails unless the checkout's commit
 #     id is exactly B3_COMMIT (git checks every object against its id as it fetches);
 #   - B3's Python dependencies, each pinned with its hash (requirements.txt, pip --require-hashes),
@@ -35,6 +36,13 @@ LABEL org.opencontainers.image.title="B3 (Big Brother Bot) for linuxgsm-panel" \
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOME=/data
 # `b3_run.py --version` and B3's health.json name the commit they run from this (the source has no .git).
 ENV B3_COMMIT=${B3_COMMIT}
+# Debian's security fixes, installed when the image is built. The base is pinned by digest and Docker
+# rebuilds python:3.15-slim on its own schedule, so a fix Debian has already shipped can be missing from
+# it (libzstd1, CVE-2026-124851: fixed in 1.5.7+dfsg-1+deb13u1, still 1.5.7+dfsg-1 in the newest image
+# on 2026-11-25). apt checks every package against Debian's signing keys; the lists go in the same layer.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /opt/b3-requirements.txt
 # The installer leaves with the install, in the same layer: B3 never runs pip, setuptools or wheel
 # (its pkg_handler takes pkg_resources only when present, and the slim base has none), and pip
