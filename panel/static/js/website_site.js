@@ -18,6 +18,7 @@
   var ID = Number(F.siteId);
   var st = {d: null, tab: 'overview', poll: null, hooks: []};
   WS.siteId = ID;
+  WS.siteFlags = F;
   WS.can = {manage: F.manage === '1', files: F.files === '1', admin: F.admin === '1', sup: F.super === '1'};
   WS.onSite = function (fn) { st.hooks.push(fn); if (st.d) fn(st.d); };
   WS.siteAct = function (verb, body, msgId) {
@@ -94,7 +95,7 @@
     document.querySelectorAll('[data-ws-pane]').forEach(function (p) { p.hidden = p.getAttribute('data-ws-pane') !== name; });
     try { history.replaceState(null, '', '?tab=' + encodeURIComponent(name)); } catch (e) { /* the address bar is a nicety */ }
     if (name === 'files' && window.wsFilesOpen) window.wsFilesOpen();
-    if (name === 'backups') loadBackups();
+    if (name === 'backups' && WS.loadBackups) WS.loadBackups();
     return false;
   };
 
@@ -131,6 +132,33 @@
     });
   };
 
+  // ── load ──
+  function render(d) {
+    st.d = d;
+    var s = d.site || {};
+    renderHead(s);
+    renderFailed(d);
+    var installing = renderInstall(d);
+    renderOverview(s);
+    st.hooks.forEach(function (fn) { fn(d); });
+    clearTimeout(st.poll);
+    if (installing || s.state === 'creating' || s.state === 'removing') st.poll = setTimeout(WS.reload, 3000);
+  }
+  WS.reload = function () {
+    return WS.get(WS.R.site(ID)).then(function (d) {
+      if (!d || d.success === false || !d.site) { WS.done(d, 'ws-msg'); return; }
+      render(d);
+    });
+  };
+})();
+
+// Domains and databases.
+(function () {
+  'use strict';
+  var WS = window.WS;
+  if (!WS || !WS.siteId) return;
+  var ID = WS.siteId;
+  var F = WS.siteFlags;
   // ── domains ──
   var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', mismatch: 'DNS points elsewhere',
     private: 'DNS points to a private address', failed: 'DNS check failed'};
@@ -236,7 +264,16 @@
       });
     });
   };
+  WS.onSite(function (d) { renderDomains(d); renderDatabases(d); });
+})();
 
+// Backups and the administrators' Settings panel.
+(function () {
+  'use strict';
+  var WS = window.WS;
+  if (!WS || !WS.siteId) return;
+  var ID = WS.siteId;
+  var F = WS.siteFlags;
   // ── backups ──
   function backupRow(b) {
     var li = WS.node('li', 'ws-row');
@@ -330,29 +367,15 @@
         });
       }});
   };
+  WS.loadBackups = loadBackups;
+  WS.onSite(function (d) { renderSettings(d.site || {}); });
+})();
 
-  // ── load ──
-  function render(d) {
-    st.d = d;
-    var s = d.site || {};
-    renderHead(s);
-    renderFailed(d);
-    var installing = renderInstall(d);
-    renderOverview(s);
-    renderDomains(d);
-    renderDatabases(d);
-    renderSettings(s);
-    st.hooks.forEach(function (fn) { fn(d); });
-    clearTimeout(st.poll);
-    if (installing || s.state === 'creating' || s.state === 'removing') st.poll = setTimeout(WS.reload, 3000);
-  }
-  WS.reload = function () {
-    return WS.get(WS.R.site(ID)).then(function (d) {
-      if (!d || d.success === false || !d.site) { WS.done(d, 'ws-msg'); return; }
-      render(d);
-    });
-  };
+// Start: the panel the address names, then the site's state.
+(function () {
+  'use strict';
+  if (!window.WS || !window.WS.siteId) return;
   var q = /[?&]tab=([a-z]+)/.exec(location.search);
   window.wsTab(q ? q[1] : 'overview');
-  WS.reload();
+  window.WS.reload();
 })();

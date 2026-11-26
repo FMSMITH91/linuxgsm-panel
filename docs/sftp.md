@@ -8,6 +8,8 @@ folder are that server's files, exactly as the panel's file manager shows them. 
 folders can be reached. The game accounts themselves are not changed: they work as they do on plain
 LinuxGSM.
 
+Users who may change a website's files see that site's folder too ([below](#websites)).
+
 The service is **off** until a superadmin turns it on.
 
 ## Turning it on
@@ -117,6 +119,14 @@ in with a password at all. Backup codes are not accepted over SFTP.
   a host that stopped answering), an open file goes on for up to 5 seconds on its last answer, then
   fails with "try again"; a refusal is never put off. One host's checks use at most a quarter of the
   panel's answer slots, so a host that stopped answering does not hold up the others.
+
+## Websites
+
+A user who holds `edit_website_files` on a [website](websites.md) also sees one folder per such site,
+named after the site. Inside it is the site's own folder (what visitors are served) and its backups,
+read-only. Files are read and written **as the site's own account**, never as root, the panel's account
+or a game account, and nothing outside the site's folder can be reached. A customer therefore needs a
+panel account and the SFTP service on; there are no separate FTP or SSH accounts.
 
 ## Signing in safely
 

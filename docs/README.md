@@ -28,6 +28,7 @@ More screenshots: [features.md](features.md#screenshots).
 - One host page for the panel and every remote: OS updates, UFW firewall with lock-out checks, fail2ban and auto-block, SSH lockdown, clean reboots that bring running servers back.
 - Users and groups with per-action, per-server permissions; a web terminal; audit logging; a Databases manager for game servers' MariaDB/MySQL databases.
 - Alerts to Telegram, Discord, ntfy and your own phone or browser, and a Telegram/Discord command bot.
+- Websites: plain, PHP and Node.js sites and one-click WordPress, phpBB, Drupal, SMF and MyBB, each in its own locked-down container, with automatic HTTPS and logins for customers that see only their own sites.
 
 The full list: [features.md](features.md).
 
@@ -56,6 +57,7 @@ The panel never runs as root, serves HTTPS by default, hashes passwords with Arg
 - [configuration.md](configuration.md): `config.json` settings, production deployment, the nginx block, Headscale.
 - [https.md](https.md): the ways to serve the panel over HTTPS, and bans behind a proxy or tunnel.
 - [addons.md](addons.md): admin tools (IW4MAdmin, B3) in locked-down containers beside a game server.
+- [websites.md](websites.md): hosting websites: kinds and one-click apps, public, restricted or tunnel access, domains and certificates, PHP settings, caching, rules, Node.js apps, customers.
 - [sftp.md](sftp.md): the built-in SFTP service: each user signs in with their own account and sees the servers they may edit.
 - [permissions.md](permissions.md): every permission, the panel owner, the Databases manager.
 - [security-features.md](security-features.md): passwords, 2FA, sessions, encryption at rest, and recovering a locked-out panel.

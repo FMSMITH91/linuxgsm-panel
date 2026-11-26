@@ -206,6 +206,24 @@ ssh-keygen -Y verify -f panel/install/release-signers -I release -n linuxgsm-pan
   -s ../catalog.json.sig < ../catalog.json
 ```
 
+### Hosting websites
+
+The [Websites](../docs/websites.md) page puts sites on the public internet, so it changes what an
+attacker can reach. What it keeps true:
+
+- Only ports 80 and 443 are opened, labelled, and only while a site is online (Public or Restricted
+  mode); Tunnel mode opens none. The panel's own port is never served through the web proxy, and a
+  request for a name the proxy does not serve is dropped.
+- Each site runs in a rootless container under its own account, with every capability dropped, a
+  read-only system, limits on memory, CPU, processes and disk, and no outbound network beyond its
+  database (WordPress: its own update servers). Treat a site's code as hostile: `edit_website_files`
+  amounts to running code in that site's container ([permissions](../docs/permissions.md#permissions)).
+- A customer login reaches only its own sites; any other site answers "not found". Customers must use
+  two-factor sign-in by default.
+- Proxy, tunnel token and exposure settings are for superadmins. Secrets (the tunnel token, a site's
+  proxy token, app environment variables, database passwords) are stored encrypted and never shown in
+  logs. Images, the web proxy and app releases are pinned in the signed add-on catalog.
+
 ## Known trust-model limitation: the panel has root on its own host
 
 When the installer is run as **root** it creates a dedicated service user and grants it

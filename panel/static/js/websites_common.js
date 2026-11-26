@@ -88,6 +88,13 @@
     return ok;
   };
 
+  window.WS = WS;
+})();
+
+// The words for states and kinds, the install steps, and the php.ini line check.
+(function () {
+  'use strict';
+  var WS = window.WS;
   WS.STATE = {creating: 'Setting up', running: 'Running', stopped: 'Stopped', failed: 'Failed',
     removing: 'Removing'};
   WS.KIND = {static: 'Plain site', php: 'PHP site', wordpress: 'WordPress', phpbb: 'phpBB forum',
@@ -162,5 +169,4 @@
     });
     return out;
   };
-  window.WS = WS;
 })();

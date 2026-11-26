@@ -278,16 +278,18 @@
 
   // Each panel is filled once, from the first answer: a status poll while the site starts must not
   // overwrite what is being typed.
+  function renderRulesOnce(d) {
+    st.rules = (d.rules || []).map(function (r) { return Object.assign({}, r); });
+    WS.renderRules();
+    var raw = WS.el('wr-raw');
+    if (raw && d.raw_rules != null) raw.value = d.raw_rules;
+  }
+  // [flag, the answer's key, what fills the panel]: each runs once its part of the answer is there.
+  var FILL = [['phpDone', 'php', renderPhp], ['perfDone', 'perf', setPerf], ['appDone', 'app', renderApp]];
   WS.onSite(function (d) {
-    if (!st.phpDone && d.php) { renderPhp(d.php); st.phpDone = true; }
-    if (!st.perfDone && d.perf) { setPerf(d.perf); st.perfDone = true; }
-    if (WS.el('wr-list') && !st.touched) {
-      st.rules = (d.rules || []).map(function (r) { return Object.assign({}, r); });
-      WS.renderRules();
-      var raw = WS.el('wr-raw');
-      if (raw && d.raw_rules != null) raw.value = d.raw_rules;
-      st.touched = true;
-    }
-    if (!st.appDone) { renderApp(d.app); st.appDone = !!d.app; }
+    FILL.forEach(function (f) {
+      if (!st[f[0]] && d[f[1]]) { f[2](d[f[1]]); st[f[0]] = true; }
+    });
+    if (WS.el('wr-list') && !st.rulesDone) { renderRulesOnce(d); st.rulesDone = true; }
   });
 })();
