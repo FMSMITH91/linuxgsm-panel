@@ -12,8 +12,10 @@ WHAT IS REFUSED (OWASP has no cheat sheet for signed update metadata: the checks
 Framework's client workflow, 5.4: signature, rollback, freeze, then content)
     A signature that does not verify (or none), checked over the exact bytes BEFORE they are parsed; a
     schema other than 1; a `seq` not above the last accepted one (rollback); an `expires` already past
-    (freeze); an add-on this panel does not know, or one missing; an image or base not pinned by a full
-    sha256 digest, or a source pin of the wrong shape. A refused catalog changes nothing.
+    (freeze); one of this panel's add-ons missing; an image or base not pinned by a full sha256 digest, or
+    a source pin of the wrong shape. A refused catalog changes nothing. An add-on this panel does not know,
+    and a top-level field it does not read, are skipped, not refused: a catalog that adds an add-on must
+    not stop the updates of panels released before it.
 
 WHICH WINS (effective())
     The stored catalog counts only when it was issued after this panel's own commit: a panel updated
@@ -70,7 +72,7 @@ BAD_FORMAT = "it is not a catalog this panel can read"
 BAD_SCHEMA = "it is in a format version this panel does not read"
 ROLLBACK = "it is older than the catalog this panel already has"
 EXPIRED = "it has expired"
-UNKNOWN_ADDON = "it names an add-on this panel does not know, or leaves one out"
+MISSING_ADDON = "it leaves out an add-on this panel installs"
 BAD_PIN = "an add-on in it is not pinned by a full sha256 digest and release"
 
 # Answers to a fetch (the card's Refresh and the daily task).
@@ -90,10 +92,13 @@ _lock = threading.Lock()
 _state = {"loaded": False, "stored": None, "fetched_at": 0.0, "answer": None, "floor_time": None}
 
 
-def _check_addons(addons):
-    """"" when `addons` is a complete, well-formed add-on map, else the reason it is refused."""
-    if not isinstance(addons, dict) or set(addons) != set(FIELDS):
-        return UNKNOWN_ADDON
+def _check_addons(addons, strict=False):
+    """"" when `addons` holds every known add-on, each well-formed, else the reason it is refused.
+
+    Other ids are skipped (only `strict`, the floor, must hold exactly the known ones).
+    """
+    if not isinstance(addons, dict) or not set(FIELDS) <= set(addons) or (strict and set(addons) != set(FIELDS)):
+        return MISSING_ADDON
     for addon_id, shape in FIELDS.items():
         entry = addons[addon_id]
         if not isinstance(entry, dict) or set(entry) != set(shape):
@@ -109,9 +114,9 @@ def read_floor(path=FLOOR_FILE):
         doc = json.load(fh)
     if not isinstance(doc, dict) or set(doc) != {"schema", "addons"} or doc["schema"] != SCHEMA:
         raise ValueError("%s: not a schema %d add-on catalog" % (path, SCHEMA))
-    why = _check_addons(doc["addons"])
+    why = _check_addons(doc["addons"], strict=True)
     if why:
-        raise ValueError("%s: %s" % (path, why))
+        raise ValueError("%s: %s, or names one it does not know" % (path, why))
     return {k: dict(v) for k, v in doc["addons"].items()}
 
 
@@ -161,7 +166,7 @@ def _parsed(data):
         doc = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return None, BAD_FORMAT
-    if not isinstance(doc, dict) or set(doc) != _TOP:
+    if not isinstance(doc, dict) or not _TOP <= set(doc):
         return None, BAD_FORMAT
     if type(doc["schema"]) is not int or doc["schema"] != SCHEMA:
         return None, BAD_SCHEMA
@@ -192,7 +197,21 @@ def check_signed(data, sig, key, last_seq, now, allow_expired=False):
     if expires <= now and not allow_expired:
         return None, EXPIRED
     why = _check_addons(doc["addons"])
-    return (None, why) if why else (doc, "")
+    return (None, why) if why else (_known(doc), "")
+
+
+_IGNORED_SEEN = set()
+
+
+def _known(doc):
+    """`doc` with only the fields and add-ons this panel reads; the skipped add-ons logged once (by count)."""
+    skipped = sorted(set(doc["addons"]) - set(FIELDS))
+    if skipped and tuple(skipped) not in _IGNORED_SEEN:
+        _IGNORED_SEEN.add(tuple(skipped))
+        _log.info("add-on catalog #%d: %d add-on(s) this panel does not know skipped", doc["seq"], len(skipped))
+    out = {k: doc[k] for k in _TOP}
+    out["addons"] = {k: doc["addons"][k] for k in FIELDS}
+    return out
 
 
 # ── the stored catalog ─────────────────────────────────────────────────────────────────────────

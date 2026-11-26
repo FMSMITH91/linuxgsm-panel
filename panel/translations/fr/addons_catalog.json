@@ -16,7 +16,7 @@
   "it is in a format version this panel does not read": "il est dans une version de format que ce panneau ne lit pas",
   "it is older than the catalog this panel already has": "il est plus ancien que le catalogue que ce panneau a déjà",
   "it has expired": "il a expiré",
-  "it names an add-on this panel does not know, or leaves one out": "il nomme un module que ce panneau ne connaît pas, ou en omet un",
+  "it leaves out an add-on this panel installs": "il omet un module que ce panneau installe",
   "an add-on in it is not pinned by a full sha256 digest and release": "un de ses modules n'est pas épinglé par une empreinte sha256 complète et une version",
   "Checking for new add-on versions…": "Recherche de nouvelles versions des modules…"
 }

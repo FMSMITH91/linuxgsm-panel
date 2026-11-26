@@ -8,7 +8,8 @@
    then offers Update to a record of the floor's image and says where the version came from.
 3. Refusals, each through the same route from the same starting catalog: no signature, another key, the release
    namespace, schema 2, a seq not above the last (rollback), an expired catalog, a digest short of 64 hex
-   characters, an unknown add-on, a missing one. Each answers why and changes nothing in use.
+   characters, a missing add-on. Each answers why and changes nothing in use. An add-on this panel does not know
+   and a top-level field it does not read are skipped: the known entries of that catalog are still applied.
 4. Which wins: a catalog issued before this panel's own commit loses to the floor, and so does an entry with an
    older release than the floor's; an expired catalog keeps its pins but offers no update and the card says so.
 5. The stored copy: read again at start and checked again (a tampered copy is not used); the daily task fetches
@@ -228,9 +229,9 @@ def _refusals292(sid, priv, other, key, base, base_bytes):
         ("a lower seq (rollback)", _doc292(4), "", _cat292.ROLLBACK),
         ("an expired catalog", expired, "", _cat292.EXPIRED),
         ("a digest short of 64 hex", _doc292(6, addons=short), "", _cat292.BAD_PIN),
-        ("an unknown add-on", _doc292(6, addons=_addons292(other={"image": _NEW_BLUEMAP292})), "",
-         _cat292.UNKNOWN_ADDON),
-        ("a missing add-on", _doc292(6, addons=_addons292(iw4madmin=None)), "", _cat292.UNKNOWN_ADDON),
+        ("a missing add-on", _doc292(6, addons=_addons292(iw4madmin=None)), "", _cat292.MISSING_ADDON),
+        ("a malformed known entry beside an unknown add-on", _doc292(6, addons=_addons292(
+            other={"image": _NEW_BLUEMAP292}, b3=dict(_cat292.FLOOR["b3"], commit="5" * 39))), "", _cat292.BAD_PIN),
     ]
     for name, data, how, why in cases:
         _reset292(base)
@@ -246,11 +247,30 @@ def _refusals292(sid, priv, other, key, base, base_bytes):
            (code, body.get("success"), body.get("error"), _cat292._state["stored"]["seq"],
             _ad292.CATALOG["bluemap"]["image"]),
            (200, False, "The add-on catalog was refused: %s." % why, 5, _NEW_BLUEMAP292))
+    _unknown292(sid, priv, key, base)
     _reset292(base)
     _serve292(base_bytes, _sign292(priv, base_bytes), key)
     code, body = _refresh292(sid)
     eq("catalog refresh (control): catalog #5 offered again is no newer, said as such, not a failure",
        (code, body.get("success"), body.get("message")), (200, True, "No newer add-on catalog: #5 of 2026-11-25 is the latest."))
+
+
+def _unknown292(sid, priv, key, base):
+    """A catalog naming an add-on this panel does not know, with a top-level field it does not read: still applied."""
+    _reset292(base)
+    newer = "ghcr.io/bluemap-minecraft/bluemap@sha256:" + "6" * 64
+    doc = _json292.loads(_doc292(6, addons=_addons292(bluemap={"image": newer},
+                                                      newaddon={"image": "ghcr.io/x/newaddon@sha256:" + "7" * 64})))
+    doc["mirrors"] = ["unread by this panel"]
+    data = _json292.dumps(doc).encode("utf-8")
+    _serve292(data, _sign292(priv, data), key)
+    code, body = _refresh292(sid)
+    eq("catalog unknown (route): an add-on this panel does not know and a top-level field it does not read are skipped; "
+       "the known entries are applied",
+       (code, body.get("success"), body.get("message"), _ad292.CATALOG["bluemap"]["image"], sorted(_ad292.PIN_SOURCES),
+        sorted((_cat292._state["stored"] or {}).get("addons") or {}), _ad292.PIN_SOURCES["bluemap"].get("seq")),
+       (200, True, "Signed add-on catalog #6 of 2026-11-25 accepted.", newer, ["b3", "bluemap", "iw4madmin"],
+        ["b3", "bluemap", "iw4madmin"], 6))
 
 
 # ── 4. which wins ───────────────────────────────────────────────────────────────────────────────

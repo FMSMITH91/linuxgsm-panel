@@ -263,8 +263,9 @@ and the panel's own pins are used.
   panel already trusts for its own updates, in its own namespace (`linuxgsm-panel-addons`, so a catalog signature can
   never pass as a release signature or the reverse). It is refused when the signature is missing or wrong, its format
   version is not 1, its sequence number is not above the last one accepted (no going back to an older catalog), it
-  has expired, it names an add-on the panel does not know or leaves one out, or an image is not pinned by a full
-  sha256 digest. A refused catalog changes nothing, and Refresh says why.
+  has expired, it leaves out one of the panel's add-ons, or an image is not pinned by a full sha256 digest. A refused
+  catalog changes nothing, and Refresh says why. An add-on the panel does not know yet (one added after its release)
+  is skipped, so a catalog that adds an add-on never stops the updates of older panels.
 - **The newer one wins.** A catalog signed before this panel's own release is older than the pins the panel ships,
   so those are used until a newer catalog is signed; an entry with an older B3 or IW4MAdmin release than the panel's
   own is never used either.
@@ -272,6 +273,10 @@ and the panel's own pins are used.
   update until a newer one is fetched, and the card says it has expired.
 - **Nothing installs by itself.** A newer pin only lights the card's **Update** button; the row says where the version
   came from (*built into this panel*, or *signed add-on catalog #N of date*).
+
+The catalog moves digests, release tags and commits. A Renovate bump that changes B3's or IW4MAdmin's build files
+(their Containerfile, entrypoint or B3's locked requirements) still ships with a panel update, because the build files
+live in the panel; digest, tag and commit bumps do not.
 
 The last accepted catalog is kept in the panel's data folder (`addon-catalog.json`, mode 0600) with its signature,
 and checked again when the panel starts.
