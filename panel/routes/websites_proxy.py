@@ -212,6 +212,14 @@ def _apply(remote, row):
     return ok, said
 
 
+def _note_version(row, status):
+    """Record on the proxy row the version the host says is installed ("" when none), as the Websites page reads it."""
+    version = str(status.get("version") or "").lstrip("v")[:40] if status.get("installed") else ""
+    if row.installed_version != version:
+        row.installed_version = version
+        db.session.commit()
+
+
 def register(app):
     """The proxy routes."""
     @app.route("/websites/proxy/status")
@@ -226,6 +234,7 @@ def register(app):
         if ok:
             from panel.routes.websites_domains import apply_certs
             apply_certs(remote, status)
+            _note_version(row, status)
         online = Website.query.filter_by(remote_id=remote.id, enabled=True).count()
         return jsonify(dict(proxy_json(row), online_sites=online, status_ok=bool(ok), status=status,
                             message="" if ok else i18n.tr(said)))
@@ -238,6 +247,8 @@ def register(app):
         remote = _remote()
         ok, said = _w.host_call(_sw.proxy_install, remote)
         if ok:
+            from panel.services import websites_catalog
+            _note_version(_w.proxy_row(remote.id), {"installed": True, "version": websites_catalog.pins("caddy")["version"]})
             ok, said = _w.host_call(_sw.egress_guard, remote)
         log_action(current_user, "remote_website_proxy_install", target=remote.name, remote=remote, success=bool(ok),
                    detail="web proxy and egress guard installed" if ok else "failed: %s" % i18n.tr(said))
