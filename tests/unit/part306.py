@@ -4,6 +4,8 @@ F23. The PHP sites' image builds with the Podman the panel installs: in Docker's
      OCI format ignores SHELL), and from RUN lines that are POSIX sh as well as bash.
 F24. Drupal's append to the settings.php its installer left read-only works, and the modes are put back; a write
      that fails says why (M4), with the step's own lines in the panel's log.
+F25. An app install whose undo could not drop its database says NOT undone and what is left, and keeps the site
+     and its database rows (a delete retries them) instead of saying "undone" over a database left behind.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -23,7 +25,7 @@ from types import SimpleNamespace as _NS306
 from flask import g as _g306
 
 from unit.part01 import _root, eq, skip
-from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_json, _p9_patch, _p9_restore_all
 from panel.core import config as _cfg306
 from panel.db.models import (GameDatabase as _GDB306, RemoteServer as _Remote306, User as _User306,
                              Website as _Site306, WebsiteDomain as _Dom306, WebsiteProxy as _Proxy306, db as _db306)
@@ -31,11 +33,14 @@ from panel.ops.ssh_manager import _core as _core306
 from panel.ops.ssh_manager import websites as _sw306
 from panel.routes import _shared as _shared306
 from panel.routes import websites as _w306
+from panel.routes import websites_apps as _wapps306
 from panel.services import websites as _ws306
 
 _TREE306 = _tf306.mkdtemp(prefix="lgsm-unit-p306-")
 # The real functions a section stands in for, put back by the next section that needs them.
-_REAL306 = {n: getattr(_sw306, n) for n in ("install", "_as_site", "remove", "start", "php_apply")}
+_REAL_NAMES306 = ("install", "_as_site", "remove", "start", "php_apply", "app_install_step", "app_undo_step")
+_REAL306 = {n: getattr(_sw306, n) for n in _REAL_NAMES306}
+_REAL306["_worker"] = _wapps306._worker
 _BIN306 = os.path.join(_TREE306, "bin")
 _CALLS306 = os.path.join(_TREE306, "calls.jsonl")
 _TOKEN306 = "t" * 40
@@ -107,7 +112,7 @@ def _reset306(**env):
 
 def _bash_seams306(helper=None):
     """The account's shell in real bash over its scratch home; Podman ready, the helper answering `helper`."""
-    for name in ("install", "_as_site", "remove", "start", "php_apply"):
+    for name in _REAL_NAMES306:
         _p9_patch(_sw306, name, _REAL306[name])
     _p9_patch(_core306, "shell_as_game_user", _bash306)
     _p9_patch(_core306, "is_local_server", lambda server: True)
@@ -266,6 +271,68 @@ def _f24_append(st):
         any("SITE_WRITE_FAILED | error=Is a directory" in ln for ln in logged)), (False, True, True, True))
 
 
+# ── F25. The install's undo and a database it could not drop ────────────────────────────────────
+class _Inline306:
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._t, self._a, self._k = target, args, kwargs or {}
+
+    def start(self):
+        self._t(*self._a, **self._k)
+
+
+def _f25_app_job(st, name, drop_ok):
+    """An app install (POST /websites/install-app, then its job) that fails at its last step; the site's row."""
+    from panel.routes import databases_sites as _ds306
+    _p9_patch(_wapps306, "_worker", lambda app, sid, uid, secrets: None)
+    _p9_patch(_w306, "threading", _NS306(Thread=_Inline306))
+    form = {"app": "wordpress", "name": name, "remote_id": st.host.id, "admin_user": "siteowner",
+            "admin_email": "owner@example.org", "domain": "%s.example.org" % name}
+    r = _Client306(st.su.id).post("/websites/install-app", json=form)
+    sid = _p9_json(r).get("id") or 0
+    _ROWS306["sites"].append(sid)
+
+    def create_for(site, slug):
+        row = _GDB306(remote_id=site.remote_id, website_id=site.id, name="ws%d_app" % site.id, secret="")
+        _db306.session.add(row)
+        _db306.session.commit()
+        _ROWS306["dbs"].append(row.id)
+        return True, "made", row, "Db-" + "z" * 30
+    _p9_patch(_ds306, "create_for", create_for)
+
+    def drop(site, row):
+        if not drop_ok:
+            return False, "The database server did not answer."
+        _db306.session.delete(row)
+        _db306.session.commit()
+        return True, "dropped"
+    _p9_patch(_ds306, "drop", drop)
+    _p9_patch(_sw306, "install", lambda remote, site, db=None: (True, _sw306.OK_STARTED))
+    _p9_patch(_sw306, "remove", lambda remote, site: (True, _sw306.OK_REMOVED))
+    _p9_patch(_sw306, "app_undo_step", lambda remote, site, step: (True, _sw306.OK_STEP))
+    _p9_patch(_sw306, "app_install_step", lambda remote, site, step: (
+        (False, _ws306.FAIL_MARKS["SITE_VERIFY_FAILED"]) if step["type"] == "verify-install" else (True, _sw306.OK_STEP)))
+    _REAL306["_worker"](_p9, sid, st.su.id, dict(_SECRET_STEP306))
+    _db306.session.expire_all()
+    return _db306.session.get(_Site306, sid), sid
+
+
+def _f25_undo(st):
+    site, sid = _f25_app_job(st, "p306-wpleft", drop_ok=False)
+    rows = _GDB306.query.filter_by(website_id=sid).all()
+    audit = _p9_audit("website_app_install")
+    eq("F25 (the app job): when its undo cannot drop the new database, the site stays (failed) saying NOT undone and "
+       "which database is still on the server, its database row still belongs to it, and the audit row says NOT "
+       "undone (it said \"undone\" and left a database that belonged to no site)",
+       (getattr(site, "state", None), "NOT undone" in (getattr(site, "state_reason", "") or ""),
+        "ws%d_app" % sid in (getattr(site, "state_reason", "") or ""), [r.name for r in rows],
+        "NOT undone" in audit.detail and "still on the database server" in audit.detail),
+       ("failed", True, True, ["ws%d_app" % sid], True))
+    site2, sid2 = _f25_app_job(st, "p306-wpgone", drop_ok=True)
+    eq("F25 (the app job): when every step is undone the site's row goes and the audit row says undone (control)",
+       (site2 is None, _GDB306.query.filter_by(website_id=sid2).count(), _p9_audit("website_app_install").detail.endswith(
+           "; undone")), (True, 0, True))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -314,7 +381,7 @@ def _ran306(step, st):
 
 
 _ran306.last = ""
-_SECTIONS306 = (_f23_php_build, _f24_append)
+_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():
@@ -333,4 +400,5 @@ with _p9.app_context():
     finally:
         _p9_restore_all()
         _w306._STATUS.clear()
+        _wapps306._JOBS.clear()
         _cleanup306()

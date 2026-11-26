@@ -35,6 +35,8 @@ ADMIN_PW_MIN = 15
 _ADMIN_USER_RE = re.compile(r"[A-Za-z0-9_.-]{3,32}")
 _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 DB_STEP = "create-database"
+S_DB_LEFT = ("The database {name} could not be removed ({why}), so it is still on the database server; delete the "
+             "website to try again.")
 # site id -> the job's state while it runs and after: {"state", "step", "error"}. Never a password.
 _JOBS = {}
 _LOCK = threading.Lock()
@@ -104,11 +106,15 @@ def _run_step(site, step, secret_vals):
 
 
 def _undo_step(site, step):
+    """Undo one finished step: (ok, the sentence saying what is left when it could not be undone)."""
     if step.get("type") == DB_STEP:
         from panel.routes import databases_sites
+        left = []
         for row in databases_sites.site_rows(site):
-            databases_sites.drop(site, row)
-        return True, ""
+            ok, said = databases_sites.drop(site, row)
+            if not ok:
+                left.append(i18n.Sentence(S_DB_LEFT, name=row.name, why=i18n.tr(said)))
+        return not left, i18n.Sentences(*left) if left else ""
     return _w.host_call(_sw.app_undo_step, site.remote, site, step)
 
 
@@ -180,11 +186,13 @@ def _finish(site, user, ok, step, said, steps):
         return
     failed = undo(site, steps, json.loads(site.install_steps_done or "[]"))
     reason = i18n.tr(said)[:200]
-    _job(site.id, state="failed", step=step, error=reason)
-    _w.audit_as(user, site, "website_app_install", "%s failed at %s: %s; undone%s" % (
-        site.app_recipe, step, reason, " except %s" % "; ".join(failed) if failed else ""), False)
+    left = "NOT undone: %s" % "; ".join(failed) if failed else ""
+    _job(site.id, state="failed", step=step, error=("%s %s" % (reason, left)).strip())
+    _w.audit_as(user, site, "website_app_install", "%s failed at %s: %s; %s" % (
+        site.app_recipe, step, reason, left or "undone"), False)
     if failed:
-        site.state, site.state_reason = "failed", ("Undo incomplete: " + "; ".join(failed))[:200]
+        # The site's row stays (failed, saying what is left), and so do its database rows: a delete retries them.
+        site.state, site.state_reason = "failed", left[:200]
         db.session.commit()
     else:
         db.session.delete(site)
@@ -333,7 +341,7 @@ def register(app):
             return _w.say(409, "Only an app install that stopped part-way can be undone.")
         failed = undo(site, _safe_steps(site), json.loads(site.install_steps_done or "[]"))
         if failed:
-            return _w.acted(site, "website_app_install", False, "Undo incomplete: " + "; ".join(failed))
+            return _w.acted(site, "website_app_install", False, "NOT undone: " + "; ".join(failed))
         _w.audit(site, "website_app_install", "an install cut short was undone")
         db.session.delete(site)
         db.session.commit()

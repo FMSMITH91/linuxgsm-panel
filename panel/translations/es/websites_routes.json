@@ -98,5 +98,6 @@
   "The domain points at a private or internal address, so it cannot be used for a public website.": "El dominio apunta a una dirección privada o interna, así que no se puede usar para un sitio web público.",
   "The domain has no A or AAAA record yet. Create the record shown, then check again.": "El dominio aún no tiene registro A ni AAAA. Crea el registro indicado y vuelve a comprobarlo.",
   "website": "sitio web",
-  "This app needs a PHP version this panel no longer offers.": "Esta aplicación necesita una versión de PHP que este panel ya no ofrece."
+  "This app needs a PHP version this panel no longer offers.": "Esta aplicación necesita una versión de PHP que este panel ya no ofrece.",
+  "The database {name} could not be removed ({why}), so it is still on the database server; delete the website to try again.": "No se pudo eliminar la base de datos {name} ({why}), así que sigue en el servidor de bases de datos; elimina el sitio web para intentarlo de nuevo."
 }
