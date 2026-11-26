@@ -3228,14 +3228,24 @@ check("helper self-update: ...and the log is a real file holding what was writte
       and open(_sul_log, encoding="utf-8").read() == "=== panel self-update ===\n")
 os.unlink(_sul_log)
 os.link(_sul_victim, _sul_log)
-with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
-    _fh.write("new run\n")
+# The fchown is observed through a stand-in (review 1124): the same uid makes the directory and the log
+# here (the test user, or root on CI), so the owner test alone held with the fchown deleted, and on a
+# real root self-update the log would stay root's, which the panel can neither read nor rotate.
+_sul_chown, _sul_o_os = [], _helper.os
+_sul_o_fchown = _sul_o_os.fchown
+try:
+    _helper.os = _R20dOver(_sul_o_os, fchown=lambda fd, u, g: (_sul_chown.append((u, g)), _sul_o_fchown(fd, u, g)))
+    with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
+        _fh.write("new run\n")
+finally:
+    _helper.os = _sul_o_os
 check("helper self-update: a HARD link at the log name is not truncated either",
       open(_sul_victim, encoding="utf-8").read() == "ORIGINAL",
       repr(open(_sul_victim, encoding="utf-8").read()))
 check("helper self-update: ...the log is a fresh file owned like its directory",
       os.stat(_sul_log).st_nlink == 1 and os.stat(_sul_log).st_uid == os.stat(_sul_data).st_uid
-      and open(_sul_log, encoding="utf-8").read() == "new run\n")
+      and _sul_chown == [(os.stat(_sul_data).st_uid, os.stat(_sul_data).st_gid)]
+      and open(_sul_log, encoding="utf-8").read() == "new run\n", repr(_sul_chown))
 _sul_fn = next(n for n in _sul_ast.walk(_sul_ast.parse(open(_helper_path, encoding="utf-8").read()))
                if isinstance(n, _sul_ast.FunctionDef) and n.name == "_self_update_run")
 _sul_calls = [n.func.id for n in _sul_ast.walk(_sul_fn)
