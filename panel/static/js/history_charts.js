@@ -112,7 +112,7 @@ function _histAxis(id, rng){ return rng === '24h' ? _histXScale(id) : _histX(); 
 // hours to a day and a minute's poll would read the same rows again for nothing.
 var _histPolled = {};
 function _histDue(key, rng, now){
-  if (rng !== '24h' && rng !== '7d' && now - (_histPolled[key] || 0) < 600000) return false;
+  if (rng !== '24h' && rng !== '7d' && _histPolled[key] !== undefined && now - _histPolled[key] < 600000) return false;
   _histPolled[key] = now;
   return true;
 }
