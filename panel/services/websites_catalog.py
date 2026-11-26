@@ -186,20 +186,36 @@ def _egress_problems(hosts, key):
     return []
 
 
+def _failed(checks):
+    """The messages of `checks` ([(test, message)], each test a no-argument callable) whose test is false.
+
+    A test that raises (a value of the wrong type) counts as failed: the shape is wrong.
+    """
+    out = []
+    for test, message in checks:
+        try:
+            ok = test()
+        except (TypeError, ValueError, KeyError, AttributeError):
+            ok = False
+        if not ok:
+            out.append(message)
+    return out
+
+
+def _preset_problem(name, nets):
+    if not isinstance(nets, list) or not nets or len(nets) > 200:
+        return "presets.%s: a list of 1-200 networks" % name
+    if any(_canonical_net(n) != n for n in nets):
+        return "presets.%s: every network canonical (host bits clear), public" % name
+    if {ipaddress.ip_network(n).version for n in nets} != {4, 6}:
+        return "presets.%s: both IPv4 and IPv6 networks" % name
+    return ""
+
+
 def _presets_problems(entry):
     if not _obj(entry, PRESETS):
         return ["presets: exactly %s" % ", ".join(PRESETS)]
-    out = []
-    for name, nets in sorted(entry.items()):
-        if not isinstance(nets, list) or not nets or len(nets) > 200:
-            out.append("presets.%s: a list of 1-200 networks" % name)
-            continue
-        canon = [_canonical_net(n) for n in nets]
-        if any(c is None or c != n for c, n in zip(canon, nets)):
-            out.append("presets.%s: every network canonical (host bits clear), public" % name)
-        elif {ipaddress.ip_network(n).version for n in nets} != {4, 6}:
-            out.append("presets.%s: both IPv4 and IPv6 networks" % name)
-    return out
+    return [p for p in (_preset_problem(n, nets) for n, nets in sorted(entry.items())) if p]
 
 
 def _canonical_net(text):
@@ -227,54 +243,56 @@ def _step_download(step, recipe):
     return [] if "url" in recipe else ["a download step needs the recipe's url and sha256"]
 
 
+def _template_ok(tpl):
+    return isinstance(tpl, str) and 0 < len(tpl) <= TEMPLATE_MAX and "\x00" not in tpl and not _unknown_placeholders(tpl)
+
+
 def _step_render(step, _recipe):
     if not _obj(step, ("type", "dest", "escape", "template"), ("append",)):
         return ["a config step has dest, escape, template (and append)"]
-    out = []
-    if not _full(_REL, step["dest"]) or ".." in step["dest"]:
-        out.append("dest %r is not a path inside the site" % step["dest"])
-    if step["escape"] not in ("php", "yaml"):
-        out.append("escape is php or yaml")
-    tpl = step["template"]
-    if not isinstance(tpl, str) or not tpl or len(tpl) > TEMPLATE_MAX or "\x00" in tpl:
-        out.append("template is text of at most %d characters" % TEMPLATE_MAX)
-    elif _unknown_placeholders(tpl):
-        out.append("template names unknown values %s" % _unknown_placeholders(tpl))
-    if "append" in step and not isinstance(step["append"], bool):
-        out.append("append is true or false")
-    return out
+    return _failed([
+        (lambda: _full(_REL, step["dest"]) and ".." not in step["dest"], "dest is not a path inside the site"),
+        (lambda: step["escape"] in ("php", "yaml"), "escape is php or yaml"),
+        (lambda: _template_ok(step["template"]),
+         "template is text of at most %d characters naming only known values" % TEMPLATE_MAX),
+        (lambda: isinstance(step.get("append", False), bool), "append is true or false"),
+    ])
+
+
+def _argv_ok(argv):
+    return isinstance(argv, list) and 0 < len(argv) <= ARGV_MAX and all(_full(_ARGV_WORD, w) for w in argv)
+
+
+def _argv_names_ok(argv):
+    named = set().union(*(_placeholders(w) for w in argv))
+    return not named & set(SECRETS) and not named - set(PLACEHOLDERS)
+
+
+def _env_ok(env):
+    return isinstance(env, dict) and len(env) <= 16 and all(_full(_ENV_NAME, k) and v in PLACEHOLDERS
+                                                            for k, v in env.items())
 
 
 def _step_run(step, _recipe):
     if not _obj(step, ("type", "image", "argv"), ("stdin", "env")):
         return ["a run step has image and argv (and stdin, env)"]
-    out = []
-    if step["image"] not in ("site", "wpcli"):
-        out.append("image is site or wpcli")
-    argv = step["argv"]
-    if not isinstance(argv, list) or not 0 < len(argv) <= ARGV_MAX or not all(_full(_ARGV_WORD, w) for w in argv):
-        return out + ["argv is 1-%d words without control characters" % ARGV_MAX]
-    named = set().union(*(_placeholders(w) for w in argv))
-    if named & set(SECRETS) or named - set(PLACEHOLDERS) - {"trusted_hosts"}:
-        out.append("argv may name only values that are not secrets")
-    if "stdin" in step and step["stdin"] not in PLACEHOLDERS:
-        out.append("stdin names one value")
-    env = step.get("env", {})
-    if not isinstance(env, dict) or len(env) > 16 or any(
-            not _full(_ENV_NAME, k) or v not in PLACEHOLDERS for k, v in env.items()):
-        out.append("env maps NAMES to values")
-    return out
+    return _failed([
+        (lambda: step["image"] in ("site", "wpcli"), "image is site or wpcli"),
+        (lambda: _argv_ok(step["argv"]), "argv is 1-%d words without control characters" % ARGV_MAX),
+        (lambda: _argv_names_ok(step["argv"]), "argv may name only values that are not secrets"),
+        (lambda: step.get("stdin", "admin_password") in PLACEHOLDERS, "stdin names one value"),
+        (lambda: _env_ok(step.get("env", {})), "env maps NAMES to values"),
+    ])
+
+
+def _paths_ok(paths):
+    return isinstance(paths, list) and len(paths) <= 16 and all(_full(_REL, p) and ".." not in p for p in paths)
 
 
 def _step_permissions(step, _recipe):
     if not _obj(step, ("type",), ("readonly", "remove")):
         return ["a permissions step has readonly and remove lists"]
-    out = []
-    for key in ("readonly", "remove"):
-        paths = step.get(key, [])
-        if not isinstance(paths, list) or len(paths) > 16 or not all(_full(_REL, p) and ".." not in p for p in paths):
-            out.append("%s is a list of paths inside the site" % key)
-    return out
+    return ["%s is a list of paths inside the site" % k for k in ("readonly", "remove") if not _paths_ok(step.get(k, []))]
 
 
 def _step_installer(step, _recipe):
@@ -283,34 +301,41 @@ def _step_installer(step, _recipe):
     pages = step["pages"]
     if not isinstance(pages, list) or not 0 < len(pages) <= PAGES_MAX:
         return ["pages is a list of 1-%d pages" % PAGES_MAX]
-    out = []
-    for i, page in enumerate(pages):
-        out += ["page %d: %s" % (i + 1, p) for p in _page_problems(page)]
-    return out
+    return ["page %d: %s" % (i + 1, p) for i, page in enumerate(pages) for p in _page_problems(page)]
+
+
+def _field_ok(name, value):
+    return (_full(_FIELD, name) and isinstance(value, str) and len(value) <= 200 and "\x00" not in value
+            and not _unknown_placeholders(value))
 
 
 def _page_problems(page):
     if not _obj(page, ("path", "method", "form", "expect")):
         return ["has path, method, form and expect"]
-    out = []
-    if not _full(r"/[A-Za-z0-9_./-]{0,120}(?:\?[A-Za-z0-9_=&.-]{1,120})?", page["path"]) or ".." in page["path"]:
-        out.append("path is a local path on the site")
-    if page["method"] not in ("GET", "POST"):
-        out.append("method is GET or POST")
-    form = page["form"]
-    if not isinstance(form, dict) or len(form) > 32 or any(
-            not _full(_FIELD, k) or not isinstance(v, str) or len(v) > 200 or "\x00" in v or _unknown_placeholders(v)
-            for k, v in form.items()):
-        out.append("form maps field names to short values")
-    if not (isinstance(page["expect"], str) and 0 < len(page["expect"]) <= 120 and _full(_ARGV_WORD, page["expect"])):
-        out.append("expect is the text the page must show")
-    return out
+    return _failed([
+        (lambda: _full(r"/[A-Za-z0-9_./-]{0,120}(?:\?[A-Za-z0-9_=&.-]{1,120})?", page["path"]) and ".." not in page["path"],
+         "path is a local path on the site"),
+        (lambda: page["method"] in ("GET", "POST"), "method is GET or POST"),
+        (lambda: isinstance(page["form"], dict) and len(page["form"]) <= 32
+         and all(_field_ok(k, v) for k, v in page["form"].items()), "form maps field names to short values"),
+        (lambda: 0 < len(page["expect"]) <= 120 and _full(_ARGV_WORD, page["expect"]), "expect is the text the page must show"),
+    ])
 
 
-_STEP_CHECKS = {"download-verify-unpack": _step_download, "create-database": lambda s, r: (
-    [] if _obj(s, ("type",)) else ["a database step has no fields"]),
-    "render-config": _step_render, "run-in-container": _step_run, "set-permissions": _step_permissions,
-    "drive-web-installer": _step_installer}
+def _step_database(step, _recipe):
+    return [] if _obj(step, ("type",)) else ["a database step has no fields"]
+
+
+_STEP_CHECKS = {"download-verify-unpack": _step_download, "create-database": _step_database,
+                "render-config": _step_render, "run-in-container": _step_run, "set-permissions": _step_permissions,
+                "drive-web-installer": _step_installer}
+
+
+def _step_problems(key, i, step, recipe):
+    kind = step.get("type") if isinstance(step, dict) else None
+    if kind not in STEP_TYPES:
+        return ["%s.steps[%d]: a type of %s" % (key, i, ", ".join(STEP_TYPES))]
+    return ["%s.steps[%d]: %s" % (key, i, p) for p in _STEP_CHECKS[kind](step, recipe)]
 
 
 def recipe_problems(name, recipe):
@@ -326,66 +351,65 @@ def recipe_problems(name, recipe):
     if not isinstance(steps, list) or not 0 < len(steps) <= 12:
         return out + ["%s.steps: 1-12 steps" % key]
     for i, step in enumerate(steps):
-        kind = step.get("type") if isinstance(step, dict) else None
-        if kind not in STEP_TYPES:
-            out.append("%s.steps[%d]: a type of %s" % (key, i, ", ".join(STEP_TYPES)))
-            continue
-        out += ["%s.steps[%d]: %s" % (key, i, p) for p in _STEP_CHECKS[kind](step, recipe)]
-    if recipe["database"] != any(s.get("type") == "create-database" for s in steps if isinstance(s, dict)):
+        out += _step_problems(key, i, step, recipe)
+    if recipe["database"] != any(isinstance(s, dict) and s.get("type") == "create-database" for s in steps):
         out.append("%s: needs a database step exactly when database is true" % key)
     return out
 
 
+def _release_ok(recipe):
+    if "url" not in recipe and "sha256" not in recipe:
+        return True
+    return _file_ok({"url": recipe.get("url"), "sha256": recipe.get("sha256")})
+
+
 def _recipe_head_problems(key, recipe):
-    out = []
-    if not (isinstance(recipe["name"], str) and 0 < len(recipe["name"]) <= 40 and _full(_ARGV_WORD, recipe["name"])):
-        out.append("%s.name: a short display name" % key)
-    if recipe["kind"] not in RECIPE_KINDS or not _full(_VERSION, recipe["version"]):
-        out.append("%s: kind of %s and a version" % (key, ", ".join(RECIPE_KINDS)))
-    if not isinstance(recipe["php"], list) or not all(_full(_PHP, v) for v in recipe["php"]):
-        out.append("%s.php: a list of PHP versions" % key)
-    if not isinstance(recipe["database"], bool):
-        out.append("%s.database: true or false" % key)
-    if ("url" in recipe) != ("sha256" in recipe) or ("url" in recipe and not _file_ok(
-            {"url": recipe["url"], "sha256": recipe["sha256"]})):
-        out.append("%s: a release url on an allowed host with its sha256, or neither" % key)
-    for path_key in ("admin_path", "installer_path"):
-        if path_key in recipe and not _full(r"/[A-Za-z0-9_./-]{0,80}", recipe[path_key]):
-            out.append("%s.%s: a local path" % (key, path_key))
-    out += _egress_problems(recipe.get("egress", []), key)
-    return out
+    local = r"/[A-Za-z0-9_./-]{0,80}"
+    return _failed([
+        (lambda: 0 < len(recipe["name"]) <= 40 and _full(_ARGV_WORD, recipe["name"]), "%s.name: a short display name" % key),
+        (lambda: recipe["kind"] in RECIPE_KINDS and _full(_VERSION, recipe["version"]),
+         "%s: kind of %s and a version" % (key, ", ".join(RECIPE_KINDS))),
+        (lambda: isinstance(recipe["php"], list) and all(_full(_PHP, v) for v in recipe["php"]),
+         "%s.php: a list of PHP versions" % key),
+        (lambda: isinstance(recipe["database"], bool), "%s.database: true or false" % key),
+        (lambda: _release_ok(recipe), "%s: a release url on an allowed host with its sha256, or neither" % key),
+        (lambda: _full(local, recipe["admin_path"]) and _full(local, recipe.get("installer_path", "/")),
+         "%s: admin_path and installer_path are local paths" % key),
+    ]) + _egress_problems(recipe.get("egress", []), key)
 
 
 # ── the whole section ───────────────────────────────────────────────────────────────────────────
+def _runtimes_problems(runtimes):
+    if not isinstance(runtimes, dict) or not runtimes:
+        return ["runtimes: at least one runtime"]
+    return [p for name, entry in sorted(runtimes.items()) for p in _runtime_problems(name, entry)]
+
+
+def _recipes_problems(recipes):
+    if not isinstance(recipes, dict):
+        return ["recipes: an object of recipes"]
+    return [p for name, r in sorted(recipes.items()) for p in recipe_problems(name, r)]
+
+
+def _origin_pull_problems(entry):
+    if _obj(entry, PRESETS) and all(_full(_PEM, v) for v in entry.values()):
+        return []
+    return ["origin_pull: one PEM certificate per preset"]
+
+
 def sites_problems(obj):
     """Why `obj` is not a `sites` section this panel uses; [] when it is."""
     if not _obj(obj, SITE_KEYS, OPTIONAL_KEYS):
         return ["sites: exactly %s (and optionally %s)" % (", ".join(SITE_KEYS), ", ".join(OPTIONAL_KEYS))]
-    out = _caddy_problems(obj["caddy"], "caddy")
+    parts = [_caddy_problems(obj["caddy"], "caddy"), _image_problems(obj["static"], "static"),
+             _versions_problems(obj["php"], "php", _PHP, True), _wordpress_problems(obj["wordpress"]),
+             _image_problems(obj["wpcli"], "wpcli"), _tunnel_problems(obj["tunnel"]),
+             _image_problems(obj["object_cache"], "object_cache"), _runtimes_problems(obj["runtimes"]),
+             _presets_problems(obj["presets"]), _origin_pull_problems(obj["origin_pull"]),
+             _recipes_problems(obj["recipes"])]
     if "caddy_cache" in obj:
-        out += _caddy_problems(obj["caddy_cache"], "caddy_cache")
-    out += _image_problems(obj["static"], "static")
-    out += _versions_problems(obj["php"], "php", _PHP, True)
-    out += _wordpress_problems(obj["wordpress"])
-    out += _image_problems(obj["wpcli"], "wpcli")
-    out += _tunnel_problems(obj["tunnel"])
-    out += _image_problems(obj["object_cache"], "object_cache")
-    runtimes = obj["runtimes"]
-    if not isinstance(runtimes, dict) or not runtimes:
-        out.append("runtimes: at least one runtime")
-    else:
-        for name, entry in sorted(runtimes.items()):
-            out += _runtime_problems(name, entry)
-    out += _presets_problems(obj["presets"])
-    if not _obj(obj["origin_pull"], PRESETS) or not all(_full(_PEM, v) for v in obj["origin_pull"].values()):
-        out.append("origin_pull: one PEM certificate per preset")
-    recipes = obj["recipes"]
-    if not isinstance(recipes, dict):
-        out.append("recipes: an object of recipes")
-    else:
-        for name, recipe in sorted(recipes.items()):
-            out += recipe_problems(name, recipe)
-    return out
+        parts.append(_caddy_problems(obj["caddy_cache"], "caddy_cache"))
+    return [p for part in parts for p in part]
 
 
 _REFUSED_SEEN = set()

@@ -52,6 +52,7 @@ import re
 import shlex
 
 from panel import REPO_ROOT
+from panel.security import privileged_websites as _pws
 from panel.security.journal_forget_sh import account_tmp_sh, orphan_journals_sh
 
 # Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
@@ -995,37 +996,6 @@ def _choice(*allowed):
     return check
 
 
-# The websites' accounts and the web proxy (tools/panel-helper's website-* verbs): the same shapes
-# the helper holds. ws<digits> or the tunnel connector's account; the proxy's release x.y.z; a sha256.
-WEBSITE_ACCOUNT_RE = r"ws[1-9][0-9]{0,8}"
-WEBSITE_TUNNEL_ACCOUNT = "lgsmtunnel"
-
-
-def _website_account(s):
-    s = str(s)
-    if not (re.fullmatch(WEBSITE_ACCOUNT_RE, s) or s == WEBSITE_TUNNEL_ACCOUNT):
-        raise VerbError("not a website account")
-    return s
-
-
-def _caddy_version(s):
-    if not re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", str(s)):
-        raise VerbError("not a release version")
-    return str(s)
-
-
-def _sha256(s):
-    if not re.fullmatch(r"[0-9a-f]{64}", str(s)):
-        raise VerbError("not a sha256")
-    return str(s)
-
-
-def _quota_mb(s):
-    s = str(s)
-    if not (s.isdecimal() and 0 <= int(s) <= 10 * 1024 * 1024):
-        raise VerbError("not a size in MB")
-    return s
-
 
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv of the real tool, stdin or None)
@@ -1526,19 +1496,6 @@ _ARGV = {
     # tools/panel-helper (do_addon_account_prepare, do_addon_account_release).
     "addon-account-prepare": ([_destroyable_user], lambda a: [], None),
     "addon-account-release": ([_destroyable_user, _choice("keep", "forget")], lambda a: [], None),
-    # The websites (panel/services/websites.py, ssh_manager.websites): a site's own account, made and
-    # removed only with the helper's mark; the web proxy installed from the catalog's pinned release,
-    # its configuration validated as its own user before it replaces the running one (content on
-    # stdin), stopped, and read; the egress guard; a site account's disk quota. See the Websites block
-    # of tools/panel-helper.
-    "website-account-create": ([_website_account], lambda a: [], None),
-    "website-account-remove": ([_website_account], lambda a: [], None),
-    "website-proxy-install": ([_caddy_version, _choice("amd64", "arm64"), _sha256], lambda a: [], None),
-    "website-proxy-apply": ([_choice("start", "reload", "restart")], lambda a: [], None),
-    "website-proxy-stop": ([], lambda a: [], None),
-    "website-proxy-status": ([], lambda a: [], None),
-    "website-egress-guard": ([_choice("on", "off")], lambda a: [], None),
-    "website-quota-set": ([_website_account, _quota_mb], lambda a: [], None),
     # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
@@ -1658,11 +1615,6 @@ def _content_grant_remote(a):
 #   * its caller branches on is_local_server() first and has its own remote builder, so the
 #     helper_argv form is only ever the local half of an already-two-sided function.
 LOCAL_ONLY_VERBS = frozenset({
-    # The websites need the helper: they write root-owned units, nftables and the proxy's binary,
-    # which no shell form here reproduces. ssh_manager.websites refuses a host without it in words,
-    # so these never reach the remote branch.
-    "website-account-create", "website-account-remove", "website-proxy-install", "website-proxy-apply",
-    "website-proxy-stop", "website-proxy-status", "website-egress-guard", "website-quota-set",
     "gameuser-group",    # the group the LOCAL sudoers grant names; it means nothing on a remote
     "lgsm-command",      # run_as_game_user picks the transport itself and never routes this here
     "cron-run-now",      # run_cron_job_now picks the transport itself, like lgsm-command
@@ -3224,6 +3176,9 @@ _REMOTE_ACTIONS.update({
     "db-query": _db_query_remote,
 })
 DB_VERBS = frozenset(v for v in _ARGV if v.startswith("db-"))
+# The website verbs (privileged_websites): the helper's own, local-only.
+_ARGV.update(_pws.argv(VerbError, _choice))
+LOCAL_ONLY_VERBS = LOCAL_ONLY_VERBS | frozenset(_pws.argv(VerbError, _choice))
 
 
 
@@ -3299,11 +3254,6 @@ def stdin_for(verb, args=None):
     return _ARGV[verb][2]
 
 
-# Website verbs whose document travels on the helper's stdin (passed as run_privileged's `secrets`,
-# text): the proxy configuration with any certificate an operator supplied.
-WEBSITE_STDIN_VERBS = frozenset({"website-proxy-apply"})
-
-
 def helper_stdin(verb, args, secrets=None):
     """Text for the HELPER's stdin.
 
@@ -3312,7 +3262,7 @@ def helper_stdin(verb, args, secrets=None):
     """
     if verb in DB_VERBS:
         return db_doc(verb, args, secrets)
-    if verb in WEBSITE_STDIN_VERBS:
+    if verb in _pws.STDIN_VERBS:
         return secrets if isinstance(secrets, str) else ""
     if verb in SECRET_STDIN:
         return check_args(verb, args)[SECRET_STDIN[verb][0]] + "\n"

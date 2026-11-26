@@ -105,6 +105,16 @@ def _ids(remote, site):
     return ids, probe
 
 
+def _egress_hosts(site):
+    """The hosts the site's egress proxy may reach: its recipe's (WordPress's update hosts), an app's build hosts."""
+    from panel.services import websites_catalog as _wc
+    if site.kind == "app":
+        return _wc.runtimes().get(site.runtime, {}).get("egress", [])
+    if not _ws().needs_egress(site):
+        return []
+    return (_wc.recipe(site.app_recipe) or {}).get("egress") or ["api.wordpress.org", "downloads.wordpress.org"]
+
+
 def _site_bundle(site, ids, probe, db=None):
     """The stdin bundle of the site's files, or raise ValueError (no token, no image)."""
     token = _secret(site.proxy_secret)
@@ -116,14 +126,8 @@ def _site_bundle(site, ids, probe, db=None):
     db_port, relay_target = _ws().db_forward(site, *(db or (None, None)))
     net = _ws().network(site, db_port, splice=probe.get("splice", False))
     cache_pw = _secret(site.object_cache_secret) if site.object_cache else None
-    egress = []
-    if _ws().needs_egress(site):
-        from panel.services import websites_catalog as _wc
-        egress = (_wc.recipe(site.app_recipe) or {}).get("egress") or ["api.wordpress.org", "downloads.wordpress.org"]
-    if site.kind == "app":
-        from panel.services import websites_catalog as _wc
-        egress = _wc.runtimes().get(site.runtime, {}).get("egress", [])
-    files = _ws().site_files(site, ids, net, token, cache_password=cache_pw, image=image, egress_hosts=egress)
+    files = _ws().site_files(site, ids, net, token, cache_password=cache_pw, image=image,
+                             egress_hosts=_egress_hosts(site))
     if relay_target:
         files.update({"%s/%s" % (_ws().USER_UNIT_DIR, k): v for k, v in _ws().db_relay_units(site, relay_target).items()})
     return _ws().bundle(files), image
@@ -258,22 +262,36 @@ def wanted_rules(proxy, enabled):
     return [(cidr, p) for cidr in _wp().allow_list(proxy) for p in PORTS]
 
 
+def _website_rule(line):
+    """(from cidr or None, port) when one `ufw status numbered` line is a labelled website ALLOW rule, else None."""
+    from panel.ops.ssh_manager import firewall as _fw
+    _num, sep, detail = line.partition("]")
+    if not sep or PROXY_COMMENT not in detail:
+        return None
+    rule = _fw._parse_ufw_rule(detail)
+    port = rule["to"].replace("/tcp", "").split()[-1] if rule["to"] else ""
+    if rule["comment"].strip() != PROXY_COMMENT or rule["action"] != "ALLOW" or port not in PORTS:
+        return None
+    frm = rule["from"].replace("(v6)", "").strip()
+    return None if frm.lower() == "anywhere" else frm, port
+
+
+def _rule_key(rule):
+    return rule[0] or "", rule[1]
+
+
 def rules_in(ufw_numbered):
     """[(from cidr or None, port)] of the labelled website rules in `ufw status numbered` output."""
-    from panel.ops.ssh_manager import firewall as _fw
-    got = set()
-    for line in (ufw_numbered or "").splitlines():
-        _num, sep, detail = line.partition("]")
-        if not sep or PROXY_COMMENT not in detail:
-            continue
-        rule = _fw._parse_ufw_rule(detail)
-        if rule["comment"].strip() != PROXY_COMMENT or rule["action"] != "ALLOW":
-            continue
-        port = rule["to"].replace("/tcp", "").split()[-1] if rule["to"] else ""
-        frm = rule["from"].replace("(v6)", "").strip()
-        if port in PORTS:
-            got.add((None if frm.lower() == "anywhere" else frm, port))
-    return sorted(got, key=lambda r: (r[0] or "", r[1]))
+    got = {_website_rule(line) for line in (ufw_numbered or "").splitlines()}
+    return sorted((r for r in got if r is not None), key=_rule_key)
+
+
+def _rule_verb(frm, port, add):
+    """The ufw verb and arguments that add (or delete) one website rule."""
+    if frm is None:
+        return ("ufw-allow-proto-port", ["tcp", port, PROXY_COMMENT]) if add else ("ufw-delete-allow-proto-port", ["tcp", port])
+    return (("ufw-allow-from-port", [frm, port, "tcp", PROXY_COMMENT]) if add
+            else ("ufw-delete-allow-from-port", [frm, port, "tcp"]))
 
 
 def ports_apply(remote, proxy, enabled):
@@ -289,40 +307,44 @@ def ports_apply(remote, proxy, enabled):
     if rc != 0:
         return False, FAILED
     have, want = set(rules_in(out)), set(wanted_rules(proxy, enabled))
-    for frm, port in sorted(want - have, key=lambda r: (r[0] or "", r[1])):
-        verb, args = (("ufw-allow-proto-port", ["tcp", port, PROXY_COMMENT]) if frm is None
-                      else ("ufw-allow-from-port", [frm, port, "tcp", PROXY_COMMENT]))
-        if _core.run_privileged(remote, verb, args, timeout=60)[2] != 0:
-            return False, FAILED
-    for frm, port in sorted(have - want, key=lambda r: (r[0] or "", r[1])):
-        verb, args = (("ufw-delete-allow-proto-port", ["tcp", port]) if frm is None
-                      else ("ufw-delete-allow-from-port", [frm, port, "tcp"]))
+    steps = ([_rule_verb(f, p, True) for f, p in sorted(want - have, key=_rule_key)]
+             + [_rule_verb(f, p, False) for f, p in sorted(have - want, key=_rule_key)])
+    for verb, args in steps:
         if _core.run_privileged(remote, verb, args, timeout=60)[2] != 0:
             return False, FAILED
     return True, OK_PORTS
 
 
+def _tunnel_ids(remote):
+    """(uid, gid) of the tunnel connector's account, or None."""
+    ok, out = _as_site(remote, _ws().TUNNEL_ACCOUNT, _ws()._ENV + 'echo "uid=$(id -u)"; echo "gid=$(id -g)"', timeout=30)
+    kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln) if ok else {}
+    if kv.get("uid", "").isdecimal() and kv.get("gid", "").isdecimal():
+        return int(kv["uid"]), int(kv["gid"])
+    return None
+
+
+def _tunnel_token_ok(token):
+    return bool(token) and len(token) <= 4096 and not any(c in token for c in "\r\n\x00 ")
+
+
 def tunnel_apply(remote, proxy):
     """Start, restart or stop the outbound tunnel connector for exposure mode 'tunnel'."""
-    acct = _ws().TUNNEL_ACCOUNT
-    unit = _ws().unit_service(_ws().TUNNEL_UNIT)
+    acct, unit = _ws().TUNNEL_ACCOUNT, _ws().unit_service(_ws().TUNNEL_UNIT)
     if proxy is None or proxy.exposure_mode != "tunnel" or not proxy.tunnel_provider:
         _as_site(remote, acct, _ws()._ENV + "systemctl --user stop %s 2>/dev/null; true" % unit)
         return True, OK_TUNNEL
     token = _secret(proxy.tunnel_token_enc)
-    if not token or len(token) > 4096 or any(c in token for c in "\r\n\x00 "):
+    if not _tunnel_token_ok(token):
         return False, "The tunnel token is missing or not one line. Paste it again."
     ok, out = _helper(remote, "website-account-create", [acct])
-    if not ok:
+    ids = _tunnel_ids(remote) if ok else None
+    if ids is None:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    ok, out = _as_site(remote, acct, _ws()._ENV + 'echo "uid=$(id -u)"; echo "gid=$(id -g)"', timeout=30)
-    kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
-    if not ok or not kv.get("uid", "").isdecimal() or not kv.get("gid", "").isdecimal():
-        return False, FAILED
     from panel.services import websites_catalog as _wc
     image = _wc.pins("tunnel")["cloudflare"]["image"]
-    files = {"%s/%s.container" % (_ws().QUADLET_DIR, _ws().TUNNEL_UNIT): _ws().tunnel_quadlet(
-        proxy, (int(kv["uid"]), int(kv["gid"])), image), "tunnel/token": token}
+    files = {"%s/%s.container" % (_ws().QUADLET_DIR, _ws().TUNNEL_UNIT): _ws().tunnel_quadlet(proxy, ids, image),
+             "tunnel/token": token}
     sh = (_ws()._ENV + _ws().write_files_sh() + "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; "
           "systemctl --user daemon-reload && systemctl --user restart %s" % (image, unit))
     ok, out = _as_site(remote, acct, sh, timeout=600, stdin_text=_ws().bundle(files))
@@ -374,7 +396,7 @@ def app_build(remote, site):
     ids, _probe = _ids(remote, site)
     if ids is None:
         return False, FAILED
-    ok, out = _as_site(remote, site.account, _ws().build_sh(site.account, site, ids), timeout=1800)
+    ok, _out = _as_site(remote, site.account, _ws().build_sh(site.account, site, ids), timeout=1800)
     return (True, OK_BUILT) if ok else (False, FAILED)
 
 
@@ -414,7 +436,7 @@ def app_undo_step(remote, site, step):
     body = _ws().undo_sh(site.account, site, step)
     if not body:
         return True, OK_STEP
-    ok, out = _as_site(remote, site.account, body, timeout=300)
+    ok, _out = _as_site(remote, site.account, body, timeout=300)
     return (True, OK_STEP) if ok else (False, FAILED)
 
 

@@ -16,13 +16,28 @@
 HOW IT RUNS. Pure functions and the helper's own validators; no host is reached and nothing is
 installed. Section 4 loads tools/panel-helper by path, as part05 does.
 """
+import importlib.machinery as _mach299
+import importlib.util as _ilu299
 import json as _json299
 import os
 import re as _re299
+import subprocess as _sp299  # nosec B404 - python3 -I over this part's own scratch archives
+import sys as _sys299
+import tempfile as _tf299
+import zipfile as _zip299
+from datetime import datetime as _dt299
+from types import SimpleNamespace as _NS299
 
 from unit.part01 import eq, _root
+from panel.ops.ssh_manager import firewall as _fw299
+from panel.ops.ssh_manager import websites as _smw299
+from panel.security import privileged as _priv299
 from panel.services import addons_catalog as _cat299
+from panel.services import websites as _ws299
 from panel.services import websites_catalog as _wc299
+from panel.services import websites_egress as _eg299
+from panel.services import websites_proxy as _wp299
+from panel.services import websites_recipes as _wr299
 
 _FLOOR_PATH299 = os.path.join(_root, "panel", "addon_images", "catalog.json")
 with open(_FLOOR_PATH299, encoding="utf-8") as _fh299:
@@ -152,7 +167,6 @@ def _s299_versions():
 
 
 def _s299_generator():
-    import importlib.util as _ilu299
     spec = _ilu299.spec_from_file_location("addon_catalog_p299", os.path.join(_root, "tools", "addon_catalog.py"))
     gen = _ilu299.module_from_spec(spec)
     spec.loader.exec_module(gen)
@@ -169,10 +183,7 @@ def _s299_generator():
 
 
 # ── 2. the web proxy's configuration ────────────────────────────────────────────────────────────
-from datetime import datetime as _dt299  # noqa: E402
-from types import SimpleNamespace as _NS299  # noqa: E402
 
-from panel.services import websites_proxy as _wp299  # noqa: E402
 
 _TOKEN299 = "t" * 40
 
@@ -233,6 +244,10 @@ def _s299_proxy_base():
        ([ln.strip() for ln in site if "protocols tls" in ln],
         [ln.strip() for ln in _render299([_site299()], None, {"tls_min": "1.3"}).split("\n") if "protocols tls" in ln]),
        (["protocols tls1.2 tls1.3"], ["protocols tls1.3"]))
+
+
+def _s299_proxy_base2():
+    text = _render299([_site299()])
     hidden = [_site299(id=6, name="off", enabled=False, port=20006, domains=[_dom299("off.example.org", did=2)]),
               _site299(id=7, name="new", port=20007, domains=[_dom299("new.example.org", verified=False, did=3)])]
     t2 = _render299(hidden)
@@ -301,6 +316,12 @@ def _s299_proxy_rules():
        (True, True, True, True, True, True))
     eq("proxy config: no page cache unless the catalog's cache build is installed (control)",
        "cache @pagecache" in _render299([_site299(page_cache=True)]), False)
+
+
+def _s299_proxy_rules2():
+    rules = [{"type": "redirect", "from": "/old", "to": "/new", "code": 301},
+             {"type": "header", "name": "Content-Security-Policy", "value": "default-src 'self'"},
+             {"type": "deny", "path": "/backup*"}]
     hostile = [
         [{"type": "header", "name": "Set-Cookie", "value": "x=1"}],
         [{"type": "header", "name": "X-Panel-Proxy-Token", "value": "x"}],
@@ -327,7 +348,6 @@ def _s299_proxy_rules():
 
 
 # ── 3. the containers ───────────────────────────────────────────────────────────────────────────
-from panel.services import websites as _ws299  # noqa: E402
 
 
 def _lines299(text, prefix):
@@ -494,11 +514,7 @@ def _s299_shell():
 
 
 # ── 4. the helper verbs ─────────────────────────────────────────────────────────────────────────
-import importlib.machinery as _mach299  # noqa: E402
-import importlib.util as _ilu299  # noqa: E402
-import tempfile as _tf299  # noqa: E402
 
-from panel.security import privileged as _priv299  # noqa: E402
 
 _HELPER_PATH299 = os.path.join(_root, "tools", "panel-helper")
 _hspec299 = _ilu299.spec_from_loader("panel_helper_p299", _mach299.SourceFileLoader("panel_helper_p299", _HELPER_PATH299))
@@ -613,8 +629,7 @@ def _s299_helper_apply():
     eq("website-proxy-apply (verb): a configuration the panel did not write, a certificate name with a path, a "
        "file that is not PEM, an unknown key and a non-JSON document are refused; the panel's own passes",
        (let, sorted(good[1])), ([], ["a.example.org.crt"]))
-    from panel.ops.ssh_manager import websites as _sw299
-    doc = _sw299.apply_doc(_wp299.render([_site299()], None, None, secret_of=lambda s: _TOKEN299), [_site299()])
+    doc = _smw299.apply_doc(_wp299.render([_site299()], None, None, secret_of=lambda s: _TOKEN299), [_site299()])
     eq("website-proxy-apply (caller): ssh_manager's document for the renderer's output is one the helper accepts",
        _refused299(_H299._web_apply_doc, doc), False)
 
@@ -632,6 +647,9 @@ def _s299_helper_guard():
         any("fc00::/7" in ln and "::ffff:0:0/96" in ln for ln in lines),
         lines[1:3] == ["table inet lgsm_web {}", "delete table inet lgsm_web"]),
        (True, True, False, True, True, True))
+
+
+def _s299_helper_guard2():
     unit = _H299.WEB_PROXY_UNIT_TEXT
     eq("web proxy unit: its own user, CAP_NET_BIND_SERVICE alone, no new privileges, a read-only system with only "
        "its state writable, the config's admin API off",
@@ -648,8 +666,6 @@ def _s299_helper_guard():
 
 
 # ── 5. the SSH layer and the firewall label ─────────────────────────────────────────────────────
-from panel.ops.ssh_manager import firewall as _fw299  # noqa: E402
-from panel.ops.ssh_manager import websites as _smw299  # noqa: E402
 
 
 class _Core299:
@@ -712,6 +728,9 @@ def _s299_ports():
     _with_core299(core, lambda: _smw299.ports_apply(None, _proxy299("public"), True))
     eq("ports (ports_apply): public with the rules already there changes nothing (control)",
        [c for c in core.calls if c[0] != "ufw-status"], [])
+
+
+def _s299_ports2():
     core = _Core299(_UFW299, local=False)
     eq("ssh layer: a managed host is refused in words before anything is sent",
        (_with_core299(core, lambda: _smw299.ports_apply(None, _proxy299("public"), True)),
@@ -725,12 +744,7 @@ def _s299_ports():
 
 
 # ── 6. the recipe engine ────────────────────────────────────────────────────────────────────────
-import zipfile as _zip299  # noqa: E402
-import subprocess as _sp299  # noqa: E402 - nosec B404: python3 -I over this part's own scratch archives
-import sys as _sys299  # noqa: E402
 
-from panel.services import websites_egress as _eg299  # noqa: E402
-from panel.services import websites_recipes as _wr299  # noqa: E402
 
 
 def _values299(site):
@@ -739,17 +753,27 @@ def _values299(site):
                                     "site_name": "My site"}, domains=["blog.example.org"])
 
 
+_RECIPE_OUT299 = {}
+
+
+def _recipe_out299():
+    """(values, {(recipe, step name): (shell, stdin)}) for every step of the four shipped recipes, built once."""
+    if not _RECIPE_OUT299:
+        vals = dict(_values299(_site299(kind="wordpress")), _uid="1005", _gid="1005",
+                    _network="pasta:-4,-o,127.0.0.1,-T,3306:3306")
+        out = {}
+        for name in ("wordpress", "phpbb", "drupal", "mybb"):
+            recipe = _wc299.recipe(name)
+            for step in _ws299.recipe_steps(recipe):
+                body, stdin = _wr299.step_sh("ws5", _site299(kind=recipe["kind"]), step, vals, recipe=recipe,
+                                             token=_TOKEN299)
+                out[(name, step["name"])] = (body, stdin or "")
+        _RECIPE_OUT299.update(vals=vals, out=out)
+    return _RECIPE_OUT299["vals"], _RECIPE_OUT299["out"]
+
+
 def _s299_recipe_steps():
-    from panel.services import websites_catalog as _wcat299
-    site = _site299(kind="wordpress")
-    vals = dict(_values299(site), _uid="1005", _gid="1005", _network="pasta:-4,-o,127.0.0.1,-T,3306:3306")
-    out = {}
-    for name in ("wordpress", "phpbb", "drupal", "mybb"):
-        recipe = _wcat299.recipe(name)
-        for step in _ws299.recipe_steps(recipe):
-            body, stdin = _wr299.step_sh("ws5", _site299(kind=recipe["kind"] if recipe["kind"] != "php" else "php"),
-                                          step, vals, recipe=recipe, token=_TOKEN299)
-            out[(name, step["name"])] = (body, stdin or "")
+    vals, out = _recipe_out299()
     leaks = [k for k, (body, _i) in out.items() if any(sec in body for sec in (vals["db_password"], vals["admin_password"],
                                                                                 _TOKEN299))]
     eq("recipes: no step of the four shipped recipes puts the database password, the admin password or the proxy "
@@ -766,6 +790,10 @@ def _s299_recipe_steps():
        ("--prompt=admin_password" in wp_install[0], "--cap-drop=all" in wp_install[0], "--read-only" in wp_install[0],
         "--dns=none" in wp_install[0], any(ln.startswith("in ") for ln in wp_install[1].splitlines())),
        (True, True, True, True, True))
+
+
+def _s299_recipe_steps2():
+    _vals, out = _recipe_out299()
     cfg = _wr299.render_template("define('A','{db_password}'); define('S','{salt}'); define('T','{salt}');",
                                  {"db_password": "a'b\\c"}, "php")
     salts = _re299.findall(r"define\('[ST]','([^']+)'\)", cfg)
@@ -782,7 +810,11 @@ def _s299_recipe_steps():
     eq("recipes (hardening): the installer folder removed and checked gone, then its path must answer 404",
        ("rm -rf -- site/html/install" in perm[0], "SITE_INSTALLER_LEFT" in perm[0], '[ "$c" = 404 ]' in perm[0]),
        (True, True, True))
-    undo = {s["type"]: _ws299.undo_sh("ws5", site, s) for s in _ws299.recipe_steps(_wcat299.recipe("phpbb"))}
+
+
+def _s299_recipe_steps3():
+    site = _site299(kind="wordpress")
+    undo = {s["type"]: _ws299.undo_sh("ws5", site, s) for s in _ws299.recipe_steps(_wc299.recipe("phpbb"))}
     eq("recipes (undo): the download's undo empties the site's files, a config's removes it, the database's is "
        "the job's (Databases code)",
        ("find site/html -mindepth 1 -delete" in undo["download-verify-unpack"], "rm -f -- site/html/install/panel-install.yml"
@@ -860,5 +892,6 @@ def _s299_egress():
 for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s299_generator, _s299_proxy_base,
                  _s299_proxy_modes, _s299_proxy_rules, _s299_quadlet, _s299_servers, _s299_php, _s299_app_cache_tunnel,
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
-                 _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress):
+                 _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
+                 _s299_helper_guard2, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3):
     _step299()

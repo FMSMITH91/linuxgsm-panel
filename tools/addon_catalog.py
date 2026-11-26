@@ -103,12 +103,13 @@ def source_problems(obj, need_sites=True):
         return ["the catalog must hold exactly %s" % ", ".join("`%s`" % k for k in keys)]
     out = [] if obj["schema"] == SCHEMA and _whole(obj["schema"]) else ["schema %r is not %d" % (obj["schema"], SCHEMA)]
     out += _sites_problems(obj["sites"]) if need_sites else []
-    addons = obj["addons"]
+    return out + _addons_problems(obj["addons"])
+
+
+def _addons_problems(addons):
     if not isinstance(addons, dict) or not addons:
-        return out + ["`addons` must be a non-empty object"]
-    for name in sorted(addons):
-        out += _entry_problems(name, addons[name])
-    return out
+        return ["`addons` must be a non-empty object"]
+    return [p for name in sorted(addons) for p in _entry_problems(name, addons[name])]
 
 
 def _parse_time(text):
@@ -154,9 +155,13 @@ def changes(before, after):
         a, b = old.get(name) or {}, new.get(name) or {}
         lines += ["  %s.%s: %s -> %s" % (name, k, a.get(k, "(none)"), b.get(k, "(none)"))
                   for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
+    return lines + _sites_changes(before, after)
+
+
+def _sites_changes(before, after):
+    """Lines naming each part of the `sites` section that differs."""
     olds, news = (before or {}).get("sites") or {}, after.get("sites") or {}
-    lines += ["  sites.%s: changed" % k for k in sorted(set(olds) | set(news)) if olds.get(k) != news.get(k)]
-    return lines
+    return ["  sites.%s: changed" % k for k in sorted(set(olds) | set(news)) if olds.get(k) != news.get(k)]
 
 
 def _loaded(text, check):

@@ -63,15 +63,9 @@ def values_for(site, db=None, admin=None, domains=()):
     """
     from panel.services import websites_proxy as _wp
     admin, db = dict(admin or {}), dict(db or {})
-    if admin:
-        if not _ADMIN_USER_RE.match(admin.get("user", "")):
-            raise ValueError("an admin name is 3-60 letters, digits and . _ @ -")
-        if not _EMAIL_RE.match(admin.get("email", "")):
-            raise ValueError("the admin email address is not one")
-        if not 12 <= len(admin.get("password", "")) <= 128:
-            raise ValueError("the admin password is 12-128 characters")
-        if not _SITE_NAME_RE.match(admin.get("site_name", "")):
-            raise ValueError("a site title is 1-80 characters without quotes, braces, $, ` or angle brackets")
+    why = _admin_problem(admin) if admin else ""
+    if why:
+        raise ValueError(why)
     names = [d for d in domains if _wp._DOMAIN_RE.match(d or "")]
     domain = names[0] if names else ""
     return {"db_name": db.get("name", ""), "db_user": db.get("user", ""), "db_password": db.get("password", ""),
@@ -81,6 +75,24 @@ def values_for(site, db=None, admin=None, domains=()):
             "domain": domain, "admin_user": admin.get("user", ""), "admin_email": admin.get("email", ""),
             "admin_password": admin.get("password", ""),
             "trusted_hosts": ", ".join("'^%s$'" % re.escape(d).replace("\\-", "-") for d in names)}
+
+
+_ADMIN_CHECKS = (
+    ("user", lambda v: bool(_ADMIN_USER_RE.match(v)), "an admin name is 3-60 letters, digits and . _ @ -"),
+    ("email", lambda v: bool(_EMAIL_RE.match(v)), "the admin email address is not one"),
+    ("password", lambda v: 12 <= len(v) <= 128, "the admin password is 12-128 characters"),
+    ("site_name", lambda v: bool(_SITE_NAME_RE.match(v)),
+     "a site title is 1-80 characters without quotes, braces, $, ` or angle brackets"),
+)
+
+
+def _admin_problem(admin):
+    """The first reason the install form's admin values are refused, or ""."""
+    for key, ok, why in _ADMIN_CHECKS:
+        value = admin.get(key, "")
+        if not (isinstance(value, str) and ok(value)):
+            return why
+    return ""
 
 
 def generate_password():
@@ -256,10 +268,34 @@ def _qd(word):
     return '"%s"' % word if "$d/" in word else _q(word)
 
 
+def _field_args(form, values):
+    """curl's --data-urlencode arguments for a page's form: a secret field read from its file, others inline."""
+    from panel.services import websites_catalog as _wc
+    args = []
+    for name, value in sorted(form.items()):
+        whole = re.fullmatch(r"\{([a-z_]{1,24})\}", value)
+        if whole and whole.group(1) in _wc.SECRETS:
+            args += ["--data-urlencode", "%s@$d/%s" % (name, whole.group(1))]
+        else:
+            args += ["--data-urlencode", "%s=%s" % (name, _argv_word(value, values))]
+    return args
+
+
+def _page_sh(i, page, values, host, port):
+    """The shell that fetches one installer page and checks its expected text."""
+    args = ["curl", "-sS", "--max-time", "180", "-b", "$d/jar", "-c", "$d/jar", "-H", "Host: %s" % host,
+            "-H", "@$d/token", "-o", "$d/page"]
+    if page["method"] == "POST":
+        args += _field_args(page["form"], values) or ["--data", ""]
+    url = "http://127.0.0.1:%d%s" % (port, page["path"])
+    return ("%s || { echo SITE_STEP_FAILED; echo page=%d; exit 30; }; " % (" ".join(_qd(a) for a in args + [url]), i + 1)
+            + "grep -qF -- %s \"$d/page\" || { echo SITE_STEP_FAILED; echo page=%d; exit 31; }; "
+            % (_q(page["expect"]), i + 1))
+
+
 def _installer_sh(site, step, values, token):
     """Walk the app's install pages over the site's loopback port; stdin carries the secrets."""
     from panel.services import websites_catalog as _wc
-    port = int(site.port)
     secret_names = sorted({ph for page in step["pages"] for v in page["form"].values()
                            for ph in re.findall(r"\{([a-z_]{1,24})\}", v) if ph in _wc.SECRETS})
     stdin = "".join("%s %s\n" % (n, _b64(values.get(n, ""))) for n in secret_names)
@@ -268,23 +304,7 @@ def _installer_sh(site, step, values, token):
             "while read -r n v; do case \"$n\" in %s|token) printf %%s \"$v\" | base64 -d > \"$d/$n\" ;; *) exit 25 ;; "
             "esac; done; " % ("|".join(secret_names) or "_none_")]
     host = values.get("domain", "") or "localhost"
-    for i, page in enumerate(step["pages"]):
-        args = ["curl", "-sS", "--max-time", "180", "-b", "$d/jar", "-c", "$d/jar", "-H", "Host: %s" % host,
-                "-H", "@$d/token", "-o", "$d/page"]
-        fields = []
-        for name, value in sorted(page["form"].items()):
-            whole = re.fullmatch(r"\{([a-z_]{1,24})\}", value)
-            if whole and whole.group(1) in _wc.SECRETS:
-                fields += ["--data-urlencode", "%s@$d/%s" % (name, whole.group(1))]
-            else:
-                fields += ["--data-urlencode", "%s=%s" % (name, _argv_word(value, values))]
-        if page["method"] == "POST":
-            args += fields or ["--data", ""]
-        url = "http://127.0.0.1:%d%s" % (port, page["path"])
-        quoted = " ".join(_qd(a) for a in args + [url])
-        body.append("%s || { echo SITE_STEP_FAILED; echo page=%d; exit 30; }; " % (quoted, i + 1))
-        body.append("grep -qF -- %s \"$d/page\" || { echo SITE_STEP_FAILED; echo page=%d; exit 31; }; "
-                    % (_q(page["expect"]), i + 1))
+    body += [_page_sh(i, page, values, host, int(site.port)) for i, page in enumerate(step["pages"])]
     body.append("echo installer=done")
     return "".join(body), stdin
 

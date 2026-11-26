@@ -110,33 +110,44 @@ def allow_list(proxy):
 
 
 # ── custom rules ────────────────────────────────────────────────────────────────────────────────
-def _rule_problem(rule):
-    """Why one custom rule is refused, or ""."""
-    kind = rule.get("type") if isinstance(rule, dict) else None
-    shapes = {"redirect": {"type", "from", "to", "code"}, "header": {"type", "name", "value"},
-              "deny": {"type", "path"}}
-    if kind not in shapes or set(rule) != shapes[kind]:
-        return "Each rule is a redirect (from, to, code), a header (name, value) or a denied path."
-    if kind == "redirect":
-        if not (isinstance(rule["from"], str) and _PATH_RE.match(rule["from"])):
-            return "A redirect starts from a path on the site, like /old-page."
-        if not (isinstance(rule["to"], str) and _TARGET_RE.match(rule["to"])):
-            return "A redirect goes to a path on the site or an https:// address."
-        if rule["code"] not in REDIRECT_CODES or isinstance(rule["code"], bool):
-            return "A redirect's code is 301, 302, 307 or 308."
-        return ""
-    if kind == "header":
-        if not (isinstance(rule["name"], str) and _HEADER_NAME_RE.match(rule["name"])):
-            return "A header name is letters, digits and hyphens."
-        if rule["name"].lower() in PROTECTED_HEADERS:
-            return "The %s header is set by the web proxy itself and cannot be changed." % rule["name"]
-        value = rule["value"]
-        if not (isinstance(value, str) and _HEADER_VALUE_RE.match(value)) or any(c in value for c in '"\\{}'):
-            return "A header value is one line of plain characters, without quotes, backslashes or braces."
-        return ""
+def _redirect_problem(rule):
+    if not (isinstance(rule["from"], str) and _PATH_RE.match(rule["from"])):
+        return "A redirect starts from a path on the site, like /old-page."
+    if not (isinstance(rule["to"], str) and _TARGET_RE.match(rule["to"])):
+        return "A redirect goes to a path on the site or an https:// address."
+    if isinstance(rule["code"], bool) or rule["code"] not in REDIRECT_CODES:
+        return "A redirect's code is 301, 302, 307 or 308."
+    return ""
+
+
+def _header_problem(rule):
+    if not (isinstance(rule["name"], str) and _HEADER_NAME_RE.match(rule["name"])):
+        return "A header name is letters, digits and hyphens."
+    if rule["name"].lower() in PROTECTED_HEADERS:
+        return "The %s header is set by the web proxy itself and cannot be changed." % rule["name"]
+    value = rule["value"]
+    if not (isinstance(value, str) and _HEADER_VALUE_RE.match(value)) or any(c in value for c in '"\\{}'):
+        return "A header value is one line of plain characters, without quotes, backslashes or braces."
+    return ""
+
+
+def _deny_problem(rule):
     if not (isinstance(rule["path"], str) and _PATH_RE.match(rule["path"])):
         return "A denied path starts with /, like /private or /backup*."
     return ""
+
+
+_RULE_SHAPES = {"redirect": ({"type", "from", "to", "code"}, _redirect_problem),
+                "header": ({"type", "name", "value"}, _header_problem),
+                "deny": ({"type", "path"}, _deny_problem)}
+
+
+def _rule_problem(rule):
+    """Why one custom rule is refused, or ""."""
+    shape = _RULE_SHAPES.get(rule.get("type")) if isinstance(rule, dict) else None
+    if shape is None or set(rule) != shape[0]:
+        return "Each rule is a redirect (from, to, code), a header (name, value) or a denied path."
+    return shape[1](rule)
 
 
 def rules_problems(rules):
@@ -295,20 +306,25 @@ def _log_lines(site):
             "\t\t\trequest>headers delete", "\t\t\tresp_headers delete", "\t\t}", "\t}"]
 
 
+def _snippet_lines(site):
+    if not site.raw_proxy_snippet or snippet_problems(site.raw_proxy_snippet):
+        return []
+    return ["\t# the superadmin's own lines for this site"] + [
+        "\t" + ln for ln in site.raw_proxy_snippet.strip("\n").split("\n")]
+
+
 def _site_lines(site, opts, proxy, mode, secret_of):
     names = _domains(site)
-    token = secret_of(site)
-    if not names or not site.port or not _TOKEN_RE.match(token or ""):
+    token = secret_of(site) or ""
+    if not (names and site.port and _TOKEN_RE.match(token)):
         return []
-    addresses = ", ".join(("http://%s" % n) if mode == "tunnel" else n for n in names)
+    tunnel = mode == "tunnel"
+    addresses = ", ".join(("http://%s" % n) if tunnel else n for n in names)
     lines = ["# site %s (%s)" % (site.id, site.name), "%s {" % addresses]
-    if mode != "tunnel":
-        lines += _tls_lines(site, opts, proxy)
+    lines += [] if tunnel else _tls_lines(site, opts, proxy)
     lines += ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
-    lines += _header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
-    if site.raw_proxy_snippet and not snippet_problems(site.raw_proxy_snippet):
-        lines += ["\t# the superadmin's own lines for this site"] + [
-            "\t" + ln for ln in site.raw_proxy_snippet.strip("\n").split("\n")]
+    lines += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
+              + _snippet_lines(site))
     lines += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
               "\t\theader_up %s %s" % (TOKEN_HEADER, _quote(token)),
               "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",

@@ -2729,6 +2729,35 @@ def _run_quiet(argv, timeout=60, **kw):
     return r.returncode, r.stdout.decode("utf-8", "replace")
 
 
+def _web_useradd(user):
+    """(rc, passwd entry) of a new website account: useradd, then its root-owned mark."""
+    os.makedirs(WEB_MARK_DIR, mode=0o700, exist_ok=True)
+    rc, _out = _run_quiet([resolve("useradd"), "-m", "-d", HOME_ROOT + "/" + user, "-s", "/usr/sbin/nologin", "-U", user])
+    if rc:
+        return rc, None
+    fd = os.open(_web_mark(user), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    os.close(fd)
+    sys.stdout.write("account=created\n")
+    return 0, pwd.getpwnam(user)
+
+
+def _web_present(pw):
+    sys.stdout.write("account=present\n")
+    return 0, pw
+
+
+def _web_enrol(user, pw):
+    """Home 0700, then GAME_GROUP (user-create's checks) when not a member yet; 0 or the failing rc."""
+    os.chmod(pw.pw_dir, 0o700)
+    if GAME_GROUP in _groups_of(user):
+        return 0
+    reason = _enrolment_refusal(user, need_install=False)
+    if reason:
+        sys.stderr.write("refusing to enrol %s in %s: %s\n" % (user, GAME_GROUP, reason))
+        return 1
+    return _enrol(user)
+
+
 def do_website_account_create(args, content):
     """Make a website account: useradd (home 0700, no login shell), mark it, enrol it, subordinate ids, lingering.
 
@@ -2743,29 +2772,13 @@ def do_website_account_create(args, content):
         pw = pwd.getpwnam(user)
     except KeyError:
         pw = None
-    created = pw is None
     if pw is not None and not _web_made(user):
         sys.stderr.write("refusing %s: an account of that name exists and the panel did not make it\n" % user)
         return 1
-    if pw is None:
-        os.makedirs(WEB_MARK_DIR, mode=0o700, exist_ok=True)
-        rc, _out = _run_quiet([resolve("useradd"), "-m", "-d", HOME_ROOT + "/" + user, "-s", "/usr/sbin/nologin",
-                               "-U", user])
-        if rc:
-            return rc
-        fd = os.open(_web_mark(user), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        os.close(fd)
-        pw = pwd.getpwnam(user)
-    os.chmod(pw.pw_dir, 0o700)
-    if GAME_GROUP not in _groups_of(user):
-        reason = _enrolment_refusal(user, need_install=False)
-        if reason:
-            sys.stderr.write("refusing to enrol %s in %s: %s\n" % (user, GAME_GROUP, reason))
-            return 1
-        rc = _enrol(user)
-        if rc:
-            return rc
-    sys.stdout.write("account=%s\n" % ("created" if created else "present"))
+    rc, pw = _web_present(pw) if pw is not None else _web_useradd(user)
+    rc = rc or _web_enrol(user, pw)
+    if rc:
+        return rc
     rc, added = _subid_add(pw, user)
     if rc:
         return rc
@@ -2908,16 +2921,23 @@ def _web_apply_doc(content):
     if not isinstance(doc, dict) or set(doc) - {"caddyfile", "files"}:
         raise ValueError("not an apply document")
     text, files = doc.get("caddyfile"), doc.get("files") or {}
-    if not isinstance(text, str) or not text.startswith(WEB_CONF_HEAD) or len(text) > WEB_CONF_MAX or "\x00" in text:
+    if not _web_conf_ok(text):
         raise ValueError("not a configuration the panel wrote")
     if not isinstance(files, dict) or len(files) > 400:
         raise ValueError("too many files")
-    for name, pem in files.items():
-        if not (re.fullmatch(_WEB_CERT_NAME_RE, name) or name == "origin-pull-ca.pem"):
-            raise ValueError("not a certificate file name")
-        if not isinstance(pem, str) or not re.fullmatch(r"(?:%s)+" % _WEB_PEM_RE, pem):
-            raise ValueError("not a PEM file")
+    bad = [name for name, pem in files.items() if not _web_cert_file_ok(name, pem)]
+    if bad:
+        raise ValueError("not a certificate file name or not a PEM file")
     return text, files
+
+
+def _web_conf_ok(text):
+    return isinstance(text, str) and text.startswith(WEB_CONF_HEAD) and len(text) <= WEB_CONF_MAX and "\x00" not in text
+
+
+def _web_cert_file_ok(name, pem):
+    named = bool(re.fullmatch(_WEB_CERT_NAME_RE, name)) or name == "origin-pull-ca.pem"
+    return named and isinstance(pem, str) and bool(re.fullmatch(r"(?:%s)+" % _WEB_PEM_RE, pem))
 
 
 def do_website_proxy_apply(args, content):
@@ -2945,6 +2965,16 @@ def do_website_proxy_apply(args, content):
     for name, pem in files.items():
         dest = WEB_PROXY_ETC + "/" + name if name == "origin-pull-ca.pem" else WEB_PROXY_CERTS + "/" + name
         _web_write(dest, pem.encode(), 0o640, 0, pw.pw_gid)
+    if not _web_validated(text, pw):
+        return 1
+    verb = ["enable", "--now"] if args[0] == "start" else ["restart"]
+    rc, _out = _run_quiet([resolve("systemctl")] + verb + [WEB_PROXY_UNIT], timeout=120)
+    sys.stdout.write("valid=yes\napplied=%s\n" % ("yes" if rc == 0 else "no"))
+    return rc
+
+
+def _web_validated(text, pw):
+    """Whether `text` passes `caddy validate` run as the proxy's user; when it does, it replaces the running file."""
     cand = WEB_PROXY_CONF + ".candidate"
     _web_write(cand, text.encode(), 0o640, 0, pw.pw_gid)
     r = subprocess.run([WEB_PROXY_BIN, "validate", "--config", cand, "--adapter", "caddyfile"],  # nosec B603
@@ -2956,12 +2986,9 @@ def do_website_proxy_apply(args, content):
         os.unlink(cand)
         lines = [ln for ln in r.stderr.decode("utf-8", "replace").splitlines() if "error" in ln.lower()][-3:]
         sys.stdout.write("valid=no\n" + "".join("error=%s\n" % ln[:300] for ln in lines))
-        return 1
+        return False
     os.replace(cand, WEB_PROXY_CONF)
-    verb = ["enable", "--now"] if args[0] == "start" else ["restart"]
-    rc, _out = _run_quiet([resolve("systemctl")] + verb + [WEB_PROXY_UNIT], timeout=120)
-    sys.stdout.write("valid=yes\napplied=%s\n" % ("yes" if rc == 0 else "no"))
-    return rc
+    return True
 
 
 def do_website_proxy_stop(args, content):
@@ -3023,8 +3050,9 @@ def web_guard_ruleset(uids):
     """The egress guard's nftables text (loaded atomically with nft -f) for site account `uids`.
 
     For those uids' sockets: loopback addresses stay reachable (their own forwards and relays; not
-    "oif lo", which a packet to the host's own tailnet address also leaves by), any other address of this host (fib daddr type local: its LAN, tailnet and public addresses, so the panel's
-    port and SSH) is dropped, and so are the private, link-local, tailnet, mapped and NAT64 ranges.
+    "oif lo", which a packet to the host's own tailnet address also leaves by), any other address of
+    this host (fib daddr type local: its LAN, tailnet and public addresses, so the panel's port and
+    SSH) is dropped, and so are the private, link-local, tailnet, mapped and NAT64 ranges.
     The internet stays reachable for what needs it (an image pull, an app's download, the egress
     proxy, the tunnel); a container without egress cannot leave its loopback anyway.
     """
