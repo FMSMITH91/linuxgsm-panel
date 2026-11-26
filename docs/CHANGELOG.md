@@ -10,6 +10,14 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.26] — 2026-11-26
+
+### Security
+
+- **B3's image installs Debian's security updates when it is built.** A compression library in the image had a
+  high-severity hole that Debian has fixed, but the base image did not have the fix yet. Panels running B3
+  offer an Update on its card.
+
 ## [2026.11.24] — 2026-11-24
 
 ### Changed
