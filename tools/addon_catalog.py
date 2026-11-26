@@ -167,7 +167,7 @@ def checks_problem(lines):
 def main(argv, stdin=None):
     """Run one command of the module docstring; its exit status."""
     data = (stdin or sys.stdin.buffer).read().decode("utf-8", "replace")
-    if argv[1:2] == ["build"] and len(argv) == 4 and argv[2].isdigit() and argv[3] in ("auto", "refresh"):
+    if argv[1:2] == ["build"] and len(argv) == 4 and argv[2].isdecimal() and argv[3] in ("auto", "refresh"):
         if "\0" not in data:
             sys.stderr.write("addon_catalog.py: stdin must be <catalog> NUL <published latest or nothing>\n")
             return 2
