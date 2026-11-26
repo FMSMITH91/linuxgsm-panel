@@ -26,6 +26,8 @@ M5.  A raw proxy snippet the configuration would leave out (it reads the proxy's
 M6.  A successful image update of a failed site records it running, its old failure reason cleared.
 M11. Only a site whose PHP image is built on the host gets the build folder (~/site/image); an empty one an earlier
      install made for another kind is removed.
+S11. A new website account is enrolled in the panel's game group first (with user-create's checks, its home
+     0700), before its subordinate ids and lingering; a refused enrolment stops there.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -789,6 +791,59 @@ def _m11_build_dir(st):
        ([200, 200, 200], {"static": False, "wordpress": False, "php": True}))
 
 
+# ── S11. The website account's enrolment ──────────────────────────────────────────────────────
+def _create_verb306(groups, refusal):
+    """website-account-create for a new ws908: (rc, the steps in order, the refusal's calls, home's mode)."""
+    names = ("subprocess", "pwd", "resolve", "WEB_MARK_DIR", "_groups_of", "_enrolment_refusal", "_subid_add",
+             "_web_guard_refresh")
+    saved = {n: getattr(_H306, n) for n in names}
+    home = _tf306.mkdtemp(prefix="p306-ws908-", dir=_TREE306)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a scratch home as useradd leaves it, for the verb to narrow
+    os.chmod(home, 0o755)
+    marks = _tf306.mkdtemp(prefix="p306-cmarks-", dir=_TREE306)
+    made, asked, sub = set(), [], _Sub306()
+
+    def getpwnam(name):
+        if name not in made:
+            raise KeyError(name)
+        return _NS306(pw_name=name, pw_uid=1908, pw_gid=1908, pw_dir=home)
+
+    class _Made(_Sub306):
+        def run(self, argv, **kw):
+            if str(argv[0]).endswith("useradd"):
+                made.add(argv[-1])
+            return sub.run(argv, **kw)
+    try:
+        _H306.subprocess, _H306.resolve, _H306.WEB_MARK_DIR = _Made(), (lambda name: "/usr/sbin/" + name), marks
+        _H306.pwd = _NS306(getpwnam=getpwnam)
+        _H306._groups_of = lambda user: set(groups)
+        _H306._enrolment_refusal = lambda user, need_install=True: asked.append((user, need_install)) or refusal
+        _H306._subid_add = lambda pw, user: sub.calls.append(["subids", user]) or (0, True)
+        _H306._web_guard_refresh = lambda: 0
+        with _ctx306.redirect_stdout(_io306.StringIO()), _ctx306.redirect_stderr(_io306.StringIO()):
+            rc = _H306.do_website_account_create(["ws908"], "")
+    finally:
+        for n, v in saved.items():
+            setattr(_H306, n, v)
+    steps = [os.path.basename(str(c[0])) + (" " + " ".join(c[1:3]) if c[0] != "subids" else "") for c in sub.calls]
+    return rc, steps, asked, oct(os.stat(home).st_mode & 0o777)
+
+
+def _s11_enrol(st):
+    rc, steps, asked, mode = _create_verb306(groups=["ws908"], refusal="")
+    eq("S11 (website-account-create): a new website account is made, its home 0700, and enrolled in the panel's game "
+       "group first, after user-create's checks (as a new account), then given its subordinate ids and lingering",
+       (rc, steps, asked, mode),
+       (0, ["useradd -m -d", "groupadd -f lgsmpanel-games", "usermod -aG lgsmpanel-games", "subids",
+            "loginctl enable-linger ws908"], [("ws908", False)], "0o700"))
+    rc2, steps2, _asked2, _mode2 = _create_verb306(groups=["ws908"], refusal="it can already become root")
+    eq("S11 (website-account-create): an enrolment the checks refuse stops the verb before anything else is given to "
+       "the account", (rc2, steps2), (1, ["useradd -m -d"]))
+    rc3, steps3, asked3, _mode3 = _create_verb306(groups=["ws908", "lgsmpanel-games"], refusal="")
+    eq("S11 (website-account-create): an account already in the group is not enrolled again (control)",
+       (rc3, steps3, asked3), (0, ["useradd -m -d", "subids", "loginctl enable-linger ws908"], []))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -839,7 +894,7 @@ def _ran306(step, st):
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
                 _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet, _m6_update_state,
-                _m11_build_dir)
+                _m11_build_dir, _s11_enrol)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():
