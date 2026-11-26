@@ -16,6 +16,7 @@
 7. One-click apps: a failing step undoes the finished ones in reverse and leaves no site; a finished
    install shows its admin password once.
 8. Backups: an archive holding a link or a path outside the document root is refused on restore.
+11. Errors: an install whose files cannot be built answers the generic sentence, its reason only in the log.
 
 HOW IT RUNS. part12's app and its database; every host call is a stand-in (ssh_manager.websites, the
 proxy renderer, the account guard) and the file operations run in real bash with /home/ws<id> moved
@@ -23,6 +24,7 @@ under a scratch folder. Nothing reaches a host (part12's tripwire is armed).
 """
 import io as _io300
 import json as _json300
+import logging as _logging300
 import os as _os300
 import shutil as _shutil300
 import socket as _socket300
@@ -55,6 +57,7 @@ from panel.services import websites as _svc300
 from panel.services import websites_proxy as _wp300
 
 _TREE300 = _tmp300.mkdtemp(prefix="lgsm-unit-p300-")
+_INSTALL300 = _sw300.install          # the real one: _stub_host300 replaces it for every section but _s11_errors
 _ROWS300 = {"remotes": [], "users": [], "groups": []}
 _HOST_IP300 = "11.22.33.44"
 _SAVED2FA300 = []
@@ -358,6 +361,8 @@ def _s3_archives(st):
        "document root", (bad.status_code, _os300.path.exists(_home300(st.a) + "/site/evil.php")), (422, False))
     row = _Audit300.query.filter_by(action="website_files_extract", success=False).order_by(_Audit300.id.desc()).first()
     check("archives: the refusal is audited against the site", row is not None and row.website_id == st.a.id)
+    eq("archives: the refusal's answer is the panel's own sentence naming the entry (control)",
+       ("'../evil.php'" in (bad.get_json() or {}).get("error", ""), "Traceback" in bad.get_data(as_text=True)), (True, False))
 
 
 # ── 4. Domains and DNS ──────────────────────────────────────────────────────────────────────────
@@ -651,6 +656,43 @@ def _s10_restore(_st):
        {"root": True, "another site's": True, "a game account": True, "own": "", "not yet named": ""})
 
 
+class _Logged300(_logging300.Handler):
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append((record.getMessage(), str(record.exc_info[1]) if record.exc_info else ""))
+
+
+def _s11_errors(st):
+    """An install whose files cannot be built answers the generic sentence; the reason goes to the log only."""
+    def internal(*_a, **_k):
+        raise ValueError("internal detail: /root/p300-db-relay")
+    _p9_patch(_sw300, "install", _INSTALL300)
+    _p9_patch(_sw300, "_helper", lambda *a, **k: (True, ""))
+    _p9_patch(_sw300, "_ids", lambda remote, site: ((1000, 1000), {}))
+    _p9_patch(_svc300, "runtime_refusal", lambda *a: "")
+    _p9_patch(_svc300, "image_for", lambda site: "x/y@sha256:" + "a" * 64)
+    _p9_patch(_svc300, "db_forward", internal)
+    _p9_patch(_sw300, "_secret", lambda value: "t" * 40)
+    log, handler = _logging300.getLogger("panel.ssh"), _Logged300()
+    log.addHandler(handler)
+    try:
+        r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id, json={"limits": {"mem_mb": 512}})
+    finally:
+        log.removeHandler(handler)
+    eq("install (settings route): a site whose files cannot be built answers the generic sentence; the exception's "
+       "text never reaches the page and is in the panel's log (OWASP Error Handling)",
+       (r.status_code, (r.get_json() or {}).get("message"), "internal detail" in r.get_data(as_text=True),
+        [e for m, e in handler.lines if "could not be built" in m]),
+       (502, _sw300.FAILED, False, ["internal detail: /root/p300-db-relay"]))
+    _p9_patch(_sw300, "_secret", lambda value: "")
+    r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id, json={"limits": {"mem_mb": 640}})
+    eq("install (settings route): a site with no proxy token yet still says so (control)",
+       (r.status_code, (r.get_json() or {}).get("message")), (502, _sw300.MISSING_GATE))
+
+
 def _state300():
     host = _host300("p300-host")
     a, b = _site300(host, "p300-a", kind="php"), _site300(host, "p300-b")
@@ -698,7 +740,7 @@ with _p9.app_context():
         _calls300 = _stub_host300()
         _st300 = _state300()
         for _step300 in (_s1_scope, _s2_files, _s3_archives, _s4_domains, _s5_sftp, _s6_secrets, _s7_apps,
-                         _s8_backups, _s9_i18n, _s10_restore):
+                         _s8_backups, _s9_i18n, _s10_restore, _s11_errors):
             check("part300: %s ran to the end" % _step300.__name__, _ran300(_step300, _st300, _calls300) is None,
                   _ran300.last)
         eq("part300: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips300:], [])

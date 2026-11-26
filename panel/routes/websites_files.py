@@ -210,8 +210,9 @@ def _extract(site, rel, fs):
     try:
         clean, size = _wf.repack(fs.stream, room)
     except _wf.ArchiveRefused as exc:
-        _w.audit(site, "website_files_extract", "refused %s: %s" % (detail, exc), False)
-        return _w.say(422, str(exc))
+        # Only the refusal's own sentence is shown, never an exception's text (OWASP Error Handling).
+        _w.audit(site, "website_files_extract", "refused %s: %s" % (detail, exc.sentence), False)
+        return _w.say(422, exc.sentence)
     with clean, _files.confined_to(_wf.DOCROOT):
         ok, said = _wf.extract(site.remote, site.account, rel, clean)
     return _write_answer(site, "website_files_extract", ok, said, "%s (%d bytes unpacked)" % (detail, size))

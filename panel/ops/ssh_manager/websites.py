@@ -124,13 +124,16 @@ def _egress_hosts(site):
 
 
 def _site_bundle(site, ids, probe, db=None):
-    """The stdin bundle of the site's files, or raise ValueError (no token, no image)."""
+    """(stdin bundle of the site's files, image, None), or (None, None, refusal) with no token or no image.
+
+    A ValueError from building the files (a value the panel's own checks should have refused) is raised.
+    """
     token = _secret(site.proxy_secret)
     if not _ws()._TOKEN_RE.match(token):
-        raise ValueError(MISSING_GATE)
+        return None, None, MISSING_GATE
     image = _ws().image_for(site)
     if not image:
-        raise ValueError(NO_IMAGE)
+        return None, None, NO_IMAGE
     db_port, relay_target = _ws().db_forward(site, *(db or (None, None)))
     net = _ws().network(site, db_port, splice=probe.get("splice", False))
     cache_pw = _secret(site.object_cache_secret) if site.object_cache else None
@@ -138,7 +141,7 @@ def _site_bundle(site, ids, probe, db=None):
                              egress_hosts=_egress_hosts(site), cpu=probe.get("cpu_delegated", False))
     if relay_target:
         files.update({"%s/%s" % (_ws().USER_UNIT_DIR, k): v for k, v in _ws().db_relay_units(site, relay_target).items()})
-    return _ws().bundle(files), image
+    return _ws().bundle(files), image, None
 
 
 def install(remote, site, db=None):
@@ -156,9 +159,13 @@ def install(remote, site, db=None):
     if why:
         return False, why
     try:
-        stdin, image = _site_bundle(site, ids, probe, db)
-    except ValueError as e:
-        return False, str(e)
+        stdin, image, refused = _site_bundle(site, ids, probe, db)
+    except ValueError:
+        # The reason stays in the panel's log; the page gets the generic sentence (OWASP Error Handling).
+        _core._log.warning("website %s: its files could not be built from its settings", site.id, exc_info=True)
+        return False, FAILED
+    if refused:
+        return False, refused
     ok, out = _as_site(remote, site.account, _ws().install_sh(site.account, site, image), timeout=900, stdin_text=stdin)
     if not ok:
         return False, _mark(out)

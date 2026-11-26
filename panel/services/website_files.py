@@ -50,7 +50,11 @@ S_DISK_UNREAD = "Couldn't measure how much disk this website uses, so nothing wa
 
 
 class ArchiveRefused(Exception):
-    """An archive the panel will not unpack; str() is the sentence for the page."""
+    """An archive the panel will not unpack; `sentence` (the panel's own words) is what the page is told."""
+
+    def __init__(self, sentence):
+        super().__init__(sentence)
+        self.sentence = sentence
 
 
 def docroot_rel(path):
