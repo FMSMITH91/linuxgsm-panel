@@ -1,14 +1,13 @@
 // One website's page (templates/website.html and its _website_*.html panels). Reads
-// GET /api/websites/<id> (one probe, cached briefly by the server):
-//   {success, site: {id, name, kind, state, state_reason, enabled, open_url, image: {name, version,
-//      update_available}, app_version, php_version, runtime_version, last_backup, usage: {mem_mb, disk_mb,
-//      cpu_pct}, limits: {mem_mb, cpu_milli, pids, disk_mb, max_body_mb, backup_keep}, access_log,
-//      full_egress, customer_note}, install: {state, steps, error, site_url, admin_url},
-//    logs: [last lines when failed], domains: [{id, domain, is_primary, dns_state, cert_state,
-//      cert_not_after, cert_error}], dns: {a: [..], aaaa: [..]}, databases: [{id, name, user}], ...}
-// The PHP, Performance, Rules and App panels (website_tuning.js) and Files (website_files.js) are fed
-// from here through WS.onSite. Actions POST to /websites/<id>/<verb>; the page decides nothing the
-// server does not check again (websites_access.site_for on every route).
+// GET /api/websites/<id> (one probe, cached briefly by the server): the site's fields (id, name, kind,
+// state, state_reason, enabled, domain, php_version, runtime, app_recipe; an administrator also gets the
+// limits mem_mb, cpu_milli, pids, disk_mb, max_body_mb, backup_keep, access_log, full_egress,
+// customer_note) and `probe` {ok, facts}: what the host said (usage, image, open_url when known).
+// WS.siteAnswer turns that into {site: {..., limits, usage, image}}; an answer already in that shape is
+// taken as it is. Each panel reads its own part when it is needed: GET /websites/<id>/domains,
+// /databases, /logs, /install, /backups/list (and website_tuning.js: /php, /app/env). Actions POST to
+// /websites/<id>/<verb>; the page decides nothing the server does not check again
+// (websites_access.site_for on every route).
 (function () {
   'use strict';
   var WS = window.WS;
@@ -21,6 +20,26 @@
   WS.siteFlags = F;
   WS.can = {manage: F.manage === '1', files: F.files === '1', admin: F.admin === '1', sup: F.super === '1'};
   WS.onSite = function (fn) { st.hooks.push(fn); if (st.d) fn(st.d); };
+  var LIMIT_KEYS = ['mem_mb', 'cpu_milli', 'pids', 'disk_mb', 'max_body_mb', 'backup_keep'];
+  function withFacts(site, facts) {
+    site.usage = site.usage || {mem_mb: facts.mem_mb, disk_mb: facts.disk_mb, cpu_pct: facts.cpu_pct};
+    site.image = site.image || facts.image || {};
+    site.open_url = site.open_url || facts.open_url || '';
+    return site;
+  }
+  WS.siteAnswer = function (d) {
+    if (!d || d.site || d.id == null) return d;
+    var site = Object.assign({}, d);
+    site.limits = {};
+    LIMIT_KEYS.forEach(function (k) { if (d[k] != null) site.limits[k] = d[k]; });
+    return {success: true, site: withFacts(site, (d.probe && d.probe.facts) || {}), probe: d.probe || {}};
+  };
+  // A log answer's lines: a list, or one text with a line per entry.
+  WS.lines = function (d) {
+    var l = d && d.lines;
+    if (typeof l === 'string') l = l.split('\n');
+    return Array.isArray(l) ? l.filter(function (x) { return x !== ''; }) : [];
+  };
   WS.siteAct = function (verb, body, msgId) {
     return WS.post(WS.R.act(ID, verb), body).then(function (d) { var ok = WS.done(d, msgId); if (ok) WS.reload(); return d; });
   };
@@ -66,19 +85,28 @@
   };
 
   // A failed site leads with why, its last log lines and Retry: never an empty page.
+  function showFailedLog(lines) {
+    WS.el('ws-failed-log').textContent = lines.slice(-20).join('\n') || WS.T('No log lines yet.');
+  }
   function renderFailed(d) {
     var failed = d.site.state === 'failed';
     WS.show('ws-failed', failed);
     if (!failed) return;
     WS.el('ws-failed-reason').textContent = d.site.state_reason || WS.T('No reason was recorded.');
-    WS.el('ws-failed-log').textContent = (d.logs || []).slice(-20).join('\n') || WS.T('No log lines yet.');
+    if (d.logs) { showFailedLog(d.logs); return; }
+    WS.get(WS.R.act(ID, 'logs')).then(function (r) { showFailedLog(WS.lines(r)); });
   }
+  // An app being installed: where its job is (GET /websites/<id>/install), shown above the panels.
   function renderInstall(d) {
-    var inst = d.install || {};
-    var on = inst.state === 'running' || (d.site.state === 'creating' && (inst.steps || []).length > 0);
+    var s = d.site;
+    var on = s.state === 'creating' && !!(s.app_recipe || d.install);
     WS.show('ws-install', on);
-    if (on) WS.renderSteps(WS.el('ws-install-steps'), inst);
-    return on;
+    if (!on) return false;
+    if (d.install) { WS.renderSteps(WS.el('ws-install-steps'), d.install); return true; }
+    WS.get(WS.R.act(ID, 'install')).then(function (inst) {
+      if (inst && typeof inst.state === 'string') WS.renderSteps(WS.el('ws-install-steps'), inst);
+    });
+    return true;
   }
 
   // ── tabs: one panel at a time, picked by ?tab= ──
@@ -128,7 +156,8 @@
   }
   window.wsLoadLogs = function () {
     WS.get(WS.R.act(ID, 'logs')).then(function (d) {
-      WS.el('ws-logs').textContent = (d && d.lines && d.lines.length) ? d.lines.join('\n') : WS.T('No log lines yet.');
+      var lines = WS.lines(d);
+      WS.el('ws-logs').textContent = lines.length ? lines.join('\n') : ((d && d.message) || WS.T('No log lines yet.'));
     });
   };
 
@@ -145,7 +174,8 @@
     if (installing || s.state === 'creating' || s.state === 'removing') st.poll = setTimeout(WS.reload, 3000);
   }
   WS.reload = function () {
-    return WS.get(WS.R.site(ID)).then(function (d) {
+    return WS.get(WS.R.site(ID)).then(function (raw) {
+      var d = WS.siteAnswer(raw);
       if (!d || d.success === false || !d.site) { WS.done(d, 'ws-msg'); return; }
       render(d);
     });
@@ -166,7 +196,7 @@
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
     top.appendChild(WS.raw('strong', 'text-break', dm.domain));
-    if (dm.is_primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
+    if (dm.is_primary || dm.primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
     li.appendChild(top);
     var info = WS.node('div', 'small text-secondary');
     info.appendChild(WS.node('span', dm.dns_state === 'matching' ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
@@ -180,26 +210,29 @@
   }
   function domainButtons(dm) {
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
-    row.appendChild(WS.button(WS.T('Check again'), 'arrow-repeat', 'wsDomain', ['check', Number(dm.id)]));
-    if (!dm.is_primary) row.appendChild(WS.button(WS.T('Make primary'), 'star', 'wsDomain', ['primary', Number(dm.id)]));
-    row.appendChild(WS.button(WS.T('Remove'), 'x-lg', 'wsDomain', ['remove', Number(dm.id)], 'btn-outline-danger'));
+    var name = String(dm.domain);
+    row.appendChild(WS.button(WS.T('Check again'), 'arrow-repeat', 'wsDomain', ['check', name]));
+    if (!(dm.is_primary || dm.primary)) row.appendChild(WS.button(WS.T('Make primary'), 'star', 'wsDomain', ['primary', name]));
+    row.appendChild(WS.button(WS.T('Remove'), 'x-lg', 'wsDomain', ['remove', name], 'btn-outline-danger'));
     return row;
   }
   function renderDomains(d) {
     var list = WS.clear(WS.el('wd-list'));
-    var doms = d.domains || [];
+    var doms = (d && d.domains) || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
     renderRecords(doms, d.dns || {});
   }
+  // The records to create: each domain's own list ({type, value}), or the host's addresses (dns.a/aaaa).
+  function recordsOf(x, dns) {
+    if (Array.isArray(x.records)) return x.records.map(function (r) { return [String(r.type), x.domain, String(r.value)]; });
+    return (dns.a || []).map(function (ip) { return ['A', x.domain, ip]; })
+      .concat((dns.aaaa || []).map(function (ip) { return ['AAAA', x.domain, ip]; }));
+  }
   function renderRecords(doms, dns) {
     var body = WS.clear(WS.el('wd-records'));
-    var want = doms.filter(function (x) { return x.dns_state !== 'matching'; });
     var rows = [];
-    want.forEach(function (x) {
-      (dns.a || []).forEach(function (ip) { rows.push(['A', x.domain, ip]); });
-      (dns.aaaa || []).forEach(function (ip) { rows.push(['AAAA', x.domain, ip]); });
-    });
+    doms.filter(function (x) { return x.dns_state !== 'matching'; }).forEach(function (x) { rows = rows.concat(recordsOf(x, dns)); });
     WS.show('wd-dns', rows.length > 0);
     rows.forEach(function (r) {
       var tr = WS.node('tr');
@@ -212,13 +245,15 @@
     var inp = WS.el('wd-domain');
     WS.say('wd-msg', WS.T('Adding…'));
     WS.post(WS.R.act(ID, 'domains/add'), {domain: inp.value.trim()}).then(function (d) {
-      if (WS.done(d, 'wd-msg')) { inp.value = ''; WS.reload(); }
+      if (WS.done(d, 'wd-msg')) { inp.value = ''; loadDomains(); WS.reload(); }
     });
   };
-  window.wsDomain = function (verb, domainId) {
+  window.wsDomain = function (verb, domain) {
     var go = function () {
       WS.say('wd-msg', WS.T('Working…'));
-      WS.post(WS.R.act(ID, 'domains/' + verb), {id: domainId}).then(function (d) { if (WS.done(d, 'wd-msg')) WS.reload(); });
+      WS.post(WS.R.act(ID, 'domains/' + verb), {domain: domain}).then(function (d) {
+        if (WS.done(d, 'wd-msg')) { loadDomains(); WS.reload(); }
+      });
     };
     if (verb !== 'remove') { go(); return; }
     window.confirmDialog({title: WS.T('Remove this domain?'), icon: 'x-circle', confirmClass: 'btn-danger', confirmLabel: WS.T('Remove'),
@@ -226,11 +261,14 @@
   };
 
   // ── database ──
+  var dbRows = {};
   function renderDatabases(d) {
     var list = WS.el('wdb-list');
     if (!list) return;
     WS.clear(list);
-    var dbs = d.databases || [];
+    var dbs = (d && d.databases) || [];
+    dbRows = {};
+    dbs.forEach(function (db) { dbRows[Number(db.id)] = db; });
     if (!dbs.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No database yet.')));
     dbs.forEach(function (db) {
       var li = WS.node('li', 'ws-row d-flex flex-wrap gap-2 align-items-center justify-content-between');
@@ -246,16 +284,17 @@
     var inp = WS.el('wdb-name');
     WS.say('wdb-msg', WS.T('Creating…'));
     WS.post(WS.R.act(ID, 'databases/add'), {name: inp.value.trim()}).then(function (d) {
-      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); }
+      if (WS.done(d, 'wdb-msg')) { inp.value = ''; loadDatabases(); }
     });
   };
   window.wsDbReveal = function (dbId) {
     WS.stepUp(function () {
-      WS.post(WS.R.act(ID, 'databases/credentials'), {id: dbId}).then(function (d) {
+      WS.post(WS.R.act(ID, 'databases/' + Number(dbId) + '/reveal'), {}).then(function (d) {
         var box = WS.el('wdb-conn-' + dbId);
         if (!box || !d || !d.success) { WS.done(d, 'wdb-msg'); return; }
+        var row = Object.assign({}, dbRows[Number(dbId)] || {}, d);
         WS.clear(box);
-        [['Host', d.host], ['Port', d.port], ['Database', d.name], ['User', d.user], ['Password', d.password]].forEach(function (kv) {
+        [['Host', row.host], ['Port', row.port], ['Database', row.name], ['User', row.user], ['Password', row.password]].forEach(function (kv) {
           var line = WS.node('div');
           line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
           line.appendChild(WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
@@ -264,7 +303,24 @@
       });
     });
   };
-  WS.onSite(function (d) { renderDomains(d); renderDatabases(d); });
+  // Domains and databases are a site runner's (manage_website): read once the page knows the site.
+  function loadDomains() {
+    if (!WS.el('wd-add')) return;
+    WS.get(WS.R.act(ID, 'domains')).then(function (d) { if (d && d.domains) renderDomains(d); });
+  }
+  function loadDatabases() {
+    if (!WS.el('wdb-list')) return;
+    WS.get(WS.R.act(ID, 'databases')).then(function (d) { if (d && d.databases) renderDatabases(d); });
+  }
+  var loaded = false;
+  WS.onSite(function (d) {
+    if (d.domains) renderDomains(d);
+    if (d.databases) renderDatabases(d);
+    if (loaded || d.domains) return;
+    loaded = true;
+    loadDomains();
+    loadDatabases();
+  });
 })();
 
 // Backups and the administrators' Settings panel.
@@ -279,7 +335,8 @@
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline justify-content-between');
     top.appendChild(WS.raw('span', 'text-break fw-semibold', b.name));
-    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, b.size].filter(Boolean).join(' · ')));
+    var size = typeof b.size === 'number' ? WS.size(b.size) : b.size;
+    top.appendChild(WS.raw('span', 'small text-secondary', [b.when || WS.when(b.mtime), size].filter(Boolean).join(' · ')));
     li.appendChild(top);
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (WS.can.files) {
@@ -337,7 +394,8 @@
       if (v != null) inp.value = String(v);
     });
     WS.el('wset-log').checked = !!s.access_log;
-    WS.el('wset-egress').checked = !!s.full_egress;
+    var eg = WS.el('wset-egress');
+    if (eg) eg.checked = !!s.full_egress;
     WS.el('wset-note').value = s.customer_note || '';
     window.wsEgressCheck();
   }
@@ -346,15 +404,28 @@
     var b = WS.el('wset-online');
     WS.stepUp(function () { WS.siteAct(b.dataset.verb, {}, 'wset-msg'); });
   };
+  // Limits go to /limits (the container is set up again), the rest to /settings; full internet access
+  // only from a superadmin's page, which is the only one that has the switch.
+  WS.settingsBodies = function () {
+    var limits = {}, settings = {access_log: WS.el('wset-log').checked, customer_note: WS.el('wset-note').value};
+    document.querySelectorAll('[data-limit]').forEach(function (inp) {
+      var k = inp.getAttribute('data-limit');
+      if (inp.value === '') return;
+      if (k === 'backup_keep') settings.backup_keep = Number(inp.value); else limits[k] = Number(inp.value);
+    });
+    var eg = WS.el('wset-egress');
+    if (eg) settings.full_egress = eg.checked;
+    return {limits: limits, settings: settings};
+  };
   window.wsSettingsSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
-    var limits = {};
-    document.querySelectorAll('[data-limit]').forEach(function (inp) {
-      if (inp.value !== '') limits[inp.getAttribute('data-limit')] = Number(inp.value);
+    var b = WS.settingsBodies();
+    WS.stepUp(function () {
+      WS.say('wset-msg', WS.T('Saving…'));
+      WS.post(WS.R.act(ID, 'limits'), b.limits).then(function (d) {
+        if (d && d.success) WS.siteAct('settings', b.settings, 'wset-msg'); else WS.done(d, 'wset-msg');
+      });
     });
-    var body = {limits: limits, access_log: WS.el('wset-log').checked, full_egress: WS.el('wset-egress').checked,
-      customer_note: WS.el('wset-note').value};
-    WS.stepUp(function () { WS.say('wset-msg', WS.T('Saving…')); WS.siteAct('settings', body, 'wset-msg'); });
   };
   window.wsDelete = function () {
     window.confirmDialog({title: WS.T('Delete this website?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete website'),

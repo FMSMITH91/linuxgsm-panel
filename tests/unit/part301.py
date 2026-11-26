@@ -94,6 +94,11 @@ try:
     _site_ad301 = _page301("website.html", P9_ADMIN, site=_SITE301, can_manage=True, can_files=True, site_admin=True)
     _site_cu301 = _page301("website.html", _CUST301, site=_SITE301, can_manage=True, can_files=True, site_admin=False)
     _site_vw301 = _page301("website.html", _CUST301, site=_SITE301, can_manage=False, can_files=False, site_admin=False)
+    # As the routes pass them: can_create / is_admin, and the site as its JSON (remote_id for an administrator only).
+    _list_rt301 = _page301("websites.html", P9_ADMIN, can_create=True, is_admin=True)
+    _site_rta301 = _page301("website.html", P9_ADMIN, site=dict(id=7, name="shop", kind="php", remote_id=1),
+                            can_manage=True, can_files=True)
+    _site_rtc301 = _page301("website.html", _CUST301, site=dict(id=7, name="shop", kind="php"), can_manage=True, can_files=True)
     _nav_none301 = _page301("websites.html", _CUST301, nav=None, can_add=False)
     _nav_empty301 = _page301("websites.html", _CUST301, nav="", can_add=False)
 finally:
@@ -126,6 +131,13 @@ eq("site: ...and keeps the main button and the panels manage_website gives (PHP,
 eq("site: a viewer has no main button and no panel that changes anything",
    _has301(_site_vw301, 'id="ws-main"', 'data-ws-pane="files"', 'data-ws-pane="php"', 'data-ws-pane="rules"',
            'data-ws-pane="backups"', 'data-ws-pane="domains"', 'id="wd-add"'), (False, False, False, False, False, True, False))
+eq("routes' names: can_create and is_admin give the Add button and the customer picker",
+   _has301(_list_rt301, 'id="ws-add-open"', 'id="ws-add-customer-id"'), (True, True))
+eq("routes' names: a site answer with its host (an administrator's) gives Settings and the PHP version choice; "
+   "one without it (a runner's) shows the version as text and no Settings",
+   (_has301(_site_rta301, 'data-ws-pane="settings"', 'id="wphp-version"', 'id="wperf-obj"'),
+    _has301(_site_rtc301, 'data-ws-pane="settings"', 'id="wphp-version"', 'id="wphp-version-text"', 'id="wperf-obj"')),
+   ((True, True, True), (False, False, True, False)))
 _side_re301 = _re301.compile(r'<a href="/websites" class="[^"]*">\s*<i class="bi bi-globe2"></i> Websites</a>')
 eq("sidebar: Websites appears when websites_nav() answers a URL, under 'Hosting' for a user with no server entry",
    (bool(_side_re301.search(_list_cu301)), '<div class="sidebar-section">Hosting</div>' in _list_cu301),
@@ -411,11 +423,7 @@ eq("node: ...and anyone else is told to ask, with no button to press",
    tuple(_miss_cu301.get(k) for k in ("shown", "fix", "action", "create", "disabled")),
    (True, "Ask a superadmin to set this up.", None, True, True))
 
-_INST301 = {"success": True, "site": {"id": 5, "state": "creating"},
-            "install": {"state": "failed", "error": "The download's checksum did not match.",
-                        "steps": [{"key": "account", "state": "undone"}, {"key": "download", "state": "failed"},
-                                  {"key": "fetch-<i>x</i>", "label": "<i>x</i>", "state": "pending"}]}}
-_inst301 = _ran301('install', _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+_INST_SCN301 = r"""
   window.wsOpenAdd();
   $('ws-kind-install').checked = true; window.wsKind('install'); window.wsPickApp('wordpress');
   $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
@@ -424,22 +432,36 @@ _inst301 = _ran301('install', _node301(_list_sa301, _COMMON301 + ["websites.js"]
   for (let i = 0; i < 8; i++) await tick();
   const post = calls.filter(function (c) { return c[0] === 'POST'; })[0];
   const labels = $('ws-progress').querySelectorAll('.ws-step-label');
+  const code = $('ws-result').querySelector('code');
   return {post: post, labels: labels.map(function (l) { return [l.textContent, l.hasAttribute('data-no-i18n')]; }),
-          result: $('ws-result').textContent, password: $('ws-result').querySelector('code').textContent,
+          polled: calls.filter(function (c) { return c[1] === '/m/websites/5/install'; }).length,
+          result: $('ws-result').textContent, password: code ? code.textContent : null,
           formHidden: $('ws-add-form').hidden, footerHidden: $('ws-add-footer').hidden, passField: $('ws-add-admin-pass').value};
-""", routes={"/api/websites": _LIST301, "/websites/install-app": {"success": True, "id": 5, "password": "Gen-erated-0ne"},
-             "/api/websites/5": _INST301}))
-eq("node: Install an app posts the app, domain and admin account, sending an empty password so the panel makes one",
+"""
+_INST_ROUTES301 = {"/api/websites": _LIST301, "/websites/install-app": {"success": True, "id": 5}}
+_FAILED301 = {"state": "failed", "step": "download", "error": "The download's checksum did not match.",
+              "steps": [{"key": "account", "state": "undone"}, {"key": "download", "state": "failed"},
+                        {"key": "fetch-<i>x</i>", "label": "<i>x</i>", "state": "pending"}]}
+_inst301 = _ran301("install (failed)", _node301(_list_sa301, _COMMON301 + ["websites.js"], _INST_SCN301,
+                                                routes=dict(_INST_ROUTES301, **{"/websites/5/install": _FAILED301})))
+_done301 = _ran301("install (done)", _node301(_list_sa301, _COMMON301 + ["websites.js"], _INST_SCN301, routes=dict(
+    _INST_ROUTES301, **{"/websites/5/install": {"state": "done", "step": "", "admin_password": "Gen-erated-0ne"}})))
+_gone301 = _ran301("install (undone, site gone)", _node301(_list_sa301, _COMMON301 + ["websites.js"], _INST_SCN301,
+                                                           routes=_INST_ROUTES301))
+eq("node: Install an app posts the app, domain, host and admin account, an empty password so the panel makes one",
    _inst301.get("post"), ["POST", "/m/websites/install-app",
-                          {"name": "blog", "domain": "blog.example.org", "host_id": "1", "customer_id": None, "app": "wordpress",
+                          {"name": "blog", "domain": "blog.example.org", "remote_id": "1", "group_id": None, "app": "wordpress",
                            "admin_user": "boss", "admin_email": "boss@example.org", "admin_password": ""}])
-eq("node: the progress view labels the recipe's steps in plain words, leaves a step it does not know as text, and "
-   "says why the install failed",
-   (_inst301.get("labels"), "checksum did not match" in (_inst301.get("result") or "")),
-   ([["Create the site account", False], ["Download and check the app", False], ["<i>x</i>", True]], True))
-eq("node: the generated password is shown once, as text, and the form and its Create button give way to the steps",
-   (_inst301.get("password"), _inst301.get("formHidden"), _inst301.get("footerHidden"), _inst301.get("passField")),
-   ("Gen-erated-0ne", True, True, ""))
+eq("node: the progress view follows the install job, labels its steps in plain words, leaves a step it does not "
+   "know as text, and says why the install failed",
+   (_inst301.get("polled", 0) >= 1, _inst301.get("labels"), "checksum did not match" in (_inst301.get("result") or ""),
+    _inst301.get("password")),
+   (True, [["Create the site account", False], ["Download and check the app", False], ["<i>x</i>", True]], True, None))
+eq("node: a finished install shows the generated password once, as text; the form and its Create button give way",
+   (_done301.get("password"), "Done." in (_done301.get("result") or ""), _done301.get("formHidden"),
+    _done301.get("footerHidden"), _done301.get("passField")), ("Gen-erated-0ne", True, True, True, ""))
+check("node: an install whose site is gone (undone after a failure) reads as failed and undone, not as running",
+      "every step done before it was undone" in (_gone301.get("result") or ""), _gone301.get("result"))
 
 _INI_SCN301 = r"""
   const t = function (s) { return WS.iniProblems(s).map(function (p) { return [p.line, p.problem]; }); };
@@ -492,10 +514,74 @@ eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed 
    (_exp301.get("tb"), _exp301.get("tb2"), _exp301.get("sent"), _exp301.get("tokenAfter"), _exp301.get("saved")),
    ({"exposure_mode": "tunnel", "tunnel_provider": "cloudflare"},
     {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"},
-    [{"host_id": 1, "exposure": {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"}}],
+    [{"remote_id": 1, "exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"}],
     "", True))
 eq("node: an HSTS max-age under two years, TLS 1.2 and 2FA off for customers each show OWASP's note (saved anyway)",
    (_exp301.get("notes"), _exp301.get("summary")), ([True, True, True], "How visitors reach your sites: Public"))
+
+_pst301 = _ran301("proxy status", _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
+  for (let i = 0; i < 6; i++) await tick();
+  return {asked: calls.filter(function (c) { return c[1].indexOf('/websites/proxy/status') >= 0; }).map(function (c) { return c[1]; }),
+          state: $('wp-state').textContent, install: !$('wp-install').hidden, mode: $('wp-mode-tunnel').checked,
+          saved: !$('wp-token-state').hidden};
+""", routes={"/api/websites": dict(_LIST301, hosts=[], sites=[dict(_LIST301["sites"][0], remote_id=4)]),
+             "/websites/proxy/status": {"exposure_mode": "tunnel", "allow_cidrs": [], "allow_presets": [],
+                                        "tunnel_token_set": True, "installed_version": "", "last_error": ""}}))
+eq("node: with no proxy rows in the list, the card reads each host's GET /websites/proxy/status (the sites' host), "
+   "and a host without the proxy offers Install, keeps its mode, and says a token is saved",
+   (_pst301.get("asked"), _pst301.get("install"), _pst301.get("mode"), _pst301.get("saved"),
+    (_pst301.get("state") or "").startswith("The web proxy is not installed")),
+   (["/m/websites/proxy/status?remote_id=4"], True, True, True, True))
+
+# The site's answer as the routes give it: the site's own fields flat, an administrator's limits among them,
+# and the host's probe; each panel reads its own part.
+_FLAT301 = {"id": 7, "name": "shop", "kind": "php", "state": "failed", "state_reason": "exited", "enabled": False,
+            "domain": "x.example.org", "php_version": "8.4", "runtime": "", "app_recipe": "", "mem_mb": 512, "cpu_milli": 1000,
+            "pids": 256, "disk_mb": 2048, "max_body_mb": 64, "remote_id": 1, "access_log": True, "full_egress": False,
+            "backup_keep": 9, "customer_note": "n", "probe": {"ok": True, "facts": {"mem_mb": 100}}}
+_FLAT_ROUTES301 = {
+    "/api/websites/7": _FLAT301,
+    "/websites/7/logs": {"success": True, "lines": "\n".join("l%d" % i for i in range(30)) + "\n"},
+    "/websites/7/domains": {"domains": [{"domain": "x.example.org", "primary": True, "dns_state": "mismatch", "cert_state": "pending",
+                                         "cert_error": "", "records": [{"type": "A", "value": "198.51.100.7"}]}]},
+    "/websites/7/databases": {"databases": [{"id": 9, "name": "ws7_main", "user": "ws7_main", "host": "127.0.0.1", "port": 3306}],
+                              "max": 5, "prefix": "ws7_"},
+    "/websites/7/databases/9/reveal": {"success": True, "password": "db-pw"},
+    "/websites/7/domains/check": {"success": True, "dns_state": "mismatch"},
+    "/websites/7/php": {"version": "8.4", "versions": ["8.4", "8.3"], "advanced": "x.y = 1", "effective": {},
+                        "values": {"memory_limit": "256M", "display_errors": "On", "opcache.memory_consumption": "128"}}}
+_flat301 = _ran301("site page (route shapes)", _node301(_site_ad301, _COMMON301 + ["website_site.js", "website_tuning.js"], r"""
+  for (let i = 0; i < 6; i++) await tick();
+  const recs = $('wd-records').querySelectorAll('tr').map(function (tr) { return tr.children.map(function (td) { return td.textContent; }); });
+  const check = $('wd-list').querySelector('button');
+  window.wsDomain('check', JSON.parse(check.getAttribute('data-args'))[1]);
+  window.wsDbReveal(9);
+  for (let i = 0; i < 6; i++) await tick();
+  const posts = calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return [c[1], c[2]]; });
+  const body1 = WS.phpBody();
+  $('wphp-version').value = '8.3';
+  const body2 = WS.phpBody();
+  return {log: $('ws-failed-log').textContent.split('\n').length, logLast: $('ws-failed-log').textContent.split('\n').pop(),
+          recs: recs, posts: posts, conn: $('wdb-conn-9').textContent, mem: $('ws-mem').value, keep: $('wset-keep').value,
+          body1: body1, v2: body2.php_version, opmem: $('wperf-op-mem').value, ini: $('wphp-ini').value,
+          bodies: WS.settingsBodies()};
+""", routes=_FLAT_ROUTES301))
+eq("node: route shapes: a failed site's log (one text) shows its last 20 lines; the probe's memory and the limits fill "
+   "the page", (_flat301.get("log"), _flat301.get("logLast"), _flat301.get("mem"), _flat301.get("keep")), (20, "l29", "100", "9"))
+eq("node: route shapes: the records to create come from the domain's own list, and a domain is acted on by its name",
+   (_flat301.get("recs"), (_flat301.get("posts") or [[None]])[0]),
+   ([["A", "x.example.org", "198.51.100.7"]], ["/m/websites/7/domains/check", {"domain": "x.example.org"}]))
+eq("node: route shapes: Show connection settings asks the reveal route and shows the row's host, port, name and user "
+   "with the password", ((_flat301.get("posts") or [None, [None]])[1][0], _flat301.get("conn")),
+   ("/m/websites/7/databases/9/reveal", "Host: 127.0.0.1Port: 3306Database: ws7_mainUser: ws7_mainPassword: db-pw"))
+eq("node: route shapes: the PHP form posts each field by its php.ini name (display_errors as On), the version only "
+   "when changed; OPcache's memory and the Advanced box come from the same answer",
+   (_flat301.get("body1"), _flat301.get("v2"), _flat301.get("opmem"), _flat301.get("ini")),
+   ({"memory_limit": "256M", "display_errors": "On"}, "8.3", "128", "x.y = 1"))
+eq("node: route shapes: Settings sends the limits to /limits and backups-to-keep, the access log, the note and (a "
+   "superadmin's page) full internet access to /settings",
+   _flat301.get("bodies"), {"limits": {"mem_mb": 512, "cpu_milli": 1000, "pids": 256, "disk_mb": 2048, "max_body_mb": 64},
+                            "settings": {"access_log": True, "customer_note": "n", "backup_keep": 9, "full_egress": False}})
 
 _SITE_D301 = {"success": True, "site": {"id": 7, "name": "shop", "kind": "wordpress", "state": "failed",
                                         "state_reason": "<script>bad()</script>", "enabled": False,

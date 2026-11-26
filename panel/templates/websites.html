@@ -2,8 +2,10 @@
 {% block title %}{{ t('Websites') }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="{{ asset_url('css/websites.css') }}" nonce="{{ csp_nonce }}">{% endblock %}
 {% block content %}
-{# The Websites list (route: websites_page). The route passes can_add (websites_access.can_create) and
-   site_admin (manage_websites anywhere, or a superadmin); everything else is read from /api/websites
+{% set can_add = can_add|default(can_create|default(false)) %}
+{% set site_admin = site_admin|default(is_admin|default(false)) %}
+{# The Websites list (route: websites_page). The route passes can_create (websites_access.can_create) and
+   is_admin (manage_websites anywhere, or a superadmin); everything else is read from /api/websites
    by js/websites.js, scoped to the viewer, so the page asks nothing of a host when it opens.
    "Add a website" is never hidden from someone who may add one: a missing precondition is said on the
    dialog's first line, with the one button that fixes it. #}

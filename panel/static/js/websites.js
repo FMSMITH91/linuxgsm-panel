@@ -96,10 +96,13 @@
     var cust = WS.el('ws-add-customer-id');
     if (cust) {
       options(cust, [{id: '', name: WS.T('No customer: administrators only')}].concat(d.customers || []), function (c) { return c.name; });
-      WS.show('ws-add-customer', true);
+      WS.show('ws-add-customer', (d.customers || []).length > 0);
     }
-    renderAppTiles(d.apps || []);
+    renderAppTiles(d.apps && d.apps.length ? d.apps : APPS);
   }
+  // The catalog's first recipes, for a list answer that does not name them.
+  var APPS = [{key: 'wordpress', name: 'WordPress'}, {key: 'phpbb', name: 'phpBB'}, {key: 'drupal', name: 'Drupal'},
+    {key: 'smf', name: 'SMF'}, {key: 'mybb', name: 'MyBB'}];
   function renderAppTiles(apps) {
     var box = WS.clear(WS.el('ws-app-tiles'));
     if (!box) return;
@@ -173,8 +176,8 @@
   };
   function val(id) { var e = WS.el(id); return e ? e.value.trim() : ''; }
   function addBody() {
-    var body = {name: val('ws-add-name'), domain: val('ws-add-domain'), host_id: val('ws-add-host-id') || null,
-      customer_id: val('ws-add-customer-id') || null};
+    var body = {name: val('ws-add-name'), domain: val('ws-add-domain'), remote_id: val('ws-add-host-id') || null,
+      group_id: val('ws-add-customer-id') || null};
     if (st.kind !== 'install') {
       body.kind = st.kind;
       if (st.kind === 'php') body.php_version = val('ws-add-php-version');
@@ -207,18 +210,18 @@
       var pass = WS.el('ws-add-admin-pass');
       if (pass) pass.value = '';
       if (!d || !d.id) { WS.done(d, 'ws-add-msg'); return; }
-      startProgress(Number(d.id), d.password || '');
+      startProgress(Number(d.id), st.kind === 'install');
     });
   };
 
   // After Create: the steps as they run (a job, like an add-on install), then the result.
-  function startProgress(id, password) {
+  function startProgress(id, isApp) {
     st.siteId = id;
+    st.isApp = isApp;
     WS.show('ws-add-form', false);
     WS.show('ws-add-footer', false);
     WS.show('ws-progress-wrap', true);
     WS.clear(WS.el('ws-result'));
-    if (password) showPassword(password);
     pollOnce();
   }
   function showPassword(password) {
@@ -229,13 +232,24 @@
     p.appendChild(code);
     box.appendChild(p);
   }
+  // An app install is a job (GET /websites/<id>/install: {state, step, error, admin_password once done});
+  // a failed one is undone and its site removed, so its next answer is "not found". A plain site is
+  // followed through its own state until it is no longer being set up.
+  function progress(d) {
+    if (st.isApp) {
+      var known = d && typeof d.state === 'string';
+      return known ? d : {state: 'failed', error: WS.T('A step failed, and every step done before it was undone.')};
+    }
+    var site = (d && (d.site || d)) || {};
+    return {state: site.state === 'creating' ? 'running' : site.state === 'failed' ? 'failed' : 'done',
+      error: site.state_reason || '', step: 'container'};
+  }
   function pollOnce() {
-    WS.get(WS.R.site(st.siteId)).then(function (d) {
-      var inst = (d && d.install) || {};
+    WS.get(st.isApp ? WS.R.act(st.siteId, 'install') : WS.R.site(st.siteId)).then(function (d) {
+      var inst = progress(d);
       WS.renderSteps(WS.el('ws-progress'), inst);
-      var running = inst.state === 'running' || (d && d.site && d.site.state === 'creating' && inst.state !== 'failed');
-      if (running) { st.poll = setTimeout(pollOnce, 2000); return; }
-      finish(d || {}, inst);
+      if (inst.state === 'running') { st.poll = setTimeout(pollOnce, 2000); return; }
+      finish(inst);
     });
   }
   function link(text, href, cls) {
@@ -245,11 +259,12 @@
     a.rel = 'noopener noreferrer';
     return a;
   }
-  function finish(d, inst) {
+  function finish(inst) {
     var box = WS.el('ws-result');
+    if (inst.admin_password) showPassword(inst.admin_password);
     var row = WS.node('div', 'd-flex flex-wrap gap-2 align-items-center');
-    if (inst.state === 'failed' || (d.site && d.site.state === 'failed')) {
-      row.appendChild(WS.node('span', 'text-danger small', inst.error || (d.site && d.site.state_reason) || WS.T('A step failed, and every step done before it was undone.')));
+    if (inst.state === 'failed') {
+      row.appendChild(WS.node('span', 'text-danger small', inst.error || WS.T('A step failed, and every step done before it was undone.')));
     } else {
       row.appendChild(WS.node('span', 'text-success small', WS.T('Done.')));
       var site = WS.safeUrl(inst.site_url), admin = WS.safeUrl(inst.admin_url);
@@ -266,7 +281,7 @@
   window.wsProxyInstall = function () {
     WS.stepUp(function () {
       WS.say('ws-add-msg', WS.T('Installing the web proxy…'));
-      WS.post(WS.R.proxyInstall, {host_id: val('ws-add-host-id') || val('wp-host') || null}).then(function (d) {
+      WS.post(WS.R.proxyInstall, {remote_id: val('ws-add-host-id') || val('wp-host') || null}).then(function (d) {
         WS.done(d);
         load();
       });

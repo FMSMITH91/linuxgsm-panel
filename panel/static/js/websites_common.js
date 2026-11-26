@@ -17,7 +17,23 @@
     installApp: '/websites/install-app',
     proxyInstall: '/websites/proxy/install',
     proxySettings: '/websites/proxy/settings',
+    proxyStatus: function (rid) { return '/websites/proxy/status?remote_id=' + encodeURIComponent(rid); },
+    proxyOptions: '/websites/proxy/options',
     page: function (id) { return '/websites/' + id; }
+  };
+  // A byte count and a Unix time as the lists show them (the host sends numbers, never text).
+  WS.size = function (n) {
+    n = Number(n);
+    if (!isFinite(n) || n < 0) return '';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : String(n)) + ' ' + units[i];
+  };
+  WS.when = function (t) {
+    t = Number(t);
+    if (!isFinite(t) || t <= 0) return '';
+    var d = new Date(t * 1000), p = function (x) { return (x < 10 ? '0' : '') + x; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   };
   WS.T = function (s) { return window.t ? window.t(s) : s; };
   WS.TF = function (s, v) { return window.tf ? window.tf(s, v) : s; };
@@ -127,6 +143,10 @@
   WS.renderSteps = function (box, install) {
     WS.clear(box);
     var steps = (install && install.steps) || [];
+    // A job that reports only where it is: that one step, in its state.
+    if (!steps.length && install && install.step) {
+      steps = [{key: install.step, state: install.state === 'running' ? 'running' : install.state === 'failed' ? 'failed' : 'done'}];
+    }
     var ol = WS.node('ol', 'list-unstyled mb-0 ws-steps');
     steps.forEach(function (s) {
       var st = WS.pick(STEP_ICON, s.state, null) ? s.state : 'pending';
