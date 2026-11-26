@@ -6,10 +6,8 @@
 (function () {
   'use strict';
   var st = {d: null, loaded: false, busy: false, poll: null, watch: false};
-  var STATE = {
-    active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
-    failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'
-  };
+  var STATE = {active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
+    failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'};
   var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…', remove: 'Removing…'};
 
   function T(s) { return window.t ? window.t(s) : s; }
@@ -62,6 +60,14 @@
     return sel;
   }
 
+  // The row's update line, and where the version it is compared with came from (built into the panel, or the
+  // signed add-on catalog). Said even when up to date: the card compared the add-on with the pin when it loaded.
+  function updateLine(a) {
+    var from = a.pin_source ? ' ' + a.pin_source : '';
+    if (a.update) return node('div', 'small text-warning', BM.updateWords(a) + from);
+    return node('div', 'small text-secondary', T('Up to date (checked just now).') + from);
+  }
+
   function installedRow(a, box) {
     if (a.database) box.appendChild(node('div', 'small text-secondary text-break', TF('Database {db}.', {db: a.database})));
     if (a.port) {
@@ -70,14 +76,7 @@
     }
     if (a.geolocation_option) geoStatus(a, box);
     if (a.eula_url) BM.status(a, box);
-    // Where the version it is compared with came from (built into the panel, or the signed add-on catalog).
-    var from = a.pin_source ? ' ' + a.pin_source : '';
-    if (a.update) {
-      box.appendChild(node('div', 'small text-warning', BM.updateWords(a) + from));
-    } else {
-      // Said, not left blank: the card compared the add-on with the pinned version when it loaded.
-      box.appendChild(node('div', 'small text-secondary', T('Up to date (checked just now).') + from));
-    }
+    box.appendChild(updateLine(a));
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
     if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
@@ -476,14 +475,16 @@
     return box;
   }
 
+  function note(id, text) {
+    var e = el(id);
+    if (e) { e.textContent = text || ''; show(id, !!text); }
+  }
+
   function draw(d) {
     st.d = d;
     show('ad-loading', false);
-    var rt = el('ad-runtime');
-    rt.textContent = d.runtime_error || '';
-    show('ad-runtime', !!d.runtime_error);
-    var cat = el('ad-catalog');
-    if (cat) { cat.textContent = d.catalog_note || ''; show('ad-catalog', !!d.catalog_note); }
+    note('ad-runtime', d.runtime_error);
+    note('ad-catalog', d.catalog_note);
     var list = el('ad-list');
     list.textContent = '';
     if (d.manage === false) { WEB.viewerRows(d, list); return; }

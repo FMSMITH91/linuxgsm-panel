@@ -152,6 +152,19 @@ def verify_signature(key, data, sig):
     return r.returncode == 0
 
 
+def _parsed(data):
+    """(the catalog object, "") from verified bytes, or (None, BAD_FORMAT or BAD_SCHEMA)."""
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, BAD_FORMAT
+    if not isinstance(doc, dict) or set(doc) != _TOP:
+        return None, BAD_FORMAT
+    if type(doc["schema"]) is not int or doc["schema"] != SCHEMA:
+        return None, BAD_SCHEMA
+    return doc, ""
+
+
 def check_signed(data, sig, key, last_seq, now, allow_expired=False):
     """(catalog dict, "") when the published bytes `data` are a catalog to accept, else (None, the reason).
 
@@ -161,14 +174,9 @@ def check_signed(data, sig, key, last_seq, now, allow_expired=False):
     """
     if not isinstance(data, bytes) or len(data) > MAX_BYTES or not verify_signature(key, data, sig):
         return None, BAD_SIGNATURE
-    try:
-        doc = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        return None, BAD_FORMAT
-    if not isinstance(doc, dict) or set(doc) != _TOP:
-        return None, BAD_FORMAT
-    if type(doc["schema"]) is not int or doc["schema"] != SCHEMA:
-        return None, BAD_SCHEMA
+    doc, why = _parsed(data)
+    if why:
+        return None, why
     seq, issued, expires = doc["seq"], _when(doc["issued"]), _when(doc["expires"])
     if type(seq) is not int or seq < 1 or issued is None or expires is None or expires <= issued:
         return None, BAD_FORMAT
