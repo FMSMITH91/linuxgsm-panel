@@ -193,6 +193,18 @@ check("cflite cleanup: schedule and manual runs only, on this repository's main,
       and "exit 1" not in _cl_run30 and "set -euo" not in _cl_run30 and "::error::" not in _cl_run30
       and "::warning::" in _cl_run30, repr((sorted(_cl_on30), _cl_perm30)))
 
+# ── CI audit 1125: no CI output is stored for 90 days when nothing reads it ────────────────────
+# The Lighthouse action uploads its reports through its own artifact call, which has no retention
+# setting: 143 runs' reports sat for 90 days and nothing read them. Its log already holds the result.
+_lh_step30 = next((st for st in _steps29(_job29(_wf29("lighthouse.yml"), "lighthouse"))
+                   if "treosh/lighthouse-ci-action@" in st), "")
+_lh_with30 = _block30(_lh_step30, "with", 8) or {}
+check("Lighthouse: the action stores no artifact (its upload keeps 90 days) and never sends the "
+      "reports to public storage",
+      _lh_with30.get("configPath") == ".github/lighthouserc.json"
+      and _lh_with30.get("uploadArtifacts") == "false" and "temporaryPublicStorage" not in _lh_with30,
+      repr(_lh_with30))
+
 # ── Every third-party import in the unit suite is a package its CI jobs install ─────────────────
 # This part first read the workflows with PyYAML: green here (the dev venv has it), red on CI
 # (neither the checks job nor coverage installs it). The base every job that runs the suite

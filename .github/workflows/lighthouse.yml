@@ -145,10 +145,14 @@ jobs:
         if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse != 'true'
         # URL + puppeteer login live in .github/lighthouserc.json so we audit the real
         # (authenticated) dashboard, not just the login page.
+        # No artifact: the action's own upload has no retention setting, so every run kept its
+        # reports for 90 days and nothing reads them. The assertions fail this step and print
+        # their results in the log. Never temporaryPublicStorage: that sends the reports to a
+        # public third-party host.
         uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # 12.6.2
         with:
           configPath: .github/lighthouserc.json
-          uploadArtifacts: true
+          uploadArtifacts: false
 
       - name: Stop the panel
         if: always() && steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse != 'true'
