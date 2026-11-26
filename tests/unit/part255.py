@@ -561,10 +561,10 @@ def _b3_build255():
     here = os.path.join(os.path.dirname(_ad255.__file__), "..", "addon_images", "b3")
     cf = open(os.path.join(here, "Containerfile"), encoding="utf-8").read()
     req = open(os.path.join(here, "requirements.txt"), encoding="utf-8").read()
-    eq("B3 build: the Containerfile's defaults are the pinned commit and base the install passes",
-       [_ad255.B3_COMMIT in _re255.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re255.M),
-        _ad255.B3_BASE in _re255.findall(r"^ARG BASE_IMAGE=(\S+)", cf, _re255.M),
-        _re255.findall(r"^FROM (\S+)", cf, _re255.M)], [True, True, ["${BASE_IMAGE}", "${BASE_IMAGE}"]])
+    eq("B3 build: the Containerfile takes the commit and base the install passes as ARGs with no default (the "
+       "values are the add-on catalog's), and builds both stages FROM that base",
+       [_re255.findall(r"^ARG (\S+)$", cf.split("\nFROM ", 1)[0], _re255.M), _re255.findall(r"^ARG \S+=", cf, _re255.M),
+        _re255.findall(r"^FROM (\S+)", cf, _re255.M)], [["BASE_IMAGE", "B3_COMMIT"], [], ["${BASE_IMAGE}", "${BASE_IMAGE}"]])
     lines = cf.splitlines()
     at = {k: next((i for i, x in enumerate(lines) if x.startswith(k)), -1)
           for k in ("COPY entrypoint.sh", "RUN chmod 0755 /opt/b3/entrypoint.sh", "USER 65534")}

@@ -73,11 +73,12 @@ def _catalog257():
     req, cf = _read257("panel", "addon_images", "b3", "requirements.txt"), _read257("panel", "addon_images", "b3",
                                                                                    "Containerfile")
     m = _re257.search(r"^maxminddb==(\S+) \\\n((?:    --hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", req, _re257.M)
-    eq("B3: built from the fork commit (addons.py and the Containerfile agree), shown as release 2.0.2 with its short "
-       "commit, maxminddb in its hashed lock",
-       (_ad257.B3_COMMIT, _re257.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
+    eq("B3: built from the fork commit (the build passes it; the Containerfile has no default), shown as release 2.0.2 "
+       "with its short commit, maxminddb in its hashed lock",
+       (_ad257.B3_COMMIT, dict(_ad257.CATALOG["b3"]["build_args"]).get("B3_COMMIT"),
+        _re257.findall(r"^ARG (B3_COMMIT\S*)$", cf, _re257.M), _ad257.CATALOG["b3"]["version"],
         bool(m), "maxminddb>=2.6" in _read257("panel", "addon_images", "b3", "requirements.in")),
-       (_PIN257, [_PIN257], "2.0.2 (7c3bbe8c)", True, True))
+       (_PIN257, _PIN257, ["B3_COMMIT", "B3_COMMIT", "B3_COMMIT"], "2.0.2 (7c3bbe8c)", True, True))
 
 
 def _probe_sof2_257():
@@ -512,15 +513,13 @@ def _renovate257():
     base, iwbase = _ad257.B3_BASE.split("@")[1], _ad257.IW4MADMIN_BASE.split("@")[1]
     iw = (_ad257.IW4MADMIN_SHA256, _ad257.IW4MADMIN_TAG)
     cat = "panel/addon_images/catalog.json"
-    eq("Renovate: B3's release tag and commit in the add-on catalog and the Containerfile (git-tags), IW4MAdmin's release "
-       "tag and archive sha256 and its base digest (aspnet 10.0) in the catalog and its Containerfile, BlueMap's (docker, "
-       "v5) and the B3 image's base digest in the catalog and the Containerfile (docker, 3.15-slim), each matched once, daily",
+    eq("Renovate: B3's release tag and commit (git-tags), IW4MAdmin's release tag and archive sha256 and its base "
+       "digest (aspnet 10.0), BlueMap's (docker, v5) and the B3 image's base digest (docker, 3.15-slim), each matched once "
+       "in the add-on catalog and nowhere else (the Containerfiles hold no pin), daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
-       ({"git-tags tag": [(cat, _PIN257, _ad257.B3_TAG), ("panel/addon_images/b3/Containerfile", _PIN257, _ad257.B3_TAG)],
-         "custom.iw4madmin-release tag": [(cat,) + iw, ("panel/addon_images/iw4madmin/Containerfile",) + iw],
-         "docker 10.0": [(cat, iwbase), ("panel/addon_images/iw4madmin/Containerfile", iwbase)],
-         "docker v5": [(cat, _ad257.BLUEMAP_IMAGE.split("@")[1])],
-         "docker 3.15-slim": [(cat, base), ("panel/addon_images/b3/Containerfile", base)]},
+       ({"git-tags tag": [(cat, _PIN257, _ad257.B3_TAG)], "custom.iw4madmin-release tag": [(cat,) + iw],
+         "docker 10.0": [(cat, iwbase)], "docker v5": [(cat, _ad257.BLUEMAP_IMAGE.split("@")[1])],
+         "docker 3.15-slim": [(cat, base)]},
         ["RaidMax/IW4M-Admin", "big-brother-bot", "docker.io/library/python", "ghcr.io/bluemap-minecraft/bluemap",
          "mcr.microsoft.com/dotnet/aspnet"]))
 

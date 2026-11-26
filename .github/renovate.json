@@ -24,19 +24,19 @@
     "tests/unit/part19.py and part242.py gate that every pin is matched and that each manager reads",
     "only its own files.",
     "The add-ons' pins live in the add-on catalog's source, panel/addon_images/catalog.json, which",
-    "tools/sign-catalog.sh signs for panels to fetch, so an add-on update needs no panel update; each",
-    "built add-on's Containerfile repeats its pins as ARG defaults, updated in the same pull request",
-    "(.github/scripts/addon_images.py stops the required Add-on images scan when the two differ).",
+    "tools/sign-catalog.sh signs for panels to fetch, so an add-on update needs no panel update. The",
+    "built add-ons' Containerfiles declare their ARGs with no default: the panel and the image scan pass",
+    "the catalog's values, so Renovate changes the catalog alone.",
     "The pins: B3's source, the newest FMSMITH91/big-brother-bot",
-    "release tag and its commit (git-tags, in the catalog and the B3 Containerfile together; master is",
+    "release tag and its commit (git-tags; master is",
     "the next version in development, so it is never proposed),",
     "IW4MAdmin's release, the newest RaidMax/IW4M-Admin release tag and the sha256 of the archive attached to",
-    "it (in the catalog and the IW4MAdmin Containerfile together; a custom datasource reads GitHub's releases",
+    "it (a custom datasource reads GitHub's releases",
     "API, where each asset carries its sha256 digest: github-release-attachments maps an asset by the tag's",
     "text, and IW4MAdmin's tags end in -prerelease while its archives do not, so it would find none), the",
-    "base of the IW4MAdmin image, the digest of mcr.microsoft.com/dotnet/aspnet:10.0 (its catalog base and the",
-    "Containerfile's ARG BASE_IMAGE together), the B3 image's base, the digest of",
-    "python:3.15-slim (its catalog base and ARG BASE_IMAGE in the B3 Containerfile together;",
+    "base of the IW4MAdmin image, the digest of mcr.microsoft.com/dotnet/aspnet:10.0 (its catalog base),",
+    "the B3 image's base, the digest of",
+    "python:3.15-slim (its catalog base;",
     "both bases written by digest alone, as podman takes them, so the tag Renovate follows is the manager's",
     "currentValueTemplate), and BlueMap's image, the digest of its `v5` tag (a new 5.x release, never",
     "a new major one). All five are checked daily (packageRules). The B3 image's Python",
@@ -72,14 +72,12 @@
     },
     {
       "customType": "regex",
-      "description": "The B3 add-on's source: FMSMITH91/big-brother-bot's newest release tag, pinned by tag and commit, in the add-on catalog and the B3 Containerfile together",
+      "description": "The B3 add-on's source: FMSMITH91/big-brother-bot's newest release tag, pinned by tag and commit, in the add-on catalog",
       "managerFilePatterns": [
-        "/^panel/addon_images/catalog\\.json$/",
-        "/^panel/addon_images/b3/Containerfile$/"
+        "/^panel/addon_images/catalog\\.json$/"
       ],
       "matchStrings": [
-        "\"commit\": \"(?<currentDigest>[0-9a-f]{40})\",\\n\\s+\"tag\": \"(?<currentValue>v[0-9][^\"]*)\"",
-        "# renovate: B3_COMMIT is FMSMITH91/big-brother-bot release (?<currentValue>v[0-9][^ ]*) [^\\n]*\\nARG B3_COMMIT=(?<currentDigest>[0-9a-f]{40})"
+        "\"commit\": \"(?<currentDigest>[0-9a-f]{40})\",\\n\\s+\"tag\": \"(?<currentValue>v[0-9][^\"]*)\""
       ],
       "versioningTemplate": "pep440",
       "depNameTemplate": "big-brother-bot",
@@ -88,14 +86,12 @@
     },
     {
       "customType": "regex",
-      "description": "The IW4MAdmin add-on's release: RaidMax/IW4M-Admin's newest release tag and its archive's sha256, in the add-on catalog and the IW4MAdmin Containerfile together",
+      "description": "The IW4MAdmin add-on's release: RaidMax/IW4M-Admin's newest release tag and its archive's sha256, in the add-on catalog",
       "managerFilePatterns": [
-        "/^panel/addon_images/catalog\\.json$/",
-        "/^panel/addon_images/iw4madmin/Containerfile$/"
+        "/^panel/addon_images/catalog\\.json$/"
       ],
       "matchStrings": [
-        "\"sha256\": \"(?<currentDigest>[0-9a-f]{64})\",\\n\\s+\"tag\": \"(?<currentValue>[0-9][0-9.]*-prerelease)\"",
-        "ARG IW4MADMIN_TAG=(?<currentValue>[0-9][0-9.]*-prerelease)\\nARG IW4MADMIN_SHA256=(?<currentDigest>[0-9a-f]{64})"
+        "\"sha256\": \"(?<currentDigest>[0-9a-f]{64})\",\\n\\s+\"tag\": \"(?<currentValue>[0-9][0-9.]*-prerelease)\""
       ],
       "depNameTemplate": "RaidMax/IW4M-Admin",
       "datasourceTemplate": "custom.iw4madmin-release",
@@ -103,13 +99,12 @@
     },
     {
       "customType": "regex",
-      "description": "The IW4MAdmin add-on image's base: the digest of mcr.microsoft.com/dotnet/aspnet:10.0, in the add-on catalog and the IW4MAdmin Containerfile together",
+      "description": "The IW4MAdmin add-on image's base: the digest of mcr.microsoft.com/dotnet/aspnet:10.0, in the add-on catalog",
       "managerFilePatterns": [
-        "/^panel/addon_images/catalog\\.json$/",
-        "/^panel/addon_images/iw4madmin/Containerfile$/"
+        "/^panel/addon_images/catalog\\.json$/"
       ],
       "matchStrings": [
-        "(?:\"base\": \"|ARG BASE_IMAGE=)(?<depName>mcr\\.microsoft\\.com/dotnet/aspnet)@(?<currentDigest>sha256:[0-9a-f]{64})"
+        "\"base\": \"(?<depName>mcr\\.microsoft\\.com/dotnet/aspnet)@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
       "currentValueTemplate": "10.0",
       "datasourceTemplate": "docker"
@@ -128,13 +123,12 @@
     },
     {
       "customType": "regex",
-      "description": "The B3 add-on image's base: the digest of python:3.15-slim, in the add-on catalog and the B3 Containerfile together",
+      "description": "The B3 add-on image's base: the digest of python:3.15-slim, in the add-on catalog",
       "managerFilePatterns": [
-        "/^panel/addon_images/catalog\\.json$/",
-        "/^panel/addon_images/b3/Containerfile$/"
+        "/^panel/addon_images/catalog\\.json$/"
       ],
       "matchStrings": [
-        "(?:\"base\": \"|ARG BASE_IMAGE=)(?<depName>docker\\.io/library/python)@(?<currentDigest>sha256:[0-9a-f]{64})"
+        "\"base\": \"(?<depName>docker\\.io/library/python)@(?<currentDigest>sha256:[0-9a-f]{64})"
       ],
       "currentValueTemplate": "3.15-slim",
       "datasourceTemplate": "docker"
@@ -211,7 +205,7 @@
       "minimumReleaseAge": "0 days"
     },
     {
-      "description": "The add-ons' build files: only the custom managers above (B3's base, python:3.15-slim, kept equal with the add-on catalog; IW4MAdmin's, aspnet:10.0). The built-in dockerfile manager reads a tagless ARG BASE_IMAGE digest as the image's latest tag: on B3's it read python:latest and proposed a different Python (#598).",
+      "description": "The add-ons' build files: their pins are the add-on catalog's (custom managers above), and their ARGs have no default. The built-in dockerfile manager reads a tagless ARG BASE_IMAGE digest as the image's latest tag: on B3's it read python:latest and proposed a different Python (#598).",
       "matchManagers": [
         "dockerfile"
       ],

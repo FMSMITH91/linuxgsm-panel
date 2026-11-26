@@ -7,9 +7,10 @@ signs and panels fetch, so a catalog change cannot merge without this scan passi
   * every add-on whose entry has an `image` (`registry/name@sha256:...`), pulled by that digest;
   * every add-on the panel builds on the host (panel/addon_images/<name>/Containerfile, an entry with
     a `base`), built here with the catalog's values passed as build arguments, as the panel passes
-    them. Each ARG default in the Containerfile must also be the catalog's value (BASE_IMAGE is
-    `base`; <NAME>_TAG, <NAME>_SHA256 and <NAME>_COMMIT are `tag`, `sha256` and `commit`), or the
-    scan stops: a build by hand would otherwise not be the image hosts run.
+    them (BASE_IMAGE is `base`; <NAME>_TAG, <NAME>_SHA256 and <NAME>_COMMIT are `tag`, `sha256` and
+    `commit`). The Containerfile declares those ARGs with NO default, so a catalog update changes no
+    file a panel runs; the scan stops on an ARG with a default (a second copy of a pin, which could
+    drift from the catalog) and on an ARG the catalog does not supply (the build would fail on hosts).
 
 The gate (OWASP Docker Security Cheat Sheet, rule 9; OWASP CI/CD Top 10, CICD-SEC-3): Trivy fails the
 run on a High or Critical vulnerability that has a fixed version, and on a secret found in an image.
@@ -80,10 +81,14 @@ def build_args(name, entry):
     return out + [(prefix + k.upper(), entry[k]) for k in ("tag", "sha256", "commit") if k in entry]
 
 
-def foreign_args(containerfile_text, args):
-    """The ARG defaults in a Containerfile that are not the catalog's value for that ARG: [(name, value)]."""
-    want = dict(args)
-    return [(n, v) for n, v in ARG_RE.findall(containerfile_text) if want.get(n) != v]
+def defaulted_args(containerfile_text):
+    """The ARGs a Containerfile gives a default: [(name, value)]. Their values belong to the catalog alone."""
+    return ARG_RE.findall(containerfile_text)
+
+
+def unsupplied_args(containerfile_text, args):
+    """The ARGs a Containerfile declares that `args` (the catalog's build arguments) does not supply, sorted."""
+    return sorted(set(DECLARED_RE.findall(containerfile_text)) - {n for n, _ in args})
 
 
 def _pin_problems(addons):
@@ -107,15 +112,18 @@ def _image_problems(addons, builds):
 def _build_plan(name, entry, images_dir, problems):
     """[(ARG, value)] that build `name` takes from its catalog entry; what is wrong is appended to `problems`.
 
-    Only the ARGs its Containerfile declares, as the panel passes them; each ARG default must be the catalog's value.
+    Only the ARGs its Containerfile declares, as the panel passes them; every one must come from the catalog,
+    and none may have a default.
     """
     with open(os.path.join(images_dir, name, "Containerfile"), encoding="utf-8") as fh:
         text = fh.read()
     declared = set(DECLARED_RE.findall(text))
     args = [(n, v) for n, v in build_args(name, entry) if n in declared]
-    if not ARG_RE.search(text):
-        problems.append("%s: its Containerfile has no ARG defaults to build from" % name)
-    problems.extend("%s: ARG %s=%s is not the catalog's value" % (name, n, v) for n, v in foreign_args(text, args))
+    if not declared:
+        problems.append("%s: its Containerfile declares no ARG to take the catalog's values" % name)
+    problems.extend("%s: ARG %s has a default (%s); its value must come from the catalog alone" % (name, n, v)
+                    for n, v in defaulted_args(text))
+    problems.extend("%s: ARG %s is not supplied by the catalog" % (name, n) for n in unsupplied_args(text, args))
     return args
 
 

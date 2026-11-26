@@ -1,7 +1,7 @@
 """Part 288 of the unit suite: IW4MAdmin built on the host on a patched .NET runtime.
 
 1. The pins: the catalog's IW4MAdmin image is built from panel/addon_images/iw4madmin (never pulled), named by
-   its release and build id, with the three build arguments addons.py records; the Containerfile's ARG defaults
+   its release and build id, with the three build arguments addons.py records; the Containerfile's ARGs (no defaults)
    are the same values; BlueMap is still pulled by digest.
 2. The archive step: the source stage's download, run under sh with a stand-in curl and unzip, fetches the release
    archive by the tag's URL, and a tampered archive stops the build before anything in it is unpacked.
@@ -89,10 +89,10 @@ def _pins288():
        [bool(_re288.fullmatch(r"mcr\.microsoft\.com/dotnet/aspnet@sha256:[0-9a-f]{64}", _ad288.IW4MADMIN_BASE)),
         bool(_re288.fullmatch(r"[0-9a-f]{64}", _ad288.IW4MADMIN_SHA256)), _ad288.IW4MADMIN_TAG],
        [True, True, "2026.2.4.1-prerelease"])
-    defaults = dict(_re288.findall(r"(?m)^ARG ([A-Z0-9_]+)=(\S+)$", _CF288))
-    eq("IW4MAdmin: the Containerfile's ARG defaults are addons.py's pins, so a build by hand is the panel's build",
-       defaults, {"BASE_IMAGE": _ad288.IW4MADMIN_BASE, "IW4MADMIN_TAG": _ad288.IW4MADMIN_TAG,
-                  "IW4MADMIN_SHA256": _ad288.IW4MADMIN_SHA256})
+    eq("IW4MAdmin: the Containerfile declares the three ARGs the panel's build passes, none with a default (the "
+       "values are the add-on catalog's)",
+       (_re288.findall(r"(?m)^ARG ([A-Z0-9_]+)$", _CF288.split("\nFROM ", 1)[0]), _re288.findall(r"(?m)^ARG \S+=", _CF288)),
+       (["BASE_IMAGE", "IW4MADMIN_TAG", "IW4MADMIN_SHA256"], []))
     eq("IW4MAdmin: its build files are the Containerfile and the entrypoint, read from the repository",
        _ad288.build_files(_ad288.IW4MADMIN), {"build/Containerfile": _CF288,
                                               "build/entrypoint.sh": _read288("panel", "addon_images", "iw4madmin",
@@ -335,12 +335,12 @@ def _renovate288():
     mgr = [m for m in cfg.get("customManagers") or [] if m.get("datasourceTemplate") == "custom.iw4madmin-release"]
     found = _release_hits288(mgr)
     pin = (_ad288.IW4MADMIN_TAG, _ad288.IW4MADMIN_SHA256)
-    eq("renovate: the IW4MAdmin release and its archive's sha256 are matched once each in the add-on catalog and the "
+    eq("renovate: the IW4MAdmin release and its archive's sha256 are matched once each in the add-on catalog, never in the "
        "Containerfile, from a custom datasource over RaidMax/IW4M-Admin's releases that keeps each archive's sha256",
        (sorted(found), len(mgr), ds.get("defaultRegistryUrlTemplate", "").startswith(
            "https://api.github.com/repos/RaidMax/IW4M-Admin/releases"),
         ["IW4MAdmin-[0-9.]+" in t and '"digest": $d' in t and "sha256:" in t for t in ds.get("transformTemplates") or []]),
-       (sorted([("panel/addon_images/iw4madmin/Containerfile",) + pin, ("panel/addon_images/catalog.json",) + pin]), 1, True,
+       (sorted([("panel/addon_images/catalog.json",) + pin]), 1, True,
         [True]))
 
 

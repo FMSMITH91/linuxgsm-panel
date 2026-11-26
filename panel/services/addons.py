@@ -99,8 +99,8 @@ RCON_TCP_GAMES = ("csgo", "ins")
 SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
 # The add-ons' pins come from the add-on catalog (services/addons_catalog.py): the floor shipped in
 # panel/addon_images/catalog.json, or a newer signed catalog the panel fetched and checked. Renovate proposes new
-# pins in catalog.json, and in the Containerfiles' ARG defaults together (.github/renovate.json). Each name below is
-# read through the module's __getattr__, so it is always the pin in use now:
+# pins in catalog.json alone (.github/renovate.json); the Containerfiles declare their ARGs with no default, and
+# _image_sh passes them. Each name below is read through the module's __getattr__, so it is always the pin in use now:
 #   B3_TAG, B3_COMMIT: a FMSMITH91/big-brother-bot release tag and the commit it points at (only releases: master
 #     between them is the next version in development). The build checks the commit, not the tag.
 #   B3_RELEASE: the tag without its "v". The tree at a release commit still says the development number

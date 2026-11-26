@@ -1,7 +1,7 @@
 """Part 292 of the unit suite: the signed add-on catalog (add-on updates without a panel update).
 
 1. The floor: panel/addon_images/catalog.json parses as a schema 1 catalog, every image and base is pinned by a
-   full sha256 digest, its pins are the Containerfiles' ARG defaults, and addons.py's pin names and CATALOG
+   full sha256 digest, its pins are the build arguments the panel passes, and addons.py's pin names and CATALOG
    images are built from it.
 2. Accepting, through the card's Refresh route (POST /api/server/<id>/addons/catalog): a catalog signed with a
    throwaway key in this part's own allowed-signers text is accepted, stored 0600 and put in use; the list route
@@ -157,12 +157,9 @@ def _floor292():
         [bool(_re292.fullmatch(r"[a-z0-9./-]+@sha256:[0-9a-f]{64}", d)) for d in digests],
         _cat292.read_floor() == doc["addons"]),
        (1, ["b3", "bluemap", "iw4madmin"], [True, True, True], True))
-    args = {}
-    for build in ("b3", "iw4madmin"):
-        with open(os.path.join(_root, "panel", "addon_images", build, "Containerfile"), encoding="utf-8") as fh:
-            args[build] = dict(_re292.findall(r"^ARG ([A-Z0-9_]+)=(\S+)$", fh.read(), _re292.M))
-    eq("catalog floor: its pins are the Containerfiles' ARG defaults (B3's base and commit, IW4MAdmin's base, release "
-       "and archive sha256)",
+    args = {b: dict(_ad292.CATALOG[b]["build_args"]) for b in ("b3", "iw4madmin")}
+    eq("catalog floor: its pins are the build arguments the panel passes (B3's base and commit, IW4MAdmin's base, "
+       "release and archive sha256); the Containerfiles hold no copy",
        args, {"b3": {"BASE_IMAGE": doc["addons"]["b3"]["base"], "B3_COMMIT": doc["addons"]["b3"]["commit"]},
               "iw4madmin": {"BASE_IMAGE": doc["addons"]["iw4madmin"]["base"],
                             "IW4MADMIN_TAG": doc["addons"]["iw4madmin"]["tag"],

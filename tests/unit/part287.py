@@ -412,18 +412,17 @@ def _s287_scan_plan():
     check("image scan: on this tree it scans BlueMap's pinned image and builds B3, with nothing wrong",
           "bluemap" in real["upstream"] and "b3" in real["builds"] and not real["problems"], repr(real))
     good = {"a": {"image": "ghcr.io/o/a@sha256:" + "1" * 64}, "x": {"base": "docker.io/library/p@sha256:" + "2" * 64}}
-    ok = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
-    bad = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("3" * 64))
-    loose = _addons_fixture287(dict(good, a={"image": "ghcr.io/o/b:latest"}),
-                               "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
+    ok = _addons_fixture287(good, "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n")
+    bad = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
+    loose = _addons_fixture287(dict(good, a={"image": "ghcr.io/o/b:latest"}), "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n")
     check("image scan: ...an image the catalog pins by digest is scanned, a build gets the catalog's values as build "
           "arguments, and one pinned by tag stops the scan",
           ok["upstream"] == {"a": "ghcr.io/o/a@sha256:" + "1" * 64}
           and ok["builds"] == {"x": [("BASE_IMAGE", "docker.io/library/p@sha256:" + "2" * 64)]}
           and not ok["problems"] and any("not pinned by digest" in p for p in loose["problems"]), repr((ok, loose)))
-    check("image scan: ...and a Containerfile default that is not the catalog's value stops the scan (it would build "
-          "another image than hosts run)",
-          bad["problems"] and "ARG BASE_IMAGE" in bad["problems"][0], repr(bad))
+    check("image scan: ...and a Containerfile ARG with a default stops the scan, even one equal to the catalog's (a "
+          "second copy of a pin, which makes a catalog update a panel update)",
+          bad["problems"] and "ARG BASE_IMAGE has a default" in bad["problems"][0], repr(bad))
     argv = _AI287.trivy_argv("t@sha256:" + "0" * 64, "/c", "/s", "x.tar")
     gate = " ".join(argv)
     check("image scan: Trivy fails on a fixable High or Critical vulnerability or a secret, reads the accepted "

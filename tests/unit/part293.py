@@ -27,6 +27,7 @@ import time as _time293
 
 from unit.part01 import _root, check, eq, skip
 from panel.ops import system_ops as _so293
+from panel.services import addons as _AD293
 
 _TMP293 = _tf293.mkdtemp(prefix="p293-")
 _ENV293 = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t",
@@ -362,14 +363,44 @@ def _caught293(mgrs, text):
     return {v.split("@")[-1] for pat in pats for x in pat.finditer(text) for v in x.groupdict().values() if v}
 
 
+def _s293_no_defaults():
+    """The Containerfiles hold no pin: no ARG default, every ARG supplied by the catalog and passed by the panel."""
+    cat = _json293.loads(_read293(_CATALOG293))["addons"]
+    texts = {b: _read293(os.path.join(_root, "panel", "addon_images", b, "Containerfile")) for b in ("b3", "iw4madmin")}
+    eq("Containerfiles: no ARG has a default, so a new base or release changes the catalog alone (no panel update)",
+       {b: _AI293.defaulted_args(t) for b, t in texts.items()}, {"b3": [], "iw4madmin": []})
+    d = _tf293.mkdtemp(prefix="cf-", dir=_TMP293)
+    _write293(os.path.join(d, "catalog.json"), _src293({"schema": 1, "addons": {"x": {"base": cat["b3"]["base"], "commit": "a" * 40}}}))
+    cases = {"default": "ARG BASE_IMAGE=%s\nARG X_COMMIT\nFROM ${BASE_IMAGE}\n" % cat["b3"]["base"],
+             "unsupplied": "ARG BASE_IMAGE\nARG X_COMMIT\nARG X_OTHER\nFROM ${BASE_IMAGE}\n",
+             "clean": "ARG BASE_IMAGE\nARG X_COMMIT\nFROM ${BASE_IMAGE}\n"}
+    got = {}
+    for name, text in cases.items():
+        _write293(os.path.join(d, name, "x", "Containerfile"), text)
+        got[name] = _AI293.plan(os.path.join(d, "catalog.json"), os.path.join(d, name))["problems"]
+    eq("add-on scan: a Containerfile ARG default is refused, even one equal to the catalog's value, and so is an ARG "
+       "the catalog does not supply; one that takes only the catalog's ARGs passes (control)",
+       got, {"default": ["x: ARG BASE_IMAGE has a default (%s); its value must come from the catalog alone"
+                         % cat["b3"]["base"]],
+             "unsupplied": ["x: ARG X_OTHER is not supplied by the catalog"], "clean": []})
+    passed = {b: dict(_re293.findall(r"--build-arg ([A-Z0-9_]+)=(\S+)", _AD293._image_sh(b, "/d"))) for b in texts}
+    eq("panel build: the podman build passes every ARG each Containerfile declares, with the catalog's values",
+       {b: (sorted(set(_re293.findall(r"(?m)^ARG ([A-Z0-9_]+)$", t))), passed[b]) for b, t in texts.items()},
+       {"b3": (["B3_COMMIT", "BASE_IMAGE"], {"BASE_IMAGE": cat["b3"]["base"], "B3_COMMIT": cat["b3"]["commit"]}),
+        "iw4madmin": (["BASE_IMAGE", "IW4MADMIN_SHA256", "IW4MADMIN_TAG"],
+                      {"BASE_IMAGE": cat["iw4madmin"]["base"], "IW4MADMIN_TAG": cat["iw4madmin"]["tag"],
+                       "IW4MADMIN_SHA256": cat["iw4madmin"]["sha256"]})})
+
+
 def _s293_renovate():
     cat = _json293.loads(_read293(_CATALOG293))
     cfg = _json293.loads(_read293(os.path.join(_root, ".github", "renovate.json")))
     addon_mgrs = [m for m in cfg["customManagers"] if any("addon_images" in f for f in m.get("managerFilePatterns") or [])]
     caught = _caught293(addon_mgrs, _read293(_CATALOG293))
     pins = {v.split("@")[-1] for e in cat["addons"].values() for v in e.values()}
-    eq("Renovate: the five add-on managers read the catalog (never addons.py) and between them match every pin in it",
-       (len(addon_mgrs), [m for m in addon_mgrs if "/^panel/addon_images/catalog\\.json$/" not in m["managerFilePatterns"]],
+    eq("Renovate: the five add-on managers read the catalog alone (never addons.py or a Containerfile) and between "
+       "them match every pin in it",
+       (len(addon_mgrs), [m for m in addon_mgrs if m["managerFilePatterns"] != ["/^panel/addon_images/catalog\\.json$/"]],
         "services/addons" in _read293(os.path.join(_root, ".github", "renovate.json")), sorted(pins - caught)),
        (5, [], False, []))
 
@@ -411,7 +442,7 @@ else:
     _s293_tampered(_rig, _b293)
     _s293_near_expiry(_rig, _b293)
     _s293_sign_release()
-for _step293 in (_s293_static, _s293_scan, _s293_renovate, _s293_lists):
+for _step293 in (_s293_static, _s293_scan, _s293_no_defaults, _s293_renovate, _s293_lists):
     _step293()
 _s293_build_refusals()
 _sh293.rmtree(_TMP293, ignore_errors=True)

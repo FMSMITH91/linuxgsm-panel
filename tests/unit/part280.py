@@ -53,9 +53,9 @@ def _pins280():
     cf = _read280("panel", "addon_images", "b3", "Containerfile")
     eq("b3 2.0.2: addons.py and the Containerfile build the v2.0.2 commit on python:3.15-slim's index digest, and "
        "the card labels it 2.0.2",
-       (_ad280.B3_COMMIT, _re280.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re280.M), _ad280.B3_BASE,
-        _re280.findall(r"^ARG BASE_IMAGE=(\S+)", cf, _re280.M), _ad280.B3_RELEASE, _ad280.CATALOG["b3"]["version"]),
-       (_COMMIT280, [_COMMIT280], _BASE280, [_BASE280], "2.0.2", "2.0.2 (7c3bbe8c)"))
+       (_ad280.B3_COMMIT, dict(_ad280.CATALOG["b3"]["build_args"]).get("B3_COMMIT"), _ad280.B3_BASE,
+        dict(_ad280.CATALOG["b3"]["build_args"]).get("BASE_IMAGE"), _ad280.B3_RELEASE, _ad280.CATALOG["b3"]["version"]),
+       (_COMMIT280, _COMMIT280, _BASE280, _BASE280, "2.0.2", "2.0.2 (7c3bbe8c)"))
     rules = _json280.loads(_read280(".github", "renovate.json"))
     base = [m.get("currentValueTemplate") for m in rules.get("customManagers") or []
             if "docker\\.io/library/python" in "".join(m.get("matchStrings") or [])]
