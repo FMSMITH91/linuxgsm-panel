@@ -18,6 +18,14 @@
 9. Turning the egress guard off with its table already gone runs no failing nft command.
 10. The listen addresses are re-read before every start of the proxy (a reboot included) and by a timer while it
     runs; a tunnel's loopback bind is never touched.
+11. The lowest TLS version: OWASP's Transport Layer Security Cheat Sheet says web applications default to TLS 1.3
+    and may support TLS 1.2 for compatibility; the default is TLS 1.2 (1.3 negotiated whenever the browser has
+    it), and the docs, the saved default and the proxy's default agree.
+12. The Security settings card: switches for includeSubDomains, preload, local certificates and the page cache,
+    each with OWASP's value beside it and a note (never a block) outside it; the page cache is rendered only
+    where the host's proxy was built with it.
+13. Each domain shows the certificate the proxy serves, by issuer, with its expiry, and a plain warning for a
+    test or local certificate, an expired one, or one close to expiry.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -47,6 +55,8 @@ from panel.core import config as _cfg302
 from panel.db.models import (RemoteServer as _Remote302, User as _User302, Website as _Site302,
                              WebsiteDomain as _Dom302, WebsiteProxy as _Proxy302, db as _db302)
 from panel.ops.ssh_manager import websites as _sw302
+from panel.routes import websites_domains as _wd302
+from panel.routes import websites_view as _wv302
 from panel.security import privileged as _priv302
 from panel.services import websites as _ws302
 from panel.services import websites_proxy as _wp302
@@ -616,6 +626,139 @@ def _s10_controls():
        _systemctl302(calls), [["disable", "--now", _TIMER302], ["disable", "--now", _UNIT302]])
 
 
+# ── 11. the lowest TLS version ──────────────────────────────────────────────────────────────────
+def _s11_tls_default():
+    with open(os.path.join(_root, "docs", "websites.md"), encoding="utf-8") as fh:
+        rows = [ln.split("|") for ln in fh.read().split("\n") if ln.startswith("| Lowest TLS version |")]
+    text = _wp302.render([_site302()], None, _wv302.proxy_options(), secret_of=lambda s: _TOKEN302)
+    eq("TLS minimum: docs/websites.md, the saved setting's default and the proxy's default agree on TLS 1.2, and the "
+       "proxy offers 1.3 and 1.2 (OWASP: default to TLS 1.3, TLS 1.2 for compatibility)",
+       ([r[2].strip() for r in rows], _wv302.OPTIONS["tls_min"][0], _wp302.DEFAULTS["tls_min"],
+        [ln.strip() for ln in text.split("\n") if "protocols tls" in ln]),
+       (["TLS 1.2"], "1.2", "1.2", ["protocols tls1.2 tls1.3"]))
+
+
+# ── 12. the Security settings card ──────────────────────────────────────────────────────────────
+_CARD302 = r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const shown = function (id) { return !$(id).hidden; };
+  const before = ['wp-tls-note', 'wp-hsts-sub-note', 'wp-hsts-preload-note', 'wp-hsts-preload-sub',
+                  'wp-local-certs-note'].map(shown);
+  $('wp-tls').value = '1.3'; $('wp-hsts-sub').checked = true; $('wp-local-certs').checked = false; window.wsOptCheck();
+  const after = ['wp-tls-note', 'wp-hsts-sub-note', 'wp-hsts-preload-sub', 'wp-local-certs-note'].map(shown);
+  window.wsSaveOptions({preventDefault: function () {}});
+  for (let i = 0; i < 4; i++) await tick();
+  const sent = calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[2]; });
+  return {before: before, after: after, sent: sent};
+"""
+
+
+def _node302(res):
+    return res if isinstance(res, dict) and "error" not in res else {"error": res}
+
+
+def _s12_card():
+    from unit.part301 import _COMMON301, _LIST301, _list_sa301, _node301
+    opts = {"hsts_max_age": 63072000, "tls_min": "1.2", "require_2fa": True, "hsts_subdomains": False,
+            "hsts_preload": True, "local_certs": True, "cache_build": False}
+    answer = dict(_LIST301, proxies=[{"host_id": 1, "host_name": "h", "installed": True, "exposure_mode": "public",
+                                      "allow_cidrs": [], "allow_presets": []}], options=opts)
+    got = _node302(_node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], _CARD302,
+                            routes={"/api/websites": answer, "/websites/proxy/options": {"success": True}}))
+    sent = ((got.get("sent") or [{}])[-1] or {}).get("options") or {}
+    eq("Security settings card: includeSubDomains off, preload on without it and local certificates on each show "
+       "their note (saved anyway); TLS 1.2 shows none (inside OWASP's recommendation)",
+       got.get("before"), [False, True, False, True, True])
+    eq("Security settings card: TLS 1.3 alone says which visitors it turns away; turning includeSubDomains on and "
+       "local certificates off clears their notes",
+       got.get("after"), [True, False, False, False])
+    eq("Security settings card: Save sends the four new switches with the rest",
+       {k: sent.get(k) for k in ("hsts_subdomains", "hsts_preload", "local_certs", "cache_build", "tls_min")},
+       {"hsts_subdomains": True, "hsts_preload": True, "local_certs": False, "cache_build": False, "tls_min": "1.3"})
+
+
+def _s12_cache(st):
+    got = {}
+
+    def apply(remote, text, sites=(), proxy=None, start_it=False):
+        got["text"] = text
+        return True, _sw302.OK_APPLIED
+    _p9_patch(_sw302, "proxy_apply", apply)
+    seen = []
+    for cache in ("no", "yes"):
+        _p9_patch(_sw302, "proxy_status", lambda remote, c=cache: (True, "installed=yes\ncache=%s\n" % c))
+        _cfg302.update_config(lambda cfg: cfg.update(websites_cache_build=True, websites_hsts_subdomains=True,
+                                                     websites_hsts_preload=True))
+        try:
+            _Client302(st.su.id).post("/websites/proxy/apply", json={"host_id": st.host.id})
+        finally:
+            _cfg302.update_config(_forget302)
+        lines = [ln.strip() for ln in got.get("text", "").split("\n")]
+        seen.append(("order cache before rewrite" in lines,
+                     any(ln.startswith("Strict-Transport-Security") and "preload" in ln for ln in lines)))
+    eq("proxy apply (route): the saved page cache is rendered only on a host whose proxy has the cache module "
+       "(otherwise left out, so the apply cannot fail on it); saved includeSubDomains and preload are sent",
+       seen, [(False, True), (True, True)])
+
+
+# ── 13. each domain's certificate ───────────────────────────────────────────────────────────────
+def _cert_lines302(issuer, days):
+    when = int(_time302.time() + days * 86400)
+    return "installed=yes\nactive=active\ncert=p302.example.org issuer=%s not_after=%d\n" % (issuer, when)
+
+
+def _site_domain302(st, issuer, days):
+    """The site page's answer for the domain, the proxy serving it a certificate from `issuer` with `days` left."""
+    asked = []
+    _p9_patch(_sw302, "proxy_status", lambda remote: (asked.append(1) or True, _cert_lines302(issuer, days)))
+    _wd302._CERTS_AT.clear()
+    body = _p9_json(_Client302(st.su.id).get("/api/websites/%d" % st.site.id))
+    again = _p9_json(_Client302(st.su.id).get("/websites/%d/domains" % st.site.id))
+    dom = (body.get("domains") or [{}])[0]
+    return dom, len(asked), (again.get("domains") or [{}])[0].get("cert_state")
+
+
+def _s13_certs(st):
+    dom, asked, again = _site_domain302(st, "acme-staging-v02.api.letsencrypt.org-directory", 60)
+    eq("site page (route): a domain shows the certificate the proxy serves: a Let's Encrypt test one is named as such, "
+       "with its expiry and the plain warning; the host is asked once per window, not on every request",
+       (dom.get("cert_state"), (dom.get("cert_not_after") or "")[:4].isdigit(), dom.get("cert_warning"), asked, again),
+       ("staging", True, _wd302.S_CERT_STAGING, 1, "staging"))
+    got = []
+    for issuer, days in (("local", 60), ("acme-v02.api.letsencrypt.org-directory", 4.5),
+                         ("acme-v02.api.letsencrypt.org-directory", -1), ("acme-v02.api.letsencrypt.org-directory", 60)):
+        dom = _site_domain302(st, issuer, days)[0]
+        got.append((dom.get("cert_state"), dom.get("cert_warning")))
+    eq("site page (route): a local certificate, one with 4 days left and an expired one each get their warning; one "
+       "with 60 days left gets none (control)", got,
+       [("local", _wd302.S_CERT_LOCAL),
+        ("issued", "This domain's certificate expires in 4 days and should have been renewed by now. Check that "
+                   "ports 80 and 443 of this host are reachable from the internet."),
+        ("issued", _wd302.S_CERT_EXPIRED), ("issued", "")])
+
+
+_DOMAINS302 = r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const li = $('wd-list').children[0];
+  const warn = li ? li.querySelector('.text-warning') : null;
+  return {text: li ? li.textContent : '', warn: warn ? warn.textContent : null};
+"""
+
+
+def _s13_page():
+    from unit.part301 import _COMMON301, _node301, _site_ad301
+    dom = {"id": 1, "domain": "shop.example.org", "is_primary": True, "dns_state": "matching", "cert_state": "staging",
+           "cert_not_after": "2027-01-29T16:36:43", "cert_error": "", "cert_warning": "W-test", "records": []}
+    site = {"success": True, "site": {"id": 7, "name": "shop", "kind": "php", "state": "running"}, "domains": [dom],
+            "dns": {}}
+    got = _node302(_node301(_site_ad301, _COMMON301 + ["website_site.js"], _DOMAINS302,
+                            routes={"/api/websites/7": site, "/websites/7/domains": {"domains": [dom]}}))
+    text = got.get("text") or ""
+    eq("Domains tab: the certificate's issuer (a test one named as untrusted), its expiry date and the warning are shown",
+       ("Test certificate (browsers do not trust it)" in text, "2027-01-29" in text, got.get("warn")),
+       (True, True, "W-test"))
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -634,7 +777,8 @@ def _cleanup302(st):
 
 
 for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone,
-                 _s6_catch_all, _s7_opcache, _s7_release, _s7_guard, _s10_rebind):
+                 _s6_catch_all, _s7_opcache, _s7_release, _s7_guard, _s10_rebind, _s11_tls_default, _s12_card,
+                 _s13_page):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)
@@ -647,6 +791,8 @@ with _p9.app_context():
         _st302 = _state302()
         _s3_options(_st302)
         _s5_route(_st302)
+        _s12_cache(_st302)
+        _s13_certs(_st302)
         eq("part302: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips302:], [])
     finally:
         _p9_restore_all()

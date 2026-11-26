@@ -2,8 +2,9 @@
 // same GET /api/websites answer as the list (websites.js calls wsProxyRender):
 //   proxies: [{host_id, host_name, installed, version, exposure_mode, allow_cidrs: [..],
 //              allow_presets: [..], tunnel_token_set, last_error}],
-//   options: {hsts_max_age, tls_min, acme_contact, acme_staging, access_log_default, access_log_days,
-//             max_sites, require_2fa, mem_mb, cpu_milli, pids, disk_mb, max_body_mb}
+//   options: {hsts_max_age, tls_min, acme_contact, acme_staging, hsts_subdomains, hsts_preload, local_certs,
+//             cache_build, access_log_default, access_log_days, max_sites, require_2fa, mem_mb, cpu_milli, pids,
+//             disk_mb, max_body_mb}
 // Saves go to POST /websites/proxy/settings {host_id, exposure: {...}} and /websites/proxy/options {options}. The tunnel
 // token is sent only when something was typed, and the page never receives it back (tunnel_token_set).
 // OWASP's recommended values are printed beside the fields; a value outside them shows a note and is
@@ -67,6 +68,7 @@
     if (e.type === 'checkbox') e.checked = !!v; else e.value = String(v);
   }
   var OPT_FIELDS = {hsts_max_age: 'wp-hsts', tls_min: 'wp-tls', acme_contact: 'wp-acme-email', acme_staging: 'wp-staging',
+    hsts_subdomains: 'wp-hsts-sub', hsts_preload: 'wp-hsts-preload', local_certs: 'wp-local-certs', cache_build: 'wp-cache-build',
     access_log_default: 'wp-log-default', access_log_days: 'wp-log-days', max_sites: 'wp-max-sites', require_2fa: 'wp-2fa',
     mem_mb: 'wp-mem', cpu_milli: 'wp-cpu', pids: 'wp-pids', disk_mb: 'wp-disk', max_body_mb: 'wp-body'};
   window.wsProxyRender = function (d) {
@@ -136,9 +138,14 @@
   // The notes beside the OWASP values: shown when a value is outside the recommendation, never a block.
   window.wsOptCheck = function () {
     var h = WS.el('wp-hsts'), tls = WS.el('wp-tls'), mfa = WS.el('wp-2fa');
+    var sub = WS.el('wp-hsts-sub'), pre = WS.el('wp-hsts-preload'), local = WS.el('wp-local-certs');
     WS.show('wp-hsts-note', !!(h && h.value !== '' && Number(h.value) < HSTS_OWASP));
-    WS.show('wp-tls-note', !!(tls && tls.value === '1.2'));
+    WS.show('wp-tls-note', !!(tls && tls.value === '1.3'));
     WS.show('wp-2fa-note', !!(mfa && !mfa.checked));
+    WS.show('wp-hsts-sub-note', !!(sub && !sub.checked));
+    WS.show('wp-hsts-preload-note', !!(pre && !pre.checked));
+    WS.show('wp-hsts-preload-sub', !!(pre && pre.checked && sub && !sub.checked));
+    WS.show('wp-local-certs-note', !!(local && local.checked));
   };
   window.wsSaveOptions = function (e) {
     if (e && e.preventDefault) e.preventDefault();

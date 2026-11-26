@@ -78,8 +78,40 @@
             <option value="1.3">TLS 1.3</option>
             <option value="1.2">TLS 1.2</option>
           </select>
-          <div class="form-text">OWASP recommends TLS 1.3, with 1.2 only for older browsers.</div>
-          <div id="wp-tls-note" class="small text-warning" hidden>TLS 1.2 is allowed for compatibility. It is still saved.</div>
+          <div class="form-text">OWASP: TLS 1.3 by default, TLS 1.2 only for compatibility. With TLS 1.2 here, every browser that has TLS 1.3 still uses it.</div>
+          <div id="wp-tls-note" class="small text-secondary" hidden>Browsers and systems without TLS 1.3 (older phones and computers) cannot open your sites.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-hsts-sub" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-hsts-sub">HSTS for every subdomain (includeSubDomains)</label>
+          </div>
+          <div class="form-text">OWASP recommends: on, once every subdomain of every site is served over HTTPS.</div>
+          <div id="wp-hsts-sub-note" class="small text-warning" hidden>Subdomains are not covered, so a subdomain reached over plain HTTP can set cookies for your sites. It is still saved.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-hsts-preload" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-hsts-preload">Ask browsers to preload HTTPS (preload)</label>
+          </div>
+          <div class="form-text">OWASP's example header includes preload, and warns it is hard to undo: once a domain is on the browsers' list, it stays HTTPS-only.</div>
+          <div id="wp-hsts-preload-note" class="small text-warning" hidden>Preload is not requested, unlike OWASP's example. It is still saved.</div>
+          <div id="wp-hsts-preload-sub" class="small text-warning" hidden>Preload is sent only together with HSTS for every subdomain.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-local-certs" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-local-certs">Use the web proxy's own local certificates</label>
+          </div>
+          <div class="form-text">For testing only. OWASP recommends: off (a certificate authority your visitors' browsers trust).</div>
+          <div id="wp-local-certs-note" class="small text-warning" hidden>Browsers do not trust these certificates: every visitor sees a warning. It is still saved.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-cache-build">
+            <label class="form-check-label small" for="wp-cache-build">Page cache in the web proxy</label>
+          </div>
+          <div class="form-text">OWASP has no recommendation for this. It takes effect only on a host whose web proxy was built with the page cache; elsewhere it is left out and nothing breaks.</div>
         </div>
         <div class="col-sm-6">
           <label for="wp-acme-email" class="form-label small mb-1">Let's Encrypt contact email</label>

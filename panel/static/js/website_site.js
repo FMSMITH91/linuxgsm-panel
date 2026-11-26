@@ -171,9 +171,14 @@
     var info = WS.node('div', 'small text-secondary');
     info.appendChild(WS.node('span', dm.dns_state === 'matching' ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
     info.appendChild(document.createTextNode(' · '));
-    info.appendChild(WS.node('span', dm.cert_state === 'issued' ? 'text-success' : '', WS.T(WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
-    if (dm.cert_not_after) info.appendChild(WS.raw('span', 'ms-1', '(' + dm.cert_not_after + ')'));
+    var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
+    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
+    if (dm.cert_not_after) {
+      info.appendChild(WS.node('span', 'ms-1', WS.T('expires')));
+      info.appendChild(WS.raw('span', 'ms-1', String(dm.cert_not_after).slice(0, 10)));
+    }
     li.appendChild(info);
+    if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;

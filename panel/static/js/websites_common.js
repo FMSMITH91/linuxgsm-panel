@@ -101,7 +101,11 @@
   WS.KIND = {static: 'Plain site', php: 'PHP site', wordpress: 'WordPress', phpbb: 'phpBB forum',
     app: 'Node.js app'};
   WS.PHP_KINDS = {php: 1, wordpress: 1, phpbb: 1};
-  WS.CERT = {issued: 'Certificate active', pending: 'Certificate pending', failed: 'Certificate failed'};
+  // A domain's cert_state: the certificate the web proxy serves (websites_domains.cert_kind), by its issuer.
+  WS.CERT = {issued: "Certificate active (Let's Encrypt)", zerossl: 'Certificate active (ZeroSSL)', other: 'Certificate active',
+    staging: 'Test certificate (browsers do not trust it)', local: 'Local certificate (browsers do not trust it)',
+    pending: 'Certificate pending', failed: 'Certificate failed'};
+  WS.TRUSTED = ['issued', 'zerossl', 'other'];
   // A map's own entry for a value the server sent, else the fallback ("constructor" is no state).
   WS.pick = function (map, key, fallback) {
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback;

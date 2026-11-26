@@ -88,10 +88,25 @@ recommended value is printed beside the field, and a value outside it shows a no
 | Setting | Default | OWASP's recommendation |
 |---------|---------|------------------------|
 | HSTS max-age | 63072000 seconds | 63072000 (two years) |
-| Lowest TLS version | TLS 1.3 | TLS 1.3, with 1.2 only for older browsers |
+| HSTS for every subdomain (includeSubDomains) | off | on, once every subdomain is served over HTTPS |
+| Ask browsers to preload HTTPS (preload) | off | in OWASP's example header, with a warning that it is hard to undo |
+| Lowest TLS version | TLS 1.2 | TLS 1.3 by default, TLS 1.2 only for compatibility |
+| Use the web proxy's own local certificates | off | off: a certificate authority visitors' browsers trust |
+| Use Let's Encrypt's test service | off | off (browsers do not trust its certificates) |
+| Page cache in the web proxy | off | none (not a security setting) |
 | Customers must use two-factor sign-in | on | on |
 | Access logs on for new sites | off | (privacy) |
 | Let's Encrypt contact email | empty | optional |
+
+**Why TLS 1.2 is the lowest version by default.** OWASP's Transport Layer Security Cheat Sheet ("Only
+Support Strong Protocols") says web applications must default to TLS 1.3 and may support TLS 1.2 for
+compatibility. With TLS 1.2 as the lowest version, every browser that has TLS 1.3 uses it, which is
+the default OWASP asks for, and the older phones, computers and crawlers a public website still gets
+visits from can connect over TLS 1.2. Choosing TLS 1.3 here turns those visitors away; the card says so.
+includeSubDomains and preload are off by default because the panel cannot know that every subdomain of
+a customer's domain is served over HTTPS; the card notes each one while it is off. Preload only goes out
+together with includeSubDomains. The page cache only takes effect on a host whose web proxy was built
+with it; elsewhere it is left out.
 
 ## Domains and certificates
 
@@ -104,6 +119,12 @@ Certificates come from Let's Encrypt automatically, for the domains you added an
 Let's Encrypt sees your domain names, the host's address and, if you set one, the contact email. A
 test service (certificates browsers do not trust) can be chosen in Security settings for trying things
 out. A site has at most 5 domains, and at most 3 can be added per hour.
+
+Each domain on the Domains tab shows the certificate the web proxy really serves for it: who issued it
+and when it expires (read from the host at most every 5 minutes). A test or local certificate is
+marked as one browsers do not trust. A certificate with fewer than 10 days left gets a warning, as does
+an expired one. The proxy renews a certificate once a third of its lifetime is left, so a warning means
+renewal has been failing for days, usually because ports 80 and 443 do not reach the host.
 
 ## Files
 

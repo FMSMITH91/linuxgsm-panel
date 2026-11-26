@@ -476,7 +476,7 @@ eq("node: a key named like an object property is an ordinary setting, not a mana
 _PROXY_D301 = dict(_LIST301, proxies=[{"host_id": 1, "host_name": "h", "installed": True, "version": "2.10",
                                        "exposure_mode": "public", "allow_cidrs": [], "allow_presets": [],
                                        "tunnel_token_set": True}],
-                   options={"hsts_max_age": 86400, "tls_min": "1.2", "require_2fa": False})
+                   options={"hsts_max_age": 86400, "tls_min": "1.3", "require_2fa": False})
 _exp301 = _ran301('exposure', _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
   const vis = function () { return [$('wp-restricted').hidden, $('wp-tunnel').hidden]; };
   const start = vis();
@@ -505,7 +505,8 @@ eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed 
     {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"},
     [{"host_id": 1, "exposure": {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"}}],
     "", True))
-eq("node: an HSTS max-age under two years, TLS 1.2 and 2FA off for customers each show OWASP's note (saved anyway)",
+eq("node: an HSTS max-age under two years, TLS 1.3 alone (who it turns away) and 2FA off for customers each show "
+   "their note (saved anyway)",
    (_exp301.get("notes"), _exp301.get("summary")), ([True, True, True], "How visitors reach your sites: Public"))
 
 _cust301 = _ran301("add a customer", _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""

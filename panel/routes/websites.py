@@ -169,6 +169,14 @@ def proxy_row(remote_id):
     return row
 
 
+def _cache_checked(remote, opts):
+    """`opts` with the page cache left out unless this host's proxy was built with its module."""
+    if opts.get("cache_build"):
+        ok, out = host_call(_sw.proxy_status, remote)
+        opts["cache_build"] = bool(ok) and _sw.parse_proxy_status(out)["cache"]
+    return opts
+
+
 def reconcile_proxy(remote):
     """Bring the host's proxy and ports in line with its online sites: (ok, sentence).
 
@@ -186,7 +194,7 @@ def reconcile_proxy(remote):
         ok, said = host_call(_sw.proxy_stop, remote)
         return host_call(_sw.ports_apply, remote, proxy, False) if ok else (ok, said)
     try:
-        text = _wp.render(online, proxy, proxy_options())
+        text = _wp.render(online, proxy, _cache_checked(remote, proxy_options()))
     except NotImplementedError:
         return False, S_NOT_READY
     ok, said = host_call(_sw.ports_apply, remote, proxy, True)
@@ -223,7 +231,8 @@ def _list_routes(app):
     @login_required
     def api_website(site_id):
         site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
-        from panel.routes import websites_apps
+        from panel.routes import websites_apps, websites_domains
+        websites_domains.refresh_certs(site.remote)
         return jsonify(_view.site_answer(site, _status(site), websites_apps.install_json(site)))
 
 

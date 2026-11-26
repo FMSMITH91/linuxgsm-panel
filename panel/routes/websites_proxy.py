@@ -222,9 +222,12 @@ def register(app):
         row = _w.proxy_row(remote.id)
         db.session.commit()
         ok, said = _w.host_call(_sw.proxy_status, remote)
+        status = _sw.parse_proxy_status(said) if ok else {}
+        if ok:
+            from panel.routes.websites_domains import apply_certs
+            apply_certs(remote, status)
         online = Website.query.filter_by(remote_id=remote.id, enabled=True).count()
-        return jsonify(dict(proxy_json(row), online_sites=online, status_ok=bool(ok),
-                            status=_sw.parse_proxy_status(said) if ok else {},
+        return jsonify(dict(proxy_json(row), online_sites=online, status_ok=bool(ok), status=status,
                             message="" if ok else i18n.tr(said)))
 
     @app.route("/websites/proxy/install", methods=["POST"])
