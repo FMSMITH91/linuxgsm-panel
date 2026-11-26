@@ -45,6 +45,7 @@ from app import (LONG_ACTIONS, RUNNABLE_ACTIONS, _apply_mod_restart, _live_run_s
 from panel.routes._shared import (CONSOLE_CONTROL_MSG, _action_log_path, _begin_action_tail, _console_push,
     _console_send_failure, _end_action_tail, _host_timezone_cached, _json_int, _maybe_resolve_public_ip,
     _server_action_buttons, _r20b_audit_on_raise, _r21b_audited, _r39a_wipe_running, grs_restore_running,
+    BUTTON_BACKUP_BUSY, button_backup_claim,
     game_account_write_refusal, uninstall_running, uninstall_sentence,
     lg265_refresh_commands, lg265_schedule_gained)
 
@@ -1132,9 +1133,10 @@ def _bg_action(app, gs, remote, action, on_done=None):
                 if not remote:
                     detail = "its host is no longer configured"
                     return
-                with r36j_route_job(server_id, "action"):
-                    # Asked again under the registration (see _r39a_power_unless_wiping).
-                    wiping = _r39a_wipe_refusal(server_id, name, action)
+                with r36j_route_job(server_id, "action"), button_backup_claim(server_id, action) as free:
+                    # Asked again under the registration (see _r39a_power_unless_wiping); a Backup
+                    # is also refused beside another backup of the server (button_backup_claim).
+                    wiping = _r39a_wipe_refusal(server_id, name, action) or (None if free else BUTTON_BACKUP_BUSY)
                     if wiping:
                         _console_push(_app, server_id, f"[panel] {action}: {wiping}")
                         detail = str(wiping)

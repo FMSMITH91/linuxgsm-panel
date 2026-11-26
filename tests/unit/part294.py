@@ -18,6 +18,8 @@
    another value come back byte for byte.
 8. The game-config form does not show (or save) a cfg field that a later line the form does not read
    as a field sets again: two commands on one line, or a quoted key.
+9. The maintenance menu's Backup is refused while another backup of the server runs, and holds the
+   server from before its database dump, so a sweep or "Back up now" sees it in that window.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -25,20 +27,21 @@ or data/.
 """
 import base64 as _b64_294
 import os
-import shutil as _sh294
+import shutil as _shutil294
 import subprocess as _sp294  # nosec B404 - bash over this part's own scratch files
 import tempfile as _tf294
+import time as _time294
 from types import SimpleNamespace as _NS294
 
 from unit.part01 import check, eq, skip
 from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json, _p9_new_server,
-                         _p9_patch, _p9_patch_sm, _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
+                         _p9_drain, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_threading)
 from panel.core.config import encrypt_secret as _enc294
 from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, files as _files294, game as _game294
-from panel.routes import databases as _dbr294, server_files as _sf294
+from panel.routes import _shared as _sh294, databases as _dbr294, server_detail as _sd294, server_files as _sf294
 from panel.services import game_restore as _grs294, lgsm_players as _lgp294
 
 _TMP294 = _tf294.mkdtemp(prefix="p294-")
@@ -75,7 +78,7 @@ def _host294(_server, cmd, *_a, **_k):
 
 def _disk_case294(linked):
     """(refusal, deleted names, card disk) for gsu294 with ~/lgsm/backup linked to the big disk or absent."""
-    _sh294.rmtree(_HOME294, ignore_errors=True)
+    _shutil294.rmtree(_HOME294, ignore_errors=True)
     os.makedirs(os.path.join(_HOME294, "gsu294", "lgsm"))
     os.makedirs(os.path.join(_TMP294, "bigdisk"), exist_ok=True)
     if linked:
@@ -359,3 +362,49 @@ eq("config form: an RCON password set again by a later line of two commands, or 
    _cfgseen294, [[("hostname", "p294"), ("sv_cheats", "0")]] * 2)
 eq("config form (control): the other fields of that file are still shown and saved",
    _cfgctl294, ([("hostname", "p294"), ("sv_cheats", "0")], True, [_two_cmds294.replace('"p294"', '"renamed"')]))
+
+
+# ── 9. The Backup button beside another backup ────────────────────────────────────────────────────
+def _button294(sid):
+    """{case: (dumps, teed actions, what a sweep saw during the dump)} for Backup-button runs."""
+    teed, dumped, got = [], [], {}
+    _p9_arm(who="part294")
+    _p9_patch(_sd294, "threading", _p9_threading(_P9Thread))
+    _p9_patch(_sd294, "_db_dump_before", lambda *a, **k: dumped.append(_sh294._button_backup_running(sid)))
+    _p9_patch(_sd294, "_run_teed", lambda app, remote, s, short, action, *a, **k: teed.append(action) or ("", "", 0))
+    try:
+        with _p9.app_context():
+            gs = _sd294.db.session.get(_sd294.GameServer, sid)
+            _sh294._game_backup_status[sid] = {"running": True, "ok": None, "msg": "", "ts": _time294.time()}
+            try:
+                _sd294._bg_action(_p9, gs, gs.remote, "backup")
+                _p9_drain()
+            finally:
+                _sh294._game_backup_status.pop(sid, None)
+            row = _p9_audit("backup_complete")
+            got["flag"] = (list(dumped), list(teed), (row.success, row.detail) if row is not None else None)
+            with _sh294.button_backup_claim(sid, "backup") as free:
+                _sd294._bg_action(_p9, gs, gs.remote, "backup")
+                _p9_drain()
+                got["claimed"] = (free, list(dumped), list(teed))
+            _sd294._bg_action(_p9, gs, gs.remote, "backup")
+            _p9_drain()
+            got["alone"] = (list(dumped), list(teed), _sh294._button_backup_running(sid))
+    finally:
+        _p9_restore_all()
+    return got
+
+
+_bksid294 = _p9_new_server(P9_HOST, "p294bk", "cod4", 28295, name="p294 bk")
+try:
+    _bk294 = _button294(_bksid294)
+finally:
+    _p9_delete_server(_bksid294)
+_flag294 = _bk294.get("flag") or ([None], [None], None)
+check("Backup button: while a scheduled or queued backup of the server runs, it dumps nothing and runs no backup, and "
+      "its outcome is audited as refused", _flag294[:2] == ([], []) and _flag294[2] is not None
+      and not _flag294[2][0] and "another backup of this server is running" in (_flag294[2][1] or ""), _flag294)
+eq("Backup button: while another Backup-button run holds the server, a second one dumps nothing and runs nothing",
+   _bk294.get("claimed"), (True, [], []))
+eq("Backup button (control): alone it dumps and runs, a sweep asking during its dump sees it running, and it lets "
+   "go after", _bk294.get("alone"), ([True], ["backup"], False))
