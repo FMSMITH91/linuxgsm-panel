@@ -335,6 +335,12 @@ def _rows302():
     return r, su, s
 
 
+def _forget302(cfg):
+    """Drop every saved website option from config.json's dict `cfg`."""
+    for key in [k for k in cfg if k.startswith("websites_")]:
+        cfg.pop(key, None)
+
+
 def _s3_options(st):
     got = {}
 
@@ -348,7 +354,7 @@ def _s3_options(st):
     try:
         r = _Client302(st.su.id).post("/websites/proxy/apply", json={"host_id": st.host.id})
     finally:
-        _cfg302.update_config(lambda cfg: [cfg.pop(k, None) for k in list(cfg) if k.startswith("websites_")])
+        _cfg302.update_config(_forget302)
     lines = [ln.strip() for ln in got.get("text", "").split("\n")]
     eq("proxy apply (route): the saved options reach the configuration: the certificate contact as the ACME email, "
        "Let's Encrypt's staging CA, TLS 1.3 only, the HSTS age and includeSubDomains",
@@ -367,7 +373,7 @@ def _s3_local(st, got):
     try:
         _Client302(st.su.id).post("/websites/proxy/apply", json={"host_id": st.host.id})
     finally:
-        _cfg302.update_config(lambda cfg: [cfg.pop(k, None) for k in list(cfg) if k.startswith("websites_")])
+        _cfg302.update_config(_forget302)
     lines = [ln.strip() for ln in got.get("text", "").split("\n")]
     eq("proxy apply (route): the local CA when saved, and with no option saved the defaults (control)",
        ("local_certs" in lines, "protocols tls1.2 tls1.3" in lines, any(ln.startswith("email ") for ln in lines)),
