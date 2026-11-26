@@ -5727,7 +5727,8 @@ check("codeql: ...and a SARIF that lists no rules, or reports an unsuccessful in
       and "(.extensions // [])[].rules[]?" in _cq_sarif and '[ "${rules}" = "0" ]' in _cq_sarif
       and "select(.executionSuccessful == false)" in _cq_sarif and '[ "${failed}" != "0" ]' in _cq_sarif
       and '[ "${runs}" = "0" ]' in _cq_sarif
-      and _cq_sarif.find("exit 1", _cq_sarif.find('[ "${rules}" = "0" ]')) < _cq_sarif.find("jq '.runs |= map"),
+      # 0 <=: a deleted `exit 1` is find() == -1, which is "before" anything (review 1124)
+      and 0 <= _cq_sarif.find("exit 1", _cq_sarif.find('[ "${rules}" = "0" ]')) < _cq_sarif.find("jq '.runs |= map"),
       _cq_sarif[:200])
 
 # ── No source file carries a literal bidi control, zero-width or line-separator character ──────
