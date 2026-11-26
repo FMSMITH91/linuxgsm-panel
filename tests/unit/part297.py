@@ -36,6 +36,7 @@ _ALLOW297 = {
     ("codacy-coverage.yml", "upload"): {
         "api.codacy.com:443", "api.github.com:443", "github.com:443", "objects.githubusercontent.com:443",
         "release-assets.githubusercontent.com:443"},
+    ("sonar-main-issues.yml", "sonar-main-issues"): {"api.github.com:443", "github.com:443", "sonarcloud.io:443"},
 }
 _lists297 = {fj: _egress223(_job29(_wf29(fj[0]), fj[1])) for fj in _ALLOW297}
 check("main-only egress: each listed main-only job blocks, allowed exactly the hosts its own runs called",
@@ -55,6 +56,14 @@ check("codacy-alerts: names the codacy environment on main only (no deployment r
       and _ca_env297.group(1) == "${{ github.ref == 'refs/heads/main' && 'codacy' || '' }}"
       and "\n  workflow_dispatch:\n" in _wf29("codacy-alerts.yml") and "\n    if:" not in _ca297,
       repr(_ca_env297 and _ca_env297.group(0)))
+
+# sonar-main-issues needed nothing more: it has a manual trigger and no `if:`, environment or post
+# step, and a manual run on a branch judges main's last analysis as the schedule does.
+_sm297 = _wf29("sonar-main-issues.yml")
+check("sonar-main-issues: runnable by hand on any branch, and on such a run it judges main and posts nothing",
+      "\n  workflow_dispatch:\n" in _sm297 and "\n    if:" not in _job29(_sm297, "sonar-main-issues")
+      and "environment:" not in _sm297 and "check-runs" not in _sm297
+      and "--branch main ${SHA:+--sha \"$SHA\"}" in _sm297, _sm297[-400:])
 
 # ── 3. codacy-coverage: a manual run does everything but the upload ─────────────────────────────
 # A workflow_run job runs main's copy of its file, so its allow-list could be seen working only
