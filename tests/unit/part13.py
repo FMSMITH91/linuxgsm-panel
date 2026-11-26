@@ -602,8 +602,10 @@ try:
         _nr10 = _try10(_n10.notify, "server_down", "t")
     finally:
         _n10.send_telegram, _n10.send_ntfy = _snd_saved10
+    # ...and the other channel still sent (review 1124): under the inline thread stand-in a raise that
+    # escaped the per-channel try was swallowed one level up and the result was None all the same.
     check("notify(): an unreadable config and a sender that raises are both contained",
-          _nb10 is None and _nr10 is None, repr((_nb10, _nr10)))
+          _nb10 is None and _nr10 is None and _raised_then10 == ["nt"], repr((_nb10, _nr10, _raised_then10)))
 
     # ── the Discord Gateway session, driven through a fake socket ──────────────────────────────
     # REAL threads from here: the heartbeat must run beside the receive loop, not inside it.
