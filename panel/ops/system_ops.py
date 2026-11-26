@@ -1738,12 +1738,20 @@ _CI_IGNORE = {"deploy", "Upload coverage to Codacy", "Code-scanning alerts gate"
 # matrix changes (a Python is added, an image retired) and the panel judging a NEW commit is
 # running the OLD code, so an exact matrix name would strand every installed panel on its version
 # the day the matrix moved. The same is true of renaming any job here: it holds every panel back
-# until it is updated by hand. tests/unit holds this list to the workflow files, and deploy.yml's
-# verify step carries the same list (a unit test holds the two equal).
-_CI_REQUIRED = ("checks (", "coverage", "js coverage", "gamedig lockfile (", "Analyze (",
-                "Open code-scanning alerts")
+# until it is updated by hand. tests/unit holds this list to the workflow files.
+#
+# _CI_SUITE is what CI and CodeQL post. The secret scan (security.yml, which runs on every push)
+# and the dependency CVE audit (security-code.yml, which ignores the paths ci.yml ignores) are
+# required too: a failed one already held a commit back, but one that had not registered yet did
+# not, and deploy.yml's verify step already waited for both. Its REQUIRED list is now this one,
+# and a unit test holds the two equal. Gitleaks is not in _CI_SUITE because it runs on a docs-only
+# commit as well: its presence says nothing about whether CI and CodeQL ran (_ci_suite_expected).
+_CI_SUITE = ("checks (", "coverage", "js coverage", "gamedig lockfile (", "Analyze (",
+             "Open code-scanning alerts")
+_CI_REQUIRED = _CI_SUITE + ("Secret scanning (Gitleaks)", "Dependency vulnerabilities (pip-audit)")
 # ci.yml's and codeql.yml's shared paths-ignore (a unit test holds the three equal): a commit
-# that changed only these runs neither workflow, so none of _CI_REQUIRED will ever appear on it.
+# that changed only these runs neither workflow, so none of _CI_SUITE will ever appear on it (the
+# secret scan, which runs on every commit, still does).
 # (.gitattributes is not one: it changes the bytes every checkout gets, so the workflows run for it.)
 _CI_PATHS_IGNORED_FILES = {"LICENSE", ".gitignore", ".editorconfig"}
 
@@ -1763,9 +1771,10 @@ def _ci_suite_expected(sha, runs):
 
     Yes when any of them is already on it (the suite ran: the rest is on its way), and yes when
     the commit changed a path the suite runs for. A docs-only commit runs neither CI nor CodeQL,
-    and demanding their checks of it would hold it 'pending' for ever. Fails SAFE: a diff the
-    checkout cannot produce (a root commit, one not fetched) expects the whole suite."""
-    if any(_ci_name_matches(req, r.get("name") or "") for r in runs for req in _CI_REQUIRED):
+    and demanding their checks of it would hold it 'pending' for ever. Only _CI_SUITE's names count
+    as "the suite ran": Gitleaks runs on every commit, docs-only ones included. Fails SAFE: a diff
+    the checkout cannot produce (a root commit, one not fetched) expects the whole suite."""
+    if any(_ci_name_matches(req, r.get("name") or "") for r in runs for req in _CI_SUITE):
         return True
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha or ""):
         return True
@@ -1793,13 +1802,14 @@ def _remote_ci_state(sha):
 
     Returns 'passing' | 'pending' | 'failing' | 'unknown'. The panel offers an update only once
     EVERY check on the commit has completed successfully AND the commit carries the checks it is
-    expected to (_CI_REQUIRED) — CI, CodeQL, and the code-scanning alerts check, which is where
-    CodeQL's, Bandit's and Semgrep's findings gate (all three upload to code scanning); plus
-    pip-audit, Gitleaks and Lighthouse, which fail their own checks. So "check for updates" never
-    surfaces a commit while anything is still running, before a late check has appeared, or after
-    any check failed. (The _CI_IGNORE checks are ignored: they verify no code — the deployment
-    itself, the coverage upload, the alerts job's misfiled run and Scorecard's rating.) Reads
-    GitHub's public check-runs API anonymously (the production panel has no token).
+    expected to (_CI_REQUIRED) — CI, CodeQL, the code-scanning alerts check, which is where
+    CodeQL's, Bandit's and Semgrep's findings gate (all three upload to code scanning), the secret
+    scan (Gitleaks) and the dependency CVE audit (pip-audit); Lighthouse fails its own check. So
+    "check for updates" never surfaces a commit while anything is still running, before a late check
+    has appeared, or after any check failed. (The _CI_IGNORE checks are ignored: they verify no
+    code — the deployment itself, the coverage upload, the alerts job's misfiled run and
+    Scorecard's rating.) Reads GitHub's public check-runs API anonymously (the production panel
+    has no token).
 
     'unknown' means the checks could not be READ — no github.com origin, GitHub unreachable, a
     404 from a private repository — and is NOT installable: the caller stops and says why (the

@@ -923,7 +923,8 @@ class _Resp21:
 
 _REQ21 = [{"name": n, "status": "completed", "conclusion": "success"}
           for n in ("checks (ubuntu)", "coverage", "js coverage", "gamedig lockfile (x)",
-                    "Analyze (python)", "Open code-scanning alerts")]
+                    "Analyze (python)", "Secret scanning (Gitleaks)",
+                    "Dependency vulnerabilities (pip-audit)", "Open code-scanning alerts")]
 
 
 def _f_ci_record():

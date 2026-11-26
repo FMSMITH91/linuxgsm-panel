@@ -8,6 +8,10 @@
 2. A database password reset holds the database like a restore, a dump and a delete do
    (databases.one_at_a_time): while one runs, a second reset, a restore, a dump and a delete are
    refused (409) and audited, and a reset while a restore runs is refused the same way.
+3. The update gate (system_ops._remote_ci_state) offers a code commit only once it also carries the
+   secret scan ("Secret scanning (Gitleaks)") and the dependency CVE audit ("Dependency
+   vulnerabilities (pip-audit)"), as deploy.yml's verify step already required; a docs-only commit,
+   which runs Gitleaks and nothing else, still passes on what it has.
 
 The sockets run through flask-socketio's test client on part12's app (its real handlers and its real
 SocketIO, with the event budget it installed); the clock the budget and the log limit read is a
@@ -21,7 +25,7 @@ from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, 
                          _p9_new_server, _p9_patch, _p9_restore_all)
 from panel.core.config import encrypt_secret as _enc296
 from panel.db.models import AuditLog as _AL296, GameDatabase as _GD296, db as _db296
-from panel.ops import socket_hooks as _sh296
+from panel.ops import socket_hooks as _sh296, system_ops as _so296
 from panel.routes import databases as _dbr296, databases_files as _dbf296
 from panel.routes import host_terminal as _ht296, server_files as _sf296
 
@@ -185,6 +189,9 @@ def _db_row296(sid):
         return r.id, r.name
 
 
+_DBA296 = {}
+
+
 def _said296(resp):
     return resp.status_code, _p9_json(resp).get("message", "")
 
@@ -228,6 +235,11 @@ def _s296_password_claim():
     eq("database claim (password reset): each refusal is audited as a failure under its own action",
        refused, sorted([("db_password", False), ("db_restore", False), ("db_dump_download", False),
                         ("db_delete", False)]))
+    _DBA296["db"] = (rid, name, api, adm)
+
+
+def _s296_password_claim_both_ways():
+    rid, name, api, adm = _DBA296["db"]
     nested = []
 
     def restore(*a):
@@ -259,6 +271,45 @@ def _s296_password_claim():
     _p9_arm(who="part296")
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. The update gate requires the secret scan and the dependency audit on a code commit
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+_SUITE296 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success"), ("js coverage", "success"),
+             ("gamedig lockfile (node 22)", "success"), ("Analyze (python)", "success"),
+             ("Open code-scanning alerts", "success")]
+_LEAKS296 = ("Secret scanning (Gitleaks)", "success")
+_AUDIT296 = ("Dependency vulnerabilities (pip-audit)", "success")
+
+
+def _gate296(pairs, changed):
+    """The update gate's verdict on a commit carrying `pairs` (name, conclusion) that changed `changed`."""
+    runs = [{"name": n, "status": "completed", "conclusion": c} for n, c in pairs]
+    _p9_patch(_so296, "_repo_slug", lambda: "o/r")
+    _p9_patch(_so296, "_ci_fetch_runs", lambda slug, sha, seen: [dict(r) for r in runs])
+    _p9_patch(_so296, "_git", lambda args, timeout=45: (changed, "", 0) if args[:1] == ["diff"] else ("", "", 1))
+    try:
+        return _so296._remote_ci_state("b" * 40)
+    finally:
+        _p9_restore_all()
+        _p9_arm(who="part296")
+
+
+def _s296_update_gate():
+    code, docs = "panel/app_factory.py\n", "docs/install.md\n"
+    got = {"suite and Gitleaks, no pip-audit": _gate296(_SUITE296 + [_LEAKS296], code),
+           "suite and pip-audit, no Gitleaks": _gate296(_SUITE296 + [_AUDIT296], code),
+           "pip-audit skipped": _gate296(_SUITE296 + [_LEAKS296, ("Dependency vulnerabilities (pip-audit)",
+                                                                  "skipped")], code)}
+    eq("update gate: a code commit missing the secret scan or the dependency audit (or carrying a skipped one) "
+       "is held at 'pending'", got, {k: "pending" for k in got})
+    ok = {"code commit with all eight": _gate296(_SUITE296 + [_LEAKS296, _AUDIT296], code),
+          "docs-only commit with only Gitleaks": _gate296([_LEAKS296], docs)}
+    eq("update gate: a code commit carrying them all passes, and a docs-only commit (which runs Gitleaks but "
+       "neither CI nor the audit) still passes on what it has (controls)", ok, {k: "passing" for k in ok})
+    failing = _gate296(_SUITE296 + [_LEAKS296, ("Dependency vulnerabilities (pip-audit)", "failure")], code)
+    eq("update gate: a failed dependency audit fails the commit (control)", failing, "failing")
+
+
 _trips296 = len(_P9_TRIPPED)
 _sh296._clock = _CLK296
 _sh296._log_state.clear()
@@ -266,7 +317,7 @@ _sh296._log.addHandler(_LOGS296)
 try:
     _p9_arm(who="part296")
     for _step296 in (_s296_every_handler, _s296_console_family, _s296_terminal_family, _s296_log,
-                     _s296_password_claim):
+                     _s296_password_claim, _s296_password_claim_both_ways, _s296_update_gate):
         _why296 = _raises296(_step296)
         if _why296:
             check("part296: %s ran to the end" % _step296.__name__, False, _why296)
