@@ -172,8 +172,11 @@ with _p9.app_context():
 with _p9.app_context():
     db.session.execute(_text291("PRAGMA user_version = 3"))
     db.session.commit()
-    for _uid291 in (_U291["legacy"], _U291["off"]):     # these two stay bcrypt-era for the timing checks
-        db.session.get(User, _uid291).password_hash = "p291-hold"
+    # These two stay bcrypt-era for the timing checks: held as Argon2id, which the migration leaves alone,
+    # and given their bcrypt-era hash back just after it.
+    _held291 = _auth291.hash_password(_K291)
+    for _uid291 in (_U291["legacy"], _U291["off"]):
+        db.session.get(User, _uid291).password_hash = _held291
     db.session.commit()
     _models291._run_data_migrations()
     _ver291 = db.session.execute(_text291("PRAGMA user_version")).scalar()

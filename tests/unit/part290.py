@@ -71,6 +71,7 @@ def _j290(resp):
 _PIN290 = "AAAAC3NzaC1lZDI1NTE5AAAAIP290pinnedkeyp290pinnedkeyp290pinnedkey"
 _hk290 = {}
 _d1_290 = None
+_saved_key290 = None
 try:
     _p9_arm(who="part290")
     _trips290 = len(_P9_TRIPPED)
@@ -91,8 +92,8 @@ try:
                           list(_closed290))
     _page290 = _D290.get("/remote/%d/manage" % P9_HOST)
     _hk290["delegate_page"] = (_page290.status_code, _page290.get_data(as_text=True))
-    _pageA290 = _p9_client(P9_ADMIN).get("/remote/%d/manage" % P9_HOST)
-    _hk290["admin_page"] = (_pageA290.status_code, _pageA290.get_data(as_text=True))
+    _page_admin290 = _p9_client(P9_ADMIN).get("/remote/%d/manage" % P9_HOST)
+    _hk290["admin_page"] = (_page_admin290.status_code, _page_admin290.get_data(as_text=True))
     _r = _p9_client(P9_ADMIN).post("/api/remote/%d/retrust-hostkey" % P9_HOST)
     _hk290["admin"] = (_r.status_code, _j290(_r).get("success"), _p9_host_row(P9_HOST).host_key,
                        _p9_audit_count("retrust_hostkey") - _audits290, list(_closed290))
@@ -101,7 +102,8 @@ finally:
     _p9_restore_all()
     if _d1_290:
         _drop290(*_d1_290)
-    _p9_set_host(P9_HOST, host_key=_saved_key290)
+    if _saved_key290 is not None:
+        _p9_set_host(P9_HOST, host_key=_saved_key290)
 _d290 = _hk290.get("delegate", (None,) * 6)
 eq("retrust host key: a delegated MANAGE_REMOTES admin on the host is refused (403), the pin is kept, "
    "nothing is audited and no connection is dropped",
@@ -212,7 +214,8 @@ _XHR290 = {"X-Requested-With": "XMLHttpRequest"}
 _NAMES290 = {"p290-lan.example": ["203.0.113.9", "10.0.0.7"], "p290-pub.example": ["203.0.113.10"],
              "localhost.p290.example": ["::1"]}
 _INTERNAL290 = ("127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.9", "169.254.169.254", "100.100.100.100",
-                "0.0.0.0", "fd7a:115c:a1e0::1", "fe80::1", "::1", "::ffff:10.0.0.1", "64:ff9b::a00:1",
+                "0.0.0.0",  # nosec B104 - a destination the check must refuse, not an address bound to
+                "fd7a:115c:a1e0::1", "fe80::1", "::1", "::ffff:10.0.0.1", "64:ff9b::a00:1",
                 "2002:a00:1::1", "2130706433", "p290-lan.example", "localhost.p290.example")
 _ssrf290 = {}
 _d3_290 = _row290 = None
