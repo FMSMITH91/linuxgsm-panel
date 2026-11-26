@@ -343,10 +343,12 @@ def _status_answer(gs):
                     "catalog_note": i18n.tr(note, **vals) if note else ""})
 
 
-def _catalog_answer(gs):
+def _catalog_answer():
     """Fetch and check the signed add-on catalog now (the card's Refresh), audited; answers in words."""
     ok, sentence, vals = _cat.refresh()
-    log_action(current_user, "addon_catalog_refresh", target=gs.name, success=ok, detail=i18n.fill(sentence, **vals))
+    # The catalog is the panel's, not one server's: the row names it.
+    log_action(current_user, "addon_catalog_refresh", target="add-on catalog", success=ok,
+               detail=i18n.fill(sentence, **vals))
     return jsonify({"success": ok, "message" if ok else "error": i18n.tr(sentence, **vals)})
 
 
@@ -901,7 +903,8 @@ def register(app):
         """Fetch the signed add-on catalog now (the card's Refresh). It installs nothing: Update does."""
         if not has_permission(current_user, MANAGE_ADDONS):
             return _say(403, _DENIED)
-        return _catalog_answer(get_game(server_id))
+        get_game(server_id)          # a server this account may open (404 otherwise): the card's own check
+        return _catalog_answer()
 
     @app.route("/api/server/<int:server_id>/addons/<addon_id>/install", methods=["POST"])
     @login_required
