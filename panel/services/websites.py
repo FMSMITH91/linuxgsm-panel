@@ -192,8 +192,9 @@ PHP_DEFAULTS = (
     ("display_startup_errors", "Off"), ("log_errors", "On"), ("error_log", "/proc/self/fd/2"),
     ("html_errors", "Off"), ("allow_url_fopen", "Off"), ("enable_dl", "Off"), ("zend.exception_ignore_args", "On"),
     ("session.use_strict_mode", "1"), ("session.use_only_cookies", "1"), ("session.cookie_httponly", "1"),
-    ("session.cookie_secure", "1"), ("session.cookie_samesite", "Lax"), ("session.save_path", "/tmp"),
-    ("upload_tmp_dir", "/tmp"),
+    ("session.cookie_secure", "1"), ("session.cookie_samesite", "Lax"),
+    ("session.save_path", "/tmp"),  # nosec B108 - the site container's own tmpfs, not the host's /tmp
+    ("upload_tmp_dir", "/tmp"),  # nosec B108 - the site container's own tmpfs, not the host's /tmp
 )
 # ...and the hardening written after everything, which no setting of the site can undo (PHP reads
 # the last value of a key; the Advanced editor refuses both keys anyway).
@@ -364,10 +365,25 @@ def valkey_conf(password):
 
 
 # ── the units ───────────────────────────────────────────────────────────────────────────────────
-def _limits(site):
-    out = ["--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb),
-           "--cpus=%.2f" % (int(site.cpu_milli) / 1000.0), "--stop-timeout=%d" % STOP_TIMEOUT]
+def _limits(site, cpu=True):
+    """The container's podman limits; --cpus only where the host delegates the cpu controller (`cpu`)."""
+    out = ["--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb)]
+    out += ["--cpus=%.2f" % (int(site.cpu_milli) / 1000.0)] if cpu else []
+    out += ["--stop-timeout=%d" % STOP_TIMEOUT]
     return out if site.full_egress else out + ["--dns=none"]
+
+
+# Where a site's CPU limit is enforced (the site card and docs say which, never silently none):
+#   container: --cpus on the container (the account's user manager has the cpu controller);
+#   account:   the host does not delegate it, so the helper's website-cpu-limit sets CPUQuota and
+#              CPUWeight on the account's whole user slice (its site, cache and gate together);
+#   none:      neither could be set.
+CPU_MODES = {
+    "container": "CPU limit: applied to the website's container.",
+    "account": ("CPU limit: this host does not let the website's account limit its own containers, so the panel "
+                "limits the whole account (its share and its quota) instead."),
+    "none": "CPU limit: this host allows no CPU limit for websites, so this website runs without one.",
+}
 
 
 def _hardening(ids, pids):
@@ -421,13 +437,14 @@ def needs_egress(site):
     return site.kind == "wordpress" and not site.full_egress
 
 
-def quadlet(site, ids, net, image=None):
+def quadlet(site, ids, net, image=None, cpu=True):
     """The site's Quadlet .container text for numeric `ids` (uid, gid) and network options `net`.
 
-    `image` defaults to image_for(site). A runtime app has its own: app_quadlet.
+    `image` defaults to image_for(site). A runtime app has its own: app_quadlet. `cpu` False leaves
+    --cpus out (the host does not delegate the cpu controller; CPU_MODES "account" limits it instead).
     """
     if site.kind == "app":
-        return app_quadlet(site, ids, net, image)
+        return app_quadlet(site, ids, net, image, cpu)
     image = image or image_for(site)
     home = _home(site.account)
     lines = _head("website %s" % site.name, [DB_RELAY_UNIT + ".socket"] if "-T,3306:%d" % (
@@ -445,13 +462,13 @@ def quadlet(site, ids, net, image=None):
                   "Volume=%s/%s/php.ini:/usr/local/etc/php/conf.d/zz-panel.ini:ro" % (home, CONF),
                   "Tmpfs=/tmp:rw,mode=1777,size=256m", "Tmpfs=/run/apache2:rw,mode=1777,size=16m",
                   "Tmpfs=/run/lock/apache2:rw,mode=1777,size=4m"]
-    lines += _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site))]
+    lines += _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site, cpu))]
     if site.kind in KINDS_PHP:
         lines.append("Exec=apache2-foreground")
     return "\n".join(lines + _tail())
 
 
-def app_quadlet(site, ids, net, image=None):
+def app_quadlet(site, ids, net, image=None, cpu=True):
     """A runtime app's Quadlet text: the runtime's pinned image, its start command and port (behind the gate)."""
     image = image or image_for(site)
     home = _home(site.account)
@@ -464,7 +481,7 @@ def app_quadlet(site, ids, net, image=None):
         "Volume=%s/%s:/app" % (home, HTML), "Volume=%s/%s/start.sh:/panel/start.sh:ro" % (home, CONF),
         "EnvironmentFile=%s/%s/app.env" % (home, CONF), "Environment=PORT=%d" % port, "Environment=NODE_ENV=production",
         "Environment=HOME=/tmp", "WorkingDir=/app", "Tmpfs=/tmp:rw,mode=1777,size=256m",
-    ] + _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site)), "Exec=/bin/sh /panel/start.sh"]
+    ] + _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site, cpu)), "Exec=/bin/sh /panel/start.sh"]
     return "\n".join(lines + _tail())
 
 
@@ -674,9 +691,9 @@ def egress_proxy_source():
         return fh.read()
 
 
-def site_files(site, ids, net, token, cache_password=None, env=None, image=None, egress_hosts=()):
+def site_files(site, ids, net, token, cache_password=None, image=None, egress_hosts=(), cpu=True):
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
-    files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image),
+    files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
              HOME_DIR + "/" + META_FILE: json.dumps({"kind": site.kind, "image": image or image_for(site),
                                                      "port": int(site.port), "name": site.name}, sort_keys=True)}
     if site.kind == "static":
@@ -687,7 +704,7 @@ def site_files(site, ids, net, token, cache_password=None, env=None, image=None,
         files["%s/%s.container" % (QUADLET_DIR, GATE_UNIT)] = gate_quadlet(site, ids, _wc.static_image())
         files[CONF + "/start.sh"] = start_script(site)
         files[CONF + "/build.sh"] = build_script(site)
-        files[CONF + "/app.env"] = env_file(site, env)
+        files[CONF + "/app.env"] = env_file(site)
     else:
         files[CONF + "/apache.conf"] = apache_conf(token)
         files[CONF + "/ports.conf"] = APACHE_PORTS
@@ -760,6 +777,20 @@ def remove_sh(account, site):
             % (UNIT, GATE_UNIT, CACHE_UNIT, _MARK_REMOVED))
 
 
+LOG_LINES = 500
+
+
+def logs_sh(account, lines=LOG_LINES):
+    """Bash (as the site's account) printing the last `lines` log lines of the site's containers, oldest first.
+
+    The containers' own output (Podman's journald driver names them), with the time; nothing of the host.
+    """
+    _home(account)
+    names = " + ".join("CONTAINER_NAME=%s" % u for u in (UNIT, GATE_UNIT, CACHE_UNIT))
+    return (_ENV + "journalctl --user %s -n %d --no-pager -o short-iso 2>/dev/null | grep -v '^-- No entries --$'; true"
+            % (names, max(1, min(int(lines), 2000))))
+
+
 def probe_sh(account, site):
     """Bash that prints the site's state as key=value lines for parse_probe (one SSH round trip)."""
     _home(account)
@@ -771,6 +802,8 @@ def probe_sh(account, site):
             + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>/dev/null)\"; " % UNIT
             + "echo \"mem=$(podman stats --no-stream --format '{{.MemUsage}}' %s 2>/dev/null | head -n 1)\"; " % UNIT
             + "echo \"disk_mb=$(du -sxm %s 2>/dev/null | cut -f1)\"; " % _q(SITE)
+            + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
+              '2>/dev/null && echo cpu_delegated=1; '
             + "[ -f %s ] && echo installed=1; true" % _q(HOME_DIR + "/" + META_FILE))
 
 
@@ -787,6 +820,7 @@ def parse_probe(out):
             "uid": int(kv["uid"]) if kv.get("uid", "").isdecimal() else None,
             "gid": int(kv["gid"]) if kv.get("gid", "").isdecimal() else None,
             "installed": kv.get("installed") == "1", "splice": kv.get("splice") == "1",
+            "cpu_delegated": kv.get("cpu_delegated") == "1",
             "os": kv.get("os", ""), "podman": kv.get("podman", "")}
 
 
@@ -814,10 +848,15 @@ def disk_state(used_mb, limit_mb):
 def recipe_steps(recipe):
     """A one-click app recipe's install steps, each one of the fixed step types the panel implements.
 
+    `recipe` is a catalog recipe, or its name (the signed catalog's entry is used; [] when it has none).
     Raises ValueError for a recipe websites_catalog would refuse. Each step is a copy with its index
     (`n`) and a `name` (type and index) the install job records in Website.install_steps_done.
     """
     from panel.services import websites_catalog as _wc
+    if isinstance(recipe, str):
+        recipe = _wc.recipe(recipe)
+        if recipe is None:
+            return []
     bad = _wc.recipe_problems("recipe", recipe)
     if bad:
         raise ValueError("the recipe is refused: %s" % bad[0])

@@ -37,13 +37,16 @@ ONLY_LOCAL = ("Websites run on the panel's own host for now: a managed host cann
               "helper, which websites need.")
 NO_HELPER = ("This host's panel helper is missing or out of date. Run install.sh again as root, then try "
              "again.")
-NO_TOKEN = "This website has no proxy token yet. Save its settings again, then try again."
+MISSING_GATE = "This website has no proxy token yet. Save its settings again, then try again."
 NO_IMAGE = "The signed catalog offers no image for this website's kind and version."
 REFUSED = "The panel refused the request."
 OK_STARTED = "The website was started."
 OK_STOPPED = "The website was stopped."
 OK_REMOVED = "The website and its account were removed."
 OK_PROXY = "The web proxy was installed."
+OK_CACHE_BUILD = "The web proxy with the page cache was built and installed."
+CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so the plain one was kept. Check the "
+                      "host's internet connection and try again.")
 OK_APPLIED = "The web proxy's configuration was checked and applied."
 BAD_CONFIG = "The web proxy refused the new configuration, so the running one was kept: {why}"
 OK_PROXY_STOPPED = "The web proxy was stopped: nothing listens on ports 80 and 443."
@@ -124,7 +127,7 @@ def _site_bundle(site, ids, probe, db=None):
     """The stdin bundle of the site's files, or raise ValueError (no token, no image)."""
     token = _secret(site.proxy_secret)
     if not _ws()._TOKEN_RE.match(token):
-        raise ValueError(NO_TOKEN)
+        raise ValueError(MISSING_GATE)
     image = _ws().image_for(site)
     if not image:
         raise ValueError(NO_IMAGE)
@@ -132,7 +135,7 @@ def _site_bundle(site, ids, probe, db=None):
     net = _ws().network(site, db_port, splice=probe.get("splice", False))
     cache_pw = _secret(site.object_cache_secret) if site.object_cache else None
     files = _ws().site_files(site, ids, net, token, cache_password=cache_pw, image=image,
-                             egress_hosts=_egress_hosts(site))
+                             egress_hosts=_egress_hosts(site), cpu=probe.get("cpu_delegated", False))
     if relay_target:
         files.update({"%s/%s" % (_ws().USER_UNIT_DIR, k): v for k, v in _ws().db_relay_units(site, relay_target).items()})
     return _ws().bundle(files), image
@@ -160,7 +163,22 @@ def install(remote, site, db=None):
     if not ok:
         return False, _mark(out)
     quota_set(remote, site)
+    cpu_limit(remote, site, probe)
     return start(remote, site)
+
+
+def cpu_limit(remote, site, probe=None):
+    """Where the site's CPU limit is enforced: (ok, websites.CPU_MODES key) — container, account or none.
+
+    The container's own --cpus where the host delegates the cpu controller to the account (written in its
+    unit); else the helper limits the account's whole user slice. Never silently unlimited: "none" is said.
+    """
+    if probe is None:
+        _ids_got, probe = _ids(remote, site)
+    if probe.get("cpu_delegated"):
+        return True, "container"
+    ok, _out = _helper(remote, "website-cpu-limit", [site.account, str(int(site.cpu_milli))], timeout=60)
+    return ok, "account" if ok else "none"
 
 
 def start(remote, site):
@@ -199,6 +217,21 @@ def proxy_install(remote):
         return False, NO_IMAGE
     ok, out = _helper(remote, "website-proxy-install", [asset["version"], arch, asset["sha256"]], timeout=900)
     return (True, OK_PROXY) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
+
+
+def cpu_note(mode):
+    """The site card's sentence for where the CPU limit is enforced (cpu_limit's mode)."""
+    modes = _ws().CPU_MODES
+    return modes.get(mode, modes["none"])
+
+
+def proxy_install_cache(remote):
+    """Build and install the web proxy with the page cache module, from the signed catalog's pins."""
+    from panel.services import websites_catalog as _wc
+    pins = _wc.pins("caddy_cache")
+    ok, out = _helper(remote, "website-proxy-install-cache",
+                      [pins["caddy"], pins["builder"], pins["base"], pins["version"]], timeout=1900)
+    return (True, OK_CACHE_BUILD) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else CACHE_BUILD_FAILED)
 
 
 def _host_machine(remote):
@@ -245,7 +278,7 @@ def proxy_status(remote):
 
 def parse_proxy_status(out):
     """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}."""
-    got = {"installed": False, "version": "", "active": "unknown", "certs": {}}
+    got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             parts = dict(p.split("=", 1) for p in line.split() if "=" in p)
@@ -253,8 +286,8 @@ def parse_proxy_status(out):
                 got["certs"][parts["cert"]] = {"issuer": parts.get("issuer", ""), "not_after": int(parts["not_after"])}
         elif "=" in line:
             key, _sep, value = line.partition("=")
-            if key in ("installed", "version", "active"):
-                got[key] = (value == "yes") if key == "installed" else value
+            if key in ("installed", "version", "active", "cache"):
+                got[key] = (value == "yes") if key in ("installed", "cache") else value
     return got
 
 
@@ -415,25 +448,63 @@ def env_apply(remote, site):
     return (True, OK_ENV) if ok else (False, _mark(out))
 
 
+def _step_values(site, step):
+    """(the step without its secrets, values_for()'s dict) from a step that carries the job's `secrets`.
+
+    The install job passes the generated or typed admin details and the new database's name and password in
+    step["secrets"]; they become the placeholder values and travel on stdin only (websites_recipes).
+    """
+    step = dict(step)
+    sec = step.pop("secrets", None) or {}
+    from panel.services import websites_recipes as _wr
+    domains = [d.domain for d in sorted(site.domains or [], key=lambda d: (not d.is_primary, d.id or 0))]
+    admin = {"user": sec.get("admin_user", ""), "email": sec.get("admin_email", ""),
+             "password": sec.get("admin_password", ""), "site_name": site.name}
+    db = {"name": sec.get("db_name", ""), "user": sec.get("db_user", ""), "password": sec.get("db_password", "")}
+    return step, _wr.values_for(site, db=db, admin=admin if sec.get("admin_user") else None, domains=domains)
+
+
 def app_install_step(remote, site, step, values=None, recipe=None):
     """Run one install step of the site's app recipe; (ok, text). create-database is the caller's (Databases code).
 
-    `values` is websites_recipes.values_for()'s dict; the account's ids and the site's network are
-    added here for a container step.
+    `values` is websites_recipes.values_for()'s dict, or the step carries the job's `secrets` (the admin
+    details and the database's) and they are turned into it here; `recipe` defaults to the site's catalog
+    recipe. The account's ids and the site's network are added for a container step. Every secret goes on
+    the step's stdin, never on a command line.
     """
     from panel.services import websites_recipes as _wr
-    values = dict(values or {})
+    from panel.services import websites_catalog as _wc
     if step["type"] == "create-database":
         return True, OK_STEP
-    if step["type"] == "run-in-container":
-        ids, probe = _ids(remote, site)
-        if ids is None:
-            return False, FAILED
-        values.update(_uid=str(ids[0]), _gid=str(ids[1]),
-                      _network=_ws().network(site, values.get("_db_port"), splice=probe.get("splice", False)))
+    if "secrets" in step:
+        try:
+            step, values = _step_values(site, step)
+        except ValueError:
+            return False, REFUSED
+    values = dict(values or {})
+    recipe = recipe or _wc.recipe(site.app_recipe) or {}
+    if step["type"] == "run-in-container" and not _container_values(remote, site, recipe, values):
+        return False, FAILED
     body, stdin = _wr.step_sh(site.account, site, step, values, recipe=recipe, token=_secret(site.proxy_secret))
     ok, out = _as_site(remote, site.account, body, timeout=1800, stdin_text=stdin)
     return (True, OK_STEP) if ok else (False, _mark(out))
+
+
+def _container_values(remote, site, recipe, values):
+    """Add the account's ids and the site's network to `values` for a container step; False when unread."""
+    ids, probe = _ids(remote, site)
+    if ids is None:
+        return False
+    db_port = values.get("_db_port") or (3306 if recipe.get("database") else None)
+    values.update(_uid=str(ids[0]), _gid=str(ids[1]),
+                  _network=_ws().network(site, db_port, splice=probe.get("splice", False)))
+    return True
+
+
+def site_logs(remote, site):
+    """The site's containers' last log lines (one SSH round trip): (ok, text)."""
+    ok, out = _as_site(remote, site.account, _ws().logs_sh(site.account), timeout=60)
+    return (True, out) if ok else (False, FAILED)
 
 
 def app_undo_step(remote, site, step):

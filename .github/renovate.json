@@ -205,13 +205,14 @@
       "minimumReleaseAge": "0 days"
     },
     {
-      "description": "The add-ons' build files: their pins are the add-on catalog's (custom managers above), and their ARGs have no default. The built-in dockerfile manager reads a tagless ARG BASE_IMAGE digest as the image's latest tag: on B3's it read python:latest and proposed a different Python (#598).",
+      "description": "The add-ons' and the websites' build files: their pins are the add-on catalog's (custom managers above), and their ARGs have no default. The built-in dockerfile manager reads a tagless ARG BASE_IMAGE digest as the image's latest tag: on B3's it read python:latest and proposed a different Python (#598).",
       "matchManagers": [
         "dockerfile"
       ],
       "matchFileNames": [
         "panel/addon_images/b3/Containerfile",
-        "panel/addon_images/iw4madmin/Containerfile"
+        "panel/addon_images/iw4madmin/Containerfile",
+        "panel/website_images/caddy-cache/Containerfile"
       ],
       "enabled": false
     },

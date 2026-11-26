@@ -62,12 +62,12 @@ def _s299_floor():
        (_wc299.sites_problems(_SITES299), all(_re299.fullmatch(r"[a-z0-9./-]+@sha256:[0-9a-f]{64}", d) for d in digests),
         _cat299.FLOOR_SECTIONS.get("sites") == _SITES299, len(digests) >= 12),
        ([], True, True, True))
-    eq("sites catalog: the shipped recipes are WordPress, phpBB, Drupal and MyBB, each release downloaded "
+    eq("sites catalog: the shipped recipes are WordPress, phpBB, Drupal, MyBB and SMF, each release downloaded "
        "from an allowed https host with its sha256 (WordPress comes in its pinned image)",
        (sorted(_SITES299["recipes"]),
         [bool(_re299.fullmatch(r"[0-9a-f]{64}", r.get("sha256", ""))) for k, r in sorted(_SITES299["recipes"].items())
          if k != "wordpress"]),
-       (["drupal", "mybb", "phpbb", "wordpress"], [True, True, True]))
+       (["drupal", "mybb", "phpbb", "smf", "wordpress"], [True, True, True, True]))
     eq("sites catalog: the panel's digest shape is the add-on catalog's (one rule for both)",
        _wc299._DIGEST, _cat299._DIGEST)
 
@@ -766,7 +766,7 @@ def _recipe_out299():
         vals = dict(_values299(_site299(kind="wordpress")), _uid="1005", _gid="1005",
                     _network="pasta:-4,-o,127.0.0.1,-T,3306:3306")
         out = {}
-        for name in ("wordpress", "phpbb", "drupal", "mybb"):
+        for name in ("wordpress", "phpbb", "drupal", "mybb", "smf"):
             recipe = _wc299.recipe(name)
             for step in _ws299.recipe_steps(recipe):
                 body, stdin = _wr299.step_sh("ws5", _site299(kind=recipe["kind"]), step, vals, recipe=recipe,
@@ -780,7 +780,7 @@ def _s299_recipe_steps():
     vals, out = _recipe_out299()
     leaks = [k for k, (body, _i) in out.items() if any(sec in body for sec in (vals["db_password"], vals["admin_password"],
                                                                                 _TOKEN299))]
-    eq("recipes: no step of the four shipped recipes puts the database password, the admin password or the proxy "
+    eq("recipes: no step of the five shipped recipes puts the database password, the admin password or the proxy "
        "token in its shell text (they go on stdin)", leaks, [])
     dl_body = out[("phpbb", "download-verify-unpack-1")][0]
     eq("recipes (download): https only with size and time caps, the sha256 checked BEFORE the unpacker runs, a "
@@ -893,9 +893,207 @@ def _s299_egress():
        [[], [], [], [], [], [], [], ["93.184.215.14"]])
 
 
+# ── 7. the page cache build, the CPU fallback, the image scan and the Cloudflare list ────────────
+_AI_SPEC299 = _ilu299.spec_from_file_location("addon_images_p299", os.path.join(_root, ".github", "scripts", "addon_images.py"))
+_AI299 = _ilu299.module_from_spec(_AI_SPEC299)
+_AI_SPEC299.loader.exec_module(_AI299)
+_CF_SPEC299 = _ilu299.spec_from_file_location("cloudflare_ranges_p299",
+                                              os.path.join(_root, ".github", "scripts", "cloudflare_ranges.py"))
+_CF299 = _ilu299.module_from_spec(_CF_SPEC299)
+_CF_SPEC299.loader.exec_module(_CF299)
+_CACHE_CF299 = os.path.join(_root, "panel", "website_images", "caddy-cache", "Containerfile")
+
+
+def _s299_cache_build():
+    with open(_CACHE_CF299, encoding="utf-8") as fh:
+        text = fh.read()
+    c = _SITES299["caddy_cache"]
+    eq("page cache build: the helper builds from its own copy of the Containerfile (equal to the repository's, which "
+       "CI builds and scans), no ARG has a default, every ARG comes from the catalog, the module at an exact version, "
+       "Go's checksum database on",
+       (_H299.WEB_CACHE_CONTAINERFILE == text, _AI299.defaulted_args(text),
+        _AI299.unsupplied_args(text, _AI299.site_build_args("caddy-cache", _SITES299)), c["module"], c["caddy"],
+        bool(_re299.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", c["version"])), "GOSUMDB=sum.golang.org" in text),
+       (True, [], [], "github.com/caddyserver/cache-handler", _SITES299["caddy"]["version"], True, True))
+    bad = {"a tag, not a digest": _bad299(("caddy_cache", "builder"), "docker.io/library/caddy:2-builder"),
+           "another module": _bad299(("caddy_cache", "module"), "github.com/example/evil"),
+           "a moving version": _bad299(("caddy_cache", "version"), "latest"),
+           "another Caddy than the proxy's": _bad299(("caddy_cache", "caddy"), "2.10.0")}
+    eq("page cache build (catalog): a builder by tag, another module, a moving version and another Caddy release are "
+       "each refused", sorted(k for k, d in bad.items() if not _wc299.sites_problems(d)), [])
+    eq("page cache build (verb): images by digest only, the module's version exact, in both tables",
+       [_refused299(_H299.validate, "website-proxy-install-cache", a) for a in (
+           ["2.11.9", "docker.io/library/caddy:2", c["base"], "v0.17.0"], ["2.11.9", c["builder"], c["base"], "main"])]
+       + [_refused299(_priv299.check_args, "website-proxy-install-cache", ["2.11.9", c["builder"], c["base"], "main"])],
+       [True, True, True])
+    saved = _H299.WEB_PROXY_BIN
+    _H299.WEB_PROXY_BIN = os.path.join(_root, "tests", "no-such-proxy-binary")
+    try:
+        rc, calls = _with_helper299(lambda: _H299.do_website_proxy_install_cache(
+            ["2.11.9", c["builder"], c["base"], c["version"]], ""), {"lgsmweb": 990})
+    finally:
+        _H299.WEB_PROXY_BIN = saved
+    eq("page cache build (verb): with no plain proxy installed it refuses before any build runs", (rc, calls), (1, []))
+
+
+class _CpuCore299(_Core299):
+    def __init__(self, rc):
+        super().__init__("")
+        self.rc = rc
+
+    def run_privileged(self, _remote, verb, args=(), **_kw):
+        self.calls.append((verb, list(args)))
+        return "", "", self.rc
+
+
+def _s299_cpu():
+    site = _site299()
+    q = _ws299.quadlet(site, (1, 1), "pasta:-4", image="x/y@sha256:" + "a" * 64, cpu=False)
+    eq("CPU fallback (unit): without the cpu controller the container's --cpus is left out (it would fail to start)",
+       ("--cpus" in q, "--cpus=1.50" in _ws299.quadlet(site, (1, 1), "pasta:-4", image="x/y@sha256:" + "a" * 64)),
+       (False, True))
+    eq("CPU fallback (probe): the account's delegated controllers are read back",
+       (_ws299.parse_probe("cpu_delegated=1\n")["cpu_delegated"], _ws299.parse_probe("uid=5\n")["cpu_delegated"],
+        "cgroup.controllers" in _ws299.probe_sh("ws5", site)), (True, False, True))
+    results = []
+    for delegated, rc in ((True, 0), (False, 0), (False, 1)):
+        core = _CpuCore299(rc)
+        got = _with_core299(core, lambda: _smw299.cpu_limit(None, site, {"cpu_delegated": delegated}))
+        results.append((got, core.calls))
+    eq("CPU fallback (cpu_limit): the container's own limit where delegated; else the account's slice through the "
+       "helper; and when that fails it says none, never silently unlimited",
+       results, [((True, "container"), []), ((True, "account"), [("website-cpu-limit", ["ws5", "1500"])]),
+                 ((False, "none"), [("website-cpu-limit", ["ws5", "1500"])])])
+    rc, calls = _with_helper299(lambda: _H299.do_website_cpu_limit(["ws7", "1500"], ""), {"ws7": 1007})
+    eq("website-cpu-limit (verb): an account without the panel's mark is refused and nothing runs", (rc, calls), (1, []))
+    eq("CPU fallback: each mode has a sentence the site card shows (an unknown one reads as none)",
+       (sorted(_ws299.CPU_MODES), _smw299.cpu_note("account") == _ws299.CPU_MODES["account"],
+        _smw299.cpu_note("?") == _ws299.CPU_MODES["none"]), (["account", "container", "none"], True, True))
+
+
+def _floor_digests299():
+    """Every image of the floor's sites section (the pulled ones; the cache build's images are built from)."""
+    out = [_SITES299["static"]["image"], _SITES299["wpcli"]["image"], _SITES299["object_cache"]["image"]]
+    out += [e["image"] for e in _SITES299["php"].values()] + [e["image"] for e in _SITES299["wordpress"]["php"].values()]
+    out += [e["image"] for e in _SITES299["tunnel"].values()]
+    return out + [e["image"] for r in _SITES299["runtimes"].values() for e in r["versions"].values()]
+
+
+def _s299_image_scan():
+    p = _AI299.plan()
+    sites_up = p["sites"]["upstream"]
+    want = set(_floor_digests299())
+    eq("image scan (plan): every image of the catalog's sites section is pulled and scanned, the page cache's proxy is "
+       "built from the catalog's values, nothing wrong on this tree",
+       (set(sites_up.values()) == want, sorted(p["sites"]["builds"]), [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
+        p["problems"]),
+       (True, ["caddy-cache"], ["BUILDER_IMAGE", "BASE_IMAGE", "CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
+    seen, real_run = [], _AI299._run
+    _AI299._run = lambda argv, **kw: seen.append(argv) or 0
+    try:
+        _AI299._images(dict(p, upstream={}, builds={}, sites=dict(p["sites"], upstream={})), _tf299.gettempdir(), [])
+    finally:
+        _AI299._run = real_run
+    build = [a for a in seen if a[:2] == ["docker", "build"]]
+    eq("image scan (_images): the page cache's proxy is built from panel/website_images with every catalog value as a "
+       "--build-arg, and hadolint lints its Containerfile",
+       (len(build), sum(1 for f in build[0] if f == "--build-arg") if build else 0,
+        any(t.endswith(os.path.join("website_images", "caddy-cache", "Containerfile")) for _l, t in _AI299.lint_targets(p))),
+       (1, 5, True))
+
+
+def _s299_image_scan2():
+    bad_cat = dict(_FLOOR_DOC299, sites=_bad299(("php", "8.4", "image"), "docker.io/library/php:8.4-apache"))
+    d = _tf299.mkdtemp(prefix="ww2-scan-")
+    try:
+        path = os.path.join(d, "catalog.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            _json299.dump(bad_cat, fh)
+        probs = _AI299.plan(path, os.path.join(_root, "panel", "addon_images"))["problems"]
+    finally:
+        __import__("shutil").rmtree(d, ignore_errors=True)
+    eq("image scan (plan): a sites image pinned by tag stops the scan before anything is pulled",
+       any("sites-php-8.4" in x for x in probs), True)
+
+
+def _s299_cloudflare():
+    lists = {_CF299.URLS[0]: "173.245.48.0/20\n103.21.244.0/22\n", _CF299.URLS[1]: "2400:cb00::/32\n"}
+    hostile = ["10.0.0.0/8\n", "173.245.48.1/20\n", "0.0.0.0/0\n", "173.245.48.0/20; rm -rf /\n", ""]
+    eq("cloudflare ranges: a private, non-canonical, too-wide, malformed or empty list is refused",
+       [_refused299(_CF299.networks, t) for t in hostile], [True] * 5)
+    d = _tf299.mkdtemp(prefix="ww2-cf-")
+    try:
+        path = os.path.join(d, "catalog.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            _json299.dump(_FLOOR_DOC299, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        rc = _CF299.main(["x", "check"], fetcher=lists.get, catalog=path)
+        with open(path, encoding="utf-8") as fh:
+            got = _json299.load(fh)["sites"]["presets"]["cloudflare"]
+        rc2 = _CF299.main(["x", "check"], fetcher=lambda u: "10.0.0.0/8\n", catalog=path)
+        with open(path, encoding="utf-8") as fh:
+            after = _json299.load(fh)["sites"]["presets"]["cloudflare"]
+    finally:
+        __import__("shutil").rmtree(d, ignore_errors=True)
+    eq("cloudflare ranges (main): published lists that pass replace the catalog's preset (and the result passes the "
+       "panel's own check); a bad list changes nothing",
+       (rc, got, rc2, after, _wc299.sites_problems(dict(_SITES299, presets={"cloudflare": got}))),
+       (0, ["173.245.48.0/20", "103.21.244.0/22", "2400:cb00::/32"], 1, got, []))
+    eq("cloudflare ranges: only the two fixed https URLs are ever fetched", _refused299(_CF299.fetch, "https://evil.example/ips"),
+       True)
+
+
+def _unb64_299(word):
+    """`word` decoded from base64 when it is valid base64, else ""."""
+    import binascii
+    try:
+        return __import__("base64").b64decode(word, validate=True).decode("utf-8", "replace")
+    except (binascii.Error, ValueError):
+        return ""
+
+
+def _s299_w3_calls():
+    sent = []
+    saved = (_smw299._as_site, _smw299._ids, _smw299._secret, _smw299._core)
+    _smw299._as_site = lambda remote, acct, body, timeout=0, stdin_text=None: sent.append((body, stdin_text or "")) or (True, "")
+    _smw299._ids = lambda remote, site: ((1005, 1005), {"splice": False})
+    _smw299._secret = lambda value: _TOKEN299
+    _smw299._core = _Core299("")
+    secrets = {"admin_user": "siteowner", "admin_email": "owner@example.org", "admin_password": "Gen-" + "z" * 20,
+               "db_name": "ws5_app", "db_user": "ws5_app", "db_password": "Db-" + "q" * 24}
+    site = _site299(kind="wordpress", app_recipe="wordpress")
+    try:
+        steps = _ws299.recipe_steps("wordpress")
+        results = [_smw299.app_install_step(None, site, dict(st, secrets=dict(secrets))) for st in steps]
+        mybb = [st for st in _ws299.recipe_steps("mybb") if st["type"] == "drive-web-installer"][0]
+        results.append(_smw299.app_install_step(None, _site299(kind="php", app_recipe="mybb"), dict(mybb, secrets=dict(secrets))))
+        logs = _smw299.site_logs(None, site)
+    finally:
+        _smw299._as_site, _smw299._ids, _smw299._secret, _smw299._core = saved
+    _w3_checks299(sent, secrets, results, logs)
+
+
+def _w3_checks299(sent, secrets, results, logs):
+    bodies = "".join(b for b, _i in sent)
+    stdins = "".join(i for _b, i in sent)
+    decoded = "".join(_unb64_299(w) for ln in stdins.splitlines() for w in ln.split()[1:])
+    eq("install job (app_install_step, as W3 calls it with the step's secrets): every step runs, the admin and database "
+       "passwords and the token never reach a shell command line, and they do reach the steps' stdin",
+       (all(r[0] for r in results), any(x in bodies for x in (secrets["admin_password"], secrets["db_password"], _TOKEN299)),
+        secrets["admin_password"] in decoded or secrets["admin_password"] in stdins,
+        secrets["db_password"] in decoded or secrets["db_password"] in stdins),
+       (True, False, True, True))
+    eq("site logs (site_logs, the routes' log view): the site's containers' own journal lines, read as its account",
+       (logs[0], "CONTAINER_NAME=lgsm-site" in sent[-1][0], "-n 500" in sent[-1][0], "sudo" in sent[-1][0]),
+       (True, True, True, False))
+    eq("recipe_steps by name (the routes pass the site's recipe name): the catalog's steps; an unknown name has none",
+       (len(_ws299.recipe_steps("smf")), _ws299.recipe_steps("no-such-app")), (5, []))
+
+
 for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s299_generator, _s299_proxy_base,
                  _s299_proxy_modes, _s299_proxy_rules, _s299_quadlet, _s299_servers, _s299_php, _s299_app_cache_tunnel,
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
-                 _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3):
+                 _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
+                 _s299_cache_build, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
     _step299()

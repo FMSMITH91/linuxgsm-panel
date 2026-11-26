@@ -29,6 +29,13 @@
       },
       "version": "2.11.9"
     },
+    "caddy_cache": {
+      "base": "docker.io/library/caddy@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b",
+      "builder": "docker.io/library/caddy@sha256:cda07fe9d82728c7ac44d844306d435e98131423dc7b114f05a8a8ecfff94707",
+      "caddy": "2.11.9",
+      "module": "github.com/caddyserver/cache-handler",
+      "version": "v0.17.0"
+    },
     "object_cache": {
       "image": "docker.io/valkey/valkey@sha256:3ad5a213cb1bc2fd4a113c89b6248a88655a6bf1dda69519d04e03cd3e3d2742",
       "version": "9"
@@ -315,6 +322,118 @@
         ],
         "url": "https://download.phpbb.com/pub/release/3.3/3.3.19/phpBB-3.3.19.zip",
         "version": "3.3.19"
+      },
+      "smf": {
+        "admin_path": "/index.php",
+        "database": true,
+        "installer_path": "/install.php",
+        "kind": "php",
+        "name": "Simple Machines Forum",
+        "php": [
+          "8.3",
+          "8.4"
+        ],
+        "sha256": "e71819b5d9516c4ecea5e46957c13a37d6a751908c36ad6715e54636917862bc",
+        "steps": [
+          {
+            "type": "create-database"
+          },
+          {
+            "strip": "SMF-2.1.8",
+            "type": "download-verify-unpack"
+          },
+          {
+            "argv": [
+              "sh",
+              "-c",
+              "cp other/install.php other/install_2-1_mysql.sql other/Settings.php other/Settings_bak.php other/db_last_error.php . && rm -rf other .github"
+            ],
+            "image": "site",
+            "type": "run-in-container"
+          },
+          {
+            "pages": [
+              {
+                "expect": "Welcome",
+                "form": {},
+                "method": "GET",
+                "path": "/install.php"
+              },
+              {
+                "expect": "Database Server Settings",
+                "form": {
+                  "contbutt": "1"
+                },
+                "method": "POST",
+                "path": "/install.php?step=0"
+              },
+              {
+                "expect": "Forum Settings",
+                "form": {
+                  "contbutt": "1",
+                  "db_name": "{db_name}",
+                  "db_passwd": "{db_password}",
+                  "db_port": "{db_port}",
+                  "db_prefix": "smf_",
+                  "db_server": "{db_host_name}",
+                  "db_type": "mysql",
+                  "db_user": "{db_user}"
+                },
+                "method": "POST",
+                "path": "/install.php?step=2"
+              },
+              {
+                "expect": "Populated Database",
+                "form": {
+                  "boardurl": "{site_url}",
+                  "compress": "1",
+                  "contbutt": "1",
+                  "dbsession": "1",
+                  "force_ssl": "1",
+                  "mbname": "{site_name}",
+                  "reg_mode": "0"
+                },
+                "method": "POST",
+                "path": "/install.php?step=3"
+              },
+              {
+                "expect": "Create your account",
+                "form": {
+                  "contbutt": "1",
+                  "pop_done": "1"
+                },
+                "method": "POST",
+                "path": "/install.php?step=4"
+              },
+              {
+                "expect": "Congratulations, the installation process is complete!",
+                "form": {
+                  "contbutt": "1",
+                  "email": "{admin_email}",
+                  "password1": "{admin_password}",
+                  "password2": "{admin_password}",
+                  "server_email": "{admin_email}",
+                  "username": "{admin_user}"
+                },
+                "method": "POST",
+                "path": "/install.php?step=5"
+              }
+            ],
+            "type": "drive-web-installer"
+          },
+          {
+            "readonly": [
+              "Settings.php"
+            ],
+            "remove": [
+              "install.php",
+              "install_2-1_mysql.sql"
+            ],
+            "type": "set-permissions"
+          }
+        ],
+        "url": "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.8.tar.gz",
+        "version": "2.1.8"
       },
       "wordpress": {
         "admin_path": "/wp-admin/",
