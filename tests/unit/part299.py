@@ -568,7 +568,11 @@ def _with_helper299(fn, pw_names, mark_names=()):
     _H299.pwd, _H299.subprocess, _H299.WEB_MARK_DIR = _Pw299(pw_names), sub, d
     _H299._addon_forget_account = _H299._forget_account_tmp = lambda *_a: 0
     try:
-        return fn(), sub.calls
+        try:
+            rc = fn()
+        except Exception as e:  # noqa: BLE001 - a verb that goes further than it should is a result, not a crash
+            rc = "raised %s" % type(e).__name__
+        return rc, sub.calls
     finally:
         (_H299.pwd, _H299.subprocess, _H299.WEB_MARK_DIR, _H299._addon_forget_account,
          _H299._forget_account_tmp) = saved
@@ -621,8 +625,9 @@ def _s299_helper_guard():
     eq("egress guard: only the site accounts' uids, loopback addresses allowed first, then every other address of "
        "this host and the private, link-local, tailnet, mapped and NAT64 ranges dropped (never 'oif lo', which a "
        "packet to the host's own tailnet address leaves by)",
-       ("elements = { 1005, 1006 }" in lines, lines.index("meta skuid != @site_uids accept")
-        < lines.index("ip daddr 127.0.0.0/8 accept") < lines.index("fib daddr type local counter drop"),
+       ("elements = { 1005, 1006 }" in lines, [ln for ln in lines if ln in (
+           "meta skuid != @site_uids accept", "ip daddr 127.0.0.0/8 accept", "fib daddr type local counter drop")]
+        == ["meta skuid != @site_uids accept", "ip daddr 127.0.0.0/8 accept", "fib daddr type local counter drop"],
         'oif "lo" accept' in lines, any("100.64.0.0/10" in ln and "192.168.0.0/16" in ln for ln in lines),
         any("fc00::/7" in ln and "::ffff:0:0/96" in ln for ln in lines),
         lines[1:3] == ["table inet lgsm_web {}", "delete table inet lgsm_web"]),
