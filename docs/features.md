@@ -15,6 +15,13 @@ Back to the [README](README.md). Who may do what: [permissions.md](permissions.m
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
 - **Add-ons in containers**: admin tools beside a game server, each in a rootless Podman container as the server's own account. See [addons.md](addons.md).
 
+## Websites
+
+- **Websites** beside Databases: plain HTML sites, your own PHP code or a Node.js app, or WordPress, phpBB, Drupal, Simple Machines Forum and MyBB installed in one step, each in its own rootless container under its own account. See [websites.md](websites.md).
+- One web proxy per host serves every site with automatic Let's Encrypt certificates, reached publicly, only from networks you list (a one-tap Cloudflare preset), or through a Cloudflare Tunnel with no open port.
+- Per site: a file manager with archive upload, SFTP, backups, its databases, PHP version and `php.ini` settings with OWASP's values beside them, OPcache, an object cache, a page cache with Purge, redirects and header rules, and limits on memory, CPU, processes and disk.
+- Customers: panel logins that see and run only their own sites, with two-factor sign-in required by default.
+
 ## Backups
 
 - One-click and scheduled backups of the panel (database, settings, keys) and of each game server, with retention, download and restore. Busy servers queue, and a backup that cannot fit on disk does not start.

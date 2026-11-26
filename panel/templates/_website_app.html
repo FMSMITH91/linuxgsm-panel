@@ -1,0 +1,37 @@
+{# A Node.js app: version, build and start commands, its port, and environment variables (stored
+   encrypted, write-only: the page gets their names, never their values). #}
+<section data-ws-pane="app" hidden>
+  <form id="wapp-form" data-action="wsAppSave" data-args='["@event"]' data-on="submit">
+    <div class="row g-2">
+      <div class="col-6 col-sm-3">
+        <label for="wapp-version" class="form-label small mb-1">Node.js version</label>
+        <select id="wapp-version" class="form-select form-select-sm" data-no-i18n></select>
+      </div>
+      <div class="col-6 col-sm-3">
+        <label for="wapp-port" class="form-label small mb-1">The app's port</label>
+        <input type="number" id="wapp-port" class="form-control form-control-sm" min="1024" max="65535" step="1" required>
+      </div>
+      <div class="col-sm-6">
+        <label for="wapp-build" class="form-label small mb-1">Install and build command</label>
+        <input type="text" id="wapp-build" class="form-control form-control-sm font-monospace" maxlength="1000"
+               autocomplete="off" spellcheck="false" placeholder="npm ci --omit=dev" data-no-i18n>
+      </div>
+      <div class="col-sm-6">
+        <label for="wapp-start" class="form-label small mb-1">Start command</label>
+        <input type="text" id="wapp-start" class="form-control form-control-sm font-monospace" maxlength="1000"
+               autocomplete="off" spellcheck="false" placeholder="npm start" data-no-i18n>
+      </div>
+    </div>
+    <fieldset class="mt-2">
+      <legend class="form-label small mb-1">Environment variables</legend>
+      <div id="wapp-env"></div>
+      <button type="button" class="btn btn-sm btn-outline-secondary mt-1" data-action="wsEnvAdd"><i class="bi bi-plus-lg"></i> Add a variable</button>
+      <div class="form-text">Stored encrypted and never shown again. Leave a saved value empty to keep it.</div>
+    </fieldset>
+    <p class="form-text">The app runs in its own container from an official Node.js image, not on the host's Node.js: that copy is shared with the panel, and the container keeps this site's limits and network rules. The build may reach the npm registry; the running app has no internet access unless an administrator allows it.</p>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-hammer"></i> Save and rebuild</button>
+      <span id="wapp-msg" class="small" role="status"></span>
+    </div>
+  </form>
+</section>

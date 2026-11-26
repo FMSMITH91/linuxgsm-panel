@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ t('Websites') }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ asset_url('css/websites.css') }}" nonce="{{ csp_nonce }}">{% endblock %}
+{% block content %}
+{# The Websites list (route: websites_page). The route passes can_add (websites_access.can_create) and
+   site_admin (manage_websites anywhere, or a superadmin); everything else is read from /api/websites
+   by js/websites.js, scoped to the viewer, so the page asks nothing of a host when it opens.
+   "Add a website" is never hidden from someone who may add one: a missing precondition is said on the
+   dialog's first line, with the one button that fixes it. #}
+<div id="ws-page" data-can-add="{{ 1 if can_add|default(false) else 0 }}"
+     data-admin="{{ 1 if site_admin|default(false) else 0 }}" data-super="{{ 1 if current_user.is_superadmin else 0 }}">
+  <div class="d-flex justify-content-between align-items-center gap-2 mb-2 ws-head">
+    <h1 class="page-title mb-0"><i class="bi bi-globe2"></i> Websites</h1>
+    {% if can_add|default(false) %}
+    <button type="button" id="ws-add-open" class="btn btn-primary btn-sm text-nowrap" data-action="wsOpenAdd">
+      <i class="bi bi-plus-lg"></i> Add a website</button>
+    {% endif %}
+  </div>
+  <p id="ws-ports" class="small mb-1 ws-ports" role="status" hidden></p>
+  <p id="ws-quota" class="small text-secondary mb-2" hidden></p>
+  <div id="ws-list" class="ws-list" aria-live="polite">
+    <p class="small text-secondary mb-0">Loading websites…</p>
+  </div>
+  {% if current_user.is_superadmin %}{% include "_website_proxy.html" %}{% endif %}
+</div>
+{% if can_add|default(false) %}{% include "_website_add.html" %}{% endif %}
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites_common.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites.js') }}"></script>
+{% if current_user.is_superadmin %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites_proxy.js') }}"></script>{% endif %}
+{% endblock %}

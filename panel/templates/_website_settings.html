@@ -1,0 +1,51 @@
+{# Administrator settings for one site: online or not (opens or closes 80/443 with the first and last
+   site), limits, access logs, outbound access, and delete with the typed name. Rendered for
+   manage_websites only; a customer's page has none of it. #}
+<section data-ws-pane="settings" hidden>
+  <div class="ws-opt d-flex flex-wrap gap-2 align-items-center">
+    <span id="wset-online-text" class="small"></span>
+    <button type="button" id="wset-online" class="btn btn-sm btn-outline-primary" data-action="wsToggleOnline">Put online</button>
+    <div class="form-text w-100 mt-0">The first site online opens ports 80 and 443 in Public or Restricted mode; the last one offline closes them.</div>
+  </div>
+  <form id="wset-form" class="row g-2" data-action="wsSettingsSave" data-args='["@event"]' data-on="submit">
+    <div class="col-6 col-sm-4"><label for="wset-mem" class="form-label small mb-1">Memory (MB)</label>
+      <input type="number" id="wset-mem" class="form-control form-control-sm" min="64" max="65536" step="1" data-limit="mem_mb"></div>
+    <div class="col-6 col-sm-4"><label for="wset-cpu" class="form-label small mb-1">CPU (1000 = one core)</label>
+      <input type="number" id="wset-cpu" class="form-control form-control-sm" min="100" max="64000" step="100" data-limit="cpu_milli"></div>
+    <div class="col-6 col-sm-4"><label for="wset-pids" class="form-label small mb-1">Processes</label>
+      <input type="number" id="wset-pids" class="form-control form-control-sm" min="16" max="32768" step="1" data-limit="pids"></div>
+    <div class="col-6 col-sm-4"><label for="wset-disk" class="form-label small mb-1">Disk (MB)</label>
+      <input type="number" id="wset-disk" class="form-control form-control-sm" min="64" max="10485760" step="1" data-limit="disk_mb"></div>
+    <div class="col-6 col-sm-4"><label for="wset-body" class="form-label small mb-1">Largest upload (MB)</label>
+      <input type="number" id="wset-body" class="form-control form-control-sm" min="1" max="10240" step="1" data-limit="max_body_mb"></div>
+    <div class="col-6 col-sm-4"><label for="wset-keep" class="form-label small mb-1">Backups to keep</label>
+      <input type="number" id="wset-keep" class="form-control form-control-sm" min="1" max="60" step="1" data-limit="backup_keep"></div>
+    <div class="col-sm-6">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" role="switch" id="wset-log">
+        <label class="form-check-label small" for="wset-log">Access log</label>
+      </div>
+      <div class="form-text mt-0">Off by default, for visitors' privacy. When on, their addresses are shortened.</div>
+    </div>
+    {% if current_user.is_superadmin %}
+    <div class="col-sm-6">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" role="switch" id="wset-egress" data-action="wsEgressCheck" data-on="change">
+        <label class="form-check-label small" for="wset-egress">Full internet access for this site</label>
+      </div>
+      <div class="form-text mt-0">Off by default: the site reaches only its database (WordPress also its own update servers).</div>
+      <div id="wset-egress-note" class="small text-warning" hidden>The site can then reach any address on the internet, though never this host's other services.</div>
+    </div>
+    {% endif %}
+    <div class="col-12"><label for="wset-note" class="form-label small mb-1">Note for administrators</label>
+      <textarea id="wset-note" class="form-control form-control-sm" rows="2" maxlength="2000"></textarea></div>
+    <div class="col-12 d-flex flex-wrap gap-2 align-items-center">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+      <span id="wset-msg" class="small" role="status"></span>
+    </div>
+  </form>
+  <div class="border-top mt-3 pt-2">
+    <button type="button" class="btn btn-sm btn-outline-danger" data-action="wsDelete"><i class="bi bi-trash"></i> Delete website</button>
+    <div class="form-text">Removes the site, its files, its backups and its account. Its databases stay in Databases.</div>
+  </div>
+</section>

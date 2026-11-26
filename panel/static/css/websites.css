@@ -1,0 +1,296 @@
+/* The Websites pages (templates/websites.html, website.html and their _website_*.html parts).
+   Loaded only there. Built for a phone first: one column at 375px, two from 768px, and the main
+   button of each page always in its header. */
+
+.ws-head {
+  flex-wrap: nowrap;
+}
+
+.ws-head .page-title {
+  min-width: 0;
+}
+
+.ws-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .5rem;
+}
+
+.ws-card {
+  display: block;
+  padding: .6rem .75rem;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid var(--border);
+}
+
+.ws-card:hover,
+.ws-card:focus-visible {
+  border-color: var(--accent);
+  color: inherit;
+}
+
+.ws-card-top {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  min-width: 0;
+}
+
+.ws-card-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ws-card-domain {
+  font-size: .85rem;
+  overflow-wrap: anywhere;
+}
+
+.ws-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .6rem;
+  align-items: center;
+  margin-top: .25rem;
+}
+
+.ws-chip {
+  display: inline-block;
+  padding: 0 .45rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  font-size: .75rem;
+  color: var(--text-muted);
+}
+
+.ws-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .4rem;
+}
+
+.ws-tile,
+.ws-mode {
+  display: flex;
+  flex-direction: column;
+  gap: .1rem;
+  padding: .5rem .6rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.ws-tile .bi {
+  font-size: 1.2rem;
+}
+
+/* On a phone a tile is its icon and name on one line, so the whole dialog fits one screen. */
+@media (width < 576px) {
+  .ws-tile {
+    flex-direction: row;
+    align-items: center;
+    gap: .4rem;
+    padding: .4rem .5rem;
+  }
+
+  .ws-tile .ws-tile-sub {
+    display: none;
+  }
+}
+
+.btn-check:checked + .ws-tile,
+.btn-check:checked + .ws-mode {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-glow);
+}
+
+.btn-check:focus-visible + .ws-tile,
+.btn-check:focus-visible + .ws-mode {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ws-tile-name {
+  font-weight: 600;
+  font-size: .9rem;
+  overflow-wrap: anywhere;
+}
+
+.ws-tile-sub {
+  font-size: .75rem;
+  color: var(--text-muted);
+}
+
+.ws-modes {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .4rem;
+}
+
+.ws-steps .ws-step {
+  display: flex;
+  align-items: baseline;
+  gap: .4rem;
+  padding: .15rem 0;
+}
+
+.ws-step-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ws-spin {
+  display: inline-block;
+  animation: ws-spin 1.2s linear infinite;
+}
+
+@keyframes ws-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ws-site-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: .5rem;
+}
+
+.ws-site-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: .4rem;
+  flex: 0 0 auto;
+}
+
+.ws-tabs {
+  overflow-x: auto;
+  gap: .25rem;
+  scrollbar-width: thin;
+}
+
+.ws-tabs .nav-link {
+  white-space: nowrap;
+  padding: .25rem .6rem;
+}
+
+.ws-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .5rem;
+}
+
+.ws-kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: .1rem .75rem;
+  font-size: .85rem;
+}
+
+.ws-kv dt {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.ws-kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ws-bar {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: .1rem .5rem;
+  margin-bottom: .35rem;
+}
+
+.ws-bar meter {
+  width: 100%;
+}
+
+.ws-bar span {
+  grid-column: 2;
+}
+
+.ws-log {
+  max-height: 14rem;
+  overflow: auto;
+  font-size: .75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ws-row {
+  padding: .4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-files .ws-file {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ws-file-acts {
+  display: flex;
+  gap: .25rem;
+  flex: 0 0 auto;
+}
+
+.ws-opt {
+  padding: .5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-rule {
+  padding: .4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ws-secret {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: .9rem;
+}
+
+@media (width >= 576px) {
+  .ws-tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .ws-tiles-apps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ws-modes {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (width >= 768px) {
+  .ws-list,
+  .ws-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (width >= 1200px) {
+  .ws-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

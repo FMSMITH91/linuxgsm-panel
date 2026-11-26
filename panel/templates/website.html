@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ t('Website') }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ asset_url('css/websites.css') }}" nonce="{{ csp_nonce }}">{% endblock %}
+{% block content %}
+{# One website (route: website_page, after websites_access.site_for). The route passes `site` and three
+   flags: can_manage (manage_website on it), can_files (edit_website_files) and site_admin
+   (manage_websites on it). A tab or control the viewer may not use is not rendered at all, so a
+   customer never sees an administrator's controls, disabled or otherwise. Values are read from
+   /api/websites/<id> by js/website_site.js; one panel shows at a time (?tab= picks it). #}
+{% set php_kind = site.kind in ('php', 'wordpress', 'phpbb') %}
+{% set list_url = websites_nav() if websites_nav is defined else '' %}
+<div id="ws-site" data-site-id="{{ site.id }}" data-kind="{{ site.kind }}" data-name="{{ site.name }}" data-list-url="{{ list_url }}"
+     data-manage="{{ 1 if can_manage|default(false) else 0 }}" data-files="{{ 1 if can_files|default(false) else 0 }}"
+     data-admin="{{ 1 if site_admin|default(false) else 0 }}" data-super="{{ 1 if current_user.is_superadmin else 0 }}">
+  <div class="ws-site-head mb-2">
+    <div class="minw-0">
+      {% if list_url %}<a href="{{ list_url }}" class="small text-secondary text-decoration-none"><i class="bi bi-arrow-left"></i> Websites</a>{% endif %}
+      <h1 class="page-title mb-0 text-break"><i class="bi bi-globe2"></i> <span data-no-i18n>{{ site.name }}</span></h1>
+      <div class="small"><span id="ws-dot" class="status-dot status-unknown" aria-hidden="true"></span><span id="ws-state">Loading…</span>
+        <span id="ws-online" class="ms-1 text-secondary"></span></div>
+    </div>
+    <div class="ws-site-actions">
+      <a id="ws-open" class="btn btn-sm btn-outline-primary" target="_blank" rel="noopener noreferrer" hidden><i class="bi bi-box-arrow-up-right"></i> Open site</a>
+      {% if can_manage|default(false) %}
+      <button type="button" id="ws-main" class="btn btn-sm btn-primary" data-action="wsMain" disabled>
+        <i id="ws-main-icon" class="bi bi-hourglass-split"></i> <span id="ws-main-label">Loading…</span></button>
+      {% endif %}
+    </div>
+  </div>
+
+  <div id="ws-failed" class="alert alert-danger py-2 px-2 small" role="alert" hidden>
+    <div class="fw-semibold">This website failed.</div>
+    <div id="ws-failed-reason" data-no-i18n></div>
+    <pre id="ws-failed-log" class="ws-log mt-2 mb-2"></pre>
+    {% if can_manage|default(false) %}
+    <button type="button" class="btn btn-sm btn-light" data-action="wsMain"><i class="bi bi-arrow-repeat"></i> Retry</button>
+    {% endif %}
+  </div>
+  <div id="ws-install" class="card mb-2" hidden>
+    <div class="card-body py-2">
+      <div class="small fw-semibold mb-1">Setting up this website</div>
+      <div id="ws-install-steps"></div>
+    </div>
+  </div>
+
+  <div class="ws-tabs nav nav-pills flex-nowrap small mb-2" role="tablist" aria-label="Website sections">
+    <button type="button" class="nav-link active" role="tab" data-ws-tab="overview" data-action="wsTab" data-args='["overview"]'>Overview</button>
+    {% if can_files|default(false) %}<button type="button" class="nav-link" role="tab" data-ws-tab="files" data-action="wsTab" data-args='["files"]'>Files</button>{% endif %}
+    <button type="button" class="nav-link" role="tab" data-ws-tab="domains" data-action="wsTab" data-args='["domains"]'>Domains</button>
+    {% if can_manage|default(false) and site.kind != 'static' %}<button type="button" class="nav-link" role="tab" data-ws-tab="database" data-action="wsTab" data-args='["database"]'>Database</button>{% endif %}
+    {% if can_manage|default(false) or can_files|default(false) %}<button type="button" class="nav-link" role="tab" data-ws-tab="backups" data-action="wsTab" data-args='["backups"]'>Backups</button>{% endif %}
+    {% if can_manage|default(false) and php_kind %}<button type="button" class="nav-link" role="tab" data-ws-tab="php" data-action="wsTab" data-args='["php"]'>PHP</button>{% endif %}
+    {% if can_manage|default(false) and site.kind == 'app' %}<button type="button" class="nav-link" role="tab" data-ws-tab="app" data-action="wsTab" data-args='["app"]'>App</button>{% endif %}
+    {% if can_manage|default(false) %}<button type="button" class="nav-link" role="tab" data-ws-tab="performance" data-action="wsTab" data-args='["performance"]'>Performance</button>
+    <button type="button" class="nav-link" role="tab" data-ws-tab="rules" data-action="wsTab" data-args='["rules"]'>Rules</button>{% endif %}
+    {% if site_admin|default(false) %}<button type="button" class="nav-link" role="tab" data-ws-tab="settings" data-action="wsTab" data-args='["settings"]'>Settings</button>{% endif %}
+  </div>
+  <div id="ws-msg" class="small mb-2" role="status"></div>
+
+  {% include "_website_overview.html" %}
+  {% if can_files|default(false) %}{% include "_website_files.html" %}{% endif %}
+  {% include "_website_domains.html" %}
+  {% if can_manage|default(false) and site.kind != 'static' %}{% include "_website_database.html" %}{% endif %}
+  {% if can_manage|default(false) or can_files|default(false) %}{% include "_website_backups.html" %}{% endif %}
+  {% if can_manage|default(false) and php_kind %}{% include "_website_php.html" %}{% endif %}
+  {% if can_manage|default(false) and site.kind == 'app' %}{% include "_website_app.html" %}{% endif %}
+  {% if can_manage|default(false) %}{% include "_website_performance.html" %}{% include "_website_rules.html" %}{% endif %}
+  {% if site_admin|default(false) %}{% include "_website_settings.html" %}{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites_common.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_site.js') }}"></script>
+{% if can_files|default(false) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_files.js') }}"></script>{% endif %}
+{% if can_manage|default(false) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_tuning.js') }}"></script>{% endif %}
+{% endblock %}

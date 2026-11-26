@@ -5,6 +5,8 @@ your login and session cookie are encrypted out of the box; you just see a one-t
 warning. The options below give a *trusted* cert, best-first. A reverse proxy (`trust_proxy`)
 takes over TLS, and so does Tailscale Serve once the panel is bound to `127.0.0.1`.
 
+This page is about the panel's own address. To host websites from the panel, with their own certificates, see [websites.md](websites.md).
+
 **Never expose the panel on plain HTTP over the public internet** — your login password and
 session cookie would travel in cleartext.
 
