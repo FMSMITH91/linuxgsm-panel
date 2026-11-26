@@ -320,11 +320,11 @@ def _update288(sid):
 
 # ── 6. Renovate ─────────────────────────────────────────────────────────────────────────────────
 def _release_hits288(mgr):
-    """[(file, tag, sha256)] the managers `mgr` match in addons.py and the IW4MAdmin Containerfile (JS regexes as Python's)."""
+    """[(file, tag, sha256)] the managers `mgr` match in the add-on catalog and the IW4MAdmin Containerfile (JS regexes as Python's)."""
     found = []
     for pat in [p for m in mgr for p in m.get("matchStrings") or []]:
         rx = _re288.compile(_re288.sub(r"\(\?<(?=[A-Za-z])", "(?P<", pat))
-        for path in ("panel/services/addons.py", "panel/addon_images/iw4madmin/Containerfile"):
+        for path in ("panel/addon_images/catalog.json", "panel/addon_images/iw4madmin/Containerfile"):
             found += [(path, x.group("currentValue"), x.group("currentDigest")) for x in rx.finditer(_read288(path))]
     return found
 
@@ -335,12 +335,12 @@ def _renovate288():
     mgr = [m for m in cfg.get("customManagers") or [] if m.get("datasourceTemplate") == "custom.iw4madmin-release"]
     found = _release_hits288(mgr)
     pin = (_ad288.IW4MADMIN_TAG, _ad288.IW4MADMIN_SHA256)
-    eq("renovate: the IW4MAdmin release and its archive's sha256 are matched once each in addons.py and the "
+    eq("renovate: the IW4MAdmin release and its archive's sha256 are matched once each in the add-on catalog and the "
        "Containerfile, from a custom datasource over RaidMax/IW4M-Admin's releases that keeps each archive's sha256",
        (sorted(found), len(mgr), ds.get("defaultRegistryUrlTemplate", "").startswith(
            "https://api.github.com/repos/RaidMax/IW4M-Admin/releases"),
         ["IW4MAdmin-[0-9.]+" in t and '"digest": $d' in t and "sha256:" in t for t in ds.get("transformTemplates") or []]),
-       (sorted([("panel/addon_images/iw4madmin/Containerfile",) + pin, ("panel/services/addons.py",) + pin]), 1, True,
+       (sorted([("panel/addon_images/iw4madmin/Containerfile",) + pin, ("panel/addon_images/catalog.json",) + pin]), 1, True,
         [True]))
 
 

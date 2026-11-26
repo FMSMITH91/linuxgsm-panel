@@ -511,17 +511,16 @@ def _renovate257():
     daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
     base, iwbase = _ad257.B3_BASE.split("@")[1], _ad257.IW4MADMIN_BASE.split("@")[1]
     iw = (_ad257.IW4MADMIN_SHA256, _ad257.IW4MADMIN_TAG)
-    eq("Renovate: B3's release tag and commit in addons.py and the Containerfile (git-tags), IW4MAdmin's release tag and "
-       "archive sha256 and its base digest (aspnet 10.0) in addons.py and its Containerfile, BlueMap's (docker, v5) and "
-       "the B3 image's base digest in addons.py and the Containerfile (docker, 3.15-slim), each matched once, daily",
+    cat = "panel/addon_images/catalog.json"
+    eq("Renovate: B3's release tag and commit in the add-on catalog and the Containerfile (git-tags), IW4MAdmin's release "
+       "tag and archive sha256 and its base digest (aspnet 10.0) in the catalog and its Containerfile, BlueMap's (docker, "
+       "v5) and the B3 image's base digest in the catalog and the Containerfile (docker, 3.15-slim), each matched once, daily",
        (found, sorted(sum((r.get("matchDepNames") or [] for r in daily), []))),
-       ({"git-tags tag": [("panel/services/addons.py", _PIN257, _ad257.B3_TAG),
-                           ("panel/addon_images/b3/Containerfile", _PIN257, _ad257.B3_TAG)],
-         "custom.iw4madmin-release tag": [("panel/services/addons.py",) + iw,
-                                          ("panel/addon_images/iw4madmin/Containerfile",) + iw],
-         "docker 10.0": [("panel/services/addons.py", iwbase), ("panel/addon_images/iw4madmin/Containerfile", iwbase)],
-         "docker v5": [("panel/services/addons.py", _ad257.BLUEMAP_IMAGE.split("@")[1])],
-         "docker 3.15-slim": [("panel/services/addons.py", base), ("panel/addon_images/b3/Containerfile", base)]},
+       ({"git-tags tag": [(cat, _PIN257, _ad257.B3_TAG), ("panel/addon_images/b3/Containerfile", _PIN257, _ad257.B3_TAG)],
+         "custom.iw4madmin-release tag": [(cat,) + iw, ("panel/addon_images/iw4madmin/Containerfile",) + iw],
+         "docker 10.0": [(cat, iwbase), ("panel/addon_images/iw4madmin/Containerfile", iwbase)],
+         "docker v5": [(cat, _ad257.BLUEMAP_IMAGE.split("@")[1])],
+         "docker 3.15-slim": [(cat, base), ("panel/addon_images/b3/Containerfile", base)]},
         ["RaidMax/IW4M-Admin", "big-brother-bot", "docker.io/library/python", "ghcr.io/bluemap-minecraft/bluemap",
          "mcr.microsoft.com/dotnet/aspnet"]))
 
