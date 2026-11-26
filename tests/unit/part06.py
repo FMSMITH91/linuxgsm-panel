@@ -5994,8 +5994,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 323, was 321: panel/routes/addons_b3_actions.py's unban/kick/warn through B3 (one view: MANAGE_ADDONS and Ban or
 # Kick players, server access, step-up) and the B3 alerts switch (MANAGE_ADDONS and server access).
 # 324, was 323: panel/routes/addons.py's Refresh of the signed add-on catalog (MANAGE_ADDONS and server access).
-check("register_routes: every one of the 324 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 324,
+# 376, was 324: the Websites tab's 52 views (panel/routes/websites*.py and databases_sites.py), every per-site
+# one through websites_access.site_for (404 for no access and no site alike), the proxy ones superadmin only.
+check("register_routes: every one of the 376 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 376,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

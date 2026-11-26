@@ -898,6 +898,26 @@
       "GET"
     ]
   },
+  "GET /api/websites": {
+    "endpoint": "api_websites",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_websites"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/websites/<int:site_id>": {
+    "endpoint": "api_website",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_website"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /backup/game/<int:server_id>/download": {
     "endpoint": "panel_backup_game_download",
     "guards": [
@@ -1182,6 +1202,127 @@
       "utils.py:decorated_view(manage_users)",
       "auth.py:decorated_function(manage_users)",
       "view:manage_users"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites": {
+    "endpoint": "websites_page",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:websites_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>": {
+    "endpoint": "website_page",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_page"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/backups/download": {
+    "endpoint": "website_backups_download",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_backups_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/backups/list": {
+    "endpoint": "website_backups_list",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_backups_list"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/databases": {
+    "endpoint": "website_databases",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_databases"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/domains": {
+    "endpoint": "website_domains",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domains"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/files/download": {
+    "endpoint": "website_files_download",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_download"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/files/list": {
+    "endpoint": "website_files_list",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_list"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/files/read": {
+    "endpoint": "website_files_read",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_read"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/logs": {
+    "endpoint": "website_logs",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_logs"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/<int:site_id>/php/effective": {
+    "endpoint": "website_php_effective",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_php_effective"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/proxy/status": {
+    "endpoint": "website_proxy_status",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:website_proxy_status"
     ],
     "methods": [
       "GET"
@@ -3634,6 +3775,392 @@
       "auth.py:decorated_function(super_admin)",
       "account_guard.py:wrapped",
       "view:revoke_invite"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/app": {
+    "endpoint": "website_app",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_app"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/app/build": {
+    "endpoint": "website_app_build",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_app_build"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/backups/create": {
+    "endpoint": "website_backups_create",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_backups_create"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/backups/delete": {
+    "endpoint": "website_backups_delete",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_backups_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/backups/restore": {
+    "endpoint": "website_backups_restore",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_backups_restore"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/cache/purge": {
+    "endpoint": "website_cache_purge",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_cache_purge"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/databases/<int:db_id>/delete": {
+    "endpoint": "website_database_delete",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_database_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/databases/<int:db_id>/reset-password": {
+    "endpoint": "website_database_reset",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_database_reset"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/databases/add": {
+    "endpoint": "website_database_add",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_database_add"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/databases/credentials": {
+    "endpoint": "website_database_credentials",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_database_credentials"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/delete": {
+    "endpoint": "website_delete",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/disable": {
+    "endpoint": "website_disable",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_disable"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/domains/add": {
+    "endpoint": "website_domain_add",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domain_add"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/domains/check": {
+    "endpoint": "website_domain_check",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domain_check"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/domains/primary": {
+    "endpoint": "website_domain_primary",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domain_primary"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/domains/remove": {
+    "endpoint": "website_domain_remove",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domain_remove"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/enable": {
+    "endpoint": "website_enable",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_enable"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/files/delete": {
+    "endpoint": "website_files_delete",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_delete"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/files/extract": {
+    "endpoint": "website_files_extract",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_extract"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/files/mkdir": {
+    "endpoint": "website_files_mkdir",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_mkdir"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/files/rename": {
+    "endpoint": "website_files_rename",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_rename"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/files/save": {
+    "endpoint": "website_files_save",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_save"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/files/upload": {
+    "endpoint": "website_files_upload",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_files_upload"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/install/undo": {
+    "endpoint": "website_install_undo",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_install_undo"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/performance": {
+    "endpoint": "website_performance",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_performance"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/php": {
+    "endpoint": "website_php_save",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_php_save"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/restart": {
+    "endpoint": "website_restart",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_restart"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/rules": {
+    "endpoint": "website_rules",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_rules"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/settings": {
+    "endpoint": "website_settings",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_settings"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/start": {
+    "endpoint": "website_start",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_start"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/stop": {
+    "endpoint": "website_stop",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_stop"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/update-image": {
+    "endpoint": "website_update_image",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_update_image"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/add": {
+    "endpoint": "website_add",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_add"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/customers/add": {
+    "endpoint": "website_customer_add",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:website_customer_add"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/install-app": {
+    "endpoint": "website_install_app",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_install_app"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/proxy/apply": {
+    "endpoint": "website_proxy_apply",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:website_proxy_apply"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/proxy/install": {
+    "endpoint": "website_proxy_install",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:website_proxy_install"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/proxy/settings": {
+    "endpoint": "website_proxy_settings",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:website_proxy_settings"
     ],
     "methods": [
       "POST"

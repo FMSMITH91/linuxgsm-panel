@@ -10,8 +10,8 @@ database or container is left behind (the install undo route finishes one a rest
 The app's admin password is generated with a CSPRNG (or typed, then at least ADMIN_PW_MIN
 characters, OWASP Authentication Cheat Sheet, "Password Complexity": 15 without MFA) and handed to the
 steps only inside the step they need it for, which the runtime layer passes on stdin, never on argv;
-it is never stored, never logged, and shown once, to the person who started the install, by the
-status route (OWASP Secrets Management Cheat Sheet, "2.7.1 Creation"; Logging Cheat Sheet, "Data to
+it is never stored, never logged, and shown once, in the no-store answer to the request that started
+the install (OWASP Secrets Management Cheat Sheet, "2.7.1 Creation"; Logging Cheat Sheet, "Data to
 exclude"). The database is made through the Databases tab's own code (routes/databases_sites) with
 its own generated password, stored encrypted. Every step's outcome is one audit row.
 """
@@ -27,7 +27,7 @@ from panel.core.clock import utcnow
 from panel.db.models import Website, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
-from panel.security.auth import MANAGE_WEBSITE, MANAGE_WEBSITES
+from panel.security.auth import MANAGE_WEBSITES
 from panel.services import websites as _svc
 from panel.services import websites_access as _wa
 
@@ -35,8 +35,7 @@ ADMIN_PW_MIN = 15
 _ADMIN_USER_RE = re.compile(r"[A-Za-z0-9_.-]{3,32}")
 _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 DB_STEP = "create-database"
-# site id -> the job's state: {"state", "step", "done", "error", "owner", "password"}; the password is
-# dropped the first time its owner reads a finished job.
+# site id -> the job's state while it runs and after: {"state", "step", "error"}. Never a password.
 _JOBS = {}
 _LOCK = threading.Lock()
 
@@ -62,7 +61,7 @@ def admin_fields(data):
     if len(email) > 254 or not _EMAIL_RE.fullmatch(email):
         problems.append("Enter the admin's email address.")
     if typed and (len(typed) < ADMIN_PW_MIN or len(typed) > 128 or any(c in typed for c in "\x00\r\n")):
-        problems.append("A typed admin password is %d to 128 characters on one line." % ADMIN_PW_MIN)
+        problems.append(i18n.Sentence("A typed admin password is {n} to 128 characters on one line.", n=ADMIN_PW_MIN))
     password = typed or secrets.token_urlsafe(18)
     return user, email, password, not typed, problems
 
@@ -109,12 +108,12 @@ def undo(site, steps, done):
     failed = []
     by_name = {s["name"]: s for s in steps}
     for name in reversed(done):
-        if name == "site":
+        if name == "account":
             continue
         ok, said = _undo_step(site, by_name.get(name, {"name": name, "type": ""}))
         if not ok:
             failed.append("%s: %s" % (name, i18n.tr(said)))
-    if "site" in done:
+    if "account" in done:
         ok, said = _w.host_call(_sw.remove, site.remote, site)
         if not ok:
             failed.append("site: %s" % i18n.tr(said))
@@ -129,10 +128,10 @@ def _job(site_id, **fields):
 def _install(site, secret_vals):
     """The job body: (ok, the step that failed or "", why)."""
     steps = _steps(site)
-    _mark(site, "site", True)          # marked first: a part-made account or container is undone too
+    _mark(site, "account", True)          # marked first: a part-made account or container is undone too
     ok, said = _w.host_call(_sw.install, site.remote, site)
     if not ok:
-        return False, "site", said, steps
+        return False, "account", said, steps
     for step in steps:
         _job(site.id, step=step["name"])
         _mark(site, step["name"], False)
@@ -151,7 +150,7 @@ def _worker(app, site_id, uid, secret_vals):
             ok, step, said, steps = _install(site, secret_vals)
         except Exception:  # noqa: BLE001 - any failure is undone, never left half-done
             _w._log.warning("app install raised", exc_info=True)
-            ok, step, said, steps = False, site.install_step or "site", _w.S_UNREACHABLE, _safe_steps(site)
+            ok, step, said, steps = False, site.install_step or "account", _w.S_UNREACHABLE, _safe_steps(site)
         _finish(site, user, ok, step, said, steps)
 
 
@@ -172,7 +171,7 @@ def _finish(site, user, ok, step, said, steps):
         return
     failed = undo(site, steps, json.loads(site.install_steps_done or "[]"))
     reason = i18n.tr(said)[:200]
-    _job(site.id, state="failed", step=step, error=reason, password="")
+    _job(site.id, state="failed", step=step, error=reason)
     _w.audit_as(user, site, "website_app_install", "%s failed at %s: %s; undone%s" % (
         site.app_recipe, step, reason, " except %s" % "; ".join(failed) if failed else ""), False)
     if failed:
@@ -183,18 +182,34 @@ def _finish(site, user, ok, step, said, steps):
         db.session.commit()
 
 
-def _status(site):
+def install_json(site):
+    """The install block of GET /api/websites/<id>: {state, steps: [{key, label, state}], error, site_url, admin_url}.
+
+    Empty steps for a site that was not made by an app install. Never the admin password: that is in
+    the answer to the request that started the install, once.
+    """
+    import json
+    if not site.app_recipe:
+        return {"state": "", "steps": [], "error": "", "site_url": "", "admin_url": ""}
     with _LOCK:
         job = dict(_JOBS.get(site.id) or {})
-        mine = job.get("owner") == current_user.id
-        password = job.get("password") if mine and job.get("state") == "done" else ""
-        if password:
-            _JOBS[site.id]["password"] = ""       # shown once
-    out = {"state": job.get("state") or ("done" if site.state == "running" else site.state), "step": job.get("step", ""),
-           "error": job.get("error", ""), "recipe": site.app_recipe, "version": site.app_version}
-    if password:
-        out["admin_password"] = password
-    return out
+    state = job.get("state") or ("done" if site.state == "running" else "failed" if site.state == "failed" else "running")
+    done = json.loads(site.install_steps_done or "[]")
+    names = ["account"] + [s["name"] for s in _safe_steps(site)]
+    current = job.get("step") or site.install_step or ""
+    steps = []
+    for name in names:
+        if name in done:
+            word = "undone" if state == "failed" else "done"
+        elif name == current:
+            word = "failed" if state == "failed" else "running"
+        else:
+            word = "pending"
+        steps.append({"key": name, "label": name, "state": word})
+    dom = site.primary_domain
+    url = "https://%s/" % dom.domain if dom and state == "done" else ""
+    return {"state": state, "steps": steps, "error": job.get("error", "") or (site.state_reason or ""),
+            "site_url": url, "admin_url": url + "wp-admin/" if url and site.app_recipe == "wordpress" else url}
 
 
 def _start(data):
@@ -219,11 +234,14 @@ def _start(data):
         websites_domains.add_first(site, _w.field(data, "domain"))
     _w.audit(site, "website_app_install", "started %s %s, admin %s%s" % (recipe_name, site.app_version, user,
                                                                          " (generated password)" if generated else ""))
-    _job(site.id, state="running", step="site", error="", owner=current_user.id, password=password)
+    _job(site.id, state="running", step="account", error="")
     secret_vals = {"admin_user": user, "admin_email": email, "admin_password": password}
     app = current_app._get_current_object()
     _w.threading.Thread(target=_worker, args=(app, site.id, current_user.id, secret_vals), daemon=True).start()
-    return jsonify({"success": True, "id": site.id, "message": i18n.tr("Installing. This takes a few minutes.")})
+    resp = jsonify({"success": True, "id": site.id, "password": password if generated else "",
+                    "message": i18n.tr("Installing. This takes a few minutes.")})
+    resp.headers["Cache-Control"] = "no-store"     # the generated admin password, shown this once
+    return resp
 
 
 def register(app):
@@ -234,14 +252,6 @@ def register(app):
         if not _wa.can_create(current_user):
             abort(404)
         return _start(_w.body())
-
-    @app.route("/websites/<int:site_id>/install")
-    @login_required
-    def website_install_status(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
-        resp = jsonify(_status(site))
-        resp.headers["Cache-Control"] = "no-store"
-        return resp
 
     @app.route("/websites/<int:site_id>/install/undo", methods=["POST"])
     @login_required

@@ -24,7 +24,7 @@ from panel.core.validation import WEBSITE_APP_PORT_MIN, WEBSITE_COMMAND_MAX, WEB
 from panel.db.models import db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
-from panel.security.auth import MANAGE_WEBSITE, MANAGE_WEBSITES
+from panel.security.auth import MANAGE_WEBSITE
 from panel.services import website_settings as _ws
 from panel.services import websites as _svc
 from panel.services import websites_access as _wa
@@ -50,58 +50,72 @@ def _problems(problems):
     return _w.say(400, " ".join(i18n.tr(p) for p in problems))
 
 
-def _apply_php(site, what):
-    db.session.commit()
-    ok, said = _w.host_call(_sw.php_apply, site.remote, site)
-    _w.forget_status(site.id)
-    return _w.acted(site, "website_php", ok, said or "PHP settings applied.", what)
+def _php_values(settings):
+    """The PHP form's values as text, a switch (display_errors) as On/Off; unknown keys left out."""
+    out = {}
+    for key, value in (settings or {}).items():
+        if key in _ws.PHP_FIELDS and not key.startswith("opcache."):
+            out[key] = ("On" if value else "Off") if isinstance(value, bool) else value
+    return out
 
 
-def _php_save(site, data):
-    values, problems = _ws.php_form(data, site)
-    if "php_version" in data and data.get("php_version") != site.php_version:
-        if not _w.is_admin(current_user, site):
-            abort(404)
-        if data.get("php_version") not in _php_versions():
-            problems.append("Choose one of the PHP versions this panel offers.")
-    if problems:
-        return _problems(problems)
-    merged = dict(json.loads(site.php_settings or "{}"), **values)
-    site.php_settings = json.dumps(merged, sort_keys=True)
-    words = ["%s=%s" % kv for kv in sorted(values.items())]
-    if "php_version" in data and data.get("php_version") != site.php_version:
-        site.php_version = data.get("php_version")
-        words.append("php_version=%s" % site.php_version)
-    return _apply_php(site, ", ".join(words) or "none")
+def _version_problem(site, version):
+    """Why `version` may not become the site's PHP version (a sentence), None when it may or is unchanged."""
+    if version is None or version == site.php_version:
+        return None
+    if not _w.is_admin(current_user, site):
+        abort(404)
+    return None if version in _php_versions() else "Choose one of the PHP versions this panel offers."
 
 
-def _ini_save(site, text):
+def _custom_problems(text):
+    """[problems] with an Advanced php.ini text (the size here, the lines by the runtime layer's checker)."""
+    if text is None:
+        return []
     problem = _ws.ini_size_problem(text)
     if problem:
-        return _w.say(400, problem)
+        return [problem]
+    return list(_svc.php_ini_problems(text) or [])
+
+
+def _php_save(site, form):
+    """POST {version, settings: {...}, custom}: check everything, store it, write the php.ini, restart."""
+    settings = form.get("settings") if isinstance(form.get("settings"), dict) else {}
+    custom = form.get("custom") if isinstance(form.get("custom"), str) else None
+    version = form.get("version") if isinstance(form.get("version"), str) and form.get("version") else None
+    values, problems = _ws.php_form(_php_values(settings), site)
+    why = _version_problem(site, version)
     try:
-        problems = _svc.php_ini_problems(text)
+        problems += ([why] if why else []) + _custom_problems(custom)
     except NotImplementedError:
         return _w.say(501, _w.S_NOT_READY)
     if problems:
         return _problems(problems)
-    site.php_ini_custom = text
-    return _apply_php(site, "Advanced php.ini (%d lines)" % (text.count("\n") + 1 if text else 0))
+    site.php_settings = json.dumps(dict(json.loads(site.php_settings or "{}"), **values), sort_keys=True)
+    words = ["%s=%s" % kv for kv in sorted(values.items())]
+    if version and version != site.php_version:
+        site.php_version = version
+        words.append("php_version=%s" % version)
+    if custom is not None and custom != (site.php_ini_custom or ""):
+        site.php_ini_custom = custom
+        words.append("Advanced php.ini (%d lines)" % (custom.count("\n") + 1 if custom else 0))
+    db.session.commit()
+    ok, said = _w.host_call(_sw.php_apply, site.remote, site)
+    _w.forget_status(site.id)
+    return _w.acted(site, "website_php", ok, said or "PHP settings applied.", ", ".join(words) or "none")
 
 
 def _php_routes(app):
-    @app.route("/websites/<int:site_id>/php")
+    @app.route("/websites/<int:site_id>/php/effective")
     @login_required
-    def website_php(site_id):
+    def website_php_effective(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
         if site.kind not in PHP_KINDS:
             return _w.say(409, S_NOT_PHP)
-        values = json.loads(site.php_settings or "{}")
         ok, effective = _w.host_call(_sw.php_effective, site.remote, site)
-        return jsonify({"version": site.php_version or "", "versions": list(_php_versions()), "values": values,
-                        "advanced": site.php_ini_custom or "", "owasp": {k: v[3] for k, v in _ws.PHP_FIELDS.items()},
-                        "owasp_notes": _ws.owasp_notes(values),
-                        "effective": effective if ok and isinstance(effective, dict) else {}})
+        if not ok or not isinstance(effective, dict):
+            return jsonify({"success": False, "values": {}, "message": i18n.tr(effective if not ok else _w.S_UNREACHABLE)})
+        return jsonify({"success": True, "values": effective})
 
     @app.route("/websites/<int:site_id>/php", methods=["POST"])
     @login_required
@@ -111,39 +125,44 @@ def _php_routes(app):
             return _w.say(409, S_NOT_PHP)
         return _php_save(site, _w.body())
 
-    @app.route("/websites/<int:site_id>/php/advanced", methods=["POST"])
-    @login_required
-    def website_php_advanced(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
-        if site.kind not in PHP_KINDS:
-            return _w.say(409, S_NOT_PHP)
-        text = _w.body().get("text")
-        return _ini_save(site, text if isinstance(text, str) else None)
+
+def _opcache_values(form, site):
+    """(the OPcache php.ini values from the Performance card, [problems])."""
+    fields = {}
+    for key, ini in (("opcache_memory_mb", "opcache.memory_consumption"), ("opcache_revalidate_s", "opcache.revalidate_freq")):
+        value = form.get(key)
+        if value is not None and not isinstance(value, bool):
+            fields[ini] = str(value).strip()
+    return _ws.php_form(fields, site)
 
 
-def _performance(site, data):
-    changes, problems = _ws.performance_form(data)
-    if problems:
-        return _problems(problems)
-    if "object_cache" in changes and changes["object_cache"] != site.object_cache and not _w.is_admin(current_user, site):
+def _performance(site, form):
+    """POST the Performance card: OPcache (and its two values), object cache, page cache and its TTL, static caching."""
+    changes, problems = _ws.performance_form({k: v for k, v in form.items() if v is not None})
+    opcache, more = _opcache_values(form, site)
+    if problems or more:
+        return _problems(problems + more)
+    if changes.get("object_cache", site.object_cache) != site.object_cache and not _w.is_admin(current_user, site):
         abort(404)
     if changes.get("object_cache") and not site.object_cache_secret:
         import secrets
         site.object_cache_secret = encrypt_secret(secrets.token_urlsafe(32))
     for key, value in changes.items():
         setattr(site, key, value)
+    if opcache:
+        site.php_settings = json.dumps(dict(json.loads(site.php_settings or "{}"), **opcache), sort_keys=True)
     db.session.commit()
     ok, said = _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
     if ok and site.enabled and ({"page_cache", "page_cache_ttl", "static_cache"} & set(changes)):
         ok, said = _w.reconcile_proxy(site.remote)
-    return _w.acted(site, "website_cache", ok, said or "Saved.",
-                    ", ".join("%s=%s" % kv for kv in sorted(changes.items())) or "none")
+    words = ["%s=%s" % kv for kv in sorted(changes.items())] + ["%s=%s" % kv for kv in sorted(opcache.items())]
+    return _w.acted(site, "website_cache", ok, said or "Saved.", ", ".join(words) or "none")
 
 
 def _rules(site, data):
     rules = data.get("rules", [])
     if not isinstance(rules, list) or len(rules) > S_RULES_MAX or not all(isinstance(r, dict) for r in rules):
-        return _w.say(400, "Custom rules must be a list of at most %d rules." % S_RULES_MAX)
+        return _w.say(400, i18n.Sentence("Custom rules must be a list of at most {n} rules.", n=S_RULES_MAX))
     from panel.services import websites_proxy as _wp
     try:
         problems = _wp.rules_problems(rules)
@@ -190,68 +209,84 @@ def _perf_routes(app):
 
 
 # ── runtime apps ────────────────────────────────────────────────────────────────────────────────
-def _env_save(site, data):
-    env = data.get("env")
-    problems = _ws.env_problems(env)
-    if problems:
-        return _problems(problems)
-    site.env_enc = encrypt_secret(json.dumps(env, sort_keys=True)) if env else ""
-    db.session.commit()
-    ok, said = _w.host_call(_sw.env_apply, site.remote, site)
-    return _w.acted(site, "website_env", ok, said or "Saved.", "environment: %d variables (%s)" % (len(env), ", ".join(sorted(env))))
+def merged_env(site, form):
+    """(the app's environment after this save, [problems]).
+
+    `env` maps a name to its new value, or to null to keep the value saved (the page never has it);
+    `env_remove` lists names to drop.
+    """
+    try:
+        saved = json.loads(decrypt_secret(site.env_enc) or "{}") if site.env_enc else {}
+    except (TypeError, ValueError):
+        saved = {}
+    env = dict(saved) if isinstance(saved, dict) else {}
+    asked = form.get("env") if isinstance(form.get("env"), dict) else {}
+    for name, value in asked.items():
+        if value is not None:
+            env[name] = value
+        elif name not in env:
+            return env, [i18n.Sentence("{name} has no saved value to keep.", name=str(name)[:64])]
+    removed = form.get("env_remove") if isinstance(form.get("env_remove"), list) else []
+    for name in removed:
+        env.pop(name, None)
+    return env, _ws.env_problems(env)
 
 
-def _app_settings(site, data):
-    problems = []
-    version = _w.field(data, "runtime_version", site.runtime_version or "")
-    if not WEBSITE_RUNTIME_VERSION_RE.match(version):
-        problems.append("Choose a runtime version this panel offers.")
-    commands = {}
+def _app_fields(site, form):
+    """({column: value} the form changes in the app's runtime, commands and port, [problems])."""
+    problems, out = [], {}
+    if "runtime_version" in form:
+        version = _w.field(form, "runtime_version")
+        if not WEBSITE_RUNTIME_VERSION_RE.match(version):
+            problems.append("Choose a runtime version this panel offers.")
+        out["runtime_version"] = version
     for key in ("build_command", "start_command"):
-        if key in data:
-            text = data.get(key) if isinstance(data.get(key), str) else ""
+        if key in form:
+            text = form.get(key) if isinstance(form.get(key), str) else ""
             if len(text) > WEBSITE_COMMAND_MAX or any(c in text for c in "\x00\r\n"):
-                problems.append("%s must be one line of at most %d characters." % (key, WEBSITE_COMMAND_MAX))
-            commands[key] = text.strip()
-    port = site.app_port
-    if "app_port" in data:
-        text = _w.field(data, "app_port")
+                problems.append(i18n.Sentence("{key} must be one line of at most {n} characters.", key=key,
+                                              n=WEBSITE_COMMAND_MAX))
+            out[key] = text.strip()
+    if form.get("app_port") is not None:
+        text = _w.field(form, "app_port")
         port = int(text) if text.isdecimal() and len(text) <= 5 else 0
         if not WEBSITE_APP_PORT_MIN <= port <= 65535:
-            problems.append("The app's port must be %d to 65535." % WEBSITE_APP_PORT_MIN)
-    if problems:
-        return _problems(problems)
-    site.runtime_version, site.app_port = version, port
-    for key, text in commands.items():
-        setattr(site, key, text)
+            problems.append(i18n.Sentence("The app's port must be {low} to 65535.", low=WEBSITE_APP_PORT_MIN))
+        out["app_port"] = port
+    return {k: v for k, v in out.items() if v != getattr(site, k)}, problems
+
+
+def _app_save(site, form):
+    """POST /app: the runtime, commands and port (administrators) and the environment (whoever runs the site)."""
+    fields, problems = _app_fields(site, form)
+    env, env_problems = merged_env(site, form)
+    if fields and not _w.is_admin(current_user, site):
+        abort(404)
+    if problems or env_problems:
+        return _problems(problems + env_problems)
+    env_changed = "env" in form or "env_remove" in form
+    for key, value in fields.items():
+        setattr(site, key, value)
+    if env_changed:
+        site.env_enc = encrypt_secret(json.dumps(env, sort_keys=True)) if env else ""
     db.session.commit()
-    ok, said = _w.host_call(_sw.install, site.remote, site)
-    return _w.acted(site, "website_update", ok, said, "app settings: version %s, port %s%s" % (
-        version or "-", port or "-", ", commands changed" if commands else ""))
+    ok, said = _w.host_call(_sw.install, site.remote, site) if fields else (True, "Saved.")
+    if ok and env_changed:
+        ok, said = _w.host_call(_sw.env_apply, site.remote, site)
+    words = ["%s=%s" % (k, v) for k, v in sorted(fields.items()) if not k.endswith("_command")]
+    words += ["commands changed"] if any(k.endswith("_command") for k in fields) else []
+    words += ["environment: %d variables (%s)" % (len(env), ", ".join(sorted(env)))] if env_changed else []
+    return _w.acted(site, "website_app", ok, said or "Saved.", ", ".join(words) or "none")
 
 
 def _app_routes(app):
-    @app.route("/websites/<int:site_id>/app/env")
+    @app.route("/websites/<int:site_id>/app", methods=["POST"])
     @login_required
-    def website_app_env(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
-        return jsonify({"names": _ws.env_names(site.env_enc, decrypt_secret)})
-
-    @app.route("/websites/<int:site_id>/app/env", methods=["POST"])
-    @login_required
-    def website_app_env_save(site_id):
+    def website_app(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
         if site.kind != "app":
             return _w.say(409, S_NOT_APP)
-        return _env_save(site, _w.body())
-
-    @app.route("/websites/<int:site_id>/app/settings", methods=["POST"])
-    @login_required
-    def website_app_settings(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
-        if site.kind != "app":
-            return _w.say(409, S_NOT_APP)
-        return _app_settings(site, _w.body())
+        return _app_save(site, _w.body())
 
     @app.route("/websites/<int:site_id>/app/build", methods=["POST"])
     @login_required

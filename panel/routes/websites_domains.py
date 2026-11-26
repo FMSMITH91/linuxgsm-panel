@@ -78,14 +78,22 @@ def _check(site, row):
             "message": i18n.tr(_dns.S_STATES[state])}
 
 
-def _row(site, data):
-    clean = website_domain(_w.field(data, "domain"))
+def _row(site, form):
+    """The site's domain the form names, by its id (`id`) or its name (`domain`), else None."""
+    try:
+        did = int(form.get("id"))
+    except (TypeError, ValueError):
+        did = None
+    if did is not None:
+        return next((d for d in site.domains if d.id == did), None)
+    clean = website_domain(_w.field(form, "domain"))
     return next((d for d in site.domains if d.domain == clean), None) if clean else None
 
 
 def domain_json(site, row):
     """A domain as the Domains tab shows it."""
-    return {"domain": row.domain, "primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
+    return {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
+            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
             "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
             "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
 

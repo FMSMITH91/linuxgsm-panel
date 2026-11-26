@@ -222,7 +222,7 @@ _lgsm._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _lgsm._mem.clear()
 
 from app import create_app  # noqa: E402
-from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState  # noqa: E402
+from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, Website, WebsiteDomain  # noqa: E402
 from panel.security import auth  # noqa: E402
 from panel.ops.ssh_manager import _core as _sm_core  # noqa: E402
 
@@ -289,6 +289,26 @@ def seed_servers(first, count):
                                       game_type="csgo", port=27015 + i,
                                       remote_id=remotes[i % len(remotes)].id, installed=True))
         db.session.commit()
+
+
+def seed_websites(first, count):
+    """`count` websites (each with a domain) spread over the hosts; the first one's id.
+
+    Seeded beside the game servers, so the second sweep has 5x the websites too and a Websites page whose
+    queries grow with the number of sites fails the N+1 check like any other page.
+    """
+    with app.app_context():
+        remotes = RemoteServer.query.all()
+        ids = []
+        for i in range(first, first + count):
+            site = Website(name="site%03d" % i, kind="php", state="running", remote_id=remotes[i % len(remotes)].id)
+            db.session.add(site)
+            db.session.flush()
+            site.account, site.port = "ws%d" % site.id, 20000 + i
+            db.session.add(WebsiteDomain(website_id=site.id, domain="site%03d.example.org" % i, is_primary=True))
+            ids.append(site.id)
+        db.session.commit()
+        return ids[0]
 
 
 def seed_minecraft_server():
@@ -391,7 +411,7 @@ def _seed_admin_and_hosts():
         return admin.id
 
 
-def _get_page_paths(admin_id, mc_server, addon_server):
+def _get_page_paths(admin_id, mc_server, addon_server, site_id):
     """Every GET page in the url map, with a real row's id in place of each id placeholder.
 
     The Minecraft lists page gets the Minecraft server and the add-on pages the Call of Duty 4 one: any
@@ -407,7 +427,9 @@ def _get_page_paths(admin_id, mc_server, addon_server):
             # An add-on id is a catalog name, not a row: the first one stands in for the add-on routes.
             "<addon_id>": "b3",
             # A B3 player id is a row of B3's own database, not the panel's: any id stands in.
-            "<int:client_id>": "1"}
+            "<int:client_id>": "1",
+            # A website's pages read the first seeded website.
+            "<int:site_id>": str(site_id)}
     with app.app_context():
         paths = []
         for rule in app.url_map.iter_rules():
@@ -573,9 +595,10 @@ def _check_api_servers_scans_concurrently(client):
 try:
     admin_id = _seed_admin_and_hosts()
     seed_servers(0, SERVERS_SMALL)
+    site_id = seed_websites(0, SERVERS_SMALL)
     mc_server = seed_minecraft_server()
     addon_server = seed_addon_server()
-    paths = _get_page_paths(admin_id, mc_server, addon_server)
+    paths = _get_page_paths(admin_id, mc_server, addon_server, site_id)
     check("perf: the sweep requests every GET page but the pinned few it cannot (a new page left out "
           "is named here)", set(_r41t_unswept) == _r41t_unswept_known,
           repr(sorted(set(_r41t_unswept) ^ _r41t_unswept_known)))
@@ -588,6 +611,7 @@ try:
     small_st, large_st = {}, {}
     small = probe(c, paths, small_st)
     seed_servers(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
+    seed_websites(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
     large = probe(c, paths, large_st)
     elapsed = time.perf_counter() - t0
 
@@ -619,6 +643,11 @@ try:
     grew = _pages_that_grew(small, large)
     check("perf: no page's query count grows with the number of game servers (N+1)",
           not grew, "; ".join(grew[:4]))
+    _site_pages = [p for p in paths if p.startswith(("/websites", "/api/websites"))]
+    check("perf: the Websites pages were in both sweeps (the list and a site's own pages, with 5x the websites "
+          "in the second), and the list answered 200 in both",
+          len(_site_pages) >= 15 and small_st.get("/api/websites") == 200 and large_st.get("/api/websites") == 200,
+          repr((len(_site_pages), small_st.get("/api/websites"), large_st.get("/api/websites"))))
     _check_no_growth_with_groups(paths)
     _check_api_servers_scans_concurrently(c)
 

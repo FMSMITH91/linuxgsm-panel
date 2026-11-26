@@ -15,6 +15,7 @@ to exclude"). A change is applied at once when a site is online: ports and proxy
 websites.reconcile_proxy, the tunnel through ssh_manager.websites.tunnel_apply.
 """
 import json
+import re
 
 from flask import abort, jsonify, request
 from flask_login import current_user, login_required
@@ -39,8 +40,9 @@ S_TUNNEL_NO_TOKEN = "A tunnel needs its token."
 
 
 def _remote():
-    """The host the request names (superadmin only, so any host), else 404."""
-    raw = request.args.get("remote_id") or _w.body().get("remote_id")
+    """The host the request names by host_id (or remote_id), in the query or the body, else 404 (superadmin only)."""
+    form = _w.body()
+    raw = request.args.get("host_id") or request.args.get("remote_id") or form.get("host_id") or form.get("remote_id")
     try:
         remote = db.session.get(RemoteServer, int(raw))
     except (TypeError, ValueError):
@@ -131,6 +133,52 @@ def _detail(changes):
     return ", ".join(words)
 
 
+_EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
+
+
+def parse_options(form):
+    """(the global website settings to store {key: value}, [problems]) from the Settings card's `options`.
+
+    Every key is held to its type and range (websites_view.OPTIONS); a value outside OWASP's
+    recommendation is stored (the page says so beside the field), never refused for that.
+    """
+    from panel.routes.websites_view import OPTIONS, TLS_CHOICES
+    out, problems = {}, []
+    for key, value in form.items():
+        if key not in OPTIONS:
+            continue
+        default, low, high = OPTIONS[key]
+        if isinstance(default, bool):
+            out[key] = value is True
+        elif isinstance(default, int):
+            if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high:
+                out[key] = value
+            else:
+                problems.append(i18n.tr("{key} must be a whole number from {low} to {high}.", key=key, low=low, high=high))
+        elif key == "tls_min":
+            if value in TLS_CHOICES:
+                out[key] = value
+            else:
+                problems.append(i18n.tr("The minimum TLS version is 1.2 or 1.3."))
+        else:
+            text = value.strip() if isinstance(value, str) else ""
+            if text and (len(text) > 254 or not _EMAIL_RE.fullmatch(text)):
+                problems.append(i18n.tr("The certificate contact is an email address, or empty."))
+            out[key] = text
+    return out, problems
+
+
+def _save_options(form):
+    from panel.core.config import update_config
+    values, problems = parse_options(form if isinstance(form, dict) else {})
+    if problems:
+        return _w.say(400, " ".join(problems))
+    update_config(lambda cfg: cfg.update({"websites_" + k: v for k, v in values.items()}))
+    log_action(current_user, "website_settings_global", target="websites",
+               detail=", ".join("%s=%s" % (k, "set" if k == "acme_contact" and v else v) for k, v in sorted(values.items())))
+    return _w.done(True, "Saved.")
+
+
 def _apply(remote, row):
     """Apply the host's proxy settings now: tunnel, then ports and proxy. -> (ok, sentence)."""
     ok, said = _w.host_call(_sw.tunnel_apply, remote, row)
@@ -173,9 +221,13 @@ def register(app):
     @superadmin_required
     @step_up_required
     def website_proxy_settings():
+        form = _w.body()
+        if isinstance(form.get("options"), dict):
+            return _save_options(form["options"])
         remote = _remote()
         row = _w.proxy_row(remote.id)
-        changes, problems = parse_settings(row, _w.body())
+        exposure = form.get("exposure") if isinstance(form.get("exposure"), dict) else form
+        changes, problems = parse_settings(row, exposure)
         if problems:
             db.session.rollback()
             return _w.say(400, " ".join(problems))

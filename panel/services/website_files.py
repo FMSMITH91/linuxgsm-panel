@@ -56,13 +56,15 @@ class ArchiveRefused(Exception):
 def docroot_rel(path):
     """`path` (relative to the document root, as the page sends it) relative to the account's home, or None.
 
-    None for anything that climbs out of the document root by its text; where it resolves on the
-    host is files.confined_to's question.
+    None for anything that climbs out of the document root by its text ("../x", "a/../../x"): refused,
+    never clamped to the root. Where it resolves on the host is files.confined_to's question.
     """
     if not isinstance(path, str) or "\x00" in path or len(path) > 4096:
         return None
-    rel = posixpath.normpath(posixpath.join("/", path)).lstrip("/")
-    return DOCROOT if rel in ("", ".") else posixpath.join(DOCROOT, rel)
+    rel = posixpath.normpath(path.lstrip("/") or ".")
+    if rel == ".." or rel.startswith("../"):
+        return None
+    return DOCROOT if rel == "." else posixpath.join(DOCROOT, rel)
 
 
 def page_rel(rel):

@@ -7,6 +7,8 @@ the Databases tab's own verb (routes/databases_sites). A backup counts toward th
 none is made when the site has no room left. A restore stops the site, takes a safety backup, checks
 the archive, unpacks it, restores the databases' dumps, and starts the site again.
 """
+import time as _time
+
 from flask import Response, jsonify, request
 from flask_login import current_user, login_required
 from werkzeug.exceptions import NotFound
@@ -74,7 +76,9 @@ def register(app):
         rows = _wb.listing(site.remote, site.account)
         if rows is None:
             return _w.say(502, _w.S_UNREACHABLE)
-        return jsonify({"backups": rows, "keep": site.backup_keep})
+        for r in rows:
+            r["when"] = _time.strftime("%Y-%m-%d %H:%M UTC", _time.gmtime(r["mtime"]))
+        return jsonify({"success": True, "backups": rows, "keep": site.backup_keep})
 
     @app.route("/websites/<int:site_id>/backups/create", methods=["POST"])
     @login_required

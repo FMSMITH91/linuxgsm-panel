@@ -30,6 +30,7 @@ from panel.services import websites_access as _wa
 S_BAD_PATH = "That path is not inside this website's files."
 S_NO_FILE = "Choose a file to upload."
 S_TOO_LARGE = "The file is larger than the {mb} MB this website has free."
+_EDITABLE_MAX = 1024 * 1024         # what the editor opens (files.read_file's own limit)
 
 
 def _account_refusal(site, reading=False):
@@ -68,7 +69,9 @@ def _read_routes(app):
             got = _files.browse_dir(site.remote, site.account, rel)
         if got is None or got.get("outside_home"):
             return _w.say(400, S_BAD_PATH)
-        return jsonify({"path": _wf.page_rel(rel), "entries": got.get("entries", []),
+        entries = [{"name": e["name"], "dir": e["is_dir"], "size": e["size"],
+                    "editable": not e["is_dir"] and e["size"] <= _EDITABLE_MAX} for e in got.get("entries", [])]
+        return jsonify({"success": True, "path": _wf.page_rel(rel), "entries": entries,
                         "unreadable": bool(got.get("unreadable"))})
 
     @app.route("/websites/<int:site_id>/files/read")
@@ -83,7 +86,7 @@ def _read_routes(app):
             content, err = _files.read_file(site.remote, site.account, rel)
         if content is None:
             return _w.say(400, err or S_BAD_PATH)
-        return jsonify({"path": _wf.page_rel(rel), "content": content})
+        return jsonify({"success": True, "path": _wf.page_rel(rel), "content": content})
 
     @app.route("/websites/<int:site_id>/files/download")
     @login_required
@@ -166,7 +169,7 @@ def _write_routes(app):
     def website_files_rename(site_id):
         site = _wa.site_for(current_user, site_id, EDIT_WEBSITE_FILES)
         data = _w.body()
-        rel, name = _rel(_w.field(data, "path")), _w.field(data, "name")
+        rel, name = _rel(_w.field(data, "path")), _w.field(data, "new_name") or _w.field(data, "name")
         refused = _w.say(400, S_BAD_PATH) if not rel or rel == _wf.DOCROOT else _account_refusal(site)
         if refused:
             return refused
@@ -190,7 +193,7 @@ def _write_routes(app):
     @login_required
     def website_files_extract(site_id):
         site = _wa.site_for(current_user, site_id, EDIT_WEBSITE_FILES)
-        rel, fs = _rel(request.form.get("path", "")), request.files.get("file")
+        rel, fs = _rel(request.form.get("path", "")), request.files.get("archive") or request.files.get("file")
         refused = (_w.say(400, S_BAD_PATH) if not rel else _w.say(400, S_NO_FILE) if fs is None or not fs.filename
                    else _account_refusal(site))
         if refused:

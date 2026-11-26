@@ -106,7 +106,8 @@ def _reveal(site, r):
     if not secret:
         return _w.say(500, "The stored password can't be read on this panel.")
     _w.audit(site, "website_db_reveal", "revealed the password of database %s" % r.name)
-    return _d._no_store(jsonify({"success": True, "password": secret}))
+    hd = _d._host_row(site.remote_id)
+    return _d._no_store(jsonify(dict(row_json(site, r, hd), success=True, password=secret)))
 
 
 def _reset(site, r):
@@ -146,12 +147,17 @@ def register(app):
                  % (name, i18n.tr(said)), ok)
         return _w.done(ok, said or "Database added.", id=row.id if row else None)
 
-    @app.route("/websites/<int:site_id>/databases/<int:db_id>/reveal", methods=["POST"])
+    @app.route("/websites/<int:site_id>/databases/credentials", methods=["POST"])
     @login_required
-    def website_database_reveal(site_id, db_id):
+    def website_database_credentials(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
-        r = _row(site, db_id)
-        return _reveal(site, r) if r is not None else _w.say(404, S_NO_SUCH)
+        try:
+            r = _row(site, int(_w.body().get("id")))
+        except (TypeError, ValueError):
+            r = None
+        if r is None:
+            return _w.say(404, S_NO_SUCH)
+        return step_up_refusal() if step_up_needed() else _reveal(site, r)
 
     @app.route("/websites/<int:site_id>/databases/<int:db_id>/reset-password", methods=["POST"])
     @login_required

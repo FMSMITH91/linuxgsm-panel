@@ -16,6 +16,8 @@ Detection lifecycle": never logged).
 import json
 import re
 
+from panel.core import i18n
+
 try:
     from zoneinfo import available_timezones
 except ImportError:  # pragma: no cover - Python 3.9+ has it
@@ -39,7 +41,7 @@ PHP_FIELDS = {
     "opcache.memory_consumption": ("int", 16, 1024, ""),
     "opcache.revalidate_freq": ("int", 0, 3600, ""),
 }
-INI_MAX_BYTES = 16 * 1024
+INI_MAX_BYTES = 8 * 1024
 INI_MAX_LINES = 300
 ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 ENV_MAX_VARS = 100
@@ -72,13 +74,14 @@ def _field_problem(key, value, site):
     if kind == "size":
         n = _size(value)
         return None if n is not None and low <= n <= _bound(high, site) else \
-            "%s must be a size like 64M, from %dM to %dM." % (key, low // MIB, _bound(high, site) // MIB)
+i18n.Sentence("{key} must be a size like 64M, from {low}M to {high}M.", key=key, low=low // MIB,
+                                high=_bound(high, site) // MIB)
     if kind == "int":
         ok = isinstance(value, str) and value.isdecimal() and len(value) <= 7 and low <= int(value) <= high
-        return None if ok else "%s must be a whole number from %d to %d." % (key, low, high)
+        return None if ok else i18n.Sentence("{key} must be a whole number from {low} to {high}.", key=key, low=low, high=high)
     if kind == "zone":
-        return None if _zone_ok(value) else "%s must be a time zone name like Europe/Paris." % key
-    return None if value in ("On", "Off") else "%s must be On or Off." % key
+        return None if _zone_ok(value) else i18n.Sentence("{key} must be a time zone name like Europe/Paris.", key=key)
+    return None if value in ("On", "Off") else i18n.Sentence("{key} must be On or Off.", key=key)
 
 
 def php_form(data, site):
@@ -119,7 +122,8 @@ def ini_size_problem(text):
     if not isinstance(text, str):
         return "The Advanced php.ini must be text."
     if len(text.encode("utf-8", "surrogatepass")) > INI_MAX_BYTES or text.count("\n") >= INI_MAX_LINES:
-        return "The Advanced php.ini may hold at most %d lines and %d KB." % (INI_MAX_LINES, INI_MAX_BYTES // 1024)
+        return i18n.Sentence("The Advanced php.ini may hold at most {lines} lines and {kb} KB.", lines=INI_MAX_LINES,
+                             kb=INI_MAX_BYTES // 1024)
     if "\x00" in text:
         return "The Advanced php.ini must be text."
     return None
@@ -131,18 +135,19 @@ def env_problems(env):
         return ["Environment variables must be a list of NAME and value pairs."]
     out = []
     if len(env) > ENV_MAX_VARS:
-        out.append("At most %d environment variables." % ENV_MAX_VARS)
+        out.append(i18n.Sentence("At most {n} environment variables.", n=ENV_MAX_VARS))
     total = 0
     for key, value in env.items():
         if not isinstance(key, str) or not ENV_KEY_RE.fullmatch(key):
             out.append("A variable name is a letter or _ then letters, digits and _, at most 64 characters.")
             break
         if not isinstance(value, str) or len(value) > ENV_MAX_VALUE or any(c in value for c in "\x00\r\n"):
-            out.append("The value of %s must be one line of at most %d characters." % (key, ENV_MAX_VALUE))
+            out.append(i18n.Sentence("The value of {key} must be one line of at most {n} characters.", key=key,
+                                     n=ENV_MAX_VALUE))
             break
         total += len(key) + len(value)
     if total > ENV_MAX_TOTAL:
-        out.append("The environment variables may hold at most %d KB in all." % (ENV_MAX_TOTAL // 1024))
+        out.append(i18n.Sentence("The environment variables may hold at most {kb} KB in all.", kb=ENV_MAX_TOTAL // 1024))
     return out
 
 
@@ -167,5 +172,6 @@ def performance_form(data):
         if text.isdecimal() and len(text) <= 6 and PAGE_TTL[0] <= int(text) <= PAGE_TTL[1]:
             out["page_cache_ttl"] = int(text)
         else:
-            problems.append("The page cache time must be %d to %d seconds." % PAGE_TTL)
+            problems.append(i18n.Sentence("The page cache time must be {low} to {high} seconds.", low=PAGE_TTL[0],
+                                          high=PAGE_TTL[1]))
     return out, problems

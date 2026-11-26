@@ -31,7 +31,7 @@ from jinja2 import TemplateNotFound
 from sqlalchemy import event
 
 from panel.core import i18n
-from panel.core.config import encrypt_secret, load_config
+from panel.core.config import encrypt_secret
 from panel.core.http import _json_body, _json_str
 from panel.core.validation import WEBSITE_KINDS, WEBSITE_PORT_MAX, WEBSITE_PORT_MIN, website_name_problem
 from panel.db.models import AuditLog, Group, RemoteServer, Website, WebsiteProxy, db
@@ -151,7 +151,7 @@ def site_json(site, admin=False):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state,
            "state_reason": site.state_reason or "", "enabled": bool(site.enabled),
            "domain": dom.domain if dom else "", "cert_state": dom.cert_state if dom else "",
-           "php_version": site.php_version or "", "runtime": site.runtime or "", "app_recipe": site.app_recipe or ""}
+           "php_version": site.php_version or "", "runtime": site.runtime or "", "app": site.app_recipe or ""}
     if admin:
         out.update({k: getattr(site, k) for k in LIMITS})
         out.update({"remote_id": site.remote_id, "access_log": bool(site.access_log), "full_egress": bool(site.full_egress),
@@ -164,7 +164,8 @@ def page(template, **ctx):
     try:
         return render_template(template, **ctx)
     except TemplateNotFound:
-        return jsonify({k: v for k, v in ctx.items() if isinstance(v, (str, int, bool, list, dict, type(None)))})
+        return jsonify({k: (site_json(v) if isinstance(v, Website) else v) for k, v in ctx.items()
+                        if isinstance(v, (str, int, bool, list, dict, type(None), Website))})
 
 
 # ── the web proxy and its ports, after a site goes online or offline ──────────────────────────
@@ -201,35 +202,34 @@ def reconcile_proxy(remote):
 
 # ── list and pages ──────────────────────────────────────────────────────────────────────────────
 def _list_routes(app):
+    from panel.routes import websites_view as _view
+
     @app.route("/websites")
     @login_required
     def websites_page():
         if not _wa.can_open_page(current_user):
             abort(404)
-        sites = _wa.visible_sites(current_user, VIEW_WEBSITES).all()
-        return page("websites.html", sites=[site_json(s, is_admin(current_user, s)) for s in sites],
-                    can_create=_wa.can_create(current_user), is_admin=is_admin(current_user))
+        return page("websites.html", can_add=_wa.can_create(current_user), site_admin=is_admin(current_user))
 
     @app.route("/websites/<int:site_id>")
     @login_required
     def website_page(site_id):
         site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
         tab = request.args.get("tab", "overview")
-        return page("website.html", site=site_json(site, is_admin(current_user, site)),
-                    tab=tab if tab.isalnum() and len(tab) <= 16 else "overview")
+        return page("website.html", site=site, tab=tab if tab.isalnum() and len(tab) <= 16 else "overview",
+                    **_view.page_flags(site))
 
     @app.route("/api/websites")
     @login_required
     def api_websites():
-        sites = _wa.visible_sites(current_user, VIEW_WEBSITES).all()
-        return jsonify({"sites": [site_json(s, is_admin(current_user, s)) for s in sites],
-                        "can_create": _wa.can_create(current_user)})
+        return jsonify(_view.list_answer(site_json))
 
     @app.route("/api/websites/<int:site_id>")
     @login_required
     def api_website(site_id):
         site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
-        return jsonify(dict(site_json(site, is_admin(current_user, site)), probe=_status(site)))
+        from panel.routes import websites_apps
+        return jsonify(_view.site_answer(site, _status(site), websites_apps.install_json(site)))
 
 
 def _status(site):
@@ -276,7 +276,7 @@ def add_target(data):
     """
     if creates_as_admin(current_user):
         try:
-            rid = int(data.get("remote_id"))
+            rid = int(data.get("host_id") or data.get("remote_id"))
         except (TypeError, ValueError):
             rid = None
         if rid is None:
@@ -295,27 +295,42 @@ def add_target(data):
 def _customer_group(data):
     """The customer group an administrator named for a new site, or None (no group, or not a customer group)."""
     try:
-        group = db.session.get(Group, int(data.get("group_id")))
+        group = db.session.get(Group, int(data.get("customer_id") or data.get("group_id")))
     except (TypeError, ValueError):
         return None
     return group if group is not None and group.is_customer else None
 
 
 def _defaults():
-    """The limits a new site starts with: Settings' defaults where set and valid, else the model's."""
-    cfg = load_config()
-    out = {}
-    for key, (low, high) in LIMITS.items():
-        v = cfg.get("websites_default_" + key)
-        if isinstance(v, int) and not isinstance(v, bool) and low <= v <= high:
-            out[key] = v
-    return out
+    """What a new site starts with: the Settings card's default limits and access-log switch."""
+    from panel.routes.websites_view import options
+    opts = options()
+    return dict({key: opts[key] for key in LIMITS}, access_log=bool(opts["access_log_default"]))
 
 
-def new_site(remote, name, kind, group=None):
+def runtime_fields(data, kind):
+    """(the kind-specific columns of a new site, refusal or None): its PHP version, or its runtime and version."""
+    from panel.routes.websites_view import php_versions, runtime_versions
+    if kind in ("php", "wordpress", "phpbb"):
+        versions = php_versions()
+        version = field(data, "php_version") or (versions[-1] if versions else "")
+        if versions and version not in versions:
+            return {}, (400, "Choose one of the PHP versions this panel offers.")
+        return {"php_version": version}, None
+    if kind == "app":
+        runtime = field(data, "runtime") or "node"
+        versions = runtime_versions().get(runtime, [])
+        version = field(data, "runtime_version") or (versions[-1] if versions else "")
+        if version not in versions:
+            return {}, (400, "Choose a runtime and version this panel offers.")
+        return {"runtime": runtime, "runtime_version": version}, None
+    return {}, None
+
+
+def new_site(remote, name, kind, group=None, extra=None):
     """The new site's row (state creating, account and port chosen, a fresh proxy token), committed."""
     site = Website(remote_id=remote.id, name=name, kind=kind, state="creating",
-                   created_by=(current_user.username or "")[:80], **_defaults())
+                   created_by=(current_user.username or "")[:80], **dict(_defaults(), **(extra or {})))
     db.session.add(site)
     db.session.flush()
     site.account, site.port = "ws%d" % site.id, _free_port(remote.id)
@@ -368,9 +383,10 @@ def _add_route(app):
         remote, group, refusal = add_target(data)
         name, kind = field(data, "name").lower(), field(data, "kind") or "static"
         refusal = refusal or add_refusal(remote, name, kind)
-        if refusal:
-            return say(*refusal)
-        site = new_site(remote, name, kind, group)
+        extra, bad = runtime_fields(data, kind) if not refusal else ({}, None)
+        if refusal or bad:
+            return say(*(refusal or bad))
+        site = new_site(remote, name, kind, group, extra)
         from panel.routes import websites_domains
         dom_said = websites_domains.add_first(site, field(data, "domain")) if field(data, "domain") else None
         audit(site, "website_create", "created a %s website on %s%s" % (kind, remote.name, " for %s" % group.name if group else ""))
@@ -412,8 +428,8 @@ def _run_routes(app):
         if reader is None:
             return say(501, S_NOT_READY)
         ok, said = host_call(reader, site.remote, site)
-        return jsonify({"success": bool(ok), "lines": said if ok and isinstance(said, str) else "",
-                        "message": "" if ok else i18n.tr(said)})
+        lines = said.splitlines()[-500:] if ok and isinstance(said, str) else []
+        return jsonify({"success": bool(ok), "lines": lines, "message": "" if ok else i18n.tr(said)})
 
 
 def _ran(site, action, ok, said, state):
@@ -486,12 +502,6 @@ def _admin_routes(app):
         forget_status(site.id)
         return acted(site, "website_update", ok, said, "image updated" if ok else "")
 
-    @app.route("/websites/<int:site_id>/limits", methods=["POST"])
-    @login_required
-    def website_limits(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
-        return _limits(site, body())
-
     @app.route("/websites/<int:site_id>/settings", methods=["POST"])
     @login_required
     def website_settings(site_id):
@@ -520,56 +530,71 @@ def _delete(site):
     return done(True, "Website removed.")
 
 
-def _limits(site, data):
+def _limits(site, fields):
+    """Set the limits in `fields` on `site` (not committed): None, or the refusal naming the first bad one."""
     changed = {}
     for key, (low, high) in LIMITS.items():
-        if key not in data:
+        if key not in fields:
             continue
         try:
-            v = int(str(data.get(key)).strip())
+            v = int(str(fields.get(key)).strip())
         except (TypeError, ValueError):
             v = None
         if v is None or not low <= v <= high:
+            db.session.rollback()
             return say(400, i18n.Sentence(S_BAD_LIMIT, field=key, low=low, high=high))
         changed[key] = v
     for key, v in changed.items():
         setattr(site, key, v)
-    db.session.commit()
-    ok, said = (host_call(_sw.install, site.remote, site) if changed else (True, "Nothing changed."))
-    if ok and "disk_mb" in changed:
-        host_call(_sw.quota_set, site.remote, site)
-    return acted(site, "website_limits", ok, said, ", ".join("%s=%d" % kv for kv in sorted(changed.items())) or "none")
+    return None
 
 
-def _settings(site, data):
-    if "full_egress" in data and not current_user.is_superadmin:
+def _keep(site, fields):
+    """Set backup_keep from `fields` when given: None, or the refusal."""
+    if "backup_keep" not in fields:
+        return None
+    try:
+        keep = int(str(fields.get("backup_keep")))
+    except (TypeError, ValueError):
+        keep = 0
+    if not 1 <= keep <= 60:
+        db.session.rollback()
+        return say(400, i18n.Sentence(S_BAD_LIMIT, field="backup_keep", low=1, high=60))
+    site.backup_keep = keep
+    return None
+
+
+def _settings(site, form):
+    """The Settings form: {limits: {..., backup_keep}, access_log, full_egress, customer_note}."""
+    limits = dict(form.get("limits")) if isinstance(form.get("limits"), dict) else {}
+    if "full_egress" in form and flag(form, "full_egress") != bool(site.full_egress) and not current_user.is_superadmin:
         abort(404)
-    words = []
+    refused = _limits(site, limits) or _keep(site, limits)
+    if refused is not None:
+        return refused
+    words = ["%s=%s" % (k, limits[k]) for k in sorted(limits) if k in LIMITS or k == "backup_keep"]
     for key in ("access_log", "full_egress"):
-        if key in data:
-            setattr(site, key, flag(data, key))
+        if key in form:
+            setattr(site, key, flag(form, key))
             words.append("%s=%s" % (key, "on" if getattr(site, key) else "off"))
-    if "backup_keep" in data:
-        try:
-            keep = int(str(data.get("backup_keep")))
-        except (TypeError, ValueError):
-            keep = 0
-        if not 1 <= keep <= 60:
-            return say(400, i18n.Sentence(S_BAD_LIMIT, field="backup_keep", low=1, high=60))
-        site.backup_keep = keep
-        words.append("backup_keep=%d" % keep)
-    if "customer_note" in data:
-        site.customer_note = field(data, "customer_note")[:2000]
+    if "customer_note" in form:
+        site.customer_note = field(form, "customer_note")[:2000]
         words.append("customer note")
     db.session.commit()
-    ok, said = reconcile_proxy(site.remote) if site.enabled and "access_log" in data else (True, "Saved.")
+    resized = any(k in LIMITS for k in limits)
+    ok, said = host_call(_sw.install, site.remote, site) if resized else (True, "Saved.")
+    if ok and "disk_mb" in limits:
+        host_call(_sw.quota_set, site.remote, site)
+    if ok and site.enabled and "access_log" in form:
+        ok, said = reconcile_proxy(site.remote)
     return acted(site, "website_settings", ok, said, ", ".join(words) or "none")
 
 
 def register(app):
     """The Websites routes: these, and the sibling modules'."""
     from panel.routes import (databases_sites, websites_apps, websites_backups, websites_customers, websites_domains,
-                              websites_files, websites_proxy, websites_settings)
+                              websites_files, websites_proxy, websites_settings, websites_view)
+    app.jinja_env.globals["websites_nav"] = websites_view.nav_url
     _list_routes(app)
     _add_route(app)
     _run_routes(app)
