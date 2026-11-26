@@ -53,6 +53,16 @@ version the catalog names. Go checks every module against its checksum database.
 out of the image, checked to contain the module, and installed in place of the plain proxy. The page cache
 is off by default. Logged-in visitors, form posts and admin pages always bypass it.
 
+## The PHP sites' image
+
+PHP sites and the one-click apps other than WordPress run on the official PHP image (Apache) pinned in the
+catalog, with the extensions the apps need added: mysqli and pdo_mysql (their database drivers), gd, intl and
+zip. The official image has none of them. The panel builds this image on the host, as the site's own account,
+from `panel/website_images/php/Containerfile` the first time a site needs it (a few minutes on a small host),
+and again only when the catalog pins a new PHP image. The build fetches Debian's packages, each checked by
+apt against Debian's signing keys, and keeps only the libraries the extensions load. CI builds the same file
+for every PHP version the catalog pins and scans it like the pinned images.
+
 ## Pinned images and downloads
 
 Every image and download a site uses is pinned in the signed catalog (`panel/addon_images/catalog.json`,

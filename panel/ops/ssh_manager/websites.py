@@ -225,7 +225,8 @@ def _install_made(remote, site, db):
         return False, FAILED
     if refused:
         return False, refused
-    ok, out = _as_site(remote, site.account, _ws().install_sh(site.account, site, image), timeout=900, stdin_text=stdin)
+    # A PHP site builds its image on a first install (minutes on a small host): install_sh's timeout allows for it.
+    ok, out = _as_site(remote, site.account, _ws().install_sh(site.account, site, image), timeout=1800, stdin_text=stdin)
     if not ok:
         return False, _mark(out)
     quota_set(remote, site)

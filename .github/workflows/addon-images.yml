@@ -4,8 +4,9 @@ name: Add-on images
 # add-on catalog (panel/addon_images/catalog.json, the source of the signed catalog panels fetch)
 # names by digest, pulled by that digest, and each image the panel builds on the host
 # (panel/addon_images/<name>/Containerfile), built here from the catalog's values.
-# The same for the websites: every image the catalog's `sites` section names, and the page cache's
-# proxy (panel/website_images/caddy-cache/Containerfile), built from `sites.caddy_cache`.
+# The same for the websites: every image the catalog's `sites` section names, the page cache's
+# proxy (panel/website_images/caddy-cache/Containerfile), built from `sites.caddy_cache`, and the PHP
+# sites' image (panel/website_images/php/Containerfile), built once per PHP version `sites.php` pins.
 # Trivy fails the run on a High or Critical vulnerability that has a fixed version, or a secret in an
 # image; an accepted finding is an entry in .github/trivyignore.yaml with its reason and an expiry
 # date. hadolint lints each Containerfile, and ClusterFuzzLite's build image

@@ -1,0 +1,44 @@
+# The PHP websites' image for linuxgsm-panel: the official PHP image (Apache) the signed catalog pins for
+# one PHP version, with the extensions the one-click apps need. Built on the host, as the site's own
+# account, by rootless Podman (panel/services/websites.py install_sh writes this file into the site's
+# home and runs `podman build` with the one build argument below); CI builds this copy and scans it.
+#
+# Why built and not pulled: the official PHP image has no MySQL driver, image library, intl or zip, and
+# phpBB, Drupal, MyBB and Simple Machines Forum each need some of them (mysqli or pdo_mysql, gd).
+#   mysqli, pdo_mysql  every app's database driver (phpBB, MyBB and SMF use mysqli; Drupal, PDO)
+#   gd                 Drupal requires it; the forums use it for avatars and visual confirmation
+#   intl, zip          Drupal and the forums use them where present (languages, extension packages)
+#   OPcache            enabled when the base image has not enabled it already
+#
+# What the build trusts: the base image, by its digest; Debian's packages (the security updates, the
+# headers the extensions compile against and the libraries they keep), each checked by apt against
+# Debian's signing keys; PHP's own extension sources, which the base image carries. The build tools
+# and headers are removed again in the same layer; only the libraries the new extensions load stay.
+#
+# The value has no default here: it comes from the signed add-on catalog (its source is
+# panel/addon_images/catalog.json, sites.php.<version>.image), passed as --build-arg by the panel and
+# by CI's image scan. So a new PHP image changes no file a panel runs, and needs no panel update.
+#   BASE_IMAGE  the catalog's sites.php.<version>.image: php:<version>-apache by digest
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+LABEL org.opencontainers.image.title="PHP for linuxgsm-panel websites"
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# At most two compilers at once: a small host keeps memory for its game servers while a site is made.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-mark showmanual > /tmp/panel-manual \
+    && apt-get install -y --no-install-recommends libfreetype-dev libicu-dev libjpeg62-turbo-dev libpng-dev \
+        libwebp-dev libzip-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
+    && jobs="$(nproc)" && if [ "${jobs}" -gt 2 ]; then jobs=2; fi \
+    && docker-php-ext-install -j "${jobs}" gd intl mysqli pdo_mysql zip \
+    && { grep -qx 'Zend OPcache' <<< "$(php -m)" || docker-php-ext-enable opcache; } \
+    && apt-mark auto '.*' > /dev/null \
+    && xargs -r apt-mark manual < /tmp/panel-manual > /dev/null \
+    && find "$(php -r 'echo ini_get("extension_dir");')" -name '*.so' -exec ldd {} + \
+        | awk '$2 == "=>" && $3 ~ /^\// && $3 !~ /^\/usr\/local\// { n = split($3, p, "/"); print "*/" p[n] }' \
+        | sort -u | xargs -r dpkg-query --search | cut -d: -f1 | sort -u | xargs -r apt-mark manual > /dev/null \
+    && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
+    && rm -rf /var/lib/apt/lists/* /tmp/panel-manual \
+    && mods="$(php -m)" && for m in gd intl mysqli pdo_mysql zip 'Zend OPcache'; do \
+        grep -qix "${m}" <<< "${mods}" || { echo "the PHP extension ${m} is missing" >&2; exit 1; }; done

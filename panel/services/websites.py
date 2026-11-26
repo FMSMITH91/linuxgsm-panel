@@ -33,7 +33,9 @@ THE NETWORK (pasta; see addons.network)
     app's gate join the site's own network namespace (Network=container:), so they are private to it.
 """
 import base64
+import hashlib
 import json
+import os
 import re
 import shlex
 import zoneinfo
@@ -79,6 +81,8 @@ _MARK_STOPPED = "SITE_STOPPED"
 _MARK_REMOVED = "SITE_REMOVED"
 FAIL_MARKS = {
     "SITE_PULL_FAILED": "The site's image could not be downloaded. Check the host's internet connection and try again.",
+    "SITE_BUILD_FAILED": ("The site's PHP image could not be built. Check the host's internet connection and free "
+                          "disk space, then try again."),
     "SITE_FILES_REFUSED": "The panel refused to write one of the site's files. Nothing was changed.",
     "SITE_START_LIMIT": "The site was started too often in a short time. Wait ten minutes, then start it again.",
     "SITE_START_FAILED": "The site's container did not start. Its last log lines are below.",
@@ -420,13 +424,44 @@ def _tail(restart="always"):
             "", "[Install]", "WantedBy=default.target", ""]
 
 
+# The PHP kinds' image: the catalog's PHP image (by digest) with the extensions the apps need, built on the host
+# as the site's account from panel/website_images/php/Containerfile (install_sh). Its tag names the PHP version
+# and a hash of the base and the Containerfile, so a new pin or a changed Containerfile is a new build.
+PHP_IMAGE_REPO = "localhost/lgsm-site-php"
+PHP_BUILD_DIR = SITE + "/image"
+PHP_CONTAINERFILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "website_images", "php",
+                                 "Containerfile")
+
+
+def php_containerfile():
+    """The PHP sites' Containerfile (panel/website_images/php/Containerfile), as the panel ships it."""
+    with open(PHP_CONTAINERFILE, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def php_build_tag(version, base):
+    """The local tag of the PHP image built from `base` (the catalog's PHP image for `version`)."""
+    mark = hashlib.sha256(("%s\n%s" % (base, php_containerfile())).encode("utf-8")).hexdigest()[:20]
+    return "%s:%s-%s" % (PHP_IMAGE_REPO, version, mark)
+
+
+def php_base_for(site):
+    """The catalog's PHP image a PHP site's own image is built from, or None when the catalog offers none."""
+    from panel.services import websites_catalog as _wc
+    return _wc.php_image("php", site.php_version) if site.kind in ("php", "phpbb") else None
+
+
 def image_for(site):
-    """The pinned image `site` runs (its kind and PHP or runtime version), or None when the catalog offers none."""
+    """The image `site` runs (its kind and PHP or runtime version), or None when the catalog offers none.
+
+    A pinned image by digest, except a PHP site's, which is built on the host from its pinned base (php_build_tag).
+    """
     from panel.services import websites_catalog as _wc     # imported here: the unit text is tested without it
     if site.kind == "static":
         return _wc.static_image()
     if site.kind in ("php", "phpbb"):
-        return _wc.php_image("php", site.php_version)
+        base = php_base_for(site)
+        return php_build_tag(site.php_version, base) if base else None
     if site.kind == "wordpress":
         return _wc.php_image("wordpress", site.php_version)
     if site.kind == "app":
@@ -675,6 +710,7 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               "%s/%s.container" % (QUADLET_DIR, GATE_UNIT), "%s/%s.container" % (QUADLET_DIR, TUNNEL_UNIT),
               "%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT), "%s/%s.socket" % (USER_UNIT_DIR, DB_RELAY_UNIT),
               "%s/%s.service" % (USER_UNIT_DIR, DB_RELAY_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
+              PHP_BUILD_DIR + "/Containerfile",
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
               CONF + "/build.sh", HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
 
@@ -694,10 +730,11 @@ def write_files_sh():
     and writes nothing more. No content is ever on the command line.
     """
     names = "|".join(FILE_NAMES)
-    return ("umask 077; mkdir -p %s %s %s %s %s tunnel || exit 1; chmod 0700 %s %s; "
+    return ("umask 077; mkdir -p %s %s %s %s %s %s tunnel || exit 1; chmod 0700 %s %s; "
             "while read -r p b; do case \"$p\" in %s) ;; *) echo SITE_FILES_REFUSED; exit 25 ;; esac; "
             "printf %%s \"$b\" | base64 -d > \"$p.new\" && mv -f -T \"$p.new\" \"$p\" || exit 1; done; "
-            % (_q(QUADLET_DIR), _q(USER_UNIT_DIR), _q(CONF), _q(HOME_DIR), _q(HTML), _q(CONF), _q(HOME_DIR), names))
+            % (_q(QUADLET_DIR), _q(USER_UNIT_DIR), _q(CONF), _q(HOME_DIR), _q(HTML), _q(PHP_BUILD_DIR), _q(CONF),
+               _q(HOME_DIR), names))
 
 
 def egress_proxy_source():
@@ -725,6 +762,8 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
         files[CONF + "/apache.conf"] = apache_conf(token)
         files[CONF + "/ports.conf"] = APACHE_PORTS
         files[CONF + "/php.ini"] = php_ini(site)
+        if site.kind in ("php", "phpbb"):
+            files[PHP_BUILD_DIR + "/Containerfile"] = php_containerfile()
     if site.object_cache and cache_password:
         files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
         files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
@@ -751,7 +790,8 @@ def install_sh(account, site, image=None):
     """
     _home(account)
     image = image or image_for(site)
-    pull = "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image)
+    pull = php_build_sh(site, image) if site.kind in ("php", "phpbb") else (
+        "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image))
     if site.kind == "app":
         from panel.services import websites_catalog as _wc
         pull += "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(_wc.static_image())
@@ -761,6 +801,23 @@ def install_sh(account, site, image=None):
             _wc.pins("object_cache")["image"])
     return (_ENV + write_files_sh() + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
+
+
+def php_build_sh(site, tag):
+    """Shell (as the account) that builds a PHP site's image `tag` from its pinned base, unless it is there already.
+
+    Built from the Containerfile the bundle wrote (PHP_BUILD_DIR), the base pulled by its digest; the build
+    reaches Debian's archive through the host's network (the site's own container never does). A failure
+    prints SITE_BUILD_FAILED and the build's last lines. Older builds of the site's image are removed (one
+    still in use stays until the next install).
+    """
+    log = _q(CONF + "/image-build.log")
+    return ("podman image exists %s || { podman build -q --pull=missing --network=host --build-arg BASE_IMAGE=%s "
+            "-t %s -f %s %s > %s 2>&1 || { echo SITE_BUILD_FAILED; tail -n 20 %s; exit 24; }; }; "
+            % (_q(tag), _q(php_base_for(site) or ""), _q(tag), _q(PHP_BUILD_DIR + "/Containerfile"), _q(PHP_BUILD_DIR),
+               log, log)
+            + "podman images --format '{{.Repository}}:{{.Tag}}' %s | grep -vxF %s | xargs -r podman rmi >/dev/null "
+              "2>&1; podman image prune -f >/dev/null 2>&1; " % (_q(PHP_IMAGE_REPO), _q(tag)))
 
 
 def start_sh(account, site, restart=False):

@@ -7,7 +7,8 @@ signs and panels fetch, so a catalog change cannot merge without this scan passi
   * every add-on whose entry has an `image` (`registry/name@sha256:...`), pulled by that digest;
   * every image the catalog's `sites` section names (the websites' static, PHP, WordPress, wp-cli,
     tunnel, object cache and Node images), pulled by digest, and each image the panel builds for the
-    websites (panel/website_images/<name>/Containerfile: the page cache's proxy), built from `sites`;
+    websites (panel/website_images/<name>/Containerfile: the page cache's proxy, and the PHP sites'
+    image once per PHP version the catalog pins, labelled php@<version>), built from `sites`;
   * every add-on the panel builds on the host (panel/addon_images/<name>/Containerfile, an entry with
     a `base`), built here with the catalog's values passed as build arguments, as the panel passes
     them (BASE_IMAGE is `base`; <NAME>_TAG, <NAME>_SHA256 and <NAME>_COMMIT are `tag`, `sha256` and
@@ -163,6 +164,19 @@ def sites_images(sites):
     return {k: v for k, v in sorted(out.items()) if isinstance(v, str)}
 
 
+def site_builds(name, sites):
+    """{label: [(ARG, value)]} of the builds of website folder `name`: the PHP image once per pinned PHP version."""
+    if name != "php":
+        return {name: site_build_args(name, sites)}
+    return {"php@" + v: [("BASE_IMAGE", e["image"])] for v, e in sorted((sites.get("php") or {}).items())
+            if isinstance(e, dict) and isinstance(e.get("image"), str)}
+
+
+def build_folder(label):
+    """The folder of a build's label: "php@8.4" is built from php/, every other label from its own name."""
+    return label.split("@", 1)[0]
+
+
 def site_build_args(name, sites):
     """[(ARG, value)] a websites build takes from `sites` (the page cache's proxy: caddy-cache)."""
     c = (sites.get("caddy_cache") or {}) if name == "caddy-cache" else {}
@@ -178,7 +192,8 @@ def sites_plan(catalog_path, images_dir, problems):
         return {"upstream": {}, "builds": {}}
     up = sites_images(sites)
     problems.extend("%s: image %s is not pinned by digest" % (k, v) for k, v in up.items() if not PINNED_RE.match(v))
-    builds = {b: _build_plan(b, {}, images_dir, problems, site_build_args(b, sites)) for b in build_dirs(images_dir)}
+    builds = {label: _build_plan(b, {}, images_dir, problems, args)
+              for b in build_dirs(images_dir) for label, args in site_builds(b, sites).items()}
     problems.extend("%s: base %s is not pinned by digest" % (b, v) for b, args in builds.items() for n, v in args
                     if n.endswith("_IMAGE") and not PINNED_RE.match(v))
     return {"upstream": up, "builds": builds}
@@ -252,8 +267,8 @@ def _build_all(builds, images_dir, work, results):
     """Build and save each {name: [(ARG, value)]} from `images_dir`/<name>; [(label, tar name)] of those saved."""
     saved = []
     for b, args in builds.items():
-        tag, tar = "localhost/addon-scan-%s:ci" % b, "build-%s.tar" % b
-        d = os.path.join(images_dir, b)
+        tag, tar = "localhost/addon-scan-%s:ci" % b.replace("@", "-"), "build-%s.tar" % b.replace("@", "-")
+        d = os.path.join(images_dir, build_folder(b))
         if (_run(["docker", "build", "--quiet", "-t", tag, *build_arg_flags(args), "-f", os.path.join(d, "Containerfile"), d])
                 or _run(["docker", "save", "-o", os.path.join(work, tar), tag])):
             results.append((b + " (built)", "could not be built or saved"))
@@ -282,7 +297,7 @@ def _scan_images(p, trivy_image, results):
 
 def lint_targets(p):
     """[(label, path)] of every file hadolint lints: each build's Containerfile, then OTHER_DOCKERFILES."""
-    sites = (p.get("sites") or {}).get("builds") or {}
+    sites = sorted({build_folder(b) for b in (p.get("sites") or {}).get("builds") or {}})
     return ([(b + " Containerfile", os.path.join(IMAGES_DIR, b, "Containerfile")) for b in p["builds"]]
             + [("websites " + b + " Containerfile", os.path.join(WEBSITE_IMAGES_DIR, b, "Containerfile")) for b in sites]
             + [(rel, os.path.join(ROOT, *rel.split("/"))) for rel in OTHER_DOCKERFILES])

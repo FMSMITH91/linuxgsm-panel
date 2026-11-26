@@ -1114,7 +1114,8 @@ def _s299_image_scan():
        "built from the catalog's values, nothing wrong on this tree",
        (set(sites_up.values()) == want, sorted(p["sites"]["builds"]), [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
         p["problems"]),
-       (True, ["caddy-cache"], ["BUILDER_IMAGE", "BASE_IMAGE", "CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
+       (True, ["caddy-cache"] + sorted("php@" + v for v in _SITES299["php"]),
+        ["BUILDER_IMAGE", "BASE_IMAGE", "CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
     seen, real_run = [], _AI299._run
     _AI299._run = lambda argv, **kw: seen.append(argv) or 0
     try:
@@ -1126,7 +1127,7 @@ def _s299_image_scan():
        "--build-arg, and hadolint lints its Containerfile",
        (len(build), sum(1 for f in build[0] if f == "--build-arg") if build else 0,
         any(t.endswith(os.path.join("website_images", "caddy-cache", "Containerfile")) for _l, t in _AI299.lint_targets(p))),
-       (1, 5, True))
+       (1 + len(_SITES299["php"]), 5, True))
 
 
 def _s299_image_scan2():
