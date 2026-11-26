@@ -387,8 +387,8 @@ def source_words(source):
     """(sentence, values) naming where an add-on's version came from, for the card (i18n.tr)."""
     if source.get("kind") != "catalog":
         return "Version source: built into this panel.", {}
-    return "Version source: signed add-on catalog #{seq} of {date}.", {"seq": source["seq"],
-                                                                         "date": source["issued"][:10]}
+    vals = {"seq": source["seq"], "date": source["issued"][:10]}
+    return "Version source: signed add-on catalog #{seq} of {date}.", vals
 
 
 EXPIRED_NOTE = ("The signed add-on catalog #{seq} expired on {date} and no newer one has been fetched, so it "

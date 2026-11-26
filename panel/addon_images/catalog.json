@@ -1,18 +1,18 @@
 {
-  "schema": 1,
   "addons": {
     "b3": {
       "base": "docker.io/library/python@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928",
-      "tag": "v2.0.2",
-      "commit": "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
+      "commit": "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f",
+      "tag": "v2.0.2"
     },
     "bluemap": {
       "image": "ghcr.io/bluemap-minecraft/bluemap@sha256:36e037916fa7c452bf969e70b4d16313820deeb2453f00ecf28185bc7787cab0"
     },
     "iw4madmin": {
       "base": "mcr.microsoft.com/dotnet/aspnet@sha256:aac50ceef10391e78a899e3d2ccd00bbafa2dcb56ccf4586cbccf00edb84fc21",
-      "tag": "2026.2.4.1-prerelease",
-      "sha256": "5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e"
+      "sha256": "5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e",
+      "tag": "2026.2.4.1-prerelease"
     }
-  }
+  },
+  "schema": 1
 }

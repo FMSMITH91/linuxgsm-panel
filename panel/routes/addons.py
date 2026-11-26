@@ -236,10 +236,16 @@ def _addon_rows(gs, found):
                           "job": job.get("kind", "install") if job.get("running") else "",
                           "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", ""),
                           "update": _change.update_reason(k, meta) if got is not None else "",
-                          "pin_source": i18n.tr(*_cat.source_words(_ad.PIN_SOURCES[k])),
+                          "pin_source": _pin_source(k),
                           "web": web and k in _aw.WEB},
                          **_extra_fields(gs, k, meta, got)))
     return rows
+
+
+def _pin_source(addon_id):
+    """Where the version an add-on is compared with came from, in the viewer's words (addons_catalog)."""
+    sentence, vals = _cat.source_words(_ad.PIN_SOURCES[addon_id])
+    return i18n.tr(sentence, **vals)
 
 
 def _extra_fields(gs, k, meta, got):
