@@ -51,5 +51,10 @@
   "The site's PHP image could not be built. Check the host's internet connection and free disk space, then try again.": "L'image PHP du site n'a pas pu être construite. Vérifiez la connexion internet de l'hôte et l'espace disque libre, puis réessayez.",
   "The app's installer did not finish: its settings, its database tables or its first page are missing. Every step was undone.": "Le programme d'installation de l'application n'a pas abouti : ses réglages, les tables de sa base de données ou sa première page manquent. Toutes les étapes ont été annulées.",
   "{why} The host said: {detail}.": "{why} L'hôte a répondu : {detail}.",
-  "A file of the app's configuration could not be written.": "Un fichier de la configuration de l'application n'a pas pu être écrit."
+  "A file of the app's configuration could not be written.": "Un fichier de la configuration de l'application n'a pas pu être écrit.",
+  "The app was built and started.": "L'application a été construite et démarrée.",
+  "The app's account and folders are ready, and it waits for its files: upload them on the Files tab, then press Save and rebuild on the App tab, which installs its packages and starts it.": "Le compte et les dossiers de l'application sont prêts, et elle attend ses fichiers : téléversez-les dans l'onglet Fichiers, puis appuyez sur Enregistrer et recompiler dans l'onglet Application, qui installe ses paquets et la démarre.",
+  "The app's install and build command failed, so the running app was left as it was. Check the command and the app's files, then try again.": "La commande d'installation et de construction de l'application a échoué : l'application en cours d'exécution a été laissée telle quelle. Vérifiez la commande et les fichiers de l'application, puis réessayez.",
+  "The app's variables were written.": "Les variables de l'application ont été écrites.",
+  "The website's files and units were written.": "Les fichiers et les unités du site web ont été écrits."
 }

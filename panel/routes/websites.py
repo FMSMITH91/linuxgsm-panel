@@ -347,13 +347,21 @@ def _php_fields(data):
 
 
 def _runtime_fields(data):
+    """(a new app site's runtime, version, port and commands, refusal or None): the catalog's defaults for the runtime.
+
+    The signed catalog's runtimes.<name> holds the app's usual port and its start and build commands (Node.js:
+    3000, npm start, npm ci); the app's settings change them later. A site without a port could not be made.
+    """
     from panel.routes.websites_view import runtime_versions
+    from panel.services import websites_catalog
     runtime = field(data, "runtime") or "node"
     versions = runtime_versions().get(runtime, [])
     version = field(data, "runtime_version") or (versions[-1] if versions else "")
     if version not in versions:
         return {}, (400, "Choose a runtime and version this panel offers.")
-    return {"runtime": runtime, "runtime_version": version}, None
+    entry = websites_catalog.runtimes().get(runtime, {})
+    return {"runtime": runtime, "runtime_version": version, "app_port": int(entry.get("port") or 0) or None,
+            "start_command": str(entry.get("start") or ""), "build_command": str(entry.get("build") or "")}, None
 
 
 def runtime_fields(data, kind):
@@ -397,15 +405,28 @@ def start_install(site):
     threading.Thread(target=_install_worker, args=(app, site.id), daemon=True).start()
 
 
+def note_run_state(site, ok, said):
+    """Record on `site` what an install, update or rebuild that ran it left (committed).
+
+    Done: running, or stopped with the reason when it is an app waiting for its files (OK_WAITING). Failed:
+    failed with the reason. A site being made by an app install or being removed keeps its state.
+    """
+    if site.state == "removing" or (site.state == "creating" and site.app_recipe):
+        return
+    waiting = ok and said == _sw.OK_WAITING
+    site.state = ("stopped" if waiting else "running") if ok else "failed"
+    site.state_reason = i18n.tr(said)[:200] if waiting or not ok else ""
+    db.session.commit()
+
+
 def _install_worker(app, site_id):
     with app.app_context():
         site = db.session.get(Website, site_id)
         if site is None:
             return
         ok, said = install_site(site)
-        site.state = "running" if ok else "failed"
-        site.state_reason = "" if ok else i18n.tr(said)[:200]
-        db.session.commit()
+        site.state = "running"          # a new site's "creating" ends here, whatever the outcome
+        note_run_state(site, ok, said)
         forget_status(site_id)
 
 

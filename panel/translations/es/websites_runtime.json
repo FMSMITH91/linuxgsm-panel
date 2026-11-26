@@ -51,5 +51,10 @@
   "The site's PHP image could not be built. Check the host's internet connection and free disk space, then try again.": "No se pudo crear la imagen PHP del sitio. Comprueba la conexión a internet del host y el espacio libre en disco, y vuelve a intentarlo.",
   "The app's installer did not finish: its settings, its database tables or its first page are missing. Every step was undone.": "El instalador de la aplicación no terminó: faltan sus ajustes, las tablas de su base de datos o su primera página. Se deshicieron todos los pasos.",
   "{why} The host said: {detail}.": "{why} El host dijo: {detail}.",
-  "A file of the app's configuration could not be written.": "No se pudo escribir un archivo de la configuración de la aplicación."
+  "A file of the app's configuration could not be written.": "No se pudo escribir un archivo de la configuración de la aplicación.",
+  "The app was built and started.": "La aplicación se compiló y se inició.",
+  "The app's account and folders are ready, and it waits for its files: upload them on the Files tab, then press Save and rebuild on the App tab, which installs its packages and starts it.": "La cuenta y las carpetas de la aplicación están listas, y espera sus archivos: súbelos en la pestaña Archivos y después pulsa Guardar y recompilar en la pestaña Aplicación, que instala sus paquetes y la inicia.",
+  "The app's install and build command failed, so the running app was left as it was. Check the command and the app's files, then try again.": "Falló el comando de instalación y compilación de la aplicación, así que la aplicación en marcha se dejó como estaba. Revisa el comando y los archivos de la aplicación y vuelve a intentarlo.",
+  "The app's variables were written.": "Se escribieron las variables de la aplicación.",
+  "The website's files and units were written.": "Se escribieron los archivos y las unidades del sitio web."
 }

@@ -14,6 +14,9 @@ F27. The page cache's proxy builds: its Caddy version ARG no longer clashes with
      the host's IP forwarding or adds its iptables chains; a failed build's last lines reach the panel's log.
      F27 wiring: turning on "Page cache in the web proxy" builds it on every host with a web proxy (and a plain
      proxy install while it is on builds it again); the Performance tab says when a site's page cache waits for it.
+F28. A Node.js site made from the page takes the catalog's port and commands, installs without starting while it has
+     no files (it says it waits for them, and its install is not undone), and the App tab's Save and rebuild (or
+     the build route) builds it and starts it; a real install failure is still undone.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -553,6 +556,62 @@ def _f27_wiring_failure(st, su, built, cache):
            _wset306.S_PAGE_CACHE_WAITS)), (200, _wset306.S_PAGE_CACHE_WAITS, 200, False))
 
 
+# ── F28. A Node.js site from the page ──────────────────────────────────────────────────────────
+def _f28_helper(verbs, created=True):
+    def helper(remote, verb, args=(), timeout=120, doc=None):
+        verbs.append(verb)
+        return True, "account=created" if verb == "website-account-create" and created else ""
+    return helper
+
+
+def _f28_node(st):
+    verbs = []
+    _bash_seams306(helper=_f28_helper(verbs))
+    _p9_patch(_w306, "start_install", lambda site: _w306._install_worker(_p9, site.id))
+    su = _Client306(st.su.id)
+    _reset306(FAKE_IMAGE_EXISTS=0)
+    r = su.post("/websites/add", json={"name": "p306-nd", "kind": "app", "runtime": "node", "runtime_version": "24",
+                                       "remote_id": st.host.id})
+    sid = _p9_json(r).get("id") or 0
+    _ROWS306["sites"].append(sid)
+    _db306.session.expire_all()
+    site = _db306.session.get(_Site306, sid)
+    node = _wc306.runtimes()["node"]
+    eq("F28a (POST /websites/add, a Node.js site): it gets the catalog's port and start and build commands (it had no "
+       "port, and its files could not be built)",
+       (r.status_code, getattr(site, "app_port", None), getattr(site, "start_command", None),
+        getattr(site, "build_command", None)), (200, node["port"], node["start"], node["build"]))
+    starts = [c["argv"] for c in _calls306("systemctl") if "restart" in c["argv"] or "start" in c["argv"]]
+    eq("F28b (POST /websites/add): with no files yet the app is installed and not started, says it waits for its "
+       "files, and its account is kept (its first start failed and the install was undone, account and all)",
+       (getattr(site, "state", None), getattr(site, "state_reason", None), starts, "website-account-remove" in verbs),
+       ("stopped", _sw306.OK_WAITING, [], False))
+    with open(os.path.join(_home306(site.account), "site", "html", "package.json"), "w", encoding="utf-8") as fh:
+        fh.write('{"name": "p306", "scripts": {"start": "node server.js"}}\n')
+    _reset306()
+    r2 = su.post("/websites/%d/app" % sid, json={})
+    _db306.session.expire_all()
+    site = _db306.session.get(_Site306, sid)
+    built = [c["argv"] for c in _calls306("podman") if c["argv"][:1] == ["run"] and "/panel/build.sh" in c["argv"]]
+    restarted = [c["argv"] for c in _calls306("systemctl") if "restart" in c["argv"]]
+    eq("F28b (POST /websites/<id>/app, the App tab's Save and rebuild): once its files are there the app is built "
+       "(its packages installed) and then started with its gate, and the site reads running",
+       (r2.status_code, len(built), [("lgsm-site.service" in a and "lgsm-site-gate.service" in a) for a in restarted],
+        site.state, site.state_reason), (200, 1, [True], "running", ""))
+    _reset306()
+    r3 = su.post("/websites/%d/app/build" % sid)
+    eq("F28b (POST /websites/<id>/app/build): the build route builds and starts it too (control)",
+       (r3.status_code, _p9_json(r3).get("message")), (200, _sw306.OK_BUILT_STARTED))
+    del verbs[:]
+    _reset306(FAKE_RC_podman=1)
+    r4 = su.post("/websites/add", json={"name": "p306-nd2", "kind": "app", "runtime": "node", "remote_id": st.host.id})
+    _ROWS306["sites"].append(_p9_json(r4).get("id") or 0)
+    _db306.session.expire_all()
+    failed = _db306.session.get(_Site306, _p9_json(r4).get("id") or 0)
+    eq("F28b (POST /websites/add): a real install failure (its image cannot be pulled) still undoes the account it "
+       "made (control)", (getattr(failed, "state", None), "website-account-remove" in verbs), ("failed", True))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -602,7 +661,7 @@ def _ran306(step, st):
 
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
-                _f27_wiring)
+                _f27_wiring, _f28_node)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

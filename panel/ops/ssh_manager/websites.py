@@ -66,6 +66,13 @@ NO_QUOTA = "This host's file system has no user quotas, so the panel measures th
 OK_PHP = "The website's PHP settings were written and it was restarted."
 OK_PURGED = "The page cache was emptied (the web proxy restarted)."
 OK_BUILT = "The app was built."
+OK_BUILT_STARTED = "The app was built and started."
+BUILD_FAILED = ("The app's install and build command failed, so the running app was left as it was. Check the "
+                "command and the app's files, then try again.")
+OK_INSTALLED = "The website's files and units were written."
+OK_ENV_WRITTEN = "The app's variables were written."
+OK_WAITING = ("The app's account and folders are ready, and it waits for its files: upload them on the Files tab, then "
+              "press Save and rebuild on the App tab, which installs its packages and starts it.")
 OK_ENV = "The app's variables were written and it was restarted."
 OK_STEP = "Step done."
 STEP_DETAIL = "{why} The host said: {detail}."
@@ -192,13 +199,15 @@ def runtime_ready(remote):
     return _ws().runtime_refusal(os_version, podman) if podman else NO_PODMAN
 
 
-def install(remote, site, db=None):
+def install(remote, site, db=None, start_it=True):
     """Create the site's account and folders, pull its image, write its unit and start it.
 
     `db` is (host, port) of the site's database as the host sees it, or None. Podman is made ready
     first (runtime_ready); an install that fails after it made the account removes that account again
     (remove), so a failed first install leaves no account, folder or unit behind. An account that was
-    already there (an update, a settings change) is never removed by a failure.
+    already there (an update, a settings change) is never removed by a failure. A runtime app with no
+    files yet is installed and not started (OK_WAITING): its first start could only fail. `start_it`
+    False writes everything and starts nothing (an app's rebuild starts it after its build).
     """
     why = runtime_ready(remote)
     if why:
@@ -206,14 +215,14 @@ def install(remote, site, db=None):
     ok, out = _helper(remote, "website-account-create", [site.account])
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    ok, said = _install_made(remote, site, db)
+    ok, said = _install_made(remote, site, db, start_it)
     if not ok and "account=created" in out.splitlines():
         undone, _t = remove(remote, site)
         _core._log.warning("website %s: the failed install was %s", site.id, "undone" if undone else "NOT undone")
     return ok, said
 
 
-def _install_made(remote, site, db):
+def _install_made(remote, site, db, start_it=True):
     """install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
@@ -235,7 +244,10 @@ def _install_made(remote, site, db):
         return False, _mark(out)
     quota_set(remote, site)
     cpu_limit(remote, site, probe)
-    return start(remote, site, restart=True)
+    if site.kind == "app" and _ws().MARK_APP_EMPTY in out.split():
+        # Installed, not started: the app's files come next (a start now would fail, and undo the install).
+        return True, OK_WAITING
+    return start(remote, site, restart=True) if start_it else (True, OK_INSTALLED)
 
 
 def cpu_limit(remote, site, probe=None):
@@ -558,20 +570,44 @@ def cache_purge(remote, site):
 
 
 def app_build(remote, site):
-    """Run the app's install/build step in its container (the build-time egress allow list only)."""
+    """Run the app's install/build step in its container (the build-time egress allow list only).
+
+    (True, OK_WAITING) while the app has no files. A failed build's last lines go to the panel's log (the
+    build has none of the app's variables: its output is the package manager's), the page gets a sentence.
+    """
     ids, _probe = _ids(remote, site)
     if ids is None:
         return False, FAILED
-    ok, _out = _as_site(remote, site.account, _ws().build_sh(site.account, site, ids), timeout=1800)
-    return (True, OK_BUILT) if ok else (False, FAILED)
+    ok, out = _as_site(remote, site.account, _ws().build_sh(site.account, site, ids), timeout=1800)
+    if ok and _ws().MARK_APP_EMPTY in out.split():
+        return True, OK_WAITING
+    if not ok:
+        _core._log.warning("website %s: the app's build failed: %s", site.id, " | ".join(out.splitlines()[-20:])[-2000:])
+    return (True, OK_BUILT) if ok else (False, BUILD_FAILED)
 
 
-def env_apply(remote, site):
-    """Write the app's environment file (0600, as the site's account, content on stdin) and restart it."""
+def app_rebuild(remote, site):
+    """Build the app from its current files, then restart it: (ok, sentence); OK_WAITING while it has no files."""
+    ok, said = app_build(remote, site)
+    if not ok or said == OK_WAITING:
+        return ok, said
+    ok, said = start(remote, site, restart=True)
+    return (True, OK_BUILT_STARTED) if ok else (False, said)
+
+
+def env_apply(remote, site, restart=True):
+    """Write the app's environment file (0600, as the site's account, content on stdin) and restart it.
+
+    `restart` False writes it only (an app's rebuild restarts it after its build).
+    """
     try:
         files = {_ws().CONF + "/app.env": _ws().env_file(site)}
     except ValueError:
         return False, REFUSED
+    if not restart:
+        ok, out = _as_site(remote, site.account, _ws()._ENV + _ws().write_files_sh() + "echo written", timeout=60,
+                           stdin_text=_ws().bundle(files))
+        return (True, OK_ENV_WRITTEN) if ok else (False, _mark(out))
     ok, out = _rewrite_and_restart(remote, site, files)
     return (True, OK_ENV) if ok else (False, _mark(out))
 

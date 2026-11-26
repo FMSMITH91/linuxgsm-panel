@@ -338,9 +338,19 @@ def _app_words(fields, env, env_changed):
 
 
 def _app_apply(site, fields, env_changed):
-    ok, said = _w.install_site(site) if fields else (True, "Saved.")
-    if ok and env_changed:
-        ok, said = _w.host_call(_sw.env_apply, site.remote, site)
+    """Save and rebuild: the units rewritten when a setting changed, the variables written, then the app built from
+    its current files and restarted, so the running app is the saved one. An app with no files yet waits for them.
+    """
+    ok, said = True, ""
+    if fields:
+        ok, said = _w.host_call(_sw.install, site.remote, site, _w.site_db(site), False)
+    if ok and said != _sw.OK_WAITING and env_changed:
+        ok, said = _w.host_call(_sw.env_apply, site.remote, site, False)
+    if ok and said != _sw.OK_WAITING:
+        ok, said = _w.host_call(_sw.app_rebuild, site.remote, site)
+    if ok or said != _sw.BUILD_FAILED:
+        _w.note_run_state(site, ok, said)
+    _w.forget_status(site.id)
     return ok, said
 
 
@@ -377,7 +387,9 @@ def _app_routes(app):
         site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         if site.kind != "app":
             return _w.say(409, S_NOT_APP)
-        ok, said = _w.host_call(_sw.app_build, site.remote, site)
+        ok, said = _w.host_call(_sw.app_rebuild, site.remote, site)
+        if ok or said != _sw.BUILD_FAILED:
+            _w.note_run_state(site, ok, said)
         _w.forget_status(site.id)
         return _w.acted(site, "website_build", ok, said or "Built.")
 

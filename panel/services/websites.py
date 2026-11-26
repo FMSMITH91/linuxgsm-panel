@@ -79,6 +79,7 @@ _MARK_INSTALLED = "SITE_INSTALLED"
 _MARK_STARTED = "SITE_STARTED"
 _MARK_STOPPED = "SITE_STOPPED"
 _MARK_REMOVED = "SITE_REMOVED"
+MARK_APP_EMPTY = "SITE_APP_EMPTY"
 FAIL_MARKS = {
     "SITE_PULL_FAILED": "The site's image could not be downloaded. Check the host's internet connection and try again.",
     "SITE_BUILD_FAILED": ("The site's PHP image could not be built. Check the host's internet connection and free "
@@ -690,7 +691,8 @@ def build_sh(account, site, ids=None, image=None):
 
     A one-off container with the same hardening, its files at /app, and the build-time egress proxy
     (the runtime's hosts only: npm's registry) at 127.0.0.1:3128 through HTTPS_PROXY. The proxy is a
-    unit started for the build and stopped after it; the running app gets none unless granted.
+    unit started for the build and stopped after it; the running app gets none unless granted. With no
+    files yet it builds nothing and prints MARK_APP_EMPTY.
     """
     home = _home(account)
     image = image or image_for(site)
@@ -706,7 +708,8 @@ def build_sh(account, site, ids=None, image=None):
     if ids:
         args += ["--user", "%d:%d" % (int(ids[0]), int(ids[1]))]
     args += [image, "/bin/sh", "/panel/build.sh"]
-    return (_ENV + "systemctl --user start %s.service || exit 1; " % EGRESS_UNIT
+    return (_ENV + "[ -n \"$(ls -A %s 2>/dev/null)\" ] || { echo %s; exit 0; }; " % (_q(HTML), MARK_APP_EMPTY)
+            + "systemctl --user start %s.service || exit 1; " % EGRESS_UNIT
             + "%s > %s/build.log 2>&1; rc=$?; systemctl --user stop %s.service; " % (shlex.join(args), _q(home + "/" + CONF), EGRESS_UNIT)
             + "tail -n 40 %s/build.log; echo \"build_rc=$rc\"; exit $rc" % _q(home + "/" + CONF))
 
@@ -810,6 +813,9 @@ def install_sh(account, site, image=None):
         # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
         pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
             unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
+    if site.kind == "app":
+        # An app with no files yet (a new site) is not started: its start command has nothing to run.
+        pull += "[ -n \"$(ls -A %s 2>/dev/null)\" ] || echo %s; " % (_q(HTML), MARK_APP_EMPTY)
     return (_ENV + write_files_sh() + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
 
