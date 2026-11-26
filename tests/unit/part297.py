@@ -21,7 +21,8 @@ import tempfile as _tf297
 from unit.part01 import check
 from unit.part06 import _wf_run_block, _wf_step_env
 from unit.part223 import _egress223
-from unit.part29 import _job29, _wf29, _write_exe29
+from unit.part29 import _job29, _runbody29, _steps29, _wf29, _write_exe29
+from unit.part30 import _if30, _row30
 
 # ── 1. the allow-lists, exactly ─────────────────────────────────────────────────────────────────
 # Read from each job's Harden-Runner "endpoint called" lines over its last eight runs of every event
@@ -38,6 +39,7 @@ _ALLOW297 = {
         "release-assets.githubusercontent.com:443"},
     ("sonar-main-issues.yml", "sonar-main-issues"): {"api.github.com:443", "github.com:443", "sonarcloud.io:443"},
     ("codeql-alerts.yml", "open-alerts"): {"api.github.com:443", "github.com:443"},
+    ("cflite_cleanup.yml", "cleanup"): {"api.github.com:443", "github.com:443"},
 }
 _lists297 = {fj: _egress223(_job29(_wf29(fj[0]), fj[1])) for fj in _ALLOW297}
 check("main-only egress: each listed main-only job blocks, allowed exactly the hosts its own runs called",
@@ -190,3 +192,42 @@ check("codeql-alerts: the judge step reads the commit the ref step chose, and th
       _cqa_post297.get("SHA") == "${{ steps.ref.outputs.sha }}" and _cqa_pif297 is not None
       and "steps.ref.outputs.post == 'true'" in " ".join(_cqa_pif297.group(1).split()),
       repr((_cqa_post297.get("SHA"), _cqa_pif297 and _cqa_pif297.group(1))))
+
+# ── 5. cflite_cleanup: a manual run on another branch deletes nothing ───────────────────────────
+# It ran on main only, so a manual run on a branch was skipped and its allow-list could not be tried
+# before it merged. Such a run now lists and judges every artifact as main's does and deletes
+# nothing; deleting stays main's. Driven through the step with a stand-in gh that logs each delete.
+_cl_job297 = _job29(_wf29("cflite_cleanup.yml"), "cleanup")
+_cl_step297 = next((st for st in _steps29(_cl_job297) if "gh api --paginate" in st), "")
+check("cflite_cleanup: runs on main, or by hand on any branch, in this repository only; a run off main "
+      "is told it is one",
+      _if30(_cl_job297) == "github.repository == 'FMSMITH91/linuxgsm-panel' && (github.ref == 'refs/heads/main' "
+                           "|| github.event_name == 'workflow_dispatch')"
+      and "          DRY_RUN: ${{ github.ref != 'refs/heads/main' }}\n" in _cl_step297, _if30(_cl_job297))
+
+
+def _cl_run297(dry):
+    """Run the cleanup step over a mixed listing; return (exit status, deleted ids, output)."""
+    d = _tf297.mkdtemp(dir=_SB297)
+    log = os.path.join(d, "log")
+    open(log, "w").close()
+    _write_exe29(os.path.join(d, "gh"), '#!/bin/bash\ncase "$*" in\n  *--paginate*) printf "%s\\n" "$ROWS" ;;\n'
+                 '  *"-X DELETE"*) last="${!#}"; echo "${last##*/}" >> "$GH_LOG" ;;\n  *) exit 1 ;;\nesac\n')
+    rows = [_row30("cifuzz-build-address-a", 1, 1), _row30("cifuzz-build-address-b", 2, 3),
+            _row30("cifuzz-build-address-c", 3, 20), _row30("cifuzz-build-address-d", 4, 30),
+            _row30("cifuzz-build-address-e", 5, 40), _row30("cifuzz-corpus-fuzz_x", 6, 60),
+            _row30("cifuzz-build-address-f", 8, 1, branch="pr")]
+    env = dict(os.environ, PATH=d + os.pathsep + os.environ["PATH"], GH_LOG=log, REPO="o/r", ROWS="\n".join(rows),
+               DRY_RUN=dry)
+    p = _sp297.run(["bash", "-c", _runbody29(_cl_step297)], capture_output=True, text=True, timeout=60,  # nosec B603 B607 - the workflow's own step
+                   env=env)
+    return p.returncode, sorted(int(x) for x in open(log, encoding="utf-8").read().split()), p.stdout
+
+
+_cl_dry297 = _cl_run297("true")
+check("cflite_cleanup: a run off main deletes nothing, and names each artifact main's run would delete",
+      _cl_dry297[:2] == (0, []) and _cl_dry297[2].count("would delete ") == 3
+      and all("artifact %d," % i in _cl_dry297[2] for i in (4, 5, 8)), repr(_cl_dry297))
+_cl_main297 = _cl_run297("false")
+check("cflite_cleanup: ...while a run on main deletes them (control)",
+      _cl_main297[:2] == (0, [4, 5, 8]) and "would delete" not in _cl_main297[2], repr(_cl_main297))
