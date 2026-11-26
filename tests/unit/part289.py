@@ -4,14 +4,21 @@
    an answer whose head holds a bare CR, a bare LF or a NUL is refused (502), and a Location or a WebSocket
    101 header value with a line break never reaches the browser, so the proxy's own sandbox policy can't
    be pushed into the body.
+2. The HTML rewrite finds the page's <head> with a linear scan: 4 MiB of `<head` with no `>` (sent gzipped, a
+   few KB) is read, decoded and rewritten as the proxy does in well under a second, in a child interpreter
+   so the quadratic regex it replaced fails this check by its timeout instead of stalling the suite; the
+   scan finds the same tag the regex did on ordinary pages.
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; the host read and the tunnel are
 stand-ins (part279's scripted stream). Nothing reaches a host, /etc or data/.
 """
+import re as _re289
+import subprocess as _subp289  # nosec B404 - a child interpreter over the panel's own code
+import sys as _sys289
 import threading as _th289
 import types as _ty289
 
-from unit.part01 import check, eq
+from unit.part01 import _root, check, eq
 from unit.part12 import P9_HOST, _p9, _p9_arm, _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all
 from unit.part279 import _Stream279, _drop_member279, _member279, _open_answer279, _session_client279
 from panel.routes import addon_web as _rw289
@@ -136,8 +143,8 @@ class _End289:
 
 def _switch289():
     sock, stream = _End289(), _End289()
-    head = _ht289.Head(101, "Switching Protocols", [("Sec-WebSocket-Accept", "p289acc\r\nSet-Cookie: p289=1"),
-                                                     ("Sec-WebSocket-Protocol", "p289proto")], b"")
+    sent = [("Sec-WebSocket-Accept", "p289acc\r\nSet-Cookie: p289=1"), ("Sec-WebSocket-Protocol", "p289proto")]
+    head = _ht289.Head(101, "Switching Protocols", sent, b"")
     _p9_patch(_rw289, "_client_socket", lambda environ: sock)
     try:
         _rw289.AddonWebProxy(None, _p9)._switch({}, stream, head, "t289")
@@ -151,3 +158,59 @@ check("proxy: the WebSocket's 101 passes the add-on's header only when its value
       "is dropped, so it can't add a header), and a plain one still passes",
       "Set-Cookie" not in _sw289 and "p289acc" not in _sw289 and "Sec-WebSocket-Protocol: p289proto\r\n" in _sw289
       and _sw289.endswith("\r\n\r\n"), repr(_sw289))
+
+
+# ── 2. the head scan ──────────────────────────────────────────────────────────────────────────────
+# The child imports the services only (the routes module needs the app): the same three steps the proxy's
+# _rewritten takes, the capped body read, the gzip decode and the rewrite, timed together.
+_SCAN289 = r"""
+import gzip, sys, time
+sys.path.insert(0, sys.argv[1])
+from panel.services import addon_web as aw, addon_web_http as h
+packed = gzip.compress(b"<head" * (4 * 1024 * 1024 // 5))
+class Stream:
+    def __init__(self, left):
+        self.left = left
+    def recv(self, n):
+        out, self.left = self.left[:n], self.left[n:]
+        return out
+head = h.Head(200, "OK", [("Content-Type", "text/html"), ("Content-Encoding", "gzip"),
+                          ("Content-Length", str(len(packed)))], b"")
+began = time.perf_counter()
+raw = b"".join(h.body(Stream(packed), head, "GET", cap=aw.MAX_REWRITE))
+out = aw.rewrite("html", aw.decoded(raw, head.get("Content-Encoding")), "/addon-web/T")
+took = time.perf_counter() - began
+print("SCAN %.3f %d %s" % (took, len(out) - len(aw.SHIM), out.startswith(aw.SHIM.encode())))
+"""
+
+
+def _scan289():
+    try:
+        p = _subp289.run([_sys289.executable, "-c", _SCAN289, _root],  # nosec B603 - own probe
+                         capture_output=True, text=True, timeout=60, check=False)
+    except Exception as e:  # TimeoutExpired, by name: the suite's runner may hand this module another subprocess
+        if type(e).__name__ != "TimeoutExpired":
+            raise
+        return "timed out after 60 s"
+    return next((x for x in p.stdout.splitlines() if x.startswith("SCAN ")), p.stderr[-400:])
+
+
+_sc289 = _scan289()
+_scp289 = _sc289.split()
+check("proxy: an add-on page of 4 MiB of `<head` with no `>` (gzipped) is read, decoded and rewritten as the proxy "
+      "does in well under a second (the call alone timed), the storage stand-ins first, nothing cut",
+      len(_scp289) == 4 and _scp289[0] == "SCAN" and float(_scp289[1]) < 1.0 and _scp289[2:] == ["4194300", "True"],
+      _sc289)
+_OLD_HEAD289 = _re289.compile(rb"<head\b[^>]*>", _re289.I)
+_PAGES289 = (b'<html><head><base href="/"></head>', b"<HEAD lang='en'>x", b"<header>x</header><head>", b"<head",
+             b"<headx><head\n>", b"no head", b"<head/>", b"<head\tclass=a>", b"<head>", b"<HEAD\r\n data-x='y'>")
+
+
+def _old_end289(page):
+    m = _OLD_HEAD289.search(page)
+    return m.end() if m else 0
+
+
+eq("proxy: on ordinary pages the scan finds the same <head> the regex did (a tag with attributes, upper case, "
+   "after a <header>, none, a lone `<head`, self-closed)",
+   [_aw289.head_end(p) for p in _PAGES289], [_old_end289(p) for p in _PAGES289])

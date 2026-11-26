@@ -375,7 +375,28 @@ def rewrites(ctype, raw_path, addon_id):
 
 _ATTR_ROOT = re.compile(rb"""(\b(?:href|src|action|formaction|poster|data)\s*=\s*["'])/(?!/)""", re.I)
 _CSS_ROOT = re.compile(rb"""(url\(\s*["']?)/(?!/)""", re.I)
-_HEAD = re.compile(rb"<head\b[^>]*>", re.I)
+# What may follow a tag's name: HTML's whitespace, the end of the tag or a self-closing slash.
+_TAG_NAME_END = frozenset(b" \t\n\r\f/>")
+
+
+def head_end(body):
+    """Where the page's first <head> start tag ends (just past its '>'), or 0 when it has none.
+
+    A linear scan, not a regex: a `[^>]*` after `<head`, over a body of many `<head` and no `>`, backtracks
+    from every candidate to the end of the body, quadratic in its length, and the body is the add-on's
+    (OWASP Input Validation Cheat Sheet, "Regular Expressions (Regex)"; OWASP ReDoS). Each byte is looked
+    at a bounded number of times: the next `<head`, the byte after it, and one search for its `>`.
+    """
+    low, at = body.lower(), 0
+    while True:
+        at = low.find(b"<head", at)
+        if at < 0:
+            return 0
+        at += len(b"<head")
+        if at == len(low) or low[at] in _TAG_NAME_END:
+            close = low.find(b">", at)
+            # No '>' after this one means none after any later <head either.
+            return close + 1 if close >= 0 else 0
 
 
 def rewrite(kind, body, prefix):
@@ -383,8 +404,7 @@ def rewrite(kind, body, prefix):
     p = prefix.encode("utf-8")
     if kind == "html":
         body = _CSS_ROOT.sub(rb"\1" + p + b"/", _ATTR_ROOT.sub(rb"\1" + p + b"/", body))
-        m = _HEAD.search(body)
-        at = m.end() if m else 0
+        at = head_end(body)
         return body[:at] + SHIM.encode("ascii") + body[at:]
     if kind == "css":
         return _CSS_ROOT.sub(rb"\1" + p + b"/", body)
