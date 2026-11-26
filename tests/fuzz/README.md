@@ -70,7 +70,7 @@ it made. `.clusterfuzzlite/build.sh` builds every `fuzz_*.py` here without a cha
   | `cflite_batch.yml` | nightly | fuzzes every target and keeps the corpus (`cifuzz-corpus-<target>`) |
   | `cflite_cron.yml` | daily | prunes the corpus and reports coverage (`cifuzz-coverage-latest`) |
   | `cflite_build.yml` | each push to main | keeps that commit's build (`cifuzz-build-address-<commit>`) |
-  | `cflite_cleanup.yml` | every 6 hours | deletes any `cifuzz-*` artifact not made by a run of this repository's main |
+  | `cflite_cleanup.yml` | every 6 hours | deletes any `cifuzz-*` artifact not made by a run of this repository's main, and main's `cifuzz-build-*` older than 14 days (the three newest stay) |
 
   All of it is stored as Actions artifacts (no storage repository). Every job that reads a
   `cifuzz-*` artifact first checks it was made by a run of this repository's main, because a

@@ -1,7 +1,8 @@
 name: ClusterFuzzLite artifact cleanup
 
 # Deletes every cifuzz-* artifact that provably did not come from a run of this repository's main,
-# without ever downloading or reading one.
+# and main's own fuzz builds (cifuzz-build-*) older than 14 days, without ever downloading or
+# reading one.
 #
 # WHY THIS EXISTS
 #   ClusterFuzzLite reads back the newest artifact of each cifuzz-* name from ANY run in this
@@ -20,6 +21,14 @@ name: ClusterFuzzLite artifact cleanup
 #   GitHub ever stopped returning one of the fields, this must not read every artifact, main's
 #   corpus included, as foreign and delete it. Each deletion is a ::warning:: naming the artifact,
 #   its run and the repository it came from, so the record of an upload survives the upload.
+#
+# OLD BUILDS
+#   ClusterFuzzLite's build upload has no retention setting, so each main build (about 450 MB)
+#   stayed 90 days. The novelty check reads only the build of a pull request's base commit and the
+#   two before it (cflite_build.yml), so a main build older than 14 days is deleted, except the
+#   three newest, which stay however old they are (a quiet main keeps the builds the next pull
+#   request needs). Only cifuzz-build-* from main here, with a creation time: the corpus
+#   (cifuzz-corpus-*) and cifuzz-coverage-latest are the nightly state and are never aged out.
 #
 # ON MAIN, ON A SCHEDULE
 #   Scheduled and manual runs only, never a pull request, so its token may write: actions: write
@@ -48,7 +57,7 @@ jobs:
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
-      - name: Delete every cifuzz-* artifact that provably came from elsewhere
+      - name: Delete every cifuzz-* artifact that provably came from elsewhere, and old main builds
         env:
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
@@ -57,7 +66,7 @@ jobs:
           if ! rows="$(gh api --paginate --jq '
             .artifacts[] | select((.expired | not) and (.name | startswith("cifuzz-")))
             | [.name, .id, .workflow_run.id, .workflow_run.head_branch,
-               .workflow_run.head_repository_id, .workflow_run.repository_id] | @tsv' \
+               .workflow_run.head_repository_id, .workflow_run.repository_id, .created_at] | @tsv' \
             -- "repos/${REPO}/actions/artifacts?per_page=100")"; then
             echo "::warning::could not list the repository's artifacts; nothing deleted this time."
             exit 0
@@ -66,16 +75,30 @@ jobs:
           unknown="$(awk -F'\t' 'NF && ($4 == "" || $5 == "" || $6 == "")' <<< "${rows}")"
           echo "stored cifuzz-* artifacts: $(grep -c . <<< "${rows}" || true); from elsewhere: $(grep -c . <<< "${foreign}" || true); provenance unknown, kept: $(grep -c . <<< "${unknown}" || true)"
           if [ -n "${unknown}" ]; then
-            echo "::warning::Kept, as their run does not say where they came from (the fuzz jobs still refuse them; delete by hand once looked at). (name, id, run, branch, head repository id, repository id):"
+            echo "::warning::Kept, as their run does not say where they came from (the fuzz jobs still refuse them; delete by hand once looked at). (name, id, run, branch, head repository id, repository id, created):"
             printf '%s\n' "${unknown}"
           fi
-          while IFS=$'\t' read -r name id run branch head repo; do
+          # Main's own builds, newest first; the three newest are kept at any age. ISO-8601 UTC
+          # times compare as text.
+          if cutoff="$(date -u -d '14 days ago' '+%Y-%m-%dT%H:%M:%SZ')"; then
+            old="$(awk -F'\t' 'NF && index($1, "cifuzz-build-") == 1 && $4 == "main" && $5 != "" && $5 == $6 && $7 ~ /^[0-9]{4}-/' <<< "${rows}" \
+              | sort -t$'\t' -k7,7r | tail -n +4 | awk -F'\t' -v cutoff="${cutoff}" '$7 < cutoff')"
+          else
+            echo "::warning::could not work out the 14-day cutoff; no old build deleted this time."
+            old=""
+          fi
+          echo "main builds older than 14 days, beyond the three newest: $(grep -c . <<< "${old}" || true)"
+          while IFS=$'\t' read -r name id run branch head repo created; do
             [ -n "${name}" ] || continue
             if ! [[ "${id}" =~ ^[0-9]+$ ]]; then
               echo "::warning::artifact ${name} has no numeric id (${id}); nothing deleted for it."
               continue
             fi
-            echo "::warning::deleting ${name} (artifact ${id}, run ${run}, branch ${branch}, head repository ${head}; this repository is ${repo})"
+            if [ "${head}" = "${repo}" ] && [ "${branch}" = "main" ]; then
+              echo "deleting old main build ${name} (artifact ${id}, run ${run}, created ${created})"
+            else
+              echo "::warning::deleting ${name} (artifact ${id}, run ${run}, branch ${branch}, head repository ${head}; this repository is ${repo})"
+            fi
             if ! gh api -X DELETE --silent -- "repos/${REPO}/actions/artifacts/${id}"; then
               # Gone already (another run, or a person) is the outcome wanted.
               if gh api --silent -- "repos/${REPO}/actions/artifacts/${id}"; then
@@ -84,4 +107,4 @@ jobs:
               fi
               echo "artifact ${id} was already gone"
             fi
-          done <<< "${foreign}"
+          done < <(printf '%s\n%s\n' "${foreign}" "${old}")
