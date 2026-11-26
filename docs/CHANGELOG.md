@@ -12,6 +12,15 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ## [2026.11.26] — 2026-11-26
 
+### Changed
+
+- **The helper names the sudoers file and line that stops an account.** When an account can't be managed
+  because a sudoers rule for all users grants it sudo, the add-on card now shows which file and line to
+  narrow.
+- **The panel no longer listens on every network address just because setup suggested it.** New installs pick
+  the address automatically. Panel Server warns while the panel listens beyond this machine and your tailnet;
+  switch Panel binding to Localhost only to fix an existing install.
+
 ### Security
 
 - **B3's image installs Debian's security updates when it is built.** A compression library in the image had a
@@ -25,6 +34,24 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **An add-on page's link ends when the add-on stops.** Stop, Update, a settings change or Remove ends open
   links to that add-on's page, and the panel checks every few seconds that the add-on still holds its port.
   Open the page again from the card.
+- **Only a super admin can re-trust a host's SSH key.** Other host admins see the button disabled, with the
+  reason: re-trusting lets the next connection sign in to whatever machine answers at that address.
+- **Scheduled Tasks need Change game server files to add, change, delete or run a task.** A task can run any
+  command as the server's account. Manage servers alone now lists the tasks, a failed task's output needs View
+  game server files, and Run now runs only a task that is in the crontab.
+- **Host admins who are not super admins can't add a host at a private, loopback or tailnet address.** The
+  connection test runs from the panel's own machine, so it could be used to probe your private network. The
+  same rule applies to changing a host's address or SSH port.
+- **Console commands that set a password are masked in the audit log.** rcon_password, sv_password and similar
+  commands are recorded with their value replaced by asterisks. The game still receives them as typed.
+- **A console opened with an API token stops when the token expires.** Before, an open connection kept
+  receiving the live console after its token's expiry.
+- **Config files are written without their contents on the command line.** Saving a config, the alerts card or
+  an upload used to put the file, passwords and tokens included, where other accounts on the host could read
+  it. The contents now travel privately.
+- **Sign-in takes the same time whether or not the account exists.** Accounts still holding a password hash
+  from before Argon2id are wrapped in Argon2id when the panel updates, and every sign-in does the same hashing
+  work while any remain.
 
 ## [2026.11.24] — 2026-11-24
 
