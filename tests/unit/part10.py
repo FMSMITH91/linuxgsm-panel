@@ -3039,7 +3039,6 @@ import app as _p10_app  # noqa: E402
 from panel.db.models import User as _P10User, UserSession as _P10Sess, db as _p10_db  # noqa: E402
 from panel.routes import _shared as _p10_shared  # noqa: E402
 from panel.routes import auth_routes as _p10_ar  # noqa: E402
-from panel.routes import server_files as _p10_sf  # noqa: E402
 from panel.routes import _console_cred as _p10_cc  # noqa: E402
 from panel.security import auth as _p10_auth  # noqa: E402
 
