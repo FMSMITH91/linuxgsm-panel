@@ -1215,7 +1215,7 @@ def _w3_checks299(sent, secrets, results, logs):
        (logs[0], "CONTAINER_NAME=lgsm-site" in sent[-1][0], "-n 500" in sent[-1][0], "sudo" in sent[-1][0]),
        (True, True, True, False))
     eq("recipe_steps by name (the routes pass the site's recipe name): the catalog's steps; an unknown name has none",
-       (len(_ws299.recipe_steps("smf")), _ws299.recipe_steps("no-such-app")), (5, []))
+       (len(_ws299.recipe_steps("smf")), _ws299.recipe_steps("no-such-app")), (len(_wc299.recipe("smf")["steps"]), []))
 
 
 for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s299_generator, _s299_proxy_base,

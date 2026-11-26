@@ -136,6 +136,17 @@
               "sites/default"
             ],
             "type": "set-permissions"
+          },
+          {
+            "files": [
+              "sites/default/settings.php"
+            ],
+            "page": {
+              "expect": "user-login-form",
+              "path": "/user/login"
+            },
+            "tables": "users",
+            "type": "verify-install"
           }
         ],
         "url": "https://ftp.drupal.org/files/projects/drupal-11.4.14.tar.gz",
@@ -270,6 +281,17 @@
               "install"
             ],
             "type": "set-permissions"
+          },
+          {
+            "files": [
+              "inc/config.php"
+            ],
+            "page": {
+              "expect": "MyBB",
+              "path": "/index.php"
+            },
+            "tables": "mybb_",
+            "type": "verify-install"
           }
         ],
         "url": "https://github.com/mybb/mybb/releases/download/mybb_1841/mybb_1841.zip",
@@ -318,6 +340,17 @@
               "install"
             ],
             "type": "set-permissions"
+          },
+          {
+            "files": [
+              "config.php"
+            ],
+            "page": {
+              "expect": "phpBB",
+              "path": "/index.php"
+            },
+            "tables": "phpbb_",
+            "type": "verify-install"
           }
         ],
         "url": "https://download.phpbb.com/pub/release/3.3/3.3.19/phpBB-3.3.19.zip",
@@ -430,6 +463,17 @@
               "install_2-1_mysql.sql"
             ],
             "type": "set-permissions"
+          },
+          {
+            "files": [
+              "Settings.php"
+            ],
+            "page": {
+              "expect": "Simple Machines",
+              "path": "/index.php"
+            },
+            "tables": "smf_",
+            "type": "verify-install"
           }
         ],
         "url": "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.8.tar.gz",
@@ -490,6 +534,17 @@
               "wp-config.php"
             ],
             "type": "set-permissions"
+          },
+          {
+            "files": [
+              "wp-config.php"
+            ],
+            "page": {
+              "expect": "name=\"log\"",
+              "path": "/wp-login.php"
+            },
+            "tables": "wp_",
+            "type": "verify-install"
           }
         ],
         "version": "7.1.5"

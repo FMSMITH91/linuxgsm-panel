@@ -46,7 +46,14 @@ password you type needs at least 15 characters). The panel then:
    container, before the site is public. SMF and MyBB have no command-line installer, so the panel walks
    their install pages over the site's own local address, then removes their `install` folder: a
    leftover installer would let anyone take the site over;
-4. turns HTTPS on and shows **Open the site** and **Open the admin page**.
+4. checks what the installer left before calling it done: the app's settings file is there and not empty,
+   its tables are in its database, and its first page answers. An installer that reports success after
+   failing is undone like any other failed step;
+5. turns HTTPS on and shows **Open the site** and **Open the admin page** (the app's own admin address).
+
+The admin password and the database password never appear on a command line or in a log: each reaches the
+installer as a file that only the site's account can read, removed when the step ends, and the installers'
+output is never written to the system journal.
 
 The dialog shows each step as it runs. If one fails, every step done before it is undone: no half
 installed site, account, database or container is left behind. New app versions arrive through the

@@ -25,6 +25,10 @@ step in reverse, so no half-installed site is left behind.
     drive-web-installer    the app's own install pages walked over the site's loopback port (never
                            the public address, before the site is public), with the proxy token and
                            secret fields read from files; each page must show its expected text.
+    verify-install         the last step: what the install must have left is checked (its config
+                           files not empty, its tables in the site's database, a page answering 200
+                           with its expected text), so an installer that reports success after
+                           failing is undone, not recorded as done.
 
 Secrets (the database password, the admin password, the proxy token) travel only on stdin, and reach a
 command only as a 0600 file removed when the step ends: never argv, an environment, a prompt's echo or the
@@ -311,6 +315,47 @@ def _run_sh(account, site, step, values):
     return body, "".join(line + "\n" for line in lines)
 
 
+# verify-install's database check: the site's own database holds at least one table named with the recipe's
+# prefix (an installer that failed part-way leaves none). Run in a one-off container of the site's image,
+# signed in as the site's own database user from the values folder; the prefix is held to [a-z0-9_]{0,16}.
+_DB_NAMES = {"DB_HOST_NAME": "db_host_name", "DB_PORT": "db_port", "DB_USER": "db_user", "DB_PASSWORD": "db_password",
+             "DB_NAME": "db_name"}
+_TABLES_PHP = ("$v = function ($n) { return file_get_contents('%s/' . $n); }; mysqli_report(MYSQLI_REPORT_OFF); "
+               "$m = @new mysqli($v('DB_HOST_NAME'), $v('DB_USER'), $v('DB_PASSWORD'), $v('DB_NAME'), (int) $v('DB_PORT')); "
+               "if ($m->connect_errno) { exit(2); } $r = $m->query(\"SELECT COUNT(*) FROM information_schema.tables "
+               "WHERE table_schema = DATABASE() AND LEFT(table_name, %%d) = '%%s'\"); "
+               "exit($r && (int) $r->fetch_row()[0] > 0 ? 0 : 3);" % STEP_VALUES_DIR)
+
+
+def _verify_sh(account, site, step, values, token):
+    """Check what the install left: files not empty, the database's tables, the site answering. -> (shell, stdin).
+
+    Any check that fails prints SITE_VERIFY_FAILED and the check's name, so the job undoes the install
+    instead of recording an installer's silent failure as done.
+    """
+    fail = "{ echo SITE_VERIFY_FAILED; echo check=%s; exit 33; }"
+    body = [_values_prelude(_DB_NAMES if "tables" in step else ())]
+    body += ["[ -s %s ] || %s; " % (_q(_ws.HTML + "/" + path), fail % "file") for path in step.get("files", [])]
+    lines = ["token %s" % _b64("%s: %s" % (_ws.GATE_HEADER, token))]
+    if "tables" in step:
+        prefix = step["tables"]
+        if not re.fullmatch(r"[a-z0-9_]{0,16}", prefix):
+            raise ValueError("a table prefix is up to 16 lowercase letters, digits and underscores")
+        lines += ["val %s %s" % (name, _b64(values.get(ph, ""))) for name, ph in sorted(_DB_NAMES.items())]
+        args = _container_args(account, site, values, _ws.image_for(site), ["php", "-r", _TABLES_PHP % (len(prefix), prefix)])
+        body.append("%s < /dev/null > /dev/null 2>&1 || %s; " % (_shell_words(args), fail % "tables"))
+    if "page" in step:
+        page = step["page"]
+        url = "http://127.0.0.1:%d%s" % (int(site.port), page["path"])
+        # As the web proxy sends it: the site's name and https (an app that forces https answers the page).
+        body.append("c=$(curl -s --max-time 60 -o \"$d/page\" -w '%%{http_code}' -H @\"$d/token\" -H %s "
+                    "-H 'X-Forwarded-Proto: https' %s); "
+                    "[ \"$c\" = 200 ] && grep -qF -- %s \"$d/page\" || %s; "
+                    % (_q("Host: %s" % (values.get("domain") or "localhost")), _q(url), _q(page["expect"]), fail % "page"))
+    body.append("echo verify=done")
+    return "".join(body), "".join(line + "\n" for line in lines)
+
+
 def _qd(word):
     """`word` for the shell: double-quoted when it names the step's temp folder ($d; the panel's own text
     of field names and fixed file names only), else single-quoted."""
@@ -400,6 +445,9 @@ def step_sh(account, site, step, values, recipe=None, token=None):
         return _ws._ENV + body, stdin
     if kind == "set-permissions":
         body, stdin = _permissions_sh(site, step, recipe or {}, token or "")
+        return _ws._ENV + body, stdin
+    if kind == "verify-install":
+        body, stdin = _verify_sh(account, site, step, values, token or "")
         return _ws._ENV + body, stdin
     raise ValueError("unknown step type %r" % kind)
 

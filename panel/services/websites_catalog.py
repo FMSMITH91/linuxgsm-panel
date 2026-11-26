@@ -59,7 +59,7 @@ _PEM = r"-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{100,8000}-----END CERTIFI
 
 # ── recipes ─────────────────────────────────────────────────────────────────────────────────────
 STEP_TYPES = ("download-verify-unpack", "create-database", "render-config", "run-in-container",
-              "set-permissions", "drive-web-installer")
+              "set-permissions", "drive-web-installer", "verify-install")
 RECIPE_KINDS = ("php", "wordpress", "app")
 # Values a recipe may name in braces. SECRETS are never put on a command line or in a URL.
 PLACEHOLDERS = ("db_name", "db_user", "db_password", "db_host", "db_host_name", "db_port", "site_name",
@@ -330,13 +330,27 @@ def _page_problems(page):
     ])
 
 
+def _step_verify(step, recipe):
+    """A verify-install step: files to find not empty, a table prefix to find in the database, a page to answer."""
+    if not _obj(step, ("type",), ("files", "tables", "page")) or len(step) < 2:
+        return ["a verify step names files, tables or a page to check"]
+    page = step.get("page", {"path": "/", "expect": "x"})
+    return _failed([
+        (lambda: _paths_ok(step.get("files", [])), "files is a list of paths inside the site"),
+        (lambda: _full(r"[a-z0-9_]{0,16}", step.get("tables", "")), "tables is a table prefix of [a-z0-9_]"),
+        (lambda: "tables" not in step or recipe.get("database") is True, "tables needs the recipe's database"),
+        (lambda: _obj(page, ("path", "expect")) and not _page_problems(dict(page, method="GET", form={})),
+         "page has a local path and the text it must show"),
+    ])
+
+
 def _step_database(step, _recipe):
     return [] if _obj(step, ("type",)) else ["a database step has no fields"]
 
 
 _STEP_CHECKS = {"download-verify-unpack": _step_download, "create-database": _step_database,
                 "render-config": _step_render, "run-in-container": _step_run, "set-permissions": _step_permissions,
-                "drive-web-installer": _step_installer}
+                "drive-web-installer": _step_installer, "verify-install": _step_verify}
 
 
 def _step_problems(key, i, step, recipe):
@@ -362,6 +376,8 @@ def recipe_problems(name, recipe):
         out += _step_problems(key, i, step, recipe)
     if recipe["database"] != any(isinstance(s, dict) and s.get("type") == "create-database" for s in steps):
         out.append("%s: needs a database step exactly when database is true" % key)
+    if [i for i, s in enumerate(steps) if isinstance(s, dict) and s.get("type") == "verify-install"] != [len(steps) - 1]:
+        out.append("%s: ends with one verify-install step (what the install left is checked before it is done)" % key)
     return out
 
 
