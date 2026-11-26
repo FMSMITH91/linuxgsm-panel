@@ -51,11 +51,28 @@ name: Codacy coverage
 #  Nothing is scoped until the rule in step 1 exists: an environment with no rules (which is what
 #  GitHub creates when a job first names one) admits every branch.
 # ──────────────────────────────────────────────────────────────────────────────────────────────
+#
+# EGRESS, AND THE MANUAL RUN THAT TRIES IT
+#   Harden-Runner blocks every host but the ones this job calls (read from its own runs' logs):
+#   api.github.com and GitHub's artifact storage for the downloads, github.com and its release
+#   hosts for the reporter, and api.codacy.com for the upload. A workflow_run job runs main's copy
+#   of this file, so a change to that list could otherwise be seen working only after it merged,
+#   with a failure landing on main. A manual run (workflow_dispatch, on any branch, given a CI
+#   run's id) runs this branch's copy instead and does every part of the job but the upload: it
+#   downloads that run's reports, checks and rewrites them, fetches and verifies the reporter, and
+#   reaches api.codacy.com without a token. It uses no environment, so it never has the token.
+#     gh workflow run codacy-coverage.yml --ref <branch> -f ci_run_id=<id of a CI run with coverage>
 
 on:
   workflow_run:
     workflows: [ "CI" ]
     types: [ completed ]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: "Id of a CI run of this repository whose coverage reports a dry run checks (nothing is uploaded)"
+        required: true
+        type: number
   # zizmor: ignore[dangerous-triggers] main's copy runs with no checkout; the report is checked as untrusted data first
 
 permissions: {}
@@ -63,9 +80,10 @@ permissions: {}
 # One upload per commit at a time: the reporter's partial reports and its `final` for a commit must
 # not interleave with a second run's for the same commit (a re-run of CI). Different commits never
 # share a group, and nothing reads this job's check (system_ops._CI_IGNORE), so a cancelled pending
-# upload costs nothing; the run that replaced it sends the same reports.
+# upload costs nothing; the run that replaced it sends the same reports. A manual run uploads
+# nothing, so it groups with nothing but itself.
 concurrency:
-  group: codacy-coverage-${{ github.event.workflow_run.head_sha }}
+  group: codacy-coverage-${{ github.event.workflow_run.head_sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -77,7 +95,9 @@ jobs:
     # A CI run of THIS repository, for a push or a pull request, that was not cancelled or skipped
     # (a failed test does not stop the coverage job: it measures, the matrix decides). A push counts
     # only when its branch is exactly main, which the step checks: this `if` compares ignoring case.
+    # Or a manual run, which uploads nothing (see EGRESS above).
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.head_repository.full_name == github.repository &&
       (github.event.workflow_run.event == 'push' ||
        github.event.workflow_run.event == 'pull_request') &&
@@ -88,8 +108,10 @@ jobs:
     # branch, so this job qualifies and a workflow on any other branch or tag does not.
     # deployment: false — the environment is here for its secret and its branch rule, which still
     # apply; without it every upload would add a "deployment" to the repository's history.
+    # A manual run names none (on a branch other than main the rule would refuse it), so the token
+    # is never in its reach.
     environment:
-      name: codacy
+      name: ${{ github.event_name == 'workflow_run' && 'codacy' || '' }}
       deployment: false
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -99,14 +121,20 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.codacy.com:443
+            api.github.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
       # No checkout: nothing from the repository is needed, and nothing of the tested code is run.
       - name: Download the coverage report CI made
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage
           path: ${{ runner.temp }}/coverage-artifact
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event.workflow_run.id || inputs.ci_run_id }}
           github-token: ${{ github.token }}
 
       # continue-on-error: a CI run whose js-coverage job failed left no such artifact, and that
@@ -118,7 +146,7 @@ jobs:
         with:
           name: js-coverage
           path: ${{ runner.temp }}/js-coverage-artifact
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event.workflow_run.id || inputs.ci_run_id }}
           github-token: ${{ github.token }}
 
       # A pinned release binary, checked against its sha256 — the way actionlint and gitleaks are
@@ -127,7 +155,8 @@ jobs:
       - name: Send coverage to Codacy
         env:
           CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           WR_EVENT: ${{ github.event.workflow_run.event }}
           REPORT_DIR: ${{ runner.temp }}/coverage-artifact
@@ -138,8 +167,11 @@ jobs:
         run: |
           set -euo pipefail
           # Self-disabling, as the step in ci.yml was: a run with no token (none configured, or one
-          # GitHub withholds Actions secrets from) uploads nothing and passes.
-          if [ -z "${CODACY_PROJECT_TOKEN:-}" ]; then
+          # GitHub withholds Actions secrets from) uploads nothing and passes. A manual run has no
+          # token either, and goes on to do everything but the upload (see EGRESS at the top).
+          if [ "${DRY_RUN:-}" = "true" ]; then
+            echo "::notice::manual run: the reports are checked and the reporter fetched; nothing is uploaded."
+          elif [ -z "${CODACY_PROJECT_TOKEN:-}" ]; then
             echo "::notice::No CODACY_PROJECT_TOKEN for this run; nothing was uploaded."
             exit 0
           fi
@@ -300,6 +332,14 @@ jobs:
             "https://github.com/codacy/codacy-coverage-reporter/releases/download/${VERSION}/codacy-coverage-reporter-linux"
           echo "${SHA256}  ${reporter}" | sha256sum -c -
           chmod +x "${reporter}"
+          if [ "${DRY_RUN:-}" = "true" ]; then
+            # Any answer will do: the question is whether the egress allow-list lets the upload's
+            # host through. A blocked host fails here, as the upload would.
+            curl --proto '=https' -sS -o /dev/null -w "api.codacy.com answered HTTP %{http_code}\n" \
+              "https://api.codacy.com/"
+            echo "::notice::manual run: reports checked, reporter verified, api.codacy.com reached; nothing was uploaded."
+            exit 0
+          fi
           # From an empty directory: the reporter walks the one it runs in and looks for a git
           # repository there, and there is neither here. Both reports' file names are already
           # relative to the repository root (coverage.py writes them so, and so does run.py), and

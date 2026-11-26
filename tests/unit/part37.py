@@ -56,9 +56,17 @@ def _rel37(path):
 
 
 def _shipped_py37():
-    """Every Python file a panel runs: what install.sh installs from .github/update-paths.txt."""
+    """Every Python file a panel runs: what install.sh installs from .github/update-paths.txt.
+
+    panel/**, the helper, and every other `runtime <file>.py` the paths file names (review 1124: the
+    helper's root-run entry, tools/panel_helper_entry.py, was read by none of the scans).
+    """
     files = sorted(_glob37.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))   # panel/install/ too
     files.append(os.path.join(_root, "tools", "panel-helper"))
+    for ln in open(os.path.join(_root, ".github", "update-paths.txt"), encoding="utf-8"):
+        word = ln.split()
+        if len(word) == 2 and word[0] == "runtime" and word[1].endswith(".py") and not word[1].startswith("panel/"):
+            files.append(os.path.join(_root, *word[1].split("/")))
     return [f for f in files if os.path.isfile(f)]
 
 
@@ -258,51 +266,115 @@ _RAW_REVIEWED37 = {
     ("panel/ops/ssh_manager/tunnel.py", "_ssh_cli_argv", "ssh -W"),
     ("panel/ops/ssh_manager/hosts.py", "_tcp_reachable", "socket.create_connection"),
 }
+# Every socket the shipped code makes itself (review 1124: `socket.socket` + `connect` opened a stream the
+# scanner did not see). None carries a browser's bytes to a host's port, so they are not named with the
+# proxy in codeql-config.yml: a bind test, a listener, a unix socket, or F5's reviewed HTTP connect.
+_SOCK_REVIEWED37 = {
+    ("panel/core/validation.py", "can_bind_address", "socket.socket"),        # bind test, closed at once
+    ("panel/ops/system_ops.py", "_kernel_has_ip", "socket.socket"),            # bind test, closed at once
+    ("panel/services/notifications.py", "_connect_infos", "socket.socket"),    # F5's reviewed HTTP clients
+    ("panel/services/sftp_server.py", "listen", "socket.socket"),              # the SFTP listener
+    ("panel/services/sftp_server.py", "main", "socket.socket"),                # the listener's inherited fd
+    ("tools/panel-helper", "_sss_sudo_answers", "socket.socket"),              # SSSD's local unix socket
+}
 
 
-def _raw_kind37(node):
-    """What raw stream a node opens: a TCP connect, an SSH direct-tcpip channel, or an ssh -W argv; else None.
+def _raw_kind37(node, aliases=None):
+    """What raw stream a node opens: a TCP connect, a socket, an SSH direct-tcpip channel, or an ssh -W argv; else None.
 
-    An argv's `-W` counts when a computed host:port follows it (ping's `-W 3` and dpkg-query's `-W -f=…` do not).
+    An argv's `-W` counts when a computed host:port follows it, or is glued to it (`"-W" + target`, a
+    `-Wh:p` word); ping's `-W 3` and dpkg-query's `-W -f=…` do not. A tuple argv is read as a list.
     """
     if isinstance(node, _ast37.Call):
-        return _raw_call37(node)
-    if isinstance(node, _ast37.List) and any(isinstance(a, _ast37.Constant) and a.value == "-W"
-                                              and not isinstance(b, _ast37.Constant)
-                                              for a, b in zip(node.elts, node.elts[1:])):
+        return _raw_call37(node, aliases)
+    if isinstance(node, (_ast37.List, _ast37.Tuple)) and (
+            any(isinstance(a, _ast37.Constant) and a.value == "-W" and not isinstance(b, _ast37.Constant)
+                for a, b in zip(node.elts, node.elts[1:]))
+            or any(_raw_glued_w37(e) for e in node.elts)):
         return "ssh -W"
     return None
 
 
-def _raw_call37(call):
-    """The raw stream a call opens ('socket.create_connection', 'open_channel direct-tcpip'), or None."""
-    name = _callee37(call.func)
-    if name.split(".")[-1] == "create_connection" and not name.endswith("websocket.create_connection"):
+def _raw_glued_w37(e):
+    """Whether argv word `e` is `-W` with its target in the same word: `"-W" + t`, f"-W{t}", or a constant `-Wh:p`."""
+    head = e.left if isinstance(e, _ast37.BinOp) and isinstance(e.op, _ast37.Add) else (
+        e.values[0] if isinstance(e, _ast37.JoinedStr) and e.values else e)
+    if not (isinstance(head, _ast37.Constant) and isinstance(head.value, str) and head.value.startswith("-W")):
+        return False
+    return head is not e or ":" in head.value[2:]
+
+
+def _raw_alias37(n):
+    """{local name: dotted name} one import statement binds from socket or eventlet under a name of its own."""
+    if isinstance(n, _ast37.ImportFrom) and (n.module or "").split(".")[0] in ("socket", "eventlet"):
+        return {a.asname or a.name: "%s.%s" % (n.module, a.name) for a in n.names}
+    if isinstance(n, _ast37.Import):
+        return {a.asname: a.name for a in n.names if a.asname and a.name.split(".")[0] in ("socket", "eventlet")}
+    return {}
+
+
+def _raw_aliases37(tree):
+    """{local name: dotted name} for what `tree` imports from socket and eventlet under a name of its own."""
+    out = {}
+    for n in _ast37.walk(tree):
+        out.update(_raw_alias37(n))
+    return out
+
+
+def _raw_call37(call, aliases=None):
+    """The raw stream a call opens ('socket.create_connection', 'socket.socket', 'open_channel direct-tcpip'), or None.
+
+    Read through an import under another name (`from socket import create_connection as cc`), eventlet's
+    connect included, and an open_channel whose kind is given by keyword or computed (review 1124).
+    """
+    head, _, rest = _callee37(call.func).partition(".")
+    name = (aliases or {}).get(head, head) + ("." + rest if rest else "")
+    if (name.endswith(".create_connection") or name == "create_connection") and not name.endswith("websocket.create_connection"):
         return "socket.create_connection"
-    first = call.args[0] if call.args else None
-    if name.split(".")[-1] == "open_channel" and isinstance(first, _ast37.Constant) and first.value == "direct-tcpip":
-        return "open_channel direct-tcpip"
-    return None
+    if name == "eventlet.connect":
+        return "socket.create_connection"
+    if name.endswith("socket.socket"):
+        return "socket.socket"
+    return "open_channel direct-tcpip" if name.split(".")[-1] == "open_channel" and _raw_tcp_kind37(call) else None
+
+
+def _raw_tcp_kind37(call):
+    """Whether an open_channel call's kind, positional or by keyword, is "direct-tcpip" or computed (unknown)."""
+    kind = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "kind"), None)
+    return kind is not None and not (isinstance(kind, _ast37.Constant) and kind.value != "direct-tcpip")
 
 
 def _raw_sites37(source, rel):
     """(rel, enclosing function, kind) for every raw stream opened in source."""
-    sites, todo = set(), [(_ast37.parse(source), "<module>")]
+    tree = _ast37.parse(source)
+    aliases = _raw_aliases37(tree)
+    sites, todo = set(), [(tree, "<module>")]
     while todo:
         node, func = todo.pop()
         for child in _ast37.iter_child_nodes(node):
-            kind = _raw_kind37(child)
+            kind = _raw_kind37(child, aliases)
             if kind:
                 sites.add((rel, func, kind))
             todo.append((child, child.name if isinstance(child, (_ast37.FunctionDef, _ast37.AsyncFunctionDef)) else func))
     return sites
 
 
+def _sock_checks37():
+    """The raw streams the shipped code opens, bar its own sockets, which are held to _SOCK_REVIEWED37 here."""
+    found, files = set(), _shipped_py37()
+    for f in files:
+        found |= _raw_sites37(open(f, encoding="utf-8").read(), _rel37(f))
+    socks = {x for x in found if x[2] == "socket.socket"}
+    check("outbound streams: (premise) the shipped files read include the helper and its root-run entry",
+          {"tools/panel-helper", "tools/panel_helper_entry.py"} <= {_rel37(f) for f in files}, "")
+    check("outbound streams: every socket the shipped code makes itself is a reviewed one",
+          socks == _SOCK_REVIEWED37, "new: %r gone: %r" % (sorted(socks - _SOCK_REVIEWED37), sorted(_SOCK_REVIEWED37 - socks)))
+    return found - socks
+
+
 def _raw_tripwire():
     """The shipped code's raw streams are exactly the reviewed ones, each named in the justification."""
-    found = set()
-    for f in _shipped_py37():
-        found |= _raw_sites37(open(f, encoding="utf-8").read(), _rel37(f))
+    found = _sock_checks37()
     text = _read29(".github", "codeql", "codeql-config.yml")
     comment = "\n".join(ln for ln in text[:text.find("query-filters:")].splitlines() if ln.lstrip().startswith("#"))
     named = sorted({"%s.%s" % (os.path.splitext(os.path.basename(r))[0], fn) for r, fn, _k in _RAW_REVIEWED37})
@@ -319,12 +391,28 @@ def _raw_controls():
               "p": "def b(t):\n    return t.open_channel('direct-tcpip', ('127.0.0.1', 1), ('127.0.0.1', 0))\n",
               "w": "def d(p):\n    return ['ssh', '-W', '%s:%d' % ('127.0.0.1', p), 'h']\n",
               "no": ("import websocket\ndef e(u):\n    return websocket.create_connection(u), ['ping', '-W', '3', u], "
-                     "['dpkg-query', '-W', '-f=x'], t.open_channel('session')\n")}
+                     "['dpkg-query', '-W', '-f=x'], t.open_channel('session'), ('ping', '-W3', u)\n")}
     got = {k: _raw_sites37(v, "probe.py") for k, v in probes.items()}
     check("outbound streams: (control) the scanner finds a TCP connect, a direct-tcpip channel and an ssh -W "
           "argv, and not a WebSocket, ping's -W, dpkg-query's -W or a session channel",
           got == {"c": {("probe.py", "a", "socket.create_connection")}, "p": {("probe.py", "b", "open_channel direct-tcpip")},
                   "w": {("probe.py", "d", "ssh -W")}, "no": set()}, repr(got))
+    # ...and the spellings review 1124 found unread: a socket then connect, an import under another name,
+    # eventlet's connect, a keyword or computed channel kind, a tuple argv, and -W glued to its target.
+    more = {"s": "import socket\ndef f(a):\n    s = socket.socket()\n    s.connect(a)\n",
+            "cc": "from socket import create_connection as cc\ndef g(a):\n    return cc(a)\n",
+            "ev": "import eventlet\ndef h(a):\n    return eventlet.connect(a)\n",
+            "kw": "def i(t):\n    return t.open_channel(kind='direct-tcpip', dest_addr=('h', 1), src_addr=('h', 0))\n",
+            "var": "def j(t, k):\n    return t.open_channel(k, ('h', 1), ('h', 0))\n",
+            "tup": "def k(p):\n    return ('ssh', '-W', '%s:%d' % ('h', p), 'x')\n",
+            "glue": "def m(t):\n    return ['ssh', '-W' + t, 'x'], ['ssh', f'-W{t}', 'x'], ['ssh', '-Wh:22', 'x']\n"}
+    got2 = {k: _raw_sites37(v, "probe.py") for k, v in more.items()}
+    check("outbound streams: (control) ...and a socket made then connected, an import under another name, "
+          "eventlet's connect, a keyword or computed channel kind, a tuple argv and a glued -W",
+          got2 == {"s": {("probe.py", "f", "socket.socket")}, "cc": {("probe.py", "g", "socket.create_connection")},
+                   "ev": {("probe.py", "h", "socket.create_connection")},
+                   "kw": {("probe.py", "i", "open_channel direct-tcpip")}, "var": {("probe.py", "j", "open_channel direct-tcpip")},
+                   "tup": {("probe.py", "k", "ssh -W")}, "glue": {("probe.py", "m", "ssh -W")}}, repr(got2))
 
 
 # ── F6: the CodeQL model pack ────────────────────────────────────────────────────────────────────

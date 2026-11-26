@@ -329,9 +329,48 @@ def _gcf_cfg_line(body):
     return _gcf_cfg_value(body, i)
 
 
+def _gcf_cfg_commands(body):
+    """The `;`-separated commands of a cfg line, up to a // comment; a `;` or `//` inside quotes is text."""
+    parts, start, quoted, i, n = [], 0, False, 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == '"':
+            quoted = not quoted
+        elif not quoted and (ch == ";" or body.startswith("//", i)):
+            parts.append(body[start:i])
+            if ch != ";":
+                return parts
+            start = i + 1
+        i += 1
+    return parts + [body[start:]]
+
+
+def _gcf_cfg_set_names(body):
+    """The names, lower-cased, that the commands of a line the form does not read can set.
+
+    Each command's first word (after a set word), its quotes stripped: `sv_lan 0; rcon_password x`
+    sets both, and so does `"rcon_password" "x"`. A word that is a command rather than a cvar
+    (`exec`, `bind`) names no field, so reading it as one costs nothing.
+    """
+    names = []
+    for cmd in _gcf_cfg_commands(body):
+        words = cmd.split()
+        if len(words) > 1 and words[0].lower() in _GCF_CFG_SETS:
+            words = words[1:]
+        name = words[0].strip('"').lower() if words else ""
+        if name:
+            names.append(name)
+    return names
+
+
 def _gcf_parse_cfg(text):
-    """Fields of a Source / idTech cfg."""
-    out, section, pending = [], "", []
+    """Fields of a Source / idTech cfg.
+
+    The game runs every line, also the ones that do not read as one field (two commands on a line, a
+    quoted key). A field that such a later line sets again is dropped: the form would show, and save,
+    a value the game then overrides, and say "Saved" (_gcf_last_only covers later FIELD lines).
+    """
+    out, section, pending, later = [], "", [], {}
     for off, body in _gcf_lines(text):
         sec = _gcf_cfg_section(body)
         if sec is not None:
@@ -347,8 +386,10 @@ def _gcf_parse_cfg(text):
         if got:
             key, (s, e), style = got
             out.append(_gcf_entry(key, off + s, off + e, body[s:e], section, pending, style))
+        else:
+            later.update((name, off) for name in _gcf_cfg_set_names(body))
         pending = []
-    return out
+    return [f for f in out if later.get(f["key"].lower(), -1) < f["start"]]
 
 
 # 7 Days to Die XML

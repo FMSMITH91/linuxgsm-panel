@@ -308,6 +308,16 @@ def _p9_audit_count(action):
         return AuditLog.query.filter_by(action=action).count()
 
 
+def _p9_audit_after(action, before_id):
+    """The newest audit row for `action` when it is newer than row id `before_id`, else _P9_NO_AUDIT.
+
+    For a check whose request comes right after another that wrote the same action: the newest row
+    alone is the earlier request's when this one writes none.
+    """
+    row = _p9_audit(action)
+    return row if row.id is not None and (before_id is None or row.id > before_id) else _P9_NO_AUDIT
+
+
 def _p9_seeded_default_group():
     """[(is_default, permissions)] of each group the fresh-install seeder (models._ensure_default_group) makes.
 
@@ -1236,16 +1246,20 @@ try:
             ("/api/remote/%d/security/block" % P9_HOST, {"ip": _hl_zoned}, "ufw_block"),
             ("/api/remote/%d/security/unban" % P9_HOST, {"jail": "sshd", "ip": _hl_zoned},
              "fail2ban_unban")):
+        # Each entry is its own request's row (review 1124): the remote entries read the panel-host
+        # rows just before them when the remote routes wrote none.
+        _hl_before = _p9_audit(_hl_act).id
         _A.post(_hl_path, json=_hl_body)
-        _hl_targets.append(_p9_audit(_hl_act).target)
+        _hl_targets.append(_p9_audit_after(_hl_act, _hl_before).target)
     eq("security block/unban (panel host and remote): a zone-id address is audited as a fixed "
        "text, never the request's", _hl_targets, ["(not an IP address)"] * 4)
     _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (True, "blocked")))
     _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (True, "blocked"))
     _hl_targets = []
     for _hl_path in ("/api/panel/security/block", "/api/remote/%d/security/block" % P9_HOST):
+        _hl_before = _p9_audit("ufw_block").id
         _A.post(_hl_path, json={"ip": " 2001:0DB8::0009 "})
-        _hl_targets.append(_p9_audit("ufw_block").target)
+        _hl_targets.append(_p9_audit_after("ufw_block", _hl_before).target)
     eq("security block (panel host and remote): ...and an ordinary one as its canonical address "
        "(positive control)", _hl_targets, ["2001:db8::9"] * 2)
     _p9_patch(_p9_rv, "remote_ufw_allow_from", lambda *a, **k: (False, "Source must be an IP"))
@@ -1415,13 +1429,15 @@ try:
     check("action (JSON): a host that raises is a 500 saying the host is unreachable",
           _r.status_code == 500 and _p9_json(_r).get("message") == "Host unreachable")
 
-    # The FORM variant: flash + redirect, never the exception text.
+    # The FORM variant: flash + redirect, never the exception text. Its own row (review 1124): the JSON
+    # call just before wrote the same failed row, which read as this one's when the form wrote none.
+    _fv_before = _p9_audit("details_server").id
     _r = _A.post("/server/%d/action" % P9_GS, data={"action": "details"})
     _fl = _p9_flashes(_A)
+    _fv_row = _p9_audit_after("details_server", _fv_before)
     check("action (form): a host that raises flashes a generic failure and audits the error",
           _r.status_code == 302 and _fl == ["That action failed. The audit log has the details."]
-          and _p9_audit("details_server").success is False
-          and "ssh down" in _p9_audit("details_server").detail, repr((_fl, _p9_audit("details_server"))))
+          and _fv_row.success is False and "ssh down" in _fv_row.detail, repr((_fl, _fv_row)))
     _r = _A.post("/server/%d/action" % P9_GS, data={"action": "rm -rf"})
     check("action (form): an action outside the runnable set is refused by name",
           _r.status_code == 302 and _p9_flashes(_A) == ["Unknown or unsupported action: rm -rf"],
@@ -3828,6 +3844,17 @@ else:
 _pb_un = open(os.path.join(_pb_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 _pb_cr = _pb_un[_pb_un.index("_conf_read() {"):]
 _pb_cr = _pb_cr[:_pb_cr.index("\n}\n") + 3]
+# A regular file is read (review 1124): _conf_read ends `|| true` with its errors dropped, so one that
+# reads nothing at all (a broken heredoc, no interpreter) printed nothing with rc 0, which the
+# symlink check below holds for too.
+_pb_plain = os.path.join(_pb_rd, "data", "plain.json")
+with open(_pb_plain, "w") as _fh:
+    _fh.write('{"port": 5124}')
+_r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',
+             env={"PANEL_DIR": _pb_rd, "F": _pb_plain}, timeout=20)
+check("uninstall.sh _conf_read: a regular config file is read (positive control)",
+      _r.stdout == '{"port": 5124}[rc=0]\n', repr(_r.stdout + _r.stderr))
+os.remove(_pb_plain)
 _r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',
              env={"PANEL_DIR": _pb_rd, "F": os.path.join(_pb_rd, "VERSION")}, timeout=20)
 check("uninstall.sh _conf_read: a symlinked config.json is not followed",

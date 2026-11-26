@@ -570,12 +570,47 @@ def _button_backup_running(sid):
     the backup runs) displaces the backup's entry into `prev` — see _begin_action_tail — and the
     backup is still archiving underneath it.
     """
+    if sid in _button_backups:
+        return True         # claimed and dumping its databases: its tail is not registered yet
     e = _action_output.get(sid)
     while e is not None:
         if e.get("action") == "backup" and not e.get("ended"):
             return True
         e = e.get("prev")
     return False
+
+
+# Servers a Backup-button run holds from before its database dump to the end of its archive
+# (button_backup_claim). Its tail, which _button_backup_running also reads, only goes in after the
+# dump, which takes one SSH call per database host: in that window a sweep, "Back up now" or a full
+# run saw no backup, started its own dump and backup beside it, and the two met on LinuxGSM's lock
+# and on the same <name>.sql.gz.
+_button_backups = set()
+_button_backups_lock = threading.Lock()
+BUTTON_BACKUP_BUSY = i18n.Sentence("another backup of this server is running")
+
+
+@contextlib.contextmanager
+def button_backup_claim(sid, action):
+    """Hold server `sid` for a Backup-button run while the block runs; yields whether it may go ahead.
+
+    False, holding nothing, while another backup of it runs (a runner's flag, or another Button run
+    claimed or archiving). Any other `action` yields True and holds nothing. The check and the claim
+    are one step under the lock, so of two runs that start together one is refused.
+    """
+    if action != "backup":
+        yield True
+        return
+    with _button_backups_lock:
+        free = not _backup_in_progress(sid)
+        if free:
+            _button_backups.add(sid)
+    try:
+        yield free
+    finally:
+        if free:
+            with _button_backups_lock:
+                _button_backups.discard(sid)
 
 
 # What a backup and a queued stop/restart do not run beside: LinuxGSM's scheduled wipe (routes/

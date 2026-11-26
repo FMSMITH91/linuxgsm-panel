@@ -17,7 +17,7 @@
   <div class="card" id="sec-profile">
     <div class="card-header"><i class="bi bi-person-badge"></i> Profile</div>
     <div class="card-body">
-      <form method="POST" action="{{ url_for('account_update_profile') }}">
+      <form method="POST" action="{{ url_for('account_update_profile') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="mb-3">
           <label class="form-label" for="acct-display-name">Display name</label>
           <input type="text" id="acct-display-name" name="display_name" class="form-control"
@@ -113,7 +113,7 @@
     <div class="card-header"><i class="bi bi-key-fill"></i> Password</div>
     <div class="card-body">
       <p class="text-secondary small mb-3">{% if current_user.totp_enabled %}Change your account password. You'll need your current password and an authenticator code to confirm it's you.{% else %}Change your account password. You'll need your current password to confirm it's you.{% endif %}</p>
-      <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off">
+      <form method="POST" action="{{ url_for('account_change_password') }}" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="mb-2 maxw-420">
           <label class="form-label small mb-1" for="account-current_password">Current password</label>
           <input id="account-current_password" type="password" name="current_password" class="form-control form-control-sm" autocomplete="current-password" required>
@@ -149,7 +149,7 @@
         {# The code field is not optional decoration: the route requires it, exactly as the
            password change above does. Turning the second factor OFF is the change that makes
            every later login easier, so it asks for the same proof. A backup code works here. #}
-        <form method="POST" action="{{ url_for('account_2fa_disable') }}">
+        <form method="POST" action="{{ url_for('account_2fa_disable') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <span class="form-label small d-inline-block" id="tfa-off-label">Confirm your password and a current code to turn 2FA off</span>
           <div class="d-flex gap-2 flex-wrap maxw-560" role="group" aria-labelledby="tfa-off-label">
             <input type="password" name="password" class="form-control form-control-sm field-grow-12" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
@@ -192,7 +192,7 @@
       {% if not successors %}
       <p class="text-secondary small mb-0">Ownership can only go to another active superadmin who has two-factor authentication turned on, and there is none yet.</p>
       {% else %}
-      <form method="POST" action="{{ url_for('account_owner_transfer') }}" autocomplete="off">
+      <form method="POST" action="{{ url_for('account_owner_transfer') }}" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <p class="text-secondary small mb-2">They become the owner; you stay a superadmin. Confirm with your password and a code from your authenticator (not a backup code).</p>
         <div class="d-flex gap-2 flex-wrap maxw-560">
           <select id="account-owner_new" name="new_owner" class="form-select form-select-sm field-grow-10" aria-label="New owner" required>
@@ -229,7 +229,7 @@
       <div class="small text-secondary">Wasn't you? Change your password and use "Sign out everywhere" on your Account page.</div>
       {% endif %}
       <hr class="my-2">
-      <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form">
+      <form method="POST" action="{{ url_for('account_revoke_sessions') }}" id="revoke-sessions-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline-danger btn-sm" type="button" data-action="_acctSignOutAll">
           <i class="bi bi-box-arrow-right"></i> Sign out everywhere else
         </button>
@@ -287,7 +287,7 @@
          along: a label pointing at nothing, and inputs whose only accessible name was a
          placeholder, which a screen reader may not announce and which vanishes as soon as you
          type. Two idioms on one page is how that gets missed; this one follows the page's own. #}
-      <form method="POST" action="{{ url_for('account_api_token_generate') }}" autocomplete="off">
+      <form method="POST" action="{{ url_for('account_api_token_generate') }}" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {% if current_user.totp_enabled %}
         <label class="form-label small mb-1" for="account-api_password">Confirm your password and the code from your app</label>
         {% else %}
@@ -312,7 +312,7 @@
         </div>
       </form>
       {% if current_user.has_api_token %}
-      <form method="POST" action="{{ url_for('account_api_token_revoke') }}" class="mt-2">
+      <form method="POST" action="{{ url_for('account_api_token_revoke') }}" class="mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline-danger btn-sm" type="submit"><i class="bi bi-x-circle"></i> Revoke</button>
       </form>
       {% endif %}

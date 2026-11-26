@@ -81,30 +81,33 @@ check("CI secrets: no workflow runs on pull_request_target, and none a pull requ
 # hosts it called beyond the GitHub Actions service names the agent allows by itself.
 # The unit suites' legs add apt's: the cloud region's plain-http mirror (a wildcard: Azure's or AWS's),
 # the https archive and security mirrors the runner image lists after it, Microsoft's package
-# repository and Ubuntu Pro's; Lighthouse adds the two hosts its throwaway panel fetches pages' data from.
+# repository and Ubuntu Pro's; Lighthouse adds the two hosts its throwaway panel fetches pages' data from;
+# Codacy's gates add its two API hosts (app.codacy.com for the issues, api.codacy.com for the coverage reporter).
+# The main-only jobs that block are tried by a manual run on the branch that changes them (part297 says how).
 _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "objects.githubusercontent.com:443",
              "release-assets.githubusercontent.com:443", "pypi.org:443", "files.pythonhosted.org:443",
              "registry.npmjs.org:443", "api.osv.dev:443", "semgrep.dev:443", "sonarcloud.io:443",
              "*.archive.ubuntu.com:80", "archive.ubuntu.com:443", "security.ubuntu.com:443",
              "packages.microsoft.com:443", "esm.ubuntu.com:443",
-             "raw.githubusercontent.com:443", "linuxgsm.com:443"}
+             "raw.githubusercontent.com:443", "linuxgsm.com:443", "app.codacy.com:443", "api.codacy.com:443"}
 _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("ci.yml", "coverage"),
              ("ci.yml", "js-coverage"), ("ci.yml", "checks"), ("lighthouse.yml", "lighthouse"), ("codeql.yml", "analyze"),
              ("codeql.yml", "pr-alerts"), ("complexity.yml", "complexity"),
              ("dependency-review.yml", "dependency-review"), ("fuzz.yml", "fuzz"),
              ("security-code.yml", "dependency-audit"), ("security-code.yml", "sast-bandit"),
              ("security-code.yml", "sast-semgrep"), ("security.yml", "secret-scan"),
-             ("sonar-new-issues.yml", "sonar-new-issues"), ("zizmor.yml", "zizmor"), ("zizmor.yml", "upload")}
+             ("sonar-new-issues.yml", "sonar-new-issues"), ("zizmor.yml", "zizmor"), ("zizmor.yml", "upload"),
+             ("codacy-alerts.yml", "open-errors"), ("codacy-coverage.yml", "upload"),
+             ("sonar-main-issues.yml", "sonar-main-issues"), ("codeql-alerts.yml", "open-alerts"),
+             ("cflite_cleanup.yml", "cleanup")}
 _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no pull request can show a block list " \
                 "is complete before it holds every panel's update"
 _AUDIT223 = {
     ("cflite_pr.yml", "code-change"): "ClusterFuzzLite builds and fuzzes in Docker containers with their own "
                                       "networking (the images are pinned by digest: part242)",
-    ("cflite_batch.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
-    ("cflite_cron.yml", "prune"): _MAIN_ONLY223, ("cflite_cron.yml", "coverage"): _MAIN_ONLY223,
-    ("cflite_cleanup.yml", "cleanup"): _MAIN_ONLY223, ("codacy-alerts.yml", "open-errors"): _MAIN_ONLY223,
-    ("codacy-coverage.yml", "upload"): _MAIN_ONLY223, ("codeql-alerts.yml", "open-alerts"): _MAIN_ONLY223,
-    ("scorecard.yml", "analysis"): _MAIN_ONLY223, ("sonar-main-issues.yml", "sonar-main-issues"): _MAIN_ONLY223,
+    ("cflite_nightly.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
+    ("cflite_nightly.yml", "prune"): _MAIN_ONLY223, ("cflite_nightly.yml", "coverage"): _MAIN_ONLY223,
+    ("scorecard.yml", "analysis"): _MAIN_ONLY223,
     ("scorecard.yml", "image-pin"): _MAIN_ONLY223, ("scorecard.yml", "image-pulled"): _MAIN_ONLY223,
     ("deploy.yml", "deploy"): "carries no Harden-Runner at all (part42)",
     ("addon-images.yml", "scan"): "pulls, builds and scans the add-on images through Docker's own networking, "
@@ -176,7 +179,7 @@ def _egress_bad223():
 
 
 _eg_bad223, _eg_seen223 = _egress_bad223()
-check("harden-runner: exactly the listed pull-request jobs run in block mode, each allowed GitHub and only "
+check("harden-runner: exactly the listed jobs run in block mode, each allowed GitHub and only "
       "hosts from the list; every other job is named with why it audits",
       not _eg_bad223 and _BLOCK223 | set(_AUDIT223) == _eg_seen223 and not _BLOCK223 & set(_AUDIT223),
       repr((_eg_bad223, sorted(_eg_seen223 - _BLOCK223 - set(_AUDIT223)), sorted((_BLOCK223 | set(_AUDIT223))

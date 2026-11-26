@@ -10,7 +10,7 @@
 </p>
 
 <form method="POST" action="{{ url_for('panel_settings_save') }}"
-      data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+      data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row">
     <!-- Branding -->
     <div class="col-lg-6 mb-3">
@@ -218,7 +218,7 @@
     <div class="row g-3">
       <div class="col-lg-6">
         <form method="POST" action="{{ url_for('tls_cert_letsencrypt') }}"
-              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="fw-semibold small mb-1">Let's Encrypt on this host</div>
           <label class="form-label small mb-1" for="tls-le-name">Certificate name</label>
           <input type="text" id="tls-le-name" name="le_name" class="form-control form-control-sm" required
@@ -236,7 +236,7 @@
       </div>
       <div class="col-lg-6">
         <form method="POST" action="{{ url_for('tls_cert_paste') }}"
-              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="fw-semibold small mb-1">Paste a certificate</div>
           <label class="form-label small mb-1" for="tls-cert">Certificate with its full chain (PEM)</label>
           <textarea id="tls-cert" name="cert_pem" rows="3" class="form-control form-control-sm font-monospace" required
@@ -252,7 +252,7 @@
 
     {% if tls.source != 'builtin' %}
     <form method="POST" action="{{ url_for('tls_cert_remove') }}" class="mt-3"
-          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-check">
         <input class="form-check-input" type="checkbox" id="tls-remove-ok" name="confirm" required>
         <label class="form-check-label small" for="tls-remove-ok">Go back to the built-in self-signed certificate. Browsers will warn about it again, and one that opened the panel over your certificate refuses its address until HSTS runs out: a day if it was put in under 30 days ago, up to two years after that. Replace it with another trusted certificate instead if you can.</label>

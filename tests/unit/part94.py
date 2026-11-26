@@ -559,9 +559,12 @@ def _leftover_cert94():
           and seen == [boot], repr((got, seen)))
     eq("update-check ticker: one pass also runs the signed add-on catalog's daily tick, once",
        _CATALOG_TICKS94, [1])
+    eq("update-check ticker: ...and its Let's Encrypt refresh reaches the stand-in, never the real renewal",
+       _RENEW94, [1])
 
 
 _CATALOG_TICKS94 = []
+_RENEW94 = []
 
 
 def _cert_ticker94():
@@ -585,7 +588,11 @@ def _cert_ticker94():
     _p9_patch(_osu94, "_maybe_alert_cert_expiring", lambda b=None: seen.append(b))
     # The signed add-on catalog's daily fetch rides this ticker too: stubbed (it would git fetch), and counted.
     _p9_patch(_osu94, "_addon_catalog", NS(daily_tick=lambda: _CATALOG_TICKS94.append(1)))
+    # The Let's Encrypt refresh too (review 1124): it was inert only because the stand-in app has no
+    # app_context, so a fake that gained one, or the call moving out of its try, ran the real renewal.
+    _p9_patch(_osu94, "_renew_tls", lambda app: _RENEW94.append(1))
     saved_run = _osu94._os_update_state["last_run"]
+    saved_ran = _osu94._UPDATE_RAN["at"]
     _osu94._os_update_state["last_run"] = _time94.time()   # the daily OS check returns at once
     try:
         _osu94.register(fake, lambda name, fn: ticker.append(fn))
@@ -595,6 +602,7 @@ def _cert_ticker94():
             pass  # one pass done
     finally:
         _osu94._os_update_state["last_run"] = saved_run
+        _osu94._UPDATE_RAN["at"] = saved_ran
     return seen, boot
 
 

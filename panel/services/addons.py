@@ -1301,7 +1301,8 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     and the card offers Update again; a settings reload writes it before it exits. The relay units are
     replaced by `units` and the unit by `unit_text`, then the add-on restarts and is watched as an install is.
     how["dirs"] are more folders of the add-on to make (B3's own-plugins folder, when it is mounted).
-    how["extra"] is shell run before the image (BlueMap's client file: addons_bluemap.client_sh).
+    how["extra"] is shell run before the image (BlueMap's client file: addons_bluemap.client_sh), and
+    how["after"] shell run once the image and the record are in place (its tidy-up: client_tidy_sh).
     Its data, settings and database stay. how["old_image"], when the update moved it, is removed afterwards.
     how["check"] (B3's settings check, b3_control.check_sh) runs after the new settings file is written
     beside the old one and before anything is moved into place; it exits on a refusal. how["reload"]
@@ -1333,7 +1334,7 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
             "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; "
             "%s%secho %s"
             % (folders, shlex.quote(q), shlex.quote(uu), stdin, how.get("check", ""), move, " && ".join(early),
-               how.get("extra", ""), _image_sh(addon_id, shlex.quote(d)) if rebuild else "", record,
+               how.get("extra", ""), _image_sh(addon_id, shlex.quote(d)) if rebuild else "", record + how.get("after", ""),
                how.get("reload", ""), _relays_gone_sh(user, addon_id),
                " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), drop,

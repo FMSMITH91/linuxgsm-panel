@@ -3228,14 +3228,24 @@ check("helper self-update: ...and the log is a real file holding what was writte
       and open(_sul_log, encoding="utf-8").read() == "=== panel self-update ===\n")
 os.unlink(_sul_log)
 os.link(_sul_victim, _sul_log)
-with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
-    _fh.write("new run\n")
+# The fchown is observed through a stand-in (review 1124): the same uid makes the directory and the log
+# here (the test user, or root on CI), so the owner test alone held with the fchown deleted, and on a
+# real root self-update the log would stay root's, which the panel can neither read nor rotate.
+_sul_chown, _sul_o_os = [], _helper.os
+_sul_o_fchown = _sul_o_os.fchown
+try:
+    _helper.os = _R20dOver(_sul_o_os, fchown=lambda fd, u, g: (_sul_chown.append((u, g)), _sul_o_fchown(fd, u, g)))
+    with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
+        _fh.write("new run\n")
+finally:
+    _helper.os = _sul_o_os
 check("helper self-update: a HARD link at the log name is not truncated either",
       open(_sul_victim, encoding="utf-8").read() == "ORIGINAL",
       repr(open(_sul_victim, encoding="utf-8").read()))
 check("helper self-update: ...the log is a fresh file owned like its directory",
       os.stat(_sul_log).st_nlink == 1 and os.stat(_sul_log).st_uid == os.stat(_sul_data).st_uid
-      and open(_sul_log, encoding="utf-8").read() == "new run\n")
+      and _sul_chown == [(os.stat(_sul_data).st_uid, os.stat(_sul_data).st_gid)]
+      and open(_sul_log, encoding="utf-8").read() == "new run\n", repr(_sul_chown))
 _sul_fn = next(n for n in _sul_ast.walk(_sul_ast.parse(open(_helper_path, encoding="utf-8").read()))
                if isinstance(n, _sul_ast.FunctionDef) and n.name == "_self_update_run")
 _sul_calls = [n.func.id for n in _sul_ast.walk(_sul_fn)
@@ -5717,7 +5727,8 @@ check("codeql: ...and a SARIF that lists no rules, or reports an unsuccessful in
       and "(.extensions // [])[].rules[]?" in _cq_sarif and '[ "${rules}" = "0" ]' in _cq_sarif
       and "select(.executionSuccessful == false)" in _cq_sarif and '[ "${failed}" != "0" ]' in _cq_sarif
       and '[ "${runs}" = "0" ]' in _cq_sarif
-      and _cq_sarif.find("exit 1", _cq_sarif.find('[ "${rules}" = "0" ]')) < _cq_sarif.find("jq '.runs |= map"),
+      # 0 <=: a deleted `exit 1` is find() == -1, which is "before" anything (review 1124)
+      and 0 <= _cq_sarif.find("exit 1", _cq_sarif.find('[ "${rules}" = "0" ]')) < _cq_sarif.find("jq '.runs |= map"),
       _cq_sarif[:200])
 
 # ── No source file carries a literal bidi control, zero-width or line-separator character ──────
@@ -6254,7 +6265,7 @@ try:
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
     os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)  # nosec B103 - a stand-in program in this test's temp dir
 
-    def _cqa_case(event_name, wr_event, head_branch, ref_name="main"):
+    def _cqa_case(event_name, wr_event, head_branch, ref_name="main", run_ref="refs/heads/main"):
         _out = os.path.join(_cqa_sb, "out-%s-%s-%s" % (event_name, wr_event, head_branch or "none"))
         open(_out, "w").close()
         _p = _sh_sub.run(["bash", "-c", _cqa_run], capture_output=True, text=True, env=dict(
@@ -6262,7 +6273,7 @@ try:
             GITHUB_EVENT_NAME=event_name, WR_EVENT=wr_event, HEAD_BRANCH=head_branch,
             # the step's own WR_BRANCH expression: head_branch || github.ref_name
             WR_BRANCH=head_branch or ref_name, WR_SHA="a" * 40, GITHUB_OUTPUT=_out,
-            GITHUB_REPOSITORY="o/r"))
+            GITHUB_REPOSITORY="o/r", RUN_REF=run_ref, RUN_SHA="b" * 40))
         _o = dict(_l.split("=", 1) for _l in open(_out).read().splitlines() if "=" in _l)
         return _p.returncode, _o.get("skip"), _o.get("ref"), _p.stdout
 
@@ -6277,9 +6288,10 @@ try:
           all(_v[0] == 0 and _v[1] == "true" and _v[2] is None
               and "is not exactly main; nothing was judged" in _v[3] for _v in _cqa_near.values()),
           repr(_cqa_near))
-    _cqa_man = _cqa_case("workflow_dispatch", "", "", ref_name="feature")
-    check("codeql-alerts: ...while a manual run is judged at the ref it was started on",
-          _cqa_man[:3] == (0, "false", "refs/heads/feature"), repr(_cqa_man))
+    # A manual run on another branch judges main read-only (part297 runs that arm).
+    _cqa_man = _cqa_case("workflow_dispatch", "", "", ref_name="main")
+    check("codeql-alerts: ...while a manual run on main is judged as main",
+          _cqa_man[:3] == (0, "false", "refs/heads/main"), repr(_cqa_man))
 finally:
     _shutil.rmtree(_cqa_sb, ignore_errors=True)
 
@@ -6455,7 +6467,8 @@ check("codacy-coverage: runs on CI's completion, in the `codacy` environment (no
       "record), for this repository's push and pull-request runs only",
       re.search(r"\non:\n  workflow_run:\n    workflows: \[ \x22CI\x22 \]\n    types: \[ completed \]\n",
                 _cc_code) is not None
-      and "\n    environment:\n      name: codacy\n      deployment: false\n" in _cc_job
+      and "\n    environment:\n      name: ${{ github.event_name == 'workflow_run' && 'codacy' || '' }}\n"
+          "      deployment: false\n" in _cc_job
       and "github.event.workflow_run.head_repository.full_name == github.repository" in _cc_if
       and "github.event.workflow_run.event == 'push' || "
           "github.event.workflow_run.event == 'pull_request'" in _cc_if, _cc_if)
@@ -6466,9 +6479,9 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
       and re.search(r"\n    permissions:\n      actions: read(?:[ \t]+#[^\n]*)?\n    steps:", _cc_job)
       is not None
       and "actions/checkout" not in _cc_code
-      and _cc_env.get("HEAD_SHA") == "${{ github.event.workflow_run.head_sha }}"
+      and _cc_env.get("HEAD_SHA") == "${{ github.event.workflow_run.head_sha || github.sha }}"
       and _cc_env.get("HEAD_BRANCH") == "${{ github.event.workflow_run.head_branch }}"
-      and "run-id: ${{ github.event.workflow_run.id }}" in _cc_job
+      and "run-id: ${{ github.event.workflow_run.id || inputs.ci_run_id }}" in _cc_job
       and "sha256sum -c" in _cc_job, repr(_cc_env))
 # The step's bash is run below with its env handed in by this test, so the wiring into it is
 # proved only here: WR_EVENT decides whether the exact-main check runs at all (any other value and
@@ -6484,7 +6497,7 @@ check("codacy-coverage: the step reads the workflow_run's own event, and the rep
       _cc_env.get("WR_EVENT") == "${{ github.event.workflow_run.event }}"
       and "uses: actions/download-artifact@" in _cc_dl
       and _cc_up_name is not None and _cc_dl_with.get("name") == _cc_up_name.group(1)
-      and _cc_dl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_dl_with.get("run-id") == "${{ github.event.workflow_run.id || inputs.ci_run_id }}"
       and _cc_dl_with.get("github-token") == "${{ github.token }}"
       and bool(_cc_env.get("REPORT_DIR")) and _cc_dl_with.get("path") == _cc_env.get("REPORT_DIR"),
       repr((_cc_env.get("WR_EVENT"), _cc_env.get("REPORT_DIR"), _cc_dl_with)))
@@ -6798,7 +6811,7 @@ check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from
       "finished, downloaded where the step reads it; only that download may fail",
       _js_up is not None and _cc_jsdl_with.get("name") == _js_up.group(1) == "js-coverage"
       and "lcov.info" in _js_up.group(2).split()
-      and _cc_jsdl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_jsdl_with.get("run-id") == "${{ github.event.workflow_run.id || inputs.ci_run_id }}"
       and _cc_jsdl_with.get("github-token") == "${{ github.token }}"
       and bool(_cc_env.get("JS_REPORT_DIR")) and _cc_jsdl_with.get("path") == _cc_env["JS_REPORT_DIR"]
       and "\n        continue-on-error: true\n" in _cc_jsdl
@@ -6848,6 +6861,10 @@ check("delete host: both lists of what stays on a forgotten host name its add-on
 # panel/routes/addons*.py, read as code (review 1123: only addons.py was read, so B3's unban/kick/warn route
 # asked with no doc naming it). A route's action is its path's last word: "<action>" for the generic route,
 # "(list)" for the bare /addons one; stacked routes each name theirs.
+# Review 1124: a view asks by a bare `step_up_needed()`, by `account_guard.step_up_needed()`, or by the
+# `@step_up_required` / `@step_up_required_to_change` decorators, and an /addons route can live in any
+# routes module (addon_web.py holds one), so every form is counted in every module.
+_RH_STEP_UP_DECOS = ("step_up_required", "step_up_required_to_change")
 
 
 def _rh_route_paths(fn):
@@ -6856,25 +6873,44 @@ def _rh_route_paths(fn):
             and d.args and isinstance(d.args[0], _ast.Constant)]
 
 
+def _rh_name(node):
+    """The last name of a Name or Attribute node (`step_up_needed` for `account_guard.step_up_needed`), or ""."""
+    return getattr(node, "id", "") or getattr(node, "attr", "")
+
+
 def _rh_step_ups(node):
-    """How many step_up_needed() calls `node` holds."""
-    return sum(1 for c in _ast.walk(node) if isinstance(c, _ast.Call) and getattr(c.func, "id", "") == "step_up_needed")
+    """How many times `node` asks for the password: step_up_needed() calls plus step-up decorators."""
+    calls = sum(1 for c in _ast.walk(node) if isinstance(c, _ast.Call) and _rh_name(c.func) == "step_up_needed")
+    decos = sum(1 for f in _ast.walk(node) if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                for d in f.decorator_list if _rh_name(d.func if isinstance(d, _ast.Call) else d) in _RH_STEP_UP_DECOS)
+    return calls + decos
 
 
-_rh_blocks, _rh_su_total = [], 0
-for _rh_f in sorted(glob.glob(os.path.join(_root, "panel", "routes", "addons*.py"))):
+def _rh_addon_blocks(tree):
+    """(action, asks) for each /addons route path of each view in `tree`."""
+    return [(re.sub(r"^.*/addons$", "(list)", _pth).rsplit("/", 1)[-1], _rh_step_ups(_fn))
+            for _fn in _ast.walk(tree) if isinstance(_fn, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+            for _pth in _rh_route_paths(_fn) if "/addons" in _pth]
+
+
+_rh_blocks, _rh_su_total, _rh_su_in_routes = [], 0, 0
+for _rh_f in sorted(glob.glob(os.path.join(_root, "panel", "routes", "*.py"))):
     _rh_tree = _ast.parse(open(_rh_f, encoding="utf-8").read())
-    _rh_su_total += _rh_step_ups(_rh_tree)
-    _rh_blocks += [(re.sub(r"^.*/addons$", "(list)", _pth).rsplit("/", 1)[-1], _rh_step_ups(_fn))
-                   for _fn in _ast.walk(_rh_tree) if isinstance(_fn, _ast.FunctionDef)
-                   for _pth in _rh_route_paths(_fn) if "/addons" in _pth]
+    _rh_blocks += _rh_addon_blocks(_rh_tree)
+    if os.path.basename(_rh_f).startswith("addons"):
+        _rh_su_total += _rh_step_ups(_rh_tree)
+        _rh_su_in_routes += sum(_rh_step_ups(_fn) for _fn in _ast.walk(_rh_tree)
+                                if isinstance(_fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and _rh_route_paths(_fn))
 _rh_su_acts = sorted({a for a, n in _rh_blocks if n})
 check("docs: (premise) every step_up_needed() call in routes/addons*.py was read inside one of its routes",
-      len(_rh_blocks) >= 12 and _rh_su_total > 0
-      and _rh_su_total == sum(_rh_step_ups(_fn) for _rh_f in glob.glob(os.path.join(_root, "panel", "routes", "addons*.py"))
-                              for _fn in _ast.walk(_ast.parse(open(_rh_f, encoding="utf-8").read()))
-                              if isinstance(_fn, _ast.FunctionDef) and _rh_route_paths(_fn)),
-      repr(sorted(_rh_blocks)))
+      len(_rh_blocks) >= 12 and _rh_su_total > 0 and _rh_su_total == _rh_su_in_routes, repr(sorted(_rh_blocks)))
+_rh_ctl_src = ("@bp.route('/addons/a/x', methods=['POST'])\n@step_up_required\ndef a(): pass\n"
+               "@bp.route('/addons/b/y', methods=['POST'])\n@account_guard.step_up_required_to_change\ndef b(): pass\n"
+               "@bp.route('/addons/c/z', methods=['POST'])\ndef c():\n    if account_guard.step_up_needed(): pass\n"
+               "@bp.route('/addons/d/w', methods=['POST'])\ndef d(): pass\n")
+check("docs: (control) a view asks by either decorator or by an attribute step_up_needed() call; one that "
+      "does none does not", sorted(_rh_addon_blocks(_ast.parse(_rh_ctl_src))) == [("w", 0), ("x", 1), ("y", 1), ("z", 1)],
+      repr(_rh_addon_blocks(_ast.parse(_rh_ctl_src))))
 # {action: (words in the security page's step-up list, words in the manage_addons row, the list's clause that holds them)}
 _rh_words = {"install": ("installing", "install", "an add-on"), "update": ("updating", "update", "an add-on"),
              "settings": ("changing the settings of", "change their settings", "an add-on"),
@@ -6958,7 +6994,11 @@ def _rh_unsafe(cmd, root):
         # Text that builds a path the rewrite never sees (review 1123): an ANSI-C `$'\x2f…'`, a command
         # substitution other than the doc's own `$(readlink "$l")`, a backtick, or a quote glued to a path
         # piece (`/sb/a/.''./.''./etc` is `..` to bash).
-        r"|\$'|\$\((?!readlink \"\$l\"\))|`|[/.]['\"]|['\"][/.]", code)
+        r"|\$'|\$\((?!readlink \"\$l\"\))|`|[/.]['\"]|['\"][/.]"
+        # ...and (review 1124) any variable but the doc's own loop `$l` (`$BASH`, `$SHELL` are absolute
+        # paths bash sets), printf (`printf -v X '\x2fopt'` builds one), a `.` word (sources a file, or names
+        # the cwd), a process substitution, and a glob touching a dot (`.*.` globs to `..` without globskipdots).
+        r"|\$(?!l\b)[A-Za-z_]\w*|\bprintf\b|(?<![^\s;&|(])\.(?=[\s;&|)]|$)|[<>]\(|\.[*?\[]|[*?\]]\.", code)
 
 
 def _rh_escapes(cmd):
@@ -7028,7 +7068,7 @@ try:
     check("delete host: (control) a doc line reaching past the sandbox is refused before anything runs",
           [_rh_unsafe(_c, "/sb") for _c in ("sudo rm -rf /opt/x\n", "rm -f ~/.bashrc\n", "rm -f $HOME/x\n",
                                              "eval \"$x\"\n", "rm -f /sb/etc/x 2>/dev/null  # /root/y\n")]
-          == [["/opt/x"], ["~"], ["$HOME"], ["eval"], []]
+          == [["/opt/x"], ["~"], ["$HOME"], ["eval", "$x"], []]
           and all(_rh_unsafe(_c, "/sb") for _c in ("X=; sudo rm -rf $X/etc/x\n", "rm -rf /sb/usr/../../etc/x\n",
                                                     "echo \"n #1\"; sudo rm -rf /opt/x\n", "cd ../..; rm -rf etc/x\n",
                                                     "rm -rf ../../etc/x\n")), "")
@@ -7043,11 +7083,15 @@ try:
         "echo a\\ # ; sudo rm -rf /opt/x\n", "rm -rf /sb/a/.''./.''./etc\n", "X=\\.\\.; rm -rf /sb/$X\\/$X\\/etc\n",
         "rm -rf $'\\x2fopt'\n", "rm -rf \"$(printf '\\x2fopt')\"\n", "rm -rf `printf /opt`\n",
         "rm -rf $(cat list)\n", "rm -rf $'list'\n",
+        # ...and the review-1124 shapes: printf building a path, bash's own absolute variables, a glob that
+        # makes `..`, a file sourced with `.`, and a process substitution.
+        "printf -v X '\\x2fopt'; sudo rm -rf \"$X\"\n", "sudo rm -rf $BASH\n", "sudo rm -rf \"$SHELL\"\n",
+        "rm -rf /sb/usr/local/.*./.*./.*./etc\n", "printf 'rm -rf \\x2fopt\\n' > f; . f\n", "cat <(echo x)\n",
         "rm -f /sb/a >/dev/null 2>&1\n", "echo 'a\\' # '; rm -rf /sb/b\n",
         "case \"$(readlink \"$l\")\" in /sb/g/*) rm -f \"$l\" ;; esac\n")]
     check("delete host: (control) ...a ${...} default, a brace list, a path glued to a redirect, a quote ended "
           "past an escaped one, and /dev/null as rm's own operand are refused; a >/dev/null redirect is not",
-          [bool(_b) for _b in _rh_ctl34] == [True] * 15 + [False] * 3
+          [bool(_b) for _b in _rh_ctl34] == [True] * 21 + [False] * 3
           and "; sudo rm" in _rh_code("echo a\\ # ; sudo rm\n"), repr(_rh_ctl34))
 finally:
     _shutil.rmtree(_rh_sb, ignore_errors=True)
@@ -7529,6 +7573,13 @@ def _ci_in_list(s, ind, indent):
     return not s or s.startswith("#") or (s.startswith("- ") and ind >= indent)
 
 
+def _ci_flow_mapping(s, key):
+    """A flow-mapping on: line's list (a paths list no file matches, a paths-ignore list every file matches), else None."""
+    if not re.search(r":[ \t]*\{", re.sub(r"(?:^|\s)#.*$", "", s)):
+        return None
+    return [("\0unreadable flow mapping: " + s, False)] if key == "paths" else [("**", False)]
+
+
 def _ci_on_path_lists(on, key="paths"):
     """Return each `paths:` list of an `on:` block (a paths-ignore list is not one), in order, as [(pattern, excluded)].
 
@@ -7537,13 +7588,19 @@ def _ci_on_path_lists(on, key="paths"):
     Block entries at the key's indent or deeper, a flow list (`paths: ['a/*', 'b']`), and a comment
     after the key. Read as one shape only, any other gave [] and the workflow passed as unfiltered; a
     list that cannot be read, or one with no entries, comes back as one entry no file matches, so
-    every install it should watch is named.
+    every install it should watch is named. A flow mapping (`pull_request: { paths: [...] }`) is not read
+    at all (review 1124): it is a paths list no file matches, and a paths-ignore list every file matches.
     """
     lists, cur, indent = [], None, 0
     for ln in on.replace("\r\n", "\n").splitlines():
         s, ind = ln.strip(), len(ln) - len(ln.lstrip())
         if cur is not None and _ci_in_list(s, ind, indent):
             cur.extend([_ci_path_entry(s[2:])] if s.startswith("- ") else [])
+            continue
+        flow = _ci_flow_mapping(s, key)
+        if flow:
+            cur = None
+            lists.append(flow)
             continue
         cur, value = None, _ci_paths_key(s, key)
         if value == "":
@@ -7668,6 +7725,12 @@ eq("workflows: (control) a paths key with a comment, entries at the key's indent
 eq("workflows: (control) ...under CRLF each job is read apart, with its own installs and its scope list",
    [(_j, _i, _s) for _j, _i, _o, _s in _ci_jobs_watch(_ci_ctl2)],
    [("a", [".github/ci-requirements/x.txt"], ["z/**"]), ("b", [".github/ci-requirements/y.txt"], None)])
+eq("workflows: (control) a trigger written as a flow mapping is named for its paths list and for its paths-ignore "
+   "list, never read as unfiltered (review 1124)",
+   [_ci_unwatched_of("f.yml", "on:\n  pull_request: " + _fm + "\npermissions: {}\njobs:\n  a:\n    steps:\n"
+                     "      - run: pip install -r .github/ci-requirements/x.txt\n")
+    for _fm in ("{ paths: ['docs/**'] }", "{paths-ignore: ['.github/**']}  # flow")],
+   [["f.yml a: .github/ci-requirements/x.txt (on: paths)", "f.yml a: .github/ci-requirements/x.txt (on: paths-ignore)"]] * 2)
 eq("workflows: (control) a paths list that cannot be read, or has no entries, watches nothing (named, not passed)",
    [_ci_watched(".github/ci-requirements/x.txt", _l) for _l in
     _ci_on_path_lists("on:\n  push:\n    paths: &anchor\n  pull_request:\n    paths:\n    paths-ignore:\n      - a\n")],
@@ -9613,20 +9676,49 @@ check("bind: setup_wizard passes can_bind_address to bind_host_error",
 # Two web paths clear them and say so; the CLI was the one that did not, leaving bcrypt hashes of
 # credentials the operator had just revoked in panel.db.
 import ast as _2fa_ast                                                             # noqa: E402
-_2fa_sources = {
-    "manage.py cmd_disable_2fa": open(os.path.join(_root, "panel", "install", "manage.py"), encoding="utf-8").read(),
-    "tags.py": open(os.path.join(_root, "panel", "routes", "tags.py"), encoding="utf-8").read(),
-    "admin_notifications.py": open(os.path.join(_root, "panel", "routes",
-                                                "admin_notifications.py"), encoding="utf-8").read(),
-}
-_2fa_missing = []
-for _name, _src in _2fa_sources.items():
-    for _fn in _2fa_ast.walk(_2fa_ast.parse(_src)):
-        if not isinstance(_fn, (_2fa_ast.FunctionDef,)):
-            continue
-        _body = _2fa_ast.get_source_segment(_src, _fn) or ""
-        if "totp_enabled = False" in _body and "backup_codes = \"\"" not in _body:
-            _2fa_missing.append("%s:%s" % (_name, _fn.name))
+# Every panel module, read as code (review 1124): three named files were read by text, so a disable moved
+# into a helper elsewhere, or written `setattr(u, "totp_enabled", False)`, passed reading nothing.
+
+
+def _2fa_assigns(node, attr, values):
+    """Whether `node` is `x.<attr> = <one of values>`."""
+    return (isinstance(node, _2fa_ast.Assign) and isinstance(node.value, _2fa_ast.Constant) and node.value.value in values
+            and any(getattr(_t, "attr", None) == attr for _t in node.targets))
+
+
+def _2fa_setattr(node, attr, values):
+    """Whether `node` is `setattr(x, "<attr>", <one of values>)`."""
+    if not (isinstance(node, _2fa_ast.Call) and getattr(node.func, "id", None) == "setattr" and len(node.args) == 3):
+        return False
+    _k, _v = node.args[1:]
+    return isinstance(_k, _2fa_ast.Constant) and isinstance(_v, _2fa_ast.Constant) and _k.value == attr and _v.value in values
+
+
+def _2fa_sets(fn, attr, values):
+    """Whether function `fn` sets attribute `attr` to one of the constants `values` (by `=` or setattr)."""
+    return any(_2fa_assigns(_n, attr, values) or _2fa_setattr(_n, attr, values) for _n in _2fa_ast.walk(fn))
+
+
+def _2fa_paths(src, name):
+    """(disabling functions of `src`, those of them that leave the backup codes), each as "name:function"."""
+    fns = [_f for _f in _2fa_ast.walk(_2fa_ast.parse(src)) if isinstance(_f, (_2fa_ast.FunctionDef, _2fa_ast.AsyncFunctionDef))]
+    off = [_f for _f in fns if _2fa_sets(_f, "totp_enabled", (False,))]
+    return (["%s:%s" % (name, _f.name) for _f in off],
+            ["%s:%s" % (name, _f.name) for _f in off if not _2fa_sets(_f, "backup_codes", ("", None))])
+
+
+_2fa_seen, _2fa_missing = [], []
+for _2fa_f in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):
+    _2fa_got = _2fa_paths(open(_2fa_f, encoding="utf-8").read(), os.path.relpath(_2fa_f, os.path.join(_root, "panel")))
+    _2fa_seen += _2fa_got[0]
+    _2fa_missing += _2fa_got[1]
+check("2FA: (premise) the three known disable paths were read (the CLI, the user page, the admin page)",
+      {"install/manage.py", "routes/tags.py", "routes/admin_notifications.py"} <= {_x.split(":")[0] for _x in _2fa_seen},
+      repr(_2fa_seen))
+check("2FA: (control) a disable by setattr without clearing the codes is named; one that clears them is not",
+      _2fa_paths("def a(u):\n    setattr(u, 'totp_enabled', False)\n"
+                 "def b(u):\n    u.totp_enabled = False\n    u.backup_codes = ''\n", "x.py") == (["x.py:a", "x.py:b"], ["x.py:a"]),
+      "")
 check("2FA: every path that disables it also clears the backup codes", not _2fa_missing,
       "left behind by: %s" % _2fa_missing)
 
@@ -10143,37 +10235,56 @@ def _r19d_re_call(call, re_names, any_receiver=False):
     return getattr(call.func, "attr", None) if any_receiver or _recv in _mods else None
 
 
-def _r30t_pat_tail(node):
+def _r30t_pat_tail(node, consts=None):
     """The literal text a pattern expression ENDS in, which is all the `$` question reads.
 
     A literal is itself; an f-string is its literal parts; `a + b` ends as `b` does and `t % v` as its
-    template `t` does. Anything else reads as "". A pattern built with `+` or `%` used to read as ""
-    and was skipped (cron.py's _CRON_SCHED_RE, review 1118 T4).
+    template `t` does; a bare name is the module-level string constant `consts` gives it (review 1124:
+    `SLUG_RE = r"^...$"` then `re.match(SLUG_RE, v)` read as ""). Anything else reads as "". A pattern
+    built with `+` or `%` used to read as "" and was skipped (cron.py's _CRON_SCHED_RE, review 1118 T4).
     """
     if isinstance(node, _anc_ast.BinOp):
         side = {_anc_ast.Add: "right", _anc_ast.Mod: "left"}.get(type(node.op))
-        return _r30t_pat_tail(getattr(node, side)) if side else ""
+        return _r30t_pat_tail(getattr(node, side), consts) if side else ""
+    if isinstance(node, _anc_ast.Name):
+        return (consts or {}).get(node.id, "")
     parts = node.values if isinstance(node, _anc_ast.JoinedStr) else [node]
     return "".join(v.value for v in parts if isinstance(v, _anc_ast.Constant) and isinstance(v.value, str))
+
+
+def _r30t_str_consts(tree):
+    """{name: the text it ends in} for each module-level `NAME = <string pattern expression>` in `tree`."""
+    out = {}
+    for _n in tree.body:
+        if isinstance(_n, _anc_ast.Assign) and len(_n.targets) == 1 and isinstance(_n.targets[0], _anc_ast.Name):
+            _tail = _r30t_pat_tail(_n.value, out)
+            if _tail:
+                out[_n.targets[0].id] = _tail
+    return out
 
 
 eq("regex anchors: a pattern's tail is read through `+`, `%` and f-strings, and a call reads as nothing (control)",
    [_r30t_pat_tail(_anc_ast.parse(_x, mode="eval").body) for _x in (
        'r"^(" + r"\\s+".join(x) + r")$"', 'r"\\s*%s\\s*$" % k', 'f"^{k}=(.*)$"', '"^a" + b', 'build()')],
    [")$", "\\s*%s\\s*$", "^=(.*)$", "", ""])
+_r30t_ctl_t = _anc_ast.parse("A = r'^a$'\nB = '^' + A\nimport re\nre.match(A, v)\nre.match(B, v)\nre.match(C, v)\n")
+eq("regex anchors: ...and a bare name reads as the module-level string constant it holds, an unknown name as "
+   "nothing (control)",
+   [_r30t_pat_tail(_c.args[0], _r30t_str_consts(_r30t_ctl_t)) for _c in _anc_ast.walk(_r30t_ctl_t)
+    if isinstance(_c, _anc_ast.Call)], ["^a$", "^a$", ""])
 _anc_unclassified, _anc_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
     try:
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
         continue
-    _r19d_rn = _r19d_re_names(_tree)
+    _r19d_rn, _r30t_consts = _r19d_re_names(_tree), _r30t_str_consts(_tree)
     for _n in _anc_ast.walk(_tree):
         # Any `.compile(` as before, and a `compile` imported from re by any name.
         if not (isinstance(_n, _anc_ast.Assign) and isinstance(_n.value, _anc_ast.Call)
                 and _r19d_re_call(_n.value, _r19d_rn, any_receiver=True) == "compile" and _n.value.args):
             continue
-        _pat = _r30t_pat_tail(_n.value.args[0])
+        _pat = _r30t_pat_tail(_n.value.args[0], _r30t_consts)
         if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
         _anc_seen |= {_t.id for _t in _n.targets if isinstance(_t, _anc_ast.Name)}
@@ -10211,6 +10322,9 @@ _INLINE_DOLLAR_OK = {
     # Built patterns, keyed on the literal they end in (`+`) or their template (`%`):
     r"(/\S*?)/?$",                     # files.py: the `pwd -P` line after its mark, matched per line (re.M)
     r"\s*%s\s*=\s*(\S+)\s*$",          # system_ops: one line of the panel's fail2ban jail file
+    # A validator, read through its name (review 1124): ssh_manager/databases.py's SLUG_RE, whose only
+    # caller (db_name) refuses a trailing "\n" itself with `slug.endswith("\n")`. \Z would say so alone.
+    r"^[a-z0-9]{1,16}$",
 }
 _inline_bad, _inline_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
@@ -10219,12 +10333,12 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
         continue
-    _r19d_rn = _r19d_re_names(_tree)
+    _r19d_rn, _r30t_consts = _r19d_re_names(_tree), _r30t_str_consts(_tree)
     for _n in _anc_ast.walk(_tree):
         if not (isinstance(_n, _anc_ast.Call)
                 and _r19d_re_call(_n, _r19d_rn) in ("match", "fullmatch", "search") and _n.args):
             continue
-        _pat = _r30t_pat_tail(_n.args[0])
+        _pat = _r30t_pat_tail(_n.args[0], _r30t_consts)
         if not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
         _inline_seen.add(_pat)

@@ -511,7 +511,7 @@ function refreshGameList(btn){
         // ...and the tiles, which are drawn from the same list (a new game gets its tile).
         // The picker is always on the page (hidden while there is no list), so a Retry from an empty
         // list has a target; the hook draws the tiles' state and starts their icons on the new grid.
-        window.refreshSection('#game-picker', '_r37d_gameTilesRefreshed');
+        window.refreshSection('#game-picker', 'gameTilesRefreshed');
         return;
       }
       if (window.toast) toast((d && d.message) || 'Still could not reach LinuxGSM', 'danger');
@@ -615,7 +615,7 @@ function startGameIcons() {
 // only data-icon-script. startGameIcons ran once, on load, with its observer rooted at the old grid,
 // now detached, so every new tile kept its initials until a reload. And a Retry from an empty list
 // fills a picker that was hidden: show it once it holds a grid.
-function _r37d_gameTilesRefreshed() {
+function gameTilesRefreshed() {
   var picker = document.getElementById('game-picker');
   if (picker) picker.hidden = !document.getElementById('game-grid');
   syncGameTiles();

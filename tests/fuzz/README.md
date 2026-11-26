@@ -53,8 +53,8 @@ Add `fuzz_<name>.py` here (set `EVENTLET_NO_GREENDNS=yes`, pre-import `ssh_manag
 uninstrumented with the same list as `fuzz_game_status.py`, then
 `with atheris.instrument_imports(): from panel.ops import ssh_manager`), a `corpus/<name>/` seed
 or two, `<name>` to `fuzz.yml`'s `matrix.target`, and `cifuzz-corpus-fuzz_<name>` to the `EXPECT`
-lists in `cflite_batch.yml` and `cflite_cron.yml`, which check that each run stored the corpus
-it made. `.clusterfuzzlite/build.sh` builds every `fuzz_*.py` here without a change.
+lists of the batch and prune jobs in `cflite_nightly.yml`, which check that each run stored the
+corpus it made. `.clusterfuzzlite/build.sh` builds every `fuzz_*.py` here without a change.
 
 ## CI
 
@@ -67,8 +67,7 @@ it made. `.clusterfuzzlite/build.sh` builds every `fuzz_*.py` here without a cha
   | workflow | when | what it does |
   |---|---|---|
   | `cflite_pr.yml` | each pull request | fuzzes only the targets the diff reaches (every target until a coverage report exists), files crashes as SARIF findings, and drops a crash main's build already has |
-  | `cflite_batch.yml` | nightly | fuzzes every target and keeps the corpus (`cifuzz-corpus-<target>`) |
-  | `cflite_cron.yml` | daily | prunes the corpus and reports coverage (`cifuzz-coverage-latest`) |
+  | `cflite_nightly.yml` | nightly | fuzzes every target and keeps the corpus (`cifuzz-corpus-<target>`), then, once that is done, prunes the corpus and reports coverage (`cifuzz-coverage-latest`) |
   | `cflite_build.yml` | each push to main | keeps that commit's build (`cifuzz-build-address-<commit>`) |
   | `cflite_cleanup.yml` | every 6 hours | deletes any `cifuzz-*` artifact not made by a run of this repository's main, and main's `cifuzz-build-*` older than 14 days (the three newest stay) |
 

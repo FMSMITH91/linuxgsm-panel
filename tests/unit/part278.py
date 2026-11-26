@@ -407,9 +407,11 @@ def _socket278():
     out, rc = _client_run278(path, req)
     t.join(10)
     srv.close()
+    # The actor is read too (review 1124): `got` is compared with the product's own `req`, a round trip
+    # that held whatever actor() made of "admin\x07".
     eq("socket client: one request line, as sent (the actor cleaned of control characters), and B3's reply read back",
-       (got, _b3c278.reply(out, rc)),
-       ([req.encode()], ("ok", {"client_id": 12, "bans_lifted": 1})))
+       (got, _b3c278.reply(out, rc), _json278.loads(req)["actor"]),
+       ([req.encode()], ("ok", {"client_id": 12, "bans_lifted": 1}), "panel:admin"))
     out, rc = _client_run278(os.path.join(_TMP278, "none.sock"), req)
     eq("socket client: no socket to connect to is \"off\" (Panel actions off), never a crash or \"down\"",
        (_b3c278.reply(out, rc), rc), (("off", None), 3))

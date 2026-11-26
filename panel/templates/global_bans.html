@@ -5,7 +5,7 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-slash-circle"></i> Global Bans</h1>
-  <form method="POST" action="{{ url_for('global_bans_sync') }}" class="mb-0">
+  <form method="POST" action="{{ url_for('global_bans_sync') }}" class="mb-0"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="btn btn-outline-secondary btn-sm"
             title="Re-apply every ban to all running Source servers — use after adding a new server or if a ban list was reset">
       <i class="bi bi-arrow-repeat"></i> Sync to all servers</button>
@@ -35,7 +35,7 @@
       <span class="d-block mt-1 text-secondary">Other engines (Minecraft bans by name, Call of Duty by slot) don't use SteamIDs, so they aren't covered here.</span>
     </p>
     {% endcall %}
-    <form method="POST" action="{{ url_for('global_bans_add') }}" class="row g-2 align-items-end">
+    <form method="POST" action="{{ url_for('global_bans_add') }}" class="row g-2 align-items-end"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="col-md-4">
         <label class="form-label small mb-1" for="gb-sid">SteamID</label>
         <input type="text" class="form-control form-control-sm" id="gb-sid" name="steamid" required
@@ -84,7 +84,7 @@
             <td class="d-none d-md-table-cell small text-secondary" data-no-i18n>{{ b.created_by }}</td>
             <td class="d-none d-md-table-cell small text-secondary">{{ b.created_at|datetime if b.created_at else '' }}</td>
             <td class="text-end text-nowrap">
-              <form method="POST" action="{{ url_for('global_bans_delete', ban_id=b.id) }}" class="d-inline mb-0">
+              <form method="POST" action="{{ url_for('global_bans_delete', ban_id=b.id) }}" class="d-inline mb-0"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-outline-secondary btn-sm" title="Remove from the list and unban on every server">
                   <i class="bi bi-x-lg"></i> Remove</button>
               </form>

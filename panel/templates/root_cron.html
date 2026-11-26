@@ -56,7 +56,7 @@
       {% set editable = r.stdin is none and not r.mixed %}
       <details class="mt-1">
         <summary class="small">{% if editable %}Edit or delete{% else %}Delete{% endif %}</summary>
-        <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off">
+        <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="n" value="{{ r.n }}">
           <input type="hidden" name="was" value="{{ r.raw }}">
           <input type="hidden" name="sha" value="{{ sha }}">
@@ -82,7 +82,7 @@
 
     <details class="mt-3" id="rc-add"{% if not jobs %} open{% endif %}>
       <summary class="small fw-semibold"><i class="bi bi-plus-lg"></i> Add a job</summary>
-      <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off">
+      <form method="POST" action="{{ url_for('root_cron_change', remote_id=remote.id) }}" class="row g-2 align-items-end mt-1" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="op" value="add">
         <input type="hidden" name="sha" value="{{ sha }}">
         <div class="col-sm-4">

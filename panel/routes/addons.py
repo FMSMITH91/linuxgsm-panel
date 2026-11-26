@@ -599,11 +599,11 @@ def _fetches(gs, plan, p):
     return ""
 
 
-def client_step(gs, addon_id, version, client, fresh_webapp=False):
+def client_step(gs, addon_id, version, client, fresh_webapp=False, tidy=True):
     """The install's or update's extra shell: BlueMap's client file for `version` (`client`: url, sha1), else ""."""
     if addon_id != _ad.BLUEMAP or not client:
         return ""
-    return _bm.client_sh(_ad.addon_dir(gs.short_name, addon_id), version, client[0], client[1], fresh_webapp)
+    return _bm.client_sh(_ad.addon_dir(gs.short_name, addon_id), version, client[0], client[1], fresh_webapp, tidy)
 
 
 def _install_steps(gs, plan, who):

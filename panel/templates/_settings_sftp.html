@@ -21,7 +21,7 @@
     <details id="sftp-change"{% if not sf.s.enabled %} open{% endif %}>
     <summary class="small fw-semibold mb-2">Change the SFTP settings</summary>
     <form method="POST" action="{{ url_for('sftp_settings_save') }}"
-          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-check form-switch mb-2">
         <input class="form-check-input" type="checkbox" role="switch" id="sftp-enabled" name="sftp_enabled" {% if sf.s.enabled %}checked{% endif %}>
         <label class="form-check-label small" for="sftp-enabled">SFTP service on</label>

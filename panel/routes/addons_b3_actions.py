@@ -94,6 +94,8 @@ def _slot_of(gs, client_id):
         return None, (404, _r3.S_NO_PLAYER)
     name = _b3.plain(rows[0].get("name")).strip()
     hit = _sm._resolve_from_console(gs.remote, gs.short_name, gs.game_type, name, gs.lgsm_name) if name else None
+    if hit is _sm.CONSOLE_UNREAD:
+        return None, (503, _sm.CONSOLE_LIST_UNREAD)
     num = _b3c.slot((hit or {}).get("num"))
     if not num:
         return None, (409, S_NOT_ONLINE)

@@ -10,7 +10,7 @@
       <div class="card-body p-4">
         <h3 class="h5"><i class="bi bi-shield-lock"></i> Confirm it is you</h3>
         <p class="text-secondary small">This action needs your password again because you signed in a while ago. You will not be asked again for a few minutes.</p>
-        <form method="POST" action="{{ url_for('account_reauth') }}">
+        <form method="POST" action="{{ url_for('account_reauth') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="next" value="{{ next_path }}">
           <div class="mb-3">
             <label class="form-label" for="ra-password">Password</label>
