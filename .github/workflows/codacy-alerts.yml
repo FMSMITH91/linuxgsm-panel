@@ -39,6 +39,15 @@ name: Codacy alerts
 #   - the line is still in a file Codacy analyses: FAILS. Codacy can see it, and stopped reporting
 #     it.
 #   - the line, or the file, is gone: listed for removal.
+#
+# EGRESS
+#   Harden-Runner blocks every host but the ones this job calls (read from its own runs' logs):
+#   github.com for the checkout, app.codacy.com for the issues, and the GitHub hosts setup-python
+#   fetches an interpreter from when the runner image has none cached. A host missing from the
+#   list fails the run on main, where the update gate reads it, so a change to the list is tried
+#   first by a manual run on its branch (gh workflow run codacy-alerts.yml --ref <branch>). Such a
+#   run uses no environment, so it reads no environment secret; it reads main's issues all the
+#   same, anonymously, as the scheduled run does today.
 
 on:
   schedule:
@@ -58,8 +67,10 @@ jobs:
     # setup), so CODACY_API_TOKEN, if it is ever set, is an environment secret no other branch's
     # workflow can read. It is not set today: the endpoint answers anonymously for this public
     # repository. deployment: false, as in codacy-coverage.yml: no deployment record per run.
+    # Only a run on main names it (the schedule always does): a manual run on another branch,
+    # which the environment's branch rule would refuse, runs with none (see EGRESS above).
     environment:
-      name: codacy
+      name: ${{ github.ref == 'refs/heads/main' && 'codacy' || '' }}
       deployment: false
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -69,7 +80,13 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            app.codacy.com:443
+            github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

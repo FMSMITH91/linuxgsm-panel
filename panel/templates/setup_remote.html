@@ -12,7 +12,7 @@
         Add the server where your LinuxGSM games run. You can skip this and add remotes later.
       </p>
 
-      <form method="POST">
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="step" value="remote_server">
 
         <div class="row">

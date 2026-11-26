@@ -404,7 +404,8 @@ _rc97 = _tf97.mkdtemp(dir=_TMP97)
 with open(os.path.join(_rc97, "panel.conf"), "w", encoding="utf-8") as _fh97:
     _fh97.write("panel_port=8443\n")
 _kept97 = _r26a_install_port("{not json", "_r25j_panel_port_to_record %s/panel.conf" % _rc97,
-                             _REC97 + "_R25J_CHOSEN_PORT=\n_r25j_port_held_by_other() { return 1; }\n")
+                             _REC97 + "_R25J_CHOSEN_PORT=\n_r25j_port_held_by_other() { return 1; }\n"
+                             "_r32a_owner_listens() { return 1; }\n")
 check("install.sh: ...so an update keeps the recorded port when config.json cannot be read",
       _kept97 == "8443", repr(_kept97))
 

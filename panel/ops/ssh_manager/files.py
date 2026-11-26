@@ -923,7 +923,7 @@ def _lgc_write_config_locked(server, user, selfname, updates):
     lgsm_players.forget(server, user, selfname)
     # selfname: the instance cfg may be a link to the live console's log (the account can make
     # one), and replacing that through the link silenced the console (_r23b_console_frag).
-    return _write_file_as_user(server, user, inst, content.encode(), selfname)
+    return _write_file_as_user(server, user, inst, content.encode("utf-8", "surrogateescape"), selfname)
 
 
 # The most settings one lgsm_write_config takes, and the most text they may add up to. LinuxGSM's
@@ -1039,7 +1039,14 @@ def _take_secrets_frame(body, inst, secrets):
 
 
 def _framed_cfg_lines(body, inst):
-    """The instance cfg's lines from its framed read, or None when the frame is missing or bad."""
+    """The instance cfg's lines from its framed read, or None when the frame is missing or bad.
+
+    Byte-faithful for the lines a save does not change: undecodable bytes are kept as surrogates
+    (the writer encodes them back the same way) and only a newline ends a line, as it does for the
+    bash that sources the file. `errors="replace"` turned a Latin-1 "Café" into "Caf" + U+FFFD on the
+    next save of any other key, and str.splitlines() also split at U+2028, U+0085, form feeds and the
+    like, so a value holding one was broken into two lines and the server's cfg no longer parsed.
+    """
     i, j = body.find(_READ_BEGIN), body.rfind(_READ_END)
     if i == -1 or j <= i:
         _core._log.warning("lgsm_write_config: could not read %s — refusing to write", inst)
@@ -1047,11 +1054,14 @@ def _framed_cfg_lines(body, inst):
     try:
         import base64 as _b64
         _framed = body[i + len(_READ_BEGIN):j].strip()
-        _cur = _b64.b64decode(_framed, validate=True).decode("utf-8", "replace") if _framed else ""
+        _cur = _b64.b64decode(_framed, validate=True).decode("utf-8", "surrogateescape") if _framed else ""
     except Exception:
         _core._log.warning("lgsm_write_config: framed body for %s was not valid base64", inst)
         return None
-    return _cur.splitlines()
+    lines = _cur.split("\n")
+    if lines[-1] == "":
+        lines.pop()         # the file's last newline ends a line; it does not start an empty one
+    return lines
 
 
 # A parameter reference LinuxGSM's own configs write inside a value — `${port}`, `$ip` in

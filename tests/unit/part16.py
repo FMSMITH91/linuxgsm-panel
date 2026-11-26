@@ -624,11 +624,15 @@ try:
     check("audit log: an ordinary entry is stored exactly as given (control)",
           [(a.target, a.detail) for a in _audits("p16_short")] == [("t", "an ordinary detail")])
     _p9_patch(_sf16, "send_console_command", lambda *a, **k: ("", "no tmux session", 1))
+    # Its own row, counted (review 1124): the newest send_command row of any kind was read, so part12's
+    # short rows ("status") satisfied the length bound with the megabyte command never audited.
+    _n_sc16 = len(_audits("send_command"))
     _r = _D16.post("/api/command/%d" % P9_GS, json={"command": "say " + "z" * 1000000})
     _sc16 = (_audits("send_command") or [NS(detail="")])[-1]
     check("audit log: a megabyte console command that failed to send is stored capped",
-          _r.status_code == 200 and 0 < len(_sc16.detail) <= _DETAIL_MAX16 + 32,
-          "%d, %d chars" % (_r.status_code, len(_sc16.detail)))
+          _r.status_code == 200 and len(_audits("send_command")) == _n_sc16 + 1
+          and _sc16.detail.startswith("say z") and 0 < len(_sc16.detail) <= _DETAIL_MAX16 + 32,
+          "%d, %d rows before, %d chars" % (_r.status_code, _n_sc16, len(_sc16.detail)))
 
     # ════════════════════════════════════════════════════════════════════════════════════════
     # 745379008 — the binding change audited as a success whatever its side effects did
@@ -687,11 +691,14 @@ try:
     _p9_patch(_p9_so, "ensure_panel_fail2ban",
               lambda *a, **k: (_ for _ in ()).throw(AssertionError("fail2ban asked")))
     _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
+    # Its own row, counted (review 1124): the block before leaves a successful row too, so with no row
+    # written here the newest one still read as a success.
+    _n_cpb16 = len(_audits("panel_change_binding"))
     _r = _A16.post("/api/panel/change-port", json={"port": 5077, "bind_host": "192.0.2.5"})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a bind-only move that never needed fail2ban is still a success (control)",
-          _p9_json(_r).get("success") is True and _cpb.success is True, repr((_p9_json(_r),
-                                                                               _cpb.detail)))
+          _p9_json(_r).get("success") is True and _cpb.success is True
+          and len(_audits("panel_change_binding")) == _n_cpb16 + 1, repr((_p9_json(_r), _cpb.detail, _n_cpb16)))
     # END OF SECTIONS
 finally:
     for _m, _t in _saved16_threading.items():
@@ -1621,12 +1628,13 @@ check("capped reader: a green read's '' ends the read like b'' does (no second r
 # shapes that matter). The PR-only "Open code-scanning alerts (PR)" is skipped on every push, and
 # fork PRs file skipped workflow_run runs of "Open code-scanning alerts" beside the push run.
 # Counting skipped as failing would block every update the panel is offered.
-# (CI's other three jobs are listed too since the gate REQUIRES each of them to be present on a
-# code commit — system_ops._CI_REQUIRED; they were trimmed from this sample as "shapes that don't
-# matter", and now they do.)
+# (CI's other three jobs, the secret scan and the dependency audit are listed too since the gate
+# REQUIRES each of them to be present on a code commit — system_ops._CI_REQUIRED; they were
+# trimmed from this sample as "shapes that don't matter", and now they do.)
 _CI16 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success"),
          ("js coverage", "success"), ("gamedig lockfile (node 22)", "success"),
-         ("Analyze (python)", "success"),
+         ("Analyze (python)", "success"), ("Secret scanning (Gitleaks)", "success"),
+         ("Dependency vulnerabilities (pip-audit)", "success"),
          ("Open code-scanning alerts (PR)", "skipped"), ("Open code-scanning alerts", "success"),
          ("Open code-scanning alerts", "skipped"), ("Open code-scanning alerts", "skipped"),
          ("Upload coverage to Codacy", "skipped"), ("deploy", "skipped"), ("lighthouse", "success"),

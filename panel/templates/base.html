@@ -212,7 +212,7 @@
     </a>
     {# A device with alerts on is sent to the sign-out page first (push_signout.js), which offers to stop them. #}
     <form method="POST" action="{{ url_for('logout') }}" class="d-grid"
-          data-push-signout="{{ url_for('account_signout') }}" data-push-scope="{{ url_for('static', filename='push/') }}">
+          data-push-signout="{{ url_for('account_signout') }}" data-push-scope="{{ url_for('static', filename='push/') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-outline-secondary btn-sm w-100"><i class="bi bi-box-arrow-right"></i> Sign Out</button>
     </form>
     <div class="mt-2 d-flex align-items-center gap-1" title="{{ t('Language') }}">
@@ -345,9 +345,9 @@ window.PALETTE_CAN = {
 };
 
 // ── CSRF ──────────────────────────────────────────────────────────────────
-// One token per session. We inject it everywhere automatically so no individual
-// form or fetch() call has to be edited:
-//   • every POST <form> gets a hidden csrf_token field on load, and
+// One token per session:
+//   • every POST <form> a template draws carries a hidden csrf_token field rendered here,
+//     on the server (a form a script builds gets one from ensureCsrfFields), and
 //   • every mutating fetch() gets an X-CSRFToken header via a wrapper.
 window.CSRF = {{ csrf_token()|tojson }};
 </script>

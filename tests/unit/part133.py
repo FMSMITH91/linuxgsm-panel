@@ -170,14 +170,16 @@ class _Fold133(_HTMLParser133):
         self.texts = []
         self.attrs = {}
 
-    def _state(self):
-        """(folded, in a summary, in a card) where the parser is now."""
+    def _state(self, data=False):
+        """(folded, in a summary, in a card) where the parser is now: for text there when `data`."""
         folded = summary = card = False
         for k, (tag, a) in enumerate(self.stack):
             # Inside a closed <details>, and not in its own <summary> (its first child, always shown).
-            # "open" is a bare attribute: its value parses as None, so it is asked by name.
-            if tag == "details" and "open" not in a and self.stack[k + 1:k + 2] != [] \
-                    and self.stack[k + 1][0] != "summary":
+            # "open" is a bare attribute: its value parses as None, so it is asked by name. Text right
+            # inside it, outside the summary, is folded too (review 1124: with nothing above it on the
+            # stack it read as shown); the <details> element itself is not.
+            inner = self.stack[k + 1:k + 2]
+            if tag == "details" and "open" not in a and (inner[0][0] != "summary" if inner else data):
                 folded = True
             if tag == "summary":
                 summary = True
@@ -205,7 +207,7 @@ class _Fold133(_HTMLParser133):
     def handle_data(self, data):
         t = " ".join(data.split())
         if t:
-            self.texts.append((t, self._state()))
+            self.texts.append((t, self._state(data=True)))
 
 
 def _fold133(page):
@@ -215,6 +217,14 @@ def _fold133(page):
 
 
 _F133 = {k: _fold133(k) for k in ("local", "remote")}
+_ctl_fold133 = _Fold133()
+_ctl_fold133.feed('<details id="d"><summary>Shown</summary>Folded bare<div>Folded in div</div></details>'
+                  '<details open><summary>S</summary>Open bare</details>')
+check("network/security tabs: (control) the fold reader reads text right inside a closed <details> as folded, "
+      "like text in a div there, and its summary and an open one's text as shown",
+      [(t, st[0]) for t, st in _ctl_fold133.texts] == [("Shown", False), ("Folded bare", True), ("Folded in div", True),
+                                                        ("S", False), ("Open bare", False)]
+      and _ctl_fold133.ids["d"][0] is False, repr(_ctl_fold133.texts))
 # The warnings that must stay in view, by name, and the words each is found by.
 _R42T_WARN133 = {"lock-out": ("lock yourself out",), "ssh-port-move": ("Lockout-safe", "lockout-safe"),
                  "inactive-firewall": ("While UFW is inactive",), "block": ("denies it on every port",),

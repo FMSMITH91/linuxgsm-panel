@@ -14,7 +14,7 @@
           </p>
         </div>
         {% if two_factor %}
-        <form method="POST">
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="mb-3">
             <label class="form-label" for="totp_code"><i class="bi bi-shield-lock"></i> Authentication code</label>
             <input type="text" name="totp_code" id="totp_code" class="form-control text-center otp-input"
@@ -26,7 +26,7 @@
           <a href="{{ url_for('login') }}" class="btn btn-link btn-sm text-secondary w-100 mt-2">Start over</a>
         </form>
         {% else %}
-        <form method="POST">
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <div class="mb-3">
             <label class="form-label" for="username">Username</label>
             <input type="text" name="username" id="username" class="form-control" required autocomplete="username">

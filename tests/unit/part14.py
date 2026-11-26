@@ -668,12 +668,11 @@ def _runs14(*pairs, status="completed"):
     return {"check_runs": [{"name": n, "status": status, "conclusion": c} for n, c in pairs]}
 
 
-# Every check _CI_REQUIRED names, plus Gitleaks (which it does not name), all passing — the shape
-# of a code commit whose suite has finished.
+# Every check _CI_REQUIRED names, all passing — the shape of a code commit whose suite has finished.
 _FULL14 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success"),
            ("js coverage", "success"), ("gamedig lockfile (node 22)", "success"),
            ("Analyze (python)", "success"), ("Open code-scanning alerts", "success"),
-           ("Secret scanning (Gitleaks)", "success")]
+           ("Secret scanning (Gitleaks)", "success"), ("Dependency vulnerabilities (pip-audit)", "success")]
 
 
 def _ci14(payload_or_exc, sha="a" * 40, diff=None):
@@ -878,7 +877,7 @@ _cqa_wf14 = _wf14_code("codeql-alerts.yml")
 _names14 = re.findall(r"^    name: (.+)$", _ci_wf14 + "\n" + _cq_wf14, re.M)
 _names14 = [re.sub(r"\$\{\{[^}]*\}\}", "", n).strip() for n in _names14]
 _req_found = {r: any((n == r) if not r.endswith("(") else n.startswith(r) for n in _names14)
-              for r in _so14._CI_REQUIRED if r != "Open code-scanning alerts"}
+              for r in _so14._CI_SUITE if r != "Open code-scanning alerts"}
 check("update gate: every required CI/CodeQL name is a job name in ci.yml or codeql.yml",
       all(_req_found.values()), repr((_req_found, _names14)))
 _ci_jobs14 = re.findall(r"^    name: (.+)$", _ci_wf14, re.M)
@@ -993,7 +992,7 @@ _dep_ign14 = re.search(r"^IGNORED='(\[.*\])'$", _dep_verify14, re.M)
 _DEP_SEC14 = ("Secret scanning (Gitleaks)", "Dependency vulnerabilities (pip-audit)")
 check("deploy: its required and ignored check lists are the panel gate's",
       _dep_req14 is not None and _dep_ign14 is not None
-      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1)))[:len(_so14._CI_REQUIRED)] == _so14._CI_REQUIRED
+      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1))) == _so14._CI_REQUIRED
       and set(_json14.loads(_dep_ign14.group(1))) == _so14._CI_IGNORE,
       repr((_dep_req14 and _dep_req14.group(1), _dep_ign14 and _dep_ign14.group(1))))
 # A secret scan or CVE audit that had not registered on the commit yet did not hold a deploy (only
@@ -1009,10 +1008,10 @@ def _push_ignore14(name):
     return re.findall(r"^      - '([^']+)'", m.group(1), re.M)
 
 
-check("deploy: it also waits for the secret scan and the dependency CVE audit, each a job of a "
-      "workflow every code push to main runs",
+check("deploy: it (and the panel gate) also waits for the secret scan and the dependency CVE audit, each a job "
+      "of a workflow every code push to main runs",
       _dep_req14 is not None
-      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1)))[len(_so14._CI_REQUIRED):] == _DEP_SEC14
+      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1)))[len(_so14._CI_SUITE):] == _DEP_SEC14
       and re.search(r"^    name: Secret scanning \(Gitleaks\)$", _wf14("security.yml"), re.M)
       and re.search(r"^    name: Dependency vulnerabilities \(pip-audit\)$", _wf14("security-code.yml"), re.M)
       and _push_ignore14("security.yml") == []
@@ -1048,7 +1047,7 @@ try:
                                HEAD_SHA="f" * 40, GITHUB_REPOSITORY="o/r"))
         return p.returncode, p.stdout
 
-    _all14 = [(n, "completed", c) for n, c in _FULL14] + [(_DEP_SEC14[1], "completed", "success")]
+    _all14 = [(n, "completed", c) for n, c in _FULL14]
     _d_ok = _dep14(_all14 + [("deploy", "in_progress", None),
                              ("Code-scanning alerts gate", "completed", "failure")])
     _d_bad = _dep14(_all14 + [("Python security lint (Bandit)", "completed", "failure")])

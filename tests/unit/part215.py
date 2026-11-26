@@ -147,7 +147,9 @@ def _s215_settings():
         _p9_patch(_an215, "load_config", lambda: dict(saved))
         saved.update({"session_idle_minutes": 20, "session_absolute_hours": 6})
         inside = _settings_page215()
-        saved.update({"session_idle_minutes": 90, "session_absolute_hours": 12})
+        # ...and the old key, as an older panel stored it (review 1124): `saved` never held it, so "the old
+        # hours key dropped" held with the drop deleted. The minutes set beside it are what is read.
+        saved.update({"session_idle_minutes": 90, "session_absolute_hours": 12, "session_lifetime_hours": 24})
         outside = _settings_page215()
         r = _p9_client(P9_ADMIN).post("/settings/save", data={
             "session_idle_minutes": "45", "session_absolute_hours": "9", "remember_days": "5", "require_2fa": "on"})

@@ -33,6 +33,13 @@ name: SonarCloud open issues (main)
 #   until it is fixed, as "Open code-scanning alerts" does. No concurrency group, on purpose: a
 #   group cancels a pending run when a third arrives, even with cancel-in-progress off, and the
 #   update gate and deploy.yml read a cancelled check as a failure. Each run only reads.
+#
+# EGRESS
+#   Harden-Runner blocks every host but the ones this job calls (read from its own runs' logs):
+#   github.com for the checkout and sonarcloud.io for the issues. A host missing from the list
+#   fails the run on main, so a change to it is tried first by a manual run on its branch
+#   (gh workflow run sonar-main-issues.yml --ref <branch>), which judges main's last analysis as
+#   the schedule does; its check lands on that branch's commit, not main's.
 
 on:
   push:
@@ -55,7 +62,11 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            sonarcloud.io:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false

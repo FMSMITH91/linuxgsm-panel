@@ -338,14 +338,25 @@ _FNS96 = "".join(_fn96(_INSTALL96, n) for n in ("_r25j_panel_port_to_record", "_
 _PDIR96 = _tf96.mkdtemp(dir=_TMP96)
 
 
+_errs96 = []
+
+
 def _to_record96(chosen, recorded, cfg_port, held):
-    """What install.sh records: `held` is whether another account listens on config.json's port."""
+    """What install.sh records: `held` is whether another account listens on config.json's port.
+
+    No panel listens on the recorded port here (_r32a_owner_listens answers no, review 1124): it was
+    neither extracted nor stubbed, so its rows ran "command not found" (127), read as "not listening".
+    Each row's stderr is kept, so a helper the function starts to call unstubbed is named.
+    """
     conf = _conf_file96("" if recorded is None else "panel_port=%s\n" % recorded)
     script = (_FNS96 + "_r26a_cfg_port() { echo %s; }\n" % cfg_port
               + "_r25j_port_held_by_other() { return %d; }\n" % (0 if held else 1)
+              + "_r32a_owner_listens() { return 1; }\n"
               + "PANEL_DIR=%s\n_R25J_CHOSEN_PORT=%s\n" % (_PDIR96, chosen)
               + "_r25j_panel_port_to_record %s\n" % conf)
-    return _bash96(script)[1]
+    _rc, out, err = _bash96(script)
+    _errs96.extend([err] if err else [])
+    return out
 
 
 _install_rows96 = {
@@ -369,6 +380,8 @@ check("install.sh: panel.conf's panel_port is a fresh install's chosen port; on 
       "config.json's port (the panel's account can edit it) only when it is the recorded one or no "
       "other account listens on it, else the recorded one is kept",
       all(got == want for got, want in _install_rows96.values()), repr(_install_rows96))
+check("install.sh: ...and every helper those rows reach is extracted or stubbed (nothing ran 'command not found')",
+      not [e for e in _errs96 if "command not found" in e], repr(_errs96[:3]))
 # The two "is this the panel's port" definitions agree, on both sides of 1024 (R7).
 _edge96 = {p: _bash96(_fn96(_INSTALL96, "_r25j_is_panel_port") + "_r25j_is_panel_port %s" % p)[0] == 0
            for p in ("1000", "1023", "1024", "5000", "65535", "65536")}

@@ -2887,6 +2887,7 @@ def _create_console_socket(app):
 def _register_console_viewers(socketio):
     """Joining and leaving a console's room, and the app's one disconnect handler."""
     @socketio.on("join_console")
+    @_socket_hooks.one_argument
     def on_join_console(data=None):
         # int(), because the ROOM NAME is built from this value and the console poller emits to
         # f"console_{gs.id}" with a real int. A client that sent "3" passed the access check
@@ -2927,6 +2928,7 @@ def _register_console_viewers(socketio):
                 _console_catchups.setdefault(server_id, {})[request.sid] = _req
 
     @socketio.on("leave_console")
+    @_socket_hooks.one_argument
     def on_leave_console(data=None):
         # int(), for the same reason join does it: _console_viewers is keyed by the int the join
         # handler put there, so a client that sent "3" here left the ROOM (the f-string spells the

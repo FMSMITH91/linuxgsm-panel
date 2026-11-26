@@ -39,7 +39,7 @@
       <div class="small fw-semibold mb-1"><i class="bi bi-telegram"></i> Telegram</div>
       {% if pc.telegram.linked %}
       <div class="small mb-1"><span class="badge bg-success">Linked</span> Your alerts also go to your own Telegram chat.</div>
-      <form method="POST" action="{{ url_for('account_telegram_unlink') }}">
+      <form method="POST" action="{{ url_for('account_telegram_unlink') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="btn btn-outline-secondary btn-sm" type="submit"><i class="bi bi-x-circle"></i> Unlink Telegram</button>
       </form>
       {% else %}
@@ -65,7 +65,7 @@
           <span class="badge bg-success ms-1 d-none" data-push-this>This device</span>
           <div class="text-secondary fs-r72"><span>Added</span> <span>{{ d.created|datetime }}</span>{% if d.last %} · <span>Last alert delivered</span> <span>{{ d.last|datetime }}</span>{% endif %}</div>
         </div>
-        <form method="POST" action="{{ url_for('account_push_device_remove', sub_id=d.id) }}">
+        <form method="POST" action="{{ url_for('account_push_device_remove', sub_id=d.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Remove</button>
         </form>
       </li>
@@ -76,7 +76,7 @@
     {% endif %}
     <p class="text-secondary small mb-2">Alerts keep arriving after you sign out, until you turn them off on that device, remove it here, or choose "Stop alerts on this device" when you sign out.</p>
     <div class="small fw-semibold mb-1">Which alerts</div>
-    <form method="POST" action="{{ url_for('account_push_events') }}">
+    <form method="POST" action="{{ url_for('account_push_events') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% for key, label, on in pc.events %}
       <div class="form-check small">
         <input class="form-check-input" type="checkbox" name="events" value="{{ key }}" id="push-ev-{{ key }}"{% if on %} checked{% endif %}>

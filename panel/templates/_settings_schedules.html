@@ -7,7 +7,7 @@
   <summary class="card-header uid-summary-card"><i class="bi bi-clock-history"></i> Schedules</summary>
   <div class="card-body">
     <form method="POST" action="{{ url_for('settings_schedules_save') }}"
-          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="tz" id="sch-tz" value="">
       <div class="row g-3">
         <div class="col-lg-4">
@@ -83,7 +83,7 @@
     <div class="border-top mt-3 pt-3" id="sch-root-cron">
       <div class="fw-semibold small"><i class="bi bi-shield-exclamation"></i> Root's crontab (panel owner only)</div>
       <div class="small text-secondary">Add, change or delete root's cron jobs on any host. A job runs as root: anything it runs can change everything on that host. Only you can see this.</div>
-      <form method="POST" action="{{ url_for('root_cron_switch') }}" class="row g-2 align-items-end mt-1" autocomplete="off">
+      <form method="POST" action="{{ url_for('root_cron_switch') }}" class="row g-2 align-items-end mt-1" autocomplete="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="on" value="{{ '0' if sc.root_cron_on else '1' }}">
         <div class="col-sm-4">
           <label class="form-label small mb-1" for="sch-rc-pw">Your password</label>
