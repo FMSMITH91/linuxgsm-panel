@@ -6848,6 +6848,10 @@ check("delete host: both lists of what stays on a forgotten host name its add-on
 # panel/routes/addons*.py, read as code (review 1123: only addons.py was read, so B3's unban/kick/warn route
 # asked with no doc naming it). A route's action is its path's last word: "<action>" for the generic route,
 # "(list)" for the bare /addons one; stacked routes each name theirs.
+# Review 1124: a view asks by a bare `step_up_needed()`, by `account_guard.step_up_needed()`, or by the
+# `@step_up_required` / `@step_up_required_to_change` decorators, and an /addons route can live in any
+# routes module (addon_web.py holds one), so every form is counted in every module.
+_RH_STEP_UP_DECOS = ("step_up_required", "step_up_required_to_change")
 
 
 def _rh_route_paths(fn):
@@ -6856,25 +6860,44 @@ def _rh_route_paths(fn):
             and d.args and isinstance(d.args[0], _ast.Constant)]
 
 
+def _rh_name(node):
+    """The last name of a Name or Attribute node (`step_up_needed` for `account_guard.step_up_needed`), or ""."""
+    return getattr(node, "id", "") or getattr(node, "attr", "")
+
+
 def _rh_step_ups(node):
-    """How many step_up_needed() calls `node` holds."""
-    return sum(1 for c in _ast.walk(node) if isinstance(c, _ast.Call) and getattr(c.func, "id", "") == "step_up_needed")
+    """How many times `node` asks for the password: step_up_needed() calls plus step-up decorators."""
+    calls = sum(1 for c in _ast.walk(node) if isinstance(c, _ast.Call) and _rh_name(c.func) == "step_up_needed")
+    decos = sum(1 for f in _ast.walk(node) if isinstance(f, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+                for d in f.decorator_list if _rh_name(d.func if isinstance(d, _ast.Call) else d) in _RH_STEP_UP_DECOS)
+    return calls + decos
 
 
-_rh_blocks, _rh_su_total = [], 0
-for _rh_f in sorted(glob.glob(os.path.join(_root, "panel", "routes", "addons*.py"))):
+def _rh_addon_blocks(tree):
+    """(action, asks) for each /addons route path of each view in `tree`."""
+    return [(re.sub(r"^.*/addons$", "(list)", _pth).rsplit("/", 1)[-1], _rh_step_ups(_fn))
+            for _fn in _ast.walk(tree) if isinstance(_fn, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+            for _pth in _rh_route_paths(_fn) if "/addons" in _pth]
+
+
+_rh_blocks, _rh_su_total, _rh_su_in_routes = [], 0, 0
+for _rh_f in sorted(glob.glob(os.path.join(_root, "panel", "routes", "*.py"))):
     _rh_tree = _ast.parse(open(_rh_f, encoding="utf-8").read())
-    _rh_su_total += _rh_step_ups(_rh_tree)
-    _rh_blocks += [(re.sub(r"^.*/addons$", "(list)", _pth).rsplit("/", 1)[-1], _rh_step_ups(_fn))
-                   for _fn in _ast.walk(_rh_tree) if isinstance(_fn, _ast.FunctionDef)
-                   for _pth in _rh_route_paths(_fn) if "/addons" in _pth]
+    _rh_blocks += _rh_addon_blocks(_rh_tree)
+    if os.path.basename(_rh_f).startswith("addons"):
+        _rh_su_total += _rh_step_ups(_rh_tree)
+        _rh_su_in_routes += sum(_rh_step_ups(_fn) for _fn in _ast.walk(_rh_tree)
+                                if isinstance(_fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and _rh_route_paths(_fn))
 _rh_su_acts = sorted({a for a, n in _rh_blocks if n})
 check("docs: (premise) every step_up_needed() call in routes/addons*.py was read inside one of its routes",
-      len(_rh_blocks) >= 12 and _rh_su_total > 0
-      and _rh_su_total == sum(_rh_step_ups(_fn) for _rh_f in glob.glob(os.path.join(_root, "panel", "routes", "addons*.py"))
-                              for _fn in _ast.walk(_ast.parse(open(_rh_f, encoding="utf-8").read()))
-                              if isinstance(_fn, _ast.FunctionDef) and _rh_route_paths(_fn)),
-      repr(sorted(_rh_blocks)))
+      len(_rh_blocks) >= 12 and _rh_su_total > 0 and _rh_su_total == _rh_su_in_routes, repr(sorted(_rh_blocks)))
+_rh_ctl_src = ("@bp.route('/addons/a/x', methods=['POST'])\n@step_up_required\ndef a(): pass\n"
+               "@bp.route('/addons/b/y', methods=['POST'])\n@account_guard.step_up_required_to_change\ndef b(): pass\n"
+               "@bp.route('/addons/c/z', methods=['POST'])\ndef c():\n    if account_guard.step_up_needed(): pass\n"
+               "@bp.route('/addons/d/w', methods=['POST'])\ndef d(): pass\n")
+check("docs: (control) a view asks by either decorator or by an attribute step_up_needed() call; one that "
+      "does none does not", sorted(_rh_addon_blocks(_ast.parse(_rh_ctl_src))) == [("w", 0), ("x", 1), ("y", 1), ("z", 1)],
+      repr(_rh_addon_blocks(_ast.parse(_rh_ctl_src))))
 # {action: (words in the security page's step-up list, words in the manage_addons row, the list's clause that holds them)}
 _rh_words = {"install": ("installing", "install", "an add-on"), "update": ("updating", "update", "an add-on"),
              "settings": ("changing the settings of", "change their settings", "an add-on"),
