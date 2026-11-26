@@ -19,7 +19,7 @@ import hashlib
 from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user, user_loaded_from_cookie
 
-from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
+from panel.db.models import AuditLog, GameServer, RemoteServer, User, Website, db
 from panel.security import session_cookie as _session_cookie
 from panel.security import account_guard as _account_guard
 
@@ -2075,7 +2075,7 @@ def audit_username(name):
 
 
 def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
-               remote=None):
+               remote=None, website=None):
     """Write an audit log entry.
 
     `actor` overrides the recorded username — used for a failed login, where there's no
@@ -2087,6 +2087,9 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
     superadmin only — never matched by name, because names are not unique: the same game on two
     hosts gets the same name by default, and a server could be renamed onto any target to read
     its rows (Aikido 745379041).
+
+    `website`: the Website a row is about, so its users (a customer included) can read it through
+    audit_scope and a site's own log view, by id and never by name.
 
     Every column is cut to its model's declared size, and the detail to _AUDIT_DETAIL_MAX — see
     there for why that has to happen here and not in the callers.
@@ -2101,6 +2104,7 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
         success=success,
         game_server_id=_audit_ref(GameServer, server),
         remote_id=_audit_ref(RemoteServer, remote),
+        website_id=_audit_ref(Website, website),
         target_user_id=_audit_account(action, target),
     )
     db.session.add(entry)
@@ -2370,19 +2374,35 @@ def _my_group_reach(user):
     mine_servers = {gs.id for gs in get_user_servers(user)}
     # ...and the custom commands, the fourth thing membership hands over (see custom_command_ids).
     mine_commands = custom_command_ids(user)
-    return mine, mine_remotes, mine_commands, mine_servers
+    # ...and the websites, paired with the permission held on each (websites_access.held_pairs): a group
+    # is reached per (permission, site), the way site_for decides.
+    from panel.services.websites_access import held_pairs
+    return mine, mine_remotes, mine_commands, mine_servers, held_pairs(user)
 
 
 def _group_within_reach(g, reach):
     """Whether everything group `g` grants lies within `reach` (from _my_group_reach)."""
-    mine, mine_remotes, mine_commands, mine_servers = reach
+    mine, mine_remotes, mine_commands, mine_servers = reach[:4]
     if not set(g.get_permissions()) <= mine:
         return False
     if not {r.id for r in (g.servers or [])} <= mine_remotes:
         return False
     if not {c.id for c in (g.custom_commands or [])} <= mine_commands:
         return False
+    if len(reach) > 4 and not _pairs_within(_group_site_pairs(g), reach[4]):
+        return False
     return {s.id for s in (g.game_servers or [])} <= mine_servers
+
+
+def _group_site_pairs(g):
+    """The (website permission, site id) pairs group `g` grants."""
+    from panel.services.websites_access import group_pairs
+    return group_pairs(g)
+
+
+def _pairs_within(pairs, held):
+    """Whether every pair in `pairs` is in `held` (None: a superadmin's, every pair)."""
+    return held is None or set(pairs) <= held
 
 
 def can_administer_user(actor, target, actor_memo=None):
@@ -2449,6 +2469,11 @@ def _reach_within_actors(actor, target, mine):
     # only extra reach is a superadmin-authored command is still someone to become.
     if not custom_command_ids(target) <= mine("commands", lambda: custom_command_ids(actor)):
         return False
+    # ...and the websites: a peer who can run a customer's site is someone to become, whatever
+    # permissions the two share.
+    from panel.services.websites_access import held_pairs
+    if not _pairs_within(held_pairs(target) or set(), mine("sites", lambda: held_pairs(actor))):
+        return False
     return ({g.id for g in get_user_servers(target)}
             <= mine("servers", lambda: {g.id for g in get_user_servers(actor)}))
 
@@ -2472,16 +2497,23 @@ def grantable_object_ids(requested_ids, existing_ids, allowed_ids):
     return (requested & set(allowed_ids)) | (existing - set(allowed_ids))
 
 
-def _grantable_perms(requested, existing=()):
+def _grantable_perms(requested, existing=(), customer=False):
     """Compute a group's permission set after an edit, safely.
 
     A superadmin can set any real permission. Anyone else (a delegated MANAGE_GROUPS user) can only
     toggle the permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
     their own privileges by editing a group they belong to. Permissions already on the group that
     they can't grant are PRESERVED (so an edit can't silently strip them).
+
+    `customer`: the group is a customer group (Group.is_customer). Below a superadmin it can then be
+    given only CUSTOMER_PERMS, so no one but a superadmin can hand a customer anything beyond their
+    own websites (OWASP Multi-Tenant Security Cheat Sheet, tenant isolation; Authorization Cheat Sheet,
+    "Enforce Least Privileges").
     """
     requested = set(requested) & set(ALL_PERMISSIONS.keys())
     if current_user.is_superadmin:
         return list(requested)
     grantable = get_user_permissions(current_user) - {SUPER_ADMIN}
+    if customer:
+        grantable &= CUSTOMER_PERMS
     return list((set(existing) - grantable) | (requested & grantable))

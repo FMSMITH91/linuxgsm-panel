@@ -27,6 +27,10 @@ check.
 | `create_websites` / `manage_websites` | Add websites up to a customer group's site limit (each new site joins the group) / administer websites: add and remove them, their kind and limits, putting one online (which opens ports 80 and 443), software updates and customers. `manage_websites` also reaches every site on a host the group was granted, except the panel's own host, where only a superadmin administers sites. A customer group can hold only `view_websites`, `edit_website_files`, `manage_website` and `create_websites`. Given to no group by default |
 | `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups. For a host admin who is not a superadmin: re-trusting a host's SSH key is superadmin-only (the next connection trusts whatever machine answers at that address and signs in with the host's saved credential), and a host they add or repoint must not be at a loopback, private, link-local or tailnet address (checked after the name is resolved), because the connection test runs from the panel's own machine |
 
+### Customers (websites)
+
+A customer is an ordinary panel account in a **customer group**, made by the Websites page's *Add customer*. Below a superadmin, nobody can give a customer group anything but `view_websites`, `edit_website_files`, `manage_website` and `create_websites`, nor any host or game server, so a customer sees only their own sites. Customers must set up 2FA before using the panel (Settings, on by default, OWASP's recommended value). A delegated admin cannot join, edit or hand out a group that reaches a site they cannot reach themselves with the same permission, nor take over (edit or delete) an account that can.
+
 ### The panel owner
 
 One account is the panel's **owner**: the one the setup wizard creates (on an upgraded install, the
