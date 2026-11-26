@@ -1003,8 +1003,14 @@ _RESTORE_IDENT_COLUMNS = (("game_server", "short_name"), ("game_server", "game_t
 # it would protect nothing.
 _RESTORE_PORT_COLUMNS = (("game_server", "port"), ("game_server", "query_port"),
                          ("remote_server", "port"))
+# A website's account (website_models.Website.account) is the panel's own choice, never typed: exactly
+# ws<the row's id>, or NULL while the row is being made. Every command a site runs is `sudo -u` that
+# account, so a restored row naming any other account (root, a game account, another site's ws<id>) would
+# have the panel act as it. Held here to that exact name, not only to a shape a crafted row could meet.
+_RESTORE_WEBSITE_ACCOUNT = ("website", "account")
 # Sentences: a row's kind is named inside a refusal shown to the viewer, translated there.
-_RESTORE_ROW_LABEL = {"game_server": i18n.Sentence("game server"), "remote_server": i18n.Sentence("host")}
+_RESTORE_ROW_LABEL = {"game_server": i18n.Sentence("game server"), "remote_server": i18n.Sentence("host"),
+                      "website": i18n.Sentence("website")}
 
 
 def _restore_fernet(tar, names):
@@ -1223,6 +1229,34 @@ def _bad_ident_rows(con, found, fernet):
     return bad
 
 
+def website_account_ok(rid, val):
+    """Whether website row `rid` may hold account `val`: NULL, or exactly ws<rid> (the name the panel gives it)."""
+    from panel.core.validation import WEBSITE_ACCOUNT_RE
+    if val is None:
+        return True
+    return (isinstance(val, str) and isinstance(rid, int) and not isinstance(rid, bool)
+            and bool(WEBSITE_ACCOUNT_RE.match(val)) and val == "ws%d" % rid)
+
+
+def _bad_website_rows(con):
+    """([(table, row id, column)] of website rows whose account is not their own ws<id>, None), or ([], why)."""
+    table, col = _RESTORE_WEBSITE_ACCOUNT
+    cols = _table_columns(con, table)
+    if not cols:
+        return [], None       # a backup from before websites: the restored panel creates the table, empty
+    problem = _column_refusal(table, col, cols)
+    if problem:
+        return [], problem
+    bad = []
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+    for rid, val in con.execute("SELECT id, %s FROM %s NOT INDEXED"  # nosec B608
+                                % (_q_ident(cols[col][0]), _q_ident(table))):
+        if not website_account_ok(rid, val):
+            _log.warning("restore refused: website #%s account is not its own ws<id>: %r", rid, str(val)[:40])
+            bad.append((table, rid, col))
+    return bad, None
+
+
 def _bad_port_rows(con, found):
     """[(table, row id, column)] for each port on `con` stored as anything but a number or NULL."""
     bad = []
@@ -1251,7 +1285,10 @@ def _restore_bad_rows(db_path, fernet):
         found, shape_problem = _restore_shape(con)
         if shape_problem:
             return [], shape_problem
-        return _bad_ident_rows(con, found, fernet) + _bad_port_rows(con, found), None
+        sites, shape_problem = _bad_website_rows(con)
+        if shape_problem:
+            return [], shape_problem
+        return _bad_ident_rows(con, found, fernet) + _bad_port_rows(con, found) + sites, None
     finally:
         con.close()
 

@@ -94,6 +94,23 @@ def db_name(server_id, slug):
     return name
 
 
+# A website's database (routes/databases_sites): ws<site id>_<slug>, the form the host helper's
+# database allow-list accepts for a site beside a game server's gs<id>_<slug>.
+SITE_DB_NAME_RE = r"ws[1-9][0-9]{0,8}_[a-z0-9]{1,16}"
+
+
+def site_db_name(site_id, slug):
+    """'ws<site_id>_<slug>' for a website's database; ValueError on a bad id or slug."""
+    if isinstance(site_id, bool) or not isinstance(site_id, int) or not 0 < site_id < 10 ** 9:
+        raise ValueError("not a website id")
+    if not isinstance(slug, str) or not re.fullmatch(SLUG_RE, slug):
+        raise ValueError("a database name is 1 to 16 lower-case letters and digits")
+    name = "ws%d_%s" % (site_id, slug)
+    if not re.fullmatch(SITE_DB_NAME_RE, name):
+        raise ValueError("not a website database name")
+    return name
+
+
 def new_password():
     """Return a random database password.
 

@@ -33,6 +33,9 @@ import collections
 import pathlib
 
 LOG_MODULE, LOG_NAME = "panel.security.auth", "log_action"
+# The other function that writes an audit row: one about a website (its id in AuditLog.website_id). It
+# writes through the same _write_audit as log_action, so reaching either is writing a row.
+LOG_NAMES_ALSO = ("log_website_action",)
 # A lambda is a nested function too (review 1015a: walked as part of its enclosing body, an
 # uncalled `{"ok": lambda: auth.log_action(...)}` counted as an audit row, and so did a lambda
 # parameter shadowing a logging module).
@@ -80,6 +83,10 @@ class CallGraph:
             self._bind_block(ast.parse(text).body, scope, name)
         self._edges = {key: self._callees(node, scope) for key, (node, scope) in self._fns.items()}
         self._to_log = self._reaching(self._log_key())
+        for name in LOG_NAMES_ALSO:
+            found = self._member(("mod", LOG_MODULE), name, 0)
+            if found and found[0] == "fn":
+                self._to_log = {**self._reaching(found[1]), **self._to_log}
 
     @classmethod
     def from_tree(cls, root, paths):
