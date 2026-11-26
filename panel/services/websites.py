@@ -763,13 +763,20 @@ def install_sh(account, site, image=None):
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
 
 
-def start_sh(account, site):
-    """Bash that starts the site's container (and its gate, object cache and egress proxy), clearing the start limit."""
+def start_sh(account, site, restart=False):
+    """Bash that starts the site's container (and its gate, object cache and egress proxy), clearing the start limit.
+
+    `restart` restarts them instead: after an install rewrote the units, a running container is replaced by
+    one from the new unit (`start` does nothing to a unit that is already running).
+    """
     _home(account)
     units = " ".join(unit_service(u) for u in _units(site))
-    egress = "systemctl --user enable --now %s.service; " % EGRESS_UNIT if needs_egress(site) else ""
+    egress = ""
+    if needs_egress(site):
+        egress = ("systemctl --user enable %s.service; systemctl --user restart %s.service; " % (EGRESS_UNIT, EGRESS_UNIT)
+                  if restart else "systemctl --user enable --now %s.service; " % EGRESS_UNIT)
     return (_ENV + egress + "systemctl --user reset-failed %s 2>/dev/null; " % units
-            + "if systemctl --user start %s; then echo %s; else " % (units, _MARK_STARTED)
+            + "if systemctl --user %s %s; then echo %s; else " % ("restart" if restart else "start", units, _MARK_STARTED)
             + "[ \"$(systemctl --user show -p Result --value %s 2>/dev/null)\" = start-limit-hit ] "
               "&& echo SITE_START_LIMIT || echo SITE_START_FAILED; " % unit_service(UNIT)
             + "journalctl --user -u %s -n 20 --no-pager -o cat 2>/dev/null | tail -n 20; exit 1; fi" % unit_service(UNIT))

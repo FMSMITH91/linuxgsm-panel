@@ -230,7 +230,7 @@ def _install_made(remote, site, db):
         return False, _mark(out)
     quota_set(remote, site)
     cpu_limit(remote, site, probe)
-    return start(remote, site)
+    return start(remote, site, restart=True)
 
 
 def cpu_limit(remote, site, probe=None):
@@ -247,9 +247,9 @@ def cpu_limit(remote, site, probe=None):
     return ok, "account" if ok else "none"
 
 
-def start(remote, site):
-    """Start the site's container."""
-    ok, out = _as_site(remote, site.account, _ws().start_sh(site.account, site), timeout=180)
+def start(remote, site, restart=False):
+    """Start the site's container (`restart`: restart it, so a running one takes its rewritten unit)."""
+    ok, out = _as_site(remote, site.account, _ws().start_sh(site.account, site, restart), timeout=180)
     return (True, OK_STARTED) if ok else (False, _mark(out))
 
 
