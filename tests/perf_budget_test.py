@@ -599,24 +599,34 @@ def _seed_year_of_history(sid, rid):
         db.session.commit()
 
 
-def _check_history_ranges_bounded(client):
-    """Each History range of the server and host pages reads the same few queries with a year of rows as with none."""
+def _history_paths():
+    """The server and host History reads at every range, for the first server that has a host."""
     with app.app_context():
         gs = GameServer.query.filter(GameServer.remote_id.isnot(None)).order_by(GameServer.id.asc()).first()
         sid, rid = gs.id, gs.remote_id
-    paths = (["/api/server/%d/history?range=%s" % (sid, r) for r in HIST_RANGES]
-             + ["/api/remote/%d/history?range=%s" % (rid, r) for r in HIST_RANGES])
+    return sid, rid, (["/api/server/%d/history?range=%s" % (sid, r) for r in HIST_RANGES]
+                      + ["/api/remote/%d/history?range=%s" % (rid, r) for r in HIST_RANGES])
+
+
+def _history_grew(paths, empty, year):
+    """The reads whose query count changed with a year of rows, or went past HIST_QUERY_BUDGET, described."""
+    return ["%s %d->%d" % (p, empty.get(p, -1), year.get(p, -1)) for p in paths
+            if empty.get(p) != year.get(p) or year.get(p, 99) > HIST_QUERY_BUDGET]
+
+
+def _check_history_ranges_bounded(client):
+    """Each History range of the server and host pages reads the same few queries with a year of rows as with none."""
+    sid, rid, paths = _history_paths()
     st_empty, st_year = {}, {}
     empty = probe(client, paths, st_empty)
     _seed_year_of_history(sid, rid)
     year = probe(client, paths, st_year)
-    replies = [len((client.get(p).get_json() or {}).get("host") or []) for p in paths if "/remote/" in p]
+    replies = [len((client.get(p).get_json() or {}).get("host") or []) for p in paths[len(HIST_RANGES):]]
+    answered = [(p, st_empty.get(p), st_year.get(p)) for p in paths]
     check("perf: every History range of the server and host pages answers 200, with no history and with a year "
           "of it (the year's replies are not empty)",
-          all(st_empty.get(p) == 200 and st_year.get(p) == 200 for p in paths) and all(replies),
-          repr(([(p, st_empty.get(p), st_year.get(p)) for p in paths], replies)))
-    grew = ["%s %d->%d" % (p, empty.get(p, -1), year.get(p, -1)) for p in paths
-            if empty.get(p) != year.get(p) or year.get(p, 99) > HIST_QUERY_BUDGET]
+          {(a, b) for _p, a, b in answered} == {(200, 200)} and all(replies), repr((answered, replies)))
+    grew = _history_grew(paths, empty, year)
     check("perf: each History range reads the same few queries (at most %d) with a year of rows as with none"
           % HIST_QUERY_BUDGET, not grew, "; ".join(grew[:6]))
 
