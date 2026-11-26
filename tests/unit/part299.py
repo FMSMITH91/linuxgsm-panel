@@ -247,6 +247,11 @@ def _s299_proxy_base():
        (["protocols tls1.2 tls1.3"], ["protocols tls1.3"]))
 
 
+def _names299(text, *names):
+    """Which of `names` the rendered text holds as a whole host name (sorted); never a substring match."""
+    return sorted(set(_re299.split(r"[^a-z0-9.-]+", text)) & set(names))
+
+
 def _s299_proxy_base2():
     text = _render299([_site299()])
     hidden = [_site299(id=6, name="off", enabled=False, port=20006, domains=[_dom299("off.example.org", did=2)]),
@@ -254,11 +259,12 @@ def _s299_proxy_base2():
     t2 = _render299(hidden)
     eq("proxy config: a disabled site and a domain not verified are not served (never on demand); an enabled "
        "site with a verified domain is (control)",
-       ("off.example.org" in t2, "new.example.org" in t2, "on_demand" in text, "blog.example.org {" in text),
-       (False, False, False, True))
+       (_names299(t2, "off.example.org", "new.example.org"), "on_demand" in text,
+        [ln for ln in text.split("\n") if ln.strip() == "blog.example.org {"] != []),
+       ([], False, True))
     bad_token = _wp299.render([_site299()], None, None, secret_of=lambda s: "short")
     eq("proxy config: a site whose token cannot be read is left out, never served without one",
-       "blog.example.org" in bad_token, False)
+       (_names299(bad_token, "blog.example.org"), _names299(text, "blog.example.org")), ([], ["blog.example.org"]))
     hsts = _render299([_site299()], None, {"hsts_subdomains": True, "hsts_preload": True})
     eq("proxy config: includeSubDomains and preload only when the operator turns them on (OWASP's recommended value "
        "is shown beside the setting, with a note when outside it)",
