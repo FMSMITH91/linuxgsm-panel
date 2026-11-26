@@ -1,4 +1,5 @@
 {
   "{name} is being dumped, restored or deleted right now.": "{name} se está volcando, restaurando o eliminando en este momento.",
-  "an earlier restore of this archive could not be undone, and the server's own files it set aside are still in the restore's work folder: move them back or away first": "una restauración anterior de este archivo no pudo deshacerse y los archivos propios del servidor que apartó siguen en la carpeta de trabajo de la restauración: vuelva a colocarlos o muévalos antes"
+  "an earlier restore of this archive could not be undone, and the server's own files it set aside are still in the restore's work folder: move them back or away first": "una restauración anterior de este archivo no pudo deshacerse y los archivos propios del servidor que apartó siguen en la carpeta de trabajo de la restauración: vuelva a colocarlos o muévalos antes",
+  "Couldn't read the player list from the game's console just now, so the panel can't tell which player that is. Try again.": "No se pudo leer la lista de jugadores de la consola del juego en este momento, así que el panel no puede saber qué jugador es. Inténtelo de nuevo."
 }

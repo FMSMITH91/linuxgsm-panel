@@ -10,6 +10,8 @@
    recovery that settles the lost answer reports the restore as completed, not "nothing was changed".
 4. A retry of an archive whose earlier restore could not be undone (ROLLBACKFAIL) is refused before the
    staging step, which would have deleted the folder holding the server's own files.
+5. A Kick or Ban that has to look the player up on the console (a list from gamedig), and a B3 Kick or
+   Warn, say the console could not be read when it was not, instead of "couldn't find that player".
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -22,8 +24,10 @@ import tempfile as _tf294
 from types import SimpleNamespace as _NS294
 
 from unit.part01 import check, eq, skip
+from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
-from unit.part12 import P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_json, _p9_new_server, _p9_patch, _p9_restore_all
+from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json, _p9_new_server,
+                         _p9_patch, _p9_restore_all)
 from panel.core.config import encrypt_secret as _enc294
 from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, game as _game294
@@ -228,3 +232,47 @@ else:
     _st294, _kept294, _live294 = _retry_after_fail294(failed=False)
     check("game restore (control): with no failed undo on record the same run restores the archive",
           (_st294, _live294) == ("done", "world v1"), (_st294, _kept294, _live294))
+
+
+# ── 5. An unread console is not "no such player" ──────────────────────────────────────────────────
+def _moderate294(listed, game_type, action):
+    """moderate()'s answer and the console lines it sent, with the console list answering `listed`."""
+    sent = []
+    try:
+        _p9_patch(_game294, "console_player_list", lambda *a, **k: listed)
+        _p9_patch(_core294, "send_console_command", lambda s, u, cmd, **k: sent.append(cmd) or ("", "", 0))
+        return _game294.moderate(object(), "p294m", game_type, action, target="Bob"), sent
+    finally:
+        _p9_restore_all()
+
+
+_unread294 = [_moderate294(None, gt, act) for gt, act in (("css", "ban"), ("cod4", "kick"))]
+eq("moderation: a Valve ban and an idTech3 kick that must look the player up on an unread console say so and send "
+   "nothing", _unread294, [((False, _game294.CONSOLE_LIST_UNREAD), [])] * 2)
+eq("moderation (control): a console read that lists nobody by that name still says the player was not found",
+   [_moderate294([{"name": "Alice", "num": "2", "steamid": "STEAM_0:1:2"}], gt, act)[0][1]
+    for gt, act in (("css", "ban"), ("cod4", "kick"))],
+   ["Couldn't find that player's SteamID to ban them.", "Couldn't find that player on the server."])
+eq("moderation (control): a console read that lists the player bans and kicks them",
+   [_moderate294([{"name": "Bob", "num": "3", "steamid": "STEAM_0:1:294"}], gt, act)
+    for gt, act in (("css", "ban"), ("cod4", "kick"))],
+   [((True, "Done."), ["banid 0 STEAM_0:1:294 kick; writeid"]), ((True, "Done."), ["clientkick 3"])])
+
+_b3sid294 = _fixture278()
+_b3got294 = {}
+try:
+    _p9_arm(who="part294")
+    _done294 = '{"id": 1, "ok": true, "result": {"cid": "3", "client_id": 12}}\n'
+    _seen294 = _socket_stub278(_done294, _game294.CONSOLE_UNREAD, name="Bob")
+    _b3got294["unread"] = _post278(P9_ADMIN, _b3sid294, "kick", {"reason": "camping"}), len(_seen294["socket"])
+    _seen294 = _socket_stub278(_done294, None, name="Bob")
+    _b3got294["none"] = _post278(P9_ADMIN, _b3sid294, "kick", {"reason": "camping"}), len(_seen294["socket"])
+finally:
+    _p9_restore_all()
+    _p9_delete_server(_b3sid294)
+_b3st294, _b3calls294 = _b3got294.get("unread") or ((0, {}), -1)
+eq("b3 kick: a console list that could not be read answers 503 saying so, and B3 is not asked",
+   (_b3st294[0], _b3st294[1].get("error"), _b3calls294), (503, _game294.CONSOLE_LIST_UNREAD, 0))
+_b3st294, _b3calls294 = _b3got294.get("none") or ((0, {}), -1)
+eq("b3 kick (control): a console list read without the player still says they are not on the server",
+   (_b3st294[0], _b3st294[1].get("error"), _b3calls294), (409, _act278.S_NOT_ONLINE, 0))
