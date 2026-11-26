@@ -121,6 +121,8 @@ def _main295(argv, out_dir):
                                           "--summary", os.path.join(out_dir, "s.txt")])
             except SystemExit as e:
                 rc = e.code
+            except Exception as e:  # noqa: BLE001 - a run that raised is a result here, not the end of the part
+                rc = "raised %s" % type(e).__name__
     finally:
         _run295.Session, _run295.find_chrome = saved[:2]
         _sig295.signal(_sig295.SIGTERM, saved[2])
