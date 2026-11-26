@@ -2914,15 +2914,14 @@ def do_website_proxy_install(args, content):
 
     args: version, architecture (amd64|arm64, must be this host's), sha256. The URL is built here from
     the version and architecture (the upstream release asset), never passed in. The archive's sha256
-    is checked BEFORE it is opened; only its `caddy` member is installed (root:lgsmweb 0750). The proxy
+    is checked BEFORE it is opened; only its `caddy` member is installed (root:lgsmweb 0750). The proxy's
+    user and folders are made only after that check, so a refused release leaves nothing behind. The proxy
     is not started: website-proxy-apply starts it when a site is enabled. Prints version=.
     """
     version, arch, sha = args
     if arch != _web_arch():
         sys.stderr.write("this host is not %s\n" % arch)
         return 1
-    pw = _web_proxy_user()
-    _web_dirs(pw)
     url = WEB_CADDY_URL % (version, version, arch)
     with tempfile.TemporaryDirectory(prefix="lgsm-web-proxy-") as d:
         archive = os.path.join(d, "caddy.tar.gz")
@@ -2941,6 +2940,8 @@ def do_website_proxy_install(args, content):
     if not binary:
         sys.stderr.write("the release holds no caddy binary\n")
         return 1
+    pw = _web_proxy_user()          # only now: a refused download leaves no account and no folder behind
+    _web_dirs(pw)
     _web_write(WEB_PROXY_BIN, binary, WEB_FILE_EXEC, 0, pw.pw_gid)
     _web_write(WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT.encode(), WEB_FILE_ROOT)
     _web_write(WEB_JOURNAL_CONF, WEB_JOURNAL_TEXT.encode(), WEB_FILE_ROOT)

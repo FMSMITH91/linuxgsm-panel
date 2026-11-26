@@ -14,6 +14,7 @@
    latest), its date read as GMT whatever the host's time zone, and the status route answers it parsed.
 6. An unknown Host over HTTPS is aborted (an https:// catch-all), outside tunnel mode.
 7. OPcache is not loaded a second time.
+8. A refused proxy release leaves no account or folder behind.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -526,6 +527,31 @@ def _s7_opcache():
        ("zend_extension" in ini, "opcache.enable = 1" in ini.split("\n")), (False, True))
 
 
+def _s7_release():
+    rc, _out, calls, _conf, tree = _helper302(
+        lambda: _H302.do_website_proxy_install(["2.11.9", "amd64", "0" * 64], ""), {"pw": {}}, installed=False,
+        made_dirs=False)
+    eq("website-proxy-install (verb): a release that does not match its sha256 leaves no account and no folder behind",
+       (rc, [c for c in calls if os.path.basename(c[0]) == "useradd"], [p for p in tree if p.startswith(("lib", "etc", "state"))]),
+       (1, [], []))
+    archive = _io302.BytesIO()
+    with _tar302.open(fileobj=archive, mode="w:gz") as tar:
+        info = _tar302.TarInfo("caddy")
+        info.size = 4
+        tar.addfile(info, _io302.BytesIO(b"ELF!"))
+    sha = _hashlib302.sha256(archive.getvalue()).hexdigest()
+    saved = _H302._web_dirs
+    _H302._web_dirs = lambda pw: [os.makedirs(p, exist_ok=True) for p in (_H302.WEB_PROXY_DIR, _H302.WEB_PROXY_ETC)]
+    try:
+        rc, _out, calls, _conf, tree = _helper302(lambda: _H302.do_website_proxy_install(["2.11.9", "amd64", sha], ""),
+                                                  {"pw": {"lgsmweb": 990}, "archive": archive.getvalue()},
+                                                  installed=False, made_dirs=False)
+    finally:
+        _H302._web_dirs = saved
+    eq("website-proxy-install (verb): a matching release is installed, its folders made (control)",
+       (rc, "lib/caddy" in tree), (0, True))
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -544,7 +570,7 @@ def _cleanup302(st):
 
 
 for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone,
-                 _s6_catch_all, _s7_opcache):
+                 _s6_catch_all, _s7_opcache, _s7_release):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)
