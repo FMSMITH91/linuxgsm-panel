@@ -7,8 +7,7 @@
     <div class="row g-2">
       <div class="col-sm-4">
         <label for="wphp-version" class="form-label small mb-1">PHP version</label>
-        {% if site_admin|default(false) %}<select id="wphp-version" class="form-select form-select-sm" data-no-i18n></select>
-        {% else %}<div id="wphp-version-text" class="form-control-plaintext form-control-sm py-1" data-no-i18n></div>{% endif %}
+        <select id="wphp-version" class="form-select form-select-sm" data-no-i18n></select>
         <div id="wphp-eol" class="small text-warning" hidden></div>
       </div>
       <div class="col-6 col-sm-4">

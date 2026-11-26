@@ -2,7 +2,6 @@
    encrypted, write-only: the page gets their names, never their values). #}
 <section data-ws-pane="app" hidden>
   <form id="wapp-form" data-action="wsAppSave" data-args='["@event"]' data-on="submit">
-    {% if site_admin|default(false) %}
     <div class="row g-2">
       <div class="col-6 col-sm-3">
         <label for="wapp-version" class="form-label small mb-1">Node.js version</label>
@@ -23,7 +22,6 @@
                autocomplete="off" spellcheck="false" placeholder="npm start" data-no-i18n>
       </div>
     </div>
-    {% endif %}
     <fieldset class="mt-2">
       <legend class="form-label small mb-1">Environment variables</legend>
       <div id="wapp-env"></div>

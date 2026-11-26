@@ -1,22 +1,20 @@
 // A website's PHP, Performance, Rules and App panels (templates/_website_php.html, _website_performance.html,
-// _website_rules.html, _website_app.html), filled once from the site's first answer (website_site.js,
-// WS.onSite) and their own reads:
-//   PHP:   GET/POST /websites/<id>/php ({version, versions, values, advanced, effective}; the form's fields
-//          by their php.ini names, php_version only from an administrator), POST php/advanced {text}
-//   Performance: POST performance {opcache, object_cache, page_cache, page_cache_ttl, static_cache},
-//          POST cache/purge; OPcache's memory and interval are php.ini values (POST php)
-//   Rules: POST rules {rules: [{type: redirect, from, to, code} | {type: header, name, value} |
-//          {type: deny, path}], raw (a superadmin's page only)}
-//   App:   POST app/settings (an administrator's page only), GET/POST app/env, POST app/build
-// The server validates every value again and has the last word; the checks here only say early what it
-// will say. OWASP's PHP values (PHP Configuration Cheat Sheet, "php.ini") are printed beside the fields;
-// a value outside one shows a note and is saved anyway.
+// _website_rules.html, _website_app.html), fed by website_site.js (WS.onSite) from GET /api/websites/<id>:
+//   php:  {versions: [{version, eol}], version, settings: {memory_limit, ..., display_errors}, custom}
+//   perf: {opcache, opcache_memory_mb, opcache_revalidate_s, object_cache, object_cache_host,
+//          object_cache_port, page_cache, page_cache_ttl, static_cache}
+//   rules: [{type: redirect, from, to, code} | {type: header, name, value} | {type: deny, path}], raw_rules
+//   app:  {versions: [..], version, build, start, port, env_names: [..]}
+// and saved to POST /websites/<id>/{php, performance, cache/purge, rules, app}; GET php/effective reads
+// what PHP really uses. The server validates every value again and has the last word; the checks here
+// only say early what it will say. OWASP's PHP values (PHP Configuration Cheat Sheet, "php.ini") are
+// printed beside the fields; a value outside one shows a note and is saved anyway.
 (function () {
   'use strict';
   var WS = window.WS;
   if (!WS || !WS.siteId) return;
   var ID = WS.siteId;
-  var st = {};
+  var st = {envNames: [], rules: []};
 
   // ── PHP ──
   function bytes(v) {
@@ -50,96 +48,63 @@
     });
     return probs.length === 0;
   };
-  // GET /websites/<id>/php: {version, versions, values, advanced, owasp, owasp_notes, effective}. The
-  // version list is only an administrator's to change (the server refuses anyone else); a runner sees it.
-  var OPCACHE = {'wperf-op-mem': 'opcache.memory_consumption', 'wperf-op-reval': 'opcache.revalidate_freq'};
-  function versionsOf(php) {
-    return (php.versions || []).map(function (v) { return String(v && typeof v === 'object' ? v.version : v); });
-  }
-  function fillValues(values) {
-    document.querySelectorAll('[data-php]').forEach(function (inp) {
-      var v = values[inp.getAttribute('data-php')];
-      if (inp.type === 'checkbox') inp.checked = v === true || v === 'On'; else inp.value = v == null ? '' : String(v);
-    });
-    Object.keys(OPCACHE).forEach(function (id) {
-      var e = WS.el(id), v = values[OPCACHE[id]];
-      if (e && v != null && v !== '') e.value = String(v);
-    });
-  }
-  function renderVersion(php) {
+  function renderPhp(php) {
     var sel = WS.el('wphp-version');
-    if (sel) {
-      WS.clear(sel);
-      versionsOf(php).forEach(function (v) { var o = WS.node('option', null, v); o.value = v; sel.appendChild(o); });
-      sel.value = php.version || '';
-    }
-    var txt = WS.el('wphp-version-text');
-    if (txt) txt.textContent = php.version || '—';
+    if (!sel || !php) return;
+    WS.clear(sel);
+    (php.versions || []).forEach(function (v) {
+      var o = WS.node('option', null, String(v.version));
+      o.value = String(v.version);
+      sel.appendChild(o);
+    });
+    sel.value = php.version || '';
     var eol = WS.el('wphp-eol');
     WS.show(eol, !!php.eol_note);
     if (php.eol_note) eol.textContent = php.eol_note;
-  }
-  function renderPhp(php) {
-    if (!php || !WS.el('wphp-form')) return;
-    st.php = php;
-    renderVersion(php);
-    fillValues(php.settings || php.values || {});
-    st.ini = php.custom != null ? php.custom : (php.advanced || '');
-    WS.el('wphp-ini').value = st.ini;
+    var s = php.settings || {};
+    document.querySelectorAll('[data-php]').forEach(function (inp) {
+      var v = s[inp.getAttribute('data-php')];
+      if (inp.type === 'checkbox') inp.checked = !!v; else inp.value = v == null ? '' : String(v);
+    });
+    WS.el('wphp-ini').value = php.custom || '';
     window.wsPhpCheck();
     window.wsIniCheck();
   }
-  // The form as the server reads it: each field by its php.ini name, display_errors as On or Off, and
-  // the version only when an administrator changed it.
-  WS.phpBody = function () {
-    var body = {};
-    document.querySelectorAll('[data-php]').forEach(function (inp) {
-      var v = inp.type === 'checkbox' ? (inp.checked ? 'On' : 'Off') : inp.value.trim();
-      if (v !== '') body[inp.getAttribute('data-php')] = v;
-    });
-    var sel = WS.el('wphp-version');
-    if (sel && st.php && sel.value && sel.value !== st.php.version) body.php_version = sel.value;
-    return body;
-  };
   window.wsPhpSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     if (!window.wsIniCheck()) { WS.say('wphp-msg', WS.T('Fix the Advanced php.ini lines first.'), 'err'); return; }
-    var ini = WS.el('wphp-ini').value;
+    var settings = {};
+    document.querySelectorAll('[data-php]').forEach(function (inp) {
+      settings[inp.getAttribute('data-php')] = inp.type === 'checkbox' ? inp.checked : inp.value.trim();
+    });
     WS.say('wphp-msg', WS.T('Saving…'));
-    WS.post(WS.R.act(ID, 'php'), WS.phpBody()).then(function (d) {
-      if (!d || !d.success || ini === st.ini) { WS.done(d, 'wphp-msg'); return; }
-      WS.post(WS.R.act(ID, 'php/advanced'), {text: ini}).then(function (d2) { if (WS.done(d2, 'wphp-msg')) st.ini = ini; });
-    });
+    WS.post(WS.R.act(ID, 'php'), {version: WS.el('wphp-version').value, settings: settings, custom: WS.el('wphp-ini').value})
+      .then(function (d) { WS.done(d, 'wphp-msg'); });
   };
-  function showEffective(vals, message) {
-    var body = WS.clear(WS.el('wphp-eff-rows'));
-    var keys = Object.keys(vals || {}).sort();
-    if (!keys.length) {
-      var tr0 = WS.node('tr');
-      tr0.appendChild(WS.node('td', 'text-secondary', message || WS.T('PHP did not answer. Is the site running?')));
-      body.appendChild(tr0);
-    }
-    keys.forEach(function (k) {
-      var tr = WS.node('tr');
-      tr.appendChild(WS.raw('td', 'font-monospace', k));
-      tr.appendChild(WS.raw('td', 'font-monospace text-break', String(vals[k])));
-      body.appendChild(tr);
-    });
-  }
-  // What PHP really uses: read again each time the section is opened (the answer to GET .../php).
   window.wsPhpEffective = function () {
-    WS.get(WS.R.act(ID, 'php')).then(function (d) {
-      showEffective((d && (d.effective || d.values)) || {}, d && d.success === false ? d.message : '');
+    WS.get(WS.R.act(ID, 'php/effective')).then(function (d) {
+      var body = WS.clear(WS.el('wphp-eff-rows'));
+      var vals = (d && d.values) || {};
+      var keys = Object.keys(vals).sort();
+      if (!keys.length) {
+        var tr0 = WS.node('tr');
+        tr0.appendChild(WS.node('td', 'text-secondary', (d && d.message) || WS.T('PHP did not answer. Is the site running?')));
+        body.appendChild(tr0);
+      }
+      keys.forEach(function (k) {
+        var tr = WS.node('tr');
+        tr.appendChild(WS.raw('td', 'font-monospace', k));
+        tr.appendChild(WS.raw('td', 'font-monospace text-break', String(vals[k])));
+        body.appendChild(tr);
+      });
     });
   };
 
   // ── Performance ──
-  // The site's switches (opcache, object_cache, page_cache, page_cache_ttl, static_cache) from the
-  // site's answer; a field the answer does not carry leaves the control as it is.
   function setPerf(p) {
     if (!p || !WS.el('wperf-page')) return;
     var map = {'wperf-opcache': p.opcache, 'wperf-obj': p.object_cache, 'wperf-page': p.page_cache, 'wperf-static': p.static_cache};
-    Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e && map[id] !== undefined) e.checked = !!map[id]; });
+    Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id]; });
     var nums = {'wperf-op-mem': p.opcache_memory_mb, 'wperf-op-reval': p.opcache_revalidate_s, 'wperf-ttl': p.page_cache_ttl};
     Object.keys(nums).forEach(function (id) { var e = WS.el(id); if (e && nums[id] != null) e.value = String(nums[id]); });
     var info = WS.el('wperf-obj-info');
@@ -154,23 +119,13 @@
   }
   function checked(id) { var e = WS.el(id); return e ? e.checked : undefined; }
   function num(id) { var e = WS.el(id); return e && e.value !== '' ? Number(e.value) : undefined; }
-  // The switches go to /performance (the object cache only from an administrator's page, which alone
-  // has it); OPcache's memory and check interval are php.ini values, so they go to /php.
-  WS.perfBodies = function () {
-    var perf = {opcache: checked('wperf-opcache'), object_cache: checked('wperf-obj'), page_cache: checked('wperf-page'),
-      page_cache_ttl: num('wperf-ttl'), static_cache: checked('wperf-static')};
-    Object.keys(perf).forEach(function (k) { if (perf[k] === undefined) delete perf[k]; });
-    var php = {};
-    Object.keys(OPCACHE).forEach(function (id) { var v = num(id); if (v !== undefined) php[OPCACHE[id]] = String(v); });
-    return {perf: perf, php: php};
-  };
   window.wsPerfSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
-    var b = WS.perfBodies();
+    var body = {opcache: checked('wperf-opcache'), opcache_memory_mb: num('wperf-op-mem'), opcache_revalidate_s: num('wperf-op-reval'),
+      object_cache: checked('wperf-obj'), page_cache: checked('wperf-page'), page_cache_ttl: num('wperf-ttl'), static_cache: checked('wperf-static')};
     WS.say('wperf-msg', WS.T('Saving…'));
-    WS.post(WS.R.act(ID, 'performance'), b.perf).then(function (d) {
-      if (!d || !d.success || !Object.keys(b.php).length) { if (WS.done(d, 'wperf-msg')) WS.reload(); return; }
-      WS.post(WS.R.act(ID, 'php'), b.php).then(function (d2) { if (WS.done(d2, 'wperf-msg')) WS.reload(); });
+    WS.post(WS.R.act(ID, 'performance'), body).then(function (d) {
+      if (WS.done(d, 'wperf-msg')) { st.perfDone = false; WS.reload(); }
     });
   };
   window.wsPurge = function () {
@@ -178,29 +133,6 @@
     WS.post(WS.R.act(ID, 'cache/purge'), {}).then(function (d) { WS.done(d, 'wperf-msg'); });
   };
 
-  // PHP: the answer's `php`, else its own GET (a PHP site's page only).
-  function loadPhp(d) {
-    if (d.php) { renderPhp(d.php); return; }
-    if (!WS.el('wphp-form')) return;
-    WS.get(WS.R.act(ID, 'php')).then(function (php) { if (php && php.success !== false) renderPhp(php); });
-  }
-  // [flag, what fills the panel from the answer]: each runs once, when the first answer arrives.
-  var FILL = [['phpDone', loadPhp], ['perfDone', function (d) { setPerf(d.perf || d.site); }]];
-  WS.onSite(function (d) {
-    FILL.forEach(function (f) {
-      if (!st[f[0]]) { st[f[0]] = true; f[1](d); }
-    });
-  });
-})();
-
-// The Rules and App panels.
-(function () {
-  'use strict';
-  var WS = window.WS;
-  if (!WS || !WS.siteId) return;
-  var ID = WS.siteId;
-  var st = {envNames: [], rules: []};
-  function num(id) { var e = WS.el(id); return e && e.value !== '' ? Number(e.value) : undefined; }
   // ── Rules ──
   var RULE = {
     redirect: {title: 'Redirect', fields: [['from', 'From path', '/old-page'], ['to', 'To address or path', '/new-page']]},
@@ -304,35 +236,18 @@
     row.appendChild(rm);
     return row;
   }
-  // The app's settings from the site's answer (`app` {versions, version, build, start, port}, or the
-  // site's own runtime_version, build_command, start_command, app_port); the variable names from
-  // GET /websites/<id>/app/env {names}, never their values.
-  function appOf(d) {
-    if (d.app) return d.app;
-    var s = d.site || {};
-    if (s.kind !== 'app') return null;
-    return {versions: s.runtime_versions || (s.runtime_version ? [s.runtime_version] : []), version: s.runtime_version,
-      build: s.build_command, start: s.start_command, port: s.app_port, env_names: null};
-  }
-  function renderEnv(names) {
-    st.envNames = (names || []).slice();
-    var box = WS.clear(WS.el('wapp-env'));
-    if (box) st.envNames.forEach(function (n) { box.appendChild(envRow(n, true)); });
-  }
-  function setIf(id, v) { var e = WS.el(id); if (e && v != null) e.value = String(v); }
   function renderApp(app) {
-    if (!app || !WS.el('wapp-form')) return;
     var sel = WS.el('wapp-version');
-    if (sel) {
-      WS.clear(sel);
-      (app.versions || []).forEach(function (v) { var o = WS.node('option', null, String(v)); o.value = String(v); sel.appendChild(o); });
-      sel.value = app.version || '';
-    }
-    setIf('wapp-port', app.port);
-    setIf('wapp-build', app.build);
-    setIf('wapp-start', app.start);
-    if (app.env_names) { renderEnv(app.env_names); return; }
-    WS.get(WS.R.act(ID, 'app/env')).then(function (d) { renderEnv((d && d.names) || []); });
+    if (!sel || !app) return;
+    WS.clear(sel);
+    (app.versions || []).forEach(function (v) { var o = WS.node('option', null, String(v)); o.value = String(v); sel.appendChild(o); });
+    sel.value = app.version || '';
+    WS.el('wapp-port').value = app.port == null ? '' : String(app.port);
+    WS.el('wapp-build').value = app.build || '';
+    WS.el('wapp-start').value = app.start || '';
+    st.envNames = (app.env_names || []).slice();
+    var box = WS.clear(WS.el('wapp-env'));
+    st.envNames.forEach(function (n) { box.appendChild(envRow(n, true)); });
   }
   window.wsEnvAdd = function () { WS.el('wapp-env').appendChild(envRow('', false)); };
   window.wsEnvRemove = function (btn) { var row = btn && btn.closest ? btn.closest('.ws-env') : null; if (row) row.remove(); };
@@ -349,48 +264,32 @@
     var removed = st.envNames.filter(function (n) { return !seen[n]; });
     return {env: env, env_remove: removed};
   };
-  // An administrator's page also has the version, commands and port (POST app/settings); then the
-  // variables (POST app/env: a saved one left empty is null, keep it; env_remove drops one) and a build.
-  function appSettings() {
-    if (!WS.el('wapp-version')) return null;
-    return {runtime_version: WS.el('wapp-version').value, app_port: num('wapp-port'), build_command: WS.el('wapp-build').value.trim(),
-      start_command: WS.el('wapp-start').value.trim()};
-  }
-  function step(path, body) {
-    return function (prev) {
-      if (prev && !prev.success) return prev;
-      return body ? WS.post(WS.R.act(ID, path), body) : prev;
-    };
-  }
   window.wsAppSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
+    var envs = WS.envBody();
+    var body = {runtime_version: WS.el('wapp-version').value, app_port: num('wapp-port'), build_command: WS.el('wapp-build').value.trim(),
+      start_command: WS.el('wapp-start').value.trim(), env: envs.env, env_remove: envs.env_remove};
     WS.say('wapp-msg', WS.T('Saving and rebuilding…'));
-    Promise.resolve(null).then(step('app/settings', appSettings())).then(step('app/env', WS.envBody()))
-      .then(step('app/build', {})).then(function (d) {
-        Array.prototype.slice.call(document.querySelectorAll('[data-env="value"]')).forEach(function (v) { v.value = ''; });
-        if (WS.done(d, 'wapp-msg')) { st.appDone = false; WS.reload(); }
-      }).catch(function () { WS.done(null, 'wapp-msg'); });
+    WS.post(WS.R.act(ID, 'app'), body).then(function (d) {
+      Array.prototype.slice.call(document.querySelectorAll('[data-env="value"]')).forEach(function (v) { v.value = ''; });
+      if (WS.done(d, 'wapp-msg')) WS.reload();
+    });
   };
 
-  // The rules from the answer's `rules` / `raw_rules`, or the site's own custom_rules (JSON text) and
-  // raw_proxy_snippet.
-  function rulesOf(d) {
-    var r = d.rules || (d.site || {}).custom_rules || [];
-    if (typeof r === 'string') { try { r = JSON.parse(r); } catch (e) { r = []; } }
-    return Array.isArray(r) ? r : [];
-  }
-  function renderRulesOnce(d) {
-    st.rules = rulesOf(d).map(function (r) { return Object.assign({}, r); });
-    WS.renderRules();
-    var raw = WS.el('wr-raw'), text = d.raw_rules != null ? d.raw_rules : (d.site || {}).raw_proxy_snippet;
-    if (raw && text != null) raw.value = text;
-  }
   // Each panel is filled once, from the first answer: a status poll while the site starts must not
   // overwrite what is being typed.
-  var FILL = [['appDone', function (d) { renderApp(appOf(d)); }], ['rulesDone', function (d) { if (WS.el('wr-list')) renderRulesOnce(d); }]];
+  function renderRulesOnce(d) {
+    st.rules = (d.rules || []).map(function (r) { return Object.assign({}, r); });
+    WS.renderRules();
+    var raw = WS.el('wr-raw');
+    if (raw && d.raw_rules != null) raw.value = d.raw_rules;
+  }
+  // [flag, the answer's key, what fills the panel]: each runs once its part of the answer is there.
+  var FILL = [['phpDone', 'php', renderPhp], ['perfDone', 'perf', setPerf], ['appDone', 'app', renderApp]];
   WS.onSite(function (d) {
     FILL.forEach(function (f) {
-      if (!st[f[0]]) { st[f[0]] = true; f[1](d); }
+      if (!st[f[0]] && d[f[1]]) { f[2](d[f[1]]); st[f[0]] = true; }
     });
+    if (WS.el('wr-list') && !st.rulesDone) { renderRulesOnce(d); st.rulesDone = true; }
   });
 })();

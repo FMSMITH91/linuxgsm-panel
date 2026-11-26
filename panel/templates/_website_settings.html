@@ -13,11 +13,11 @@
     <div class="col-6 col-sm-4"><label for="wset-cpu" class="form-label small mb-1">CPU (1000 = one core)</label>
       <input type="number" id="wset-cpu" class="form-control form-control-sm" min="100" max="64000" step="100" data-limit="cpu_milli"></div>
     <div class="col-6 col-sm-4"><label for="wset-pids" class="form-label small mb-1">Processes</label>
-      <input type="number" id="wset-pids" class="form-control form-control-sm" min="32" max="32768" step="1" data-limit="pids"></div>
+      <input type="number" id="wset-pids" class="form-control form-control-sm" min="16" max="32768" step="1" data-limit="pids"></div>
     <div class="col-6 col-sm-4"><label for="wset-disk" class="form-label small mb-1">Disk (MB)</label>
-      <input type="number" id="wset-disk" class="form-control form-control-sm" min="64" max="1048576" step="1" data-limit="disk_mb"></div>
+      <input type="number" id="wset-disk" class="form-control form-control-sm" min="64" max="10485760" step="1" data-limit="disk_mb"></div>
     <div class="col-6 col-sm-4"><label for="wset-body" class="form-label small mb-1">Largest upload (MB)</label>
-      <input type="number" id="wset-body" class="form-control form-control-sm" min="1" max="4096" step="1" data-limit="max_body_mb"></div>
+      <input type="number" id="wset-body" class="form-control form-control-sm" min="1" max="10240" step="1" data-limit="max_body_mb"></div>
     <div class="col-6 col-sm-4"><label for="wset-keep" class="form-label small mb-1">Backups to keep</label>
       <input type="number" id="wset-keep" class="form-control form-control-sm" min="1" max="60" step="1" data-limit="backup_keep"></div>
     <div class="col-sm-6">
@@ -27,7 +27,6 @@
       </div>
       <div class="form-text mt-0">Off by default, for visitors' privacy. When on, their addresses are shortened.</div>
     </div>
-    {% if current_user.is_superadmin %}
     <div class="col-sm-6">
       <div class="form-check form-switch">
         <input class="form-check-input" type="checkbox" role="switch" id="wset-egress" data-action="wsEgressCheck" data-on="change">
@@ -36,7 +35,6 @@
       <div class="form-text mt-0">Off by default: the site reaches only its database (WordPress also its own update servers).</div>
       <div id="wset-egress-note" class="small text-warning" hidden>The site can then reach any address on the internet, though never this host's other services.</div>
     </div>
-    {% endif %}
     <div class="col-12"><label for="wset-note" class="form-label small mb-1">Note for administrators</label>
       <textarea id="wset-note" class="form-control form-control-sm" rows="2" maxlength="2000"></textarea></div>
     <div class="col-12 d-flex flex-wrap gap-2 align-items-center">

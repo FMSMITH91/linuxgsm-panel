@@ -1,13 +1,11 @@
-// The web proxy card on the Websites list (templates/_website_proxy.html), superadmin only. websites.js
-// hands it the list answer (wsProxyRender); the hosts are its `hosts` ([{id, name}]) or, failing that,
-// the hosts its sites run on. Each host's proxy is read from GET /websites/proxy/status?remote_id=N:
-//   {exposure_mode, allow_cidrs, allow_presets, tunnel_provider, tunnel_token_set, installed_version,
-//    last_error, online_sites}
-// and saved with POST /websites/proxy/settings {remote_id, exposure_mode, allow_cidrs, allow_presets,
-// tunnel_provider, tunnel_token}. The token is sent only when something was typed, and the page never
-// receives it back (tunnel_token_set). The security settings (`options` in the list answer:
-// hsts_max_age, tls_min, acme_contact, acme_staging, access_log_default, access_log_days, max_sites,
-// require_2fa, mem_mb, cpu_milli, pids, disk_mb, max_body_mb) are saved to POST /websites/proxy/options.
+// The web proxy card on the Websites list (templates/_website_proxy.html), superadmin only. Fed by the
+// same GET /api/websites answer as the list (websites.js calls wsProxyRender):
+//   proxies: [{host_id, host_name, installed, version, exposure_mode, allow_cidrs: [..],
+//              allow_presets: [..], tunnel_token_set, last_error}],
+//   options: {hsts_max_age, tls_min, acme_contact, acme_staging, access_log_default, access_log_days,
+//             max_sites, require_2fa, mem_mb, cpu_milli, pids, disk_mb, max_body_mb}
+// Saves go to POST /websites/proxy/settings as {host_id, exposure: {...}} or {options: {...}}. The tunnel
+// token is sent only when something was typed, and the page never receives it back (tunnel_token_set).
 // OWASP's recommended values are printed beside the fields; a value outside them shows a note and is
 // saved anyway: the administrator decides (HTTP Strict Transport Security Cheat Sheet, "Examples";
 // Transport Layer Security Cheat Sheet, "Only Support Strong Protocols"; Multifactor Authentication
@@ -71,30 +69,8 @@
   var OPT_FIELDS = {hsts_max_age: 'wp-hsts', tls_min: 'wp-tls', acme_contact: 'wp-acme-email', acme_staging: 'wp-staging',
     access_log_default: 'wp-log-default', access_log_days: 'wp-log-days', max_sites: 'wp-max-sites', require_2fa: 'wp-2fa',
     mem_mb: 'wp-mem', cpu_milli: 'wp-cpu', pids: 'wp-pids', disk_mb: 'wp-disk', max_body_mb: 'wp-body'};
-  function hostsOf(d) {
-    if (d.hosts && d.hosts.length) return d.hosts.map(function (h) { return {id: h.id, name: h.name}; });
-    var seen = {}, out = [];
-    (d.sites || []).forEach(function (s) {
-      if (s.remote_id != null && !seen[s.remote_id]) { seen[s.remote_id] = 1; out.push({id: s.remote_id, name: String(s.remote_id)}); }
-    });
-    return out;
-  }
-  function proxyOf(h, p) {
-    p = p || {};
-    return {host_id: h.id, host_name: h.name, installed: !!p.installed_version, version: p.installed_version || '',
-      exposure_mode: p.exposure_mode || 'public', allow_cidrs: p.allow_cidrs || [], allow_presets: p.allow_presets || [],
-      tunnel_token_set: !!p.tunnel_token_set, last_error: p.last_error || (p.success === false ? p.message : '')};
-  }
-  // Each host's proxy row, then the card. A list answer that already carries `proxies` is used as it is.
   window.wsProxyRender = function (d) {
-    if (d.proxies) { renderAll(d, d.proxies); return Promise.resolve(); }
-    var hosts = hostsOf(d);
-    return Promise.all(hosts.map(function (h) {
-      return WS.get(WS.R.proxyStatus(h.id)).then(function (p) { return proxyOf(h, p); });
-    })).then(function (rows) { renderAll(d, rows); });
-  };
-  function renderAll(d, proxies) {
-    st.proxies = proxies;
+    st.proxies = d.proxies || [];
     var sel = WS.el('wp-host');
     if (sel && !sel.options.length) {
       st.proxies.forEach(function (p) {
@@ -109,7 +85,7 @@
     var o = d.options || {};
     Object.keys(OPT_FIELDS).forEach(function (k) { setVal(OPT_FIELDS[k], o[k]); });
     window.wsOptCheck();
-  }
+  };
   window.wsProxyHost = function () { var s = WS.el('wp-host'); st.host = s ? s.value : null; renderHost(); };
   window.wsExposure = function (mode) { setMode(mode); };
   window.wsCfPreset = function () {
@@ -150,7 +126,7 @@
     if (problem) { WS.say('wp-msg', problem, 'err'); return; }
     WS.stepUp(function () {
       WS.say('wp-msg', WS.T('Saving…'));
-      WS.post(WS.R.proxySettings, Object.assign({remote_id: st.host}, body)).then(function (d) {
+      WS.post(WS.R.proxySettings, {host_id: st.host, exposure: body}).then(function (d) {
         var tok = WS.el('wp-token');
         if (tok) tok.value = '';
         if (WS.done(d, 'wp-msg') && WS.loadList) WS.loadList();
@@ -176,7 +152,7 @@
     });
     WS.stepUp(function () {
       WS.say('wp-opts-msg', WS.T('Saving…'));
-      WS.post(WS.R.proxyOptions, {options: out}).then(function (d) { WS.done(d, 'wp-opts-msg'); });
+      WS.post(WS.R.proxySettings, {options: out}).then(function (d) { WS.done(d, 'wp-opts-msg'); });
     });
   };
 })();

@@ -8,8 +8,6 @@
    customer never sees an administrator's controls, disabled or otherwise. Values are read from
    /api/websites/<id> by js/website_site.js; one panel shows at a time (?tab= picks it). #}
 {% set php_kind = site.kind in ('php', 'wordpress', 'phpbb') %}
-{# An administrator's site answer carries the host (remote_id); a runner's does not. #}
-{% set site_admin = site_admin|default(site.remote_id is defined) %}
 {% set list_url = websites_nav() if websites_nav is defined else '' %}
 <div id="ws-site" data-site-id="{{ site.id }}" data-kind="{{ site.kind }}" data-name="{{ site.name }}" data-list-url="{{ list_url }}"
      data-manage="{{ 1 if can_manage|default(false) else 0 }}" data-files="{{ 1 if can_files|default(false) else 0 }}"
