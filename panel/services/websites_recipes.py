@@ -263,9 +263,12 @@ def _run_sh(account, site, step, values):
     for name in sorted(env):
         args += ["-e", name]
     args += ["--entrypoint", step["argv"][0], image] + [_argv_word(w, values) for w in step["argv"][1:]]
+    # The site's image is pulled by its install; wp-cli's is pulled here, by its digest, before its first use.
+    pull = ("podman image exists %s || podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; "
+            % (_q(image), _q(image)) if step["image"] == "wpcli" else "")
     body = ("while read -r k n v; do case \"$k\" in env) case \"$n\" in %s) export \"$n=$(printf %%s \"$v\" | base64 -d)\" ;; "
             "*) exit 25 ;; esac ;; in) inp=\"$n\" ;; esac; done; " % ("|".join(sorted(env)) or "_none_")
-            + "printf %%s \"${inp:-}\" | base64 -d | %s 2>&1 | tail -n 40; rc=${PIPESTATUS[2]}; " % shlex.join(args)
+            + pull + "printf %%s \"${inp:-}\" | base64 -d | %s 2>&1 | tail -n 40; rc=${PIPESTATUS[2]}; " % shlex.join(args)
             + "[ \"$rc\" -eq 0 ] || { echo SITE_STEP_FAILED; exit \"$rc\"; }")
     # the `in` line has no name field: "in <b64>" reads as k=in n=<b64>
     return body, "".join(line + "\n" for line in lines)
