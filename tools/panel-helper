@@ -2796,14 +2796,26 @@ def do_website_account_create(args, content):
     return _web_guard_refresh()
 
 
+def _web_exists(user):
+    try:
+        pwd.getpwnam(user)
+    except KeyError:
+        return False
+    return True
+
+
 def do_website_account_remove(args, content):
     """Remove a website account this helper made: lingering off, its manager stopped, its processes, userdel -r.
 
-    Refused for an account without the mark. Its user journal and /tmp folders go too
+    Refused for an account without the mark (one with neither the mark nor an entry is already gone:
+    account=absent, rc 0). Its user journal and /tmp folders go too
     (_addon_forget_account, _forget_account_tmp), then the mark, then the egress guard is refreshed.
     """
     user = args[0]
     if not _web_made(user):
+        if not _web_exists(user):   # already removed (an install's undo, then the caller's own): nothing to do
+            sys.stdout.write("account=absent\n")
+            return 0
         sys.stderr.write("refusing %s: not a website account the panel made\n" % user)
         return 1
     try:

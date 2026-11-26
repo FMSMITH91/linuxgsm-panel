@@ -3,6 +3,7 @@
   "This host's panel helper is missing or out of date. Run install.sh again as root, then try again.": "L'assistant du panneau manque sur cet hôte ou n'est pas à jour. Relancez install.sh en root, puis réessayez.",
   "This website has no proxy token yet. Save its settings again, then try again.": "Ce site web n'a pas encore de jeton du proxy. Enregistrez de nouveau ses réglages, puis réessayez.",
   "The signed catalog offers no image for this website's kind and version.": "Le catalogue signé ne propose aucune image pour le type et la version de ce site web.",
+  "Websites need Podman, and the panel could not install it on this host. Check the host's internet connection and its package sources, then try again. Nothing was made.": "Les sites web ont besoin de Podman, et le panneau n'a pas pu l'installer sur cet hôte. Vérifiez la connexion internet de l'hôte et ses sources de paquets, puis réessayez. Rien n'a été créé.",
   "The panel refused the request.": "Le panneau a refusé la demande.",
   "The website was started.": "Le site web a été démarré.",
   "The website was stopped.": "Le site web a été arrêté.",

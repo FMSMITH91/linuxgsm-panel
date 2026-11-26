@@ -8,6 +8,8 @@
    last error is said in plain words. A refusal never shows the proxy's raw JSON (that goes to the log).
 3. The saved global options reach the configuration through the proxy routes (reconcile_proxy), with the
    sites' certificate files and the proxy left enabled.
+4. A website install on a host without Podman installs it first, or refuses before anything is made; a failed
+   first install removes the account it made, never one that was already there.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -366,6 +368,73 @@ def _s3_local(st, got):
        (True, True, False))
 
 
+# ── 4. Podman, and the undo of a failed install ─────────────────────────────────────────────────
+class _Core302:
+    """ssh_manager._core for ssh_manager.websites: the local host, a helper, a host without Podman at first."""
+
+    def __init__(self, apt_ok, created=True):
+        self.calls, self.apt_ok, self.podman = [], apt_ok, ""
+        self.created = created
+        self._log = _logging302.getLogger("panel.p302")
+
+    def is_local_server(self, _remote):
+        return True
+
+    def helper_present(self):
+        return True
+
+    def run_command(self, _remote, _cmd, **_kw):
+        return "os=24.04\npodman=%s\n" % self.podman, "", 0
+
+    def run_privileged(self, _remote, verb, args=(), **_kw):
+        self.calls.append((verb, list(args)))
+        if verb == "apt-install":
+            if self.apt_ok:
+                self.podman = "podman version 4.9.3"
+            return "", "E: no", 0 if self.apt_ok else 100
+        if verb == "website-account-create":
+            return "account=%s\nsubids=added\nlinger=on\n" % ("created" if self.created else "present"), "", 0
+        return "", "", 0
+
+
+def _with302(core, fn):
+    saved = (_sw302._core, _sw302._ids, _sw302._as_site)
+    _sw302._core = core
+    _sw302._ids = lambda remote, site: (None, {})            # the step after the account fails
+    _sw302._as_site = lambda remote, account, sh, **k: (core.calls.append(("as-site", [account])) or (True, ""))
+    try:
+        return fn()
+    finally:
+        _sw302._core, _sw302._ids, _sw302._as_site = saved
+
+
+def _s4_podman():
+    core = _Core302(apt_ok=False)
+    said = _with302(core, lambda: _sw302.install(None, _site302()))
+    eq("website install (ssh layer): Podman missing and not installable is refused in words BEFORE anything is made "
+       "(no account, folder or unit), after the same apt-install add-ons use",
+       (said, [c[0] for c in core.calls], core.calls[0]),
+       ((False, _sw302.NO_PODMAN), ["apt-install", "apt-add-repo", "apt-update", "apt-install"],
+        ("apt-install", ["podman", "uidmap", "passt"])))
+    core = _Core302(apt_ok=True)
+    said = _with302(core, lambda: _sw302.install(None, _site302()))
+    eq("website install (ssh layer): Podman missing is installed first; a first install that then fails removes the "
+       "account it made (the undo)",
+       (said, [c[0] for c in core.calls]),
+       ((False, _sw302.FAILED), ["apt-install", "website-account-create", "as-site", "website-account-remove"]))
+    core = _Core302(apt_ok=True, created=False)
+    core.podman = "podman version 4.9.3"
+    said = _with302(core, lambda: _sw302.install(None, _site302()))
+    eq("website install (ssh layer): a failure on an account that was already there (an update) never removes it, "
+       "and a host with Podman installs nothing (control)",
+       (said, [c[0] for c in core.calls]), ((False, _sw302.FAILED), ["website-account-create"]))
+    rc, out, calls, _conf, _t = _helper302(lambda: _H302.do_website_account_remove(["ws7"], ""), {"pw": {}})
+    rc2, _o, calls2, _c2, _t2 = _helper302(lambda: _H302.do_website_account_remove(["ws7"], ""), {"pw": {"ws7": 1007}})
+    eq("website-account-remove (verb): an account already gone is done (account=absent) and nothing runs; one that "
+       "exists without the panel's mark is still refused",
+       (rc, out.strip(), calls, rc2, calls2), (0, "account=absent", [], 1, []))
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -383,7 +452,7 @@ def _cleanup302(st):
     _db302.session.commit()
 
 
-for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors):
+for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)

@@ -28,6 +28,10 @@ If something the host needs is missing (for example the web proxy is not install
 says so on its first line, with one button that fixes it for a superadmin; anyone else is told to ask
 a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button.
 
+Websites run in Podman, like add-ons. The first website on a host installs Podman and its two helpers from
+Ubuntu's archive; a host where that fails is refused before anything is made. A first install that fails
+later removes the site's account and folders again, so nothing half-made is left behind.
+
 ## Installing an app
 
 Choose **Install an app**, pick the app, and enter its domain and the app's admin username and email.

@@ -670,6 +670,7 @@ def _s11_errors(st):
     def internal(*_a, **_k):
         raise ValueError("internal detail: /root/p300-db-relay")
     _p9_patch(_sw300, "install", _INSTALL300)
+    _p9_patch(_sw300, "runtime_ready", lambda remote: "")
     _p9_patch(_sw300, "_helper", lambda *a, **k: (True, ""))
     _p9_patch(_sw300, "_ids", lambda remote, site: ((1000, 1000), {}))
     _p9_patch(_svc300, "runtime_refusal", lambda *a: "")

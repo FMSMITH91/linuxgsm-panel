@@ -39,6 +39,8 @@ NO_HELPER = ("This host's panel helper is missing or out of date. Run install.sh
              "again.")
 MISSING_GATE = "This website has no proxy token yet. Save its settings again, then try again."
 NO_IMAGE = "The signed catalog offers no image for this website's kind and version."
+NO_PODMAN = ("Websites need Podman, and the panel could not install it on this host. Check the host's internet "
+             "connection and its package sources, then try again. Nothing was made.")
 REFUSED = "The panel refused the request."
 OK_STARTED = "The website was started."
 OK_STOPPED = "The website was stopped."
@@ -148,14 +150,67 @@ def _site_bundle(site, ids, probe, db=None):
     return _ws().bundle(files), image, None
 
 
+def _host_runtime(remote):
+    """(os VERSION_ID, podman --version) of the host, read as the panel's own account."""
+    out, _err, _rc = _core.run_command(remote, '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
+                                       'echo "podman=$(podman --version 2>/dev/null | head -n 1)"', timeout=30, sudo=False)
+    kv = _ws()._ad.kv_lines(out)
+    return kv.get("os", ""), kv.get("podman", "")
+
+
+def _apt_podman(remote):
+    """apt-install Podman and its two helpers, as add-ons do (universe added once when apt cannot find them)."""
+    packages = list(_ws()._ad.PACKAGES)
+    if _core.run_privileged(remote, "apt-install", packages, timeout=900)[2] == 0:
+        return True
+    _core.run_privileged(remote, "apt-add-repo", ["universe"], timeout=300)
+    _core.run_privileged(remote, "apt-update", [], timeout=300)
+    out, err, rc = _core.run_privileged(remote, "apt-install", packages, timeout=900)
+    if rc != 0:
+        _core._log.warning("websites: Podman could not be installed: %s", " ".join((err or out or "").split())[-300:])
+    return rc == 0
+
+
+def runtime_ready(remote):
+    """Why this host cannot run a website now (a sentence), or "": Podman is installed first when missing.
+
+    Asked BEFORE anything is made for a site, so a host that cannot run one is refused with nothing left.
+    """
+    if not _core.is_local_server(remote):
+        return ONLY_LOCAL
+    os_version, podman = _host_runtime(remote)
+    why = _ws().runtime_refusal(os_version, podman)
+    if why or podman:
+        return why
+    if not _apt_podman(remote):
+        return NO_PODMAN
+    os_version, podman = _host_runtime(remote)
+    return _ws().runtime_refusal(os_version, podman) if podman else NO_PODMAN
+
+
 def install(remote, site, db=None):
     """Create the site's account and folders, pull its image, write its unit and start it.
 
-    `db` is (host, port) of the site's database as the host sees it, or None.
+    `db` is (host, port) of the site's database as the host sees it, or None. Podman is made ready
+    first (runtime_ready); an install that fails after it made the account removes that account again
+    (remove), so a failed first install leaves no account, folder or unit behind. An account that was
+    already there (an update, a settings change) is never removed by a failure.
     """
+    why = runtime_ready(remote)
+    if why:
+        return False, why
     ok, out = _helper(remote, "website-account-create", [site.account])
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
+    ok, said = _install_made(remote, site, db)
+    if not ok and "account=created" in out.splitlines():
+        undone, _t = remove(remote, site)
+        _core._log.warning("website %s: the failed install was %s", site.id, "undone" if undone else "NOT undone")
+    return ok, said
+
+
+def _install_made(remote, site, db):
+    """install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
         return False, FAILED
