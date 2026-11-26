@@ -339,8 +339,8 @@ def section(name):
         raise KeyError(name)
     ensure_loaded()
     floor = FLOOR_SECTIONS.get(name)
-    stored = _state["stored"]
-    if not stored or name not in stored:
+    stored = _state["stored"] or {}
+    if name not in stored:
         return floor, None, {"kind": "floor"}
     floor_time, now = _floor_time(), time.time()
     if not floor_time or _when(stored["issued"]) <= floor_time:
