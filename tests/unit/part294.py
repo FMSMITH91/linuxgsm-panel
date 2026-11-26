@@ -16,6 +16,8 @@
    engine kicks the first match, and Steam names are not unique).
 7. A settings save rewrites only the lines it changes: a Latin-1 byte and a U+2028 or form feed inside
    another value come back byte for byte.
+8. The game-config form does not show (or save) a cfg field that a later line the form does not read
+   as a field sets again: two commands on one line, or a quoted key.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -32,7 +34,7 @@ from unit.part01 import check, eq, skip
 from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _p9, _p9_arm, _p9_client, _p9_delete_server, _p9_json, _p9_new_server,
-                         _p9_patch, _p9_restore_all)
+                         _p9_patch, _p9_patch_sm, _p9_restore_all)
 from panel.core.config import encrypt_secret as _enc294
 from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, files as _files294, game as _game294
@@ -321,3 +323,39 @@ eq("config save: the other lines come back byte for byte (a Latin-1 byte, a U+20
    (True, _CFG294.replace(b'maxplayers="8"', b'maxplayers="9"')))
 eq("config save (control): a new key is appended after the last line, with no blank line before it",
    _cfg_save294({"new_key": "n"}), (True, _CFG294 + b'new_key="n"\n'))
+
+
+# ── 8. A cfg field set again by a later line the form does not read ───────────────────────────────
+def _cfg_form294(sid, text, key, value):
+    """GET the form over `text`, then save `value` into the last field named `key`: (fields, saved, written)."""
+    writes = []
+    _p9_arm(who="part294")
+    _p9_patch_sm("read_file", lambda server, user, rel, **k: (text, None))
+    _p9_patch_sm("write_file", lambda server, user, rel, content, **k: writes.append(content) or (True, ""))
+    _p9_patch(_sf294, "_read_refused", lambda *a, **k: None)
+    _p9_patch(_sf294, "_write_refused", lambda *a, **k: None)
+    c, url = _p9_client(P9_ADMIN), "/api/server/%d/game-config/form" % sid
+    try:
+        got = _p9_json(c.get(url + "?path=serverfiles/cfg/p294.cfg"))
+        fields = [(f["key"], f["value"], f["id"]) for g in (got.get("form") or {}).get("groups", []) for f in g["fields"]]
+        fid = [i for k, _v, i in fields if k.lower() == key]
+        saved = _p9_json(c.post(url, json={"path": "serverfiles/cfg/p294.cfg", "hash": got["form"]["hash"],
+                                           "changes": {str(fid[-1]): value}})) if fid else {}
+    finally:
+        _p9_restore_all()
+    return [(k, v) for k, v, _i in fields], saved.get("success"), writes[-1:]
+
+
+_cfgsid294 = _p9_new_server(P9_HOST, "p294cfg", "cod4", 28294, name="p294 cfg")
+try:
+    _two_cmds294 = 'hostname "p294"\nrcon_password "old"\nsv_cheats 0\nsv_lan 0; rcon_password "live"\n'
+    _quoted294 = 'hostname "p294"\nrcon_password "old"\nsv_cheats 0\n"rcon_password" "live"\n'
+    _cfgseen294 = [_cfg_form294(_cfgsid294, t, "rcon_password", "rotated")[0] for t in (_two_cmds294, _quoted294)]
+    _cfgctl294 = _cfg_form294(_cfgsid294, _two_cmds294, "hostname", "renamed")
+finally:
+    _p9_delete_server(_cfgsid294)
+eq("config form: an RCON password set again by a later line of two commands, or by a quoted key, is not offered "
+   "(the form showed the first line, and saving it said Saved while the game kept the later value)",
+   _cfgseen294, [[("hostname", "p294"), ("sv_cheats", "0")]] * 2)
+eq("config form (control): the other fields of that file are still shown and saved",
+   _cfgctl294, ([("hostname", "p294"), ("sv_cheats", "0")], True, [_two_cmds294.replace('"p294"', '"renamed"')]))
