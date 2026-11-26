@@ -56,9 +56,17 @@ def _rel37(path):
 
 
 def _shipped_py37():
-    """Every Python file a panel runs: what install.sh installs from .github/update-paths.txt."""
+    """Every Python file a panel runs: what install.sh installs from .github/update-paths.txt.
+
+    panel/**, the helper, and every other `runtime <file>.py` the paths file names (review 1124: the
+    helper's root-run entry, tools/panel_helper_entry.py, was read by none of the scans).
+    """
     files = sorted(_glob37.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))   # panel/install/ too
     files.append(os.path.join(_root, "tools", "panel-helper"))
+    for ln in open(os.path.join(_root, ".github", "update-paths.txt"), encoding="utf-8"):
+        word = ln.split()
+        if len(word) == 2 and word[0] == "runtime" and word[1].endswith(".py") and not word[1].startswith("panel/"):
+            files.append(os.path.join(_root, *word[1].split("/")))
     return [f for f in files if os.path.isfile(f)]
 
 
