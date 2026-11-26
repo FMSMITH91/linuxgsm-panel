@@ -236,6 +236,23 @@ def install_json(site):
             "site_url": site_url, "admin_url": admin_url}
 
 
+def app_php_version(recipe, data):
+    """(the PHP version an app's new site runs, None), or (None, the refusal as (status, sentence)).
+
+    The one the form names, else the newest that both the signed catalog offers today and the recipe
+    lists (every offered version when the recipe lists none); "" for an app that does not run PHP.
+    """
+    from panel.routes.websites_view import php_versions
+    if str(recipe.get("kind") or "php") not in _svc.KINDS_PHP:
+        return "", None
+    listed = recipe.get("php") if isinstance(recipe.get("php"), list) else []
+    offered = [v for v in php_versions() if not listed or v in listed]
+    version = _w.field(data, "php_version") or (offered[-1] if offered else "")
+    if version not in offered:
+        return None, (409, "This app needs a PHP version this panel no longer offers.")
+    return version, None
+
+
 def _start_refusal(data):
     """((recipe name, recipe, admin fields, host, group, site name), None) for the form, or (None, the refusal)."""
     recipe_name = _w.field(data, "app")
@@ -248,9 +265,10 @@ def _start_refusal(data):
     remote, group, refusal = _w.add_target(data)
     name = _w.field(data, "name").lower() or recipe_name
     refusal = refusal or _w.add_refusal(remote, name, str(recipe.get("kind") or "php"))
-    if refusal:
-        return None, _w.say(*refusal)
-    return (recipe_name, recipe, fields, remote, group, name), None
+    version, bad = app_php_version(recipe, data) if not refusal else (None, None)
+    if refusal or bad:
+        return None, _w.say(*(refusal or bad))
+    return (recipe_name, dict(recipe, _php_version=version), fields, remote, group, name), None
 
 
 def _start(data):
@@ -258,7 +276,7 @@ def _start(data):
     if refused is not None:
         return refused
     recipe_name, recipe, (user, email, password, generated, _p), remote, group, name = got
-    site = _w.new_site(remote, name, str(recipe.get("kind") or "php"), group)
+    site = _w.new_site(remote, name, str(recipe.get("kind") or "php"), group, {"php_version": recipe["_php_version"]})
     site.app_recipe, site.app_version = recipe_name, str(recipe.get("version") or "")
     site.install_started_at, site.install_steps_done = utcnow(), "[]"
     db.session.commit()

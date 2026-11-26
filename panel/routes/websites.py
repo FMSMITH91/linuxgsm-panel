@@ -335,7 +335,7 @@ def _php_fields(data):
     from panel.routes.websites_view import php_versions
     versions = php_versions()
     version = field(data, "php_version") or (versions[-1] if versions else "")
-    if versions and version not in versions:
+    if version not in versions:
         return {}, (400, "Choose one of the PHP versions this panel offers.")
     return {"php_version": version}, None
 

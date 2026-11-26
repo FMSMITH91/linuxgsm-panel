@@ -97,5 +97,6 @@
   "The domain points somewhere else. Create the A (and AAAA) record shown, then check again.": "Le domaine pointe ailleurs. Créez l'enregistrement A (et AAAA) indiqué, puis vérifiez à nouveau.",
   "The domain points at a private or internal address, so it cannot be used for a public website.": "Le domaine pointe vers une adresse privée ou interne, il ne peut donc pas servir à un site web public.",
   "The domain has no A or AAAA record yet. Create the record shown, then check again.": "Le domaine n'a pas encore d'enregistrement A ou AAAA. Créez l'enregistrement indiqué, puis vérifiez à nouveau.",
-  "website": "site web"
+  "website": "site web",
+  "This app needs a PHP version this panel no longer offers.": "Cette application a besoin d'une version de PHP que ce panneau ne propose plus."
 }

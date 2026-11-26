@@ -47,19 +47,12 @@ def _catalog(fn_name, default):
     return got if isinstance(got, type(default)) else default
 
 
-def _php_pins():
-    from panel.services import websites_catalog
-    try:
-        got = websites_catalog.pins("php")
-    except NotImplementedError:
-        return {}
-    versions = got.get("versions") if isinstance(got, dict) else None
-    return versions if isinstance(versions, dict) else {}
-
-
 def php_versions():
-    """The PHP versions the signed catalog pins, oldest first."""
-    return sorted(_php_pins())
+    """The PHP versions a site may choose now: the signed catalog's, still supported upstream, oldest first.
+
+    The catalog's `php` section is {version: {image, eol}} (websites_catalog.php_versions reads it).
+    """
+    return list(_catalog("php_versions", []))
 
 
 def runtime_versions():

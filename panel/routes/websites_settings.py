@@ -35,14 +35,9 @@ S_RULES_MAX = 50
 
 
 def _php_versions():
-    """The PHP versions the signed catalog pins now (none until the catalog layer answers)."""
-    from panel.services import websites_catalog
-    try:
-        got = websites_catalog.pins("php")
-    except NotImplementedError:
-        return ()
-    versions = got.get("versions") if isinstance(got, dict) else None
-    return tuple(sorted(versions)) if isinstance(versions, dict) else ()
+    """The PHP versions a site may choose now (websites_view.php_versions: the catalog's supported ones)."""
+    from panel.routes.websites_view import php_versions
+    return tuple(php_versions())
 
 
 def _problems(problems):
@@ -109,9 +104,11 @@ def _php_save(site, form):
         return _w.say(501, _w.S_NOT_READY)
     if problems:
         return _problems(problems)
+    new_version = bool(version) and version != site.php_version
     words = _php_store(site, values, custom, version)
     db.session.commit()
-    ok, said = _w.host_call(_sw.php_apply, site.remote, site)
+    # A new PHP version is a new image: the whole site is installed again (its php.ini with it), else only the php.ini.
+    ok, said = _w.install_site(site) if new_version else _w.host_call(_sw.php_apply, site.remote, site)
     _w.forget_status(site.id)
     return _w.acted(site, "website_php", ok, said or "PHP settings applied.", ", ".join(words) or "none")
 
