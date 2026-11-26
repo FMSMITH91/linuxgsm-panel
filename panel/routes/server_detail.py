@@ -1105,6 +1105,15 @@ def _db_dump_before(app, server_id, remote, short_name, action):
         _console_push(app, server_id, f"[panel] {action}: {note}")
 
 
+def _bg_refusal(server_id, name, action, free):
+    """Why a long action is not run after all, or None to go ahead.
+
+    A wipe or restore of the server (_r39a_wipe_refusal), or for a Backup another backup of it (`free`
+    False: button_backup_claim).
+    """
+    return _r39a_wipe_refusal(server_id, name, action) or (None if free else BUTTON_BACKUP_BUSY)
+
+
 def _bg_action(app, gs, remote, action, on_done=None):
     """Run a long LinuxGSM command in the background (green thread).
 
@@ -1134,9 +1143,8 @@ def _bg_action(app, gs, remote, action, on_done=None):
                     detail = "its host is no longer configured"
                     return
                 with r36j_route_job(server_id, "action"), button_backup_claim(server_id, action) as free:
-                    # Asked again under the registration (see _r39a_power_unless_wiping); a Backup
-                    # is also refused beside another backup of the server (button_backup_claim).
-                    wiping = _r39a_wipe_refusal(server_id, name, action) or (None if free else BUTTON_BACKUP_BUSY)
+                    # Asked again under the registration (see _r39a_power_unless_wiping).
+                    wiping = _bg_refusal(server_id, name, action, free)
                     if wiping:
                         _console_push(_app, server_id, f"[panel] {action}: {wiping}")
                         detail = str(wiping)

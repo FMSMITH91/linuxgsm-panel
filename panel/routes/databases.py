@@ -840,10 +840,17 @@ def dump_for_backup(sid, remote, account):
         return None          # nothing readable to dump; the backup goes on as it always did
     if not rows:
         return None
-    # Each database is held for "dump" as the Databases tab's own dump is (one_at_a_time): a restore,
-    # delete or other dump of it running now would interleave with this one on the same
-    # panel-db-dumps/<name>.sql.gz, and a backup could archive a half-written file. A held one is
-    # left out and said; the rest are dumped.
+    why = [w for w in _dump_held(remote, account, hd, rows) if w]
+    return _note(why[0] if len(why) == 1 else i18n.Sentences(*why)) if why else None
+
+
+def _dump_held(remote, account, hd, rows):
+    """A backup's dump of `rows`, each held for "dump" while it runs: [sentence or ""] about what was not dumped.
+
+    Held as the Databases tab's own dump is (one_at_a_time): a restore, delete or other dump of one running
+    now would interleave with this one on the same panel-db-dumps/<name>.sql.gz, and a backup could
+    archive a half-written file. A database already held is left out and said; the rest are dumped.
+    """
     with contextlib.ExitStack() as stack:
         free, busy = [], []
         for r in rows:
@@ -853,8 +860,7 @@ def dump_for_backup(sid, remote, account):
             why.append(_dump_rows(remote, account, hd, free) if free else "")
         except Exception:
             why.append(i18n.Sentence("the dump failed ({error}).", error=_log_and_generic("database dump failed")))
-    why = [w for w in why if w]
-    return _note(why[0] if len(why) == 1 else i18n.Sentences(*why)) if why else None
+    return why
 
 
 def _dump_rows(remote, account, hd, rows):
