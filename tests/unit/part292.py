@@ -194,8 +194,8 @@ def _accept292(sid, priv, key):
 
 
 # ── 3. refusals ─────────────────────────────────────────────────────────────────────────────────
-def _refusals292(sid, priv, other, key, base):
-    """Each refusal from the accepted catalog #5 (`base`): (name, data, sig, the reason)."""
+def _refusals292(sid, priv, other, key, base, base_bytes):
+    """Each refusal from the accepted catalog #5 (`base`, checked; `base_bytes`, as published), then #5 again."""
     expired = _doc292(6, issued="2026-01-01T00:00:00Z", expires="2026-02-01T00:00:00Z")
     short = _addons292(bluemap={"image": "ghcr.io/bluemap-minecraft/bluemap@sha256:" + "3" * 63})
     cases = [
@@ -225,7 +225,7 @@ def _refusals292(sid, priv, other, key, base):
             _ad292.CATALOG["bluemap"]["image"]),
            (200, False, "The add-on catalog was refused: %s." % why, 5, _NEW_BLUEMAP292))
     _reset292(base)
-    _serve292(base, _sign292(priv, base), key)
+    _serve292(base_bytes, _sign292(priv, base_bytes), key)
     code, body = _refresh292(sid)
     eq("catalog refresh (control): catalog #5 offered again is no newer, said as such, not a failure",
        (code, body.get("success"), body.get("message")), (200, True, "No newer add-on catalog: #5 of 2026-11-25 is the latest."))
@@ -334,7 +334,7 @@ else:
         _reset292(None)
         _base292 = _accept292(_sid292, _priv292, _key292)
         _refusals292(_sid292, _priv292, _other292, _key292,
-                     _cat292.check_signed(_base292, _sign292(_priv292, _base292), _key292, 0, 0)[0])
+                     _cat292.check_signed(_base292, _sign292(_priv292, _base292), _key292, 0, 0)[0], _base292)
         _p9_restore_all()
         _p9_arm(who="part292")
         _host292({"kind": "bluemap", "image": _cat292.FLOOR["bluemap"]["image"], "mc_version": "1.21.4"})
