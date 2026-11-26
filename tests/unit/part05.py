@@ -1724,6 +1724,7 @@ _VERB_SAMPLES = {
     "website-proxy-install": ["2.11.9", "amd64", "a" * 64],
     "website-proxy-apply": ["start"],
     "website-proxy-stop": [],
+    "website-proxy-rebind": ["check"],
     "website-proxy-status": [],
     "website-egress-guard": ["on"],
     "website-quota-set": ["ws12", "2048"],

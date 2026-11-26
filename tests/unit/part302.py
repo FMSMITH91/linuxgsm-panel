@@ -16,6 +16,8 @@
 7. OPcache is not loaded a second time.
 8. A refused proxy release leaves no account or folder behind.
 9. Turning the egress guard off with its table already gone runs no failing nft command.
+10. The listen addresses are re-read before every start of the proxy (a reboot included) and by a timer while it
+    runs; a tunnel's loopback bind is never touched.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -45,6 +47,7 @@ from panel.core import config as _cfg302
 from panel.db.models import (RemoteServer as _Remote302, User as _User302, Website as _Site302,
                              WebsiteDomain as _Dom302, WebsiteProxy as _Proxy302, db as _db302)
 from panel.ops.ssh_manager import websites as _sw302
+from panel.security import privileged as _priv302
 from panel.services import websites as _ws302
 from panel.services import websites_proxy as _wp302
 
@@ -56,6 +59,7 @@ _H302.NSSWITCH_FILE = os.path.join(_root, "tests", "no-such-nsswitch.conf")
 
 _TOKEN302 = "p" * 40
 _UNIT302 = "lgsm-web-proxy.service"
+_TIMER302 = "lgsm-web-proxy-rebind.timer"
 # Documentation addresses only (RFC 5737, RFC 3849), and made-up tailnet ones.
 _IPJ302 = _json302.dumps([
     {"ifname": "lo", "addr_info": [{"local": "127.0.0.1", "scope": "host"}, {"local": "::1", "scope": "host"}]},
@@ -123,7 +127,8 @@ class _Sub302:
 _PATHS302 = {"WEB_PROXY_DIR": "lib", "WEB_PROXY_BIN": "lib/caddy", "WEB_PROXY_ETC": "etc", "WEB_PROXY_CONF": "etc/Caddyfile",
              "WEB_PROXY_CERTS": "etc/certs", "WEB_PROXY_STATE": "state", "WEB_PROXY_UNIT_FILE": "units/proxy.service",
              "WEB_JOURNAL_CONF": "units/journald.conf", "WEB_GUARD_FILE": "etc/egress-guard.nft",
-             "WEB_GUARD_UNIT_FILE": "units/guard.service", "WEB_MARK_DIR": "marks"}
+             "WEB_GUARD_UNIT_FILE": "units/guard.service", "WEB_MARK_DIR": "marks",
+             "WEB_REBIND_UNIT_FILE": "units/rebind.service", "WEB_REBIND_TIMER_FILE": "units/rebind.timer"}
 
 
 def _plain_write302(path, data, _mode, _uid=0, _gid=0):
@@ -264,7 +269,8 @@ def _s2_start():
         rc, out, calls, _conf, _t = _helper302(lambda: _H302.do_website_proxy_apply([arg], _doc302()), {})
         eq("website-proxy-apply %s (verb): the proxy is enabled AND restarted, so a running proxy loads the new file "
            "and one left running comes back after a reboot" % arg,
-           (rc, _systemctl302(calls)), (0, [["enable", _UNIT302], ["restart", _UNIT302]]))
+           (rc, _systemctl302(calls)),
+           (0, [["daemon-reload"], ["enable", _UNIT302], ["enable", "--now", _TIMER302], ["restart", _UNIT302]]))
     host = {"states": [_LOOPING302], "journal": "starting\n" + _BUSY_JSON302 + "\n"}
     rc, out, calls, conf, _t = _helper302(lambda: _H302.do_website_proxy_apply(["start"], _doc302()), host)
     said = _panel_says302(out)
@@ -567,6 +573,49 @@ def _s7_guard():
            (rc, ["delete", "table", "inet", "lgsm_web"] in [c[1:] for c in calls]), (0, deleted))
 
 
+# ── 10. the listen addresses at boot and while running ──────────────────────────────────────────
+_MARKED302 = (_H302.WEB_CONF_HEAD + ": x\n\n{\n" + _H302.WEB_BIND_MARK + "\n\tdefault_bind 198.51.100.9\n"
+              "\tadmin off\n}\n")
+
+
+def _binds302(conf):
+    return [ln for ln in (conf or "").split("\n") if "default_bind" in ln and not ln.startswith("\t#")]
+
+
+def _s10_rebind():
+    pre = [ln for ln in _H302.WEB_PROXY_UNIT_TEXT.split("\n") if ln.startswith("ExecStartPre=")]
+    eq("web proxy unit: before every start, a reboot included, the helper re-reads the host's addresses as root "
+       "('+', the unit itself runs as the proxy's user), from the path sudo runs",
+       pre, ["ExecStartPre=+%s website-proxy-rebind start" % _priv302.HELPER_PATH])
+    rc, out, calls, conf, _t = _helper302(lambda: _H302.do_website_proxy_rebind(["start"], ""), {}, old_conf=_MARKED302)
+    eq("website-proxy-rebind start (verb): a changed address replaces the marked bind line before the proxy starts; "
+       "nothing is restarted from inside the start",
+       (rc, out.strip(), _binds302(conf), _systemctl302(calls)),
+       (0, "rebind=changed", ["\tdefault_bind 203.0.113.7 [2001:db8::7]"], []))
+    rc, out, calls, conf, _t = _helper302(lambda: _H302.do_website_proxy_rebind(["check"], ""), {}, old_conf=_MARKED302)
+    eq("website-proxy-rebind check (verb, the timer): a running proxy whose host changed address is rewritten and "
+       "restarted", (out.strip(), _binds302(conf), _systemctl302(calls)),
+       ("rebind=changed", ["\tdefault_bind 203.0.113.7 [2001:db8::7]"], [["restart", _UNIT302]]))
+    _s10_controls()
+
+
+def _s10_controls():
+    tunnel = _wp302.render([_site302()], _proxy302("tunnel", "cloudflare"), None, secret_of=lambda s: _TOKEN302)
+    same = _MARKED302.replace("198.51.100.9", "203.0.113.7 [2001:db8::7]")
+    cases = ((tunnel, {}), (same, {}), (_MARKED302, {"ip": _IPJ_TAILNET_ONLY302}))
+    got = [_helper302(lambda: _H302.do_website_proxy_rebind(["check"], ""), host, old_conf=c) for c, host in cases]
+    eq("website-proxy-rebind (verb): a tunnel's own loopback bind, addresses that did not change, and a host left "
+       "with no address of its own are each left as they are (controls)",
+       [(g[1].strip(), g[3] == c[0], _systemctl302(g[2])) for g, c in zip(got, cases)],
+       [("rebind=unchanged", True, [])] * 3)
+    _rc, _out, _calls, conf, _t = _helper302(lambda: _H302.do_website_proxy_apply(["start"], _doc302()), {})
+    eq("website-proxy-apply (verb): the bind line it puts in carries the mark the re-read looks for",
+       _H302.WEB_BIND_MARK in (conf or ""), True)
+    _rc, _out, calls, _conf, _t = _helper302(lambda: _H302.do_website_proxy_stop([], ""), {})
+    eq("website-proxy-stop (verb): the address timer is stopped with the proxy",
+       _systemctl302(calls), [["disable", "--now", _TIMER302], ["disable", "--now", _UNIT302]])
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -585,7 +634,7 @@ def _cleanup302(st):
 
 
 for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone,
-                 _s6_catch_all, _s7_opcache, _s7_release, _s7_guard):
+                 _s6_catch_all, _s7_opcache, _s7_release, _s7_guard, _s10_rebind):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)

@@ -998,7 +998,8 @@ _WEB_PATHS299 = {"WEB_PROXY_DIR": "lib", "WEB_PROXY_BIN": "lib/caddy", "WEB_PROX
                  "WEB_PROXY_CONF": "etc/Caddyfile", "WEB_PROXY_CERTS": "etc/certs", "WEB_PROXY_STATE": "state",
                  "WEB_PROXY_UNIT_FILE": "units/proxy.service", "WEB_JOURNAL_CONF": "units/journald.conf",
                  "WEB_GUARD_FILE": "etc/egress-guard.nft", "WEB_GUARD_UNIT_FILE": "units/guard.service",
-                 "WEB_MARK_DIR": "marks"}
+                 "WEB_MARK_DIR": "marks", "WEB_REBIND_UNIT_FILE": "units/rebind.service",
+                 "WEB_REBIND_TIMER_FILE": "units/rebind.timer"}
 
 
 def _web_files299(verbs):
@@ -1051,11 +1052,13 @@ def _s299_helper_modes():
     proxy, root = ("0o640", (0, 990)), ("0o600", (0, 0))
     eq("web proxy files (install, apply, cache build and egress guard verbs): the binary runs only as root and the "
        "proxy's group (0750), the proxy reads its configuration and certificates through its group but cannot change "
-       "them (root-owned 0640), the units, journald's drop-in and the guard's ruleset are root's alone (0600)",
+       "them (root-owned 0640), the units (the address re-read's too), journald's drop-in and the guard's ruleset "
+       "are root's alone (0600)",
        (rcs, files), ([0, 0, 0, 0], {"lib/caddy": ("0o750", (0, 990)), "etc/Caddyfile": proxy,
                                      "etc/certs/a.example.org.crt": proxy, "etc/egress-guard.nft": root,
                                      "units/proxy.service": root, "units/journald.conf": root,
-                                     "units/guard.service": root}))
+                                     "units/guard.service": root, "units/rebind.service": root,
+                                     "units/rebind.timer": root}))
     eq("web proxy files: every file is owner-only (0600) while its bytes are written; its final mode comes after",
        writing, [0o600])
 

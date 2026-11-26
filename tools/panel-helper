@@ -2608,6 +2608,13 @@ WEB_JOURNAL_CONF = "/etc/systemd/journald@lgsm-web-proxy.conf"
 WEB_GUARD_FILE = WEB_PROXY_ETC + "/egress-guard.nft"
 WEB_GUARD_UNIT = "lgsm-web-egress-guard.service"
 WEB_GUARD_UNIT_FILE = "/etc/systemd/system/" + WEB_GUARD_UNIT
+# The listen addresses re-read: before every start of the proxy (its unit's ExecStartPre, so a reboot
+# with a new address still serves) and by a timer while it runs (website-proxy-rebind).
+WEB_REBIND_UNIT = "lgsm-web-proxy-rebind.service"
+WEB_REBIND_TIMER = "lgsm-web-proxy-rebind.timer"
+WEB_REBIND_UNIT_FILE = "/etc/systemd/system/" + WEB_REBIND_UNIT
+WEB_REBIND_TIMER_FILE = "/etc/systemd/system/" + WEB_REBIND_TIMER
+WEB_BIND_MARK = "\t# the host's own addresses: re-read at each apply, each start and every 10 minutes"
 WEB_CADDY_URL = "https://github.com/caddyserver/caddy/releases/download/v%s/caddy_%s_linux_%s.tar.gz"
 WEB_CADDY_MAX_BYTES = 100 * 1024 * 1024
 WEB_CONF_MAX = 1024 * 1024
@@ -2631,6 +2638,7 @@ Wants=network-online.target
 Type=notify
 User=lgsmweb
 Group=lgsmweb
+ExecStartPre=+/usr/local/lib/linuxgsm-panel/panel-helper website-proxy-rebind start
 ExecStart=/usr/local/lib/lgsm-web-proxy/caddy run --environ=false --config /etc/lgsm-web-proxy/Caddyfile --adapter caddyfile
 Environment=HOME=/var/lib/lgsm-web-proxy XDG_DATA_HOME=/var/lib/lgsm-web-proxy XDG_CONFIG_HOME=/var/lib/lgsm-web-proxy
 TimeoutStopSec=15s
@@ -2670,6 +2678,25 @@ WantedBy=multi-user.target
 """
 # Access logs (off unless a site turns them on) are kept 7 days in the proxy's own journal namespace.
 WEB_JOURNAL_TEXT = "# Written by linuxgsm-panel: the web proxy's own journal.\n[Journal]\nMaxRetentionSec=7day\n"
+WEB_REBIND_UNIT_TEXT = """# Written by linuxgsm-panel: the web proxy's listen addresses, re-read (website-proxy-rebind).
+[Unit]
+Description=linuxgsm-panel web proxy listen addresses
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/linuxgsm-panel/panel-helper website-proxy-rebind check
+"""
+WEB_REBIND_TIMER_TEXT = """# Written by linuxgsm-panel: the web proxy's listen addresses, re-read every 10 minutes.
+[Unit]
+Description=linuxgsm-panel web proxy listen addresses, every 10 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+"""
 WEB_GUARD_UNIT_TEXT = """# Written by linuxgsm-panel: the websites' egress guard (nftables table lgsm_web).
 [Unit]
 Description=linuxgsm-panel websites egress guard
@@ -2944,6 +2971,8 @@ def do_website_proxy_install(args, content):
     _web_dirs(pw)
     _web_write(WEB_PROXY_BIN, binary, WEB_FILE_EXEC, 0, pw.pw_gid)
     _web_write(WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT.encode(), WEB_FILE_ROOT)
+    _web_write(WEB_REBIND_UNIT_FILE, WEB_REBIND_UNIT_TEXT.encode(), WEB_FILE_ROOT)
+    _web_write(WEB_REBIND_TIMER_FILE, WEB_REBIND_TIMER_TEXT.encode(), WEB_FILE_ROOT)
     _web_write(WEB_JOURNAL_CONF, WEB_JOURNAL_TEXT.encode(), WEB_FILE_ROOT)
     if not os.path.exists(WEB_PROXY_CONF):
         empty = WEB_CONF_HEAD + ": no site yet.\n{\n\tadmin off\n\tpersist_config off\n}\nhttp:// {\n\tabort\n}\n"
@@ -3031,11 +3060,12 @@ def _web_bind(text):
     addrs = web_bind_addresses(out)
     if not addrs:
         return text, []
+    bind = "%s\n\tdefault_bind %s\n" % (WEB_BIND_MARK, " ".join(addrs))
     head, sep, rest = text.partition("\n{\n")
     if not sep:                     # no global options block: one is put in after the header line
         head, sep, rest = text.partition("\n")
-        return head + "\n{\n\tdefault_bind %s\n}\n" % " ".join(addrs) + rest, addrs
-    return head + sep + "\tdefault_bind %s\n" % " ".join(addrs) + rest, addrs
+        return head + "\n{\n" + bind + "}\n" + rest, addrs
+    return head + sep + bind + rest, addrs
 
 
 def _web_ports(text):
@@ -3195,12 +3225,62 @@ def _web_read(path):
         return None
 
 
+def _web_units_current():
+    """Write the proxy's unit and the rebind service and timer when they differ from this helper's text.
+
+    A proxy installed by an older helper gets the re-read before each start at its next apply.
+    """
+    changed = False
+    for path, text in ((WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT), (WEB_REBIND_UNIT_FILE, WEB_REBIND_UNIT_TEXT),
+                       (WEB_REBIND_TIMER_FILE, WEB_REBIND_TIMER_TEXT)):
+        if _web_read(path) != text.encode():
+            _web_write(path, text.encode(), WEB_FILE_ROOT)
+            changed = True
+    if changed:
+        _run_quiet([resolve("systemctl"), "daemon-reload"], timeout=60)
+
+
+def web_rebound(conf, addrs):
+    """`conf` with its marked default_bind line set to `addrs`, or None when there is nothing to change.
+
+    Only the line the helper put in after WEB_BIND_MARK is touched: a tunnel's own loopback bind has no
+    mark. No address at all keeps the line as it is (the start then says why in the journal).
+    """
+    m = re.search(re.escape(WEB_BIND_MARK) + r"\n\tdefault_bind ([^\n]+)\n", conf or "")
+    if not m or not addrs or m.group(1).split() == addrs:
+        return None
+    return conf[:m.start(1)] + " ".join(addrs) + conf[m.end(1):]
+
+
+def do_website_proxy_rebind(args, content):
+    """Re-read the host's addresses into the proxy's bind line: `start` (ExecStartPre) or `check` (the timer).
+
+    `start` only rewrites the file (the start that follows reads it). `check` rewrites it and restarts
+    the proxy when it is running and the addresses changed. Prints rebind=changed|unchanged; always 0,
+    so a failed read never stops the proxy from starting on the addresses it had.
+    """
+    conf = (_web_read(WEB_PROXY_CONF) or b"").decode("utf-8", "replace")
+    _rc, out = _run_quiet([resolve("ip"), "-j", "addr", "show"], timeout=20)
+    new = web_rebound(conf, web_bind_addresses(out))
+    if new is None:
+        sys.stdout.write("rebind=unchanged\n")
+        return 0
+    pw = pwd.getpwnam(WEB_PROXY_USER)
+    _web_write(WEB_PROXY_CONF, new.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
+    sys.stdout.write("rebind=changed\n")
+    if args[0] == "check" and _web_unit_state()[0] == "active":
+        _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
+    return 0
+
+
 def _web_start(old, pw):
     """Enable and restart the proxy on the new file; when it does not stay running, put `old` back. 0 or 1."""
     was_active = _web_unit_state()[0] == "active"
     since = int(time.time()) - 1
     systemctl = resolve("systemctl")
+    _web_units_current()
     _run_quiet([systemctl, "enable", WEB_PROXY_UNIT], timeout=60)
+    _run_quiet([systemctl, "enable", "--now", WEB_REBIND_TIMER], timeout=60)
     _run_quiet([systemctl, "restart", WEB_PROXY_UNIT], timeout=120)
     if _web_running():
         sys.stdout.write("applied=yes\n")
@@ -3359,7 +3439,8 @@ def do_website_cpu_limit(args, content):
 
 
 def do_website_proxy_stop(args, content):
-    """Stop and disable the web proxy (the last enabled site went offline): nothing listens on 80/443."""
+    """Stop and disable the web proxy and its address timer (the last site went offline): nothing listens on 80/443."""
+    _run_quiet([resolve("systemctl"), "disable", "--now", WEB_REBIND_TIMER], timeout=60)
     rc, _out = _run_quiet([resolve("systemctl"), "disable", "--now", WEB_PROXY_UNIT], timeout=120)
     sys.stdout.write("stopped=%s\n" % ("yes" if rc == 0 else "no"))
     return rc
@@ -3835,6 +3916,7 @@ VERBS = {
     "website-proxy-install": ([v_caddy_version, v_choice("amd64", "arm64"), v_sha256], lambda a: [], None),
     "website-proxy-apply": ([v_choice("start", "reload", "restart")], lambda a: [], None),
     "website-proxy-stop": ([], lambda a: [], None),
+    "website-proxy-rebind": ([v_choice("start", "check")], lambda a: [], None),
     "website-proxy-status": ([], lambda a: [], None),
     "website-egress-guard": ([v_choice("on", "off")], lambda a: [], None),
     "website-quota-set": ([v_website_account, v_quota_mb], lambda a: [], None),
@@ -9947,6 +10029,7 @@ ACTIONS = {
     "website-quota-set": do_website_quota_set,
     "website-proxy-install-cache": do_website_proxy_install_cache,
     "website-cpu-limit": do_website_cpu_limit,
+    "website-proxy-rebind": do_website_proxy_rebind,
     "addon-account-release": do_addon_account_release,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,

@@ -43,6 +43,7 @@ def argv(error, choice):
         "website-account-create": [account], "website-account-remove": [account],
         "website-proxy-install": [version, choice("amd64", "arm64"), sha256],
         "website-proxy-apply": [choice("start", "reload", "restart")], "website-proxy-stop": [],
+        "website-proxy-rebind": [choice("start", "check")],
         "website-proxy-status": [], "website-egress-guard": [choice("on", "off")],
         "website-quota-set": [account, quota],
         "website-proxy-install-cache": [version, image, image, module], "website-cpu-limit": [account, cpu],
