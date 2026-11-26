@@ -180,6 +180,10 @@ ACTION_PERMISSION_MAP = {
 #     bcrypt's 72-byte input limit irrelevant; Argon2 has no such limit, so new hashes have no
 #     pre-hash at all (OWASP warns against pre-hashing for bcrypt; Argon2 does not need it).
 #   * a bare `$2b$...` — bcrypt over the raw password, from before that.
+# At upgrade, data migration 4 (models._layer_legacy_password_hashes) wraps each of those in
+# Argon2id: `layered$<sha256|raw>$<bcrypt salt>$<Argon2id of the bcrypt hash>` (OWASP Password
+# Storage Cheat Sheet, "Upgrading Legacy Hashes", layering). A stolen database then holds no bare
+# bcrypt hash; the owner's next sign-in still replaces it with a direct Argon2id hash.
 ARGON2_TIME_COST = 2
 ARGON2_MEMORY_KIB = 19456
 ARGON2_PARALLELISM = 1
@@ -200,6 +204,8 @@ _ARGON2_MAX_FACTOR = 4
 # paths, where a body near MAX_CONTENT_LENGTH would otherwise be hashed whole.
 MAX_PASSWORD_BYTES = 1024 * 1024
 _SHA256_PREFIX = "sha256$"
+_LAYERED_PREFIX = "layered$"
+_BCRYPT_SALT_LEN = 29          # `$2b$12$` and the 22-character salt: what bcrypt.hashpw takes as the salt
 
 
 def _prehash(password):
@@ -320,9 +326,40 @@ def check_password(password, password_hash):
     try:
         if stored.startswith(_ARGON2_PREFIX):
             return run_off_hub(_argon2_verify, stored, raw)
+        if stored.startswith(_LAYERED_PREFIX):
+            return _check_layered(password, stored)
         return _check_bcrypt(password, stored)
     except (ValueError, TypeError):
         return False
+
+
+def _bcrypt_input(kind, password):
+    """What the legacy format `kind` ("sha256" or "raw") gave bcrypt for `password`."""
+    return _prehash(password) if kind == "sha256" else password.encode("utf-8")[:72]
+
+
+def layer_legacy_hash(stored):
+    """`stored` (a bcrypt-era hash) wrapped in Argon2id, as the layered format; None for any other.
+
+    The Argon2id input is the whole bcrypt hash string, so checking it needs the password: bcrypt
+    is recomputed with the stored salt, then Argon2id verifies the result (_check_layered).
+    """
+    stored = stored.strip() if isinstance(stored, str) else ""
+    kind, inner = ("sha256", stored[len(_SHA256_PREFIX):]) if stored.startswith(_SHA256_PREFIX) else ("raw", stored)
+    if not (inner.startswith(("$2a$", "$2b$", "$2y$")) and len(inner) == 60):
+        return None
+    return "%s%s$%s$%s" % (_LAYERED_PREFIX, kind, inner[:_BCRYPT_SALT_LEN],
+                           run_off_hub(_argon2_hash, inner.encode("ascii")))
+
+
+def _check_layered(password, stored):
+    """Verify a layered hash: bcrypt with its stored salt, then Argon2id over that bcrypt hash."""
+    kind, _sep, rest = stored[len(_LAYERED_PREFIX):].partition("$")
+    salt, phc = rest[:_BCRYPT_SALT_LEN], rest[_BCRYPT_SALT_LEN + 1:]
+    if kind not in ("sha256", "raw") or rest[_BCRYPT_SALT_LEN:_BCRYPT_SALT_LEN + 1] != "$":
+        return False
+    inner = run_off_hub(bcrypt.hashpw, _bcrypt_input(kind, password), salt.encode("ascii"))
+    return run_off_hub(_argon2_verify, phc, inner)
 
 
 def needs_rehash(password_hash):
@@ -371,6 +408,14 @@ def backup_code_matches(code, stored):
 # the background, so it's ready before the first login without either delaying startup or making
 # that first login abnormally slow.
 _DUMMY_HASH = None
+# ...and a bcrypt-era one (cost 12, the cost those formats were written at), for the same reason
+# while any account still holds a bcrypt-era or layered hash: see login_password_check.
+_DUMMY_BCRYPT = None
+# Whether any account holds a hash that is not Argon2id: asked of the database at most once a
+# minute. A stale "yes" costs a few logins one bcrypt each; a hash that comes back by a restore
+# is seen within the minute, or at once when a login meets one.
+_LEGACY_SEEN = {"at": None, "any": True}
+_LEGACY_TTL = 60.0
 
 
 def _dummy_hash():
@@ -382,12 +427,60 @@ def _dummy_hash():
     return _DUMMY_HASH
 
 
+def _dummy_bcrypt():
+    global _DUMMY_BCRYPT
+    if _DUMMY_BCRYPT is None:
+        _DUMMY_BCRYPT = _SHA256_PREFIX + run_off_hub(
+            bcrypt.hashpw, _prehash(secrets.token_hex(16)), bcrypt.gensalt(12)).decode("ascii")
+    return _DUMMY_BCRYPT
+
+
+def _legacy_hashes_present():
+    """Whether any account's stored hash is not Argon2id (bcrypt-era or layered); True when unknown."""
+    now = time.monotonic()
+    if _LEGACY_SEEN["at"] is not None and now - _LEGACY_SEEN["at"] < _LEGACY_TTL:
+        return _LEGACY_SEEN["any"]
+    try:
+        found = db.session.query(User.id).filter(
+            ~User.password_hash.startswith(_ARGON2_PREFIX, autoescape=True)).first() is not None
+    except Exception:  # noqa: BLE001 - no database to ask: spend the larger cost, never the smaller
+        return True
+    _LEGACY_SEEN.update(at=now, any=found)
+    return found
+
+
+def login_password_check(password, password_hash):
+    """Whether `password` matches `password_hash`, spending the same work whatever the hash is.
+
+    For the sign-in paths (the login form, the SFTP service). `password_hash` is None for a name
+    with no active account. Every call runs one Argon2id verify, plus one bcrypt verify while any
+    account still holds a bcrypt-era or layered hash (_legacy_hashes_present): an unknown name, an
+    Argon2id account and a legacy one then take the same time, where the decoy alone (Argon2id,
+    about 13 ms) answered an unknown name some 20 times faster than a bcrypt account (OWASP
+    Authentication Cheat Sheet, "Authentication and Error Messages": the same processing whether
+    or not the user exists).
+    """
+    stored = password_hash.strip() if isinstance(password_hash, str) else ""
+    if not stored:
+        check_password(password, _dummy_hash())
+        ok, legacy = False, False
+    else:
+        ok, legacy = check_password(password, stored), not stored.startswith(_ARGON2_PREFIX)
+    if legacy:
+        _LEGACY_SEEN["any"] = True
+        if not stored.startswith(_LAYERED_PREFIX):
+            check_password(password, _dummy_hash())     # a bare bcrypt hash: its Argon2id half
+    elif _legacy_hashes_present():
+        check_password(password, _dummy_bcrypt())
+    return ok
+
+
 def dummy_password_check(password):
     """Run a throwaway compare to equalize login timing for a nonexistent or inactive user.
 
-    Always returns False.
+    Always returns False. The same work as login_password_check for that name.
     """
-    check_password(password, _dummy_hash())
+    login_password_check(password, None)
     return False
 
 
