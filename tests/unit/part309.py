@@ -451,6 +451,10 @@ _prog309h = _stage309 + _hist_js309 + "\n" + _host_js309 + "\n" + r"""
   out.lbl = ['24h', '7d', '30d', '90d', '6mo', '1y'].map(r => [/2026/.test(_histLbl(iso, r)), /:/.test(_histLbl(iso, r)),
                                                            /03|3/.test(_histLbl(iso, r))]);
   out.axis = ['24h', '7d', '1y'].map(r => typeof _histAxis('x', r).afterFit === 'function');
+  _histTimes['tt'] = [new Date('2026-01-02T03:00:00Z')];
+  out.ticks = ['7d', '30d', '90d', '6mo', '1y'].map(r => _histAxis('tt', r).ticks.callback(0));
+  els['narrow'] = {parentNode: {clientWidth: 343}}; els['wide'] = {parentNode: {clientWidth: 900}};
+  out.limit = ['narrow', 'wide'].map(id => ['24h', '1y'].map(r => _histAxis(id, r).ticks.maxTicksLimit));
   out.due = [_histDue('k', '24h', 1000), _histDue('k', '24h', 1001), _histDue('k2', '1y', 2000),
              _histDue('k2', '1y', 2000 + 599999), _histDue('k2', '1y', 2000 + 600000)];
   replyWith = {host: raw}; window.loadHostHistory(); await settle();
@@ -478,6 +482,11 @@ if _o309h is not None:
                            [True, False, False], [True, False, False]])
     eq("history charts: only the 24h axis puts the date under the time (the others' labels carry it)",
        _o309h.get("axis"), [True, False, False])
+    eq("history charts: past 24h a tick is the day on two short lines, the hour under it for 7d and the year for 6mo "
+       "and 1y (one long label ran into the next at phone width)",
+       _o309h.get("ticks"), [["Jan 2", "03 AM"], "Jan 2", "Jan 2", ["Jan 2", "2026"], ["Jan 2", "2026"]])
+    eq("history charts: at phone width an axis has four ticks, wider six, for 24h and the long ranges alike",
+       _o309h.get("limit"), [[4, 4], [6, 6]])
     eq("history charts: a poll reads 24h and 7d every time, and a long range once in ten minutes",
        _o309h.get("due"), [True, True, True, False, True])
     eq("host History card: the 24h range draws the average only (control)", _o309h.get("raw"), ["CPU %"])

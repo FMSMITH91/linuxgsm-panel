@@ -103,9 +103,29 @@ function _histLbl(iso, rng){
   return new Date(iso).toLocaleString([], _histLblFmt[rng] || _histLblFmt['24h']);
 }
 
+// The x axis past 24h: each tick is the day, with the hour under it for 7d and the year under it for 6mo
+// and 1y. Two short lines, not the tooltip's one long label: "Nov 26, 2025" side by side ran into each
+// other at phone width.
+var _histTickSub = {'7d': {hour:'2-digit'}, '6mo': {year:'numeric'}, '1y': {year:'numeric'}};
+function _histXDays(id, rng){
+  var sc = _histX();
+  sc.ticks.callback = function(value){
+    var t = (_histTimes[id] || [])[value]; if (!t) return '';
+    var day = t.toLocaleDateString([], {month:'short', day:'numeric'});
+    var sub = _histTickSub[rng];
+    return sub ? [day, t.toLocaleString([], sub)] : day;
+  };
+  return sc;
+}
+
 // The x axis for a range: the 24h one puts the date under the time where the day changes; the longer
-// ones show the points' own labels (_histLbl), which already carry the date.
-function _histAxis(id, rng){ return rng === '24h' ? _histXScale(id) : _histX(); }
+// ones the day (_histXDays). At phone width four ticks, not six, so the labels never meet.
+function _histAxis(id, rng){
+  var sc = rng === '24h' ? _histXScale(id) : _histXDays(id, rng);
+  var box = document.getElementById(id);
+  if (box && box.parentNode && box.parentNode.clientWidth < 420) sc.ticks.maxTicksLimit = 4;
+  return sc;
+}
 
 // Whether a poll should read range `rng` again for chart set `key`: the 24h and 7d ranges every poll
 // (a new sample lands each minute); the hourly ranges every ten minutes, since a point there spans
