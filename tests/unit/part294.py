@@ -153,7 +153,7 @@ _bd294 = {}
 try:
     _p9_arm(who="part294")
     _sid294 = _p9_new_server(P9_HOST, "p294db", "pmc", 25594, name="p294 db")
-    _rid294, _rid2_294 = _db_rows294(_sid294, ("gs_p294a", "gs_p294b"))
+    _rid294 = _db_rows294(_sid294, ("gs_p294a", "gs_p294b"))[0]
     _api294 = "/api/server/%d/databases/%d" % (_sid294, _rid294)
     _adm294 = _p9_client(P9_ADMIN)
     _hd294 = _NS294(auth_mode="socket")
