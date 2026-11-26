@@ -268,7 +268,18 @@ def _command_argv(words):
     _k += _runner("_r19d_unwrap")(words[_k:], None)[0]
     if _k + 1 < len(words) and os.path.basename(words[_k]) == "busybox":
         _k += 1
+    words = words[:_k] + _shell_word_split(words[_k]) + words[_k + 1:] if _k < len(words) else words
     return words[_k:] if _k < len(words) and os.path.basename(words[_k]) in SHELLS else None
+
+
+def _shell_word_split(word):
+    """A shell word with its stdin redirect glued on, split in two: `bash<f.sh` is `bash` `<f.sh`, `sh<` is `sh` `<`.
+
+    shlex does not split at `<`, so the glued form read as no shell at all and its script went unread
+    (review 1124). Only a word whose part before the redirect names a shell is split.
+    """
+    _m = re.fullmatch(r"(.*?)(\d*<.*)", word, re.S)
+    return [_m.group(1), _m.group(2)] if _m and os.path.basename(_m.group(1)) in SHELLS else [word]
 
 
 def _redirects(argv):

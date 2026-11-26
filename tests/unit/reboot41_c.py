@@ -194,9 +194,12 @@ def _unread_host41(with_plan_row):
 
 def _unread_idle_checks41():
     """No plan rows: the notices say what is known, and the server that never returns pages once."""
-    r, h, rows = _unread_host41(False)
+    r, h, _rows = _unread_host41(False)
+    # Measured from the request, as literals (review 1124): taken from the mark minus the constant, the
+    # bound moved with _REBOOT_EXPECT_OFFLINE_EXTRA, and with no mark at all it read the epoch clock. The page
+    # comes later than the bound (the mark is set again when the new boot is seen, then two sweeps confirm).
+    marked = _CLOCK41.time()
     HR.request_reboot(r, "now", None, "web")
-    marked = (_ps41._expected_offline.get(rows["mc"].id) or 0) - _mon41._REBOOT_EXPECT_OFFLINE_EXTRA
     h.reboot_now()
     _CLOCK41.sleep(30)
     _pass41()
@@ -216,8 +219,9 @@ def _unread_idle_checks41():
     check("alerts (real sweeps): ...and that server, which never comes back, pages 'went offline "
           "unexpectedly' once, only after the reboot's mark (5 min more than a restart's window) ends",
           _all41(_server_pages41() == [("server_down", "mcserver")], first is not None,
-                 (first or 0) >= _mon41._REBOOT_EXPECT_OFFLINE_EXTRA + _mon41._EXPECT_OFFLINE_WINDOW),
-          repr((first, _server_pages41())))
+                 _mon41._REBOOT_EXPECT_OFFLINE_EXTRA == 300 and _mon41._EXPECT_OFFLINE_WINDOW == 180,
+                 (first or 0) >= 300 + 180),
+          repr((first, _server_pages41(), _mon41._REBOOT_EXPECT_OFFLINE_EXTRA)))
 
 
 def _unread_plan_checks41():

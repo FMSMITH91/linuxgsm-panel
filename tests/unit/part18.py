@@ -1008,9 +1008,13 @@ try:
     _p9_state._game_backup_status.pop(_bk118, None)
     _r = _A18.post("/api/panel/backup/game/%d" % _bk118, json={"force": True})
     _p9_drain()
+    # ...and the request was taken and the backup ran (review 1124): the route also answers 200 with
+    # success False and starts nothing (the lock held, a button backup running), which every other
+    # term here holds for too.
     check("backup (on demand): the server that took the id is shown no outcome of it",
-          _r.status_code == 200 and _bk118 not in _p9_state._game_backup_status,
-          repr((_r.status_code, _p9_state._game_backup_status.get(_bk118))))
+          _r.status_code == 200 and _p9_json(_r).get("success") is True and _bkruns18 == ["bkone"]
+          and _bk118 not in _p9_state._game_backup_status,
+          repr((_r.status_code, _p9_json(_r), _bkruns18, _p9_state._game_backup_status.get(_bk118))))
     check("backup (on demand): ...and its schedule clock is not moved by it",
           not _bk18.get_game_schedule(_bk118)["last"], repr(_bk18.get_game_schedule(_bk118)))
     check("backup (on demand): the lock is released", not _p9_state._full_backup_lock.locked())

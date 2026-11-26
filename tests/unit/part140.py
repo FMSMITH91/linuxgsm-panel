@@ -168,13 +168,38 @@ for _gt140, _want in _PORT_WANT140.items():
           "%s opened %s" % (_gt140, _ports_got140.get(_gt140)))
 
 # Every caller that OPENS ports says which game it is: without game_type, TeamSpeak's ServerQuery
-# rows read as server-browser queries again.
-for _rel140, _n140 in ((("panel", "routes", "manage_servers.py"), 2), (("panel", "routes", "remote_vps.py"), 1)):
-    _src140 = _read140(*_rel140)
-    check("player ports: %s passes the game type to every detect_game_ports call that opens ports"
-          % "/".join(_rel140),
-          len(_re140.findall(r"detect_game_ports\([^)]*game_type=gs\.game_type", _src140)) == _n140,
-          "found %d" % len(_re140.findall(r"detect_game_ports\([^)]*game_type=gs\.game_type", _src140)))
+# rows read as server-browser queries again. Every call in panel/ is read (review 1124: the calls that
+# DO pass it were counted, so a new caller without it changed no count): one with no game_type is one of
+# the read-only callers below, which read the game port alone and open nothing.
+import ast as _ast140  # noqa: E402
+import glob as _glob140  # noqa: E402
+_DGP_READ_ONLY140 = {("panel/routes/manage_servers.py", "_read_port_after_start"),
+                     ("panel/services/game_ports.py", "read_reported_port")}
+
+
+def _dgp_calls140(source, rel):
+    """(rel, enclosing function, passes game_type) for each detect_game_ports call in `source`."""
+    out, todo = [], [(_ast140.parse(source), "<module>")]
+    while todo:
+        node, fn = todo.pop()
+        for c in _ast140.iter_child_nodes(node):
+            if isinstance(c, _ast140.Call) and (getattr(c.func, "id", None) or getattr(c.func, "attr", "")) == "detect_game_ports":
+                out.append((rel, fn, any(k.arg == "game_type" for k in c.keywords)))
+            todo.append((c, c.name if isinstance(c, (_ast140.FunctionDef, _ast140.AsyncFunctionDef)) else fn))
+    return out
+
+
+_dgp140 = [_c for _f in sorted(_glob140.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True))
+           for _c in _dgp_calls140(open(_f, encoding="utf-8").read(), os.path.relpath(_f, _root).replace(os.sep, "/"))]
+_dgp_bare140 = {(r, f) for r, f, typed in _dgp140 if not typed}
+check("player ports: every detect_game_ports call in panel/ passes the game type, bar the read-only callers that "
+      "open nothing (and each of those is still there)",
+      sum(1 for _c in _dgp140 if _c[2]) >= 4 and _dgp_bare140 == _DGP_READ_ONLY140,
+      "without game_type: %r" % sorted(_dgp_bare140))
+check("player ports: (control) the call reader takes a bare and an attribute call, with and without game_type",
+      sorted(_dgp_calls140("def a(r):\n    detect_game_ports(r, 'u', 's', game_type='x')\n"
+                           "def b(r):\n    _sm.detect_game_ports(r, 'u', 's')\n", "x.py"))
+      == [("x.py", "a", True), ("x.py", "b", False)], "")
 
 
 # ── 3. the panel's cron lines in the form every LinuxGSM monitor recognises ─────────────────────
@@ -370,7 +395,6 @@ check("pz install: step 5 sets the random password for Project Zomboid only, and
       _pz_calls140 == [("p140pz", "pzserver")] and not hasattr(_job_css140, "lgc_note")
       and _pz_said140[:1] == [("p140pz installed and started " + str(_ms140.LGC_PZ_ADMIN_SET), False)],
       repr(_pz_said140))
-import ast as _ast140  # noqa: E402
 
 
 def _calls_in140(src, fn):
@@ -1076,7 +1100,13 @@ try:
         _time140.sleep(0.1)
         _waited140 += 1
 finally:
-    (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user) = _saved_l4_140
+    # Put back only once the operator's save has ended (review 1124): a thread still running after the
+    # wait would call the real writers, with part12's tripwire not armed here. It is named instead.
+    _l4_alive140 = "thread" in _lock_seen140 and _lock_seen140["thread"].is_alive()
+    if not _l4_alive140:
+        (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user) = _saved_l4_140
+check("pz admin: the operator's save had ended before the stand-ins were put back (it never reaches the real "
+      "writers)", "thread" in _lock_seen140 and not _l4_alive140, repr(_lock_seen140))
 check("pz admin: a settings save sent while the fix has read CHANGE_ME waits for the fix's write, so the "
       "operator's password lands last and is not overwritten by a random one",
       _l4_ok140 == (True, "") and _lock_seen140.get("save done during the read") is False
