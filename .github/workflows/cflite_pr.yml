@@ -126,8 +126,8 @@ jobs:
       # keep, the run step unpacks its corpus with an unchecked tarfile.extractall (a path-traversal
       # TODO upstream) in a container holding this job's token, and a crash makes it RUN the stored
       # build to see whether the crash is new. So before either reads anything, every stored
-      # cifuzz-* artifact must come from a run of this repository's main: cflite_batch.yml,
-      # cflite_cron.yml and cflite_build.yml, which run nowhere else. The same block guards each of
+      # cifuzz-* artifact must come from a run of this repository's main: cflite_nightly.yml
+      # and cflite_build.yml, which run nowhere else. The same block guards each of
       # them, and part29 holds the copies equal.
       #
       # A check before a read is not the read: an artifact uploaded after it passes is read

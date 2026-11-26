@@ -105,8 +105,8 @@ _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no p
 _AUDIT223 = {
     ("cflite_pr.yml", "code-change"): "ClusterFuzzLite builds and fuzzes in Docker containers with their own "
                                       "networking (the images are pinned by digest: part242)",
-    ("cflite_batch.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
-    ("cflite_cron.yml", "prune"): _MAIN_ONLY223, ("cflite_cron.yml", "coverage"): _MAIN_ONLY223,
+    ("cflite_nightly.yml", "batch"): _MAIN_ONLY223, ("cflite_build.yml", "build"): _MAIN_ONLY223,
+    ("cflite_nightly.yml", "prune"): _MAIN_ONLY223, ("cflite_nightly.yml", "coverage"): _MAIN_ONLY223,
     ("scorecard.yml", "analysis"): _MAIN_ONLY223,
     ("scorecard.yml", "image-pin"): _MAIN_ONLY223, ("scorecard.yml", "image-pulled"): _MAIN_ONLY223,
     ("deploy.yml", "deploy"): "carries no Harden-Runner at all (part42)",

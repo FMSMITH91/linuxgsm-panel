@@ -15,10 +15,12 @@ Nothing here touches the network or the checkout's data/.
 """
 import os
 import re as _re297
+import shutil as _shutil297
 import subprocess as _sp297  # nosec B404 - runs bash on the workflows' own steps with stand-in programs
 import tempfile as _tf297
 
 from unit.part01 import check
+from unit.part05 import _root
 from unit.part06 import _wf_run_block, _wf_step_env
 from unit.part223 import _egress223
 from unit.part29 import _job29, _runbody29, _steps29, _wf29, _write_exe29
@@ -231,3 +233,26 @@ check("cflite_cleanup: a run off main deletes nothing, and names each artifact m
 _cl_main297 = _cl_run297("false")
 check("cflite_cleanup: ...while a run on main deletes them (control)",
       _cl_main297[:2] == (0, [4, 5, 8]) and "would delete" not in _cl_main297[2], repr(_cl_main297))
+
+# ── 6. cflite_nightly: prune and coverage start when the batch run has finished ─────────────────
+# They were cflite_cron.yml on its own schedule, 86 minutes after cflite_batch.yml's, and GitHub
+# starts scheduled runs hours late at times: a prune could read and rewrite the corpus while a batch
+# run was still storing it. One workflow, one schedule, and `needs: batch`; a failed batch (a crash
+# found) still leaves a corpus to prune and measure, a cancelled run starts neither. The job names
+# are the check names the update gate has seen on main's head, so they stay.
+_ng297 = _wf29("cflite_nightly.yml")
+_ng_jobs297 = {j: _job29(_ng297, j) for j in ("batch", "prune", "coverage")}
+_ng_after297 = "    needs: batch\n    if: ${{ !cancelled() && github.repository == 'FMSMITH91/linuxgsm-panel' && " \
+               "github.ref == 'refs/heads/main' }}\n"
+check("cflite_nightly: one schedule; batch first, then prune and coverage once it has finished (not on a "
+      "cancelled run); the job names kept, and the two old workflows gone",
+      _ng297.count("    - cron: ") == 1 and "\n  workflow_dispatch:\n" in _ng297
+      and "needs:" not in _ng_jobs297["batch"]
+      and all(_ng_after297 in _ng_jobs297[j] for j in ("prune", "coverage"))
+      and [_re297.search(r"^    name: (.*)$", _ng_jobs297[j], _re297.M).group(1) for j in _ng_jobs297]
+      == ["batch fuzz (${{ matrix.sanitizer }})", "prune the corpus", "fuzzing coverage report"]
+      and not any(os.path.exists(os.path.join(_root, ".github", "workflows", f))
+                  for f in ("cflite_batch.yml", "cflite_cron.yml")),
+      repr({j: _re297.findall(r"^    (?:needs|if): .*$", t, _re297.M) for j, t in _ng_jobs297.items()}))
+
+_shutil297.rmtree(_SB297, ignore_errors=True)

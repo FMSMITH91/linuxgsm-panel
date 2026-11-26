@@ -54,8 +54,8 @@ _STORE30 = "This run stored the fuzz artifacts it made"
 _GUARD30 = "Every stored fuzz artifact was made on main here"
 
 # ── E3: every producer ends by checking its own run stored what it made ─────────────────────────
-_producers30 = [("cflite_build.yml", "build"), ("cflite_batch.yml", "batch"),
-                ("cflite_cron.yml", "prune"), ("cflite_cron.yml", "coverage")]
+_producers30 = [("cflite_build.yml", "build"), ("cflite_nightly.yml", "batch"),
+                ("cflite_nightly.yml", "prune"), ("cflite_nightly.yml", "coverage")]
 _store_bodies30, _store_bad30 = [], []
 for _f30, _j30 in _producers30:
     _jt30 = _job29(_wf29(_f30), _j30)
@@ -88,7 +88,7 @@ def _expect30(job_text):
 
 
 _exp30 = {"%s/%s" % fj: _expect30(_job29(_wf29(fj[0]), fj[1]))
-          for fj in (("cflite_batch.yml", "batch"), ("cflite_cron.yml", "prune"))}
+          for fj in (("cflite_nightly.yml", "batch"), ("cflite_nightly.yml", "prune"))}
 check("cflite: the batch and prune runs check a stored corpus for EVERY fuzz target build.sh builds",
       len(_targets30) >= 9 and all(v == _targets30 for v in _exp30.values()), repr((_targets30, _exp30)))
 
