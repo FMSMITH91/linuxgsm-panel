@@ -37,6 +37,7 @@ this part's scratch directory, with stand-ins for the host tools it calls. Nothi
 or data/.
 """
 import base64 as _b64_294
+import contextlib as _ctx294
 import glob as _glob294
 import random as _random294
 import json as _json294
@@ -51,7 +52,7 @@ from types import SimpleNamespace as _NS294
 from unit.part01 import _root, check, eq, skip
 from unit.part47 import _cut47, _node47
 from unit.part272 import _bm272, _drop272, _fixture272, _getter272, _host272, _mojang272, _probe_out272, _writes272
-from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
+from unit.part278 import _act278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
                          _p9_drain, _p9_json, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all, _p9_threading)
@@ -276,7 +277,7 @@ def _moderate294(listed, game_type, action):
 
 _unread294 = [_moderate294(None, gt, act) for gt, act in (("css", "ban"), ("cod4", "kick"))]
 eq("moderation: a Valve ban and an idTech3 kick that must look the player up on an unread console say so and send "
-   "nothing", _unread294, [((False, _game294.CONSOLE_LIST_UNREAD), [])] * 2)
+   "nothing", _unread294, [((False, getattr(_game294, "CONSOLE_LIST_UNREAD", "?")), [])] * 2)
 eq("moderation (control): a console read that lists nobody by that name still says the player was not found",
    [_moderate294([{"name": "Alice", "num": "2", "steamid": "STEAM_0:1:2"}], gt, act)[0][1]
     for gt, act in (("css", "ban"), ("cod4", "kick"))],
@@ -286,21 +287,43 @@ eq("moderation (control): a console read that lists the player bans and kicks th
     for gt, act in (("css", "ban"), ("cod4", "kick"))],
    [((True, "Done."), ["banid 0 STEAM_0:1:294 kick; writeid"]), ((True, "Done."), ["clientkick 3"])])
 
-_b3sid294 = _fixture278()
+def _b3_fixture294(short, port):
+    """A CoD2 server holding the B3 database part278's stand-ins name (gs_b3_278), taken over if a row has it."""
+    sid = _p9_new_server(P9_HOST, short, "cod2", port, name=short)
+    with _p9.app_context():
+        row = _GD294.query.filter_by(remote_id=P9_HOST, name="gs_b3_278").first()
+        if row is None:
+            row = _GD294(remote_id=P9_HOST, name="gs_b3_278", secret=_enc294("Zp294" + "q" * 27),
+                         auth_plugin="mysql_native_password", max_conn=10, created_by="p294")
+            _db294.session.add(row)
+        row.game_server_id = sid
+        _db294.session.commit()
+    return sid
+
+
+def _b3_drop294(sid):
+    with _p9.app_context():
+        for row in _GD294.query.filter_by(game_server_id=sid).all():
+            _db294.session.delete(row)
+        _db294.session.commit()
+    _p9_delete_server(sid)
+
+
+_b3sid294 = _b3_fixture294("cod2p294", 28994)
 _b3got294 = {}
 try:
     _p9_arm(who="part294")
     _done294 = '{"id": 1, "ok": true, "result": {"cid": "3", "client_id": 12}}\n'
-    _seen294 = _socket_stub278(_done294, _game294.CONSOLE_UNREAD, name="Bob")
+    _seen294 = _socket_stub278(_done294, getattr(_game294, "CONSOLE_UNREAD", {}), name="Bob")
     _b3got294["unread"] = _post278(P9_ADMIN, _b3sid294, "kick", {"reason": "camping"}), len(_seen294["socket"])
     _seen294 = _socket_stub278(_done294, None, name="Bob")
     _b3got294["none"] = _post278(P9_ADMIN, _b3sid294, "kick", {"reason": "camping"}), len(_seen294["socket"])
 finally:
     _p9_restore_all()
-    _p9_delete_server(_b3sid294)
+    _b3_drop294(_b3sid294)
 _b3st294, _b3calls294 = _b3got294.get("unread") or ((0, {}), -1)
 eq("b3 kick: a console list that could not be read answers 503 saying so, and B3 is not asked",
-   (_b3st294[0], _b3st294[1].get("error"), _b3calls294), (503, _game294.CONSOLE_LIST_UNREAD, 0))
+   (_b3st294[0], _b3st294[1].get("error"), _b3calls294), (503, getattr(_game294, "CONSOLE_LIST_UNREAD", "?"), 0))
 _b3st294, _b3calls294 = _b3got294.get("none") or ((0, {}), -1)
 eq("b3 kick (control): a console list read without the player still says they are not on the server",
    (_b3st294[0], _b3st294[1].get("error"), _b3calls294), (409, _act278.S_NOT_ONLINE, 0))
@@ -309,7 +332,7 @@ eq("b3 kick (control): a console list read without the player still says they ar
 # ── 6. A Valve Kick by a name two players share ───────────────────────────────────────────────────
 _two294 = [{"name": "Bob", "num": "3", "steamid": "STEAM_0:1:3"}, {"name": "Bob", "num": "5", "steamid": "STEAM_0:1:5"}]
 eq("moderation: a Source Kick by a name two connected players share is refused, and nothing is sent",
-   _moderate294(_two294, "css", "kick"), ((False, _game294.VALVE_NAME_SHARED), []))
+   _moderate294(_two294, "css", "kick"), ((False, getattr(_game294, "VALVE_NAME_SHARED", "?")), []))
 eq("moderation (control): a Source Kick by a name one player has, or with a console that could not be read, is "
    "sent as before", [_moderate294(_two294[:1], "css", "kick"), _moderate294(None, "css", "kick")],
    [((True, "Done."), ['kick "Bob"'])] * 2)
@@ -401,7 +424,8 @@ def _button294(sid):
                 _sh294._game_backup_status.pop(sid, None)
             row = _p9_audit("backup_complete")
             got["flag"] = (list(dumped), list(teed), (row.success, row.detail) if row is not None else None)
-            with _sh294.button_backup_claim(sid, "backup") as free:
+            claim = getattr(_sh294, "button_backup_claim", lambda *a: _ctx294.nullcontext(None))
+            with claim(sid, "backup") as free:
                 _sd294._bg_action(_p9, gs, gs.remote, "backup")
                 _p9_drain()
                 got["claimed"] = (free, list(dumped), list(teed))
@@ -479,7 +503,7 @@ _js294 = _node47(
     "global._r30c_bkSave = function(){}; global.backupUpload = function(){}; global.gameTilesRefreshed = function(){};\n"
     + _PANEL294[_PANEL294.index("var _ACTION_DENY"):_PANEL294.index("// ── The console's command history")] + "\n"
     + _cut47(_PANEL294, "window.ensureCsrfFields = function") + "\n"
-    + _cut47(_PANEL294, "function _serverForm(") + "\n"
+    + (_cut47(_PANEL294, "function _serverForm(") if "function _serverForm(" in _PANEL294 else "") + "\n"
     + _cut47(_PANEL294, "function _submitAjaxForm(") + "\n"
     "function mkForm(token) {\n"
     "  const kids = token === undefined ? [] : [{name: 'csrf_token', value: token}];\n"
@@ -558,9 +582,12 @@ for _n294 in _bmfiles294 + ("index.html",):
     open(os.path.join(_sub294, _n294), "w").close()
 _EMPTY_SHA294 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"    # an empty file's: the 1.21.5 jar is kept, nothing fetched
 _ls294 = "cd %s && ls -1 * | tr '\\n' ' '" % _bmdir294
-_fetch294 = _bash294(_bm272.client_sh(_bmdir294, "1.21.5", "https://piston-data.mojang.com/x", _EMPTY_SHA294, True,
-                                      tidy=False) + _ls294)[0].split()
-_tidy294 = _bash294(_bm272.client_tidy_sh(_bmdir294, "1.21.5", True) + _ls294)[0].split()
+try:
+    _fetch294 = _bash294(_bm272.client_sh(_bmdir294, "1.21.5", "https://piston-data.mojang.com/x", _EMPTY_SHA294, True,
+                                          tidy=False) + _ls294)[0].split()
+    _tidy294 = _bash294(_bm272.client_tidy_sh(_bmdir294, "1.21.5", True) + _ls294)[0].split()
+except (TypeError, AttributeError) as _e294:      # a client_sh with no separate tidy-up
+    _fetch294 = _tidy294 = [type(_e294).__name__]
 eq("BlueMap update (bash): the fetch alone keeps the old jar and page; the tidy-up then removes them (control)",
    (_fetch294, _tidy294),
    (["data:", "minecraft-client-1.21.4.jar", "minecraft-client-1.21.5.jar", "web:", "index.html"],
@@ -584,13 +611,13 @@ def _b3_row294(sid, meta):
     return next(((r.get("version"), r.get("version_new"), r.get("update")) for r in got if r.get("id") == "b3"), None)
 
 
-_b3row_sid294 = _fixture278()
+_b3row_sid294 = _b3_fixture294("cod2p294r", 28995)
 try:
     _b3rows294 = [_b3_row294(_b3row_sid294, {"kind": "b3", "image": "localhost/lgsm-addon-b3:oldbuild", "version": v,
                                              "database": "gs_b3_278"})
                   for v in (_b3cat294["version"], "2.0.1 (0123abcd)")]
 finally:
-    _p9_delete_server(_b3row_sid294)
+    _b3_drop294(_b3row_sid294)
 eq("add-on rows: a new image with the installed version's label is offered with no version (the card says a newer "
    "version of the add-on); one with another label names it (control)", _b3rows294,
    [(_b3cat294["version"], "", "image"), ("2.0.1 (0123abcd)", _b3cat294["version"], "image")])
