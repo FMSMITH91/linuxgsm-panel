@@ -950,3 +950,4 @@ bd58baf2 Console commands that set a password are masked in the audit log.
 dbe29777 Sign-in takes the same time whether or not the account exists.
 c1ab89d1 The helper names the sudoers file and line that stops an account.
 ec128f2e The panel no longer listens on every network address just because setup suggested it.
+b901edb4 Add-on updates arrive without a panel update.

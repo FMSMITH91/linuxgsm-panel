@@ -29,13 +29,17 @@
 #      panel runs (a panel on it shows the release before it), through a private index: your
 #      checkout, its index and HEAD are not touched. The commit is signed like any other (git
 #      commit-tree -S). A re-run after a failed release publishes it and adds the name;
+#   5b. for main, runs tools/sign-catalog.sh on <sha> (the add-on catalog, signed in its own namespace
+#      linuxgsm-panel-addons): it publishes the commit's panel/addon_images/catalog.json when that
+#      differs from the published catalog or the published one nears its expiry, and does nothing
+#      otherwise. A failure is reported, never fatal: re-run tools/sign-catalog.sh <sha>;
 #   6. pushes that branch, and for main starts the deploy of <sha> (gh workflow run deploy.yml),
 #      unless <sha> itself changes only paths CI does not run for (ci.yml's paths-ignore): its
 #      deploy would wait 20 minutes for checks that never come, and then fail.
 #
 # Environment: SIGN_RELEASE_REMOTE (default origin), SIGN_RELEASE_KEY, SIGN_RELEASE_NO_DEPLOY=1 to
 # skip step 6's deploy and step 4's release, SIGN_RELEASE_NO_RELEASE=1 to skip only the release,
-# SIGN_RELEASE_GH (default gh) for the GitHub CLI command.
+# SIGN_RELEASE_NO_CATALOG=1 to skip step 5b, SIGN_RELEASE_GH (default gh) for the GitHub CLI command.
 set -euo pipefail
 export LC_ALL=C.UTF-8 LANG=C.UTF-8 LANGUAGE=
 
@@ -337,6 +341,15 @@ else
     echo "sign-release: ${ADDED} ${BRANCH} ${SHA} and pushed ${SIG_BRANCH} (${COMMIT:0:10})."
 fi
 unset GIT_INDEX_FILE
+
+# 5b. The add-on catalog, after the release signature is pushed (sign-catalog fetches the branch again
+#     and commits on top of it). The commit's checks were read before this was run; sign-catalog reads
+#     them itself, and the typed confirmation above covers it (--yes, stdin not a terminal).
+if [[ "${BRANCH}" = "main" ]] && [[ "${SIGN_RELEASE_NO_CATALOG:-}" != "1" ]] \
+   && git cat-file -e "${SHA}:panel/addon_images/catalog.json" 2>/dev/null; then
+    bash "${TOOLS_DIR}/sign-catalog.sh" --yes "${SHA}" < /dev/null \
+        || echo "sign-release: the add-on catalog was not published; run: tools/sign-catalog.sh ${SHA}" >&2
+fi
 
 # A commit that changes only what ci.yml's paths-ignore lists ('**/*.md', 'docs/**', LICENSE,
 # .gitignore, .editorconfig; system_ops._ci_path_ignored reads the same list) gets no CI or CodeQL

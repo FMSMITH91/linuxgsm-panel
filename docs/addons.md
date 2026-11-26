@@ -174,7 +174,7 @@ BlueMap's command-line build renders the world, keeps watching it for changes, a
   (`Starting minecraft server version …` in `serverfiles/logs/latest.log`). One BlueMap build reads worlds
   of Minecraft 1.13.2 to 26.3 (release 5.29). After you update the game to another version, the card shows
   **Update available**; Update fetches that version's client file and restarts BlueMap with it. A game
-  version newer than the pinned BlueMap supports waits for the panel's next BlueMap pin (BlueMap's log says
+  version newer than the pinned BlueMap supports waits for the next BlueMap pin, in the signed add-on catalog or a panel update (BlueMap's log says
   what it can't read).
 - **The web page.** It listens on `127.0.0.1:<port>` on the game's host only; nothing is opened in any
   firewall. **Open** on the card shows the map through the panel (see [Web pages](#web-pages)), for users
@@ -248,7 +248,38 @@ and database are kept. It asks for the password like Install, and it is audited.
 for clears the unit's start limit first (5 starts in 10 minutes, kept against a crash loop), so a run of changes
 doesn't leave the add-on down; if systemd still refuses a start for that limit, the card says so. The panel's pins themselves are
 proposed daily by Renovate (B3's fork releases, IW4MAdmin's releases and the `aspnet:10.0` digest, BlueMap's `v5` digest,
-`python:3.15-slim`'s digest).
+`python:3.15-slim`'s digest) in `panel/addon_images/catalog.json`.
+
+### New add-on versions without a panel update
+
+The pins come from the **add-on catalog**. Each panel ships one (`panel/addon_images/catalog.json`, the floor), and
+the project also publishes a **signed** one on the `release-signatures` branch (`catalog/latest.json` and
+`catalog/latest.json.sig`), so a new add-on image reaches panels without a panel release. The panel fetches it once a
+day and when you press **Refresh** on the Add-ons card (Manage add-ons), from the same GitHub source as the panel's update
+check and under the same switch (Settings → Outside services → *Panel update check*): with it off, nothing is fetched
+and the panel's own pins are used.
+
+- **Checked before it is used.** The catalog must carry a valid `ssh-keygen -Y` signature by the release key this
+  panel already trusts for its own updates, in its own namespace (`linuxgsm-panel-addons`, so a catalog signature can
+  never pass as a release signature or the reverse). It is refused when the signature is missing or wrong, its format
+  version is not 1, its sequence number is not above the last one accepted (no going back to an older catalog), it
+  has expired, it leaves out one of the panel's add-ons, or an image is not pinned by a full sha256 digest. A refused
+  catalog changes nothing, and Refresh says why. An add-on the panel does not know yet (one added after its release)
+  is skipped, so a catalog that adds an add-on never stops the updates of older panels.
+- **The newer one wins.** A catalog signed before this panel's own release is older than the pins the panel ships,
+  so those are used until a newer catalog is signed; an entry with an older B3 or IW4MAdmin release than the panel's
+  own is never used either.
+- **An expired catalog offers nothing.** It keeps naming the version you may have installed from it, but offers no
+  update until a newer one is fetched, and the card says it has expired.
+- **Nothing installs by itself.** A newer pin only lights the card's **Update** button; the row says where the version
+  came from (*built into this panel*, or *signed add-on catalog #N of date*).
+
+The catalog moves digests, release tags and commits. A Renovate bump that changes B3's or IW4MAdmin's build files
+(their Containerfile, entrypoint or B3's locked requirements) still ships with a panel update, because the build files
+live in the panel; digest, tag and commit bumps do not.
+
+The last accepted catalog is kept in the panel's data folder (`addon-catalog.json`, mode 0600) with its signature,
+and checked again when the panel starts.
 
 ### B3's players and penalties
 

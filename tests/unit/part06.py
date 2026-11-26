@@ -5993,8 +5993,9 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # (View add-on pages or Manage add-ons, and server access); the page's proxy is WSGI middleware, not a view.
 # 323, was 321: panel/routes/addons_b3_actions.py's unban/kick/warn through B3 (one view: MANAGE_ADDONS and Ban or
 # Kick players, server access, step-up) and the B3 alerts switch (MANAGE_ADDONS and server access).
-check("register_routes: every one of the 323 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 323,
+# 324, was 323: panel/routes/addons.py's Refresh of the signed add-on catalog (MANAGE_ADDONS and server access).
+check("register_routes: every one of the 324 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 324,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

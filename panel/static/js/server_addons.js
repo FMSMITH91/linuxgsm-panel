@@ -6,10 +6,8 @@
 (function () {
   'use strict';
   var st = {d: null, loaded: false, busy: false, poll: null, watch: false};
-  var STATE = {
-    active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
-    failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'
-  };
+  var STATE = {active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
+    failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'};
   var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…', remove: 'Removing…'};
 
   function T(s) { return window.t ? window.t(s) : s; }
@@ -70,12 +68,7 @@
     }
     if (a.geolocation_option) geoStatus(a, box);
     if (a.eula_url) BM.status(a, box);
-    if (a.update) {
-      box.appendChild(node('div', 'small text-warning', BM.updateWords(a)));
-    } else {
-      // Said, not left blank: the card compared the add-on with the panel's own version when it loaded.
-      box.appendChild(node('div', 'small text-secondary', T('Up to date (checked just now).')));
-    }
+    box.appendChild(BM.updateLine(a));
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
     if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
@@ -100,6 +93,13 @@
       // The version the update installs, beside the installed one the row's name shows.
       if (a.version_new) return TF('Update available: {version}', {version: a.version_new});
       return T('Update available: a newer version of the add-on.');
+    }
+    // The row's update line, and where the version it is compared with came from (built into the panel, or the
+    // signed add-on catalog). Said even when up to date: the card compared the add-on with the pin when it loaded.
+    function updateLine(a) {
+      var from = a.pin_source ? ' ' + a.pin_source : '';
+      if (a.update) return node('div', 'small text-warning', updateWords(a) + from);
+      return node('div', 'small text-secondary', T('Up to date (checked just now).') + from);
     }
     function sizeWords(kb) {
       return kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : Math.max(1, Math.round(kb / 1024)) + ' MB';
@@ -162,8 +162,8 @@
       if (a.eula_url) return T('This stops BlueMap and deletes its container, image and files: its settings, the rendered map and Minecraft\'s client file. The world itself is not touched.');
       return T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.');
     }
-    return {updateWords: updateWords, status: status, eula: eula, installBody: installBody, installWords: installWords,
-      removeWords: removeWords};
+    return {updateWords: updateWords, updateLine: updateLine, status: status, eula: eula, installBody: installBody,
+      installWords: installWords, removeWords: removeWords};
   })();
 
   // An add-on's web page, opened through the panel (routes/addon_web.py) in a new tab: a form post (CSRF
@@ -474,12 +474,16 @@
     return box;
   }
 
+  function note(id, text) {
+    var e = el(id);
+    if (e) { e.textContent = text || ''; show(id, !!text); }
+  }
+
   function draw(d) {
     st.d = d;
     show('ad-loading', false);
-    var rt = el('ad-runtime');
-    rt.textContent = d.runtime_error || '';
-    show('ad-runtime', !!d.runtime_error);
+    note('ad-runtime', d.runtime_error);
+    note('ad-catalog', d.catalog_note);
     var list = el('ad-list');
     list.textContent = '';
     if (d.manage === false) { WEB.viewerRows(d, list); return; }
@@ -506,6 +510,15 @@
       draw(d);
       return true;
     }).catch(function () { show('ad-loading', false); say(T('Could not load add-ons.'), 'text-danger'); return false; });
+  };
+
+  // Refresh: fetch the signed add-on catalog first (Manage add-ons), then read the card again.
+  window.adRefresh = function () {
+    if (st.d && st.d.manage === false) return window.adLoad(true);
+    if (st.busy) return Promise.resolve(false);
+    st.busy = true;
+    say(T('Checking for new add-on versions…'));
+    return postJson(api('/catalog')).then(after).catch(failed);
   };
 
   function after(res) {

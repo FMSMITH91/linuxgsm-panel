@@ -1,6 +1,6 @@
 # IW4MAdmin for linuxgsm-panel's Add-ons tab, built on the game's host, as the game server's account,
 # by rootless Podman (panel/services/addons.py writes this folder and runs `podman build` with the
-# three build arguments below, the same values as these defaults).
+# three build arguments below).
 #
 # Built here rather than pulled: the image IW4MAdmin publishes for its release carries the .NET runtime
 # of the day it was built, and is not rebuilt when Microsoft fixes that runtime. IW4MAdmin is a
@@ -14,15 +14,23 @@
 #     IW4MADMIN_TAG (the same files its own image is built from), checked against IW4MADMIN_SHA256
 #     before anything in it is used.
 # curl and unzip stay in the first stage; the image keeps the base, the release's files and the start script.
-# renovate: BASE_IMAGE follows mcr.microsoft.com/dotnet/aspnet:10.0's digest, with addons.py's IW4MADMIN_BASE
-ARG BASE_IMAGE=mcr.microsoft.com/dotnet/aspnet@sha256:aac50ceef10391e78a899e3d2ccd00bbafa2dcb56ccf4586cbccf00edb84fc21
-# renovate: IW4MADMIN_TAG is RaidMax/IW4M-Admin's release, IW4MADMIN_SHA256 its archive's (with addons.py)
-ARG IW4MADMIN_TAG=2026.2.4.1-prerelease
-ARG IW4MADMIN_SHA256=5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e
+# The values have no default here: they come from the signed add-on catalog (its source is
+# panel/addon_images/catalog.json, where Renovate keeps them current), passed as --build-arg by the panel
+# and by CI's image scan. So a new base or IW4MAdmin release changes no file a panel runs, and needs no
+# panel update. A build missing one stops at once: FROM has no image without BASE_IMAGE, and the first
+# RUN refuses an empty IW4MADMIN_TAG or IW4MADMIN_SHA256.
+#   BASE_IMAGE        the catalog's iw4madmin `base`: mcr.microsoft.com/dotnet/aspnet:10.0 by digest
+#   IW4MADMIN_TAG     the catalog's iw4madmin `tag`: RaidMax/IW4M-Admin's release
+#   IW4MADMIN_SHA256  the catalog's iw4madmin `sha256`: that release's archive
+ARG BASE_IMAGE
+ARG IW4MADMIN_TAG
+ARG IW4MADMIN_SHA256
 
 FROM ${BASE_IMAGE} AS source
 ARG IW4MADMIN_TAG
 ARG IW4MADMIN_SHA256
+RUN test -n "${IW4MADMIN_TAG}" && test -n "${IW4MADMIN_SHA256}" \
+    || { echo "IW4MADMIN_TAG or IW4MADMIN_SHA256 build argument missing (the add-on catalog's iw4madmin entry)" >&2; exit 1; }
 # Build-only and thrown away: what ships is checked by its sha256 below, whatever versions these are
 # (hadolint's DL3008 is off for that reason: .github/hadolint.yaml).
 RUN apt-get update \

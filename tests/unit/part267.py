@@ -335,7 +335,7 @@ def _addon_card267():
             "function node(t, c, x){ return {appendChild: function(){}}; }\n"
             "function button(label, icon, act){ made.push(act); return {}; }\n"
             "function T(s){ return s; } function TF(s){ return s; } function geoStatus(){} function settingsFold(){}\n"
-            "var BM = {status: function(){}, updateWords: function(){ return ''; }};\n"
+            "var BM = {status: function(){}, updateWords: function(){ return ''; }, updateLine: function(){ return node(); }};\n"
             "var WEB = {open: function(){}};\n"
             + _cut47(src, "var JOB = {") + "\n" + _cut47(src, "function installedRow(") + "\n"
             "function acts(a){ made = []; installedRow(a, node()); return made; }\n"

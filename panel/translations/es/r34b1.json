@@ -9,5 +9,5 @@
   "a queued stop or restart is waiting": "hay una parada o un reinicio en cola esperando",
   "an add-on install, update, settings change or removal is running": "se está instalando, actualizando, cambiando los ajustes o quitando un complemento",
   "Up to date (checked just now).": "Al día (comprobado ahora mismo).",
-  "New versions of an add-on come with panel updates: after one, its card offers Update, and nothing changes until you press it.": "Las versiones nuevas de un complemento llegan con las actualizaciones del panel: después de una, su tarjeta ofrece Actualizar, y nada cambia hasta que lo pulses."
+  "New versions of an add-on come in a signed add-on catalog, which the panel checks daily and on Refresh, or with a panel update. Its card then offers Update, and nothing changes until you press it.": "Las nuevas versiones de un complemento llegan en un catálogo de complementos firmado, que el panel comprueba cada día y al pulsar Actualizar, o con una actualización del panel. Su tarjeta ofrece entonces Actualizar, y nada cambia hasta que lo pulse."
 }

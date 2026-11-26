@@ -292,8 +292,7 @@ _R30D_NESTED_C = re.compile(r"(?:^|[\s;&|(`/'\"])(?:(?:ba|da|z|k|mk)?sh|busybox\
                             + _R35D_C_TOKEN + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
 # Builtins that take a variable NAME as a word (`export 'PATH=…'`, `read ${P}TH`): one handed a
 # quoted or built name may be setting PATH. printf names it only after -v.
-_R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray",
-                       "getopts", "unset")
+_R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray", "getopts", "unset")
 _R26D_SHIM_JUDGE = r'''
 _r26d_standin() {
   case "$1" in /*) _r26d_f=$1;; *) _r26d_f=$PWD/$1;; esac
@@ -2122,6 +2121,10 @@ _r16d_wrap_ts_handles()
 # expired API tokens on a console socket) drives part12's app; imports part01, 12 and 131.
 # part291 (secrets off the command line, login timing, host findings) drives part12's app with recording transports,
 # the helper's sudoers reader over scratch files and the install templates; imports part01 and 12.
+# part292 (the signed add-on catalog: the floor, accepting, refusals, which wins, the stored copy) drives part12's
+# app with a throwaway ssh-keygen key; imports part01 and 12.
+# part293 (the signed add-on catalog: sign-catalog.sh, sign-release's catalog-only rule, the scan and Renovate) runs
+# git, bash and ssh-keygen over scratch repositories with a stand-in gh; imports part01.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2141,7 +2144,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248", "part249",
     "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262", "part263",
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
-    "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part15")
+    "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291",
+    "part292", "part293", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

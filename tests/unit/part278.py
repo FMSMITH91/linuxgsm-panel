@@ -59,9 +59,11 @@ def _pin278():
     with open(os.path.join(_root, "panel", "addon_images", "b3", "Containerfile"), encoding="utf-8") as fh:
         cf = fh.read()
     stage2 = cf.split("\nFROM ${BASE_IMAGE}\n", 1)[-1]
-    eq("b3 pin: addons.py and the Containerfile build the same commit, labelled 2.0.2 with its short commit",
-       (_ad278.B3_COMMIT, _re278.findall(r"^ARG B3_COMMIT=(\S+)", cf, _re278.M), _ad278.CATALOG["b3"]["version"]),
-       (_PIN278, [_PIN278], "2.0.2 (7c3bbe8c)"))
+    eq("b3 pin: the build passes addons.py's commit to the Containerfile's ARG B3_COMMIT (no default there), labelled "
+       "2.0.2 with its short commit",
+       (_ad278.B3_COMMIT, dict(_ad278.CATALOG["b3"]["build_args"]).get("B3_COMMIT"),
+        _re278.findall(r"^ARG (B3_COMMIT\S*)$", cf.split("\nFROM ", 1)[0], _re278.M), _ad278.CATALOG["b3"]["version"]),
+       (_PIN278, _PIN278, ["B3_COMMIT"], "2.0.2 (7c3bbe8c)"))
     check("b3 pin: the running image keeps the commit (ENV B3_COMMIT in the second stage, after its ARG), so "
           "--version and health.json name it",
           _re278.search(r"^ARG B3_COMMIT\n(?:.*\n)*?ENV B3_COMMIT=\$\{B3_COMMIT\}$", stage2, _re278.M) is not None, stage2[:300])

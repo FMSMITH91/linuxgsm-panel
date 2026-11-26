@@ -78,6 +78,11 @@ noise panel/install/requirements.in
 noise panel/install/requirements-bootstrap.in
 # The B3 add-on's requirements.in, likewise: its build reads requirements.txt beside it.
 noise panel/addon_images/b3/requirements.in
+# The add-on catalog's source: the images and versions the add-ons run reach a panel as the SIGNED catalog
+# (tools/sign-catalog.sh publishes it on release-signatures), not through an update, so a commit that
+# changes only this file is no update and is signed as tooling-only (.inherit). A panel's built-in copy is
+# only the floor a fetched catalog may not go below, refreshed by the next real update.
+noise panel/addon_images/catalog.json
 # osv-scanner's dated exemptions for requirements.txt (security-code.yml); nothing on a host reads it.
 noise panel/install/osv-scanner.toml
 # Analysis and lint configuration, read by the scanners alone.

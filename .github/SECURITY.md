@@ -117,6 +117,14 @@ holds, never the copy in the update: root-owned `/usr/local/lib/linuxgsm-panel/r
 root install, the installed commit's `release-signers` on a per-user one. An unsigned or unreadable
 target is held, and so, with no pin, is a `main` tip older than the installed commit.
 
+The same key signs the **add-on catalog** (`catalog/latest.json` on that branch), which lets a new add-on image
+reach panels without a panel update. Its signature uses its own namespace, `linuxgsm-panel-addons`, so it can
+never stand in for a release signature, nor the reverse. The panel checks it with the key it already holds for
+its update check before reading a byte of it, and refuses a catalog whose sequence number is not above the last
+one it accepted (rollback), one that has expired (freeze), and one that leaves out a known add-on or pins one by
+anything but a full sha256 digest (an add-on it does not know yet is skipped). A newer catalog only offers an add-on's Update button; nothing is installed until
+someone with Manage add-ons presses it (docs/addons.md, "New add-on versions without a panel update").
+
 What it does not cover:
 
 - **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
@@ -168,6 +176,35 @@ made again from the tag and compared, and fed to a scanner (for example `osv-sca
 
 A lost key is recovered with `PANEL_ALLOW_UNSIGNED_UPDATE=1` on a run by hand over SSH; the panel's
 own update, its terminal and anything it starts through the helper cannot pass it.
+
+### The add-on catalog is signed with the same key
+
+The images and versions the add-ons run (BlueMap's image, IW4MAdmin's and B3's base image and source
+pin) are a catalog panels fetch and verify, so a new add-on image needs no panel update. Its source is
+`panel/addon_images/catalog.json`; a merge into `main` that changes it must pass the required
+"Add-on images" scan (Trivy and hadolint over exactly what the catalog names). `tools/sign-catalog.sh`
+(run by `tools/sign-release.sh` for every `main` commit it signs) then signs it with the release key
+in its own namespace, `linuxgsm-panel-addons`, so a catalog signature never passes as a release
+signature, nor the reverse, and publishes it on `release-signatures` as `catalog/<seq>.json` and
+`catalog/latest.json`, each with its `.sig`. The signer refuses a commit off `main`'s first-parent
+line, one whose checks have not all passed, one older than the commit the published catalog came
+from, and a published catalog whose own signature does not verify; it verifies its signature against
+`release-signers` before publishing.
+
+Each catalog carries `seq` (one more than the last published), `issued` and `expires` (30 days later),
+the rollback and freeze protections of The Update Framework: a panel refuses a catalog whose `seq` is
+not above the last one it accepted, or that has expired. The signer signs the catalog again (a new
+`seq` and expiry) whenever it runs within 10 days of expiry, and
+`tools/sign-catalog.sh --refresh-catalog <commit>` does so at once. A commit that changes only the catalog (and the docs) is
+signed tooling-only: panels are offered no update for it. To check the published catalog yourself:
+
+```sh
+git fetch --quiet origin release-signatures
+git show origin/release-signatures:catalog/latest.json > ../catalog.json
+git show origin/release-signatures:catalog/latest.json.sig > ../catalog.json.sig
+ssh-keygen -Y verify -f panel/install/release-signers -I release -n linuxgsm-panel-addons \
+  -s ../catalog.json.sig < ../catalog.json
+```
 
 ## Known trust-model limitation: the panel has root on its own host
 
