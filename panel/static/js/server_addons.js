@@ -60,14 +60,6 @@
     return sel;
   }
 
-  // The row's update line, and where the version it is compared with came from (built into the panel, or the
-  // signed add-on catalog). Said even when up to date: the card compared the add-on with the pin when it loaded.
-  function updateLine(a) {
-    var from = a.pin_source ? ' ' + a.pin_source : '';
-    if (a.update) return node('div', 'small text-warning', BM.updateWords(a) + from);
-    return node('div', 'small text-secondary', T('Up to date (checked just now).') + from);
-  }
-
   function installedRow(a, box) {
     if (a.database) box.appendChild(node('div', 'small text-secondary text-break', TF('Database {db}.', {db: a.database})));
     if (a.port) {
@@ -76,7 +68,7 @@
     }
     if (a.geolocation_option) geoStatus(a, box);
     if (a.eula_url) BM.status(a, box);
-    box.appendChild(updateLine(a));
+    box.appendChild(BM.updateLine(a));
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
     if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
@@ -101,6 +93,13 @@
       // The version the update installs, beside the installed one the row's name shows.
       if (a.version_new) return TF('Update available: {version}', {version: a.version_new});
       return T('Update available: a newer version of the add-on.');
+    }
+    // The row's update line, and where the version it is compared with came from (built into the panel, or the
+    // signed add-on catalog). Said even when up to date: the card compared the add-on with the pin when it loaded.
+    function updateLine(a) {
+      var from = a.pin_source ? ' ' + a.pin_source : '';
+      if (a.update) return node('div', 'small text-warning', updateWords(a) + from);
+      return node('div', 'small text-secondary', T('Up to date (checked just now).') + from);
     }
     function sizeWords(kb) {
       return kb >= 1048576 ? (kb / 1048576).toFixed(1) + ' GB' : Math.max(1, Math.round(kb / 1024)) + ' MB';
@@ -163,8 +162,8 @@
       if (a.eula_url) return T('This stops BlueMap and deletes its container, image and files: its settings, the rendered map and Minecraft\'s client file. The world itself is not touched.');
       return T('This stops the add-on and deletes its container, image and files: its settings and its data (players, statistics) too.');
     }
-    return {updateWords: updateWords, status: status, eula: eula, installBody: installBody, installWords: installWords,
-      removeWords: removeWords};
+    return {updateWords: updateWords, updateLine: updateLine, status: status, eula: eula, installBody: installBody,
+      installWords: installWords, removeWords: removeWords};
   })();
 
   // An add-on's web page, opened through the panel (routes/addon_web.py) in a new tab: a form post (CSRF

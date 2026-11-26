@@ -153,7 +153,10 @@ def verify_signature(key, data, sig):
 
 
 def _parsed(data):
-    """(the catalog object, "") from verified bytes, or (None, BAD_FORMAT or BAD_SCHEMA)."""
+    """(the catalog object, "") from verified bytes, or (None, BAD_FORMAT or BAD_SCHEMA).
+
+    Its times must be catalog times with `expires` after `issued`, and `seq` a whole number from 1.
+    """
     try:
         doc = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -162,7 +165,13 @@ def _parsed(data):
         return None, BAD_FORMAT
     if type(doc["schema"]) is not int or doc["schema"] != SCHEMA:
         return None, BAD_SCHEMA
-    return doc, ""
+    return (doc, "") if _well_formed(doc) else (None, BAD_FORMAT)
+
+
+def _well_formed(doc):
+    """Whether `doc`'s `seq` is a whole number from 1 and its times are catalog times, `expires` after `issued`."""
+    seq, issued, expires = doc["seq"], _when(doc["issued"]), _when(doc["expires"])
+    return type(seq) is int and seq >= 1 and issued is not None and expires is not None and expires > issued
 
 
 def check_signed(data, sig, key, last_seq, now, allow_expired=False):
@@ -172,14 +181,12 @@ def check_signed(data, sig, key, last_seq, now, allow_expired=False):
     format and schema, rollback (`seq` above `last_seq`), freeze (`expires` after `now`, unless
     `allow_expired`: the stored copy, re-read at start) and the add-on entries.
     """
-    if not isinstance(data, bytes) or len(data) > MAX_BYTES or not verify_signature(key, data, sig):
+    if not (isinstance(data, bytes) and len(data) <= MAX_BYTES and verify_signature(key, data, sig)):
         return None, BAD_SIGNATURE
     doc, why = _parsed(data)
     if why:
         return None, why
-    seq, issued, expires = doc["seq"], _when(doc["issued"]), _when(doc["expires"])
-    if type(seq) is not int or seq < 1 or issued is None or expires is None or expires <= issued:
-        return None, BAD_FORMAT
+    seq, expires = doc["seq"], _when(doc["expires"])
     if seq <= last_seq:
         return None, ROLLBACK
     if expires <= now and not allow_expired:
