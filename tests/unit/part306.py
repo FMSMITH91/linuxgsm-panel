@@ -6,6 +6,8 @@ F24. Drupal's append to the settings.php its installer left read-only works, and
      that fails says why (M4), with the step's own lines in the panel's log.
 F25. An app install whose undo could not drop its database says NOT undone and what is left, and keeps the site
      and its database rows (a delete retries them) instead of saying "undone" over a database left behind.
+F26. A runtime app's gate and the object cache (Network=container:) carry no DNS option, which Podman refuses beside
+     that network mode; the site's own container keeps --dns=none.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -333,6 +335,41 @@ def _f25_undo(st):
            "; undone")), (True, 0, True))
 
 
+# ── F26. The containers that join the site's network namespace ─────────────────────────────────
+def _unit306(site, name):
+    """The text of Quadlet `name` the install left in the site's scratch home ("" when none)."""
+    path = os.path.join(_home306(site.account), _ws306.QUADLET_DIR, name + ".container")
+    return _read306(path) if os.path.exists(path) else ""
+
+
+def _args306(text):
+    return [ln for ln in text.split("\n") if ln.startswith(("PodmanArgs=", "Network="))]
+
+
+def _f26_dns(st):
+    _bash_seams306()
+    app = _site306(st, "p306-node", kind="app", php_version="", runtime="node", runtime_version="24", app_port=3000,
+                   start_command="npm start")
+    php = _site306(st, "p306-cache", kind="php", object_cache=True,
+                   object_cache_secret=_cfg306.encrypt_secret("c" * 40))
+    for site in (app, php):
+        os.makedirs(os.path.join(_home306(site.account), "site", "html"), exist_ok=True)
+        with open(os.path.join(_home306(site.account), "site", "html", "index.js"), "w", encoding="utf-8") as fh:
+            fh.write("// the app\n")
+    _reset306(FAKE_IMAGE_EXISTS=0)
+    su = _Client306(st.su.id)
+    codes = [su.post("/websites/%d/update-image" % s.id).status_code for s in (app, php)]
+    gate, cache = _args306(_unit306(app, "lgsm-site-gate")), _args306(_unit306(php, "lgsm-site-cache"))
+    eq("F26 (POST /websites/<id>/update-image): the gate in front of a Node.js app and the object cache join the "
+       "site's network namespace with no DNS option (Podman refused --dns=none there: neither unit ever started)",
+       (codes, gate[0:1], cache[0:1], [a for a in gate + cache if "--dns" in a]),
+       ([200, 200], ["Network=container:lgsm-site"], ["Network=container:lgsm-site"], []))
+    eq("F26: the site's own container keeps --dns=none and its no-route network, so the units that join it have no "
+       "DNS and no way out either (control)",
+       ["--dns=none" in a for a in _args306(_unit306(app, "lgsm-site")) + _args306(_unit306(php, "lgsm-site"))
+        if a.startswith("PodmanArgs=")], [True, True])
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -381,7 +418,7 @@ def _ran306(step, st):
 
 
 _ran306.last = ""
-_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo)
+_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

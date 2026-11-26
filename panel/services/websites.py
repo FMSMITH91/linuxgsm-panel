@@ -539,6 +539,10 @@ def app_quadlet(site, ids, net, image=None, cpu=True):
     return "\n".join(lines + _tail())
 
 
+# The gate and the object cache join the site container's network namespace (Network=container:), so they have
+# exactly its network: the same loopback, and no route out but what pasta forwards for the site. Podman refuses a
+# DNS option (--dns=none) beside Network=container: ("conflicting options: dns and the network mode"); the name
+# servers are the joined container's, and the site's own --dns=none already leaves it none.
 def gate_quadlet(site, ids, image):
     """The token gate in front of a runtime app: nginx in the app's own network namespace, on 8080."""
     home = _home(site.account)
@@ -547,7 +551,7 @@ def gate_quadlet(site, ids, image):
         "Pull=never", "Network=container:%s" % UNIT,
         "Volume=%s/%s/nginx.conf:/etc/nginx/conf.d/default.conf:ro" % (home, CONF),
         "Tmpfs=/tmp:rw,mode=1777,size=32m"] + _hardening(ids, 64) + [
-        "PodmanArgs=--memory=64m --memory-swap=64m --dns=none --stop-timeout=%d" % STOP_TIMEOUT]
+        "PodmanArgs=--memory=64m --memory-swap=64m --stop-timeout=%d" % STOP_TIMEOUT]
     return "\n".join(lines + _tail())
 
 
@@ -562,8 +566,8 @@ def object_cache_quadlet(site, ids, image=None):
         "Pull=never", "Network=container:%s" % UNIT,
         "Volume=%s/%s/valkey.conf:/etc/valkey/valkey.conf:ro" % (home, CONF), "Tmpfs=/tmp:rw,mode=1777,size=16m",
     ] + _hardening(ids, 64) + [
-        "PodmanArgs=--memory=%dm --memory-swap=%dm --dns=none --stop-timeout=%d" % (
-            OBJECT_CACHE_MB * 2, OBJECT_CACHE_MB * 2, STOP_TIMEOUT),
+        "PodmanArgs=--memory=%dm --memory-swap=%dm --stop-timeout=%d" % (OBJECT_CACHE_MB * 2, OBJECT_CACHE_MB * 2,
+                                                                          STOP_TIMEOUT),
         "Exec=valkey-server /etc/valkey/valkey.conf"]
     return "\n".join(lines + _tail())
 
