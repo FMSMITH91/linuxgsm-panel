@@ -285,7 +285,7 @@ def _s2_plain_errors():
     host = {"validate_rc": 1, "validate_err": '{"level":"error","ts":1.5,"msg":"adapting config using caddyfile: '
                                               '/etc/lgsm-web-proxy/Caddyfile.candidate:72: unrecognized directive: '
                                               'respond_bogus"}\n'}
-    rc, out, calls, conf, _t = _helper302(lambda: _H302.do_website_proxy_apply(["start"], _doc302()), host)
+    rc, out, _calls, conf, _t = _helper302(lambda: _H302.do_website_proxy_apply(["start"], _doc302()), host)
     eq("website-proxy-apply (verb): a refused configuration's error is printed in plain words (the message, a line "
        "number), never Caddy's JSON record or its file path; the running file is kept",
        (rc, [ln for ln in out.split("\n") if ln.startswith("error=")], conf == _OLD_CONF302),

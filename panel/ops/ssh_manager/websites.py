@@ -381,6 +381,16 @@ def proxy_status(remote):
     return _helper(remote, "website-proxy-status", timeout=60)
 
 
+def _cert_line(certs, line):
+    """Record one `cert=<domain> issuer= not_after=` line in `certs`, keeping the later date for a domain."""
+    parts = dict(p.split("=", 1) for p in line.split() if "=" in p)
+    if not parts.get("not_after", "").isdecimal():
+        return
+    seen = certs.get(parts["cert"])
+    if seen is None or int(parts["not_after"]) > seen["not_after"]:
+        certs[parts["cert"]] = {"issuer": parts.get("issuer", ""), "not_after": int(parts["not_after"])}
+
+
 def parse_proxy_status(out):
     """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}.
 
@@ -390,12 +400,7 @@ def parse_proxy_status(out):
     got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
-            parts = dict(p.split("=", 1) for p in line.split() if "=" in p)
-            if not parts.get("not_after", "").isdecimal():
-                continue
-            seen = got["certs"].get(parts["cert"])
-            if seen is None or int(parts["not_after"]) > seen["not_after"]:
-                got["certs"][parts["cert"]] = {"issuer": parts.get("issuer", ""), "not_after": int(parts["not_after"])}
+            _cert_line(got["certs"], line)
         elif "=" in line:
             key, _sep, value = line.partition("=")
             if key in ("installed", "version", "active", "cache"):

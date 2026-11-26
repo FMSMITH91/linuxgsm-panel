@@ -3009,7 +3009,7 @@ def _web_link_addrs(link):
 
 
 def web_bind_addresses(ip_json):
-    """This host's addresses for the proxy's default_bind (IPv4 first), from `ip -j addr show` output."""
+    """Return the host's addresses for the proxy's default_bind (IPv4 first), from `ip -j addr show` output."""
     try:
         links = json.loads(ip_json or "[]")
     except ValueError:
@@ -3019,8 +3019,11 @@ def web_bind_addresses(ip_json):
 
 
 def _web_bind(text):
-    """(text, [bind addresses]) the proxy will use: the configuration's own default_bind (tunnel mode), else
-    this host's addresses put in as the first global option. ([], ...) when the host has none."""
+    """Return (text, [bind addresses]) the proxy will use; the addresses are [] when the host has none.
+
+    The configuration's own default_bind (tunnel mode) is kept; otherwise the host's addresses are put in
+    as the first global option.
+    """
     m = _WEB_BIND_RE.search(text)
     if m:
         return text, m.group(1).split()
@@ -3157,14 +3160,8 @@ def do_website_proxy_apply(args, content):
         sys.stderr.write("the web proxy is not installed\n")
         return 1
     pw = pwd.getpwnam(WEB_PROXY_USER)
-    text, binds = _web_bind(text)
+    text, binds = _web_listen_ok(text, pw)
     if not binds:
-        sys.stdout.write("bind=none\n")
-        return 1
-    _rc, ss_out = _run_quiet([resolve("ss"), "-Hltnp"], timeout=20)
-    busy = web_port_holders(ss_out, binds, _web_ports(text), pw.pw_uid)
-    if busy:
-        sys.stdout.write("".join("busy=%s %s %s\n" % b for b in busy))
         return 1
     for name, pem in files.items():
         dest = WEB_PROXY_ETC + "/" + name if name == "origin-pull-ca.pem" else WEB_PROXY_CERTS + "/" + name
@@ -3174,6 +3171,20 @@ def do_website_proxy_apply(args, content):
         return 1
     sys.stdout.write("valid=yes\nbind=%s\n" % " ".join(binds))
     return _web_start(old, pw)
+
+
+def _web_listen_ok(text, pw):
+    """Return (text with its binds, binds), or (text, []) after printing bind=none or busy= lines."""
+    text, binds = _web_bind(text)
+    if not binds:
+        sys.stdout.write("bind=none\n")
+        return text, []
+    _rc, ss_out = _run_quiet([resolve("ss"), "-Hltnp"], timeout=20)
+    busy = web_port_holders(ss_out, binds, _web_ports(text), pw.pw_uid)
+    if busy:
+        sys.stdout.write("".join("busy=%s %s %s\n" % b for b in busy))
+        return text, []
+    return text, binds
 
 
 def _web_read(path):
