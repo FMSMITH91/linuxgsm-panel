@@ -58,6 +58,10 @@ def _entry_problems(name, entry):
         return ["add-on name %r is not a lowercase name" % name]
     if not isinstance(entry, dict) or not entry:
         return ["%s: not an object of fields" % name]
+    return _field_problems(name, entry)
+
+
+def _field_problems(name, entry):
     out = ["%s.%s: not a field the catalog has" % (name, k) for k in sorted(entry) if k not in _FIELDS]
     out += ["%s.%s: %r is not a full pin of its kind" % (name, k, v) for k, v in sorted(entry.items())
             if k in _FIELDS and not (isinstance(v, str) and _FIELDS[k].match(v))]
@@ -117,26 +121,36 @@ def changes(before, after):
     return lines
 
 
+def _loaded(text, check):
+    """(object, "") for JSON text that `check` finds nothing wrong with, else (None, why)."""
+    try:
+        obj = json.loads(text)
+    except ValueError as exc:
+        return None, "not JSON (%s)" % exc
+    bad = check(obj)
+    return (None, "; ".join(bad)) if bad else (obj, "")
+
+
+def _previous(latest, now):
+    """(the published catalog or None when there is none, "" or why it cannot be built on)."""
+    if not latest.strip():
+        return None, ""
+    prev, why = _loaded(latest, published_problems)
+    if why:
+        return None, "the published catalog/latest.json is not a catalog: " + why
+    if now < _parse_time(prev["issued"]):
+        return None, "this clock is behind the published catalog's issue time %s" % prev["issued"]
+    return prev, ""
+
+
 def build(source, latest, now, mode):
     """(exit status, catalog text or "", message) for the `build` command."""
-    try:
-        src = json.loads(source)
-    except ValueError as exc:
-        return 1, "", "the commit's catalog is not JSON: %s" % exc
-    problems = source_problems(src)
-    if problems:
-        return 1, "", "the commit's catalog is refused: " + "; ".join(problems)
-    prev = None
-    if latest.strip():
-        try:
-            prev = json.loads(latest)
-        except ValueError:
-            prev = "not JSON"
-        bad = published_problems(prev)
-        if bad:
-            return 1, "", "the published catalog/latest.json is not a catalog: " + "; ".join(bad)
-        if now < _parse_time(prev["issued"]):
-            return 1, "", "this clock is behind the published catalog's issue time %s" % prev["issued"]
+    src, why = _loaded(source, source_problems)
+    if why:
+        return 1, "", "the commit's catalog is refused: " + why
+    prev, why = _previous(latest, now)
+    if why:
+        return 1, "", why
     if prev and mode == "auto" and core(prev) == src and _parse_time(prev["expires"]) - now > REFRESH_DAYS * _DAY:
         return 3, "", "catalog seq %d already says this and expires %s: nothing to publish" % (prev["seq"], prev["expires"])
     out = dict(src, seq=(prev["seq"] + 1) if prev else 1, issued=time.strftime(_TIME_FMT, time.gmtime(now)),
@@ -146,51 +160,67 @@ def build(source, latest, now, mode):
     return 0, serialize(out), "catalog seq %d, expires %s:\n%s" % (out["seq"], out["expires"], what)
 
 
+def _runs(lines):
+    """[(name, status, conclusion)] of the check runs in `lines` that count (IGNORED left out)."""
+    parts = [line.rstrip("\n").split("\t") for line in lines]
+    return [tuple(p) for p in parts if len(p) == 3 and p[0] and p[0] not in IGNORED]
+
+
+def _ran(required, runs):
+    """Whether a run that was not skipped answers `required` (a name, or a prefix ending in "(")."""
+    return any(c != "skipped" and (n == required or (required.endswith("(") and n.startswith(required)))
+               for n, _, c in runs)
+
+
 def checks_problem(lines):
     """Why the check runs in `lines` do not all pass; "" when they do."""
-    runs = []
-    for line in lines:
-        parts = line.rstrip("\n").split("\t")
-        if len(parts) == 3 and parts[0] and parts[0] not in IGNORED:
-            runs.append(parts)
+    runs = _runs(lines)
     failed = sorted({n for n, s, c in runs if s == "completed" and c in _FAILED})
     if failed:
         return "a check failed: " + ", ".join(failed)
     running = sorted({n for n, s, _ in runs if s != "completed"})
     if running:
         return "checks still running: " + ", ".join(running)
-    missing = [r for r in REQUIRED if not any(c != "skipped" and (n == r or (r.endswith("(") and n.startswith(r)))
-                                              for n, _, c in runs)]
+    missing = [r for r in REQUIRED if not _ran(r, runs)]
     return ("checks it must pass have not run: " + ", ".join(missing)) if missing else ""
+
+
+def _cmd_build(argv, text):
+    if "\0" not in text:
+        sys.stderr.write("addon_catalog.py: stdin must be <catalog> NUL <published latest or nothing>\n")
+        return 2
+    source, latest = text.split("\0", 1)
+    rc, out, msg = build(source, latest, int(argv[2]), argv[3])
+    sys.stdout.write(out)
+    sys.stderr.write(msg + "\n")
+    return rc
+
+
+def _cmd_seq(text):
+    obj, why = _loaded(text, published_problems)
+    if why:
+        sys.stderr.write("addon_catalog.py: not a published catalog: %s\n" % why)
+        return 1
+    sys.stdout.write("%d\n" % obj["seq"])
+    return 0
+
+
+def _cmd_checks(text):
+    why = checks_problem(text.splitlines())
+    if why:
+        sys.stderr.write(why + "\n")
+    return 1 if why else 0
 
 
 def main(argv, stdin=None):
     """Run one command of the module docstring; its exit status."""
-    data = (stdin or sys.stdin.buffer).read().decode("utf-8", "replace")
+    text = (stdin or sys.stdin.buffer).read().decode("utf-8", "replace")
     if argv[1:2] == ["build"] and len(argv) == 4 and argv[2].isdecimal() and argv[3] in ("auto", "refresh"):
-        if "\0" not in data:
-            sys.stderr.write("addon_catalog.py: stdin must be <catalog> NUL <published latest or nothing>\n")
-            return 2
-        source, latest = data.split("\0", 1)
-        rc, text, msg = build(source, latest, int(argv[2]), argv[3])
-        sys.stdout.write(text)
-        sys.stderr.write(msg + "\n")
-        return rc
+        return _cmd_build(argv, text)
     if argv[1:] == ["seq"]:
-        try:
-            obj = json.loads(data)
-        except ValueError:
-            obj = None
-        if published_problems(obj):
-            sys.stderr.write("addon_catalog.py: not a published catalog\n")
-            return 1
-        sys.stdout.write("%d\n" % obj["seq"])
-        return 0
+        return _cmd_seq(text)
     if argv[1:] == ["checks"]:
-        why = checks_problem(data.splitlines())
-        if why:
-            sys.stderr.write(why + "\n")
-        return 1 if why else 0
+        return _cmd_checks(text)
     sys.stderr.write(__doc__)
     return 2
 

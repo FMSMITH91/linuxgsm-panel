@@ -86,12 +86,17 @@ def foreign_args(containerfile_text, args):
     return [(n, v) for n, v in ARG_RE.findall(containerfile_text) if want.get(n) != v]
 
 
-def _image_problems(addons, builds):
-    """What is wrong with the pins themselves: a pulled image not pinned by digest, a build without its entry."""
+def _pin_problems(addons):
+    """Each pulled image or build base the catalog does not pin by digest."""
     out = ["%s: image %s is not pinned by digest" % (k, v) for k, v in upstream_images(addons).items()
            if not PINNED_RE.match(v)]
-    out += ["%s: base %s is not pinned by digest" % (k, v["base"]) for k, v in sorted(addons.items())
-            if isinstance(v.get("base"), str) and not PINNED_RE.match(v["base"])]
+    return out + ["%s: base %s is not pinned by digest" % (k, v["base"]) for k, v in sorted(addons.items())
+                  if isinstance(v.get("base"), str) and not PINNED_RE.match(v["base"])]
+
+
+def _image_problems(addons, builds):
+    """What is wrong with the pins themselves: a pulled image not pinned by digest, a build without its entry."""
+    out = _pin_problems(addons)
     out += ["%s: has a Containerfile but no catalog entry with a base" % b for b in builds
             if not isinstance((addons.get(b) or {}).get("base"), str)]
     out += ["%s: the catalog names it a base to build from but there is no Containerfile" % k
@@ -99,21 +104,27 @@ def _image_problems(addons, builds):
     return out
 
 
+def _build_plan(name, entry, images_dir, problems):
+    """[(ARG, value)] that build `name` takes from its catalog entry; what is wrong is appended to `problems`.
+
+    Only the ARGs its Containerfile declares, as the panel passes them; each ARG default must be the catalog's value.
+    """
+    with open(os.path.join(images_dir, name, "Containerfile"), encoding="utf-8") as fh:
+        text = fh.read()
+    declared = set(DECLARED_RE.findall(text))
+    args = [(n, v) for n, v in build_args(name, entry) if n in declared]
+    if not ARG_RE.search(text):
+        problems.append("%s: its Containerfile has no ARG defaults to build from" % name)
+    problems.extend("%s: ARG %s=%s is not the catalog's value" % (name, n, v) for n, v in foreign_args(text, args))
+    return args
+
+
 def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR):
     """{"upstream": {name: image}, "builds": {name: [(ARG, value)]}, "problems": [text]} for the tree as it is."""
     addons, problem = read_catalog(catalog_path)
     builds = build_dirs(images_dir)
     problems = [problem] if problem else _image_problems(addons, builds)
-    args = {}
-    for b in builds:
-        with open(os.path.join(images_dir, b, "Containerfile"), encoding="utf-8") as fh:
-            text = fh.read()
-        declared = set(DECLARED_RE.findall(text))   # only the ARGs it takes, as the panel passes them
-        args[b] = [(n, v) for n, v in build_args(b, addons.get(b) or {}) if n in declared]
-        if not ARG_RE.search(text):
-            problems.append("%s: its Containerfile has no ARG defaults to build from" % b)
-        for n, v in foreign_args(text, args[b]):
-            problems.append("%s: ARG %s=%s is not the catalog's value" % (b, n, v))
+    args = {b: _build_plan(b, addons.get(b) or {}, images_dir, problems) for b in builds}
     up = upstream_images(addons)
     if not up and not builds and not problems:
         problems.append("nothing to scan: no pulled image in the catalog and no build folder")

@@ -328,6 +328,9 @@ def _s293_static():
        [_so293._path_class(p) for p in ("panel/addon_images/catalog.json", "panel/addon_images/b3/Containerfile",
                                         "panel/addon_images/iw4madmin/entrypoint.sh", "panel/services/addons.py")],
        ["noise", "runtime", "runtime", "runtime"])
+
+
+def _s293_scan():
     cat = _json293.loads(_read293(_CATALOG293))
     p = _AI293.plan()
     want_builds = {"b3": [("BASE_IMAGE", cat["addons"]["b3"]["base"]), ("B3_COMMIT", cat["addons"]["b3"]["commit"])],
@@ -351,6 +354,10 @@ def _s293_static():
     eq("add-on scan: ...and its docker build of B3 and IW4MAdmin passes every one of those values as a --build-arg",
        [sorted(a[i + 1] for i, f in enumerate(a) if f == "--build-arg") for a in builds],
        [sorted("%s=%s" % kv for kv in want_builds[b]) for b in ("b3", "iw4madmin")])
+
+
+def _s293_renovate():
+    cat = _json293.loads(_read293(_CATALOG293))
     cfg = _json293.loads(_read293(os.path.join(_root, ".github", "renovate.json")))
     addon_mgrs = [m for m in cfg["customManagers"] if any("addon_images" in f for f in m.get("managerFilePatterns") or [])]
     text = _read293(_CATALOG293)
@@ -364,6 +371,9 @@ def _s293_static():
        (len(addon_mgrs), [m for m in addon_mgrs if "/^panel/addon_images/catalog\\.json$/" not in m["managerFilePatterns"]],
         "services/addons" in _read293(os.path.join(_root, ".github", "renovate.json")), sorted(pins - caught)),
        (5, [], False, []))
+
+
+def _s293_lists():
     dep = _read293(os.path.join(_root, ".github", "workflows", "deploy.yml"))
     req = _re293.search(r"(?m)^ *REQUIRED=\((.*)\)$", dep)
     ign = _re293.search(r"IGNORED='(\[[^']*\])'", dep)
@@ -400,6 +410,7 @@ else:
     _s293_tampered(_rig, _b293)
     _s293_near_expiry(_rig, _b293)
     _s293_sign_release()
-_s293_static()
+for _step293 in (_s293_static, _s293_scan, _s293_renovate, _s293_lists):
+    _step293()
 _s293_build_refusals()
 _sh293.rmtree(_TMP293, ignore_errors=True)
