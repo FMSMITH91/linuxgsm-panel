@@ -194,9 +194,9 @@ for _nm301, _pg301 in (("list (superadmin)", _list_sa301), ("site (administrator
 _tpl_src301 = "".join(_read301(os.path.join(_ROOT301, "panel", "templates", f))
                       for f in sorted(os.listdir(os.path.join(_ROOT301, "panel", "templates")))
                       if f.startswith(("_website", "website")))
+_inline301 = _re301.findall(r"<script(?![^>]*\bsrc=)[^>]*>", _tpl_src301, _re301.IGNORECASE)
 check("csp: no Websites template writes an inline <script> body or a style attribute (the policy refuses both)",
-      not _re301.search(r"<script(?![^>]*\bsrc=)[^>]*>", _tpl_src301) and " style=" not in _tpl_src301,
-      _re301.findall(r"<script(?![^>]*\bsrc=)[^>]*>", _tpl_src301)[:3])
+      not _inline301 and not _re301.search(r"\sstyle\s*=", _tpl_src301, _re301.IGNORECASE), _inline301[:3])
 
 
 # ── 3. the scripts, in node, over the rendered page ───────────────────────────────────────────────
