@@ -24,6 +24,8 @@ M3.  website-account-remove deletes the account on its first call even while the
 M5.  A raw proxy snippet the configuration would leave out (it reads the proxy's environment) is refused in plain
      words, not stored and reported as applied.
 M6.  A successful image update of a failed site records it running, its old failure reason cleared.
+M11. Only a site whose PHP image is built on the host gets the build folder (~/site/image); an empty one an earlier
+     install made for another kind is removed.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -774,6 +776,19 @@ def _m6_update_state(st):
        (r2.status_code, got.state, got.state_reason), (502, "failed", "kept"))
 
 
+# ── M11. The image build folder ────────────────────────────────────────────────────────────────
+def _m11_build_dir(st):
+    _bash_seams306()
+    sites = {kind: _site306(st, "p306-m11-%s" % kind, kind=kind) for kind in ("static", "wordpress", "php")}
+    os.makedirs(os.path.join(_home306(sites["static"].account), "site", "image"))
+    _reset306(FAKE_IMAGE_EXISTS=0)
+    codes = [_Client306(st.su.id).post("/websites/%d/update-image" % s.id).status_code for s in sites.values()]
+    eq("M11 (POST /websites/<id>/update-image): only the kind whose PHP image is built on the host has ~/site/image "
+       "(every site, static and WordPress included, got an empty one); the empty one an earlier install left is gone",
+       (codes, {k: os.path.isdir(os.path.join(_home306(s.account), "site", "image")) for k, s in sites.items()}),
+       ([200, 200, 200], {"static": False, "wordpress": False, "php": True}))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -823,7 +838,8 @@ def _ran306(step, st):
 
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
-                _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet, _m6_update_state)
+                _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet, _m6_update_state,
+                _m11_build_dir)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

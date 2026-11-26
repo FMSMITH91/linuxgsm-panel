@@ -432,6 +432,7 @@ def _tail(restart="always"):
 # as the site's account from panel/website_images/php/Containerfile (install_sh). Its tag names the PHP version
 # and a hash of the base and the Containerfile, so a new pin or a changed Containerfile is a new build.
 PHP_IMAGE_REPO = "localhost/lgsm-site-php"
+PHP_BUILT_KINDS = ("php", "phpbb")         # the kinds whose image is built on the host (the others are pulled)
 PHP_BUILD_DIR = SITE + "/image"
 PHP_CONTAINERFILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "website_images", "php",
                                  "Containerfile")
@@ -733,18 +734,19 @@ def bundle(files):
     return "".join("%s %s\n" % (p, _b64(files[p])) for p in sorted(files))
 
 
-def write_files_sh():
+def write_files_sh(build_dir=False):
     """Shell (as the account) writing each file of the stdin bundle, 0600 or 0700 folders, atomically.
 
     Every path is matched against FILE_NAMES in the shell too; anything else prints SITE_FILES_REFUSED
-    and writes nothing more. No content is ever on the command line.
+    and writes nothing more. No content is ever on the command line. `build_dir`: the PHP image's build
+    folder (PHP_BUILD_DIR) is made too, for a kind whose image is built on the host; other kinds get none.
     """
     names = "|".join(FILE_NAMES)
-    return ("umask 077; mkdir -p %s %s %s %s %s %s tunnel || exit 1; chmod 0700 %s %s; "
+    return ("umask 077; mkdir -p %s %s %s %s %s %stunnel || exit 1; chmod 0700 %s %s; "
             "while read -r p b; do case \"$p\" in %s) ;; *) echo SITE_FILES_REFUSED; exit 25 ;; esac; "
             "printf %%s \"$b\" | base64 -d > \"$p.new\" && mv -f -T \"$p.new\" \"$p\" || exit 1; done; "
-            % (_q(QUADLET_DIR), _q(USER_UNIT_DIR), _q(CONF), _q(HOME_DIR), _q(HTML), _q(PHP_BUILD_DIR), _q(CONF),
-               _q(HOME_DIR), names))
+            % (_q(QUADLET_DIR), _q(USER_UNIT_DIR), _q(CONF), _q(HOME_DIR), _q(HTML),
+               _q(PHP_BUILD_DIR) + " " if build_dir else "", _q(CONF), _q(HOME_DIR), names))
 
 
 def egress_proxy_source():
@@ -800,7 +802,7 @@ def install_sh(account, site, image=None):
     """
     _home(account)
     image = image or image_for(site)
-    pull = php_build_sh(site, image) if site.kind in ("php", "phpbb") else (
+    pull = php_build_sh(site, image) if site.kind in PHP_BUILT_KINDS else (
         "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image))
     if site.kind == "app":
         from panel.services import websites_catalog as _wc
@@ -813,10 +815,12 @@ def install_sh(account, site, image=None):
         # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
         pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
             unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
+    if site.kind not in PHP_BUILT_KINDS:
+        pull += "rmdir %s 2>/dev/null; " % _q(PHP_BUILD_DIR)     # the empty folder an earlier install made
     if site.kind == "app":
         # An app with no files yet (a new site) is not started: its start command has nothing to run.
         pull += "[ -n \"$(ls -A %s 2>/dev/null)\" ] || echo %s; " % (_q(HTML), MARK_APP_EMPTY)
-    return (_ENV + write_files_sh() + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
+    return (_ENV + write_files_sh(site.kind in PHP_BUILT_KINDS) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
 
 
