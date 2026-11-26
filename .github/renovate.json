@@ -211,7 +211,9 @@
       ],
       "matchFileNames": [
         "panel/addon_images/b3/Containerfile",
-        "panel/addon_images/iw4madmin/Containerfile", "panel/website_images/caddy-cache/Containerfile"],
+        "panel/addon_images/iw4madmin/Containerfile",
+        "panel/website_images/caddy-cache/Containerfile"
+      ],
       "enabled": false
     },
     {
