@@ -80,6 +80,28 @@ def _cidrs(data, problems):
     return out
 
 
+def _choices(data, changes, problems):
+    """The tunnel provider and origin TLS choice from the form, each held to its list."""
+    for key, allowed in (("tunnel_provider", WEBSITE_TUNNEL_PROVIDERS), ("origin_tls", WEBSITE_ORIGIN_TLS)):
+        if key in data:
+            value = _w.field(data, key)
+            if value not in allowed:
+                problems.append(i18n.tr("{key} must be one of {allowed}.", key=key, allowed=", ".join(a for a in allowed if a)))
+            changes[key] = value
+
+
+def _token(data, changes, problems):
+    """The tunnel token, when one was typed: encrypted for the row, or refused (one line, at most TOKEN_MAX)."""
+    token = data.get("tunnel_token")
+    if not (isinstance(token, str) and token.strip()):
+        return
+    token = token.strip()
+    if len(token) > TOKEN_MAX or any(c in token for c in "\x00\r\n"):
+        problems.append(i18n.tr(S_TOKEN))
+    else:
+        changes["tunnel_token_enc"] = encrypt_secret(token)
+
+
 def parse_settings(row, data):
     """(changes {column: value}, [problems]) for the proxy settings form; nothing is stored here."""
     problems, changes = [], {}
@@ -92,21 +114,10 @@ def parse_settings(row, data):
     if "allow_presets" in data:
         presets = data.get("allow_presets") if isinstance(data.get("allow_presets"), list) else []
         changes["allow_presets"] = json.dumps(sorted({p for p in presets if p in WEBSITE_ALLOW_PRESETS}))
-    for key, allowed in (("tunnel_provider", WEBSITE_TUNNEL_PROVIDERS), ("origin_tls", WEBSITE_ORIGIN_TLS)):
-        if key in data:
-            value = _w.field(data, key)
-            if value not in allowed:
-                problems.append(i18n.tr("{key} must be one of {allowed}.", key=key, allowed=", ".join(a for a in allowed if a)))
-            changes[key] = value
+    _choices(data, changes, problems)
     if "origin_pull_mtls" in data:
         changes["origin_pull_mtls"] = _w.flag(data, "origin_pull_mtls")
-    token = data.get("tunnel_token")
-    if isinstance(token, str) and token.strip():
-        token = token.strip()
-        if len(token) > TOKEN_MAX or any(c in token for c in "\x00\r\n"):
-            problems.append(i18n.tr(S_TOKEN))
-        else:
-            changes["tunnel_token_enc"] = encrypt_secret(token)
+    _token(data, changes, problems)
     return changes, problems + _mode_problems(row, changes)
 
 
@@ -136,35 +147,39 @@ def _detail(changes):
 _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 
 
+def _option(key, value):
+    """(the value to store for option `key`, None) or (None, the sentence refusing it)."""
+    from panel.routes.websites_view import OPTIONS, TLS_CHOICES
+    default, low, high = OPTIONS[key]
+    if isinstance(default, bool):
+        return value is True, None
+    if isinstance(default, int):
+        ok = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+        return (value, None) if ok else (None, i18n.tr("{key} must be a whole number from {low} to {high}.",
+                                                       key=key, low=low, high=high))
+    if key == "tls_min":
+        return (value, None) if value in TLS_CHOICES else (None, i18n.tr("The minimum TLS version is 1.2 or 1.3."))
+    text = value.strip() if isinstance(value, str) else ""
+    if text and (len(text) > 254 or not _EMAIL_RE.fullmatch(text)):
+        return None, i18n.tr("The certificate contact is an email address, or empty.")
+    return text, None
+
+
 def parse_options(form):
     """(the global website settings to store {key: value}, [problems]) from the Settings card's `options`.
 
     Every key is held to its type and range (websites_view.OPTIONS); a value outside OWASP's
     recommendation is stored (the page says so beside the field), never refused for that.
     """
-    from panel.routes.websites_view import OPTIONS, TLS_CHOICES
+    from panel.routes.websites_view import OPTIONS
     out, problems = {}, []
     for key, value in form.items():
-        if key not in OPTIONS:
-            continue
-        default, low, high = OPTIONS[key]
-        if isinstance(default, bool):
-            out[key] = value is True
-        elif isinstance(default, int):
-            if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high:
-                out[key] = value
+        if key in OPTIONS:
+            got, why = _option(key, value)
+            if why:
+                problems.append(why)
             else:
-                problems.append(i18n.tr("{key} must be a whole number from {low} to {high}.", key=key, low=low, high=high))
-        elif key == "tls_min":
-            if value in TLS_CHOICES:
-                out[key] = value
-            else:
-                problems.append(i18n.tr("The minimum TLS version is 1.2 or 1.3."))
-        else:
-            text = value.strip() if isinstance(value, str) else ""
-            if text and (len(text) > 254 or not _EMAIL_RE.fullmatch(text)):
-                problems.append(i18n.tr("The certificate contact is an email address, or empty."))
-            out[key] = text
+                out[key] = got
     return out, problems
 
 

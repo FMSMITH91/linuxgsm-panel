@@ -77,19 +77,16 @@ def _custom_problems(text):
     return list(_svc.php_ini_problems(text) or [])
 
 
-def _php_save(site, form):
-    """POST {version, settings: {...}, custom}: check everything, store it, write the php.ini, restart."""
+def _php_parts(form):
+    """(settings dict, Advanced text or None, version or None) from the PHP form, each by its type."""
     settings = form.get("settings") if isinstance(form.get("settings"), dict) else {}
     custom = form.get("custom") if isinstance(form.get("custom"), str) else None
     version = form.get("version") if isinstance(form.get("version"), str) and form.get("version") else None
-    values, problems = _ws.php_form(_php_values(settings), site)
-    why = _version_problem(site, version)
-    try:
-        problems += ([why] if why else []) + _custom_problems(custom)
-    except NotImplementedError:
-        return _w.say(501, _w.S_NOT_READY)
-    if problems:
-        return _problems(problems)
+    return settings, custom, version
+
+
+def _php_store(site, values, custom, version):
+    """Store the checked PHP values, version and Advanced text on `site`; their audit words."""
     site.php_settings = json.dumps(dict(json.loads(site.php_settings or "{}"), **values), sort_keys=True)
     words = ["%s=%s" % kv for kv in sorted(values.items())]
     if version and version != site.php_version:
@@ -98,6 +95,21 @@ def _php_save(site, form):
     if custom is not None and custom != (site.php_ini_custom or ""):
         site.php_ini_custom = custom
         words.append("Advanced php.ini (%d lines)" % (custom.count("\n") + 1 if custom else 0))
+    return words
+
+
+def _php_save(site, form):
+    """POST {version, settings: {...}, custom}: check everything, store it, write the php.ini, restart."""
+    settings, custom, version = _php_parts(form)
+    values, problems = _ws.php_form(_php_values(settings), site)
+    why = _version_problem(site, version)
+    try:
+        problems += ([why] if why else []) + _custom_problems(custom)
+    except NotImplementedError:
+        return _w.say(501, _w.S_NOT_READY)
+    if problems:
+        return _problems(problems)
+    words = _php_store(site, values, custom, version)
     db.session.commit()
     ok, said = _w.host_call(_sw.php_apply, site.remote, site)
     _w.forget_status(site.id)

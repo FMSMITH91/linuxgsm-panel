@@ -258,23 +258,24 @@ def creates_as_admin(user):
         MANAGE_WEBSITES in g.get_permissions() and not g.is_customer for g in user.groups)
 
 
+def _admin_host(data):
+    """The host an administrator named (host_id): any for a superadmin (the panel's own when none is named),
+    else one they have host-level access to (get_host_remote); None when none is named."""
+    try:
+        rid = int(data.get("host_id") or data.get("remote_id"))
+    except (TypeError, ValueError):
+        return _local_host() if current_user.is_superadmin else None
+    return db.session.get(RemoteServer, rid) if current_user.is_superadmin else get_host_remote(rid)
+
+
 def add_target(data):
     """(host, customer group or None, refusal or None) for a new site from the add form's fields.
 
-    An administrator names the host (a superadmin may leave it to the panel's own; anyone else must
-    have host-level access to it, get_host_remote) and may give the site to a customer group. A
-    customer's site joins their own group and runs on that group's host (its first site's, else the
-    panel's own).
+    An administrator names the host (_admin_host) and may give the site to a customer group. A customer's
+    site joins their own group and runs on that group's host (its first site's, else the panel's own).
     """
     if creates_as_admin(current_user):
-        try:
-            rid = int(data.get("host_id") or data.get("remote_id"))
-        except (TypeError, ValueError):
-            rid = None
-        if rid is None:
-            remote = _local_host() if current_user.is_superadmin else None
-        else:
-            remote = db.session.get(RemoteServer, rid) if current_user.is_superadmin else get_host_remote(rid)
+        remote = _admin_host(data)
         return remote, _customer_group(data), (None if remote else (400, S_NO_HOST))
     group = _wa.create_target(current_user)
     if group is None:
@@ -300,23 +301,30 @@ def _defaults():
     return dict({key: opts[key] for key in LIMITS}, access_log=bool(opts["access_log_default"]))
 
 
+def _php_fields(data):
+    from panel.routes.websites_view import php_versions
+    versions = php_versions()
+    version = field(data, "php_version") or (versions[-1] if versions else "")
+    if versions and version not in versions:
+        return {}, (400, "Choose one of the PHP versions this panel offers.")
+    return {"php_version": version}, None
+
+
+def _runtime_fields(data):
+    from panel.routes.websites_view import runtime_versions
+    runtime = field(data, "runtime") or "node"
+    versions = runtime_versions().get(runtime, [])
+    version = field(data, "runtime_version") or (versions[-1] if versions else "")
+    if version not in versions:
+        return {}, (400, "Choose a runtime and version this panel offers.")
+    return {"runtime": runtime, "runtime_version": version}, None
+
+
 def runtime_fields(data, kind):
     """(the kind-specific columns of a new site, refusal or None): its PHP version, or its runtime and version."""
-    from panel.routes.websites_view import php_versions, runtime_versions
     if kind in ("php", "wordpress", "phpbb"):
-        versions = php_versions()
-        version = field(data, "php_version") or (versions[-1] if versions else "")
-        if versions and version not in versions:
-            return {}, (400, "Choose one of the PHP versions this panel offers.")
-        return {"php_version": version}, None
-    if kind == "app":
-        runtime = field(data, "runtime") or "node"
-        versions = runtime_versions().get(runtime, [])
-        version = field(data, "runtime_version") or (versions[-1] if versions else "")
-        if version not in versions:
-            return {}, (400, "Choose a runtime and version this panel offers.")
-        return {"runtime": runtime, "runtime_version": version}, None
-    return {}, None
+        return _php_fields(data)
+    return _runtime_fields(data) if kind == "app" else ({}, None)
 
 
 def new_site(remote, name, kind, group=None, extra=None):
@@ -371,20 +379,24 @@ def _add_route(app):
     def website_add():
         if not _wa.can_create(current_user):
             abort(404)
-        data = body()
-        remote, group, refusal = add_target(data)
-        name, kind = field(data, "name").lower(), field(data, "kind") or "static"
-        refusal = refusal or add_refusal(remote, name, kind)
-        extra, bad = runtime_fields(data, kind) if not refusal else ({}, None)
-        if refusal or bad:
-            return say(*(refusal or bad))
-        site = new_site(remote, name, kind, group, extra)
-        from panel.routes import websites_domains
-        dom_said = websites_domains.add_first(site, field(data, "domain")) if field(data, "domain") else None
-        audit(site, "website_create", "created a %s website on %s%s" % (kind, remote.name, " for %s" % group.name if group else ""))
-        start_install(site)
-        return jsonify({"success": True, "id": site.id, "message": i18n.tr("Website added. It is being set up."),
-                        "domain_note": i18n.tr(dom_said) if dom_said else ""})
+        return _add(body())
+
+
+def _add(data):
+    """Add the site the add form describes (the route has checked can_create)."""
+    remote, group, refusal = add_target(data)
+    name, kind = field(data, "name").lower(), field(data, "kind") or "static"
+    refusal = refusal or add_refusal(remote, name, kind)
+    extra, bad = runtime_fields(data, kind) if not refusal else ({}, None)
+    if refusal or bad:
+        return say(*(refusal or bad))
+    site = new_site(remote, name, kind, group, extra)
+    from panel.routes import websites_domains
+    dom_said = websites_domains.add_first(site, field(data, "domain")) if field(data, "domain") else None
+    audit(site, "website_create", "created a %s website on %s%s" % (kind, remote.name, " for %s" % group.name if group else ""))
+    start_install(site)
+    return jsonify({"success": True, "id": site.id, "message": i18n.tr("Website added. It is being set up."),
+                    "domain_note": i18n.tr(dom_said) if dom_said else ""})
 
 
 # ── running a site ──────────────────────────────────────────────────────────────────────────────
@@ -556,6 +568,32 @@ def _keep(site, fields):
     return None
 
 
+def _settings_flags(site, form):
+    """Set the access-log and egress switches and the customer note from the form; their audit words."""
+    words = []
+    for key in ("access_log", "full_egress"):
+        if key in form:
+            setattr(site, key, flag(form, key))
+            words.append("%s=%s" % (key, "on" if getattr(site, key) else "off"))
+    if "customer_note" in form:
+        site.customer_note = field(form, "customer_note")[:2000]
+        words.append("customer note")
+    return words
+
+
+def _settings_apply(site, limits, form):
+    """Apply a saved Settings form on the host: (ok, sentence)."""
+    if not any(k in LIMITS for k in limits):
+        ok, said = True, "Saved."
+    else:
+        ok, said = host_call(_sw.install, site.remote, site)
+    if ok and "disk_mb" in limits:
+        host_call(_sw.quota_set, site.remote, site)
+    if ok and site.enabled and "access_log" in form:
+        ok, said = reconcile_proxy(site.remote)
+    return ok, said
+
+
 def _settings(site, form):
     """The Settings form: {limits: {..., backup_keep}, access_log, full_egress, customer_note}."""
     limits = dict(form.get("limits")) if isinstance(form.get("limits"), dict) else {}
@@ -565,20 +603,9 @@ def _settings(site, form):
     if refused is not None:
         return refused
     words = ["%s=%s" % (k, limits[k]) for k in sorted(limits) if k in LIMITS or k == "backup_keep"]
-    for key in ("access_log", "full_egress"):
-        if key in form:
-            setattr(site, key, flag(form, key))
-            words.append("%s=%s" % (key, "on" if getattr(site, key) else "off"))
-    if "customer_note" in form:
-        site.customer_note = field(form, "customer_note")[:2000]
-        words.append("customer note")
+    words += _settings_flags(site, form)
     db.session.commit()
-    resized = any(k in LIMITS for k in limits)
-    ok, said = host_call(_sw.install, site.remote, site) if resized else (True, "Saved.")
-    if ok and "disk_mb" in limits:
-        host_call(_sw.quota_set, site.remote, site)
-    if ok and site.enabled and "access_log" in form:
-        ok, said = reconcile_proxy(site.remote)
+    ok, said = _settings_apply(site, limits, form)
     return acted(site, "website_settings", ok, said, ", ".join(words) or "none")
 
 

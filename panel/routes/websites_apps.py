@@ -50,6 +50,13 @@ def _recipe(name):
     return (got, None) if isinstance(got, dict) else (None, "Choose one of the apps this panel offers.")
 
 
+def _typed_password_problem(typed):
+    """The sentence refusing a typed admin password, or None (none typed is fine: one is generated)."""
+    if typed and (len(typed) < ADMIN_PW_MIN or len(typed) > 128 or any(c in typed for c in "\x00\r\n")):
+        return i18n.Sentence("A typed admin password is {n} to 128 characters on one line.", n=ADMIN_PW_MIN)
+    return None
+
+
 def admin_fields(data):
     """(admin user, email, password, generated?, [problems]) from the form."""
     user, email = _w.field(data, "admin_user"), _w.field(data, "admin_email")
@@ -60,10 +67,9 @@ def admin_fields(data):
                         "admin, administrator or root.")
     if len(email) > 254 or not _EMAIL_RE.fullmatch(email):
         problems.append("Enter the admin's email address.")
-    if typed and (len(typed) < ADMIN_PW_MIN or len(typed) > 128 or any(c in typed for c in "\x00\r\n")):
-        problems.append(i18n.Sentence("A typed admin password is {n} to 128 characters on one line.", n=ADMIN_PW_MIN))
-    password = typed or secrets.token_urlsafe(18)
-    return user, email, password, not typed, problems
+    why = _typed_password_problem(typed)
+    problems += [why] if why else []
+    return user, email, typed or secrets.token_urlsafe(18), not typed, problems
 
 
 def _steps(site):
@@ -182,6 +188,30 @@ def _finish(site, user, ok, step, said, steps):
         db.session.commit()
 
 
+_NO_INSTALL = {"state": "", "steps": [], "error": "", "site_url": "", "admin_url": ""}
+
+
+def _step_word(name, done, current, state):
+    """One install step's state for the page: done/undone, running/failed, or pending."""
+    if name in done:
+        return "undone" if state == "failed" else "done"
+    if name == current:
+        return "failed" if state == "failed" else "running"
+    return "pending"
+
+
+def _job_state(site, job):
+    if job.get("state"):
+        return job["state"]
+    return {"running": "done", "failed": "failed"}.get(site.state, "running")
+
+
+def _urls(site, state):
+    dom = site.primary_domain
+    url = "https://%s/" % dom.domain if dom and state == "done" else ""
+    return url, (url + "wp-admin/" if url and site.app_recipe == "wordpress" else url)
+
+
 def install_json(site):
     """The install block of GET /api/websites/<id>: {state, steps: [{key, label, state}], error, site_url, admin_url}.
 
@@ -190,41 +220,41 @@ def install_json(site):
     """
     import json
     if not site.app_recipe:
-        return {"state": "", "steps": [], "error": "", "site_url": "", "admin_url": ""}
+        return dict(_NO_INSTALL)
     with _LOCK:
         job = dict(_JOBS.get(site.id) or {})
-    state = job.get("state") or ("done" if site.state == "running" else "failed" if site.state == "failed" else "running")
+    state = _job_state(site, job)
     done = json.loads(site.install_steps_done or "[]")
-    names = ["account"] + [s["name"] for s in _safe_steps(site)]
     current = job.get("step") or site.install_step or ""
-    steps = []
-    for name in names:
-        if name in done:
-            word = "undone" if state == "failed" else "done"
-        elif name == current:
-            word = "failed" if state == "failed" else "running"
-        else:
-            word = "pending"
-        steps.append({"key": name, "label": name, "state": word})
-    dom = site.primary_domain
-    url = "https://%s/" % dom.domain if dom and state == "done" else ""
+    steps = [{"key": n, "label": n, "state": _step_word(n, done, current, state)}
+             for n in ["account"] + [s["name"] for s in _safe_steps(site)]]
+    site_url, admin_url = _urls(site, state)
     return {"state": state, "steps": steps, "error": job.get("error", "") or (site.state_reason or ""),
-            "site_url": url, "admin_url": url + "wp-admin/" if url and site.app_recipe == "wordpress" else url}
+            "site_url": site_url, "admin_url": admin_url}
 
 
-def _start(data):
+def _start_refusal(data):
+    """((recipe name, recipe, admin fields, host, group, site name), None) for the form, or (None, the refusal)."""
     recipe_name = _w.field(data, "app")
     recipe, why = _recipe(recipe_name)
     if why:
-        return _w.say(400 if why != _w.S_NOT_READY else 501, why)
-    user, email, password, generated, problems = admin_fields(data)
-    if problems:
-        return _w.say(400, " ".join(i18n.tr(p) for p in problems))
+        return None, _w.say(400 if why != _w.S_NOT_READY else 501, why)
+    fields = admin_fields(data)
+    if fields[4]:
+        return None, _w.say(400, " ".join(i18n.tr(p) for p in fields[4]))
     remote, group, refusal = _w.add_target(data)
     name = _w.field(data, "name").lower() or recipe_name
     refusal = refusal or _w.add_refusal(remote, name, str(recipe.get("kind") or "php"))
     if refusal:
-        return _w.say(*refusal)
+        return None, _w.say(*refusal)
+    return (recipe_name, recipe, fields, remote, group, name), None
+
+
+def _start(data):
+    got, refused = _start_refusal(data)
+    if refused is not None:
+        return refused
+    recipe_name, recipe, (user, email, password, generated, _p), remote, group, name = got
     site = _w.new_site(remote, name, str(recipe.get("kind") or "php"), group)
     site.app_recipe, site.app_version = recipe_name, str(recipe.get("version") or "")
     site.install_started_at, site.install_steps_done = utcnow(), "[]"
