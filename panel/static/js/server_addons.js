@@ -70,11 +70,13 @@
     }
     if (a.geolocation_option) geoStatus(a, box);
     if (a.eula_url) BM.status(a, box);
+    // Where the version it is compared with came from (built into the panel, or the signed add-on catalog).
+    var from = a.pin_source ? ' ' + a.pin_source : '';
     if (a.update) {
-      box.appendChild(node('div', 'small text-warning', BM.updateWords(a)));
+      box.appendChild(node('div', 'small text-warning', BM.updateWords(a) + from));
     } else {
-      // Said, not left blank: the card compared the add-on with the panel's own version when it loaded.
-      box.appendChild(node('div', 'small text-secondary', T('Up to date (checked just now).')));
+      // Said, not left blank: the card compared the add-on with the pinned version when it loaded.
+      box.appendChild(node('div', 'small text-secondary', T('Up to date (checked just now).') + from));
     }
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
@@ -480,6 +482,8 @@
     var rt = el('ad-runtime');
     rt.textContent = d.runtime_error || '';
     show('ad-runtime', !!d.runtime_error);
+    var cat = el('ad-catalog');
+    if (cat) { cat.textContent = d.catalog_note || ''; show('ad-catalog', !!d.catalog_note); }
     var list = el('ad-list');
     list.textContent = '';
     if (d.manage === false) { WEB.viewerRows(d, list); return; }
@@ -506,6 +510,15 @@
       draw(d);
       return true;
     }).catch(function () { show('ad-loading', false); say(T('Could not load add-ons.'), 'text-danger'); return false; });
+  };
+
+  // Refresh: fetch the signed add-on catalog first (Manage add-ons), then read the card again.
+  window.adRefresh = function () {
+    if (st.d && st.d.manage === false) return window.adLoad(true);
+    if (st.busy) return Promise.resolve(false);
+    st.busy = true;
+    say(T('Checking for new add-on versions…'));
+    return postJson(api('/catalog')).then(after).catch(failed);
   };
 
   function after(res) {

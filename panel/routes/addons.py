@@ -29,7 +29,7 @@ from panel.routes import addon_web as _web, addons_change as _change, databases_
 from panel.routes._shared import _reboot_holds, game_account_write_refusal, uninstall_running
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
-from panel.services import addon_web as _aw, addons as _ad, reboot_words as _rw
+from panel.services import addon_web as _aw, addons as _ad, addons_catalog as _cat, reboot_words as _rw
 from panel.services import addons_bluemap as _bm, b3_control as _b3c, b3_players as _b3p, geoip as _geoip
 
 _DENIED = "Permission denied"
@@ -236,6 +236,7 @@ def _addon_rows(gs, found):
                           "job": job.get("kind", "install") if job.get("running") else "",
                           "error": i18n.tr(job["why"]) if job.get("why") else "", "tail": job.get("tail", ""),
                           "update": _change.update_reason(k, meta) if got is not None else "",
+                          "pin_source": i18n.tr(*_cat.source_words(_ad.PIN_SOURCES[k])),
                           "web": web and k in _aw.WEB},
                          **_extra_fields(gs, k, meta, got)))
     return rows
@@ -330,8 +331,17 @@ def _status_answer(gs):
         return jsonify({"success": True, "manage": False, "addons": _page_rows(gs, st["addons"])})
     why = _ad.runtime_refusal(st["os"], st["podman"])
     rows, dbs = _addon_rows(gs, st["addons"]), _databases(gs, st["addons"])
+    note, vals = _cat.expired_note()
     return jsonify({"success": True, "manage": True, "addons": rows, "databases": dbs, "podman": st["podman"],
-                    "db_host": _db_host_state(gs, rows, dbs), "runtime_error": i18n.tr(why) if why else ""})
+                    "db_host": _db_host_state(gs, rows, dbs), "runtime_error": i18n.tr(why) if why else "",
+                    "catalog_note": i18n.tr(note, **vals) if note else ""})
+
+
+def _catalog_answer(gs):
+    """Fetch and check the signed add-on catalog now (the card's Refresh), audited; answers in words."""
+    ok, sentence, vals = _cat.refresh()
+    log_action(current_user, "addon_catalog_refresh", target=gs.name, success=ok, detail=i18n.fill(sentence, **vals))
+    return jsonify({"success": ok, "message" if ok else "error": i18n.tr(sentence, **vals)})
 
 
 # ── install, in the background ────────────────────────────────────────────────────────────────
@@ -841,6 +851,7 @@ def _account_refusal(gs, what, reading):
 
 def _guarded(server_id, addon_id, answer, reading=False):
     """Run `answer(gs)` for one of the server's offered add-ons, once the account has been asked about."""
+    _cat.ensure_loaded()            # the pins in use: the floor, or the stored signed catalog checked again
     gs = get_game(server_id)
     if addon_id is not None and addon_id not in _ad.offered(gs.game_type):
         return _say(404, _UNKNOWN)
@@ -876,6 +887,15 @@ def register(app):
         if not (has_permission(current_user, MANAGE_ADDONS) or _web.may_view(current_user)):
             return _say(403, _DENIED)
         return _guarded(server_id, None, _status_answer, reading=True)
+
+    @app.route("/api/server/<int:server_id>/addons/catalog", methods=["POST"])
+    @login_required
+    @server_access_required
+    def api_server_addons_catalog(server_id):
+        """Fetch the signed add-on catalog now (the card's Refresh). It installs nothing: Update does."""
+        if not has_permission(current_user, MANAGE_ADDONS):
+            return _say(403, _DENIED)
+        return _catalog_answer(get_game(server_id))
 
     @app.route("/api/server/<int:server_id>/addons/<addon_id>/install", methods=["POST"])
     @login_required

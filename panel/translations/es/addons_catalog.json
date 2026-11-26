@@ -1,0 +1,22 @@
+{
+  "Version source: built into this panel.": "Origen de la versión: incluida en este panel.",
+  "Version source: signed add-on catalog #{seq} of {date}.": "Origen de la versión: catálogo de complementos firmado n.º {seq} del {date}.",
+  "The signed add-on catalog #{seq} expired on {date} and no newer one has been fetched, so it offers no updates until one is.": "El catálogo de complementos firmado n.º {seq} caducó el {date} y no se ha obtenido uno más reciente, así que no ofrece actualizaciones hasta que se obtenga.",
+  "The add-on catalog was refused: {why}.": "Se rechazó el catálogo de complementos: {why}.",
+  "Signed add-on catalog #{seq} of {date} accepted.": "Catálogo de complementos firmado n.º {seq} del {date} aceptado.",
+  "No newer add-on catalog: #{seq} of {date} is the latest.": "No hay un catálogo de complementos más reciente: el n.º {seq} del {date} es el último.",
+  "The add-on catalog verified, but the panel couldn't save it.": "El catálogo de complementos se verificó, pero el panel no pudo guardarlo.",
+  "The update check is turned off (Settings → Outside services), so the add-on catalog is not fetched either.": "La comprobación de actualizaciones está desactivada (Ajustes → Servicios externos), así que tampoco se obtiene el catálogo de complementos.",
+  "This panel is not a git checkout, so it can't fetch the add-on catalog.": "Este panel no es una copia de git, así que no puede obtener el catálogo de complementos.",
+  "Couldn't fetch the add-on catalog from GitHub. Try again later.": "No se pudo obtener el catálogo de complementos de GitHub. Inténtelo más tarde.",
+  "No signed add-on catalog has been published yet: the versions built into this panel are used.": "Aún no se ha publicado ningún catálogo de complementos firmado: se usan las versiones incluidas en este panel.",
+  "This panel has no release key to check the add-on catalog with.": "Este panel no tiene una clave de publicación con la que comprobar el catálogo de complementos.",
+  "its signature did not verify with this panel's release key": "su firma no se verificó con la clave de publicación de este panel",
+  "it is not a catalog this panel can read": "no es un catálogo que este panel sepa leer",
+  "it is in a format version this panel does not read": "está en una versión de formato que este panel no lee",
+  "it is older than the catalog this panel already has": "es más antiguo que el catálogo que este panel ya tiene",
+  "it has expired": "ha caducado",
+  "it names an add-on this panel does not know, or leaves one out": "nombra un complemento que este panel no conoce, u omite uno",
+  "an add-on in it is not pinned by a full sha256 digest and release": "uno de sus complementos no está fijado por un resumen sha256 completo y una versión",
+  "Checking for new add-on versions…": "Buscando nuevas versiones de los complementos…"
+}

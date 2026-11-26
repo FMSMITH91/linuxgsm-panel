@@ -58,6 +58,8 @@ import os
 import re
 import shlex
 
+from panel.services import addons_catalog as _cat
+
 # ── the catalog ─────────────────────────────────────────────────────────────────────────────────
 IW4MADMIN = "iw4madmin"
 B3 = "b3"
@@ -95,42 +97,45 @@ RCON_TCP_GAMES = ("csgo", "ins")
 # Source games B3 refuses to run on without SourceMod (its csgo and insurgency parsers exit 220): the
 # folder LinuxGSM's mods-install puts it in.
 SOURCEMOD_DIR = {"csgo": "serverfiles/csgo/addons/sourcemod", "ins": "serverfiles/insurgency/addons/sourcemod"}
-# FMSMITH91/big-brother-bot's v2.0.2 release (its signed tag v2.0.2 points at this commit, 2026-11-20): the Quake 3
-# engine parsers asking `dumpuser` by the slot's name, ET: Legacy's status and chat, CoD4x and vanilla ET, commands
-# refused to a player B3 has not authenticated, geolocation, and the service interface the panel uses on top of it:
-# `--check-config` (exit 230), `--version` with the commit (from the image's B3_COMMIT), fixed exit codes 220-223
-# and 230-233 (b3/exitcodes.py), health.json, the `data` table's b3_schema_version, purge_aliases_days,
-# events.jsonl, the control socket (with `actor`) and the plugin reload (SIGHUP / reload_plugins): the B3 the
-# add-on builds. Renovate proposes the fork's newest release tag (.github/renovate.json): the tag and its commit in
-# these two lines, and in the Containerfile's ARG and the comment above it, together. Only releases: master between
-# them is the next version in development (its tree says 2.0.3dev after v2.0.2), not something to build.
-B3_TAG = "v2.0.2"
-B3_COMMIT = "7c3bbe8c2fc3e9e75673ceb58c98e54cfc48170f"
-# The release B3_COMMIT is. The tree at that commit still says 2.0.2dev (b3/__init__.py's __version__: the release
-# build sets the number in the artifacts it publishes, b3-2.0.2 wheel and installer, not in the tagged source), so
-# B3 built from source reports "2.0.2dev" in its health.json; the card names the release instead whenever the
-# commit B3 reports is this one (b3_control.running_version). Only a label: the build checks the commit, not a tag,
-# and the image's tag is the commit and build id, so a new label alone offers no update.
-B3_RELEASE = B3_TAG[1:]
-# RaidMax/IW4M-Admin's release 2026.2.4.1 (2026-02-04, its tag 2026.2.4.1-prerelease at 79fa919a: IW4MAdmin's
-# release workflow marks every release a prerelease and names the tag so), and the sha256 of the archive attached
-# to it, IW4MAdmin-2026.2.4.1.zip: the files IW4MAdmin's own image of that release is built from. Renovate
-# proposes a newer release's tag and its archive's sha256 together, here and in the Containerfile's ARGs.
-IW4MADMIN_TAG = "2026.2.4.1-prerelease"
-IW4MADMIN_SHA256 = "5c00c45297e3ee80cbc3d042561253a4673319ff3c5e641ab89aae6a1977fe1e"
-# The release's build number, the archive's name and the version the card shows.
-IW4MADMIN_VERSION = IW4MADMIN_TAG.split("-", 1)[0]
-# mcr.microsoft.com/dotnet/aspnet:10.0 (ASP.NET Core 10.0.15, Ubuntu 24.04) on 2026-11-24, by its multi-arch index
-# digest: the IW4MAdmin build's base. Renovate proposes the tag's new digest here and in the Containerfile's ARG
-# BASE_IMAGE together, so each runtime fix Microsoft ships is offered as an update.
-IW4MADMIN_BASE = "mcr.microsoft.com/dotnet/aspnet@sha256:aac50ceef10391e78a899e3d2ccd00bbafa2dcb56ccf4586cbccf00edb84fc21"
-# BlueMap's `v5` image (its release 5.29 on 2026-10-10, org.opencontainers.image.revision a61e143f; the same
-# digest as its v5.29 and latest tags then), by its multi-arch index digest. Renovate proposes the v5 tag's new
-# digest, so a new 5.x release is offered and a major release with new configs is not.
-BLUEMAP_IMAGE = "ghcr.io/bluemap-minecraft/bluemap@sha256:36e037916fa7c452bf969e70b4d16313820deeb2453f00ecf28185bc7787cab0"
-# python:3.15-slim (3.15.2, Debian 13) on 2026-11-20, by its multi-arch index digest: the build's base. Renovate
-# proposes the tag's new digest here and in the Containerfile's ARG BASE_IMAGE together (.github/renovate.json).
-B3_BASE = "docker.io/library/python@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928"
+# The add-ons' pins come from the add-on catalog (services/addons_catalog.py): the floor shipped in
+# panel/addon_images/catalog.json, or a newer signed catalog the panel fetched and checked. Renovate proposes new
+# pins in catalog.json, and in the Containerfiles' ARG defaults together (.github/renovate.json). Each name below is
+# read through the module's __getattr__, so it is always the pin in use now:
+#   B3_TAG, B3_COMMIT: a FMSMITH91/big-brother-bot release tag and the commit it points at (only releases: master
+#     between them is the next version in development). The build checks the commit, not the tag.
+#   B3_RELEASE: the tag without its "v". The tree at a release commit still says the development number
+#     (b3/__init__.py's __version__: the release build sets the number in the artifacts it publishes, not in the
+#     tagged source), so B3 built from source reports e.g. "2.0.2dev" in its health.json; the card names the
+#     release instead whenever the commit B3 reports is this one (b3_control.running_version). Only a label.
+#   B3_BASE: python:3.15-slim by its multi-arch index digest, the B3 build's base.
+#   IW4MADMIN_TAG, IW4MADMIN_SHA256: a RaidMax/IW4M-Admin release tag (its release workflow marks every release a
+#     prerelease and names the tag so) and the sha256 of the archive attached to it, the files IW4MAdmin's own
+#     image of that release is built from. IW4MADMIN_VERSION: the release's build number, the archive's name and
+#     the version the card shows.
+#   IW4MADMIN_BASE: mcr.microsoft.com/dotnet/aspnet:10.0 by its multi-arch index digest, the IW4MAdmin build's base,
+#     so each runtime fix Microsoft ships is offered as an update.
+#   BLUEMAP_IMAGE: BlueMap's `v5` image by its multi-arch index digest (a new 5.x release is offered, a major
+#     release with new configs is not).
+_PIN_NAMES = {"B3_TAG": ("b3", "tag"), "B3_COMMIT": ("b3", "commit"), "B3_BASE": ("b3", "base"),
+              "IW4MADMIN_TAG": ("iw4madmin", "tag"), "IW4MADMIN_SHA256": ("iw4madmin", "sha256"),
+              "IW4MADMIN_BASE": ("iw4madmin", "base"), "BLUEMAP_IMAGE": ("bluemap", "image")}
+# The pins in use and where each add-on's came from ({"kind": "floor"} or the catalog's seq and dates).
+PINS = {k: dict(v) for k, v in _cat.FLOOR.items()}
+PIN_SOURCES = {k: {"kind": "floor"} for k in PINS}
+
+
+def __getattr__(name):
+    """The pin names above (PEP 562), read from PINS so they follow the catalog in use."""
+    if name in _PIN_NAMES:
+        addon_id, field = _PIN_NAMES[name]
+        return PINS[addon_id][field]
+    if name == "B3_RELEASE":
+        return PINS[B3]["tag"][1:]
+    if name == "IW4MADMIN_VERSION":
+        return PINS[IW4MADMIN]["tag"].split("-", 1)[0]
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
+
+
 # The files of each add-on build folder (panel/addon_images/<build>/) that go to the host.
 BUILD_FILES = {"b3": ("Containerfile", "requirements.txt", "entrypoint.sh"),
                "iw4madmin": ("Containerfile", "entrypoint.sh")}
@@ -158,9 +163,6 @@ def build_id(folder, base, names):
 CATALOG = {
     IW4MADMIN: {
         "name": "IW4MAdmin",
-        "image": "localhost/lgsm-addon-iw4madmin:%s-%s" % (
-            IW4MADMIN_VERSION, build_id(os.path.join(_IMAGES_DIR, "iw4madmin"), IW4MADMIN_BASE, BUILD_FILES["iw4madmin"])),
-        "version": IW4MADMIN_VERSION,
         "source": "https://github.com/RaidMax/IW4M-Admin",
         # game type -> the parser IW4MAdmin matches by name (its Plugins/ScriptPlugins/Parser*.cs).
         # LinuxGSM's cod4server runs CoD4x (executable cod4x18_dedrun).
@@ -178,16 +180,10 @@ CATALOG = {
         # its synchronous ProcessExit shutdown outlasted Podman's wait and it was killed (137).
         "stop_signal": "SIGINT", "stop_timeout": 30, "success_exit": None,
         "database": False, "build": "iw4madmin", "legacy": False, "log_file": None,
-        # The build's arguments, in order (the Containerfile's ARGs, the same values as their defaults).
-        "build_args": (("BASE_IMAGE", IW4MADMIN_BASE), ("IW4MADMIN_TAG", IW4MADMIN_TAG),
-                       ("IW4MADMIN_SHA256", IW4MADMIN_SHA256)),
         "data_kept": False, "reads": "log", "command": (), "nice": 0, "no_restart": None,
     },
     B3: {
         "name": "B3 (Big Brother Bot)",
-        "image": "localhost/lgsm-addon-b3:%s-%s" % (
-            B3_COMMIT[:12], build_id(os.path.join(_IMAGES_DIR, "b3"), B3_BASE, BUILD_FILES["b3"])),
-        "version": "%s (%s)" % (B3_RELEASE, B3_COMMIT[:8]),
         "source": "https://github.com/FMSMITH91/big-brother-bot",
         # game type -> B3's parser (each tested against LinuxGSM's server, work/batch-1115 vps-b3 rounds 3
         # and 3b). United Offensive is CoD1's engine and log: B3's cod parser. World at War is cod5.
@@ -203,7 +199,6 @@ CATALOG = {
         # killed it (137); that fork commit made them daemon, so no exit status is excused here.
         "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": None,
         "database": True, "build": "b3", "legacy": True, "log_file": "Data/b3.log",
-        "build_args": (("BASE_IMAGE", B3_BASE), ("B3_COMMIT", B3_COMMIT)),
         "data_kept": True, "reads": "log", "command": (), "nice": 0,
         # B3's exit codes (b3/exitcodes.py) that a restart can't mend: 222 an admin's !die in the game,
         # 230 invalid settings. Not 233 (the database not reached at start): that one may come back.
@@ -211,8 +206,6 @@ CATALOG = {
     },
     BLUEMAP: {
         "name": "BlueMap",
-        "image": BLUEMAP_IMAGE,
-        "version": "v5 " + BLUEMAP_IMAGE.rsplit(":", 1)[1][:12],
         "source": "https://github.com/BlueMap-Minecraft/BlueMap",
         # LinuxGSM's Java servers with a world: vanilla (mcserver) and Paper (pmcserver). Not its proxies
         # (Velocity, Waterfall: no world) nor Bedrock (BlueMap reads Java worlds only).
@@ -226,7 +219,7 @@ CATALOG = {
         "web_port": 8100,
         # The JVM runs its shutdown hook on SIGTERM (BlueMap saves the maps' state) and exits 143.
         "stop_signal": "SIGTERM", "stop_timeout": 30, "success_exit": "143",
-        "database": False, "build": None, "legacy": False, "log_file": None, "build_args": (),
+        "database": False, "build": None, "legacy": False, "log_file": None,
         "data_kept": False, "reads": "world",
         # The image's `java -jar cli.jar` takes these, then the Minecraft version: render, watch, serve.
         "command": ("-r", "-u", "-w", "-v"),
@@ -235,6 +228,42 @@ CATALOG = {
     },
 }
 ADDON_IDS = tuple(sorted(CATALOG))
+
+
+def _pin_fields(addon_id, pins):
+    """The CATALOG fields that follow an add-on's pins: its image, the version the card shows, its build's arguments.
+
+    A built image is named by its release (or commit) and build_id; the build's arguments are the Containerfile's
+    ARGs, in order. A pulled image is its digest.
+    """
+    p = pins[addon_id]
+    if addon_id == IW4MADMIN:
+        version = p["tag"].split("-", 1)[0]
+        bid = build_id(os.path.join(_IMAGES_DIR, "iw4madmin"), p["base"], BUILD_FILES["iw4madmin"])
+        return {"image": "localhost/lgsm-addon-iw4madmin:%s-%s" % (version, bid), "version": version,
+                "build_args": (("BASE_IMAGE", p["base"]), ("IW4MADMIN_TAG", p["tag"]),
+                               ("IW4MADMIN_SHA256", p["sha256"]))}
+    if addon_id == B3:
+        bid = build_id(os.path.join(_IMAGES_DIR, "b3"), p["base"], BUILD_FILES["b3"])
+        return {"image": "localhost/lgsm-addon-b3:%s-%s" % (p["commit"][:12], bid),
+                "version": "%s (%s)" % (p["tag"][1:], p["commit"][:8]),
+                "build_args": (("BASE_IMAGE", p["base"]), ("B3_COMMIT", p["commit"]))}
+    return {"image": p["image"], "version": "v5 " + p["image"].rsplit(":", 1)[1][:12], "build_args": ()}
+
+
+def use_pins(pins, sources):
+    """Put `pins` ({add-on id: its pins}, checked by addons_catalog) in use, with where each came from.
+
+    Each CATALOG entry is replaced whole, so a reader sees one add-on's old fields or its new ones, never a mix.
+    """
+    for k in CATALOG:
+        CATALOG[k] = dict(CATALOG[k], **_pin_fields(k, pins))
+        PINS[k] = dict(pins[k])
+        PIN_SOURCES[k] = dict(sources[k])
+
+
+for _k in CATALOG:
+    CATALOG[_k].update(_pin_fields(_k, PINS))
 
 # Where an add-on lives in the account's home, and the name of its unit and container.
 HOME_DIR = "panel-addons"
