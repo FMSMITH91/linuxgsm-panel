@@ -691,11 +691,14 @@ try:
     _p9_patch(_p9_so, "ensure_panel_fail2ban",
               lambda *a, **k: (_ for _ in ()).throw(AssertionError("fail2ban asked")))
     _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
+    # Its own row, counted (review 1124): the block before leaves a successful row too, so with no row
+    # written here the newest one still read as a success.
+    _n_cpb16 = len(_audits("panel_change_binding"))
     _r = _A16.post("/api/panel/change-port", json={"port": 5077, "bind_host": "192.0.2.5"})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a bind-only move that never needed fail2ban is still a success (control)",
-          _p9_json(_r).get("success") is True and _cpb.success is True, repr((_p9_json(_r),
-                                                                               _cpb.detail)))
+          _p9_json(_r).get("success") is True and _cpb.success is True
+          and len(_audits("panel_change_binding")) == _n_cpb16 + 1, repr((_p9_json(_r), _cpb.detail, _n_cpb16)))
     # END OF SECTIONS
 finally:
     for _m, _t in _saved16_threading.items():
