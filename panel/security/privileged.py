@@ -52,6 +52,7 @@ import re
 import shlex
 
 from panel import REPO_ROOT
+from panel.security import privileged_websites as _pws
 from panel.security.journal_forget_sh import account_tmp_sh, orphan_journals_sh
 
 # Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
@@ -66,8 +67,7 @@ F2B = "fail2ban-client"
 SYSTEMCTL = "systemctl"
 
 # The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
-UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager",
-         "unattended-upgrades")
+UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager", "unattended-upgrades")
 
 # The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
 # separate constant from UNITS: UNITS is what the panel may start/stop/reload on the host (ssh,
@@ -1917,8 +1917,7 @@ def _f2b_log_lines_remote(a):
 
 
 # The files ufw-stored-rules prints, in order (the helper's FWA_STORED_PATHS).
-FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules",
-                    "/etc/ufw/user6.rules")
+FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules", "/etc/ufw/user6.rules")
 
 
 # ufw handles IPv6 only where the kernel has it (ufw's backend.use_ipv6 tests this path exists). The
@@ -2337,7 +2336,8 @@ _REMOTE_ACTIONS = {
 # the panel's host, and by run_privileged (db_scrub) for every transport.
 DB_FLAVORS = ("mariadb", "mysql")
 # gs<server id>_<slug>: also the user name, so at most 29 characters (MySQL user names hold 32).
-DB_NAME_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+# A website's database is ws<site id>_<slug>, the same shape.
+DB_NAME_RE = r"[gw]s[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
 # A database password (databases.new_password): no quote, backslash or URI delimiter anywhere, so
 # it is inert in SQL, option files, YAML, KeyValues, INI and an oxmysql connection URI.
 DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"
@@ -3173,6 +3173,8 @@ _REMOTE_ACTIONS.update({
     "db-query": _db_query_remote,
 })
 DB_VERBS = frozenset(v for v in _ARGV if v.startswith("db-"))
+# The website verbs (privileged_websites): the helper's own, local-only.
+LOCAL_ONLY_VERBS = LOCAL_ONLY_VERBS | _pws.install(_ARGV, VerbError, _choice)
 
 
 

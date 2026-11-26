@@ -257,6 +257,7 @@ _RAW_REVIEWED37 = {
     ("panel/ops/ssh_manager/tunnel.py", "_paramiko", "open_channel direct-tcpip"),
     ("panel/ops/ssh_manager/tunnel.py", "_ssh_cli_argv", "ssh -W"),
     ("panel/ops/ssh_manager/hosts.py", "_tcp_reachable", "socket.create_connection"),
+    ("panel/services/websites_egress.py", "handle", "socket.create_connection"),
 }
 
 

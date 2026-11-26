@@ -292,7 +292,8 @@ It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management,
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
 a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, root's crontab for the
-owner's root cron page, readying a game account for add-on containers, and more — 137 verbs.
+owner's root cron page, readying a game account for add-on containers, websites' accounts and their
+web proxy, and more — 145 verbs.
 The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
