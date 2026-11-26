@@ -128,7 +128,7 @@ def _cfl_bad242(found):
     return [u for _, u in found if u not in ok], len({j for j, u in found if u in ok})
 
 
-_cfl_found242 = [(f + "/" + j, u) for f in ("cflite_pr.yml", "cflite_batch.yml", "cflite_build.yml", "cflite_cron.yml")
+_cfl_found242 = [(f + "/" + j, u) for f in ("cflite_pr.yml", "cflite_nightly.yml", "cflite_build.yml")
                  for j, u in _cfl_uses242(_wf29(f))]
 _cfl_all242 = _cfl_bad242(_cfl_found242)
 _cfl_ctl242 = {

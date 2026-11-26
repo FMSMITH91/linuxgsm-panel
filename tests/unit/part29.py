@@ -343,7 +343,7 @@ def _cf2_no_secret(cfl):
     bad += ["%s: a step-level if: reads env or secrets" % n for n, t in cfl.items()
             if _re29.search(r"^ {8}if: .*\b(env|secrets)\.", t, _re29.M)]
     check("cflite: no workflow names a storage repository or gates a step on a secret",
-          set(cfl) >= {"cflite_pr.yml", "cflite_batch.yml", "cflite_cron.yml", "cflite_build.yml"}
+          set(cfl) >= {"cflite_pr.yml", "cflite_nightly.yml", "cflite_build.yml"}
           and not bad, repr(bad))
 
 
@@ -373,7 +373,7 @@ def _producer_bad(name, text, job):
 # reader. And each job that reads them may (actions: read, the vendor's read-all).
 def _cf2_producers(cfl):
     bad = []
-    for name, jobs in (("cflite_batch.yml", ("batch",)), ("cflite_cron.yml", ("prune", "coverage")),
+    for name, jobs in (("cflite_nightly.yml", ("batch", "prune", "coverage")),
                        ("cflite_build.yml", ("build",))):
         for job in jobs:
             bad += _producer_bad(name, cfl.get(name, ""), job)
@@ -482,7 +482,7 @@ def _cf2_guard_driven(cfl, tmp):
         return
     os.makedirs(os.path.join(tmp, "gbin"))
     _write_exe29(os.path.join(tmp, "gbin", "gh"), _FAKE_GH29)
-    script = _wf_run_block(cfl["cflite_batch.yml"], _GUARD29)
+    script = _wf_run_block(cfl["cflite_nightly.yml"], _GUARD29)
     g = {"main": _guard_run29(script, tmp, []),
          "fork": _guard_run29(script, tmp, [_art29("cifuzz-corpus-fuzz_x", 7, "main", 9)]),
          "branch": _guard_run29(script, tmp, [_art29("cifuzz-coverage-latest", 8, "topic")]),

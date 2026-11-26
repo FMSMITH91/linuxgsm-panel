@@ -2146,8 +2146,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248", "part249",
     "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262", "part263",
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
-    "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291",
-    "part292", "part293", "part294", "part15")
+    "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part292", "part293",
+    "part294", "part297", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
