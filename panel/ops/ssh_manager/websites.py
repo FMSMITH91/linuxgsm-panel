@@ -17,6 +17,7 @@ package's __getattr__): import it by name, `from panel.ops.ssh_manager import we
 still differ from every other submodule's (a unit gate): hence site_probe, not probe (databases has one).
 """
 import json
+import re
 import secrets as _secrets
 
 from panel.ops.ssh_manager import _core
@@ -67,6 +68,9 @@ OK_PURGED = "The page cache was emptied (the web proxy restarted)."
 OK_BUILT = "The app was built."
 OK_ENV = "The app's variables were written and it was restarted."
 OK_STEP = "Step done."
+STEP_DETAIL = "{why} The host said: {detail}."
+# A line an install step's own shell prints (never an installer's): a mark, or one of its key=value lines.
+_OWN_LINE_RE = re.compile(r"(SITE_[A-Z_]{1,40}|(error|check|page|code)=[^\x00-\x1f]{1,200})\Z")
 PROXY_COMMENT = "lgsmpanel-websites"
 PORTS = ("80", "443")
 
@@ -605,7 +609,26 @@ def app_install_step(remote, site, step, values=None, recipe=None):
         return False, FAILED
     body, stdin = _wr.step_sh(site.account, site, step, values, recipe=recipe, token=_secret(site.proxy_secret))
     ok, out = _as_site(remote, site.account, body, timeout=1800, stdin_text=stdin)
-    return (True, OK_STEP) if ok else (False, _mark(out))
+    return (True, OK_STEP) if ok else (False, step_failure(site, step, out))
+
+
+def step_failure(site, step, out):
+    """The sentence for a failed install step, with the panel's own reason when its shell printed one.
+
+    The step's own lines (the panel's marks and its `error=`, `check=`, `page=`, `code=` lines; only the marks
+    of a container step, whose output is the container's) go to the panel's log, and the panel's file writer's
+    reason to the page. An installer's or a container's own output never does, as it may echo a value it was
+    handed (OWASP Logging Cheat Sheet, "Data to exclude"; Error Handling Cheat Sheet: details server-side).
+    """
+    from panel.core import i18n
+    lines = [ln.strip() for ln in (out or "").splitlines()]
+    own = [ln for ln in lines if _OWN_LINE_RE.match(ln)
+           and (step.get("type") != "run-in-container" or ln.startswith("SITE_"))]
+    _core._log.warning("website %s: install step %s failed: %s", site.id, step.get("name") or step.get("type"),
+                       " | ".join(own)[-600:] or "no output of the panel's own")
+    said = _mark(out)
+    errors = [ln[len("error="):] for ln in own if ln.startswith("error=")] if "SITE_WRITE_FAILED" in lines else []
+    return i18n.Sentence(STEP_DETAIL, why=said, detail=errors[0]) if errors else said
 
 
 def _in_container(step):

@@ -91,6 +91,7 @@ FAIL_MARKS = {
     "SITE_DOWNLOAD_FAILED": "The app's release could not be downloaded. Try again later.",
     "SITE_UNPACK_FAILED": "The app's archive could not be unpacked safely, so nothing was kept.",
     "SITE_STEP_FAILED": "An install step failed. Its output is below; the steps already done were undone.",
+    "SITE_WRITE_FAILED": "A file of the app's configuration could not be written.",
     "SITE_INSTALLER_LEFT": "The app's installer folder is still there after install, so the site was not made public.",
     "SITE_VERIFY_FAILED": ("The app's installer did not finish: its settings, its database tables or its first page "
                            "are missing. Every step was undone."),

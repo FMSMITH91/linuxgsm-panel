@@ -2,6 +2,8 @@
 
 F23. The PHP sites' image builds with the Podman the panel installs: in Docker's image format (Podman's default
      OCI format ignores SHELL), and from RUN lines that are POSIX sh as well as bash.
+F24. Drupal's append to the settings.php its installer left read-only works, and the modes are put back; a write
+     that fails says why (M4), with the step's own lines in the panel's log.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -9,6 +11,7 @@ podman and systemctl first on PATH that record their argv (one JSON line each). 
 tripwire is armed).
 """
 import json as _json306
+import logging as _logging306
 import os
 import re as _re306
 import shutil as _shutil306
@@ -19,7 +22,7 @@ from types import SimpleNamespace as _NS306
 
 from flask import g as _g306
 
-from unit.part01 import _root, eq
+from unit.part01 import _root, eq, skip
 from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from panel.core import config as _cfg306
 from panel.db.models import (GameDatabase as _GDB306, RemoteServer as _Remote306, User as _User306,
@@ -36,6 +39,8 @@ _REAL306 = {n: getattr(_sw306, n) for n in ("install", "_as_site", "remove", "st
 _BIN306 = os.path.join(_TREE306, "bin")
 _CALLS306 = os.path.join(_TREE306, "calls.jsonl")
 _TOKEN306 = "t" * 40
+_SECRET_STEP306 = {"admin_user": "siteowner", "admin_email": "owner@example.org", "admin_password": "Adm1n-" + "q" * 24,
+                   "db_name": "ws906_app", "db_user": "ws906_app", "db_password": "Db-" + "z" * 30}
 
 # The stand-in tools: each records its argv (one JSON line) and exits 0, except `podman image exists`
 # (FAKE_IMAGE_EXISTS, default 1: not there) and whatever FAKE_RC_<tool> names.
@@ -206,6 +211,61 @@ def _f23_php_build(st):
        (r2.status_code, [c["argv"][:1] for c in _calls306("podman") if c["argv"][:1] == ["build"]]), (200, []))
 
 
+# ── F24. Drupal's append, and a failed write's reason (M4) ─────────────────────────────────────
+class _Records306(_logging306.Handler):
+    def __init__(self):
+        super().__init__(level=_logging306.DEBUG)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+def _drupal_home306(site, settings_is_dir=False):
+    """A scratch home as Drupal's installer leaves it: sites/default 0555, settings.php 0444 (or a folder there)."""
+    _rmtree306(_home306(site.account))
+    sd = os.path.join(_home306(site.account), "site", "html", "sites", "default")
+    os.makedirs(os.path.join(sd, "settings.php") if settings_is_dir else sd)
+    if not settings_is_dir:
+        with open(os.path.join(sd, "settings.php"), "w", encoding="utf-8") as fh:
+            fh.write("<?php\n$databases = [];\n")
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- read-only, as Drupal leaves it
+        os.chmod(os.path.join(sd, "settings.php"), 0o444)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- read-only, as Drupal leaves it
+    os.chmod(sd, 0o555)
+    return sd
+
+
+def _f24_append(st):
+    _bash_seams306()
+    site = _site306(st, "p306-dr", kind="php", app_recipe="drupal")
+    step = [s for s in _ws306.recipe_steps("drupal") if s["type"] == "render-config"][0]
+    sd = _drupal_home306(site)
+    ok, said = _sw306.app_install_step(_NS306(is_local=True), site, dict(step, secrets=dict(_SECRET_STEP306)))
+    text = _read306(os.path.join(sd, "settings.php"))
+    modes = (oct(os.stat(os.path.join(sd, "settings.php")).st_mode & 0o777), oct(os.stat(sd).st_mode & 0o777))
+    name = ("F24 (app_install_step, Drupal's render-config): the trusted host line is appended to the settings.php "
+            "its installer left 0444 in a 0555 folder, and both modes are put back (every Drupal install failed here)")
+    if os.geteuid() == 0:
+        skip(name, "root writes a read-only file anyway, so this run cannot show the refusal")
+    else:
+        eq(name, (ok, "$settings['trusted_host_patterns'] = ['^p306-dr\\.example\\.org$'];" in text, modes),
+           (True, True, ("0o444", "0o555")))
+    rec = _Records306()
+    _core306._log.addHandler(rec)
+    try:
+        _drupal_home306(site, settings_is_dir=True)
+        ok2, said2 = _sw306.app_install_step(_NS306(is_local=True), site, dict(step, secrets=dict(_SECRET_STEP306)))
+    finally:
+        _core306._log.removeHandler(rec)
+    logged = [ln for ln in rec.lines if "install step render-config-3 failed" in ln]
+    eq("F24/M4 (app_install_step): a config write that fails says why on the page (the system's reason and the file), "
+       "and the step's own lines reach the panel's log (it was the generic sentence, with nothing kept)",
+       (ok2, str(said2).startswith(_ws306.FAIL_MARKS["SITE_WRITE_FAILED"]),
+        "The host said: Is a directory: sites/default/settings.php." in str(said2),
+        any("SITE_WRITE_FAILED | error=Is a directory" in ln for ln in logged)), (False, True, True, True))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -254,7 +314,7 @@ def _ran306(step, st):
 
 
 _ran306.last = ""
-_SECTIONS306 = (_f23_php_build,)
+_SECTIONS306 = (_f23_php_build, _f24_append)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

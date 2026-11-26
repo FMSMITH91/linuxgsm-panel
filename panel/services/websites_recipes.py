@@ -212,19 +212,39 @@ for name, is_dir, size, opener in entries():
 print("unpacked=%%d" %% count)
 ''' % (UNPACK_MAX_BYTES, UNPACK_MAX_ENTRIES, UNPACK_MAX_DEPTH)
 
-# The safe writer (python3 -I -c, as the account; arguments: destination relative to html, a|w).
+# The safe writer (python3 -I -c, as the account; arguments: destination relative to html, a|w). An installer
+# may leave the file it appends to read-only (Drupal: settings.php 0444 in a 0555 sites/default): the append
+# makes the file (or, for a new one, its folder) writable by its owner for the write alone and puts the mode
+# back after it. A write that fails prints SITE_WRITE_FAILED and `error=<the system's reason>: <path>`.
 WRITE_PY = r'''
-import os, sys
+import os, stat, sys
 html = os.path.realpath(os.path.expanduser("~/site/html"))
 path = os.path.join(html, sys.argv[1])
 d = os.path.dirname(path)
 if os.path.realpath(d) != d or not (d == html or d.startswith(html + os.sep)) or os.path.islink(path):
     print("SITE_FILES_REFUSED"); sys.exit(25)
 data = sys.stdin.buffer.read()
-flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if sys.argv[2] == "a" else os.O_TRUNC)
-fd = os.open(path, flags, 0o600)
-with os.fdopen(fd, "wb") as fh:
-    fh.write(data)
+append = sys.argv[2] == "a"
+modes = {}
+try:
+    if append:
+        p = path if os.path.lexists(path) else d
+        modes[p] = stat.S_IMODE(os.lstat(p).st_mode)
+        os.chmod(p, modes[p] | stat.S_IWUSR)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_APPEND if append else os.O_TRUNC)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+except OSError as e:
+    print("SITE_WRITE_FAILED")
+    print("error=%s: %s" % (e.strerror or "error", sys.argv[1]))
+    sys.exit(34)
+finally:
+    for p, m in modes.items():
+        try:
+            os.chmod(p, m)
+        except OSError:
+            print("error=its mode could not be put back: " + sys.argv[1])
 print("written=" + sys.argv[1])
 '''
 
