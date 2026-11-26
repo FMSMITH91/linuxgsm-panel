@@ -192,7 +192,7 @@ def _images(p, work, results):
 
 
 def build_arg_flags(args):
-    """docker build's --build-arg flags for [(ARG, value)]."""
+    """Docker build's --build-arg flags for [(ARG, value)]."""
     return [f for n, v in args for f in ("--build-arg", "%s=%s" % (n, v))]
 
 

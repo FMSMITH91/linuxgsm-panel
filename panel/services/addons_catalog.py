@@ -100,7 +100,7 @@ def _has_known(addons, strict):
 
 
 def _check_addons(addons, strict=False):
-    """"" when `addons` holds every known add-on, each well-formed, else the reason it is refused.
+    """An empty string when `addons` holds every known add-on, each well-formed, else the reason it is refused.
 
     Other ids are skipped (only `strict`, the floor, must hold exactly the known ones).
     """
@@ -175,15 +175,20 @@ def _parsed(data):
         return None, BAD_FORMAT
     if not isinstance(doc, dict) or not _TOP <= set(doc):
         return None, BAD_FORMAT
-    if type(doc["schema"]) is not int or doc["schema"] != SCHEMA:
+    if not _whole(doc["schema"]) or doc["schema"] != SCHEMA:
         return None, BAD_SCHEMA
     return (doc, "") if _well_formed(doc) else (None, BAD_FORMAT)
 
 
+
+def _whole(value):
+    """Whether `value` is an int and not a bool (True and False are ints in Python)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
 def _well_formed(doc):
     """Whether `doc`'s `seq` is a whole number from 1 and its times are catalog times, `expires` after `issued`."""
     seq, issued, expires = doc["seq"], _when(doc["issued"]), _when(doc["expires"])
-    return type(seq) is int and seq >= 1 and issued is not None and expires is not None and expires > issued
+    return _whole(seq) and seq >= 1 and issued is not None and expires is not None and expires > issued
 
 
 def check_signed(data, sig, key, last_seq, now, allow_expired=False):

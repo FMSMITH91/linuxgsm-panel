@@ -1,4 +1,4 @@
-"""Build and check the signed add-on catalog that tools/sign-catalog.sh publishes.
+r"""Build and check the signed add-on catalog that tools/sign-catalog.sh publishes.
 
 Usage:
   addon_catalog.py build <now, epoch seconds> <auto|refresh>
@@ -48,6 +48,11 @@ IGNORED = ("deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "
 _FAILED = ("failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale")
 
 
+
+def _whole(value):
+    """Whether `value` is an int and not a bool (True and False are ints in Python)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
 def serialize(obj):
     """The exact bytes that are signed and published (and that panels verify)."""
     return json.dumps(obj, indent=2, sort_keys=True) + "\n"
@@ -74,7 +79,7 @@ def source_problems(obj):
     """Why `obj` is not a catalog source (schema 1); [] when it is."""
     if not isinstance(obj, dict) or sorted(obj) != ["addons", "schema"]:
         return ["the catalog must hold exactly `schema` and `addons`"]
-    out = [] if obj["schema"] == SCHEMA and type(obj["schema"]) is int else ["schema %r is not %d" % (obj["schema"], SCHEMA)]
+    out = [] if obj["schema"] == SCHEMA and _whole(obj["schema"]) else ["schema %r is not %d" % (obj["schema"], SCHEMA)]
     addons = obj["addons"]
     if not isinstance(addons, dict) or not addons:
         return out + ["`addons` must be a non-empty object"]
@@ -98,7 +103,7 @@ def published_problems(obj):
         return ["a published catalog holds exactly schema, addons, seq, issued and expires"]
     out = source_problems(core(obj))
     seq = obj["seq"]
-    if type(seq) is not int or seq < 1:
+    if not _whole(seq) or seq < 1:
         out.append("seq %r is not a positive whole number" % (seq,))
     if _parse_time(obj["issued"]) is None or _parse_time(obj["expires"]) is None:
         out.append("issued and expires must be UTC times as YYYY-MM-DDTHH:MM:SSZ")
