@@ -16,7 +16,7 @@
         who reaches this address can create the administrator account first. Open the link the
         installer printed, or paste the token here.
       </p>
-      <form method="POST" action="{{ url_for('setup_wizard') }}">
+      <form method="POST" action="{{ url_for('setup_wizard') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label class="form-label" for="setup-token-input">Setup token</label>
         <input id="setup-token-input" type="text" name="setup_token" class="form-control"
                autocomplete="off" autocapitalize="off" spellcheck="false" required>

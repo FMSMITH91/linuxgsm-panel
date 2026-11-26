@@ -609,6 +609,24 @@ try:
         _res = _run("db-import", *_VERB_ARGS["db-import"])
         check("db-import (%s): a dump that is a link is refused as no dump (rc 4, both sides alike), nothing fed "
               "to the client" % _side, _res[0] == 4 and not [s for s in _sqls() if s], repr((_res, _sqls())))
+    # ~/panel-db-dumps itself a link to a folder of the account's holding the dump: the helper's O_NOFOLLOW
+    # open refuses it, and so must the remote rendering (it tested only the file).
+    _lk207 = _os207.path.join(_T, "linked-dumps")
+    _os207.makedirs(_lk207, exist_ok=True)
+    with _gz207.open(_os207.path.join(_lk207, "gs12_lp.sql.gz"), "wb") as _fh:
+        _fh.write(b"DROP TABLE x;\n")
+    _os207.rename(_dd, _dd + ".aside")
+    _os207.symlink(_lk207, _dd)
+    try:
+        for _side, _run in (("helper", _h), ("remote", _r)):
+            _reset()
+            _res = _run("db-import", *_VERB_ARGS["db-import"])
+            check("db-import (%s): a ~/panel-db-dumps that is a link to a folder holding the dump is refused as no dump "
+                  "(rc 4), nothing fed to the client" % _side, _res[0] == 4 and not [s for s in _sqls() if s],
+                  repr((_res, _sqls())))
+    finally:
+        _os207.unlink(_dd)
+        _os207.rename(_dd + ".aside", _dd)
 
     _p207_dump_presence(_dd)
 

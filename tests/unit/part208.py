@@ -481,12 +481,13 @@ try:
             _sd208._bg_action(_p9, gs, gs.remote, action)
         return order, [c[1:] for c in _S208.calls if c[0] == "dump"], pushed
 
-    _R208["lgsm_backup"] = _lgsm208("backup")
-    _R208["lgsm_update"] = _lgsm208("update")
     # The backups above ran _marked_backup with no caller to write the outcome over its "running" mark, as
-    # every real caller does: cleared here, or the uninstall below is refused as beside a running backup.
+    # every real caller does: cleared here, or the Backup action below is refused as beside a running backup
+    # (button_backup_claim), and so is the uninstall after it.
     for _sid208 in (_SID208, _OTHER208):
         _sh208._game_backup_status.pop(_sid208, None)
+    _R208["lgsm_backup"] = _lgsm208("backup")
+    _R208["lgsm_update"] = _lgsm208("update")
 
     # ── 10. delete: confirmed by name ─────────────────────────────────────────────────────────────
     _S208.reset()

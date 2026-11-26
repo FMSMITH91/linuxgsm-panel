@@ -255,23 +255,32 @@ def client_file(version):
     return "minecraft-client-%s.jar" % version
 
 
-def client_sh(addon_dir, version, url, sha1, fresh_webapp=False):
+def client_sh(addon_dir, version, url, sha1, fresh_webapp=False, tidy=True):
     """Shell, as the account: the client jar for `version` into data/, checked against `sha1`; other versions' go.
 
     Kept when the file there already has that SHA-1. Downloaded beside and renamed once it matches, so
-    BlueMap never reads half a file. Prints ADDON_CLIENT_FAILED and exits 27 when it can't. With
-    `fresh_webapp`, web/index.html goes too, so a new BlueMap writes its own page again (its release
-    notes ask for that on an update).
+    BlueMap never reads half a file. Prints ADDON_CLIENT_FAILED and exits 27 when it can't. Then, with
+    `tidy`, client_tidy_sh. An update passes tidy=False and runs that tidy-up after the new image is
+    there instead: the old jar (and page) are what the running BlueMap still uses if the pull fails.
+    """
+    f = shlex.quote("%s/data/%s" % (addon_dir, client_file(version)))
+    return ("{ [ \"$(sha1sum %s 2>/dev/null | cut -d' ' -f1)\" = %s ] || { "
+            "curl -fsS --proto =https --tlsv1.2 --max-time 900 --max-filesize %d -o %s.part %s "
+            "&& [ \"$(sha1sum %s.part | cut -d' ' -f1)\" = %s ] && mv -f -T %s.part %s; }; } "
+            "|| { rm -f %s.part; echo ADDON_CLIENT_FAILED; exit 27; }; %s"
+            % (f, sha1, CLIENT_CAP, f, shlex.quote(url), f, sha1, f, f, f,
+               client_tidy_sh(addon_dir, version, fresh_webapp) if tidy else ""))
+
+
+def client_tidy_sh(addon_dir, version, fresh_webapp=False):
+    """Shell, as the account: other versions' client jars removed; with `fresh_webapp`, web/index.html too.
+
+    The page goes so a new BlueMap writes its own again (its release notes ask for that on an update).
     """
     d = shlex.quote(addon_dir + "/data")
     f = shlex.quote("%s/data/%s" % (addon_dir, client_file(version)))
     page = "rm -f %s; " % shlex.quote(addon_dir + "/web/index.html") if fresh_webapp else ""
-    return ("{ [ \"$(sha1sum %s 2>/dev/null | cut -d' ' -f1)\" = %s ] || { "
-            "curl -fsS --proto =https --tlsv1.2 --max-time 900 --max-filesize %d -o %s.part %s "
-            "&& [ \"$(sha1sum %s.part | cut -d' ' -f1)\" = %s ] && mv -f -T %s.part %s; }; } "
-            "|| { rm -f %s.part; echo ADDON_CLIENT_FAILED; exit 27; }; "
-            "for j in %s/minecraft-client-*.jar; do [ \"$j\" = %s ] || rm -f -- \"$j\"; done; %s"
-            % (f, sha1, CLIENT_CAP, f, shlex.quote(url), f, sha1, f, f, f, d, f, page))
+    return "for j in %s/minecraft-client-*.jar; do [ \"$j\" = %s ] || rm -f -- \"$j\"; done; %s" % (d, f, page)
 
 
 # ── Mojang's version list (read by the panel's host) ─────────────────────────────────────────────

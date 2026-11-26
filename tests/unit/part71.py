@@ -335,7 +335,7 @@ def _wide_names71():
     for tag, listed in rows.items():
         _p9_patch(_game71, "console_player_list", lambda *a, _l=listed, **k: list(_l))
         hit = _game71._resolve_from_console(None, "p71q3", "q3", "Bob", None)
-        got[tag] = None if hit is None else hit["num"]
+        got[tag] = None if not hit else hit["num"]   # no one, or a falsy CONSOLE_AMBIGUOUS
     check("moderation (idTech3): a name gamedig shows with a `^a`-style colour code stripped (as id's "
           "Quake III and JK2MV's 1.02 colour mode read one) finds its console row — the console kept "
           "\"^aBob\" and the Kick found no one",

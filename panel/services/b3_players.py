@@ -93,11 +93,34 @@ RECENT_SQL = ("SELECT p.id, p.type, p.duration, p.inactive, p.reason, p.keyword,
 SCHEMA_SQL = "SELECT data_value FROM data WHERE data_key = ?"
 # One player's name as B3 stored it, for a kick or a warning (the slot is found by it in the game's list).
 NAME_SQL = "SELECT name FROM clients WHERE id = ?"
-# The other players whose stored name holds that player's: a name in the game's list can be any of
-# them, so a kick or a warning by that name could reach another B3 id. A superset (LIKE, the name's
-# own % and _ as wildcards); the caller keeps the ones the listed name can mean.
-NAMESAKES_SQL = ("SELECT c.name FROM clients c JOIN clients t ON t.id = ? WHERE c.id <> t.id"
-                 " AND c.name LIKE CONCAT('%', t.name, '%') LIMIT 21")
+# The other players a name in the game's list could be when it is that player's: a kick or a warning
+# by that name could reach another B3 id. A stored name and the target's are compared by a key built
+# the way the panel compares a listed name with a stored one (routes/addons_b3_actions._namesake):
+# plain() takes out ^ and a letter or digit and the ends are trimmed, then console_name_matches takes
+# out ^ and a digit, trims, and reads ^ and any character (or ^X and six) as gamedig's quake3 protocol
+# does. The column's collation also ignores case, so equal keys are a superset of the names that check
+# accepts (a run of two carets aside, which the check itself reads two ways). It was a substring test on
+# the raw stored names: it missed a namesake when the target's stored name held a code plain() takes
+# out ("^ABob" against "Bob"), and on a large database counted every "Grace" and "Space" as a namesake
+# of "Ace" until the read was full, and every Kick of that player was refused. The patterns are built
+# from hex (no quote or backslash depends on the server's SQL mode) and case-sensitive ((?-i)), as
+# Python's are, whatever the collation.
+def _sql_text(text):
+    return "CONVERT(X'%s' USING utf8mb4)" % text.encode("utf-8").hex().upper()
+
+
+NAMESAKE_PATTERNS = (r"(?-i)\^[0-9A-Za-z]", r"(?-i)\^[0-9]", r"(?-i)\^(X.{6}|.)")
+
+
+def _namesake_key(column):
+    """The SQL for `column`'s namesake key: each of NAMESAKE_PATTERNS taken out in turn, the ends trimmed after each."""
+    for pattern in NAMESAKE_PATTERNS:
+        column = "TRIM(REGEXP_REPLACE(%s, %s, ''))" % (column, _sql_text(pattern))
+    return column
+
+
+NAMESAKES_SQL = ("SELECT c.name FROM clients c JOIN clients t ON t.id = ? WHERE c.id <> t.id AND "
+                 + _namesake_key("c.name") + " = " + _namesake_key("t.name") + " LIMIT 21")
 NAMESAKES_MAX = 20
 
 

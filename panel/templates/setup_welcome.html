@@ -18,7 +18,7 @@
         <li>For a remote host: SSH access (key, password, or Tailscale SSH).</li>
         <li>A sudo-capable user (or root) on whichever host you install game servers on.</li>
       </ul>
-      <form method="POST">
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="step" value="welcome">
         <div class="mb-3">
           <label class="form-label" for="setup-welcome-site_title">Site Title</label>

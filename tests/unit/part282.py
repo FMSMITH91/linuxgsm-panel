@@ -376,6 +376,7 @@ def _dbm_keyless282():
             "var document = {createTextNode: function (x) { return node('#text', null, x); }};\n"
             "var boxes = {}; function el(id){ return boxes[id] || (boxes[id] = node('div')); }\n"
             "var st = {canEdit: false, page: 0};\n"
+            + (_cut47(src, "function cutNote(") if "function cutNote(" in src else "") + "\n"
             + _cut47(src, "function cellNode(") + "\n" + _cut47(src, "function drawRows(") + "\n"
             "var t = {readonly: true, columns: [{name: 'a'}]}, out = [];\n"
             "[null, {k: 1}].forEach(function (key) { made = []; drawRows(t, {columns: ['a'], more: false, rows: "
@@ -467,7 +468,7 @@ def _restore_signal282():
         sb.gone()
     eq("game restore (bash): a SIGTERM after the switch is noted done keeps the restored files and removes the "
        "aside copy (the trap moved the old files back over a finished restore)", got,
-       (True, True, "world v1", None, [], False))
+       (True, True, "world v1", None, ["panel-restore-state-%d" % ready["t0"]], False))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
