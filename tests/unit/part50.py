@@ -164,7 +164,7 @@ check("pr_scope: the slug gh is given is REBUILT, not the argument's own text, a
 
 # ── 3. the wiring: every scoped job ─────────────────────────────────────────────────────────────
 _SCOPED50 = {
-    "ci.yml": ("checks", "coverage", "coverage-verdict", "js-coverage", "gamedig-lockfile"),
+    "ci.yml": ("checks", "coverage", "coverage-verdict", "js-coverage", "js-coverage-verdict", "gamedig-lockfile"),
     "codeql.yml": ("analyze", "pr-alerts"),
     "security-code.yml": ("dependency-audit", "sast-bandit", "sast-semgrep"),
     "lighthouse.yml": ("lighthouse",),
@@ -181,7 +181,7 @@ _RUN50 = "steps.scope.outputs.docs_only != 'true'"
 _DOCS50 = "steps.scope.outputs.docs_only == 'true'"
 # The jobs that skip on their OWN list (pr_scope.py --job, part169): the same wiring, on `skip`.
 _PER_JOB50 = {("ci.yml", "coverage"), ("ci.yml", "coverage-verdict"), ("ci.yml", "js-coverage"),
-              ("lighthouse.yml", "lighthouse")}
+              ("ci.yml", "js-coverage-verdict"), ("lighthouse.yml", "lighthouse")}
 
 
 def _gate50(key, docs_gate):

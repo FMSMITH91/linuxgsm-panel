@@ -894,7 +894,7 @@ for _app, _name in _rq:
 def _rq_gated(text):
     """{job template: the verdict job's template} for each job a verdict job judges in workflow `text`.
 
-    A verdict job (ci.yml's checks-verdict and coverage-verdict) needs the one job whose parts it judges,
+    A verdict job (ci.yml's checks-verdict, coverage-verdict and js-coverage-verdict) needs the one job whose parts it judges,
     runs whatever happened (`if: ${{ always() }}`: a job whose needs failed is otherwise skipped, and a
     skipped required check counts as passed) and reads that job's result. Such a part need not be required
     itself when its verdict is: the verdict fails unless every part passed.
@@ -931,11 +931,12 @@ check("required checks: each one is a job of a workflow that runs on every pull 
 _gt_wf = ("on:\n  pull_request:\njobs:\n  parts:\n    name: p (${{ matrix.part }})\n    runs-on: x\n"
           "  verdict:\n    name: v\n    needs: parts\n%s    steps:\n      - run: test \"${{ needs.parts.result }}\" = success\n")
 eq("required checks: ...a job is exempt only behind a verdict job that needs it, runs always() and reads its result: "
-   "ci.yml's checks and coverage parts, and nothing without always() (controls)",
+   "ci.yml's checks, coverage and js coverage parts, and nothing without always() (controls)",
    [_rq_gated(_rq_jobs["ci.yml"][0]), _rq_gated(_gt_wf % "    if: ${{ always() }}\n"), _rq_gated(_gt_wf % ""),
     _rq_gated(_gt_wf % "    if: ${{ success() }}\n")],
    [{"checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}": "checks (${{ matrix.os }} · py${{ matrix.python }})",
-     "coverage · ${{ matrix.part }}": "coverage"}, {"p (${{ matrix.part }})": "v"}, {}, {}])
+     "coverage · ${{ matrix.part }}": "coverage", "js coverage · ${{ matrix.part }}": "js coverage"},
+    {"p (${{ matrix.part }})": "v"}, {}, {}])
 check("required checks: ...and the list includes Codacy, SonarCloud, the tests, CodeQL's gate and the "
       "complexity gate",
       {("codacy-production", "Codacy Static Code Analysis"),

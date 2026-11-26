@@ -312,7 +312,7 @@ _REUSERS153 = {
                            ("Run all checks (compile, lint, unit, smoke, shellcheck)",
                             "Run the root-only unit checks, as root")),
     ("ci.yml", "coverage"): ("coverage · ${{ matrix.part }}", ("Measure",)),
-    ("ci.yml", "js-coverage"): ("js coverage", ("Measure",)),
+    ("ci.yml", "js-coverage"): ("js coverage · ${{ matrix.part }}", ("Measure",)),
     ("ci.yml", "gamedig-lockfile"): ("gamedig lockfile (node ${{ matrix.node }})",
                                      ("npm ci from the lockfile, then run gamedig once",)),
     ("lighthouse.yml", "lighthouse"): ("lighthouse", ("Run Lighthouse CI",)),
@@ -419,10 +419,10 @@ _ctl_jobs153 = _jobs29(_wf29("ci.yml") + "\n  py_X9:\n    runs-on: ubuntu-24.04\
 check("reuse wiring: (control) the job reader sees an id with a capital, a digit and an underscore, and "
       "one whose key line ends in a comment",
       _ctl_jobs153 == _ci_jobs153 + ["py_X9", "py_Y8"], repr(_ctl_jobs153))
-# The checks legs and coverage run in parts (ci.yml says why); the name main must carry is the verdict job's,
+# The checks legs, coverage and js coverage run in parts (ci.yml says why); the name main must carry is the verdict job's,
 # which does no work of its own to reuse, and passes only when every part passed (part294 holds that).
 _VERDICTS153 = {"checks-verdict": ("checks", "checks (${{ matrix.os }} · py${{ matrix.python }})"),
-                "coverage-verdict": ("coverage", "coverage")}
+                "coverage-verdict": ("coverage", "coverage"), "js-coverage-verdict": ("js-coverage", "js coverage")}
 _carried153 = {_j: _n for (_w, _j), (_n, _s) in _REUSERS153.items() if _w == "ci.yml"}
 _carried153.update({_parts: _n for _v, (_parts, _n) in _VERDICTS153.items()})
 check("reuse wiring: every ci.yml job reuses or is the verdict on one that does, and the name main carries for each "

@@ -95,12 +95,13 @@ def _job169(path, job_id):
     return m.group(1) if m else ""
 
 
-# `coverage` is coverage-verdict's name: the job `coverage` runs in parts (ci.yml), and each part asks
-# the same question under the same name, below.
-_WIRING169 = {"coverage": ("ci.yml", "coverage-verdict"), "js coverage": ("ci.yml", "js-coverage"),
-              "lighthouse": ("lighthouse.yml", "lighthouse")}
+# `coverage` and `js coverage` are their verdict jobs' names: the jobs `coverage` and `js-coverage` run
+# in parts (ci.yml), and each part asks the same question under the same name, below. The number is how
+# many steps at least gate on the answer (js-coverage-verdict has three after its scope step).
+_WIRING169 = {"coverage": ("ci.yml", "coverage-verdict", 5), "js coverage": ("ci.yml", "js-coverage-verdict", 3),
+              "lighthouse": ("lighthouse.yml", "lighthouse", 5)}
 _bad169 = []
-for _name169, (_wf169, _id169) in _WIRING169.items():
+for _name169, (_wf169, _id169, _min169) in _WIRING169.items():
     _b169 = _job169(_wf169, _id169)
     if "    name: %s\n" % _name169 not in _b169:
         _bad169.append("%s: job %s is not named %r" % (_wf169, _id169, _name169))
@@ -108,13 +109,15 @@ for _name169, (_wf169, _id169) in _WIRING169.items():
         _bad169.append("%s %s: the scope step does not pass --job %r" % (_wf169, _id169, _name169))
     if "outputs.docs_only" in _b169:
         _bad169.append("%s %s: a step still gates on docs_only" % (_wf169, _id169))
-    if _b169.count("steps.scope.outputs.skip") < 5:
-        _bad169.append("%s %s: fewer than five steps gate on skip" % (_wf169, _id169))
+    if _b169.count("steps.scope.outputs.skip") < _min169:
+        _bad169.append("%s %s: fewer than %d steps gate on skip" % (_wf169, _id169, _min169))
     if _ps169.JOB_WORKFLOW.get(_name169) != ".github/workflows/" + _wf169:
         _bad169.append("pr_scope.JOB_WORKFLOW[%r] is not %s" % (_name169, _wf169))
-_parts169 = _job169("ci.yml", "coverage")
-if '--job "coverage"' not in _parts169 or "outputs.docs_only" in _parts169 or _parts169.count("steps.scope.outputs.skip") < 5:
-    _bad169.append("ci.yml coverage: its parts do not ask pr_scope --job \"coverage\" and gate their steps on skip")
+for _pj169, _pn169 in (("coverage", "coverage"), ("js-coverage", "js coverage")):
+    _parts169 = _job169("ci.yml", _pj169)
+    if '--job "%s"' % _pn169 not in _parts169 or "outputs.docs_only" in _parts169 \
+            or _parts169.count("steps.scope.outputs.skip") < 5:
+        _bad169.append("ci.yml %s: its parts do not ask pr_scope --job %r and gate their steps on skip" % (_pj169, _pn169))
 eq("workflows: coverage, js coverage and Lighthouse each pass their own name to pr_scope --job and gate "
    "their steps on its skip; pr_scope knows each one's workflow", _bad169, [])
 eq("pr_scope: every job with a list is wired in a workflow, and none other",
@@ -137,10 +140,14 @@ def _skipped_installs169(name, block):
 
 
 # A job that skips for a path it installs would pass a pull request that bumps only that file without ever
-# installing it: each --job job's installs are read from its own block and held against its list.
-_inst169 = {n: _installs169(_job169(w, j)) for n, (w, j) in _WIRING169.items()}
+# installing it: each --job job's installs are read from its own block (and its parts', for a job in
+# parts) and held against its list.
+_PARTS_OF169 = {"coverage": "coverage", "js coverage": "js-coverage"}
+_blocks169 = {n: _job169(w, j) + (_job169(w, _PARTS_OF169[n]) if n in _PARTS_OF169 else "")
+              for n, (w, j, _m) in _WIRING169.items()}
+_inst169 = {n: _installs169(b) for n, b in _blocks169.items()}
 eq("pr_scope --job: no job skips for a requirements file it installs (read from its own workflow block)",
-   {n: _skipped_installs169(n, _job169(w, j)) for n, (w, j) in _WIRING169.items()},
+   {n: _skipped_installs169(n, b) for n, b in _blocks169.items()},
    {n: [] for n in _WIRING169})
 check("pr_scope --job: ...the coverage job's installs were read, its coverage.txt among them (floor)",
       ".github/ci-requirements/coverage.txt" in _inst169["coverage"], repr(_inst169))
