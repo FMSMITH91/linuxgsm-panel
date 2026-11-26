@@ -123,6 +123,28 @@ def _row292(sid, addon_id="bluemap"):
     return next((x for x in d.get("addons") or [] if x.get("id") == addon_id), {}), d
 
 
+class _KeygenOnly292:
+    """The tripwire's system_ops.subprocess, letting through only the catalog's own `ssh-keygen -Y verify`."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def run(self, argv, *a, **k):
+        if list(argv[:3]) == ["ssh-keygen", "-Y", "verify"]:
+            return _sp292.run(argv, *a, **k)  # nosec B603 - ssh-keygen over this part's throwaway key and catalog
+        return self._inner.run(argv, *a, **k)
+
+
+def _arm292():
+    """part12's tripwire, armed afresh, with the signature check (system_ops' subprocess) let through."""
+    _p9_restore_all()
+    _p9_arm(who="part292")
+    _p9_patch(_so292, "subprocess", _KeygenOnly292(_so292.subprocess))
+
+
 # ── 1. the floor ────────────────────────────────────────────────────────────────────────────────
 def _floor292():
     with open(os.path.join(_root, "panel", "addon_images", "catalog.json"), encoding="utf-8") as fh:
@@ -329,23 +351,19 @@ else:
     _sid292 = _p9_new_server(P9_HOST, "mcp292", "mc", 25565, name="p292-mc")
     _cat292.STORE_FILE = os.path.join(_TMP292, "addon-catalog.json")
     try:
-        _p9_restore_all()
-        _p9_arm(who="part292")
+        _arm292()
         _reset292(None)
         _base292 = _accept292(_sid292, _priv292, _key292)
         _refusals292(_sid292, _priv292, _other292, _key292,
                      _cat292.check_signed(_base292, _sign292(_priv292, _base292), _key292, 0, 0)[0], _base292)
-        _p9_restore_all()
-        _p9_arm(who="part292")
+        _arm292()
         _host292({"kind": "bluemap", "image": _cat292.FLOOR["bluemap"]["image"], "mc_version": "1.21.4"})
         _wins292(_sid292, _base292)
-        _p9_restore_all()
-        _p9_arm(who="part292")
+        _arm292()
         _stored292(_priv292, _key292)
         _p9_restore_all()
         _published292()
-        _p9_restore_all()
-        _p9_arm(who="part292")
+        _arm292()
         _permission292(_sid292)
     finally:
         _p9_restore_all()
