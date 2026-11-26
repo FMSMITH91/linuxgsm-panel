@@ -1,0 +1,3 @@
+{
+  "Only a superadmin can re-trust a host key: the next connection trusts whatever machine answers at this address and signs in to it with the host's saved credential.": "Seul un superadministrateur peut refaire confiance à la clé d'un hôte : la prochaine connexion fait confiance à la machine qui répond à cette adresse, quelle qu'elle soit, et s'y connecte avec l'identifiant enregistré de l'hôte."
+}

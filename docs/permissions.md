@@ -23,7 +23,7 @@ check.
 | `manage_addons` | A server's add-ons: install, update, start, stop and remove them, change their settings, read their logs, and look B3's players and penalties up (their IP addresses and GUIDs only with `manage_databases` as well; unbanning one through B3 with `ban_player` as well, kicking or warning one with `kick_player`). Installing the first one on a host installs Podman through the helper. Given to no group by default |
 | `view_addon_pages` | Open a server's add-on web pages (IW4MAdmin's webfront, BlueMap's map) through the panel, in a new tab, without managing the add-ons: its Add-ons tab then lists only the installed add-ons that have a page. `manage_addons` opens them too. The page runs sandboxed, apart from the panel's own pages ([add-ons](addons.md#web-pages)). Given to no group by default |
 | `edit_database_data` | Change the data inside a server's databases on the Databases page: edit rows and run SQL statements, always as that database's own account. Given to no group by default; give it with `manage_databases`, which browsing (and the manager itself) needs |
-| `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
+| `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups. For a host admin who is not a superadmin: re-trusting a host's SSH key is superadmin-only (the next connection trusts whatever machine answers at that address and signs in with the host's saved credential) |
 
 ### The panel owner
 
