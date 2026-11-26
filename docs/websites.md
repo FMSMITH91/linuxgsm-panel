@@ -139,7 +139,8 @@ The **Files** tab is a file manager for the site's folder: browse, edit, upload,
 **Upload archive and extract** (zip or tar.gz). An archive is checked before anything is unpacked:
 nothing may land outside the site's folder, links and device files are refused, and the unpacked size
 is capped. The same folder appears in the panel's [SFTP service](sftp.md#websites) for users who may
-change the site's files.
+change the site's files. The site's disk limit counts this folder, its backups and its settings, not the
+container images the panel keeps for it ([how websites run](websites-runtime.md#disk)).
 
 ## PHP
 

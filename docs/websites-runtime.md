@@ -37,6 +37,19 @@ A site's CPU limit is applied in one of three ways, and the site card says which
 - **None**, only if neither could be set. The card says "this website runs without one" rather than
   hiding it.
 
+## Disk
+
+A site's disk limit (2048 MB unless an administrator changes it) counts the site's own folder: its files, its
+backups and its settings. The panel measures it with `du`, as the site's account, before every upload and every
+saved file. If `du` cannot read all of it, the panel does not guess: nothing is written, and the page says the use
+could not be measured. A write that would pass the limit is refused.
+
+The site's container images do not count toward that limit. They come from the signed catalog, they are the same
+for every site of a kind, and old ones are removed after an update. Each site account keeps its own copy: about
+2 GB for a WordPress site (its image and wp-cli's), about 1.1 GB for a PHP site whose image is built on the host,
+and about 0.6 GB for a Node.js site. On a host where `/home` has user quotas on, the panel also sets the site
+account's quota, to the site's limit plus 4096 MB for those images.
+
 ## The web proxy
 
 One web proxy (Caddy) per host owns ports 80 and 443 while at least one site is enabled. It is

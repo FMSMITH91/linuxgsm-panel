@@ -900,7 +900,7 @@ def probe_sh(account, site):
             + "echo \"result=$(systemctl --user show -p Result --value %s 2>/dev/null)\"; " % unit_service(UNIT)
             + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>/dev/null)\"; " % UNIT
             + "echo \"mem=$(podman stats --no-stream --format '{{.MemUsage}}' %s 2>/dev/null | head -n 1)\"; " % UNIT
-            + "echo \"disk_mb=$(du -sxm %s 2>/dev/null | cut -f1)\"; " % _q(SITE)
+            + "d=$(du -sxm %s 2>/dev/null) && echo \"disk_mb=${d%%%%[[:space:]]*}\"; " % _q(SITE)
             + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
               '2>/dev/null && echo cpu_delegated=1; '
             + "[ -f %s ] && echo installed=1; true" % _q(HOME_DIR + "/" + META_FILE))

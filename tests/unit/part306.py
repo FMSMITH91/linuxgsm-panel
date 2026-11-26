@@ -17,6 +17,8 @@ F27. The page cache's proxy builds: its Caddy version ARG no longer clashes with
 F28. A Node.js site made from the page takes the catalog's port and commands, installs without starting while it has
      no files (it says it waits for them, and its install is not undone), and the App tab's Save and rebuild (or
      the build route) builds it and starts it; a real install failure is still undone.
+F29. A site's disk use is its own folder (~/site) measured by du with du's own exit status: a partial count is no
+     measurement, and the account's container images are not counted (a user quota allows for them).
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -45,10 +47,12 @@ from panel.core import config as _cfg306
 from panel.db.models import (GameDatabase as _GDB306, RemoteServer as _Remote306, User as _User306,
                              Website as _Site306, WebsiteDomain as _Dom306, WebsiteProxy as _Proxy306, db as _db306)
 from panel.ops.ssh_manager import _core as _core306
+from panel.ops.ssh_manager import files as _files306
 from panel.ops.ssh_manager import websites as _sw306
 from panel.routes import _shared as _shared306
 from panel.routes import websites as _w306
 from panel.routes import websites_apps as _wapps306
+from panel.routes import websites_files as _wfr306
 from panel.routes import websites_proxy as _wproxy306
 from panel.routes import websites_settings as _wset306
 from panel.services import websites as _ws306
@@ -74,6 +78,8 @@ tool = os.path.basename(sys.argv[0])
 rc = int(os.environ.get("FAKE_RC_" + tool, "0"))
 if tool == "podman" and argv[:2] == ["image", "exists"]:
     rc = int(os.environ.get("FAKE_IMAGE_EXISTS", "1"))
+if tool == "du":
+    sys.stdout.write(os.environ.get("FAKE_DU_OUT", "4096") + "\t" + argv[-1] + "\n")
 with open(os.environ["FAKE_CALLS"], "a") as fh:
     fh.write(json.dumps({"tool": tool, "argv": argv}) + "\n")
 sys.exit(rc)
@@ -82,7 +88,7 @@ sys.exit(rc)
 
 def _tools306():
     os.makedirs(_BIN306, exist_ok=True)
-    for name in ("podman", "systemctl", "journalctl"):
+    for name in ("podman", "systemctl", "journalctl", "du"):
         path = os.path.join(_BIN306, name)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("#!%s\n%s" % (_sys306.executable, _FAKE306))
@@ -612,6 +618,70 @@ def _f28_node(st):
        "made (control)", (getattr(failed, "state", None), "website-account-remove" in verbs), ("failed", True))
 
 
+# ── F29. The disk count ─────────────────────────────────────────────────────────────────────────
+def _any_bash306(server, user, sh, timeout=30, selfname=None, scope=False, stdin_text=None):
+    """shell_as_game_user for any shell of the account (an _ENV one or not), in bash over its scratch home."""
+    if sh.startswith(_ws306._ENV):
+        return _bash306(server, user, sh, timeout, selfname, scope, stdin_text)
+    home = _home306(user)
+    os.makedirs(home, exist_ok=True)
+    env = dict(os.environ, HOME=home, PATH=_BIN306 + os.pathsep + os.environ.get("PATH", ""), FAKE_CALLS=_CALLS306,
+               **_RUN306["env"])
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    r = _sp306.run(["bash", "-c", sh.replace("/home/%s" % user, home)], capture_output=True, timeout=timeout,  # nosec B603 B607
+                   env=env, check=False)
+    return r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace"), r.returncode
+
+
+def _f29_disk(st):
+    _bash_seams306()
+    _p9_patch(_core306, "shell_as_game_user", _any_bash306)
+    _p9_patch(_wfr306, "game_account_write_refusal", lambda *a, **k: None)
+    wrote = []
+    _p9_patch(_files306, "write_file", lambda remote, account, rel, content: wrote.append(rel) or (True, "Saved."))
+    site = _site306(st, "p306-du", kind="static", disk_mb=64)
+    su = _Client306(st.su.id)
+    _reset306(FAKE_RC_du=1, FAKE_DU_OUT=1000)
+    r = su.post("/websites/%d/files/save" % site.id, json={"path": "index.html", "content": "<p>p306</p>"})
+    eq("F29 (POST /websites/<id>/files/save): a du that could not read every file (exit 1, a partial number) is no "
+       "measurement: nothing is written and the page says the use could not be measured (the partial number was "
+       "used, through a pipe whose status was cut's)", (r.status_code, wrote), (507, []))
+    _reset306(FAKE_DU_OUT=1000)
+    r2 = su.post("/websites/%d/files/save" % site.id, json={"path": "index.html", "content": "<p>p306</p>"})
+    du = [c["argv"] for c in _calls306("du")]
+    eq("F29 (POST /websites/<id>/files/save): the count is the site's own folder (~/site), not the whole home with "
+       "the account's container images (a WordPress site was over its 2048 MB right after its install); a "
+       "measured folder under the limit takes the write (control)",
+       (r2.status_code, wrote, [a[-1] for a in du]), (200, ["site/html/index.html"],
+                                                      [os.path.join(_home306(site.account), "site")]))
+    _reset306(FAKE_RC_du=1, FAKE_DU_OUT=7)
+    ok, out = _sw306.site_probe(_NS306(is_local=True), site)
+    _reset306(FAKE_DU_OUT=7)
+    ok2, out2 = _sw306.site_probe(_NS306(is_local=True), site)
+    eq("F29 (ssh_manager.websites.site_probe): the site card's disk figure is du's only when du read everything",
+       (ok, _ws306.parse_probe(out)["disk_mb"], ok2, _ws306.parse_probe(out2)["disk_mb"]), (True, None, True, 7))
+    _f29_quota()
+
+
+def _f29_quota():
+    names = ("subprocess", "pwd", "_web_made", "_web_quota_mount", "resolve")
+    saved = {n: getattr(_H306, n) for n in names}
+    sub = _Sub306()
+    try:
+        _H306.subprocess, _H306._web_made, _H306.resolve = sub, (lambda user: True), (lambda name: "/usr/sbin/" + name)
+        _H306.pwd = _NS306(getpwnam=lambda name: _NS306(pw_uid=1500, pw_gid=1500, pw_dir="/home/" + name))
+        _H306._web_quota_mount = lambda home: ("/home", True)
+        with _ctx306.redirect_stdout(_io306.StringIO()), _ctx306.redirect_stderr(_io306.StringIO()):
+            rcs = [_H306.do_website_quota_set(["ws906", mb], "") for mb in ("2048", "0")]
+    finally:
+        for n, v in saved.items():
+            setattr(_H306, n, v)
+    soft = [c[3] for c in sub.calls if c[1:3] == ["-u", "ws906"]]
+    eq("F29 (website-quota-set): on a file system with user quotas the account's quota is its site's limit plus the "
+       "allowance for its container images, which the quota counts (an image's files are the account's own); a "
+       "limit of 0 stays no quota", (rcs, soft), ([0, 0], [str((2048 + 4096) * 1024), "0"]))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -661,7 +731,7 @@ def _ran306(step, st):
 
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
-                _f27_wiring, _f28_node)
+                _f27_wiring, _f28_node, _f29_disk)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

@@ -3606,11 +3606,20 @@ def _web_quota_mount(path):
     return best, on
 
 
+# A website account's rootless image store is in its home and mostly owned by the account itself (an image's
+# root is the account's own uid), so a user quota counts it. The site's disk limit is for its own folder
+# (website_files.used_bytes), so the quota adds this allowance for the account's images: the test host's
+# largest measured store was WordPress's, 2154 MB (its image and wp-cli's), and an update keeps the old image
+# beside the new one until it is pruned.
+WEB_IMAGE_ALLOWANCE_MB = 4096
+
+
 def do_website_quota_set(args, content):
     """Set a website account's disk quota (MB, 0 = none) where its home's file system has user quotas on.
 
-    Prints quota=set, or quota=unavailable when the file system has none (the panel then measures
-    the site with du instead and says which mode the host is in).
+    The quota is the site's limit plus WEB_IMAGE_ALLOWANCE_MB for the account's container images (none
+    when the limit is 0). Prints quota=set, or quota=unavailable when the file system has none (the panel
+    then measures the site with du instead and says which mode the host is in).
     """
     user, mb = args[0], int(args[1])
     if not _web_made(user):
@@ -3621,7 +3630,7 @@ def do_website_quota_set(args, content):
     if not on:
         sys.stdout.write("quota=unavailable\n")
         return 0
-    kb = mb * 1024
+    kb = (mb + WEB_IMAGE_ALLOWANCE_MB) * 1024 if mb else 0
     rc, _out = _run_quiet([resolve("setquota"), "-u", user, str(kb), str(kb + kb // 10), "0", "0", mount])
     sys.stdout.write("quota=%s\n" % ("set" if rc == 0 else "failed"))
     return rc

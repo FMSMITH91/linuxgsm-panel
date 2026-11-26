@@ -240,11 +240,17 @@ def repack(fh, room):
 
 # ── disk ────────────────────────────────────────────────────────────────────────────────────────
 def used_bytes(remote, account):
-    """How many bytes the site's account uses in its home (du -sxb, as the account), or None."""
-    home = _core._quote("/home/%s" % account)
-    out, _err, rc = _core.shell_as_game_user(remote, account, "du -sxb -- %s 2>/dev/null | cut -f1" % home,
-                                             timeout=60)
-    text = (out or "").strip()
+    """How many bytes the site's own folder uses (~/site: its files, backups and config), or None when unread.
+
+    du -sxb as the account, with du's own exit status (no pipe in front of it): a du that could not read
+    every file printed a partial number and exited 1, and a partial number is no measurement. The account's
+    container images are not counted against the site's disk limit: they are the panel's (pinned, the same
+    for every site of a kind, the old ones pruned), not the site's, and a WordPress site's are larger than
+    the default limit on their own (docs/websites.md, "Disk").
+    """
+    site_dir = _core._quote("/home/%s/site" % account)
+    out, _err, rc = _core.shell_as_game_user(remote, account, "du -sxb -- %s 2>/dev/null" % site_dir, timeout=60)
+    text = (out or "").strip().split("\t", 1)[0]
     return int(text) if rc == 0 and text.isdecimal() else None
 
 
