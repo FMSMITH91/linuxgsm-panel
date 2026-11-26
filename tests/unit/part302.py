@@ -10,6 +10,8 @@
    sites' certificate files and the proxy left enabled.
 4. A website install on a host without Podman installs it first, or refuses before anything is made; a failed
    first install removes the account it made, never one that was already there.
+5. The certificate status names the certificate the proxy serves (the issuer the configuration uses, else the
+   latest), its date read as GMT whatever the host's time zone, and the status route answers it parsed.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -435,6 +437,71 @@ def _s4_podman():
        (rc, out.strip(), calls, rc2, calls2), (0, "account=absent", [], 1, []))
 
 
+# ── 5. the certificate status ───────────────────────────────────────────────────────────────────
+_CERTS302 = {"local": "Nov 27 05:31:25 2026 GMT", "acme-staging-v02.api.letsencrypt.org-directory": "Jan 29 16:36:43 2027 GMT",
+             "acme-v02.api.letsencrypt.org-directory": "Mar  1 00:00:00 2027 GMT"}
+
+
+def _status302(conf, issuers):
+    """website-proxy-status over certificates of `issuers` for one domain, the running file `conf`."""
+    def run():
+        state = _H302.WEB_PROXY_STATE
+        for issuer in issuers:
+            os.makedirs(os.path.join(state, "certificates", issuer, "s.example.org"))
+            open(os.path.join(state, "certificates", issuer, "s.example.org", "s.example.org.crt"), "w").close()
+        host["enddates"] = {os.path.join(state, "certificates", i, "s.example.org", "s.example.org.crt"): _CERTS302[i]
+                            for i in issuers}
+        return _H302.do_website_proxy_status([], "")
+    host = {}
+    _rc, out, _calls, _conf, _t = _helper302(run, host, old_conf=conf)
+    return [ln for ln in out.split("\n") if ln.startswith("cert=")]
+
+
+def _s5_certs():
+    staging = _H302.WEB_CONF_HEAD + "\n{\n\tacme_ca " + _wp302.LE_STAGING + "\n}\n"
+    both = ["acme-staging-v02.api.letsencrypt.org-directory", "local"]
+    eq("website-proxy-status (verb): after a move from the local CA to Let's Encrypt staging, the one certificate "
+       "said for the domain is the one served (the issuer the configuration uses), not the stale local one",
+       _status302(staging, both),
+       ["cert=s.example.org issuer=acme-staging-v02.api.letsencrypt.org-directory not_after=1801240603"])
+    eq("website-proxy-status (verb): the issuer in use wins even over a later date, and with no certificate from it "
+       "the latest is said (controls)",
+       (_status302(_H302.WEB_CONF_HEAD + "\n{\n\tlocal_certs\n}\n", both),
+        _status302(_H302.WEB_CONF_HEAD + "\n{\n}\n", both)),
+       (["cert=s.example.org issuer=local not_after=1795757485"],
+        ["cert=s.example.org issuer=acme-staging-v02.api.letsencrypt.org-directory not_after=1801240603"]))
+    old = ("cert=s.example.org issuer=acme-staging-v02.api.letsencrypt.org-directory not_after=1801240603\n"
+           "cert=s.example.org issuer=local not_after=1795757485\n")
+    eq("proxy status (ssh layer): two lines for one domain (an older helper) keep the later date, never the last line",
+       _sw302.parse_proxy_status(old)["certs"],
+       {"s.example.org": {"issuer": "acme-staging-v02.api.letsencrypt.org-directory", "not_after": 1801240603}})
+
+
+def _s5_timezone():
+    saved = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    _time302.tzset()
+    try:
+        lines = _status302(_H302.WEB_CONF_HEAD + "\n{\n\tlocal_certs\n}\n", ["local"])
+    finally:
+        if saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved
+        _time302.tzset()
+    eq("website-proxy-status (verb): a certificate's GMT notAfter is the same epoch on a host outside UTC "
+       "(calendar.timegm, not mktime)", lines, ["cert=s.example.org issuer=local not_after=1795757485"])
+
+
+def _s5_route(st):
+    lines = "installed=yes\nversion=v2.11.9\ncache=no\nactive=active\ncert=p302.example.org issuer=local not_after=1795757485\n"
+    _p9_patch(_sw302, "proxy_status", lambda remote: (True, lines))
+    body = _p9_json(_Client302(st.su.id).get("/websites/proxy/status?host_id=%d" % st.host.id))
+    eq("proxy status (route): the host's status is answered parsed (installed, active, each domain's certificate)",
+       (body.get("status_ok"), (body.get("status") or {}).get("active"), (body.get("status") or {}).get("certs")),
+       (True, "active", {"p302.example.org": {"issuer": "local", "not_after": 1795757485}}))
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -452,7 +519,7 @@ def _cleanup302(st):
     _db302.session.commit()
 
 
-for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman):
+for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)
@@ -464,6 +531,7 @@ with _p9.app_context():
         _p9_patch(_sw302, "tunnel_apply", lambda *a, **k: (True, _sw302.OK_TUNNEL))
         _st302 = _state302()
         _s3_options(_st302)
+        _s5_route(_st302)
         eq("part302: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips302:], [])
     finally:
         _p9_restore_all()

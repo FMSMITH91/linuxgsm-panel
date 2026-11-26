@@ -382,12 +382,19 @@ def proxy_status(remote):
 
 
 def parse_proxy_status(out):
-    """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}."""
+    """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}.
+
+    The helper prints the served certificate of each domain; should a domain still come twice (an older
+    helper printed every issuer's), the later not_after wins, never simply the last line.
+    """
     got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             parts = dict(p.split("=", 1) for p in line.split() if "=" in p)
-            if parts.get("not_after", "").isdecimal():
+            if not parts.get("not_after", "").isdecimal():
+                continue
+            seen = got["certs"].get(parts["cert"])
+            if seen is None or int(parts["not_after"]) > seen["not_after"]:
                 got["certs"][parts["cert"]] = {"issuer": parts.get("issuer", ""), "not_after": int(parts["not_after"])}
         elif "=" in line:
             key, _sep, value = line.partition("=")

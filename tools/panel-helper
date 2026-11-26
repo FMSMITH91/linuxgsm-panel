@@ -48,6 +48,7 @@ USAGE
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
 import base64
+import calendar
 import errno
 import fcntl
 import filecmp
@@ -3352,26 +3353,47 @@ def do_website_proxy_stop(args, content):
     return rc
 
 
+def web_issuer_in_use(conf):
+    """The storage folder of the issuer the configuration `conf` uses: local, the ACME CA it names, else Let's Encrypt."""
+    if re.search(r"^\tlocal_certs$", conf or "", re.M):
+        return "local"
+    m = re.search(r"^\tacme_ca https://([A-Za-z0-9./-]{1,200})$", conf or "", re.M)
+    return m.group(1).strip("/").replace("/", "-") if m else "acme-v02.api.letsencrypt.org-directory"
+
+
+def _web_not_after(path):
+    """A stored certificate's notAfter as an epoch (it is GMT: calendar.timegm, never local time), or None."""
+    try:
+        rc, text = _run_quiet([resolve("openssl"), "x509", "-noout", "-enddate", "-in", path], timeout=20)
+    except FileNotFoundError:
+        return None
+    m = re.search(r"notAfter=(.+)", text) if rc == 0 else None
+    try:
+        return int(calendar.timegm(time.strptime(m.group(1).strip().replace(" GMT", ""), "%b %d %H:%M:%S %Y"))) if m else None
+    except ValueError:
+        return None
+
+
 def _web_cert_lines():
-    """`cert=<domain> issuer=<folder> not_after=<epoch>` for each certificate in the proxy's storage."""
-    out = []
+    """`cert=<domain> issuer=<folder> not_after=<epoch>`: one line per domain, the certificate the proxy serves.
+
+    The storage keeps every issuer's certificate (a move from the local CA to Let's Encrypt leaves the
+    local one behind). The one from the issuer the running configuration uses wins, else the latest.
+    """
+    in_use = web_issuer_in_use((_web_read(WEB_PROXY_CONF) or b"").decode("utf-8", "replace"))
+    best = {}
     for path in sorted(glob.glob(WEB_PROXY_STATE + "/certificates/*/*/*.crt"))[:500]:
         domain = os.path.basename(os.path.dirname(path))
         issuer = os.path.basename(os.path.dirname(os.path.dirname(path)))
         if not re.fullmatch(r"[a-z0-9.-]{1,253}", domain) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", issuer):
             continue
-        try:
-            rc, text = _run_quiet([resolve("openssl"), "x509", "-noout", "-enddate", "-in", path], timeout=20)
-        except FileNotFoundError:
+        when = _web_not_after(path)
+        if when is None:
             continue
-        m = re.search(r"notAfter=(.+)", text) if rc == 0 else None
-        if m:
-            try:
-                when = int(time.mktime(time.strptime(m.group(1).strip().replace(" GMT", ""), "%b %d %H:%M:%S %Y")))
-            except ValueError:
-                continue
-            out.append("cert=%s issuer=%s not_after=%d" % (domain, issuer, when))
-    return out
+        rank = (issuer == in_use, when)
+        if domain not in best or rank > best[domain][0]:
+            best[domain] = (rank, issuer, when)
+    return ["cert=%s issuer=%s not_after=%d" % (d, best[d][1], best[d][2]) for d in sorted(best)]
 
 
 def do_website_proxy_status(args, content):

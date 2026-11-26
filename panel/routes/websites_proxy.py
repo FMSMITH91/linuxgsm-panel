@@ -224,7 +224,7 @@ def register(app):
         ok, said = _w.host_call(_sw.proxy_status, remote)
         online = Website.query.filter_by(remote_id=remote.id, enabled=True).count()
         return jsonify(dict(proxy_json(row), online_sites=online, status_ok=bool(ok),
-                            status=said if ok and isinstance(said, dict) else {},
+                            status=_sw.parse_proxy_status(said) if ok else {},
                             message="" if ok else i18n.tr(said)))
 
     @app.route("/websites/proxy/install", methods=["POST"])
