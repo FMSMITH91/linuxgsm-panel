@@ -766,6 +766,7 @@ def _action_answer(app, gs, addon_id, action):
     if action == "start":
         return _start_answer(app, gs, addon_id)
     watched = _stop_in_watch(gs.id, addon_id, True)     # before the stop, so the watch can't see it first
+    _aw.revoke_server(gs.id, addon_id)                  # its page's links end with it (addon_web.revoke_server)
     out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.action_sh(addon_id, action),
                                           timeout=_ad.ACTION_TIMEOUT)
     ok = rc == 0
@@ -793,6 +794,7 @@ def _remove_answer(gs, addon_id):
     if job is not None:
         return _say(409, {"remove": _BUSY_REMOVING, "other": ADDON_BUSY, "uninstall": _BUSY_UNINSTALL}
                     .get(job.get("kind"), _BUSY_REMOVE))
+    _aw.revoke_server(gs.id, addon_id)
     try:
         out, err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, _ad.remove_sh(gs.short_name, addon_id),
                                               timeout=_ad.ACTION_TIMEOUT)

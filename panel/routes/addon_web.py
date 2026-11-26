@@ -12,9 +12,13 @@ THE PROXY (/addon-web/<token>/...) is WSGI middleware in front of the app, not a
 page has an opaque origin and sends no panel cookie, so the panel's session, CSRF and Fetch Metadata
 steps have nothing to check, and none of them can add a panel cookie to the add-on's answers. Every
 request is authorized again from the link: its sign-in still live, the permission and the server still
-held (Authorization Cheat Sheet, "Validate the Permissions on Every Request"). It connects only to
-127.0.0.1:<the port read at Open> on that server's host (Server-Side Request Forgery Prevention Cheat
-Sheet: no destination from the request), through ssh_manager.tunnel. A refused link is audited once.
+held (Authorization Cheat Sheet, "Validate the Permissions on Every Request"), and before a new
+connection the port is read again as at Open when that read is older than PORT_RECHECK_SECONDS (an add-on
+that stopped, or a port another account took, ends the link). It connects only to 127.0.0.1:<the port
+read at Open> on that server's host (Server-Side Request Forgery Prevention Cheat Sheet: no destination
+from the request), through ssh_manager.tunnel. A refused link is audited once. The browser's status line
+is built from the add-on's code, never its reason phrase, and no header value with a line break is
+passed on (HTTP response splitting).
 """
 import logging
 import time
@@ -175,9 +179,9 @@ class AddonWebProxy:
         lang = "en"
         try:
             with self.app.app_context():
-                link, server = self._authorized(token, environ)
-                lang = link.lang
-                asked = self._forward(environ, start_response, token, link, server, "/" + rest)
+                opened = self._authorized(token, environ)
+                lang = opened[0].lang
+                asked = self._forward(environ, start_response, token, opened, "/" + rest)
         except _Refusal as r:
             return _plain(start_response, r.status, r.sentence, lang)
         if callable(asked):
@@ -186,7 +190,10 @@ class AddonWebProxy:
 
     # ── who is asking ──────────────────────────────────────────────────────────────────────────────
     def _authorized(self, token, environ):
-        """(the link, its server's host row) when the link's sign-in may still use it; else _Refusal."""
+        """(the link, its server's row, that row's host) when the link's sign-in may still use it; else _Refusal.
+
+        The host is read here, while the rows' session is open: they are used after this app context ends.
+        """
         with self.app.app_context():
             link = _aw.lookup(token, session_idle_limits()[0], session_absolute_limits()[0])
             if link is None:
@@ -196,7 +203,7 @@ class AddonWebProxy:
             if why:
                 self._log_refusal(token, link, gs, why, environ)
                 raise _Refusal(403, _REVOKED)
-            return link, gs.remote
+            return link, gs, gs.remote
 
     @staticmethod
     def _why_not(link, gs):
@@ -237,20 +244,26 @@ class AddonWebProxy:
             return link is not None and not self._why_not(link, db.session.get(GameServer, link.server_id))
 
     # ── what is passed on ──────────────────────────────────────────────────────────────────────────
-    def _forward(self, environ, start_response, token, link, server, raw_rest):
+    def _forward(self, environ, start_response, token, opened, raw_rest):
+        link, remote = opened[0], opened[2]
         method, target, websocket = _checked(environ, link, raw_rest)
         if method == "OPTIONS":
             return _preflight(environ, start_response)
         req_body = _request_body(environ)
         prefix = environ.get("SCRIPT_NAME", "") + _aw.PATH_ROOT + token
+        self._port_checked(token, opened, environ)
         gate = _aw.gate(link.remote_id, link.port, link.addon_id)
         if not gate.acquire(timeout=_aw.QUEUE_SECONDS):
             raise _Refusal(503, _BUSY)
         try:
-            stream, head = _ask(server, link, method, target,
+            stream, head = _ask(remote, link, method, target,
                                 _aw.upstream_headers(environ, link.port, link.jar, websocket), req_body)
         except (ConnectionError, OSError):
             gate.release()
+            # Nothing answered on the port: the add-on may have stopped, and whatever binds the port next
+            # must not be sent the add-on's own sign-in. The jar is emptied and the port read again first.
+            link.jar.clear()
+            _aw.forget_port(link.target())
             _log.info("add-on page: no answer from %s on server %s", link.addon_id, link.server_id)
             raise _Refusal(502, _NO_ANSWER) from None
         _aw.keep_cookies(link.jar, head.headers)
@@ -258,6 +271,26 @@ class AddonWebProxy:
             gate.release()
             return lambda: self._switch(environ, stream, head, token)
         return _answer(start_response, stream, head, method, raw_rest, link, prefix, gate)
+
+    def _port_checked(self, token, opened, environ):
+        """Go on only while the link's port is still its add-on's own; else end the link (_Refusal).
+
+        Open found the add-on running and the server's own account listening on the port. The add-on can
+        stop later (an update, a crash) and another local account bind the same port, so before each new
+        connection (a request, a WebSocket) the same read is made again when the last one is older than
+        addon_web.PORT_RECHECK_SECONDS (Authorization Cheat Sheet, "Validate the Permissions on Every
+        Request"). A port that is no longer the add-on's ends the link, audited once; a host that does not
+        answer refuses this request only.
+        """
+        link, gs, remote = opened
+        try:
+            ok = _aw.port_still_theirs(link.target(), lambda: _still_listening(link, gs.id, gs.short_name, remote))
+        except ConnectionError:
+            raise _Refusal(502, _NO_ANSWER) from None
+        if not ok:
+            link.jar.clear()
+            self._log_refusal(token, link, gs, "the add-on is no longer running on its port", environ)
+            raise _Refusal(409, _ENDED)
 
     def _switch(self, environ, stream, head, token):
         """Answer the browser's upgrade with the add-on's 101, then splice the two until either ends."""
@@ -279,6 +312,19 @@ class AddonWebProxy:
             from eventlet import wsgi as _ewsgi     # only reached under eventlet's server (_client_socket)
             _ewsgi.WSGI_LOCAL.already_handled = True
         return []
+
+
+def _still_listening(link, server_id, account, remote):
+    """Open's read again, as the server's `account` on `remote`: whether the add-on runs on the link's port.
+
+    The root-capable-account question is asked first, as at Open: an account it refuses is not read.
+    """
+    if game_account_write_refusal(remote, account, reading=True):
+        return False
+    out, _err, rc = _sm.shell_as_game_user(remote, account, _aw.open_sh(link.addon_id), timeout=30)
+    if rc != 0:
+        raise ConnectionError("the host did not answer")
+    return _aw.page_port(out, server_id)[0] == link.port
 
 
 def _checked(environ, link, raw_rest):

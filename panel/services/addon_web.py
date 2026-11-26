@@ -15,9 +15,11 @@ THE LINK (a capability URL). 32 random bytes from `secrets` (OWASP Session Manag
 (the id flask-login keeps: user, auth epoch, session), one server, one add-on and the port read for it
 when it was opened. On EVERY request the proxy asks again whether that sign-in is still live (signed
 out, password changed, session revoked or expired: refused) and whether the user still holds the
-permission and the server (Authorization Cheat Sheet, "Validate the Permissions on Every Request").
-It ends after the panel's own idle timeout without use, and at the panel's absolute session limit
-from its opening ("Session Expiration"). It is never logged (the panel's server keeps no access log,
+permission and the server (Authorization Cheat Sheet, "Validate the Permissions on Every Request"),
+and before a new connection whether the add-on still holds its port (read again every
+PORT_RECHECK_SECONDS). It ends when the add-on is stopped, updated, changed or removed, after the
+panel's own idle timeout without use, and at the panel's absolute session limit from its opening
+("Session Expiration"). It is never logged (the panel's server keeps no access log,
 and nothing here writes a path), and every answer says `Referrer-Policy: no-referrer`.
 
 WHAT IS PASSED ON. Request headers from an allowlist only: never the panel's cookies, Authorization,
@@ -62,6 +64,9 @@ MAX_HEAD = 64 * 1024
 QUEUE_SECONDS = 30
 # A WebSocket's link is asked again this often, so a sign-out or a removed permission ends it too.
 RECHECK_SECONDS = 30
+# Before a new connection to the add-on (a request, a WebSocket), its port is read again (Open's read: the
+# add-on running, its record's port, the server's own account listening) when the last read is older than this.
+PORT_RECHECK_SECONDS = 10
 # The cookie jar per link (the add-on's own sign-in).
 JAR_COOKIES = 32
 JAR_BYTES = 16 * 1024
@@ -131,6 +136,8 @@ _LINKS = {}            # sha256(token) -> Link
 _LOCK = threading.Lock()
 _GATES = {}            # (remote id, port) -> BoundedSemaphore
 _GATES_LOCK = threading.Lock()
+_VERIFIED = {}         # (server id, host id, add-on, port) -> time.monotonic() of the last read that found it the add-on's
+_VERIFY_LOCKS = {}     # the same key -> the lock one read at a time holds (the others wait, then use its answer)
 
 
 class Link:
@@ -144,6 +151,10 @@ class Link:
         self.user_key, self.user_id = user_key, user_id
         self.server_id, self.remote_id, self.addon_id, self.port = target
         self.lang, self.born, self.used, self.jar, self.refusal_logged = lang, now, now, {}, False
+
+    def target(self):
+        """(server id, host id, add-on, port): what the link was opened for."""
+        return self.server_id, self.remote_id, self.addon_id, self.port
 
 
 def _digest(token):
@@ -170,6 +181,8 @@ def mint(user_key, user_id, target, lang, idle, absolute, now=None):
         if len(_LINKS) >= MAX_LINKS:
             del _LINKS[min(_LINKS, key=lambda k: _LINKS[k].born)]
         _LINKS[_digest(token)] = Link(user_key, user_id, target, lang, now)
+    # Open read the port just now: the link's first requests need not read it again.
+    _VERIFIED[tuple(target)] = time.monotonic()
     return token
 
 
@@ -203,6 +216,45 @@ def revoke_user(user_id):
     with _LOCK:
         for k in [k for k, v in _LINKS.items() if v.user_id == user_id]:
             del _LINKS[k]
+
+
+def revoke_server(server_id, addon_id):
+    """Forget every link to `server_id`'s `addon_id` page, and its port's last read.
+
+    Called when the add-on is stopped, updated, changed or removed: its port is free until it runs again,
+    and any local account may bind it meanwhile, so a link opened before must not reach whatever answers
+    there (OWASP Session Management Cheat Sheet, "Session Expiration": ended on the server).
+    """
+    with _LOCK:
+        for k in [k for k, v in _LINKS.items() if v.server_id == server_id and v.addon_id == addon_id]:
+            del _LINKS[k]
+    for key in [k for k in list(_VERIFIED) if k[0] == server_id and k[2] == addon_id]:
+        _VERIFIED.pop(key, None)
+
+
+def port_still_theirs(target, ask):
+    """Whether `target`'s port is still its add-on's: a read younger than PORT_RECHECK_SECONDS, else `ask()`.
+
+    `ask()` is Open's read again (True: the add-on runs and the server's account listens on that port);
+    it may raise ConnectionError (the host did not answer), which is passed on and caches nothing. One
+    read at a time per target: requests that arrive meanwhile wait for it and use its answer.
+    """
+    target = tuple(target)
+    with _GATES_LOCK:
+        lock = _VERIFY_LOCKS.setdefault(target, threading.Lock())
+    with lock:
+        if time.monotonic() - _VERIFIED.get(target, float("-inf")) < PORT_RECHECK_SECONDS:
+            return True
+        _VERIFIED.pop(target, None)
+        if not ask():
+            return False
+        _VERIFIED[target] = time.monotonic()
+        return True
+
+
+def forget_port(target):
+    """Drop `target`'s last port read, so the next connection reads it again (its add-on did not answer)."""
+    _VERIFIED.pop(tuple(target), None)
 
 
 def gate(remote_id, port, addon_id):

@@ -8,6 +8,11 @@
    few KB) is read, decoded and rewritten as the proxy does in well under a second, in a child interpreter
    so the quadratic regex it replaced fails this check by its timeout instead of stalling the suite; the
    scan finds the same tag the regex did on ordinary pages.
+3. The port, checked again: before a new connection the proxy repeats Open's read (the root-capable question
+   first) once the last read is older than PORT_RECHECK_SECONDS; a port the add-on no longer holds ends the
+   link (audited, nothing dialled, its cookie jar emptied), a host that does not answer refuses that request
+   only; an upstream that does not answer empties the jar and forces the next read; and Stop, Update and
+   Remove end the add-on's links (only that add-on's, on that server).
 
 HOW IT RUNS. Routes on part12's app with its transport tripwire armed; the host read and the tunnel are
 stand-ins (part279's scripted stream). Nothing reaches a host, /etc or data/.
@@ -19,9 +24,10 @@ import threading as _th289
 import types as _ty289
 
 from unit.part01 import _root, check, eq
-from unit.part12 import P9_HOST, _p9, _p9_arm, _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all
+from unit.part12 import (P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server, _p9_new_server,
+                         _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part279 import _Stream279, _drop_member279, _member279, _open_answer279, _session_client279
-from panel.routes import addon_web as _rw289
+from panel.routes import addon_web as _rw289, addons as _ra289, addons_change as _rc289
 from panel.security import auth as _auth289
 from panel.services import addon_web as _aw289, addon_web_http as _ht289, addons as _ad289
 
@@ -35,17 +41,22 @@ def _stubs289(ctx):
         return ctx["answers"].pop(0) if ctx["answers"] else ("", "", 1)
 
     def tunnel(server, port, timeout=30):
+        if ctx["page"][0] is None:
+            raise ConnectionError("p289: nothing listens")
         s = _Stream279(ctx["page"][0])
         ctx["opened"].append((getattr(server, "id", None), port, s))
         return s
     _p9_patch_sm("shell_as_game_user", shell)
     _p9_patch_sm("open_loopback", tunnel)
-    _p9_patch(_rw289, "game_account_write_refusal", lambda remote, user, reading=False: None)
+    _p9_patch(_rw289, "game_account_write_refusal",
+              lambda remote, user, reading=False: ctx["asked"].append(reading) or ctx["why"][0])
+    # Long enough that no check here reads the port again unless it sets a shorter one itself.
+    _p9_patch(_aw289, "PORT_RECHECK_SECONDS", 3600)
 
 
 def _harness289(tag, port_offset=0):
     """A server, a member with View add-on pages, and a link Open made for BlueMap: the context."""
-    ctx = {"reads": [], "answers": [], "opened": [], "page": [_PAGE289]}
+    ctx = {"reads": [], "answers": [], "opened": [], "page": [_PAGE289], "asked": [], "why": [None]}
     _p9_arm(who="part289")
     _stubs289(ctx)
     ctx["sid"] = _p9_new_server(P9_HOST, "mcp289" + tag, "mc", 25600 + port_offset, name="p289-" + tag)
@@ -80,11 +91,15 @@ def _splitting289():
     try:
         ctx = _harness289("sp")
         for name, page in _SPLIT289.items():
-            ctx["page"][0] = page
+            # A refused answer makes the next request read the port again (section 3): its answer is queued,
+            # so every request here reaches the add-on and is judged on the add-on's answer alone.
+            ctx["answers"].append(_open_answer279(ctx["sid"], ctx["port"]))
+            ctx["page"][0], k = page, len(ctx["opened"])
             r = ctx["fresh"].get(ctx["loc"])
-            res[name] = (r.status_code, "p289()" in r.get_data(as_text=True) + str(r.headers),
+            res[name] = (r.status_code, len(ctx["opened"]) > k, "p289()" in r.get_data(as_text=True) + str(r.headers),
                          r.headers.get("Content-Security-Policy", "").startswith("sandbox allow-scripts"))
         for name, page in (("custom reason", _PAGE289), ("unknown code", _PAGE289.replace(b"200 Totally Fine", b"299 Nice"))):
+            ctx["answers"].append(_open_answer279(ctx["sid"], ctx["port"]))
             ctx["page"][0] = page
             r = ctx["fresh"].get(ctx["loc"])
             res[name] = (r.status, r.get_data())
@@ -95,8 +110,8 @@ def _splitting289():
 
 _sp289 = _splitting289()
 eq("proxy: an add-on answer whose head holds a bare LF (in the reason phrase or a header), a bare CR or a NUL is "
-   "refused (502, the sandbox policy on the refusal) and none of it reaches the browser",
-   {k: _sp289.get(k) for k in _SPLIT289}, {k: (502, False, True) for k in _SPLIT289})
+   "refused once read (502, the sandbox policy on the refusal) and none of it reaches the browser",
+   {k: _sp289.get(k) for k in _SPLIT289}, {k: (502, True, False, True) for k in _SPLIT289})
 eq("proxy: the status line is built from the add-on's code alone: its own reason phrase is never relayed, an "
    "unknown code gets a fixed word, and the body still comes through",
    (_sp289.get("custom reason"), _sp289.get("unknown code")), (("200 OK", b"hi"), ("299 Unknown", b"hi")))
@@ -214,3 +229,140 @@ def _old_end289(page):
 eq("proxy: on ordinary pages the scan finds the same <head> the regex did (a tag with attributes, upper case, "
    "after a <header>, none, a lone `<head`, self-closed)",
    [_aw289.head_end(p) for p in _PAGES289], [_old_end289(p) for p in _PAGES289])
+
+
+# ── 3. the port, checked again ────────────────────────────────────────────────────────────────────
+def _link289(ctx):
+    return _aw289._LINKS.get(_aw289._digest(ctx["token"]))
+
+
+def _not_theirs289(ctx):
+    """Open's read once the add-on has stopped and another account holds its port: no listener of this account's."""
+    out, err, rc = _open_answer279(ctx["sid"], ctx["port"])
+    return out.replace("own=127.0.0.1:%d" % ctx["port"], "own="), err, rc
+
+
+def _recheck_steps289(ctx, res):
+    fresh, loc = ctx["fresh"], ctx["loc"]
+    n = len(ctx["reads"])
+    res["cached"] = (fresh.get(loc).status_code, len(ctx["reads"]) - n)
+    _p9_patch(_aw289, "PORT_RECHECK_SECONDS", 0)
+    ctx["answers"].append(_open_answer279(ctx["sid"], ctx["port"]))
+    n, a = len(ctx["reads"]), len(ctx["asked"])
+    r = fresh.get(loc)
+    res["reread"] = (r.status_code, len(ctx["reads"]) - n, "ss -Htlnp" in ctx["reads"][-1], ctx["asked"][a:])
+    n, k = len(ctx["reads"]), len(ctx["opened"])
+    r = fresh.get(loc)              # no answer queued: the host "did not answer"
+    res["host_down"] = (r.status_code, len(ctx["opened"]) - k, _link289(ctx) is not None)
+    # The add-on's own sign-in in the jar, then nothing answers on the port.
+    _p9_patch(_aw289, "PORT_RECHECK_SECONDS", 3600)
+    ctx["answers"].append(_open_answer279(ctx["sid"], ctx["port"]))
+    ctx["page"][0] = _PAGE289.replace(b"Content-Length", b"Set-Cookie: p289jar=1\r\nContent-Length")
+    first = fresh.get(loc).status_code
+    jar = dict(_link289(ctx).jar)
+    ctx["page"][0] = None
+    gone = fresh.get(loc).status_code
+    res["jar"] = (first, jar, gone, dict(_link289(ctx).jar), _link289(ctx).target() in _aw289._VERIFIED)
+    ctx["page"][0] = _PAGE289
+    ctx["answers"].append(_open_answer279(ctx["sid"], ctx["port"]))
+    n = len(ctx["reads"])
+    res["after_jar"] = (fresh.get(loc).status_code, len(ctx["reads"]) - n)
+
+
+def _taken_steps289(ctx, res):
+    fresh, loc = ctx["fresh"], ctx["loc"]
+    link = _link289(ctx)
+    link.jar["p289jar"] = "2"
+    _p9_patch(_aw289, "PORT_RECHECK_SECONDS", 0)
+    ctx["answers"].append(_not_theirs289(ctx))
+    k = len(ctx["opened"])
+    r = fresh.get(loc)
+    row = _p9_audit("addon_web_refused")
+    res["taken"] = (r.status_code, "link has ended" in r.get_data(as_text=True), len(ctx["opened"]) - k,
+                    "no longer running on its port" in getattr(row, "detail", ""), dict(link.jar),
+                    _link289(ctx) is None, fresh.get(loc).status_code)
+    # A root-capable account: refused before anything is read as it, and the link ends.
+    ctx["answers"].append(_open_answer279(ctx["sid"], ctx["port"]))
+    r = _session_client279(ctx["member"][0]).post("/api/server/%d/addons/%s/web" % (ctx["sid"], _ad289.BLUEMAP))
+    ctx["loc"] = r.headers.get("Location", "")
+    ctx["token"] = ctx["loc"][len("/addon-web/"):-1]
+    ctx["why"][0] = "p289: that account can become root"
+    n = len(ctx["reads"])
+    res["root"] = (fresh.get(ctx["loc"]).status_code, len(ctx["reads"]) - n, _link289(ctx) is None)
+    ctx["why"][0] = None
+
+
+def _recheck289():
+    res = {}
+    ctx = {"member": (0, 0), "sid": 0}
+    try:
+        ctx = _harness289("pc", 1)
+        for step in (_recheck_steps289, _taken_steps289):
+            try:
+                step(ctx, res)
+            except Exception as e:       # a step that raised fails its checks by name (below), not the suite
+                res.setdefault("raised", []).append("%s: %r" % (step.__name__, e))
+    finally:
+        _teardown289(ctx)
+    return res
+
+
+_rc289r = _recheck289()
+eq("port check: no step raised", _rc289r.get("raised", []), [])
+eq("port check: a link's first requests after Open read nothing again (Open's read counts)", _rc289r.get("cached"),
+   (200, 0))
+eq("port check: once the last read is older than PORT_RECHECK_SECONDS the next request repeats Open's read (the "
+   "account's own listeners) after asking the root-capable question as a READ, and is answered",
+   _rc289r.get("reread"), (200, 1, True, [True]))
+eq("port check: a host that does not answer refuses that request (502), dials nothing and keeps the link",
+   _rc289r.get("host_down"), (502, 0, True))
+eq("port check: an add-on that stopped and a port another account now holds ends the link: 409 with the ended "
+   "sentence, nothing dialled, audited, its cookie jar emptied, and the link gone after",
+   _rc289r.get("taken"), (409, True, 0, True, {}, True, 404))
+eq("port check: an account that became root-capable is refused before anything is read as it, and the link ends",
+   _rc289r.get("root"), (409, 0, True))
+eq("proxy: a port where nothing answers empties the link's cookie jar (the add-on's sign-in is not kept for "
+   "whatever binds the port next) and drops the last read",
+   _rc289r.get("jar"), (200, {"p289jar": "1"}, 502, {}, False))
+eq("proxy: ...so the next request reads the port again first, and is answered", _rc289r.get("after_jar"), (200, 1))
+
+
+def _revoke_actions289():
+    sid = _p9_new_server(P9_HOST, "mcp289rv", "mc", 25603, name="p289-rv")
+    port = _ad289.PORT_BASE + sid
+
+    def links():
+        return {name: _aw289.mint("1:0:p289", 1, target, "en", 1800.0, 28800.0) for name, target in
+                (("this", (sid, P9_HOST, _ad289.BLUEMAP, port)), ("other add-on", (sid, P9_HOST, _ad289.IW4MADMIN, port)),
+                 ("other server", (sid + 1000, P9_HOST, _ad289.BLUEMAP, port)))}
+
+    def alive(toks):
+        return {name: _aw289.lookup(t, 1800.0, 28800.0) is not None for name, t in toks.items()}
+    out = {}
+    _p9_arm(who="part289")
+    _p9_patch(_ra289, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_ra289, "_await_start", lambda *a, **k: None)
+    _p9_patch(_rc289, "_worker", lambda *a, **k: None)
+    _p9_patch_sm("shell_as_game_user", lambda *a, **k: ("removed=1\nothers=1\nADDON_REMOVED\n", "", 0))
+    _p9_patch_sm("run_privileged", lambda *a, **k: ("", "", 0))
+    c = _p9_client(P9_ADMIN)
+    try:
+        for action in ("stop", "update", "remove"):
+            toks = links()
+            r = c.post("/api/server/%d/addons/%s/%s" % (sid, _ad289.BLUEMAP, action))
+            with _ra289._JOBS_LOCK:
+                _ra289._JOBS.pop((sid, _ad289.BLUEMAP), None)
+            out[action] = (r.status_code, alive(toks))
+    finally:
+        _p9_restore_all()
+        _aw289._LINKS.clear()
+        _p9_delete_server(sid)
+    return out
+
+
+_ra289r = _revoke_actions289()
+eq("Stop, Update and Remove end the links to that add-on's page on that server (its port is free until it runs "
+   "again); another add-on's and another server's links are kept",
+   _ra289r, {"stop": (200, {"this": False, "other add-on": True, "other server": True}),
+             "update": (202, {"this": False, "other add-on": True, "other server": True}),
+             "remove": (200, {"this": False, "other add-on": True, "other server": True})})

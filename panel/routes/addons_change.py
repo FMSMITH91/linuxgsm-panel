@@ -42,7 +42,7 @@ from panel.core.http import _json_body, _log_and_generic
 from panel.db.models import GameDatabase, GameServer, claim_row, row_birth
 from panel.ops import ssh_manager as _sm
 from panel.security.auth import log_action
-from panel.services import addons as _ad
+from panel.services import addon_web as _aw, addons as _ad
 from panel.services import addons_bluemap as _bm, b3_control as _b3c, geoip as _geoip
 
 _NOT_INSTALLED = "That add-on isn't installed on this server."
@@ -385,6 +385,7 @@ def start(app, gs, addon_id, kind):
         job = _ra.claim_job(gs.id, addon_id, kind)
     if job is not None:
         return _ra._say(409, _ra.busy_sentence(job))
+    _aw.revoke_server(gs.id, addon_id)      # the add-on restarts: its page's links end (addon_web.revoke_server)
     log_action(current_user, "addon_update" if kind == "update" else "addon_settings", target=gs.name, server=gs,
                detail="%s: started%s" % (addon_id, _choice_words(choice)))
     threading.Thread(target=_worker, daemon=True,

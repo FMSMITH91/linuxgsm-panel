@@ -206,14 +206,18 @@ nothing changes in Tailscale.
   alone, the server's Add-ons tab lists only the installed add-ons that have a page, each with Open.
 - **How it reaches the page.** Only `127.0.0.1:<port>` on that server's host, the port in the add-on's
   record when you pressed Open, checked to be in that server's range of add-on ports and listened on by the
-  server's own account: a socket on the panel's own host, a forwarded channel on the panel's SSH
+  server's own account (read again before a new connection once that read is more than 10 seconds old: if the
+  add-on has stopped or another account holds the port, the link ends and you open the page again from the
+  card): a socket on the panel's own host, a forwarded channel on the panel's SSH
   connection to a remote host (`direct-tcpip`; the host's sshd must allow TCP forwarding, its default), or
   `ssh -W` for a Tailscale host. Never an address from the browser.
 - **The link.** Open makes a link only for you, that server and that add-on (a random 256-bit value, kept
   by the panel only as its hash and never written to a log). It works while your sign-in does: signing
   out, a password change, "sign out everywhere", a removed permission or server access, or your session
   ending stops it on its next request (an open IW4MAdmin page within 30 seconds). It also ends after the
-  panel's idle timeout without use, and at the panel's absolute sign-in limit after you opened it. The page
+  panel's idle timeout without use, and at the panel's absolute sign-in limit after you opened it, and when
+  the add-on is stopped, updated, changed or removed on its card. If nothing answers on the add-on's port,
+  the panel forgets the add-on's own sign-in for that link (sign in to IW4MAdmin again). The page
   sends no referrer. The address is in your browser's history; it is useless once it has ended.
 - **Kept apart from the panel.** The page is the add-on's own HTML and script, so it runs in a sandbox
   (`Content-Security-Policy: sandbox allow-scripts allow-forms`, without `allow-same-origin`): the browser
