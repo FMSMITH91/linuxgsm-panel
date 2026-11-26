@@ -109,7 +109,8 @@ def _tools305():
         path = os.path.join(_BIN305, name)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("#!%s\n%s" % (_sys305.executable, _FAKE305))
-        os.chmod(path, 0o755)  # nosec B103 - a scratch stand-in this part runs
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+        os.chmod(path, 0o700)
 
 
 def _home305(account):
@@ -515,6 +516,7 @@ def _rmtree305(path):
     """Remove `path` whole, folders an install step made read-only included."""
     for top, dirs, _files in os.walk(path):
         for d in dirs:
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: owner-only scratch folders
             os.chmod(os.path.join(top, d), 0o700)
     _shutil305.rmtree(path, ignore_errors=True)
 
@@ -598,6 +600,9 @@ def _s10_verify(st):
             open(os.path.join(home, "site", "html", "config.php"), "w").close()
         ok, said = _sw305.app_install_step(_NS305(is_local=True), site, dict(step, secrets=dict(_SECRET_STEP305)))
         results[label] = (ok, said == _ws305.FAIL_MARKS["SITE_VERIFY_FAILED"])
+    eq("verify: the table check reads its values folder (the prefix bound in a prepared statement, never in the SQL)",
+       ("'/run/panel-values/'" in _wr305._TABLES_PHP and _wr305.STEP_VALUES_DIR == "/run/panel-values",
+        "prepare(" in _wr305._TABLES_PHP and "phpbb_" not in _wr305._TABLES_PHP), (True, True))
     eq("verify (app_install_step): phpBB's install counts as done only with its config.php not empty, its phpbb_ tables "
        "present and its index answering 200 with its text (phpbbcli exits 0 on an error, and the job said done over "
        "an empty config.php and no tables)",

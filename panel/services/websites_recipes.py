@@ -317,14 +317,17 @@ def _run_sh(account, site, step, values):
 
 # verify-install's database check: the site's own database holds at least one table named with the recipe's
 # prefix (an installer that failed part-way leaves none). Run in a one-off container of the site's image,
-# signed in as the site's own database user from the values folder; the prefix is held to [a-z0-9_]{0,16}.
-_DB_NAMES = {"DB_HOST_NAME": "db_host_name", "DB_PORT": "db_port", "DB_USER": "db_user", "DB_PASSWORD": "db_password",
-             "DB_NAME": "db_name"}
-_TABLES_PHP = ("$v = function ($n) { return file_get_contents('%s/' . $n); }; mysqli_report(MYSQLI_REPORT_OFF); "
+# signed in as the site's own database user; every value, the prefix included, is read from the values folder
+# (STEP_VALUES_DIR) and the prefix is bound as a parameter of a prepared statement, never put in the SQL.
+_DB_NAMES = {name.upper(): name for name in ("db_host_name", "db_port", "db_user", "db_password", "db_name")}
+_TABLES_PHP = ("$v = function ($n) { return file_get_contents('/run/panel-values/' . $n); }; "
+               "mysqli_report(MYSQLI_REPORT_OFF); "
                "$m = @new mysqli($v('DB_HOST_NAME'), $v('DB_USER'), $v('DB_PASSWORD'), $v('DB_NAME'), (int) $v('DB_PORT')); "
-               "if ($m->connect_errno) { exit(2); } $r = $m->query(\"SELECT COUNT(*) FROM information_schema.tables "
-               "WHERE table_schema = DATABASE() AND LEFT(table_name, %%d) = '%%s'\"); "
-               "exit($r && (int) $r->fetch_row()[0] > 0 ? 0 : 3);" % STEP_VALUES_DIR)
+               "if ($m->connect_errno) { exit(2); } $p = $v('TABLE_PREFIX'); "
+               "$q = $m->prepare('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() "
+               "AND LEFT(table_name, CHAR_LENGTH(?)) = ?'); "
+               "if (! $q || ! $q->bind_param('ss', $p, $p) || ! $q->execute()) { exit(2); } "
+               "exit((int) $q->get_result()->fetch_row()[0] > 0 ? 0 : 3);")
 
 
 def _verify_sh(account, site, step, values, token):
@@ -334,7 +337,7 @@ def _verify_sh(account, site, step, values, token):
     instead of recording an installer's silent failure as done.
     """
     fail = "{ echo SITE_VERIFY_FAILED; echo check=%s; exit 33; }"
-    body = [_values_prelude(_DB_NAMES if "tables" in step else ())]
+    body = [_values_prelude(list(_DB_NAMES) + ["TABLE_PREFIX"] if "tables" in step else ())]
     body += ["[ -s %s ] || %s; " % (_q(_ws.HTML + "/" + path), fail % "file") for path in step.get("files", [])]
     lines = ["token %s" % _b64("%s: %s" % (_ws.GATE_HEADER, token))]
     if "tables" in step:
@@ -342,7 +345,8 @@ def _verify_sh(account, site, step, values, token):
         if not re.fullmatch(r"[a-z0-9_]{0,16}", prefix):
             raise ValueError("a table prefix is up to 16 lowercase letters, digits and underscores")
         lines += ["val %s %s" % (name, _b64(values.get(ph, ""))) for name, ph in sorted(_DB_NAMES.items())]
-        args = _container_args(account, site, values, _ws.image_for(site), ["php", "-r", _TABLES_PHP % (len(prefix), prefix)])
+        lines.append("val TABLE_PREFIX %s" % _b64(prefix))
+        args = _container_args(account, site, values, _ws.image_for(site), ["php", "-r", _TABLES_PHP])
         body.append("%s < /dev/null > /dev/null 2>&1 || %s; " % (_shell_words(args), fail % "tables"))
     if "page" in step:
         page = step["page"]
