@@ -926,7 +926,7 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
                          ("cflite_pr.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
                                             "panel/core/terminal.py", "tests/fuzz/**",
                                             ".clusterfuzzlite/**", "panel/install/requirements.txt")),
-                         ("addon-images.yml", ("panel/addon_images/**", "panel/services/addons.py",
+                         ("addon-images.yml", ("panel/addon_images/**", "panel/website_images/**", "panel/services/addons.py",
                                                ".clusterfuzzlite/Dockerfile", ".github/workflows/addon-images.yml",
                                                ".github/scripts/addon_images.py", ".github/trivyignore.yaml",
                                                ".github/hadolint.yaml"))):

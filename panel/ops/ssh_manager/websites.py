@@ -44,6 +44,9 @@ OK_STARTED = "The website was started."
 OK_STOPPED = "The website was stopped."
 OK_REMOVED = "The website and its account were removed."
 OK_PROXY = "The web proxy was installed."
+OK_CACHE_BUILD = "The web proxy with the page cache was built and installed."
+CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so the plain one was kept. Check the "
+                      "host's internet connection and try again.")
 OK_APPLIED = "The web proxy's configuration was checked and applied."
 BAD_CONFIG = "The web proxy refused the new configuration, so the running one was kept: {why}"
 OK_PROXY_STOPPED = "The web proxy was stopped: nothing listens on ports 80 and 443."
@@ -132,7 +135,7 @@ def _site_bundle(site, ids, probe, db=None):
     net = _ws().network(site, db_port, splice=probe.get("splice", False))
     cache_pw = _secret(site.object_cache_secret) if site.object_cache else None
     files = _ws().site_files(site, ids, net, token, cache_password=cache_pw, image=image,
-                             egress_hosts=_egress_hosts(site))
+                             egress_hosts=_egress_hosts(site), cpu=probe.get("cpu_delegated", False))
     if relay_target:
         files.update({"%s/%s" % (_ws().USER_UNIT_DIR, k): v for k, v in _ws().db_relay_units(site, relay_target).items()})
     return _ws().bundle(files), image
@@ -160,7 +163,22 @@ def install(remote, site, db=None):
     if not ok:
         return False, _mark(out)
     quota_set(remote, site)
+    cpu_limit(remote, site, probe)
     return start(remote, site)
+
+
+def cpu_limit(remote, site, probe=None):
+    """Where the site's CPU limit is enforced: (ok, websites.CPU_MODES key) — container, account or none.
+
+    The container's own --cpus where the host delegates the cpu controller to the account (written in its
+    unit); else the helper limits the account's whole user slice. Never silently unlimited: "none" is said.
+    """
+    if probe is None:
+        _ids_got, probe = _ids(remote, site)
+    if probe.get("cpu_delegated"):
+        return True, "container"
+    ok, _out = _helper(remote, "website-cpu-limit", [site.account, str(int(site.cpu_milli))], timeout=60)
+    return ok, "account" if ok else "none"
 
 
 def start(remote, site):
@@ -199,6 +217,21 @@ def proxy_install(remote):
         return False, NO_IMAGE
     ok, out = _helper(remote, "website-proxy-install", [asset["version"], arch, asset["sha256"]], timeout=900)
     return (True, OK_PROXY) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
+
+
+def cpu_note(mode):
+    """The site card's sentence for where the CPU limit is enforced (cpu_limit's mode)."""
+    modes = _ws().CPU_MODES
+    return modes.get(mode, modes["none"])
+
+
+def proxy_install_cache(remote):
+    """Build and install the web proxy with the page cache module, from the signed catalog's pins."""
+    from panel.services import websites_catalog as _wc
+    pins = _wc.pins("caddy_cache")
+    ok, out = _helper(remote, "website-proxy-install-cache",
+                      [pins["caddy"], pins["builder"], pins["base"], pins["version"]], timeout=1900)
+    return (True, OK_CACHE_BUILD) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else CACHE_BUILD_FAILED)
 
 
 def _host_machine(remote):
@@ -245,7 +278,7 @@ def proxy_status(remote):
 
 def parse_proxy_status(out):
     """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}."""
-    got = {"installed": False, "version": "", "active": "unknown", "certs": {}}
+    got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             parts = dict(p.split("=", 1) for p in line.split() if "=" in p)
@@ -253,8 +286,8 @@ def parse_proxy_status(out):
                 got["certs"][parts["cert"]] = {"issuer": parts.get("issuer", ""), "not_after": int(parts["not_after"])}
         elif "=" in line:
             key, _sep, value = line.partition("=")
-            if key in ("installed", "version", "active"):
-                got[key] = (value == "yes") if key == "installed" else value
+            if key in ("installed", "version", "active", "cache"):
+                got[key] = (value == "yes") if key in ("installed", "cache") else value
     return got
 
 

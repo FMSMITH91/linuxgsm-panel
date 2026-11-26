@@ -34,5 +34,10 @@
   "The app's installer folder is still there after install, so the site was not made public.": "La carpeta del instalador de la aplicación sigue ahí tras la instalación, así que el sitio no se hizo público.",
   "The tunnel token is missing or not one line. Paste it again.": "Falta el token del túnel o no ocupa una sola línea. Vuelve a pegarlo.",
   "Websites need Ubuntu 24.04 or newer on the website's host.": "Los sitios web necesitan Ubuntu 24.04 o posterior en el host del sitio web.",
-  "Websites need Podman 4.9 or newer, and this host has an older one.": "Los sitios web necesitan Podman 4.9 o posterior, y este host tiene uno más antiguo."
+  "Websites need Podman 4.9 or newer, and this host has an older one.": "Los sitios web necesitan Podman 4.9 o posterior, y este host tiene uno más antiguo.",
+  "CPU limit: applied to the website's container.": "Límite de CPU: aplicado al contenedor del sitio web.",
+  "CPU limit: this host does not let the website's account limit its own containers, so the panel limits the whole account (its share and its quota) instead.": "Límite de CPU: este host no permite que la cuenta del sitio web limite sus propios contenedores, así que el panel limita en su lugar toda la cuenta (su proporción y su cuota).",
+  "CPU limit: this host allows no CPU limit for websites, so this website runs without one.": "Límite de CPU: este host no permite ningún límite de CPU para los sitios web, así que este sitio web funciona sin él.",
+  "The web proxy with the page cache was built and installed.": "Se compiló e instaló el proxy web con la caché de páginas.",
+  "The web proxy with the page cache could not be built, so the plain one was kept. Check the host's internet connection and try again.": "No se pudo compilar el proxy web con la caché de páginas, así que se mantuvo el normal. Comprueba la conexión a internet del host y vuelve a intentarlo."
 }

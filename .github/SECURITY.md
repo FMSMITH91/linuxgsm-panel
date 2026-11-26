@@ -275,7 +275,7 @@ change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's rest
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
 a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, root's crontab for the
 owner's root cron page, readying a game account for add-on containers, websites' accounts and their
-web proxy, and more — 145 verbs.
+web proxy, and more — 147 verbs.
 The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,

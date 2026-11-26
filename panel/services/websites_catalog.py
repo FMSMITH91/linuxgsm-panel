@@ -47,9 +47,12 @@ _CADDY_URL = "https://github.com/caddyserver/caddy/releases/download/v{v}/caddy_
 # The hosts a site may reach while it builds or runs (WordPress's updates, npm's registry): relayed
 # one by one, never a route to the internet.
 EGRESS_HOSTS = ("api.wordpress.org", "downloads.wordpress.org", "registry.npmjs.org")
-SITE_KEYS = ("caddy", "static", "php", "wordpress", "wpcli", "tunnel", "object_cache", "runtimes", "presets",
-             "origin_pull", "recipes")
-OPTIONAL_KEYS = ("caddy_cache",)
+SITE_KEYS = ("caddy", "caddy_cache", "static", "php", "wordpress", "wpcli", "tunnel", "object_cache", "runtimes",
+             "presets", "origin_pull", "recipes")
+OPTIONAL_KEYS = ()
+# The page cache's proxy build (panel/website_images/caddy-cache/Containerfile, built on the host by the
+# helper): this module, at an exact version, compiled into Caddy by xcaddy in the pinned builder image.
+CACHE_MODULE = "github.com/caddyserver/cache-handler"
 TUNNEL_PROVIDERS = ("cloudflare",)
 PRESETS = ("cloudflare",)
 # A CDN's client certificate authority for authenticated origin pulls (public; PEM).
@@ -407,9 +410,21 @@ def sites_problems(obj):
              _image_problems(obj["object_cache"], "object_cache"), _runtimes_problems(obj["runtimes"]),
              _presets_problems(obj["presets"]), _origin_pull_problems(obj["origin_pull"]),
              _recipes_problems(obj["recipes"])]
-    if "caddy_cache" in obj:
-        parts.append(_caddy_problems(obj["caddy_cache"], "caddy_cache"))
+    parts.append(_cache_build_problems(obj["caddy_cache"], obj["caddy"]))
     return [p for part in parts for p in part]
+
+
+def _cache_build_problems(entry, caddy):
+    """The page cache's build pins: Caddy's version (the proxy's own), builder and base images, the module's exact tag."""
+    if not _obj(entry, ("caddy", "builder", "base", "module", "version")):
+        return ["caddy_cache: caddy, builder, base, module and version"]
+    return _failed([
+        (lambda: entry["caddy"] == caddy["version"], "caddy_cache.caddy: the proxy's own version"),
+        (lambda: _full(_DIGEST, entry["builder"]) and _full(_DIGEST, entry["base"]),
+         "caddy_cache: builder and base images pinned by digest"),
+        (lambda: entry["module"] == CACHE_MODULE, "caddy_cache.module: %s" % CACHE_MODULE),
+        (lambda: _full(r"v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", entry["version"]), "caddy_cache.version: an exact vX.Y.Z"),
+    ])
 
 
 _REFUSED_SEEN = set()
@@ -438,12 +453,10 @@ def _copy(value):
 def pins(kind):
     """The pins for `kind`, a copy: "static", "php", "wordpress", "wpcli", "caddy", "caddy_cache", "tunnel" or "object_cache".
 
-    {} for "caddy_cache" while the catalog has no cache-enabled proxy build. KeyError for anything else.
+    KeyError for anything else.
     """
     sites, _source = section()
-    if kind == "caddy_cache":
-        return _copy(sites.get("caddy_cache") or {})
-    if kind not in ("static", "php", "wordpress", "wpcli", "caddy", "tunnel", "object_cache"):
+    if kind not in ("static", "php", "wordpress", "wpcli", "caddy", "caddy_cache", "tunnel", "object_cache"):
         raise KeyError(kind)
     return _copy(sites[kind])
 

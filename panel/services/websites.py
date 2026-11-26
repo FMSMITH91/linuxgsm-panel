@@ -364,10 +364,25 @@ def valkey_conf(password):
 
 
 # ── the units ───────────────────────────────────────────────────────────────────────────────────
-def _limits(site):
-    out = ["--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb),
-           "--cpus=%.2f" % (int(site.cpu_milli) / 1000.0), "--stop-timeout=%d" % STOP_TIMEOUT]
+def _limits(site, cpu=True):
+    """The container's podman limits; --cpus only where the host delegates the cpu controller (`cpu`)."""
+    out = ["--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb)]
+    out += ["--cpus=%.2f" % (int(site.cpu_milli) / 1000.0)] if cpu else []
+    out += ["--stop-timeout=%d" % STOP_TIMEOUT]
     return out if site.full_egress else out + ["--dns=none"]
+
+
+# Where a site's CPU limit is enforced (the site card and docs say which, never silently none):
+#   container: --cpus on the container (the account's user manager has the cpu controller);
+#   account:   the host does not delegate it, so the helper's website-cpu-limit sets CPUQuota and
+#              CPUWeight on the account's whole user slice (its site, cache and gate together);
+#   none:      neither could be set.
+CPU_MODES = {
+    "container": "CPU limit: applied to the website's container.",
+    "account": ("CPU limit: this host does not let the website's account limit its own containers, so the panel "
+                "limits the whole account (its share and its quota) instead."),
+    "none": "CPU limit: this host allows no CPU limit for websites, so this website runs without one.",
+}
 
 
 def _hardening(ids, pids):
@@ -421,13 +436,14 @@ def needs_egress(site):
     return site.kind == "wordpress" and not site.full_egress
 
 
-def quadlet(site, ids, net, image=None):
+def quadlet(site, ids, net, image=None, cpu=True):
     """The site's Quadlet .container text for numeric `ids` (uid, gid) and network options `net`.
 
-    `image` defaults to image_for(site). A runtime app has its own: app_quadlet.
+    `image` defaults to image_for(site). A runtime app has its own: app_quadlet. `cpu` False leaves
+    --cpus out (the host does not delegate the cpu controller; CPU_MODES "account" limits it instead).
     """
     if site.kind == "app":
-        return app_quadlet(site, ids, net, image)
+        return app_quadlet(site, ids, net, image, cpu)
     image = image or image_for(site)
     home = _home(site.account)
     lines = _head("website %s" % site.name, [DB_RELAY_UNIT + ".socket"] if "-T,3306:%d" % (
@@ -445,13 +461,13 @@ def quadlet(site, ids, net, image=None):
                   "Volume=%s/%s/php.ini:/usr/local/etc/php/conf.d/zz-panel.ini:ro" % (home, CONF),
                   "Tmpfs=/tmp:rw,mode=1777,size=256m", "Tmpfs=/run/apache2:rw,mode=1777,size=16m",
                   "Tmpfs=/run/lock/apache2:rw,mode=1777,size=4m"]
-    lines += _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site))]
+    lines += _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site, cpu))]
     if site.kind in KINDS_PHP:
         lines.append("Exec=apache2-foreground")
     return "\n".join(lines + _tail())
 
 
-def app_quadlet(site, ids, net, image=None):
+def app_quadlet(site, ids, net, image=None, cpu=True):
     """A runtime app's Quadlet text: the runtime's pinned image, its start command and port (behind the gate)."""
     image = image or image_for(site)
     home = _home(site.account)
@@ -464,7 +480,7 @@ def app_quadlet(site, ids, net, image=None):
         "Volume=%s/%s:/app" % (home, HTML), "Volume=%s/%s/start.sh:/panel/start.sh:ro" % (home, CONF),
         "EnvironmentFile=%s/%s/app.env" % (home, CONF), "Environment=PORT=%d" % port, "Environment=NODE_ENV=production",
         "Environment=HOME=/tmp", "WorkingDir=/app", "Tmpfs=/tmp:rw,mode=1777,size=256m",
-    ] + _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site)), "Exec=/bin/sh /panel/start.sh"]
+    ] + _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site, cpu)), "Exec=/bin/sh /panel/start.sh"]
     return "\n".join(lines + _tail())
 
 
@@ -674,9 +690,9 @@ def egress_proxy_source():
         return fh.read()
 
 
-def site_files(site, ids, net, token, cache_password=None, env=None, image=None, egress_hosts=()):
+def site_files(site, ids, net, token, cache_password=None, env=None, image=None, egress_hosts=(), cpu=True):
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
-    files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image),
+    files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
              HOME_DIR + "/" + META_FILE: json.dumps({"kind": site.kind, "image": image or image_for(site),
                                                      "port": int(site.port), "name": site.name}, sort_keys=True)}
     if site.kind == "static":
@@ -771,6 +787,8 @@ def probe_sh(account, site):
             + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>/dev/null)\"; " % UNIT
             + "echo \"mem=$(podman stats --no-stream --format '{{.MemUsage}}' %s 2>/dev/null | head -n 1)\"; " % UNIT
             + "echo \"disk_mb=$(du -sxm %s 2>/dev/null | cut -f1)\"; " % _q(SITE)
+            + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
+              '2>/dev/null && echo cpu_delegated=1; '
             + "[ -f %s ] && echo installed=1; true" % _q(HOME_DIR + "/" + META_FILE))
 
 
@@ -787,6 +805,7 @@ def parse_probe(out):
             "uid": int(kv["uid"]) if kv.get("uid", "").isdecimal() else None,
             "gid": int(kv["gid"]) if kv.get("gid", "").isdecimal() else None,
             "installed": kv.get("installed") == "1", "splice": kv.get("splice") == "1",
+            "cpu_delegated": kv.get("cpu_delegated") == "1",
             "os": kv.get("os", ""), "podman": kv.get("podman", "")}
 
 

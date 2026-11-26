@@ -5,6 +5,9 @@ What is scanned is what the add-on catalog names, read from the repository, neve
 workflow. panel/addon_images/catalog.json is the source of the catalog that tools/sign-catalog.sh
 signs and panels fetch, so a catalog change cannot merge without this scan passing:
   * every add-on whose entry has an `image` (`registry/name@sha256:...`), pulled by that digest;
+  * every image the catalog's `sites` section names (the websites' static, PHP, WordPress, wp-cli,
+    tunnel, object cache and Node images), pulled by digest, and each image the panel builds for the
+    websites (panel/website_images/<name>/Containerfile: the page cache's proxy), built from `sites`;
   * every add-on the panel builds on the host (panel/addon_images/<name>/Containerfile, an entry with
     a `base`), built here with the catalog's values passed as build arguments, as the panel passes
     them (BASE_IMAGE is `base`; <NAME>_TAG, <NAME>_SHA256 and <NAME>_COMMIT are `tag`, `sha256` and
@@ -31,6 +34,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 IMAGES_DIR = os.path.join(ROOT, "panel", "addon_images")
+WEBSITE_IMAGES_DIR = os.path.join(ROOT, "panel", "website_images")
 CATALOG = os.path.join(IMAGES_DIR, "catalog.json")
 TRIVY_IGNORE = os.path.join(ROOT, ".github", "trivyignore.yaml")
 HADOLINT_CONFIG = os.path.join(ROOT, ".github", "hadolint.yaml")
@@ -109,16 +113,16 @@ def _image_problems(addons, builds):
     return out
 
 
-def _build_plan(name, entry, images_dir, problems):
+def _build_plan(name, entry, images_dir, problems, offered=None):
     """[(ARG, value)] that build `name` takes from its catalog entry; what is wrong is appended to `problems`.
 
     Only the ARGs its Containerfile declares, as the panel passes them; every one must come from the catalog,
-    and none may have a default.
+    and none may have a default. `offered` is the catalog's [(ARG, value)] for it (an add-on's by default).
     """
     with open(os.path.join(images_dir, name, "Containerfile"), encoding="utf-8") as fh:
         text = fh.read()
     declared = set(DECLARED_RE.findall(text))
-    args = [(n, v) for n, v in build_args(name, entry) if n in declared]
+    args = [(n, v) for n, v in (build_args(name, entry) if offered is None else offered) if n in declared]
     if not declared:
         problems.append("%s: its Containerfile declares no ARG to take the catalog's values" % name)
     problems.extend("%s: ARG %s has a default (%s); its value must come from the catalog alone" % (name, n, v)
@@ -127,8 +131,53 @@ def _build_plan(name, entry, images_dir, problems):
     return args
 
 
-def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR):
-    """{"upstream": {name: image}, "builds": {name: [(ARG, value)]}, "problems": [text]} for the tree as it is."""
+def read_sites(path=CATALOG):
+    """The catalog source's `sites` section, or {} when it has none."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            obj = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    sites = obj.get("sites") if isinstance(obj, dict) else None
+    return sites if isinstance(sites, dict) else {}
+
+
+def sites_images(sites):
+    """{label: image} of every image the `sites` section names, as the websites pull them."""
+    out = {"sites-static": (sites.get("static") or {}).get("image"), "sites-wpcli": (sites.get("wpcli") or {}).get("image"),
+           "sites-object-cache": (sites.get("object_cache") or {}).get("image")}
+    out.update({"sites-php-%s" % v: e.get("image") for v, e in (sites.get("php") or {}).items()})
+    out.update({"sites-wordpress-php%s" % v: e.get("image")
+                for v, e in ((sites.get("wordpress") or {}).get("php") or {}).items()})
+    out.update({"sites-tunnel-%s" % n: e.get("image") for n, e in (sites.get("tunnel") or {}).items()})
+    out.update({"sites-%s-%s" % (r, v): e.get("image") for r, rt in (sites.get("runtimes") or {}).items()
+                for v, e in (rt.get("versions") or {}).items()})
+    return {k: v for k, v in sorted(out.items()) if isinstance(v, str)}
+
+
+def site_build_args(name, sites):
+    """[(ARG, value)] a websites build takes from `sites` (the page cache's proxy: caddy-cache)."""
+    c = (sites.get("caddy_cache") or {}) if name == "caddy-cache" else {}
+    keys = (("BUILDER_IMAGE", "builder"), ("BASE_IMAGE", "base"), ("CADDY_VERSION", "caddy"),
+            ("CACHE_MODULE", "module"), ("CACHE_VERSION", "version"))
+    return [(arg, c[k]) for arg, k in keys if isinstance(c.get(k), str)]
+
+
+def sites_plan(catalog_path, images_dir, problems):
+    """{"upstream": {label: image}, "builds": {name: [(ARG, value)]}} of the websites; problems appended."""
+    sites = read_sites(catalog_path)
+    if not sites:
+        return {"upstream": {}, "builds": {}}
+    up = sites_images(sites)
+    problems.extend("%s: image %s is not pinned by digest" % (k, v) for k, v in up.items() if not PINNED_RE.match(v))
+    builds = {b: _build_plan(b, {}, images_dir, problems, site_build_args(b, sites)) for b in build_dirs(images_dir)}
+    problems.extend("%s: base %s is not pinned by digest" % (b, v) for b, args in builds.items() for n, v in args
+                    if n.endswith("_IMAGE") and not PINNED_RE.match(v))
+    return {"upstream": up, "builds": builds}
+
+
+def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR, website_dir=WEBSITE_IMAGES_DIR):
+    """{"upstream": {name: image}, "builds": {name: [(ARG, value)]}, "sites": {upstream, builds}, "problems": [text]}."""
     addons, problem = read_catalog(catalog_path)
     builds = build_dirs(images_dir)
     problems = [problem] if problem else _image_problems(addons, builds)
@@ -136,7 +185,7 @@ def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR):
     up = upstream_images(addons)
     if not up and not builds and not problems:
         problems.append("nothing to scan: no pulled image in the catalog and no build folder")
-    return {"upstream": up, "builds": args, "problems": problems}
+    return {"upstream": up, "builds": args, "sites": sites_plan(catalog_path, website_dir, problems), "problems": problems}
 
 
 def trivy_argv(trivy_image, cache, tars, tar_name):
@@ -172,17 +221,31 @@ def _created(ref):
 
 def _images(p, work, results):
     """Pull or build each image and save it to `work`; [(label, tar name)] of those that got there."""
+    sites = p.get("sites") or {}
+    return (_pull_all(dict(p["upstream"], **(sites.get("upstream") or {})), work, results)
+            + _build_all(p["builds"], IMAGES_DIR, work, results)
+            + _build_all(sites.get("builds") or {}, WEBSITE_IMAGES_DIR, work, results))
+
+
+def _pull_all(upstream, work, results):
+    """Pull and save each image of {label: ref}; [(label, tar name)] of those saved."""
     saved = []
-    for name, ref in p["upstream"].items():
+    for name, ref in upstream.items():
         tar = "pull-%s.tar" % name
         if _run(["docker", "pull", "--quiet", ref]) or _run(["docker", "save", "-o", os.path.join(work, tar), ref]):
             results.append((name, "could not be pulled or saved"))
             continue
         print("%s: %s, created %s" % (name, ref, _created(ref)), flush=True)
         saved.append((name, tar))
-    for b, args in p["builds"].items():
+    return saved
+
+
+def _build_all(builds, images_dir, work, results):
+    """Build and save each {name: [(ARG, value)]} from `images_dir`/<name>; [(label, tar name)] of those saved."""
+    saved = []
+    for b, args in builds.items():
         tag, tar = "localhost/addon-scan-%s:ci" % b, "build-%s.tar" % b
-        d = os.path.join(IMAGES_DIR, b)
+        d = os.path.join(images_dir, b)
         if (_run(["docker", "build", "--quiet", "-t", tag, *build_arg_flags(args), "-f", os.path.join(d, "Containerfile"), d])
                 or _run(["docker", "save", "-o", os.path.join(work, tar), tag])):
             results.append((b + " (built)", "could not be built or saved"))
@@ -211,7 +274,9 @@ def _scan_images(p, trivy_image, results):
 
 def lint_targets(p):
     """[(label, path)] of every file hadolint lints: each build's Containerfile, then OTHER_DOCKERFILES."""
+    sites = (p.get("sites") or {}).get("builds") or {}
     return ([(b + " Containerfile", os.path.join(IMAGES_DIR, b, "Containerfile")) for b in p["builds"]]
+            + [("websites " + b + " Containerfile", os.path.join(WEBSITE_IMAGES_DIR, b, "Containerfile")) for b in sites]
             + [(rel, os.path.join(ROOT, *rel.split("/"))) for rel in OTHER_DOCKERFILES])
 
 
