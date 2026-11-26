@@ -292,8 +292,7 @@ _R30D_NESTED_C = re.compile(r"(?:^|[\s;&|(`/'\"])(?:(?:ba|da|z|k|mk)?sh|busybox\
                             + _R35D_C_TOKEN + _R31D_SH_OPTS + r"('[^']*'|\"[^\"]*\"|[^\s;&|]+)")
 # Builtins that take a variable NAME as a word (`export 'PATH=…'`, `read ${P}TH`): one handed a
 # quoted or built name may be setting PATH. printf names it only after -v.
-_R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray",
-                       "getopts", "unset")
+_R29D_NAME_BUILTINS = ("export", "declare", "typeset", "readonly", "local", "read", "mapfile", "readarray", "getopts", "unset")
 _R26D_SHIM_JUDGE = r'''
 _r26d_standin() {
   case "$1" in /*) _r26d_f=$1;; *) _r26d_f=$PWD/$1;; esac
