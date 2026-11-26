@@ -438,7 +438,7 @@ def _s6_secrets(st):
     good = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
         "exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": token}})
     row = _Proxy300.query.filter_by(remote_id=st.host.id).first()
-    audit = _Audit300.query.filter_by(action="website_proxy_settings").order_by(_Audit300.id.desc()).first()
+    audit = _Audit300.query.filter_by(action="remote_website_proxy_settings").order_by(_Audit300.id.desc()).first()
     eq("proxy settings: the tunnel token is stored encrypted, never echoed and never in the audit row",
        (good.status_code, row.exposure_mode, token in (row.tunnel_token_enc or ""), _dec300(row.tunnel_token_enc),
         token in good.get_data(as_text=True), token in (audit.detail or ""), _p9_json(good)["proxy"]["tunnel_token_set"]),

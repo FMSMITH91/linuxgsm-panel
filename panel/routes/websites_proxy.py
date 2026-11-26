@@ -52,10 +52,6 @@ def _remote():
     return remote
 
 
-def _audit(remote, action, detail, ok=True):
-    log_action(current_user, action, target=remote.name, detail=detail, success=bool(ok), remote=remote)
-
-
 def proxy_json(row):
     """The proxy row as the Settings card reads it: never the tunnel token, only whether one is set."""
     return {"exposure_mode": row.exposure_mode, "allow_cidrs": row.cidrs(), "allow_presets": row.presets(),
@@ -240,7 +236,8 @@ def register(app):
         ok, said = _w.host_call(_sw.proxy_install, remote)
         if ok:
             ok, said = _w.host_call(_sw.egress_guard, remote)
-        _audit(remote, "website_proxy_install", "web proxy and egress guard installed" if ok else "failed: %s" % i18n.tr(said), ok)
+        log_action(current_user, "remote_website_proxy_install", target=remote.name, remote=remote, success=bool(ok),
+                   detail="web proxy and egress guard installed" if ok else "failed: %s" % i18n.tr(said))
         return _w.done(ok, said or "The web proxy is installed.")
 
     @app.route("/websites/proxy/settings", methods=["POST"])
@@ -262,7 +259,8 @@ def register(app):
             setattr(row, key, value)
         db.session.commit()
         ok, said = _apply(remote, row)
-        _audit(remote, "website_proxy_settings", _detail(changes) + ("" if ok else "; not applied: %s" % i18n.tr(said)), ok)
+        log_action(current_user, "remote_website_proxy_settings", target=remote.name, remote=remote, success=bool(ok),
+                   detail=_detail(changes) + ("" if ok else "; not applied: %s" % i18n.tr(said)))
         return _w.done(ok, said or "Saved and applied.", proxy=proxy_json(row))
 
     @app.route("/websites/proxy/options", methods=["POST"])
@@ -280,5 +278,6 @@ def register(app):
         remote = _remote()
         row = _w.proxy_row(remote.id)
         ok, said = _apply(remote, row)
-        _audit(remote, "website_proxy_apply", "configuration applied" if ok else "failed: %s" % i18n.tr(said), ok)
+        log_action(current_user, "remote_website_proxy_apply", target=remote.name, remote=remote, success=bool(ok),
+                   detail="configuration applied" if ok else "failed: %s" % i18n.tr(said))
         return _w.done(ok, said or "Applied.")

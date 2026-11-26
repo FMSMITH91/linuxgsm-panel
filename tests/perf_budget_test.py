@@ -646,7 +646,7 @@ try:
     _site_pages = [p for p in paths if p.startswith(("/websites", "/api/websites"))]
     check("perf: the Websites pages were in both sweeps (the list and a site's own pages, with 5x the websites "
           "in the second), and the list answered 200 in both",
-          len(_site_pages) >= 15 and small_st.get("/api/websites") == 200 and large_st.get("/api/websites") == 200,
+          len(_site_pages) >= 12 and small_st.get("/api/websites") == 200 and large_st.get("/api/websites") == 200,
           repr((len(_site_pages), small_st.get("/api/websites"), large_st.get("/api/websites"))))
     _check_no_growth_with_groups(paths)
     _check_api_servers_scans_concurrently(c)

@@ -163,10 +163,14 @@ def _admin_parts(out, sites, admin):
 
 def list_answer(site_json):
     """GET /api/websites."""
+    from sqlalchemy.orm import selectinload
     from panel.routes.websites import is_admin
-    sites = _wa.visible_sites(current_user, VIEW_WEBSITES).all()
+    # A fixed number of queries whatever the number of sites: the domains in one, the sites the viewer
+    # administers in one (not one of each per site).
+    sites = _wa.visible_sites(current_user, VIEW_WEBSITES).options(selectinload(Website.domains)).all()
     admin = is_admin(current_user)
-    out = {"success": True, "sites": [site_json(s, is_admin(current_user, s)) for s in sites],
+    mine = {sid for (sid,) in _wa.visible_sites(current_user, MANAGE_WEBSITES).with_entities(Website.id)}
+    out = {"success": True, "sites": [site_json(s, s.id in mine) for s in sites],
            "can_create": _wa.can_create(current_user), "missing": _missing(admin), "quota": _quota(),
            "php_versions": php_versions(), "runtimes": runtime_versions(), "apps": _apps()}
     _admin_parts(out, sites, admin)
