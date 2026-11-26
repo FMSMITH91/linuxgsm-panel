@@ -69,7 +69,7 @@ _M = {k: "__GRS_%s__" % k for k in (
     "HOLDFAIL", "READY", "UP", "DOWN", "NOUNDO", "RUNNING", "BUSY",
     "RESTORED", "NOPART", "UPOFFSET", "UPSIZE", "UPREADY", "UPFAIL", "UPFORMAT", "UPSTORED", "KEEPLINK",
     "INODES", "ALIVE", "STAGING", "STAGEFAIL", "CRONFAIL", "LGSMBUSY", "SWITCHING",
-    "ROLLEDBACK", "ROLLBACKFAIL", "RECDONE", "RECUNDONE", "RECFAIL", "RECBUSY")}
+    "ROLLEDBACK", "ROLLBACKFAIL", "RECDONE", "RECUNDONE", "RECFAIL", "RECBUSY", "ASIDEKEPT")}
 
 # A decompression bomb's bound: what the members declare may not pass RATIO times the archive's own
 # size plus RATIO_SLACK. Game data packs at a few to one (worlds and assets are mostly compressed
@@ -499,6 +499,10 @@ def restore_script(user, selfname, name, t0, need, undo, busy_polls=_GRS_BUSY_PO
         '*) [ -f "$st.failed" ] || undo;; esac; %s; [ -f "$st" ] || rm -rf -- "$S"; rm -f -- "$nm"; %s; '
         % (_grs_put_cron(), _grs_putback_leftovers())) + [
         'if [ -z "$h" ]; then echo %s; exit 5; fi' % _M["NOARCHIVE"],
+        # An earlier run of this archive whose undo failed (ROLLBACKFAIL) left the server's own files in
+        # $O, which its answer named. The archive's time names the paths, so a retry would reuse $O and
+        # the staging step's rm would delete it; the stale $st.failed would also stop the trap undoing.
+        'if [ -f "$st.failed" ]; then echo "%s $O"; exit 5; fi' % _M["ASIDEKEPT"],
         'if [ ! -s "$B"/%s ]; then echo %s; exit 5; fi' % (_q(undo), _M["NOUNDO"]),
         "if %s; then echo %s; exit 4; fi" % (_wwr._wwr_tmux_up(selfname), _M["RUNNING"]),
         'sf=$(cd -P -- "$HR/serverfiles" 2>/dev/null && pwd -P && printf x) && sf=${sf%?x} || sf="$HR"',
@@ -630,6 +634,8 @@ _GRS_LATE_REFUSALS = _GRS_VET_REFUSALS + (
     ("CRONFAIL", "the game account's crontab could not be set aside for the switch-over"),
     ("LGSMBUSY", "a LinuxGSM command of the game account was still running two minutes after its crontab was set aside"),
     ("NOUNDO", "the pre-restore backup is not in the backup folder"),
+    ("ASIDEKEPT", ("an earlier restore of this archive could not be undone, and the server's own files it set aside "
+                   "are still in the restore's work folder: move them back or away first")),
     ("RUNNING", "the server was still running after LinuxGSM's stop"),
     ("BUSY", "a process of the game account still had files open in serverfiles a minute after the stop"),
 )

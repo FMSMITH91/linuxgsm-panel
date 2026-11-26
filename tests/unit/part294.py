@@ -8,6 +8,8 @@
    out and said, and a restore asked for while the backup dumps it is refused (409).
 3. A restore cut by a signal while it removes the aside copy leaves its state saying done, so the
    recovery that settles the lost answer reports the restore as completed, not "nothing was changed".
+4. A retry of an archive whose earlier restore could not be undone (ROLLBACKFAIL) is refused before the
+   staging step, which would have deleted the folder holding the server's own files.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -188,3 +190,41 @@ if _missing190:
 else:
     eq("game restore: a signal during the clean-up is settled as a completed restore", _restore_cut294(),
        (True, "world v1", "done", []))
+
+
+# ── 4. A retry after ROLLBACKFAIL keeps the aside folder ──────────────────────────────────────────
+def _retry_after_fail294(failed):
+    """(restore_outcome, aside file kept, live file unchanged) for a retry with or without $st.failed."""
+    sb = _Sb190()
+    beat = _grs294.HEARTBEAT
+    _grs294.HEARTBEAT = 1
+    try:
+        ready = sb.vet()[1][1]
+        with open(os.path.join(sb.bdir, _UNDO190), "wb") as f:
+            f.write(b"undo")
+        wd = os.path.join(sb.home, _grs294.WORK_DIR)
+        aside = os.path.join(wd, "panel-restore-old-%d" % ready["t0"])
+        os.makedirs(aside)
+        with open(os.path.join(aside, "own.txt"), "w") as f:
+            f.write("the server's own files")
+        if failed:
+            open(os.path.join(wd, "panel-restore-state-%d.failed" % ready["t0"]), "w").close()
+        rs = _grs294.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], _UNDO190, busy_polls=1,
+                                    members=ready["members"])
+        out, rc = sb.run(rs)
+        return (_grs294.restore_outcome(out, rc)[0], os.path.isfile(os.path.join(aside, "own.txt")),
+                sb.read("serverfiles/world/region/r.0.mca"))
+    finally:
+        _grs294.HEARTBEAT = beat
+        sb.gone()
+
+
+if _missing190:
+    skip("game restore: a retry after a failed undo keeps the aside folder", "missing tools: %s" % _missing190)
+else:
+    _st294, _kept294, _live294 = _retry_after_fail294(failed=True)
+    check("game restore: a retry after a failed undo is refused and keeps the folder holding the server's own files",
+          (_st294, _kept294, _live294) == ("refused", True, "world v2"), (_st294, _kept294, _live294))
+    _st294, _kept294, _live294 = _retry_after_fail294(failed=False)
+    check("game restore (control): with no failed undo on record the same run restores the archive",
+          (_st294, _live294) == ("done", "world v1"), (_st294, _kept294, _live294))

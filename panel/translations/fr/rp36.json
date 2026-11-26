@@ -1,3 +1,4 @@
 {
-  "{name} is being dumped, restored or deleted right now.": "{name} est en cours de vidage, de restauration ou de suppression."
+  "{name} is being dumped, restored or deleted right now.": "{name} est en cours de vidage, de restauration ou de suppression.",
+  "an earlier restore of this archive could not be undone, and the server's own files it set aside are still in the restore's work folder: move them back or away first": "une restauration précédente de cette archive n'a pas pu être annulée, et les fichiers propres du serveur qu'elle a mis de côté sont toujours dans le dossier de travail de la restauration : remettez-les en place ou déplacez-les d'abord"
 }
