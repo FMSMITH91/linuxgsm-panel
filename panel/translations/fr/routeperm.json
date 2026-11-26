@@ -1,3 +1,6 @@
 {
-  "Only a superadmin can re-trust a host key: the next connection trusts whatever machine answers at this address and signs in to it with the host's saved credential.": "Seul un superadministrateur peut refaire confiance à la clé d'un hôte : la prochaine connexion fait confiance à la machine qui répond à cette adresse, quelle qu'elle soit, et s'y connecte avec l'identifiant enregistré de l'hôte."
+  "Only a superadmin can re-trust a host key: the next connection trusts whatever machine answers at this address and signs in to it with the host's saved credential.": "Seul un superadministrateur peut refaire confiance à la clé d'un hôte : la prochaine connexion fait confiance à la machine qui répond à cette adresse, quelle qu'elle soit, et s'y connecte avec l'identifiant enregistré de l'hôte.",
+  "Adding, changing, deleting or running a scheduled task also needs the \"Change game server files\" permission, because a task can run any command as this server's account.": "Ajouter, modifier, supprimer ou exécuter une tâche planifiée nécessite aussi la permission « Modifier les fichiers du serveur de jeu », car une tâche peut exécuter n'importe quelle commande avec le compte de ce serveur.",
+  "This task's output needs the \"View game server files\" permission.": "La sortie de cette tâche nécessite la permission « Voir les fichiers du serveur de jeu ».",
+  "Couldn't read the scheduled tasks to check that one, so it was not run.": "Impossible de lire les tâches planifiées pour vérifier celle-ci : elle n'a donc pas été exécutée."
 }

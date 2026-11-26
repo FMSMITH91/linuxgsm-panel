@@ -1535,10 +1535,14 @@ function loadCron(){
     var loading=document.getElementById('cron-loading');
     if(d.error){ loading.style.display=''; loading.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     var tb=document.getElementById('cron-tbody'), rows='';
+    // Without Edit files the server refuses every task write (the card says why above its form),
+    // so the rows carry no Run, Edit or Delete buttons that could only fail.
+    var cronCard=document.getElementById('cron-card');
+    var canWrite=!cronCard || cronCard.getAttribute('data-cron-edit')!=='0';
     (d.jobs||[]).forEach(function(j){
       var runBtn = '<button class="btn btn-sm btn-link p-0 me-2" data-cron-run title="Run now"><i class="bi bi-play-circle"></i></button>';
       // Every task is editable + deletable now, including panel-installed ones.
-      var actions = runBtn
+      var actions = !canWrite ? '' : runBtn
         + '<button class="btn btn-sm btn-link p-0 me-2" data-cron-edit title="Edit"><i class="bi bi-pencil"></i></button>'
         + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>';
       // Non-blocking label so you can tell what a panel-installed line is (still fully editable).

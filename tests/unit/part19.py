@@ -141,7 +141,8 @@ def _p18b_write_gate():
                  "delete_path", "upload_file"):
         _p9_patch(_sf18, _n18, _wg18_rec(_n18))
     _p9_patch_sm("delete_cron_job", _wg18_rec("delete_cron_job"))
-    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
+    # Run now runs only a line the crontab holds: the one _wg18_all names is listed.
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [{"raw": "x"}])
     _sh18._ACCOUNT_VERDICTS.clear()
     _wg18_reply["out"] = ("ACCT adminacct 1000 adminacct adm sudo\nACCT plaingame 1001 plaingame\n"
                           "LGSM_ACCT_PROBE_DONE\n")

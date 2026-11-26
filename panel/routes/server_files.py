@@ -1167,7 +1167,53 @@ def _cron_listing(app, gs):
             "there being none.")})
     if not grs_restore_running(gs.id):      # its crontab is set aside: never read the empty one as Off
         _sync_toggles_from_cron(gs, jobs)
-    return jsonify({"jobs": _sch.annotate(gs, jobs)})
+    jobs = _sch.annotate(gs, jobs)
+    # A failed task's `error` is the tail of its output: whatever the command printed, a config's
+    # passwords included. Reading what the account's files hold is VIEW_FILES, so without it the
+    # card says the output is withheld (the Failed badge and time still show).
+    if not _fpm_can_view():
+        for job in jobs:
+            if job.get("error"):
+                job["error"] = i18n.tr(CRON_OUTPUT_NEEDS_VIEW_FILES)
+    return jsonify({"jobs": jobs})
+
+
+# A scheduled task runs ANY command as the game account (`bash -c` through the recorder), so the
+# four Scheduled Tasks writes need EDIT_FILES as well as MANAGE_SERVERS: EDIT_FILES is the panel's
+# bar for changing what that account runs, and MANAGE_SERVERS alone (schedule, alerts, mods) would
+# otherwise read every secret in its configs and plant a login key. The card prints the same sentence.
+CRON_NEEDS_EDIT_FILES = ("Adding, changing, deleting or running a scheduled task also needs the \"Change game "
+                         "server files\" permission, because a task can run any command as this server's account.")
+CRON_OUTPUT_NEEDS_VIEW_FILES = "This task's output needs the \"View game server files\" permission."
+
+
+def _cron_write_refused():
+    """The 403 for a Scheduled Tasks write by someone without MANAGE_SERVERS and EDIT_FILES, else None."""
+    if not _can_manage_files():
+        return jsonify({"error": "Permission denied"}), 403
+    if not _fpm_can_edit():
+        return jsonify({"success": False, "error": "Permission denied",
+                        "message": i18n.tr(CRON_NEEDS_EDIT_FILES)}), 403
+    return None
+
+
+def _cron_line_refused(gs, raw):
+    """A refusal when `raw` is not a line read back from the account's crontab now, else None.
+
+    Run now runs the command taken from `raw`; a line the request typed, never scheduled, would run
+    as the account without ever being in the crontab the card lists.
+    """
+    jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
+    if jobs is None:
+        why = i18n.tr("Couldn't read the scheduled tasks to check that one, so it was not run.")
+    elif not raw.strip() or raw.strip() not in {(j.get("raw") or "").strip() for j in jobs}:
+        why = i18n.tr("That task has changed since the page loaded — reload Scheduled Tasks and try again.")
+    else:
+        return None
+    # Audited: a refused Run now is an attempt to run a command as the account.
+    log_action(current_user, "cron_run_now", target=gs.name, success=False,
+               detail="not run: not a task in the crontab", server=gs)
+    return jsonify({"success": False, "message": why})
 
 
 def _apply_gmod_selection(remote, gmod_user, games):
@@ -2438,6 +2484,8 @@ def _register_cron_jobs(app):
                 return _cron_listing(app, gs)
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
+        if (no_edit := _cron_write_refused()) is not None:
+            return no_edit
         data = _json_body()
         # The write refusals first, as every cron write asks them; then a Warn players first chain,
         # which the panel composes into the command (panel/services/schedule_chains.py).
@@ -2465,8 +2513,8 @@ def _register_cron_jobs(app):
     @server_access_required
     def api_server_cron_update(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
-            return jsonify({"error": "Permission denied"}), 403
+        if (no_edit := _cron_write_refused()) is not None:
+            return no_edit
         return _r28b_cron_update(gs, _json_body())
 
 
@@ -2524,8 +2572,8 @@ def _register_cron_actions(app):
     @server_access_required
     def api_server_cron_delete(server_id):
         gs = get_game(server_id)
-        if not _can_manage_files():
-            return jsonify({"error": "Permission denied"}), 403
+        if (no_edit := _cron_write_refused()) is not None:
+            return no_edit
         data = _json_body()
         refused = _r36c_reboot_refused(gs, "cron_delete") or _write_refused(gs, "cron_delete")
         if refused is not None:
@@ -2549,14 +2597,16 @@ def _register_cron_actions(app):
     def api_server_cron_run(server_id):
         """Run a scheduled task on demand (records its exit code + output so Last-run updates)."""
         gs = get_game(server_id)
-        if not _can_manage_files():
-            return jsonify({"error": "Permission denied"}), 403
+        if (no_edit := _cron_write_refused()) is not None:
+            return no_edit
         raw = _json_str(_json_body(), "raw")        # as cron_add reads its fields
         # Registered while it starts, from before the reboot refusal (panel_state.r36j_route_job). The
         # job then runs detached on the host; from there a reboot's probe sees its LinuxGSM command.
         with r36j_route_job(gs.id, "cron"):
             refused = (_r36c_reboot_refused(gs, "cron_run_now") or _r39a_wipe_refused(gs, "cron_run_now")
                        or _write_refused(gs, "cron_run_now"))
+            if refused is None:
+                refused = _cron_line_refused(gs, raw)
             if refused is not None:
                 return refused
             try:

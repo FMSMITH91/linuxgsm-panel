@@ -121,3 +121,87 @@ check("retrust host key (control): a superadmin's host page keeps the working Re
       _ap290[0] == 200 and 'data-action="retrustHostKey"' in _ap290[1] and "hostkey-why" not in _ap290[1],
       repr(_ap290[0]))
 eq("part290 retrust: nothing reached a real transport", _hk290.get("trips"), 0)
+
+
+# ── 2. Scheduled Tasks: writes need EDIT_FILES, job output needs VIEW_FILES, run-now a listed line ──
+_RAW290 = "0 5 * * * /home/csgoserver/backup.sh"
+_JOBS290 = [{"raw": _RAW290, "schedule": "0 5 * * *", "command": "/home/csgoserver/backup.sh", "managed": False,
+             "last_run": 1700000000, "ok": False, "error": "rconpassword=p290-hunter2"}]
+_cron290 = {}
+_mgr290 = _ed290 = None
+try:
+    _p9_arm(who="part290")
+    _trips290 = len(_P9_TRIPPED)
+    _calls290 = []
+    _p9_quiet_lookups()
+    _p9_patch(_sh290, "privileged_accounts", lambda remote, users: {})
+    _p9_patch(_sf290, "_sync_toggles_from_cron", lambda gs, jobs: None)
+    _p9_patch_sm("upgrade_managed_cron_tracking", lambda *a, **k: None)
+    _p9_patch_sm("list_cron_jobs", lambda remote, user, lgsm: [dict(j) for j in _JOBS290])
+    for _n290 in ("add_cron_job", "update_cron_job", "run_cron_job_now"):
+        _p9_patch(_sf290, _n290, (lambda n: lambda *a, **k: _calls290.append((n, a[2])) or (True, "Started"))(_n290))
+    _p9_patch_sm("delete_cron_job", lambda *a, **k: _calls290.append(("delete_cron_job", a[2])) or (True, ""))
+    _p9_patch(_core290, "run_command", lambda *a, **k: ("", "", 1))
+    _mgr290 = _user290("p290_sched", [_auth290.MANAGE_SERVERS, _auth290.VIEW_SERVERS], hosts=[P9_HOST])
+    _ed290 = _user290("p290_files", [_auth290.MANAGE_SERVERS, _auth290.VIEW_SERVERS, _auth290.EDIT_FILES,
+                                     _auth290.VIEW_FILES], hosts=[P9_HOST])
+    _M290, _E290 = _p9_client(_mgr290[0]), _p9_client(_ed290[0])
+    _u290 = "/api/server/%d/cron" % P9_GS
+    _bodies290 = (("add", "", {"schedule": "* * * * *", "command": "cat lgsm/config-lgsm/*/*.cfg"}),
+                  ("update", "/update", {"raw": _RAW290, "schedule": "* * * * *", "command": "id"}),
+                  ("delete", "/delete", {"raw": _RAW290}),
+                  ("run", "/run", {"raw": _RAW290}))
+    for _k290, _sfx290, _b290 in _bodies290:
+        _r = _M290.post(_u290 + _sfx290, json=_b290)
+        _cron290["mgr_" + _k290] = (_r.status_code, _j290(_r).get("message"))
+    _cron290["mgr_calls"] = list(_calls290)
+    _cron290["mgr_list"] = _j290(_M290.get(_u290)).get("jobs")
+    _cron290["ed_list"] = _j290(_E290.get(_u290)).get("jobs")
+    _r = _E290.post(_u290 + "/run", json={"raw": "0 5 * * * id; cat lgsm/config-lgsm/*/*.cfg"})
+    _cron290["ed_run_typed"] = (_r.status_code, _j290(_r), list(_calls290))
+    _r = _E290.post(_u290 + "/run", json={"raw": _RAW290})
+    _cron290["ed_run_listed"] = (_r.status_code, _j290(_r).get("success"), list(_calls290))
+    del _calls290[:]
+    _r = _E290.post(_u290, json={"schedule": "0 6 * * *", "command": "/home/csgoserver/backup.sh"})
+    _cron290["ed_add"] = (_r.status_code, _j290(_r).get("success"), list(_calls290))
+    for _k290, _c290 in (("mgr_page", _M290), ("ed_page", _E290)):
+        _pg290 = _c290.get("/server/%d/files" % P9_GS)
+        _cron290[_k290] = (_pg290.status_code, _pg290.get_data(as_text=True))
+    _cron290["trips"] = len(_P9_TRIPPED) - _trips290
+finally:
+    _p9_restore_all()
+    for _du290 in (_mgr290, _ed290):
+        if _du290:
+            _drop290(*_du290)
+eq("scheduled tasks: MANAGE_SERVERS without EDIT_FILES may not add, change, delete or run a task "
+   "(403, the reason given), and no crontab writer or runner is called",
+   {k: _cron290.get("mgr_" + k) for k in ("add", "update", "delete", "run", "calls")},
+   {"add": (403, _sf290.CRON_NEEDS_EDIT_FILES), "update": (403, _sf290.CRON_NEEDS_EDIT_FILES),
+    "delete": (403, _sf290.CRON_NEEDS_EDIT_FILES), "run": (403, _sf290.CRON_NEEDS_EDIT_FILES), "calls": []})
+_ml290 = _cron290.get("mgr_list") or [{}]
+_el290 = _cron290.get("ed_list") or [{}]
+check("scheduled tasks: without VIEW_FILES the listing withholds a failed task's output (the Failed state stays)",
+      _ml290[0].get("error") == _sf290.CRON_OUTPUT_NEEDS_VIEW_FILES and _ml290[0].get("ok") is False
+      and "p290-hunter2" not in repr(_ml290), repr(_ml290))
+check("scheduled tasks (control): with VIEW_FILES the listing shows the task's output as recorded",
+      _el290[0].get("error") == "rconpassword=p290-hunter2", repr(_el290))
+_rt290 = _cron290.get("ed_run_typed", (None, {}, None))
+eq("scheduled tasks: Run now refuses a line that is not in the account's crontab, and runs nothing",
+   (_rt290[1].get("success"), _rt290[2]), (False, []))
+check("scheduled tasks: ...and says the task changed since the page loaded",
+      "changed since the page loaded" in (_rt290[1].get("message") or ""), repr(_rt290[1]))
+eq("scheduled tasks (control): Run now runs a line read back from the crontab, for an EDIT_FILES holder",
+   _cron290.get("ed_run_listed"), (200, True, [("run_cron_job_now", _RAW290)]))
+eq("scheduled tasks (control): an EDIT_FILES holder still adds a task",
+   _cron290.get("ed_add"), (200, True, [("add_cron_job", "0 6 * * *")]))
+_mp290 = _cron290.get("mgr_page", (None, ""))
+_ep290 = _cron290.get("ed_page", (None, ""))
+check("scheduled tasks: without EDIT_FILES the card keeps its Add task button, disabled, with the sentence "
+      "saying why, and tells the script not to offer row actions",
+      _mp290[0] == 200 and 'id="cron-ro"' in _mp290[1] and 'data-cron-edit="0"' in _mp290[1]
+      and 'id="cron-submit" disabled aria-describedby="cron-ro"' in _mp290[1]
+      and _sf290.CRON_NEEDS_EDIT_FILES in _mp290[1], repr(_mp290[0]))
+check("scheduled tasks (control): with EDIT_FILES the card's form is live and carries no such sentence",
+      _ep290[0] == 200 and 'id="cron-ro"' not in _ep290[1] and 'data-cron-edit="1"' in _ep290[1]
+      and 'id="cron-submit">' in _ep290[1], repr(_ep290[0]))
+eq("part290 scheduled tasks: nothing reached a real transport", _cron290.get("trips"), 0)
