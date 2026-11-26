@@ -85,9 +85,6 @@ def _bad299(path, value):
     return doc
 
 
-_ZERO299 = "0" * 64
-
-
 def _s299_refusals():
     caddy_url = _SITES299["caddy"]["assets"]["amd64"]["url"]
     cases = {
