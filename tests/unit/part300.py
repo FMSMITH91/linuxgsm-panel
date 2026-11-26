@@ -131,7 +131,7 @@ def _stub_host300():
                  "php_apply", "php_effective", "cache_purge", "app_build", "env_apply", "app_install_step",
                  "app_undo_step"):
         _p9_patch(_sw300, name, rec(name))
-    _p9_patch(_wp300, "render", lambda sites, proxy=None: "# %d sites" % len(sites))
+    _p9_patch(_wp300, "render", lambda sites, proxy=None, opts=None: "# %d sites" % len(sites))
     _p9_patch(_wp300, "rules_problems", lambda rules: [])
     _p9_patch(_svc300, "php_ini_problems", lambda text: [] if "extension" not in text else ["no extension="])
     for mod in (_wfr300, _wbk300):

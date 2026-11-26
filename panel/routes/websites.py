@@ -172,10 +172,13 @@ def proxy_row(remote_id):
 def reconcile_proxy(remote):
     """Bring the host's proxy and ports in line with its online sites: (ok, sentence).
 
-    With a site online: ports first (opened for the exposure mode), then the new proxy configuration.
-    With none: the proxy stopped first, then the ports closed. A failure between the two leaves the
-    safe state (a port open and nothing listening, or nothing listening at all) for the next try.
+    With a site online: ports first (opened for the exposure mode), then the new proxy configuration,
+    rendered with the saved global settings (websites_view.proxy_options: certificates, TLS, HSTS, the
+    page cache) and applied with its certificate files, the proxy left running AND enabled. With none:
+    the proxy stopped first, then the ports closed. A failure between the two leaves the safe state (a
+    port open and nothing listening, or nothing listening at all) for the next try.
     """
+    from panel.routes.websites_view import proxy_options
     from panel.services import websites_proxy as _wp
     proxy = proxy_row(remote.id)
     online = Website.query.filter_by(remote_id=remote.id, enabled=True).order_by(Website.id).all()
@@ -183,11 +186,11 @@ def reconcile_proxy(remote):
         ok, said = host_call(_sw.proxy_stop, remote)
         return host_call(_sw.ports_apply, remote, proxy, False) if ok else (ok, said)
     try:
-        text = _wp.render(online, proxy)
+        text = _wp.render(online, proxy, proxy_options())
     except NotImplementedError:
         return False, S_NOT_READY
     ok, said = host_call(_sw.ports_apply, remote, proxy, True)
-    return host_call(_sw.proxy_apply, remote, text) if ok else (ok, said)
+    return host_call(_sw.proxy_apply, remote, text, online, proxy, True) if ok else (ok, said)
 
 
 # ── list and pages ──────────────────────────────────────────────────────────────────────────────

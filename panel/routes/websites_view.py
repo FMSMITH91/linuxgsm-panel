@@ -21,7 +21,9 @@ from panel.services import websites_access as _wa
 # note (HTTP Strict Transport Security Cheat Sheet, "Examples": max-age=63072000; Transport Layer
 # Security Cheat Sheet: TLS 1.3, 1.2 where clients need it; Multifactor Authentication Cheat Sheet).
 OPTIONS = {"hsts_max_age": (63072000, 0, 126144000), "tls_min": ("1.2", None, None), "acme_contact": ("", None, None),
-           "acme_staging": (False, None, None), "access_log_default": (False, None, None),
+           "acme_staging": (False, None, None), "local_certs": (False, None, None),
+           "hsts_subdomains": (False, None, None), "hsts_preload": (False, None, None),
+           "cache_build": (False, None, None), "access_log_default": (False, None, None),
            "access_log_days": (7, 1, 90), "max_sites": (3, 1, 100), "require_2fa": (True, None, None),
            "mem_mb": (512, 64, 65536), "cpu_milli": (1000, 100, 64000), "pids": (256, 32, 32768),
            "disk_mb": (2048, 64, 1048576), "max_body_mb": (64, 1, 4096)}
@@ -90,6 +92,19 @@ def options():
     """The global website settings in force, each checked against its type and range (else its default)."""
     cfg = load_config()
     return {key: _option_or_default(key, cfg.get(config_key(key), OPTIONS[key][0])) for key in OPTIONS}
+
+
+# The saved options the proxy's configuration reads (websites_proxy.options), by websites_proxy's names:
+# the Settings card's certificate contact is the proxy's ACME email.
+PROXY_OPTION_NAMES = {"hsts_max_age": "hsts_max_age", "hsts_subdomains": "hsts_subdomains",
+                      "hsts_preload": "hsts_preload", "tls_min": "tls_min", "acme_contact": "acme_email", "acme_staging": "acme_staging",
+                      "local_certs": "local_certs", "cache_build": "cache_build", "access_log_days": "access_log_days"}
+
+
+def proxy_options():
+    """The saved global settings as websites_proxy.render's `opts` (websites_proxy.DEFAULTS' keys)."""
+    got = options()
+    return {proxy_key: got[key] for key, proxy_key in PROXY_OPTION_NAMES.items()}
 
 
 def _proxy_json(remote, row):

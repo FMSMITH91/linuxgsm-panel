@@ -6,6 +6,8 @@
 2. Starting it: every apply enables the proxy and restarts it (a running proxy loads the new file), and
    success is said only when the unit stays running; otherwise the previous file is put back and the journal's
    last error is said in plain words. A refusal never shows the proxy's raw JSON (that goes to the log).
+3. The saved global options reach the configuration through the proxy routes (reconcile_proxy), with the
+   sites' certificate files and the proxy left enabled.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -294,5 +296,107 @@ def _s2_plain_errors():
         any('"level":"error"' in m for m in logged)), (False, True, True))
 
 
+# ── 3. the saved options reach the configuration (route) ────────────────────────────────────────
+class _Client302:
+    def __init__(self, uid):
+        self.c = _p9_client(uid)
+
+    def post(self, *a, **k):
+        _g302.pop("_login_user", None)
+        return self.c.post(*a, **k)
+
+    def get(self, *a, **k):
+        _g302.pop("_login_user", None)
+        return self.c.get(*a, **k)
+
+
+def _rows302():
+    r = _Remote302(name="p302-host", host="198.51.100.62", port=22, username="u", auth_method="key",
+                   auth_credential="", is_local=False, public_ip="198.51.100.62")
+    su = _User302(username="p302-super", password_hash=os.urandom(8).hex(), is_superadmin=True, is_active=True)
+    _db302.session.add_all([r, su])
+    _db302.session.flush()
+    s = _Site302(remote_id=r.id, name="p302-site", kind="static", state="running", enabled=True,
+                 proxy_secret=_cfg302.encrypt_secret(_TOKEN302))
+    _db302.session.add(s)
+    _db302.session.flush()
+    s.account, s.port = "ws%d" % s.id, 20000 + s.id % 900
+    _db302.session.add(_Dom302(website_id=s.id, domain="p302.example.org", is_primary=True,
+                               verified_at=_dt302(2026, 1, 1)))
+    _db302.session.commit()
+    return r, su, s
+
+
+def _s3_options(st):
+    got = {}
+
+    def apply(remote, text, sites=(), proxy=None, start_it=False):
+        got.update(text=text, sites=[x.id for x in sites], proxy=proxy is not None, start_it=start_it)
+        return True, _sw302.OK_APPLIED
+    _p9_patch(_sw302, "proxy_apply", apply)
+    _cfg302.update_config(lambda cfg: cfg.update(websites_acme_contact="ops@example.org", websites_acme_staging=True,
+                                                 websites_tls_min="1.3", websites_hsts_max_age=300,
+                                                 websites_hsts_subdomains=True))
+    try:
+        r = _Client302(st.su.id).post("/websites/proxy/apply", json={"host_id": st.host.id})
+    finally:
+        _cfg302.update_config(lambda cfg: [cfg.pop(k, None) for k in list(cfg) if k.startswith("websites_")])
+    lines = [ln.strip() for ln in got.get("text", "").split("\n")]
+    eq("proxy apply (route): the saved options reach the configuration: the certificate contact as the ACME email, "
+       "Let's Encrypt's staging CA, TLS 1.3 only, the HSTS age and includeSubDomains",
+       (r.status_code, [ln for ln in lines if ln.startswith(("email ", "acme_ca ", "protocols tls",
+                                                             "Strict-Transport-Security"))]),
+       (200, ['email "ops@example.org"', "acme_ca " + _wp302.LE_STAGING, "protocols tls1.3",
+              'Strict-Transport-Security "max-age=300; includeSubDomains"']))
+    eq("proxy apply (route): the online sites go with the configuration (their certificate files) and the proxy is "
+       "started and enabled, not only reloaded",
+       (got.get("sites"), got.get("proxy"), got.get("start_it")), ([st.site.id], True, True))
+    _s3_local(st, got)
+
+
+def _s3_local(st, got):
+    _cfg302.update_config(lambda cfg: cfg.update(websites_local_certs=True))
+    try:
+        _Client302(st.su.id).post("/websites/proxy/apply", json={"host_id": st.host.id})
+    finally:
+        _cfg302.update_config(lambda cfg: [cfg.pop(k, None) for k in list(cfg) if k.startswith("websites_")])
+    lines = [ln.strip() for ln in got.get("text", "").split("\n")]
+    eq("proxy apply (route): the local CA when saved, and with no option saved the defaults (control)",
+       ("local_certs" in lines, "protocols tls1.2 tls1.3" in lines, any(ln.startswith("email ") for ln in lines)),
+       (True, True, False))
+
+
+def _state302():
+    host, su, site = _rows302()
+    return _NS302(host=host, su=su, site=site)
+
+
+def _cleanup302(st):
+    _db302.session.rollback()
+    for row in (_Dom302.query.filter_by(website_id=st.site.id).all()
+                + _Proxy302.query.filter_by(remote_id=st.host.id).all()):
+        _db302.session.delete(row)
+    for model, i in ((_Site302, st.site.id), (_User302, st.su.id), (_Remote302, st.host.id)):
+        row = _db302.session.get(model, i)
+        if row is not None:
+            _db302.session.delete(row)
+    _db302.session.commit()
+
+
 for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors):
     _step302()
+
+_trips302 = len(_P9_TRIPPED)
+with _p9.app_context():
+    _st302 = None
+    try:
+        _p9_arm(who="part302")
+        _p9_patch(_sw302, "ports_apply", lambda *a, **k: (True, _sw302.OK_PORTS))
+        _p9_patch(_sw302, "tunnel_apply", lambda *a, **k: (True, _sw302.OK_TUNNEL))
+        _st302 = _state302()
+        _s3_options(_st302)
+        eq("part302: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips302:], [])
+    finally:
+        _p9_restore_all()
+        if _st302 is not None:
+            _cleanup302(_st302)
