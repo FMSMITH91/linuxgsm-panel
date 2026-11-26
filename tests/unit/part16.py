@@ -624,11 +624,15 @@ try:
     check("audit log: an ordinary entry is stored exactly as given (control)",
           [(a.target, a.detail) for a in _audits("p16_short")] == [("t", "an ordinary detail")])
     _p9_patch(_sf16, "send_console_command", lambda *a, **k: ("", "no tmux session", 1))
+    # Its own row, counted (review 1124): the newest send_command row of any kind was read, so part12's
+    # short rows ("status") satisfied the length bound with the megabyte command never audited.
+    _n_sc16 = len(_audits("send_command"))
     _r = _D16.post("/api/command/%d" % P9_GS, json={"command": "say " + "z" * 1000000})
     _sc16 = (_audits("send_command") or [NS(detail="")])[-1]
     check("audit log: a megabyte console command that failed to send is stored capped",
-          _r.status_code == 200 and 0 < len(_sc16.detail) <= _DETAIL_MAX16 + 32,
-          "%d, %d chars" % (_r.status_code, len(_sc16.detail)))
+          _r.status_code == 200 and len(_audits("send_command")) == _n_sc16 + 1
+          and _sc16.detail.startswith("say z") and 0 < len(_sc16.detail) <= _DETAIL_MAX16 + 32,
+          "%d, %d rows before, %d chars" % (_r.status_code, _n_sc16, len(_sc16.detail)))
 
     # ════════════════════════════════════════════════════════════════════════════════════════
     # 745379008 — the binding change audited as a success whatever its side effects did
