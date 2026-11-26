@@ -750,6 +750,9 @@ def _release_names267():
     try:
         labels = [_so267.version_for_commit(c) for c in (tooling2, tooling, fourth, third)]
         installer = _installer_label267(repo)
+        # The cat-file counter sees a read (review 1124): "no log" and "unreadable log" both count 0, the
+        # answer _skewed_walk267 expects, so a counter that stopped counting passed it testing nothing.
+        counted = _release_name_walk267(repo, "2026.11.19")
         nextday = _commit267(repo, "tooling the next day", _DAY267 + 86400 + 60)
         unmarked = (_so267.version_for_commit(nextday), _installer_label267(repo))
         # Marked tooling-only, so both readers walk past it toward the day before. Three things keep
@@ -765,6 +768,8 @@ def _release_names267():
        "before it on the same day (2026.11.19.4, the first one met), as the update card, What's new and the bots read "
        "it; the named commits keep their own", labels, ["2026.11.19.4", "2026.11.19.4", "2026.11.19.4", "2026.11.19.3"])
     eq("release name: ...install.sh's \"Update complete\" label follows the same rule", installer, "2026.11.19.4")
+    eq("release name: (control) install.sh's walk past two tooling-only commits reads the named release's saved "
+       "name once, and the cat-file counter sees it", counted, ("2026.11.19.4", 1))
     eq("release name: a tooling-only commit whose day has no named release before it shows the date (another day's "
        "name is never borrowed)", (lone, installer_lone), ("2026.11.20", "2026.11.20"))
     eq("release name: ...and so does an unmarked commit of that day, which may run new code (control)",
