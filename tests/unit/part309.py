@@ -133,8 +133,9 @@ try:
     _k309["backlog2"] = len(_rows309(_MH, "hour"))
     _clear309()
     _put309([_ms309(_T309 + _td309(hours=h, minutes=2)) for h in (10, 60, 100)])
-    for _i309 in range(3):
-        _tick309(_T309 + _td309(hours=101))
+    _tick309(_T309 + _td309(hours=101))
+    _tick309(_T309 + _td309(hours=101))
+    _tick309(_T309 + _td309(hours=101))
     _k309["gap"] = [h for (h,) in _rows309(_MH, "hour")]
     # ── 4. a year and a day, then gone; the samples' 14 days as before ─────────────────────────
     _clear309()
