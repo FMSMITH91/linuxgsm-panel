@@ -3844,6 +3844,17 @@ else:
 _pb_un = open(os.path.join(_pb_root, "panel", "install", "uninstall.sh"), encoding="utf-8").read()
 _pb_cr = _pb_un[_pb_un.index("_conf_read() {"):]
 _pb_cr = _pb_cr[:_pb_cr.index("\n}\n") + 3]
+# A regular file is read (review 1124): _conf_read ends `|| true` with its errors dropped, so one that
+# reads nothing at all (a broken heredoc, no interpreter) printed nothing with rc 0, which the
+# symlink check below holds for too.
+_pb_plain = os.path.join(_pb_rd, "data", "plain.json")
+with open(_pb_plain, "w") as _fh:
+    _fh.write('{"port": 5124}')
+_r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',
+             env={"PANEL_DIR": _pb_rd, "F": _pb_plain}, timeout=20)
+check("uninstall.sh _conf_read: a regular config file is read (positive control)",
+      _r.stdout == '{"port": 5124}[rc=0]\n', repr(_r.stdout + _r.stderr))
+os.remove(_pb_plain)
 _r = _pb_run("set -euo pipefail\n" + _pb_cr + '_conf_read "$F"; echo "[rc=$?]"',
              env={"PANEL_DIR": _pb_rd, "F": os.path.join(_pb_rd, "VERSION")}, timeout=20)
 check("uninstall.sh _conf_read: a symlinked config.json is not followed",
