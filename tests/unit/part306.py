@@ -7,7 +7,8 @@ F24. Drupal's append to the settings.php its installer left read-only works, and
 F25. An app install whose undo could not drop its database says NOT undone and what is left, and keeps the site
      and its database rows (a delete retries them) instead of saying "undone" over a database left behind.
 F26. A runtime app's gate and the object cache (Network=container:) carry no DNS option, which Podman refuses beside
-     that network mode; the site's own container keeps --dns=none.
+     that network mode; the site's own container keeps --dns=none. F26a: turning the object cache on or off on
+     the Performance card writes (or removes) its unit and config and starts (or stops) it.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -37,6 +38,7 @@ from panel.routes import _shared as _shared306
 from panel.routes import websites as _w306
 from panel.routes import websites_apps as _wapps306
 from panel.services import websites as _ws306
+from panel.services import websites_catalog as _wc306
 
 _TREE306 = _tf306.mkdtemp(prefix="lgsm-unit-p306-")
 # The real functions a section stands in for, put back by the next section that needs them.
@@ -370,6 +372,36 @@ def _f26_dns(st):
         if a.startswith("PodmanArgs=")], [True, True])
 
 
+def _f26a_cache_switch(st):
+    _bash_seams306()
+    site = _site306(st, "p306-obj", kind="wordpress")
+    su = _Client306(st.su.id)
+    conf = os.path.join(_home306(site.account), "site", "conf", "valkey.conf")
+    valkey = _wc306.pins("object_cache")["image"]
+    _reset306(FAKE_IMAGE_EXISTS=0)
+    r_on = su.post("/websites/%d/performance" % site.id, json={"object_cache": True})
+    on_calls = _calls306()
+    unit_on, conf_on = _unit306(site, "lgsm-site-cache"), os.path.exists(conf)
+    started = any(c["tool"] == "systemctl" and "restart" in c["argv"] and "lgsm-site-cache.service" in c["argv"]
+                  for c in on_calls)
+    pulled = any(c["tool"] == "podman" and c["argv"][:1] == ["pull"] and valkey in c["argv"] for c in on_calls)
+    eq("F26a (POST /websites/<id>/performance, object cache on): its unit and its 0600 config are written, its image "
+       "pulled and the unit started with the site (it only rewrote the php.ini: no cache ever ran)",
+       (r_on.status_code, "Network=container:lgsm-site" in unit_on, conf_on, pulled, started),
+       (200, True, True, True, True))
+    _reset306(FAKE_IMAGE_EXISTS=0)
+    r_off = su.post("/websites/%d/performance" % site.id, json={"object_cache": False})
+    stopped = any(c["tool"] == "systemctl" and "stop" in c["argv"] and "lgsm-site-cache.service" in c["argv"]
+                  for c in _calls306())
+    eq("F26a (POST /websites/<id>/performance, object cache off): its container is stopped and its unit and config "
+       "(with its password) removed", (r_off.status_code, _unit306(site, "lgsm-site-cache"), os.path.exists(conf), stopped),
+       (200, "", False, True))
+    _reset306()
+    r_op = su.post("/websites/%d/performance" % site.id, json={"opcache": False})
+    eq("F26a (POST /websites/<id>/performance, OPcache only): the php.ini is rewritten and the site restarted, with "
+       "no install (control)", (r_op.status_code, [c["argv"][:1] for c in _calls306("podman")]), (200, []))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -418,7 +450,7 @@ def _ran306(step, st):
 
 
 _ran306.last = ""
-_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns)
+_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

@@ -806,6 +806,10 @@ def install_sh(account, site, image=None):
         from panel.services import websites_catalog as _wc
         pull += "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(
             _wc.pins("object_cache")["image"])
+    else:
+        # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
+        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
+            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
     return (_ENV + write_files_sh() + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
 

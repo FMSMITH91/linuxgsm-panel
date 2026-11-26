@@ -99,5 +99,7 @@
   "The domain has no A or AAAA record yet. Create the record shown, then check again.": "El dominio aún no tiene registro A ni AAAA. Crea el registro indicado y vuelve a comprobarlo.",
   "website": "sitio web",
   "This app needs a PHP version this panel no longer offers.": "Esta aplicación necesita una versión de PHP que este panel ya no ofrece.",
-  "The database {name} could not be removed ({why}), so it is still on the database server; delete the website to try again.": "No se pudo eliminar la base de datos {name} ({why}), así que sigue en el servidor de bases de datos; elimina el sitio web para intentarlo de nuevo."
+  "The database {name} could not be removed ({why}), so it is still on the database server; delete the website to try again.": "No se pudo eliminar la base de datos {name} ({why}), así que sigue en el servidor de bases de datos; elimina el sitio web para intentarlo de nuevo.",
+  "The object cache was turned on, and the website was restarted with it.": "Se activó la caché de objetos y el sitio web se reinició con ella.",
+  "The object cache was turned off and removed, and the website was restarted.": "Se desactivó y se quitó la caché de objetos, y el sitio web se reinició."
 }

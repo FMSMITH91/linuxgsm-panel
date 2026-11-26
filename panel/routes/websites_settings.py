@@ -32,6 +32,8 @@ PHP_KINDS = ("php", "wordpress", "phpbb")
 S_NOT_PHP = "This website does not run PHP."
 S_NOT_APP = "This website is not an app."
 S_RULES_MAX = 50
+S_CACHE_ON = "The object cache was turned on, and the website was restarted with it."
+S_CACHE_OFF = "The object cache was turned off and removed, and the website was restarted."
 
 
 def _php_versions():
@@ -165,8 +167,18 @@ def _perf_store(site, changes, opcache):
     db.session.commit()
 
 
-def _perf_apply(site, changes):
-    ok, said = _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
+def _perf_apply(site, changes, cache_turned):
+    """Apply a saved Performance card: (ok, sentence).
+
+    The object cache turned on or off is a container of its own: the site is installed again, which writes (or
+    removes) its unit and config with the site's other files, pulls its image and starts (or stops) it. Any
+    other change rewrites the php.ini and restarts the site; a proxy setting re-applies the proxy.
+    """
+    if cache_turned:
+        ok, said = _w.install_site(site)
+        said = (S_CACHE_ON if site.object_cache else S_CACHE_OFF) if ok else said
+    else:
+        ok, said = _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
     proxied = {"page_cache", "page_cache_ttl", "static_cache"} & set(changes)
     if ok and site.enabled and proxied:
         ok, said = _w.reconcile_proxy(site.remote)
@@ -178,8 +190,9 @@ def _performance(site, form):
     changes, opcache, problems = _perf_check(site, form)
     if problems:
         return _problems(problems)
+    cache_turned = "object_cache" in changes and bool(changes["object_cache"]) != bool(site.object_cache)
     _perf_store(site, changes, opcache)
-    ok, said = _perf_apply(site, changes)
+    ok, said = _perf_apply(site, changes, cache_turned)
     words = ["%s=%s" % kv for kv in sorted(changes.items())] + ["%s=%s" % kv for kv in sorted(opcache.items())]
     return _w.acted(site, "website_cache", ok, said or "Saved.", ", ".join(words) or "none")
 
