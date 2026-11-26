@@ -20,20 +20,26 @@
    as a field sets again: two commands on one line, or a quoted key.
 9. The maintenance menu's Backup is refused while another backup of the server runs, and holds the
    server from before its database dump, so a sweep or "Back up now" sees it in that window.
+10. Markup injected into a page cannot become a CSRF-valid form post: every POST form a template draws
+    carries the token the server rendered, panel.js no longer gives every form in the page one, an ajax
+    form without a token is not sent, and the dispatcher refuses the internal _r<digits> helpers.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
 or data/.
 """
 import base64 as _b64_294
+import glob as _glob294
 import os
+import re as _re294
 import shutil as _shutil294
 import subprocess as _sp294  # nosec B404 - bash over this part's own scratch files
 import tempfile as _tf294
 import time as _time294
 from types import SimpleNamespace as _NS294
 
-from unit.part01 import check, eq, skip
+from unit.part01 import _root, check, eq, skip
+from unit.part47 import _cut47, _node47
 from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
@@ -408,3 +414,81 @@ eq("Backup button: while another Backup-button run holds the server, a second on
    _bk294.get("claimed"), (True, [], []))
 eq("Backup button (control): alone it dumps and runs, a sweep asking during its dump sees it running, and it lets "
    "go after", _bk294.get("alone"), ([True], ["backup"], False))
+
+
+# ── 10. An injected form gets no token, and is not sent ───────────────────────────────────────────
+def _form_tag_end294(src, i):
+    """Index of the `>` closing the tag that opens at `i`, past quoted values and Jinja blocks."""
+    j, quote = i + 1, None
+    while j < len(src):
+        ch = src[j]
+        if quote:
+            quote = None if ch == quote else quote
+        elif src.startswith(("{{", "{%", "{#"), j):
+            j = src.index({"{{": "}}", "{%": "%}", "{#": "#}"}[src[j:j + 2]], j + 2) + 1
+        elif ch in "\"'":
+            quote = ch
+        elif ch == ">":
+            return j
+        j += 1
+    return len(src)
+
+
+def _post_forms294():
+    """(POST form tags seen, those not followed at once by the server-rendered token) over every template."""
+    seen, bare = 0, []
+    token = '<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">'
+    for path in sorted(_glob294.glob(os.path.join(_root, "panel", "templates", "**", "*.html"), recursive=True)):
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        for m in _re294.finditer(r"<form\b", src):
+            end = _form_tag_end294(src, m.start())
+            if _re294.search(r"\bmethod\s*=\s*[\"']?post\b", src[m.start():end], _re294.I):
+                seen += 1
+                if not src.startswith(token, end + 1):
+                    bare.append("%s:%d" % (os.path.basename(path), src.count("\n", 0, m.start()) + 1))
+    return seen, bare
+
+
+_seen294, _bare294 = _post_forms294()
+check("templates: every POST form carries the token the server rendered into it (panel.js no longer gives every "
+      "form in the page one)", _seen294 >= 50 and not _bare294, "%d POST forms, without a token: %s" % (_seen294, _bare294[:6]))
+_page294 = _p9_client(P9_ADMIN).get("/account").get_data(as_text=True)
+_tags294 = _re294.findall(r"<form\b[^>]*method=\"POST\"[^>]*>(<input[^>]*>)?", _page294)
+check("account page (rendered): each POST form opens with a csrf_token field holding a token",
+      bool(_tags294) and all(_re294.fullmatch(r'<input type="hidden" name="csrf_token" value="[^"]+">', t or "")
+                            for t in _tags294), repr(_tags294[:4]))
+
+_PANEL294 = open(os.path.join(_root, "panel", "static", "js", "panel.js"), encoding="utf-8").read()
+_js294 = _node47(
+    "global.window = global; global.CSRF = 'tok'; const sent = [];\n"
+    "global.fetch = (u, o) => { sent.push(u); return new Promise(() => 0); };\n"
+    "global.document = {createElement: () => ({})};\n"
+    "global._r30c_bkSave = function(){}; global.backupUpload = function(){}; global.gameTilesRefreshed = function(){};\n"
+    + _PANEL294[_PANEL294.index("var _ACTION_DENY"):_PANEL294.index("// ── The console's command history")] + "\n"
+    + _cut47(_PANEL294, "window.ensureCsrfFields = function") + "\n"
+    + _cut47(_PANEL294, "function _serverForm(") + "\n"
+    + _cut47(_PANEL294, "function _submitAjaxForm(") + "\n"
+    "function mkForm(token) {\n"
+    "  const kids = token === undefined ? [] : [{name: 'csrf_token', value: token}];\n"
+    "  return {tagName: 'FORM', action: '/x', kids,\n"
+    "    getAttribute: n => n === 'method' ? 'post' : null,\n"
+    "    querySelector: q => q.indexOf('csrf_token') >= 0 ? (kids[0] || null) : null,\n"
+    "    querySelectorAll: () => { throw new Error('walked the page'); },\n"
+    "    appendChild: c => kids.push(Object.assign(c, {name: c.name}))};\n"
+    "}\n"
+    "global.FormData = function(){};\n"
+    "const page = {tagName: undefined, querySelectorAll: () => { throw new Error('walked the page'); }};\n"
+    "let walked = false; try { window.ensureCsrfFields(page); } catch (e) { walked = true; }\n"
+    "const built = mkForm(); window.ensureCsrfFields(built);\n"
+    "_submitAjaxForm(mkForm()); _submitAjaxForm(mkForm('')); const refused = sent.length;\n"
+    "_submitAjaxForm(mkForm('tok'));\n"
+    "console.log(JSON.stringify({walked, built: built.kids.length ? built.kids[0].value : null, refused,\n"
+    "  sent: sent.length, r: _actionFn('_r30c_bkSave') === null, up: _actionFn('backupUpload') === null,\n"
+    "  ok: typeof _actionFn('gameTilesRefreshed')}));\n")
+if _js294 is None:
+    skip("panel.js: an ajax form without a server token is not sent, and nothing walks the page", "node is not installed")
+else:
+    eq("panel.js: an ajax form without a server token is not sent, nothing walks the page giving forms a token, a "
+       "form a script builds still gets one, and the dispatcher refuses _r<digits> helpers and backupUpload",
+       _js294, {"walked": False, "built": "tok", "refused": 0, "sent": 1, "r": True, "up": True, "ok": "function"})

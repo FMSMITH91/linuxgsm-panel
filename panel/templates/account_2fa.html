@@ -24,7 +24,7 @@
        DISABLE form on the account page does. Turning the second factor on installs a factor the
        account holder does not hold, and only a live session was ever needed for it — so someone
        sitting in front of an unlocked one could lock the owner out of their own account. #}
-    <form method="POST" action="{{ url_for('account_2fa_enable') }}">
+    <form method="POST" action="{{ url_for('account_2fa_enable') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <span class="form-label d-inline-block" id="tfa-on-label">Confirm your password and the code from your app</span>
       <div class="d-flex gap-2 flex-wrap maxw-560" role="group" aria-labelledby="tfa-on-label">
         <input type="password" name="password" class="form-control field-grow-12"
@@ -40,7 +40,7 @@
     {% else %}
     {# Held here by "Require 2FA" (no app chrome): Cancel would only come back to this page, so the
        way out is signing out — someone without their phone at hand is not stuck. #}
-    <form method="POST" action="{{ url_for('logout') }}" class="mt-2">
+    <form method="POST" action="{{ url_for('logout') }}" class="mt-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-link btn-sm text-secondary px-0">Sign out instead</button>
     </form>
     {% endif %}

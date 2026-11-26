@@ -285,15 +285,15 @@ _out157 = _js99(_name157, (
     "  obs.push(me); this.observe = el => me.seen.push(el); this.unobserve = () => {};\n"
     "  this.disconnect = () => { me.off = true; }; };\n"
     + _line_or99(_MS157, "var _r37d_iconWatch") + "\n"), (
-    "function _loadGameIcon(", "function startGameIcons(", "function _r37d_gameTilesRefreshed("), (
+    "function _loadGameIcon(", "function startGameIcons(", "function gameTilesRefreshed("), (
     "  const out = {};\n"
     "  grid = mkGrid(['rustserver']); startGameIcons();\n"
-    "  grid = mkGrid(['csgoserver', 'gmodserver']); _r37d_gameTilesRefreshed();\n"
+    "  grid = mkGrid(['csgoserver', 'gmodserver']); gameTilesRefreshed();\n"
     "  const io = obs[obs.length - 1];\n"
     "  io.cb(io.seen.map(t => ({target: t, isIntersecting: true})));\n"
     "  out.refresh = {observers: obs.length, oldOff: obs[0].off, root: io.root === grid,\n"
     "    src: grid.imgs.map(i => i.src), synced, shown: !picker.hidden};\n"
-    "  grid = null; picker.hidden = true; _r37d_gameTilesRefreshed(); out.empty = picker.hidden;\n"
+    "  grid = null; picker.hidden = true; gameTilesRefreshed(); out.empty = picker.hidden;\n"
     "  console.log(JSON.stringify(out));\n"), _MS157)
 if _out157 is not None:
     check("install page: after Refresh list or a Retry swaps the picker in, the new tiles' icons load "

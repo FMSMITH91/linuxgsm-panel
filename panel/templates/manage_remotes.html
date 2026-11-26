@@ -20,7 +20,7 @@
   <div class="card-body">
     <form method="POST" action="{{ url_for('add_remote') }}" class="row g-2 ajax-form"
           data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh"
-          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+          data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="col-md-3">
         <label class="form-label" for="manage-remotes-name">Name</label>
         <input id="manage-remotes-name" type="text" name="name" class="form-control" required placeholder="e.g. Main VPS">
@@ -165,7 +165,7 @@
           <i class="bi bi-sliders2"></i> Manage
         </a>
         <form method="POST" action="{{ url_for('test_remote', remote_id=remote.id) }}"
-              class="ajax-form d-inline" data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh">
+              class="ajax-form d-inline" data-ajax-refresh="#remotes-list" data-ajax-after="afterRemotesRefresh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-outline-secondary btn-sm" title="Test Connection">
             <i class="bi bi-plug"></i> Test
           </button>
@@ -200,7 +200,7 @@
         <form method="POST" action="{{ url_for('edit_remote', remote_id=remote.id) }}"
               class="row g-2 ajax-form" data-ajax-refresh="#remotes-list"
               data-ajax-after="afterRemotesRefresh" data-ajax-reset="off"
-              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+              data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="remote_id" value="{{ remote.id }}">
           <div class="col-md-3">
             <label class="form-label" for="manage-remotes-name-{{ remote.id }}">Name</label>

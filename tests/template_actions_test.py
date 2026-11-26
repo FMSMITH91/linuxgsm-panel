@@ -682,7 +682,7 @@ if not esprima:
     # passed" with four CSRF gates gone and exited 0. A check that did not run has to appear in
     # the count as a check that did not run.
     for _n in ("panel.js exports ensureCsrfFields for markup that arrives after load",
-               "panel.js: refreshSection re-arms the token on the markup it swaps in",
+               "panel.js: no page-wide token arming (an injected POST form got the token too)",
                "panel/static/js: a native form.submit() re-arms its CSRF token first",
                "panel/static/js: the submit()-site walk found call sites at all"):
         skip(_n, "esprima not installed (pip install esprima)")
@@ -690,11 +690,15 @@ if esprima:
     _csrf_js = (ROOT / "panel" / "static" / "js" / "panel.js").read_text(encoding="utf-8")
     check("window.ensureCsrfFields = function" in _csrf_js,
           "panel.js exports ensureCsrfFields for markup that arrives after load", "not exported")
-    # It must run at the end of refreshSection, or every swapped-in form loses its token.
-    _rs = _csrf_js[_csrf_js.index("window.refreshSection ="):]
-    _rs = _rs[:_rs.index("function _submitAjaxForm")]
-    check("window.ensureCsrfFields(cur)" in _rs,
-          "panel.js: refreshSection re-arms the token on the markup it swaps in", _rs[:300])
+    # Every POST form a template draws carries the token the server rendered (checked over the
+    # templates in unit part294), so nothing walks the page giving forms a token: that walk, on load
+    # and after every refreshSection swap, armed an injected <form> too. ensureCsrfFields takes the
+    # one form a script is about to submit.
+    _ecf = _csrf_js[_csrf_js.index("window.ensureCsrfFields = function"):]
+    _ecf = _ecf[:_ecf.index("\n  };") + 5]
+    check("querySelectorAll" not in _ecf and "form.tagName !== 'FORM'" in _ecf
+          and "ensureCsrfFields(document)" not in _csrf_js and "ensureCsrfFields(cur)" not in _csrf_js,
+          "panel.js: no page-wide token arming (an injected POST form got the token too)", _ecf[:300])
 
     # The general invariant, over the AST rather than the text: every CallExpression of the form
     # <x>.submit() must sit inside a function that also calls ensureCsrfFields. A native submit is

@@ -34,7 +34,7 @@
               link, sent to you separately. Ask them for it if you do not have it.</p>
           </div>
           {% if error %}<div class="alert alert-danger py-2 small" role="alert">{{ error }}</div>{% endif %}
-          <form method="POST" action="{{ url_for('redeem_invite', token=token) }}">
+          <form method="POST" action="{{ url_for('redeem_invite', token=token) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-3">
               <label class="form-label" for="inv-code">Invite code</label>
               <input type="text" name="invite_code" id="inv-code" class="form-control font-monospace text-center fs-5"
@@ -51,7 +51,7 @@
               sees this password — it is not sent to whoever invited you.</p>
           </div>
           {% if error %}<div class="alert alert-danger py-2 small">{{ error }}</div>{% endif %}
-          <form method="POST" action="{{ url_for('redeem_invite', token=token) }}">
+          <form method="POST" action="{{ url_for('redeem_invite', token=token) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-3">
               <label class="form-label" for="inv-username">Username</label>
               <input type="text" name="username" id="inv-username" class="form-control"
