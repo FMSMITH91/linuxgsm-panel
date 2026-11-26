@@ -24,7 +24,6 @@ from panel.core.validation import WEBSITE_APP_PORT_MIN, WEBSITE_COMMAND_MAX, WEB
 from panel.db.models import db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
-from panel.security.auth import MANAGE_WEBSITE
 from panel.services import website_settings as _ws
 from panel.services import websites as _svc
 from panel.services import websites_access as _wa
@@ -109,7 +108,7 @@ def _php_routes(app):
     @app.route("/websites/<int:site_id>/php/effective")
     @login_required
     def website_php_effective(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         if site.kind not in PHP_KINDS:
             return _w.say(409, S_NOT_PHP)
         ok, effective = _w.host_call(_sw.php_effective, site.remote, site)
@@ -120,7 +119,7 @@ def _php_routes(app):
     @app.route("/websites/<int:site_id>/php", methods=["POST"])
     @login_required
     def website_php_save(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         if site.kind not in PHP_KINDS:
             return _w.say(409, S_NOT_PHP)
         return _php_save(site, _w.body())
@@ -189,13 +188,13 @@ def _perf_routes(app):
     @app.route("/websites/<int:site_id>/performance", methods=["POST"])
     @login_required
     def website_performance(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         return _performance(site, _w.body())
 
     @app.route("/websites/<int:site_id>/cache/purge", methods=["POST"])
     @login_required
     def website_cache_purge(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         if not site.page_cache:
             return _w.say(409, "This website's page cache is off.")
         ok, said = _w.host_call(_sw.cache_purge, site.remote, site)
@@ -204,7 +203,7 @@ def _perf_routes(app):
     @app.route("/websites/<int:site_id>/rules", methods=["POST"])
     @login_required
     def website_rules(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         return _rules(site, _w.body())
 
 
@@ -283,7 +282,7 @@ def _app_routes(app):
     @app.route("/websites/<int:site_id>/app", methods=["POST"])
     @login_required
     def website_app(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         if site.kind != "app":
             return _w.say(409, S_NOT_APP)
         return _app_save(site, _w.body())
@@ -291,7 +290,7 @@ def _app_routes(app):
     @app.route("/websites/<int:site_id>/app/build", methods=["POST"])
     @login_required
     def website_app_build(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         if site.kind != "app":
             return _w.say(409, S_NOT_APP)
         ok, said = _w.host_call(_sw.app_build, site.remote, site)

@@ -242,6 +242,14 @@ def register(app):
         _audit(remote, "website_proxy_settings", _detail(changes) + ("" if ok else "; not applied: %s" % i18n.tr(said)), ok)
         return _w.done(ok, said or "Saved and applied.", proxy=proxy_json(row))
 
+    @app.route("/websites/proxy/options", methods=["POST"])
+    @login_required
+    @superadmin_required
+    @step_up_required
+    def website_proxy_options():
+        form = _w.body()
+        return _save_options(form.get("options") if isinstance(form.get("options"), dict) else form)
+
     @app.route("/websites/proxy/apply", methods=["POST"])
     @login_required
     @superadmin_required

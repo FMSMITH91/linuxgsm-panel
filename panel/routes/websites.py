@@ -19,25 +19,22 @@ websites_access.can_create. Everything on the host goes through ssh_manager.webs
 The sibling modules (websites_domains, _files, _backups, _settings, _apps, _customers, _proxy and
 databases_sites) share the helpers here and are registered by register().
 """
-import inspect
 import logging
 import secrets
 import threading
 import time
 
-from flask import abort, current_app, g, has_app_context, jsonify, render_template, request
+from flask import abort, current_app, jsonify, render_template, request
 from flask_login import current_user, login_required
 from jinja2 import TemplateNotFound
-from sqlalchemy import event
-
 from panel.core import i18n
 from panel.core.config import encrypt_secret
 from panel.core.http import _json_body, _json_str
 from panel.core.validation import WEBSITE_KINDS, WEBSITE_PORT_MAX, WEBSITE_PORT_MIN, website_name_problem
-from panel.db.models import AuditLog, Group, RemoteServer, Website, WebsiteProxy, db
+from panel.db.models import Group, RemoteServer, Website, WebsiteProxy, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.security.auth import (MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES, get_host_remote, has_permission,
-                                 log_action)
+                                 log_website_action)
 from panel.services import websites_access as _wa
 
 _log = logging.getLogger(__name__)
@@ -55,7 +52,6 @@ _STATUS = {}                      # site id -> (monotonic time, probe dict)
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
-_LOG_PARAMS = frozenset(inspect.signature(log_action).parameters)
 
 
 # ── answers ─────────────────────────────────────────────────────────────────────────────────────
@@ -89,33 +85,27 @@ def flag(data, key):
 
 
 # ── audit ───────────────────────────────────────────────────────────────────────────────────────
-@event.listens_for(AuditLog, "before_insert")
-def _stamp_website(_mapper, _conn, row):
-    """Give the audit row audit() is writing the site's id (AuditLog.website_id), which scopes who reads it."""
-    if row.website_id is None and has_app_context():
-        sid = g.get("_website_audit")
-        if sid:
-            row.website_id = sid
-
-
 def audit(site, action, detail="", success=True):
     """One audit row about `site` by the signed-in user (audit_as)."""
     audit_as(current_user, site, action, detail, success)
 
 
 def audit_as(user, site, action, detail="", success=True):
-    """One audit row about `site`: its name as the target, its id in website_id, `detail` made printable.
+    """One audit row about `site` (auth.log_website_action: its name as the target, its id in website_id).
 
-    `detail` names what was done (a path, a domain, a setting), never file contents or a secret.
-    `user` is None for the panel itself (a background job whose starter is gone).
+    `detail` names what was done (a path, a domain, a setting), made printable; never file contents or a
+    secret. `user` is None for the panel itself (a background job whose starter is gone).
     """
     from panel.routes.server_files import _audit_safe
-    kw = {"website": site} if "website" in _LOG_PARAMS else {}
-    g._website_audit = site.id
-    try:
-        log_action(user, action, target=site.name, detail=_audit_safe(detail, 1000), success=bool(success), **kw)
-    finally:
-        g.pop("_website_audit", None)
+    log_website_action(user, site, action, _audit_safe(detail, 1000), bool(success))
+
+
+def manage_perm(site_id):
+    """The permission a "run this site" route asks site_for for: MANAGE_WEBSITES when the user administers
+    the site (an administrator runs it too), else MANAGE_WEBSITE. Either way site_for decides, per site.
+    """
+    admin = _wa.visible_sites(current_user, MANAGE_WEBSITES).filter(Website.id == site_id).first()
+    return MANAGE_WEBSITES if admin is not None else MANAGE_WEBSITE
 
 
 def host_call(fn, *args):
@@ -222,6 +212,8 @@ def _list_routes(app):
     @app.route("/api/websites")
     @login_required
     def api_websites():
+        if not _wa.can_open_page(current_user):
+            return jsonify({"success": True, "sites": [], "can_create": False})
         return jsonify(_view.list_answer(site_json))
 
     @app.route("/api/websites/<int:site_id>")
@@ -400,21 +392,21 @@ def _run_routes(app):
     @app.route("/websites/<int:site_id>/start", methods=["POST"])
     @login_required
     def website_start(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, manage_perm(site_id))
         ok, said = host_call(_sw.start, site.remote, site)
         return _ran(site, "website_start", ok, said, "running")
 
     @app.route("/websites/<int:site_id>/stop", methods=["POST"])
     @login_required
     def website_stop(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, manage_perm(site_id))
         ok, said = host_call(_sw.stop, site.remote, site)
         return _ran(site, "website_stop", ok, said, "stopped")
 
     @app.route("/websites/<int:site_id>/restart", methods=["POST"])
     @login_required
     def website_restart(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, manage_perm(site_id))
         ok, said = host_call(_sw.stop, site.remote, site)
         if ok:
             ok, said = host_call(_sw.start, site.remote, site)

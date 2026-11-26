@@ -9,7 +9,6 @@
   "Customer added. Send them the invite link and its code; both are shown once.": "Cliente añadido. Envíale el enlace de invitación y su código; ambos se muestran una sola vez.",
   "That is not a domain a public website can use: letters, digits, hyphens and dots, like www.example.org.": "Ese no es un dominio que pueda usar un sitio web público: letras, dígitos, guiones y puntos, como www.example.org.",
   "That domain is already used by a website.": "Ese dominio ya lo usa un sitio web.",
-  "That is the panel's own address, which is never served as a website.": "Esa es la dirección del propio panel, que nunca se sirve como sitio web.",
   "No such domain on this website.": "Este sitio web no tiene ese dominio.",
   "That path is not inside this website's files.": "Esa ruta no está dentro de los archivos de este sitio web.",
   "Choose a file to upload.": "Elige un archivo para subir.",
@@ -97,5 +96,6 @@
   "The domain points at this website's host.": "El dominio apunta al servidor de este sitio web.",
   "The domain points somewhere else. Create the A (and AAAA) record shown, then check again.": "El dominio apunta a otro lugar. Crea el registro A (y AAAA) indicado y vuelve a comprobarlo.",
   "The domain points at a private or internal address, so it cannot be used for a public website.": "El dominio apunta a una dirección privada o interna, así que no se puede usar para un sitio web público.",
-  "The domain has no A or AAAA record yet. Create the record shown, then check again.": "El dominio aún no tiene registro A ni AAAA. Crea el registro indicado y vuelve a comprobarlo."
+  "The domain has no A or AAAA record yet. Create the record shown, then check again.": "El dominio aún no tiene registro A ni AAAA. Crea el registro indicado y vuelve a comprobarlo.",
+  "website": "sitio web"
 }

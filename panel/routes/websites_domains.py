@@ -18,7 +18,7 @@ from panel.core.config import load_config
 from panel.core.validation import website_domain
 from panel.db.models import WebsiteDomain, db
 from panel.routes import websites as _w
-from panel.security.auth import MANAGE_WEBSITE
+from panel.security.auth import VIEW_WEBSITES
 from panel.services import website_dns as _dns
 from panel.services import websites_access as _wa
 
@@ -103,13 +103,13 @@ def register(app):
     @app.route("/websites/<int:site_id>/domains")
     @login_required
     def website_domains(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
         return jsonify({"domains": [domain_json(site, d) for d in site.domains]})
 
     @app.route("/websites/<int:site_id>/domains/add", methods=["POST"])
     @login_required
     def website_domain_add(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         clean, refused = domain_refusal(site, _w.field(_w.body(), "domain"))
         if refused:
             _w.audit(site, "website_domain_add", "refused domain: %s" % i18n.tr(refused[1]), False)
@@ -123,7 +123,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/domains/remove", methods=["POST"])
     @login_required
     def website_domain_remove(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
@@ -142,7 +142,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/domains/check", methods=["POST"])
     @login_required
     def website_domain_check(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
@@ -153,7 +153,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/domains/primary", methods=["POST"])
     @login_required
     def website_domain_primary(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)

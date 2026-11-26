@@ -56,11 +56,7 @@ def _max_sites(data, held):
 
 
 def _make(name, perms, sites, max_sites):
-    group = Group(name="customer-%s" % name, description="Website customer", is_default=False, is_customer=True,
-                  max_sites=max_sites)
-    group.set_permissions(perms)
-    group.websites.extend(sites)
-    db.session.add(group)
+    group = _wa.make_customer_group(name, sites, perms, max_sites)
     db.session.flush()
     inv, token = Invite.mint(current_user, group_ids=[group.id], note="customer %s" % name)
     code, inv.code_hash = Invite.new_code()
@@ -82,7 +78,7 @@ def register(app):
             return _w.say(400, S_NAME)
         if not sites:
             return _w.say(400, S_NO_SITES)
-        if Group.query.filter_by(name="customer-%s" % name).first() is not None:
+        if Group.query.filter_by(name=_wa.CUSTOMER_GROUP_PREFIX + name).first() is not None:
             return _w.say(409, S_TAKEN)
         live = Invite.query.filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
                                    Invite.expires_at > utcnow()).count()

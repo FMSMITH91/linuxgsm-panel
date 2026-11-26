@@ -4154,6 +4154,18 @@
       "POST"
     ]
   },
+  "POST /websites/proxy/options": {
+    "endpoint": "website_proxy_options",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "account_guard.py:wrapped",
+      "view:website_proxy_options"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/proxy/settings": {
     "endpoint": "website_proxy_settings",
     "guards": [

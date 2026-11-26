@@ -57,6 +57,7 @@ from panel.services import websites_proxy as _wp300
 _TREE300 = _tmp300.mkdtemp(prefix="lgsm-unit-p300-")
 _ROWS300 = {"remotes": [], "users": [], "groups": []}
 _HOST_IP300 = "11.22.33.44"
+_SAVED2FA300 = []
 
 
 class _Inline300:
@@ -134,6 +135,9 @@ def _stub_host300():
         _p9_patch(mod, "game_account_write_refusal", lambda *a, **k: None)
     _p9_patch(_core300, "shell_as_game_user", _bash300)
     _p9_patch(_w300, "threading", _NS300(Thread=_Inline300))
+    # The customers here sign in without 2FA: part298 drives the rule that holds them at its setup.
+    _SAVED2FA300.append(_p9.config.get("WEBSITES_CUSTOMER_2FA", True))
+    _p9.config["WEBSITES_CUSTOMER_2FA"] = False
     from panel.routes import databases as _dbr300
     _p9_patch(_dbr300, "host_state", lambda remote, may_probe=False: ("unknown", None, {}))
     return calls
@@ -602,6 +606,34 @@ def _s9_i18n(_st):
     eq("i18n: every sentence the website routes say is in the es and fr catalogs", missing, {"es": [], "fr": []})
 
 
+# ── 10. A panel backup restore re-checks each website's account ─────────────────────────────────
+def _panel_archive300(rows):
+    """A panel backup archive whose panel.db holds website rows (id, account); its path."""
+    import sqlite3
+    folder = _tmp300.mkdtemp(dir=_TREE300)
+    dbp, arch = _os300.path.join(folder, "panel.db"), _os300.path.join(folder, "panel-backup.tar.gz")
+    con = sqlite3.connect(dbp)
+    con.execute("CREATE TABLE website (id INTEGER PRIMARY KEY, name VARCHAR(32), account VARCHAR(16))")
+    con.executemany("INSERT INTO website (id, name, account) VALUES (?, ?, ?)", rows)
+    con.commit()
+    con.close()
+    with _tar300.open(arch, "w:gz") as t:
+        t.add(dbp, arcname="panel.db")
+    return arch
+
+
+def _s10_restore(_st):
+    from panel.ops import backup as _bk300
+    got = {label: _bk300.upload_refusal(_panel_archive300(rows))[0]
+           for label, rows in (("root", [(5, "a", "root")]), ("another site's", [(5, "a", "ws6")]),
+                               ("a game account", [(5, "a", "csgoserver")]), ("own", [(5, "a", "ws5")]),
+                               ("not yet named", [(5, "a", None)]))}
+    eq("restore: a backup whose website row names root, another site's ws<id> or a game account is refused, "
+       "naming the row; its own ws<id> and a row not named yet restore (controls)",
+       {k: ("website #5" in str(v)) if v else "" for k, v in got.items()},
+       {"root": True, "another site's": True, "a game account": True, "own": "", "not yet named": ""})
+
+
 def _state300():
     host = _host300("p300-host")
     a, b = _site300(host, "p300-a", kind="php"), _site300(host, "p300-b")
@@ -649,12 +681,13 @@ with _p9.app_context():
         _calls300 = _stub_host300()
         _st300 = _state300()
         for _step300 in (_s1_scope, _s2_files, _s3_archives, _s4_domains, _s5_sftp, _s6_secrets, _s7_apps,
-                         _s8_backups, _s9_i18n):
+                         _s8_backups, _s9_i18n, _s10_restore):
             check("part300: %s ran to the end" % _step300.__name__, _ran300(_step300, _st300, _calls300) is None,
                   _ran300.last)
         eq("part300: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips300:], [])
     finally:
         _p9_restore_all()
+        _p9.config["WEBSITES_CUSTOMER_2FA"] = (_SAVED2FA300 or [True])[0]
         _w300._STATUS.clear()
         _wapps300._JOBS.clear()
         _cleanup300()

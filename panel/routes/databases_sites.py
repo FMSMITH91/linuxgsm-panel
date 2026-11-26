@@ -20,7 +20,7 @@ from panel.ops.ssh_manager import databases as _dbs
 from panel.routes import databases as _d
 from panel.routes import websites as _w
 from panel.security.account_guard import step_up_needed, step_up_refusal
-from panel.security.auth import MANAGE_WEBSITE, MANAGE_WEBSITES
+from panel.security.auth import MANAGE_WEBSITES
 from panel.services import websites_access as _wa
 
 S_CAP = "This website already has {n} databases, the most it may have."
@@ -127,7 +127,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/databases")
     @login_required
     def website_databases(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         hd = _d._host_row(site.remote_id)
         return jsonify({"databases": [row_json(site, r, hd) for r in site_rows(site)], "max": _cap(),
                         "prefix": "ws%d_" % site.id})
@@ -135,7 +135,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/databases/add", methods=["POST"])
     @login_required
     def website_database_add(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         slug = _w.field(_w.body(), "name").lower()
         try:
             _dbs.site_db_name(site.id, slug)
@@ -150,7 +150,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/databases/credentials", methods=["POST"])
     @login_required
     def website_database_credentials(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         try:
             r = _row(site, int(_w.body().get("id")))
         except (TypeError, ValueError):
@@ -162,7 +162,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/databases/<int:db_id>/reset-password", methods=["POST"])
     @login_required
     def website_database_reset(site_id, db_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         r = _row(site, db_id)
         if r is None:
             return _w.say(404, S_NO_SUCH)

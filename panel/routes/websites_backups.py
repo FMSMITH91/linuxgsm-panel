@@ -19,7 +19,7 @@ from panel.ops.ssh_manager import files as _files
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
 from panel.routes._shared import game_account_write_refusal
-from panel.security.auth import EDIT_WEBSITE_FILES, MANAGE_WEBSITE
+from panel.security.auth import EDIT_WEBSITE_FILES
 from panel.services import website_backup as _wb
 from panel.services import website_files as _wf
 from panel.services import websites_access as _wa
@@ -70,7 +70,7 @@ def register(app):
     @login_required
     def website_backups_list(site_id):
         try:
-            site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+            site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         except NotFound:
             site = _wa.site_for(current_user, site_id, EDIT_WEBSITE_FILES)
         rows = _wb.listing(site.remote, site.account)
@@ -83,7 +83,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/backups/create", methods=["POST"])
     @login_required
     def website_backups_create(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         refused = _refused(site)
         if refused:
             return refused
@@ -123,7 +123,7 @@ def register(app):
     @app.route("/websites/<int:site_id>/backups/delete", methods=["POST"])
     @login_required
     def website_backups_delete(site_id):
-        site = _wa.site_for(current_user, site_id, MANAGE_WEBSITE)
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         name = _name(_w.body())
         refused = _w.say(404, _wb.S_BAD_NAME) if name is None else _refused(site)
         if refused:

@@ -206,7 +206,7 @@ def site_answer(site, probe, install):
     from panel.routes.websites_domains import domain_json
     from panel.services import website_dns
     admin = is_admin(current_user, site)
-    manage = _holds(site, MANAGE_WEBSITE)
+    manage = admin or _holds(site, MANAGE_WEBSITE)
     records = website_dns.records(site.remote)
     out = {"success": True, "site": _site_block(site, admin, probe), "install": install, "logs": [],
            "domains": [domain_json(site, d) for d in site.domains],
@@ -227,8 +227,9 @@ def site_answer(site, probe, install):
 def page_flags(site):
     """The flags website.html reads for `site`: can_manage, can_files, site_admin."""
     from panel.routes.websites import is_admin
-    return {"can_manage": _holds(site, MANAGE_WEBSITE), "can_files": _holds(site, EDIT_WEBSITE_FILES),
-            "site_admin": is_admin(current_user, site)}
+    admin = is_admin(current_user, site)
+    return {"can_manage": admin or _holds(site, MANAGE_WEBSITE), "can_files": _holds(site, EDIT_WEBSITE_FILES),
+            "site_admin": admin}
 
 
 def nav_url():
