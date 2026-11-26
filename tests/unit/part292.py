@@ -306,8 +306,8 @@ def _stored292(priv, key):
     _reset292(None)
     _cat292._state["loaded"] = False
     _cat292.ensure_loaded()
-    eq("catalog store: read again at start, checked again, and put in use",
-       (_cat292._state["stored"] or {}).get("seq"), 5)
+    eq("catalog store: read again at start, checked again, and put in use (the last accepted, #6)",
+       (_cat292._state["stored"] or {}).get("seq"), 6)
     with open(_cat292.store_file(), encoding="utf-8") as fh:
         doc = _json292.load(fh)
     with open(_cat292.store_file(), "w", encoding="utf-8") as fh:
