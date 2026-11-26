@@ -10,6 +10,7 @@ from panel.services import (notifications)
 from panel.services.certs import (_maybe_alert_cert_expiring)
 from panel.services import tls_own
 from panel.services import schedules as _schedules
+from panel.services import addons_catalog as _addon_catalog
 from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
@@ -153,6 +154,7 @@ def register(app, supervise):
             _renew_tls(app)                          # a renewed Let's Encrypt certificate, once a day
             _maybe_alert_cert_expiring(app.config)   # periodic TLS-cert expiry check
             _maybe_alert_os_updates()      # ...and the once-a-day OS package check
+            _addon_catalog.daily_tick()    # the signed add-on catalog: at the first pass, then daily
             time.sleep(1800)
 
     # This module owns both the ticker and the helper the tests drive, so it supervises and

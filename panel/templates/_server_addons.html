@@ -6,12 +6,13 @@
 <div class="card" id="ad-card" data-sfsub="addons" data-start-hidden>
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-boxes"></i> Add-ons</span>
-    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="adLoad" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Refresh</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="adRefresh"><i class="bi bi-arrow-repeat"></i> Refresh</button>
   </div>
   <div class="card-body">
     <p class="small text-secondary mb-2">Admin tools that run beside this game server, each in its own container as the server's account. Nothing is installed until you install one.</p>
     <div id="ad-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading add-ons…</div>
     <div id="ad-runtime" class="small text-warning mb-2" role="status" data-start-hidden></div>
+    <div id="ad-catalog" class="small text-warning mb-2" role="status" data-start-hidden></div>
     <div id="ad-list"></div>
     <div id="ad-msg" class="small mt-1" role="status"></div>
     <pre id="ad-log" class="small border rounded p-2 mt-2 mb-0 ad-log" data-start-hidden data-no-i18n></pre>
@@ -45,7 +46,7 @@
         <li>An add-on's web page listens on this host's own address only (127.0.0.1); no port is opened for it. Open shows it through the panel, in a new tab, kept apart from the panel's own pages: it can't read the panel's sign-in or act for you on the panel. The link works only while you are signed in and may open add-on pages.</li>
         <li>BlueMap reads the Minecraft world read-only and reaches nothing at all: Minecraft's client file it needs is downloaded by this host before it starts, once you accept Mojang's EULA.</li>
         <li>Removing an add-on deletes its container, image and files. A database from the Databases tab is kept; an add-on's own data goes with it.</li>
-        <li>New versions of an add-on come with panel updates: after one, its card offers Update, and nothing changes until you press it.</li>
+        <li>New versions of an add-on come in a signed add-on catalog, which the panel checks daily and on Refresh, or with a panel update. Its card then offers Update, and nothing changes until you press it.</li>
       </ul>
     {% endcall %}
   </div>

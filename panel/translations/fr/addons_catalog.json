@@ -1,0 +1,22 @@
+{
+  "Version source: built into this panel.": "Origine de la version : intégrée à ce panneau.",
+  "Version source: signed add-on catalog #{seq} of {date}.": "Origine de la version : catalogue de modules signé n°{seq} du {date}.",
+  "The signed add-on catalog #{seq} expired on {date} and no newer one has been fetched, so it offers no updates until one is.": "Le catalogue de modules signé n°{seq} a expiré le {date} et aucun plus récent n'a été récupéré : il ne propose aucune mise à jour tant qu'un nouveau ne l'est pas.",
+  "The add-on catalog was refused: {why}.": "Le catalogue de modules a été refusé : {why}.",
+  "Signed add-on catalog #{seq} of {date} accepted.": "Catalogue de modules signé n°{seq} du {date} accepté.",
+  "No newer add-on catalog: #{seq} of {date} is the latest.": "Aucun catalogue de modules plus récent : le n°{seq} du {date} est le dernier.",
+  "The add-on catalog verified, but the panel couldn't save it.": "Le catalogue de modules est vérifié, mais le panneau n'a pas pu l'enregistrer.",
+  "The update check is turned off (Settings → Outside services), so the add-on catalog is not fetched either.": "La vérification des mises à jour est désactivée (Paramètres → Services extérieurs) : le catalogue de modules n'est donc pas récupéré non plus.",
+  "This panel is not a git checkout, so it can't fetch the add-on catalog.": "Ce panneau n'est pas un dépôt git : il ne peut pas récupérer le catalogue de modules.",
+  "Couldn't fetch the add-on catalog from GitHub. Try again later.": "Impossible de récupérer le catalogue de modules depuis GitHub. Réessayez plus tard.",
+  "No signed add-on catalog has been published yet: the versions built into this panel are used.": "Aucun catalogue de modules signé n'a encore été publié : les versions intégrées à ce panneau sont utilisées.",
+  "This panel has no release key to check the add-on catalog with.": "Ce panneau n'a pas de clé de publication pour vérifier le catalogue de modules.",
+  "its signature did not verify with this panel's release key": "sa signature n'a pas été vérifiée avec la clé de publication de ce panneau",
+  "it is not a catalog this panel can read": "ce n'est pas un catalogue que ce panneau sait lire",
+  "it is in a format version this panel does not read": "il est dans une version de format que ce panneau ne lit pas",
+  "it is older than the catalog this panel already has": "il est plus ancien que le catalogue que ce panneau a déjà",
+  "it has expired": "il a expiré",
+  "it leaves out an add-on this panel installs": "il omet un module que ce panneau installe",
+  "an add-on in it is not pinned by a full sha256 digest and release": "un de ses modules n'est pas épinglé par une empreinte sha256 complète et une version",
+  "Checking for new add-on versions…": "Recherche de nouvelles versions des modules…"
+}
