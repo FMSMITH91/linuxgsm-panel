@@ -26,6 +26,13 @@ OPTIONS = {"hsts_max_age": (63072000, 0, 126144000), "tls_min": ("1.2", None, No
            "mem_mb": (512, 64, 65536), "cpu_milli": (1000, 100, 64000), "pids": (256, 32, 32768),
            "disk_mb": (2048, 64, 1048576), "max_body_mb": (64, 1, 4096)}
 TLS_CHOICES = ("1.2", "1.3")
+# An option stored under another config key: the customers' 2FA rule is the one account_guard reads.
+CONFIG_KEYS = {"require_2fa": "websites_customer_2fa"}
+
+
+def config_key(option):
+    """The config.json key an option is stored under."""
+    return CONFIG_KEYS.get(option, "websites_" + option)
 
 
 def _catalog(fn_name, default):
@@ -68,7 +75,7 @@ def options():
     cfg = load_config()
     out = {}
     for key, (default, low, high) in OPTIONS.items():
-        v = cfg.get("websites_" + key, default)
+        v = cfg.get(config_key(key), default)
         if isinstance(default, bool):
             v = v if isinstance(v, bool) else default
         elif isinstance(default, int):

@@ -173,7 +173,11 @@ def _save_options(form):
     values, problems = parse_options(form if isinstance(form, dict) else {})
     if problems:
         return _w.say(400, " ".join(problems))
-    update_config(lambda cfg: cfg.update({"websites_" + k: v for k, v in values.items()}))
+    from flask import current_app
+    from panel.routes.websites_view import config_key
+    update_config(lambda cfg: cfg.update({config_key(k): v for k, v in values.items()}))
+    if "require_2fa" in values:
+        current_app.config["WEBSITES_CUSTOMER_2FA"] = values["require_2fa"]
     log_action(current_user, "website_settings_global", target="websites",
                detail=", ".join("%s=%s" % (k, "set" if k == "acme_contact" and v else v) for k, v in sorted(values.items())))
     return _w.done(True, "Saved.")

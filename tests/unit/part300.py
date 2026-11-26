@@ -299,10 +299,13 @@ def _tgz300(members):
 
 
 def _refused300(fh, room=10 ** 9):
+    """The refusal sentence, or None when the archive was taken (or the check crashed instead of refusing)."""
     try:
         out, _n = _wf300.repack(fh, room)
     except _wf300.ArchiveRefused as exc:
         return str(exc)
+    except Exception:  # noqa: BLE001 - a crash is not a refusal: the page would get a 500, not the sentence
+        return None
     out.close()
     return None
 
@@ -456,8 +459,9 @@ def _s6_secrets(st):
     fine = su.post("/websites/proxy/settings", json={"options": {"hsts_max_age": 300, "tls_min": "1.3", "require_2fa": False}})
     from panel.core.config import load_config as _lc300
     eq("global options: a TLS minimum other than 1.2 or 1.3 is refused; an HSTS age under OWASP's is saved "
-       "(a note on the page, never a block)", (opts.status_code, fine.status_code, _lc300().get("websites_hsts_max_age"),
-                                               _lc300().get("websites_tls_min")), (400, 200, 300, "1.3"))
+       "(a note on the page, never a block); the customers' 2FA switch is the key the sign-in guard reads",
+       (opts.status_code, fine.status_code, _lc300().get("websites_hsts_max_age"), _lc300().get("websites_tls_min"),
+        _lc300().get("websites_customer_2fa")), (400, 200, 300, "1.3", False))
     from panel.core import config as _cfg300
     _cfg300.update_config(lambda cfg: [cfg.pop(k, None) for k in list(cfg) if k.startswith("websites_")])
 
