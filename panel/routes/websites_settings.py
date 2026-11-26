@@ -209,11 +209,18 @@ def _rules_list(data):
     return rules if all(isinstance(r, dict) for r in rules) else None
 
 
-def _rules_problems(rules):
-    """[problems] with the rules (the proxy layer's checker), or None while it is not built."""
+def _rules_problems(rules, data):
+    """[problems] with the rules and a superadmin's raw snippet (the proxy layer's checkers), or None while not built.
+
+    A snippet the renderer would leave out (one that reads the proxy's environment or files, or whose braces do
+    not balance) is refused here in plain words, never stored and then silently dropped from the configuration.
+    """
     from panel.services import websites_proxy as _wp
     try:
-        return list(_wp.rules_problems(rules) or [])
+        problems = list(_wp.rules_problems(rules) or [])
+        if "raw" in data:
+            problems += list(_wp.snippet_problems(data["raw"]) or [])
+        return problems
     except NotImplementedError:
         return None
 
@@ -224,7 +231,7 @@ def _rules(site, data):
         return _w.say(400, i18n.Sentence("Custom rules must be a list of at most {n} rules.", n=S_RULES_MAX))
     if "raw" in data and not current_user.is_superadmin:
         abort(404)
-    problems = _rules_problems(rules)
+    problems = _rules_problems(rules, data)
     if problems is None:
         return _w.say(501, _w.S_NOT_READY)
     if problems:

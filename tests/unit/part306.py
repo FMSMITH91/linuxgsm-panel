@@ -21,6 +21,8 @@ F29. A site's disk use is its own folder (~/site) measured by du with du's own e
      measurement, and the account's container images are not counted (a user quota allows for them).
 M3.  website-account-remove deletes the account on its first call even while the account's last processes are
      still ending after its user manager stopped (userdel refuses with exit 8 then).
+M5.  A raw proxy snippet the configuration would leave out (it reads the proxy's environment) is refused in plain
+     words, not stored and reported as applied.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -732,6 +734,22 @@ def _m3_userdel(st):
        (rc2, len(userdels2), slept2), (0, 1, []))
 
 
+# ── M5. A raw proxy snippet ─────────────────────────────────────────────────────────────────────
+def _m5_snippet(st):
+    site = _site306(st, "p306-raw", kind="static")
+    su = _Client306(st.su.id)
+    r = su.post("/websites/%d/rules" % site.id, json={"rules": [], "raw": "respond {env.HOME}"})
+    _db306.session.expire_all()
+    kept = _db306.session.get(_Site306, site.id).raw_proxy_snippet or ""
+    eq("M5 (POST /websites/<id>/rules): a raw snippet that reads the proxy's environment is refused in plain words and "
+       "not stored (it was stored, answered \"checked and applied\", and silently left out of the configuration)",
+       (r.status_code, "may not read the proxy's environment" in (_p9_json(r).get("message") or ""), kept), (400, True, ""))
+    r2 = su.post("/websites/%d/rules" % site.id, json={"rules": [], "raw": "header X-P306 yes"})
+    _db306.session.expire_all()
+    eq("M5 (POST /websites/<id>/rules): a snippet the configuration takes is stored (control)",
+       (r2.status_code, _db306.session.get(_Site306, site.id).raw_proxy_snippet), (200, "header X-P306 yes"))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -781,7 +799,7 @@ def _ran306(step, st):
 
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
-                _f27_wiring, _f28_node, _f29_disk, _m3_userdel)
+                _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():
