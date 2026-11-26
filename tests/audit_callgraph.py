@@ -86,7 +86,7 @@ class CallGraph:
         for name in LOG_NAMES_ALSO:
             found = self._member(("mod", LOG_MODULE), name, 0)
             if found and found[0] == "fn":
-                self._to_log = dict(self._reaching(found[1]), **self._to_log)
+                self._to_log = {**self._reaching(found[1]), **self._to_log}
 
     @classmethod
     def from_tree(cls, root, paths):
