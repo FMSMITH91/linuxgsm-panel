@@ -1,4 +1,4 @@
-"""Part 307 of the unit suite: SFTP on one specific address.
+"""Part 307 of the unit suite: SFTP on one specific address, and CI's artifact retention.
 
 1. SFTP "A specific address" (services/sftp_common, sftp_broker, routes/sftp_settings, ops/system_ops):
    the card lists the panel host's own addresses read with `ip -o addr` in the C locale, marks a public
@@ -7,10 +7,12 @@
    service (the running one within a check interval), says why on the card and in the audit log once,
    and never falls back to other addresses; it starts again when the address is back; the fail2ban
    jail bans on the SFTP port for a public address and not for a private one.
+2. CI: every actions/upload-artifact step in every workflow and local action keeps its artifact for an
+   explicit number of days: 7 for a run's own reports, 30 for a fuzz crash reproducer.
 
 HOW IT RUNS. Routes on part12's app with the host's address list stood in (the broker's own reader is
 driven once through a stand-in `ip`); the running service's watcher is driven through run_once with a
-stand-in child process.
+stand-in child process; the workflows are read as text.
 """
 import os
 import re as _re307
@@ -287,4 +289,56 @@ if _CFG_SNAP307 is None:
 else:
     _cfg307.CONFIG_FILE.write_bytes(_CFG_SNAP307)
 _cfg307._cfg_cache["key"] = None
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 2. CI: every uploaded artifact has an explicit retention
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _step_body307(lines, col):
+    """The lines of one step after its `uses:` line (at column `col`): up to the next step or a shallower line."""
+    body = []
+    for nxt in lines:
+        indent = len(nxt) - len(nxt.lstrip(" "))
+        if nxt.strip() and (indent < col or (nxt.lstrip().startswith("- ") and indent <= col)):
+            break
+        body.append(nxt)
+    return body
+
+
+def _key307(body, key):
+    """The value of `key:` in a step's lines (its comment cut), or None."""
+    return next((b.split(":", 1)[1].split("#")[0].strip() for b in body if b.strip().startswith(key + ":")), None)
+
+
+def _upload_steps307(text):
+    """[(artifact name, retention-days text or None)] for each actions/upload-artifact step in `text`."""
+    lines, out = text.splitlines(), []
+    for i, ln in enumerate(lines):
+        m = _re307.match(r"^(\s*)(- )?uses: actions/upload-artifact@", ln)
+        if m:
+            body = _step_body307(lines[i + 1:], len(m.group(1)) + len(m.group(2) or ""))
+            out.append((_key307(body, "name") or "?", _key307(body, "retention-days")))
+    return out
+
+
+_CTL_WF307 = ("    steps:\n      - name: a\n        uses: actions/upload-artifact@" + "a" * 40 + " # v7\n"
+              "        with:\n          name: kept\n          # why\n          retention-days: 7\n"
+              "      - uses: actions/upload-artifact@" + "b" * 40 + " # v7\n        with:\n          name: forever\n"
+              "          path: x\n      - name: next step\n        retention-days: 3\n")
+eq("ci artifacts: (control) the reader finds each upload step and its own retention, not the next step's",
+   _upload_steps307(_CTL_WF307), [("kept", "7"), ("forever", None)])
+_uploads307 = {}
+for _dir307 in (os.path.join(_ROOT307, ".github", "workflows"), os.path.join(_ROOT307, ".github", "actions")):
+    for _base307, _dirs307, _files307 in os.walk(_dir307):
+        for _fn307 in sorted(_files307):
+            if _fn307.endswith((".yml", ".yaml")):
+                with open(os.path.join(_base307, _fn307), encoding="utf-8") as _fh307:
+                    _found307 = _upload_steps307(_fh307.read())
+                if _found307:
+                    _uploads307[os.path.relpath(os.path.join(_base307, _fn307), _ROOT307)] = _found307
+_bad307 = {f: [s for s in steps if s[1] not in ("7", "30") or (s[1] == "30") != s[0].startswith("fuzz-crash-")]
+           for f, steps in _uploads307.items()}
+check("ci artifacts: every upload-artifact step keeps its artifact 7 days (a run's report) or 30 (a fuzz crash), "
+      "never GitHub's 90-day default",
+      sum(len(s) for s in _uploads307.values()) >= 7 and not any(_bad307.values()), repr(_uploads307))
 
