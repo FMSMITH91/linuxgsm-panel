@@ -164,7 +164,7 @@ check("pr_scope: the slug gh is given is REBUILT, not the argument's own text, a
 
 # ── 3. the wiring: every scoped job ─────────────────────────────────────────────────────────────
 _SCOPED50 = {
-    "ci.yml": ("checks", "coverage", "js-coverage", "gamedig-lockfile"),
+    "ci.yml": ("checks", "coverage", "coverage-verdict", "js-coverage", "js-coverage-verdict", "gamedig-lockfile"),
     "codeql.yml": ("analyze", "pr-alerts"),
     "security-code.yml": ("dependency-audit", "sast-bandit", "sast-semgrep"),
     "lighthouse.yml": ("lighthouse",),
@@ -180,7 +180,8 @@ _ALWAYS50 = {"security.yml", "dependency-review.yml", "fuzz.yml", "cflite_pr.yml
 _RUN50 = "steps.scope.outputs.docs_only != 'true'"
 _DOCS50 = "steps.scope.outputs.docs_only == 'true'"
 # The jobs that skip on their OWN list (pr_scope.py --job, part169): the same wiring, on `skip`.
-_PER_JOB50 = {("ci.yml", "coverage"), ("ci.yml", "js-coverage"), ("lighthouse.yml", "lighthouse")}
+_PER_JOB50 = {("ci.yml", "coverage"), ("ci.yml", "coverage-verdict"), ("ci.yml", "js-coverage"),
+              ("ci.yml", "js-coverage-verdict"), ("lighthouse.yml", "lighthouse")}
 
 
 def _gate50(key, docs_gate):
@@ -200,13 +201,13 @@ _SCOPE_ENV50 = ("EVENT: ${{ github.event_name }}", "PR: ${{ github.event.pull_re
 # anyway, by (workflow, job, step): each with the reason it is not gated like the rest.
 _DOCS_STEPS50 = {
     ("ci.yml", "checks", "Documentation-only pull request, so the unit suite alone (it reads the docs)"),
-    ("ci.yml", "coverage", "Record that this pull request changed nothing coverage measures"),
+    ("ci.yml", "coverage-verdict", "Record that this pull request changed nothing coverage measures"),
     ("codeql.yml", "pr-alerts",
      "Documentation-only pull request, so nothing was analysed and there is nothing to judge"),
 }
 _UNGATED50 = {
     # Uploads coverage.xml or, on a docs-only pull request, docs-only.txt (codacy-coverage.yml).
-    ("ci.yml", "coverage", "Upload the report"): None,
+    ("ci.yml", "coverage-verdict", "Upload the report"): None,
     # Its `if` needs the analyze step's success, which a docs-only pull request skips.
     ("codeql.yml", "analyze", "Upload the results to code scanning"): "steps.analyze.outcome == 'success'",
 }
@@ -356,7 +357,7 @@ _unit50 = next((s for s in _steps29(_checks50) if _name29(s).startswith("Documen
 check("docs-only: one CI leg still runs the unit suite on a docs-only pull request, set up as usual "
       "(its checks read README.md, SECURITY.md, the CHANGELOG and VERSIONS.md)",
       len(_docs_rows50) == 1
-      and _if50(_unit50) == _DOCS50 + " && matrix.docs" and "run: python tests/unit_test.py" in _unit50
+      and _if50(_unit50) == _DOCS50 + " && matrix.docs" and 'UNIT_SHARD="${PART#unit }" python tests/unit_test.py' in _unit50
       and _cs50.get("Install dependencies") == _RUN50 + " || matrix.docs"
       and sum(1 for k, v in _cs50.items() if v == _RUN50 + " || matrix.docs") == 2,
       repr(_cs50))
@@ -365,7 +366,7 @@ _unit_reads50 = [f for f in ("part06.py", "part37.py", "part42.py")
                  or "VERSIONS.md" in open(os.path.join(_root, "tests", "unit", f), encoding="utf-8").read()]
 check("docs-only: ...which is needed, because the unit suite does read the documentation",
       len(_unit_reads50) >= 2, repr(_unit_reads50))
-_cov50 = _code29(_job29(_ci50, "coverage"))
+_cov50 = _code29(_job29(_ci50, "coverage-verdict"))
 _cov_up50 = next((s for s in _steps29(_cov50) if _name29(s) == "Upload the report"), "")
 _cc50 = _wf29("codacy-coverage.yml")
 check("docs-only: the coverage job leaves docs-only.txt in its artifact instead of a report, which is "

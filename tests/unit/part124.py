@@ -29,7 +29,7 @@ from unit.part12 import _P9_TRIPPED, _p9_arm, _p9_patch, _p9_restore_all
 from unit.part20 import _patch, _patched
 from unit.part51 import _Q51, _alloc51
 from unit.part118 import _DPKG118, _SIM118
-from unit.reboot41_a import _POWER_NAMES41
+from unit.power_names import POWER_NAMES as _POWER_NAMES41
 import app as _app124  # noqa: E402
 from panel.core import terminal as _term124
 from panel.ops.ssh_manager import game as _game124
