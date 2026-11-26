@@ -131,7 +131,8 @@
   {% set _db_nav = db_overview() %}
   {# Websites: websites_nav() (panel/routes/websites.py) answers the list page's URL for a user who may
      open it (websites_access.can_open_page), else ''. Absent until that module registers it. A user
-     with websites and no server entry (a customer) gets the section as "Hosting". #}
+     with websites and no server entry (a customer) gets the section as "Hosting". It only decides
+     whether the entry shows: the link itself is built here by url_for, never a variable's text. #}
   {% set _ws_nav = websites_nav() if websites_nav is defined else '' %}
   {% set _srv_nav = has_permission('manage_servers') or has_permission('install_server') or _db_nav %}
   {% if _srv_nav or _ws_nav %}
@@ -147,7 +148,7 @@
       <i class="bi bi-database"></i> Databases</a></li>
     {% endif %}
     {% if _ws_nav %}
-    <li><a href="{{ _ws_nav }}" class="{% if request.endpoint in ('websites_page', 'website_page') %}active{% endif %}">
+    <li><a href="{{ url_for('websites_page') }}" class="{% if request.endpoint in ('websites_page', 'website_page') %}active{% endif %}">
       <i class="bi bi-globe2"></i> Websites</a></li>
     {% endif %}
   </ul>

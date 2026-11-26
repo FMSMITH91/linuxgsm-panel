@@ -97,6 +97,9 @@ try:
     _site_na301 = _page301("website.html", _CUST301, site=_SITE301, can_manage=True, can_files=True, site_admin=True)
     _nav_none301 = _page301("websites.html", _CUST301, nav=None, can_add=False)
     _nav_empty301 = _page301("websites.html", _CUST301, nav="", can_add=False)
+    _nav_js301 = (_page301("websites.html", _CUST301, nav="javascript:alert(1)", can_add=False),
+                  _page301("website.html", _CUST301, nav="javascript:alert(1)", site=_SITE301, can_manage=True,
+                           can_files=True, site_admin=False))
 finally:
     _drop301(_CUST301)
 
@@ -137,6 +140,10 @@ eq("sidebar: Websites appears when websites_nav() answers a URL, under 'Hosting'
 eq("sidebar: no entry (and no empty section) when websites_nav() answers '' or is not registered",
    (bool(_side_re301.search(_nav_empty301)), "Hosting" in _nav_empty301,
     bool(_side_re301.search(_nav_none301)), "Hosting" in _nav_none301), (False, False, False, False))
+eq("sidebar and back link: websites_nav() only decides whether they show; the address is the route's own (url_for), "
+   "never the text it answered", (bool(_side_re301.search(_nav_js301[0])), '<a href="/websites" class="small' in _nav_js301[1],
+                                  'data-list-url="/websites"' in _nav_js301[1], [p.count("javascript:") for p in _nav_js301]),
+   (True, True, True, [0, 0]))
 _srv301 = _list_sa301.find('<div class="sidebar-section">Servers</div>')
 _wsl301 = _list_sa301.find('<a href="/websites"')
 check("sidebar: a superadmin's entry sits in the Servers section, with Install a Server (and Databases when there is one)",

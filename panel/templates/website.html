@@ -9,12 +9,12 @@
    /api/websites/<id> by js/website_site.js; one panel shows at a time (?tab= picks it). #}
 {% set php_kind = site.kind in ('php', 'wordpress', 'phpbb') %}
 {% set list_url = websites_nav() if websites_nav is defined else '' %}
-<div id="ws-site" data-site-id="{{ site.id }}" data-kind="{{ site.kind }}" data-name="{{ site.name }}" data-list-url="{{ list_url }}"
+<div id="ws-site" data-site-id="{{ site.id }}" data-kind="{{ site.kind }}" data-name="{{ site.name }}" data-list-url="{{ url_for('websites_page') if list_url else '' }}"
      data-manage="{{ 1 if can_manage|default(false) else 0 }}" data-files="{{ 1 if can_files|default(false) else 0 }}"
      data-admin="{{ 1 if site_admin|default(false) else 0 }}" data-super="{{ 1 if current_user.is_superadmin else 0 }}">
   <div class="ws-site-head mb-2">
     <div class="minw-0">
-      {% if list_url %}<a href="{{ list_url }}" class="small text-secondary text-decoration-none"><i class="bi bi-arrow-left"></i> Websites</a>{% endif %}
+      {% if list_url %}<a href="{{ url_for('websites_page') }}" class="small text-secondary text-decoration-none"><i class="bi bi-arrow-left"></i> Websites</a>{% endif %}
       <h1 class="page-title mb-0 text-break"><i class="bi bi-globe2"></i> <span data-no-i18n>{{ site.name }}</span></h1>
       <div class="small"><span id="ws-dot" class="status-dot status-unknown" aria-hidden="true"></span><span id="ws-state">Loading…</span>
         <span id="ws-online" class="ms-1 text-secondary"></span></div>
