@@ -356,16 +356,17 @@ def _s293_scan():
        [sorted("%s=%s" % kv for kv in want_builds[b]) for b in ("b3", "iw4madmin")])
 
 
+def _caught293(mgrs, text):
+    """Every value Renovate's managers `mgrs` capture in `text` (an image's digest without its name)."""
+    pats = [_re293.compile(_re293.sub(r"\(\?<(?=[A-Za-z])", "(?P<", ms)) for m in mgrs for ms in m["matchStrings"]]
+    return {v.split("@")[-1] for pat in pats for x in pat.finditer(text) for v in x.groupdict().values() if v}
+
+
 def _s293_renovate():
     cat = _json293.loads(_read293(_CATALOG293))
     cfg = _json293.loads(_read293(os.path.join(_root, ".github", "renovate.json")))
     addon_mgrs = [m for m in cfg["customManagers"] if any("addon_images" in f for f in m.get("managerFilePatterns") or [])]
-    text = _read293(_CATALOG293)
-    caught = set()
-    for m in addon_mgrs:
-        for ms in m["matchStrings"]:
-            for x in _re293.finditer(_re293.sub(r"\(\?<(?=[A-Za-z])", "(?P<", ms), text):
-                caught.update(v.split("@")[-1] for v in x.groupdict().values() if v)
+    caught = _caught293(addon_mgrs, _read293(_CATALOG293))
     pins = {v.split("@")[-1] for e in cat["addons"].values() for v in e.values()}
     eq("Renovate: the five add-on managers read the catalog (never addons.py) and between them match every pin in it",
        (len(addon_mgrs), [m for m in addon_mgrs if "/^panel/addon_images/catalog\\.json$/" not in m["managerFilePatterns"]],

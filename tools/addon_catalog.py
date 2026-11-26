@@ -175,14 +175,10 @@ def _ran(required, runs):
 def checks_problem(lines):
     """Why the check runs in `lines` do not all pass; "" when they do."""
     runs = _runs(lines)
-    failed = sorted({n for n, s, c in runs if s == "completed" and c in _FAILED})
-    if failed:
-        return "a check failed: " + ", ".join(failed)
-    running = sorted({n for n, s, _ in runs if s != "completed"})
-    if running:
-        return "checks still running: " + ", ".join(running)
-    missing = [r for r in REQUIRED if not _ran(r, runs)]
-    return ("checks it must pass have not run: " + ", ".join(missing)) if missing else ""
+    found = (("a check failed: ", sorted({n for n, s, c in runs if s == "completed" and c in _FAILED})),
+             ("checks still running: ", sorted({n for n, s, _ in runs if s != "completed"})),
+             ("checks it must pass have not run: ", [r for r in REQUIRED if not _ran(r, runs)]))
+    return next((label + ", ".join(names) for label, names in found if names), "")
 
 
 def _cmd_build(argv, text):
