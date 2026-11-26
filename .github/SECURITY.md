@@ -117,6 +117,14 @@ holds, never the copy in the update: root-owned `/usr/local/lib/linuxgsm-panel/r
 root install, the installed commit's `release-signers` on a per-user one. An unsigned or unreadable
 target is held, and so, with no pin, is a `main` tip older than the installed commit.
 
+The same key signs the **add-on catalog** (`catalog/latest.json` on that branch), which lets a new add-on image
+reach panels without a panel update. Its signature uses its own namespace, `linuxgsm-panel-addons`, so it can
+never stand in for a release signature, nor the reverse. The panel checks it with the key it already holds for
+its update check before reading a byte of it, and refuses a catalog whose sequence number is not above the last
+one it accepted (rollback), one that has expired (freeze), and one that names an unknown add-on or an image not
+pinned by a full sha256 digest. A newer catalog only offers an add-on's Update button; nothing is installed until
+someone with Manage add-ons presses it (docs/addons.md, "New add-on versions without a panel update").
+
 What it does not cover:
 
 - **The first install is trust on first use.** `curl … | bash` runs GitHub's installer, and a host
