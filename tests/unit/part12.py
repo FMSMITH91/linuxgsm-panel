@@ -308,6 +308,16 @@ def _p9_audit_count(action):
         return AuditLog.query.filter_by(action=action).count()
 
 
+def _p9_audit_after(action, before_id):
+    """The newest audit row for `action` when it is newer than row id `before_id`, else _P9_NO_AUDIT.
+
+    For a check whose request comes right after another that wrote the same action: the newest row
+    alone is the earlier request's when this one writes none.
+    """
+    row = _p9_audit(action)
+    return row if row.id is not None and (before_id is None or row.id > before_id) else _P9_NO_AUDIT
+
+
 def _p9_seeded_default_group():
     """[(is_default, permissions)] of each group the fresh-install seeder (models._ensure_default_group) makes.
 
@@ -1236,16 +1246,20 @@ try:
             ("/api/remote/%d/security/block" % P9_HOST, {"ip": _hl_zoned}, "ufw_block"),
             ("/api/remote/%d/security/unban" % P9_HOST, {"jail": "sshd", "ip": _hl_zoned},
              "fail2ban_unban")):
+        # Each entry is its own request's row (review 1124): the remote entries read the panel-host
+        # rows just before them when the remote routes wrote none.
+        _hl_before = _p9_audit(_hl_act).id
         _A.post(_hl_path, json=_hl_body)
-        _hl_targets.append(_p9_audit(_hl_act).target)
+        _hl_targets.append(_p9_audit_after(_hl_act, _hl_before).target)
     eq("security block/unban (panel host and remote): a zone-id address is audited as a fixed "
        "text, never the request's", _hl_targets, ["(not an IP address)"] * 4)
     _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (True, "blocked")))
     _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (True, "blocked"))
     _hl_targets = []
     for _hl_path in ("/api/panel/security/block", "/api/remote/%d/security/block" % P9_HOST):
+        _hl_before = _p9_audit("ufw_block").id
         _A.post(_hl_path, json={"ip": " 2001:0DB8::0009 "})
-        _hl_targets.append(_p9_audit("ufw_block").target)
+        _hl_targets.append(_p9_audit_after("ufw_block", _hl_before).target)
     eq("security block (panel host and remote): ...and an ordinary one as its canonical address "
        "(positive control)", _hl_targets, ["2001:db8::9"] * 2)
     _p9_patch(_p9_rv, "remote_ufw_allow_from", lambda *a, **k: (False, "Source must be an IP"))
