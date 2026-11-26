@@ -354,14 +354,14 @@ _con298 = _sqlite298.connect(":memory:")
 try:
     for _t in sorted({_t for _t, _c in _NEWCOLS298}):
         _con298.execute('CREATE TABLE "%s" (id INTEGER PRIMARY KEY)' % _t)
-        _con298.execute('INSERT INTO "%s" (id) VALUES (1)' % _t)
+        _con298.execute('INSERT INTO "%s" (id) VALUES (1)' % _t)  # nosec B608 - the model's own table names
     for (_t, _c) in _NEWCOLS298:
         _ddl = _models298._LIGHT_MIGRATIONS.get((_t, _c))
         if _ddl is None:
             _mig298[(_t, _c)] = "no entry"
             continue
         _con298.execute(_ddl)
-        _mig298[(_t, _c)] = _con298.execute('SELECT "%s" FROM "%s" WHERE id = 1' % (_c, _t)).fetchone()[0]
+        _mig298[(_t, _c)] = _con298.execute('SELECT "%s" FROM "%s" WHERE id = 1' % (_c, _t)).fetchone()[0]  # nosec B608 - the model's own table names
 finally:
     _con298.close()
 eq("websites: every column added to an existing table has a light migration that adds it to an older "

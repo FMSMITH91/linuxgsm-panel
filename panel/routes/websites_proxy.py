@@ -34,9 +34,9 @@ MAX_CIDRS = 200
 TOKEN_MAX = 4096
 S_MODE = "Choose how the websites are reached: public, restricted or tunnel."
 S_CIDR = "{cidr} is not a network address like 203.0.113.0/24 or 2001:db8::/32."
-S_TOKEN = "Paste the tunnel's token: one line of at most 4096 characters."
+S_TOKEN = "Paste the tunnel's token: one line of at most 4096 characters."  # nosec B105 - a sentence for the page, not a credential
 S_RESTRICTED_EMPTY = "A restricted host needs at least one network or preset in its allow list."
-S_TUNNEL_NO_TOKEN = "A tunnel needs its token."
+S_TUNNEL_NO_TOKEN = "A tunnel needs its token."  # nosec B105 - a sentence for the page, not a credential
 
 
 def _remote():
