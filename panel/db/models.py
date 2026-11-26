@@ -2109,6 +2109,40 @@ def _fpm_grant_file_permissions():
             group.set_permissions(sorted(perms | add))
 
 
+def _layer_legacy_password_hashes():
+    """Data migration 4: every bcrypt-era password hash wrapped in Argon2id (auth.layer_legacy_hash).
+
+    The current hash and the reuse history alike. OWASP Password Storage Cheat Sheet, "Upgrading
+    Legacy Hashes": layering the old hash inside the new algorithm protects an account that has not
+    signed in since the upgrade, whose bcrypt hash otherwise stayed in the database as it was. The
+    owner's next sign-in replaces it with a direct Argon2id hash (needs_rehash). Safe to repeat: a
+    hash already layered, or Argon2id, is left as it is.
+    """
+    from panel.security.auth import layer_legacy_hash      # deferred: auth imports this module
+    for user in User.query.all():
+        layered = layer_legacy_hash(user.password_hash)
+        if layered:
+            user.password_hash = layered
+        history = _layered_history(user.password_history, layer_legacy_hash)
+        if history is not None:
+            user.password_history = history
+
+
+def _layered_history(text, layer):
+    """A reuse history (JSON list) with each bcrypt-era hash layered by `layer`; None when nothing changes.
+
+    An unreadable history is left as it is (set_password starts it again).
+    """
+    try:
+        history = json.loads(text or "[]")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(history, list):
+        return None
+    new = [(layer(h) or h) if isinstance(h, str) else h for h in history]
+    return json.dumps(new) if new != history else None
+
+
 # The data migrations, in order. PRAGMA user_version in the database file records how many have
 # run, so each runs ONCE per database, on the start that first finds it missing: a fresh database
 # (on its empty tables), an upgraded one, and a backup taken before it and restored later, which
@@ -2119,6 +2153,7 @@ _DATA_MIGRATIONS = (
     (_autostart_off_for_unfinished_installs, "PRAGMA user_version = 1"),
     (_r21b_canonical_remote_hosts, "PRAGMA user_version = 2"),
     (_fpm_grant_file_permissions, "PRAGMA user_version = 3"),
+    (_layer_legacy_password_hashes, "PRAGMA user_version = 4"),
 )
 
 

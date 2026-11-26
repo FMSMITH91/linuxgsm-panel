@@ -7,6 +7,7 @@ resolve across its submodules).
 import re
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 from panel.core import i18n, terminal
+from panel.core.stdin_chunks import StdinChunks
 from panel.security import privileged as _priv
 import posixpath as _pp
 import unicodedata as _ud
@@ -232,12 +233,24 @@ def _guarded_write(user, abspath, inner):
     return _guarded(user, abspath, _login_guard(_core._quote(f"/home/{user}"), "p") + inner)
 
 
-# Biggest base64 payload we will put in a single command. The whole `bash -c '<script>'` is ONE
-# argv entry, and Linux caps a single argument at MAX_ARG_STRLEN (131072 bytes) — so this stays
-# comfortably below that with room for the surrounding script. 80k of base64 is ~60 KB of file,
-# which covers essentially every config, script and Lua file a game server holds.
-_ONE_SHOT_B64 = 80000
-_CHUNK_B64 = 50000
+# The file's bytes travel on the command's STDIN as base64, never in the command: the `sudo -u <acct>
+# bash -c '...'` text is an argv that any local account reads in /proc/<pid>/cmdline (no hidepid by
+# default) and that sudo logs as COMMAND=, and a config written this way carries RCON and admin
+# passwords, a steampass and alert tokens. Sent in slices of _WRITE_B64_STEP bytes of file (a
+# multiple of 3, so each slice's base64 joins the next with no padding), so a large upload is never
+# held as one base64 copy. With no argv limit to fit, every file is ONE command.
+_WRITE_B64_STEP = 49152
+# The write's deadline: a minute, plus a second per 128 KB of base64, so a 50 MB upload over a slow
+# link is not cut off part-way (it was a minute PER 50 KB chunk before).
+_WRITE_B64_RATE = 131072
+
+
+def _b64_stdin(data_bytes):
+    """`data_bytes` as base64, in slices, for a command's stdin (run_command's stdin_text)."""
+    import base64 as _b64
+    view = memoryview(data_bytes)
+    return StdinChunks(_b64.b64encode(view[i:i + _WRITE_B64_STEP])
+                       for i in range(0, len(view), _WRITE_B64_STEP))
 
 
 def _keep_mode(dest, staged):
@@ -285,18 +298,18 @@ def _r23b_console_frag(user, selfname):
 
 
 def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
-    """Write bytes to a file as the game user, via base64.
+    """Write bytes to a file as the game user, in ONE command, the bytes on its stdin as base64.
 
-    Round trips are the whole cost here. Every run_command is a separate SSH exec, and this used to
-    make at least THREE per file — mkdir, one per base64 chunk, then the decode — which is what made
-    uploading a folder of several hundred small Lua files take minutes: the work is nothing, the
-    latency is everything. A file small enough to fit one command now takes ONE, and that is almost
-    every file anyone uploads. Large files still stream in chunks, with the mkdir folded into the
-    first one.
+    Round trips are the whole cost here. Every run_command is a separate SSH exec, and uploading a
+    folder of several hundred small Lua files once took minutes when each file cost three; each
+    file is one command.
 
-    Both paths write to a temp file and `mv` it into place. The previous form decoded straight over
-    the destination, so a failure part-way left the real file truncated; a rename within the same
-    directory is atomic, so the destination is either the old file or the whole new one.
+    The bytes never appear in the command (see _WRITE_B64_STEP): the command's text is visible to
+    every local account and to sudo's log, and the stdin is not.
+
+    The command writes a temp file and `mv`s it into place. Decoding straight over the
+    destination left the real file truncated when a write failed part-way; a rename within the
+    same directory is atomic, so the destination is either the old file or the whole new one.
 
     A rename also replaces the destination's INODE, and the temp file was created under the game
     user's umask — so without _keep_mode every save reset the file to 0644. Editing LinuxGSM's own
@@ -308,18 +321,12 @@ def _write_file_as_user(server, user, abspath, data_bytes, selfname=None):
     With `selfname`, a target that resolves to the live console's log is refused on the host
     (_r23b_console_frag) before any byte is staged.
     """
-    import base64 as _b64
-    b64 = _b64.b64encode(data_bytes).decode()
-    tmp = abspath + ".paneltmp"
     parent = _pp.dirname(abspath)
     mk = "mkdir -p " + _core._quote(parent)
-    # The guard rides whichever command goes first, so a target that resolves outside the home dir
-    # is refused before any byte is written.
+    # The guard rides the front of the command, so a target that resolves outside the home dir is
+    # refused before any byte is written.
     mk = _r23b_console_frag(user, selfname) + mk
-    if len(b64) <= _ONE_SHOT_B64:
-        ok, msg = _write_one_shot(server, user, abspath, b64, mk, selfname)
-    else:
-        ok, msg = _write_chunked(server, user, abspath, b64, tmp, mk, selfname)
+    ok, msg = _write_one_shot(server, user, abspath, data_bytes, mk, selfname)
     if not ok:
         # A host-side refusal's mark (_r31j_console_mark), as its fixed text.
         said = next((text for mark, text in _r34b_write_marks() if mark in (msg or "")), None)
@@ -334,76 +341,28 @@ def _r34b_write_marks():
             (_R32J_RESERVED_MARK, R34B_WRITE_RESERVED), (_LOGIN_MARK, LOGIN_FILE_REFUSED))
 
 
-def _write_one_shot(server, user, abspath, b64, mk, selfname=None):
-    """Write a small base64 payload in ONE guarded command: decode to a staged copy, keep mode, rename."""
+def _write_one_shot(server, user, abspath, data_bytes, mk, selfname=None):
+    """Write `data_bytes` in ONE guarded command: decode stdin to a staged copy, keep mode, rename."""
     # `mv -T`: the destination is the file's own name, never a directory to move INTO. Plain
     # `mv -f tmp cfg`, with a folder named cfg there, put the file inside it as cfg/cfg.paneltmp
     # and exited 0 — "Uploaded", a success audit row, and no file at `cfg`. -T refuses instead,
     # and the staged copy is removed rather than left beside it.
     # Staged beside the resolved target (_R22B_TARGET), so the rename stays inside one directory.
+    # `base64 -d` is the one reader of stdin in the command; a refusal before it leaves it unread.
     t, st = _R22B_TARGET, _R22B_TARGET + ".paneltmp"
-    inner = (f"{mk} && {_R22B_MKDIR} && printf %s {_core._quote(b64)} | base64 -d > {st} "
+    inner = (f"{mk} && {_R22B_MKDIR} && {{ base64 -d > {st} || {{ rm -f {st}; false; }}; }} "
              f"&& {_keep_mode(t, st)} && {{ mv -f -T {st} {t} "
              f"|| {{ rm -f {st}; false; }}; }}")
+    timeout = 60 + (len(data_bytes) * 4 // 3) // _WRITE_B64_RATE
     out, e, rc = _core.shell_as_game_user(server, user, _guarded_write(user, abspath, inner),
-                                          timeout=60, selfname=selfname)
+                                          timeout=timeout, selfname=selfname,
+                                          stdin_text=_b64_stdin(data_bytes))
     if _r12b_outside_home(out):
         return False, "Invalid path"
     mark = _r31j_console_mark(out)
     if mark:
         return False, mark
     return (rc == 0), (e or out or "")
-
-
-def _write_chunked(server, user, abspath, b64, tmp, mk, selfname=None):
-    """Stream a large base64 payload to `tmp` in chunks (guard + mkdir on the first), then decode."""
-    refused = _r23b_send_chunks(server, user, abspath, (b64, tmp, mk), selfname)
-    if refused:
-        return refused
-    return _r23b_chunk_finish(server, user, abspath, tmp, selfname)
-
-
-def _r23b_send_chunks(server, user, abspath, payload, selfname):
-    """_write_chunked's chunks, appended to `tmp`: None when all went, else its (False, why)."""
-    b64, tmp, mk = payload
-    op = ">"
-    for i in range(0, max(len(b64), 1), _CHUNK_B64):
-        inner = f"printf %s {_core._quote(b64[i:i + _CHUNK_B64])} {op} {_core._quote(tmp)}"
-        if op == ">":
-            inner = _guarded_write(user, abspath, f"{mk} && {inner}")
-        out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60, selfname=selfname)
-        if op == ">" and _r12b_outside_home(out):
-            return False, "Invalid path"
-        if op == ">" and _r31j_console_mark(out):
-            return False, _r31j_console_mark(out)
-        if rc != 0:
-            # A chunk that failed part-way leaves what came before it staged in the user's folder,
-            # where the browser lists it as `<name>.paneltmp`.
-            _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30, selfname=selfname)
-            return False, e or "write failed"
-        op = ">>"
-    return None
-
-
-def _r23b_chunk_finish(server, user, abspath, tmp, selfname):
-    """_write_chunked's last command: decode the staged chunks over the file, then remove them."""
-    # `mv -T` for the reason _write_one_shot gives; a refused rename removes both staged copies.
-    # Guarded again: it is its own command, and it is the one that needs "$p" (_R22B_TARGET).
-    # The staged chunks go whatever happens after the guard: a finish whose folder the account
-    # cannot write, a full disk during the decode or a failed _keep_mode stopped the `&&` chain
-    # before its `rm -f`, and the whole payload stayed beside the file as `<name>.paneltmp`.
-    t, new = _R22B_TARGET, _R22B_TARGET + ".new"
-    fin = (f"{{ {_R22B_MKDIR} && base64 -d {_core._quote(tmp)} > {new} "
-           f"&& {_keep_mode(t, new)} "
-           f"&& {{ mv -f -T {new} {t} || {{ rm -f {new}; false; }}; }}; }}; "
-           f"r=$?; rm -f {_core._quote(tmp)}; exit $r")
-    fin = _r23b_console_frag(user, selfname) + fin
-    o, e, rc = _core.shell_as_game_user(server, user, _guarded_write(user, abspath, fin), timeout=60,
-                                        selfname=selfname)
-    if _r12b_outside_home(o) or _r31j_console_mark(o):
-        _core.shell_as_game_user(server, user, f"rm -f {_core._quote(tmp)}", timeout=30, selfname=selfname)
-        return False, ("Invalid path" if _r12b_outside_home(o) else _r31j_console_mark(o))
-    return (rc == 0), (e or o or "")
 
 
 # Applied at the top of every config/mods entry point below. _safe_abspath already rejects an

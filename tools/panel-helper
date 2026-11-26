@@ -2140,9 +2140,21 @@ def _escalation_verdict(user):
     if not matched:
         return "no", ""
     if all(items == ["ALL"] for items, _rest in matched):
-        return "yes", ("a sudoers rule for ALL users grants it sudo; narrow that rule to named "
-                       "users or groups")
-    return "yes", "a sudoers rule grants it sudo"
+        return "yes", ("a sudoers rule for ALL users%s grants it sudo; narrow that rule to named "
+                       "users or groups" % _sudoers_where(matched))
+    return "yes", "a sudoers rule%s grants it sudo" % _sudoers_where(matched)
+
+
+def _sudoers_where(matched):
+    """Name where `matched`'s rules are, for the operator to know which file to narrow.
+
+    " (<file>:<line>, ...)" for the first three, "" when none could be placed.
+    """
+    where = [w for w in dict.fromkeys(getattr(rest, "where", "") for _items, rest in matched) if w]
+    if not where:
+        return ""
+    more = " and %d more" % (len(where) - 3) if len(where) > 3 else ""
+    return " (%s%s)" % (", ".join(where[:3]), more)
 
 
 # Where _can_already_escalate reads the sudo policy from. Module-level so a test can point it at a
@@ -2151,6 +2163,22 @@ SUDOERS_FILE = "/etc/sudoers"
 SUDOERS_DIR = "/etc/sudoers.d"
 _SUDOERS_INCLUDE_RE = re.compile(r"[@#]include(dir)?\s+(.+)")
 _SUDOERS_ALIAS_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+class _SudoersLine(str):
+    """A logical sudoers line, or the part of one after its user list, that remembers `where`.
+
+    `where` is "<file>:<line>" of the physical line it starts on, "" when not known.
+    """
+
+    where = ""
+
+
+def _sudoers_placed(text, where):
+    """`text` as a _SudoersLine at `where`."""
+    line = _SudoersLine(text)
+    line.where = where
+    return line
 
 
 def _sudoers_lines(path, seen, depth=0):
@@ -2184,7 +2212,7 @@ def _r13b_sudoers_file_lines(path, seen, depth):
         if m:
             out.extend(_r13b_included_lines(m, path, seen, depth))
             continue
-        out.append(line)
+        out.append(_sudoers_placed(line, "%s:%s" % (path, line.where)))
     return out
 
 
@@ -2217,27 +2245,31 @@ def _sudoers_logical_lines(text):
     as a line of its own. Joining `\\<newline>` across the whole text first, as this used to, glued
     that next line onto the comment and then deleted it with the comment: a `# ... \\` line followed
     by `steam ALL=(ALL) NOPASSWD: ALL` read as no rule for steam, and steam was enrolled. The
-    continuation itself is `\\`, optional blanks, then the newline."""
-    out, pending = [], []
-    for raw in text.splitlines():
+    continuation itself is `\\`, optional blanks, then the newline.
+
+    Each line comes back as a _SudoersLine whose `where` is the number of the physical line it
+    starts on (_r13b_sudoers_file_lines puts the file's path in front)."""
+    out, pending, start = [], [], 0
+    for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not pending and _SUDOERS_INCLUDE_RE.fullmatch(line):
-            out.append(line)
+            out.append(_sudoers_placed(line, str(number)))
             continue
         # `#` starts a comment, except where it introduces a uid (`#1000`, `%#1000`).
         code, comments = re.subn(r"#(?![0-9]).*", "", line)
         code = code.strip()
+        start = start if pending else number
         if not comments and code.endswith("\\"):
             pending.append(code[:-1])
             continue
         joined = " ".join(pending + [code]).strip()
         pending = []
         if joined:
-            out.append(joined)
+            out.append(_sudoers_placed(joined, str(start)))
     if pending:
         joined = " ".join(pending).strip()
         if joined:
-            out.append(joined)
+            out.append(_sudoers_placed(joined, str(start)))
     return out
 
 
@@ -2278,7 +2310,8 @@ def _sudoers_matching_rules(lines, user, names, uid, gids):
         m = re.match(r"((?:[^\s,]+\s*,\s*)*[^\s,]+)\s", line)
         if not m:
             raise ValueError("unparsed sudoers line: %s" % line)
-        rules.append(([x.strip() for x in m.group(1).split(",")], line[m.end():]))
+        rules.append(([x.strip() for x in m.group(1).split(",")],
+                      _sudoers_placed(line[m.end():], getattr(line, "where", ""))))
 
     def matches(item, depth=0):
         if depth > 16:

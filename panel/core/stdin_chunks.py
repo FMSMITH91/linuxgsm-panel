@@ -49,9 +49,16 @@ def write_channel_stdin(stdin, stdin_text):
 
     StdinChunks go one chunk at a time; anything else is written whole, as it always was (paramiko's
     own file splits it into packets without copying).
+
+    A command that exits without reading it all (a write the guard refused before its decode)
+    closes the channel, and the write that follows raises: that ends the writing, as it does on
+    the local transport, and the command's own exit status and output say what happened.
     """
     if stdin_text is None:
         return
-    for piece in (stdin_text if isinstance(stdin_text, StdinChunks) else (stdin_text,)):
-        stdin.write(piece)
-    stdin.flush()
+    try:
+        for piece in (stdin_text if isinstance(stdin_text, StdinChunks) else (stdin_text,)):
+            stdin.write(piece)
+        stdin.flush()
+    except OSError:
+        return

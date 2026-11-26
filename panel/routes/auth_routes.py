@@ -15,8 +15,8 @@ from panel.core.config import (decrypt_secret, encrypt_secret)
 from panel.security import banlist as _banlist
 from panel.security.headers import (no_store)
 from panel.db.models import (User, db)
-from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash, check_password, client_ip,
-    dummy_password_check,
+from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash, client_ip,
+    login_password_check,
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
     session_fingerprint, throttle_key, verify_totp_step)
 from panel.services import (notifications)
@@ -1002,14 +1002,12 @@ def _login_password(attempt):
     user, slot, refused = _login_reserve(attempt, username)
     if refused is not None:
         return refused
-    if user and user.is_active and check_password(password, user.password_hash):
+    # The same hashing work whether the name has an active account or not, and whatever format its
+    # hash is in (login_password_check), so the response time does not say which.
+    active = bool(user and user.is_active)
+    if login_password_check(password, user.password_hash if active else None) and active:
         account_guard.account_release(slot)
         return _login_password_ok(attempt, user, password, remember)
-    # For a missing/inactive user we skipped the (slow) hash compare above;
-    # run a dummy one now so response time doesn't reveal whether the account
-    # exists (username-enumeration by timing).
-    if not (user and user.is_active):
-        dummy_password_check(password)
     # Reason for the audit log only — the flash message below stays generic so a real
     # attacker still can't tell existing usernames from wrong passwords (no enumeration).
     _reason = ("no such user" if not user

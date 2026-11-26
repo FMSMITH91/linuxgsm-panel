@@ -292,17 +292,18 @@ _CONSOLE89 = "log/console/p89srv-console.log"
 _CONSOLE_STATE89 = {"now": "live"}       # whether the console is attached (unit.console_live)
 
 
-def _bash89(script):
+def _bash89(script, stdin=None):
     r = _sp89.run(["/bin/bash", "-c", script], capture_output=True, text=True,  # nosec B603 - own text
-                  timeout=30)
+                  timeout=30, input=stdin)
     return r.stdout, r.stderr, r.returncode
 
 
 def _fshell89(server, user, script, timeout=30, **k):
     # The console attached (unit.console_live), as for a running server: the host refuses the
     # console's log only then.
+    feed = b"".join(k["stdin_text"]).decode() if k.get("stdin_text") is not None else None
     return _bash89(_console_state89(script.replace("/home/p89u", _HOME89), _CONSOLE_STATE89["now"],
-                                    k.get("selfname") or "nosuchserver"))
+                                    k.get("selfname") or "nosuchserver"), stdin=feed)
 
 
 def _put89(rel, data):
@@ -338,7 +339,7 @@ def _console_writes89():
     _tree89()
     log = os.path.join(_HOME89, _CONSOLE89)
     ino = os.stat(log).st_ino
-    big = b"B" * (70 * 1024)          # past _ONE_SHOT_B64: the chunked path
+    big = b"B" * (70 * 1024)          # more than one stdin slice
     want = _files89.WRITE_CONSOLE
     got = {
         "save by name": _files89.write_file(NS(), "p89u", _CONSOLE89, "", selfname="p89srv"),

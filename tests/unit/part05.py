@@ -6871,8 +6871,9 @@ try:
     with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
         _fh.write("ALL ALL=(ALL) NOPASSWD: /usr/bin/id\ndeploy ALL=(ALL) ALL\n")
     _v = _helper._escalation_verdict("deploy")
-    check("enrolment: ...while a rule naming the account itself says so plainly",
-          _v == ("yes", "a sudoers rule grants it sudo"), repr(_v))
+    _sg_at = os.path.join(_sg_dir, "90-ops")
+    check("enrolment: ...while a rule naming the account itself says so plainly, with where the rules are",
+          _v == ("yes", "a sudoers rule (%s:1, %s:2) grants it sudo" % (_sg_at, _sg_at)), repr(_v))
 
     # sudo also reads rules from LDAP or SSSD when nsswitch.conf says so, and this parser never
     # sees those: an account granted sudo there read as "cannot escalate" and was enrolled. It now
