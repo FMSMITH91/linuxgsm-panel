@@ -97,14 +97,14 @@ def _disk_case294(linked):
 
 _ref294, _del294, _disk294 = _disk_case294(linked=True)
 check("backup disk: a ~/lgsm/backup linked to a big disk is measured there (900 GB free, not the home's 3 GB)",
-      _disk294.get("free") == 966367641600, _disk294)
-check("backup disk: with the backup folder on a big disk, the headroom prune deletes nothing", _del294 == [], _del294)
+      _disk294.get("free") == 966367641600, repr(_disk294))
+check("backup disk: with the backup folder on a big disk, the headroom prune deletes nothing", _del294 == [], repr(_del294))
 check("backup disk: with the backup folder on a big disk, the pre-flight check does not refuse the backup",
-      _ref294 is None, _ref294)
+      _ref294 is None, repr(_ref294))
 _ref294, _del294, _disk294 = _disk_case294(linked=False)
-check("backup disk (control): no backup folder yet reads the home's filesystem", _disk294.get("free") == 3221225472, _disk294)
+check("backup disk (control): no backup folder yet reads the home's filesystem", _disk294.get("free") == 3221225472, repr(_disk294))
 check("backup disk (control): a tight home with no backup folder still refuses the backup",
-      bool(_ref294) and "Not enough disk space" in _ref294, _ref294)
+      bool(_ref294) and "Not enough disk space" in _ref294, repr(_ref294))
 _sent294 = []
 try:
     _p9_patch(_core294, "run_command", lambda *a, **k: _sent294.append(a) or ("", "", 1))
@@ -113,7 +113,7 @@ try:
 finally:
     _p9_restore_all()
 check("backup disk: an unsafe account name sends nothing and reads zeros",
-      _disk294 == {"free": 0, "total": 0} and not _sent294, (_disk294, _sent294))
+      _disk294 == {"free": 0, "total": 0} and not _sent294, repr((_disk294, _sent294)))
 
 
 # ── 2. A backup's database dump holds each database ───────────────────────────────────────────────
@@ -166,14 +166,14 @@ finally:
 _note294, _while294 = _bd294.get("during_restore") or (None, None)
 check("backup dump: a database being restored is left out of the backup's dump and said",
       _while294 == [["gs_p294b"]] and "gs_p294a is being dumped, restored or deleted right now." in str(_note294 or ""),
-      (_note294, _while294))
+      repr((_note294, _while294)))
 eq("backup dump: the restore it overlapped still completes", getattr(_bd294.get("restore"), "status_code", 0), 200)
 _nested294 = _bd294.get("nested")
 check("backup dump: a restore asked for while the backup dumps that database is refused (409, being dumped)",
       _nested294 is not None and _nested294.status_code == 409
-      and "being dumped" in _p9_json(_nested294).get("message", ""), _nested294)
+      and "being dumped" in _p9_json(_nested294).get("message", ""), repr(_nested294))
 check("backup dump (control): with nothing else running, every database is dumped in one call and nothing is said",
-      _bd294.get("alone") is None and _bd294.get("alone_dumped") == [["gs_p294a", "gs_p294b"]], _bd294)
+      _bd294.get("alone") is None and _bd294.get("alone_dumped") == [["gs_p294a", "gs_p294b"]], repr(_bd294))
 
 
 # ── 3. A restore cut while removing the aside copy is settled as done ─────────────────────────────
@@ -238,10 +238,10 @@ if _missing190:
 else:
     _st294, _kept294, _live294 = _retry_after_fail294(failed=True)
     check("game restore: a retry after a failed undo is refused and keeps the folder holding the server's own files",
-          (_st294, _kept294, _live294) == ("refused", True, "world v2"), (_st294, _kept294, _live294))
+          (_st294, _kept294, _live294) == ("refused", True, "world v2"), repr((_st294, _kept294, _live294)))
     _st294, _kept294, _live294 = _retry_after_fail294(failed=False)
     check("game restore (control): with no failed undo on record the same run restores the archive",
-          (_st294, _live294) == ("done", "world v1"), (_st294, _kept294, _live294))
+          (_st294, _live294) == ("done", "world v1"), repr((_st294, _kept294, _live294)))
 
 
 # ── 5. An unread console is not "no such player" ──────────────────────────────────────────────────
@@ -403,7 +403,7 @@ finally:
 _flag294 = _bk294.get("flag") or ([None], [None], None)
 check("Backup button: while a scheduled or queued backup of the server runs, it dumps nothing and runs no backup, and "
       "its outcome is audited as refused", _flag294[:2] == ([], []) and _flag294[2] is not None
-      and not _flag294[2][0] and "another backup of this server is running" in (_flag294[2][1] or ""), _flag294)
+      and not _flag294[2][0] and "another backup of this server is running" in (_flag294[2][1] or ""), repr(_flag294))
 eq("Backup button: while another Backup-button run holds the server, a second one dumps nothing and runs nothing",
    _bk294.get("claimed"), (True, [], []))
 eq("Backup button (control): alone it dumps and runs, a sweep asking during its dump sees it running, and it lets "
