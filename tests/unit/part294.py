@@ -6,6 +6,8 @@
 2. A backup's database dump (the sweep, Back up now and the Backup button all dump through
    dump_for_backup) holds each database as the Databases tab's own dump does: one being restored is left
    out and said, and a restore asked for while the backup dumps it is refused (409).
+3. A restore cut by a signal while it removes the aside copy leaves its state saying done, so the
+   recovery that settles the lost answer reports the restore as completed, not "nothing was changed".
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -17,12 +19,14 @@ import subprocess as _sp294  # nosec B404 - bash over this part's own scratch fi
 import tempfile as _tf294
 from types import SimpleNamespace as _NS294
 
-from unit.part01 import check, eq
+from unit.part01 import check, eq, skip
+from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
 from unit.part12 import P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_json, _p9_new_server, _p9_patch, _p9_restore_all
 from panel.core.config import encrypt_secret as _enc294
 from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, game as _game294
 from panel.routes import databases as _dbr294
+from panel.services import game_restore as _grs294
 
 _TMP294 = _tf294.mkdtemp(prefix="p294-")
 
@@ -154,3 +158,33 @@ check("backup dump: a restore asked for while the backup dumps that database is 
       and "being dumped" in _p9_json(_nested294).get("message", ""), _nested294)
 check("backup dump (control): with nothing else running, every database is dumped in one call and nothing is said",
       _bd294.get("alone") is None and _bd294.get("alone_dumped") == [["gs_p294a", "gs_p294b"]], _bd294)
+
+
+# ── 3. A restore cut while removing the aside copy is settled as done ─────────────────────────────
+def _restore_cut294():
+    """(restored file, outcome the recovery read, work files left after it) for a TERM after "done"."""
+    sb = _Sb190()
+    beat = _grs294.HEARTBEAT
+    _grs294.HEARTBEAT = 1
+    try:
+        ready = sb.vet()[1][1]
+        with open(os.path.join(sb.bdir, _UNDO190), "wb") as f:
+            f.write(b"undo")
+        rs = _grs294.restore_script(_U190, _U190, _NAME190, ready["t0"], ready["need"], _UNDO190, busy_polls=1,
+                                    members=ready["members"])
+        cut = rs.replace('echo done > "$st"; then ', 'echo done > "$st"; then kill -TERM $$; ', 1)
+        sb.run(cut)
+        outcome = _grs294.recover_outcome(sb.run(_grs294.recover_script(_U190, ready["t0"]))[0])
+        wd = os.path.join(sb.home, _grs294.WORK_DIR)
+        left = sorted(f for f in (os.listdir(wd) if os.path.isdir(wd) else []) if f != "panel-restore.lock")
+        return cut != rs, sb.read("serverfiles/world/region/r.0.mca"), outcome, left
+    finally:
+        _grs294.HEARTBEAT = beat
+        sb.gone()
+
+
+if _missing190:
+    skip("game restore: a signal during the clean-up is settled as a completed restore", "missing tools: %s" % _missing190)
+else:
+    eq("game restore: a signal during the clean-up is settled as a completed restore", _restore_cut294(),
+       (True, "world v1", "done", []))

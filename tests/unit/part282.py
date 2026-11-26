@@ -467,7 +467,7 @@ def _restore_signal282():
         sb.gone()
     eq("game restore (bash): a SIGTERM after the switch is noted done keeps the restored files and removes the "
        "aside copy (the trap moved the old files back over a finished restore)", got,
-       (True, True, "world v1", None, [], False))
+       (True, True, "world v1", None, ["panel-restore-state-%d" % ready["t0"]], False))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
