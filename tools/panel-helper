@@ -2832,6 +2832,26 @@ def _web_exists(user):
     return True
 
 
+# userdel refuses (exit 8) while a process of the user is still running. Right after the account's user
+# manager was stopped, its last processes can still be ending (its slice removed a moment later): the
+# account is then deleted on a later try, each after killing what is left again.
+WEB_USERDEL_TRIES = 20
+WEB_USERDEL_WAIT = 0.5
+
+
+def _web_userdel(user):
+    """userdel -r `user`, tried again while it refuses for a process still running (exit 8): its exit code."""
+    rc = 8
+    for attempt in range(WEB_USERDEL_TRIES):
+        if attempt:
+            time.sleep(WEB_USERDEL_WAIT)
+            _run_quiet([resolve("pkill"), "-9", "-u", user])
+        rc, _out = _run_quiet([resolve("userdel"), "-r", user])
+        if rc != 8:
+            break
+    return rc
+
+
 def do_website_account_remove(args, content):
     """Remove a website account this helper made: lingering off, its manager stopped, its processes, userdel -r.
 
@@ -2861,7 +2881,7 @@ def do_website_account_remove(args, content):
     _run_quiet([resolve("systemctl"), "reset-failed", unit])
     _run_quiet([resolve("pkill"), "-9", "-u", user])
     forgotten = _addon_forget_account(uid, True) + _forget_account_tmp(user, uid)
-    rc, _out = _run_quiet([resolve("userdel"), "-r", user])
+    rc = _web_userdel(user)
     if rc not in (0, 12):           # 12: the home was already gone
         return rc
     os.unlink(_web_mark(user))

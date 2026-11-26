@@ -19,6 +19,8 @@ F28. A Node.js site made from the page takes the catalog's port and commands, in
      the build route) builds it and starts it; a real install failure is still undone.
 F29. A site's disk use is its own folder (~/site) measured by du with du's own exit status: a partial count is no
      measurement, and the account's container images are not counted (a user quota allows for them).
+M3.  website-account-remove deletes the account on its first call even while the account's last processes are
+     still ending after its user manager stopped (userdel refuses with exit 8 then).
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -682,6 +684,54 @@ def _f29_quota():
        "limit of 0 stays no quota", (rcs, soft), ([0, 0], [str((2048 + 4096) * 1024), "0"]))
 
 
+# ── M3. Removing a website account while its user manager stops ────────────────────────────────
+class _UserdelSub306(_Sub306):
+    """The helper's subprocess with userdel refusing (exit 8: a process still running) `busy` times first."""
+
+    def __init__(self, busy):
+        super().__init__()
+        self.busy = busy
+
+    def run(self, argv, **kw):
+        if list(argv)[-2:-1] == ["-r"] and str(argv[0]).endswith("userdel"):
+            self.calls.append(list(argv))
+            self.busy -= 1
+            return _NS306(returncode=8 if self.busy >= 0 else 0, stdout=b"", stderr=b"userdel: user is logged in\n")
+        return super().run(argv, **kw)
+
+
+def _remove_verb306(busy):
+    names = ("subprocess", "pwd", "resolve", "_web_made", "WEB_MARK_DIR", "_addon_forget_account", "_forget_account_tmp",
+             "_web_guard_refresh", "time")
+    saved = {n: getattr(_H306, n) for n in names}
+    marks = _tf306.mkdtemp(prefix="p306-marks-", dir=_TREE306)
+    with open(os.path.join(marks, "ws907"), "w", encoding="utf-8"):
+        pass
+    sub, slept = _UserdelSub306(busy), []
+    try:
+        _H306.subprocess, _H306.resolve, _H306.WEB_MARK_DIR = sub, (lambda name: "/usr/sbin/" + name), marks
+        _H306.pwd = _NS306(getpwnam=lambda name: _NS306(pw_uid=1907, pw_gid=1907, pw_dir="/home/" + name))
+        _H306._web_made = lambda user: True
+        _H306._addon_forget_account = _H306._forget_account_tmp = lambda *a: 0
+        _H306._web_guard_refresh, _H306.time = (lambda: 0), _NS306(sleep=slept.append)
+        with _ctx306.redirect_stdout(_io306.StringIO()), _ctx306.redirect_stderr(_io306.StringIO()):
+            rc = _H306.do_website_account_remove(["ws907"], "")
+    finally:
+        for n, v in saved.items():
+            setattr(_H306, n, v)
+    return rc, [c for c in sub.calls if str(c[0]).endswith("userdel")], os.path.exists(os.path.join(marks, "ws907")), slept
+
+
+def _m3_userdel(st):
+    rc, userdels, mark, slept = _remove_verb306(busy=2)
+    eq("M3 (website-account-remove): while the stopped user manager's last processes still end (userdel exits 8), "
+       "the account is deleted on a later try in the same call, its mark removed (the first undo of a failed "
+       "install failed, and only the job's second call worked)", (rc, len(userdels), mark, len(slept)), (0, 3, False, 2))
+    rc2, userdels2, _mark2, slept2 = _remove_verb306(busy=0)
+    eq("M3 (website-account-remove): an account with nothing left running is deleted at once, with no wait (control)",
+       (rc2, len(userdels2), slept2), (0, 1, []))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -731,7 +781,7 @@ def _ran306(step, st):
 
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
-                _f27_wiring, _f28_node, _f29_disk)
+                _f27_wiring, _f28_node, _f29_disk, _m3_userdel)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():
