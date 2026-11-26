@@ -15,6 +15,14 @@ confirmations lead somewhere and presses OK — deleting, stopping, revoking —
 that deletes hosts, because that takes their servers with it. The last turns on two-factor sign-in
 (it ends on the backup codes page) and then lets the session expire under an open page, which is
 how every page's poller finds out.
+
+CI walks it in parts (run.py --part i/n), one browser and one freshly seeded panel each, and merges
+their LCOV (merge.py). A part owns whole units (`units()`): a page, with its flows and, when it is on
+ACCEPT_PAGES, its confirming pass (that pass presses only the controls the page's first pass found
+opening a confirmation, so the two must share one browser session); the i18n pass; and the end
+(two-factor, then the expiry, which signs the session out and so comes last). Inside a part every
+unit keeps its place in the order above, so the confirming pass still ends with the page that
+deletes hosts.
 """
 import time
 
@@ -56,6 +64,44 @@ SKIP_CONFIRMING = SKIP + ["restoreBackup", "doPanelUpdate", "switchPanelBranch",
 
 # The i18n pass: these pages, in Spanish, a few controls each.
 I18N_PAGES = ["/", "/server/1", "/remote/2/manage", "/users"]
+
+# The two units of the walk that are not a page of PAGES (see units()).
+I18N, END = "(i18n pass)", "(two-factor, then the expiry)"
+
+# Seconds each unit took in CI (pull request #613's js coverage job, 2026-11-26: a page's first
+# pass and flows plus its confirming pass), which part_units() balances the parts by. A unit that
+# is not here (a page added since) counts NEW_UNIT_SECONDS until the table is measured again.
+UNIT_SECONDS = {
+    "/": 49, "/server/1": 68, "/server/2": 20, "/server/3": 14, "/server/4": 54,
+    "/server/1/files": 148, "/server/2/files": 33, "/server/7/files": 27, "/servers/install": 14,
+    "/remotes": 85, "/remote/1/manage": 64, "/remote/2/manage": 108, "/remote/3/manage": 46,
+    "/users": 27, "/groups": 76, "/logs": 8, "/account": 41, "/settings": 35, "/notifications": 13,
+    "/tailscale": 43, "/server-management": 153, "/commands": 18, "/global-bans": 10,
+    "/terminal/1": 6, "/terminal/2": 6, "/databases": 7, I18N: 158, END: 15,
+}
+NEW_UNIT_SECONDS = 30
+
+
+def units():
+    """Return the units a part of the walk can own, in walk order: each page, the i18n pass, the end."""
+    return PAGES + [I18N, END]
+
+
+def part_units(part, parts):
+    """Return the units part `part` of `parts` (1-based) walks: every unit is in exactly one part.
+
+    Heaviest unit first, each to the part with the least time so far (the lowest part on a tie), so
+    every part of a run computes the same split.
+    """
+    if not 1 <= part <= parts:
+        raise ValueError("part %d of %d" % (part, parts))
+    order = units()
+    totals, owner = [0] * parts, {}
+    for unit in sorted(order, key=lambda u: (-UNIT_SECONDS.get(u, NEW_UNIT_SECONDS), order.index(u))):
+        k = min(range(parts), key=lambda i: (totals[i], i))
+        totals[k] += UNIT_SECONDS.get(unit, NEW_UNIT_SECONDS)
+        owner[unit] = k + 1
+    return [u for u in order if owner[u] == part]
 
 
 def _page(d, path, accept=False, limit=250):
@@ -115,17 +161,30 @@ def _session_expires(d):
     log("- session expired: now at %s" % (d.path() or "?"))
 
 
-def walk(d, only=None):
-    """Take the walk: the wizard, every page, i18n, the confirming pass, 2FA, and the expiry."""
+def chosen_units(only=None, part_list=None):
+    """Return the units to walk: `part_list` (all of them when None), cut down to the pages `only` names."""
+    chosen = set(units() if part_list is None else part_list)
+    if only:
+        chosen &= set(only)
+    return chosen
+
+
+def walk(d, only=None, part_list=None):
+    """Take the walk: the wizard, every page, i18n, the confirming pass, 2FA, and the expiry.
+
+    `only` (page paths) or `part_list` (part_units()) narrows it; the wizard always runs.
+    """
+    chosen = chosen_units(only, part_list)
     # Always, even for --only: until the wizard is done every page redirects to it.
     _run_flow(d, "/setup", "wizard", setup_wizard)
-    for p in [p for p in PAGES if not only or p in only]:
-        _page(d, p)
-    if not only:
+    for p in PAGES:
+        if p in chosen:
+            _page(d, p)
+    if I18N in chosen:
         _i18n(d)
     for p in ACCEPT_PAGES:
-        if not only or p in only:
+        if p in chosen:
             _page(d, p, accept=True)
-    if not only:
+    if END in chosen:
         _run_flow(d, "/account/2fa/enable", "two-factor", two_factor)
         _session_expires(d)

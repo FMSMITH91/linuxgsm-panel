@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Measure how much of the panel's own JavaScript (panel/static/js/*.js) a real browser runs.
 
-    python tools/js_coverage/run.py --out lcov.info [--summary js-coverage.txt] [--chrome PATH]
+    python tools/js_coverage/run.py --out lcov.info [--summary js-coverage.txt] [--chrome PATH] [--part I/N]
 
 Boots a seeded panel (serve.py) in a throwaway copy of this tree, drives headless Chrome through
 its pages and their controls over the DevTools protocol, and records V8's precise block coverage
 of every /static/js/*.js the pages load. Writes LCOV with repository paths (panel/static/js/<file>.js),
-which is what Codacy is sent beside the Python report, and a per-file summary.
+which is what Codacy is sent beside the Python report, and a per-file summary. With --part I/N it
+walks only part I of N (walk.part_units: a balanced share of the walk's units, each in exactly one
+part), as CI's parallel js coverage parts do; merge.py adds the parts' reports into one.
 
 EXITS NON-ZERO, rather than writing an empty report, when the panel did not boot, the sign-in did
 not land, Chrome could not be driven, a page the walk names did not render as itself, or no file
@@ -23,6 +25,7 @@ downloaded. The browser gets a throwaway profile, and downloads are refused.
 import argparse
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -40,7 +43,7 @@ sys.path.insert(0, HERE)
 import v8_lcov  # noqa: E402
 from cdp import CDP, CDPError  # noqa: E402
 from driver import Driver, FlowAssertion, LoginFailed  # noqa: E402
-from walk import walk  # noqa: E402
+from walk import part_units, walk  # noqa: E402
 
 MARKER = ".js-coverage-throwaway"
 # Never copied into the throwaway tree: the real data dir (root only: lgsm/data is code), VCS and
@@ -383,6 +386,14 @@ def measure_and_report(d, out, summary_path):
     return files
 
 
+def part_arg(text):
+    """Read --part: "I/N" with 1 <= I <= N, as (I, N); anything else is refused."""
+    m = re.fullmatch(r"([1-9][0-9]?)/([1-9][0-9]?)", text)
+    if not m or int(m.group(1)) > int(m.group(2)):
+        raise argparse.ArgumentTypeError("not a part I/N with 1 <= I <= N: %r" % text)
+    return int(m.group(1)), int(m.group(2))
+
+
 def parse_args(argv):
     """Parse the command line: where the reports go, which browser, what to keep or walk."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
@@ -392,6 +403,8 @@ def parse_args(argv):
     ap.add_argument("--keep", action="store_true", help="keep the throwaway tree and logs")
     ap.add_argument("--only", default="", help="comma-separated page paths: walk just these "
                                                "(for working on the walk itself)")
+    ap.add_argument("--part", type=part_arg, default=None, metavar="I/N",
+                    help="walk only part I of N (CI's parallel parts)")
     return ap.parse_args(argv)
 
 
@@ -404,9 +417,12 @@ def main(argv=None):
     chrome = find_chrome(args.chrome)
     if not chrome:
         fail("no Chrome/Chromium found (--chrome, $CHROME, %s)" % ", ".join(CHROME_NAMES))
+    part_list = part_units(*args.part) if args.part else None
+    if part_list is not None:
+        log("part %d/%d: %s" % (args.part + (", ".join(part_list),)))
     try:
         with Session(chrome, keep=args.keep) as d:
-            walk(d, only=[p for p in args.only.split(",") if p] or None)
+            walk(d, only=[p for p in args.only.split(",") if p] or None, part_list=part_list)
             measure_and_report(d, args.out, args.summary)
     except Abort as e:
         fail(str(e), e.code)
