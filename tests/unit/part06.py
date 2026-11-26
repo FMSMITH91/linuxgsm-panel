@@ -10195,37 +10195,56 @@ def _r19d_re_call(call, re_names, any_receiver=False):
     return getattr(call.func, "attr", None) if any_receiver or _recv in _mods else None
 
 
-def _r30t_pat_tail(node):
+def _r30t_pat_tail(node, consts=None):
     """The literal text a pattern expression ENDS in, which is all the `$` question reads.
 
     A literal is itself; an f-string is its literal parts; `a + b` ends as `b` does and `t % v` as its
-    template `t` does. Anything else reads as "". A pattern built with `+` or `%` used to read as ""
-    and was skipped (cron.py's _CRON_SCHED_RE, review 1118 T4).
+    template `t` does; a bare name is the module-level string constant `consts` gives it (review 1124:
+    `SLUG_RE = r"^...$"` then `re.match(SLUG_RE, v)` read as ""). Anything else reads as "". A pattern
+    built with `+` or `%` used to read as "" and was skipped (cron.py's _CRON_SCHED_RE, review 1118 T4).
     """
     if isinstance(node, _anc_ast.BinOp):
         side = {_anc_ast.Add: "right", _anc_ast.Mod: "left"}.get(type(node.op))
-        return _r30t_pat_tail(getattr(node, side)) if side else ""
+        return _r30t_pat_tail(getattr(node, side), consts) if side else ""
+    if isinstance(node, _anc_ast.Name):
+        return (consts or {}).get(node.id, "")
     parts = node.values if isinstance(node, _anc_ast.JoinedStr) else [node]
     return "".join(v.value for v in parts if isinstance(v, _anc_ast.Constant) and isinstance(v.value, str))
+
+
+def _r30t_str_consts(tree):
+    """{name: the text it ends in} for each module-level `NAME = <string pattern expression>` in `tree`."""
+    out = {}
+    for _n in tree.body:
+        if isinstance(_n, _anc_ast.Assign) and len(_n.targets) == 1 and isinstance(_n.targets[0], _anc_ast.Name):
+            _tail = _r30t_pat_tail(_n.value, out)
+            if _tail:
+                out[_n.targets[0].id] = _tail
+    return out
 
 
 eq("regex anchors: a pattern's tail is read through `+`, `%` and f-strings, and a call reads as nothing (control)",
    [_r30t_pat_tail(_anc_ast.parse(_x, mode="eval").body) for _x in (
        'r"^(" + r"\\s+".join(x) + r")$"', 'r"\\s*%s\\s*$" % k', 'f"^{k}=(.*)$"', '"^a" + b', 'build()')],
    [")$", "\\s*%s\\s*$", "^=(.*)$", "", ""])
+_r30t_ctl_t = _anc_ast.parse("A = r'^a$'\nB = '^' + A\nimport re\nre.match(A, v)\nre.match(B, v)\nre.match(C, v)\n")
+eq("regex anchors: ...and a bare name reads as the module-level string constant it holds, an unknown name as "
+   "nothing (control)",
+   [_r30t_pat_tail(_c.args[0], _r30t_str_consts(_r30t_ctl_t)) for _c in _anc_ast.walk(_r30t_ctl_t)
+    if isinstance(_c, _anc_ast.Call)], ["^a$", "^a$", ""])
 _anc_unclassified, _anc_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
     try:
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
         continue
-    _r19d_rn = _r19d_re_names(_tree)
+    _r19d_rn, _r30t_consts = _r19d_re_names(_tree), _r30t_str_consts(_tree)
     for _n in _anc_ast.walk(_tree):
         # Any `.compile(` as before, and a `compile` imported from re by any name.
         if not (isinstance(_n, _anc_ast.Assign) and isinstance(_n.value, _anc_ast.Call)
                 and _r19d_re_call(_n.value, _r19d_rn, any_receiver=True) == "compile" and _n.value.args):
             continue
-        _pat = _r30t_pat_tail(_n.value.args[0])
+        _pat = _r30t_pat_tail(_n.value.args[0], _r30t_consts)
         if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
         _anc_seen |= {_t.id for _t in _n.targets if isinstance(_t, _anc_ast.Name)}
@@ -10263,6 +10282,9 @@ _INLINE_DOLLAR_OK = {
     # Built patterns, keyed on the literal they end in (`+`) or their template (`%`):
     r"(/\S*?)/?$",                     # files.py: the `pwd -P` line after its mark, matched per line (re.M)
     r"\s*%s\s*=\s*(\S+)\s*$",          # system_ops: one line of the panel's fail2ban jail file
+    # A validator, read through its name (review 1124): ssh_manager/databases.py's SLUG_RE, whose only
+    # caller (db_name) refuses a trailing "\n" itself with `slug.endswith("\n")`. \Z would say so alone.
+    r"^[a-z0-9]{1,16}$",
 }
 _inline_bad, _inline_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):   # panel/install/'s too
@@ -10271,12 +10293,12 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _tree = _anc_ast.parse(open(_f, encoding="utf-8").read())
     except SyntaxError:
         continue
-    _r19d_rn = _r19d_re_names(_tree)
+    _r19d_rn, _r30t_consts = _r19d_re_names(_tree), _r30t_str_consts(_tree)
     for _n in _anc_ast.walk(_tree):
         if not (isinstance(_n, _anc_ast.Call)
                 and _r19d_re_call(_n, _r19d_rn) in ("match", "fullmatch", "search") and _n.args):
             continue
-        _pat = _r30t_pat_tail(_n.args[0])
+        _pat = _r30t_pat_tail(_n.args[0], _r30t_consts)
         if not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
         _inline_seen.add(_pat)
