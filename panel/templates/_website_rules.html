@@ -1,0 +1,27 @@
+{# Rules: redirects, extra response headers and blocked paths, as a form, never raw proxy text. The web
+   proxy checks the whole new setup before it replaces the running one, so a bad rule changes nothing
+   for any site. Raw lines are for a superadmin only, checked the same way. #}
+<section data-ws-pane="rules" hidden>
+  <form id="wr-form" data-action="wsRulesSave" data-args='["@event"]' data-on="submit">
+    <div id="wr-list"></div>
+    <p id="wr-empty" class="small text-secondary mb-2">No rules yet.</p>
+    <div class="d-flex flex-wrap gap-2 mb-2">
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRuleAdd" data-args='["redirect"]'><i class="bi bi-signpost"></i> Add a redirect</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRuleAdd" data-args='["header"]'><i class="bi bi-card-heading"></i> Add a header</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRuleAdd" data-args='["deny"]'><i class="bi bi-slash-circle"></i> Block a path</button>
+    </div>
+    {% if current_user.is_superadmin %}
+    <details class="mb-2">
+      <summary class="small">Raw web proxy lines</summary>
+      <label for="wr-raw" class="visually-hidden">Raw web proxy lines</label>
+      <textarea id="wr-raw" class="form-control form-control-sm font-monospace mt-1" rows="4" maxlength="4000" spellcheck="false"></textarea>
+      <div class="form-text">For superadmins. Added inside this site's block, after the rules above.</div>
+    </details>
+    {% endif %}
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save rules</button>
+      <span id="wr-msg" class="small" role="status"></span>
+    </div>
+    <div class="form-text">The web proxy checks every change first. One that fails is refused, and every site keeps serving as before.</div>
+  </form>
+</section>

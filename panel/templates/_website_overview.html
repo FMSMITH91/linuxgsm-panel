@@ -1,0 +1,31 @@
+{# Overview: what runs, its software and what it uses (js/website_site.js renderOverview). #}
+<section data-ws-pane="overview">
+  <div class="ws-grid">
+    <div class="card">
+      <div class="card-body py-2">
+        <dl class="ws-kv mb-2">
+          <dt>Kind</dt><dd id="ws-ov-kind">—</dd>
+          <dt>Software</dt><dd id="ws-ov-image" data-no-i18n>—</dd>
+          <dt id="ws-ov-version-label">Version</dt><dd id="ws-ov-version" data-no-i18n>—</dd>
+          <dt>Last backup</dt><dd id="ws-ov-backup">—</dd>
+        </dl>
+        <div class="d-flex flex-wrap gap-2">
+          {% if can_manage|default(false) %}<button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRestart"><i class="bi bi-arrow-clockwise"></i> Restart</button>{% endif %}
+          {% if site_admin|default(false) %}<button type="button" id="ws-update" class="btn btn-sm btn-outline-primary" data-action="wsUpdateImage" hidden><i class="bi bi-cloud-arrow-down"></i> Update</button>{% endif %}
+        </div>
+        <div id="ws-update-note" class="form-text" hidden>A newer signed image is available.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body py-2">
+        <div class="ws-bar"><label for="ws-mem" class="small">Memory</label><meter id="ws-mem" min="0" max="1" value="0"></meter><span id="ws-mem-text" class="small text-secondary" data-no-i18n></span></div>
+        <div class="ws-bar"><label for="ws-disk" class="small">Disk</label><meter id="ws-disk" min="0" max="1" value="0"></meter><span id="ws-disk-text" class="small text-secondary" data-no-i18n></span></div>
+        <div class="ws-bar"><label for="ws-cpu" class="small">CPU</label><meter id="ws-cpu" min="0" max="100" value="0"></meter><span id="ws-cpu-text" class="small text-secondary" data-no-i18n></span></div>
+      </div>
+    </div>
+  </div>
+  <details id="ws-logs-box" class="mt-2">
+    <summary class="small" data-action="wsLoadLogs">Recent log lines</summary>
+    <pre id="ws-logs" class="ws-log mt-1 mb-0"></pre>
+  </details>
+</section>

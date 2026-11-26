@@ -1,0 +1,109 @@
+{# "Add a website": one dialog, one screen on a phone (full screen below 576px). A kind is one of four
+   big tiles; "Install an app" swaps in the app tiles and the app's admin account. Everything else
+   (limits, host on a one-host panel) takes its default. The first line says what is missing, if
+   anything, with the one button that fixes it (js/websites.js, wsRenderMissing). After Create, the
+   same dialog shows the steps as they run, then the result. #}
+<div class="modal fade" id="ws-add-modal" tabindex="-1" aria-labelledby="ws-add-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h2 class="modal-title fs-6" id="ws-add-title">Add a website</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <div id="ws-missing" class="alert alert-warning py-2 px-2 small mb-2" role="status" hidden>
+          <div id="ws-missing-text"></div>
+          <div id="ws-missing-fix" class="mt-1"></div>
+        </div>
+        <form id="ws-add-form" data-action="wsAddSubmit" data-args='["@event"]' data-on="submit">
+          <fieldset class="mb-2">
+            <legend class="form-label small mb-1">What kind of website?</legend>
+            <div class="ws-tiles">
+              <input type="radio" class="btn-check" name="ws-kind" id="ws-kind-static" value="static" checked
+                     data-action="wsKind" data-args='["static"]' data-on="change">
+              <label class="ws-tile" for="ws-kind-static"><i class="bi bi-file-earmark-richtext"></i>
+                <span class="ws-tile-name">Plain site</span><span class="ws-tile-sub">HTML, CSS and images</span></label>
+              <input type="radio" class="btn-check" name="ws-kind" id="ws-kind-php" value="php"
+                     data-action="wsKind" data-args='["php"]' data-on="change">
+              <label class="ws-tile" for="ws-kind-php"><i class="bi bi-filetype-php"></i>
+                <span class="ws-tile-name">PHP site</span><span class="ws-tile-sub">Your own PHP code</span></label>
+              <input type="radio" class="btn-check" name="ws-kind" id="ws-kind-app" value="app"
+                     data-action="wsKind" data-args='["app"]' data-on="change">
+              <label class="ws-tile" for="ws-kind-app"><i class="bi bi-box-seam"></i>
+                <span class="ws-tile-name">Node.js app</span><span class="ws-tile-sub">Your own Node.js app</span></label>
+              <input type="radio" class="btn-check" name="ws-kind" id="ws-kind-install" value="install"
+                     data-action="wsKind" data-args='["install"]' data-on="change">
+              <label class="ws-tile" for="ws-kind-install"><i class="bi bi-magic"></i>
+                <span class="ws-tile-name">Install an app</span><span class="ws-tile-sub">WordPress, forums and more</span></label>
+            </div>
+          </fieldset>
+          <fieldset id="ws-add-apps" class="mb-2" hidden>
+            <legend class="form-label small mb-1">Which app?</legend>
+            <div id="ws-app-tiles" class="ws-tiles ws-tiles-apps"></div>
+          </fieldset>
+          <div class="row g-2">
+            <div class="col-sm-6">
+              <label for="ws-add-name" class="form-label small mb-1">Name</label>
+              <input type="text" id="ws-add-name" class="form-control form-control-sm" maxlength="32" required
+                     pattern="[a-z0-9]([a-z0-9\-]{0,30}[a-z0-9])?" autocomplete="off" autocapitalize="off" spellcheck="false"
+                     aria-describedby="ws-add-name-help">
+              <div id="ws-add-name-help" class="form-text">Lowercase letters, digits and hyphens.</div>
+            </div>
+            <div class="col-sm-6">
+              <label for="ws-add-domain" class="form-label small mb-1">Domain</label>
+              <input type="text" id="ws-add-domain" class="form-control form-control-sm" maxlength="253" inputmode="url"
+                     autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="www.example.org" data-no-i18n
+                     aria-describedby="ws-add-domain-help" data-action="wsDomainTyped" data-on="input">
+              <div id="ws-add-domain-help" class="form-text">Optional: add it later. An app needs one.</div>
+            </div>
+            <div class="col-sm-6" id="ws-add-php" hidden>
+              <label for="ws-add-php-version" class="form-label small mb-1">PHP version</label>
+              <select id="ws-add-php-version" class="form-select form-select-sm" data-no-i18n></select>
+            </div>
+            <div class="col-sm-6" id="ws-add-node" hidden>
+              <label for="ws-add-node-version" class="form-label small mb-1">Node.js version</label>
+              <select id="ws-add-node-version" class="form-select form-select-sm" data-no-i18n></select>
+            </div>
+            <div class="col-sm-6" id="ws-add-host" hidden>
+              <label for="ws-add-host-id" class="form-label small mb-1">Host</label>
+              <select id="ws-add-host-id" class="form-select form-select-sm" data-no-i18n></select>
+            </div>
+            {% if site_admin|default(false) %}
+            <div class="col-sm-6" id="ws-add-customer" hidden>
+              <label for="ws-add-customer-id" class="form-label small mb-1">Customer</label>
+              <select id="ws-add-customer-id" class="form-select form-select-sm"></select>
+            </div>
+            {% endif %}
+          </div>
+          <div id="ws-add-admin" class="row g-2 mt-0" hidden>
+            <div class="col-6">
+              <label for="ws-add-admin-user" class="form-label small mb-1">Admin username</label>
+              <input type="text" id="ws-add-admin-user" class="form-control form-control-sm" maxlength="60"
+                     autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="col-6">
+              <label for="ws-add-admin-email" class="form-label small mb-1">Admin email</label>
+              <input type="email" id="ws-add-admin-email" class="form-control form-control-sm" maxlength="254" autocomplete="off">
+            </div>
+            <div class="col-12">
+              <label for="ws-add-admin-pass" class="form-label small mb-1">Admin password</label>
+              <input type="password" id="ws-add-admin-pass" class="form-control form-control-sm" minlength="15"
+                     autocomplete="new-password" aria-describedby="ws-add-pass-help">
+              <div id="ws-add-pass-help" class="form-text">Leave it empty for a strong one, shown once. A typed one needs 15 characters or more.</div>
+            </div>
+          </div>
+        </form>
+        <div id="ws-progress-wrap" hidden>
+          <h3 class="fs-6 mb-2">Setting up your website</h3>
+          <div id="ws-progress"></div>
+          <div id="ws-result" class="mt-2" role="status"></div>
+        </div>
+      </div>
+      {# Outside the scrolling body, so Create is on screen however long the form grows. #}
+      <div class="modal-footer py-2 justify-content-start" id="ws-add-footer">
+        <button type="submit" form="ws-add-form" id="ws-add-create" class="btn btn-primary btn-sm"><i class="bi bi-check-lg"></i> Create</button>
+        <span id="ws-add-msg" class="small minw-0" role="status"></span>
+      </div>
+    </div>
+  </div>
+</div>

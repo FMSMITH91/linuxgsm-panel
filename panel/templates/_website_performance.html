@@ -1,0 +1,52 @@
+{# Performance: OPcache and the object cache (PHP kinds), the page cache at the web proxy with Purge,
+   and long caching with compression for static files (js/website_tuning.js). #}
+<section data-ws-pane="performance" hidden>
+  <form id="wperf-form" data-action="wsPerfSave" data-args='["@event"]' data-on="submit">
+    {% if php_kind %}
+    <div class="ws-opt">
+      <div class="form-check form-switch mb-1">
+        <input class="form-check-input" type="checkbox" role="switch" id="wperf-opcache">
+        <label class="form-check-label small fw-semibold" for="wperf-opcache" data-no-i18n>OPcache</label>
+      </div>
+      <div class="form-text mt-0 mb-1">Keeps compiled PHP in memory, so pages are built faster.</div>
+      <div class="row g-2">
+        <div class="col-6"><label for="wperf-op-mem" class="form-label small mb-1">Memory (MB)</label>
+          <input type="number" id="wperf-op-mem" class="form-control form-control-sm" min="16" max="1024" step="1"></div>
+        <div class="col-6"><label for="wperf-op-reval" class="form-label small mb-1">Check files every (s)</label>
+          <input type="number" id="wperf-op-reval" class="form-control form-control-sm" min="0" max="3600" step="1"></div>
+      </div>
+    </div>
+    <div class="ws-opt">
+      <div class="form-check form-switch mb-1">
+        <input class="form-check-input" type="checkbox" role="switch" id="wperf-obj">
+        <label class="form-check-label small fw-semibold" for="wperf-obj">Object cache</label>
+      </div>
+      <div class="form-text mt-0">A private Redis-compatible store for this site only, with no copy on disk.</div>
+      <div id="wperf-obj-info" class="small mt-1" hidden></div>
+    </div>
+    {% endif %}
+    <div class="ws-opt">
+      <div class="form-check form-switch mb-1">
+        <input class="form-check-input" type="checkbox" role="switch" id="wperf-page">
+        <label class="form-check-label small fw-semibold" for="wperf-page">Page cache</label>
+      </div>
+      <div class="form-text mt-0 mb-1">The web proxy keeps whole pages for visitors who are not signed in. Sign-ins, form posts and admin pages always skip it.</div>
+      <div class="d-flex flex-wrap gap-2 align-items-end">
+        <div><label for="wperf-ttl" class="form-label small mb-1">Keep pages for (s)</label>
+          <input type="number" id="wperf-ttl" class="form-control form-control-sm fx-12" min="10" max="86400" step="1"></div>
+        <button type="button" class="btn btn-sm btn-outline-warning" data-action="wsPurge"><i class="bi bi-trash3"></i> Purge cache</button>
+      </div>
+    </div>
+    <div class="ws-opt">
+      <div class="form-check form-switch mb-1">
+        <input class="form-check-input" type="checkbox" role="switch" id="wperf-static">
+        <label class="form-check-label small fw-semibold" for="wperf-static">Static file caching</label>
+      </div>
+      <div class="form-text mt-0">Browsers keep images, styles and scripts longer, and pages are sent compressed.</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+      <span id="wperf-msg" class="small" role="status"></span>
+    </div>
+  </form>
+</section>
