@@ -20,6 +20,7 @@ out of ci.yml, and the root step's own Python on made-up logs.
 import json as _json294
 import os
 import re as _re294
+import signal as _signal294
 import subprocess as _sp294  # nosec B404 - python and bash with fixed argvs over this part's own inputs
 import sys as _sys294
 import tempfile as _tf294
@@ -30,14 +31,27 @@ from unit.part29 import _job29, _name29, _steps29, _wf29
 from unit import shard as _sh294
 
 
-def _run294(argv, **kw):
-    """The finished process; one that ran past its time limit answers -9 with what it had printed."""
-    kw.setdefault("timeout", 120)
-    try:
-        return _sp294.run(argv, capture_output=True, text=True, check=False, **kw)  # nosec B603 - fixed argvs
-    except _sp294.TimeoutExpired as e:
-        out, err = (x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr))
-        return _sp294.CompletedProcess(argv, -9, out, err)
+def _run294(argv, timeout=120, **kw):
+    """The finished process; one still running at `timeout` is killed and answers -9 with what it printed.
+
+    The class of the timeout raised depends on whose subprocess this is (eventlet's green one raises its
+    own TimeoutExpired), so it is told by name.
+    """
+    inp = kw.pop("input", None)
+    with _sp294.Popen(argv, stdin=_sp294.PIPE if inp is not None else _sp294.DEVNULL, stdout=_sp294.PIPE,
+                      stderr=_sp294.PIPE, text=True, start_new_session=True, **kw) as proc:  # nosec B603 - fixed argvs
+        try:
+            out, err = proc.communicate(inp, timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - re-raised unless it is the timeout
+            if type(e).__name__ != "TimeoutExpired":
+                raise
+            try:
+                os.killpg(proc.pid, _signal294.SIGKILL)   # the child and all it started
+            except OSError:
+                proc.kill()
+            out, err = proc.communicate()
+            return _sp294.CompletedProcess(argv, -9, out or "", err or "")
+    return _sp294.CompletedProcess(argv, proc.returncode, out, err)
 
 
 with open(os.path.join(_root, "tests", "unit_test.py"), encoding="utf-8") as _fh294:
@@ -67,20 +81,27 @@ eq("unit shards: ...and anything else is refused, never read as the whole suite 
 def _split_bad294(n):
     """What is wrong with the split into n shards ([] when nothing)."""
     owned = _sh294.plan(_PARTS294, _graph294, _weights294, n)
-    lists = [_sh294.run_list(_PARTS294, _graph294, o) for o in owned]
-    flat = [p for o in owned for p in o]
     bad = ["%d shards, not %d" % (len(owned), n)] if len(owned) != n else []
-    bad += ["lost: %s" % p for p in _PARTS294 if p not in _always294 and p not in flat]
-    bad += ["owned twice: %s" % p for p in sorted(set(flat)) if flat.count(p) > 1]
-    bad += ["setup or part15 owned: %s" % p for p in flat if p in _always294]
-    for i, lst in enumerate(lists, 1):
-        bad += ["shard %d: %s imports %s, not listed" % (i, p, q) for p in lst for q in _graph294[p] if q not in lst]
-        bad += ["shard %d: an owned part missing" % i for p in owned[i - 1] if p not in lst]
-        if lst != [p for p in _PARTS294 if p in lst]:
-            bad.append("shard %d: not in _PARTS order" % i)
-        if lst[:_sh294.SETUP] != list(_PARTS294[:_sh294.SETUP]) or lst[-1:] != list(_sh294.TAIL):
-            bad.append("shard %d: not the setup first and part15 last" % i)
+    bad += _owned_bad294([p for o in owned for p in o])
+    for i, own in enumerate(owned, 1):
+        bad += _list_bad294(i, own, _sh294.run_list(_PARTS294, _graph294, own))
     return bad
+
+
+def _owned_bad294(flat):
+    """A part no shard owns, one owned twice, or the setup or part15 owned at all."""
+    bad = ["lost: %s" % p for p in _PARTS294 if p not in _always294 and p not in flat]
+    bad += ["owned twice: %s" % p for p in sorted(set(flat)) if flat.count(p) > 1]
+    return bad + ["setup or part15 owned: %s" % p for p in flat if p in _always294]
+
+
+def _list_bad294(i, own, lst):
+    """What is wrong with shard i's run list `lst` for the parts it owns."""
+    bad = ["shard %d: %s imports %s, not listed" % (i, p, q) for p in lst for q in _graph294[p] if q not in lst]
+    bad += ["shard %d: an owned part missing" % i for p in own if p not in lst]
+    bad += ["shard %d: not in _PARTS order" % i] * (lst != [p for p in _PARTS294 if p in lst])
+    return bad + ["shard %d: not the setup first and part15 last" % i] * (
+        lst[:_sh294.SETUP] != list(_PARTS294[:_sh294.SETUP]) or lst[-1:] != list(_sh294.TAIL))
 
 
 _splits294 = {n: _split_bad294(n) for n in range(1, 9)}
@@ -128,13 +149,16 @@ eq("unit runner: the whole-suite gates run in the unsplit run and in exactly one
    [_sh294.runs_whole_suite_gates(None)] + [[_sh294.runs_whole_suite_gates((i, n)) for i in range(1, n + 1)].count(True)
                                             for n in range(1, 9)],
    [True] + [1] * 8)
-_wholes294 = _re294.findall(r"^ *_whole_check\(\"([^\"]+)\"", _runner294, _re294.M)
+with open(os.path.join(_root, "tests", "unit", "shard.py"), encoding="utf-8") as _fh294:
+    _shardsrc294 = _fh294.read()
+_wholes294 = _re294.findall(r"^ *_?whole_check\(\"([^\"]+)\"", _runner294 + _shardsrc294, _re294.M)
 _plain294 = [n for n in ("unit suite: every ordering note that lists a part's imports lists exactly them",
                          "unit suite: no part imports a part that runs at or after it in _PARTS")
              if ('\ncheck("%s"' % n) in _runner294]
 check("unit runner: the gates that read the whole suite (the ordering notes, the import order, the split itself) "
       "are recorded through _whole_check, and the run counts them",
-      len(_wholes294) == 9 and not _plain294 and "len(_whole_ran) == (9 if" in _runner294, repr((_wholes294, _plain294)))
+      len(_wholes294) == 9 and not _plain294 and "want = 8 if shard is None else 9 if shard[0] == 1 else 0" in _shardsrc294
+      and "_whole_check, _whole_ran = _shard.whole_gate(check, _SHARD)" in _runner294, repr((_wholes294, _plain294)))
 
 
 # ── 3. run-tests.sh ───────────────────────────────────────────────────────────────────────────────
@@ -243,12 +267,18 @@ def _side_effect_mods294():
         if not name.endswith(".py") or _re294.fullmatch(r"part\d+\.py|__init__\.py", name):
             continue
         with open(os.path.join(_root, "tests", "unit", name), encoding="utf-8") as fh:
-            tree = _ast294.parse(fh.read())
-        top = [n.value.func for n in tree.body if isinstance(n, _ast294.Expr) and isinstance(n.value, _ast294.Call)]
-        pushes = [n for n in _ast294.walk(tree) if isinstance(n, _ast294.Attribute) and n.attr == "push"]
-        if pushes or any(isinstance(f, _ast294.Name) and f.id in ("check", "eq", "skip") for f in top):
-            out.add("unit." + name[:-3])
+            if _side_effect294(_ast294.parse(fh.read())):
+                out.add("unit." + name[:-3])
     return out
+
+
+def _side_effect294(tree):
+    """Whether a module records a check at its top level, or pushes a context anywhere."""
+    import ast as _ast294
+    top = [n.value.func for n in tree.body if isinstance(n, _ast294.Expr) and isinstance(n.value, _ast294.Call)]
+    if any(isinstance(n, _ast294.Attribute) and n.attr == "push" for n in _ast294.walk(tree)):
+        return True
+    return any(isinstance(f, _ast294.Name) and f.id in ("check", "eq", "skip") for f in top)
 
 
 def _mods_reached294(part):

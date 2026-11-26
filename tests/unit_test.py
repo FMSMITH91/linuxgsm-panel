@@ -36,10 +36,7 @@ sys.path[:0] = [os.path.join(_root, "tests"), _root, os.path.join(_root, "panel"
 # tests/unit/shard.py says which parts a shard runs. Read before anything else is set up, so a
 # malformed value stops the run at once (exit 1, naming it) rather than running all or nothing.
 from unit import shard as _shard  # noqa: E402 - stdlib only: nothing ahead of eventlet changes
-try:
-    _SHARD = _shard.parse(os.environ.get("UNIT_SHARD"))
-except ValueError as _shard_err:
-    sys.exit(str(_shard_err))
+_SHARD = _shard.from_env(os.environ)
 
 # ── nothing in this suite may read or write the machine's own config.json (or its keys) ─────────
 # DATA_DIR is a fixed path inside the checkout, so a unit check that reached panel.core.config
@@ -2238,8 +2235,7 @@ def _r26d_pin_helper(part):
 # per-run gates below judge what this process ran; the gates that read the whole suite (the ordering
 # notes, the import order, every part file in _PARTS, the shards owning each part once) run in the
 # unsplit run and in shard 1 only (_whole_check), so the shards together run each of them once.
-_RUN_PARTS = _PARTS if _SHARD is None else tuple(_shard.shard_parts(_SHARD, _PARTS, _root))
-_shard.RUN = _RUN_PARTS
+_RUN_PARTS = _shard.RUN = _PARTS if _SHARD is None else tuple(_shard.shard_parts(_SHARD, _PARTS, _root))
 for _part in _RUN_PARTS:
     _path_before = list(sys.path)
     _r26d_pin_helper(_part)
@@ -2269,15 +2265,7 @@ _r29d_last_left = tuple(getattr(sys.modules.get(_m), "_HELPER_STATE", {}).get("p
 # was recorded after the loop, so "no part's path was recorded" could never be true (review 1012b).
 _r16d_tmp_parts_made = len(_r15d_made_tmp) - _r16d_tmp_runner_made
 from unit.part01 import check, results, hub_leaks, hub_swept, run_exit_code, thread_gate  # noqa: E402
-_whole_ran = []
-
-
-def _whole_check(name, cond, detail=""):
-    """check() for a gate that reads the whole suite: recorded in the unsplit run and in shard 1 only."""
-    if _shard.runs_whole_suite_gates(_SHARD):
-        _whole_ran.append(name)
-        check(name, cond, detail)
-
+_whole_check, _whole_ran = _shard.whole_gate(check, _SHARD)   # check(), in the unsplit run and shard 1 only
 
 # A part that leaves a directory on sys.path (tools/, tools/js_coverage) hands every later import of
 # a top-level name in it — `run`, `walk`, `flows`, `serve` — that directory's file. part14, part53
@@ -2473,31 +2461,29 @@ _notes_r14d = _r14d_noted_imports(
     _src_r14d[_src_r14d.index("# The parts, in order:"):_src_r14d.index("\n_PARTS = (")])
 _wrong_r14d = sorted("%s: note says %s, imports %s" % (_p, sorted(_n), sorted(_r14d_real_imports(_p)))
                      for _p, _n in _notes_r14d.items() if _n != _r14d_real_imports(_p))
-_whole_check("unit suite: every ordering note that lists a part's imports lists exactly them",
-      len(_notes_r14d) >= 20 and not _wrong_r14d,
-      "%d notes read; %s" % (len(_notes_r14d), _wrong_r14d))
+_whole_check("unit suite: every ordering note that lists a part's imports lists exactly them", len(_notes_r14d) >= 20 and not _wrong_r14d,
+             "%d notes read; %s" % (len(_notes_r14d), _wrong_r14d))
 _ctl_r14d = _r14d_noted_imports("# part57 (x: y) drives part12's app; imports\n# part01, 12 and 20.\n"
                                 "# part19 comes after part18. part20 builds and imports only part01.")
 _whole_check("unit suite: ...the note reader takes a list across lines, and not a part named mid-sentence "
-      "(control)", _ctl_r14d == {"part57": {"01", "12", "20"}, "part20": {"01"}}, repr(_ctl_r14d))
+             "(control)", _ctl_r14d == {"part57": {"01", "12", "20"}, "part20": {"01"}}, repr(_ctl_r14d))
 _ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 comes after part70, "
                                  "whose app it imports. part72 (x) imports from part01 and part12. "
                                  "part73 (x) imports nothing but part01. part74 (x) imports part01. imports part05.")
 _whole_check("unit suite: ...and a note listing imports in a wording it cannot read is named, not dropped "
-      "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73", "part74"]
-      and all(next(iter(_v)).startswith("unreadable") for _v in _ctl2_r14d.values()), repr(_ctl2_r14d))
+             "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73", "part74"]
+             and all(next(iter(_v)).startswith("unreadable") for _v in _ctl2_r14d.values()), repr(_ctl2_r14d))
 _ctl4_r14d = _r14d_noted_imports("# part99 (x) imports part01 and 87.\n# part100 (x) imports part01, 99 "
                                  "and 100.\n# part101 (x) imports from part100.")
-_whole_check("unit suite: ...a three-digit part's note is read, and lists a three-digit import, as a "
-      "two-digit one's is (control)",
-      _ctl4_r14d.get("part99") == {"01", "87"} and _ctl4_r14d.get("part100") == {"01", "99", "100"}
-      and next(iter(_ctl4_r14d.get("part101", {""}))).startswith("unreadable")
-      and "part100" in _notes_r14d, repr((_ctl4_r14d, sorted(_notes_r14d)[-3:])))
+_whole_check("unit suite: ...a three-digit part's note is read, and lists a three-digit import, as a two-digit one's is (control)",
+             _ctl4_r14d.get("part99") == {"01", "87"} and _ctl4_r14d.get("part100") == {"01", "99", "100"}
+             and next(iter(_ctl4_r14d.get("part101", {""}))).startswith("unreadable")
+             and "part100" in _notes_r14d, repr((_ctl4_r14d, sorted(_notes_r14d)[-3:])))
 _ctl3_r18d = _r18d_parts_imported("from unit.part12 import a\nfrom unit import part05, idreuse_support\n"
                                   "from .part01 import b\nfrom . import part20\nimport unit.part30\n"
                                   "from unit.part61_ufw import c\n")
 _whole_check("unit suite: ...a part's imports are read in every spelling: from unit import partNN, relative, "
-      "and import unit.partNN (control)", _ctl3_r18d == {"12", "05", "01", "20", "30"}, repr(_ctl3_r18d))
+             "and import unit.partNN (control)", _ctl3_r18d == {"12", "05", "01", "20", "30"}, repr(_ctl3_r18d))
 
 # ...and the imports are held to the ORDER, which is what the notes are for: "nothing imports
 # backwards, so the import order below IS the execution order" was stated, never checked. A part
@@ -2536,16 +2522,14 @@ _r15d_backward = sorted("%s imports %s, which runs after it or is not in _PARTS"
                         if ("part" + _i) not in _PARTS
                         or _PARTS.index("part" + _i) >= _PARTS.index(_p))
 _whole_check("unit suite: ...the order check follows imports through shared modules: unit.reboot41_d names "
-      "no part, and reaches part01 and part20 through unit.reboot41_fixtures (control)",
-      {"01", "20"} <= _r16d_parts_reached("unit.reboot41_d"),
-      repr(sorted(_r16d_parts_reached("unit.reboot41_d"))))
+             "no part, and reaches part01 and part20 through unit.reboot41_fixtures (control)",
+             {"01", "20"} <= _r16d_parts_reached("unit.reboot41_d"), repr(sorted(_r16d_parts_reached("unit.reboot41_d"))))
 _whole_check("unit suite: ...and through `from unit import <module>`: part16 reaches unit.idreuse_support "
-      "that way (control)", "unit.idreuse_support" in _r16d_unit_imports("unit.part16"),
-      repr(sorted(_r16d_unit_imports("unit.part16"))))
+             "that way (control)", "unit.idreuse_support" in _r16d_unit_imports("unit.part16"),
+             repr(sorted(_r16d_unit_imports("unit.part16"))))
 _r15d_imports_read = sum(len(_r14d_real_imports(_p)) for _p in _PARTS)
-_whole_check("unit suite: no part imports a part that runs at or after it in _PARTS",
-      _r15d_imports_read >= 100 and not _r15d_backward,
-      "%d imports read; %s" % (_r15d_imports_read, _r15d_backward))
+_whole_check("unit suite: no part imports a part that runs at or after it in _PARTS", _r15d_imports_read >= 100 and not _r15d_backward,
+             "%d imports read; %s" % (_r15d_imports_read, _r15d_backward))
 
 # ...and every part20 patch is undone. _patch pushes onto part20's list and only _patched() (or
 # part20's own _restore_all, long finished) pops it: one made outside a _patched() block by any of
@@ -2553,8 +2537,7 @@ _whole_check("unit suite: no part imports a part that runs at or after it in _PA
 # A shard whose run list holds no part20 (tests/unit/shard.py) made no part20 patch to leave behind.
 _r15d_saved20 = getattr(sys.modules.get("unit.part20"), "_SAVED20", None)
 check("unit suite: every part20 _patch was undone by the end of the run",
-      _r15d_saved20 == [] or (_r15d_saved20 is None and "part20" not in _RUN_PARTS),
-      "not imported" if _r15d_saved20 is None else repr(
+      _r15d_saved20 == [] or (_r15d_saved20 is None and "part20" not in _RUN_PARTS), "not imported" if _r15d_saved20 is None else repr(
           [(getattr(_o, "__name__", type(_o).__name__), _n) for _o, _n, _v in _r15d_saved20[:6]]))
 
 _hub_first_after = {}      # each leftover once, with the part it first outlived
@@ -3383,41 +3366,9 @@ check("unit suite: no check reached sudo or the network through part05's no-sudo
 # its ~5,000 checks — and the gate — with it, and the tally still exited 0.
 _parts_on_disk = sorted(os.path.basename(p)[:-3]
                         for p in glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
-if _SHARD is None:
-    check("unit suite: every tests/unit/part*.py was imported and ran, each from its own place in _PARTS",
-          bool(_parts_on_disk) and all("unit." + p in sys.modules for p in _parts_on_disk) and set(_parts_on_disk) == set(_PARTS),
-          "never ran: %s; not in _PARTS: %s" % ([p for p in _parts_on_disk if "unit." + p not in sys.modules],
-                                                sorted(set(_parts_on_disk) ^ set(_PARTS))))
-else:
-    # A shard: every part of its run list ran, and no part outside it was imported (one would have
-    # run inside another part's import, out of order).
-    _shard_ran = sorted(_m[len("unit."):] for _m in sys.modules if re.fullmatch(r"unit\.part\d+", _m))
-    check("unit suite: this shard imported every part of its run list, each from its own place in _PARTS, and no other part",
-          bool(_shard_ran) and _shard_ran == sorted(_RUN_PARTS), "shard %d/%d; never ran: %s; ran, not listed: %s" % (
-              _SHARD + (sorted(set(_RUN_PARTS) - set(_shard_ran)), sorted(set(_shard_ran) - set(_RUN_PARTS)))))
-    # ...and, once (shard 1), the split itself: every part file is in _PARTS, each part but the setup and
-    # part15 is owned by exactly one shard, every shard's list holds what its parts import and keeps
-    # _PARTS order, and the split's import reader agrees with the order gate's (_r16d_parts_reached).
-    _shard_graph = _shard.import_graph(_PARTS, _root)
-    _shard_owned = _shard.plan(_PARTS, _shard_graph, _shard.load_weights(), _SHARD[1])
-    _shard_lists = [_shard.run_list(_PARTS, _shard_graph, _o) for _o in _shard_owned]
-    _shard_flat = [_p for _o in _shard_owned for _p in _o]
-    _shard_bad = sorted(set(_PARTS[_shard.SETUP:]) - set(_shard.TAIL) ^ set(_shard_flat))
-    _shard_bad += sorted({_p for _p in _shard_flat if _shard_flat.count(_p) > 1})
-    _shard_bad += ["%s: %s not listed" % (_p, _q) for _l in _shard_lists for _p in _l for _q in _shard_graph[_p] if _q not in _l]
-    _shard_bad += ["a list leaves _PARTS order" for _l in _shard_lists if _l != [_p for _p in _PARTS if _p in _l]]
-    _shard_bad += ["%s: the readers differ" % _p for _p in _PARTS
-                   if set(_shard_graph[_p]) != {"part" + _n for _n in _r16d_parts_reached("unit." + _p)}]
-    _whole_check("unit suite: every tests/unit/part*.py is in _PARTS, and the shards own each part but the setup and part15 "
-                 "exactly once, each shard listing every part its parts import, in _PARTS order",
-                 bool(_parts_on_disk) and set(_parts_on_disk) == set(_PARTS) and not _shard_bad
-                 and _shard_lists[_SHARD[0] - 1] == list(_RUN_PARTS),
-                 "not in _PARTS: %s; %s" % (sorted(set(_parts_on_disk) ^ set(_PARTS)), _shard_bad[:6]))
-# The whole-suite gates ran once each, here, exactly when this run holds them (the unsplit run, or shard 1).
-check("unit suite: the whole-suite gates ran here exactly when this run holds them, each once",
-      len(set(_whole_ran)) == len(_whole_ran) and len(_whole_ran) == (9 if _shard.runs_whole_suite_gates(_SHARD) and _SHARD
-                                                                       else 8 if _SHARD is None else 0),
-      "shard %r: %d ran" % (_SHARD, len(_whole_ran)))
+# ...one shard's run list instead when the suite is split, and the split itself once (tests/unit/shard.py).
+_shard.end_gates(check, _whole_check, _whole_ran, _SHARD, (_PARTS, _RUN_PARTS, _parts_on_disk), _root,
+                 _r16d_parts_reached)
 
 
 # ok is True (pass), False (fail) or None (skipped — the check did not run; see part01.skip).
@@ -3427,9 +3378,6 @@ failed = sum(1 for ok, _, _ in results if ok is False)
 skipped = [(name, detail) for ok, name, detail in results if ok is None]
 for ok, name, detail in results:
     print(_r31j_result_line(ok, name, detail))
-# Which shard this was, beside its tally: CI's root step refuses two runs of different shards.
-if _SHARD is not None:
-    print("\nunit shard %d/%d: %d of %d parts: %s" % (_SHARD + (len(_RUN_PARTS), len(_PARTS), " ".join(_RUN_PARTS))))
 print("\n%d / %d checks passed" % (passed, len(results) - len(skipped)))
 # Loud, and after the tally, because a skip is a hole in the run rather than a result in it. It
 # does not fail the suite (the environment is not the code's fault) but it must never be mistaken
