@@ -17,16 +17,19 @@ step in reverse, so no half-installed site is left behind.
                            from the CSPRNG, written through stdin into the site's files, refusing a
                            path that leaves them or passes through a link.
     run-in-container       a one-off container of the site's image (or wp-cli's), hardened like the
-                           site's, its files mounted; secrets reach it on its stdin or through
-                           `-e NAME` from the shell's environment, never on a command line.
+                           site's, its files mounted; values reach it on its stdin or as files in a
+                           read-only folder (STEP_VALUES_DIR), never on a command line or in an
+                           environment; its output never reaches the journal.
     set-permissions        files made read-only, folders removed (an installer left behind is a
                            takeover risk), then checked: the installer path must answer 404.
     drive-web-installer    the app's own install pages walked over the site's loopback port (never
                            the public address, before the site is public), with the proxy token and
                            secret fields read from files; each page must show its expected text.
 
-Secrets (the database password, the admin password, the proxy token) travel only on stdin: the
-OWASP Secrets Management Cheat Sheet's advice against secrets in argv and logs.
+Secrets (the database password, the admin password, the proxy token) travel only on stdin, and reach a
+command only as a 0600 file removed when the step ends: never argv, an environment, a prompt's echo or the
+journal (OWASP Secrets Management Cheat Sheet, "5.1 Injection of Secrets (file, in-memory)", "8.3 Detection
+lifecycle"; Logging Cheat Sheet, "Data to exclude"). A recipe may not ask a command to prompt for a value.
 """
 import base64
 import re
@@ -244,31 +247,65 @@ def _render_sh(step, values):
     return "python3 -I -c %s %s %s" % (_q(WRITE_PY), _q(step["dest"]), mode), text
 
 
-def _run_sh(account, site, step, values):
-    """The one-off container command, and its stdin (an env bundle, then the stdin secret)."""
-    from panel.services import websites_catalog as _wc
-    home = _ws._home(account)
-    image = _ws.image_for(site) if step["image"] == "site" else _wc.pins("wpcli")["image"]
+# A step container reads its values (the recipe's `values`: database name and password, admin details) from
+# files, one per name, in STEP_VALUES_DIR: the shell writes them 0600 in a 0700 folder of the site's own, mounts it
+# read-only and removes it when the step ends. Podman is never given a value, so none is on a command line, in
+# an environment the host logs or `podman inspect` shows, or in a container's configuration (OWASP Secrets
+# Management Cheat Sheet, "5.1 Injection of Secrets (file, in-memory)": mounted files, not environment variables).
+STEP_VALUES_DIR = "/run/panel-values"
+_VALUES_MOUNT = object()      # where the folder is mounted: written by the shell as "$d/values"
+
+
+def _values_prelude(names):
+    """Shell that makes the step's 0700 folder $d (removed on exit) and writes each stdin line into it, 0600.
+
+    Lines: `val NAME <b64>` for each of `names` (to $d/values/NAME), `in <b64>` (to $d/in, the command's
+    stdin) and `token <b64>` (to $d/token, the proxy token's header line). Any other name stops the shell.
+    """
+    return ("umask 077; d=$(mktemp -d \"$HOME/%s/.step.XXXXXX\") || exit 1; trap 'rm -rf \"$d\"' EXIT; "
+            "mkdir \"$d/values\" || exit 1; : > \"$d/in\"; " % _ws.SITE
+            + "while read -r k n v; do case \"$k\" in val) case \"$n\" in %s) printf %%s \"$v\" | base64 -d > "
+              "\"$d/values/$n\" || exit 1 ;; *) exit 25 ;; esac ;; in|token) printf %%s \"$n\" | base64 -d > "
+              "\"$d/$k\" || exit 1 ;; *) exit 25 ;; esac; done; " % ("|".join(sorted(names)) or "_none_"))
+
+
+def _container_args(account, site, values, image, argv):
+    """The one-off container's podman argv (hardened like the site's; its values folder mounted read-only)."""
     if not (str(values.get("_uid", "")).isdecimal() and str(values.get("_gid", "")).isdecimal()):
         raise ValueError("a container step needs the account's uid and gid")
-    env = step.get("env", {})
-    lines = ["env %s %s" % (name, _b64(values.get(ph, ""))) for name, ph in sorted(env.items())]
+    home = _ws._home(account)
+    return (["podman", "run", "--rm", "-i", "--name", STEP_CONTAINER, "--pull=never", "--log-driver=none",
+             "--userns=keep-id", "--user", "%s:%s" % (values["_uid"], values["_gid"]), "--read-only", "--cap-drop=all",
+             "--security-opt=no-new-privileges", "--pids-limit=%d" % int(site.pids), "--memory=%dm" % int(site.mem_mb),
+             "--dns=none", "--network=%s" % values.get("_network", "none"), "--tmpfs=/tmp:rw,mode=1777,size=256m",
+             "-v", "%s/%s:%s" % (home, _ws.HTML, _ws.DOCROOT_PHP), "-w", _ws.DOCROOT_PHP, "-e", "HOME=/tmp",
+             "-v", _VALUES_MOUNT, "--entrypoint", argv[0], image] + list(argv[1:]))
+
+
+def _shell_words(args):
+    """`args` for the shell: each word single-quoted, the values folder's mount written as "$d/values"."""
+    return " ".join('"$d/values":%s:ro' % STEP_VALUES_DIR if a is _VALUES_MOUNT else _q(a) for a in args)
+
+
+def _run_sh(account, site, step, values):
+    """The one-off container command, and its stdin (the step's values, then the stdin value, each base64).
+
+    The container's output reaches only this shell (--log-driver=none): never the journal, where an
+    installer's echo of a value would stay (OWASP Logging Cheat Sheet, "Data to exclude"). The wp-cli image
+    is pulled by its digest before its first use.
+    """
+    from panel.services import websites_catalog as _wc
+    image = _ws.image_for(site) if step["image"] == "site" else _wc.pins("wpcli")["image"]
+    named = step.get("values", {})
+    lines = ["val %s %s" % (name, _b64(values.get(ph, ""))) for name, ph in sorted(named.items())]
     if "stdin" in step:
         lines.append("in %s" % _b64(values.get(step["stdin"], "")))
-    args = ["podman", "run", "--rm", "-i", "--name", STEP_CONTAINER, "--pull=never", "--userns=keep-id",
-            "--user", "%s:%s" % (values["_uid"], values["_gid"]), "--read-only", "--cap-drop=all",
-            "--security-opt=no-new-privileges", "--pids-limit=%d" % int(site.pids), "--memory=%dm" % int(site.mem_mb),
-            "--dns=none", "--network=%s" % values.get("_network", "none"), "--tmpfs=/tmp:rw,mode=1777,size=256m",
-            "-v", "%s/%s:%s" % (home, _ws.HTML, _ws.DOCROOT_PHP), "-w", _ws.DOCROOT_PHP, "-e", "HOME=/tmp"]
-    for name in sorted(env):
-        args += ["-e", name]
-    args += ["--entrypoint", step["argv"][0], image] + [_argv_word(w, values) for w in step["argv"][1:]]
-    # The site's image is pulled by its install; wp-cli's is pulled here, by its digest, before its first use.
+    args = _container_args(account, site, values, image, [step["argv"][0]]
+                           + [_argv_word(w, values) for w in step["argv"][1:]])
     pull = ("podman image exists %s || podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; "
             % (_q(image), _q(image)) if step["image"] == "wpcli" else "")
-    body = ("while read -r k n v; do case \"$k\" in env) case \"$n\" in %s) export \"$n=$(printf %%s \"$v\" | base64 -d)\" ;; "
-            "*) exit 25 ;; esac ;; in) inp=\"$n\" ;; esac; done; " % ("|".join(sorted(env)) or "_none_")
-            + pull + "printf %%s \"${inp:-}\" | base64 -d | %s 2>&1 | tail -n 40; rc=${PIPESTATUS[2]}; " % shlex.join(args)
+    body = (_values_prelude(named) + pull
+            + "%s < \"$d/in\" 2>&1 | tail -n 40; rc=${PIPESTATUS[0]}; " % _shell_words(args)
             + "[ \"$rc\" -eq 0 ] || { echo SITE_STEP_FAILED; exit \"$rc\"; }")
     # the `in` line has no name field: "in <b64>" reads as k=in n=<b64>
     return body, "".join(line + "\n" for line in lines)
@@ -312,7 +349,7 @@ def _installer_sh(site, step, values, token):
                            for ph in re.findall(r"\{([a-z_]{1,24})\}", v) if ph in _wc.SECRETS})
     stdin = "".join("%s %s\n" % (n, _b64(values.get(n, ""))) for n in secret_names)
     stdin += "token %s\n" % _b64("%s: %s" % (_ws.GATE_HEADER, token))
-    body = ["d=$(mktemp -d) || exit 1; trap 'rm -rf \"$d\"' EXIT; chmod 0700 \"$d\"; ",
+    body = ["umask 077; d=$(mktemp -d) || exit 1; trap 'rm -rf \"$d\"' EXIT; chmod 0700 \"$d\"; ",
             "while read -r n v; do case \"$n\" in %s|token) printf %%s \"$v\" | base64 -d > \"$d/$n\" ;; *) exit 25 ;; "
             "esac; done; " % ("|".join(secret_names) or "_none_")]
     host = values.get("domain", "") or "localhost"

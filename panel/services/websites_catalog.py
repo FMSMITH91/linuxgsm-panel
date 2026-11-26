@@ -270,20 +270,26 @@ def _argv_names_ok(argv):
     return not named & set(SECRETS) and not named - set(PLACEHOLDERS)
 
 
-def _env_ok(env):
-    return isinstance(env, dict) and len(env) <= 16 and all(_full(_ENV_NAME, k) and v in PLACEHOLDERS
-                                                            for k, v in env.items())
+def _argv_no_prompt(argv):
+    """Whether no word asks a command to prompt for a value: wp-cli echoes what it read, and the command line."""
+    return not any("--prompt" in w for w in argv)
+
+
+def _values_ok(values):
+    return isinstance(values, dict) and len(values) <= 16 and all(_full(_ENV_NAME, k) and v in PLACEHOLDERS
+                                                                  for k, v in values.items())
 
 
 def _step_run(step, _recipe):
-    if not _obj(step, ("type", "image", "argv"), ("stdin", "env")):
-        return ["a run step has image and argv (and stdin, env)"]
+    if not _obj(step, ("type", "image", "argv"), ("stdin", "values")):
+        return ["a run step has image and argv (and stdin, values)"]
     return _failed([
         (lambda: step["image"] in ("site", "wpcli"), "image is site or wpcli"),
         (lambda: _argv_ok(step["argv"]), "argv is 1-%d words without control characters" % ARGV_MAX),
         (lambda: _argv_names_ok(step["argv"]), "argv may name only values that are not secrets"),
+        (lambda: _argv_no_prompt(step["argv"]), "argv may not ask for a prompt (its answer is echoed)"),
         (lambda: step.get("stdin", "admin_password") in PLACEHOLDERS, "stdin names one value"),
-        (lambda: _env_ok(step.get("env", {})), "env maps NAMES to values"),
+        (lambda: _values_ok(step.get("values", {})), "values maps file NAMES to values"),
     ])
 
 

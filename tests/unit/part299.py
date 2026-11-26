@@ -106,7 +106,7 @@ def _s299_refusals():
         "recipe url with a query": _bad299(("recipes", "phpbb", "url"), _SITES299["recipes"]["phpbb"]["url"] + "?x=1"),
         "recipe url on a port": _bad299(("recipes", "mybb", "url"), "https://github.com:8443/mybb/x.zip"),
         "recipe step of an unknown type": _bad299(("recipes", "phpbb", "steps", 0), {"type": "run-shell"}),
-        "secret on a command line": _bad299(("recipes", "wordpress", "steps", 3, "argv", 5),
+        "secret on a command line": _bad299(("recipes", "wordpress", "steps", 3, "argv", 2),
                                             "--admin_password={admin_password}"),
         "config written outside the site": _bad299(("recipes", "phpbb", "steps", 2, "dest"), "../../.bashrc"),
         "unknown placeholder": _bad299(("recipes", "drupal", "steps", 3, "template"), "{panel_secret_key}"),
@@ -805,11 +805,11 @@ def _s299_recipe_steps():
         "SITE_SHA_MISMATCH" in dl_body, "SITE_NOT_EMPTY" in dl_body),
        (True, True, True, True, True))
     wp_install = out[("wordpress", "run-in-container-3")]
-    eq("recipes (WordPress): wp core install reads the admin password from its prompt on stdin, in a one-off "
-       "container with every capability dropped, a read-only root and no DNS",
-       ("--prompt=admin_password" in wp_install[0], "--cap-drop=all" in wp_install[0], "--read-only" in wp_install[0],
-        "--dns=none" in wp_install[0], any(ln.startswith("in ") for ln in wp_install[1].splitlines())),
-       (True, True, True, True, True))
+    eq("recipes (WordPress): wp core install reads the admin password from a file of its values folder (never a "
+       "prompt wp-cli echoes), in a one-off container with every capability dropped, a read-only root and no DNS",
+       ("--prompt" in wp_install[0], "--cap-drop=all" in wp_install[0], "--read-only" in wp_install[0],
+        "--dns=none" in wp_install[0], any(ln.startswith("val ADMIN_PASSWORD ") for ln in wp_install[1].splitlines())),
+       (False, True, True, True, True))
 
 
 def _s299_recipe_steps2():

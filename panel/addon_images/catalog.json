@@ -107,9 +107,11 @@
             "argv": [
               "php",
               "-r",
-              "$l = require 'autoload.php'; require_once 'core/includes/install.core.inc'; $d = 'Drupal\\\\mysql\\\\Driver\\\\Database\\\\mysql'; $e = 'getenv'; install_drupal($l, ['interactive' => FALSE, 'parameters' => ['profile' => 'standard', 'langcode' => 'en'], 'forms' => ['install_settings_form' => ['driver' => $d, $d => ['database' => $e('DB_NAME'), 'username' => $e('DB_USER'), 'password' => $e('DB_PASSWORD'), 'host' => $e('DB_HOST_NAME'), 'port' => $e('DB_PORT'), 'prefix' => '']], 'install_configure_form' => ['site_name' => $e('SITE_NAME'), 'site_mail' => $e('ADMIN_EMAIL'), 'account' => ['name' => $e('ADMIN_USER'), 'mail' => $e('ADMIN_EMAIL'), 'pass' => ['pass1' => $e('ADMIN_PASSWORD'), 'pass2' => $e('ADMIN_PASSWORD')]], 'enable_update_status_module' => FALSE, 'enable_update_status_emails' => FALSE]]]);"
+              "$l = require 'autoload.php'; require_once 'core/includes/install.core.inc'; $d = 'Drupal\\\\mysql\\\\Driver\\\\Database\\\\mysql'; $e = function ($n) { return file_get_contents('/run/panel-values/' . $n); }; install_drupal($l, ['interactive' => FALSE, 'parameters' => ['profile' => 'standard', 'langcode' => 'en'], 'forms' => ['install_settings_form' => ['driver' => $d, $d => ['database' => $e('DB_NAME'), 'username' => $e('DB_USER'), 'password' => $e('DB_PASSWORD'), 'host' => $e('DB_HOST_NAME'), 'port' => $e('DB_PORT'), 'prefix' => '']], 'install_configure_form' => ['site_name' => $e('SITE_NAME'), 'site_mail' => $e('ADMIN_EMAIL'), 'account' => ['name' => $e('ADMIN_USER'), 'mail' => $e('ADMIN_EMAIL'), 'pass' => ['pass1' => $e('ADMIN_PASSWORD'), 'pass2' => $e('ADMIN_PASSWORD')]], 'enable_update_status_module' => FALSE, 'enable_update_status_emails' => FALSE]]]);"
             ],
-            "env": {
+            "image": "site",
+            "type": "run-in-container",
+            "values": {
               "ADMIN_EMAIL": "admin_email",
               "ADMIN_PASSWORD": "admin_password",
               "ADMIN_USER": "admin_user",
@@ -119,9 +121,7 @@
               "DB_PORT": "db_port",
               "DB_USER": "db_user",
               "SITE_NAME": "site_name"
-            },
-            "image": "site",
-            "type": "run-in-container"
+            }
           },
           {
             "append": true,
@@ -471,19 +471,19 @@
           },
           {
             "argv": [
-              "wp",
-              "core",
-              "install",
-              "--url={site_url}",
-              "--title={site_name}",
-              "--admin_user={admin_user}",
-              "--admin_email={admin_email}",
-              "--prompt=admin_password",
-              "--skip-email"
+              "sh",
+              "-c",
+              "wp core install --url=\"$(cat /run/panel-values/SITE_URL)\" --title=\"$(cat /run/panel-values/SITE_NAME)\" --admin_user=\"$(cat /run/panel-values/ADMIN_USER)\" --admin_email=\"$(cat /run/panel-values/ADMIN_EMAIL)\" --skip-email --quiet && wp eval '$v = function ($n) { return file_get_contents(\"/run/panel-values/\" . $n); }; $u = get_user_by(\"login\", $v(\"ADMIN_USER\")); if (! $u) { exit(1); } wp_set_password($v(\"ADMIN_PASSWORD\"), $u->ID);'"
             ],
             "image": "wpcli",
-            "stdin": "admin_password",
-            "type": "run-in-container"
+            "type": "run-in-container",
+            "values": {
+              "ADMIN_EMAIL": "admin_email",
+              "ADMIN_PASSWORD": "admin_password",
+              "ADMIN_USER": "admin_user",
+              "SITE_NAME": "site_name",
+              "SITE_URL": "site_url"
+            }
           },
           {
             "readonly": [
