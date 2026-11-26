@@ -951,3 +951,12 @@ dbe29777 Sign-in takes the same time whether or not the account exists.
 c1ab89d1 The helper names the sudoers file and line that stops an account.
 ec128f2e The panel no longer listens on every network address just because setup suggested it.
 b901edb4 Add-on updates arrive without a panel update.
+77f20a9b Backups check the right disk.
+4f175499 One backup of a server at a time.
+b4c80a80 Restores report what happened.
+6a65bedb Kick and Ban say when the console could not be read.
+abd99473 Settings saves keep the rest of the file.
+bfd743a9 Every form carries its own security token from the server.
+5b0ac399 Clearer add-on and database messages.
+909e1791 Database password resets wait their turn.
+e39699e0 Panel updates wait for the secret and dependency scans.
