@@ -67,13 +67,23 @@ def _rows309(model, *cols):
 
 
 _clock309 = [_T309]
+_tickerr309 = []
 
 
 def _tick309(now):
-    """One tick through its caller, app._prune_metric_samples, at `now` (the 30-minute throttle reset)."""
+    """One tick through its caller, app._prune_metric_samples, at `now` (the 30-minute throttle reset).
+
+    A tick that raises (a row counted twice breaks the one-row-an-hour index) is recorded, not fatal, so
+    the checks below name it.
+    """
     _clock309[0] = now
     _ps309._last_sample_prune[0] = 0.0
-    _app309._prune_metric_samples(_p9)
+    try:
+        _app309._prune_metric_samples(_p9)
+    except Exception as exc:  # noqa: BLE001 - recorded for the checks
+        _tickerr309.append(repr(exc)[:200])
+        with _p9.app_context():
+            _db309.session.rollback()
 
 
 def _clear309():
@@ -151,8 +161,8 @@ eq("tick: each complete hour of a server's samples is one row: how many, average
 eq("tick: ...and a host's: CPU, RAM and disk averaged, the network rate's average and highest over the samples "
    "that have one (None when none has)",
    _hh1, [(_HOST309, _T309, 2, 10.0, 60.0, 30.0, 100.0, 100.0, None, None)])
-eq("tick: a second run over the same hours changes nothing (no sample counted twice)", _k309.get("again"),
-   (_sm1, _hh1))
+eq("tick: a second run over the same hours changes nothing (no sample counted twice) and no tick failed",
+   (_k309.get("again"), _tickerr309), ((_sm1, _hh1), []))
 eq("tick: the next run rolls only the hour that completed since, the earlier rows as they were",
    _k309.get("next"), [(_T309, 3, 30.0), (_T309 + _td309(hours=1), 1, 50.0), (_T309 + _td309(hours=2), 1, 99.0)])
 eq("tick: a rolled hour whose samples were since pruned keeps its row (it is not built again from what is "
