@@ -557,6 +557,11 @@ def _leftover_cert94():
           "failed and no boot record still alert; the ticker passes the boot record",
           got == {"plain HTTP": False, "serving TLS": True, "TLS failed": True, "no record": True}
           and seen == [boot], repr((got, seen)))
+    eq("update-check ticker: one pass also runs the signed add-on catalog's daily tick, once",
+       _CATALOG_TICKS94, [1])
+
+
+_CATALOG_TICKS94 = []
 
 
 def _cert_ticker94():
@@ -578,6 +583,8 @@ def _cert_ticker94():
     _p9_patch(_osu94, "_update_tick", lambda app, st, last: last)
     _p9_patch(_osu94, "_announced_update", lambda: None)
     _p9_patch(_osu94, "_maybe_alert_cert_expiring", lambda b=None: seen.append(b))
+    # The signed add-on catalog's daily fetch rides this ticker too: stubbed (it would git fetch), and counted.
+    _p9_patch(_osu94, "_addon_catalog", NS(daily_tick=lambda: _CATALOG_TICKS94.append(1)))
     saved_run = _osu94._os_update_state["last_run"]
     _osu94._os_update_state["last_run"] = _time94.time()   # the daily OS check returns at once
     try:
