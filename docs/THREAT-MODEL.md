@@ -30,12 +30,16 @@ flowchart LR
     PS[Push services<br/>FCM, Mozilla, Apple, WNS]
     CH[Telegram / Discord / ntfy]
     GH[GitHub: code, releases,<br/>release-signatures]
+    V[Website visitors]
+    CF[CDN or tunnel provider<br/>optional]
   end
   subgraph PanelHost[Panel host]
     P[Panel web app<br/>panel user]
     DB[(panel.db + cred_key)]
     H[panel-helper<br/>root]
     GA[Game accounts<br/>lgsmpanel-games]
+    WP[Web proxy<br/>lgsmweb, ports 80/443]
+    WS[Website containers<br/>one ws account each]
   end
   subgraph Remote[Remote hosts]
     RS[sshd]
@@ -52,6 +56,12 @@ flowchart LR
   CH -- "TB5 bot commands" --> P
   P -- "TB6 db-query as the database's own account" --> DBS
   GH -- "TB7 signed update" --> H
+  V -- "TB10 HTTP/HTTPS" --> WP
+  V -. "TB10 through a CDN or tunnel" .-> CF
+  CF -.-> WP
+  WP -- "loopback + per-site token" --> WS
+  WS -- "TB11 site code to the host" --> H
+  P -- "TB3 sudo -u ws account" --> WS
   P --- DB
 ```
 
@@ -68,6 +78,8 @@ Trust boundaries:
 | TB7 | GitHub to an installed panel (updates) | anyone holding the GitHub account or a CI token |
 | TB8 | CI runners (pull-request code) | anyone who opens a pull request |
 | TB9 | SFTP client to the panel's SFTP service (off by default) | anyone who can reach its port; signed-in users with `edit_files` |
+| TB10 | Internet to the web proxy and the websites (only while a site is online) | anyone on the internet, or only the allow list's networks, or only the tunnel provider |
+| TB11 | A website's code to its host | a hostile or compromised site: its owner (a customer), or whoever exploits its PHP, WordPress, phpBB or app code |
 
 ## Assets
 
@@ -83,6 +95,8 @@ Trust boundaries:
 | The release key and the update path | every panel installs what it verifies | the signer's machine; `release-signatures` branch; `panel/install/release-signers` |
 | The add-on catalog | which add-on image every panel offers as an update | `panel/addon_images/catalog.json` (the floor); `catalog/latest.json` + `.sig` on `release-signatures`; the accepted copy in `data/addon-catalog.json` (0600) |
 | Audit log | accountability for every change | `panel.db` `audit_log` (`panel/security/auth.py` `log_action`) |
+| Websites and their customers' data | other people's sites, files and databases (multi-tenant) | each site's own account (`ws<id>`) and container; its database on the host's database server |
+| Website secrets: each site's proxy token and object-cache password, an app's environment variables, an operator's own certificate key, a host's tunnel token | each opens a site, or lets someone serve as it | `panel.db` (`website`, `website_domain`, `website_proxy`), encrypted with the key ring (`panel/db/at_rest.py` `SECRET_COLUMNS`) |
 
 ## STRIDE per trust boundary
 
@@ -104,6 +118,7 @@ the file that holds them.
 | I | Secrets shown to a role that should not see them | Mitigate: permission per route (`panel/security/auth.py`), server access per group, LinuxGSM `details` masked for roles without MANAGE_SERVERS, debug report scrubbing (`panel/ops/debug_report/privacy.py`). |
 | D | Request floods, huge uploads, log flooding | Mitigate: a malformed request line (no HTTP version, an unknown protocol) is refused before the app with nothing logged and no version named, and a client that hangs up mid-response (closes or resets the connection) leaves no traceback, while any other failed response is logged in full (`panel/core/wsgi_serve.py`); a request carrying `Transfer-Encoding` is refused before the app (411, or 400 for any coding but `chunked`, and the connection closed: the app could never read such a body, and its discard had no size bound) and a body is read with a line cap and, with no Content-Length, a total cap (OWASP Denial of Service Cheat Sheet, "Input validation"; WSTG-INJT-16, "Remediation"); app-wide request cap on Content-Length bodies, the panel's uploads split into pieces with size limits (`panel/routes/backup_upload.py`, `panel/routes/databases_files.py`), the panel's own ban list (`panel/security/banlist.py`) beside fail2ban. Idle and slow connections are closed by whole-request deadlines, not only per-read timeouts: 30 s from the end of a request (or the accept) to the next request's first byte, a TLS handshake included; 40 s from that byte to the end of the headers, however they trickle; a body gets 60 s of waiting for the client plus 1 s per 500 bytes sent (Apache mod_reqtimeout's MinRate, the cheat sheet's example), and only time spent waiting for the client counts; every read and write also gives up after 60 s with no progress, above Socket.IO's 45 s heartbeat window, which engineio sets on an open WebSocket itself, and the request deadlines end when a request reaches the app, so the console and terminal are not cut. One source holds at most 64 connections (an IPv6 source by its /64; loopback, where Tailscale Serve and a local proxy deliver every viewer, is not counted: see Residual risks); a client that stops reading an answer, or stalls its body, leaves nothing in the log. accept() waits and retries when descriptors or memory run out instead of ending the server, and the unit sets `LimitNOFILE=8192` against a pool of 1,024 connections (OWASP Denial of Service Cheat Sheet, "Rate limiting": minimum ingress rate with request-read timeouts, an absolute timeout, a load limit; Logging Cheat Sheet, "Attacks on Logs"; `panel/core/wsgi_serve.py`). Transfer: volumetric floods, and slow connections from many sources at once, to the network in front (Tailscale or a proxy). |
 | E | A lower role reaches an admin action | Mitigate: deny by default, permission checks on every request, step-up re-authentication for root-equivalent actions (`account_guard.py`), the owner account no other admin can change (`panel/security/owner.py`). |
+| E | A customer login reaches another customer's website, or the panel's other pages | Mitigate: a website is reached only through a group that holds the permission AND has the site (`group_websites`; the permission and the site are paired per group), checked on every request by one function, `site_for` in `panel/services/websites_access.py`, with the site id from the URL only; no access and no such site both answer 404, so ids are no oracle (OWASP Insecure Direct Object Reference Prevention Cheat Sheet, "Mitigation"; Multi-Tenant Security Cheat Sheet, "Preventing Cross-Tenant Data Access": 404 rather than 403). A customer group (`Group.is_customer`) can be given only the website permissions (`CUSTOMER_PERMS` in `panel/security/auth.py`), no host and no game server, by anyone below a superadmin, so a customer sees no host, game server, user, group or other site; its members must set up 2FA (Settings, on by default); the audit log shows them only their own rows and rows about their sites (`AuditLog.website_id`, never the free-text target). A unit check enumerates every `/websites` route and fails on one that does not call `site_for`, and the two-tenant checks (`tests/unit/part298.py`) prove cross-tenant access refused and same-tenant access allowed (Authorization Cheat Sheet, "Deny by Default", "Validate the Permissions on Every Request", "Testing"). |
 
 ### TB2: panel to root (the helper)
 
@@ -216,6 +231,43 @@ every address (the operator's explicit choice, with a warning; the panel never o
 | D | Uploads fill the disk; connections exhaust the service | Mitigate: an upload size cap (Settings, 4 GiB recommended), refused when less than 256 MiB would stay free (a file opened for append counted from its size at open plus every byte written, since `sftp-server` ignores the offsets of such writes), 64 open files per session, 64 connections and 10 unsigned-in connections per address. The service is its own process: a transfer cannot stall the panel's pages or live console. |
 | E | The SFTP service used to reach root or the panel's account | Mitigate: it runs as the panel's account and starts `sftp-server` as the game account only (`sudo -u`, the grant's `%lgsmpanel-games` line); no shell, command, forwarding or subsystem but sftp is accepted. |
 
+### TB10: internet to the web proxy and the websites
+
+Exists only while a site is online on a host. One proxy per host, `lgsm-web-proxy.service` as the
+dedicated `lgsmweb` account (no shell, no sudo, not in `lgsmpanel-games`), configured only by the panel
+(`panel/services/websites_proxy.py`, applied by the helper after the proxy validates it). The operator
+picks how the host is reached (`WebsiteProxy.exposure_mode`): Public (80/443 open to all), Restricted
+(80/443 open only to an allow list: a Cloudflare preset from the signed catalog and/or the operator's own
+networks), or Tunnel (an outbound connector, no inbound port at all).
+
+| STRIDE | Threat | Response and controls |
+| --- | --- | --- |
+| S | Host-header confusion: a request for a name the proxy does not serve, or for the bare IP, reaches a site or the panel | Mitigate: one block per verified domain and a catch-all that aborts the connection for any other Host, the bare IP included; the panel itself is never behind this proxy and keeps its own port; certificates only for domains in the configuration, never on demand. |
+| S | A forged client-address header (`CF-Connecting-IP`, `X-Forwarded-For`) from outside the allow list makes the proxy, a site's log or its rate limits trust a made-up address | Mitigate: the proxy strips every client `X-Forwarded-*` and sets its own; in Restricted mode it trusts a forwarded address only from the allow list's networks (`trusted_proxies` is exactly that list) and the firewall admits 80/443 only from them, so a forged header from any other source is ignored. In Public mode no forwarded header is trusted at all. OWASP's cheat sheets do not cover forwarded headers; the authority is RFC 7239, section 8 (a forwarded header is only as trustworthy as the proxy that set it), and the proxy's own `trusted_proxies` documentation. |
+| T | Request smuggling or desync between the proxy and a site | Mitigate: one proxy normalises every request and speaks HTTP/1.1 to the site on loopback; HTTP/3 is off (no UDP 443); the proxy binary is pinned by sha256 in the signed catalog and updated only through it. |
+| R | No record of who visited a site | Accept: access logs are off by default (privacy); when an operator turns them on per site they go to the journal with client addresses masked (/24, /48) and kept 7 days. Every panel action on a site is an audit row (TB1). |
+| I | Certificate and ACME data: the certificate authority learns each domain, the host's address and an optional contact | Accept, disclosed: Let's Encrypt is an outside service (Settings, Outside services), the contact email is off by default, and docs/PRIVACY.md says what it sees; an operator may use their own or a CDN's origin certificate instead (`WebsiteProxy.origin_tls`). |
+| I | A local account bypasses the proxy and calls a site's loopback port directly | Mitigate: the proxy adds a per-site token (`Website.proxy_secret`, encrypted at rest) to every request and the site's server refuses a request without it (403). |
+| T | The allow list drifts: the CDN's ranges change, or the firewall rules and the proxy's trusted list disagree | Mitigate: the ranges ship in the signed catalog (no extra fetch by panels) and a scheduled job proposes each change; the firewall rules (labelled) and the proxy configuration are both rendered from the same `WebsiteProxy` row and replaced together, and the next probe reconciles a crash between them. Residual: a range the CDN adds before the catalog does is refused until the catalog catches up (fails closed). |
+| D | Floods and slow clients | Mitigate: header, read, write and idle timeouts and a per-site request body limit at the proxy; per-site CPU, memory and pids limits on the container (TB11). Residual: no WAF and no volumetric protection beyond what a CDN in front gives (residual risks). |
+| E | A proxy bug gives the attacker the proxy's process | Mitigate: `lgsmweb` holds only `CAP_NET_BIND_SERVICE`, with `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp` and write access to its own state folder only; the admin API is off; it can reach the sites' loopback ports and nothing of the panel's (systemd.exec(5); OWASP has no proxy hardening guide). |
+| I | A leaked tunnel token lets someone else serve the host's domains | Mitigate: the token is stored encrypted (`WebsiteProxy.tunnel_token_enc`, `panel/db/at_rest.py`), never logged and never on a command line (a 0600 file read by the connector); the connector runs rootless with no host network beyond the proxy on loopback. Residual: the token is the provider's credential; after a leak the operator rotates it at the provider and pastes the new one (OWASP Secrets Management Cheat Sheet, rotation). |
+
+### TB11: a website's code to its host
+
+Every site runs as its own account (`ws<id>`, home 0700, made by the helper and marked as the panel's)
+in a rootless container; customers upload PHP, WordPress plugins or app code, so the code is treated as
+hostile.
+
+| STRIDE | Threat | Response and controls |
+| --- | --- | --- |
+| E | Container escape to the host, root or the panel's account | Mitigate: rootless Podman, every capability dropped, no new privileges, read-only root file system with tmpfs for scratch, numeric user, no Podman or Docker socket, no shared volume between sites, image by digest from the signed catalog (OWASP Docker Security Cheat Sheet, rules 3, 4, 7, 8, 11 and 13); a site's code never runs as root or as the panel's account, and the helper acts only on a `ws<id>` account that carries the panel's marker file, never on one the panel did not create. |
+| I | A site reads another site's files or database | Mitigate: one account, one container and one subuid range per site, homes 0700; a site's database account sees only its `ws<id>_` database (the helper's allow-list); SFTP and the file manager are rooted at the site's own folder and run as its account. |
+| D | Resource exhaustion: CPU, memory, processes, disk | Mitigate: per-site memory (no swap), pids and CPU limits on the container, a disk quota or the panel's `du` check (warn at 80 %, refuse uploads at 100 %, stop at 120 %). Residual where the file system has no user quotas: the `du` check runs every 5 minutes, so a site can overshoot between checks. |
+| I | Outbound probing: a site calls the tailnet, the panel's port, SSH or the internet (SSRF) | Mitigate: no outbound network for a site by default (only the database relay); WordPress reaches only its own update hosts unless a superadmin gives that site full outbound with a warning; an app's build step reaches only its package registry; the egress guard (an nftables table for the `ws*` uid range) drops every connection to the host's own non-loopback addresses and every non-loopback interface, and is required for customer sites (OWASP Server Side Request Forgery Prevention Cheat Sheet: the panel itself never connects to a customer-supplied name either, it only compares DNS answers). |
+| T | A site's settings inject into the proxy configuration or php.ini | Mitigate: per-site rules come from a form, not raw text, and are validated; the whole generated configuration is validated by the proxy before it replaces the running one, so a bad rule cannot take other sites down; php.ini lines are validated one by one and the panel's hardening lines (`expose_php=Off`, `allow_url_include=Off`) always follow them; raw proxy snippets are superadmin-only. |
+| S | A one-click install leaves a half-installed site, or a predictable admin password | Mitigate: the install is a job of steps, each undone on failure (`Website.install_steps_done`); the admin password comes from a CSPRNG, is shown once, never stored, never logged and never on argv; downloads are checked against the catalog's sha256 before they are unpacked. |
+
 ## Residual risks
 
 | Risk | Response | Why, and who owns it |
@@ -229,6 +281,10 @@ every address (the operator's explicit choice, with a warning; the panel never o
 | The SQL box's audit line keeps numbers | Accept | String and hex literals are masked under either escape mode (a literal whose end depends on sql_mode masks the rest of the line), but decimal numbers stay in the audit line by design, so an id or amount typed into a statement is recorded. Owner: whoever grants EDIT_DATABASE_DATA. |
 | The per-source connection cap does not reach clients that come through Tailscale Serve, Funnel or a proxy on the box | Reduce, then accept | Those all connect from loopback, which the cap does not count, so many slow clients (or one client opening many connections) through Funnel or a proxy can fill the pool of 1,024 connections for about the 30 s idle or 40 s header deadline, until those close them. Counting by tailscaled's X-Forwarded-For is not done: the cap acts when a connection is accepted, before any header is read, and a proxy may carry requests from different clients over one kept-alive connection to the panel, so a connection is not one client. What still applies to them: the idle, header and body deadlines, the body's minimum rate, the panel's ban list (by the X-Forwarded-For of a root-owned loopback peer), and the pool limit with `LimitNOFILE`, which keep the panel up while the flood lasts. Tailscale publishes no per-client connection limit for Funnel. Prefer Serve (tailnet members only) to Funnel; a proxy on the box should set its own per-client limits. Owner: the operator who turns on Funnel or puts a proxy in front. |
 | The panel's systemd unit has no sandboxing directives (`systemd-analyze security` scores it 9.2, "UNSAFE") | Accept | Everything the panel starts runs inside the unit's namespaces, seccomp filter and capability bounding set, even across sudo: the root helper (apt, ufw, useradd, writes to `/etc`, OS upgrades) and every game server, which is started as its account and then moved to its own scope but keeps what it inherited. So `NoNewPrivileges` and `CapabilityBoundingSet` would stop sudo; `ProtectSystem`, `ProtectHome`, `ReadOnlyPaths`, `PrivateTmp` (tmux's sockets), `ProtectKernelModules`, `ProtectProc` and `RestrictSUIDSGID` would break the helper's writes, OS upgrades (a new sudo is a setuid file, a kernel writes `/usr/lib/modules`) or the games; `SystemCallArchitectures=native` and `MemoryDenyWriteExecute` would stop 32-bit game servers and Java/Mono JITs; `UMask=0077` would reach game files; `LimitCORE=0` would take crash dumps from every game. The directives that reach nothing the panel starts (the panel's own non-dumpable flag above, and `RemoveIPC`/`ProtectHostname`/`RestrictRealtime`/`LockPersonality` as candidates) are kept out of the unit until each is shown, on a real host, not to change a helper verb, an OS upgrade or a game start. The protections that do apply sit at the boundaries instead: the narrow helper (TB2), the game accounts (TB3), the add-on containers. OWASP has no systemd hardening guide; the authority is systemd.exec(5). |
+| A customer's own WordPress or phpBB plugins and themes have vulnerabilities | Transfer | The panel updates images and app cores from the signed catalog; plugins and themes are the site owner's. What such a hole can reach is limited by TB11's container, limits and egress guard. Owner: the site's owner. |
+| Denial of service from the public internet against an online website | Accept | Timeouts, body limits and per-site resource limits keep one site from starving the host's game servers for long, but there is no WAF and no volumetric protection; a CDN in front (Restricted mode) or a tunnel moves that to the provider. Owner: the operator who puts a site online. |
+| No egress filtering for an admin's own sites on Ubuntu 24.04 without the guard | Reduce, then accept | Podman's pasta on 24.04 cannot keep a container off the host's other local addresses, so the egress guard is required for customer sites (refused without it); an admin's own site without the guard keeps that gap, stated on its card. 26.04's pasta closes it. |
+| Per-account disk quotas are unavailable on some file systems | Reduce, then accept | Where user quotas are off the panel measures each site with `du` every 5 minutes, so a site can write past its limit between checks before uploads are refused and the site is stopped; the Websites page says which mode a host is in. |
 | Push services and chat platforms see alert metadata | Transfer | To the vendor, under its terms; the text is minimal. |
 | An operator's own TLS certificate expires | Accept, with warning | With HSTS, browsers refuse an expired trusted certificate with no way past it, so the web page is unreachable until it is renewed; the panel and the host's shell keep working. The expiry alert warns from 30 days, and a Let's Encrypt certificate put in through Settings is reloaded daily once certbot renews it (docs/https.md section 5). Owner: the operator who installed the certificate. |
 | Harden-Runner audit-only jobs (ClusterFuzzLite, the add-on image scan, main-only jobs) | Accept for now | ClusterFuzzLite and the add-on image scan run in Docker containers with their own networking; a main-only job cannot be checked by a pull request before it holds every panel's update. The unit suites' `checks` matrix and Lighthouse now run in block mode: `checks` allows apt's regional mirror by a `*.archive.ubuntu.com:80` wildcard, and its TEST-NET dials are refused at once; Lighthouse allows the two hosts its throwaway panel fetches from and refuses Chrome's own calls, which are not the audited page's. tests/unit/part223.py lists each audit-only job with its reason, and each block-mode job's allowed hosts, and fails when a job's mode changes without that list. |

@@ -25,6 +25,8 @@ _UNSAFE = frozenset(("POST", "PUT", "PATCH", "DELETE"))
 def register(app):
     cfg = load_config()
     app.config.setdefault("REQUIRE_2FA", bool(cfg.get("require_2fa")))
+    # Customers (websites) must set up 2FA unless a superadmin turned this off; on by default.
+    app.config.setdefault("WEBSITES_CUSTOMER_2FA", bool(cfg.get("websites_customer_2fa", True)))
     app.config.setdefault("STEP_UP_MINUTES", session_policy.step_up_minutes(cfg))
     app.before_request(fetch_metadata_guard)
     app.before_request(account_guard.twofa_gate)

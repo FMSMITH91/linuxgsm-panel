@@ -6,5 +6,8 @@
   "Administer websites: add and remove them, choose their kind and limits, put them online (opens ports 80 and 443), update their software and add customers": "Administrar sitios web: añadirlos y quitarlos, elegir su tipo y límites, ponerlos en línea (abre los puertos 80 y 443), actualizar su software y añadir clientes",
   "A website name is 1 to 32 lowercase letters, digits and hyphens, and starts and ends with a letter or digit.": "El nombre de un sitio web tiene de 1 a 32 letras minúsculas, dígitos y guiones, y empieza y termina con una letra o un dígito.",
   "This website already has {n} domains, the most one site may have.": "Este sitio web ya tiene {n} dominios, el máximo que puede tener un sitio.",
-  "{n} domains were added to this website in the last hour. Try again later.": "Se añadieron {n} dominios a este sitio web en la última hora. Inténtalo de nuevo más tarde."
+  "{n} domains were added to this website in the last hour. Try again later.": "Se añadieron {n} dominios a este sitio web en la última hora. Inténtalo de nuevo más tarde.",
+  "That domain is already used by a website on this panel.": "Ese dominio ya lo usa un sitio web de este panel.",
+  "That is not a domain name a website can use: lowercase letters, digits and hyphens, at least one dot, no IP address, no wildcard and no local name.": "Ese no es un nombre de dominio que un sitio web pueda usar: letras minúsculas, dígitos y guiones, al menos un punto, sin dirección IP, sin comodín y sin nombre local.",
+  "That is the panel's own address, which is never served as a website.": "Esa es la dirección del propio panel, que nunca se sirve como sitio web."
 }

@@ -142,7 +142,7 @@ def register(app):
         group.name = new_name
         group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
-                                               group.get_permissions()))
+                                               group.get_permissions(), customer=bool(group.is_customer)))
         _apply_group_reach(group)
 
         db.session.commit()
@@ -316,11 +316,14 @@ def _apply_group_reach(group):
     # could grant their own group every host and server in the install — permissions unchanged,
     # so the escalation test still passed, while can_access_remote/can_access_server started
     # returning True for everything.
+    # A customer group is given no host and no game server by anyone below a superadmin (what it
+    # already holds, a superadmin's choice, is kept): its members reach their own websites only.
+    _customer = bool(group.is_customer) and not current_user.is_superadmin
     _keep_r = grantable_object_ids(_posted_ids("servers"),
                                    {r.id for r in (group.servers or [])},
-                                   accessible_remote_ids(current_user))
+                                   set() if _customer else accessible_remote_ids(current_user))
     _keep_g = grantable_object_ids(_posted_ids("game_servers"),
                                    {g.id for g in (group.game_servers or [])},
-                                   {g.id for g in get_user_servers(current_user)})
+                                   set() if _customer else {g.id for g in get_user_servers(current_user)})
     group.servers = _selected_remotes(_keep_r)
     group.game_servers = _selected_game_servers(_keep_g)

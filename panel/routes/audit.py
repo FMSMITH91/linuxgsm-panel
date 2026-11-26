@@ -74,6 +74,11 @@ def _reachable_object_filters(user):
         about.append(AuditLog.game_server_id.in_(sorted(server_ids)))
     if remote_ids:
         about.append(AuditLog.remote_id.in_(sorted(remote_ids)))
+    # ...and about a website they hold any website permission on (websites_access, by id).
+    from panel.services.websites_access import reachable_site_ids
+    site_ids = reachable_site_ids(user)
+    if site_ids:
+        about.append(AuditLog.website_id.in_(sorted(site_ids)))
     return about
 
 
