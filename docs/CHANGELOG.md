@@ -18,6 +18,11 @@ dated section below lists what that day's releases changed, newest first; the nu
   add-on list your panel checks every day. A newer version lights up Update on the add-on's card without a
   panel update, and the card says which list it came from. Each installed B3 and IW4MAdmin is offered one
   image update after this release.
+- **Host websites from the panel.** A new Websites page runs plain HTML, PHP and Node.js sites, and installs
+  WordPress, phpBB, Drupal, MyBB or Simple Machines Forum in one step, each in its own locked-down container
+  with automatic HTTPS. A site can be public, open only to networks you list (Cloudflare's in one tap) or
+  reached through a Cloudflare Tunnel; files go in through the file manager or SFTP, each site has its own PHP
+  settings and caching, and customers can have logins that see only their own sites.
 
 ### Changed
 
