@@ -225,13 +225,39 @@ def _merge_run295(reports, tmp):
             with open(paths[-1], "w", encoding="utf-8") as fh:
                 fh.write(text)
     out, summ = os.path.join(tmp, "lcov.info"), os.path.join(tmp, "summary.txt")
-    with _ctx295.redirect_stdout(_io295.StringIO()), _ctx295.redirect_stderr(_io295.StringIO()):
-        rc = _merge295.main(["--out", out, "--summary", summ] + paths)
-    return rc, _read295(out), _read295(summ)
+    return _merge_main295(tmp, ["--out", out, "--summary", summ] + paths), _read295(out), _read295(summ)
+
+
+def _merge_main295(cwd, argv):
+    """merge.main(argv) run in `cwd` (CI runs it in the workspace), its output kept off the test's; the status."""
+    before = os.getcwd()
+    os.chdir(cwd)
+    try:
+        with _ctx295.redirect_stdout(_io295.StringIO()), _ctx295.redirect_stderr(_io295.StringIO()):
+            return _merge295.main(argv)
+    finally:
+        os.chdir(before)
 
 
 _mt295 = _tf295.mkdtemp(prefix="jscov295-merge-")
 try:
+    # Every path merge.py is given must resolve inside the folder it runs in: a report outside it, a `..` out of it
+    # and a link inside it that points out are refused (status 2) before anything is read or written.
+    _jail295, _outside295 = os.path.join(_mt295, "ws"), os.path.join(_mt295, "elsewhere.info")
+    os.makedirs(_jail295)
+    with open(_outside295, "w", encoding="utf-8") as _fh295:
+        _fh295.write(_P1_295)
+    os.symlink(_outside295, os.path.join(_jail295, "link.info"))
+    _esc295 = {_k: _merge_main295(_jail295, ["--out", "lcov.info"] + _v) for _k, _v in (
+        ("absolute", [_outside295]), ("dotdot", [os.path.join("..", "elsewhere.info")]), ("link", ["link.info"]))}
+    with open(os.path.join(_jail295, "lcov.p1.info"), "w", encoding="utf-8") as _fh295:
+        _fh295.write(_P1_295)
+    _esc295["out"] = _merge_main295(_jail295, ["--out", os.path.join("..", "x.info"), "lcov.p1.info"])
+    check("js coverage merge: a report outside the folder it runs in, a `..` out of it, a link pointing out of it "
+          "and an --out outside it are refused (status 2), and nothing is written",
+          _esc295 == {"absolute": 2, "dotdot": 2, "link": 2, "out": 2}
+          and not os.path.exists(os.path.join(_jail295, "lcov.info")) and not os.path.exists(os.path.join(_mt295, "x.info")),
+          repr(_esc295))
     _m295 = _merge_run295([_P1_295, _P2_295, _P3_295], _mt295)
     check("js coverage merge: each file's line hits are summed over the parts and its lines are their union, "
           "LF/LH counted again (a part's own totals ignored); FN/FNDA and BRDA summed, '-' only where no part ran",
@@ -293,7 +319,7 @@ try:
     os.makedirs(os.path.join(_vt295, "tools", "js_coverage"))
     for _f295 in ("merge.py", "v8_lcov.py"):
         _sh295.copy(os.path.join(_JC295, _f295), os.path.join(_vt295, "tools", "js_coverage", _f295))
-    _parts_dir295 = os.path.join(_vt295, "rt", "js-coverage-parts")
+    _parts_dir295 = os.path.join(_vt295, "js-coverage-parts")   # the workspace, where the download step puts them
     os.makedirs(_parts_dir295)
     for _i295, _t295 in enumerate((_P1_295, _P2_295, _P3_295, _P1_295), 1):
         with open(os.path.join(_parts_dir295, "lcov.p%d.info" % _i295), "w", encoding="utf-8") as _fh295:

@@ -165,28 +165,42 @@ def parse_args(argv):
     return ap.parse_args(argv)
 
 
+def inside(path):
+    """`path` resolved (links and `..` followed), when that is inside the folder merge.py runs in; LcovError when not.
+
+    Every file it reads or writes is named on its command line, so none may leave that folder (CI runs it in the
+    workspace, with the parts' reports downloaded into it): OWASP's input validation for a path, resolve, then check.
+    """
+    resolved, base = os.path.realpath(path), os.path.realpath(os.getcwd())
+    if not resolved.startswith(base + os.sep):
+        raise LcovError("%s is outside the folder merge.py runs in (%s)" % (path, base))
+    return resolved
+
+
 def _read(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
 
 
 def main(argv=None):
-    """Merge the reports; exit 2 when one is missing or not LCOV, 3 when no line ran in any."""
+    """Merge the reports; exit 2 when a path is outside this folder or a report is missing or not LCOV, 3 when no line ran in any."""
     args = parse_args(argv)
     files = {}
     try:
+        out = inside(args.out)
+        summary = inside(args.summary) if args.summary else ""
+        part_paths = [inside(p) for p in args.part_summary]
         for path in args.reports:
-            add_report(files, _read(path), os.path.basename(path))
+            add_report(files, _read(inside(path)), os.path.basename(path))
     except (OSError, LcovError) as e:
         print("merge: %s" % e, file=sys.stderr)
         return 2
-    parts = [(os.path.basename(p), _read(p)) for p in args.part_summary if os.path.isfile(p)]
+    parts = [(os.path.basename(p), _read(p)) for p in part_paths if os.path.isfile(p)]
     text, hit = summary_text(files, parts)
-    # The tool's own --out and --summary (CI passes fixed names).
-    with open(args.out, "w", encoding="utf-8") as fh:  # NOSONAR - the tool's own --out
+    with open(out, "w", encoding="utf-8") as fh:
         fh.write(to_lcov(files))
-    if args.summary:
-        with open(args.summary, "w", encoding="utf-8") as fh:  # NOSONAR - the tool's own --summary
+    if summary:
+        with open(summary, "w", encoding="utf-8") as fh:
             fh.write(text)
     print(text, end="")
     if hit == 0:

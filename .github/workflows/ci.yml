@@ -1008,7 +1008,8 @@ jobs:
         with:
           pattern: js-coverage-part-*
           merge-multiple: true
-          path: ${{ runner.temp }}/js-coverage-parts
+          # Into the workspace: merge.py reads and writes only inside the folder it runs in.
+          path: js-coverage-parts
 
       # Each of the four parts' reports must be there: a part missing would make a smaller report.
       # merge.py (standard library, the runner's python3) sums each line's hits over the parts.
@@ -1016,7 +1017,7 @@ jobs:
         if: steps.scope.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          parts="${RUNNER_TEMP}/js-coverage-parts"
+          parts="js-coverage-parts"
           reports=() summaries=()
           for id in p1 p2 p3 p4; do
             if [ ! -s "${parts}/lcov.${id}.info" ]; then
