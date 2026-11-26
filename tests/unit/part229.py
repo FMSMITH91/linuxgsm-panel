@@ -56,6 +56,11 @@ def _codes229():
 
 
 def _stub_api229(sent, updates):
+    # A link is audited, and the audit hands push_alerts the account's alert, which its background
+    # sender delivers through whichever app was registered last: part12's app when no part since has
+    # registered another, and then that alert reached `sent` too (the part run with only part01-part12
+    # before it). This part sends that alert itself (_pa229.deliver, below), so the sender is kept out.
+    _p9_patch(_pa229, "_APP", [None])
     _p9_patch(_tl229, "bot_token", lambda: _TOKEN229)
     _p9_patch(_nt229, "telegram_get_me", lambda token: "PanelBot")
     _p9_patch(_nt229, "send_telegram", lambda token, chat, text: sent.append((str(chat), text)) or (True, ""))
