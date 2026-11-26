@@ -149,6 +149,9 @@ def _s215_settings():
         inside = _settings_page215()
         saved.update({"session_idle_minutes": 90, "session_absolute_hours": 12})
         outside = _settings_page215()
+        # The old key, as an older panel stored it (review 1124): `saved` never held it, so "the old hours
+        # key dropped" held with the drop deleted.
+        saved["session_lifetime_hours"] = 24
         r = _p9_client(P9_ADMIN).post("/settings/save", data={
             "session_idle_minutes": "45", "session_absolute_hours": "9", "remember_days": "5", "require_2fa": "on"})
         applied = (_p9.config.get("PERMANENT_SESSION_LIFETIME"), _p9.config.get("SESSION_ABSOLUTE_SECONDS"),
