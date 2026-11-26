@@ -60,11 +60,16 @@ through it.
 
 ### Page cache
 
-The page cache needs Caddy built with the cache module. The panel builds it on the host when you turn the
-cache on: a container build from the pinned Caddy builder image runs `xcaddy` with the module at the exact
-version the catalog names. Go checks every module against its checksum database. The binary is then taken
-out of the image, checked to contain the module, and installed in place of the plain proxy. The page cache
-is off by default. Logged-in visitors, form posts and admin pages always bypass it.
+The page cache needs Caddy built with the cache module. The panel builds it on each host that has a web
+proxy when a superadmin turns on **Page cache in the web proxy** in the Websites security settings (and again
+after the plain proxy is installed while it is on). The build runs in the background and takes a few minutes;
+a failure is shown on the security settings card, with the build's last lines in the panel's log. A container
+build from the pinned Caddy builder image runs `xcaddy` with the module at the exact version the catalog
+names. Go checks every module against its checksum database. The build runs with every capability dropped
+and on the host's own network, so Podman sets up no network of its own: it never turns on the host's IP
+forwarding or adds firewall chains. The binary is then taken out of the image, checked to contain the module,
+and installed in place of the plain proxy. Until then, a site's page cache is left out and nothing breaks.
+The page cache is off by default. Logged-in visitors, form posts and admin pages always bypass it.
 
 ## The PHP sites' image
 
@@ -72,9 +77,18 @@ PHP sites and the one-click apps other than WordPress run on the official PHP im
 catalog, with the extensions the apps need added: mysqli and pdo_mysql (their database drivers), gd, intl and
 zip. The official image has none of them. The panel builds this image on the host, as the site's own account,
 from `panel/website_images/php/Containerfile` the first time a site needs it (a few minutes on a small host),
-and again only when the catalog pins a new PHP image. The build fetches Debian's packages, each checked by
-apt against Debian's signing keys, and keeps only the libraries the extensions load. CI builds the same file
-for every PHP version the catalog pins and scans it like the pinned images.
+and again only when the catalog pins a new PHP image. It is built in Docker's image format, which keeps the
+file's `SHELL` line (Podman's default format ignores it), and its commands are plain POSIX shell as well. The
+build fetches Debian's packages, each checked by apt against Debian's signing keys, and keeps only the
+libraries the extensions load. CI builds the same file for every PHP version the catalog pins and scans it
+like the pinned images.
+
+## An app's variables
+
+A Node.js app's environment variables are stored encrypted in the panel's database. On the host they are in
+`~/site/conf/app.env` (0600, in a 0700 folder of the site's account), which its container reads as its
+environment: the app's own processes, the site's account (`podman inspect`) and root can read them, and no
+other account. They are never on a command line, in a unit file, in the journal or in an audit row.
 
 ## Pinned images and downloads
 

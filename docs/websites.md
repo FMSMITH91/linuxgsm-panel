@@ -112,8 +112,8 @@ the default OWASP asks for, and the older phones, computers and crawlers a publi
 visits from can connect over TLS 1.2. Choosing TLS 1.3 here leaves those visitors out; the card says so.
 includeSubDomains and preload are off by default because the panel cannot know that every subdomain of
 a customer's domain is served over HTTPS; the card notes each one while it is off. Preload only goes out
-together with includeSubDomains. The page cache only takes effect on a host whose web proxy was built
-with it; elsewhere it is left out.
+together with includeSubDomains. Turning on the page cache builds the web proxy with it on the host, which
+takes a few minutes; until then the sites' page caches are left out and nothing breaks.
 
 ## Domains and certificates
 
@@ -190,6 +190,11 @@ the panel installs for its server queries): that copy is shared with the panel a
 app there would escape its site's limits and network rules. The build step may reach the npm registry;
 the running app has no internet access unless an administrator allows it. A crashed app is restarted,
 with a growing pause between tries.
+
+A new Node.js site starts with no files, so it is not started yet: it waits for them. Upload the app on the
+**Files** tab, then press **Save and rebuild** on the **App** tab. That runs the install and build command
+and starts the app. Press it again after you change the app's files. If the build fails, the running app is
+left as it was.
 
 ## No outbound access, by default
 
