@@ -615,27 +615,32 @@ def _site_authz(user, folder, write, taken):
     return dict(ok=True, **describe_site(site))
 
 
-def _h_authz(_app, req, _spawn):
+def _server_authz(user, gs, write):
+    """_h_authz's answer for a game server's folder."""
     from panel.security.auth import VIEW_FILES, get_user_permissions
-    user, why = _session_user(req)
-    if user is None:
-        return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
-    servers = editable(user)
-    gs = servers.get(str(req.get("folder") or ""))
-    if gs is None:
-        return _site_authz(user, str(req.get("folder") or ""), bool(req.get("write")), servers) \
-            or {"ok": False, "gone": True}
-    if not req.get("write") and not (user.is_superadmin or VIEW_FILES in get_user_permissions(user)):
+    if not write and not (user.is_superadmin or VIEW_FILES in get_user_permissions(user)):
         return {"ok": False, "reason": "Reading files needs the view_files permission too."}
     if not _host_claim(gs.remote_id):
         return {"ok": False, "busy": True, "reason": HOST_BUSY}
     try:
-        refusal = account_refusal(gs, bool(req.get("write")))
+        refusal = account_refusal(gs, write)
     finally:
         _host_release(gs.remote_id)
     if refusal:
         return {"ok": False, "reason": refusal}
     return dict(ok=True, **describe(gs))
+
+
+def _h_authz(_app, req, _spawn):
+    user, why = _session_user(req)
+    if user is None:
+        return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
+    servers = editable(user)
+    folder, write = str(req.get("folder") or ""), bool(req.get("write"))
+    gs = servers.get(folder)
+    if gs is None:
+        return _site_authz(user, folder, write, servers) or {"ok": False, "gone": True}
+    return _server_authz(user, gs, write)
 
 
 def _host_claim(rid):

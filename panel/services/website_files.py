@@ -73,14 +73,19 @@ def page_rel(rel):
     return "" if rel == DOCROOT else rel[len(DOCROOT) + 1:] if rel.startswith(DOCROOT + "/") else rel
 
 
+def _unsafe_text(name):
+    """Whether an entry name is not text a path can be made of: empty, NUL, a backslash, absolute, a drive."""
+    if not isinstance(name, str) or not name or "\x00" in name or "\\" in name:
+        return True
+    return name.startswith("/") or (len(name) > 1 and name[1] == ":")
+
+
 def _entry_name(name):
     """An archive entry's name as a safe relative path ("a/b.txt"), or None when it may not be one."""
-    if not isinstance(name, str) or not name or "\x00" in name or "\\" in name:
-        return None
-    if name.startswith("/") or (len(name) > 1 and name[1] == ":"):
+    if _unsafe_text(name):
         return None
     parts = [p for p in name.split("/") if p not in ("", ".")]
-    if not parts or any(p == ".." for p in parts) or any(_files.name_problem(p) for p in parts):
+    if not parts or ".." in parts or any(_files.name_problem(p) for p in parts):
         return None
     return "/".join(parts)
 

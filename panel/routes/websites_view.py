@@ -70,22 +70,26 @@ def runtime_versions():
     return out
 
 
+def _whole(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _option_or_default(key, v):
+    """Stored option `v` for `key` when it has the option's type and range, else the default."""
+    default, low, high = OPTIONS[key]
+    if isinstance(default, bool):
+        return v if isinstance(v, bool) else default
+    if isinstance(default, int):
+        return v if _whole(v) and low <= v <= high else default
+    if key == "tls_min":
+        return v if v in TLS_CHOICES else default
+    return v if isinstance(v, str) and len(v) <= 254 else default
+
+
 def options():
-    """The global website settings in force, each checked against its range (else its default)."""
+    """The global website settings in force, each checked against its type and range (else its default)."""
     cfg = load_config()
-    out = {}
-    for key, (default, low, high) in OPTIONS.items():
-        v = cfg.get(config_key(key), default)
-        if isinstance(default, bool):
-            v = v if isinstance(v, bool) else default
-        elif isinstance(default, int):
-            v = v if isinstance(v, int) and not isinstance(v, bool) and low <= v <= high else default
-        else:
-            v = v if isinstance(v, str) and len(v) <= 254 else default
-        out[key] = v
-    if out["tls_min"] not in TLS_CHOICES:
-        out["tls_min"] = OPTIONS["tls_min"][0]
-    return out
+    return {key: _option_or_default(key, cfg.get(config_key(key), OPTIONS[key][0])) for key in OPTIONS}
 
 
 def _proxy_json(remote, row):
@@ -115,14 +119,21 @@ def _missing(admin):
              "fix_url": fix}]
 
 
+def _admin_host_ids():
+    """The hosts a non-superadmin administrator holds MANAGE_WEBSITES on through an ordinary group."""
+    ids = set()
+    for g in current_user.groups:
+        if not g.is_customer and MANAGE_WEBSITES in g.get_permissions():
+            ids |= {r.id for r in g.servers}
+    return ids
+
+
 def _hosts():
     if current_user.is_superadmin:
         rows = RemoteServer.query.order_by(RemoteServer.id).all()
     else:
-        ids = {r.id for g in current_user.groups if not g.is_customer and MANAGE_WEBSITES in g.get_permissions()
-               for r in g.servers}
-        rows = [r for r in RemoteServer.query.filter(RemoteServer.id.in_(sorted(ids) or [0])).all()
-                if not (r.is_local or r.auth_method == "local")]
+        rows = RemoteServer.query.filter(RemoteServer.id.in_(sorted(_admin_host_ids()) or [0])).all()
+        rows = [r for r in rows if not r.is_local and r.auth_method != "local"]
     return [{"id": r.id, "name": r.name} for r in rows]
 
 
@@ -131,16 +142,14 @@ def _quota():
     return {"used": len(group.websites or []), "max": int(group.max_sites or 0)} if group is not None else None
 
 
-def list_answer(site_json):
-    """GET /api/websites."""
-    from panel.routes.websites import creates_as_admin, is_admin
-    sites = _wa.visible_sites(current_user, VIEW_WEBSITES).all()
-    admin = is_admin(current_user)
-    out = {"success": True, "sites": [site_json(s, is_admin(current_user, s)) for s in sites],
-           "can_create": _wa.can_create(current_user), "missing": _missing(admin), "quota": _quota(),
-           "php_versions": php_versions(), "runtimes": runtime_versions(),
-           "apps": [{"key": k, "name": str(v.get("name") or k), "version": str(v.get("version") or "")}
-                    for k, v in sorted(_catalog("recipes", {}).items()) if isinstance(v, dict)]}
+def _apps():
+    return [{"key": k, "name": str(v.get("name") or k), "version": str(v.get("version") or "")}
+            for k, v in sorted(_catalog("recipes", {}).items()) if isinstance(v, dict)]
+
+
+def _admin_parts(out, sites, admin):
+    """Add what only administrators read: ports (site admins), hosts and customers (who add as one)."""
+    from panel.routes.websites import creates_as_admin
     if admin:
         out["ports"] = _ports(sites)
     if creates_as_admin(current_user):
@@ -150,6 +159,17 @@ def list_answer(site_json):
         rows = {p.remote_id: p for p in WebsiteProxy.query.all()}
         out["proxies"] = [_proxy_json(r, rows.get(r.id)) for r in RemoteServer.query.order_by(RemoteServer.id)]
         out["options"] = options()
+
+
+def list_answer(site_json):
+    """GET /api/websites."""
+    from panel.routes.websites import is_admin
+    sites = _wa.visible_sites(current_user, VIEW_WEBSITES).all()
+    admin = is_admin(current_user)
+    out = {"success": True, "sites": [site_json(s, is_admin(current_user, s)) for s in sites],
+           "can_create": _wa.can_create(current_user), "missing": _missing(admin), "quota": _quota(),
+           "php_versions": php_versions(), "runtimes": runtime_versions(), "apps": _apps()}
+    _admin_parts(out, sites, admin)
     return out
 
 
@@ -158,15 +178,22 @@ def _holds(site, perm):
     return _wa.visible_sites(current_user, perm).filter(Website.id == site.id).first() is not None
 
 
-def _site_block(site, admin, probe):
-    dom = site.primary_domain
+def _usage(probe):
     facts = (probe or {}).get("facts") or {}
+    return {k: facts[k] for k in ("mem_mb", "disk_mb", "cpu_pct") if isinstance(facts.get(k), (int, float))}
+
+
+def _open_url(site):
+    dom = site.primary_domain
+    return "https://%s/" % dom.domain if dom and site.enabled else ""
+
+
+def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
-           "enabled": bool(site.enabled), "open_url": "https://%s/" % dom.domain if dom and site.enabled else "",
+           "enabled": bool(site.enabled), "open_url": _open_url(site),
            "image": {"name": site.image_key or "", "version": (site.image_digest or "")[-12:], "update_available": False},
            "app_version": site.app_version or "", "php_version": site.php_version or "",
-           "runtime_version": site.runtime_version or "", "last_backup": None,
-           "usage": {k: facts.get(k) for k in ("mem_mb", "disk_mb", "cpu_pct") if isinstance(facts.get(k), (int, float))}}
+           "runtime_version": site.runtime_version or "", "last_backup": None, "usage": _usage(probe)}
     if admin:
         out["limits"] = {k: getattr(site, k) for k in ("mem_mb", "cpu_milli", "pids", "disk_mb", "max_body_mb", "backup_keep")}
         out.update(access_log=bool(site.access_log), full_egress=bool(site.full_egress), customer_note=site.customer_note or "")
@@ -200,6 +227,18 @@ def _app(site):
             "env_names": website_settings.env_names(site.env_enc, decrypt_secret)}
 
 
+def _manager_parts(out, site):
+    """Add what someone who runs the site reads: its databases, PHP, performance, rules and app."""
+    from panel.routes.databases_sites import site_rows
+    out["databases"] = [{"id": r.id, "name": r.name, "user": r.name} for r in site_rows(site)]
+    out["php"] = _php(site)
+    out["perf"] = _perf(site)
+    out["rules"] = json.loads(site.custom_rules or "[]")
+    out["app"] = _app(site) if site.kind == "app" else None
+    if current_user.is_superadmin:
+        out["raw_rules"] = site.raw_proxy_snippet or ""
+
+
 def site_answer(site, probe, install):
     """GET /api/websites/<id>."""
     from panel.routes.websites import is_admin
@@ -213,14 +252,7 @@ def site_answer(site, probe, install):
            "dns": {"a": [v for t, v in records if t == "A"], "aaaa": [v for t, v in records if t == "AAAA"]},
            "can": {"manage": manage, "files": _holds(site, EDIT_WEBSITE_FILES), "admin": admin}}
     if manage:
-        from panel.routes.databases_sites import site_rows
-        out["databases"] = [{"id": r.id, "name": r.name, "user": r.name} for r in site_rows(site)]
-        out["php"] = _php(site)
-        out["perf"] = _perf(site)
-        out["rules"] = json.loads(site.custom_rules or "[]")
-        out["app"] = _app(site) if site.kind == "app" else None
-        if current_user.is_superadmin:
-            out["raw_rules"] = site.raw_proxy_snippet or ""
+        _manager_parts(out, site)
     return out
 
 

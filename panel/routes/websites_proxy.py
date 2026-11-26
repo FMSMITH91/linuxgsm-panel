@@ -147,6 +147,19 @@ def _detail(changes):
 _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 
 
+def _number_option(key, value, low, high):
+    ok = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+    return (value, None) if ok else (None, i18n.tr("{key} must be a whole number from {low} to {high}.",
+                                                   key=key, low=low, high=high))
+
+
+def _contact_option(value):
+    text = value.strip() if isinstance(value, str) else ""
+    if text and (len(text) > 254 or not _EMAIL_RE.fullmatch(text)):
+        return None, i18n.tr("The certificate contact is an email address, or empty.")
+    return text, None
+
+
 def _option(key, value):
     """(the value to store for option `key`, None) or (None, the sentence refusing it)."""
     from panel.routes.websites_view import OPTIONS, TLS_CHOICES
@@ -154,15 +167,10 @@ def _option(key, value):
     if isinstance(default, bool):
         return value is True, None
     if isinstance(default, int):
-        ok = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
-        return (value, None) if ok else (None, i18n.tr("{key} must be a whole number from {low} to {high}.",
-                                                       key=key, low=low, high=high))
+        return _number_option(key, value, low, high)
     if key == "tls_min":
         return (value, None) if value in TLS_CHOICES else (None, i18n.tr("The minimum TLS version is 1.2 or 1.3."))
-    text = value.strip() if isinstance(value, str) else ""
-    if text and (len(text) > 254 or not _EMAIL_RE.fullmatch(text)):
-        return None, i18n.tr("The certificate contact is an email address, or empty.")
-    return text, None
+    return _contact_option(value)
 
 
 def parse_options(form):

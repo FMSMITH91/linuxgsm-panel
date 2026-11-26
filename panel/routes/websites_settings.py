@@ -147,14 +147,17 @@ def _opcache_values(form, site):
     return _ws.php_form(fields, site)
 
 
-def _performance(site, form):
-    """POST the Performance card: OPcache (and its two values), object cache, page cache and its TTL, static caching."""
+def _perf_check(site, form):
+    """(column changes, OPcache values, [problems]) from the Performance card; 404 for a non-admin's object cache."""
     changes, problems = _ws.performance_form({k: v for k, v in form.items() if v is not None})
     opcache, more = _opcache_values(form, site)
-    if problems or more:
-        return _problems(problems + more)
-    if changes.get("object_cache", site.object_cache) != site.object_cache and not _w.is_admin(current_user, site):
+    turning = changes.get("object_cache", site.object_cache) != site.object_cache
+    if turning and not _w.is_admin(current_user, site):
         abort(404)
+    return changes, opcache, problems + more
+
+
+def _perf_store(site, changes, opcache):
     if changes.get("object_cache") and not site.object_cache_secret:
         import secrets
         site.object_cache_secret = encrypt_secret(secrets.token_urlsafe(32))
@@ -163,35 +166,63 @@ def _performance(site, form):
     if opcache:
         site.php_settings = json.dumps(dict(json.loads(site.php_settings or "{}"), **opcache), sort_keys=True)
     db.session.commit()
+
+
+def _perf_apply(site, changes):
     ok, said = _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
-    if ok and site.enabled and ({"page_cache", "page_cache_ttl", "static_cache"} & set(changes)):
+    proxied = {"page_cache", "page_cache_ttl", "static_cache"} & set(changes)
+    if ok and site.enabled and proxied:
         ok, said = _w.reconcile_proxy(site.remote)
+    return ok, said
+
+
+def _performance(site, form):
+    """POST the Performance card: OPcache (and its two values), object cache, page cache and its TTL, static caching."""
+    changes, opcache, problems = _perf_check(site, form)
+    if problems:
+        return _problems(problems)
+    _perf_store(site, changes, opcache)
+    ok, said = _perf_apply(site, changes)
     words = ["%s=%s" % kv for kv in sorted(changes.items())] + ["%s=%s" % kv for kv in sorted(opcache.items())]
     return _w.acted(site, "website_cache", ok, said or "Saved.", ", ".join(words) or "none")
 
 
-def _rules(site, data):
+def _rules_list(data):
+    """The form's rules as a list of dicts, or None when they are not one (or too many)."""
     rules = data.get("rules", [])
-    if not isinstance(rules, list) or len(rules) > S_RULES_MAX or not all(isinstance(r, dict) for r in rules):
-        return _w.say(400, i18n.Sentence("Custom rules must be a list of at most {n} rules.", n=S_RULES_MAX))
+    if not isinstance(rules, list) or len(rules) > S_RULES_MAX:
+        return None
+    return rules if all(isinstance(r, dict) for r in rules) else None
+
+
+def _rules_problems(rules):
+    """[problems] with the rules (the proxy layer's checker), or None while it is not built."""
     from panel.services import websites_proxy as _wp
     try:
-        problems = _wp.rules_problems(rules)
+        return list(_wp.rules_problems(rules) or [])
     except NotImplementedError:
+        return None
+
+
+def _rules(site, data):
+    rules = _rules_list(data)
+    if rules is None:
+        return _w.say(400, i18n.Sentence("Custom rules must be a list of at most {n} rules.", n=S_RULES_MAX))
+    if "raw" in data and not current_user.is_superadmin:
+        abort(404)
+    problems = _rules_problems(rules)
+    if problems is None:
         return _w.say(501, _w.S_NOT_READY)
     if problems:
         return _problems(problems)
-    old_rules, old_raw = site.custom_rules, site.raw_proxy_snippet
+    old = (site.custom_rules, site.raw_proxy_snippet)
     site.custom_rules = json.dumps(rules, sort_keys=True)
     if "raw" in data:
-        if not current_user.is_superadmin:
-            abort(404)
-        raw = data.get("raw")
-        site.raw_proxy_snippet = raw[:8192] if isinstance(raw, str) else ""
+        site.raw_proxy_snippet = data["raw"][:8192] if isinstance(data["raw"], str) else ""
     db.session.commit()
     ok, said = _w.reconcile_proxy(site.remote) if site.enabled else (True, "Saved; they apply when the website is online.")
     if not ok:
-        site.custom_rules, site.raw_proxy_snippet = old_rules, old_raw
+        site.custom_rules, site.raw_proxy_snippet = old
         db.session.commit()
     return _w.acted(site, "website_rules", ok, said, "%d custom rules%s" % (len(rules), ", raw snippet" if "raw" in data else ""))
 
@@ -220,51 +251,77 @@ def _perf_routes(app):
 
 
 # ── runtime apps ────────────────────────────────────────────────────────────────────────────────
+def _saved_env(site):
+    """The app's stored environment as a dict ({} when none or unreadable)."""
+    try:
+        saved = json.loads(decrypt_secret(site.env_enc) or "{}") if site.env_enc else {}
+    except (TypeError, ValueError):
+        return {}
+    return dict(saved) if isinstance(saved, dict) else {}
+
+
 def merged_env(site, form):
     """(the app's environment after this save, [problems]).
 
     `env` maps a name to its new value, or to null to keep the value saved (the page never has it);
     `env_remove` lists names to drop.
     """
-    try:
-        saved = json.loads(decrypt_secret(site.env_enc) or "{}") if site.env_enc else {}
-    except (TypeError, ValueError):
-        saved = {}
-    env = dict(saved) if isinstance(saved, dict) else {}
+    env = _saved_env(site)
     asked = form.get("env") if isinstance(form.get("env"), dict) else {}
     for name, value in asked.items():
+        if value is None and name not in env:
+            return env, [i18n.Sentence("{name} has no saved value to keep.", name=str(name)[:64])]
         if value is not None:
             env[name] = value
-        elif name not in env:
-            return env, [i18n.Sentence("{name} has no saved value to keep.", name=str(name)[:64])]
-    removed = form.get("env_remove") if isinstance(form.get("env_remove"), list) else []
-    for name in removed:
+    for name in form.get("env_remove") if isinstance(form.get("env_remove"), list) else []:
         env.pop(name, None)
     return env, _ws.env_problems(env)
+
+
+def _command_field(form, key, out, problems):
+    text = form.get(key) if isinstance(form.get(key), str) else ""
+    if len(text) > WEBSITE_COMMAND_MAX or any(c in text for c in "\x00\r\n"):
+        problems.append(i18n.Sentence("{key} must be one line of at most {n} characters.", key=key, n=WEBSITE_COMMAND_MAX))
+    out[key] = text.strip()
+
+
+def _port_field(form, out, problems):
+    text = _w.field(form, "app_port")
+    port = int(text) if text.isdecimal() and len(text) <= 5 else 0
+    if not WEBSITE_APP_PORT_MIN <= port <= 65535:
+        problems.append(i18n.Sentence("The app's port must be {low} to 65535.", low=WEBSITE_APP_PORT_MIN))
+    out["app_port"] = port
 
 
 def _app_fields(site, form):
     """({column: value} the form changes in the app's runtime, commands and port, [problems])."""
     problems, out = [], {}
     if "runtime_version" in form:
-        version = _w.field(form, "runtime_version")
-        if not WEBSITE_RUNTIME_VERSION_RE.match(version):
+        out["runtime_version"] = _w.field(form, "runtime_version")
+        if not WEBSITE_RUNTIME_VERSION_RE.match(out["runtime_version"]):
             problems.append("Choose a runtime version this panel offers.")
-        out["runtime_version"] = version
     for key in ("build_command", "start_command"):
         if key in form:
-            text = form.get(key) if isinstance(form.get(key), str) else ""
-            if len(text) > WEBSITE_COMMAND_MAX or any(c in text for c in "\x00\r\n"):
-                problems.append(i18n.Sentence("{key} must be one line of at most {n} characters.", key=key,
-                                              n=WEBSITE_COMMAND_MAX))
-            out[key] = text.strip()
+            _command_field(form, key, out, problems)
     if form.get("app_port") is not None:
-        text = _w.field(form, "app_port")
-        port = int(text) if text.isdecimal() and len(text) <= 5 else 0
-        if not WEBSITE_APP_PORT_MIN <= port <= 65535:
-            problems.append(i18n.Sentence("The app's port must be {low} to 65535.", low=WEBSITE_APP_PORT_MIN))
-        out["app_port"] = port
+        _port_field(form, out, problems)
     return {k: v for k, v in out.items() if v != getattr(site, k)}, problems
+
+
+def _app_words(fields, env, env_changed):
+    words = ["%s=%s" % (k, v) for k, v in sorted(fields.items()) if not k.endswith("_command")]
+    if any(k.endswith("_command") for k in fields):
+        words.append("commands changed")
+    if env_changed:
+        words.append("environment: %d variables (%s)" % (len(env), ", ".join(sorted(env))))
+    return ", ".join(words) or "none"
+
+
+def _app_apply(site, fields, env_changed):
+    ok, said = _w.host_call(_sw.install, site.remote, site) if fields else (True, "Saved.")
+    if ok and env_changed:
+        ok, said = _w.host_call(_sw.env_apply, site.remote, site)
+    return ok, said
 
 
 def _app_save(site, form):
@@ -281,13 +338,8 @@ def _app_save(site, form):
     if env_changed:
         site.env_enc = encrypt_secret(json.dumps(env, sort_keys=True)) if env else ""
     db.session.commit()
-    ok, said = _w.host_call(_sw.install, site.remote, site) if fields else (True, "Saved.")
-    if ok and env_changed:
-        ok, said = _w.host_call(_sw.env_apply, site.remote, site)
-    words = ["%s=%s" % (k, v) for k, v in sorted(fields.items()) if not k.endswith("_command")]
-    words += ["commands changed"] if any(k.endswith("_command") for k in fields) else []
-    words += ["environment: %d variables (%s)" % (len(env), ", ".join(sorted(env)))] if env_changed else []
-    return _w.acted(site, "website_app", ok, said or "Saved.", ", ".join(words) or "none")
+    ok, said = _app_apply(site, fields, env_changed)
+    return _w.acted(site, "website_app", ok, said or "Saved.", _app_words(fields, env, env_changed))
 
 
 def _app_routes(app):

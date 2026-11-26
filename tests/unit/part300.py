@@ -203,6 +203,17 @@ def _call300(client, rule, method, site_id):
     return client.get(url) if method == "GET" else client.post(url, json={"confirm": "x", "name": "x", "path": ""})
 
 
+def _s1_missing(st, rules):
+    """Every per-site route: 404 for a site that does not exist, and for a user whose group holds no site."""
+    gone = [(r, m, resp.status_code) for r, m in rules
+            for resp in (_call300(_Client300(st.su.id), r, m, 10 ** 8),) if resp.status_code != 404]
+    eq("scope: every per-site route answers 404 for a site that does not exist, even to a superadmin", gone, [])
+    nogrant = _Client300(st.nobody.id)
+    leaks2 = [(r, m) for r, m in rules if _call300(nogrant, r, m, st.a.id).status_code != 404]
+    eq("scope: a user holding every website permission through a group with no sites gets 404 everywhere",
+       leaks2, [])
+
+
 def _s1_scope(st):
     rules = _site_rules300()
     check("scope: the website routes were found to check (at least 40 per-site routes)", len(rules) >= 40,
@@ -211,13 +222,7 @@ def _s1_scope(st):
     leaks = [(r, m, resp.status_code) for r, m in rules
              for resp in (_call300(cust, r, m, st.b.id),) if resp.status_code != 404]
     eq("scope: a customer of site A gets 404 from every per-site route of site B", leaks, [])
-    gone = [(r, m, resp.status_code) for r, m in rules
-            for resp in (_call300(_Client300(st.su.id), r, m, 10 ** 8),) if resp.status_code != 404]
-    eq("scope: every per-site route answers 404 for a site that does not exist, even to a superadmin", gone, [])
-    nogrant = _Client300(st.nobody.id)
-    leaks2 = [(r, m) for r, m in rules if _call300(nogrant, r, m, st.a.id).status_code != 404]
-    eq("scope: a user holding every website permission through a group with no sites gets 404 everywhere",
-       leaks2, [])
+    _s1_missing(st, rules)
     ok = cust.get("/api/websites/%d" % st.a.id)
     eq("scope: the customer still reaches their own site (control)", (ok.status_code, (_p9_json(ok).get("site") or {}).get("name")),
        (200, st.a.name))
@@ -569,25 +574,33 @@ def _s8_backups(st):
 _SAYS300 = {"say": 1, "done": 1, "acted": 3, "Sentence": 0, "tr": 0}
 
 
+def _text300(node):
+    """A string constant node's text, else None."""
+    import ast
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _said300(n):
+    """The viewer's sentence node `n` holds: an S_* constant's text, or a say/done/acted/Sentence/tr literal."""
+    import ast
+    if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith("S_") for t in n.targets):
+        return _text300(n.value)
+    name = getattr(getattr(n, "func", None), "attr", None) or getattr(getattr(n, "func", None), "id", "")
+    if not isinstance(n, ast.Call) or name not in _SAYS300 or len(n.args) <= _SAYS300[name]:
+        return None
+    text = _text300(n.args[_SAYS300[name]])
+    return text if text and " " in text else None
+
+
 def _sentences300():
-    """The sentences the website modules show: S_* constants, and literals handed to say/done/Sentence/tr."""
+    """The sentences the website modules show: S_* constants, and literals handed to say/done/acted/Sentence/tr."""
     import ast
     from unit import REPO_ROOT
     files = [_os300.path.join(REPO_ROOT, "panel", d, f) for d in ("routes", "services")
              for f in sorted(_os300.listdir(_os300.path.join(REPO_ROOT, "panel", d)))
              if f.startswith(("websites", "website_")) or f == "databases_sites.py"]
-    out = set()
-    for path in files:
-        for n in ast.walk(ast.parse(open(path, encoding="utf-8").read())):
-            if (isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str)
-                    and any(isinstance(t, ast.Name) and t.id.startswith("S_") for t in n.targets)):
-                out.add(n.value.value)
-            elif isinstance(n, ast.Call) and getattr(n.func, "attr", getattr(n.func, "id", "")) in _SAYS300:
-                at = _SAYS300[getattr(n.func, "attr", getattr(n.func, "id", ""))]
-                arg = n.args[at] if len(n.args) > at else None
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and " " in arg.value:
-                    out.add(arg.value)
-    return files, {t for t in out if "%" not in t}
+    out = {_said300(n) for path in files for n in ast.walk(ast.parse(open(path, encoding="utf-8").read()))}
+    return files, {t for t in out if t and "%" not in t}
 
 
 def _s9_i18n(_st):

@@ -69,16 +69,24 @@ def _zone_ok(text):
     return text == "UTC" or (available_timezones is not None and text in available_timezones())
 
 
+def _size_problem(key, value, low, high):
+    n = _size(value)
+    if n is not None and low <= n <= high:
+        return None
+    return i18n.Sentence("{key} must be a size like 64M, from {low}M to {high}M.", key=key, low=low // MIB, high=high // MIB)
+
+
+def _int_problem(key, value, low, high):
+    ok = isinstance(value, str) and value.isdecimal() and len(value) <= 7 and low <= int(value) <= high
+    return None if ok else i18n.Sentence("{key} must be a whole number from {low} to {high}.", key=key, low=low, high=high)
+
+
 def _field_problem(key, value, site):
     kind, low, high, _owasp = PHP_FIELDS[key]
     if kind == "size":
-        n = _size(value)
-        return None if n is not None and low <= n <= _bound(high, site) else \
-i18n.Sentence("{key} must be a size like 64M, from {low}M to {high}M.", key=key, low=low // MIB,
-                                high=_bound(high, site) // MIB)
+        return _size_problem(key, value, low, _bound(high, site))
     if kind == "int":
-        ok = isinstance(value, str) and value.isdecimal() and len(value) <= 7 and low <= int(value) <= high
-        return None if ok else i18n.Sentence("{key} must be a whole number from {low} to {high}.", key=key, low=low, high=high)
+        return _int_problem(key, value, low, high)
     if kind == "zone":
         return None if _zone_ok(value) else i18n.Sentence("{key} must be a time zone name like Europe/Paris.", key=key)
     return None if value in ("On", "Off") else i18n.Sentence("{key} must be On or Off.", key=key)
@@ -129,24 +137,24 @@ def ini_size_problem(text):
     return None
 
 
+def _env_pair_problem(key, value):
+    """The sentence refusing one variable, or None."""
+    if not isinstance(key, str) or not ENV_KEY_RE.fullmatch(key):
+        return "A variable name is a letter or _ then letters, digits and _, at most 64 characters."
+    if not isinstance(value, str) or len(value) > ENV_MAX_VALUE or any(c in value for c in "\x00\r\n"):
+        return i18n.Sentence("The value of {key} must be one line of at most {n} characters.", key=key, n=ENV_MAX_VALUE)
+    return None
+
+
 def env_problems(env):
     """[problems] with an environment-variable mapping {NAME: value} (empty: it may be stored)."""
     if not isinstance(env, dict):
         return ["Environment variables must be a list of NAME and value pairs."]
-    out = []
-    if len(env) > ENV_MAX_VARS:
-        out.append(i18n.Sentence("At most {n} environment variables.", n=ENV_MAX_VARS))
-    total = 0
-    for key, value in env.items():
-        if not isinstance(key, str) or not ENV_KEY_RE.fullmatch(key):
-            out.append("A variable name is a letter or _ then letters, digits and _, at most 64 characters.")
-            break
-        if not isinstance(value, str) or len(value) > ENV_MAX_VALUE or any(c in value for c in "\x00\r\n"):
-            out.append(i18n.Sentence("The value of {key} must be one line of at most {n} characters.", key=key,
-                                     n=ENV_MAX_VALUE))
-            break
-        total += len(key) + len(value)
-    if total > ENV_MAX_TOTAL:
+    out = [i18n.Sentence("At most {n} environment variables.", n=ENV_MAX_VARS)] if len(env) > ENV_MAX_VARS else []
+    bad = next((p for p in (_env_pair_problem(k, v) for k, v in env.items()) if p), None)
+    if bad:
+        return out + [bad]
+    if sum(len(k) + len(v) for k, v in env.items()) > ENV_MAX_TOTAL:
         out.append(i18n.Sentence("The environment variables may hold at most {kb} KB in all.", kb=ENV_MAX_TOTAL // 1024))
     return out
 

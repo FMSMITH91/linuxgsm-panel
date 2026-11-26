@@ -594,11 +594,17 @@ def _settings_apply(site, limits, form):
     return ok, said
 
 
+def _egress_refusal(site, form):
+    """404 for anyone but a superadmin changing the site's full-internet switch."""
+    changing = "full_egress" in form and flag(form, "full_egress") != bool(site.full_egress)
+    if changing and not current_user.is_superadmin:
+        abort(404)
+
+
 def _settings(site, form):
     """The Settings form: {limits: {..., backup_keep}, access_log, full_egress, customer_note}."""
     limits = dict(form.get("limits")) if isinstance(form.get("limits"), dict) else {}
-    if "full_egress" in form and flag(form, "full_egress") != bool(site.full_egress) and not current_user.is_superadmin:
-        abort(404)
+    _egress_refusal(site, form)
     refused = _limits(site, limits) or _keep(site, limits)
     if refused is not None:
         return refused
