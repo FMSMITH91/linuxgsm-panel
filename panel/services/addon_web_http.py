@@ -42,6 +42,10 @@ def read_head(stream):
     """The answer's Head; UpstreamError when the stream ends first or the head is too long or malformed."""
     head, rest = _head_bytes(stream)
     lines = head.decode("latin-1").split("\r\n")
+    if any(c in line for line in lines for c in "\r\n\0"):
+        # A bare CR or LF (or a NUL) left inside a line once the head is split on CRLF: relayed, it
+        # would end the browser's head early and turn the proxy's own headers into body text.
+        raise UpstreamError("a bare line break in the answer's head")
     parts = lines[0].split(" ", 2)
     if len(parts) < 2 or not parts[0].startswith("HTTP/1.") or not parts[1].isdecimal() or len(parts[1]) != 3:
         raise UpstreamError("not an HTTP answer")

@@ -263,7 +263,7 @@ class AddonWebProxy:
         """Answer the browser's upgrade with the add-on's 101, then splice the two until either ends."""
         sock = _client_socket(environ)
         lines = ["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade"]
-        lines += ["%s: %s" % (k, v) for k, v in head.headers if k.lower() in _aw.SWITCH_HEADERS]
+        lines += ["%s: %s" % (k, v) for k, v in head.headers if k.lower() in _aw.SWITCH_HEADERS and _aw.header_ok(v)]
         try:
             if sock is None:
                 raise OSError("no browser socket to switch")
@@ -373,7 +373,8 @@ def _answer(start_response, stream, head, method, raw_rest, link, prefix, gate):
 
 
 def _status(head):
-    return "%d %s" % (head.status, head.reason or _phrase(head.status))
+    """The browser's status line from the add-on's code alone: its reason phrase is never relayed."""
+    return "%d %s" % (head.status, _phrase(head.status))
 
 
 def _rewritten(start_response, exchange, method, kind, prefix, headers):

@@ -228,7 +228,7 @@ def upstream_headers(environ, port, jar, websocket=False):
     """
     allow = REQUEST_HEADERS | (WEBSOCKET_HEADERS if websocket else frozenset())
     out = [("Host", "%s:%d" % ("127.0.0.1", port))] + list(_allowlisted(environ, allow))
-    if environ.get("CONTENT_TYPE") and _header_ok(environ["CONTENT_TYPE"]):
+    if environ.get("CONTENT_TYPE") and header_ok(environ["CONTENT_TYPE"]):
         out.append(("content-type", environ["CONTENT_TYPE"]))
     if "gzip" in environ.get("HTTP_ACCEPT_ENCODING", ""):
         out.append(("Accept-Encoding", "gzip"))
@@ -243,11 +243,17 @@ def _allowlisted(environ, allow):
     """(name, value) of the request's HTTP_ headers whose name is in `allow` and whose value is one line."""
     for key, value in environ.items():
         name = key[5:].replace("_", "-").lower() if key.startswith("HTTP_") else ""
-        if name in allow and _header_ok(value):
+        if name in allow and header_ok(value):
             yield name, value
 
 
-def _header_ok(value):
+def header_ok(value):
+    """Whether `value` may go into a header line: a string of one line (no CR, LF or NUL), at most 8 KiB.
+
+    A line break in a value written to the browser would end the proxy's head early and push its own
+    headers (the sandbox policy among them) into the body: HTTP response splitting (OWASP WSTG, "Testing
+    for HTTP Splitting Smuggling").
+    """
     return isinstance(value, str) and len(value) <= 8192 and not any(c in value for c in "\r\n\0")
 
 
@@ -296,8 +302,9 @@ def kept_response_headers(headers, prefix, port):
     for name, value in headers:
         low = name.lower()
         if low == "location":
-            out.append(("Location", location(value, prefix, port)))
-        elif low in RESPONSE_HEADERS and _header_ok(value):
+            moved = location(value, prefix, port) if header_ok(value) else prefix + "/"
+            out.append(("Location", moved if header_ok(moved) else prefix + "/"))
+        elif low in RESPONSE_HEADERS and header_ok(value):
             out.append((name, value))
     return out
 
