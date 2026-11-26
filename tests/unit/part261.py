@@ -531,16 +531,6 @@ _PUSH_POSTS261 = {"/account/push/subscribe", "/account/telegram/link"}
 # Step-up routes no page script or form sends a changing request to (grepped: no URL text, no url_for), kept
 # as API routes. Taking one off when a page starts to call it is checked below.
 _NO_PAGE261 = {
-               # The Websites pages send these through their own step-up wrapper and land in another branch;
-               # once they are in this tree the gate sees them, and these entries must go (the check below
-               # names any entry a page sends).
-               "/websites/<int:site_id>/databases/<int:db_id>/delete": "the Websites pages, not in this tree yet",
-               "/websites/<int:site_id>/databases/<int:db_id>/reset-password": "the Websites pages, not in this tree yet",
-               "/websites/<int:site_id>/databases/credentials": "the Websites pages, not in this tree yet",
-               "/websites/customers/add": "the Websites pages, not in this tree yet",
-               "/websites/proxy/install": "the Websites pages, not in this tree yet",
-               "/websites/proxy/options": "the Websites pages, not in this tree yet",
-               "/websites/proxy/settings": "the Websites pages, not in this tree yet",
                "/api/remote/<int:remote_id>/firewall/close": "the Firewall tab deletes a rule by number instead",
                "/api/remote/<int:remote_id>/game-port/<int:port>/open": "Sync ports opens a server's ports",
                "/api/remote/<int:remote_id>/run-updates": "the host page runs os-update/start and polls it",
