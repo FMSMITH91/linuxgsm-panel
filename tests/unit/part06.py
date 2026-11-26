@@ -9665,20 +9665,43 @@ check("bind: setup_wizard passes can_bind_address to bind_host_error",
 # Two web paths clear them and say so; the CLI was the one that did not, leaving bcrypt hashes of
 # credentials the operator had just revoked in panel.db.
 import ast as _2fa_ast                                                             # noqa: E402
-_2fa_sources = {
-    "manage.py cmd_disable_2fa": open(os.path.join(_root, "panel", "install", "manage.py"), encoding="utf-8").read(),
-    "tags.py": open(os.path.join(_root, "panel", "routes", "tags.py"), encoding="utf-8").read(),
-    "admin_notifications.py": open(os.path.join(_root, "panel", "routes",
-                                                "admin_notifications.py"), encoding="utf-8").read(),
-}
-_2fa_missing = []
-for _name, _src in _2fa_sources.items():
-    for _fn in _2fa_ast.walk(_2fa_ast.parse(_src)):
-        if not isinstance(_fn, (_2fa_ast.FunctionDef,)):
-            continue
-        _body = _2fa_ast.get_source_segment(_src, _fn) or ""
-        if "totp_enabled = False" in _body and "backup_codes = \"\"" not in _body:
-            _2fa_missing.append("%s:%s" % (_name, _fn.name))
+# Every panel module, read as code (review 1124): three named files were read by text, so a disable moved
+# into a helper elsewhere, or written `setattr(u, "totp_enabled", False)`, passed reading nothing.
+
+
+def _2fa_sets(fn, attr, values):
+    """Whether function `fn` sets attribute `attr` to one of the constants `values` (by `=` or setattr)."""
+    for _n in _2fa_ast.walk(fn):
+        if isinstance(_n, _2fa_ast.Assign) and isinstance(_n.value, _2fa_ast.Constant) and _n.value.value in values \
+                and any(getattr(_t, "attr", None) == attr for _t in _n.targets):
+            return True
+        if isinstance(_n, _2fa_ast.Call) and getattr(_n.func, "id", None) == "setattr" and len(_n.args) == 3 \
+                and all(isinstance(_x, _2fa_ast.Constant) for _x in _n.args[1:]) \
+                and _n.args[1].value == attr and _n.args[2].value in values:
+            return True
+    return False
+
+
+def _2fa_paths(src, name):
+    """(disabling functions of `src`, those of them that leave the backup codes), each as "name:function"."""
+    fns = [_f for _f in _2fa_ast.walk(_2fa_ast.parse(src)) if isinstance(_f, (_2fa_ast.FunctionDef, _2fa_ast.AsyncFunctionDef))]
+    off = [_f for _f in fns if _2fa_sets(_f, "totp_enabled", (False,))]
+    return (["%s:%s" % (name, _f.name) for _f in off],
+            ["%s:%s" % (name, _f.name) for _f in off if not _2fa_sets(_f, "backup_codes", ("", None))])
+
+
+_2fa_seen, _2fa_missing = [], []
+for _2fa_f in sorted(glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)):
+    _2fa_got = _2fa_paths(open(_2fa_f, encoding="utf-8").read(), os.path.relpath(_2fa_f, os.path.join(_root, "panel")))
+    _2fa_seen += _2fa_got[0]
+    _2fa_missing += _2fa_got[1]
+check("2FA: (premise) the three known disable paths were read (the CLI, the user page, the admin page)",
+      {"install/manage.py", "routes/tags.py", "routes/admin_notifications.py"} <= {_x.split(":")[0] for _x in _2fa_seen},
+      repr(_2fa_seen))
+check("2FA: (control) a disable by setattr without clearing the codes is named; one that clears them is not",
+      _2fa_paths("def a(u):\n    setattr(u, 'totp_enabled', False)\n"
+                 "def b(u):\n    u.totp_enabled = False\n    u.backup_codes = ''\n", "x.py") == (["x.py:a", "x.py:b"], ["x.py:a"]),
+      "")
 check("2FA: every path that disables it also clears the backup codes", not _2fa_missing,
       "left behind by: %s" % _2fa_missing)
 
