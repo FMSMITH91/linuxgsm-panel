@@ -23,6 +23,7 @@ M3.  website-account-remove deletes the account on its first call even while the
      still ending after its user manager stopped (userdel refuses with exit 8 then).
 M5.  A raw proxy snippet the configuration would leave out (it reads the proxy's environment) is refused in plain
      words, not stored and reported as applied.
+M6.  A successful image update of a failed site records it running, its old failure reason cleared.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -750,6 +751,29 @@ def _m5_snippet(st):
        (r2.status_code, _db306.session.get(_Site306, site.id).raw_proxy_snippet), (200, "header X-P306 yes"))
 
 
+# ── M6. An image update of a failed site ───────────────────────────────────────────────────────
+def _m6_update_state(st):
+    _bash_seams306()
+    site = _site306(st, "p306-upd", kind="static")
+    site.state, site.state_reason = "failed", "The site's container did not start. Its last log lines are below."
+    _db306.session.commit()
+    _reset306()
+    r = _Client306(st.su.id).post("/websites/%d/update-image" % site.id)
+    _db306.session.expire_all()
+    got = _db306.session.get(_Site306, site.id)
+    eq("M6 (POST /websites/<id>/update-image): a successful update of a failed site (restarted from its new image) "
+       "records it running and clears its old failure (it stayed failed, with the old reason)",
+       (r.status_code, got.state, got.state_reason), (200, "running", ""))
+    site.state, site.state_reason = "failed", "kept"
+    _db306.session.commit()
+    _reset306(FAKE_RC_podman=1)
+    r2 = _Client306(st.su.id).post("/websites/%d/update-image" % site.id)
+    _db306.session.expire_all()
+    got = _db306.session.get(_Site306, site.id)
+    eq("M6 (POST /websites/<id>/update-image): a failed update leaves the site's state as it was (control)",
+       (r2.status_code, got.state, got.state_reason), (502, "failed", "kept"))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -799,7 +823,7 @@ def _ran306(step, st):
 
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
-                _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet)
+                _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet, _m6_update_state)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

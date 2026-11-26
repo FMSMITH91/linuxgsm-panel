@@ -560,6 +560,8 @@ def _admin_routes(app):
     def website_update_image(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
         ok, said = install_site(site)
+        if ok:      # it was restarted from its new image: a site that had failed is running again
+            note_run_state(site, ok, said)
         forget_status(site.id)
         return acted(site, "website_update", ok, said, "image updated" if ok else "")
 
