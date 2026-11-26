@@ -210,9 +210,12 @@ def _job_state(site, job):
 
 
 def _urls(site, state):
+    """(site url, admin url) of a finished install: the admin url is the recipe's own admin_path on the site."""
+    from panel.services import websites_catalog
     dom = site.primary_domain
     url = "https://%s/" % dom.domain if dom and state == "done" else ""
-    return url, (url + "wp-admin/" if url and site.app_recipe == "wordpress" else url)
+    path = str((websites_catalog.recipe(site.app_recipe) or {}).get("admin_path") or "/") if url else "/"
+    return url, (url + path.lstrip("/") if url else "")
 
 
 def install_json(site):
