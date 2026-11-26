@@ -182,11 +182,23 @@ TWOFA_GATE_OPEN = frozenset(("account_2fa_enable", "logout", "account_signout", 
 
 def twofa_required(user):
     """Whether `user` must set up 2FA before using the panel (Settings' switch, see the module note)."""
-    if not current_app.config.get("REQUIRE_2FA") or getattr(user, "totp_enabled", True):
+    if getattr(user, "totp_enabled", True):
+        return False
+    # A customer (a member of a customer group) must, while Settings' "Require 2FA for customers"
+    # is on (the default; OWASP Multifactor Authentication Cheat Sheet, "Quick Recommendations": require
+    # MFA for all users). A customer group's members reach other people's hosting.
+    if current_app.config.get("WEBSITES_CUSTOMER_2FA", True) and _in_customer_group(user):
+        return True
+    if not current_app.config.get("REQUIRE_2FA"):
         return False
     # A superadmin's permissions are all of them (get_user_permissions), so this covers superadmins.
     from panel.security.auth import MANAGE_GROUPS, MANAGE_USERS, USE_TERMINAL, get_user_permissions
     return bool(get_user_permissions(user) & {USE_TERMINAL, MANAGE_USERS, MANAGE_GROUPS})
+
+
+def _in_customer_group(user):
+    """Whether `user` belongs to a customer group (Group.is_customer)."""
+    return any(getattr(g, "is_customer", False) for g in (getattr(user, "groups", None) or []))
 
 
 def held_at_sign_in_gate(user):

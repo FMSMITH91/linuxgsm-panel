@@ -19,7 +19,7 @@ import hashlib
 from flask import abort, current_app, flash, jsonify, redirect, request, url_for
 from flask_login import LoginManager, current_user, user_loaded_from_cookie
 
-from panel.db.models import AuditLog, GameServer, RemoteServer, User, db
+from panel.db.models import AuditLog, GameServer, RemoteServer, User, Website, db
 from panel.security import session_cookie as _session_cookie
 from panel.security import account_guard as _account_guard
 
@@ -2091,6 +2091,23 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
     Every column is cut to its model's declared size, and the detail to _AUDIT_DETAIL_MAX — see
     there for why that has to happen here and not in the callers.
     """
+    _write_audit(user, action, target, detail, success, actor,
+                 {"game_server_id": _audit_ref(GameServer, server), "remote_id": _audit_ref(RemoteServer, remote)})
+
+
+def log_website_action(user, site, action, detail="", success=True):
+    """Write an audit entry about website `site`: the target is its name and the row carries its id.
+
+    The id (AuditLog.website_id) is what lets the site's users, a customer included, read the row
+    (audit_scope, a site's own log view), never the name. Never put file contents, passwords or tokens
+    in `detail` (OWASP Logging Cheat Sheet, "Data to exclude").
+    """
+    _write_audit(user, action, getattr(site, "name", "") or "", detail, success, None,
+                 {"website_id": _audit_ref(Website, site)})
+
+
+def _write_audit(user, action, target, detail, success, actor, refs):
+    """Add and commit one AuditLog row; `refs` holds the ids of what it is about (column -> value)."""
     entry = AuditLog(
         user_id=user.id if user else None,
         username=audit_username(actor if actor else (user.username if user else "system")),
@@ -2099,9 +2116,8 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
         detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]", visible=True),
         ip_address=client_ip(),
         success=success,
-        game_server_id=_audit_ref(GameServer, server),
-        remote_id=_audit_ref(RemoteServer, remote),
         target_user_id=_audit_account(action, target),
+        **refs,
     )
     db.session.add(entry)
     db.session.commit()
@@ -2370,19 +2386,36 @@ def _my_group_reach(user):
     mine_servers = {gs.id for gs in get_user_servers(user)}
     # ...and the custom commands, the fourth thing membership hands over (see custom_command_ids).
     mine_commands = custom_command_ids(user)
-    return mine, mine_remotes, mine_commands, mine_servers
+    # ...and the websites, paired with the permission held on each (websites_access.held_pairs): a group
+    # is reached per (permission, site), the way site_for decides.
+    from panel.services.websites_access import held_pairs
+    return mine, mine_remotes, mine_commands, mine_servers, held_pairs(user)
 
 
 def _group_within_reach(g, reach):
     """Whether everything group `g` grants lies within `reach` (from _my_group_reach)."""
-    mine, mine_remotes, mine_commands, mine_servers = reach
-    if not set(g.get_permissions()) <= mine:
+    mine, mine_remotes, mine_commands, mine_servers = reach[:4]
+    axes = ((set(g.get_permissions()), mine), (_row_ids(g.servers), mine_remotes),
+            (_row_ids(g.custom_commands), mine_commands), (_row_ids(g.game_servers), mine_servers))
+    if not all(granted <= held for granted, held in axes):
         return False
-    if not {r.id for r in (g.servers or [])} <= mine_remotes:
-        return False
-    if not {c.id for c in (g.custom_commands or [])} <= mine_commands:
-        return False
-    return {s.id for s in (g.game_servers or [])} <= mine_servers
+    return len(reach) <= 4 or _pairs_within(_group_site_pairs(g), reach[4])
+
+
+def _row_ids(rows):
+    """The ids of `rows` (a relationship's list, or None) as a set."""
+    return {r.id for r in (rows or [])}
+
+
+def _group_site_pairs(g):
+    """The (website permission, site id) pairs group `g` grants."""
+    from panel.services.websites_access import group_pairs
+    return group_pairs(g)
+
+
+def _pairs_within(pairs, held):
+    """Whether every pair in `pairs` is in `held` (None: a superadmin's, every pair)."""
+    return held is None or set(pairs) <= held
 
 
 def can_administer_user(actor, target, actor_memo=None):
@@ -2449,6 +2482,11 @@ def _reach_within_actors(actor, target, mine):
     # only extra reach is a superadmin-authored command is still someone to become.
     if not custom_command_ids(target) <= mine("commands", lambda: custom_command_ids(actor)):
         return False
+    # ...and the websites: a peer who can run a customer's site is someone to become, whatever
+    # permissions the two share.
+    from panel.services.websites_access import held_pairs
+    if not _pairs_within(held_pairs(target) or set(), mine("sites", lambda: held_pairs(actor))):
+        return False
     return ({g.id for g in get_user_servers(target)}
             <= mine("servers", lambda: {g.id for g in get_user_servers(actor)}))
 
@@ -2472,16 +2510,23 @@ def grantable_object_ids(requested_ids, existing_ids, allowed_ids):
     return (requested & set(allowed_ids)) | (existing - set(allowed_ids))
 
 
-def _grantable_perms(requested, existing=()):
+def _grantable_perms(requested, existing=(), customer=False):
     """Compute a group's permission set after an edit, safely.
 
     A superadmin can set any real permission. Anyone else (a delegated MANAGE_GROUPS user) can only
     toggle the permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
     their own privileges by editing a group they belong to. Permissions already on the group that
     they can't grant are PRESERVED (so an edit can't silently strip them).
+
+    `customer`: the group is a customer group (Group.is_customer). Below a superadmin it can then be
+    given only CUSTOMER_PERMS, so no one but a superadmin can hand a customer anything beyond their
+    own websites (OWASP Multi-Tenant Security Cheat Sheet, tenant isolation; Authorization Cheat Sheet,
+    "Enforce Least Privileges").
     """
     requested = set(requested) & set(ALL_PERMISSIONS.keys())
     if current_user.is_superadmin:
         return list(requested)
     grantable = get_user_permissions(current_user) - {SUPER_ADMIN}
+    if customer:
+        grantable &= CUSTOMER_PERMS
     return list((set(existing) - grantable) | (requested & grantable))

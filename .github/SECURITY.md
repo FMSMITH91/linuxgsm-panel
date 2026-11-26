@@ -38,9 +38,9 @@ version only, so please update before reporting.
 
 [docs/THREAT-MODEL.md](../docs/THREAT-MODEL.md) is the panel's threat model (OWASP Threat Modeling
 Cheat Sheet): its assets, the trust boundaries (the browser, the panel, root through the helper, game
-accounts, remote hosts, push services and chat bots, database servers, the update path and CI), STRIDE
-against each one with the controls that answer it and the file that holds them, and the risks
-accepted. The sections below are the parts an operator acts on.
+accounts, remote hosts, push services and chat bots, database servers, the update path, CI, the internet
+to the websites' proxy, and websites' own code), STRIDE against each one with the controls that answer it
+and the file that holds them, and the risks accepted. The sections below are the parts an operator acts on.
 
 ## Deploying securely
 
@@ -376,6 +376,10 @@ account or script name that is not a plain identifier, or is `root` (GHSA-hh39-7
 reported by kta1kri; GHSA-c49r-gmr2-6qf5). A login or host handed to the system `ssh` client is checked the same way
 and placed after `--`. A panel backup restore re-checks every such name in the archive's database
 and refuses the restore naming the bad row.
+
+### Websites are a third line, and a tenant boundary
+
+A website runs as its own account (`ws<id>`, home 0700), made by the helper and marked as the panel's, in a rootless container with every capability dropped, a read-only root file system, memory, CPU, process and disk limits, and no outbound network by default (an nftables egress guard also keeps it off the host's own addresses; required for customers' sites). The panel never runs a site's code as root or as its own account. A customer is a panel user in a customer group: every `/websites` request goes through one check (`site_for`, `panel/services/websites_access.py`) that pairs the permission with the site per group, and a site the user cannot reach answers 404, exactly like one that does not exist. Below a superadmin, nobody can give a customer group a permission other than the website ones, a host or a game server. Ports 80 and 443 belong to one web proxy per host, run as its own unprivileged account, and are open only while a site is online: to everyone, to an allow list (a CDN's ranges or your own networks), or not at all with a tunnel. The threat model's TB10 and TB11 hold the details.
 
 ### Root never runs or installs from the panel's checkout
 
