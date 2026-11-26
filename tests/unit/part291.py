@@ -200,7 +200,7 @@ check("upgrade: ...an Argon2id hash is left as it is (control)",
       _hash_of291(_U291["argon"]).startswith("$argon2id$"), _hash_of291(_U291["argon"])[:30])
 
 _paths291 = {}
-_sftp_none291 = _sftp_legacy291 = _good291 = (None, None)
+_sign291 = {}      # filled inside the try below; a step that raised leaves its key missing
 try:
     _auth291.run_off_hub = _count291
     _auth291._LEGACY_SEEN.update(at=None, any=True)
@@ -227,11 +227,11 @@ try:
     _auth291._LEGACY_SEEN.update(at=None, any=True)
     with _p9.app_context():
         del _work291[:]
-        _sftp_none291 = (_broker291._kbd_refusal(None, {"password": "x" + _K291}), sorted(_work291))
+        _sign291["sftp none"] = (_broker291._kbd_refusal(None, {"password": "x" + _K291}), sorted(_work291))
         del _work291[:]
-        _sftp_legacy291 = (_broker291._kbd_refusal(db.session.get(User, _U291["legacy"]),
+        _sign291["sftp legacy"] = (_broker291._kbd_refusal(db.session.get(User, _U291["legacy"]),
                                                    {"password": "x" + _K291}), sorted(_work291))
-    _good291 = _login291(8, "p291_layered", _K291)
+    _sign291["good"] = _login291(8, "p291_layered", _K291)
 finally:
     _auth291.run_off_hub = _run_off291
     _auth291._LEGACY_SEEN.update(at=None, any=True)
@@ -245,13 +245,15 @@ check("login timing: an unknown name, an inactive account, an Argon2id account, 
 check("login timing: ...and only one Argon2id each once no bcrypt-era hash is left (control)",
       _paths291.get("unknown, no legacy hash", (0, None))[1] == ["argon2"]
       and _paths291.get("argon2, no legacy hash", (0, None))[1] == ["argon2"], repr(_paths291))
+_sftp_n291 = _sign291.get("sftp none", (None, None))
+_sftp_l291 = _sign291.get("sftp legacy", (None, None))
 check("SFTP sign-in timing: an unknown name and a bcrypt-era account run the same hashing",
-      _sftp_none291[1] == _sftp_legacy291[1] == _same291
-      and _sftp_none291[0] == "no such user" and _sftp_legacy291[0] == "wrong password",
-      repr((_sftp_none291, _sftp_legacy291)))
+      _sftp_n291[1] == _sftp_l291[1] == _same291
+      and _sftp_n291[0] == "no such user" and _sftp_l291[0] == "wrong password",
+      repr((_sftp_n291, _sftp_l291)))
 check("login: the right password on a layered account signs in and re-encodes it as Argon2id (control)",
-      _good291[0] == 302 and _hash_of291(_U291["layered"]).startswith("$argon2id$"),
-      repr((_good291, _hash_of291(_U291["layered"])[:30])))
+      _sign291.get("good", (None, None))[0] == 302 and _hash_of291(_U291["layered"]).startswith("$argon2id$"),
+      repr((_sign291.get("good"), _hash_of291(_U291["layered"])[:30])))
 with _p9.app_context():
     for _uid291 in _U291.values():
         db.session.delete(db.session.get(User, _uid291))

@@ -32,7 +32,7 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     server_access_required,
     superadmin_required)
 from panel.routes import _cron_access as _cra
-from panel.routes._console_cred import _credential_still_valid, _login_id_still_accepted, _viewer_credential  # noqa: F401
+from panel.routes._console_cred import _credential_still_valid, _viewer_credential
 from panel.services import (console_secrets as _csec, host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
 from itertools import count, groupby
 import re
