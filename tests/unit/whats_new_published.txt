@@ -938,3 +938,6 @@ b3191625 IW4MAdmin runs on an up-to-date .NET runtime.
 09c10d04 An add-on's Open button works on panels served over HTTPS.
 e167b67c IW4MAdmin is rebuilt on Microsoft's latest .NET 10 image.
 f81f9273 B3's image installs Debian's security updates when it is built.
+457177ab Add-on pages can't break out of their sandbox.
+696ef6a5 A crafted add-on page can't freeze the panel.
+be04d785 An add-on page's link ends when the add-on stops.

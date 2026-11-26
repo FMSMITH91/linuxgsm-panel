@@ -17,6 +17,14 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **B3's image installs Debian's security updates when it is built.** A compression library in the image had a
   high-severity hole that Debian has fixed, but the base image did not have the fix yet. Panels running B3
   offer an Update on its card.
+- **Add-on pages can't break out of their sandbox.** The panel no longer passes on an add-on's own status text
+  or any header line with a hidden line break, so an add-on can't make the panel's protection for its page
+  disappear.
+- **A crafted add-on page can't freeze the panel.** Preparing an add-on's page now takes the same short time
+  whatever the page contains. Before, a page built for it could stall the whole panel for minutes.
+- **An add-on page's link ends when the add-on stops.** Stop, Update, a settings change or Remove ends open
+  links to that add-on's page, and the panel checks every few seconds that the add-on still holds its port.
+  Open the page again from the card.
 
 ## [2026.11.24] — 2026-11-24
 
