@@ -45,12 +45,11 @@
   }
   function lock(cert) {
     var ok = cert === 'issued';
-    var i = WS.icon(ok ? 'lock-fill text-success' : cert === 'failed' ? 'unlock text-danger' : 'hourglass-split text-secondary');
-    i.setAttribute('aria-hidden', 'false');
-    i.setAttribute('role', 'img');
-    i.setAttribute('aria-label', WS.T(WS.pick(WS.CERT, cert, 'No certificate yet')));
-    i.title = i.getAttribute('aria-label');
-    return i;
+    // The icon is decoration; its meaning is a hidden text node, which the translator reaches.
+    var box = WS.node('span', 'ws-lock');
+    box.appendChild(WS.icon(ok ? 'lock-fill text-success' : cert === 'failed' ? 'unlock text-danger' : 'hourglass-split text-secondary'));
+    box.appendChild(WS.node('span', 'visually-hidden', WS.T(WS.pick(WS.CERT, cert, 'No certificate yet'))));
+    return box;
   }
   WS.card = function (s) {
     var a = WS.node('a', 'card ws-card');
@@ -64,7 +63,8 @@
     var meta = WS.node('div', 'ws-card-meta');
     meta.appendChild(WS.node('span', 'ws-chip', WS.kindLabel(s.kind)));
     meta.appendChild(WS.node('span', 'small text-secondary', WS.stateLabel(s.state)));
-    meta.appendChild(WS.node('span', 'small ' + (s.enabled ? 'text-success' : 'text-secondary'), WS.T(s.enabled ? 'Online' : 'Offline')));
+    var onCls = s.enabled ? 'small text-success' : 'small text-secondary';
+    meta.appendChild(WS.node('span', onCls, WS.T(s.enabled ? 'Online' : 'Offline')));
     a.appendChild(meta);
     return a;
   };
