@@ -103,6 +103,11 @@ paths-ignore:
 #                                      panel's own host), tunnel._paramiko (an SSH direct-tcpip channel)
 #                                      and tunnel._ssh_cli_argv (ssh -W, Tailscale hosts). Not HTTP and
 #                                      sending nothing: hosts._tcp_reachable, the SSH-address reach test.
+#   websites_egress.handle             A website's egress proxy (run as the site's own account, not by
+#                                      the panel): a TCP connect to port 443 of a host on its fixed
+#                                      list only, after every resolved address passed address_ok
+#                                      (public unicast; no private, mapped or NAT64); TLS passes
+#                                      through untouched, the proxy writes no request of its own.
 # The three HTTP requests in notifications and the ones in game_icons, modrinth, steam_workshop,
 # breached_passwords and webpush refuse every redirect; geoip follows one only to db-ip.com's two hosts,
 # addons_bluemap only to piston-meta.mojang.com.

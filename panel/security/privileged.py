@@ -2337,7 +2337,7 @@ _REMOTE_ACTIONS = {
 DB_FLAVORS = ("mariadb", "mysql")
 # gs<server id>_<slug>: also the user name, so at most 29 characters (MySQL user names hold 32).
 # A website's database is ws<site id>_<slug>, the same shape.
-DB_NAME_RE = r"(?:gs|ws)[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+DB_NAME_RE = r"[gw]s[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
 # A database password (databases.new_password): no quote, backslash or URI delimiter anywhere, so
 # it is inert in SQL, option files, YAML, KeyValues, INI and an oxmysql connection URI.
 DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"

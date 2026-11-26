@@ -308,7 +308,7 @@ def ports_apply(remote, proxy, enabled):
     """
     if not _core.is_local_server(remote):
         return False, ONLY_LOCAL
-    out, _err, rc = _core.run_privileged(remote, "ufw-status", ["numbered"], timeout=60)
+    out, _err, rc = _core.run_privileged(remote, "ufw-status", ["numbered"], timeout=45)
     if rc != 0:
         return False, FAILED
     have, want = set(rules_in(out)), set(wanted_rules(proxy, enabled))

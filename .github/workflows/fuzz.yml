@@ -99,6 +99,8 @@ jobs:
               'panel/security/privileged.py'
               # ...and the remote journal clean-up shell privileged.py imports.
               'panel/security/journal_forget_sh.py'
+              # ...and the website verbs' table privileged.py merges in.
+              'panel/security/privileged_websites.py'
               'panel/db/models.py'
               # ...and the two modules models.py imports its db object and website tables from.
               'panel/db/sqla.py'

@@ -8255,7 +8255,7 @@ def _root_cron_refusal(_args):
 # the client prints is scrubbed of both passwords before it is passed on: a syntax error can quote
 # the statement it failed on.
 DB_FLAVORS = ("mariadb", "mysql")
-DB_NAME_RE = r"(?:gs|ws)[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+DB_NAME_RE = r"[gw]s[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
 DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"
 DB_ADMIN_USER_RE = r"[A-Za-z0-9_.@-]{1,32}"
 DB_ADMIN_PW_RE = r"[\x20-\x7e]{1,128}"
@@ -8266,7 +8266,7 @@ DB_DUMP_DIR = "panel-db-dumps"
 DB_ARCHIVE_ROOT = "/var/backups/linuxgsm-panel"
 DB_ARCHIVE_DIR = DB_ARCHIVE_ROOT + "/databases"
 DB_ARCHIVE_DAYS = 30
-DB_ARCHIVE_FILE_RE = r"(?:gs|ws)[1-9][0-9]{0,9}_[a-z0-9]{1,16}-[0-9]{8}T[0-9]{6}Z\.sql\.gz"
+DB_ARCHIVE_FILE_RE = r"[gw]s[1-9][0-9]{0,9}_[a-z0-9]{1,16}-[0-9]{8}T[0-9]{6}Z\.sql\.gz"
 DB_IMPORT_MAX = 2 * 1024 * 1024 * 1024
 DB_HARDEN_CNF = "/etc/mysql/mariadb.conf.d/60-linuxgsm-panel.cnf"
 DB_HARDEN_CNF_TEXT = ("# Written by linuxgsm-panel when it installed this database server.\n"
