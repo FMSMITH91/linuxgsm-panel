@@ -25,6 +25,8 @@
     form without a token is not sent, and the dispatcher refuses the internal _r<digits> helpers.
 11. The database browser's cut value in a keyless row sends only an editor to the SQL box; anyone else
     (no Edit database data, so no SQL box) is told the table has no key to read the value by.
+12. A BlueMap Update removes the old client jar (and, after a new image, the old page) only once the new
+    image and the record are in place: a failed pull leaves the running BlueMap what it uses.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -42,6 +44,7 @@ from types import SimpleNamespace as _NS294
 
 from unit.part01 import _root, check, eq, skip
 from unit.part47 import _cut47, _node47
+from unit.part272 import _bm272, _drop272, _fixture272, _getter272, _host272, _mojang272, _probe_out272, _writes272
 from unit.part278 import _act278, _fixture278, _post278, _socket_stub278
 from unit.part190 import _NAME190, _U190, _UNDO190, _Sb190, _missing190
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_audit, _p9_client, _p9_delete_server,
@@ -516,3 +519,42 @@ else:
        "told the table has no key to read it by", _dbm294,
        ["Too long to show here: this table has no key to read the whole value by.",
         "Too long to show here: use the SQL box."])
+
+
+# ── 12. BlueMap's tidy-up waits for the new image ─────────────────────────────────────────────────
+_bmids294 = _fixture272()
+try:
+    _p9_arm(who="part294")
+    _bmcalls294 = _host272(_probe_out272(meta={"kind": "bluemap", "image": "ghcr.io/bluemap-minecraft/bluemap@sha256:" + "0" * 64,
+                                               "mc_version": "1.21.4", "port": 21008, "eula_accepted_by": "admin"},
+                                         version="1.21.5"))
+    _p9_patch(_bm272, "_get", _getter272(*_mojang272("1.21.5")))
+    _bmr294 = _p9_client(P9_ADMIN).post("/api/server/%d/addons/bluemap/update" % _bmids294["mc"])
+    _p9_drain()
+    _bmsh294 = _writes272(_bmcalls294)[0]
+finally:
+    _p9_restore_all()
+    _drop272(_bmids294)
+_at294 = {k: _bmsh294.find(m) for k, m in (("fetch", "minecraft-client-1.21.5.jar.part"), ("pull", "ADDON_PULL_FAILED"),
+                                            ("record", "/addon.json.new"), ("tidy", "/minecraft-client-*.jar; do"),
+                                            ("page", "/web/index.html"))}
+check("BlueMap update: the client file is fetched before the image, and the old jar and page are removed only after "
+      "the image is pulled and the record written (before, a failed pull left BlueMap without them)",
+      _bmr294.status_code == 202 and min(_at294.values()) >= 0
+      and _at294["fetch"] < _at294["pull"] < _at294["record"] < _at294["tidy"] < _at294["page"], repr(_at294))
+
+_bmdir294 = os.path.join(_TMP294, "bm", "addon")
+_bmfiles294 = ("minecraft-client-1.21.4.jar", "minecraft-client-1.21.5.jar")
+for _n294 in _bmfiles294 + ("index.html",):
+    _sub294 = os.path.join(_bmdir294, "web" if _n294 == "index.html" else "data")
+    os.makedirs(_sub294, exist_ok=True)
+    open(os.path.join(_sub294, _n294), "w").close()
+_EMPTY_SHA294 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"    # an empty file's: the 1.21.5 jar is kept, nothing fetched
+_ls294 = "cd %s && ls -1 * | tr '\\n' ' '" % _bmdir294
+_fetch294 = _bash294(_bm272.client_sh(_bmdir294, "1.21.5", "https://piston-data.mojang.com/x", _EMPTY_SHA294, True,
+                                      tidy=False) + _ls294)[0].split()
+_tidy294 = _bash294(_bm272.client_tidy_sh(_bmdir294, "1.21.5", True) + _ls294)[0].split()
+eq("BlueMap update (bash): the fetch alone keeps the old jar and page; the tidy-up then removes them (control)",
+   (_fetch294, _tidy294),
+   (["data:", "minecraft-client-1.21.4.jar", "minecraft-client-1.21.5.jar", "web:", "index.html"],
+    ["data:", "minecraft-client-1.21.5.jar", "web:"]))

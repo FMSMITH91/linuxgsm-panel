@@ -2126,7 +2126,7 @@ _r16d_wrap_ts_handles()
 # part293 (the signed add-on catalog: sign-catalog.sh, sign-release's catalog-only rule, the scan and Renovate) runs
 # git, bash and ssh-keygen over scratch repositories with a stand-in gh; imports part01.
 # part294 (review pass 36's runtime fixes) drives part12's app, stand-in transports, bash over scratch files and part190's
-# restore sandbox, part278's B3 stand-ins and node; imports part01, 12, 47, 190 and 278.
+# restore sandbox, part272's BlueMap and part278's B3 stand-ins and node; imports part01, 12, 47, 190, 272 and 278.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",

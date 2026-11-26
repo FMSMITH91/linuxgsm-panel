@@ -264,7 +264,7 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
     now = _settings_now(addon_id, meta, b3ini, choice)
     geo, own = now[0], now[2] and addon_id == _ad.B3
     rec = dict(meta, **_record(addon_id, now, meta, kind))
-    extra, why = _fetches(gs, addon_id, p, rec, (geo, kind, meta))
+    (extra, after), why = _fetches(gs, addon_id, p, rec, (geo, kind, meta))
     if why:
         return why, ""
     new_ini, files = _b3_files(b3ini, geoini, now) if addon_id == _ad.B3 else (None, {})
@@ -272,7 +272,7 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
         files.update(_ad.build_files(addon_id))
     unit, units, net, web = _unit(gs, addon_id, p, meta, geo, own)
     rec.update(network=net, port=web, changed_by=who)
-    how = {"rebuild": kind == "update", "settings": new_ini is not None, "extra": extra,
+    how = {"rebuild": kind == "update", "settings": new_ini is not None, "extra": extra, "after": after,
            "old_image": meta.get("image", ""), "dirs": [_ad.B3_OWN_PLUGINS] if own else []}
     how.update(_b3_apply_steps(gs, p, meta, (kind, now, new_ini, files.get(_ad.B3_GEO_INI)), who))
     sh = _ad.reconfigure_sh(gs.short_name, addon_id, unit, json.dumps(rec) + "\n", files, units, how)
@@ -310,31 +310,34 @@ def _b3_apply_steps(gs, p, meta, change, who):
 
 
 def _fetches(gs, addon_id, p, rec, how):
-    """What a change fetches first: an offline B3's country database, BlueMap's client file. -> (extra shell, why not).
+    """What a change fetches first: an offline B3's country database, BlueMap's client file.
 
-    `how` is (geolocation mode, kind of change, the add-on's record before it). The extra shell is BlueMap's
-    (_client); "" for the others.
+    -> ((shell before the image, shell after the record), why not). `how` is (geolocation mode, kind of
+    change, the add-on's record before it). The shells are BlueMap's (_client); empty for the others.
     """
     why = _geoip_for(gs, addon_id, rec, how[0], how[1])
-    return ("", why) if why else _client(gs, addon_id, p, rec, how[2])
+    return (("", ""), why) if why else _client(gs, addon_id, p, rec, how[2])
 
 
 def _client(gs, addon_id, p, rec, meta):
-    """The client file BlueMap needs for the version the game runs now: (the shell that fetches it, why not or "").
+    """The client file BlueMap needs for the version the game runs now: ((fetch, tidy-up), why not or "").
 
-    Sets rec["mc_version"]. After a new image (`meta`, the record before, names another), the shell also removes
-    web/index.html, so the new BlueMap writes its own page. ("", "") for an add-on that reads no world.
+    Sets rec["mc_version"]. The fetch runs before the image; the tidy-up (other versions' jars and, after a
+    new image, web/index.html, so the new BlueMap writes its own page) runs only once the image and the
+    record are in place: before them, a failed pull left the running BlueMap without the jar of the version
+    its unit still names, and without its page. (("", ""), "") for an add-on that reads no world.
     """
     if "world" not in p:
-        return "", ""
+        return ("", ""), ""
     from panel.routes import addons as _ra   # it imports this module: read at call time
     version = p["world"]["version"]
     url, sha1, why = _bm.client_download(version)
     if why:
-        return "", why
+        return ("", ""), why
     rec["mc_version"] = version
     fresh = (meta.get("image") or "") != _ad.CATALOG[addon_id]["image"]
-    return _ra.client_step(gs, addon_id, version, (url, sha1), fresh_webapp=fresh), ""
+    return (_ra.client_step(gs, addon_id, version, (url, sha1), tidy=False),
+            _bm.client_tidy_sh(_ad.addon_dir(gs.short_name, addon_id), version, fresh)), ""
 
 
 def _record(addon_id, now, meta, kind):
