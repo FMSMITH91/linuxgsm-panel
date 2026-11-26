@@ -12,6 +12,13 @@ dated section below lists what that day's releases changed, newest first; the nu
 
 ## [2026.11.26] — 2026-11-26
 
+### Added
+
+- **Add-on updates arrive without a panel update.** BlueMap, B3 and IW4MAdmin versions now come from a signed
+  add-on list your panel checks every day. A newer version lights up Update on the add-on's card without a
+  panel update, and the card says which list it came from. Each installed B3 and IW4MAdmin is offered one
+  image update after this release.
+
 ### Changed
 
 - **The helper names the sudoers file and line that stops an account.** When an account can't be managed
