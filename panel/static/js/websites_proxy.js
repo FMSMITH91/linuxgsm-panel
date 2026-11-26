@@ -136,16 +136,21 @@
     });
   };
   // The notes beside the OWASP values: shown when a value is outside the recommendation, never a block.
+  // A switch's state: true (on), false (off), or null when the card has no such switch.
+  function switchOn(id) {
+    var e = WS.el(id);
+    return e ? !!e.checked : null;
+  }
   window.wsOptCheck = function () {
-    var h = WS.el('wp-hsts'), tls = WS.el('wp-tls'), mfa = WS.el('wp-2fa');
-    var sub = WS.el('wp-hsts-sub'), pre = WS.el('wp-hsts-preload'), local = WS.el('wp-local-certs');
+    var h = WS.el('wp-hsts'), tls = WS.el('wp-tls');
+    var sub = switchOn('wp-hsts-sub'), pre = switchOn('wp-hsts-preload');
     WS.show('wp-hsts-note', !!(h && h.value !== '' && Number(h.value) < HSTS_OWASP));
     WS.show('wp-tls-note', !!(tls && tls.value === '1.3'));
-    WS.show('wp-2fa-note', !!(mfa && !mfa.checked));
-    WS.show('wp-hsts-sub-note', !!(sub && !sub.checked));
-    WS.show('wp-hsts-preload-note', !!(pre && !pre.checked));
-    WS.show('wp-hsts-preload-sub', !!(pre && pre.checked && sub && !sub.checked));
-    WS.show('wp-local-certs-note', !!(local && local.checked));
+    WS.show('wp-2fa-note', switchOn('wp-2fa') === false);
+    WS.show('wp-hsts-sub-note', sub === false);
+    WS.show('wp-hsts-preload-note', pre === false);
+    WS.show('wp-hsts-preload-sub', pre === true && sub === false);
+    WS.show('wp-local-certs-note', switchOn('wp-local-certs') === true);
   };
   window.wsSaveOptions = function (e) {
     if (e && e.preventDefault) e.preventDefault();
