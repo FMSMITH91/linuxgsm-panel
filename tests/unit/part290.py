@@ -30,7 +30,7 @@ from panel.db.models import (AuditLog as _Audit290, CustomCommand as _CC290, Gro
 from panel.ops import system_ops as _so290, tailscale_integration as _ts290
 from panel.ops.ssh_manager import _core as _core290
 from panel.core.validation import ip_address_or_none as _ip290
-from panel.routes import (_shared as _sh290, remote_vps as _rv290, remotes as _rm290, server_detail as _sd290,
+from panel.routes import (_cron_access as _cra290, _shared as _sh290, remote_vps as _rv290, remotes as _rm290, server_detail as _sd290,
                           server_files as _sf290)
 from panel.security import auth as _auth290
 from panel.services import console_secrets as _csec290
@@ -176,12 +176,12 @@ finally:
 eq("scheduled tasks: MANAGE_SERVERS without EDIT_FILES may not add, change, delete or run a task "
    "(403, the reason given), and no crontab writer or runner is called",
    {k: _cron290.get("mgr_" + k) for k in ("add", "update", "delete", "run", "calls")},
-   {"add": (403, _sf290.CRON_NEEDS_EDIT_FILES), "update": (403, _sf290.CRON_NEEDS_EDIT_FILES),
-    "delete": (403, _sf290.CRON_NEEDS_EDIT_FILES), "run": (403, _sf290.CRON_NEEDS_EDIT_FILES), "calls": []})
+   {"add": (403, _cra290.CRON_NEEDS_EDIT_FILES), "update": (403, _cra290.CRON_NEEDS_EDIT_FILES),
+    "delete": (403, _cra290.CRON_NEEDS_EDIT_FILES), "run": (403, _cra290.CRON_NEEDS_EDIT_FILES), "calls": []})
 _ml290 = _cron290.get("mgr_list") or [{}]
 _el290 = _cron290.get("ed_list") or [{}]
 check("scheduled tasks: without VIEW_FILES the listing withholds a failed task's output (the Failed state stays)",
-      _ml290[0].get("error") == _sf290.CRON_OUTPUT_NEEDS_VIEW_FILES and _ml290[0].get("ok") is False
+      _ml290[0].get("error") == _cra290.CRON_OUTPUT_NEEDS_VIEW_FILES and _ml290[0].get("ok") is False
       and "p290-hunter2" not in repr(_ml290), repr(_ml290))
 check("scheduled tasks (control): with VIEW_FILES the listing shows the task's output as recorded",
       _el290[0].get("error") == "rconpassword=p290-hunter2", repr(_el290))
@@ -200,7 +200,7 @@ check("scheduled tasks: without EDIT_FILES the card keeps its Add task button, d
       "saying why, and tells the script not to offer row actions",
       _mp290[0] == 200 and 'id="cron-ro"' in _mp290[1] and 'data-cron-edit="0"' in _mp290[1]
       and 'id="cron-submit" disabled aria-describedby="cron-ro"' in _mp290[1]
-      and _sf290.CRON_NEEDS_EDIT_FILES in _mp290[1], repr(_mp290[0]))
+      and _cra290.CRON_NEEDS_EDIT_FILES in _mp290[1], repr(_mp290[0]))
 check("scheduled tasks (control): with EDIT_FILES the card's form is live and carries no such sentence",
       _ep290[0] == 200 and 'id="cron-ro"' not in _ep290[1] and 'data-cron-edit="1"' in _ep290[1]
       and 'id="cron-submit">' in _ep290[1], repr(_ep290[0]))

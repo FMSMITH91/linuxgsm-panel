@@ -31,6 +31,8 @@ from panel.security.auth import (SEND_COMMAND, UPDATE_SERVER, VIEW_CONSOLE, _can
     _fpm_can_edit, _fpm_can_open_files, _fpm_can_view, _r17c_row_id, files_access, can_access_remote, can_access_server, get_game, has_permission, log_action,
     server_access_required,
     superadmin_required)
+from panel.routes import _cron_access as _cra
+from panel.routes._console_cred import _credential_still_valid, _login_id_still_accepted, _viewer_credential  # noqa: F401
 from panel.services import (console_secrets as _csec, host_reboot as _hr, lgsm_cfg_form as _cmpc, lgsm_data, lgsm_players as _lgp, schedule_chains as _sch)
 from itertools import count, groupby
 import re
@@ -264,122 +266,6 @@ def _drop_banned_sockets(app, socketio):
     if doomed:
         app.logger.info("ban sweep: dropped %d socket(s) from a banned address", len(doomed))
     return len(doomed)
-
-
-def _viewer_credential():
-    """What join_console records for this socket: (current_user's login id, bearer digest).
-
-    The login id is the string the session cookie carries ("<uid>:<epoch>[:<session sid>]"), so
-    running it back through _login_id_still_accepted later asks what a page load asks. The
-    digest is recorded only when this socket authenticated with a bearer token that is the
-    current user's: revoking a token changes neither the epoch nor any session row, so the token
-    itself has to be compared. Request context only.
-    """
-    import hashlib
-    digest = None
-    hdr = request.headers.get("Authorization", "")
-    if hdr.startswith("Bearer "):
-        d = hashlib.sha256(hdr[7:].strip().encode()).hexdigest()
-        if getattr(current_user, "api_token", None) == d:
-            digest = d
-    return current_user.get_id(), digest
-
-
-def _login_id_still_accepted(login_id):
-    """The User a recorded login id still names, or None: load_user's verdict without its writes.
-
-    For the console poller, which holds each viewer's login id ("<uid>:<epoch>[:<sid>]",
-    User.get_id) outside any request and re-asks every tick whether the panel would still accept
-    it. It asks load_user's questions (the epoch still matches, the account is active, the
-    per-device UserSession row still exists and has not idled out) and nothing else, because
-    load_user is a REQUEST hook and two of its side effects are wrong here. It writes last_seen
-    every ~5 minutes, and idle expiry is measured from last_seen, so a poller calling it kept a
-    login alive for as long as a console socket stayed open (a stolen remember cookie included).
-    And it turns a database error into None ("deny this request"), which the poller read as
-    "revoked" and evicted a legitimate viewer on a transient lock.
-
-    So this writes and deletes nothing, and RAISES when it cannot look (after a rollback, so the
-    next viewer's query is not refused by a session left mid-failure). The per-request client
-    binding (_session_binding_ok) is not asked: there is no request. Keep it in step with
-    auth.load_user: smoke_test drives both over the same login ids.
-    """
-    s = str(login_id)
-    try:
-        if ":" not in s:      # legacy cookie from before epochs: load_user accepts the plain id
-            return _legacy_login_user(s)
-        return _epoch_login_user(s)
-    except Exception:
-        db.session.rollback()
-        raise
-
-
-def _legacy_login_user(s):
-    """The active User a pre-epoch login id (the bare user id) names, or None.
-
-    Only while that account's auth_epoch is still 0, as auth._load_legacy_user: a bare id predates
-    epochs, so once a password change or "sign out everywhere" has moved the epoch it is one of the
-    cookies that bump revoked.
-    """
-    from panel.db.models import User
-    user = db.session.get(User, int(s)) if s.isdecimal() else None
-    ok = user is not None and user.is_active and (user.auth_epoch or 0) == 0
-    return user if ok else None
-
-
-def _epoch_login_user(s):
-    """The User an "<uid>:<epoch>[:<sid>]" login id still names, or None."""
-    from panel.db.models import User
-    parts = s.split(":")
-    uid, epoch = parts[0], parts[1]
-    sid = parts[2] if len(parts) > 2 and parts[2] else None
-    if not uid.isdecimal():
-        return None
-    user = db.session.get(User, int(uid))
-    if user is None or str(user.auth_epoch or 0) != epoch or not user.is_active:
-        return None
-    if sid and not _session_row_live(sid, user):
-        return None
-    return user
-
-
-def _session_row_live(sid, user):
-    """Whether `user`'s per-device UserSession row `sid` still exists and has not idled out."""
-    from panel.core.clock import utcnow
-    from panel.db.models import UserSession
-    sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
-    return not (sess is None or sess.is_expired(utcnow()))
-
-
-def _credential_still_valid(uid, cred):
-    """Is the credential a viewer joined with still one the panel would accept?
-
-    cred is what _viewer_credential recorded, or None for a viewer registered without one (nothing
-    to check). A revoked device, a bumped auth_epoch, an idle-expired session and a deactivated account all
-    fail here as they fail a page load.
-
-    It asks _login_id_still_accepted, NOT the app's user_loader: load_user refreshed last_seen
-    from this poller (so an open console socket kept its login from ever idling out) and answered
-    a database error with None (so a transient lock evicted a legitimate viewer as "revoked").
-    _login_id_still_accepted writes nothing and RAISES when it cannot look, and
-    _evict_unauthorized_viewers keeps a viewer it could not check.
-    """
-    if cred is None:
-        return True
-    login_id, digest = cred
-    user = _login_id_still_accepted(login_id)
-    if user is None or user.id != uid:
-        return False
-    if digest is None:
-        return True
-    # A bearer socket: the token must still be the account's AND unexpired. User.by_api_token asks
-    # the expiry only when a request authenticates, and nothing clears the stored hash when it
-    # passes, so a socket joined before the expiry kept the live console after it (OWASP Session
-    # Management Cheat Sheet, "Session Expiration": enforce it server side). host_terminal shares this.
-    if getattr(user, "api_token", None) != digest:
-        return False
-    from panel.core.clock import utcnow
-    expires = getattr(user, "api_token_expires", None)
-    return expires is None or expires > utcnow()
 
 
 def _console_whole_lines(server_id, raw):
@@ -1177,53 +1063,9 @@ def _cron_listing(app, gs):
             "there being none.")})
     if not grs_restore_running(gs.id):      # its crontab is set aside: never read the empty one as Off
         _sync_toggles_from_cron(gs, jobs)
-    jobs = _sch.annotate(gs, jobs)
-    # A failed task's `error` is the tail of its output: whatever the command printed, a config's
-    # passwords included. Reading what the account's files hold is VIEW_FILES, so without it the
-    # card says the output is withheld (the Failed badge and time still show).
-    if not _fpm_can_view():
-        for job in jobs:
-            if job.get("error"):
-                job["error"] = i18n.tr(CRON_OUTPUT_NEEDS_VIEW_FILES)
-    return jsonify({"jobs": jobs})
+    # A failed task's output is withheld without VIEW_FILES (_cron_access); its Failed badge stays.
+    return jsonify({"jobs": _cra.withhold_output(_sch.annotate(gs, jobs))})
 
-
-# A scheduled task runs ANY command as the game account (`bash -c` through the recorder), so the
-# four Scheduled Tasks writes need EDIT_FILES as well as MANAGE_SERVERS: EDIT_FILES is the panel's
-# bar for changing what that account runs, and MANAGE_SERVERS alone (schedule, alerts, mods) would
-# otherwise read every secret in its configs and plant a login key. The card prints the same sentence.
-CRON_NEEDS_EDIT_FILES = ("Adding, changing, deleting or running a scheduled task also needs the \"Change game "
-                         "server files\" permission, because a task can run any command as this server's account.")
-CRON_OUTPUT_NEEDS_VIEW_FILES = "This task's output needs the \"View game server files\" permission."
-
-
-def _cron_write_refused():
-    """The 403 for a Scheduled Tasks write by someone without MANAGE_SERVERS and EDIT_FILES, else None."""
-    if not _can_manage_files():
-        return jsonify({"error": "Permission denied"}), 403
-    if not _fpm_can_edit():
-        return jsonify({"success": False, "error": "Permission denied",
-                        "message": i18n.tr(CRON_NEEDS_EDIT_FILES)}), 403
-    return None
-
-
-def _cron_line_refused(gs, raw):
-    """A refusal when `raw` is not a line read back from the account's crontab now, else None.
-
-    Run now runs the command taken from `raw`; a line the request typed, never scheduled, would run
-    as the account without ever being in the crontab the card lists.
-    """
-    jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
-    if jobs is None:
-        why = i18n.tr("Couldn't read the scheduled tasks to check that one, so it was not run.")
-    elif not raw.strip() or raw.strip() not in {(j.get("raw") or "").strip() for j in jobs}:
-        why = i18n.tr("That task has changed since the page loaded — reload Scheduled Tasks and try again.")
-    else:
-        return None
-    # Audited: a refused Run now is an attempt to run a command as the account.
-    log_action(current_user, "cron_run_now", target=gs.name, success=False,
-               detail="not run: not a task in the crontab", server=gs)
-    return jsonify({"success": False, "message": why})
 
 
 def _apply_gmod_selection(remote, gmod_user, games):
@@ -2494,7 +2336,7 @@ def _register_cron_jobs(app):
                 return _cron_listing(app, gs)
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
-        if (no_edit := _cron_write_refused()) is not None:
+        if (no_edit := _cra.write_refused()) is not None:
             return no_edit
         data = _json_body()
         # The write refusals first, as every cron write asks them; then a Warn players first chain,
@@ -2523,7 +2365,7 @@ def _register_cron_jobs(app):
     @server_access_required
     def api_server_cron_update(server_id):
         gs = get_game(server_id)
-        if (no_edit := _cron_write_refused()) is not None:
+        if (no_edit := _cra.write_refused()) is not None:
             return no_edit
         return _r28b_cron_update(gs, _json_body())
 
@@ -2582,7 +2424,7 @@ def _register_cron_actions(app):
     @server_access_required
     def api_server_cron_delete(server_id):
         gs = get_game(server_id)
-        if (no_edit := _cron_write_refused()) is not None:
+        if (no_edit := _cra.write_refused()) is not None:
             return no_edit
         data = _json_body()
         refused = _r36c_reboot_refused(gs, "cron_delete") or _write_refused(gs, "cron_delete")
@@ -2607,7 +2449,7 @@ def _register_cron_actions(app):
     def api_server_cron_run(server_id):
         """Run a scheduled task on demand (records its exit code + output so Last-run updates)."""
         gs = get_game(server_id)
-        if (no_edit := _cron_write_refused()) is not None:
+        if (no_edit := _cra.write_refused()) is not None:
             return no_edit
         raw = _json_str(_json_body(), "raw")        # as cron_add reads its fields
         # Registered while it starts, from before the reboot refusal (panel_state.r36j_route_job). The
@@ -2616,7 +2458,7 @@ def _register_cron_actions(app):
             refused = (_r36c_reboot_refused(gs, "cron_run_now") or _r39a_wipe_refused(gs, "cron_run_now")
                        or _write_refused(gs, "cron_run_now"))
             if refused is None:
-                refused = _cron_line_refused(gs, raw)
+                refused = _cra.line_refused(gs, raw)
             if refused is not None:
                 return refused
             try:

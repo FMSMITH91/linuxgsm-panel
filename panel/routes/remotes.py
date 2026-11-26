@@ -226,6 +226,14 @@ def delegated_target_refusal(host):
     return None, str(addrs[0])
 
 
+def _r290_add_refusal(is_local, host, auth_method):
+    """(why, address to dial) for the add form: _delegated_add_refusal, then delegated_target_refusal."""
+    why = _delegated_add_refusal(is_local, auth_method)
+    if why or is_local:
+        return why, host
+    return delegated_target_refusal(host)
+
+
 def _delegated_retarget_refusal(remote, new_host, new_port, new_user, new_auth, new_cred):
     """Why the signed-in user may not repoint `remote` this way, or None when they may.
 
@@ -302,15 +310,12 @@ def _register_remote_list(app):
                 or _add_remote_target_error(is_local, host, auth_method, credential))
         if _bad:
             return _form_err(_bad, "manage_remotes")
-        _refused = _delegated_add_refusal(is_local, auth_method)
+        _refused, _dial = _r290_add_refusal(is_local, host, auth_method)
         if _refused:
             return _form_err(_refused, "manage_remotes", code=403)
 
         if is_local:
             return _add_local_remote(name, lgsm_user)
-        _refused, _dial = delegated_target_refusal(host)
-        if _refused:
-            return _form_err(_refused, "manage_remotes", code=403)
         fingerprint = host_key_fingerprint_arg(request.form.get("host_key_fingerprint"))
         _bad = _fingerprint_field_error(fingerprint, auth_method)
         if _bad:
