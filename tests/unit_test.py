@@ -2131,10 +2131,14 @@ _r16d_wrap_ts_handles()
 # app with a throwaway ssh-keygen key; imports part01 and 12.
 # part293 (the signed add-on catalog: sign-catalog.sh, sign-release's catalog-only rule, the scan and Renovate) runs
 # git, bash and ssh-keygen over scratch repositories with a stand-in gh; imports part01.
-# part294 (the unit suite in shards: tests/unit/shard.py's split, the runner's and run-tests.sh's refusals, ci.yml's
+# part303 (the unit suite in shards: tests/unit/shard.py's split, the runner's and run-tests.sh's refusals, ci.yml's
 # shard jobs and their verdicts) runs child Pythons and bash over ci.yml's own steps; imports part01, 06 and 29.
 # part295 (the js coverage walk in parallel parts: run.py --part through main(), merge.py, ci.yml's parts and their
 # verdict) loads tools/js_coverage and runs bash over ci.yml's own steps; imports part01, 06 and 29.
+# part294 (review pass 36's runtime fixes) drives part12's app, stand-in transports, bash over scratch files and part190's
+# restore sandbox, part272's BlueMap and part278's B3 stand-ins and node; imports part01, 12, 47, 190, 272 and 278.
+# part296 (socket events with two arguments, the database password reset's claim, the update gate's security
+# checks) drives part12's app; imports part01 and 12.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09", "part10", "part11", "part12", "part13", "part14", "part16",
     "part17", "part18", "part19", "part20", "part21", "part22", "part23", "part24", "part25", "part26", "part27", "part28", "part29", "part30", "part31",
     "part32", "part33", "part34", "part35", "part36", "part37", "part38", "part39", "part40", "part41", "part42", "part43", "part44", "part47", "part49",
@@ -2154,8 +2158,8 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part236", "part237", "part238", "part239", "part240", "part241", "part242", "part243", "part244", "part245", "part246", "part247", "part248", "part249",
     "part250", "part251", "part252", "part253", "part254", "part255", "part256", "part257", "part258", "part259", "part260", "part261", "part262", "part263",
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
-    "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291",
-    "part292", "part293", "part294", "part295", "part15")
+    "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part292", "part293",
+    "part294", "part295", "part297", "part296", "part303", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
@@ -2406,17 +2410,20 @@ def _r14d_noted_imports(text):
     out = {}
     for _seg in _re.split(r"(?:^|(?<=[.;])\s+)(?=part\d{2,}\b)", flat):
         _m = _re.match(r"(part\d{2,})\b", _seg)
-        _ls = [_x.group(1) for _x in _re.finditer(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d{2,}(?:(?:\s*,\s*|"
-                                                  r"\s+and\s+|,\s+and\s+)(?:part)?\d{2,})*)", _seg)]
-        if _m and len(_ls) == 1:
-            out[_m.group(1)] = set(_re.findall(r"\d{2,}", _ls[0]))
-        elif _m and (_ls or _re.search(r"\bimport(?:s|ing)\b[^.;]*?(?<!\d)\d{2,}\b", _seg)):
+        _xs = list(_re.finditer(r"\bimport(?:s|ing)\s+(?:only\s+)?(part\d{2,}(?:(?:\s*,\s*|"
+                                r"\s+and\s+|,\s+and\s+)(?:part)?\d{2,})*)", _seg))
+        # With its one list taken out, a segment still naming imports holds a second list in other words
+        # ("It also imports parts 05 and 12"), which was never compared (review 1124).
+        _other = _re.search(r"\bimport(?:s|ing)\b[^.;]*?(?<!\d)\d{2,}\b", _seg[:_xs[0].start()] + _seg[_xs[0].end():] if len(_xs) == 1 else _seg)
+        if _m and (_xs or _other):
             # A note that names imports in a wording the reader does not take ("imports parts 01
             # and 12") was dropped silently, not judged (review 1011e): named instead. The digits
             # may follow "part" ("imports from part01"): a word boundary before them read only
             # the bare-number wording (review 1012a). A note with two lists is named too: only its first
-            # was compared, so a stray second list passed whatever it said (review 1123).
-            out[_m.group(1)] = {"unreadable: " + _seg[:80]}
+            # was compared, so a stray second list passed whatever it said (review 1123). A second note
+            # for a part replaced the first, which was then never compared (review 1124): named too.
+            _got = set(_re.findall(r"\d{2,}", _xs[0].group(1))) if len(_xs) == 1 and not _other else {"unreadable: " + _seg[:80]}
+            out[_m.group(1)] = {"unreadable: a second note for " + _m.group(1)} if _m.group(1) in out else _got
     return out
 
 
@@ -2469,12 +2476,12 @@ _ctl_r14d = _r14d_noted_imports("# part57 (x: y) drives part12's app; imports\n#
                                 "# part19 comes after part18. part20 builds and imports only part01.")
 _whole_check("unit suite: ...the note reader takes a list across lines, and not a part named mid-sentence "
              "(control)", _ctl_r14d == {"part57": {"01", "12", "20"}, "part20": {"01"}}, repr(_ctl_r14d))
-_ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 comes after part70, "
-                                 "whose app it imports. part72 (x) imports from part01 and part12. "
-                                 "part73 (x) imports nothing but part01. part74 (x) imports part01. imports part05.")
-_whole_check("unit suite: ...and a note listing imports in a wording it cannot read is named, not dropped "
-             "(control)", sorted(_ctl2_r14d) == ["part70", "part72", "part73", "part74"]
-             and all(next(iter(_v)).startswith("unreadable") for _v in _ctl2_r14d.values()), repr(_ctl2_r14d))
+_ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 comes after part70, whose app it imports. part72 (x) imports from part01 "
+                                 "and part12. part73 (x) imports nothing but part01. part74 (x) imports part01. imports part05. part75 (x) imports part01. "
+                                 "It also imports parts 05 and 12. part76 (x) imports part01 and 05. part76 (y) imports part01. part77 (x) imports part01.")
+_whole_check("unit suite: ...and a note listing imports in a wording it cannot read, a second list in other words or a second note for a part, is named (control)",
+             sorted(_k for _k, _v in _ctl2_r14d.items() if next(iter(_v)).startswith("unreadable")) == ["part70", "part72", "part73", "part74", "part75", "part76"]
+             and len(_ctl2_r14d) == 7 and _ctl2_r14d.get("part77") == {"01"}, repr(_ctl2_r14d))
 _ctl4_r14d = _r14d_noted_imports("# part99 (x) imports part01 and 87.\n# part100 (x) imports part01, 99 "
                                  "and 100.\n# part101 (x) imports from part100.")
 _whole_check("unit suite: ...a three-digit part's note is read, and lists a three-digit import, as a two-digit one's is (control)",

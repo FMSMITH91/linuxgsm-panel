@@ -55,12 +55,14 @@ def _codes229():
        ["abc", "abc", "", "", ""])
 
 
+_QUEUED229 = []
+
+
 def _stub_api229(sent, updates):
-    # A link is audited, and the audit hands push_alerts the account's alert, which its background
-    # sender delivers through whichever app was registered last: part12's app when no part since has
-    # registered another, and then that alert reached `sent` too (the part run with only part01-part12
-    # before it). This part sends that alert itself (_pa229.deliver, below), so the sender is kept out.
-    _p9_patch(_pa229, "_APP", [None])
+    # Push alerts are recorded, not sent (review 1124): the link's own audit row queues an account alert,
+    # which reached the linked chat as a second message once part13 stopped leaving push alerts bound to an
+    # app whose database it had removed (where every delivery failed unseen).
+    _p9_patch(_pa229, "_put", _QUEUED229.append)
     _p9_patch(_tl229, "bot_token", lambda: _TOKEN229)
     _p9_patch(_nt229, "telegram_get_me", lambda token: "PanelBot")
     _p9_patch(_nt229, "send_telegram", lambda token, chat, text: sent.append((str(chat), text)) or (True, ""))
@@ -92,6 +94,8 @@ def _routes229():
        (off.status_code, r.status_code, url.startswith("https://t.me/PanelBot?start="),
         _p9_json(chk).get("linked"), chat, str(raw)[:4], audited, [s[0] for s in sent]),
        (400, 200, True, True, "424242", "enc:", 1, ["424242"]))
+    eq("telegram link: ...and the link queues the account's own alert that a chat was linked",
+       [q for q in _QUEUED229 if q[:2] == ("account", "telegram_link")], [("account", "telegram_link", "p229_tg")])
     stale = _p9_client(uid)
     with stale.session_transaction() as s:
         s["_auth_at"] = _time229.time() - 3600

@@ -267,7 +267,7 @@
           <div class="mt-2 d-flex gap-2 flex-wrap">
             {% if can_install and srv.install_retryable %}
             <form method="POST" action="{{ url_for('retry_install', server_id=srv.id) }}"
-                  class="ajax-form d-inline" data-ajax-after="watchInstallsNow">
+                  class="ajax-form d-inline" data-ajax-after="watchInstallsNow"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn btn-sm btn-warning">
                 <i class="bi bi-arrow-clockwise"></i> Retry install
               </button>
@@ -285,7 +285,7 @@
                irreversible action on the same object. #}
             <form method="POST" action="{{ url_for('uninstall_server', server_id=srv.id) }}"
                   class="uninstall-form d-inline" data-server-name="{{ srv.name }}"
-                  data-server-short="{{ srv.short_name }}" data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+                  data-server-short="{{ srv.short_name }}" data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="button" class="btn btn-sm btn-outline-danger uninstall-trigger">
                 <i class="bi bi-trash"></i> Remove
               </button>
@@ -426,7 +426,7 @@
                  warning that this takes every backup with it. panel.js carries it for both. #}
               <form method="POST" action="{{ url_for('uninstall_server', server_id=srv.id) }}"
                     class="uninstall-form d-inline" data-server-name="{{ srv.name }}"
-                    data-server-short="{{ srv.short_name }}" data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+                    data-server-short="{{ srv.short_name }}" data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="button" class="btn btn-outline-danger btn-sm uninstall-trigger"
                         title="Uninstall — deletes the server, its files and its backups"
                         aria-label="{{ t('Uninstall %s')|format(srv.name) }}"><i class="bi bi-trash"></i></button>

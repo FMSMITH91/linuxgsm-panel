@@ -10,12 +10,16 @@
 // window[name] was — native fetch, open or eval included, and this file's own fetch WRAPPER, which
 // adds the CSRF token to every POST. The nonce CSP stops injected markup running script; an
 // unguarded dispatcher turned that same markup back into authenticated, CSRF-valid requests on the
-// next click. Refused: any native function, and the panel's own request/markup primitives. An
-// action is a function a panel script defined for the purpose, and none of those is one.
+// next click. Refused: any native function, the panel's own request/markup primitives (by name),
+// and the internal helpers named _r<digits>… (_r30c_bkSave posts any JSON to any URL it is given;
+// none of them is a data-action). This is a deny list over a page's own functions, so it narrows
+// what injected markup could reach rather than closing it: the boundary is the CSP and the
+// escaping, with two more layers for forms (server-rendered tokens, below).
 var _ACTION_DENY = {fetch: 1, refreshSection: 1, confirmDialog: 1, sessionExpired: 1,
-                    _submitAjaxForm: 1, ensureCsrfFields: 1};
+                    _submitAjaxForm: 1, ensureCsrfFields: 1, ajaxForm: 1, backupUpload: 1};
+var _R_HELPER = new RegExp('^_r[0-9]');
 function _actionFn(name){
-  if (typeof name !== 'string' || !name || _ACTION_DENY[name]) return null;
+  if (typeof name !== 'string' || !name || _ACTION_DENY[name] || _R_HELPER.test(name)) return null;
   if (!Object.prototype.hasOwnProperty.call(window, name)) return null;
   var fn = window[name];
   if (typeof fn !== 'function') return null;
@@ -221,27 +225,24 @@ window.addEventListener('pageshow', function(ev){
   document.addEventListener('visibilitychange', function(){
     if (!document.hidden && Date.now() - _lastPing > 60000) _pingAuth();
   });
-  // Give every POST form under `root` its hidden token. Exported and IDEMPOTENT, because
-  // DOMContentLoaded is not the only time a form appears: refreshSection() re-fetches the page and
-  // swaps a container's innerHTML, and what comes back is the SERVER-rendered markup — without the
-  // field this added to the live DOM. The uninstall form on the host page is inside such a
-  // container (importExisting refreshes #host-servers-card) and is submitted with form.submit(),
-  // a native POST that carries no header — so after importing servers, Uninstall failed CSRF.
-  // Measured in a browser against this file: token present on load, null after the swap.
+  // Give ONE POST form, built or about to be sent by a panel script, its hidden token if it has none.
+  // Every POST form a template draws carries the token the server rendered into it (also after
+  // refreshSection swaps a region in: that markup is the server's too), so nothing here walks the
+  // page. It used to: on load and after every swap it gave EVERY POST form in the document a
+  // token, an injected <form> included, which a native submit then sent as a CSRF-valid request
+  // (`form-action 'self'` allows any route). A script passes the form it is about to submit.
   //
-  // The fetch wrapper above covers everything submitted with fetch(); this covers the rest, and
-  // form.submit() fires no 'submit' event, so a delegated listener could not have.
-  window.ensureCsrfFields = function(root){
-    (root || document).querySelectorAll('form').forEach(function(f){
-      var m = (f.getAttribute('method') || 'GET').toUpperCase();
-      if (m === 'POST' && !f.querySelector('input[name="csrf_token"]')) {
-        var i = document.createElement('input');
-        i.type = 'hidden'; i.name = 'csrf_token'; i.value = window.CSRF;
-        f.appendChild(i);
-      }
-    });
+  // The fetch wrapper above covers everything submitted with fetch(); this covers form.submit(),
+  // which fires no 'submit' event, so a delegated listener could not have.
+  window.ensureCsrfFields = function(form){
+    if (!form || form.tagName !== 'FORM') return;
+    var m = (form.getAttribute('method') || 'GET').toUpperCase();
+    if (m === 'POST' && !form.querySelector('input[name="csrf_token"]')) {
+      var i = document.createElement('input');
+      i.type = 'hidden'; i.name = 'csrf_token'; i.value = window.CSRF;
+      form.appendChild(i);
+    }
   };
-  document.addEventListener('DOMContentLoaded', function(){ window.ensureCsrfFields(document); });
 })();
 
 // Escape a string for safe interpolation into innerHTML — use this whenever a
@@ -554,10 +555,8 @@ window.refreshSection = function(sel, afterName){
 };
 // What a section swapped in from the server needs before its after-hook runs (refreshSection).
 function _sectionSwapped(cur){
-  // The swapped-in markup is what the SERVER rendered, so any POST form in it arrives without
-  // the hidden token — see ensureCsrfFields.
-  if (window.ensureCsrfFields) window.ensureCsrfFields(cur);
-  // ...and its timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
+  // The swapped-in markup is what the SERVER rendered, POST forms with their own tokens. Its
+  // timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
   // after an in-place refresh (saving a user) the whole Last login column switched to UTC.
   if (window.localizeTimes) window.localizeTimes(cur);
   // ...and an element marked data-start-hidden arrives with the mark, which start_hidden.js
@@ -566,7 +565,16 @@ function _sectionSwapped(cur){
   // content option). Left as the mark, CSS keeps it hidden and display '' cannot show it.
   if (window.applyStartHidden) window.applyStartHidden(cur);
 }
+// Whether `form` carries a token the server rendered into it. Only a template's form does: markup
+// injected into a page cannot know the token, and an ajax form is sent with the fetch wrapper's
+// header, which would make any injected <form class="ajax-form"> a CSRF-valid request on a click.
+// A field holding a wrong value is refused by the server, which reads the form's field first.
+function _serverForm(form){
+  var t = form && form.querySelector ? form.querySelector('input[name="csrf_token"]') : null;
+  return !!(t && t.value);
+}
 function _submitAjaxForm(form){
+  if (!_serverForm(form)) return;
   var btn = form.querySelector('[type="submit"]'), orig = btn ? btn.innerHTML : '';
   // nosemgrep - a static spinner in, and the button's own saved markup back out on restore.
   if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }

@@ -641,7 +641,7 @@ if _out53 is not None:
     check("install page: a refreshed game list replaces the game column and re-greys it for the chosen "
           "host, instead of reloading the page (which discarded the host and name chosen)",
           _out53 == {"reloads": 0, "swaps": [["#game-col", "filterGamesForHost"],
-                                             ["#game-picker", "_r37d_gameTilesRefreshed"]]}, repr(_out53))
+                                             ["#game-picker", "gameTilesRefreshed"]]}, repr(_out53))
 check("install page: ...and the column it swaps is there to swap",
       'id="game-col"' in _read53(_TPL53, "install_server.html"))
 

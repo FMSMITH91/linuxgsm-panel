@@ -156,9 +156,12 @@ def _route_editor49(a_client, sid):
               _refused49(body) and _read49(rel) == before, repr((code, body, _read49(rel))))
     _reset49()
     code, body = _post49(a_client, url + "/file", json={"path": "cfglink/common.cfg", "content": _ON49})
+    # In the "is a LinuxGSM config" words (review 1124): the "the host could not be asked" refusal holds
+    # the same console phrase, so a host probe that broke passed as the host resolving the link.
     check("raw editor: a LinuxGSM cfg reached through a symlinked folder is refused too (the host "
           "resolves it)",
-          _refused49(body) and _read49("lgsm/config-lgsm/%s/common.cfg" % _SELF49) == "",
+          _refused49(body) and "can't be saved into a LinuxGSM config" in (body.get("message") or "")
+          and _read49("lgsm/config-lgsm/%s/common.cfg" % _SELF49) == "",
           repr((code, body)))
 
 

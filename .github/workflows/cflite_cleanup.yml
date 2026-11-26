@@ -36,6 +36,13 @@ name: ClusterFuzzLite artifact cleanup
 #   its check lands on main's head, where the panel's update gate and deploy.yml read a failure as
 #   main being broken, and a GitHub API hiccup every six hours is not that. Everything it finds or
 #   cannot do is a ::warning::; the fuzz jobs' own guards still refuse a foreign artifact.
+#
+# EGRESS, AND A MANUAL RUN ON ANOTHER BRANCH
+#   Harden-Runner blocks every host but api.github.com, the one host its runs call (github.com is
+#   on every list). A host missing from it fails the run on main, so a change to it is tried first
+#   by a manual run on its branch (gh workflow run cflite_cleanup.yml --ref <branch>). Such a run
+#   lists and judges every artifact as main's does and deletes nothing ("would delete"): deleting
+#   stays main's alone.
 on:
   schedule:
     - cron: '29 */6 * * *'
@@ -49,18 +56,23 @@ jobs:
     name: delete fuzz artifacts not made on main here
     runs-on: ubuntu-26.04
     timeout-minutes: 10
-    if: github.repository == 'FMSMITH91/linuxgsm-panel' && github.ref == 'refs/heads/main'
+    if: github.repository == 'FMSMITH91/linuxgsm-panel' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     permissions:
       actions: write   # list and delete artifacts; nothing is downloaded or checked out
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
       - name: Delete every cifuzz-* artifact that provably came from elsewhere, and old main builds
         env:
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
+          # A manual run on another branch deletes nothing (see EGRESS at the top).
+          DRY_RUN: ${{ github.ref != 'refs/heads/main' }}
         run: |
           set -uo pipefail
           if ! rows="$(gh api --paginate --jq '
@@ -92,6 +104,10 @@ jobs:
             [ -n "${name}" ] || continue
             if ! [[ "${id}" =~ ^[0-9]+$ ]]; then
               echo "::warning::artifact ${name} has no numeric id (${id}); nothing deleted for it."
+              continue
+            fi
+            if [ "${DRY_RUN:-}" = "true" ]; then
+              echo "would delete ${name} (artifact ${id}, run ${run}, branch ${branch}, head repository ${head}, created ${created}); not on main, so nothing is deleted"
               continue
             fi
             if [ "${head}" = "${repo}" ] && [ "${branch}" = "main" ]; then

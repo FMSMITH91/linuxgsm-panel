@@ -1182,16 +1182,36 @@ _root = _UNIT_ROOT
 # `x_clock = datetime.utcnow()`. Now every call of either helper counts unless its receiver is
 # panel.core.clock itself: `clock`, `_clock`, `_clock212`, or `mod("panel.core.clock")`. Comments and
 # strings that name the old spelling are not calls.
+# Called or not (review 1124): `db.Column(db.DateTime, default=datetime.utcnow)` hands the helper to
+# SQLAlchemy, which calls it on every insert, and `now = datetime.utcnow` calls it later; both count.
+# A receiver that is a panel module imported under a name (`import panel.routes.x as _m`, then
+# `_m.utcnow`) holds clock's helper as that module imported it, never datetime's.
 _R35T_DEPRECATED_UTC = ("utc" + "now", "utc" + "fromtimestamp")
 _R35T_CLOCK_RECV = _re.compile(r"(?:^|\.)_?clock\d*$|\(['\"]panel\.core\.clock['\"]\)$")
 
 
+def _r35t_panel_bound(node):
+    """The names one import statement binds to a panel module (none for any other node)."""
+    if isinstance(node, _smg_ast.Import):
+        return {_a.asname for _a in node.names if _a.asname and _a.name.startswith("panel.")}
+    if isinstance(node, _smg_ast.ImportFrom) and (node.module or "").startswith("panel"):
+        return {_a.asname or _a.name for _a in node.names}
+    return set()
+
+
+def _r35t_panel_modules(tree):
+    """The names `tree` binds to a panel module by import."""
+    return set().union(*(_r35t_panel_bound(_n) for _n in _smg_ast.walk(tree)))
+
+
 def _r35t_old_utc_calls(text):
-    """Line numbers of the calls in `text` to datetime's deprecated UTC helpers (clock's are not)."""
-    return [_n.lineno for _n in _smg_ast.walk(_smg_ast.parse(text))
-            if isinstance(_n, _smg_ast.Call) and isinstance(_n.func, _smg_ast.Attribute)
-            and _n.func.attr in _R35T_DEPRECATED_UTC
-            and not _R35T_CLOCK_RECV.search(_smg_ast.unparse(_n.func.value))]
+    """Line numbers of the references in `text` to datetime's deprecated UTC helpers (clock's are not)."""
+    tree = _smg_ast.parse(text)
+    own = _r35t_panel_modules(tree)
+    return [_n.lineno for _n in _smg_ast.walk(tree)
+            if isinstance(_n, _smg_ast.Attribute) and _n.attr in _R35T_DEPRECATED_UTC
+            and _smg_ast.unparse(_n.value) not in own
+            and not _R35T_CLOCK_RECV.search(_smg_ast.unparse(_n.value))]
 
 
 _offenders = []
@@ -1210,10 +1230,16 @@ _r35t_utc_ctl = [_r35t_old_utc_calls(_c) for _c in (
     "_dt." + _R35T_DEPRECATED_UTC[0] + "()",
     "a = mod('panel.core.clock')." + _R35T_DEPRECATED_UTC[0] + "()",
     "b = _clock212." + _R35T_DEPRECATED_UTC[0] + "()\nc = clock." + _R35T_DEPRECATED_UTC[0] + "()",
-    "# datetime." + _R35T_DEPRECATED_UTC[0] + "()\nx = 'datetime." + _R35T_DEPRECATED_UTC[0] + "()'")]
+    "# datetime." + _R35T_DEPRECATED_UTC[0] + "()\nx = 'datetime." + _R35T_DEPRECATED_UTC[0] + "()'",
+    "created = db.Column(db.DateTime, default=datetime." + _R35T_DEPRECATED_UTC[0] + ")",
+    "f = _dt." + _R35T_DEPRECATED_UTC[1] + "\ny = f(0)",
+    "g = clock." + _R35T_DEPRECATED_UTC[0],
+    "import panel.routes.users as _m\nh = _m." + _R35T_DEPRECATED_UTC[0] + "\n_m." + _R35T_DEPRECATED_UTC[0] + " = h")]
 check("...the deprecated-UTC reader takes a call on datetime beside a name holding 'clock', and not "
       "panel.core.clock's own nor a comment or string naming the old spelling (control)",
-      _r35t_utc_ctl == [[1], [1], [1], [], [], []], repr(_r35t_utc_ctl))
+      _r35t_utc_ctl[:6] == [[1], [1], [1], [], [], []], repr(_r35t_utc_ctl))
+check("...and takes the helper passed uncalled (a column default, an alias called later), not clock's "
+      "nor a panel module's own (control)", _r35t_utc_ctl[6:] == [[1], [1], [], []], repr(_r35t_utc_ctl))
 check("no module calls the datetime UTC helpers that are scheduled for removal",
       not _offenders, ", ".join(_offenders[:5]))
 

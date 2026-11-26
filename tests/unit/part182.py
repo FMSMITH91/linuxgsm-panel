@@ -45,9 +45,16 @@ try:
         _fh182.write("tailscale version\n")
     _glued182 = {_s: _tn182.shell_text(["bash", "-c", _s % _f182], {}) for _s in (
         'x;bash -c "sh %s; true"', "x;bash -c 'sh %s'", "echo|bash -c 'sh %s'", "(bash -c 'sh %s')")}
+    # ...and a shell word with its stdin redirect glued on (review 1124): shlex keeps `bash<f.sh` one word.
+    _redir182 = {_s: _tn182.shell_text(["bash", "-c", _s % _f182], {}) for _s in (
+        "bash<%s", "sh< %s", "sudo -u x sh<%s", "true; bash <%s")}
 finally:
     _shutil182.rmtree(_tmp182, ignore_errors=True)
 check("unit suite guard: a nested shell glued to a separator (x;bash, echo|bash, a subshell) has the script "
       "file its -c script runs read",
       all("tailscale version" in (_t or "") for _t in _glued182.values()),
       repr({_k: (_v or "")[-160:] for _k, _v in _glued182.items()}))
+check("unit suite guard: a nested shell's script file is read when its stdin redirect is glued to the shell word "
+      "(bash<f, sh< f, behind sudo), as when it is spaced (control)",
+      all("tailscale version" in (_t or "") for _t in _redir182.values()),
+      repr({_k: (_v or "")[-160:] for _k, _v in _redir182.items()}))

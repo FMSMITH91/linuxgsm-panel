@@ -1350,9 +1350,18 @@ def _fmt_size(nbytes):
 def backup_disk_info(server, user):
     """Free/total bytes of the filesystem that holds this game user's LinuxGSM backups.
 
-    (~/lgsm/backup lives under the home dir.) Best-effort — returns zeros on error.
+    Measured on ~/lgsm/backup itself, not the home: an operator moves backups to a bigger disk by
+    making that folder a symlink (prune_game_backups follows it with `find -H`), and df follows
+    the link. Measuring the home then read the wrong disk, so the headroom prune deleted backups
+    for space it never freed and the pre-flight check refused every backup. Falls back to the home
+    while the folder does not exist yet (the first backup creates it there). Run as the game
+    account, which can enter a 0700 home. Best-effort: returns zeros on error.
     """
-    out, _, _ = _core.run_command(server, "df -PB1 %s" % _core._quote("/home/%s" % user), timeout=15, sudo=False)
+    if not _core.game_idents_ok(user):
+        return {"free": 0, "total": 0}
+    home = "/home/%s" % user
+    sh = 'd=%s; [ -d "$d" ] || d=%s; df -PB1 -- "$d"' % (_core._quote(home + "/lgsm/backup"), _core._quote(home))
+    out, _, _ = _core.shell_as_game_user(server, user, sh, timeout=15)
     lines = [ln for ln in (out or "").splitlines() if ln.strip()]
     if len(lines) >= 2:
         parts = lines[-1].split()

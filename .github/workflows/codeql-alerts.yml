@@ -40,6 +40,15 @@ name: Code-scanning alerts
 #   even been judged. The verdict is therefore POSTED, as a check run named "Open code-scanning
 #   alerts", on the head_sha of the run that triggered this — and the gate requires that check to
 #   be present. The job itself is named differently, and the gate ignores it (_CI_IGNORE).
+#
+# EGRESS, AND A MANUAL RUN ON ANOTHER BRANCH
+#   Harden-Runner blocks every host but the ones this job calls (read from its own runs' logs):
+#   api.github.com for the API and github.com for the checkout. A workflow_run job runs main's copy
+#   of this file, so a change to that list is tried first by a manual run on its branch:
+#     gh workflow run codeql-alerts.yml --ref <branch>
+#   Such a run judges MAIN (its head commit, every call the gate makes) and posts no verdict: a
+#   check on main's head from a branch's copy of this file would be read by the update gate as
+#   main's own. A manual run on main judges and posts, as before.
 on:
   workflow_run:
     workflows: [ "CodeQL", "Security scan (code)", "Security scan (workflows)" ]
@@ -108,7 +117,10 @@ jobs:
       - name: Harden Runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
-          egress-policy: audit
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
 
       - name: Resolve which ref to judge
         id: ref
@@ -121,8 +133,29 @@ jobs:
           # step takes it the same way). With the fallback, an empty head_branch read as main.
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           WR_SHA: ${{ github.event.workflow_run.head_sha }}
+          # Where a manual run was started, and its commit (see EGRESS at the top).
+          RUN_REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # A manual run started on another branch judges main read-only: main's head commit, and
+          # no verdict posted (post=false).
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${RUN_REF:-}" != "refs/heads/main" ]; then
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+            if ! [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::could not read main's head commit; nothing was judged."
+              exit 1
+            fi
+            {
+              echo "ref=refs/heads/main"
+              echo "label=\`main\`"
+              echo "sha=${sha}"
+              echo "post=false"
+              echo "skip=false"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice::started on ${RUN_REF:-?}: judging main at ${sha}; no verdict is posted."
+            exit 0
+          fi
           # The job's `if` compared head_branch with 'main' the way GitHub compares strings:
           # IGNORING CASE, and by SHORT name. So a branch `Main`, or a tag `main` or `MAIN`, pushed
           # with a commit carrying its own workflow named "CodeQL", passed it and was judged as
@@ -139,6 +172,8 @@ jobs:
           {
             echo "ref=refs/heads/${WR_BRANCH}"
             echo "label=\`${WR_BRANCH}\`"
+            echo "sha=${WR_SHA:-${RUN_SHA:-}}"
+            echo "post=true"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
 
@@ -201,9 +236,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF: ${{ steps.ref.outputs.ref }}
           LABEL: ${{ steps.ref.outputs.label }}
-          # The commit being judged: the triggering run's head, or this run's own commit when run
-          # by hand.
-          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # The commit being judged: the triggering run's head, this run's own commit when run by
+          # hand on main, or main's head when run by hand elsewhere (the ref step's choice).
+          SHA: ${{ steps.ref.outputs.sha }}
           # What triggered this (push or schedule; empty on a manual run), and that run's workflow
           # file: a scheduled run re-analyses with that one workflow only.
           WR_EVENT: ${{ github.event.workflow_run.event }}
@@ -276,7 +311,8 @@ jobs:
       # unjudged, where a failing check says why.
       - name: Post the verdict on the judged commit
         if: >-
-          always() && steps.ref.outputs.skip != 'true' && steps.settled.outputs.judge == 'true'
+          always() && steps.ref.outputs.skip != 'true' && steps.settled.outputs.judge == 'true' &&
+          steps.ref.outputs.post == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}

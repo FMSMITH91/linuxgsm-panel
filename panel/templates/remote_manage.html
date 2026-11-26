@@ -1135,7 +1135,7 @@
             {% if current_user.is_superadmin or has_permission('uninstall_server') %}
             <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}"
                   class="uninstall-form d-inline" data-server-name="{{ gs.name }}" data-server-short="{{ gs.short_name }}"
-                  data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+                  data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="button" class="btn btn-sm btn-outline-danger uninstall-trigger" title="Delete server and all data"><i class="bi bi-trash"></i> Uninstall</button>
             </form>
             {% endif %}

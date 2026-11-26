@@ -10,7 +10,7 @@
   <div class="card-body">
     <form method="POST" action="{{ url_for('logout') }}" id="signout-form"
           data-hashes="{{ current_user.push_subscriptions|map(attribute='endpoint_hash')|join(',') }}"
-          data-scope="{{ url_for('static', filename='push/') }}">
+          data-scope="{{ url_for('static', filename='push/') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="push_endpoint" value="" id="signout-endpoint">
       <div class="d-none" id="signout-push">
         <p class="small mb-2">Alerts on this device keep arriving after you sign out.</p>

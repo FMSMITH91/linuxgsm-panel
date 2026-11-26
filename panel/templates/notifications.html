@@ -13,7 +13,7 @@
 {% endcall %}
 
 <form method="POST" action="{{ url_for('notifications_save') }}"
-      data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}">
+      data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row">
     <!-- Telegram -->
     <div class="col-lg-6 col-xl-4 mb-3">

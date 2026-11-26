@@ -420,7 +420,7 @@ check("reuse wiring: (control) the job reader sees an id with a capital, a digit
       "one whose key line ends in a comment",
       _ctl_jobs153 == _ci_jobs153 + ["py_X9", "py_Y8"], repr(_ctl_jobs153))
 # The checks legs, coverage and js coverage run in parts (ci.yml says why); the name main must carry is the verdict job's,
-# which does no work of its own to reuse, and passes only when every part passed (part294 holds that).
+# which does no work of its own to reuse, and passes only when every part passed (part303 holds that).
 _VERDICTS153 = {"checks-verdict": ("checks", "checks (${{ matrix.os }} · py${{ matrix.python }})"),
                 "coverage-verdict": ("coverage", "coverage"), "js-coverage-verdict": ("js-coverage", "js coverage")}
 _carried153 = {_j: _n for (_w, _j), (_n, _s) in _REUSERS153.items() if _w == "ci.yml"}

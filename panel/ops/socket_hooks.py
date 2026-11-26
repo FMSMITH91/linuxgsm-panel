@@ -16,6 +16,7 @@ So there is exactly ONE disconnect handler in this app (panel/routes/server_file
 else that needs to clean up per-socket registers a hook here. tests/unit/part06.py fails the build
 if a second one ever appears.
 """
+import functools
 import logging
 import time
 
@@ -60,6 +61,28 @@ def run_disconnect_hooks(sid):
             fn(sid)
         except Exception:
             _log.warning("disconnect hook %s failed", getattr(fn, "__name__", fn), exc_info=True)
+
+
+def one_argument(handler):
+    """Make a Socket.IO event handler take at most one argument; an event sent with more is dropped.
+
+    python-socketio calls a handler with every argument the client put into the event, so
+    `2["join_console",{},{}]` called a one-parameter handler with two and raised TypeError, which
+    flask-socketio logged with a full traceback, one per packet. A browser page of the panel sends
+    one payload per event, so more than one is a client that is not the page: the event is refused
+    without a word to it, and one line a minute says so, naming the event (the handler's own name,
+    never the client's text). OWASP Error Handling Cheat Sheet: no stack traces for a client's
+    mistake; Logging Cheat Sheet, "Attacks on Logs": logging must not be a way to fill the log.
+    """
+    @functools.wraps(handler)
+    def held(*args):
+        if len(args) > 1:
+            from flask import request
+            _log_limited("shape", "socket: dropped an event for %s from %s: it carried %d arguments",
+                         handler.__name__, _who(request.environ), len(args))
+            return None
+        return handler(*args)
+    return held
 
 
 # ── the event budget ──────────────────────────────────────────────────────────────────────────────

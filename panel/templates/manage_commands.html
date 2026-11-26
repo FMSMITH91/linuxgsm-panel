@@ -147,7 +147,7 @@
             class="ajax-form d-inline" data-ajax-refresh="#commands-list"
             data-confirm="{{ t('Delete command “%s”? Groups using it lose access.')|format(cmd.name) }}"
             data-confirm-title="Delete Command" data-confirm-class="btn-danger"
-            data-confirm-label="Delete" data-confirm-icon="trash">
+            data-confirm-label="Delete" data-confirm-icon="trash"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
       </form>
     </div>
@@ -155,7 +155,7 @@
   <div class="collapse" id="edit-cmd-{{ cmd.id }}">
     <div class="card-body border-top border-panel">
       <form method="POST" action="{{ url_for('edit_command', cmd_id=cmd.id) }}"
-            class="ajax-form" data-ajax-refresh="#commands-list" data-ajax-reset="off">
+            class="ajax-form" data-ajax-refresh="#commands-list" data-ajax-reset="off"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {{ command_fields(cmd, 'e' ~ cmd.id) }}
         <button type="submit" class="btn btn-primary btn-sm mt-2"><i class="bi bi-save"></i> Save</button>
       </form>
@@ -177,7 +177,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <form method="POST" action="{{ url_for('add_command') }}"
-            class="ajax-form" data-ajax-refresh="#commands-list">
+            class="ajax-form" data-ajax-refresh="#commands-list"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-terminal-plus"></i> Add Custom Command</h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>

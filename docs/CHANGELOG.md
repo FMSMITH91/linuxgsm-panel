@@ -28,6 +28,22 @@ dated section below lists what that day's releases changed, newest first; the nu
   the address automatically. Panel Server warns while the panel listens beyond this machine and your tailnet;
   switch Panel binding to Localhost only to fix an existing install.
 
+### Fixed
+
+- **Backups check the right disk.** When ~/lgsm/backup is a link to another disk, the free-space check now
+  measures that disk, so backups are no longer deleted and then refused for space on the home disk.
+- **One backup of a server at a time.** The maintenance menu's Backup is refused while another backup of the
+  same server runs, and a backup no longer dumps a database that is being restored.
+- **Restores report what happened.** A restore interrupted while tidying up is reported as completed, and
+  retrying an archive whose undo failed is refused until the set-aside files are moved.
+- **Kick and Ban say when the console could not be read.** A Source Kick by a name two players share is
+  refused instead of removing whichever comes first.
+- **Settings saves keep the rest of the file.** Saving a setting no longer rewrites other lines (accented
+  text, unusual line separators), and the config form no longer offers a value a later line overrides.
+- **Clearer add-on and database messages.** BlueMap keeps its old client file until an update's new image is
+  in, B3 says when only its build changed, B3 Kick and Warn no longer mistake one player's name for a shorter
+  one inside it, and the database browser no longer points viewers without the SQL box at it.
+
 ### Security
 
 - **B3's image installs Debian's security updates when it is built.** A compression library in the image had a
@@ -59,6 +75,12 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **Sign-in takes the same time whether or not the account exists.** Accounts still holding a password hash
   from before Argon2id are wrapped in Argon2id when the panel updates, and every sign-in does the same hashing
   work while any remain.
+- **Every form carries its own security token from the server.** Markup injected into a page can no longer
+  submit a form as you.
+- **Database password resets wait their turn.** A password reset on the Databases tab is refused while a
+  restore, dump or delete of the same database, or another reset, is running, and the refusal is audited.
+- **Panel updates wait for the secret and dependency scans.** A panel offers a new version only after its
+  secret scan and dependency vulnerability audit have passed, not just CI and CodeQL.
 
 ## [2026.11.24] — 2026-11-24
 

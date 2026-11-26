@@ -3076,8 +3076,10 @@ def _db_harden_remote(a):
 _DB_IMPORT_SH = (
     'set -o pipefail; umask 077; f=$(mktemp) || exit 1; trap \'rm -f -- "$f"\' EXIT; '
     '{ IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && printf "%%s\\n" "$l1" "$l2" "$l3"; } '
-    '> "$f" || exit 2; z="$1/%s/$2.sql.gz"; '
-    '[ -f "$z" ] && [ ! -L "$z" ] || { echo "panel-db: no dump of that database in the server\'s files"; exit 4; }; '
+    '> "$f" || exit 2; d="$1/%s"; z="$d/$2.sql.gz"; '
+    # The folder as well as the file: the helper opens both O_NOFOLLOW, and db-sizes reads a linked folder
+    # as no dump, so a ~/panel-db-dumps linked elsewhere is no dump here too.
+    '[ ! -L "$d" ] && [ -f "$z" ] && [ ! -L "$z" ] || { echo "panel-db: no dump of that database in the server\'s files"; exit 4; }; '
     '[ "$(stat -c %%s -- "$z")" -le %d ] || { echo "panel-db: the dump is larger than 2 GiB"; exit 4; }; '
     'sb=; case "$("$4" --help 2>/dev/null)" in *--sandbox*) sb=--sandbox;; esac; '
     "gzip -dc -- \"$z\" | sed %s | \"$4\" --defaults-extra-file=\"$f\" $sb --protocol=tcp "

@@ -67,7 +67,7 @@ jobs:
       matrix:
         os: [ ubuntu-22.04, ubuntu-24.04, ubuntu-26.04 ]
         # tests/unit/shard.py evens the four shards out by measured time; "suites" is the rest of
-        # tools/run-tests.sh (RUN_TESTS_UNIT=skip). tests/unit/part294 holds this list to 1/4..4/4.
+        # tools/run-tests.sh (RUN_TESTS_UNIT=skip). tests/unit/part303 holds this list to 1/4..4/4.
         part: [ unit 1/4, unit 2/4, unit 3/4, unit 4/4, suites ]
         include:
           # Each Ubuntu LTS the panel is expected to run on, paired with the Python that release
@@ -446,7 +446,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `id` names the part's data artifact (an artifact name cannot hold "/"). tests/unit/part294
+        # `id` names the part's data artifact (an artifact name cannot hold "/"). tests/unit/part303
         # holds the unit parts to 1/4..4/4, as in the checks legs.
         include:
           - part: unit 1/4

@@ -804,7 +804,7 @@
         {% set _can_refresh_cmds = current_user.is_superadmin or has_permission('moderate_server')
              or has_permission('send_command') or has_permission('manage_servers') %}
         {% if _can_refresh_cmds %}
-        <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" class="d-inline">
+        <form method="POST" action="{{ url_for('refresh_server_commands', server_id=server.id) }}" class="d-inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-1" title="Reload command list from the server">
             <i class="bi bi-arrow-repeat"></i>
           </button>

@@ -199,8 +199,10 @@ check("run-tests: RUN_TESTS_UNIT=skip runs the static checks and every other sui
 _rsd85 = _checkout85()
 _rs85 = _bash85("set -e\nPY=%s\nRT_ROOT=\"$PWD\"\n%srun_suite x %s"
                 % (sys.executable, _RUN_SUITE85, _OK_SUITE85), _rsd85)
+# "exit 97" is _fn85's answer for a function it did not find (review 1124): a nonzero status alone
+# passed with run_suite renamed or gone.
 check("run-tests: run_suite refuses to run in the checkout itself rather than delete its "
-      "data/panel.db", _rs85[0] != 0
+      "data/panel.db", _rs85[0] != 0 and "exit 97" not in _RUN_SUITE85
       and sorted(os.listdir(os.path.join(_rsd85, "data"))) == ["panel.db", "panel.db.backup"],
       repr(_rs85))
 
@@ -247,7 +249,8 @@ _ltr85 = {
 }
 check("run-tests: a lane copy that failed (no scratch directory, a copy that did not complete) "
       "stops the run before any lane starts in it",
-      all(rc != 0 and "continued" not in out for rc, out in _ltr85.values()), repr(_ltr85))
+      "exit 97" not in _lt85 and all(rc != 0 and "continued" not in out for rc, out in _ltr85.values()),
+      repr(_ltr85))
 
 # Ctrl-C: every process in the process group gets SIGINT, as from a terminal. The lanes ignore
 # it (bash starts them so), so only run_lanes' own trap can stop them.

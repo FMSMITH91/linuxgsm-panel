@@ -9,7 +9,7 @@
         <h4 class="mb-0">Create Admin Account</h4>
       </div>
       <p class="text-secondary small">This will be the super admin account — full access to everything.</p>
-      <form method="POST">
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="step" value="admin_user">
         <div class="mb-3">
           <label class="form-label" for="setup-admin-username">Username</label>

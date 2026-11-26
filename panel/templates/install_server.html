@@ -43,7 +43,7 @@
           {# ...and data-ajax-after opens the corner progress widget the moment the install is
              accepted, rather than waiting for its next poll. #}
           data-ajax-after="watchInstallsNow"
-          class="row g-2 align-items-start ajax-form">
+          class="row g-2 align-items-start ajax-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="col-md-3">
         <label class="form-label" for="remote-select">Target Server</label>
         {# With ONE host there is nothing to choose: the placeholder is a required field whose
