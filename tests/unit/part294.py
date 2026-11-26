@@ -3,6 +3,9 @@
 1. The backup disk check measures the filesystem that holds ~/lgsm/backup (a symlink to another disk is
    how backups are moved), falling back to the home while the folder does not exist: the headroom prune
    and the pre-flight refusal no longer act on the home's free space.
+2. A backup's database dump (the sweep, Back up now and the Backup button all dump through
+   dump_for_backup) holds each database as the Databases tab's own dump does: one being restored is left
+   out and said, and a restore asked for while the backup dumps it is refused (409).
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -12,10 +15,14 @@ import os
 import shutil as _sh294
 import subprocess as _sp294  # nosec B404 - bash over this part's own scratch files
 import tempfile as _tf294
+from types import SimpleNamespace as _NS294
 
-from unit.part01 import check
-from unit.part12 import _p9_patch, _p9_restore_all
+from unit.part01 import check, eq
+from unit.part12 import P9_ADMIN, P9_HOST, _p9, _p9_arm, _p9_client, _p9_json, _p9_new_server, _p9_patch, _p9_restore_all
+from panel.core.config import encrypt_secret as _enc294
+from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, game as _game294
+from panel.routes import databases as _dbr294
 
 _TMP294 = _tf294.mkdtemp(prefix="p294-")
 
@@ -87,3 +94,63 @@ finally:
     _p9_restore_all()
 check("backup disk: an unsafe account name sends nothing and reads zeros",
       _disk294 == {"free": 0, "total": 0} and not _sent294, (_disk294, _sent294))
+
+
+# ── 2. A backup's database dump holds each database ───────────────────────────────────────────────
+def _db_rows294(sid, names):
+    with _p9.app_context():
+        rows = [_GD294(remote_id=P9_HOST, game_server_id=sid, name=n, secret=_enc294("Zp294" + "q" * 27),
+                       auth_plugin="mysql_native_password", max_conn=10, created_by="p294") for n in names]
+        _db294.session.add_all(rows)
+        _db294.session.commit()
+        return [r.id for r in rows]
+
+
+def _backup_dump294(sid, account):
+    with _p9.app_context():
+        return _dbr294.dump_for_backup(sid, _db294.session.get(_RS294, P9_HOST), account)
+
+
+_bd294 = {}
+try:
+    _p9_arm(who="part294")
+    _sid294 = _p9_new_server(P9_HOST, "p294db", "pmc", 25594, name="p294 db")
+    _rid294, _rid2_294 = _db_rows294(_sid294, ("gs_p294a", "gs_p294b"))
+    _api294 = "/api/server/%d/databases/%d" % (_sid294, _rid294)
+    _adm294 = _p9_client(P9_ADMIN)
+    _hd294 = _NS294(auth_mode="socket")
+    _p9_patch(_dbr294, "_restore_target", lambda gs, r: _hd294)
+    _p9_patch(_dbr294, "_host_row", lambda remote_id: _hd294)
+    _p9_patch(_dbr294, "game_account_write_refusal", lambda remote, user, **k: None)
+    _p9_patch(_dbr294, "_forget_data", lambda db_id: None)
+    _dumped294 = []
+
+    def _dump294(remote, hostdb, dest, account, names):
+        _dumped294.append(list(names))
+        if _bd294.pop("post_nested", False):
+            _bd294["nested"] = _adm294.post(_api294 + "/restore", json={"confirm": "gs_p294a"})
+        return True, ""
+
+    def _restore294(remote, hostdb, account, n, pw):
+        _bd294["during_restore"] = (_backup_dump294(_sid294, "p294db"), list(_dumped294))
+        return True, ""
+    _p9_patch(_dbr294._dbs, "dump", _dump294)
+    _p9_patch(_dbr294._dbs, "restore", _restore294)
+    _bd294["restore"] = _adm294.post(_api294 + "/restore", json={"confirm": "gs_p294a"})
+    _dumped294.clear()
+    _bd294["post_nested"] = True
+    _bd294["alone"] = _backup_dump294(_sid294, "p294db")
+    _bd294["alone_dumped"] = list(_dumped294)
+finally:
+    _p9_restore_all()
+_note294, _while294 = _bd294.get("during_restore") or (None, None)
+check("backup dump: a database being restored is left out of the backup's dump and said",
+      _while294 == [["gs_p294b"]] and "gs_p294a is being dumped, restored or deleted right now." in str(_note294 or ""),
+      (_note294, _while294))
+eq("backup dump: the restore it overlapped still completes", getattr(_bd294.get("restore"), "status_code", 0), 200)
+_nested294 = _bd294.get("nested")
+check("backup dump: a restore asked for while the backup dumps that database is refused (409, being dumped)",
+      _nested294 is not None and _nested294.status_code == 409
+      and "being dumped" in _p9_json(_nested294).get("message", ""), _nested294)
+check("backup dump (control): with nothing else running, every database is dumped in one call and nothing is said",
+      _bd294.get("alone") is None and _bd294.get("alone_dumped") == [["gs_p294a", "gs_p294b"]], _bd294)
