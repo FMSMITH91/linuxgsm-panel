@@ -10,7 +10,7 @@
   found, and each finds the break it exists for when the code it guards is broken.
 * tools/sbom.py writes CycloneDX 1.6 for the lockfiles, and sign-release.sh attaches it to the
   release it publishes (the whole script, on a local repository with a stand-in GitHub CLI).
-* docs/THREAT-MODEL.md answers the OWASP cheat sheet's four questions, covers the nine trust
+* docs/THREAT-MODEL.md answers the OWASP cheat sheet's four questions, covers the eleven trust
   boundaries, and every file it points at exists; SECURITY.md links to it.
 
 Nothing here touches the network or the checkout's data/.
@@ -440,11 +440,11 @@ else:
 _tm223 = _read223("docs", "THREAT-MODEL.md")
 _ptr223 = sorted({p for p in _re223.findall(r"`((?:panel|tools|tests|docs|\.github)/[A-Za-z0-9_./-]+)`", _tm223)})
 _missing223 = [p for p in _ptr223 if not os.path.exists(os.path.join(_root, p.rstrip("/")))]
-check("threat model: docs/THREAT-MODEL.md answers the four questions, covers TB1-TB9 with STRIDE tables, says "
+check("threat model: docs/THREAT-MODEL.md answers the four questions, covers TB1-TB11 with STRIDE tables, says "
       "the response to each residual risk, and every file it points at exists; SECURITY.md links to it",
       all(q in _tm223 for q in ("What are we working on?", "What can go wrong?", "What are we going to do about it?",
                                 "Did we do a good enough job?"))
-      and all("### TB%d:" % i in _tm223 for i in range(1, 10)) and _tm223.count("| STRIDE |") == 9
+      and all("### TB%d:" % i in _tm223 for i in range(1, 12)) and _tm223.count("| STRIDE |") == 11
       and "## Residual risks" in _tm223 and len(_ptr223) >= 25 and not _missing223
       and "](../docs/THREAT-MODEL.md)" in _read223(".github", "SECURITY.md"),
       repr((_missing223, len(_ptr223))))
