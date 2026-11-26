@@ -67,8 +67,7 @@ F2B = "fail2ban-client"
 SYSTEMCTL = "systemctl"
 
 # The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
-UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager",
-         "unattended-upgrades")
+UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager", "unattended-upgrades")
 
 # The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
 # separate constant from UNITS: UNITS is what the panel may start/stop/reload on the host (ssh,
@@ -996,7 +995,6 @@ def _choice(*allowed):
     return check
 
 
-
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv of the real tool, stdin or None)
 #
@@ -1919,8 +1917,7 @@ def _f2b_log_lines_remote(a):
 
 
 # The files ufw-stored-rules prints, in order (the helper's FWA_STORED_PATHS).
-FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules",
-                    "/etc/ufw/user6.rules")
+FWA_STORED_PATHS = ("/etc/default/ufw", "/etc/ufw/ufw.conf", "/etc/ufw/user.rules", "/etc/ufw/user6.rules")
 
 
 # ufw handles IPv6 only where the kernel has it (ufw's backend.use_ipv6 tests this path exists). The
@@ -3177,8 +3174,7 @@ _REMOTE_ACTIONS.update({
 })
 DB_VERBS = frozenset(v for v in _ARGV if v.startswith("db-"))
 # The website verbs (privileged_websites): the helper's own, local-only.
-_ARGV.update(_pws.argv(VerbError, _choice))
-LOCAL_ONLY_VERBS = LOCAL_ONLY_VERBS | frozenset(_pws.argv(VerbError, _choice))
+LOCAL_ONLY_VERBS = LOCAL_ONLY_VERBS | _pws.install(_ARGV, VerbError, _choice)
 
 
 
@@ -3262,8 +3258,6 @@ def helper_stdin(verb, args, secrets=None):
     """
     if verb in DB_VERBS:
         return db_doc(verb, args, secrets)
-    if verb in _pws.STDIN_VERBS:
-        return secrets if isinstance(secrets, str) else ""
     if verb in SECRET_STDIN:
         return check_args(verb, args)[SECRET_STDIN[verb][0]] + "\n"
     return stdin_for(verb)

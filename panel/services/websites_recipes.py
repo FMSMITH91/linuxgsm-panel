@@ -67,11 +67,20 @@ def values_for(site, db=None, admin=None, domains=()):
     if why:
         raise ValueError(why)
     names = [d for d in domains if _wp._DOMAIN_RE.match(d or "")]
-    domain = names[0] if names else ""
+    out = _db_values(db)
+    out.update(_site_values(site, admin, names))
+    return out
+
+
+def _db_values(db):
+    host, port = db.get("host", "127.0.0.1"), db.get("port", 3306)
     return {"db_name": db.get("name", ""), "db_user": db.get("user", ""), "db_password": db.get("password", ""),
-            "db_host": "%s:%s" % (db.get("host", "127.0.0.1"), db.get("port", 3306)),
-            "db_host_name": str(db.get("host", "127.0.0.1")), "db_port": str(db.get("port", 3306)),
-            "site_name": admin.get("site_name", site.name), "site_url": "https://%s" % domain if domain else "",
+            "db_host": "%s:%s" % (host, port), "db_host_name": str(host), "db_port": str(port)}
+
+
+def _site_values(site, admin, names):
+    domain = names[0] if names else ""
+    return {"site_name": admin.get("site_name", site.name), "site_url": "https://%s" % domain if domain else "",
             "domain": domain, "admin_user": admin.get("user", ""), "admin_email": admin.get("email", ""),
             "admin_password": admin.get("password", ""),
             "trusted_hosts": ", ".join("'^%s$'" % re.escape(d).replace("\\-", "-") for d in names)}

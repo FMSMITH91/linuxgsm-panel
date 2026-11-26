@@ -76,8 +76,13 @@ def _helper(remote, verb, args=(), timeout=120, doc=None):
         return False, ONLY_LOCAL
     if not _core.helper_present():
         return False, NO_HELPER
-    out, _err, rc = _core.run_privileged(remote, verb, list(args), timeout=timeout, secrets=doc)
-    return rc == 0, out or ""
+    if doc is None:
+        out, _err, rc = _core.run_privileged(remote, verb, list(args), timeout=timeout)
+        return rc == 0, out or ""
+    # A verb that reads a document on stdin (privileged_websites.STDIN_VERBS): the helper, that stdin.
+    from panel.security import privileged as _priv
+    out, err, rc = _core._exec_local_argv(_priv.helper_argv(verb, list(args)), timeout=timeout, stdin_text=doc)
+    return rc == 0, "\n".join(x for x in (out, err) if x).strip()
 
 
 def _as_site(remote, account, sh, timeout=120, stdin_text=None):

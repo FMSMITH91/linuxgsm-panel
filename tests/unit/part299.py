@@ -32,6 +32,7 @@ from unit.part01 import eq, _root
 from panel.ops.ssh_manager import firewall as _fw299
 from panel.ops.ssh_manager import websites as _smw299
 from panel.security import privileged as _priv299
+from panel.security import privileged_websites as _pws299
 from panel.services import addons_catalog as _cat299
 from panel.services import websites as _ws299
 from panel.services import websites_catalog as _wc299
@@ -661,8 +662,8 @@ def _s299_helper_guard2():
     eq("helper verbs: the website verbs are local-only in the panel's table (no shell form reproduces them), and "
        "the apply document travels on the helper's stdin",
        (sorted(v for v in _priv299.verbs() if v.startswith("website-") and v not in _priv299.LOCAL_ONLY_VERBS),
-        _priv299.helper_stdin("website-proxy-apply", ["start"], '{"caddyfile": "x"}'), "website-proxy-apply" in _H299.STDIN_VERBS),
-       ([], '{"caddyfile": "x"}', True))
+        sorted(_pws299.STDIN_VERBS), "website-proxy-apply" in _H299.STDIN_VERBS),
+       ([], ["website-proxy-apply"], True))
 
 
 # ── 5. the SSH layer and the firewall label ─────────────────────────────────────────────────────
@@ -715,6 +716,9 @@ def _s299_ports():
        (True, [("ufw-allow-from-port", ["203.0.113.0/24", "443", "tcp", "lgsmpanel-websites"]),
                ("ufw-allow-from-port", ["203.0.113.0/24", "80", "tcp", "lgsmpanel-websites"]),
                ("ufw-delete-allow-proto-port", ["tcp", "443"]), ("ufw-delete-allow-proto-port", ["tcp", "80"])]))
+
+
+def _s299_ports1b():
     core = _Core299(_UFW299)
     _with_core299(core, lambda: _smw299.ports_apply(None, _proxy299("public"), False))
     eq("ports (ports_apply): the last site disabled removes both labelled rules", [c for c in core.calls if c[0] != "ufw-status"],
@@ -893,5 +897,5 @@ for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s29
                  _s299_proxy_modes, _s299_proxy_rules, _s299_quadlet, _s299_servers, _s299_php, _s299_app_cache_tunnel,
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
-                 _s299_helper_guard2, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3):
+                 _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3):
     _step299()

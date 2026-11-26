@@ -5,14 +5,14 @@ the tunnel connector's own account; the web proxy's release is x.y.z with its sh
 Every one is performed by the helper itself (an empty argv) and is local-only: they write root-owned
 units, nftables and the proxy's binary, which no shell form reproduces, and ssh_manager.websites
 refuses a host without the helper in words, so none ever reaches the remote branch.
-privileged.py merges argv() into its table after VerbError and _choice exist.
+privileged.py merges them into its table (install) after VerbError and _choice exist.
 """
 import re
 
 ACCOUNT_RE = r"ws[1-9][0-9]{0,8}"
 TUNNEL_ACCOUNT = "lgsmtunnel"
-# Verbs whose document travels on the helper's stdin (run_privileged's `secrets`, as text): the
-# proxy configuration with any certificate an operator supplied.
+# The verb whose document travels on the helper's stdin: the proxy configuration with any certificate an
+# operator supplied. ssh_manager.websites runs it through the helper with that stdin itself.
 STDIN_VERBS = frozenset({"website-proxy-apply"})
 
 
@@ -41,3 +41,10 @@ def argv(error, choice):
         "website-quota-set": [account, quota],
     }
     return {verb: (checks, lambda a: [], None) for verb, checks in validators.items()}
+
+
+def install(table, error, choice):
+    """Merge argv() into the privileged `table`; the website verbs, which are all local-only."""
+    verbs = argv(error, choice)
+    table.update(verbs)
+    return frozenset(verbs)
