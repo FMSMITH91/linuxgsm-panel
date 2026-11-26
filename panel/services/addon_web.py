@@ -15,9 +15,11 @@ THE LINK (a capability URL). 32 random bytes from `secrets` (OWASP Session Manag
 (the id flask-login keeps: user, auth epoch, session), one server, one add-on and the port read for it
 when it was opened. On EVERY request the proxy asks again whether that sign-in is still live (signed
 out, password changed, session revoked or expired: refused) and whether the user still holds the
-permission and the server (Authorization Cheat Sheet, "Validate the Permissions on Every Request").
-It ends after the panel's own idle timeout without use, and at the panel's absolute session limit
-from its opening ("Session Expiration"). It is never logged (the panel's server keeps no access log,
+permission and the server (Authorization Cheat Sheet, "Validate the Permissions on Every Request"),
+and before a new connection whether the add-on still holds its port (read again every
+PORT_RECHECK_SECONDS). It ends when the add-on is stopped, updated, changed or removed, after the
+panel's own idle timeout without use, and at the panel's absolute session limit from its opening
+("Session Expiration"). It is never logged (the panel's server keeps no access log,
 and nothing here writes a path), and every answer says `Referrer-Policy: no-referrer`.
 
 WHAT IS PASSED ON. Request headers from an allowlist only: never the panel's cookies, Authorization,
@@ -62,6 +64,9 @@ MAX_HEAD = 64 * 1024
 QUEUE_SECONDS = 30
 # A WebSocket's link is asked again this often, so a sign-out or a removed permission ends it too.
 RECHECK_SECONDS = 30
+# Before a new connection to the add-on (a request, a WebSocket), its port is read again (Open's read: the
+# add-on running, its record's port, the server's own account listening) when the last read is older than this.
+PORT_RECHECK_SECONDS = 10
 # The cookie jar per link (the add-on's own sign-in).
 JAR_COOKIES = 32
 JAR_BYTES = 16 * 1024
@@ -131,6 +136,8 @@ _LINKS = {}            # sha256(token) -> Link
 _LOCK = threading.Lock()
 _GATES = {}            # (remote id, port) -> BoundedSemaphore
 _GATES_LOCK = threading.Lock()
+_VERIFIED = {}         # (server id, host id, add-on, port) -> time.monotonic() of the last read that found it the add-on's
+_VERIFY_LOCKS = {}     # the same key -> the lock one read at a time holds (the others wait, then use its answer)
 
 
 class Link:
@@ -144,6 +151,10 @@ class Link:
         self.user_key, self.user_id = user_key, user_id
         self.server_id, self.remote_id, self.addon_id, self.port = target
         self.lang, self.born, self.used, self.jar, self.refusal_logged = lang, now, now, {}, False
+
+    def target(self):
+        """(server id, host id, add-on, port): what the link was opened for."""
+        return self.server_id, self.remote_id, self.addon_id, self.port
 
 
 def _digest(token):
@@ -170,6 +181,8 @@ def mint(user_key, user_id, target, lang, idle, absolute, now=None):
         if len(_LINKS) >= MAX_LINKS:
             del _LINKS[min(_LINKS, key=lambda k: _LINKS[k].born)]
         _LINKS[_digest(token)] = Link(user_key, user_id, target, lang, now)
+    # Open read the port just now: the link's first requests need not read it again.
+    _VERIFIED[tuple(target)] = time.monotonic()
     return token
 
 
@@ -205,6 +218,45 @@ def revoke_user(user_id):
             del _LINKS[k]
 
 
+def revoke_server(server_id, addon_id):
+    """Forget every link to `server_id`'s `addon_id` page, and its port's last read.
+
+    Called when the add-on is stopped, updated, changed or removed: its port is free until it runs again,
+    and any local account may bind it meanwhile, so a link opened before must not reach whatever answers
+    there (OWASP Session Management Cheat Sheet, "Session Expiration": ended on the server).
+    """
+    with _LOCK:
+        for k in [k for k, v in _LINKS.items() if v.server_id == server_id and v.addon_id == addon_id]:
+            del _LINKS[k]
+    for key in [k for k in list(_VERIFIED) if k[0] == server_id and k[2] == addon_id]:
+        _VERIFIED.pop(key, None)
+
+
+def port_still_theirs(target, ask):
+    """Whether `target`'s port is still its add-on's: a read younger than PORT_RECHECK_SECONDS, else `ask()`.
+
+    `ask()` is Open's read again (True: the add-on runs and the server's account listens on that port);
+    it may raise ConnectionError (the host did not answer), which is passed on and caches nothing. One
+    read at a time per target: requests that arrive meanwhile wait for it and use its answer.
+    """
+    target = tuple(target)
+    with _GATES_LOCK:
+        lock = _VERIFY_LOCKS.setdefault(target, threading.Lock())
+    with lock:
+        if time.monotonic() - _VERIFIED.get(target, float("-inf")) < PORT_RECHECK_SECONDS:
+            return True
+        _VERIFIED.pop(target, None)
+        if not ask():
+            return False
+        _VERIFIED[target] = time.monotonic()
+        return True
+
+
+def forget_port(target):
+    """Drop `target`'s last port read, so the next connection reads it again (its add-on did not answer)."""
+    _VERIFIED.pop(tuple(target), None)
+
+
 def gate(remote_id, port, addon_id):
     """The semaphore that holds requests to one add-on's page to the connections it takes at once.
 
@@ -228,7 +280,7 @@ def upstream_headers(environ, port, jar, websocket=False):
     """
     allow = REQUEST_HEADERS | (WEBSOCKET_HEADERS if websocket else frozenset())
     out = [("Host", "%s:%d" % ("127.0.0.1", port))] + list(_allowlisted(environ, allow))
-    if environ.get("CONTENT_TYPE") and _header_ok(environ["CONTENT_TYPE"]):
+    if environ.get("CONTENT_TYPE") and header_ok(environ["CONTENT_TYPE"]):
         out.append(("content-type", environ["CONTENT_TYPE"]))
     if "gzip" in environ.get("HTTP_ACCEPT_ENCODING", ""):
         out.append(("Accept-Encoding", "gzip"))
@@ -243,11 +295,17 @@ def _allowlisted(environ, allow):
     """(name, value) of the request's HTTP_ headers whose name is in `allow` and whose value is one line."""
     for key, value in environ.items():
         name = key[5:].replace("_", "-").lower() if key.startswith("HTTP_") else ""
-        if name in allow and _header_ok(value):
+        if name in allow and header_ok(value):
             yield name, value
 
 
-def _header_ok(value):
+def header_ok(value):
+    """Whether `value` may go into a header line: a string of one line (no CR, LF or NUL), at most 8 KiB.
+
+    A line break in a value written to the browser would end the proxy's head early and push its own
+    headers (the sandbox policy among them) into the body: HTTP response splitting (OWASP WSTG, "Testing
+    for HTTP Splitting Smuggling").
+    """
     return isinstance(value, str) and len(value) <= 8192 and not any(c in value for c in "\r\n\0")
 
 
@@ -296,8 +354,9 @@ def kept_response_headers(headers, prefix, port):
     for name, value in headers:
         low = name.lower()
         if low == "location":
-            out.append(("Location", location(value, prefix, port)))
-        elif low in RESPONSE_HEADERS and _header_ok(value):
+            moved = location(value, prefix, port) if header_ok(value) else prefix + "/"
+            out.append(("Location", moved if header_ok(moved) else prefix + "/"))
+        elif low in RESPONSE_HEADERS and header_ok(value):
             out.append((name, value))
     return out
 
@@ -368,7 +427,28 @@ def rewrites(ctype, raw_path, addon_id):
 
 _ATTR_ROOT = re.compile(rb"""(\b(?:href|src|action|formaction|poster|data)\s*=\s*["'])/(?!/)""", re.I)
 _CSS_ROOT = re.compile(rb"""(url\(\s*["']?)/(?!/)""", re.I)
-_HEAD = re.compile(rb"<head\b[^>]*>", re.I)
+# What may follow a tag's name: HTML's whitespace, the end of the tag or a self-closing slash.
+_TAG_NAME_END = frozenset(b" \t\n\r\f/>")
+
+
+def head_end(body):
+    """Where the page's first <head> start tag ends (just past its '>'), or 0 when it has none.
+
+    A linear scan, not a regex: a `[^>]*` after `<head`, over a body of many `<head` and no `>`, backtracks
+    from every candidate to the end of the body, quadratic in its length, and the body is the add-on's
+    (OWASP Input Validation Cheat Sheet, "Regular Expressions (Regex)"; OWASP ReDoS). Each byte is looked
+    at a bounded number of times: the next `<head`, the byte after it, and one search for its `>`.
+    """
+    low, at = body.lower(), 0
+    while True:
+        at = low.find(b"<head", at)
+        if at < 0:
+            return 0
+        at += len(b"<head")
+        if at == len(low) or low[at] in _TAG_NAME_END:
+            close = low.find(b">", at)
+            # No '>' after this one means none after any later <head either.
+            return close + 1 if close >= 0 else 0
 
 
 def rewrite(kind, body, prefix):
@@ -376,8 +456,7 @@ def rewrite(kind, body, prefix):
     p = prefix.encode("utf-8")
     if kind == "html":
         body = _CSS_ROOT.sub(rb"\1" + p + b"/", _ATTR_ROOT.sub(rb"\1" + p + b"/", body))
-        m = _HEAD.search(body)
-        at = m.end() if m else 0
+        at = head_end(body)
         return body[:at] + SHIM.encode("ascii") + body[at:]
     if kind == "css":
         return _CSS_ROOT.sub(rb"\1" + p + b"/", body)

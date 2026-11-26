@@ -462,6 +462,9 @@ def _routes_setup279(answers, opened, reads):
     _p9_patch_sm("shell_as_game_user", shell)
     _p9_patch_sm("open_loopback", tunnel)
     _p9_patch(_rw279, "game_account_write_refusal", lambda remote, user, reading=False: None)
+    # Open's read counts for a link's later requests for this long, so no request here reads the port again
+    # (part289 checks that read) and the scripted answers stay Open's.
+    _p9_patch(_aw279, "PORT_RECHECK_SECONDS", 3600)
 
 
 def _open_answer279(sid, port, state="active"):

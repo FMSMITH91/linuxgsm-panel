@@ -10,12 +10,12 @@ check.
 
 | Permission | Grants |
 |------------|--------|
-| `view_servers` / `view_console` / `view_logs` | See status / console / audit logs |
+| `view_servers` / `view_console` / `view_logs` | See status / console / audit logs. A console command that sets a secret (`rcon_password X`, `sv_password X`) is kept in the audit log with its value masked |
 | `send_command` | Send raw console commands |
 | `use_terminal` | Open a shell on a host, as the account the panel uses there, which on most installs can become root: grant it only to people you would give that account |
 | `moderate_server` | Umbrella for `kick_player` + `ban_player` + `say_server` (also grantable individually) |
 | `start_server` / `stop_server` / `restart_server` / `update_server` | Power & update controls |
-| `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers; `manage_servers` also covers a server's schedule, alerts and mods |
+| `install_server` / `uninstall_server` / `manage_servers` | Add, remove, and define game servers; `manage_servers` also covers a server's schedule, alerts and mods. A scheduled task runs any command as the game account, so adding, changing, deleting or running one on the Scheduled Tasks card also needs `edit_files`, and a failed task's output shows only with `view_files` too; with those, `manage_servers` amounts to running commands as that account. Without `edit_files` the card lists the tasks and says why it cannot change them |
 | `view_files` / `edit_files` | Browse, read and download a server's files and configs, including the passwords in them / upload, edit, rename, create and delete them and save its config forms (give `view_files` with it). LinuxGSM runs a game's config files as a script, so `edit_files` amounts to running commands as that game account: give it only to someone you would trust with that account's login. When the panel's [SFTP service](sftp.md) is on, `edit_files` also shows the server's folder over SFTP, where the user can do the same with any SFTP client (reading there needs `view_files` too) |
 | `download_backup` / `delete_backup` | Download / delete a game server's backup archives (a deleted backup is gone for good). Taking a backup, its schedule and the panel's own backups stay with superadmins |
 | `restore_backup` | Restore a game server from one of its backups: the server is stopped, a backup of its current state is taken first, then its files are replaced with the archive's (the account's SSH keys and shell start-up files are kept as they are, never taken from the archive). The most destructive backup permission. Uploading a backup to restore also needs `edit_files` (an uploaded archive can hold any file, including the scripts the server runs). An archive's config files run as the game account at the server's next start, so this too amounts to running commands as that account |
@@ -23,7 +23,7 @@ check.
 | `manage_addons` | A server's add-ons: install, update, start, stop and remove them, change their settings, read their logs, and look B3's players and penalties up (their IP addresses and GUIDs only with `manage_databases` as well; unbanning one through B3 with `ban_player` as well, kicking or warning one with `kick_player`). Installing the first one on a host installs Podman through the helper. Given to no group by default |
 | `view_addon_pages` | Open a server's add-on web pages (IW4MAdmin's webfront, BlueMap's map) through the panel, in a new tab, without managing the add-ons: its Add-ons tab then lists only the installed add-ons that have a page. `manage_addons` opens them too. The page runs sandboxed, apart from the panel's own pages ([add-ons](addons.md#web-pages)). Given to no group by default |
 | `edit_database_data` | Change the data inside a server's databases on the Databases page: edit rows and run SQL statements, always as that database's own account. Given to no group by default; give it with `manage_databases`, which browsing (and the manager itself) needs |
-| `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups |
+| `manage_remotes` / `manage_users` / `manage_groups` | Manage hosts / users / groups. For a host admin who is not a superadmin: re-trusting a host's SSH key is superadmin-only (the next connection trusts whatever machine answers at that address and signs in with the host's saved credential), and a host they add or repoint must not be at a loopback, private, link-local or tailnet address (checked after the name is resolved), because the connection test runs from the panel's own machine |
 
 ### The panel owner
 

@@ -352,15 +352,17 @@ def _wf_parts287():
 
 
 def _s287_scan_workflow():
-    _, head, _ = _wf_parts287()
+    _, head, jobs = _wf_parts287()
     cron = _re287.findall(r'cron: "([^"]+)"', head)
-    paths = _re287.findall(r"^      - '([^']+)'$", head, _re287.M)
-    check("image scan: the workflow runs daily, by hand, and on a pull request changing an image, a pin or the "
-          "scan's own files",
+    # Every pull request (its job is a required check); the scope step lists what it scans.
+    paths = _re287.findall(r"^              '([^']+)'$", jobs, _re287.M)
+    check("image scan: the workflow runs daily, by hand, and on every pull request, scanning one that changes "
+          "an image, a pin, a linted Dockerfile or the scan's own files",
           len(cron) == 1 and _re287.fullmatch(r"\d{1,2} \d{1,2} \* \* \*", cron[0]) is not None
-          and "workflow_dispatch:" in head and "pull_request:" in head
+          and "workflow_dispatch:" in head and "pull_request:" in head and "paths" not in head
           and {"panel/addon_images/**", "panel/services/addons.py", ".github/workflows/addon-images.yml",
-               ".github/scripts/addon_images.py", ".github/trivyignore.yaml", ".github/hadolint.yaml"} <= set(paths),
+               ".github/scripts/addon_images.py", ".github/trivyignore.yaml", ".github/hadolint.yaml",
+               ".clusterfuzzlite/Dockerfile"} <= set(paths),
           repr((cron, paths)))
 
 
@@ -368,7 +370,8 @@ def _s287_scan_token():
     wf, head, jobs = _wf_parts287()
     perms = _re287.findall(r"^\s+permissions:(.*(?:\n\s{6,}\S.*)*)", jobs, _re287.M)
     check("image scan: ...holds a read-only token and no secret, and runs the script's plan, then its scan",
-          "permissions: {}" in head and len(perms) == 1 and perms[0].split("#")[0].split() == ["contents:", "read"]
+          "permissions: {}" in head and len(perms) == 1
+          and _re287.sub(r"#.*", "", perms[0]).split() == ["contents:", "read", "pull-requests:", "read"]
           and "secrets." not in wf and "addon_images.py plan" in jobs
           and jobs.index("addon_images.py plan") < jobs.index("addon_images.py scan"), repr(perms))
 
@@ -427,6 +430,15 @@ def _s287_scan_plan():
           and argv[:3] == ["docker", "run", "--rm"], gate)
 
 
+def _s287_scan_lint():
+    lint = _AI287.lint_targets(_AI287.plan())
+    check("image scan: hadolint lints every build's Containerfile and ClusterFuzzLite's build image, which "
+          "nothing else lints",
+          ("b3 Containerfile", os.path.join(_root, "panel", "addon_images", "b3", "Containerfile")) in lint
+          and (".clusterfuzzlite/Dockerfile", os.path.join(_root, ".clusterfuzzlite", "Dockerfile")) in lint
+          and all(os.path.isfile(p) for _, p in lint), repr(lint))
+
+
 def _s287_scan_accepted():
     text = _read287(".github", "trivyignore.yaml")
     entries = _re287.split(r"(?m)^  - id: ", _code_lines287(text))[1:]
@@ -444,7 +456,7 @@ def _s287_scan_accepted():
 for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers,
                _s287_core_dumps, _s287_orphan_crontabs, _s287_orphan_callers, _s287_threat_model, _s287_b3_no_pip,
                _s287_scan_workflow, _s287_scan_token, _s287_scan_images_pinned, _s287_scan_images_from_file,
-               _s287_scan_plan, _s287_scan_accepted):
+               _s287_scan_plan, _s287_scan_lint, _s287_scan_accepted):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down

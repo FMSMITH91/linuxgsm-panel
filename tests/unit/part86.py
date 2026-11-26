@@ -122,7 +122,8 @@ _HOME86 = os.path.join(_TMP86, "home", "p86u")
 
 
 def _fshell86(server, user, script, timeout=30, **k):
-    out, err, rc = _bash86(script.replace("/home/p86u", _HOME86))
+    feed = b"".join(k["stdin_text"]).decode() if k.get("stdin_text") is not None else None
+    out, err, rc = _bash86(script.replace("/home/p86u", _HOME86), stdin=feed)
     return out, err, rc
 
 
@@ -156,14 +157,14 @@ def _read86(rel):
 def _symlink_save86():
     _p9_patch(_p9_core, "shell_as_game_user", _fshell86)
     _tree86()
-    big = b"B" * (70 * 1024)          # past _ONE_SHOT_B64: the chunked path
+    big = b"B" * (70 * 1024)          # more than one stdin slice
     got = {}
     for rel, data in (("one.cfg", b"new"), ("big.cfg", big)):
         ok, _msg = _files86._write_file_as_user(NS(), "p86u", "/home/p86u/" + rel, data)
         got[rel] = (ok, os.path.islink(os.path.join(_HOME86, rel)),
                     _read86("serverfiles/cfg/" + rel) == data)
     check("files: saving a file that is a symlink to another file in the home writes the file it "
-          "points at and keeps the link, one-shot and chunked (it replaced the link with a copy and "
+          "points at and keeps the link, small and large (it replaced the link with a copy and "
           "the game read the old config)",
           got == {"one.cfg": (True, True, True), "big.cfg": (True, True, True)}, repr(got))
     ok_p, _ = _files86._write_file_as_user(NS(), "p86u", "/home/p86u/plain.cfg", b"new")

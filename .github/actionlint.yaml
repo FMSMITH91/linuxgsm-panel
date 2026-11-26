@@ -25,6 +25,7 @@ self-hosted-runner:
 config-variables:
   - DEPLOY_ENABLED
   - DEPLOY_HOST
+  - DEPLOY_HOST_KEY
   - DEPLOY_USER
 
 # GitHub's self-repository form, `uses: $/<path>` (GitHub changelog 2026-07-30, "Reference

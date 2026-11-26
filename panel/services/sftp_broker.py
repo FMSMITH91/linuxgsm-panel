@@ -450,13 +450,15 @@ def _h_auth_kbd(_app, req, spawn):
 
 def _kbd_refusal(user, req):
     """Why this password and code do not sign `user` in (for the audit row), or None when they do."""
-    from panel.security.auth import check_password, dummy_password_check
+    from panel.security.auth import login_password_check
     password = req.get("password") if isinstance(req.get("password"), str) else ""
     why = user_refusal(user) if user is not None else None
-    if user is None or not user.is_active:
-        dummy_password_check(password)          # the same time spent whether the name exists or not
+    # The same hashing work whether the name exists or not, whatever its hash's format.
+    active = user is not None and user.is_active
+    ok = login_password_check(password, user.password_hash if active else None)
+    if not active:
         return why or "no such user"
-    if not check_password(password, user.password_hash):
+    if not ok:
         return "wrong password"
     return why or _code_refusal(user, req.get("code"))
 

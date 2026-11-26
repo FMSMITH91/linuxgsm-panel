@@ -12,8 +12,9 @@ What is scanned is what a host runs, read from the repository, never typed into 
 The gate (OWASP Docker Security Cheat Sheet, rule 9; OWASP CI/CD Top 10, CICD-SEC-3): Trivy fails the
 run on a High or Critical vulnerability that has a fixed version, and on a secret found in an image.
 An accepted finding goes in .github/trivyignore.yaml with its reason and an expiry date, after which
-it fails the run again until someone looks at it. hadolint lints each Containerfile, with the rules
-.github/hadolint.yaml turns off and why. Nothing is pushed anywhere; no secret or token is used.
+it fails the run again until someone looks at it. hadolint lints each Containerfile, and the other
+Dockerfiles CI builds (OTHER_DOCKERFILES), with the rules .github/hadolint.yaml turns off and why.
+Nothing is pushed anywhere; no secret or token is used.
 
     addon_images.py plan    print what would be scanned (JSON); exit 1 on a problem with the pins
     addon_images.py scan    pull, build, scan and lint; exit 1 on any finding or failure
@@ -31,6 +32,9 @@ ADDONS = os.path.join(ROOT, "panel", "services", "addons.py")
 IMAGES_DIR = os.path.join(ROOT, "panel", "addon_images")
 TRIVY_IGNORE = os.path.join(ROOT, ".github", "trivyignore.yaml")
 HADOLINT_CONFIG = os.path.join(ROOT, ".github", "hadolint.yaml")
+# Dockerfiles linted beside the add-on Containerfiles, though no host runs them: ClusterFuzzLite's
+# build image, which nothing else lints. Paths from the repository root.
+OTHER_DOCKERFILES = (".clusterfuzzlite/Dockerfile",)
 
 PINNED_RE = re.compile(r"[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}\Z")
 ARG_RE = re.compile(r"^ARG[ \t]+([A-Za-z_][A-Za-z0-9_]*)=(\S+)[ \t]*$", re.M)
@@ -154,11 +158,17 @@ def _scan_images(p, trivy_image, results):
             results.append((label, _verdict(_run(trivy_argv(trivy_image, cache, work, tar)), "Trivy")))
 
 
+def lint_targets(p):
+    """[(label, path)] of every file hadolint lints: each build's Containerfile, then OTHER_DOCKERFILES."""
+    return ([(b + " Containerfile", os.path.join(IMAGES_DIR, b, "Containerfile")) for b in p["builds"]]
+            + [(rel, os.path.join(ROOT, *rel.split("/"))) for rel in OTHER_DOCKERFILES])
+
+
 def _lint(p, hadolint_image, results):
-    """Run hadolint over every build's Containerfile; append (label, verdict) to results."""
-    for b in p["builds"]:
-        with open(os.path.join(IMAGES_DIR, b, "Containerfile"), "rb") as fh:
-            results.append((b + " Containerfile", _verdict(_run(hadolint_argv(hadolint_image), stdin=fh), "hadolint")))
+    """Run hadolint over every lint_targets() file; append (label, verdict) to results."""
+    for label, path in lint_targets(p):
+        with open(path, "rb") as fh:
+            results.append((label, _verdict(_run(hadolint_argv(hadolint_image), stdin=fh), "hadolint")))
 
 
 def scan(trivy_image, hadolint_image):

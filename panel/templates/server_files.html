@@ -465,7 +465,7 @@
 {% endif %}
 
 <!-- Scheduled tasks (cron) -->
-<div class="card" id="cron-card" data-sfsub="schedule" data-start-hidden>
+<div class="card" id="cron-card" data-sfsub="schedule" data-start-hidden data-cron-edit="{{ 1 if fpm.edit else 0 }}">
   <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
     <span><i class="bi bi-clock-history"></i> Scheduled Tasks <span class="text-secondary small">(cron)</span></span>
     <span class="text-secondary fs-r66">
@@ -475,24 +475,29 @@
     </span>
   </div>
   <div class="card-body">
+    {# A task runs any command as the account, so its writes need EDIT_FILES too (server_files.py
+       CRON_NEEDS_EDIT_FILES): without it the form stays in place, disabled, with the reason. #}
+    {% if not fpm.edit %}
+    <p class="small text-secondary mb-2" id="cron-ro"><i class="bi bi-lock"></i> Adding, changing, deleting or running a scheduled task also needs the "Change game server files" permission, because a task can run any command as this server's account.</p>
+    {% endif %}
     <!-- Add / edit form -->
     <form id="cron-form" class="row g-2 align-items-end mb-2" data-action="saveCron" data-args='["@event"]' data-on="submit">
       <div class="col-12 col-md-3">
         <label class="form-label mb-1 fs-r70" for="cron-sched">Schedule</label>
-        <input type="text" id="cron-sched" class="form-control form-control-sm font-monospace" placeholder="*/5 * * * *" spellcheck="false" required>
+        <input type="text" id="cron-sched" class="form-control form-control-sm font-monospace" placeholder="*/5 * * * *" spellcheck="false" required{% if not fpm.edit %} disabled{% endif %}>
       </div>
       <div class="col-12 col-md-6">
         <label class="form-label mb-1 fs-r70" for="cron-cmd">Command</label>
-        <input type="text" id="cron-cmd" class="form-control form-control-sm font-monospace" placeholder="/home/{{ server.short_name }}/backup.sh" spellcheck="false" required data-no-i18n>
+        <input type="text" id="cron-cmd" class="form-control form-control-sm font-monospace" placeholder="/home/{{ server.short_name }}/backup.sh" spellcheck="false" required data-no-i18n{% if not fpm.edit %} disabled{% endif %}>
       </div>
       <div class="col-12 col-md-3 d-flex gap-2">
-        <button type="submit" class="btn btn-primary btn-sm flex-grow-1" id="cron-submit"><i class="bi bi-plus-lg"></i> Add task</button>
+        <button type="submit" class="btn btn-primary btn-sm flex-grow-1" id="cron-submit"{% if not fpm.edit %} disabled aria-describedby="cron-ro"{% endif %}><i class="bi bi-plus-lg"></i> Add task</button>
         <button type="button" class="btn btn-outline-secondary btn-sm" id="cron-cancel" data-start-hidden data-action="cancelCronEdit">Cancel</button>
       </div>
       {# Warn players first (server_schedule_chains.js): a restart, stop or update with chat warnings
          before it, which the panel composes into one cron line. Only where the console's chat command
          is known. The panel below opens on a click, so nothing moves until the viewer asks. #}
-      {% if sch_verb %}
+      {% if sch_verb and fpm.edit %}
       <div class="col-12" id="sch-wrap">
         <div class="form-check mb-0">
           <input class="form-check-input" type="checkbox" id="sch-on">

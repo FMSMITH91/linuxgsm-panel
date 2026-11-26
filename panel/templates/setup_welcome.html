@@ -32,8 +32,9 @@
         <div class="row">
           <div class="col">
             <label class="form-label" for="setup-welcome-bind_host">Bind Host</label>
-            <input id="setup-welcome-bind_host" type="text" name="bind_host" class="form-control" value="{{ config.bind_host or '0.0.0.0' }}">
-            <div class="form-text">Use 127.0.0.1 behind a reverse proxy, 0.0.0.0 for direct access</div>
+            <input id="setup-welcome-bind_host" type="text" name="bind_host" class="form-control" value="{{ config.bind_host or '' }}"
+                   placeholder="Automatic">
+            <div class="form-text">Leave empty to choose automatically: localhost behind Tailscale Serve, else this machine's Tailscale address, else all interfaces. Use 127.0.0.1 behind another reverse proxy.</div>
           </div>
           <div class="col">
             <label class="form-label" for="setup-welcome-port">Port</label>

@@ -15,9 +15,9 @@
 # at once: each job's scope step, right after its checkout, skips the steps that read code, and the
 # job still reports under its name. Gitleaks and Dependency Review run in full regardless.
 #
-# Fuzz and ClusterFuzzLite run on every pull request too, and pass at once when it changes nothing
-# they fuzz (each job's scope step, the first after Harden-Runner, reads the pull request's file
-# list); they ARE listed below. Not here, on purpose: Aikido's
+# Fuzz, ClusterFuzzLite and the add-on image scan run on every pull request too, and pass at once
+# when it changes nothing they fuzz or scan (each job's scope step, the first after Harden-Runner,
+# reads the pull request's file list); they ARE listed below. Not here, on purpose: Aikido's
 # checks (its pull-request suite often never starts, which would hold every merge), GitHub's own
 # code-scanning checks (CodeQL, Bandit, Semgrep OSS, zizmor: the "Open code-scanning alerts (PR)" job
 # waits for each one's analysis of the pull request's merge commit and gates on what they find;
@@ -61,5 +61,6 @@ github-actions | fuzz (db_data)
 github-actions | fuzz (push)
 github-actions | fuzz (upload_scan)
 github-actions | fuzz the diff (address)
+github-actions | Add-on images (Trivy, hadolint)
 codacy-production | Codacy Static Code Analysis
 sonarqubecloud | SonarCloud Code Analysis

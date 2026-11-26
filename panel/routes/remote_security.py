@@ -53,7 +53,20 @@ def _panel_bind_is_public(bind):
     return not (a.is_loopback or any(a in n for n in _TAILNET_NETS if n.version == a.version))
 
 
+def panel_listens_publicly():
+    """The address this process listens on when that reaches beyond loopback and the tailnet, else "".
+
+    The Panel Server page's warning: every interface (0.0.0.0, ::), or a LAN or public address,
+    exposes the panel's port to whatever can reach the host, where loopback (Tailscale Serve
+    proxies to it) and the host's Tailscale addresses do not. The address served, not the one
+    stored: a stored change waits for the next start (app.config BOOT_BIND). "" when unknown.
+    """
+    bound = str(current_app.config.get("BOOT_BIND") or "").strip()
+    return bound if bound and _panel_bind_is_public(bound) else ""
+
+
 def register(app):
+    app.jinja_env.globals["panel_listens_publicly"] = panel_listens_publicly
     _register_ban_lists(app)
     _register_blocking(app)
     _register_whitelist_and_log(app)

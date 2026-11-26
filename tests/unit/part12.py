@@ -190,11 +190,46 @@ _P9_PATCHED = {}
 _P9_ABSENT = object()
 
 
+# The file writers (ssh_manager/files.py _write_file_as_user) send a file's bytes as base64 on the
+# command's stdin, never in the command. A stand-in for shell_as_game_user that takes no stdin_text
+# (most run the command in a real bash over a scratch home, or record it) is handed the bytes the
+# way the command once carried them, inline before the decode, so what it writes or reads is
+# unchanged; part291 checks the real path below it, where no command carries them.
+_P9_WRITE_DECODE = "{ base64 -d > "
+
+
+def _p9_inline_stdin(fn):
+    """`fn`, a shell_as_game_user stand-in, given a write's stdin inline when it cannot take stdin_text."""
+    import inspect
+    import shlex
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn
+    if "stdin_text" in params:
+        return fn
+    # One that takes **kwargs still gets every stdin as it always did (the batched player poll's).
+    keeps = any(v.kind is inspect.Parameter.VAR_KEYWORD for v in params.values())
+
+    def run(server, user, sh, *a, stdin_text=None, **k):
+        if stdin_text is not None and _P9_WRITE_DECODE in sh:
+            whole = stdin_text if isinstance(stdin_text, (bytes, str)) else b"".join(stdin_text)
+            feed = whole.decode() if isinstance(whole, bytes) else whole
+            stdin_text = [whole]           # read once already: handed on as one chunk
+            sh = sh.replace(_P9_WRITE_DECODE, "{ printf %%s %s | base64 -d > " % shlex.quote(feed), 1)
+        if keeps and stdin_text is not None:
+            k["stdin_text"] = stdin_text
+        return fn(server, user, sh, *a, **k)
+    return run
+
+
 def _p9_patch(owner, name, value):
     key = (owner, name)
     if key not in _P9_PATCHED:
         _P9_PATCHED[key] = owner.__dict__.get(name, _P9_ABSENT) if isinstance(owner, type(os)) \
             else getattr(owner, name)
+    if name == "shell_as_game_user" and callable(value):
+        value = _p9_inline_stdin(value)
     setattr(owner, name, value)
 
 
@@ -2051,7 +2086,8 @@ try:
         _r = _A.post(_sf_url + _u, json={"raw": "x", "schedule": "* * * * *", "command": "monitor"})
         check("cron %s: a crontab write that raises is a 500" % _u, _r.status_code == 500,
               "got %d" % _r.status_code)
-    _d = _p9_json(_A.post(_sf_url + "/cron/run", json={"raw": "x"}))
+    # A line the listing holds: Run now runs only a line read back from the crontab (part290).
+    _d = _p9_json(_A.post(_sf_url + "/cron/run", json={"raw": "0 5 * * * monitor"}))
     check("cron run: a run that raises answers success=false",
           _d == {"success": False, "message": "Internal server error"}, repr(_d))
     _r = _V.post(_sf_url + "/cron/run", json={"raw": "x"})

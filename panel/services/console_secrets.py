@@ -77,6 +77,14 @@ _ARG_RE = re.compile(
     r"(?P<value>\"[^\"\n]{0,256}\"|'[^'\n]{0,256}'|[^\s\"'?&;,\x1b]{1,256})",
     re.IGNORECASE)
 
+# A console command that SETS a secret: a statement whose first word names one (`rcon_password X`,
+# `sv_password "X"`, `sv_setsteamaccount X`), its value after blanks. _ARG_RE takes a blank-separated
+# value only after a -flag or +flag, because in console OUTPUT "password is wrong" is prose; a typed
+# command is a statement, so its value is read as one. Statements end at `;` or a line end, as the
+# Source and GoldSrc consoles split them. Anchored at a statement start, every repeat bounded.
+_SET_RE = re.compile(r"(?P<head>(?:^|(?<=;))[ \t]{0,64}[\w.]{0,40}?" + _KEY_NAME_WORDS + r"[\w.]{0,40}[ \t]{1,16})"
+                     r"(?P<value>[^;\n]{1,512})", re.IGNORECASE | re.MULTILINE)
+
 # Words that follow a flag in prose rather than as its value ("set via -adminpassword option").
 # A real secret spelled like one of these is still masked by its value from the config.
 _PROSE_AFTER_FLAG = frozenset(("option", "options", "argument", "parameter", "flag", "switch", "setting", "value",
@@ -172,6 +180,26 @@ def mask(server_id, text):
     """`text` masked with whatever this server's cache holds; never reads the config."""
     got = _values.get(server_id)
     return mask_text(text, got[1] if got is not None else ())
+
+
+def _set_mask(m):
+    """_SET_RE's replacement: the statement's name kept, its value masked (not an empty or switch value)."""
+    bare = m.group("value").strip().strip("\"'").strip().lower()
+    return m.group(0) if bare in _NOT_SECRET else m.group("head") + MASK
+
+
+def mask_command(server_id, text):
+    """A typed console command as the audit log and the sender's notice keep it.
+
+    mask() (this server's cached values and every secret flag), then each statement that sets a
+    secret. The audit log is read by VIEW_LOGS holders, who may not read the server's configs, and
+    the notice rides in the session cookie (OWASP Logging Cheat Sheet, "Data to exclude"). Never
+    reads the config: the console the sender is typing into keeps the cache current, and the send
+    path gains no host round trip.
+    """
+    if not text:
+        return text
+    return _SET_RE.sub(_set_mask, mask(server_id, text))
 
 
 def mask_for(gs, text):

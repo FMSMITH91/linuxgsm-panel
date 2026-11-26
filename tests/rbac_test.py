@@ -1337,7 +1337,7 @@ _HOST_LEVEL_VIEWS = {
                            "api_remote_security_block", "api_remote_security_autoblock",
                            "api_remote_security_unban", "api_remote_security_log"},
     "remote_tailscale.py": {"api_remote_tailscale_check"},
-    "remote_vps.py": {"remote_firewall", "api_remote_firewall", "api_remote_firewall_open",
+    "remote_vps.py": {"remote_firewall", "api_remote_firewall", "api_remote_firewall_open", "api_remote_retrust_hostkey",
                       "api_remote_firewall_allow_from", "api_remote_firewall_limit",
                       "api_remote_firewall_close", "api_remote_firewall_delete_rule",
                       "api_remote_ssh_status", "api_remote_ssh_mode", "api_remote_ssh_port",
@@ -4336,7 +4336,9 @@ _GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
                 "can_moderate_action", "can_run_custom_command", "_can_manage_files",
                 "_can_edit_tags", "_required_perms", "_fpm_can_edit",
                 # server_detail's daily-restart refusal: RESTART_SERVER, then the restore gate.
-                "_daily_restart_refusal")
+                "_daily_restart_refusal",
+                # Scheduled Tasks writes: MANAGE_SERVERS and EDIT_FILES (routes/_cron_access.py).
+                "write_refused")
 
 
 def _r21d_reads_caller_superadmin(tree):

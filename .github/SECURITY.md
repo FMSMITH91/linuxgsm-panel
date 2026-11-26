@@ -128,7 +128,8 @@ What it does not cover:
   through its old installer or with `PANEL_ALLOW_UNSIGNED_UPDATE=1` over SSH.
 - **The test host's deploy** ships the commit's own installer. It runs only when started by hand,
   only from `main`. Its reach is the tailnet ACL's: confirm the ACL lets the CI runner's tag reach
-  the test host only.
+  the test host only. Its SSH connection checks the host's key against the `DEPLOY_HOST_KEY`
+  repository variable alone and refuses any other; without that variable it stops before connecting.
 
 ### Checking a first install
 

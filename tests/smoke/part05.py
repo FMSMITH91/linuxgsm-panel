@@ -468,6 +468,7 @@ from panel.core.panel_state import _action_output as _ao
 from panel.routes._shared import (_action_log_path, _begin_action_tail, _drain_action_output,
                                   _end_action_tail)
 from panel.routes import server_files as _r_sf
+from panel.routes import _console_cred as _r_cc
 import re as _lat_re
 _ao.clear()
 _lat_saved = (_sm_core.run_as_game_user, _sm_core.run_command)
@@ -1543,7 +1544,7 @@ try:
                 _cv_u = db.session.get(User, admin_id)
                 _cv_u.is_active = not _cv_inactive
                 try:
-                    _cv_a = _r_sf._login_id_still_accepted(_cv_lid)
+                    _cv_a = _r_cc._login_id_still_accepted(_cv_lid)
                     _cv_b = _cv_load(_cv_lid)
                 finally:
                     _cv_u.is_active = True

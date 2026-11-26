@@ -123,9 +123,9 @@ eq("data migration 3: a group whose list cannot be read is left as it was, not r
 check("data migration 3: no group is given download_backup or delete_backup",
       not [_n for _n, _p in _mig184.get("first", {}).items()
            if "download_backup" in str(_p) or "delete_backup" in str(_p)], repr(_mig184.get("first")))
-eq("data migration 3: counted (user_version 3)", _mig184.get("v1"), 3)
+eq("data migration 3: counted (user_version 4, with migration 4 after it)", _mig184.get("v1"), 4)
 eq("data migration 3: ...ONCE: the next start leaves a group the file permissions were taken from alone",
-   (_perms184("second", "p184_ms"), _mig184.get("v2")), (["manage_servers", "view_servers"], 3))
+   (_perms184("second", "p184_ms"), _mig184.get("v2")), (["manage_servers", "view_servers"], 4))
 eq("data migration 3: run again by hand it only adds, and adds each permission once",
    _perms184("repeat", "p184_ms"), ["edit_files", "manage_servers", "view_files", "view_servers"])
 

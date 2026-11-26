@@ -937,3 +937,16 @@ b3191625 IW4MAdmin runs on an up-to-date .NET runtime.
 75404eac BlueMap runs its newest v5 image.
 09c10d04 An add-on's Open button works on panels served over HTTPS.
 e167b67c IW4MAdmin is rebuilt on Microsoft's latest .NET 10 image.
+f81f9273 B3's image installs Debian's security updates when it is built.
+457177ab Add-on pages can't break out of their sandbox.
+696ef6a5 A crafted add-on page can't freeze the panel.
+be04d785 An add-on page's link ends when the add-on stops.
+edd79c1a Only a super admin can re-trust a host's SSH key.
+e8eb1ca6 Scheduled Tasks need Change game server files to add, change, delete or run a task.
+5a115c0e Host admins who are not super admins can't add a host at a private, loopback or tailnet address.
+bd58baf2 Console commands that set a password are masked in the audit log.
+8d4ef15c A console opened with an API token stops when the token expires.
+74338762 Config files are written without their contents on the command line.
+dbe29777 Sign-in takes the same time whether or not the account exists.
+c1ab89d1 The helper names the sudoers file and line that stops an account.
+ec128f2e The panel no longer listens on every network address just because setup suggested it.

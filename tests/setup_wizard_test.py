@@ -876,9 +876,9 @@ try:
     # above would otherwise be free to swallow it.
     r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                                "port": "5052", "bind_host": ""})
-    check("open: step=welcome treats a blank bind_host as the 0.0.0.0 default",
-          load_config().get("bind_host") == "0.0.0.0",  # nosec B104 - the expected default, not a bind
-          repr(load_config().get("bind_host")))
+    check("open: step=welcome treats a blank bind_host as automatic: stored empty, so the boot binds "
+          "127.0.0.1 behind Tailscale Serve (it stored 0.0.0.0, which outranked that for good)",
+          load_config().get("bind_host") == "", repr(load_config().get("bind_host")))
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
     for _good in ("0.0.0.0", "::", "127.0.0.1", "::1"):  # nosec B104 - inputs posted to the wizard

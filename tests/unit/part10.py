@@ -3039,7 +3039,7 @@ import app as _p10_app  # noqa: E402
 from panel.db.models import User as _P10User, UserSession as _P10Sess, db as _p10_db  # noqa: E402
 from panel.routes import _shared as _p10_shared  # noqa: E402
 from panel.routes import auth_routes as _p10_ar  # noqa: E402
-from panel.routes import server_files as _p10_sf  # noqa: E402
+from panel.routes import _console_cred as _p10_cc  # noqa: E402
 from panel.security import auth as _p10_auth  # noqa: E402
 
 _p10a = _P10Flask("p10_auth")
@@ -3150,7 +3150,7 @@ def _p10_legacy_bare_id(uid):
           _p10_loads(str(uid), "203.0.113.9", bound=True))
     with _p10a.app_context():
         check("legacy cookie: the console poller agrees (control)",
-              _p10_sf._login_id_still_accepted(str(uid)) is not None)
+              _p10_cc._login_id_still_accepted(str(uid)) is not None)
         u = _p10_db.session.get(_P10User, uid)
         u.auth_epoch = 1                     # a password change / sign out everywhere / reset
         _p10_db.session.commit()
@@ -3158,7 +3158,7 @@ def _p10_legacy_bare_id(uid):
           "changes and sign-out-everywhere)", not _p10_loads(str(uid), "203.0.113.9", bound=True))
     with _p10a.app_context():
         check("legacy cookie: ...and the console poller refuses it too",
-              _p10_sf._login_id_still_accepted(str(uid)) is None)
+              _p10_cc._login_id_still_accepted(str(uid)) is None)
         u = _p10_db.session.get(_P10User, uid)
         u.auth_epoch = 0
         _p10_db.session.commit()

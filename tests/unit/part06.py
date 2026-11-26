@@ -10481,7 +10481,8 @@ try:
     os.makedirs(_dp_ghbin)
     with open(os.path.join(_dp_ghbin, "gh"), "w") as _dp_f:
         _dp_f.write("#!/bin/sh\nfor n in 'checks (x)' coverage 'js coverage' 'gamedig lockfile (22)' "
-                    "'Analyze (python)' 'Open code-scanning alerts'; do\n"
+                    "'Analyze (python)' 'Open code-scanning alerts' 'Secret scanning (Gitleaks)' "
+                    "'Dependency vulnerabilities (pip-audit)'; do\n"
                     "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
                     " \"$n\"\ndone\n")
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir
@@ -10544,6 +10545,9 @@ try:
     _dp_verify_fx = (_dp_verify_run.replace("FLOOR=%s\n" % _dp_floor_m[0], "FLOOR=%s\n" % _dp_floorc)
                      if len(_dp_floor_m) == 1 else "echo '::error::no FLOOR= line'; exit 99\n")
 
+    # The host's known_hosts lines, as the DEPLOY_HOST_KEY repository variable holds them (made-up keys).
+    _DP_HOST_KEYS = "host.invalid ssh-ed25519 AAAAexample1\nhost.invalid ecdsa-sha2-nistp256 AAAAexample2"
+
     def _dp_deploy(sha, stream, branch="main"):
         """Run the job's two run blocks as the runner would: verify, and — only if it passed — the
         deploy step, with the installer path verify wrote to $GITHUB_OUTPUT. ssh records the
@@ -10565,7 +10569,8 @@ try:
         _d = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(stream) + _dp_run],
                          capture_output=True, text=True, cwd=_dp_runner,
                          env=dict(_dp_genv, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
-                                  HEAD_SHA=sha, INSTALLER=_handed[-1] if _handed else ""))
+                                  HEAD_SHA=sha, INSTALLER=_handed[-1] if _handed else "",
+                                  RUNNER_TEMP=_rt, DEPLOY_HOST_KEY=_DP_HOST_KEYS))
         return _sh_sub.CompletedProcess(_d.args, _d.returncode, _v.stdout + _d.stdout,
                                         _v.stderr + _d.stderr)
 
@@ -10747,6 +10752,39 @@ try:
           _dp_x.returncode != 0 and not os.path.exists(_dp_out)
           and "handed over no installer" in _dp_x.stdout,
           "rc=%s sent=%s out=%r" % (_dp_x.returncode, os.path.exists(_dp_out), _dp_x.stdout[-200:]))
+    # The host key is pinned, not trusted on first sight: ssh reads only the DEPLOY_HOST_KEY lines
+    # (an owner-only file in the job's temp dir) and refuses a host whose key is not among them.
+
+    def _dp_keyrun(key):
+        """Run the deploy step with `key` as DEPLOY_HOST_KEY: (result, ssh's argv or None, sent?, (known_hosts, mode))."""
+        _rt = _tempfile.mkdtemp(dir=_dp_sb, prefix="runner-temp-")
+        _inst = os.path.join(_rt, "verified-install.sh")
+        with open(_inst, "w") as _f:
+            _f.write("#!/bin/bash\n")
+        _args, _out, _kh = (os.path.join(_rt, _n) for _n in ("ssh-args", "stream", "deploy_known_hosts"))
+        _p = _sh_sub.run(["bash", "-c", 'ssh() { printf "%%s\\n" "$@" > %s; cat > %s; }\n' % (
+            _shlex_q(_args), _shlex_q(_out)) + _dp_run], capture_output=True, text=True, cwd=_dp_runner,
+            env=dict(_dp_genv, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu", HEAD_SHA=_dp_sha,
+                     INSTALLER=_inst, RUNNER_TEMP=_rt, DEPLOY_HOST_KEY=key))
+        _argv = open(_args).read().splitlines() if os.path.exists(_args) else None
+        _khs = (open(_kh).read(), os.stat(_kh).st_mode & 0o777) if os.path.exists(_kh) else None
+        return _p, _argv, os.path.exists(_out), _khs
+
+    _dp_k_ok = _dp_keyrun(_DP_HOST_KEYS)
+    check("deploy: ssh checks the host's key against the DEPLOY_HOST_KEY lines alone, written owner-only, "
+          "and trusts no key on first sight",
+          _dp_k_ok[0].returncode == 0 and _dp_k_ok[2] and _dp_k_ok[1] is not None
+          and "StrictHostKeyChecking=yes" in _dp_k_ok[1] and "GlobalKnownHostsFile=/dev/null" in _dp_k_ok[1]
+          and not any("accept-new" in _a or _a == "StrictHostKeyChecking=no" for _a in _dp_k_ok[1])
+          and any(_a.startswith("UserKnownHostsFile=") and _a.endswith("/deploy_known_hosts") for _a in _dp_k_ok[1])
+          and _dp_k_ok[3] == (_DP_HOST_KEYS + "\n", 0o600),
+          "rc=%s argv=%r sent=%s known_hosts=%r err=%r" % (_dp_k_ok[0].returncode, _dp_k_ok[1], _dp_k_ok[2],
+                                                          _dp_k_ok[3], _dp_k_ok[0].stderr[-200:]))
+    _dp_k_none = {_k: _dp_keyrun(_v) for _k, _v in (("unset", ""), ("not a key", "# no keys here"))}
+    check("deploy: ...and with no host key lines set it stops before connecting, sending nothing",
+          all(_r[0].returncode != 0 and _r[1] is None and not _r[2]
+              and "Set repo variable DEPLOY_HOST_KEY" in _r[0].stdout for _r in _dp_k_none.values()),
+          repr({_k: (_r[0].returncode, _r[1], _r[2], _r[0].stdout[-160:]) for _k, _r in _dp_k_none.items()}))
     # The PER-USER branch too. It took install.sh from origin/main and ran it unpinned, so the
     # deploy of a verified commit installed whatever main's tip was by then — a later push whose CI
     # had not finished, or had failed. Same stream, a host whose unit reports nothing and whose

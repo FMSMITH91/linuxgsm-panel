@@ -17,6 +17,7 @@ dev venv has PyYAML). The last check holds every unit part to that: a third-part
 package the suite's CI jobs install. Nothing runs.
 """
 import ast as _ast30
+import datetime as _dt30
 import importlib.metadata as _md30
 import inspect as _inspect30
 import os
@@ -192,6 +193,72 @@ check("cflite cleanup: schedule and manual runs only, on this repository's main,
       and "refs/heads/main" in _if30(_cl_job30)
       and "exit 1" not in _cl_run30 and "set -euo" not in _cl_run30 and "::error::" not in _cl_run30
       and "::warning::" in _cl_run30, repr((sorted(_cl_on30), _cl_perm30)))
+
+# ── CI audit 1125: no CI output is stored for 90 days when nothing reads it ────────────────────
+# The Lighthouse action uploads its reports through its own artifact call, which has no retention
+# setting: 143 runs' reports sat for 90 days and nothing read them. Its log already holds the result.
+_lh_step30 = next((st for st in _steps29(_job29(_wf29("lighthouse.yml"), "lighthouse"))
+                   if "treosh/lighthouse-ci-action@" in st), "")
+_lh_with30 = _block30(_lh_step30, "with", 8) or {}
+check("Lighthouse: the action stores no artifact (its upload keeps 90 days) and never sends the "
+      "reports to public storage",
+      _lh_with30.get("configPath") == ".github/lighthouserc.json"
+      and _lh_with30.get("uploadArtifacts") == "false" and "temporaryPublicStorage" not in _lh_with30,
+      repr(_lh_with30))
+
+# ClusterFuzzLite's build upload has no retention setting either: 56 main builds (26 GB) sat for
+# 90 days though the novelty check reads only the base commit's build and the two before it. The
+# cleanup step itself runs here, against a stand-in `gh` that serves an artifact listing and logs
+# each delete.
+_cl_step30 = next((st for st in _steps29(_cl_job30) if "gh api --paginate" in st), "")
+_now30 = _dt30.datetime.now(_dt30.timezone.utc)
+
+
+def _row30(name, aid, days, branch="main", head="9", repo="9"):
+    when = (_now30 - _dt30.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return "\t".join((name, str(aid), "5%d" % aid, branch, head, repo, when))
+
+
+def _cleanup30(rows):
+    """Run the cleanup step over `rows`; return (exit status, sorted deleted ids, stdout)."""
+    sb = _tf30.mkdtemp(prefix="cl30-")
+    try:
+        gh = os.path.join(sb, "gh")
+        with open(gh, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/bash\ncase "$*" in\n'
+                     '  *--paginate*) printf "%s\\n" "$ROWS" ;;\n'
+                     '  *"-X DELETE"*) last="${!#}"; echo "${last##*/}" >> "$GH_LOG" ;;\n'
+                     '  *) exit 1 ;;\n'           # the "is it still there?" read: gone
+                     'esac\n')
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stub the suite runs itself
+        os.chmod(gh, 0o700)
+        log = os.path.join(sb, "log")
+        open(log, "w").close()
+        p = _sp30.run(["bash", "-c", _runbody29(_cl_step30)], capture_output=True, text=True,  # nosec B603 B607 - the workflow's own step
+                      timeout=60, env=dict(os.environ, PATH=sb + os.pathsep + os.environ["PATH"],
+                                           GH_LOG=log, REPO="o/r", ROWS="\n".join(rows)))
+        with open(log, encoding="utf-8") as fh:
+            return p.returncode, sorted(int(x) for x in fh.read().split()), p.stdout
+    finally:
+        _sh30.rmtree(sb, ignore_errors=True)
+
+
+_cl_mixed30 = _cleanup30([
+    _row30("cifuzz-build-address-a", 1, 1), _row30("cifuzz-build-address-b", 2, 3),
+    _row30("cifuzz-build-address-c", 3, 20), _row30("cifuzz-build-address-d", 4, 30),
+    _row30("cifuzz-build-address-e", 5, 40),
+    _row30("cifuzz-corpus-fuzz_x", 6, 60), _row30("cifuzz-coverage-latest", 7, 60),
+    _row30("cifuzz-build-address-f", 8, 1, branch="pr"),            # a fork's: foreign, at any age
+    _row30("cifuzz-build-address-g", 9, 50, head=""),               # provenance unknown: kept
+])
+check("cflite cleanup: main builds older than 14 days are deleted beyond the three newest; the "
+      "corpus, the coverage state, recent builds and builds of unknown origin stay",
+      _cl_mixed30[:2] == (0, [4, 5, 8]), repr(_cl_mixed30))
+_cl_quiet30 = _cleanup30([_row30("cifuzz-build-address-q%d" % i, 20 + i, 30 + i) for i in range(3)]
+                         + [_row30("cifuzz-corpus-fuzz_y", 30, 1)])
+check("cflite cleanup: ...on a quiet main the three newest builds stay however old they are (the "
+      "next pull request's novelty check needs them), and the step still succeeds",
+      _cl_quiet30[:2] == (0, []), repr(_cl_quiet30))
 
 # ── Every third-party import in the unit suite is a package its CI jobs install ─────────────────
 # This part first read the workflows with PyYAML: green here (the dev venv has it), red on CI
