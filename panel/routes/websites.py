@@ -543,21 +543,37 @@ def _admin_routes(app):
         return _settings(site, body())
 
 
+def _drop_databases(site):
+    """Drop every database of `site` (and its user) through the Databases code: (ok, sentence of the first failure)."""
+    from panel.routes import databases_sites
+    for row in databases_sites.site_rows(site):
+        ok, said = databases_sites.drop(site, row)
+        if not ok:
+            return False, said
+    return True, ""
+
+
 def _delete(site):
-    """Take `site` offline, remove its container, unit and account, then its row."""
+    """Take `site` offline, drop its databases, remove its container, unit and account, then its row.
+
+    The databases go first: one that cannot be dropped stops the delete with the site still whole (and
+    offline), so a retry finds it; none is left behind belonging to no site.
+    """
     remote, name = site.remote, site.name
     was_online = site.enabled
     site.state, site.enabled = "removing", False
     db.session.commit()
     if was_online:
         reconcile_proxy(remote)
-    ok, said = host_call(_sw.remove, remote, site)
+    ok, said = _drop_databases(site)
+    if ok:
+        ok, said = host_call(_sw.remove, remote, site)
     if not ok:
         site.state, site.state_reason = "failed", i18n.tr(said)[:200]
         db.session.commit()
         return acted(site, "website_delete", False, said)
     sid = site.id
-    audit(site, "website_delete", "removed website %s and its account" % name)
+    audit(site, "website_delete", "removed website %s, its databases and its account" % name)
     db.session.delete(site)
     db.session.commit()
     forget_status(sid)

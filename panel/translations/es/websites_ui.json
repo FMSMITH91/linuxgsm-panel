@@ -175,7 +175,7 @@
   "Remove this domain?": "¿Quitar este dominio?",
   "Remove this rule": "Quitar esta regla",
   "Remove this variable": "Quitar esta variable",
-  "Removes the site, its files, its backups and its account. Its databases stay in Databases.": "Elimina el sitio, sus archivos, sus copias de seguridad y su cuenta. Sus bases de datos se quedan en Bases de datos.",
+  "Removes the site, its files, its backups, its databases and its account.": "Elimina el sitio, sus archivos, sus copias de seguridad, sus bases de datos y su cuenta.",
   "Removing": "Eliminando",
   "Reset this database password?": "¿Restablecer la contraseña de esta base de datos?",
   "Response header": "Cabecera de respuesta",
