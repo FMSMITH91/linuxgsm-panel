@@ -1101,7 +1101,13 @@ try:
         _time140.sleep(0.1)
         _waited140 += 1
 finally:
-    (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user) = _saved_l4_140
+    # Put back only once the operator's save has ended (review 1124): a thread still running after the
+    # wait would call the real writers, with part12's tripwire not armed here. It is named instead.
+    _l4_alive140 = "thread" in _lock_seen140 and _lock_seen140["thread"].is_alive()
+    if not _l4_alive140:
+        (_smf140.lgsm_get_values, _smf140._read_instance_cfg_lines, _smf140._write_file_as_user) = _saved_l4_140
+check("pz admin: the operator's save had ended before the stand-ins were put back (it never reaches the real "
+      "writers)", "thread" in _lock_seen140 and not _l4_alive140, repr(_lock_seen140))
 check("pz admin: a settings save sent while the fix has read CHANGE_ME waits for the fix's write, so the "
       "operator's password lands last and is not overwritten by a random one",
       _l4_ok140 == (True, "") and _lock_seen140.get("save done during the read") is False
