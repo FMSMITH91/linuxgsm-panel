@@ -9,6 +9,7 @@ import time as _time41
 from types import SimpleNamespace as NS
 
 from unit.part01 import eq, skip
+from unit.power_names import POWER_NAMES
 from panel.ops.ssh_manager import hosts as _hosts41
 from unit.reboot41_fixtures import (
     AuditLog, GameServer, HR, _CLOCK41, _Flask41, _NOTES41,
@@ -1694,9 +1695,7 @@ _STUBS41 = ('ok() { echo "OK $*"; }; warn() { echo "WARN $*"; }; info() { :; }; 
 # name, which whatever skips a function finds first. What PATH cannot cover is refused as text: a
 # command named by PATH (`/sbin/reboot`, `/usr/bin/sudo reboot`, whose secure_path ignores ours),
 # a PATH reassigned in the block, and the kernel's sysrq trigger.
-_POWER_NAMES41 = ("reboot", "shutdown", "poweroff", "halt", "systemctl", "loginctl", "telinit",
-                  "init", "kexec", "busctl", "dbus-send", "gdbus", "sudo", "doas", "pkexec", "run0",
-                  "su", "env")
+_POWER_NAMES41 = POWER_NAMES   # unit.power_names, which part124 shares without importing this module
 _POWER41 = _re41.compile(r"systemctl|shutdown|/sbin/|\binit\s+6|telinit|poweroff|halt\b|"
                          r"\bkexec\b|loginctl|busctl|dbus-send|gdbus|sysrq|\bPATH=|"
                          # a path's last part only: /var/run/reboot-required is no command

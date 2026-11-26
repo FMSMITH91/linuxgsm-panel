@@ -211,7 +211,7 @@ the file that holds them.
 | T | Poisoned pipeline execution from a pull request | Mitigate: no `pull_request_target`; `workflow_run` jobs run main's copy and treat artifacts as untrusted; actions pinned by full SHA; required checks and signed commits on `main` (OWASP Top 10 CI/CD Security Risks, CICD-SEC-1 and CICD-SEC-4). |
 | I | A secret reaches pull-request code | Mitigate: the only secrets live in environments only `main` can use; pull-request jobs hold the job token alone (CICD-SEC-6). |
 | E | A job's token can do more than the job needs | Mitigate: every workflow starts with `permissions: {}` and each job grants only what it uses (CICD-SEC-5). |
-| I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list (the unit suites' `checks` matrix, their coverage and JavaScript coverage jobs, and Lighthouse among them); the rest audit (CICD-SEC-7, CICD-SEC-10). |
+| I | A compromised tool sends data out of a runner | Mitigate: Harden-Runner on every job but the deploy; the pull-request jobs that reach only known hosts run it in block mode with an allow-list (the unit suites' `checks` matrix, their coverage and JavaScript coverage jobs, the verdict jobs that judge their parts, and Lighthouse among them); the rest audit (CICD-SEC-7, CICD-SEC-10). |
 
 ### TB9: SFTP client to the panel's SFTP service
 

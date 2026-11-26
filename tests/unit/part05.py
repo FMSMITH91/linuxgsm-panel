@@ -827,8 +827,11 @@ check("test wiring: every tests/*_test.py is referenced by tools/run-tests.sh",
       not _missing_runner, "not run by CI: %s" % _missing_runner)
 
 _ci = (_repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-_cov_line = [ln for ln in _ci.split("\n") if "for suite in" in ln]
-_cov_names = set(_cov_line[0].split("for suite in", 1)[1].split(";")[0].split()) if _cov_line else set()
+# The coverage job runs in parts (ci.yml): each part names its suites in a `suites=` word, and the loop
+# runs `for suite in ${suites}`; the union of the parts' suites is what is measured.
+_cov_line = [ln for ln in _ci.split("\n") if "for suite in ${suites}; do" in ln]
+_cov_names = {_w for _ln in _ci.split("\n") for _m in [_re_fl.search(r'\bsuites=(?:"([^"]*)"|(\w+);)', _ln)] if _m
+              for _w in (_m.group(1) or _m.group(2)).split()} if _cov_line else set()
 # url_map is deliberately out of the coverage loop (it only reads the URL map), so compare against
 # the suites the runner treats as DB-owning plus the pure-logic ones — i.e. everything but url_map.
 _want_cov = {s[:-len("_test.py")] for s in _suites} - {"url_map"}

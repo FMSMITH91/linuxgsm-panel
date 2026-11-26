@@ -249,7 +249,7 @@ _jcj_coe = [_s.split("\n", 1)[0] for _s in _jcj_steps if "continue-on-error" in 
 check("js coverage (CI): ...installs only requirements.txt, hash-checked, and runs the harness "
       "with nothing that turns its failure into a pass",
       _jcj_pip == ["pip install --quiet --require-hashes --only-binary :all: --no-deps -r panel/install/requirements.txt"]
-      and "python tools/js_coverage/run.py --chrome" in _jcj and "--out lcov.info" in _jcj
+      and "python tools/js_coverage/run.py --chrome" in _jcj and '--out "lcov.${ID}.info"' in _jcj
       and "|| true" not in _jcj and "set -euo pipefail" in _jcj
       and _jcj_coe == ["name: Take the report the pull request's run made on the same tree"]
       and "if-no-files-found: error" in _jcj,
@@ -259,14 +259,15 @@ check("js coverage (CI): ...installs only requirements.txt, hash-checked, and ru
 # told: the step must leave with run.py's status (and so stop the upload after it), put the summary
 # on the run page either way, and fail — saying so — on a runner with no Chrome. PATH holds nothing
 # but the stand-ins, so a runner that does have Chrome cannot make the last case pass by accident.
-_jcm = re.search(r"- name: Measure\n(?:\s+if: .*\n)?\s+run: \|\n((?:\s{10}.*\n|\s*\n)+)", _ci14)
+_jcm = re.search(r"- name: Measure\n(?:\s+if: .*\n)?(?:\s+env:\n(?:\s{10}.*\n)+)?\s+run: \|\n((?:\s{10}.*\n|\s*\n)+)",
+                 _ci14[_ci14.find("\n  js-coverage:\n"):])
 _jcm_code = "\n".join(_l[10:] for _l in _jcm.group(1).splitlines()) if _jcm else ""
 _jcm_sb = _tf14.mkdtemp(prefix="jscov-ci-")
 try:
     _jcm_bin = os.path.join(_jcm_sb, "bin")
     os.makedirs(_jcm_bin)
     for _n, _body in (("python", "#!/bin/sh\necho \"$*\" > args\n"
-                                 "[ -n \"$JC_SUMMARY\" ] && echo \"$JC_SUMMARY\" > js-coverage.txt\n"
+                                 "[ -n \"$JC_SUMMARY\" ] && echo \"$JC_SUMMARY\" > js-coverage.$ID.txt\n"
                                  "exit \"$JC_RC\"\n"),
                       ("google-chrome", "#!/bin/sh\nexit 0\n")):
         # Created owner-only and executable in the one open: no window in which it is anyone else's.
@@ -286,7 +287,7 @@ try:
         _summ = os.path.join(_wd, "step-summary")
         _p = _sp14.run(["/bin/bash", "-c", _jcm_code], cwd=_wd, capture_output=True, text=True,  # nosec B603 - ci.yml's own step
                        timeout=30, env={"PATH": _path, "JC_RC": str(rc), "JC_SUMMARY": summary,
-                                        "GITHUB_STEP_SUMMARY": _summ})
+                                        "GITHUB_STEP_SUMMARY": _summ, "PART": "2/4", "ID": "p2"})
         _read = (lambda _f: open(_f).read() if os.path.exists(_f) else "")
         return _p.returncode, _read(_summ), _read(os.path.join(_wd, "args")), _p.stdout + _p.stderr
 
@@ -298,7 +299,7 @@ try:
           and _jcm_cases["not reached"][0] == 2 and _jcm_cases["no summary"][0] == 2
           and all("TOTAL 5216" in _jcm_cases[_k][1] for _k in ("measured", "empty", "not reached"))
           and _jcm_cases["no summary"][1] == ""
-          and "--out lcov.info --summary js-coverage.txt" in _jcm_cases["measured"][2]
+          and "--part 2/4 --out lcov.p2.info --summary js-coverage.p2.txt" in _jcm_cases["measured"][2]
           and "--chrome " + os.path.join(_jcm_bin, "google-chrome") in _jcm_cases["measured"][2],
           repr({_k: _v[:3] for _k, _v in _jcm_cases.items()}))
     check("js coverage (CI): ...and on a runner with no Chrome it fails, saying so, without running",
@@ -347,7 +348,7 @@ def _jc_main(session_enter, chrome="/usr/bin/chrome-stand-in", walk=None):
             return False
 
     _saved = (_jc_run.Session, _jc_run.walk, _jc_run.find_chrome, _sig14.getsignal(_sig14.SIGTERM))
-    _jc_run.Session, _jc_run.walk = _Session, (walk or (lambda _d, only=None: None))
+    _jc_run.Session, _jc_run.walk = _Session, (walk or (lambda _d, only=None, part_list=None: None))
     _jc_run.find_chrome = lambda _explicit: chrome
     _buf = _io14.StringIO()
     try:
@@ -369,7 +370,7 @@ def _jc_raise(msg, code=2):
     return _enter
 
 
-def _jc_lost(_d, only=None):
+def _jc_lost(_d, only=None, part_list=None):
     raise _jc_run.LoginFailed("signing in did not land: still at '/login'")
 
 
@@ -881,9 +882,13 @@ _req_found = {r: any((n == r) if not r.endswith("(") else n.startswith(r) for n 
 check("update gate: every required CI/CodeQL name is a job name in ci.yml or codeql.yml",
       all(_req_found.values()), repr((_req_found, _names14)))
 _ci_jobs14 = re.findall(r"^    name: (.+)$", _ci_wf14, re.M)
-_ci_jobs14 = [n.split("${{")[0].strip() for n in _ci_jobs14]
+# A job run in parts (`<name> · ${{ matrix.part }}`) reports through its verdict job, named <name>
+# exactly, which passes only when every part did (ci.yml; part303 holds the verdicts).
+_ci_parts14 = [n for n in _ci_jobs14 if n.endswith(" · ${{ matrix.part }}")]
+_ci_jobs14 = [n.split("${{")[0].strip() for n in _ci_jobs14 if n not in _ci_parts14]
 check("update gate: ...and every ci.yml job is required (none left for the gate to miss)",
-      len(_ci_jobs14) == 4
+      len(_ci_jobs14) == 4 and len(_ci_parts14) == 3
+      and all(n[:-len(" · ${{ matrix.part }}")] in re.findall(r"^    name: (.+)$", _ci_wf14, re.M) for n in _ci_parts14)
       and all(any(_so14._ci_name_matches(r, n) for r in _so14._CI_REQUIRED) for n in _ci_jobs14),
       repr(_ci_jobs14))
 check("update gate: the alerts workflow POSTS the required 'Open code-scanning alerts' check, and "

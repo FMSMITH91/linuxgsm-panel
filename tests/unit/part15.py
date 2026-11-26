@@ -307,8 +307,11 @@ import sys as _sys15  # noqa: E402
 from unit.part12 import P9_RESOLVER_THREADS as _threads_rec15, P9_UNARMED_REQUESTS as _unarmed_rec15  # noqa: E402
 from unit.part250 import _tripwire_parts250  # noqa: E402
 
-_before15 = sorted(n for n in (os.path.basename(p)[:-3] for p in _glob15.glob(os.path.join(_root, "tests", "unit", "part*.py")))
-                   if n != "part15" and "unit." + n not in _sys15.modules)
+# Every part this run imports: all of tests/unit/part*.py, or one shard's list (tests/unit/shard.py,
+# which the runner records as RUN), whose last part is this one too.
+_run15 = getattr(_sys15.modules.get("unit.shard"), "RUN", None) or [
+    os.path.basename(p)[:-3] for p in _glob15.glob(os.path.join(_root, "tests", "unit", "part*.py"))]
+_before15 = sorted(n for n in _run15 if n != "part15" and "unit." + n not in _sys15.modules)
 check("unit suite: part15 runs last (every other tests/unit/part*.py ran before it, so its run-wide gates "
       "and the leftover-thread look below see every part)", not _before15, "run after part15: %s" % _before15)
 check("page renders: no part rendered a server page with the timezone or public-IP lookup unstubbed (each "

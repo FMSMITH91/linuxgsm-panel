@@ -5,6 +5,8 @@
 #   ./tools/run-tests.sh              # uses python3
 #   PYTHON=./venv/bin/python ./tools/run-tests.sh
 #   RUN_TESTS_PARALLEL=1 ./tools/run-tests.sh     # the suites in three lanes at once (CI does)
+#   RUN_TESTS_UNIT=only UNIT_SHARD=2/4 ./tools/run-tests.sh   # one unit shard alone (CI's unit jobs)
+#   RUN_TESTS_UNIT=skip ./tools/run-tests.sh      # everything but the unit suite (CI's "suites" job)
 set -euo pipefail
 cd "$(dirname "$0")/.."   # repo root (this script lives in tools/)
 PY="${PYTHON:-python3}"
@@ -23,6 +25,14 @@ fi
 trap 'rm -rf "$RT_TMP"' EXIT
 # The checkout itself. run_suite refuses to clear a database here (see it).
 RT_ROOT="$PWD"
+# RUN_TESTS_UNIT splits the run in two for CI, which runs the parts as separate jobs side by side:
+# "only" runs the unit suite and nothing else (one shard of it with UNIT_SHARD=i/n, which the unit
+# runner reads: tests/unit/shard.py), "skip" runs everything else, and unset runs everything, as
+# before. Anything else stops here, so a misspelt value cannot quietly run less.
+case "${RUN_TESTS_UNIT:-}" in
+    ""|only|skip) ;;
+    *) echo "  !! RUN_TESTS_UNIT=${RUN_TESTS_UNIT}: expected only, skip or nothing" >&2; exit 2 ;;
+esac
 
 # ORDER IS CHEAPEST-FIRST, and deliberately so. Every step aborts the run (set -e), so whatever
 # runs first decides how long a BROKEN tree takes to tell you. The static checks and the sub-second
@@ -100,49 +110,52 @@ run_suite() {
     fi
 }
 
-echo "== byte-compile (syntax errors) =="
-"$PY" -m compileall -q -x "$VENVS" .
-# compileall walks *.py ONLY. tools/panel-helper is Python with a shebang and no extension — it is
-# the root-owned end of the sudo boundary, and it was the one file in the repo no static check
-# could see. Named explicitly here and below for the same reason.
-"$PY" -m py_compile tools/panel-helper
+# The static checks: compile, lint and shellcheck (not in a unit-only run).
+static_checks() {
+    echo "== byte-compile (syntax errors) =="
+    "$PY" -m compileall -q -x "$VENVS" .
+    # compileall walks *.py ONLY. tools/panel-helper is Python with a shebang and no extension — it is
+    # the root-owned end of the sudo boundary, and it was the one file in the repo no static check
+    # could see. Named explicitly here and below for the same reason.
+    "$PY" -m py_compile tools/panel-helper
 
-echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F811, F841) =="
-# REQUIRE_TOOLS=1 (set by CI) turns "the tool isn't here" from a skip into a failure. The probe
-# below cannot tell "not installed" from "installed and raising on import" — a dependency conflict
-# or a bad wheel — and either way it printed "skipping" and the script went on to say
-# "All checks passed." Proven by execution: with flake8 made to raise, an injected F821 was
-# reported as a clean run.
-if "$PY" -m flake8 --version >/dev/null 2>&1; then
-    # F401 (unused import) + F841 (unused local var) are included so dead code is caught
-    # here rather than later by CodeQL / Codacy in the Security tab.
-    #
-    # F811 (redefinition of an unused name) was NOT in this list, and Codacy's pyflakes caught
-    # what it missed: splitting register_routes() left server_files.py importing flask_socketio
-    # twice, the second shadowing the first. Harmless there, but the same rule fires when a
-    # def or a name is genuinely clobbered by a later one — a silent wrong-function bug. It is
-    # the cheapest possible check for that, so it runs here rather than only in a cloud tool.
-    "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F811,F841 --show-source --statistics \
-        --extend-exclude=venv,.venv . tools/panel-helper
-elif [[ "${REQUIRE_TOOLS:-0}" = "1" ]]; then
-    echo "  !! flake8 is required here (REQUIRE_TOOLS=1) and could not be run" >&2
-    exit 1
-else
-    echo "  (flake8 not installed — skipping)"
-fi
+    echo "== lint: real bugs + unused imports/vars (undefined names, bad syntax, F401, F811, F841) =="
+    # REQUIRE_TOOLS=1 (set by CI) turns "the tool isn't here" from a skip into a failure. The probe
+    # below cannot tell "not installed" from "installed and raising on import" — a dependency conflict
+    # or a bad wheel — and either way it printed "skipping" and the script went on to say
+    # "All checks passed." Proven by execution: with flake8 made to raise, an injected F821 was
+    # reported as a clean run.
+    if "$PY" -m flake8 --version >/dev/null 2>&1; then
+        # F401 (unused import) + F841 (unused local var) are included so dead code is caught
+        # here rather than later by CodeQL / Codacy in the Security tab.
+        #
+        # F811 (redefinition of an unused name) was NOT in this list, and Codacy's pyflakes caught
+        # what it missed: splitting register_routes() left server_files.py importing flask_socketio
+        # twice, the second shadowing the first. Harmless there, but the same rule fires when a
+        # def or a name is genuinely clobbered by a later one — a silent wrong-function bug. It is
+        # the cheapest possible check for that, so it runs here rather than only in a cloud tool.
+        "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F811,F841 --show-source --statistics \
+            --extend-exclude=venv,.venv . tools/panel-helper
+    elif [[ "${REQUIRE_TOOLS:-0}" = "1" ]]; then
+        echo "  !! flake8 is required here (REQUIRE_TOOLS=1) and could not be run" >&2
+        exit 1
+    else
+        echo "  (flake8 not installed — skipping)"
+    fi
 
-if command -v shellcheck >/dev/null 2>&1; then
-    echo "== shellcheck (shell scripts) =="
-    # Every tracked *.sh, not a hand-kept list: smoke-local.sh and .clusterfuzzlite/build.sh had
-    # been missing from it. `git ls-files` so a new script is covered the day it is committed.
-    # shellcheck disable=SC2046  # word-splitting is what we want here; no shell script has a space
-    shellcheck -S warning $(git ls-files '*.sh')
-elif [[ "${REQUIRE_TOOLS:-0}" = "1" ]]; then
-    echo "  !! shellcheck is required here (REQUIRE_TOOLS=1) and is not on PATH" >&2
-    exit 1
-else
-    echo "== shellcheck (not installed — skipping) =="
-fi
+    if command -v shellcheck >/dev/null 2>&1; then
+        echo "== shellcheck (shell scripts) =="
+        # Every tracked *.sh, not a hand-kept list: smoke-local.sh and .clusterfuzzlite/build.sh had
+        # been missing from it. `git ls-files` so a new script is covered the day it is committed.
+        # shellcheck disable=SC2046  # word-splitting is what we want here; no shell script has a space
+        shellcheck -S warning $(git ls-files '*.sh')
+    elif [[ "${REQUIRE_TOOLS:-0}" = "1" ]]; then
+        echo "  !! shellcheck is required here (REQUIRE_TOOLS=1) and is not on PATH" >&2
+        exit 1
+    else
+        echo "== shellcheck (not installed — skipping) =="
+    fi
+}
 
 unit_suite() {
     echo "== unit tests (pure logic; no network) =="
@@ -302,12 +315,18 @@ _r23a_lane_log() {
 
 run_lanes() {
     local -a lanes=("unit_suite" "other_suites rbac_suite" "smoke_suite")
-    local -a pids shown
+    local -a pids shown suites=("${ALL_SUITES[@]}")
     local -A lane_of
     local i n rc bad=0 other smoke want got
+    # RUN_TESTS_UNIT=skip: the unit lane and the unit suite both go, so the check below still holds
+    # the lanes to running every other suite exactly once.
+    if [[ "${RUN_TESTS_UNIT:-}" == "skip" ]]; then
+        lanes=("${lanes[@]:1}")
+        mapfile -t suites < <(printf '%s\n' "${ALL_SUITES[@]}" | grep -vx unit_suite)
+    fi
     # shellcheck disable=SC2048,SC2086  # a lane is a list of function names, split on purpose
     got="$(printf '%s\n' ${lanes[*]} | sort)"
-    want="$(printf '%s\n' "${ALL_SUITES[@]}" | sort)"
+    want="$(printf '%s\n' "${suites[@]}" | sort)"
     if [[ "$got" != "$want" ]]; then
         echo "  !! the lanes run [${got//$'\n'/ }], not each of [${want//$'\n'/ }] once" >&2
         return 1
@@ -317,6 +336,9 @@ run_lanes() {
     other="$(lane_tree)"
     smoke="$(lane_tree)"
     local -a dirs=("$PWD" "$other" "$smoke")
+    if [[ "${RUN_TESTS_UNIT:-}" == "skip" ]]; then
+        dirs=("$other" "$smoke")
+    fi
     # Installed BEFORE the first lane starts, so no Ctrl-C lands in a window where a lane (which
     # ignores SIGINT) is running and nothing would stop it. On the way out it prints every lane log
     # not shown yet: those were in $RT_TMP, which the EXIT trap removes, so a run cancelled because
@@ -370,15 +392,19 @@ run_lanes() {
     return "$bad"
 }
 
-if [[ "${RUN_TESTS_PARALLEL:-0}" = "1" ]]; then
+if [[ "${RUN_TESTS_UNIT:-}" == "only" ]]; then
+    unit_suite
+elif [[ "${RUN_TESTS_PARALLEL:-0}" = "1" ]]; then
+    static_checks
     run_lanes
 else
+    static_checks
     # One after another, in ALL_SUITES' order: unit in the tree, as in the lanes, and every suite
     # that owns data/ in ONE copy of it (see run_suite), never in the checkout.
     seq_tree="$(lane_tree)"
     for fn in "${ALL_SUITES[@]}"; do
         if [[ "$fn" == "unit_suite" ]]; then
-            "$fn"
+            [[ "${RUN_TESTS_UNIT:-}" == "skip" ]] || "$fn"
         else
             ( cd "$seq_tree"; "$fn" )
         fi

@@ -6493,7 +6493,9 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
 _cc_dl_at = _cc_raw.find("- name: Download the coverage report CI made")
 _cc_dl = _cc_raw[_cc_dl_at:_cc_raw.find("\n      - name: ", _cc_dl_at)] if _cc_dl_at >= 0 else ""
 _cc_dl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_dl[_cc_dl.find("with:"):], re.M))
-_cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n", _cov_job)
+# The `coverage` artifact is coverage-verdict's: it combines the coverage parts' measurements into the report.
+_cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n",
+                        _ci_wf[_ci_wf.index("\n  coverage-verdict:\n"):])
 check("codacy-coverage: the step reads the workflow_run's own event, and the report from where the "
       "download put CI's coverage artifact, from that run",
       _cc_env.get("WR_EVENT") == "${{ github.event.workflow_run.event }}"
@@ -6793,7 +6795,8 @@ _pz_shadow = [_n for _n in (".landscape.yml", ".landscape.yaml", "landscape.yml"
               if os.path.exists(os.path.join(_root, _n))]
 check("prospector: no other profile at the root shadows .prospector.yaml", not _pz_shadow,
       repr(_pz_shadow))
-# The JavaScript artifact the step reads is the one CI's js-coverage job uploads, from the run
+# The JavaScript artifact the step reads is the one CI's js-coverage-verdict job uploads (the parts'
+# reports added into one), from the run
 # that finished, into the directory the step reads; and its absence is not the Python report's
 # failure: only that download may fail without stopping the job.
 _cc_jsdl_at = _cc_raw.find("- name: Download the JavaScript coverage report CI made")
@@ -6801,7 +6804,7 @@ _cc_jsdl = (_cc_raw[_cc_jsdl_at:_cc_raw.find("\n      - name: ", _cc_jsdl_at)]
             if _cc_jsdl_at >= 0 else "")
 _cc_jsdl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_jsdl[_cc_jsdl.find("with:"):],
                                 re.M))
-_js_job_at = _ci_wf.find("\n  js-coverage:\n")
+_js_job_at = _ci_wf.find("\n  js-coverage-verdict:\n")
 _js_job = _ci_wf[_js_job_at:] if _js_job_at >= 0 else ""
 _js_job = _js_job[:re.search(r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]).start() + 1] if re.search(
     r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]) else _js_job
