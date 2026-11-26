@@ -35,9 +35,10 @@ CAP_KEY = "sftp_max_upload_mb"
 IDLE_KEY = "sftp_idle_minutes"
 ABSOLUTE_KEY = "sftp_absolute_hours"
 HOST_KEY_KEY = "sftp_host_key"
+BIND_ADDR_SETTING = "sftp_bind_address"
 
-BIND_TAILSCALE, BIND_LOOPBACK, BIND_ALL = "tailscale", "loopback", "all"
-BIND_CHOICES = (BIND_TAILSCALE, BIND_LOOPBACK, BIND_ALL)
+BIND_TAILSCALE, BIND_LOOPBACK, BIND_ALL, BIND_ADDRESS = "tailscale", "loopback", "all", "address"
+BIND_CHOICES = (BIND_TAILSCALE, BIND_LOOPBACK, BIND_ALL, BIND_ADDRESS)
 
 DEFAULT_PORT = 2222
 # The OWASP File Upload Cheat Sheet ("Upload and Download Limits") asks for a size limit and names no
@@ -77,6 +78,8 @@ def settings(cfg):
     return {
         "enabled": cfg.get(ENABLED_KEY) is True,
         "bind": bind if bind in BIND_CHOICES else None,
+        # The one address "A specific address" listens on; "" for every other choice.
+        "address": address_or(cfg.get(BIND_ADDR_SETTING)) if bind == BIND_ADDRESS else "",
         "port": port_or(cfg.get(PORT_KEY), DEFAULT_PORT),
         "password": cfg.get(KBD_SIGNIN_KEY) is True,
         "cap_mb": cap_or(cfg.get(CAP_KEY), RECOMMENDED_CAP_MB),
@@ -161,14 +164,17 @@ def host_has_ipv6(path="/proc/net/if_inet6"):
         return False
 
 
-def bind_addresses(choice, tailscale_ips, ipv6):
+def bind_addresses(choice, tailscale_ips, ipv6, address=""):
     """The addresses the service listens on for `choice`; [] when there is none to use yet.
 
     * tailscale: this host's Tailscale addresses (IPv4 first), only those inside Tailscale's ranges.
     * loopback: 127.0.0.1.
     * all: 0.0.0.0, and :: as well when the host has IPv6 (`ipv6`).
+    * address: `address` alone (checked by address_or), never anything in its place.
     Never 0.0.0.0 or :: for any choice but `all`.
     """
+    if choice == BIND_ADDRESS:
+        return [address_or(address)] if address_or(address) else []
     if choice == BIND_LOOPBACK:
         return ["127.0.0.1"]
     if choice == BIND_ALL:
@@ -201,6 +207,54 @@ def _tailnet_addresses(ips):
 TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))  # NOSONAR - Tailscale's fixed ranges
 
 
+# Addresses that are not reachable from the internet: RFC 1918, the shared CGNAT range (RFC 6598, which
+# holds Tailscale's), loopback, link-local, and IPv6 unique local addresses (RFC 4193, which holds
+# Tailscale's IPv6 range). Any other address of the host is public, and the card says so beside it.
+NOT_PUBLIC = tuple(ipaddress.ip_network(n) for n in (  # NOSONAR - the fixed private and local ranges
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+    "::1/128", "fe80::/10", "fc00::/7"))
+
+
+def address_or(value):
+    """`value` as one IP address in its canonical text, else "".
+
+    Never the "every address" forms (0.0.0.0, ::), a multicast address, or an IPv6 link-local one,
+    which needs an interface to listen on that a stored address does not carry.
+    """
+    try:
+        addr = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return ""
+    if addr.is_unspecified or addr.is_multicast or (addr.version == 6 and addr.is_link_local):
+        return ""
+    return str(addr)
+
+
+def is_public(address):
+    """Whether `address` is reachable from the internet: not private, CGNAT, loopback, link-local or ULA."""
+    try:
+        addr = ipaddress.ip_address(str(address or "").strip())
+    except ValueError:
+        return False
+    return not any(addr.version == n.version and addr in n for n in NOT_PUBLIC)
+
+
+def host_addresses(rows):
+    """The addresses "A specific address" offers, from `ip -o addr` rows (ufweval.parse_ip_addr).
+
+    [{"addr", "iface", "public"}], IPv4 first, each once; nothing on loopback (127.0.0.1 is its own
+    choice) and nothing address_or refuses. [] when the rows are None (not read).
+    """
+    out, seen = [], set()
+    for iface, addr, _scope in rows or ():
+        text = address_or(addr)
+        if iface == "lo" or not text or text in seen:
+            continue
+        seen.add(text)
+        out.append({"addr": text, "iface": str(iface), "public": is_public(text)})
+    return sorted(out, key=lambda a: ":" in a["addr"])
+
+
 def _bind_allowed(bind, tailscale_up, enabled, saved_bind):
     """Whether the card may save `bind`: Tailscale while it is down only as the saved choice or with the service off."""
     if bind not in BIND_CHOICES:
@@ -208,18 +262,44 @@ def _bind_allowed(bind, tailscale_up, enabled, saved_bind):
     return bind != BIND_TAILSCALE or tailscale_up or not enabled or saved_bind == BIND_TAILSCALE
 
 
-def parse_form(form, tailscale_up, saved_bind=None):
+def _address_choice(form, enabled, saved, host_addrs):
+    """(address to store or None, refusal or None) for the card's bind choice.
+
+    "A specific address" needs one of this host's addresses (`host_addrs`). One that is not on the
+    host now is refused only as a new choice for a service that is on, as the Tailscale address is:
+    the saved address is kept (the service waits for it), so turning the service off still saves.
+    """
+    if (form.get("sftp_bind") or "").strip() != BIND_ADDRESS:
+        return None, None
+    addr = address_or(form.get(BIND_ADDR_SETTING))
+    if not addr or not _address_allowed(addr, enabled, saved or {}, host_addrs or ()):
+        return None, "Choose one of this host's addresses for the SFTP service."
+    return addr, None
+
+
+def _address_allowed(addr, enabled, saved, host_addrs):
+    """Whether `addr` may be saved: the host has it, the service is off, or it is the saved address kept."""
+    if addr in host_addrs or not enabled:
+        return True
+    return saved.get("bind") == BIND_ADDRESS and addr == saved.get("address")
+
+
+def parse_form(form, tailscale_up, saved_bind=None, host_addrs=(), saved=None):
     """(changes for config.json, refusal or None) from the Settings card's form.
 
     Out-of-range numbers are refused, never quietly changed. Values outside the recommendation are
     saved (the card shows a note beside them). The Tailscale address is refused while Tailscale is
     down only as a new choice for a service that is on: the saved choice is kept as it is (the
     service waits for Tailscale), so turning the service off or changing its port still saves.
+    `host_addrs` are this host's addresses (host_addresses' "addr"), `saved` the settings in force.
     """
     bind = (form.get("sftp_bind") or "").strip()
     enabled = form.get("sftp_enabled") == "on"
     if not _bind_allowed(bind, tailscale_up, enabled, saved_bind):
         return None, "Choose where the SFTP service listens."
+    address, why = _address_choice(form, enabled, saved, host_addrs)
+    if why:
+        return None, why
     port = port_or(form.get("sftp_port"), None)
     if port is None:
         return None, "The SFTP port must be a whole number from 1 to 65535."
@@ -235,9 +315,12 @@ def parse_form(form, tailscale_up, saved_bind=None):
     if idle > absolute * 60:
         return None, ("The idle timeout cannot be longer than the absolute session limit. Shorten the "
                       "idle timeout or lengthen the limit.")
-    return {ENABLED_KEY: enabled, BIND_KEY: bind, PORT_KEY: port,
-            KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap, IDLE_KEY: idle,
-            ABSOLUTE_KEY: absolute}, None
+    changes = {ENABLED_KEY: enabled, BIND_KEY: bind, PORT_KEY: port,
+               KBD_SIGNIN_KEY: form.get("sftp_password_auth") == "on", CAP_KEY: cap, IDLE_KEY: idle,
+               ABSOLUTE_KEY: absolute}
+    if address:
+        changes[BIND_ADDR_SETTING] = address
+    return changes, None
 
 
 # ── The service's host key ─────────────────────────────────────────────────────────────────────

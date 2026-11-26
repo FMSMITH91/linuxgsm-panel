@@ -17,7 +17,7 @@ Settings → **SFTP**:
 | Setting | What it does | Recommended |
 | --- | --- | --- |
 | SFTP service on | Starts the service. Off stops it, and nothing listens. | — |
-| Listen on | **This host's Tailscale address** (offered only while Tailscale is up), **only this host** (127.0.0.1), or **all addresses** (0.0.0.0, and :: when the host has IPv6) | Tailscale; 127.0.0.1 without Tailscale |
+| Listen on | **This host's Tailscale address** (offered only while Tailscale is up), **only this host** (127.0.0.1), **all addresses** (0.0.0.0, and :: when the host has IPv6), or **a specific address** (one of the panel host's own addresses) | Tailscale; 127.0.0.1 without Tailscale |
 | Port | The TCP port | 2222 (the default) |
 | Largest upload (MiB) | A single file larger than this is refused | 4096 |
 | Absolute session limit (hours) | A session ends this long after sign-in, whatever it does: it opens nothing new after it, a file already open may finish for up to an hour, then the session is closed and the user signs in again. Until set, the panel's own sign-in limit (Settings → Sessions & Security) | 8 (OWASP: 4 to 8 hours) |
@@ -46,6 +46,20 @@ service's **host key fingerprint**.
 
   With all addresses, keep sign-in to SSH keys (the default). Failed sign-ins count towards the
   panel's fail2ban jail, which then also bans on the SFTP port.
+- **A specific address**: the service listens on that one address and no other, for example a
+  LAN address, or one public address when the host has several. The list shows the panel host's own
+  addresses (read with `ip -o addr` in the C locale) and the interface each is on. An address that is
+  not private (RFC 1918, 100.64.0.0/10, loopback, link-local or an IPv6 unique local address) is
+  marked **public** in the list, and the card warns beside it: anyone on the internet can then try to
+  sign in (OWASP Attack Surface Analysis Cheat Sheet, "Measuring and Assessing the Attack Surface":
+  internet-facing code is the high-risk part). With a public address the panel's fail2ban jail also
+  bans on the SFTP port, as it does for all addresses. The panel never opens the firewall: allow the
+  port as above, `sudo ufw allow to 203.0.113.5 port 2222 proto tcp` for one address.
+
+  When the host loses the address (a DHCP lease moves it, an interface goes down), the panel
+  notices within 30 seconds, stops the service and says why on the card and in the audit log
+  (`sftp_address_gone`). It never falls back to another address. When the address comes back the
+  service starts again on it (`sftp_address_back` in the audit log).
 
 ## Connecting
 

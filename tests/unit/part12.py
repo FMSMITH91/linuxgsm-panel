@@ -466,6 +466,10 @@ def _p9_arm(patch=None, who="part12"):
     # Rendering reads Tailscale state for the nav; that is a host command, answered here.
     patch(_p9_ts, "get_tailscale_info",
           lambda force_refresh=False: NS(dns_name=None, serve_config={}, serve_unreadable=False))
+    # ...and Settings reads the panel host's own addresses for the SFTP card (`ip -o addr`): answered
+    # here as not read. part307 drives the real reader with a stand-in `ip`.
+    from panel.services import sftp_broker as _p9_sftp
+    patch(_p9_sftp, "host_address_rows", lambda: None)
 
 
 try:
