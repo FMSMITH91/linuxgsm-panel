@@ -16,15 +16,16 @@ websites.reconcile_proxy, the tunnel through ssh_manager.websites.tunnel_apply.
 """
 import json
 import re
+import threading
 
-from flask import abort, jsonify, request
+from flask import abort, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from panel.core import i18n
 from panel.core.config import encrypt_secret
 from panel.core.validation import (WEBSITE_ALLOW_PRESETS, WEBSITE_EXPOSURE_MODES, WEBSITE_ORIGIN_TLS,
                                    WEBSITE_TUNNEL_PROVIDERS, website_cidr)
-from panel.db.models import RemoteServer, Website, db
+from panel.db.models import RemoteServer, User, Website, WebsiteProxy, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
 from panel.security.account_guard import step_up_required
@@ -37,6 +38,8 @@ S_CIDR = "{cidr} is not a network address like 203.0.113.0/24 or 2001:db8::/32."
 S_TOKEN = "Paste the tunnel's token: one line of at most 4096 characters."  # nosec B105 - a sentence for the page, not a credential
 S_RESTRICTED_EMPTY = "A restricted host needs at least one network or preset in its allow list."
 S_TUNNEL_NO_TOKEN = "A tunnel needs its token."  # nosec B105 - a sentence for the page, not a credential
+S_CACHE_BUILDING = ("Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; "
+                    "the websites' page caches start when it is done.")
 
 
 def _remote():
@@ -192,14 +195,51 @@ def _save_options(form):
     values, problems = parse_options(form if isinstance(form, dict) else {})
     if problems:
         return _w.say(400, " ".join(problems))
-    from flask import current_app
-    from panel.routes.websites_view import config_key
+    from panel.routes.websites_view import config_key, options
+    cache_before = options()["cache_build"]
     update_config(lambda cfg: cfg.update({config_key(k): v for k, v in values.items()}))
     if "require_2fa" in values:
         current_app.config["WEBSITES_CUSTOMER_2FA"] = values["require_2fa"]
     log_action(current_user, "website_settings_global", target="websites",
                detail=", ".join("%s=%s" % (k, "set" if k == "acme_contact" and v else v) for k, v in sorted(values.items())))
+    if values.get("cache_build") and not cache_before:
+        hosts = [p.remote_id for p in WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").all()]
+        if hosts:
+            cache_build_start(hosts)
+            return _w.done(True, S_CACHE_BUILDING)
     return _w.done(True, "Saved.")
+
+
+# ── the page cache's proxy ───────────────────────────────────────────────────────────────────────
+def cache_build_start(remote_ids):
+    """Build the web proxy with the page cache on each host of `remote_ids`, in the background (minutes).
+
+    Started when the Security settings' "Page cache in the web proxy" is turned on, and after the plain proxy is
+    installed while it is on (that install puts the plain binary back). The outcome is an audit row, and a
+    failure is the proxy row's last_error, which the Security settings card shows.
+    """
+    app = current_app._get_current_object()
+    for rid in remote_ids:
+        threading.Thread(target=_cache_build_worker, args=(app, rid, current_user.id), daemon=True).start()
+
+
+def _cache_build_worker(app, remote_id, uid):
+    with app.app_context():
+        remote, user = db.session.get(RemoteServer, remote_id), db.session.get(User, uid)
+        if remote is None:
+            return
+        ok, out = _w.host_call(_sw.proxy_status, remote)
+        built = bool(ok) and _sw.parse_proxy_status(out)["cache"]
+        ok, said = (True, _sw.OK_CACHE_BUILD) if built else _w.host_call(_sw.proxy_install_cache, remote)
+        row = _w.proxy_row(remote_id)
+        row.last_error = "" if ok else i18n.tr(said)[:200]
+        db.session.commit()
+        if ok and Website.query.filter_by(remote_id=remote_id, enabled=True).count():
+            ok, said = _w.reconcile_proxy(remote)
+        log_action(user, "remote_website_proxy_cache", target=remote.name, remote=remote, success=bool(ok),
+                   detail="the web proxy with the page cache %s" % (
+                       "was already built" if built and ok else "was built and installed" if ok
+                       else "failed: %s" % i18n.tr(said)))
 
 
 def _apply(remote, row):
@@ -247,9 +287,12 @@ def register(app):
         remote = _remote()
         ok, said = _w.host_call(_sw.proxy_install, remote)
         if ok:
+            from panel.routes.websites_view import options
             from panel.services import websites_catalog
             _note_version(_w.proxy_row(remote.id), {"installed": True, "version": websites_catalog.pins("caddy")["version"]})
             ok, said = _w.host_call(_sw.egress_guard, remote)
+            if ok and options()["cache_build"]:
+                cache_build_start([remote.id])      # the plain install put the plain binary back
         log_action(current_user, "remote_website_proxy_install", target=remote.name, remote=remote, success=bool(ok),
                    detail="web proxy and egress guard installed" if ok else "failed: %s" % i18n.tr(said))
         return _w.done(ok, said or "The web proxy is installed.")

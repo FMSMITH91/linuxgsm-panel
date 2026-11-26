@@ -32,6 +32,8 @@ PHP_KINDS = ("php", "wordpress", "phpbb")
 S_NOT_PHP = "This website does not run PHP."
 S_NOT_APP = "This website is not an app."
 S_RULES_MAX = 50
+S_PAGE_CACHE_WAITS = ("Saved. The page cache starts once this host's web proxy has it: a superadmin turns on \"Page cache "
+                      "in the web proxy\" in the Websites security settings.")
 S_CACHE_ON = "The object cache was turned on, and the website was restarted with it."
 S_CACHE_OFF = "The object cache was turned off and removed, and the website was restarted."
 
@@ -182,6 +184,8 @@ def _perf_apply(site, changes, cache_turned):
     proxied = {"page_cache", "page_cache_ttl", "static_cache"} & set(changes)
     if ok and site.enabled and proxied:
         ok, said = _w.reconcile_proxy(site.remote)
+    if ok and changes.get("page_cache") and not _w.page_cache_ready(site.remote):
+        said = S_PAGE_CACHE_WAITS
     return ok, said
 
 

@@ -12,6 +12,8 @@ F26. A runtime app's gate and the object cache (Network=container:) carry no DNS
 F27. The page cache's proxy builds: its Caddy version ARG no longer clashes with the builder's ENV, xcaddy does not
      setcap, and the root build uses the host's network (the copy-out container none), so netavark never turns on
      the host's IP forwarding or adds its iptables chains; a failed build's last lines reach the panel's log.
+     F27 wiring: turning on "Page cache in the web proxy" builds it on every host with a web proxy (and a plain
+     proxy install while it is on builds it again); the Performance tab says when a site's page cache waits for it.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -44,6 +46,8 @@ from panel.ops.ssh_manager import websites as _sw306
 from panel.routes import _shared as _shared306
 from panel.routes import websites as _w306
 from panel.routes import websites_apps as _wapps306
+from panel.routes import websites_proxy as _wproxy306
+from panel.routes import websites_settings as _wset306
 from panel.services import websites as _ws306
 from panel.services import websites_catalog as _wc306
 
@@ -497,6 +501,58 @@ def _f27_cache_build(st):
                                  any("line 40 of the build" in ln for ln in rec.lines)), (False, True, True))
 
 
+def _f27_wiring(st):
+    built, cache = [], {"have": "no", "ok": True}
+    _p9_patch(_wproxy306, "threading", _NS306(Thread=_Inline306))
+    _p9_patch(_sw306, "proxy_status", lambda remote: (True, "installed=yes\nversion=v2.11.9\ncache=%s\n" % cache["have"]))
+    _p9_patch(_sw306, "proxy_install_cache", lambda remote: built.append(remote.id) or (
+        (True, _sw306.OK_CACHE_BUILD) if cache["ok"] else (False, _sw306.CACHE_BUILD_FAILED)))
+    _p9_patch(_sw306, "proxy_install", lambda remote: (True, _sw306.OK_PROXY))
+    _p9_patch(_sw306, "egress_guard", lambda remote: (True, _sw306.OK_GUARD))
+    row = _w306.proxy_row(st.host.id)
+    row.installed_version = "2.11.9"
+    _db306.session.commit()
+    su = _Client306(st.su.id)
+    try:
+        r = su.post("/websites/proxy/options", json={"options": {"cache_build": True}})
+        audit = _p9_audit("remote_website_proxy_cache")
+        eq("F27 wiring (POST /websites/proxy/options, page cache turned on): the web proxy with the page cache is "
+           "built on the host with a web proxy, the page says so, and the outcome is audited (no route ever called the "
+           "build: the option did nothing)",
+           (r.status_code, built, _p9_json(r).get("message") == _wproxy306.S_CACHE_BUILDING, audit.success,
+            "was built and installed" in audit.detail), (200, [st.host.id], True, True, True))
+        del built[:]
+        r2 = su.post("/websites/proxy/options", json={"options": {"cache_build": True}})
+        eq("F27 wiring: saving the settings again with the page cache already on builds nothing (control)",
+           (r2.status_code, built), (200, []))
+        r3 = su.post("/websites/proxy/install", json={"host_id": st.host.id})
+        eq("F27 wiring (POST /websites/proxy/install with the page cache on): the plain install is followed by the "
+           "build, which puts the cache module back", (r3.status_code, built), (200, [st.host.id]))
+        _f27_wiring_failure(st, su, built, cache)
+    finally:
+        _cfg306.update_config(lambda cfg: cfg.pop("websites_cache_build", None))
+
+
+def _f27_wiring_failure(st, su, built, cache):
+    su.post("/websites/proxy/options", json={"options": {"cache_build": False}})
+    del built[:]
+    cache["ok"] = False
+    su.post("/websites/proxy/options", json={"options": {"cache_build": True}})
+    _db306.session.expire_all()
+    eq("F27 wiring: a build that fails is the proxy row's last error (the Security settings card shows it)",
+       (built, _w306.proxy_row(st.host.id).last_error), ([st.host.id], _sw306.CACHE_BUILD_FAILED))
+    _bash_seams306()
+    site = _site306(st, "p306-pc", kind="php")
+    _reset306()
+    r = su.post("/websites/%d/performance" % site.id, json={"page_cache": True})
+    cache["have"] = "yes"
+    r2 = su.post("/websites/%d/performance" % site.id, json={"page_cache": True, "page_cache_ttl": 120})
+    eq("F27 wiring (POST /websites/<id>/performance): a page cache turned on while this host's proxy lacks the module "
+       "says it waits for it; once the proxy has it, the plain answer (control)",
+       (r.status_code, _p9_json(r).get("message"), r2.status_code, _p9_json(r2).get("message") == _w306.i18n.tr(
+           _wset306.S_PAGE_CACHE_WAITS)), (200, _wset306.S_PAGE_CACHE_WAITS, 200, False))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -545,7 +601,8 @@ def _ran306(step, st):
 
 
 _ran306.last = ""
-_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build)
+_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
+                _f27_wiring)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

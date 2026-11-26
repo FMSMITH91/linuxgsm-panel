@@ -282,7 +282,7 @@
   "For testing only. OWASP recommends: off (a certificate authority your visitors' browsers trust).": "Pour les tests seulement. OWASP recommande : désactivé (une autorité de certification à laquelle les navigateurs de vos visiteurs font confiance).",
   "Browsers do not trust these certificates: every visitor sees a warning. It is still saved.": "Les navigateurs ne font pas confiance à ces certificats : chaque visiteur voit un avertissement. Le réglage est tout de même enregistré.",
   "Page cache in the web proxy": "Cache de pages dans le proxy web",
-  "OWASP has no recommendation for this. It takes effect only on a host whose web proxy was built with the page cache; elsewhere it is left out and nothing breaks.": "OWASP ne donne aucune recommandation à ce sujet. Il ne prend effet que sur un hôte dont le proxy web a été construit avec le cache de pages ; ailleurs il est ignoré et rien ne casse.",
+  "OWASP has no recommendation for this. Turning it on builds the web proxy with the page cache on the host, which takes a few minutes; until then the websites' page caches are left out and nothing breaks.": "L'OWASP ne fait aucune recommandation à ce sujet. L'activer compile sur l'hôte le proxy web avec le cache de pages, ce qui prend quelques minutes ; d'ici là, les caches de pages des sites web sont laissés de côté et rien ne casse.",
   "expires": "expire le",
   "Certificate active (Let's Encrypt)": "Certificat actif (Let's Encrypt)",
   "Certificate active (ZeroSSL)": "Certificat actif (ZeroSSL)",

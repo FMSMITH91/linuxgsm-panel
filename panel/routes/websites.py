@@ -195,6 +195,12 @@ def _cache_checked(remote, opts):
     return opts
 
 
+def page_cache_ready(remote):
+    """Whether a site's page cache takes effect on `remote`: the setting is on and its proxy has the module."""
+    from panel.routes.websites_view import options
+    return _cache_checked(remote, {"cache_build": options()["cache_build"]})["cache_build"]
+
+
 def reconcile_proxy(remote):
     """Bring the host's proxy and ports in line with its online sites: (ok, sentence).
 
