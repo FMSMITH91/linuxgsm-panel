@@ -1429,13 +1429,15 @@ try:
     check("action (JSON): a host that raises is a 500 saying the host is unreachable",
           _r.status_code == 500 and _p9_json(_r).get("message") == "Host unreachable")
 
-    # The FORM variant: flash + redirect, never the exception text.
+    # The FORM variant: flash + redirect, never the exception text. Its own row (review 1124): the JSON
+    # call just before wrote the same failed row, which read as this one's when the form wrote none.
+    _fv_before = _p9_audit("details_server").id
     _r = _A.post("/server/%d/action" % P9_GS, data={"action": "details"})
     _fl = _p9_flashes(_A)
+    _fv_row = _p9_audit_after("details_server", _fv_before)
     check("action (form): a host that raises flashes a generic failure and audits the error",
           _r.status_code == 302 and _fl == ["That action failed. The audit log has the details."]
-          and _p9_audit("details_server").success is False
-          and "ssh down" in _p9_audit("details_server").detail, repr((_fl, _p9_audit("details_server"))))
+          and _fv_row.success is False and "ssh down" in _fv_row.detail, repr((_fl, _fv_row)))
     _r = _A.post("/server/%d/action" % P9_GS, data={"action": "rm -rf"})
     check("action (form): an action outside the runnable set is refused by name",
           _r.status_code == 302 and _p9_flashes(_A) == ["Unknown or unsupported action: rm -rf"],
