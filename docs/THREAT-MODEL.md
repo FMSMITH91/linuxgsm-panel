@@ -241,8 +241,9 @@ every address (the operator's explicit choice, with a warning; the panel never o
   on pull requests that touch them, 600 s nightly, and by ClusterFuzzLite.
 - **Scanners.** CodeQL, Bandit, Semgrep, zizmor, Gitleaks, pip-audit, osv-scanner, Dependency Review,
   SonarCloud and Codacy, with an open-alerts gate on main. The add-on images are scanned daily, and on
-  any change to one or to its pin, as hosts run them (Trivy fails on a fixable High or Critical finding
-  or a secret; accepted findings expire; hadolint lints the Containerfiles; `.github/workflows/addon-images.yml`).
+  any change to one or to its pin as a required check before it merges, as hosts run them (Trivy fails
+  on a fixable High or Critical finding or a secret; accepted findings expire; hadolint lints the
+  Containerfiles and ClusterFuzzLite's build image; `.github/workflows/addon-images.yml`).
 - **Penetration test.** An OWASP ZAP and WSTG test of a local panel (November 2026) found no critical
   or high issue; its medium and low findings were fixed in the next release. A second round the same
   month (ZAP, Nuclei, Nikto, Schemathesis, Dalfox, testssl.sh, Trivy) found nothing above low; its

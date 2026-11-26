@@ -1,6 +1,6 @@
-# hadolint's settings for the add-on Containerfiles (panel/addon_images/*/Containerfile), read by
-# .github/scripts/addon_images.py in the "Add-on images" workflow. Every other rule fails the run, at
-# hadolint's own default threshold.
+# hadolint's settings for the add-on Containerfiles (panel/addon_images/*/Containerfile) and
+# ClusterFuzzLite's build image (.clusterfuzzlite/Dockerfile), read by .github/scripts/addon_images.py
+# in the "Add-on images" workflow. Every other rule fails the run, at hadolint's own default threshold.
 ignored:
   # DL3008, "pin versions in apt-get install": OWASP's Docker Security Cheat Sheet (rule 9) lists
   # pinned OS package versions, but here apt installs only into a build stage that is thrown away

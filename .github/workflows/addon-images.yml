@@ -5,14 +5,19 @@ name: Add-on images
 # builds on the host (panel/addon_images/<name>/Containerfile), built here from the same pins.
 # Trivy fails the run on a High or Critical vulnerability that has a fixed version, or a secret in an
 # image; an accepted finding is an entry in .github/trivyignore.yaml with its reason and an expiry
-# date. hadolint lints each Containerfile (.github/hadolint.yaml). What runs, and how, is
+# date. hadolint lints each Containerfile, and ClusterFuzzLite's build image
+# (.clusterfuzzlite/Dockerfile), with .github/hadolint.yaml. What runs, and how, is
 # .github/scripts/addon_images.py (OWASP Docker Security Cheat Sheet, rule 9: scan images in the
 # pipeline; OWASP Top 10 CI/CD Security Risks, CICD-SEC-3).
 #
 # TRIGGERS. Daily, because a newly published advisory changes the answer with no commit (the pinned
-# IW4MAdmin image sat unchanged for months with Critical findings nothing reported). On a pull request
-# that changes an image, a pin or this scan's own files, so a Renovate digest or base-image update is
-# scanned before it merges. By hand (workflow_dispatch), to scan main at once.
+# IW4MAdmin image sat unchanged for months with Critical findings nothing reported). On EVERY pull
+# request, with no path filter, because its job is a required check (.github/required-checks.txt)
+# and a required check whose workflow did not run holds the pull request forever. The job's scope
+# step decides instead: a pull request that changes no image, pin, linted Dockerfile or file of this
+# scan passes at once under the job's name; one that does is pulled, built, scanned and linted
+# before it can merge, so a Renovate digest or base-image update cannot merge on a red scan. By
+# hand (workflow_dispatch), to scan main at once.
 #
 # No secret and a read-only token: every image is public, so pulls are anonymous, and nothing is
 # pushed or uploaded. The scanners run from images pinned by tag and digest (Renovate proposes new
@@ -21,13 +26,6 @@ name: Add-on images
 on:
   pull_request:
     branches: [ main ]
-    paths:
-      - 'panel/addon_images/**'
-      - 'panel/services/addons.py'
-      - '.github/workflows/addon-images.yml'
-      - '.github/scripts/addon_images.py'
-      - '.github/trivyignore.yaml'
-      - '.github/hadolint.yaml'
   schedule:
     - cron: "23 7 * * *"   # daily 07:23 UTC, after security-code.yml's dependency audit
   workflow_dispatch:
@@ -47,6 +45,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read   # checks out the Containerfiles and the pins; nothing is written
+      pull-requests: read   # the scope step lists the pull request's files
     env:
       # addon_images.py reads these two pins from this file (digest required); Renovate keeps them current.
       # renovate: datasource=docker
@@ -58,11 +57,53 @@ jobs:
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
+      # A pull request that changes none of `scope` passes here without pulling, building or
+      # scanning anything; the list is everything the scan reads. The schedule and a manual run scan
+      # in full. A file list that cannot be read whole (GitHub lists at most 3000 files), or any
+      # other doubt, scans in full too.
+      - name: Does this pull request change an add-on image or this scan?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            scope=(
+              'panel/addon_images/**'
+              'panel/services/addons.py'
+              '.clusterfuzzlite/Dockerfile'
+              '.github/workflows/addon-images.yml'
+              '.github/scripts/addon_images.py'
+              '.github/trivyignore.yaml'
+              '.github/hadolint.yaml'
+            )
+            if total="$(gh api "repos/${REPO}/pulls/${PR}" --jq '.changed_files')" \
+               && rows="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate \
+                          --jq '.[] | "f " + .filename, ("p " + (.previous_filename // empty))')" \
+               && [ "$(grep -c '^f ' <<< "$rows")" -eq "$total" ]; then
+              files="$(cut -c3- <<< "$rows")"   # drop the "f " / "p " tag
+              run=false
+              while IFS= read -r f; do
+                for g in "${scope[@]}"; do
+                  # shellcheck disable=SC2053 # $g is a glob on purpose
+                  if [[ "$f" == $g ]]; then run=true; fi
+                done
+              done <<< "$files"
+            fi
+          fi
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+          echo "this pull request changes what this job scans: ${run}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.scope.outputs.run == 'true'
         with:
           # The scan reads the tree; no step here needs the job token.
           persist-credentials: false
       - name: What will be scanned
+        if: steps.scope.outputs.run == 'true'
         run: python3 .github/scripts/addon_images.py plan
       - name: Pull, build, scan and lint
+        if: steps.scope.outputs.run == 'true'
         run: python3 .github/scripts/addon_images.py scan

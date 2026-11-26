@@ -240,8 +240,12 @@ jobs:
           # (up to 20 minutes) for the same set system_ops._remote_ci_state waits for: every check
           # on the commit completed and none failed, and each REQUIRED name present and not merely
           # skipped. The two lists are system_ops' _CI_REQUIRED and _CI_IGNORE; a unit test holds
-          # them equal. A name ending in "(" is a prefix, for a matrix job.
-          REQUIRED=("checks (" "coverage" "js coverage" "gamedig lockfile (" "Analyze (" "Open code-scanning alerts")
+          # them equal. A name ending in "(" is a prefix, for a matrix job. REQUIRED adds two the
+          # panel gate does not name: the secret scan and the dependency CVE audit. A failure of
+          # either already stopped a deploy, but one that had not registered yet did not. Both
+          # run on every push to main this step lets through: security.yml has no path filter,
+          # and security-code.yml's paths-ignore is ci.yml's, which the check above refuses.
+          REQUIRED=("checks (" "coverage" "js coverage" "gamedig lockfile (" "Analyze (" "Open code-scanning alerts" "Secret scanning (Gitleaks)" "Dependency vulnerabilities (pip-audit)")
           IGNORED='["deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "Scorecard analysis", "Scorecard image pin", "Scorecard image pulled", "Dependabot", "update-pip-graph"]'
           waited_until=$(( $(date +%s) + 20 * 60 ))
           while :; do
@@ -298,6 +302,8 @@ jobs:
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          # The host's public keys, as known_hosts lines (ssh-keyscan of the host): not secret.
+          DEPLOY_HOST_KEY: ${{ vars.DEPLOY_HOST_KEY }}
           HEAD_SHA: ${{ inputs.sha }}
           INSTALLER: ${{ steps.verify.outputs.installer }}
         run: |
@@ -308,6 +314,15 @@ jobs:
           # it read out of that commit.
           [ -s "${INSTALLER:-}" ] || { echo "::error::The verify step handed over no installer; nothing was deployed."; exit 1; }
           trap 'rm -f -- "${INSTALLER}"' EXIT
+          # The host is known before the first connection, never trusted on first sight: ssh
+          # checks its key against these lines alone (StrictHostKeyChecking=yes, no global file),
+          # and refuses a host whose key is not one of them. Without them the step stops here.
+          if ! grep -qE '^[^#[:space:]]+[[:space:]]+(ssh-|ecdsa-)' <<< "${DEPLOY_HOST_KEY:-}"; then
+              echo "::error::Set repo variable DEPLOY_HOST_KEY to the host's known_hosts lines (ssh-keyscan); nothing was deployed."
+              exit 1
+          fi
+          KNOWN_HOSTS="${RUNNER_TEMP:?}/deploy_known_hosts"
+          (umask 077 && printf '%s\n' "${DEPLOY_HOST_KEY}" > "${KNOWN_HOSTS}")
           echo "Deploying ${HEAD_SHA}, verified on main."
           # Tailscale SSH handles auth (no key needed); install.sh does the safe update.
           # PANEL_NO_UPGRADE=1: the auto-deploy is a panel-only update — it must never
@@ -405,5 +420,6 @@ jobs:
               exit 1
           fi
           REMOTE
-          } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+          } | ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${KNOWN_HOSTS}" \
+                -o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=20 \
                 "$U@$DEPLOY_HOST" 'bash -s'
