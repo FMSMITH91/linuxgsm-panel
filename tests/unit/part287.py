@@ -410,12 +410,6 @@ def _s287_scan_plan():
     real = _AI287.plan()
     check("image scan: on this tree it scans BlueMap's pinned image and builds B3, with nothing wrong",
           "BLUEMAP_IMAGE" in real["upstream"] and "b3" in real["builds"] and not real["problems"], repr(real))
-    lint = _AI287.lint_targets(real)
-    check("image scan: hadolint lints every build's Containerfile and ClusterFuzzLite's build image, which "
-          "nothing else lints",
-          ("b3 Containerfile", os.path.join(_root, "panel", "addon_images", "b3", "Containerfile")) in lint
-          and (".clusterfuzzlite/Dockerfile", os.path.join(_root, ".clusterfuzzlite", "Dockerfile")) in lint
-          and all(os.path.isfile(p) for _, p in lint), repr(lint))
     good = 'A_IMAGE = "ghcr.io/o/a@sha256:%s"\nB_IMAGE = "ghcr.io/o/b:latest"\nBASE = "docker.io/library/p@sha256:%s"\n' \
         % ("1" * 64, "2" * 64)
     ok = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
@@ -436,6 +430,15 @@ def _s287_scan_plan():
           and argv[:3] == ["docker", "run", "--rm"], gate)
 
 
+def _s287_scan_lint():
+    lint = _AI287.lint_targets(_AI287.plan())
+    check("image scan: hadolint lints every build's Containerfile and ClusterFuzzLite's build image, which "
+          "nothing else lints",
+          ("b3 Containerfile", os.path.join(_root, "panel", "addon_images", "b3", "Containerfile")) in lint
+          and (".clusterfuzzlite/Dockerfile", os.path.join(_root, ".clusterfuzzlite", "Dockerfile")) in lint
+          and all(os.path.isfile(p) for _, p in lint), repr(lint))
+
+
 def _s287_scan_accepted():
     text = _read287(".github", "trivyignore.yaml")
     entries = _re287.split(r"(?m)^  - id: ", _code_lines287(text))[1:]
@@ -453,7 +456,7 @@ def _s287_scan_accepted():
 for _fn287 in (_s287_tree_modes, _s287_tree_modes_owner, _s287_snapshot_modes, _s287_tree_modes_callers,
                _s287_core_dumps, _s287_orphan_crontabs, _s287_orphan_callers, _s287_threat_model, _s287_b3_no_pip,
                _s287_scan_workflow, _s287_scan_token, _s287_scan_images_pinned, _s287_scan_images_from_file,
-               _s287_scan_plan, _s287_scan_accepted):
+               _s287_scan_plan, _s287_scan_lint, _s287_scan_accepted):
     try:
         _fn287()
     except Exception as _e287:  # a crash names its section instead of taking the suite down
