@@ -580,16 +580,20 @@ def _text300(node):
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+def _call_said300(n):
+    """The literal a say/done/acted/Sentence/tr call hands its viewer, else None."""
+    name = getattr(n.func, "attr", None) or getattr(n.func, "id", "")
+    at = _SAYS300.get(name)
+    text = _text300(n.args[at]) if at is not None and len(n.args) > at else None
+    return text if text and " " in text else None
+
+
 def _said300(n):
     """The viewer's sentence node `n` holds: an S_* constant's text, or a say/done/acted/Sentence/tr literal."""
     import ast
     if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith("S_") for t in n.targets):
         return _text300(n.value)
-    name = getattr(getattr(n, "func", None), "attr", None) or getattr(getattr(n, "func", None), "id", "")
-    if not isinstance(n, ast.Call) or name not in _SAYS300 or len(n.args) <= _SAYS300[name]:
-        return None
-    text = _text300(n.args[_SAYS300[name]])
-    return text if text and " " in text else None
+    return _call_said300(n) if isinstance(n, ast.Call) else None
 
 
 def _sentences300():

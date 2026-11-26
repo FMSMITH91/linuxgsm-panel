@@ -215,16 +215,22 @@ def _rules(site, data):
         return _w.say(501, _w.S_NOT_READY)
     if problems:
         return _problems(problems)
+    ok, said = _rules_store(site, rules, data)
+    return _w.acted(site, "website_rules", ok, said, "%d custom rules%s" % (len(rules), ", raw snippet" if "raw" in data else ""))
+
+
+def _rules_store(site, rules, form):
+    """Store the checked rules (and a superadmin's raw snippet) and apply them; put the old ones back on a failure."""
     old = (site.custom_rules, site.raw_proxy_snippet)
     site.custom_rules = json.dumps(rules, sort_keys=True)
-    if "raw" in data:
-        site.raw_proxy_snippet = data["raw"][:8192] if isinstance(data["raw"], str) else ""
+    if "raw" in form:
+        site.raw_proxy_snippet = form["raw"][:8192] if isinstance(form["raw"], str) else ""
     db.session.commit()
     ok, said = _w.reconcile_proxy(site.remote) if site.enabled else (True, "Saved; they apply when the website is online.")
     if not ok:
         site.custom_rules, site.raw_proxy_snippet = old
         db.session.commit()
-    return _w.acted(site, "website_rules", ok, said, "%d custom rules%s" % (len(rules), ", raw snippet" if "raw" in data else ""))
+    return ok, said
 
 
 def _perf_routes(app):
