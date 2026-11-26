@@ -4,16 +4,28 @@
    the command's stdin as base64, never in the command, on every transport (local, Tailscale SSH, direct SSH).
 2. Sign-in: POST /login and the SFTP service spend the same hashing work for an unknown name as for any account
    while bcrypt-era hashes remain; the upgrade layers those hashes in Argon2id, and a sign-in re-encodes them.
+3. The helper's refusal of an account a sudoers rule for ALL users covers names that rule's file and line; the
+   panel's enrolment passes it on whole; install.sh's can_already_sudo still answers yes and no.
 
-HOW IT RUNS. Routes on part12's app with its transport tripwire armed; each transport is a recorder.
+HOW IT RUNS. Routes on part12's app with its transport tripwire armed; each transport is a recorder. The helper
+reads a scratch sudoers policy, with the account and group lookups stood in.
 """
 import base64 as _b64_291
+import importlib.machinery as _mach291
+import importlib.util as _ilu291
 import json as _json291
+import os as _os291
+import re as _re291
+import shutil as _shutil291
+import subprocess as _sp291  # nosec B404 - python over this part's own scratch copy of the helper
+import sys as _sys291
+import tempfile as _tf291
+from types import SimpleNamespace as _NS291
 
 import bcrypt as _bcrypt291
 from sqlalchemy import text as _text291
 
-from unit.part01 import check
+from unit.part01 import _root as _root291, check
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, RemoteServer, User, _p9, _p9_arm, _p9_client, _p9_json,
                          _p9_patch, _p9_restore_all, db)
 from panel.db import models as _models291
@@ -21,6 +33,8 @@ from panel.ops.ssh_manager import _core as _core291, files as _files291
 from panel.routes import server_files as _sf291
 from panel.security import account_guard as _ag291, auth as _auth291
 from panel.services import sftp_broker as _broker291
+
+_HELPER291 = _os291.path.join(_root291, "tools", "panel-helper")
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 1. A written file's bytes are on no command line
@@ -236,3 +250,87 @@ with _p9.app_context():
     for _uid291 in _U291.values():
         db.session.delete(db.session.get(User, _uid291))
     db.session.commit()
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 3. The helper's "a sudoers rule for ALL users" refusal names the file and line to narrow
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The refusal said to narrow "that rule" without saying where it was; a host with a control panel's
+# drop-in (`ALL ALL=(ALL) NOPASSWD: ...` in /etc/sudoers.d/<name>) left the operator hunting.
+_spec291 = _ilu291.spec_from_loader("panel_helper_291", _mach291.SourceFileLoader("panel_helper_291", _HELPER291))
+_helper291 = _ilu291.module_from_spec(_spec291)
+_spec291.loader.exec_module(_helper291)
+_SUD291 = _tf291.mkdtemp(prefix="p291-sudoers-")
+_os291.makedirs(_os291.path.join(_SUD291, "sudoers.d"))
+_DROP291 = _os291.path.join(_SUD291, "sudoers.d", "cloudpanel")
+
+
+def _sudoers291(main, drop):
+    with open(_os291.path.join(_SUD291, "sudoers"), "w", encoding="utf-8") as fh:
+        fh.write(main)
+    with open(_DROP291, "w", encoding="utf-8") as fh:
+        fh.write(drop)
+
+
+_ALLDROP291 = ("# added by a hosting control panel\n\nDefaults env_keep += \"X\"\n"
+               "ALL ALL=(ALL) NOPASSWD: \\\n  /usr/bin/id\n")
+_h291 = _helper291
+_h291.SUDOERS_FILE, _h291.SUDOERS_DIR = _os291.path.join(_SUD291, "sudoers"), _os291.path.join(_SUD291, "sudoers.d")
+_h291.NSSWITCH_FILE = _os291.path.join(_SUD291, "no-nsswitch.conf")
+_h291._groups_of = lambda user: {"p291grp"}
+_h291._doas_verdict = _h291._polkit_verdict = lambda user, names: None
+_h291.pwd = _NS291(getpwnam=lambda user: _NS291(pw_uid=61291, pw_gid=61291))
+_h291.grp = _NS291(getgrnam=lambda name: _NS291(gr_gid=61291))
+_sudoers291("root ALL=(ALL) ALL\n", _ALLDROP291)
+_v_all291 = _h291._escalation_verdict("p291acct")
+_sudoers291("root ALL=(ALL) ALL\n@include %s\n" % _DROP291, "p291acct ALL=(ALL) ALL\n")
+_v_named291 = _h291._escalation_verdict("p291acct")
+_sudoers291("root ALL=(ALL) ALL\n", "%admins ALL=(ALL) ALL\n")
+_v_none291 = _h291._escalation_verdict("p291acct")
+check("helper: a sudoers rule for ALL users refuses the account and names its file and line (the line a "
+      "continued rule starts on), so the operator knows what to narrow",
+      _v_all291 == ("yes", "a sudoers rule for ALL users (%s:4) grants it sudo; narrow that rule to named users or "
+                           "groups" % _DROP291), repr(_v_all291))
+check("helper: ...a rule naming the account, reached through @include, is placed in the included file",
+      _v_named291 == ("yes", "a sudoers rule (%s:1) grants it sudo" % _DROP291), repr(_v_named291))
+check("helper: ...and a policy with no rule for it still lets it in (control)", _v_none291 == ("no", ""),
+      repr(_v_none291))
+
+# The panel's side: the enrolment's refusal reaches the add-on card whole (it was cut at 200
+# characters, which a long account name and path pushed the location past).
+_said291 = ("refusing to enrol p291-a-rather-long-game-account-name in lgsmpanel-games: it can already reach "
+            "root (%s)" % _v_all291[1])
+_enrol291 = None
+try:
+    _p9_patch(_core291, "is_local_server", lambda s: True)
+    _p9_patch(_core291, "run_privileged", lambda *a, **k: ("", _said291, 1))
+    _enrol291 = _core291.enrol_game_user(object(), "p291-a-rather-long-game-account-name")
+finally:
+    _p9_restore_all()
+check("enrolment: the helper's refusal comes back whole, its file and line and what to do included",
+      _enrol291 == _said291 and len(_said291) > 200, repr(_enrol291))
+
+# install.sh's can_already_sudo prints the verdict's first word, which is unchanged: its own snippet,
+# run on the helper's code over this sandbox, still answers yes and no.
+_inst291 = open(_os291.path.join(_root291, "install.sh"), encoding="utf-8").read()
+_cas291 = _re291.search(r"<<'CAS_PY' \|\| true\n(.*?)\nCAS_PY\n", _inst291, _re291.S)
+_code291 = _os291.path.join(_SUD291, "helper-code.py")
+
+
+def _cas_answer291(drop):
+    _sudoers291("root ALL=(ALL) ALL\n", drop)
+    with open(_HELPER291, encoding="utf-8") as fh, open(_code291, "w", encoding="utf-8") as out:
+        out.write(fh.read() + "\nSUDOERS_FILE, SUDOERS_DIR = %r, %r\nNSSWITCH_FILE = %r\n"
+                  "import types\n_groups_of = lambda user: {'p291grp'}\n"
+                  "_doas_verdict = _polkit_verdict = lambda user, names: None\n"
+                  "pwd = types.SimpleNamespace(getpwnam=lambda u: types.SimpleNamespace(pw_uid=61291, pw_gid=61291))\n"
+                  "grp = types.SimpleNamespace(getgrnam=lambda n: types.SimpleNamespace(gr_gid=61291))\n"
+                  % (_h291.SUDOERS_FILE, _h291.SUDOERS_DIR, _h291.NSSWITCH_FILE))
+    r = _sp291.run([_sys291.executable, "-I", "-", _code291, "p291acct"], input=_cas291.group(1) if _cas291 else "",
+                   capture_output=True, text=True, timeout=60)
+    return r.stdout.strip()
+
+
+_cas_got291 = (_cas_answer291(_ALLDROP291), _cas_answer291("%admins ALL=(ALL) ALL\n"))
+check("install.sh: can_already_sudo's helper question still answers yes for a rule for ALL users, and no "
+      "without one (control)", _cas291 is not None and _cas_got291 == ("yes", "no"), repr(_cas_got291))
+_shutil291.rmtree(_SUD291, ignore_errors=True)

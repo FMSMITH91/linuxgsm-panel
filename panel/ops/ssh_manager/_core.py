@@ -2515,7 +2515,8 @@ def enrol_game_user(server, user):
         _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
         return "the enrolment could not be run"
     if g_rc != 0:
-        reason = (g_err or "").strip()[:200] or ("exit status %s" % g_rc)
+        # 400: the helper's refusal names the sudoers file and line to narrow, which must survive.
+        reason = (g_err or "").strip()[:400] or ("exit status %s" % g_rc)
         _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP, reason)
         return reason
     return None
