@@ -61,22 +61,37 @@ def _add_record(rec, tag, val):
         raise LcovError("not an LCOV record: %s" % tag)
 
 
+def _open_block(files, line):
+    """Read a line outside an SF block: skip a TN record, open an SF block, refuse anything else."""
+    tag, sep, val = line.partition(":")
+    if tag == "TN":
+        return None
+    if tag == "SF" and sep:
+        return files.setdefault(val, _new_file())
+    raise LcovError("a record outside an SF block")
+
+
+def _take_line(files, cur, line):
+    """Read one line of a report; return the SF block it leaves open (None outside one)."""
+    if not line.strip():
+        return cur
+    if cur is None:
+        return _open_block(files, line)
+    if line == "end_of_record":
+        return None
+    tag, sep, val = line.partition(":")
+    if not sep:
+        raise LcovError("not an LCOV record")
+    _add_record(cur, tag, val)
+    return cur
+
+
 def add_report(files, text, name="report"):
     """Add one LCOV report's records into `files` ({path: record}); return `files`."""
     cur = None
     for no, line in enumerate(text.splitlines(), 1):
-        tag, sep, val = line.partition(":")
         try:
-            if not line.strip() or (tag == "TN" and cur is None):
-                continue
-            if line == "end_of_record" and cur is not None:
-                cur = None
-            elif tag == "SF" and sep and cur is None:
-                cur = files.setdefault(val, _new_file())
-            elif sep and cur is not None:
-                _add_record(cur, tag, val)
-            else:
-                raise LcovError("a record outside an SF block")
+            cur = _take_line(files, cur, line)
         except (LcovError, ValueError) as e:
             raise LcovError("%s line %d: %s (%r)" % (name, no, e, line[:80])) from None
     if cur is not None:
@@ -113,23 +128,30 @@ def to_lcov(files):
     return "\n".join(out) + "\n" if out else ""
 
 
+def _row(path, lines):
+    """Return one file's row of the table, its lines and its lines hit."""
+    f, h = len(lines), sum(1 for v in lines.values() if v)
+    spans = ", ".join("%d-%d" % (a, b) if a != b else str(a) for a, b, _n in v8_lcov.missed_spans(lines, 3))
+    row = "%-34s %5d %5d %6.1f%%%s  %s" % (path, f, h, 100.0 * h / f if f else 0.0,
+                                          "" if h else "  (no line ran)", spans)
+    return row, f, h
+
+
+def _after_total(text):
+    """Return what a part's own summary says after its TOTAL (its table is in the merged one)."""
+    return text.split("\nTOTAL", 1)[1].split("\n", 1)[-1] if "\nTOTAL" in text else text
+
+
 def summary_text(files, part_summaries=()):
     """Return the merged lines' per-file table and TOTAL, then what each part reported broken."""
-    rows, total, hit = [], 0, 0
+    out, total, hit = ["%-34s %5s %5s %7s  %s" % ("file", "lines", "hit", "cover", "largest missed runs")], 0, 0
     for path in sorted(files):
-        lines = files[path]["lines"]
-        f, h = len(lines), sum(1 for v in lines.values() if v)
+        row, f, h = _row(path, files[path]["lines"])
+        out.append(row)
         total, hit = total + f, hit + h
-        spans = ", ".join("%d-%d" % (a, b) if a != b else str(a)
-                          for a, b, _n in v8_lcov.missed_spans(lines, 3))
-        rows.append("%-34s %5d %5d %6.1f%%%s  %s" % (
-            path, f, h, 100.0 * h / f if f else 0.0, "" if h else "  (no line ran)", spans))
-    out = ["%-34s %5s %5s %7s  %s" % ("file", "lines", "hit", "cover", "largest missed runs")] + rows
     out.append("%-34s %5d %5d %6.1f%%" % ("TOTAL", total, hit, 100.0 * hit / total if total else 0.0))
     for name, text in part_summaries:
-        # A part's own summary: its table is in the one above; what follows its TOTAL is not.
-        tail = text.split("\nTOTAL", 1)[1].split("\n", 1)[1] if "\nTOTAL" in text else text
-        out += ["", "── %s ──" % name, tail.rstrip("\n")]
+        out += ["", "── %s ──" % name, _after_total(text).rstrip("\n")]
     return "\n".join(out) + "\n", hit
 
 

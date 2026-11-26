@@ -135,18 +135,21 @@ def _subsequence295(part, whole):
     return all(any(s == w for w in it) for s in part)
 
 
+def _part_bad295(i, p, whole):
+    """What is wrong inside part `i`'s steps `p` ([] when nothing)."""
+    bad = ["part %d does not start with the wizard" % i] * (p[:1] != [("wizard", "")])
+    bad += ["part %d is out of the walk's order" % i] * (not _subsequence295(p, whole))
+    bad += ["part %d confirms %s without its first pass" % (i, s[1])
+            for s in p if s[0] == "confirm" and ("page", s[1]) not in p]
+    return bad + ["part %d: the end is not last" % i] * (("end", "") in p and p[-1] != ("end", ""))
+
+
 def _split_bad295(parts, whole):
     """What is wrong with the parts' steps against the whole walk's ([] when nothing)."""
-    bad = ["part %d does not start with the wizard" % i for i, p in enumerate(parts, 1) if p[:1] != [("wizard", "")]]
     got = _col295.Counter(s for p in parts for s in p[1:])
     want = _col295.Counter(whole[1:])
-    bad += ["dropped %r" % (s,) for s in want - got] + ["doubled %r" % (s,) for s in got - want]
-    for i, p in enumerate(parts, 1):
-        bad += ["part %d is out of the walk's order" % i] * (not _subsequence295(p, whole))
-        bad += ["part %d confirms %s without its first pass" % (i, s[1])
-                for s in p if s[0] == "confirm" and ("page", s[1]) not in p]
-        bad += ["part %d: the end is not last" % i] * (("end", "") in p and p[-1] != ("end", ""))
-    return bad
+    bad = ["dropped %r" % (s,) for s in want - got] + ["doubled %r" % (s,) for s in got - want]
+    return bad + [b for i, p in enumerate(parts, 1) for b in _part_bad295(i, p, whole)]
 
 
 _out295 = _tf295.mkdtemp(prefix="jscov295-")
