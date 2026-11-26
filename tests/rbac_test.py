@@ -4338,7 +4338,10 @@ _GATE_TOKENS = ("permission_required", "superadmin_required", "has_permission",
                 # server_detail's daily-restart refusal: RESTART_SERVER, then the restore gate.
                 "_daily_restart_refusal",
                 # Scheduled Tasks writes: MANAGE_SERVERS and EDIT_FILES (routes/_cron_access.py).
-                "write_refused")
+                "write_refused",
+                # Websites: the per-site check (the permission paired with the site, 404 otherwise) and the
+                # add-a-site check (websites_access.py); part298 holds every /websites route to one of them.
+                "site_for", "can_create")
 
 
 def _r21d_reads_caller_superadmin(tree):
