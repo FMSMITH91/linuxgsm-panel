@@ -2479,8 +2479,10 @@ _whole_check("unit suite: ...the note reader takes a list across lines, and not 
 _ctl2_r14d = _r14d_noted_imports("# part70 (x) imports parts 01 and 12. part71 comes after part70, whose app it imports. part72 (x) imports from part01 "
                                  "and part12. part73 (x) imports nothing but part01. part74 (x) imports part01. imports part05. part75 (x) imports part01. "
                                  "It also imports parts 05 and 12. part76 (x) imports part01 and 05. part76 (y) imports part01. part77 (x) imports part01.")
-_whole_check("unit suite: ...and a note listing imports in a wording it cannot read, a second list in other words or a second note for a part, is named (control)",
-             sorted(_k for _k, _v in _ctl2_r14d.items() if next(iter(_v)).startswith("unreadable")) == ["part70", "part72", "part73", "part74", "part75", "part76"]
+_whole_check("unit suite: ...and a note listing imports in a wording it cannot read, a second list in other words or a second note "
+             "for a part, is named (control)",
+             sorted(_k for _k, _v in _ctl2_r14d.items() if next(iter(_v)).startswith("unreadable"))
+             == ["part70", "part72", "part73", "part74", "part75", "part76"]
              and len(_ctl2_r14d) == 7 and _ctl2_r14d.get("part77") == {"01"}, repr(_ctl2_r14d))
 _ctl4_r14d = _r14d_noted_imports("# part99 (x) imports part01 and 87.\n# part100 (x) imports part01, 99 "
                                  "and 100.\n# part101 (x) imports from part100.")
