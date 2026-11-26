@@ -105,7 +105,7 @@ _big291 = bytes(range(256)) * 400 + b"tail"
 _seen291.clear()
 _files291_saved = _core291.run_command
 try:
-    _core291.run_command = lambda s, c, **k: _rec291("tailscale")(s, c, **k)
+    _core291.run_command = _rec291("tailscale")
     _okb291 = _files291._write_file_as_user(object(), "csgoserver", "/home/csgoserver/big.bin", _big291)
 finally:
     _core291.run_command = _files291_saved

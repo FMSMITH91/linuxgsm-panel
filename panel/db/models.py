@@ -2123,13 +2123,24 @@ def _layer_legacy_password_hashes():
         layered = layer_legacy_hash(user.password_hash)
         if layered:
             user.password_hash = layered
-        try:
-            history = json.loads(user.password_history or "[]")
-        except (TypeError, ValueError):
-            continue    # an unreadable history is left as it is (set_password starts it again)
-        if isinstance(history, list) and any(layer_legacy_hash(h) for h in history if isinstance(h, str)):
-            user.password_history = json.dumps([(layer_legacy_hash(h) or h) if isinstance(h, str) else h
-                                                for h in history])
+        history = _layered_history(user.password_history, layer_legacy_hash)
+        if history is not None:
+            user.password_history = history
+
+
+def _layered_history(text, layer):
+    """A reuse history (JSON list) with each bcrypt-era hash layered by `layer`; None when nothing changes.
+
+    An unreadable history is left as it is (set_password starts it again).
+    """
+    try:
+        history = json.loads(text or "[]")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(history, list):
+        return None
+    new = [(layer(h) or h) if isinstance(h, str) else h for h in history]
+    return json.dumps(new) if new != history else None
 
 
 # The data migrations, in order. PRAGMA user_version in the database file records how many have

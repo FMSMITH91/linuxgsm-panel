@@ -2146,8 +2146,10 @@ def _escalation_verdict(user):
 
 
 def _sudoers_where(matched):
-    """Where `matched`'s rules are, as " (<file>:<line>, ...)" for the first three, so the operator
-    knows which file to narrow; "" when none could be placed."""
+    """Name where `matched`'s rules are, for the operator to know which file to narrow.
+
+    " (<file>:<line>, ...)" for the first three, "" when none could be placed.
+    """
     where = [w for w in dict.fromkeys(getattr(rest, "where", "") for _items, rest in matched) if w]
     if not where:
         return ""
@@ -2164,8 +2166,10 @@ _SUDOERS_ALIAS_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]*")
 
 
 class _SudoersLine(str):
-    """A logical sudoers line (or the part of one after its user list) that remembers `where`:
-    "<file>:<line>" of the physical line it starts on, "" when not known."""
+    """A logical sudoers line, or the part of one after its user list, that remembers `where`.
+
+    `where` is "<file>:<line>" of the physical line it starts on, "" when not known.
+    """
 
     where = ""
 
