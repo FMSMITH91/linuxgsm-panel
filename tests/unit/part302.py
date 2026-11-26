@@ -15,6 +15,7 @@
 6. An unknown Host over HTTPS is aborted (an https:// catch-all), outside tunnel mode.
 7. OPcache is not loaded a second time.
 8. A refused proxy release leaves no account or folder behind.
+9. Turning the egress guard off with its table already gone runs no failing nft command.
 
 HOW IT RUNS. tools/panel-helper is loaded by path (as part05 and part299 do) with stand-ins for its subprocess,
 pwd and folders (under a scratch folder); ssh_manager.websites runs with a stand-in for its _core; the proxy
@@ -552,6 +553,14 @@ def _s7_release():
        (rc, "lib/caddy" in tree), (0, True))
 
 
+def _s7_guard():
+    for tables, deleted in (("table ip filter\n", False), ("table ip filter\ntable inet lgsm_web\n", True)):
+        rc, _out, calls, _conf, _t = _helper302(lambda: _H302.do_website_egress_guard(["off"], ""), {"tables": tables})
+        eq("website-egress-guard off (verb): the table is deleted only when it is there (no nft error when the unit "
+           "already removed it)%s" % (" (control)" if deleted else ""),
+           (rc, ["delete", "table", "inet", "lgsm_web"] in [c[1:] for c in calls]), (0, deleted))
+
+
 def _state302():
     host, su, site = _rows302()
     return _NS302(host=host, su=su, site=site)
@@ -570,7 +579,7 @@ def _cleanup302(st):
 
 
 for _step302 in (_s1_bind, _s1_refusals, _s2_start, _s2_plain_errors, _s4_podman, _s5_certs, _s5_timezone,
-                 _s6_catch_all, _s7_opcache, _s7_release):
+                 _s6_catch_all, _s7_opcache, _s7_release, _s7_guard):
     _step302()
 
 _trips302 = len(_P9_TRIPPED)

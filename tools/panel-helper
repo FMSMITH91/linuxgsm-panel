@@ -3471,7 +3471,9 @@ def do_website_egress_guard(args, content):
         for path in (WEB_GUARD_FILE, WEB_GUARD_UNIT_FILE):
             if os.path.exists(path):
                 os.unlink(path)
-        _run_quiet([resolve("nft"), "delete", "table", "inet", "lgsm_web"])
+        _rc, tables = _run_quiet([resolve("nft"), "list", "tables"])
+        if "table inet lgsm_web" in tables.splitlines():     # the unit's ExecStop usually removed it already
+            _run_quiet([resolve("nft"), "delete", "table", "inet", "lgsm_web"])
         _run_quiet([resolve("systemctl"), "daemon-reload"])
         sys.stdout.write("guard=off\n")
         return 0
