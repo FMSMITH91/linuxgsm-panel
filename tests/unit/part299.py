@@ -434,6 +434,14 @@ def _s299_php():
        ([h for h in hostile if not _ws299.php_ini_problems(h)],
         _ws299.php_ini_problems("; comment\nmax_file_uploads = 5\nauto_prepend_file = /var/www/html/prepend.php\n")),
        ([], []))
+    www, tmp = _ws299.PHP_PATH_ROOTS       # the site's files and its container's own temporary folder
+    paths = {tmp: True, www: True, www + "/a.b/c_d-e": True, tmp + "/" + "x" * 64: True, ".:%s:%s/lib" % (tmp, www): True,
+             tmp + "/" + "x" * 65: False, tmp + "/": False, tmp + "x": False, www + "x/a": False, tmp + "//a": False,
+             tmp + "/a b": False, tmp + "/../etc": False, www.rsplit("/", 1)[0]: False, tmp * 255 + "!": False}
+    got = {p: not _ws299.php_ini_problems("open_basedir = " + p) for p in paths}
+    eq("php.ini (Advanced): a path is one of the two roots plus folders of 1-64 plain characters; an empty, too long "
+       "or spaced folder, a look-alike root and '..' are refused, and a long hostile value is answered (the check "
+       "is string operations, not a backtracking regex)", got, paths)
     eq("php form: sizes, numbers, a time zone and On/Off are checked against their ranges",
        _ws299.php_settings_problems({"memory_limit": "8M", "upload_max_filesize": "64M", "date.timezone": "Mars/Base",
                                      "display_errors": "yes", "max_execution_time": "60", "evil": "1"}),

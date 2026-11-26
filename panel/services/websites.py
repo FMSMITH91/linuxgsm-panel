@@ -209,7 +209,11 @@ PHP_PATH_KEYS = ("auto_prepend_file", "auto_append_file", "open_basedir", "inclu
 PHP_INI_MAX = 8192
 PHP_INI_LINES = 200
 _INI_LINE_RE = re.compile(r"([a-z][a-z0-9_.]{0,63})[ \t]*=[ \t]*(.{0,1024})\Z")
-_PATH_OK_RE = re.compile(r"/(?:var/www/html|tmp)(?:/[A-Za-z0-9_.-]{1,64})*\Z")
+# A path value: one of these roots, then folders of 1-64 of these characters (an allow-list: OWASP
+# Input Validation Cheat Sheet). Checked with string operations rather than a repeated-group regex, as
+# the value is a user's text (the cheat sheet's ReDoS warning on regular expressions).
+PHP_PATH_ROOTS = ("/var/www/html", "/tmp")  # nosec B108 - paths inside the site container, not the host's
+_PATH_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 
 
 def _path_value_ok(key, value):
@@ -217,7 +221,17 @@ def _path_value_ok(key, value):
     if key == "error_log" and raw == "/proc/self/fd/2":
         return True
     parts = raw.split(":") if key in ("open_basedir", "include_path") else [raw]
-    return all(p == "." or (_PATH_OK_RE.match(p) and "/../" not in p + "/") for p in parts if p)
+    return all(p == "." or (_path_inside(p) and "/../" not in p + "/") for p in parts if p)
+
+
+def _path_inside(path):
+    """Whether `path` is a PHP_PATH_ROOTS root, or one followed by /folder parts of 1-64 _PATH_CHARS each."""
+    for root in PHP_PATH_ROOTS:
+        if path == root:
+            return True
+        if path.startswith(root + "/"):
+            return all(0 < len(part) <= 64 and _PATH_CHARS.issuperset(part) for part in path[len(root) + 1:].split("/"))
+    return False
 
 
 def _ini_line_problem(key, value):
