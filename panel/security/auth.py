@@ -92,6 +92,14 @@ MANAGE_ADDONS = "manage_addons"
 # ...and opening an installed add-on's own web page through the panel (routes/addon_web.py): IW4MAdmin's
 # webfront, BlueMap's map. Granted to no group by default; Manage add-ons opens them too.
 VIEW_ADDON_PAGES = "view_addon_pages"
+# Websites (panel/services/websites_access.py). Every one is checked PER SITE: the user must hold it
+# through a group that has the site (group_websites), so a permission alone reaches no site. None is
+# granted to any group by default.
+VIEW_WEBSITES = "view_websites"                 # see a site: status, domains, certificate state, logs
+EDIT_WEBSITE_FILES = "edit_website_files"       # its files, SFTP folder and backups: runs code as the site
+MANAGE_WEBSITE = "manage_website"               # run one site: start/stop, its domains, database, backups
+CREATE_WEBSITES = "create_websites"             # add sites, up to a customer group's max_sites
+MANAGE_WEBSITES = "manage_websites"             # administer sites: add/remove, kind, limits, enable, customers
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
@@ -135,6 +143,16 @@ ALL_PERMISSIONS = {
                     "containers beside the game as its account, and read their logs"),
     VIEW_ADDON_PAGES: ("Open a server's add-on web pages (IW4MAdmin, BlueMap) through the panel, without "
                        "managing the add-ons"),
+    VIEW_WEBSITES: ("See the websites in the group: their status, domains, certificate state and logs, "
+                    "never their passwords or tokens"),
+    EDIT_WEBSITE_FILES: ("Change a website's files — the file manager, archive upload, the site's SFTP folder, and "
+                         "downloading and restoring its backups. A PHP or WordPress file runs as that site, so this "
+                         "amounts to running code in the site's container"),
+    MANAGE_WEBSITE: ("Run the websites in the group: start, stop and restart them, add, remove and check their "
+                     "domains, take backups, and see and reset their database password"),
+    CREATE_WEBSITES: ("Add new websites, up to the customer group's site limit; each new site joins the group"),
+    MANAGE_WEBSITES: ("Administer websites: add and remove them, choose their kind and limits, put them online "
+                      "(opens ports 80 and 443), update their software and add customers"),
     MANAGE_USERS: "Manage user accounts",
     MANAGE_GROUPS: "Manage groups and permissions",
     VIEW_LOGS: "View audit logs",
@@ -2260,6 +2278,11 @@ def _fpm_can_edit():
 # (VIEW_FILES), its Schedule, Alerts and Mods tabs (MANAGE_SERVERS) and its Backups tab.
 # MANAGE_DATABASES and MANAGE_ADDONS too: their Databases and Add-ons tabs are only on this page, and a
 # database or add-on manager may hold nothing else here.
+# Any one of these opens the Websites page (it lists only the sites the user holds one of them on).
+WEBSITES_PAGE_PERMS = (VIEW_WEBSITES, EDIT_WEBSITE_FILES, MANAGE_WEBSITE, CREATE_WEBSITES, MANAGE_WEBSITES)
+# The permissions a customer group may hold: nobody below a superadmin can give a customer group any
+# other (websites_access.customer_grantable), and none of them reaches a host or a game server.
+CUSTOMER_PERMS = frozenset((VIEW_WEBSITES, EDIT_WEBSITE_FILES, MANAGE_WEBSITE, CREATE_WEBSITES))
 FILES_PAGE_PERMS = (VIEW_FILES, MANAGE_SERVERS, DOWNLOAD_BACKUP, DELETE_BACKUP, RESTORE_BACKUP, MANAGE_DATABASES,
                     MANAGE_ADDONS, VIEW_ADDON_PAGES)
 
