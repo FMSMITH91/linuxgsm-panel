@@ -5,17 +5,24 @@
    the event and never the client's text, and the socket stays up. Each event family is driven: the
    console (join_console, leave_console) and the terminal (term_open, term_input, term_resize,
    term_close). Every handler the app registers is covered, so a new one without it fails here.
+2. A database password reset holds the database like a restore, a dump and a delete do
+   (databases.one_at_a_time): while one runs, a second reset, a restore, a dump and a delete are
+   refused (409) and audited, and a reset while a restore runs is refused the same way.
 
 The sockets run through flask-socketio's test client on part12's app (its real handlers and its real
 SocketIO, with the event budget it installed); the clock the budget and the log limit read is a
 stand-in, so nothing here depends on how fast the machine is.
 """
 import logging as _lg296
+from types import SimpleNamespace as _ns296
 
 from unit.part01 import check, eq
-from unit.part12 import (P9_ADMIN, P9_GS, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch,
-                         _p9_restore_all)
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_VIEWER, _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json,
+                         _p9_new_server, _p9_patch, _p9_restore_all)
+from panel.core.config import encrypt_secret as _enc296
+from panel.db.models import AuditLog as _AL296, GameDatabase as _GD296, db as _db296
 from panel.ops import socket_hooks as _sh296
+from panel.routes import databases as _dbr296, databases_files as _dbf296
 from panel.routes import host_terminal as _ht296, server_files as _sf296
 
 _SIO296 = _p9.socketio
@@ -166,13 +173,100 @@ def _s296_log():
     c.disconnect()
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# 2. A database password reset holds the database
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _db_row296(sid):
+    with _p9.app_context():
+        r = _GD296(remote_id=P9_HOST, game_server_id=sid, name="gs%d_p296" % sid, secret=_enc296("Zp296" + "q" * 27),
+                   auth_plugin="mysql_native_password", max_conn=10, created_by="p296")
+        _db296.session.add(r)
+        _db296.session.commit()
+        return r.id, r.name
+
+
+def _said296(resp):
+    return resp.status_code, _p9_json(resp).get("message", "")
+
+
+def _s296_password_claim():
+    sid = _p9_new_server(P9_HOST, "p296db", "pmc", 25596, name="p296 db")
+    rid, name = _db_row296(sid)
+    api = "/api/server/%d/databases/%d" % (sid, rid)
+    adm = _p9_client(P9_ADMIN)
+    hd = _ns296(flavor="mariadb", native_ok=True)     # the host's database server, as its record reads
+    _p9_patch(_dbr296, "_restore_target", lambda gs, r: hd)
+    _p9_patch(_dbr296, "game_account_write_refusal", lambda remote, user, **k: None)
+    _p9_patch(_dbf296, "own_target", lambda gs, r: hd)
+    _p9_patch(_dbr296._net, "admin_target", lambda *a: (object(), hd))
+    _p9_patch(_dbr296, "drop_row", lambda *a: (True, ""))
+    _p9_patch(_dbr296, "_forget_data", lambda db_id: None)
+    _p9_patch(_dbr296._dbs, "restore", lambda *a: (True, ""))
+    _p9_patch(_dbf296._dbs, "dump", lambda *a: (True, ""))
+    seen = {}
+
+    def set_password(remote, hostdb, n, secret):
+        if not seen:
+            seen["entered"] = True      # once: a nested reset that got through must not nest again
+            seen["reset"] = {k: _said296(v) for k, v in (
+                ("reset", adm.post(api + "/reset-password")),
+                ("restore", adm.post(api + "/restore", json={"confirm": name})),
+                ("dump", adm.post(api + "/dump")),
+                ("delete", adm.post(api + "/delete", json={"confirm": name})))}
+        return True, ""
+    _p9_patch(_dbr296._dbs, "set_password", set_password)
+    first = adm.post(api + "/reset-password")
+    busy = "password is being changed right now"
+    inner = seen.get("reset") or {}
+    eq("database claim (password reset): while a reset runs, a second reset, a restore, a dump and a delete of the "
+       "same database are each refused (409, saying its password is being changed); the first completes",
+       ({k: (s, busy in m) for k, (s, m) in inner.items()}, first.status_code),
+       ({"reset": (409, True), "restore": (409, True), "dump": (409, True), "delete": (409, True)}, 200))
+    with _p9.app_context():
+        refused = sorted((a.action, a.success) for a in
+                         _AL296.query.filter(_AL296.detail.like("%" + name + " (refused:%")))
+    eq("database claim (password reset): each refusal is audited as a failure under its own action",
+       refused, sorted([("db_password", False), ("db_restore", False), ("db_dump_download", False),
+                        ("db_delete", False)]))
+    nested = []
+
+    def restore(*a):
+        if not nested:
+            nested.append(_said296(adm.post(api + "/reset-password")))
+        return True, ""
+    _p9_patch(_dbr296._dbs, "restore", restore)
+    _p9_patch(_dbr296._dbs, "set_password", lambda *a: (True, ""))
+    rest = adm.post(api + "/restore", json={"confirm": name})
+    with _p9.app_context():
+        before = _db296.session.get(_GD296, rid).secret
+    alone = adm.post(api + "/reset-password")
+    with _p9.app_context():
+        after = _db296.session.get(_GD296, rid).secret
+    eq("database claim (password reset): a reset while a restore runs is refused (409, saying it is being "
+       "restored), and a reset alone runs and stores a new password (control)",
+       (rest.status_code, nested[:1] and (nested[0][0], "being restored" in nested[0][1]), alone.status_code,
+        before != after), (200, (409, True), 200, True))
+
+    def broken(*a):
+        raise RuntimeError("p296 host fault")
+    _p9_patch(_dbr296._dbs, "set_password", broken)
+    failed = adm.post(api + "/reset-password")
+    _p9_patch(_dbr296._dbs, "set_password", lambda *a: (True, ""))
+    again = adm.post(api + "/reset-password")
+    eq("database claim (password reset): a reset that raised releases it (the next reset runs)",
+       (failed.status_code, again.status_code), (500, 200))
+    _p9_restore_all()
+    _p9_arm(who="part296")
+
+
 _trips296 = len(_P9_TRIPPED)
 _sh296._clock = _CLK296
 _sh296._log_state.clear()
 _sh296._log.addHandler(_LOGS296)
 try:
     _p9_arm(who="part296")
-    for _step296 in (_s296_every_handler, _s296_console_family, _s296_terminal_family, _s296_log):
+    for _step296 in (_s296_every_handler, _s296_console_family, _s296_terminal_family, _s296_log,
+                     _s296_password_claim):
         _why296 = _raises296(_step296)
         if _why296:
             check("part296: %s ran to the end" % _step296.__name__, False, _why296)
