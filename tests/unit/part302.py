@@ -516,7 +516,7 @@ def _s6_catch_all():
        (tail(None), tail(_proxy302("restricted")), tail(_proxy302("tunnel", "cloudflare"))),
        (["https:// {", "http:// {"], ["https:// {", "http:// {"], ["http:// {"]))
     text = _wp302.render([_site302()], None, None, secret_of=lambda s: _TOKEN302).split("\n")
-    i = text.index("https:// {")
+    i = text.index("https:// {") if "https:// {" in text else 0      # absent: the check fails by name, never raises
     eq("proxy config: the https:// catch-all only aborts (no response, so no Server header)", text[i:i + 3],
        ["https:// {", "\tabort", "}"])
 
