@@ -44,7 +44,7 @@ TLS_MIN = ("1.2", "1.3")
 STORAGE = "/var/lib/lgsm-web-proxy"
 CERT_DIR = "/etc/lgsm-web-proxy/certs"
 ORIGIN_PULL_CA = "/etc/lgsm-web-proxy/origin-pull-ca.pem"
-TOKEN_HEADER = "X-Panel-Proxy-Token"
+GATE_HEADER = "X-Panel-Proxy-Token"
 # Tunnel mode: the proxy listens on this loopback port only, plain HTTP; the connector reaches it.
 TUNNEL_PORT = 19080
 LE_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -58,7 +58,7 @@ RULES_MAX = 50
 SNIPPET_MAX = 4000
 # Response headers a custom rule may not set: they belong to the proxy, the browser's session or HTTP.
 PROTECTED_HEADERS = ("set-cookie", "server", "content-length", "transfer-encoding", "connection", "host",
-                     TOKEN_HEADER.lower(), "strict-transport-security", "x-content-type-options")
+                     GATE_HEADER.lower(), "strict-transport-security", "x-content-type-options")
 _PATH_RE = re.compile(r"/[A-Za-z0-9._~/%+-]{0,200}\*?\Z")
 _HEADER_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}\Z")
 _HEADER_VALUE_RE = re.compile(r"[\x20-\x7e]{1,500}\Z")
@@ -326,7 +326,7 @@ def _site_lines(site, opts, proxy, mode, secret_of):
     lines += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
               + _snippet_lines(site))
     lines += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
-              "\t\theader_up %s %s" % (TOKEN_HEADER, _quote(token)),
+              "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
               "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
               "\t}", "}", ""]
     return lines

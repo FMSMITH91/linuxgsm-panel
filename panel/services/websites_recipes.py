@@ -308,7 +308,7 @@ def _installer_sh(site, step, values, token):
     secret_names = sorted({ph for page in step["pages"] for v in page["form"].values()
                            for ph in re.findall(r"\{([a-z_]{1,24})\}", v) if ph in _wc.SECRETS})
     stdin = "".join("%s %s\n" % (n, _b64(values.get(n, ""))) for n in secret_names)
-    stdin += "token %s\n" % _b64("%s: %s" % (_ws.TOKEN_HEADER, token))
+    stdin += "token %s\n" % _b64("%s: %s" % (_ws.GATE_HEADER, token))
     body = ["d=$(mktemp -d) || exit 1; trap 'rm -rf \"$d\"' EXIT; chmod 0700 \"$d\"; ",
             "while read -r n v; do case \"$n\" in %s|token) printf %%s \"$v\" | base64 -d > \"$d/$n\" ;; *) exit 25 ;; "
             "esac; done; " % ("|".join(secret_names) or "_none_")]
@@ -327,7 +327,7 @@ def _permissions_sh(site, step, recipe, token):
                      % (_q(_ws.HTML + "/" + path), _q(_ws.HTML + "/" + path)))
     stdin = None
     if recipe.get("installer_path"):
-        stdin = "%s: %s\n" % (_ws.TOKEN_HEADER, token)
+        stdin = "%s: %s\n" % (_ws.GATE_HEADER, token)
         lines.append("h=$(mktemp) || exit 1; trap 'rm -f \"$h\"' EXIT; cat > \"$h\"; "
                      "c=$(curl -s -o /dev/null -w '%%{http_code}' --max-time 30 -H @\"$h\" http://127.0.0.1:%d%s); "
                      "[ \"$c\" = 404 ] || { echo SITE_INSTALLER_LEFT; echo code=$c; exit 32; }; "

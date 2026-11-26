@@ -69,7 +69,7 @@ STOP_TIMEOUT = 20
 KINDS_PHP = ("php", "wordpress", "phpbb")
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
-TOKEN_HEADER = "X-Panel-Proxy-Token"
+GATE_HEADER = "X-Panel-Proxy-Token"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _ACCOUNT_RE = re.compile(r"ws[1-9][0-9]{0,8}\Z")
 
@@ -323,7 +323,7 @@ def nginx_conf(token, upstream_port=None):
                   "    location / {", "        try_files $uri $uri/ =404;", "    }"]
     else:
         lines += ["    location / {", "        proxy_pass http://127.0.0.1:%d;" % int(upstream_port),
-                  "        proxy_http_version 1.1;", "        proxy_set_header %s \"\";" % TOKEN_HEADER,
+                  "        proxy_http_version 1.1;", "        proxy_set_header %s \"\";" % GATE_HEADER,
                   "        proxy_set_header Host $host;", "        proxy_set_header Upgrade $http_upgrade;",
                   '        proxy_set_header Connection "upgrade";',
                   "        proxy_set_header X-Forwarded-For $http_x_forwarded_for;",
@@ -343,9 +343,9 @@ def apache_conf(token):
         "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP,
         "    <Directory %s>" % DOCROOT_PHP, "        Options -Indexes +SymLinksIfOwnerMatch", "        AllowOverride All",
         "        Require all granted", "    </Directory>",
-        '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s'\">" % (TOKEN_HEADER, token),
+        '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s'\">" % (GATE_HEADER, token),
         "            Require all denied", "        </If>", "    </Location>",
-        "    RequestHeader unset %s" % TOKEN_HEADER,
+        "    RequestHeader unset %s" % GATE_HEADER,
         "    ErrorLog /proc/self/fd/2", "    CustomLog /dev/null common", "</VirtualHost>", ""])
 
 
