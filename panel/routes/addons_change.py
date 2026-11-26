@@ -88,15 +88,18 @@ def shown_version(addon_id, meta, installed=True):
     The installed image's own label (the record's `version`, written by the install or the last update)
     while the catalog's image is another; the catalog's label when they are the same image, or when it is
     not installed (`installed` False: the version Install would put there). The pending
-    one is the catalog's label while an image update waits. A record's label that is not plain text of
-    at most _VERSION_MAX characters is not shown ("").
+    one is the catalog's label while an image update waits, and "" when that label is the installed one:
+    B3's names its release and commit only, so a new base image or requirements lock (a new image, the
+    same label) read "Update available: 2.0.2 (7c3bbe8c)" beside an add-on already named that, and the
+    card says "a newer version of the add-on" instead. A record's label that is not plain text of at most
+    _VERSION_MAX characters is not shown ("").
     """
     pin = _ad.CATALOG[addon_id]["version"]
     if not installed or (meta.get("image") or "") == _ad.CATALOG[addon_id]["image"]:
         return pin, ""
     had = meta.get("version")
     ok = isinstance(had, str) and 0 < len(had) <= _VERSION_MAX and had.isprintable()
-    return (had if ok else ""), pin
+    return (had if ok else ""), ("" if had == pin else pin)
 
 
 def settings_choice(body):

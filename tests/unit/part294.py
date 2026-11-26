@@ -27,6 +27,8 @@
     (no Edit database data, so no SQL box) is told the table has no key to read the value by.
 12. A BlueMap Update removes the old client jar (and, after a new image, the old page) only once the new
     image and the record are in place: a failed pull leaves the running BlueMap what it uses.
+13. An add-on whose new image carries the same version label as the installed one (B3 after a base image
+    or requirements change) is offered as "a newer version", not as the version it already runs.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -34,6 +36,7 @@ or data/.
 """
 import base64 as _b64_294
 import glob as _glob294
+import json as _json294
 import os
 import re as _re294
 import shutil as _shutil294
@@ -52,6 +55,7 @@ from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, _P9Thread, _p9, _p9_arm, _p9_
 from panel.core.config import encrypt_secret as _enc294
 from panel.db.models import GameDatabase as _GD294, RemoteServer as _RS294, db as _db294
 from panel.ops.ssh_manager import _core as _core294, cron as _cron294, files as _files294, game as _game294
+from panel.routes import addons as _ra294
 from panel.routes import _shared as _sh294, databases as _dbr294, server_detail as _sd294, server_files as _sf294
 from panel.services import game_restore as _grs294, lgsm_players as _lgp294
 
@@ -558,3 +562,32 @@ eq("BlueMap update (bash): the fetch alone keeps the old jar and page; the tidy-
    (_fetch294, _tidy294),
    (["data:", "minecraft-client-1.21.4.jar", "minecraft-client-1.21.5.jar", "web:", "index.html"],
     ["data:", "minecraft-client-1.21.5.jar", "web:"]))
+
+
+# ── 13. A new image with the same label ───────────────────────────────────────────────────────────
+_b3cat294 = _ra294._ad.CATALOG["b3"]
+
+
+def _b3_row294(sid, meta):
+    """The B3 row of the add-ons list route, with the host answering `meta` as B3's record."""
+    probe = "os=24.04\npodman=podman version 5.0\nmeta.b3=%s\nstate.b3=active\n" % _ra294._ad._b64(_json294.dumps(meta))
+    try:
+        _p9_arm(who="part294")
+        _p9_patch_sm("shell_as_game_user", lambda *a, **k: (probe, "", 0))
+        _p9_patch(_ra294, "game_account_write_refusal", lambda *a, **k: None)
+        got = _p9_json(_p9_client(P9_ADMIN).get("/api/server/%d/addons" % sid)).get("addons") or []
+    finally:
+        _p9_restore_all()
+    return next(((r.get("version"), r.get("version_new"), r.get("update")) for r in got if r.get("id") == "b3"), None)
+
+
+_b3row_sid294 = _fixture278()
+try:
+    _b3rows294 = [_b3_row294(_b3row_sid294, {"kind": "b3", "image": "localhost/lgsm-addon-b3:oldbuild", "version": v,
+                                             "database": "gs_b3_278"})
+                  for v in (_b3cat294["version"], "2.0.1 (0123abcd)")]
+finally:
+    _p9_delete_server(_b3row_sid294)
+eq("add-on rows: a new image with the installed version's label is offered with no version (the card says a newer "
+   "version of the add-on); one with another label names it (control)", _b3rows294,
+   [(_b3cat294["version"], "", "image"), ("2.0.1 (0123abcd)", _b3cat294["version"], "image")])
