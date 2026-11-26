@@ -37,7 +37,6 @@ _VERSION = r"[0-9A-Za-z][0-9A-Za-z.+-]{0,31}"
 _PHP = r"[0-9]\.[0-9]{1,2}"
 _RUNTIME_VERSION = r"[0-9]{1,3}"
 _NAME = r"[a-z][a-z0-9-]{0,31}"
-_HOST = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+"
 ARCHES = ("amd64", "arm64")
 # The only hosts a site file is ever downloaded from (the SSRF cheat sheet's allow-list).
 ALLOWED_HOSTS = ("github.com", "download.phpbb.com", "ftp.drupal.org", "downloads.wordpress.org",
