@@ -106,10 +106,12 @@ def _cc_dry297(dry, tok="", blocked=False):
     # curl logs each call and writes a stand-in reporter where -o asks; a blocked host fails as
     # Harden-Runner's block makes it fail (no address: curl exit 6). The reporter logs its calls.
     _write_exe29(os.path.join(bin_, "curl"),
-                 '#!/bin/sh\necho "CURL $*" >> "$P297_LOG"\n'
+                 # printf, not echo: Ubuntu's /bin/sh is dash, whose echo turns the \n inside curl's -w format into
+                 # a line break and split the logged command (the URL landed on a line of its own).
+                 '#!/bin/sh\nprintf "CURL %s\\n" "$*" >> "$P297_LOG"\n'
                  'case "$*" in *api.codacy.com*) [ -n "$P297_BLOCK" ] && exit 6; exit 0 ;; esac\n'
                  'while [ $# -gt 0 ]; do case "$1" in -o) o="$2"; shift 2;; *) shift;; esac; done\n'
-                 'printf \'#!/bin/sh\\necho "REPORTER $*" >> "$P297_LOG"\\n\' > "$o"\n')
+                 'printf \'#!/bin/sh\\nprintf "REPORTER %%s\\\\n" "$*" >> "$P297_LOG"\\n\' > "$o"\n')
     _write_exe29(os.path.join(bin_, "sha256sum"), "#!/bin/sh\ncat >/dev/null\n")
     env = dict(os.environ, PATH=bin_ + os.pathsep + os.environ["PATH"], P297_LOG=log,
                P297_BLOCK="1" if blocked else "", CODACY_PROJECT_TOKEN=tok, HEAD_SHA="e" * 40,
