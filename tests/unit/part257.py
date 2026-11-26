@@ -172,13 +172,13 @@ def _geoip257():
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.encode(), None)}, switch=False)
     eq("DB-IP: turned off in Outside services, nothing is asked", (_geo257.latest(), asked),
        ((None, "", _geo257.OFF), []))
-    redirect, req = _geo257._AllowedRedirect(), _urlreq257.Request(_geo257.PAGE)
-    eq("DB-IP: a redirect is followed on db-ip.com's two hosts only, over https",
+    redirect, req = _geo257._NoRedirect(), _urlreq257.Request(_geo257.PAGE)
+    eq("DB-IP: only db-ip.com's two hosts over https are asked, and no redirect is followed (not even to them)",
        [_geo257._allowed(u) for u in ("https://download.db-ip.com/x", "http://db-ip.com/x", "https://evil.example/x",
                                       "https://db-ip.com:8443/x")]
        + [redirect.redirect_request(req, None, 302, "", {}, u) is not None
           for u in ("https://evil.example/x", "https://download.db-ip.com/free/x.gz")],
-       [True, False, False, False, False, True])
+       [True, False, False, False, False, False])
     check("Outside services: DB-IP has its own switch, which says what it sends and what Off stops",
           any(s["key"] == _os257.DBIP and "no player address" in s["note"] for s in _os257.SERVICES), "")
 
