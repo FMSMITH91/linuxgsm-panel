@@ -138,7 +138,7 @@ TOOLS = {
     "mysqldump": ("/usr/bin/mysqldump",),
     # The websites (website-* verbs): the egress guard's nftables table, a site account's disk quota,
     # and the certificate dates the proxy status reads. The proxy binary itself is WEB_PROXY_BIN, a
-    # fixed root-owned path this helper installs.
+    # fixed root-owned path this helper installs (WEB_FILE_EXEC).
     "nft": ("/usr/sbin/nft", "/sbin/nft"),
     "setquota": ("/usr/sbin/setquota", "/sbin/setquota"),
     "openssl": ("/usr/bin/openssl", "/bin/openssl"),
@@ -2854,14 +2854,32 @@ def _web_caddy_member(path):
     return None
 
 
+# The web proxy's files, by who must read them (the narrowest mode that works for each):
+#   WEB_FILE_ROOT   units, journald's drop-in, the egress guard's ruleset: read by systemd, journald
+#                   and nft, all root. Nobody else needs them.
+#   WEB_FILE_PROXY  the Caddyfile (it holds every site's proxy token), its candidate and the
+#                   certificates: read by the proxy as WEB_PROXY_USER through its group, written by
+#                   root alone, so the proxy cannot change its own configuration.
+#   WEB_FILE_EXEC   the proxy binary: run by systemd as WEB_PROXY_USER (through its group) and by this
+#                   helper as root (version, list-modules); no other account runs it.
+WEB_FILE_ROOT = 0o600
+WEB_FILE_PROXY = 0o640
+WEB_FILE_EXEC = 0o750
+
+
 def _web_write(path, data, mode, uid=0, gid=0):
-    """Write `data` (bytes) to `path` atomically, owned uid:gid with `mode`."""
+    """Write `data` (bytes) to `path` atomically, owned uid:gid with `mode`.
+
+    The temporary file is created owner-only (0600) and gets its owner, its content and only then its
+    final mode, so no other account can open it while it is incomplete or before its group is set.
+    """
     tmp = path + ".lgsm-new"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
+        os.fchmod(fd, 0o600)        # O_TRUNC kept the mode of a leftover temporary file: narrow it first
         os.fchown(fd, uid, gid)
-        os.fchmod(fd, mode)
         os.write(fd, data)
+        os.fchmod(fd, mode)
     finally:
         os.close(fd)
     os.replace(tmp, path)
@@ -2881,7 +2899,7 @@ def do_website_proxy_install(args, content):
 
     args: version, architecture (amd64|arm64, must be this host's), sha256. The URL is built here from
     the version and architecture (the upstream release asset), never passed in. The archive's sha256
-    is checked BEFORE it is opened; only its `caddy` member is installed (root:root 0755). The proxy
+    is checked BEFORE it is opened; only its `caddy` member is installed (root:lgsmweb 0750). The proxy
     is not started: website-proxy-apply starts it when a site is enabled. Prints version=.
     """
     version, arch, sha = args
@@ -2908,12 +2926,12 @@ def do_website_proxy_install(args, content):
     if not binary:
         sys.stderr.write("the release holds no caddy binary\n")
         return 1
-    _web_write(WEB_PROXY_BIN, binary, 0o755)
-    _web_write(WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT.encode(), 0o644)
-    _web_write(WEB_JOURNAL_CONF, WEB_JOURNAL_TEXT.encode(), 0o644)
+    _web_write(WEB_PROXY_BIN, binary, WEB_FILE_EXEC, 0, pw.pw_gid)
+    _web_write(WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT.encode(), WEB_FILE_ROOT)
+    _web_write(WEB_JOURNAL_CONF, WEB_JOURNAL_TEXT.encode(), WEB_FILE_ROOT)
     if not os.path.exists(WEB_PROXY_CONF):
         empty = WEB_CONF_HEAD + ": no site yet.\n{\n\tadmin off\n\tpersist_config off\n}\nhttp:// {\n\tabort\n}\n"
-        _web_write(WEB_PROXY_CONF, empty.encode(), 0o640, 0, pw.pw_gid)
+        _web_write(WEB_PROXY_CONF, empty.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
     _run_quiet([resolve("systemctl"), "daemon-reload"])
     sys.stdout.write("version=%s\n" % version)
     return 0
@@ -2968,7 +2986,7 @@ def do_website_proxy_apply(args, content):
     pw = pwd.getpwnam(WEB_PROXY_USER)
     for name, pem in files.items():
         dest = WEB_PROXY_ETC + "/" + name if name == "origin-pull-ca.pem" else WEB_PROXY_CERTS + "/" + name
-        _web_write(dest, pem.encode(), 0o640, 0, pw.pw_gid)
+        _web_write(dest, pem.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
     if not _web_validated(text, pw):
         return 1
     verb = ["enable", "--now"] if args[0] == "start" else ["restart"]
@@ -2980,7 +2998,7 @@ def do_website_proxy_apply(args, content):
 def _web_validated(text, pw):
     """Whether `text` passes `caddy validate` run as the proxy's user; when it does, it replaces the running file."""
     cand = WEB_PROXY_CONF + ".candidate"
-    _web_write(cand, text.encode(), 0o640, 0, pw.pw_gid)
+    _web_write(cand, text.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
     r = subprocess.run([WEB_PROXY_BIN, "validate", "--config", cand, "--adapter", "caddyfile"],  # nosec B603
                        shell=False, capture_output=True, timeout=120, user=pw.pw_uid, group=pw.pw_gid,
                        extra_groups=[], cwd=WEB_PROXY_STATE,
@@ -3092,7 +3110,7 @@ def do_website_proxy_install_cache(args, content):
             sys.stderr.write("the cache-enabled web proxy could not be built: nothing was installed\n")
             return 1
         with open(binary, "rb") as fh:
-            _web_write(WEB_PROXY_BIN, fh.read(), 0o755)
+            _web_write(WEB_PROXY_BIN, fh.read(), WEB_FILE_EXEC, 0, pw.pw_gid)
     _rc, active = _run_quiet([resolve("systemctl"), "is-active", WEB_PROXY_UNIT], timeout=20)
     if active.strip() == "active":
         _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
@@ -3207,7 +3225,7 @@ def _web_guard_refresh():
 
 
 def _web_guard_load():
-    _web_write(WEB_GUARD_FILE, web_guard_ruleset(_web_site_uids()).encode(), 0o640)
+    _web_write(WEB_GUARD_FILE, web_guard_ruleset(_web_site_uids()).encode(), WEB_FILE_ROOT)
     rc, _out = _run_quiet([resolve("nft"), "-f", WEB_GUARD_FILE])
     if rc == 0:
         sys.stdout.write("guard=on\n")
@@ -3229,7 +3247,7 @@ def do_website_egress_guard(args, content):
     rc = _web_guard_load()
     if rc:
         return rc
-    _web_write(WEB_GUARD_UNIT_FILE, WEB_GUARD_UNIT_TEXT.encode(), 0o644)
+    _web_write(WEB_GUARD_UNIT_FILE, WEB_GUARD_UNIT_TEXT.encode(), WEB_FILE_ROOT)
     _run_quiet([resolve("systemctl"), "daemon-reload"])
     rc, _out = _run_quiet([resolve("systemctl"), "enable", WEB_GUARD_UNIT])
     return rc

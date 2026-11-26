@@ -16,13 +16,18 @@
 HOW IT RUNS. Pure functions and the helper's own validators; no host is reached and nothing is
 installed. Section 4 loads tools/panel-helper by path, as part05 does.
 """
+import contextlib as _ctx299
+import hashlib as _hashlib299
 import importlib.machinery as _mach299
 import importlib.util as _ilu299
+import io as _io299
 import json as _json299
 import os
 import re as _re299
+import stat as _stat299
 import subprocess as _sp299  # nosec B404 - python3 -I over this part's own scratch archives
 import sys as _sys299
+import tarfile as _tar299
 import tempfile as _tf299
 import zipfile as _zip299
 from datetime import datetime as _dt299
@@ -947,6 +952,112 @@ def _s299_cache_build():
     eq("page cache build (verb): with no plain proxy installed it refuses before any build runs", (rc, calls), (1, []))
 
 
+class _OsSpy299:
+    """Stand in for the helper's os module, recording owners and the mode a file has while it is written.
+
+    fchown and chown are recorded, not done (they need root); a rename carries the record along.
+    """
+
+    def __init__(self):
+        self.owners, self.write_modes = {}, []
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    def fchown(self, fd, uid, gid):
+        self.owners[os.readlink("/proc/self/fd/%d" % fd)] = (uid, gid)
+
+    def chown(self, path, uid, gid):
+        self.owners[path] = (uid, gid)
+
+    def replace(self, src, dst):
+        os.replace(src, dst)
+        if src in self.owners:
+            self.owners[dst] = self.owners.pop(src)
+
+    def write(self, fd, data):
+        self.write_modes.append(_stat299.S_IMODE(os.fstat(fd).st_mode))
+        return os.write(fd, data)
+
+
+class _CurlSub299(_Sub299):
+    """The helper's subprocess with curl writing `archive` to its -o path; everything else succeeds."""
+
+    def __init__(self, archive):
+        super().__init__()
+        self.archive = archive
+
+    def run(self, argv, *_a, **_kw):
+        if "-o" in argv:
+            with open(argv[argv.index("-o") + 1], "wb") as fh:
+                fh.write(self.archive)
+        return super().run(argv)
+
+
+_WEB_PATHS299 = {"WEB_PROXY_DIR": "lib", "WEB_PROXY_BIN": "lib/caddy", "WEB_PROXY_ETC": "etc",
+                 "WEB_PROXY_CONF": "etc/Caddyfile", "WEB_PROXY_CERTS": "etc/certs", "WEB_PROXY_STATE": "state",
+                 "WEB_PROXY_UNIT_FILE": "units/proxy.service", "WEB_JOURNAL_CONF": "units/journald.conf",
+                 "WEB_GUARD_FILE": "etc/egress-guard.nft", "WEB_GUARD_UNIT_FILE": "units/guard.service",
+                 "WEB_MARK_DIR": "marks"}
+
+
+def _web_files299(verbs):
+    """Run the proxy's verbs in a scratch tree: (return codes, {file: (mode, owner)}, modes while written)."""
+    d, build = _tf299.mkdtemp(prefix="wsf-p299-"), _tf299.mkdtemp(prefix="wsf-p299b-")
+    names = tuple(_WEB_PATHS299) + ("pwd", "subprocess", "os", "resolve", "_web_arch", "_web_cache_build",
+                                     "_web_has_cache")
+    saved = {n: getattr(_H299, n) for n in names}
+    spy, buf = _OsSpy299(), _io299.BytesIO()
+    with _tar299.open(fileobj=buf, mode="w:gz") as tar:
+        info = _tar299.TarInfo("caddy")
+        info.size = 4
+        tar.addfile(info, _io299.BytesIO(b"ELF!"))
+    with open(os.path.join(build, "caddy"), "wb") as fh:
+        fh.write(b"ELF+cache")
+    try:
+        for n, rel in _WEB_PATHS299.items():
+            setattr(_H299, n, os.path.join(d, rel))
+        for sub in ("units", "marks"):
+            os.makedirs(os.path.join(d, sub))
+        _H299.pwd, _H299.subprocess, _H299.os = _Pw299({"lgsmweb": 990}), _CurlSub299(buf.getvalue()), spy
+        _H299.resolve, _H299._web_arch = (lambda prog: "/usr/bin/" + prog), (lambda: "amd64")
+        _H299._web_cache_build, _H299._web_has_cache = (lambda _a, _d: os.path.join(build, "caddy")), (lambda _b, _p: True)
+        with _ctx299.redirect_stdout(_io299.StringIO()), _ctx299.redirect_stderr(_io299.StringIO()):
+            rcs = [fn(_hashlib299.sha256(buf.getvalue()).hexdigest()) for fn in verbs]
+        files = {}
+        for top, _dirs, found in os.walk(d):
+            for f in found:
+                path = os.path.join(top, f)
+                files[os.path.relpath(path, d)] = (oct(_stat299.S_IMODE(os.stat(path).st_mode)), spy.owners.get(path))
+        return rcs, files, sorted(set(spy.write_modes))
+    finally:
+        for n, v in saved.items():
+            setattr(_H299, n, v)
+        __import__("shutil").rmtree(d, ignore_errors=True)
+        __import__("shutil").rmtree(build, ignore_errors=True)
+
+
+def _s299_helper_modes():
+    pem = "-----BEGIN CERTIFICATE-----\n" + "A" * 64 + "\n-----END CERTIFICATE-----\n"
+    doc = _json299.dumps({"caddyfile": _H299.WEB_CONF_HEAD + ": x\n", "files": {"a.example.org.crt": pem}})
+    rcs, files, writing = _web_files299([
+        lambda sha: _H299.do_website_proxy_install(["2.11.9", "amd64", sha], ""),
+        lambda _sha: _H299.do_website_proxy_apply(["start"], doc),
+        lambda _sha: _H299.do_website_proxy_install_cache(["2.11.9", "b@sha256:" + "1" * 64, "c@sha256:" + "2" * 64,
+                                                           "v0.17.0"], ""),
+        lambda _sha: _H299.do_website_egress_guard(["on"], "")])
+    proxy, root = ("0o640", (0, 990)), ("0o600", (0, 0))
+    eq("web proxy files (install, apply, cache build and egress guard verbs): the binary runs only as root and the "
+       "proxy's group (0750), the proxy reads its configuration and certificates through its group but cannot change "
+       "them (root-owned 0640), the units, journald's drop-in and the guard's ruleset are root's alone (0600)",
+       (rcs, files), ([0, 0, 0, 0], {"lib/caddy": ("0o750", (0, 990)), "etc/Caddyfile": proxy,
+                                     "etc/certs/a.example.org.crt": proxy, "etc/egress-guard.nft": root,
+                                     "units/proxy.service": root, "units/journald.conf": root,
+                                     "units/guard.service": root}))
+    eq("web proxy files: every file is owner-only (0600) while its bytes are written; its final mode comes after",
+       writing, [0o600])
+
+
 class _CpuCore299(_Core299):
     def __init__(self, rc):
         super().__init__("")
@@ -1106,5 +1217,5 @@ for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s29
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
-                 _s299_cache_build, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
+                 _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
     _step299()
