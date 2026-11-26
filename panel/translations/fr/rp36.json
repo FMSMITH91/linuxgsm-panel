@@ -3,5 +3,6 @@
   "an earlier restore of this archive could not be undone, and the server's own files it set aside are still in the restore's work folder: move them back or away first": "une restauration précédente de cette archive n'a pas pu être annulée, et les fichiers propres du serveur qu'elle a mis de côté sont toujours dans le dossier de travail de la restauration : remettez-les en place ou déplacez-les d'abord",
   "Couldn't read the player list from the game's console just now, so the panel can't tell which player that is. Try again.": "Impossible de lire la liste des joueurs dans la console du jeu pour le moment, le panneau ne peut donc pas savoir de quel joueur il s'agit. Réessayez.",
   "More than one connected player has that name, so a Kick by name could remove the wrong one. Ban by SteamID, or kick them from the server console by their user id.": "Plusieurs joueurs connectés portent ce nom, donc une expulsion par nom pourrait retirer le mauvais joueur. Bannissez par SteamID, ou expulsez-le depuis la console du serveur par son identifiant d'utilisateur.",
-  "another backup of this server is running": "une autre sauvegarde de ce serveur est en cours"
+  "another backup of this server is running": "une autre sauvegarde de ce serveur est en cours",
+  "Too long to show here: this table has no key to read the whole value by.": "Trop long pour être affiché ici : cette table n'a pas de clé permettant de lire la valeur entière."
 }

@@ -23,6 +23,8 @@
 10. Markup injected into a page cannot become a CSRF-valid form post: every POST form a template draws
     carries the token the server rendered, panel.js no longer gives every form in the page one, an ajax
     form without a token is not sent, and the dispatcher refuses the internal _r<digits> helpers.
+11. The database browser's cut value in a keyless row sends only an editor to the SQL box; anyone else
+    (no Edit database data, so no SQL box) is told the table has no key to read the value by.
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -492,3 +494,25 @@ else:
     eq("panel.js: an ajax form without a server token is not sent, nothing walks the page giving forms a token, a "
        "form a script builds still gets one, and the dispatcher refuses _r<digits> helpers and backupUpload",
        _js294, {"walked": False, "built": "tok", "refused": 0, "sent": 1, "r": True, "up": True, "ok": "function"})
+
+
+# ── 11. A cut value's note fits the viewer ────────────────────────────────────────────────────────
+_DBM294 = open(os.path.join(_root, "panel", "static", "js", "databases_manager.js"), encoding="utf-8").read()
+_dbm294 = _node47(
+    "function T(s){ return s; }\nfunction TF(s){ return s; }\nfunction raw(e){ return e; }\n"
+    "function node(t, c, x){ return {t: t, text: x || '', kids: [], appendChild: function (k) { this.kids.push(k); return k; }}; }\n"
+    "function button(label){ return node('button', null, label); }\n"
+    "var document = {createTextNode: function (x) { return node('#text', null, x); }};\n"
+    "var st = {canEdit: false};\n"
+    + (_cut47(_DBM294, "function cutNote(") if "function cutNote(" in _DBM294 else "") + "\n"
+    + _cut47(_DBM294, "function cellNode(") + "\n"
+    "var out = [false, true].map(function (e) { st.canEdit = e;\n"
+    "  var td = cellNode({}, {text: 'long', more: true}, 0, 0, false); return td.kids[td.kids.length - 1].text; });\n"
+    "console.log(JSON.stringify(out));\n")
+if _dbm294 is None:
+    skip("databases browser: a keyless row's cut value says what the viewer can do", "node is not installed")
+else:
+    eq("databases browser: a keyless row's cut value sends only an editor to the SQL box; a viewer without one is "
+       "told the table has no key to read it by", _dbm294,
+       ["Too long to show here: this table has no key to read the whole value by.",
+        "Too long to show here: use the SQL box."])

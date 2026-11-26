@@ -304,7 +304,12 @@ function dbmEditorField(c, cell, isNew) {
   }
 
   // keyed: the row has a key, so its whole value can be read (/cell). A read-only table's rows (a view,
-  // no primary key, a binary key) have none: their cut values say where to read them instead.
+  // no primary key, a binary key) have none: their cut values say where to read them instead. Only an
+  // editor has the SQL box (Edit database data); anyone else is told why there is no "Show all".
+  function cutNote() {
+    return st.canEdit ? T('Too long to show here: use the SQL box.')
+      : T('Too long to show here: this table has no key to read the whole value by.');
+  }
   function cellNode(c, cell, ri, ci, keyed) {
     var td = node('td', 'dbm-cell');
     if (cell.null) { td.appendChild(node('span', 'text-secondary fst-italic', 'NULL')); return raw(td); }
@@ -313,7 +318,7 @@ function dbmEditorField(c, cell, isNew) {
     if (cell.more) {
       td.appendChild(document.createTextNode('… '));
       td.appendChild(keyed ? button(T('Show all'), 'btn-link p-0 align-baseline small', 'dbmShowAll', [ri, ci])
-        : node('span', 'small text-secondary', T('Too long to show here: use the SQL box.')));
+        : node('span', 'small text-secondary', cutNote()));
     }
     return td;
   }

@@ -376,6 +376,7 @@ def _dbm_keyless282():
             "var document = {createTextNode: function (x) { return node('#text', null, x); }};\n"
             "var boxes = {}; function el(id){ return boxes[id] || (boxes[id] = node('div')); }\n"
             "var st = {canEdit: false, page: 0};\n"
+            + (_cut47(src, "function cutNote(") if "function cutNote(" in src else "") + "\n"
             + _cut47(src, "function cellNode(") + "\n" + _cut47(src, "function drawRows(") + "\n"
             "var t = {readonly: true, columns: [{name: 'a'}]}, out = [];\n"
             "[null, {k: 1}].forEach(function (key) { made = []; drawRows(t, {columns: ['a'], more: false, rows: "
