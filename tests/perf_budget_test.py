@@ -570,6 +570,57 @@ def _check_api_servers_scans_concurrently(client):
           "every host scanned in sequence — this endpoint costs hosts x SSH latency")
 
 
+# The History ranges: the sweep above asks each history page once, at its default range (24h). This asks
+# every range, with no history and then with a year of it (a day of per-minute samples and 8,760 hourly
+# rows for one server and its host), and holds each to the same few queries either way: a read that grew
+# with the rows (a query per hour, a lazy load per row) would run thousands at a year.
+HIST_RANGES = ("24h", "7d", "30d", "90d", "6mo", "1y")
+HIST_QUERY_BUDGET = 8
+
+
+def _seed_year_of_history(sid, rid):
+    """A day of per-minute samples and a year of hourly rows for server `sid` and host `rid`."""
+    from datetime import timedelta
+    from panel.core.clock import utcnow
+    from panel.db.models import HostHourly, HostSample, MetricHourly, MetricSample
+    now = utcnow().replace(minute=0, second=0, microsecond=0)
+    with app.app_context():
+        db.session.execute(MetricSample.__table__.insert(), [
+            {"server_id": sid, "ts": now - timedelta(minutes=m), "cpu": 1.0, "ram_mb": 1, "players": 1}
+            for m in range(1, 1441)])
+        db.session.execute(HostSample.__table__.insert(), [
+            {"remote_id": rid, "ts": now - timedelta(minutes=m), "cpu": 1.0, "ram_pct": 1.0, "disk_pct": 1.0}
+            for m in range(1, 1441)])
+        hours = [now - timedelta(hours=h) for h in range(1, 8761)]
+        db.session.execute(MetricHourly.__table__.insert(), [
+            {"server_id": sid, "hour": h, "n": 60, "cpu_avg": 1.0, "players_max": 1} for h in hours])
+        db.session.execute(HostHourly.__table__.insert(), [
+            {"remote_id": rid, "hour": h, "n": 60, "cpu_avg": 1.0, "rx_avg": 1.0} for h in hours])
+        db.session.commit()
+
+
+def _check_history_ranges_bounded(client):
+    """Each History range of the server and host pages reads the same few queries with a year of rows as with none."""
+    with app.app_context():
+        gs = GameServer.query.filter(GameServer.remote_id.isnot(None)).order_by(GameServer.id.asc()).first()
+        sid, rid = gs.id, gs.remote_id
+    paths = (["/api/server/%d/history?range=%s" % (sid, r) for r in HIST_RANGES]
+             + ["/api/remote/%d/history?range=%s" % (rid, r) for r in HIST_RANGES])
+    st_empty, st_year = {}, {}
+    empty = probe(client, paths, st_empty)
+    _seed_year_of_history(sid, rid)
+    year = probe(client, paths, st_year)
+    replies = [len((client.get(p).get_json() or {}).get("host") or []) for p in paths if "/remote/" in p]
+    check("perf: every History range of the server and host pages answers 200, with no history and with a year "
+          "of it (the year's replies are not empty)",
+          all(st_empty.get(p) == 200 and st_year.get(p) == 200 for p in paths) and all(replies),
+          repr(([(p, st_empty.get(p), st_year.get(p)) for p in paths], replies)))
+    grew = ["%s %d->%d" % (p, empty.get(p, -1), year.get(p, -1)) for p in paths
+            if empty.get(p) != year.get(p) or year.get(p, 99) > HIST_QUERY_BUDGET]
+    check("perf: each History range reads the same few queries (at most %d) with a year of rows as with none"
+          % HIST_QUERY_BUDGET, not grew, "; ".join(grew[:6]))
+
+
 try:
     admin_id = _seed_admin_and_hosts()
     seed_servers(0, SERVERS_SMALL)
@@ -621,6 +672,7 @@ try:
           not grew, "; ".join(grew[:4]))
     _check_no_growth_with_groups(paths)
     _check_api_servers_scans_concurrently(c)
+    _check_history_ranges_bounded(c)
 
     worst = sorted(large.items(), key=lambda kv: -kv[1])[:5]
     print("busiest pages at %d hosts / %d servers: %s"

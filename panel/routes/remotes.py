@@ -546,9 +546,10 @@ def _register_remote_delete_and_test(app):
             # Reproduced in a throwaway SQLite DB: the samples survive, both rowids are recycled,
             # and the next server created serves the deleted one's CPU/RAM/player history on
             # /api/server/<id>/history for the whole 14-day prune window.
-            from panel.db.models import MetricSample
-            db.session.execute(MetricSample.__table__.delete()
-                               .where(MetricSample.server_id.in_(_doomed_ids)))
+            # The hourly rollups (MetricHourly) hold the same history for a year: they go too.
+            from panel.db.models import MetricHourly, MetricSample
+            for _hist in (MetricSample, MetricHourly):
+                db.session.execute(_hist.__table__.delete().where(_hist.server_id.in_(_doomed_ids)))
         # ...and its databases' rows (the databases themselves stay on that machine).
         _dbr.forget_remote(remote_id)
         # Delete group associations

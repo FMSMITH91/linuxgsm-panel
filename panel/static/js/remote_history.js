@@ -1,4 +1,4 @@
-// The host page's History card: this host's CPU, RAM, disk and network over 24 hours or 7 days, drawn
+// The host page's History card: this host's CPU, RAM, disk and network over 24 hours to a year, drawn
 // with the server page's chart code (history_charts.js). Refreshed every minute while the card is on
 // screen, which is how often a sample is recorded.
 var _hch_range = '24h';
@@ -22,10 +22,14 @@ function _hch_drawHost(h){
   var times = h.map(function(p){ return new Date(p.t); });
   var ink = _cmpbInk();
   var pctY = { y:{ min:0, max:100, ticks:{color:ink.tick, maxTicksLimit:5}, grid:{color:ink.grid} } };
-  var xs = function(id){ _histTimes[id] = times; return _hch_range === '7d' ? _histX() : _histXScale(id); };
-  _histChart('hh-cpu', L, [ _ds(_hch_t('CPU %'), h.map(function(p){ return p.cpu; }), '#58a6ff', true) ], pctY, xs('hh-cpu'));
-  _histChart('hh-ram', L, [ _ds(_hch_t('RAM %'), h.map(function(p){ return p.ram; }), '#3fb950', true) ], pctY, xs('hh-ram'));
-  _histChart('hh-disk', L, [ _ds(_hch_t('Disk %'), h.map(function(p){ return p.disk; }), '#d29922', true) ], pctY, xs('hh-disk'));
+  var xs = function(id){ _histTimes[id] = times; return _histAxis(id, _hch_range); };
+  // Past 7 days a point is hours merged: its average, with its peak dashed beside it.
+  var line = function(label, key, color){
+    return _hch_peak([ _ds(_hch_t(label), h.map(function(p){ return p[key]; }), color, true) ], h, key + '_max', color);
+  };
+  _histChart('hh-cpu', L, line('CPU %', 'cpu', '#58a6ff'), pctY, xs('hh-cpu'));
+  _histChart('hh-ram', L, line('RAM %', 'ram', '#3fb950'), pctY, xs('hh-ram'));
+  _histChart('hh-disk', L, line('Disk %', 'disk', '#d29922'), pctY, xs('hh-disk'));
   _hch_netChart('hh-net', L, h, xs('hh-net'));
 }
 
@@ -47,7 +51,7 @@ document.addEventListener('click', function(e){
   var rng = b.getAttribute('data-hh-range'); if (rng === _hch_range) return;
   _hch_range = rng;
   b.parentNode.querySelectorAll('[data-hh-range]').forEach(function(x){ x.classList.toggle('active', x === b); });
-  // Rebuilt, not refreshed in place: the x axis differs between the two ranges.
+  // Rebuilt, not refreshed in place: the x axis and the peak lines differ between ranges.
   ['hh-cpu', 'hh-ram', 'hh-disk', 'hh-net'].forEach(function(id){
     if (_histCharts[id]) { try { _histCharts[id].destroy(); } catch (err) { /* already gone */ } delete _histCharts[id]; }
   });
@@ -58,6 +62,6 @@ window.loadHostHistory();
 if (window.pollWhenVisible) {
   pollWhenVisible(function(){
     var c = document.getElementById('hh-card');
-    if (c && c.offsetParent !== null) window.loadHostHistory();
+    if (c && c.offsetParent !== null && _histDue('hh', _hch_range, Date.now())) window.loadHostHistory();
   }, 60000);
 }

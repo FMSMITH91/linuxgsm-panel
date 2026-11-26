@@ -6,6 +6,7 @@ Back to the [README](README.md). Who may do what: [permissions.md](permissions.m
 
 - One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), with search and game icons.
 - Real-time console with command history and quick commands, LinuxGSM's script log and the game's own log, per-game CPU/RAM/uptime, and live player counts.
+- **History charts** on the server page and the host page: CPU, RAM, disk, network and players over the last 24 hours, 7 days, 30 days, 90 days, 6 months or year. The last 14 days keep a sample a minute; past that each hour is kept as its average, peak and low, for a year.
 - Start/stop/restart/update/validate and more; restart, stop, backups and mod changes can wait until a server is empty.
 - **Clean host reboots** — game servers are stopped cleanly first and the ones that were running come back. See [Rebooting a host](#rebooting-a-host).
 - Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL, per-server schedules with autostart and restart-when-empty, and a file browser with upload, download and in-browser editing.

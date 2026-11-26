@@ -2,6 +2,17 @@
   "Received": "Reçu",
   "Host network · received and sent": "Réseau de l'hôte · reçu et envoyé",
   "Network · received and sent": "Réseau · reçu et envoyé",
-  "No history yet. A sample is recorded every minute while this host has a game server installed.": "Pas encore d'historique. Un échantillon est enregistré chaque minute tant que cet hôte a un serveur de jeu installé.",
-  "range must be 24h or 7d": "La plage doit être 24h ou 7d"
+  "No history in this range yet. A sample is recorded every minute while this host has a game server installed.": "Pas encore d'historique sur cette période. Un échantillon est enregistré chaque minute tant que cet hôte a un serveur de jeu installé.",
+  "range must be one of 24h, 7d, 30d, 90d, 6mo, 1y": "La plage doit être 24h, 7d, 30d, 90d, 6mo ou 1y",
+  "Last 24 hours": "Dernières 24 heures",
+  "Last 7 days": "7 derniers jours",
+  "Last 30 days": "30 derniers jours",
+  "Last 90 days": "90 derniers jours",
+  "Last 6 months": "6 derniers mois",
+  "Last year": "Dernière année",
+  "30d": "30 j",
+  "90d": "90 j",
+  "6mo": "6 m",
+  "1y": "1 an",
+  "Peak": "Pic"
 }

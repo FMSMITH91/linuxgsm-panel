@@ -641,18 +641,23 @@
 
 <!-- History: persisted CPU/RAM/player trends (sampled ~1/min) -->
 <div class="card mb-3" data-mtab="history" data-start-hidden>
-  <div class="card-header d-flex justify-content-between align-items-center">
+  {# flex-wrap: at phone width the six range buttons take their own line rather than overflow the card. #}
+  <div class="card-header d-flex flex-wrap gap-2 justify-content-between align-items-center">
     <span><i class="bi bi-graph-up"></i> History
       <span class="ms-1 text-success fs-r72 fw-normal" title="Updates automatically (a sample is recorded every minute)">● Live</span>
     </span>
     <div class="btn-group btn-group-sm" role="group" aria-label="History range">
-      <button type="button" class="btn btn-outline-secondary active" data-hist-range="24h">24h</button>
-      <button type="button" class="btn btn-outline-secondary" data-hist-range="7d">7d</button>
+      <button type="button" class="btn btn-outline-secondary active" data-hist-range="24h" title="Last 24 hours">24h</button>
+      <button type="button" class="btn btn-outline-secondary" data-hist-range="7d" title="Last 7 days">7d</button>
+      <button type="button" class="btn btn-outline-secondary" data-hist-range="30d" title="Last 30 days">30d</button>
+      <button type="button" class="btn btn-outline-secondary" data-hist-range="90d" title="Last 90 days">90d</button>
+      <button type="button" class="btn btn-outline-secondary" data-hist-range="6mo" title="Last 6 months">6mo</button>
+      <button type="button" class="btn btn-outline-secondary" data-hist-range="1y" title="Last year">1y</button>
     </div>
   </div>
   <div class="card-body">
     <div id="hist-empty" class="text-secondary small text-center py-4" data-start-hidden>
-      <i class="bi bi-hourglass-split"></i> No history yet — a sample is recorded every minute. Check back shortly.
+      <i class="bi bi-hourglass-split"></i> No history in this range yet — a sample is recorded every minute. Check back shortly.
     </div>
     <div id="hist-charts">
       <div class="small text-secondary mb-1"><i class="bi bi-people-fill"></i> Players</div>

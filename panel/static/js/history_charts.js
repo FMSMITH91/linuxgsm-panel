@@ -88,12 +88,42 @@ if (_r37d_inkWatch && document.documentElement) {
   _r37d_inkWatch.observe(document.documentElement, {attributes: true, attributeFilter: ['data-bs-theme']});
 }
 
+// How a point's time reads, per range: every range carries the date so a hovered point is never
+// ambiguous about which day it is (the compact date-at-change of the 24h axis is _histXScale). 7d and
+// 30d points are hours; 90d points are days, and 6mo and 1y add the year, which their span crosses.
+var _histLblFmt = {
+  '24h': {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'},
+  '7d': {month:'short', day:'numeric', hour:'2-digit'},
+  '30d': {month:'short', day:'numeric', hour:'2-digit'},
+  '90d': {month:'short', day:'numeric'},
+  '6mo': {year:'numeric', month:'short', day:'numeric'},
+  '1y': {year:'numeric', month:'short', day:'numeric'}
+};
 function _histLbl(iso, rng){
-  // Tooltip title (per point). Both ranges carry the date so a hovered point is never ambiguous
-  // about which day it is; the compact date-at-change lives on the x-axis ticks (_histXScale).
-  var d = new Date(iso);
-  return rng==='7d' ? d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit'})
-                           : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  return new Date(iso).toLocaleString([], _histLblFmt[rng] || _histLblFmt['24h']);
+}
+
+// The x axis for a range: the 24h one puts the date under the time where the day changes; the longer
+// ones show the points' own labels (_histLbl), which already carry the date.
+function _histAxis(id, rng){ return rng === '24h' ? _histXScale(id) : _histX(); }
+
+// Whether a poll should read range `rng` again for chart set `key`: the 24h and 7d ranges every poll
+// (a new sample lands each minute); the hourly ranges every ten minutes, since a point there spans
+// hours to a day and a minute's poll would read the same rows again for nothing.
+var _histPolled = {};
+function _histDue(key, rng, now){
+  if (rng !== '24h' && rng !== '7d' && now - (_histPolled[key] || 0) < 600000) return false;
+  _histPolled[key] = now;
+  return true;
+}
+
+// A dashed "Peak" line beside an average, for the ranges whose points are hourly rollups (they carry
+// cpu_max and the like); none for the 24h and 7d ranges, whose points are single samples.
+function _hch_peak(datasets, points, key, color){
+  if (!points.length || points[0][key] === undefined) return datasets;
+  var peak = Object.assign(_ds(_hch_t('Peak'), points.map(function(p){ return p[key]; }), color, false),
+                           {borderDash: [4, 3], borderWidth: 1});
+  return datasets.concat([peak]);
 }
 
 function _ds(label, data, color, fill){
