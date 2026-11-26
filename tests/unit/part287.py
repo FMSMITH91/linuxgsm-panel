@@ -16,8 +16,8 @@
    helper and the game servers, would inherit it).
 5. B3's image leaves out pip, setuptools and wheel (and ensurepip's pip wheel) once B3's packages are in.
 6. The "Add-on images" workflow: daily and on a pull request touching an image or a pin, a read-only
-   token, scanner images by digest; its script scans what addons.py pins and what the panel builds,
-   refuses a Containerfile default addons.py does not pass, and gates Trivy on fixable High/Critical
+   token, scanner images by digest; its script scans what the add-on catalog pins and what the panel
+   builds, refuses a Containerfile default that is not the catalog's, and gates Trivy on fixable High/Critical
    findings; every accepted finding has a reason and an expiry date.
 
 HOW IT RUNS. install.sh's own text, cut out and run under bash over this part's scratch trees (a
@@ -28,6 +28,7 @@ Nothing here runs as another account, or reads or writes /etc, the real cron spo
 """
 import atexit as _atexit287
 import importlib.util as _ilu287
+import json as _json287
 import os
 import pwd as _pwd287
 import re as _re287
@@ -399,25 +400,28 @@ def _s287_scan_images_from_file():
           repr((real, _AI287.scanner_images(loose))))
 
 
-def _addons_fixture287(body, containerfile):
+def _addons_fixture287(addons, containerfile):
     d = _tf287.mkdtemp(prefix="ai-", dir=_TMP287)
-    _write287(os.path.join(d, "addons.py"), body, 0o600)
+    _write287(os.path.join(d, "catalog.json"), _json287.dumps({"schema": 1, "addons": addons}), 0o600)
     _write287(os.path.join(d, "images", "x", "Containerfile"), containerfile, 0o600)
-    return _AI287.plan(os.path.join(d, "addons.py"), os.path.join(d, "images"))
+    return _AI287.plan(os.path.join(d, "catalog.json"), os.path.join(d, "images"))
 
 
 def _s287_scan_plan():
     real = _AI287.plan()
     check("image scan: on this tree it scans BlueMap's pinned image and builds B3, with nothing wrong",
-          "BLUEMAP_IMAGE" in real["upstream"] and "b3" in real["builds"] and not real["problems"], repr(real))
-    good = 'A_IMAGE = "ghcr.io/o/a@sha256:%s"\nB_IMAGE = "ghcr.io/o/b:latest"\nBASE = "docker.io/library/p@sha256:%s"\n' \
-        % ("1" * 64, "2" * 64)
+          "bluemap" in real["upstream"] and "b3" in real["builds"] and not real["problems"], repr(real))
+    good = {"a": {"image": "ghcr.io/o/a@sha256:" + "1" * 64}, "x": {"base": "docker.io/library/p@sha256:" + "2" * 64}}
     ok = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
     bad = _addons_fixture287(good, "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("3" * 64))
-    check("image scan: ...an image pinned by digest is scanned, one pinned by tag is not taken for a pin",
-          ok["upstream"] == {"A_IMAGE": "ghcr.io/o/a@sha256:" + "1" * 64} and ok["builds"] == ["x"]
-          and not ok["problems"], repr(ok))
-    check("image scan: ...and a Containerfile default addons.py does not pass stops the scan (it would build "
+    loose = _addons_fixture287(dict(good, a={"image": "ghcr.io/o/b:latest"}),
+                               "ARG BASE_IMAGE=docker.io/library/p@sha256:%s\nFROM ${BASE_IMAGE}\n" % ("2" * 64))
+    check("image scan: ...an image the catalog pins by digest is scanned, a build gets the catalog's values as build "
+          "arguments, and one pinned by tag stops the scan",
+          ok["upstream"] == {"a": "ghcr.io/o/a@sha256:" + "1" * 64}
+          and ok["builds"] == {"x": [("BASE_IMAGE", "docker.io/library/p@sha256:" + "2" * 64)]}
+          and not ok["problems"] and any("not pinned by digest" in p for p in loose["problems"]), repr((ok, loose)))
+    check("image scan: ...and a Containerfile default that is not the catalog's value stops the scan (it would build "
           "another image than hosts run)",
           bad["problems"] and "ARG BASE_IMAGE" in bad["problems"][0], repr(bad))
     argv = _AI287.trivy_argv("t@sha256:" + "0" * 64, "/c", "/s", "x.tar")
