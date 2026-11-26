@@ -22,6 +22,7 @@ from panel.core.panel_state import (forget_rows)
 from panel.routes import databases as _dbr
 from panel.routes._shared import (REAUTH_BLOCKED_MSG, _begin_bootstrap, reauth_password)
 from contextlib import contextmanager
+import ipaddress
 import logging
 import re
 import socket
@@ -174,6 +175,65 @@ def _delegated_add_refusal(is_local, auth_method):
     return None
 
 
+# Where a delegated admin's host may not be: the panel host's loopback, its LANs (RFC 1918), link-local,
+# the CGNAT block Tailscale addresses come from, IPv6's unique-local block (Tailscale's
+# fd7a:115c:a1e0::/48 in it), unspecified and multicast. The connection test runs FROM the panel host,
+# so naming one of these probed the network behind it, one address and port at a time, which is why
+# api_tailscale_check_peer is superadmin-only (OWASP SSRF Prevention Cheat Sheet, "Case 2").
+_INTERNAL_NETS = tuple(ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+    "192.168.0.0/16", "224.0.0.0/3", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8"))
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+INTERNAL_TARGET_REFUSAL = ("Only a superadmin can add or point a host at a loopback, private, link-local or "
+                           "tailnet address: the connection test runs from the panel's own machine. Use "
+                           "the host's public address, or ask a superadmin.")
+
+
+def _resolve_host(host):
+    """Every address `host` resolves to now (all A and AAAA records); [] when it does not resolve."""
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError, ValueError):
+        return []
+    return [ip_address_or_none(str(info[4][0]).split("%")[0]) for info in infos]
+
+
+def _internal_address(addr):
+    """Whether `addr` (an ip_address) is in _INTERNAL_NETS, read in its IPv4 form when it embeds one."""
+    if addr.version == 6:
+        if addr in _NAT64:
+            addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+        else:
+            addr = addr.ipv4_mapped or addr.sixtofour or addr
+    return any(addr in net for net in _INTERNAL_NETS if net.version == addr.version)
+
+
+def delegated_target_refusal(host):
+    """(why, address to dial) for a connection test a non-superadmin asks for; why is None when allowed.
+
+    Resolved first, every record checked, and the test then dials the address that was checked, never
+    the name again: a second lookup between the check and the connection is the DNS rebinding gap the
+    SSRF Prevention Cheat Sheet names. A superadmin's test dials `host` as given.
+    """
+    if current_user.is_superadmin:
+        return None, host
+    literal = ip_address_or_none(host) or _r36j_inet_aton(host)
+    addrs = [a for a in ([literal] if literal is not None else _resolve_host(host)) if a is not None]
+    if not addrs:
+        return i18n.tr("{host} did not resolve to an address.", host=host), None
+    if any(_internal_address(a) for a in addrs):
+        return i18n.tr(INTERNAL_TARGET_REFUSAL), None
+    return None, str(addrs[0])
+
+
+def _r290_add_refusal(is_local, host, auth_method):
+    """(why, address to dial) for the add form: _delegated_add_refusal, then delegated_target_refusal."""
+    why = _delegated_add_refusal(is_local, auth_method)
+    if why or is_local:
+        return why, host
+    return delegated_target_refusal(host)
+
+
 def _delegated_retarget_refusal(remote, new_host, new_port, new_user, new_auth, new_cred):
     """Why the signed-in user may not repoint `remote` this way, or None when they may.
 
@@ -250,7 +310,7 @@ def _register_remote_list(app):
                 or _add_remote_target_error(is_local, host, auth_method, credential))
         if _bad:
             return _form_err(_bad, "manage_remotes")
-        _refused = _delegated_add_refusal(is_local, auth_method)
+        _refused, _dial = _r290_add_refusal(is_local, host, auth_method)
         if _refused:
             return _form_err(_refused, "manage_remotes", code=403)
 
@@ -271,7 +331,7 @@ def _register_remote_list(app):
             # connection, the pin would come from whichever one that is, not from this login.
             _seen_key = []
             # With a fingerprint, that first key must match it or nothing is sent (RFC 4251 4.1).
-            success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
+            success, msg = ssh_test_connection(_dial, ssh_port, ssh_user, auth_method, credential,
                                                captured=_seen_key, fingerprint=fingerprint)
             if not success:
                 return _form_err(i18n.tr("Connection test failed: {why}", why=msg), "manage_remotes")
@@ -728,6 +788,11 @@ def _r36c_retarget_refusal(remote, new_host, new_port, new_user):
         return why, 403
     if _r36c_host_identity(new_host, new_port) == _r36c_host_identity(remote.host, remote.port):
         return None, None
+    # A delegated admin repointing a host (a new address or SSH port) is held to the add form's address
+    # rule: the row's next connection test, from the panel host, goes there.
+    why = None if remote.is_local else delegated_target_refusal(new_host)[0]
+    if why:
+        return why, 403
     why = r36c_same_host_refusal(new_host, new_port, own_id=remote.id)
     return (why, 409) if why else (None, None)
 

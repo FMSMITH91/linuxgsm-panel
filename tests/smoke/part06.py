@@ -67,6 +67,7 @@ check("deactivation: the epoch-cookie session stops working once deactivated",
 # ("", "...timed out", -1) rather than raising, which is why neither route's except branch
 # ever saw these.
 from panel.ops.ssh_manager import _core as _sw_core
+from panel.ops.ssh_manager import cron as _sw_cron
 
 _sw_saved = {}
 # What the restore below must put back. A helper that re-saved on every call kept the PREVIOUS stub
@@ -105,6 +106,8 @@ try:
     # 2. "Run now" on a scheduled task reported "Started" from a launch that never happened.
     #    The job is detached, so the rc says nothing about how the job ENDS — but it does say
     #    whether it began, and that was discarded.
+    # Run now runs only a line the crontab holds, so the posted line is listed.
+    _sw_stub(_sw_cron, "list_cron_jobs", lambda *a, **k: [{"raw": "0 5 * * * /home/x/x update"}])
     _sw_stub(_sw_core, "run_command", lambda *a, **k: ("", "sudo: a password is required", 1))
     _cr = c.post("/api/server/%d/cron/run" % gs_id, json={"raw": "0 5 * * * /home/x/x update"},
                  headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}

@@ -219,7 +219,13 @@ def _register_firewall_view(app):
         # Clear the pinned SSH host key so the next connection re-pins it (TOFU). Use
         # after legitimately reinstalling a server, when its host key has changed and
         # connections are being rejected as a mismatch.
-        remote = get_remote(remote_id)
+        # Superadmin-only: the next connection pins WHATEVER answers at this address and signs in
+        # with the row's credential, often the panel's own key. A delegated admin who can redirect
+        # the host's SSH traffic (root on their own VPS) would otherwise move that key onto a
+        # machine they were never granted, the same move remotes._delegated_retarget_refusal refuses.
+        if not current_user.is_superadmin:
+            return jsonify({"success": False, "message": i18n.tr(RETRUST_SUPERADMIN_ONLY)}), 403
+        remote = get_host_remote(remote_id)
         old_fp = remote.host_key_fingerprint
         remote.host_key = ""
         db.session.commit()
@@ -231,6 +237,12 @@ def _register_firewall_view(app):
                    detail="cleared pinned host key (%s)" % (old_fp or "none"), remote=remote)
         return jsonify({"success": True,
                         "message": "Host key cleared — it will be re-pinned on the next connection."})
+
+
+# Why a delegated admin may not clear a pinned host key; the host page prints the same sentence.
+RETRUST_SUPERADMIN_ONLY = ("Only a superadmin can re-trust a host key: the next connection trusts "
+                           "whatever machine answers at this address and signs in to it with the "
+                           "host's saved credential.")
 
 
 # What a firewall audit row names in place of a port or protocol that did not validate: a fixed

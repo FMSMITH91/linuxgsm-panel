@@ -85,7 +85,8 @@ def _stub_files130(reached):
                             ("_bg_gmod_content_uninstall", "gmod-uninstall-job", None)):
         _p9_patch(_p9_sf, name, _mark(step, ret))
     _p9_patch_sm("delete_cron_job", _mark("delete", (True, "")))
-    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [])
+    # Run now runs only a line the crontab holds: _CRON130's line is listed.
+    _p9_patch_sm("list_cron_jobs", lambda *a, **k: [{"raw": _CRON130["raw"]}])
     _p9_patch(_p9_sf, "_claim_gmod_content_host", lambda rid: True)
     _p9_patch(_pb130.bk, "game_prune_keep", _stop("backup"))
 

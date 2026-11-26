@@ -2051,7 +2051,8 @@ try:
         _r = _A.post(_sf_url + _u, json={"raw": "x", "schedule": "* * * * *", "command": "monitor"})
         check("cron %s: a crontab write that raises is a 500" % _u, _r.status_code == 500,
               "got %d" % _r.status_code)
-    _d = _p9_json(_A.post(_sf_url + "/cron/run", json={"raw": "x"}))
+    # A line the listing holds: Run now runs only a line read back from the crontab (part290).
+    _d = _p9_json(_A.post(_sf_url + "/cron/run", json={"raw": "0 5 * * * monitor"}))
     check("cron run: a run that raises answers success=false",
           _d == {"success": False, "message": "Internal server error"}, repr(_d))
     _r = _V.post(_sf_url + "/cron/run", json={"raw": "x"})

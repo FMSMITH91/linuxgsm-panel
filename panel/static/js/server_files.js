@@ -1535,10 +1535,11 @@ function loadCron(){
     var loading=document.getElementById('cron-loading');
     if(d.error){ loading.style.display=''; loading.innerHTML='<span class="text-danger">'+esc(d.error)+'</span>'; return; }  // nosemgrep
     var tb=document.getElementById('cron-tbody'), rows='';
-    (d.jobs||[]).forEach(function(j){
+    // Without "Change game server files" every task write is refused (the card says why): no row actions.
+    var canWrite=(document.getElementById('cron-card')||{dataset:{}}).dataset.cronEdit!=='0'; (d.jobs||[]).forEach(function(j){
       var runBtn = '<button class="btn btn-sm btn-link p-0 me-2" data-cron-run title="Run now"><i class="bi bi-play-circle"></i></button>';
       // Every task is editable + deletable now, including panel-installed ones.
-      var actions = runBtn
+      var actions = !canWrite ? '' : runBtn
         + '<button class="btn btn-sm btn-link p-0 me-2" data-cron-edit title="Edit"><i class="bi bi-pencil"></i></button>'
         + '<button class="btn btn-sm btn-link text-danger p-0" data-cron-del title="Delete"><i class="bi bi-trash"></i></button>';
       // Non-blocking label so you can tell what a panel-installed line is (still fully editable).
