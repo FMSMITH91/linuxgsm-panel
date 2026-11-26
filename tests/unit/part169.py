@@ -95,7 +95,9 @@ def _job169(path, job_id):
     return m.group(1) if m else ""
 
 
-_WIRING169 = {"coverage": ("ci.yml", "coverage"), "js coverage": ("ci.yml", "js-coverage"),
+# `coverage` is coverage-verdict's name: the job `coverage` runs in parts (ci.yml), and each part asks
+# the same question under the same name, below.
+_WIRING169 = {"coverage": ("ci.yml", "coverage-verdict"), "js coverage": ("ci.yml", "js-coverage"),
               "lighthouse": ("lighthouse.yml", "lighthouse")}
 _bad169 = []
 for _name169, (_wf169, _id169) in _WIRING169.items():
@@ -110,6 +112,9 @@ for _name169, (_wf169, _id169) in _WIRING169.items():
         _bad169.append("%s %s: fewer than five steps gate on skip" % (_wf169, _id169))
     if _ps169.JOB_WORKFLOW.get(_name169) != ".github/workflows/" + _wf169:
         _bad169.append("pr_scope.JOB_WORKFLOW[%r] is not %s" % (_name169, _wf169))
+_parts169 = _job169("ci.yml", "coverage")
+if '--job "coverage"' not in _parts169 or "outputs.docs_only" in _parts169 or _parts169.count("steps.scope.outputs.skip") < 5:
+    _bad169.append("ci.yml coverage: its parts do not ask pr_scope --job \"coverage\" and gate their steps on skip")
 eq("workflows: coverage, js coverage and Lighthouse each pass their own name to pr_scope --job and gate "
    "their steps on its skip; pr_scope knows each one's workflow", _bad169, [])
 eq("pr_scope: every job with a list is wired in a workflow, and none other",

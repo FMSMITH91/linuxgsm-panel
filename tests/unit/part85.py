@@ -19,6 +19,7 @@ app; everything else on the module functions with stand-ins, undone in a finally
 """
 import atexit as _atexit85
 import os
+import re as _re85
 import shutil as _shutil85
 import signal as _signal85
 import sqlite3 as _sq85
@@ -122,7 +123,8 @@ _RUN_SUITE85 = _fn85(_RT85, "run_suite")
 _li85 = _RT85.find("\nlane_tree() {")
 _LANES85 = (_RT85[_li85 + 1:_RT85.index("\n}\n", _RT85.index("\nrun_lanes() {")) + 3]
             if _li85 >= 0 else "exit 97\n")
-_di85 = _RT85.find('\nif [[ "${RUN_TESTS_PARALLEL:-0}" = "1" ]]; then')
+# The dispatch opens on RUN_TESTS_UNIT=only (CI's unit shards run the unit suite alone).
+_di85 = _RT85.find('\nif [[ "${RUN_TESTS_UNIT:-}" == "only" ]]; then')
 _DISPATCH85 = _RT85[_di85 + 1:_RT85.index("\nfi\n", _di85) + 4] if _di85 >= 0 else "exit 97\n"
 _OK_SUITE85 = os.path.join(_TMP85, "ok_suite.py")
 with open(_OK_SUITE85, "w", encoding="utf-8") as _fh85:
@@ -142,19 +144,19 @@ def _checkout85():
     return d
 
 
-def _run_tests85(parallel, dispatch=None):
+def _run_tests85(parallel, dispatch=None, unit_mode=""):
     """(rc, output, the checkout's data/ afterwards) for one whole run over stand-in suites.
 
     The real run_suite, lane_tree, run_lanes and the mode dispatch; each DB-owning stand-in
     suite goes through run_suite, which clears data/ where it runs.
     """
     d = _checkout85()
-    stubs = ("unit_suite() { echo '1 / 1 checks passed'; }\n"
+    stubs = ("unit_suite() { echo '1 / 1 checks passed'; }\nstatic_checks() { echo '== static =='; }\n"
              + "".join('%s() { run_suite %s "%s"; }\n' % (n, n, _OK_SUITE85)
                        for n in ("other_suites", "smoke_suite", "rbac_suite")))
     script = ("set -euo pipefail\nPY=%s\nRT_TMP=$(mktemp -d %s/rt-XXXXXX)\nRT_ROOT=\"$PWD\"\n"
-              "RUN_TESTS_PARALLEL=%d\n%s%s%s%s"
-              % (sys.executable, _TMP85, 1 if parallel else 0, _RUN_SUITE85, _LANES85, stubs,
+              "RUN_TESTS_PARALLEL=%d\nRUN_TESTS_UNIT=%s\n%s%s%s%s"
+              % (sys.executable, _TMP85, 1 if parallel else 0, unit_mode, _RUN_SUITE85, _LANES85, stubs,
                  dispatch or _DISPATCH85))
     rc, out = _bash85(script, d, timeout=120)
     return rc, out, sorted(os.listdir(os.path.join(d, "data")))
@@ -182,6 +184,18 @@ _r23d_one85 = _run_tests85(False, _DISPATCH85.replace('for fn in "${ALL_SUITES[@
 check("run-tests: ...a sequential mode that runs only the unit suite is not read as having run them all (control)",
       'for fn in "${ALL_SUITES[@]}"; do' in _DISPATCH85 and _r23d_one85[0] == 0
       and not _r23d_all_ran85(_r23d_one85[1]), repr(_r23d_one85))
+# RUN_TESTS_UNIT (CI runs the parts as separate jobs): "skip" runs every other suite, in both modes, and
+# the static checks; "only" runs the unit suite and nothing else.
+_ut85 = {(m, par): _run_tests85(par, unit_mode=m) for m in ("skip", "only") for par in (False, True)}
+_ut_bad85 = []
+for (_mode85, _p85), (_rc85, _o85, _d85) in _ut85.items():
+    _all_db85 = all(_o85.count("== %s ==" % _n) == 1 for _n in ("other_suites", "smoke_suite", "rbac_suite"))
+    _want85 = (3, True, True) if _mode85 == "skip" else (1, False, False)
+    if (_rc85, _d85) != (0, ["panel.db", "panel.db.backup"]) or (
+            len(_re85.findall(r"^1 / 1 checks passed$", _o85, _re85.M)), _all_db85, "== static ==" in _o85) != _want85:
+        _ut_bad85.append((_mode85, _p85, _rc85, _o85[-300:]))
+check("run-tests: RUN_TESTS_UNIT=skip runs the static checks and every other suite but not the unit suite, and "
+      "RUN_TESTS_UNIT=only the unit suite alone, in both modes", not _ut_bad85, repr(_ut_bad85))
 _rsd85 = _checkout85()
 _rs85 = _bash85("set -e\nPY=%s\nRT_ROOT=\"$PWD\"\n%srun_suite x %s"
                 % (sys.executable, _RUN_SUITE85, _OK_SUITE85), _rsd85)

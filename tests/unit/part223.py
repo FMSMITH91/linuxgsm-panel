@@ -89,7 +89,8 @@ _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "
              "packages.microsoft.com:443", "esm.ubuntu.com:443",
              "raw.githubusercontent.com:443", "linuxgsm.com:443"}
 _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("ci.yml", "coverage"),
-             ("ci.yml", "js-coverage"), ("ci.yml", "checks"), ("lighthouse.yml", "lighthouse"), ("codeql.yml", "analyze"),
+             ("ci.yml", "js-coverage"), ("ci.yml", "checks"), ("ci.yml", "checks-verdict"),
+             ("ci.yml", "coverage-verdict"), ("lighthouse.yml", "lighthouse"), ("codeql.yml", "analyze"),
              ("codeql.yml", "pr-alerts"), ("complexity.yml", "complexity"),
              ("dependency-review.yml", "dependency-review"), ("fuzz.yml", "fuzz"),
              ("security-code.yml", "dependency-audit"), ("security-code.yml", "sast-bandit"),

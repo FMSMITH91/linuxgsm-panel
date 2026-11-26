@@ -6478,7 +6478,9 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
 _cc_dl_at = _cc_raw.find("- name: Download the coverage report CI made")
 _cc_dl = _cc_raw[_cc_dl_at:_cc_raw.find("\n      - name: ", _cc_dl_at)] if _cc_dl_at >= 0 else ""
 _cc_dl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_dl[_cc_dl.find("with:"):], re.M))
-_cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n", _cov_job)
+# The `coverage` artifact is coverage-verdict's: it combines the coverage parts' measurements into the report.
+_cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n",
+                        _ci_wf[_ci_wf.index("\n  coverage-verdict:\n"):])
 check("codacy-coverage: the step reads the workflow_run's own event, and the report from where the "
       "download put CI's coverage artifact, from that run",
       _cc_env.get("WR_EVENT") == "${{ github.event.workflow_run.event }}"

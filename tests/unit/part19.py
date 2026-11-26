@@ -889,9 +889,38 @@ for _app, _name in _rq:
             if _sg_re.search(r"[\s\x22'\[,]%s[\s\x22',\]]" % _sg_re.escape(_val), _txt) is None:
                 _rq_bad.append("%r: %s's matrix has no %r" % (_name, _wf, _val))
         _rq_hosts.add(_wf)
+
+
+def _rq_gated(text):
+    """{job template: the verdict job's template} for each job a verdict job judges in workflow `text`.
+
+    A verdict job (ci.yml's checks-verdict and coverage-verdict) needs the one job whose parts it judges,
+    runs whatever happened (`if: ${{ always() }}`: a job whose needs failed is otherwise skipped, and a
+    skipped required check counts as passed) and reads that job's result. Such a part need not be required
+    itself when its verdict is: the verdict fails unless every part passed.
+    """
+    body = text[text.index("\njobs:\n"):]
+    blocks = {_jm.group(1): _jm.group(2)
+              for _jm in _sg_re.finditer(r"^  ([A-Za-z0-9_-]+):\n((?:    .*\n|\n)*)", body, _sg_re.M)}
+
+    def _tpl(jid):
+        _nm = _sg_re.search(r"^    name: (.+)$", blocks[jid], _sg_re.M)
+        return _nm.group(1).strip() if _nm else jid
+    out = {}
+    for _jid, _blk in blocks.items():
+        _need = _sg_re.search(r"^    needs: ([A-Za-z0-9_-]+)$", _blk, _sg_re.M)
+        if (_need and _need.group(1) in blocks and "\n    if: ${{ always() }}\n" in "\n" + _blk
+                and "${{ needs.%s.result }}" % _need.group(1) in _blk):
+            out[_tpl(_need.group(1))] = _tpl(_jid)
+    return out
+
+
 for _wf in sorted(_rq_hosts):
+    _gated = _rq_gated(_rq_jobs[_wf][0])
     for _tpl, _rx in _rq_jobs[_wf][1]:
-        if not any(_a == "github-actions" and _sg_re.fullmatch(_rx, _n) for _a, _n in _rq):
+        _verdict_rx = next((_r for _t, _r in _rq_jobs[_wf][1] if _t == _gated.get(_tpl)), None)
+        if not any(_a == "github-actions" and _sg_re.fullmatch(_rx if _verdict_rx is None else _verdict_rx, _n)
+                   for _a, _n in _rq):
             _rq_bad.append("%s: job %r is not a required check" % (_wf, _tpl))
 check("required checks: each one is a job of a workflow that runs on every pull request, and "
       "every job of those workflows is required",
@@ -899,6 +928,14 @@ check("required checks: each one is a job of a workflow that runs on every pull 
       and {"ci.yml", "codeql.yml", "security-code.yml", "security.yml", "lighthouse.yml",
            "complexity.yml"} <= _rq_hosts,
       repr((_rq_bad[:6], sorted(_rq_hosts))))
+_gt_wf = ("on:\n  pull_request:\njobs:\n  parts:\n    name: p (${{ matrix.part }})\n    runs-on: x\n"
+          "  verdict:\n    name: v\n    needs: parts\n%s    steps:\n      - run: test \"${{ needs.parts.result }}\" = success\n")
+eq("required checks: ...a job is exempt only behind a verdict job that needs it, runs always() and reads its result: "
+   "ci.yml's checks and coverage parts, and nothing without always() (controls)",
+   [_rq_gated(_rq_jobs["ci.yml"][0]), _rq_gated(_gt_wf % "    if: ${{ always() }}\n"), _rq_gated(_gt_wf % ""),
+    _rq_gated(_gt_wf % "    if: ${{ success() }}\n")],
+   [{"checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}": "checks (${{ matrix.os }} · py${{ matrix.python }})",
+     "coverage · ${{ matrix.part }}": "coverage"}, {"p (${{ matrix.part }})": "v"}, {}, {}])
 check("required checks: ...and the list includes Codacy, SonarCloud, the tests, CodeQL's gate and the "
       "complexity gate",
       {("codacy-production", "Codacy Static Code Analysis"),
@@ -985,7 +1022,8 @@ _mx_bad, _mx_read = [], []
 for _wf in sorted(_rq_hosts | {"fuzz.yml"}):
     for _tpl, _rx in _rq_jobs.get(_wf, ("", []))[1]:
         _legs = _r30t_matrix_legs(_rq_jobs[_wf][0], _tpl)
-        if _legs is None:
+        # A job in parts reports through its verdict (_rq_gated above): its parts are not checks to require.
+        if _legs is None or _tpl in _rq_gated(_rq_jobs[_wf][0]):
             continue
         _mx_read.append(_tpl)
         _listed = sorted(_m.group(1) for _a, _n in _rq for _m in [_sg_re.fullmatch(_rx, _n)] if _m and _a == "github-actions")

@@ -308,10 +308,10 @@ finally:
 # ── the wiring ────────────────────────────────────────────────────────────────────────────────
 # (workflow, job id, the job's `name:` as written, the work steps it names)
 _REUSERS153 = {
-    ("ci.yml", "checks"): ("checks (${{ matrix.os }} · py${{ matrix.python }})",
+    ("ci.yml", "checks"): ("checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}",
                            ("Run all checks (compile, lint, unit, smoke, shellcheck)",
                             "Run the root-only unit checks, as root")),
-    ("ci.yml", "coverage"): ("coverage", ("Measure",)),
+    ("ci.yml", "coverage"): ("coverage · ${{ matrix.part }}", ("Measure",)),
     ("ci.yml", "js-coverage"): ("js coverage", ("Measure",)),
     ("ci.yml", "gamedig-lockfile"): ("gamedig lockfile (node ${{ matrix.node }})",
                                      ("npm ci from the lockfile, then run gamedig once",)),
@@ -323,9 +323,7 @@ _ON_REUSE153 = {
         "steps.scope.outputs.docs_only == 'true' && matrix.docs",
     ("ci.yml", "coverage", "Take the report the pull request's run made on the same tree"):
         _RUN153 + " && steps.reuse.outputs.reuse == 'true'",
-    ("ci.yml", "coverage", "Record that this pull request changed nothing coverage measures"):
-        "steps.scope.outputs.docs_only == 'true'",
-    ("ci.yml", "coverage", "Upload the report"): "",
+    ("ci.yml", "coverage", "Upload the report"): _RUN153,
     ("ci.yml", "js-coverage", "Take the report the pull request's run made on the same tree"):
         _RUN153 + " && steps.reuse.outputs.reuse == 'true'",
     ("ci.yml", "js-coverage", "Upload the report"): _RUN153,
@@ -421,12 +419,19 @@ _ctl_jobs153 = _jobs29(_wf29("ci.yml") + "\n  py_X9:\n    runs-on: ubuntu-24.04\
 check("reuse wiring: (control) the job reader sees an id with a capital, a digit and an underscore, and "
       "one whose key line ends in a comment",
       _ctl_jobs153 == _ci_jobs153 + ["py_X9", "py_Y8"], repr(_ctl_jobs153))
-check("reuse wiring: every ci.yml job reuses, and each is a check the panel's update gate requires "
-      "(system_ops._CI_REQUIRED), so main still carries each name",
-      sorted(_ci_jobs153) == sorted(j for w, j in _REUSERS153 if w == "ci.yml")
-      and all(any(_so153._ci_name_matches(r, n) for r in _so153._CI_REQUIRED)
-              for (w, _j), (n, _s) in _REUSERS153.items() if w == "ci.yml"),
-      repr(_ci_jobs153))
+# The checks legs and coverage run in parts (ci.yml says why); the name main must carry is the verdict job's,
+# which does no work of its own to reuse, and passes only when every part passed (part294 holds that).
+_VERDICTS153 = {"checks-verdict": ("checks", "checks (${{ matrix.os }} · py${{ matrix.python }})"),
+                "coverage-verdict": ("coverage", "coverage")}
+_carried153 = {_j: _n for (_w, _j), (_n, _s) in _REUSERS153.items() if _w == "ci.yml"}
+_carried153.update({_parts: _n for _v, (_parts, _n) in _VERDICTS153.items()})
+check("reuse wiring: every ci.yml job reuses or is the verdict on one that does, and the name main carries for each "
+      "(the verdict's, for a job in parts) is a check the panel's update gate requires (system_ops._CI_REQUIRED)",
+      sorted(_ci_jobs153) == sorted([j for w, j in _REUSERS153 if w == "ci.yml"] + list(_VERDICTS153))
+      and all("    name: %s\n" % _n in _job29(_wf29("ci.yml"), _v) for _v, (_p, _n) in _VERDICTS153.items())
+      and all(any(_so153._ci_name_matches(r, n.replace("${{ matrix.os }}", "ubuntu-22.04")) for r in _so153._CI_REQUIRED)
+              for n in _carried153.values()),
+      repr((_ci_jobs153, _carried153)))
 _dl153 = {}
 for _j153 in ("coverage", "js-coverage"):
     _st153 = {_sname153(s): s for s in _steps29(_code29(_job29(_wf29("ci.yml"), _j153)))}

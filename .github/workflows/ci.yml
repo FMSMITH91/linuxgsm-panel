@@ -33,8 +33,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # EACH LEG RUNS IN FIVE PARTS AT ONCE: the unit suite in four shards (UNIT_SHARD=i/n,
+  # tests/unit/shard.py, each also run again as root beside it) and everything else in one part
+  # (compile, lint, shellcheck and the other suites). One process ran the whole unit suite twice per
+  # leg, and that was the leg: 29.3 min on 22.04 for PR #613, the other suites done in under 3.
+  # The check each leg reported is still there under its name, from checks-verdict below, which
+  # fails unless every part of every leg passed: the ruleset and .github/required-checks.txt are
+  # unchanged, and a red part can never leave a green leg (OWASP CI/CD Top 10, CICD-SEC-1).
   checks:
-    name: checks (${{ matrix.os }} · py${{ matrix.python }})
+    name: checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}
     runs-on: ${{ matrix.os }}
     # 45. A timed-out leg is a failed required check, and on main a failure the panel's update gate
     # and deploy.yml read, so the limit has to clear the slowest leg with room for a slow runner.
@@ -58,6 +65,10 @@ jobs:
     strategy:
       fail-fast: false   # report EVERY LTS result even if one fails, so a version-specific break is obvious
       matrix:
+        os: [ ubuntu-22.04, ubuntu-24.04, ubuntu-26.04 ]
+        # tests/unit/shard.py evens the four shards out by measured time; "suites" is the rest of
+        # tools/run-tests.sh (RUN_TESTS_UNIT=skip). tests/unit/part294 holds this list to 1/4..4/4.
+        part: [ unit 1/4, unit 2/4, unit 3/4, unit 4/4, suites ]
         include:
           # Each Ubuntu LTS the panel is expected to run on, paired with the Python that release
           # actually ships, so the suite is proven on the real combination rather than on
@@ -141,7 +152,7 @@ jobs:
         id: reuse
         if: github.event_name == 'push' && steps.scope.outputs.docs_only != 'true'
         env:
-          CHECK_NAME: checks (${{ matrix.os }} · py${{ matrix.python }})
+          CHECK_NAME: checks (${{ matrix.os }} · py${{ matrix.python }}) · ${{ matrix.part }}
           GH_TOKEN: ${{ github.token }}
         run: >-
           python3 .github/scripts/reuse_pr_result.py --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
@@ -230,8 +241,23 @@ jobs:
         # files the next step reads, and none of it to this step's own output, which a background
         # process still holding it would keep open; a run-tests.sh failure ends the step without
         # waiting for it. SC2016: ${!SUDO_@} is the root shell's to expand.
+        #
+        # One part of the leg (the matrix's `part`): "suites" runs everything but the unit suite in its
+        # lanes; "unit i/n" runs that shard of it as the runner (RUN_TESTS_UNIT=only) and as root, both
+        # with UNIT_SHARD exported (sudo -E keeps it; the root step refuses two runs of different
+        # shards). Any other value fails the step.
+        env:
+          PART: ${{ matrix.part }}
         run: |
           set -uo pipefail
+          case "${PART}" in
+            suites)
+              PYTHON=python REQUIRE_TOOLS=1 RUN_TESTS_PARALLEL=1 RUN_TESTS_UNIT=skip bash tools/run-tests.sh
+              exit
+              ;;
+            "unit "[1-9]/[1-9]) export UNIT_SHARD="${PART#unit }" ;;
+            *) echo "::error::not a part of a leg: ${PART}"; exit 1 ;;
+          esac
           root_tree="$(mktemp -d "${RUNNER_TEMP}/unit-root-tree-XXXXXX")"
           chmod --reference=. "${root_tree}"
           cp -a ./. "${root_tree}/"
@@ -246,7 +272,7 @@ jobs:
             echo "$((SECONDS - started))" > "${RUNNER_TEMP}/unit-root-seconds.txt"
           ) < /dev/null > "${RUNNER_TEMP}/unit-root.txt" 2>&1 &
           root_pid=$!
-          PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" RUN_TESTS_PARALLEL=1 \
+          PYTHON=python REQUIRE_TOOLS=1 UNIT_LOG="${RUNNER_TEMP}/unit-user.txt" RUN_TESTS_UNIT=only \
             bash tools/run-tests.sh || exit
           wait "${root_pid}"
 
@@ -273,9 +299,15 @@ jobs:
         #
         # The run itself starts in the step above, beside the other suites, and that step waits for
         # it; this step judges what it wrote. A run that left no output is judged as one that left
-        # no tally.
+        # no tally. The "suites" part runs no unit shard, so it has no root run to judge.
+        env:
+          PART: ${{ matrix.part }}
         run: |
           set -uo pipefail
+          if [ "${PART}" = suites ]; then
+            echo "this part runs no unit shard, so there is no root run to judge"
+            exit 0
+          fi
           root_log="${RUNNER_TEMP}/unit-root.txt"
           echo "the unit suite as root took $(cat "${RUNNER_TEMP}/unit-root-seconds.txt" 2>/dev/null || echo '?')s"
           python - "${RUNNER_TEMP}/unit-user.txt" "${root_log}" <<'EOF'
@@ -286,7 +318,7 @@ jobs:
 
 
           def read(path):
-              seen, why, tally = {}, {}, None
+              seen, why, tally, shard = {}, {}, None, None
               with open(path, encoding="utf-8", errors="replace") as fh:
                   for ln in fh:
                       m = LINE.match(ln.rstrip("\n"))
@@ -296,7 +328,9 @@ jobs:
                               why[m.group(2)] = m.group(3) or ""
                       if re.match(r"\d+ / \d+ checks passed$", ln.strip()):
                           tally = ln.strip()
-              return seen, why, tally
+                      if ln.startswith("unit shard "):
+                          shard = ln.split(":", 1)[0]
+              return seen, why, tally, shard
 
 
           def fail(why):
@@ -315,8 +349,8 @@ jobs:
               print("::endgroup::")
 
 
-          user, user_why, user_tally = read(sys.argv[1])
-          root, _, root_tally = read(sys.argv[2])
+          user, user_why, user_tally, user_shard = read(sys.argv[1])
+          root, _, root_tally, root_shard = read(sys.argv[2])
           for _path, _tally, _label in ((sys.argv[1], user_tally, "as the runner"),
                                         (sys.argv[2], root_tally, "as root")):
               if _tally is None:
@@ -324,6 +358,9 @@ jobs:
           if user_tally is None or root_tally is None:
               fail("a unit run left no tally (as the runner: %s; as root: %s), so nothing can be "
                    "judged" % (user_tally, root_tally))
+          if user_shard != root_shard:
+              fail("the two runs are not the same part of the suite (as the runner: %s; as root: %s)"
+                   % (user_shard, root_shard))
           gates = sorted(n for n, w in user_why.items() if re.search(r"\broot\b", w))
           # Each root-only branch also records itself under its skip's own name (tests/unit
           # part12's _r15d_root_ran), so a gate must PASS under that name as root: one that was
@@ -346,14 +383,82 @@ jobs:
           EOF
 
       # The documentation-only pull request's one check (see the scope step): the unit suite, which
-      # reads README.md, SECURITY.md, the CHANGELOG and VERSIONS.md. On this leg only.
+      # reads README.md, SECURITY.md, the CHANGELOG and VERSIONS.md. On this leg only, each unit
+      # part running its own shard; the "suites" part has nothing to run here and passes.
       - name: Documentation-only pull request, so the unit suite alone (it reads the docs)
         if: steps.scope.outputs.docs_only == 'true' && matrix.docs
-        run: python tests/unit_test.py
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          if [ "${PART}" != suites ]; then
+            UNIT_SHARD="${PART#unit }" python tests/unit_test.py
+          fi
 
+  # The check each leg has always reported, by the name the ruleset requires: it passes only when
+  # EVERY part of every leg passed. `always()`, because a job whose needs failed is otherwise
+  # skipped, and GitHub counts a skipped required check as passed. A part that failed, was cancelled
+  # or never ran leaves `needs.checks.result` other than success, and this fails. A failing part
+  # turns all three legs red (one job's matrix has one result); its own check names the leg.
+  checks-verdict:
+    name: checks (${{ matrix.os }} · py${{ matrix.python }})
+    needs: checks
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            python: "3.10"
+          - os: ubuntu-24.04
+            python: "3.12"
+          - os: ubuntu-26.04
+            python: "3.14"
+    steps:
+      # Block mode. This job reaches nothing; GitHub's two hosts are every block list's floor (part223).
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+
+      - name: Every part of every leg passed
+        env:
+          RESULT: ${{ needs.checks.result }}
+        run: |
+          echo "the parts' result: ${RESULT}"
+          if [ "${RESULT}" != "success" ]; then
+            echo "::error::a part of the checks did not pass (${RESULT}): see the checks named this leg and its part"
+            exit 1
+          fi
+
+  # COVERAGE IN FIVE PARTS AT ONCE, like the checks legs: the unit suite in four shards and the other
+  # suites in one, each measured on its own runner and combined into one report by coverage-verdict
+  # below, which reports the `coverage` check the ruleset requires. One process measuring the whole
+  # unit suite was 1341 s of this job's 24.8 min for PR #613.
   coverage:
-    name: coverage
+    name: coverage · ${{ matrix.part }}
     runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # `id` names the part's data artifact (an artifact name cannot hold "/"). tests/unit/part294
+        # holds the unit parts to 1/4..4/4, as in the checks legs.
+        include:
+          - part: unit 1/4
+            id: unit1
+          - part: unit 2/4
+            id: unit2
+          - part: unit 3/4
+            id: unit3
+          - part: unit 4/4
+            id: unit4
+          - part: suites
+            id: suites
     # 30. Measured on main's nine push runs of 2026-10-10 to 2026-10-12: 982-1162 s (16.4-19.4
     # min), the "Measure" step 961-1136 s of it (652f166c: unit 441 s, smoke 630 s). 20 had left
     # 38 s, and a timed-out run here is a failed required check like a red one. On f896aeae and
@@ -429,7 +534,7 @@ jobs:
         id: reuse
         if: github.event_name == 'push' && steps.scope.outputs.skip != 'true'
         env:
-          CHECK_NAME: coverage
+          CHECK_NAME: coverage · ${{ matrix.part }}
           GH_TOKEN: ${{ github.token }}
         run: >-
           python3 .github/scripts/reuse_pr_result.py --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
@@ -439,16 +544,16 @@ jobs:
 
       # On REUSE nothing is measured here, and codacy-coverage.yml still sends this run's report for
       # main's commit (Codacy compares each later pull request with it). The pull request's run
-      # measured this same tree, so its report is this commit's: taken from that run, and uploaded
-      # below as this run's own. Cross-run download: github-token and run-id, with actions: read.
-      # A download that fails does not fail the job: the steps below then measure, as on any run.
+      # measured this same tree, so its data for this part is this commit's: taken from that run, and
+      # uploaded below as this run's own. Cross-run download: github-token and run-id, with actions:
+      # read. A download that fails does not fail the job: the steps below then measure, as on any run.
       - name: Take the report the pull request's run made on the same tree
         if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse == 'true'
         id: take
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: coverage
+          name: coverage-data-${{matrix.id}}
           run-id: ${{ steps.reuse.outputs.run_id }}
           github-token: ${{ github.token }}
 
@@ -498,12 +603,24 @@ jobs:
         # unit_test with and without `coverage run`). `|| true` means a suite that hangs here looks identical
         # to one that is merely slow, so without a per-suite number there is nothing to reason
         # from. The totals land in the step summary next to the coverage report.
+        #
+        # One part (the matrix's `part`): a unit shard (UNIT_SHARD, tests/unit/shard.py), or the other
+        # suites. Its data is combined into one file here, .coverage.<id> in the workspace, which the
+        # upload step publishes and coverage-verdict combines with the other parts'.
+        env:
+          PART: ${{ matrix.part }}
+          ID: ${{ matrix.id }}
         run: |
           export COVERAGE_FILE="${RUNNER_TEMP}/coverage-data/.coverage"
           mkdir -p "${RUNNER_TEMP}/coverage-data"
+          case "${PART}" in
+            suites) suites="template_actions smoke rbac manage setup_wizard perf_budget input_validation url_map" ;;
+            "unit "[1-9]/[1-9]) suites=unit; export UNIT_SHARD="${PART#unit }" ;;
+            *) echo "::error::not a part of the coverage run: ${PART}"; exit 1 ;;
+          esac
           echo "| suite | seconds |" > /tmp/suite_times.md
           echo "| --- | ---: |" >> /tmp/suite_times.md
-          for suite in unit template_actions smoke rbac manage setup_wizard perf_budget input_validation url_map; do
+          for suite in ${suites}; do
             _t0=$SECONDS
             rm -f data/panel.db data/panel.db-shm data/panel.db-wal data/panel.db.backup
             python -m coverage run --rcfile=.github/coveragerc "tests/${suite}_test.py" >/dev/null 2>&1 || true
@@ -513,20 +630,123 @@ jobs:
             # API — which is the one way I needed to read them.
             echo "| \`${suite}\` | $((SECONDS - _t0)) |" | tee -a /tmp/suite_times.md
           done
-          # Timed as well, and separately from the suites: if the suites are not where the job's
-          # time goes, it is in these three (combine/xml/report over many statements and several
-          # parallel data files). Measure rather than guess.
+          # Timed as well, and separately from the suites (combine over several parallel data files).
           _c0=$SECONDS; python -m coverage combine --rcfile=.github/coveragerc
           echo "| \`combine\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
-          _c0=$SECONDS; python -m coverage xml --rcfile=.github/coveragerc -o coverage.xml
-          echo "| \`xml\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
-          _c0=$SECONDS; python -m coverage report --rcfile=.github/coveragerc --sort=miss > coverage.txt
-          echo "| \`report\` | $((SECONDS - _c0)) |" | tee -a /tmp/suite_times.md
+          cp "${COVERAGE_FILE}" ".coverage.${ID}"
           {
-            echo '### Coverage'
+            echo "### Coverage: ${PART}"
             echo ''
             echo '#### Time per suite'
             cat /tmp/suite_times.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # This part's data, measured or taken, for coverage-verdict to combine. Not on a pull request
+      # that changes nothing coverage measures: nothing was measured, and coverage-verdict says so.
+      # 7 days: a push to main that merges this pull request takes it from here (the step above).
+      - name: Upload the report
+        if: steps.scope.outputs.skip != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-data-${{matrix.id}}
+          retention-days: 7
+          include-hidden-files: true
+          if-no-files-found: error
+          path: .coverage.${{ matrix.id }}
+
+  # The `coverage` check the ruleset requires: every part's data combined into the one report
+  # Codacy reads (the `coverage` artifact codacy-coverage.yml downloads). `always()`, as for
+  # checks-verdict: it fails unless every part passed, so a part that failed or never ran cannot
+  # leave a report short of its data with a green check; and it fails if any part's data is missing.
+  coverage-verdict:
+    name: coverage
+    needs: coverage
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read   # the scope step lists the pull request's files
+    env:
+      COVERAGE_CORE: sysmon
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            release-assets.githubusercontent.com:443
+
+      - name: Every part of the coverage run passed
+        env:
+          RESULT: ${{ needs.coverage.result }}
+        run: |
+          echo "the parts' result: ${RESULT}"
+          if [ "${RESULT}" != "success" ]; then
+            echo "::error::a part of the coverage run did not pass (${RESULT}): see the checks named coverage and its part"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The same answer the parts had: on a pull request that changes nothing coverage measures they
+      # measured nothing, and this records why there is no report.
+      - name: Does this pull request change anything this job measures?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/pr_scope.py --event "$EVENT" --repo "$GITHUB_REPOSITORY"
+          --pr "$PR" --head-sha "$HEAD_SHA" --job "coverage"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.scope.outputs.skip != 'true'
+        with:
+          python-version: "3.14"
+
+      - name: Install coverage
+        if: steps.scope.outputs.skip != 'true'
+        run: |
+          python -m pip install --quiet --require-hashes --only-binary :all: \
+            -r .github/ci-requirements/coverage.txt
+
+      - name: Download every part's data
+        if: steps.scope.outputs.skip != 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/coverage-parts
+
+      # Each of the five parts' files must be there: a part missing would make a smaller report.
+      - name: Combine the parts' data into one report
+        if: steps.scope.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          parts="${RUNNER_TEMP}/coverage-parts"
+          for id in unit1 unit2 unit3 unit4 suites; do
+            if [ ! -s "${parts}/.coverage.${id}" ]; then
+              echo "::error::no coverage data from the ${id} part"; exit 1
+            fi
+          done
+          export COVERAGE_FILE="${RUNNER_TEMP}/coverage-data/.coverage"
+          mkdir -p "${RUNNER_TEMP}/coverage-data"
+          cp "${parts}"/.coverage.* "${RUNNER_TEMP}/coverage-data/"
+          python -m coverage combine --rcfile=.github/coveragerc
+          python -m coverage xml --rcfile=.github/coveragerc -o coverage.xml
+          python -m coverage report --rcfile=.github/coveragerc --sort=miss > coverage.txt
+          {
+            echo '### Coverage'
             echo ''
             echo '```'
             tail -n 20 coverage.txt

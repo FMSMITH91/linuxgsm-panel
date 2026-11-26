@@ -882,9 +882,13 @@ _req_found = {r: any((n == r) if not r.endswith("(") else n.startswith(r) for n 
 check("update gate: every required CI/CodeQL name is a job name in ci.yml or codeql.yml",
       all(_req_found.values()), repr((_req_found, _names14)))
 _ci_jobs14 = re.findall(r"^    name: (.+)$", _ci_wf14, re.M)
-_ci_jobs14 = [n.split("${{")[0].strip() for n in _ci_jobs14]
+# A job run in parts (`<name> · ${{ matrix.part }}`) reports through its verdict job, named <name>
+# exactly, which passes only when every part did (ci.yml; part294 holds the verdicts).
+_ci_parts14 = [n for n in _ci_jobs14 if n.endswith(" · ${{ matrix.part }}")]
+_ci_jobs14 = [n.split("${{")[0].strip() for n in _ci_jobs14 if n not in _ci_parts14]
 check("update gate: ...and every ci.yml job is required (none left for the gate to miss)",
-      len(_ci_jobs14) == 4
+      len(_ci_jobs14) == 4 and len(_ci_parts14) == 2
+      and all(n[:-len(" · ${{ matrix.part }}")] in re.findall(r"^    name: (.+)$", _ci_wf14, re.M) for n in _ci_parts14)
       and all(any(_so14._ci_name_matches(r, n) for r in _so14._CI_REQUIRED) for n in _ci_jobs14),
       repr(_ci_jobs14))
 check("update gate: the alerts workflow POSTS the required 'Open code-scanning alerts' check, and "
