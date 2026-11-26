@@ -205,3 +205,77 @@ check("scheduled tasks (control): with EDIT_FILES the card's form is live and ca
       _ep290[0] == 200 and 'id="cron-ro"' not in _ep290[1] and 'data-cron-edit="1"' in _ep290[1]
       and 'id="cron-submit">' in _ep290[1], repr(_ep290[0]))
 eq("part290 scheduled tasks: nothing reached a real transport", _cron290.get("trips"), 0)
+
+
+# ── 3. The add-remote connection test: a delegated admin may not aim it at an internal address ─────
+_XHR290 = {"X-Requested-With": "XMLHttpRequest"}
+_NAMES290 = {"p290-lan.example": ["203.0.113.9", "10.0.0.7"], "p290-pub.example": ["203.0.113.10"],
+             "localhost.p290.example": ["::1"]}
+_INTERNAL290 = ("127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.9", "169.254.169.254", "100.100.100.100",
+                "0.0.0.0", "fd7a:115c:a1e0::1", "fe80::1", "::1", "::ffff:10.0.0.1", "64:ff9b::a00:1",
+                "2002:a00:1::1", "2130706433", "p290-lan.example", "localhost.p290.example")
+_ssrf290 = {}
+_d3_290 = _row290 = None
+try:
+    _p9_arm(who="part290")
+    _trips290 = len(_P9_TRIPPED)
+    _tested290 = []
+    _p9_patch(_rm290, "ssh_test_connection",
+              lambda host, *a, **k: _tested290.append(host) or (False, "p290 stand-in: no SSH here"))
+    _p9_patch(_rm290, "_resolve_host", lambda host: [_ip290(a) for a in _NAMES290.get(host, [])])
+    with _p9.app_context():
+        _h290 = _Remote290(name="p290-own", host="203.0.113.60", port=22, username="root", auth_method="password",
+                           auth_credential="", is_online=True)
+        _db290.session.add(_h290)
+        _db290.session.commit()
+        _row290 = _h290.id
+    _d3_290 = _user290("p290_hostadm", [_auth290.MANAGE_REMOTES, _auth290.VIEW_SERVERS], hosts=[_row290])
+    _H290 = _p9_client(_d3_290[0])
+
+    def _add290(client, host):
+        del _tested290[:]
+        r = client.post("/remotes/add", headers=_XHR290, data={
+            "name": "p290new", "host": host, "ssh_port": "22", "ssh_user": "root", "auth_method": "password",
+            "credential": "p290-not-a-real-password"})
+        return r.status_code, _j290(r).get("message") or "", list(_tested290)
+
+    _ssrf290["internal"] = {h: _add290(_H290, h) for h in _INTERNAL290}
+    _ssrf290["public"] = _add290(_H290, "203.0.113.7")
+    _ssrf290["public_name"] = _add290(_H290, "p290-pub.example")
+    _ssrf290["unresolved"] = _add290(_H290, "p290-nowhere.example")
+    _ssrf290["admin_internal"] = _add290(_p9_client(P9_ADMIN), "10.1.2.3")
+    _r = _H290.post("/remotes/%d/edit" % _row290, headers=_XHR290,
+                    data={"host": "10.9.9.9", "ssh_port": "22", "auth_method": "password",
+                          "credential": "p290-new-password"})
+    _ssrf290["edit_internal"] = (_r.status_code, _j290(_r).get("message"), _p9_host_row(_row290).host)
+    _r = _H290.post("/remotes/%d/edit" % _row290, headers=_XHR290,
+                    data={"ssh_port": "2222", "auth_method": "password", "credential": "p290-new-password"})
+    _ssrf290["edit_public_port"] = (_r.status_code, _p9_host_row(_row290).port)
+    _ssrf290["trips"] = len(_P9_TRIPPED) - _trips290
+finally:
+    _p9_restore_all()
+    if _d3_290:
+        _drop290(*_d3_290)
+    with _p9.app_context():
+        for _rr290 in _Remote290.query.filter(_Remote290.name.in_(["p290-own", "p290new"])).all():
+            _db290.session.delete(_rr290)
+        _db290.session.commit()
+_in290 = _ssrf290.get("internal") or {}
+eq("add remote: a delegated admin's connection test is refused for every loopback, private, link-local, "
+   "tailnet, unspecified and embedded-IPv4 address, and for a name with any such record; nothing is dialled",
+   {h: v for h, v in _in290.items() if v != (403, _rm290.INTERNAL_TARGET_REFUSAL, [])}, {})
+check("add remote: ...every one of those addresses was asked", len(_in290) == len(_INTERNAL290), repr(sorted(_in290)))
+eq("add remote (control): a delegated admin's test of a public address is dialled", _ssrf290.get("public", ())[2:],
+   (["203.0.113.7"],))
+eq("add remote: a delegated admin's name is dialled at the address that was checked, never looked up again",
+   _ssrf290.get("public_name", ())[2:], (["203.0.113.10"],))
+check("add remote: a name that does not resolve is refused before anything is dialled",
+      _ssrf290.get("unresolved", (0, "", None))[2] == []
+      and "did not resolve" in _ssrf290.get("unresolved", (0, "", None))[1], repr(_ssrf290.get("unresolved")))
+eq("add remote (control): a superadmin may still test a private address", _ssrf290.get("admin_internal", ())[2:],
+   (["10.1.2.3"],))
+eq("edit remote: a delegated admin may not repoint their host at a private address (403, the row unchanged)",
+   _ssrf290.get("edit_internal"), (403, _rm290.INTERNAL_TARGET_REFUSAL, "203.0.113.60"))
+check("edit remote (control): a delegated admin may still move their public host's SSH port with a new password",
+      _ssrf290.get("edit_public_port", (0, 0))[1] == 2222, repr(_ssrf290.get("edit_public_port")))
+eq("part290 add remote: nothing reached a real transport", _ssrf290.get("trips"), 0)
