@@ -601,12 +601,16 @@ def app_install_step(remote, site, step, values=None, recipe=None):
             return False, REFUSED
     values = dict(values or {})
     recipe = recipe or _wc.recipe(site.app_recipe) or {}
-    in_container = step["type"] == "run-in-container" or (step["type"] == "verify-install" and "tables" in step)
-    if in_container and not _container_values(remote, site, recipe, values):
+    if _in_container(step) and not _container_values(remote, site, recipe, values):
         return False, FAILED
     body, stdin = _wr.step_sh(site.account, site, step, values, recipe=recipe, token=_secret(site.proxy_secret))
     ok, out = _as_site(remote, site.account, body, timeout=1800, stdin_text=stdin)
     return (True, OK_STEP) if ok else (False, _mark(out))
+
+
+def _in_container(step):
+    """Whether a step runs a one-off container (a command, or verify-install's table count)."""
+    return step["type"] == "run-in-container" or (step["type"] == "verify-install" and "tables" in step)
 
 
 def _container_values(remote, site, recipe, values):

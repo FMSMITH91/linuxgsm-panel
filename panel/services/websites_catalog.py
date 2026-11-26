@@ -374,9 +374,20 @@ def recipe_problems(name, recipe):
         return out + ["%s.steps: 1-12 steps" % key]
     for i, step in enumerate(steps):
         out += _step_problems(key, i, step, recipe)
-    if recipe["database"] != any(isinstance(s, dict) and s.get("type") == "create-database" for s in steps):
+    return out + _steps_order_problems(key, recipe, steps)
+
+
+def _types(steps):
+    return [s.get("type") if isinstance(s, dict) else None for s in steps]
+
+
+def _steps_order_problems(key, recipe, steps):
+    """A database step exactly when the recipe has a database, and one verify-install step, the last."""
+    kinds = _types(steps)
+    out = []
+    if recipe["database"] != ("create-database" in kinds):
         out.append("%s: needs a database step exactly when database is true" % key)
-    if [i for i, s in enumerate(steps) if isinstance(s, dict) and s.get("type") == "verify-install"] != [len(steps) - 1]:
+    if [i for i, k in enumerate(kinds) if k == "verify-install"] != [len(kinds) - 1]:
         out.append("%s: ends with one verify-install step (what the install left is checked before it is done)" % key)
     return out
 

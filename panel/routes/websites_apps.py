@@ -256,10 +256,9 @@ def app_php_version(recipe, data):
     return version, None
 
 
-def _start_refusal(data):
-    """((recipe name, recipe, admin fields, host, group, site name), None) for the form, or (None, the refusal)."""
-    recipe_name = _w.field(data, "app")
-    recipe, why = _recipe(recipe_name)
+def _form_refusal(data):
+    """((recipe, admin fields), None) for the form's app, admin and domain, or (None, the refusal)."""
+    recipe, why = _recipe(_w.field(data, "app"))
     if why:
         return None, _w.say(400 if why != _w.S_NOT_READY else 501, why)
     fields = admin_fields(data)
@@ -268,6 +267,16 @@ def _start_refusal(data):
     if not _w.field(data, "domain"):
         # Every app's installer writes its address into its configuration (phpBB refuses an empty one).
         return None, _w.say(400, "An app needs its domain.")
+    return (recipe, fields), None
+
+
+def _start_refusal(data):
+    """((recipe name, recipe, admin fields, host, group, site name), None) for the form, or (None, the refusal)."""
+    recipe_name = _w.field(data, "app")
+    got, refused = _form_refusal(data)
+    if refused is not None:
+        return None, refused
+    recipe, fields = got
     remote, group, refusal = _w.add_target(data)
     name = _w.field(data, "name").lower() or recipe_name
     refusal = refusal or _w.add_refusal(remote, name, str(recipe.get("kind") or "php"))

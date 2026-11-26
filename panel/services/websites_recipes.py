@@ -432,24 +432,16 @@ def step_sh(account, site, step, values, recipe=None, token=None):
     kind = step["type"]
     if kind == "create-database":
         return "", None
-    if kind == "download-verify-unpack":
-        return _ws._ENV + _download_sh(recipe, step), None
-    if kind == "render-config":
-        body, text = _render_sh(step, values)
-        return _ws._ENV + body, text
-    if kind == "run-in-container":
-        body, stdin = _run_sh(account, site, step, values)
-        return _ws._ENV + body, stdin
-    if kind == "drive-web-installer":
-        body, stdin = _installer_sh(site, step, values, token or "")
-        return _ws._ENV + body, stdin
-    if kind == "set-permissions":
-        body, stdin = _permissions_sh(site, step, recipe or {}, token or "")
-        return _ws._ENV + body, stdin
-    if kind == "verify-install":
-        body, stdin = _verify_sh(account, site, step, values, token or "")
-        return _ws._ENV + body, stdin
-    raise ValueError("unknown step type %r" % kind)
+    build = {"download-verify-unpack": lambda: (_download_sh(recipe, step), None),
+             "render-config": lambda: _render_sh(step, values),
+             "run-in-container": lambda: _run_sh(account, site, step, values),
+             "drive-web-installer": lambda: _installer_sh(site, step, values, token or ""),
+             "set-permissions": lambda: _permissions_sh(site, step, recipe or {}, token or ""),
+             "verify-install": lambda: _verify_sh(account, site, step, values, token or "")}.get(kind)
+    if build is None:
+        raise ValueError("unknown step type %r" % kind)
+    body, stdin = build()
+    return _ws._ENV + body, stdin
 
 
 def undo_sh(account, site, step):

@@ -605,7 +605,8 @@ def _s10_verify(st):
                  "page redirects": (False, True), "wrong page": (False, True)})
 
 
-def _s11_secrets(st):
+def _s11_run305():
+    """Every step of the five recipes through app_install_step in bash: ({app: [ok]}, the panel's log lines)."""
     _bash_seams305()
     rec = _Records305()
     root = _logging305.getLogger()
@@ -615,19 +616,32 @@ def _s11_secrets(st):
         results = {app: _run_app305(app)[0] for app in _KINDS305}
     finally:
         root.removeHandler(rec)
+    return {a: [ok for _t, ok, _s in r] for a, r in results.items()}, rec.lines
+
+
+def _env_names305(runs):
+    """How many `-e NAME` (a value taken from podman's own environment) the container runs were given."""
+    return sum(1 for c in runs for i, a in enumerate(c["argv"]) if a == "-e" and "=" not in c["argv"][i + 1])
+
+
+def _s11_secrets(st):
+    oks, lines = _s11_run305()
     calls = _calls305()
     eq("secrets: every step of the five recipes ran (the stand-ins answer as an installed app)",
-       {a: [ok for _t, ok, _s in r] for a, r in results.items()}, {a: [True] * len(r) for a, r in results.items()})
-    blob = _json305.dumps(calls) + "\n".join(_RUN305["shells"]) + "\n".join(rec.lines)
+       oks, {a: [True] * len(r) for a, r in oks.items()})
+    blob = _json305.dumps(calls) + "\n".join(_RUN305["shells"]) + "\n".join(lines)
     eq("secrets: neither the admin password, the database password nor the proxy token is in any command's argv or "
        "environment, any shell the host's sudo logs, or any line the panel logged",
        [s[:4] for s in _SECRETS305 if s in blob], [])
     runs = [c for c in calls if c["tool"] == "podman" and c["argv"][:1] == ["run"]]
     eq("secrets: every step container's output stays out of the journal (--log-driver=none), none is handed an "
        "environment variable from podman's own environment, none asks for a prompt",
-       ([("--log-driver=none" in c["argv"]) for c in runs].count(False), sum(
-           1 for c in runs for i, a in enumerate(c["argv"]) if a == "-e" and "=" not in c["argv"][i + 1]),
+       ([("--log-driver=none" in c["argv"]) for c in runs].count(False), _env_names305(runs),
         any("--prompt" in a for c in runs for a in c["argv"]), len(runs) >= 6), (0, 0, False, True))
+    _s11_wordpress(runs)
+
+
+def _s11_wordpress(runs):
     prompt = _json305.loads(_json305.dumps(_wc305.recipe("wordpress")))
     prompt["steps"][3]["argv"] = ["wp", "core", "install", "--prompt=admin_password"]
     check("secrets (catalog): a recipe step that asks its command for a prompt is refused (wp-cli echoes the answer)",
@@ -674,28 +688,25 @@ def _read_common305():
         return fh.read()
 
 
+def _drop305(model, ids):
+    for i in ids:
+        row = _db305.session.get(model, i) if i else None
+        if row is not None:
+            _db305.session.delete(row)
+
+
 def _cleanup305():
     _db305.session.rollback()
-    for i in _ROWS305["dbs"]:
-        row = _db305.session.get(_GDB305, i)
-        if row is not None:
-            _db305.session.delete(row)
-    for sid in _ROWS305["sites"]:
-        for d in _Dom305.query.filter_by(website_id=sid).all():
-            _db305.session.delete(d)
-        row = _db305.session.get(_Site305, sid) if sid else None
-        if row is not None:
-            _db305.session.delete(row)
-    for rid in _ROWS305["remotes"]:
-        for p in _Proxy305.query.filter_by(remote_id=rid).all():
-            _db305.session.delete(p)
-        for s in _Site305.query.filter_by(remote_id=rid).all():
-            _db305.session.delete(s)
-    for model, key in ((_User305, "users"), (_Remote305, "remotes")):
-        for i in _ROWS305[key]:
-            row = _db305.session.get(model, i)
-            if row is not None:
-                _db305.session.delete(row)
+    _drop305(_GDB305, _ROWS305["dbs"])
+    sites = set(_ROWS305["sites"]) | {s.id for s in _Site305.query.filter(
+        _Site305.remote_id.in_(_ROWS305["remotes"] or [0])).all()}
+    for d in _Dom305.query.filter(_Dom305.website_id.in_(sorted(sites) or [0])).all():
+        _db305.session.delete(d)
+    for p in _Proxy305.query.filter(_Proxy305.remote_id.in_(_ROWS305["remotes"] or [0])).all():
+        _db305.session.delete(p)
+    _drop305(_Site305, sorted(sites))
+    _drop305(_User305, _ROWS305["users"])
+    _drop305(_Remote305, _ROWS305["remotes"])
     _db305.session.commit()
     _rmtree305(_TREE305)
 

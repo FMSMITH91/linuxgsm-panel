@@ -1106,6 +1106,11 @@ def _floor_digests299():
     return out + [e["image"] for r in _SITES299["runtimes"].values() for e in r["versions"].values()]
 
 
+def _php_builds299():
+    """The PHP sites' image builds the scan names: php@<version> for each PHP version the floor pins."""
+    return sorted("php@" + v for v in _SITES299["php"])
+
+
 def _s299_image_scan():
     p = _AI299.plan()
     sites_up = p["sites"]["upstream"]
@@ -1114,7 +1119,7 @@ def _s299_image_scan():
        "built from the catalog's values, nothing wrong on this tree",
        (set(sites_up.values()) == want, sorted(p["sites"]["builds"]), [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
         p["problems"]),
-       (True, ["caddy-cache"] + sorted("php@" + v for v in _SITES299["php"]),
+       (True, ["caddy-cache"] + _php_builds299(),
         ["BUILDER_IMAGE", "BASE_IMAGE", "CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
     seen, real_run = [], _AI299._run
     _AI299._run = lambda argv, **kw: seen.append(argv) or 0
