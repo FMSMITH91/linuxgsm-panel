@@ -22,10 +22,7 @@ import importlib.metadata as _md30
 import inspect as _inspect30
 import os
 import re as _re30
-import shutil as _sh30
-import subprocess as _sp30  # nosec B404 - runs bash on a workflow step of this repository
 import sys as _sys30
-import tempfile as _tf30
 
 from unit.part01 import check
 from unit.part05 import _root
