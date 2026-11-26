@@ -270,7 +270,7 @@ def _drupal_home306(site, settings_is_dir=False):
         # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- read-only, as Drupal leaves it
         os.chmod(os.path.join(sd, "settings.php"), 0o444)
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- read-only, as Drupal leaves it
-    os.chmod(sd, 0o555)
+    os.chmod(sd, 0o555)  # nosec B103 - read-only, as Drupal leaves it, in this part's scratch tree
     return sd
 
 
@@ -279,7 +279,7 @@ def _f24_append(st):
     site = _site306(st, "p306-dr", kind="php", app_recipe="drupal")
     step = [s for s in _ws306.recipe_steps("drupal") if s["type"] == "render-config"][0]
     sd = _drupal_home306(site)
-    ok, said = _sw306.app_install_step(_NS306(is_local=True), site, dict(step, secrets=dict(_SECRET_STEP306)))
+    ok, _said = _sw306.app_install_step(_NS306(is_local=True), site, dict(step, secrets=dict(_SECRET_STEP306)))
     text = _read306(os.path.join(sd, "settings.php"))
     modes = (oct(os.stat(os.path.join(sd, "settings.php")).st_mode & 0o777), oct(os.stat(sd).st_mode & 0o777))
     name = ("F24 (app_install_step, Drupal's render-config): the trusted host line is appended to the settings.php "
@@ -299,7 +299,7 @@ def _f24_append(st):
     logged = [ln for ln in rec.lines if "install step render-config-3 failed" in ln]
     eq("F24/M4 (app_install_step): a config write that fails says why on the page (the system's reason and the file), "
        "and the step's own lines reach the panel's log (it was the generic sentence, with nothing kept)",
-       (ok2, str(said2).startswith(_ws306.FAIL_MARKS["SITE_WRITE_FAILED"]),
+       (ok2, str(said2).startswith(_ws306.FAIL_MARKS.get("SITE_WRITE_FAILED", "(no such mark)")),
         "The host said: Is a directory: sites/default/settings.php." in str(said2),
         any("SITE_WRITE_FAILED | error=Is a directory" in ln for ln in logged)), (False, True, True, True))
 
@@ -401,6 +401,11 @@ def _f26_dns(st):
         if a.startswith("PodmanArgs=")], [True, True])
 
 
+def _called306(tool, *words):
+    """Whether a recorded call of `tool` had every one of `words` in its argv."""
+    return any(all(w in c["argv"] for w in words) for c in _calls306(tool))
+
+
 def _f26a_cache_switch(st):
     _bash_seams306()
     site = _site306(st, "p306-obj", kind="wordpress")
@@ -409,19 +414,16 @@ def _f26a_cache_switch(st):
     valkey = _wc306.pins("object_cache")["image"]
     _reset306(FAKE_IMAGE_EXISTS=0)
     r_on = su.post("/websites/%d/performance" % site.id, json={"object_cache": True})
-    on_calls = _calls306()
     unit_on, conf_on = _unit306(site, "lgsm-site-cache"), os.path.exists(conf)
-    started = any(c["tool"] == "systemctl" and "restart" in c["argv"] and "lgsm-site-cache.service" in c["argv"]
-                  for c in on_calls)
-    pulled = any(c["tool"] == "podman" and c["argv"][:1] == ["pull"] and valkey in c["argv"] for c in on_calls)
+    started = _called306("systemctl", "restart", "lgsm-site-cache.service")
+    pulled = _called306("podman", "pull", valkey)
     eq("F26a (POST /websites/<id>/performance, object cache on): its unit and its 0600 config are written, its image "
        "pulled and the unit started with the site (it only rewrote the php.ini: no cache ever ran)",
        (r_on.status_code, "Network=container:lgsm-site" in unit_on, conf_on, pulled, started),
        (200, True, True, True, True))
     _reset306(FAKE_IMAGE_EXISTS=0)
     r_off = su.post("/websites/%d/performance" % site.id, json={"object_cache": False})
-    stopped = any(c["tool"] == "systemctl" and "stop" in c["argv"] and "lgsm-site-cache.service" in c["argv"]
-                  for c in _calls306())
+    stopped = _called306("systemctl", "stop", "lgsm-site-cache.service")
     eq("F26a (POST /websites/<id>/performance, object cache off): its container is stopped and its unit and config "
        "(with its password) removed", (r_off.status_code, _unit306(site, "lgsm-site-cache"), os.path.exists(conf), stopped),
        (200, "", False, True))
@@ -493,15 +495,27 @@ def _f27_cache_build(st):
        "CADDY_VERSION won, so xcaddy was asked for `vv2.11.9`), and xcaddy does not setcap (refused under "
        "--cap-drop=ALL)", ([a for a in args if a in _BUILDER_ENV306], "PANEL_CADDY_VERSION" in args,
                            "XCADDY_SETCAP=0" in env.split()), ([], True, True))
+    _f27_build_argv()
+    _f27_build_failure()
+
+
+def _first306(calls, verb):
+    """The first recorded podman call whose verb is `verb`, else []."""
+    return next((c for c in calls if c[1:2] == [verb]), [])
+
+
+def _f27_build_argv():
     rc, _err, calls = _cache_verb306(_Sub306())
-    build = next((c for c in calls if c[1:2] == ["build"]), [])
-    create = next((c for c in calls if c[1:2] == ["create"]), [])
+    build, create = _first306(calls, "build"), _first306(calls, "create")
     c = _wc306.pins("caddy_cache")
     eq("F27c (website-proxy-install-cache): the root build's RUN steps use the host's network and the container the "
        "binary is copied out of has none, so netavark never sets up a bridge (it turned on ip_forward and added its "
        "iptables chains, which stayed); the version reaches the build as PANEL_CADDY_VERSION",
        (rc, "--network=host" in build, "--network=none" in create, "PANEL_CADDY_VERSION=%s" % c["caddy"] in build,
         [a for a in build if a.startswith("CADDY_VERSION=")]), (0, True, True, True, []))
+
+
+def _f27_build_failure():
     lines = "".join("line %d of the build\n" % i for i in range(1, 41)).encode()
     rc2, err2, _calls2 = _cache_verb306(_Sub306(build_rc=1, build_out=lines))
     eq("F27 (website-proxy-install-cache): a failed build says so with its last lines (the helper hid them)",
@@ -537,7 +551,7 @@ def _f27_wiring(st):
         eq("F27 wiring (POST /websites/proxy/options, page cache turned on): the web proxy with the page cache is "
            "built on the host with a web proxy, the page says so, and the outcome is audited (no route ever called the "
            "build: the option did nothing)",
-           (r.status_code, built, _p9_json(r).get("message") == _wproxy306.S_CACHE_BUILDING, audit.success,
+           (r.status_code, built, _p9_json(r).get("message") == getattr(_wproxy306, "S_CACHE_BUILDING", "(none)"), audit.success,
             "was built and installed" in audit.detail), (200, [st.host.id], True, True, True))
         del built[:]
         r2 = su.post("/websites/proxy/options", json={"options": {"cache_build": True}})
@@ -548,7 +562,12 @@ def _f27_wiring(st):
            "build, which puts the cache module back", (r3.status_code, built), (200, [st.host.id]))
         _f27_wiring_failure(st, su, built, cache)
     finally:
-        _cfg306.update_config(lambda cfg: cfg.pop("websites_cache_build", None))
+        _cfg306.update_config(_forget_cache306)
+
+
+def _forget_cache306(cfg):
+    """Take the page cache option this section saved out of the panel's config again."""
+    cfg.pop("websites_cache_build", None)
 
 
 def _f27_wiring_failure(st, su, built, cache):
@@ -568,7 +587,7 @@ def _f27_wiring_failure(st, su, built, cache):
     eq("F27 wiring (POST /websites/<id>/performance): a page cache turned on while this host's proxy lacks the module "
        "says it waits for it; once the proxy has it, the plain answer (control)",
        (r.status_code, _p9_json(r).get("message"), r2.status_code, _p9_json(r2).get("message") == _w306.i18n.tr(
-           _wset306.S_PAGE_CACHE_WAITS)), (200, _wset306.S_PAGE_CACHE_WAITS, 200, False))
+           getattr(_wset306, "S_PAGE_CACHE_WAITS", "(none)"))), (200, getattr(_wset306, "S_PAGE_CACHE_WAITS", "(none)"), 200, False))
 
 
 # ── F28. A Node.js site from the page ──────────────────────────────────────────────────────────
@@ -600,8 +619,16 @@ def _f28_node(st):
     eq("F28b (POST /websites/add): with no files yet the app is installed and not started, says it waits for its "
        "files, and its account is kept (its first start failed and the install was undone, account and all)",
        (getattr(site, "state", None), getattr(site, "state_reason", None), starts, "website-account-remove" in verbs),
-       ("stopped", _sw306.OK_WAITING, [], False))
-    with open(os.path.join(_home306(site.account), "site", "html", "package.json"), "w", encoding="utf-8") as fh:
+       ("stopped", getattr(_sw306, "OK_WAITING", "(none)"), [], False))
+    _f28_rebuild(su, sid)
+    _f28_real_failure(st, su, verbs)
+
+
+def _f28_rebuild(su, sid):
+    site = _db306.session.get(_Site306, sid)
+    html = os.path.join(_home306(site.account), "site", "html")
+    os.makedirs(html, exist_ok=True)
+    with open(os.path.join(html, "package.json"), "w", encoding="utf-8") as fh:
         fh.write('{"name": "p306", "scripts": {"start": "node server.js"}}\n')
     _reset306()
     r2 = su.post("/websites/%d/app" % sid, json={})
@@ -616,7 +643,10 @@ def _f28_node(st):
     _reset306()
     r3 = su.post("/websites/%d/app/build" % sid)
     eq("F28b (POST /websites/<id>/app/build): the build route builds and starts it too (control)",
-       (r3.status_code, _p9_json(r3).get("message")), (200, _sw306.OK_BUILT_STARTED))
+       (r3.status_code, _p9_json(r3).get("message")), (200, getattr(_sw306, "OK_BUILT_STARTED", "(none)")))
+
+
+def _f28_real_failure(st, su, verbs):
     del verbs[:]
     _reset306(FAKE_RC_podman=1)
     r4 = su.post("/websites/add", json={"name": "p306-nd2", "kind": "app", "runtime": "node", "remote_id": st.host.id})
@@ -799,7 +829,7 @@ def _create_verb306(groups, refusal):
     saved = {n: getattr(_H306, n) for n in names}
     home = _tf306.mkdtemp(prefix="p306-ws908-", dir=_TREE306)
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a scratch home as useradd leaves it, for the verb to narrow
-    os.chmod(home, 0o755)
+    os.chmod(home, 0o755)  # nosec B103 - a scratch home as useradd leaves it, in this part's scratch tree
     marks = _tf306.mkdtemp(prefix="p306-cmarks-", dir=_TREE306)
     made, asked, sub = set(), [], _Sub306()
 

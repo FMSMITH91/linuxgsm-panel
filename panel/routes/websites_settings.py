@@ -169,6 +169,17 @@ def _perf_store(site, changes, opcache):
     db.session.commit()
 
 
+def _cache_install(site):
+    """The site installed again for its object cache turned on or off: (ok, sentence)."""
+    ok, said = _w.install_site(site)
+    return ok, (S_CACHE_ON if site.object_cache else S_CACHE_OFF) if ok else said
+
+
+def _php_restart(site):
+    """A PHP site's php.ini rewritten and the site restarted (nothing for another kind): (ok, sentence)."""
+    return _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
+
+
 def _perf_apply(site, changes, cache_turned):
     """Apply a saved Performance card: (ok, sentence).
 
@@ -176,11 +187,7 @@ def _perf_apply(site, changes, cache_turned):
     removes) its unit and config with the site's other files, pulls its image and starts (or stops) it. Any
     other change rewrites the php.ini and restarts the site; a proxy setting re-applies the proxy.
     """
-    if cache_turned:
-        ok, said = _w.install_site(site)
-        said = (S_CACHE_ON if site.object_cache else S_CACHE_OFF) if ok else said
-    else:
-        ok, said = _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
+    ok, said = _cache_install(site) if cache_turned else _php_restart(site)
     proxied = {"page_cache", "page_cache_ttl", "static_cache"} & set(changes)
     if ok and site.enabled and proxied:
         ok, said = _w.reconcile_proxy(site.remote)

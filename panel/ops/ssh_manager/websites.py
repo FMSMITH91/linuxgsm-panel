@@ -663,14 +663,19 @@ def step_failure(site, step, out):
     handed (OWASP Logging Cheat Sheet, "Data to exclude"; Error Handling Cheat Sheet: details server-side).
     """
     from panel.core import i18n
-    lines = [ln.strip() for ln in (out or "").splitlines()]
-    own = [ln for ln in lines if _OWN_LINE_RE.match(ln)
-           and (step.get("type") != "run-in-container" or ln.startswith("SITE_"))]
+    own = _own_lines(step, out)
     _core._log.warning("website %s: install step %s failed: %s", site.id, step.get("name") or step.get("type"),
                        " | ".join(own)[-600:] or "no output of the panel's own")
     said = _mark(out)
-    errors = [ln[len("error="):] for ln in own if ln.startswith("error=")] if "SITE_WRITE_FAILED" in lines else []
+    errors = [ln[len("error="):] for ln in own if ln.startswith("error=")] if "SITE_WRITE_FAILED" in own else []
     return i18n.Sentence(STEP_DETAIL, why=said, detail=errors[0]) if errors else said
+
+
+def _own_lines(step, out):
+    """The lines of a step's output that its own shell printed (_OWN_LINE_RE); only the marks of a container step."""
+    marks_only = step.get("type") == "run-in-container"
+    lines = (ln.strip() for ln in (out or "").splitlines())
+    return [ln for ln in lines if _OWN_LINE_RE.match(ln) and (ln.startswith("SITE_") or not marks_only)]
 
 
 def _in_container(step):

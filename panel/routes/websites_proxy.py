@@ -202,12 +202,18 @@ def _save_options(form):
         current_app.config["WEBSITES_CUSTOMER_2FA"] = values["require_2fa"]
     log_action(current_user, "website_settings_global", target="websites",
                detail=", ".join("%s=%s" % (k, "set" if k == "acme_contact" and v else v) for k, v in sorted(values.items())))
-    if values.get("cache_build") and not cache_before:
-        hosts = [p.remote_id for p in WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").all()]
-        if hosts:
-            cache_build_start(hosts)
-            return _w.done(True, S_CACHE_BUILDING)
-    return _w.done(True, "Saved.")
+    started = _cache_turned_on(values, cache_before)
+    return _w.done(True, S_CACHE_BUILDING if started else "Saved.")
+
+
+def _cache_turned_on(values, before):
+    """Start the page cache's proxy build on every host with a web proxy when the option was just turned on."""
+    if not values.get("cache_build") or before:
+        return False
+    hosts = [p.remote_id for p in WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").all()]
+    if hosts:
+        cache_build_start(hosts)
+    return bool(hosts)
 
 
 # ── the page cache's proxy ───────────────────────────────────────────────────────────────────────
