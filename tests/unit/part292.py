@@ -235,7 +235,7 @@ def _refusals292(sid, priv, other, key, base, base_bytes):
 def _wins292(sid, base):
     _p9_patch(_cat292, "_floor_time", lambda: _FLOOR_AT292)
     stored = _json292.loads(base.decode("utf-8"))
-    pins, src = _cat292.effective(stored, 1795000000, 1795000001)        # this panel's commit after the catalog
+    pins, src = _cat292.effective(stored, 1796000000, 1796000001)        # this panel's commit after the catalog
     eq("catalog wins: a catalog issued before this panel's own commit loses to the floor (the panel is newer)",
        (pins["b3"]["commit"], src["b3"]), (_cat292.FLOOR["b3"]["commit"], {"kind": "floor"}))
     pins, src = _cat292.effective(stored, None, 0)

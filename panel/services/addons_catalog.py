@@ -31,7 +31,6 @@ import json
 import logging
 import os
 import re
-import subprocess  # nosec B404 - ssh-keygen with an argument list, no shell
 import tempfile
 import threading
 import time
@@ -143,11 +142,12 @@ def verify_signature(key, data, sig):
             fh.write(key.strip() + "\n")
         with open(sf, "w", encoding="utf-8") as fh:
             fh.write(sig.strip() + "\n")
+        from panel.ops import system_ops as _so   # its subprocess: the one the test runners shim
         try:
-            r = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", kf, "-I", "release",  # nosec B603 B607
-                                "-n", NAMESPACE, "-s", sf], input=data, capture_output=True, timeout=20,
-                               check=False, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C.UTF-8"})
-        except (subprocess.TimeoutExpired, OSError):
+            r = _so.subprocess.run(["ssh-keygen", "-Y", "verify", "-f", kf, "-I", "release",  # nosec B603 B607
+                                    "-n", NAMESPACE, "-s", sf], input=data, capture_output=True, timeout=20,
+                                   check=False, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C.UTF-8"})
+        except (_so._SOPS_TIMEOUTS + (OSError,)):
             return False
     return r.returncode == 0
 
@@ -233,7 +233,7 @@ def _floor_time():
     if _state["floor_time"] is None:
         from panel.ops import system_ops as _so
         out, _err, rc = _so._git(["log", "-1", "--format=%ct", "HEAD"], timeout=10)
-        _state["floor_time"] = int(out) if rc == 0 and out.strip().isdigit() else 0
+        _state["floor_time"] = int(out) if rc == 0 and out.strip().isdecimal() else 0
     return _state["floor_time"] or None
 
 
@@ -318,10 +318,10 @@ def _published():
 def _blob(so, ref, path, limit):
     """The exact bytes of `path` at `ref` (git cat-file, no text decoding), or b"" when unread or over `limit`."""
     try:
-        r = subprocess.run(["git", "-C", so.PANEL_DIR, "cat-file", "blob", "%s:%s" % (ref, path)],  # nosec B603 B607
-                           capture_output=True, timeout=10, check=False,
-                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true"))
-    except (subprocess.TimeoutExpired, OSError):
+        r = so.subprocess.run(["git", "-C", so.PANEL_DIR, "cat-file", "blob", "%s:%s" % (ref, path)],  # nosec B603 B607
+                              capture_output=True, timeout=10, check=False,
+                              env=dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true"))
+    except (so._SOPS_TIMEOUTS + (OSError,)):
         return b""
     return r.stdout if r.returncode == 0 and len(r.stdout) <= limit else b""
 
