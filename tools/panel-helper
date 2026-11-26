@@ -3329,11 +3329,14 @@ WEB_CACHE_CONTAINERFILE = r'''# The websites' web proxy with the page cache modu
 ARG BUILDER_IMAGE
 ARG BASE_IMAGE
 FROM ${BUILDER_IMAGE} AS build
-ARG CADDY_VERSION
+# PANEL_CADDY_VERSION, not CADDY_VERSION: the builder image sets ENV CADDY_VERSION (v2.x.y), and an ENV wins over
+# an ARG of the same name, which made "vv2.x.y". XCADDY_SETCAP=0: the builder's default (1) runs setcap on the
+# binary, which a build with every capability dropped may not do; the proxy's unit grants the bind right itself.
+ARG PANEL_CADDY_VERSION
 ARG CACHE_MODULE
 ARG CACHE_VERSION
-ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GONOSUMDB= GOPRIVATE=
-RUN xcaddy build "v${CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" --output /usr/bin/caddy-cache \
+ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GONOSUMDB= GOPRIVATE= XCADDY_SETCAP=0
+RUN xcaddy build "v${PANEL_CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" --output /usr/bin/caddy-cache \
     && /usr/bin/caddy-cache list-modules | grep -qx "http.handlers.cache"
 
 FROM ${BASE_IMAGE}
@@ -3363,21 +3366,32 @@ def v_cpu_milli(s):
     return s
 
 
+# The build's RUN steps use the host's network (--network=host), and the container the binary is copied out of
+# has none: root Podman's default bridge network made netavark turn on the host's IP forwarding and add its own
+# iptables chains, which stay after the build (and after Podman is removed). The build's last lines go to the
+# helper's stderr, which the panel logs: they hold the public pins and Go's output, no secret.
+WEB_CACHE_TAIL = 20
+
+
 def _web_cache_build(args, d):
     """Build the cache-enabled proxy image from WEB_CACHE_CONTAINERFILE in `d`; the binary's path, or None."""
     version, builder, base, module_version = args
     with open(os.path.join(d, "Containerfile"), "w", encoding="utf-8") as fh:
         fh.write(WEB_CACHE_CONTAINERFILE)
     podman = resolve("podman")
-    build = [podman, "build", "--quiet", "--no-cache", "--pull=missing", "--cap-drop=ALL",
+    build = [podman, "build", "--no-cache", "--pull=missing", "--network=host", "--cap-drop=ALL",
              "--security-opt", "no-new-privileges", "-t", WEB_CACHE_TAG,
              "--build-arg", "BUILDER_IMAGE=" + builder, "--build-arg", "BASE_IMAGE=" + base,
-             "--build-arg", "CADDY_VERSION=" + version, "--build-arg", "CACHE_MODULE=" + WEB_CACHE_MODULE,
+             "--build-arg", "PANEL_CADDY_VERSION=" + version, "--build-arg", "CACHE_MODULE=" + WEB_CACHE_MODULE,
              "--build-arg", "CACHE_VERSION=" + module_version, "-f", os.path.join(d, "Containerfile"), d]
-    rc, _out = _run_quiet(build, timeout=1800)
-    if rc:
+    r = subprocess.run(build, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B603 - fixed argv
+                       timeout=1800, env=_clean_env())
+    if r.returncode != 0:
+        tail = (r.stdout or b"").decode("utf-8", "replace").splitlines()[-WEB_CACHE_TAIL:]
+        sys.stderr.write("the build failed (rc %d); its last lines:\n%s" % (
+            r.returncode, "".join("build: %s\n" % ln[:300] for ln in tail)))
         return None
-    rc, cid = _run_quiet([podman, "create", WEB_CACHE_TAG], timeout=120)
+    rc, cid = _run_quiet([podman, "create", "--network=none", WEB_CACHE_TAG], timeout=120)
     out = os.path.join(d, "caddy")
     try:
         rc = rc or _run_quiet([podman, "cp", cid.strip() + ":/usr/bin/caddy", out], timeout=120)[0]

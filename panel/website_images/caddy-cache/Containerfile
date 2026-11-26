@@ -6,11 +6,14 @@
 ARG BUILDER_IMAGE
 ARG BASE_IMAGE
 FROM ${BUILDER_IMAGE} AS build
-ARG CADDY_VERSION
+# PANEL_CADDY_VERSION, not CADDY_VERSION: the builder image sets ENV CADDY_VERSION (v2.x.y), and an ENV wins over
+# an ARG of the same name, which made "vv2.x.y". XCADDY_SETCAP=0: the builder's default (1) runs setcap on the
+# binary, which a build with every capability dropped may not do; the proxy's unit grants the bind right itself.
+ARG PANEL_CADDY_VERSION
 ARG CACHE_MODULE
 ARG CACHE_VERSION
-ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GONOSUMDB= GOPRIVATE=
-RUN xcaddy build "v${CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" --output /usr/bin/caddy-cache \
+ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GONOSUMDB= GOPRIVATE= XCADDY_SETCAP=0
+RUN xcaddy build "v${PANEL_CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" --output /usr/bin/caddy-cache \
     && /usr/bin/caddy-cache list-modules | grep -qx "http.handlers.cache"
 
 FROM ${BASE_IMAGE}

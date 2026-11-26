@@ -180,7 +180,7 @@ def build_folder(label):
 def site_build_args(name, sites):
     """[(ARG, value)] a websites build takes from `sites` (the page cache's proxy: caddy-cache)."""
     c = (sites.get("caddy_cache") or {}) if name == "caddy-cache" else {}
-    keys = (("BUILDER_IMAGE", "builder"), ("BASE_IMAGE", "base"), ("CADDY_VERSION", "caddy"),
+    keys = (("BUILDER_IMAGE", "builder"), ("BASE_IMAGE", "base"), ("PANEL_CADDY_VERSION", "caddy"),
             ("CACHE_MODULE", "module"), ("CACHE_VERSION", "version"))
     return [(arg, c[k]) for arg, k in keys if isinstance(c.get(k), str)]
 

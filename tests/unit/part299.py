@@ -1120,7 +1120,7 @@ def _s299_image_scan():
        (set(sites_up.values()) == want, sorted(p["sites"]["builds"]), [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
         p["problems"]),
        (True, ["caddy-cache"] + _php_builds299(),
-        ["BUILDER_IMAGE", "BASE_IMAGE", "CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
+        ["BUILDER_IMAGE", "BASE_IMAGE", "PANEL_CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
     seen, real_run = [], _AI299._run
     _AI299._run = lambda argv, **kw: seen.append(argv) or 0
     try:

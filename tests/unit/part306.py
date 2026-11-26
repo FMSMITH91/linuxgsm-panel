@@ -9,12 +9,19 @@ F25. An app install whose undo could not drop its database says NOT undone and w
 F26. A runtime app's gate and the object cache (Network=container:) carry no DNS option, which Podman refuses beside
      that network mode; the site's own container keeps --dns=none. F26a: turning the object cache on or off on
      the Performance card writes (or removes) its unit and config and starts (or stops) it.
+F27. The page cache's proxy builds: its Caddy version ARG no longer clashes with the builder's ENV, xcaddy does not
+     setcap, and the root build uses the host's network (the copy-out container none), so netavark never turns on
+     the host's IP forwarding or adds its iptables chains; a failed build's last lines reach the panel's log.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
 podman and systemctl first on PATH that record their argv (one JSON line each). Nothing reaches a host (part12's
 tripwire is armed).
 """
+import contextlib as _ctx306
+import importlib.machinery as _mach306
+import importlib.util as _ilu306
+import io as _io306
 import json as _json306
 import logging as _logging306
 import os
@@ -402,6 +409,94 @@ def _f26a_cache_switch(st):
        "no install (control)", (r_op.status_code, [c["argv"][:1] for c in _calls306("podman")]), (200, []))
 
 
+# ── F27. The page cache's proxy build ──────────────────────────────────────────────────────────
+_hspec306 = _ilu306.spec_from_loader("panel_helper_p306", _mach306.SourceFileLoader(
+    "panel_helper_p306", os.path.join(_root, "tools", "panel-helper")))
+_H306 = _ilu306.module_from_spec(_hspec306)
+_hspec306.loader.exec_module(_H306)
+# ENV names the caddy builder image sets (docker-library/caddy's builder Dockerfile): an ARG of one of these names
+# is overridden by the ENV inside the build stage.
+_BUILDER_ENV306 = ("CADDY_VERSION", "XCADDY_VERSION", "XCADDY_SETCAP", "XCADDY_SKIP_CLEANUP", "GOLANG_VERSION", "GOPATH",
+                   "GOTOOLCHAIN", "PATH")
+
+
+class _Sub306:
+    """The helper's subprocess, standing in: records every argv; `podman build` answers build_rc and its lines."""
+    PIPE, STDOUT, TimeoutExpired = _sp306.PIPE, _sp306.STDOUT, _sp306.TimeoutExpired
+
+    def __init__(self, build_rc=0, build_out=b""):
+        self.calls, self.build_rc, self.build_out = [], build_rc, build_out
+
+    def run(self, argv, **_kw):
+        argv = list(argv)
+        self.calls.append(argv)
+        if argv[1:2] == ["build"]:
+            return _NS306(returncode=self.build_rc, stdout=self.build_out, stderr=b"")
+        if argv[1:2] == ["create"]:
+            return _NS306(returncode=0, stdout=b"c0ffee\n", stderr=b"")
+        if argv[1:2] == ["cp"]:
+            with open(argv[3], "wb") as fh:
+                fh.write(b"caddy")
+        return _NS306(returncode=0, stdout=b"inactive\n", stderr=b"")
+
+
+def _cache_verb306(sub):
+    """website-proxy-install-cache run by the helper with `sub` for its subprocess: (rc, stderr, calls)."""
+    names = ("subprocess", "resolve", "pwd", "WEB_PROXY_BIN", "_web_has_cache", "_web_write")
+    saved = {n: getattr(_H306, n) for n in names}
+    binary = os.path.join(_TREE306, "caddy")
+    with open(binary, "wb") as fh:
+        fh.write(b"plain")
+    err = _io306.StringIO()
+    try:
+        _H306.subprocess, _H306.resolve, _H306.WEB_PROXY_BIN = sub, lambda name: "/usr/bin/" + name, binary
+        _H306.pwd = _NS306(getpwnam=lambda name: _NS306(pw_uid=1500, pw_gid=1500, pw_dir="/var/lib/lgsm-web-proxy"))
+        _H306._web_has_cache = lambda path, pw: True
+        _H306._web_write = lambda *a, **k: None
+        c = _wc306.pins("caddy_cache")
+        with _ctx306.redirect_stderr(err):
+            rc = _H306.do_website_proxy_install_cache([c["caddy"], c["builder"], c["base"], c["version"]], "")
+    finally:
+        for n, v in saved.items():
+            setattr(_H306, n, v)
+    return rc, err.getvalue(), sub.calls
+
+
+def _f27_cache_build(st):
+    cf = _H306.WEB_CACHE_CONTAINERFILE
+    build_stage = cf[cf.index(" AS build"):cf.index("\nFROM ${BASE_IMAGE}")]
+    args = _re306.findall(r"^ARG ([A-Z_]+)$", build_stage, _re306.M)
+    env = " ".join(ln for ln in build_stage.split("\n") if ln.startswith("ENV "))
+    eq("F27a/b (the helper's Containerfile): no build-stage ARG shares a name with the builder image's ENV (its ENV "
+       "CADDY_VERSION won, so xcaddy was asked for `vv2.11.9`), and xcaddy does not setcap (refused under "
+       "--cap-drop=ALL)", ([a for a in args if a in _BUILDER_ENV306], "PANEL_CADDY_VERSION" in args,
+                           "XCADDY_SETCAP=0" in env.split()), ([], True, True))
+    rc, _err, calls = _cache_verb306(_Sub306())
+    build = next((c for c in calls if c[1:2] == ["build"]), [])
+    create = next((c for c in calls if c[1:2] == ["create"]), [])
+    c = _wc306.pins("caddy_cache")
+    eq("F27c (website-proxy-install-cache): the root build's RUN steps use the host's network and the container the "
+       "binary is copied out of has none, so netavark never sets up a bridge (it turned on ip_forward and added its "
+       "iptables chains, which stayed); the version reaches the build as PANEL_CADDY_VERSION",
+       (rc, "--network=host" in build, "--network=none" in create, "PANEL_CADDY_VERSION=%s" % c["caddy"] in build,
+        [a for a in build if a.startswith("CADDY_VERSION=")]), (0, True, True, True, []))
+    lines = "".join("line %d of the build\n" % i for i in range(1, 41)).encode()
+    rc2, err2, _calls2 = _cache_verb306(_Sub306(build_rc=1, build_out=lines))
+    eq("F27 (website-proxy-install-cache): a failed build says so with its last lines (the helper hid them)",
+       (rc2, "build: line 40 of the build" in err2, "build: line 21 of the build" in err2,
+        "build: line 20 of the build" in err2), (1, True, True, False))
+    rec = _Records306()
+    _core306._log.addHandler(rec)
+    _p9_patch(_sw306, "_helper", lambda remote, verb, args=(), timeout=120, doc=None: (False, err2))
+    try:
+        ok, said = _sw306.proxy_install_cache(_NS306(is_local=True))
+    finally:
+        _core306._log.removeHandler(rec)
+    eq("F27 (ssh_manager.websites.proxy_install_cache): the page gets the plain sentence, and the build's last lines "
+       "go to the panel's log", (ok, said == _sw306.CACHE_BUILD_FAILED,
+                                 any("line 40 of the build" in ln for ln in rec.lines)), (False, True, True))
+
+
 # ── the run ─────────────────────────────────────────────────────────────────────────────────────
 def _rmtree306(path):
     """Remove `path` whole, folders a step made read-only included."""
@@ -450,7 +545,7 @@ def _ran306(step, st):
 
 
 _ran306.last = ""
-_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch)
+_SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

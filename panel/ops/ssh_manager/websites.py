@@ -302,7 +302,13 @@ def proxy_install_cache(remote):
     pins = _wc.pins("caddy_cache")
     ok, out = _helper(remote, "website-proxy-install-cache",
                       [pins["caddy"], pins["builder"], pins["base"], pins["version"]], timeout=1900)
-    return (True, OK_CACHE_BUILD) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else CACHE_BUILD_FAILED)
+    if ok:
+        return True, OK_CACHE_BUILD
+    if out in (ONLY_LOCAL, NO_HELPER):
+        return False, out
+    # The helper's reason and the build's last lines (public pins and Go's output) go to the panel's log only.
+    _core._log.warning("web proxy page cache build failed: %s", " | ".join(out.splitlines()[-24:])[-3000:])
+    return False, CACHE_BUILD_FAILED
 
 
 def _host_machine(remote):
