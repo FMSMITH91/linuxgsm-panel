@@ -10481,7 +10481,8 @@ try:
     os.makedirs(_dp_ghbin)
     with open(os.path.join(_dp_ghbin, "gh"), "w") as _dp_f:
         _dp_f.write("#!/bin/sh\nfor n in 'checks (x)' coverage 'js coverage' 'gamedig lockfile (22)' "
-                    "'Analyze (python)' 'Open code-scanning alerts'; do\n"
+                    "'Analyze (python)' 'Open code-scanning alerts' 'Secret scanning (Gitleaks)' "
+                    "'Dependency vulnerabilities (pip-audit)'; do\n"
                     "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
                     " \"$n\"\ndone\n")
     # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- a stand-in program in this test's temp dir

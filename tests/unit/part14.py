@@ -990,11 +990,36 @@ _dep_raw14 = _wf14("deploy.yml")
 _dep_verify14 = _wf14_run(_dep_raw14, "Verify the commit is on main, and take its installer")
 _dep_req14 = re.search(r"^REQUIRED=\((.*)\)$", _dep_verify14, re.M)
 _dep_ign14 = re.search(r"^IGNORED='(\[.*\])'$", _dep_verify14, re.M)
+_DEP_SEC14 = ("Secret scanning (Gitleaks)", "Dependency vulnerabilities (pip-audit)")
 check("deploy: its required and ignored check lists are the panel gate's",
       _dep_req14 is not None and _dep_ign14 is not None
-      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1))) == _so14._CI_REQUIRED
+      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1)))[:len(_so14._CI_REQUIRED)] == _so14._CI_REQUIRED
       and set(_json14.loads(_dep_ign14.group(1))) == _so14._CI_IGNORE,
       repr((_dep_req14 and _dep_req14.group(1), _dep_ign14 and _dep_ign14.group(1))))
+# A secret scan or CVE audit that had not registered on the commit yet did not hold a deploy (only
+# a failed one did). Each must be a job of a workflow that runs on every push to main the verify
+# step lets through: security.yml unfiltered, security-code.yml ignoring exactly ci.yml's paths.
+
+
+def _push_ignore14(name):
+    """The workflow's push paths-ignore globs: [] when unfiltered, None with no push or a `paths:`."""
+    m = re.search(r"^on:\n(?:(?: .*)?\n)*?  push:\n((?:    .*\n)+)", _wf14(name), re.M)
+    if m is None or re.search(r"^    paths:", m.group(1), re.M):
+        return None
+    return re.findall(r"^      - '([^']+)'", m.group(1), re.M)
+
+
+check("deploy: it also waits for the secret scan and the dependency CVE audit, each a job of a "
+      "workflow every code push to main runs",
+      _dep_req14 is not None
+      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1)))[len(_so14._CI_REQUIRED):] == _DEP_SEC14
+      and re.search(r"^    name: Secret scanning \(Gitleaks\)$", _wf14("security.yml"), re.M)
+      and re.search(r"^    name: Dependency vulnerabilities \(pip-audit\)$", _wf14("security-code.yml"), re.M)
+      and _push_ignore14("security.yml") == []
+      and _push_ignore14("security-code.yml") == _push_ignore14("ci.yml") == [
+          "**/*.md", "docs/**", "LICENSE", ".gitignore", ".editorconfig"],
+      repr((_dep_req14 and _dep_req14.group(1), _push_ignore14("security.yml"),
+            _push_ignore14("security-code.yml"), _push_ignore14("ci.yml"))))
 check("deploy: the job may read check runs and hands the verify step a token",
       "checks: read" in _dep_raw14 and "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in
       _dep_raw14[_dep_raw14.index("- name: Verify the commit is on main"):
@@ -1023,7 +1048,7 @@ try:
                                HEAD_SHA="f" * 40, GITHUB_REPOSITORY="o/r"))
         return p.returncode, p.stdout
 
-    _all14 = [(n, "completed", c) for n, c in _FULL14]
+    _all14 = [(n, "completed", c) for n, c in _FULL14] + [(_DEP_SEC14[1], "completed", "success")]
     _d_ok = _dep14(_all14 + [("deploy", "in_progress", None),
                              ("Code-scanning alerts gate", "completed", "failure")])
     _d_bad = _dep14(_all14 + [("Python security lint (Bandit)", "completed", "failure")])
@@ -1031,6 +1056,8 @@ try:
     _d_skip = _dep14([r for r in _all14 if r[0] != "Open code-scanning alerts"]
                      + [("Open code-scanning alerts", "completed", "skipped")])
     _d_run = _dep14(_all14 + [("lighthouse", "in_progress", None)])
+    _d_nosec = {n: _dep14([r for r in _all14 if r[0] != n]) for n in _DEP_SEC14}
+    _d_skipsec = _dep14([r for r in _all14 if r[0] != _DEP_SEC14[0]] + [(_DEP_SEC14[0], "completed", "skipped")])
     check("deploy: a commit with every required check passed is deployed (its own run and the "
           "alerts job's misfiled run ignored)", _d_ok[0] == 0 and "WAITED-OK" in _d_ok[1],
           repr(_d_ok))
@@ -1043,6 +1070,11 @@ try:
           and _d_skip[0] == 1 and "missing: Open code-scanning alerts" in _d_skip[1]
           and _d_run[0] == 1 and "1 still running" in _d_run[1],
           repr((_d_noalert, _d_skip, _d_run)))
+    check("deploy: ...and so does a secret scan or dependency CVE audit that never registered on the "
+          "commit, or was skipped",
+          all(v[0] == 1 and "missing: %s" % n in v[1] for n, v in _d_nosec.items())
+          and _d_skipsec[0] == 1 and "missing: Secret scanning (Gitleaks)" in _d_skipsec[1],
+          repr((_d_nosec, _d_skipsec)))
 finally:
     _shutil14.rmtree(_dsb14, ignore_errors=True)
 

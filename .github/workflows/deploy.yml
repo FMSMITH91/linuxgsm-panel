@@ -240,8 +240,12 @@ jobs:
           # (up to 20 minutes) for the same set system_ops._remote_ci_state waits for: every check
           # on the commit completed and none failed, and each REQUIRED name present and not merely
           # skipped. The two lists are system_ops' _CI_REQUIRED and _CI_IGNORE; a unit test holds
-          # them equal. A name ending in "(" is a prefix, for a matrix job.
-          REQUIRED=("checks (" "coverage" "js coverage" "gamedig lockfile (" "Analyze (" "Open code-scanning alerts")
+          # them equal. A name ending in "(" is a prefix, for a matrix job. REQUIRED adds two the
+          # panel gate does not name: the secret scan and the dependency CVE audit. A failure of
+          # either already stopped a deploy, but one that had not registered yet did not. Both
+          # run on every push to main this step lets through: security.yml has no path filter,
+          # and security-code.yml's paths-ignore is ci.yml's, which the check above refuses.
+          REQUIRED=("checks (" "coverage" "js coverage" "gamedig lockfile (" "Analyze (" "Open code-scanning alerts" "Secret scanning (Gitleaks)" "Dependency vulnerabilities (pip-audit)")
           IGNORED='["deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "Scorecard analysis", "Scorecard image pin", "Scorecard image pulled", "Dependabot", "update-pip-graph"]'
           waited_until=$(( $(date +%s) + 20 * 60 ))
           while :; do
