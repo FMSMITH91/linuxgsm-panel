@@ -340,3 +340,40 @@ check("send command (control): the game is still sent every command exactly as t
       "rcon_password N3wS3cret" in _cmd290.get("sent", []) and "rcon_password FormS3cret" in _cmd290.get("sent", [])
       and "rcon_password CustomS3cret" in _cmd290.get("sent", []), repr(_cmd290.get("sent")))
 eq("part290 send command: nothing reached a real transport", _cmd290.get("trips"), 0)
+
+
+# ── 5. A console socket opened with an API token is dropped once the token expires ─────────────────
+_tok290 = {}
+_d5_290 = None
+try:
+    _d5_290 = _user290("p290_token", [_auth290.VIEW_CONSOLE], hosts=[P9_HOST])
+    with _p9.app_context():
+        _u5_290 = _db290.session.get(_User290, _d5_290[0])
+        _u5_290.api_token = "a" * 64
+        _u5_290.api_token_expires = _now290() + _td290(hours=1)
+        _db290.session.commit()
+        _login290 = _u5_290.get_id()
+    _cred290 = (_login290, "a" * 64)
+    with _p9.app_context():
+        _tok290["valid"] = _sf290._viewer_still_allowed(_d5_290[0], P9_GS, _cred290)
+    with _p9.app_context():
+        _db290.session.get(_User290, _d5_290[0]).api_token_expires = _now290() - _td290(seconds=1)
+        _db290.session.commit()
+    with _p9.app_context():
+        _tok290["expired"] = _sf290._viewer_still_allowed(_d5_290[0], P9_GS, _cred290)
+        _tok290["no_digest"] = _sf290._viewer_still_allowed(_d5_290[0], P9_GS, (_login290, None))
+    with _p9.app_context():
+        _db290.session.get(_User290, _d5_290[0]).api_token_expires = None
+        _db290.session.commit()
+    with _p9.app_context():
+        _tok290["no_expiry"] = _sf290._viewer_still_allowed(_d5_290[0], P9_GS, _cred290)
+        _tok290["other_token"] = _sf290._viewer_still_allowed(_d5_290[0], P9_GS, (_login290, "b" * 64))
+finally:
+    if _d5_290:
+        _drop290(*_d5_290)
+eq("console socket: the poller's per-tick check drops a bearer socket once its token has expired",
+   _tok290.get("expired"), False)
+eq("console socket (control): an unexpired token, a token with no expiry and a session socket still pass; "
+   "another token does not",
+   (_tok290.get("valid"), _tok290.get("no_expiry"), _tok290.get("no_digest"), _tok290.get("other_token")),
+   (True, True, True, False))

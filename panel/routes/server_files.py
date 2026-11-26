@@ -369,7 +369,17 @@ def _credential_still_valid(uid, cred):
     user = _login_id_still_accepted(login_id)
     if user is None or user.id != uid:
         return False
-    return digest is None or getattr(user, "api_token", None) == digest
+    if digest is None:
+        return True
+    # A bearer socket: the token must still be the account's AND unexpired. User.by_api_token asks
+    # the expiry only when a request authenticates, and nothing clears the stored hash when it
+    # passes, so a socket joined before the expiry kept the live console after it (OWASP Session
+    # Management Cheat Sheet, "Session Expiration": enforce it server side). host_terminal shares this.
+    if getattr(user, "api_token", None) != digest:
+        return False
+    from panel.core.clock import utcnow
+    expires = getattr(user, "api_token_expires", None)
+    return expires is None or expires > utcnow()
 
 
 def _console_whole_lines(server_id, raw):
