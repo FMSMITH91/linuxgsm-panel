@@ -12,6 +12,8 @@
    staging step, which would have deleted the folder holding the server's own files.
 5. A Kick or Ban that has to look the player up on the console (a list from gamedig), and a B3 Kick or
    Warn, say the console could not be read when it was not, instead of "couldn't find that player".
+6. A Source/GoldSrc Kick by name is refused when the console lists two players with that name (the
+   engine kicks the first match, and Steam names are not unique).
 
 HOW IT RUNS. Stand-in transports answer every host call; shell text the panel builds is run by bash over
 this part's scratch directory, with stand-ins for the host tools it calls. Nothing reaches a host, /etc
@@ -276,3 +278,12 @@ eq("b3 kick: a console list that could not be read answers 503 saying so, and B3
 _b3st294, _b3calls294 = _b3got294.get("none") or ((0, {}), -1)
 eq("b3 kick (control): a console list read without the player still says they are not on the server",
    (_b3st294[0], _b3st294[1].get("error"), _b3calls294), (409, _act278.S_NOT_ONLINE, 0))
+
+
+# ── 6. A Valve Kick by a name two players share ───────────────────────────────────────────────────
+_two294 = [{"name": "Bob", "num": "3", "steamid": "STEAM_0:1:3"}, {"name": "Bob", "num": "5", "steamid": "STEAM_0:1:5"}]
+eq("moderation: a Source Kick by a name two connected players share is refused, and nothing is sent",
+   _moderate294(_two294, "css", "kick"), ((False, _game294.VALVE_NAME_SHARED), []))
+eq("moderation (control): a Source Kick by a name one player has, or with a console that could not be read, is "
+   "sent as before", [_moderate294(_two294[:1], "css", "kick"), _moderate294(None, "css", "kick")],
+   [((True, "Done."), ['kick "Bob"'])] * 2)

@@ -989,17 +989,20 @@ def _r19b_name_refusal(target):
     return None
 
 
-class _ConsoleUnread(dict):
-    """The empty, falsy answer of _resolve_from_console when the console list could not be read."""
+class _NoOnePlayer(dict):
+    """An empty, falsy answer of _resolve_from_console that says why it found no one player."""
 
     __slots__ = ()
 
 
 # Falsy and empty, so every caller that reads "no player" from a None still does (`hit or {}`,
-# `p.get(...)`); the ones that must not call an unread console "nobody" test `is CONSOLE_UNREAD`.
-CONSOLE_UNREAD = _ConsoleUnread()
+# `p.get(...)`); the ones that must tell these apart from "nobody by that name" test them with `is`.
+CONSOLE_UNREAD = _NoOnePlayer()         # the console list could not be read
+CONSOLE_AMBIGUOUS = _NoOnePlayer()      # more than one listed player the name can mean
 CONSOLE_LIST_UNREAD = ("Couldn't read the player list from the game's console just now, so the panel can't tell "
                        "which player that is. Try again.")
+VALVE_NAME_SHARED = ("More than one connected player has that name, so a Kick by name could remove the wrong one. "
+                     "Ban by SteamID, or kick them from the server console by their user id.")
 
 
 def _resolve_from_console(server, user, game_type, name, selfname):
@@ -1009,7 +1012,8 @@ def _resolve_from_console(server, user, game_type, name, selfname):
     from gamedig, which doesn't carry those ids. Returns the one listed player the name can mean,
     or None when it is no one, or more than one (the first of them could be the wrong player).
     A console that could not be read answers CONSOLE_UNREAD, not None: it measured nothing, and
-    "Couldn't find that player" sent the admin looking for a player who may well be there.
+    "Couldn't find that player" sent the admin looking for a player who may well be there. More
+    than one match answers CONSOLE_AMBIGUOUS (also falsy), for the Kick by name that must refuse it.
     Only runs when someone actually clicks kick/ban — no continuous polling.
     """
     if not (name or "").strip():
@@ -1018,7 +1022,7 @@ def _resolve_from_console(server, user, game_type, name, selfname):
     if listed is None:
         return CONSOLE_UNREAD
     hits = console_name_matches(game_type, listed, name)
-    return hits[0] if len(hits) == 1 else None
+    return hits[0] if len(hits) == 1 else (CONSOLE_AMBIGUOUS if hits else None)
 
 
 def console_name_matches(game_type, listed, name):
@@ -1109,6 +1113,12 @@ def _mod_valve_cmd(action, target, steamid, resolve):
         why = _r19b_name_refusal(target)
         if why:
             return None, why
+        # The engine kicks the first player whose name matches, and Steam names are not unique: with
+        # two "Bob"s connected it removed whichever came first while the audit row named the one the
+        # admin meant. A console read that shows the name twice refuses; any other answer kicks by
+        # name as before (an unread or unparsed console list is no evidence of a second player).
+        if resolve() is CONSOLE_AMBIGUOUS:
+            return None, VALVE_NAME_SHARED
         return 'kick "%s"' % nm, None
     sid = _sanitize_steamid(steamid)
     if not sid:      # list came from gamedig (no SteamID) — resolve it on the console now
