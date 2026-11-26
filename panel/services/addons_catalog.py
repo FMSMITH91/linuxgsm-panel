@@ -92,12 +92,19 @@ _lock = threading.Lock()
 _state = {"loaded": False, "stored": None, "fetched_at": 0.0, "answer": None, "floor_time": None}
 
 
+def _has_known(addons, strict):
+    """Whether the map `addons` holds every known add-on (and, when `strict`, nothing else)."""
+    if not isinstance(addons, dict):
+        return False
+    return set(addons) == set(FIELDS) if strict else set(FIELDS) <= set(addons)
+
+
 def _check_addons(addons, strict=False):
     """"" when `addons` holds every known add-on, each well-formed, else the reason it is refused.
 
     Other ids are skipped (only `strict`, the floor, must hold exactly the known ones).
     """
-    if not isinstance(addons, dict) or not set(FIELDS) <= set(addons) or (strict and set(addons) != set(FIELDS)):
+    if not _has_known(addons, strict):
         return MISSING_ADDON
     for addon_id, shape in FIELDS.items():
         entry = addons[addon_id]
