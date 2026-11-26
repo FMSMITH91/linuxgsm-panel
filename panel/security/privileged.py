@@ -995,6 +995,38 @@ def _choice(*allowed):
     return check
 
 
+# The websites' accounts and the web proxy (tools/panel-helper's website-* verbs): the same shapes
+# the helper holds. ws<digits> or the tunnel connector's account; the proxy's release x.y.z; a sha256.
+WEBSITE_ACCOUNT_RE = r"ws[1-9][0-9]{0,8}"
+WEBSITE_TUNNEL_ACCOUNT = "lgsmtunnel"
+
+
+def _website_account(s):
+    s = str(s)
+    if not (re.fullmatch(WEBSITE_ACCOUNT_RE, s) or s == WEBSITE_TUNNEL_ACCOUNT):
+        raise VerbError("not a website account")
+    return s
+
+
+def _caddy_version(s):
+    if not re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", str(s)):
+        raise VerbError("not a release version")
+    return str(s)
+
+
+def _sha256(s):
+    if not re.fullmatch(r"[0-9a-f]{64}", str(s)):
+        raise VerbError("not a sha256")
+    return str(s)
+
+
+def _quota_mb(s):
+    s = str(s)
+    if not (s.isdecimal() and 0 <= int(s) <= 10 * 1024 * 1024):
+        raise VerbError("not a size in MB")
+    return s
+
+
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv of the real tool, stdin or None)
 #
@@ -1494,6 +1526,19 @@ _ARGV = {
     # tools/panel-helper (do_addon_account_prepare, do_addon_account_release).
     "addon-account-prepare": ([_destroyable_user], lambda a: [], None),
     "addon-account-release": ([_destroyable_user, _choice("keep", "forget")], lambda a: [], None),
+    # The websites (panel/services/websites.py, ssh_manager.websites): a site's own account, made and
+    # removed only with the helper's mark; the web proxy installed from the catalog's pinned release,
+    # its configuration validated as its own user before it replaces the running one (content on
+    # stdin), stopped, and read; the egress guard; a site account's disk quota. See the Websites block
+    # of tools/panel-helper.
+    "website-account-create": ([_website_account], lambda a: [], None),
+    "website-account-remove": ([_website_account], lambda a: [], None),
+    "website-proxy-install": ([_caddy_version, _choice("amd64", "arm64"), _sha256], lambda a: [], None),
+    "website-proxy-apply": ([_choice("start", "reload", "restart")], lambda a: [], None),
+    "website-proxy-stop": ([], lambda a: [], None),
+    "website-proxy-status": ([], lambda a: [], None),
+    "website-egress-guard": ([_choice("on", "off")], lambda a: [], None),
+    "website-quota-set": ([_website_account, _quota_mb], lambda a: [], None),
     # Free Steam's per-user crash-dump slots. The helper owns the path list; this side only
     # validates the account name. See do_steam_dumps_sweep in tools/panel-helper.
     "steam-dumps-sweep": ([_managed_user], lambda a: [], None),
@@ -1613,6 +1658,11 @@ def _content_grant_remote(a):
 #   * its caller branches on is_local_server() first and has its own remote builder, so the
 #     helper_argv form is only ever the local half of an already-two-sided function.
 LOCAL_ONLY_VERBS = frozenset({
+    # The websites need the helper: they write root-owned units, nftables and the proxy's binary,
+    # which no shell form here reproduces. ssh_manager.websites refuses a host without it in words,
+    # so these never reach the remote branch.
+    "website-account-create", "website-account-remove", "website-proxy-install", "website-proxy-apply",
+    "website-proxy-stop", "website-proxy-status", "website-egress-guard", "website-quota-set",
     "gameuser-group",    # the group the LOCAL sudoers grant names; it means nothing on a remote
     "lgsm-command",      # run_as_game_user picks the transport itself and never routes this here
     "cron-run-now",      # run_cron_job_now picks the transport itself, like lgsm-command
@@ -2337,7 +2387,8 @@ _REMOTE_ACTIONS = {
 # the panel's host, and by run_privileged (db_scrub) for every transport.
 DB_FLAVORS = ("mariadb", "mysql")
 # gs<server id>_<slug>: also the user name, so at most 29 characters (MySQL user names hold 32).
-DB_NAME_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+# A website's database is ws<site id>_<slug>, the same shape.
+DB_NAME_RE = r"(?:gs|ws)[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
 # A database password (databases.new_password): no quote, backslash or URI delimiter anywhere, so
 # it is inert in SQL, option files, YAML, KeyValues, INI and an oxmysql connection URI.
 DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"
@@ -3248,6 +3299,11 @@ def stdin_for(verb, args=None):
     return _ARGV[verb][2]
 
 
+# Website verbs whose document travels on the helper's stdin (passed as run_privileged's `secrets`,
+# text): the proxy configuration with any certificate an operator supplied.
+WEBSITE_STDIN_VERBS = frozenset({"website-proxy-apply"})
+
+
 def helper_stdin(verb, args, secrets=None):
     """Text for the HELPER's stdin.
 
@@ -3256,6 +3312,8 @@ def helper_stdin(verb, args, secrets=None):
     """
     if verb in DB_VERBS:
         return db_doc(verb, args, secrets)
+    if verb in WEBSITE_STDIN_VERBS:
+        return secrets if isinstance(secrets, str) else ""
     if verb in SECRET_STDIN:
         return check_args(verb, args)[SECRET_STDIN[verb][0]] + "\n"
     return stdin_for(verb)

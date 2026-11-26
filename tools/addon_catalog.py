@@ -46,15 +46,16 @@ _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 _PUBLISHED_KEYS = ("expires", "issued", "seq")
 _SOURCE_KEYS = ["addons", "schema", "sites"]
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The panels' own check of the `sites` section (standard library only at import), from this checkout.
+_WC_SPEC = importlib.util.spec_from_file_location(
+    "websites_catalog_for_signing", os.path.join(_REPO, "panel", "services", "websites_catalog.py"))
+_WC = importlib.util.module_from_spec(_WC_SPEC)
+_WC_SPEC.loader.exec_module(_WC)
 
 
 def _sites_problems(sites):
-    """websites_catalog.sites_problems(sites), from the file beside this checkout (stdlib only at import)."""
-    spec = importlib.util.spec_from_file_location(
-        "websites_catalog_for_signing", os.path.join(_REPO, "panel", "services", "websites_catalog.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.sites_problems(sites)
+    """websites_catalog.sites_problems(sites): why the section is refused, [] when it passes."""
+    return _WC.sites_problems(sites)
 
 # The checks a commit must have passed before its catalog is signed: the set deploy.yml's verify step
 # waits for (a unit check holds the two lists equal). A name ending in "(" is a prefix, for a matrix job.

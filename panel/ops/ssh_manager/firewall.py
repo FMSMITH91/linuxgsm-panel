@@ -965,6 +965,27 @@ def _fwb_other_ssh_way(g, counts, in_use):
     return _fwb_any_live(counts, in_use)
 
 
+# Rules the panel opens on purpose, by their ufw comment, and the only ports each may hold: the
+# Firewall page names such a rule's purpose instead of treating it as an unexplained open port. The
+# websites' proxy owns 80 and 443 over TCP while a site is enabled (ssh_manager.websites.ports_apply);
+# never SSH, RDP or the panel's own port.
+INTENTIONAL_RULES = {"lgsmpanel-websites": ("websites", ("80/tcp", "443/tcp"))}
+
+
+def mark_intentional_rules(groups):
+    """Set g["intentional"] (the purpose, e.g. "websites") on each ALLOW group whose comment and port are listed.
+
+    A comment alone is not enough: the label on any other port is ignored, so nobody can make an
+    arbitrary rule look intentional by naming it so.
+    """
+    for g in groups:
+        purpose, ports = INTENTIONAL_RULES.get(str(g.get("comment") or ""), (None, ()))
+        port = "%s/%s" % (g.get("port_num", ""), str(g.get("proto_label", "")).lower())
+        if purpose and g.get("action") == "ALLOW" and port in ports:
+            g["intentional"] = purpose
+    return groups
+
+
 def _annotate_firewall_protection(server, enabled, groups):
     """Flag rules whose removal could LOCK YOU OUT.
 
@@ -977,6 +998,7 @@ def _annotate_firewall_protection(server, enabled, groups):
     """
     # Disabled, nothing is protected below, so sshd is not asked.
     ssh_ports = _fwssh_served_ports(server) if enabled else _ssh_ports(server)
+    mark_intentional_rules(groups)
     for g in groups:
         _classify_access_rule(g, ssh_ports)
 
