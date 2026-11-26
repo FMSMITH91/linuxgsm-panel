@@ -266,7 +266,7 @@
   window.wsProxyInstall = function () {
     WS.stepUp(function () {
       WS.say('ws-add-msg', WS.T('Installing the web proxy…'));
-      WS.post(WS.R.proxyInstall, {host_id: val('ws-add-host-id') || val('wp-host') || null}).then(function (d) {
+      WS.post('/websites/proxy/install', {host_id: val('ws-add-host-id') || val('wp-host') || null}).then(function (d) {
         WS.done(d);
         load();
       });
@@ -284,9 +284,63 @@
       renderQuota(d.quota);
       renderList(d.sites);
       if (WS.el('ws-add-modal')) { fillAdd(d); WS.renderMissing(d.missing); }
+      if (WS.customerSites) WS.customerSites(d.sites || []);
       if (window.wsProxyRender) window.wsProxyRender(d);
     });
   }
   WS.loadList = load;
   if (PAGE) load();
+})();
+
+// Add a customer (administrators): the sites they get, then a one-time invite link and code, shown once.
+(function () {
+  'use strict';
+  var WS = window.WS;
+  if (!WS || !WS.el('wc-form')) return;
+  WS.customerSites = function (sites) {
+    var box = WS.clear(WS.el('wc-sites'));
+    sites.forEach(function (s) {
+      var id = 'wc-site-' + Number(s.id);
+      var wrap = WS.node('div', 'form-check');
+      var cb = WS.node('input', 'form-check-input');
+      cb.type = 'checkbox';
+      cb.id = id;
+      cb.value = String(Number(s.id));
+      cb.setAttribute('data-wc-site', '');
+      var lab = WS.raw('label', 'form-check-label small', s.name);
+      lab.htmlFor = id;
+      wrap.appendChild(cb);
+      wrap.appendChild(lab);
+      box.appendChild(wrap);
+    });
+    if (!sites.length) box.appendChild(WS.node('span', 'small text-secondary', WS.T('Add a website first.')));
+  };
+  WS.customerBody = function () {
+    var ids = [];
+    document.querySelectorAll('[data-wc-site]').forEach(function (cb) { if (cb.checked) ids.push(Number(cb.value)); });
+    return {name: WS.el('wc-name').value.trim().toLowerCase(), sites: ids, max_sites: Number(WS.el('wc-max').value) || 3};
+  };
+  function showInvite(d) {
+    var box = WS.clear(WS.el('wc-result'));
+    WS.show(box, true);
+    var p = WS.node('div', 'alert alert-info py-2 px-2 small mb-0');
+    p.appendChild(WS.node('div', 'fw-semibold', WS.T('Send the customer this link and its code. Both are shown only this once:')));
+    p.appendChild(WS.raw('code', 'ws-secret user-select-all', d.invite || ''));
+    p.appendChild(WS.raw('code', 'ws-secret user-select-all', d.code || ''));
+    box.appendChild(p);
+  }
+  window.wsCustomerAdd = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var body = WS.customerBody();
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(body.name)) { WS.say('wc-msg', WS.T('A customer name is 1 to 32 lowercase letters, digits and hyphens.'), 'err'); return; }
+    if (!body.sites.length) { WS.say('wc-msg', WS.T('Choose at least one website for the customer.'), 'err'); return; }
+    WS.stepUp(function () {
+      WS.say('wc-msg', WS.T('Adding…'));
+      WS.post('/websites/customers/add', body).then(function (d) {
+        if (!WS.done(d, 'wc-msg')) return;
+        showInvite(d);
+        WS.el('wc-name').value = '';
+      });
+    });
+  };
 })();

@@ -4,7 +4,7 @@
 //              allow_presets: [..], tunnel_token_set, last_error}],
 //   options: {hsts_max_age, tls_min, acme_contact, acme_staging, access_log_default, access_log_days,
 //             max_sites, require_2fa, mem_mb, cpu_milli, pids, disk_mb, max_body_mb}
-// Saves go to POST /websites/proxy/settings as {host_id, exposure: {...}} or {options: {...}}. The tunnel
+// Saves go to POST /websites/proxy/settings {host_id, exposure: {...}} and /websites/proxy/options {options}. The tunnel
 // token is sent only when something was typed, and the page never receives it back (tunnel_token_set).
 // OWASP's recommended values are printed beside the fields; a value outside them shows a note and is
 // saved anyway: the administrator decides (HTTP Strict Transport Security Cheat Sheet, "Examples";
@@ -126,7 +126,7 @@
     if (problem) { WS.say('wp-msg', problem, 'err'); return; }
     WS.stepUp(function () {
       WS.say('wp-msg', WS.T('Saving…'));
-      WS.post(WS.R.proxySettings, {host_id: st.host, exposure: body}).then(function (d) {
+      WS.post('/websites/proxy/settings', {host_id: st.host, exposure: body}).then(function (d) {
         var tok = WS.el('wp-token');
         if (tok) tok.value = '';
         if (WS.done(d, 'wp-msg') && WS.loadList) WS.loadList();
@@ -152,7 +152,7 @@
     });
     WS.stepUp(function () {
       WS.say('wp-opts-msg', WS.T('Saving…'));
-      WS.post(WS.R.proxySettings, {options: out}).then(function (d) { WS.done(d, 'wp-opts-msg'); });
+      WS.post('/websites/proxy/options', {options: out}).then(function (d) { WS.done(d, 'wp-opts-msg'); });
     });
   };
 })();

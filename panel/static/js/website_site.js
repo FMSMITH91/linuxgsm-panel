@@ -235,7 +235,11 @@
     dbs.forEach(function (db) {
       var li = WS.node('li', 'ws-row d-flex flex-wrap gap-2 align-items-center justify-content-between');
       li.appendChild(WS.raw('span', 'fw-semibold text-break', db.name));
-      li.appendChild(WS.button(WS.T('Show connection settings'), 'key', 'wsDbReveal', [Number(db.id)]));
+      var acts = WS.node('span', 'd-flex flex-wrap gap-2');
+      acts.appendChild(WS.button(WS.T('Show connection settings'), 'key', 'wsDbReveal', [Number(db.id)]));
+      acts.appendChild(WS.button(WS.T('Reset password'), 'arrow-repeat', 'wsDbReset', [Number(db.id)], 'btn-outline-warning'));
+      if (WS.can.admin) acts.appendChild(WS.button(WS.T('Delete'), 'trash', 'wsDbDelete', [Number(db.id), String(db.name)], 'btn-outline-danger'));
+      li.appendChild(acts);
       li.appendChild(WS.node('div', 'w-100 small font-monospace ws-db-conn', ''));
       li.lastChild.id = 'wdb-conn-' + Number(db.id);
       list.appendChild(li);
@@ -249,9 +253,31 @@
       if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); }
     });
   };
+  // A new password for the database's own user (the app's settings must then be given it).
+  window.wsDbReset = function (dbId) {
+    window.confirmDialog({title: WS.T('Reset this database password?'), icon: 'key', confirmClass: 'btn-warning',
+      confirmLabel: WS.T('Reset password'), bodyText: WS.T('The site stops reaching the database until its settings have the new password.'),
+      onConfirm: function () {
+        WS.stepUp(function () {
+          WS.post('/websites/' + ID + '/databases/' + Number(dbId) + '/reset-password', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
+        });
+      }});
+  };
+  // Administrators only, with the database's name typed.
+  window.wsDbDelete = function (dbId, name) {
+    window.confirmDialog({title: WS.T('Delete this database?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete'),
+      bodyText: WS.T('Its tables and data are removed for good. Type the database name to confirm.'), requireText: name,
+      requireLabel: WS.T('Database name'), onConfirm: function () {
+        WS.stepUp(function () {
+          WS.post('/websites/' + ID + '/databases/' + Number(dbId) + '/delete', {confirm: name}).then(function (d) {
+            if (WS.done(d, 'wdb-msg')) WS.reload();
+          });
+        });
+      }});
+  };
   window.wsDbReveal = function (dbId) {
     WS.stepUp(function () {
-      WS.post(WS.R.act(ID, 'databases/credentials'), {id: dbId}).then(function (d) {
+      WS.post('/websites/' + ID + '/databases/credentials', {id: dbId}).then(function (d) {
         var box = WS.el('wdb-conn-' + dbId);
         if (!box || !d || !d.success) { WS.done(d, 'wdb-msg'); return; }
         WS.clear(box);

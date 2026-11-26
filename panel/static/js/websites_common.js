@@ -8,15 +8,16 @@
 (function () {
   'use strict';
   var WS = {};
-  // The routes the pages call (panel/routes/websites*.py). One place, so a renamed route is one edit.
+  // The routes the pages call (panel/routes/websites*.py). One place, so a renamed route is one edit —
+  // except a step-up route (the proxy's install, settings and options, a customer, a database's
+  // credentials, password and delete): its address is written where it is sent, inside the WS.stepUp
+  // callback, so the step-up gate (unit part261) sees that it is only sent after the password check.
   WS.R = {
     list: '/api/websites',
     site: function (id) { return '/api/websites/' + id; },
     act: function (id, verb) { return '/websites/' + id + '/' + verb; },
     add: '/websites/add',
     installApp: '/websites/install-app',
-    proxyInstall: '/websites/proxy/install',
-    proxySettings: '/websites/proxy/settings',
     page: function (id) { return '/websites/' + id; }
   };
   WS.T = function (s) { return window.t ? window.t(s) : s; };

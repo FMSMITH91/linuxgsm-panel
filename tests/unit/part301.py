@@ -501,6 +501,41 @@ eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed 
 eq("node: an HSTS max-age under two years, TLS 1.2 and 2FA off for customers each show OWASP's note (saved anyway)",
    (_exp301.get("notes"), _exp301.get("summary")), ([True, True, True], "How visitors reach your sites: Public"))
 
+_cust301 = _ran301("add a customer", _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  $('wc-name').value = 'Acme'; $('wc-max').value = '2';
+  document.querySelectorAll('[data-wc-site]')[0].checked = true;
+  window.wsCustomerAdd({preventDefault: function () {}});
+  for (let i = 0; i < 4; i++) await tick();
+  const post = calls.filter(function (c) { return c[0] === 'POST'; });
+  return {post: post, shown: $('wc-result').querySelectorAll('code').map(function (c) { return c.textContent; }),
+          hidden: $('wc-result').hidden};
+""", routes={"/api/websites": _LIST301, "/websites/customers/add": {"success": True, "invite": "https://panel.test/i/T", "code": "C0DE"}}))
+eq("node: Add a customer posts the name, the ticked sites and the limit (after the password check), then shows the "
+   "invite link and its code once, as text",
+   (_cust301.get("post"), _cust301.get("shown"), _cust301.get("hidden")),
+   ([["POST", "/m/websites/customers/add", {"name": "acme", "sites": [3], "max_sites": 2}]], ["https://panel.test/i/T", "C0DE"], False))
+eq("list: the Add a customer form is an administrator's only",
+   ("id=\"wc-form\"" in _list_sa301, "id=\"wc-form\"" in _list_cq301), (True, False))
+_dbx301 = _ran301("database reset and delete", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const acts = $('wdb-list').querySelectorAll('button').map(function (b) { return b.getAttribute('data-action'); });
+  window.wsDbReset(9); window.wsDbDelete(9, 'ws7_main');
+  const asked = dialogs.map(function (d) { return d.requireText || ''; });
+  const before = calls.filter(function (c) { return c[0] === 'POST'; }).length;
+  dialogs.forEach(function (d) { d.onConfirm(); });
+  for (let i = 0; i < 4; i++) await tick();
+  return {acts: acts, asked: asked, before: before,
+          posts: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return [c[1], c[2]]; })};
+""", routes={"/api/websites/7": {"success": True, "site": {"id": 7, "name": "shop", "kind": "php", "state": "running"},
+                                 "databases": [{"id": 9, "name": "ws7_main", "user": "ws7_main"}]},
+             "/websites/7/databases/9/reset-password": {"success": True}, "/websites/7/databases/9/delete": {"success": True}}))
+eq("node: a database row offers its connection settings, a new password and (an administrator) Delete; nothing is "
+   "sent before the dialog is confirmed, Delete wants the name typed, and each goes to its own route",
+   (_dbx301.get("acts"), _dbx301.get("asked"), _dbx301.get("before"), _dbx301.get("posts")),
+   (["wsDbReveal", "wsDbReset", "wsDbDelete"], ["", "ws7_main"], 0,
+    [["/m/websites/7/databases/9/reset-password", {}], ["/m/websites/7/databases/9/delete", {"confirm": "ws7_main"}]]))
+
 _SITE_D301 = {"success": True, "site": {"id": 7, "name": "shop", "kind": "wordpress", "state": "failed",
                                         "state_reason": "<script>bad()</script>", "enabled": False,
                                         "open_url": "javascript:alert(1)", "limits": {"mem_mb": 512, "disk_mb": 2048}},
