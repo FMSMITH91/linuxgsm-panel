@@ -7578,13 +7578,18 @@ def _ci_on_path_lists(on, key="paths"):
     Block entries at the key's indent or deeper, a flow list (`paths: ['a/*', 'b']`), and a comment
     after the key. Read as one shape only, any other gave [] and the workflow passed as unfiltered; a
     list that cannot be read, or one with no entries, comes back as one entry no file matches, so
-    every install it should watch is named.
+    every install it should watch is named. A flow mapping (`pull_request: { paths: [...] }`) is not read
+    at all (review 1124): it is a paths list no file matches, and a paths-ignore list every file matches.
     """
     lists, cur, indent = [], None, 0
     for ln in on.replace("\r\n", "\n").splitlines():
         s, ind = ln.strip(), len(ln) - len(ln.lstrip())
         if cur is not None and _ci_in_list(s, ind, indent):
             cur.extend([_ci_path_entry(s[2:])] if s.startswith("- ") else [])
+            continue
+        if re.search(r":[ \t]*\{", re.sub(r"(?:^|\s)#.*$", "", s)):
+            cur = None
+            lists.append([("\0unreadable flow mapping: " + s, False)] if key == "paths" else [("**", False)])
             continue
         cur, value = None, _ci_paths_key(s, key)
         if value == "":
@@ -7709,6 +7714,12 @@ eq("workflows: (control) a paths key with a comment, entries at the key's indent
 eq("workflows: (control) ...under CRLF each job is read apart, with its own installs and its scope list",
    [(_j, _i, _s) for _j, _i, _o, _s in _ci_jobs_watch(_ci_ctl2)],
    [("a", [".github/ci-requirements/x.txt"], ["z/**"]), ("b", [".github/ci-requirements/y.txt"], None)])
+eq("workflows: (control) a trigger written as a flow mapping is named for its paths list and for its paths-ignore "
+   "list, never read as unfiltered (review 1124)",
+   [_ci_unwatched_of("f.yml", "on:\n  pull_request: " + _fm + "\npermissions: {}\njobs:\n  a:\n    steps:\n"
+                     "      - run: pip install -r .github/ci-requirements/x.txt\n")
+    for _fm in ("{ paths: ['docs/**'] }", "{paths-ignore: ['.github/**']}  # flow")],
+   [["f.yml a: .github/ci-requirements/x.txt (on: paths)", "f.yml a: .github/ci-requirements/x.txt (on: paths-ignore)"]] * 2)
 eq("workflows: (control) a paths list that cannot be read, or has no entries, watches nothing (named, not passed)",
    [_ci_watched(".github/ci-requirements/x.txt", _l) for _l in
     _ci_on_path_lists("on:\n  push:\n    paths: &anchor\n  pull_request:\n    paths:\n    paths-ignore:\n      - a\n")],
