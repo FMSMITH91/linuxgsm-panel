@@ -72,7 +72,7 @@ _BUSY_SAID = {
     "dump": "This database is being dumped right now. Try again when that has finished.",
     "restore": "This database is being restored right now. Try again when that has finished.",
     "delete": "This database is being deleted right now.",
-    "password": "This database's password is being changed right now. Try again when that has finished.",  # nosec B105 - a sentence under the claim key "password", not a password
+    "password": "This database's password is being changed right now. Try again when that has finished.",  # nosec B105 - a sentence, not a password
 }
 
 

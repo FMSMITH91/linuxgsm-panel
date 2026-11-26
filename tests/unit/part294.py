@@ -473,7 +473,7 @@ def _form_tag_end294(src, i):
 def _post_forms294():
     """(POST form tags seen, those not followed at once by the server-rendered token) over every template."""
     seen, bare = 0, []
-    token = '<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">'
+    hidden_input = '<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">'
     for path in sorted(_glob294.glob(os.path.join(_root, "panel", "templates", "**", "*.html"), recursive=True)):
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
@@ -481,7 +481,7 @@ def _post_forms294():
             end = _form_tag_end294(src, m.start())
             if _re294.search(r"\bmethod\s*=\s*[\"']?post\b", src[m.start():end], _re294.I):
                 seen += 1
-                if not src.startswith(token, end + 1):
+                if not src.startswith(hidden_input, end + 1):
                     bare.append("%s:%d" % (os.path.basename(path), src.count("\n", 0, m.start()) + 1))
     return seen, bare
 
