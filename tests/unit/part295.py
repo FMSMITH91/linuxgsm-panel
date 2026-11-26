@@ -278,7 +278,7 @@ def _bash295(script, tmp, env):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(script)
     env = dict(env, PATH=os.path.join(tmp, "bin") + ":/usr/bin:/bin")
-    return _sp295.run(["bash", "-e", path], cwd=tmp, capture_output=True, text=True,  # nosec B603 - ci.yml's step
+    return _sp295.run(["/bin/bash", "-e", path], cwd=tmp, capture_output=True, text=True,  # nosec B603 - ci.yml's step
                       timeout=60, check=False, env=env)
 
 
