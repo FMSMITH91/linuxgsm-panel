@@ -119,7 +119,7 @@ def _namesake_key(column):
     return column
 
 
-NAMESAKES_SQL = ("SELECT c.name FROM clients c JOIN clients t ON t.id = ? WHERE c.id <> t.id AND "
+NAMESAKES_SQL = ("SELECT c.name FROM clients c JOIN clients t ON t.id = ? WHERE c.id <> t.id AND "  # nosec B608 - fixed patterns as hex literals; the id is bound with ?
                  + _namesake_key("c.name") + " = " + _namesake_key("t.name") + " LIMIT 21")
 NAMESAKES_MAX = 20
 

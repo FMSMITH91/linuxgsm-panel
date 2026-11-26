@@ -652,7 +652,7 @@ eq("b3 namesakes: a target stored as \"^ABob\" finds \"Bob\" and \"^aBob\" (B3 k
 
 def _namesake_misses294(sql, rounds=20000):
     """Generated (target, listed, stored) triples the identity check calls namesakes that `sql` would not select."""
-    rnd = _random294.Random(294)
+    rnd = _random294.Random(294)  # nosec B311 - a fixed seed so the generated cases repeat; nothing secret
     codes = ["^a", "^A", "^1", "^_", "^X12345", "^X123456", "^ ", "^x1"]
 
     def noisy(core):
