@@ -125,12 +125,19 @@ def _cc_dry297(dry, tok="", blocked=False):
             p.stdout + p.stderr)
 
 
+def _host297(cmd):
+    """The host of the URL a recorded command ends with ("" when it ends with none)."""
+    from urllib.parse import urlsplit
+    words = str(cmd).split()
+    return (urlsplit(words[-1]).hostname or "") if words else ""
+
+
 _cc_dry_ok297 = _cc_dry297("true")
 check("codacy-coverage: a manual run checks the report, fetches the reporter, reaches api.codacy.com "
       "and uploads nothing",
       _cc_dry_ok297[0] == 0 and not _cc_dry_ok297[2] and len(_cc_dry_ok297[1]) == 2
       and "codacy-coverage-reporter-linux" in _cc_dry_ok297[1][0]
-      and _cc_dry_ok297[1][1].endswith("https://api.codacy.com/")
+      and _host297(_cc_dry_ok297[1][1]) == "api.codacy.com"
       and "nothing was uploaded" in _cc_dry_ok297[3], repr(_cc_dry_ok297))
 _cc_dry_blk297 = _cc_dry297("true", blocked=True)
 check("codacy-coverage: ...and fails when api.codacy.com cannot be reached, as the upload would",
@@ -138,7 +145,7 @@ check("codacy-coverage: ...and fails when api.codacy.com cannot be reached, as t
 _cc_wr297 = {"false": _cc_dry297("false", "x0"), "unset": _cc_dry297(None, "x0")}
 check("codacy-coverage: ...while a workflow_run with the token still uploads (control)",
       all(v[0] == 0 and len(v[2]) == 2 and v[2][0].startswith("REPORTER report --partial -l Python")
-          and not any("api.codacy.com/" in c for c in v[1]) for v in _cc_wr297.values()),
+          and not any(_host297(c) == "api.codacy.com" for c in v[1]) for v in _cc_wr297.values()),
       repr(_cc_wr297))
 
 # ── 4. codeql-alerts: a manual run on another branch judges main and posts nothing ──────────────
