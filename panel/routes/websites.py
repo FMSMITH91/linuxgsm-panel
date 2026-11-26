@@ -119,6 +119,24 @@ def host_call(fn, *args):
         return False, S_UNREACHABLE
 
 
+def site_db(site):
+    """(host, port) of the site's database server as its host sees it, or None when the site has no database.
+
+    A site's databases are made by the Databases code on its own host's server, reached on the loopback;
+    the container gets that port forwarded (ssh_manager.websites.install's `db`).
+    """
+    from panel.routes import databases, databases_sites
+    if not databases_sites.site_rows(site):
+        return None
+    hd = databases._host_row(site.remote_id)
+    return "127.0.0.1", int(getattr(hd, "port", None) or 3306)
+
+
+def install_site(site):
+    """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence)."""
+    return host_call(_sw.install, site.remote, site, site_db(site))
+
+
 def acted(site, action, ok, said, detail=""):
     """Audit a host action on `site` and answer it."""
     audit(site, action, detail or ("done" if ok else "failed: %s" % i18n.tr(said)), ok)
@@ -378,7 +396,7 @@ def _install_worker(app, site_id):
         site = db.session.get(Website, site_id)
         if site is None:
             return
-        ok, said = host_call(_sw.install, site.remote, site)
+        ok, said = install_site(site)
         site.state = "running" if ok else "failed"
         site.state_reason = "" if ok else i18n.tr(said)[:200]
         db.session.commit()
@@ -514,7 +532,7 @@ def _admin_routes(app):
     @login_required
     def website_update_image(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
-        ok, said = host_call(_sw.install, site.remote, site)
+        ok, said = install_site(site)
         forget_status(site.id)
         return acted(site, "website_update", ok, said, "image updated" if ok else "")
 
@@ -598,7 +616,7 @@ def _settings_apply(site, limits, form):
     if not any(k in LIMITS for k in limits):
         ok, said = True, "Saved."
     else:
-        ok, said = host_call(_sw.install, site.remote, site)
+        ok, said = install_site(site)
     if ok and "disk_mb" in limits:
         host_call(_sw.quota_set, site.remote, site)
     if ok and site.enabled and "access_log" in form:

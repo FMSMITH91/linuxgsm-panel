@@ -94,9 +94,12 @@ def _run_step(site, step, secret_vals):
     if step.get("type") == DB_STEP:
         from panel.routes import databases_sites
         ok, said, row, db_pw = databases_sites.create_for(site, str(step.get("slug") or "app"))
-        if ok:
-            secret_vals.update(db_name=row.name, db_user=row.name, db_password=db_pw)
-        return ok, said
+        if not ok:
+            return ok, said
+        secret_vals.update(db_name=row.name, db_user=row.name, db_password=db_pw)
+        # The running site gets the new database's port forwarded now: the app's own installer pages (and the
+        # site afterwards) reach it from the site's container, not only the one-off step containers.
+        return _w.install_site(site)
     return _w.host_call(_sw.app_install_step, site.remote, site, dict(step, secrets=dict(secret_vals)))
 
 

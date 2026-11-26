@@ -324,7 +324,7 @@ def _app_words(fields, env, env_changed):
 
 
 def _app_apply(site, fields, env_changed):
-    ok, said = _w.host_call(_sw.install, site.remote, site) if fields else (True, "Saved.")
+    ok, said = _w.install_site(site) if fields else (True, "Saved.")
     if ok and env_changed:
         ok, said = _w.host_call(_sw.env_apply, site.remote, site)
     return ok, said
