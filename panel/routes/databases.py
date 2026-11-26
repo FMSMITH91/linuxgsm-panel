@@ -72,6 +72,7 @@ _BUSY_SAID = {
     "dump": "This database is being dumped right now. Try again when that has finished.",
     "restore": "This database is being restored right now. Try again when that has finished.",
     "delete": "This database is being deleted right now.",
+    "password": "This database's password is being changed right now. Try again when that has finished.",
 }
 
 
@@ -478,30 +479,6 @@ def _addon_refusal(gs, r, sentence):
     return _say(409, i18n.Sentence(sentence, addon=addon)) if addon else None
 
 
-def _reset_answer(gs, r):
-    """POST: a new password for the database's user (both of its host entries)."""
-    remote, hd = _net.admin_target(gs.remote, _host_row(gs.remote_id), r)
-    if remote is None:
-        return _say(409, _NOT_READY)
-    held = _addon_refusal(gs, r, _ADDON_RESET)
-    if held is not None:
-        return held
-    secret = _dbs.new_password()
-    with _r20b_audit_on_raise("db_password", target=gs.name, detail=r.name, server=gs):
-        ok, said = _dbs.set_password(remote, hd, r.name, secret)
-    if ok:
-        r.secret = encrypt_secret(secret)
-        r.auth_plugin = _dbs.auth_plugin_name(_dbs.plugin_for(hd))
-        db.session.commit()
-    reply = {"success": bool(ok), "message": i18n.tr(
-        said or ("New password set. Update it in the game's config, then restart the server." if ok else "Failed"))}
-    with _r42r_audit_after(reply):
-        log_action(current_user, "db_password", target=gs.name, detail=_done_or_not(
-            ok, "new password for database %s" % r.name, "database %s password not changed" % r.name, said),
-            success=bool(ok), server=gs)
-    return jsonify(reply), 200 if ok else 502
-
-
 def _done_or_not(ok, done, not_done, said):
     """An audit row's detail: what was done, or what was not and why (never the success wording)."""
     return done if ok else "%s: %s" % (not_done, said or "failed")
@@ -544,6 +521,35 @@ def one_at_a_time(what, action):
                 return answer(gs, r, *args)
         return held
     return wrap
+
+
+@one_at_a_time("password", "db_password")
+def _reset_answer(gs, r):
+    """POST: a new password for the database's user (both of its host entries).
+
+    Held like a restore or a delete: a restore signs in with the stored password, and one
+    changed under it, or a second reset meanwhile, leaves the stored copy and the server's apart.
+    """
+    remote, hd = _net.admin_target(gs.remote, _host_row(gs.remote_id), r)
+    if remote is None:
+        return _say(409, _NOT_READY)
+    held = _addon_refusal(gs, r, _ADDON_RESET)
+    if held is not None:
+        return held
+    secret = _dbs.new_password()
+    with _r20b_audit_on_raise("db_password", target=gs.name, detail=r.name, server=gs):
+        ok, said = _dbs.set_password(remote, hd, r.name, secret)
+    if ok:
+        r.secret = encrypt_secret(secret)
+        r.auth_plugin = _dbs.auth_plugin_name(_dbs.plugin_for(hd))
+        db.session.commit()
+    reply = {"success": bool(ok), "message": i18n.tr(
+        said or ("New password set. Update it in the game's config, then restart the server." if ok else "Failed"))}
+    with _r42r_audit_after(reply):
+        log_action(current_user, "db_password", target=gs.name, detail=_done_or_not(
+            ok, "new password for database %s" % r.name, "database %s password not changed" % r.name, said),
+            success=bool(ok), server=gs)
+    return jsonify(reply), 200 if ok else 502
 
 
 @one_at_a_time("delete", "db_delete")
