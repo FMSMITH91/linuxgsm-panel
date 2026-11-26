@@ -5348,12 +5348,19 @@ def _ca13_teardown(apps, saved):
     else:
         _cfgmod10.CONFIG_FILE.write_bytes(_CA13_CFG_SNAP)
     _cfgmod10._cfg_cache["key"] = None
+    # The app bindings each boot registers (review 1124): ssh_manager's host-key pin app and push
+    # alerts' app. Left in place they point at an app whose database directory is removed below, so a
+    # later first-contact pin or a queued push alert would open a deleted database.
+    _sm_core._pin_app = saved["pin_app"]
+    _push_alerts13._APP[0] = saved["push_app"]
     _shutil10.rmtree(str(_CA13_DIR.parent), ignore_errors=True)
 
 
+from panel.services import push_alerts as _push_alerts13  # noqa: E402
 _ca13_saved_state = {"listeners": dict(_banlist13._listeners), "hooks": dict(_hooks13._hooks),
                      "authlog": (list(_app10mod._authlog.handlers), _app10mod._authlog.level,
-                                 _app10mod._authlog.propagate)}
+                                 _app10mod._authlog.propagate),
+                     "pin_app": _sm_core._pin_app, "push_app": _push_alerts13._APP[0]}
 _ca13_apps = []
 _ca13_trip = _arm10()
 try:
@@ -5367,6 +5374,9 @@ try:
         _ca13_set(_owner13, _name13, _val13)
     _ca13_app, _ca13_runners, _ca13_bootlog = _ca13_first_boot()
     _ca13_apps.append(_ca13_app)
+    check("create_app: the boot bound itself as the host-key pin app and the push-alerts app (premise of the "
+          "teardown check)", _sm_core._pin_app is _ca13_app and _push_alerts13._APP[0] is _ca13_app,
+          repr((_sm_core._pin_app, _push_alerts13._APP[0])))
     check("create_app: the database it opened is the throwaway one, never the checkout's",
           _ca13_app.config["SQLALCHEMY_DATABASE_URI"] == "sqlite:///%s" % _CA13_DB,
           _ca13_app.config["SQLALCHEMY_DATABASE_URI"])
@@ -5398,6 +5408,12 @@ finally:
     _disarm10(_ca13_trip)
     _ca13_restore()
     _ca13_teardown(_ca13_apps, _ca13_saved_state)
+check("app boot: the teardown put back the host-key pin app and the push-alerts app from before the boots "
+      "(never one whose database was removed)",
+      bool(_ca13_apps) and _sm_core._pin_app is _ca13_saved_state["pin_app"]
+      and _push_alerts13._APP[0] is _ca13_saved_state["push_app"]
+      and all(_x not in _ca13_apps for _x in (_sm_core._pin_app, _push_alerts13._APP[0])),
+      repr((_sm_core._pin_app, _push_alerts13._APP[0], _ca13_apps)))
 check("app boot: the checkout's own data/panel.db was not created",
       _CA13_LIVE_DB_EXISTED or not os.path.exists(_CA13_LIVE_DB), _CA13_LIVE_DB)
 
