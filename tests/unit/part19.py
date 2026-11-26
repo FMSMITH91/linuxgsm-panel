@@ -913,17 +913,22 @@ check("complexity gate: pull requests only, hash-pinned Lizard and Pylint, self-
       and "-r .github/ci-requirements/complexity.txt" in _cx
       and -1 < _cx.find("complexity_gate.py --self-test") < _cx.rfind("complexity_gate.py\n"),
       _cx[-600:])
-# Fuzz and ClusterFuzzLite are required too, so they run on every pull request; a pull request that
-# changes nothing they fuzz passes at once. That is a scope step's job, first in each: it must list
-# what the old path filter listed (the harnesses' modules, the fuzz tree, what the job installs),
-# and every step that builds or fuzzes must wait on it.
+# Fuzz, ClusterFuzzLite and the add-on image scan are required too, so they run on every pull
+# request; a pull request that changes nothing they fuzz or scan passes at once. That is a scope
+# step's job, first in each: it must list what the old path filter listed (the harnesses' modules,
+# the fuzz tree, what the job installs; the images, their pins and the scan's own files), and every
+# step that builds, fuzzes or scans must wait on it.
 _sc_bad = []
 for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
                                        "panel/core/terminal.py", "tests/fuzz/**", "panel/install/requirements.txt",
                                        ".github/ci-requirements/atheris.txt")),
                          ("cflite_pr.yml", ("panel/ops/ssh_manager/**", "panel/ops/system_ops.py",
                                             "panel/core/terminal.py", "tests/fuzz/**",
-                                            ".clusterfuzzlite/**", "panel/install/requirements.txt"))):
+                                            ".clusterfuzzlite/**", "panel/install/requirements.txt")),
+                         ("addon-images.yml", ("panel/addon_images/**", "panel/services/addons.py",
+                                               ".clusterfuzzlite/Dockerfile", ".github/workflows/addon-images.yml",
+                                               ".github/scripts/addon_images.py", ".github/trivyignore.yaml",
+                                               ".github/hadolint.yaml"))):
     _sc_txt = _rq_jobs.get(_sc_wf, ("", []))[0]
     _sc_steps = _sc_txt[_sc_txt.find("    steps:\n"):]
     # Harden-Runner is every job's first step (part42 holds that); the scope step comes next.
@@ -936,7 +941,7 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
     _sc_list = "\n".join(_sg_re.sub(r"(?:^|\s)#.*$", "", _l) for _l in _sc_list.splitlines())
     _sc_after = [_b for _b in _sc_steps[_sc_at:].split("\n      - ")[1:]
                  if _sg_re.search(r"(uses: (actions/checkout|actions/setup-python|\$/\.github/actions/cflite-)"
-                                  r"|^name: (Install|Fuzz))", _b, _sg_re.M)]
+                                  r"|^name: (Install|Fuzz|What will be scanned|Pull, build))", _b, _sg_re.M)]
     if _sc_at < 0 or _sc_steps.find("\n      - ") < _sc_at - 400:
         _sc_bad.append("%s: no scope step first" % _sc_wf)
     _sc_bad += ["%s: scope lacks %s" % (_sc_wf, _w) for _w in _sc_must if "'%s'" % _w not in _sc_list]
@@ -944,8 +949,8 @@ for _sc_wf, _sc_must in (("fuzz.yml", ("panel/ops/ssh_manager/**", "panel/ops/sy
                 for _b in _sc_after if "steps.scope.outputs.run == 'true'" not in _b]
     if len(_sc_after) < 2:
         _sc_bad.append("%s: read %d gated steps" % (_sc_wf, len(_sc_after)))
-check("fuzz workflows: a scope step first (after Harden-Runner), listing what the path filter did, "
-      "and every build or fuzz step waits on it",
+check("fuzz workflows and the add-on image scan: a scope step first (after Harden-Runner), listing what "
+      "the path filter did, and every build, fuzz or scan step waits on it",
       not _sc_bad, repr(_sc_bad))
 # SonarCloud's free-plan gate cannot be made "0 new issues", so a required job checks that itself:
 # pull requests only, self-test first, the pull request's number and head commit passed as env.
@@ -956,10 +961,11 @@ check("SonarCloud new issues: pull requests only, self-test first, the head comm
       and "SHA: ${{ github.event.pull_request.head.sha }}" in _sn
       and '--sha "$SHA"' in _sn and "${{ github.event.pull_request.head.sha }}\n" not in _sn.split(
           "run:")[-1], _sn[-500:])
-check("required checks: ...including SonarCloud's zero-new-issues job, Dependency Review, actionlint "
-      "and every fuzz job",
+check("required checks: ...including SonarCloud's zero-new-issues job, Dependency Review, actionlint, "
+      "every fuzz job and the add-on image scan",
       {("github-actions", "SonarCloud new issues"), ("github-actions", "Dependency Review"),
-       ("github-actions", "actionlint"), ("github-actions", "fuzz the diff (address)")} <= set(_rq)
+       ("github-actions", "actionlint"), ("github-actions", "fuzz the diff (address)"),
+       ("github-actions", "Add-on images (Trivy, hadolint)")} <= set(_rq)
       and sum(1 for _a, _n in _rq if _n.startswith("fuzz (")) >= 6, repr(_rq))
 # A job TEMPLATE like `fuzz (${{ matrix.target }})` matches any one listed leg, so "every job is required"
 # above could not ask for a new matrix value, and a count held the fuzz list at its first six while three
