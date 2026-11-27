@@ -177,11 +177,12 @@ def _server_pass(app, gs_id, now):
     if gs is None or gs.remote is None:
         return
     cfg = U.settings()
-    if U.window_key(U.host_now(gs.remote, now), cfg) is None:
-        return
     from panel.services import addons as _ad
-    if not _ad.offered(gs.game_type):
+    # The server's add-ons are read from its host once per window: every later pass finds it done.
+    key = _due("server:%d" % gs.id, gs.remote, cfg, now)
+    if key is None or not _ad.offered(gs.game_type):
         return
+    _DONE["server:%d" % gs.id] = key
     for addon_id, security in _pending_addons(gs, cfg):
         ref = "addon:%d:%s" % (gs.id, addon_id)
         key = _due(ref, gs.remote, cfg, now)
@@ -210,19 +211,32 @@ def _pending_addons(gs, cfg):
 
 
 def _addon_once(app, gs, addon_id):
-    """Update one add-on unless its game server has players on, or its account refuses the write."""
+    """Update one add-on unless its game server has players on (update_addon refuses the rest)."""
     from panel.services.monitoring import _cached_player_count
-    from panel.security.auth import log_action
-    from panel.routes._shared import game_account_write_refusal
-    why = game_account_write_refusal(gs.remote, gs.short_name)
     players = _cached_player_count(gs.id)
-    if not why and isinstance(players, int) and players > 0:
-        why = "it has players on"
-    if why:
-        log_action(None, "update_skipped", target=gs.name, actor=ACTOR, server=gs,
-                   detail="automatic: %s not updated, %s; the next window tries again" % (addon_id, why))
+    if isinstance(players, int) and players > 0:
+        _addon_skipped(gs, addon_id, "it has players on", ACTOR)
         return
     update_addon(app, gs, addon_id, ACTOR)
+
+
+def _addon_skipped(gs, addon_id, why, who):
+    from panel.security.auth import log_action
+    log_action(None, "update_skipped", target=gs.name, actor=who, server=gs,
+               detail="%s: %s not updated, %s; the next window tries again" % (who, addon_id, why))
+
+
+def _addon_refusal(gs):
+    """Why the server's add-ons may not be changed now ("" when they may): its account, or a reboot of its host.
+
+    The card's own checks (routes/addons._guarded): the root-capable-account refusal before anything runs as the
+    game account, and a clean reboot whose plan holds the server.
+    """
+    from panel.routes._shared import _reboot_holds, game_account_write_refusal
+    why = game_account_write_refusal(gs.remote, gs.short_name)
+    if why:
+        return str(why)
+    return "its host is being rebooted" if _reboot_holds(gs) else ""
 
 
 def update_addon(app, gs, addon_id, who):
@@ -231,6 +245,10 @@ def update_addon(app, gs, addon_id, who):
     from panel.routes import addons as _ra, addons_change as _ch
     from panel.security.auth import log_action
     from panel.services import addon_web as _aw
+    refused = _addon_refusal(gs)
+    if refused:
+        _addon_skipped(gs, addon_id, refused, who)
+        return False, refused
     with _ra._JOBS_LOCK:
         job = _ra.claim_job(gs.id, addon_id, "update")
     if job is not None:

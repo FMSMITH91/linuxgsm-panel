@@ -366,6 +366,39 @@ def _s4_addon(host, su):
     return gs
 
 
+def _s4_addon_guards(gs):
+    """update_addon runs the card's own checks first: the account's write refusal, and a reboot holding the server."""
+    from panel.routes import _shared as _sh320
+    ran = []
+    _p9_patch(_ch320, "_worker", lambda *a, **k: ran.append(a[3]))
+    _p9_patch(_sh320, "game_account_write_refusal", lambda *a, **k: "refused: a root-capable account")
+    refused = _ua320.update_addon(_p9, gs, "b3", "automatic")
+    _p9_patch(_sh320, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch(_sh320, "_reboot_holds", lambda server: True)
+    held = _ua320.update_addon(_p9, gs, "b3", "automatic")
+    _p9_restore_one(_sh320, "_reboot_holds")
+    skip = (_Audit320.query.filter(_Audit320.game_server_id == gs.id, _Audit320.action == "update_skipped")
+            .order_by(_Audit320.id.desc()).first())
+    eq("add-on update (nightly window, safe now): refused for a root-capable game account and while a reboot holds "
+       "the server, before anything runs as the account, and the history says why",
+       (refused[0], held[0], ran, skip.detail if skip is not None else ""),
+       (False, False, [], "automatic: b3 not updated, its host is being rebooted; the next window tries again"))
+
+
+def _s4_addon_once(gs):
+    """A server's add-ons are read from its host once per window, not on every pass of the loop."""
+    reads = []
+    _p9_patch(_ua320, "_pending_addons", lambda server, cfg: reads.append(server.id) or [])
+    _ua320._DONE.clear()
+    _ua320._DONE.update({"website:%d" % i: "2026-11-27" for i in _ROWS320["sites"]})
+    _ua320.tick(_p9, now=_IN320)
+    _ua320.tick(_p9, now=_IN320 + 300)
+    _ua320.tick(_p9, now=_OUT320)
+    eq("nightly window: each game server's add-ons are read once per window (two passes inside it, one outside)",
+       reads.count(gs.id), 1)
+    _p9_restore_one(_ua320, "_pending_addons")
+
+
 def _s4_change_steps():
     """addons_change._change_steps passes keep_prev for an update only (read from the function it builds `how` in)."""
     import ast
@@ -520,6 +553,8 @@ with _p9.app_context():
         _gs320v = _ran320(_s4_addon, _host320, _su320)
         check("part320: _s4_addon ran to the end", _gs320v, _ran320.last)
         if isinstance(_gs320v, _GS320):
+            for _name320, _step320 in (("_s4_addon_guards", _s4_addon_guards), ("_s4_addon_once", _s4_addon_once)):
+                check("part320: %s ran to the end" % _name320, _ran320(_step320, _gs320v), _ran320.last)
             check("part320: _s7_safe ran to the end", _ran320(_s7_safe, _host320, _su320, _gs320v), _ran320.last)
             _d320 = _ran320(_s8_rows, _host320, _su320, _cust320, _gs320v)
             check("part320: _s8_rows ran to the end", _d320, _ran320.last)
