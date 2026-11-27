@@ -47,8 +47,14 @@
     if (!box) return;
     WS.phpNotes().forEach(function (n) { box.appendChild(WS.node('div', null, n)); });
   };
+  // The folded Advanced box says how many settings it holds, so none sits unseen behind an unlabelled toggle.
+  function iniCount(text) {
+    return String(text || '').split('\n').filter(function (ln) { ln = ln.trim(); return ln && ln.charAt(0) !== ';'; }).length;
+  }
   window.wsIniCheck = function () {
     var box = WS.clear(WS.el('wphp-ini-problems'));
+    var sum = WS.el('wphp-adv-sum');
+    if (sum) sum.textContent = WS.TF('Advanced php.ini: {n} settings', {n: iniCount(WS.el('wphp-ini').value)});
     var probs = WS.iniProblems(WS.el('wphp-ini').value);
     probs.slice(0, 10).forEach(function (p) {
       box.appendChild(WS.node('li', null, p.line ? WS.TF('Line {n}: {problem}', {n: p.line, problem: WS.T(p.problem)}) : WS.T(p.problem)));
@@ -60,7 +66,7 @@
     if (!sel || !php) return;
     WS.clear(sel);
     (php.versions || []).forEach(function (v) {
-      var o = WS.node('option', null, String(v.version));
+      var o = WS.node('option', null, v.eol ? WS.TF('{version} (end of support)', {version: String(v.version)}) : String(v.version));
       o.value = String(v.version);
       sel.appendChild(o);
     });
@@ -72,7 +78,8 @@
     var s = php.settings || {};
     document.querySelectorAll('[data-php]').forEach(function (inp) {
       var v = s[inp.getAttribute('data-php')];
-      if (inp.type === 'checkbox') inp.checked = !!v; else inp.value = v == null ? '' : String(v);
+      // A switch is saved as On or Off: the text "Off" is not on.
+      if (inp.type === 'checkbox') inp.checked = v === true || v === 'On'; else inp.value = v == null ? '' : String(v);
     });
     WS.el('wphp-ini').value = php.custom || '';
     window.wsPhpCheck();

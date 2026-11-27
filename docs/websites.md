@@ -166,7 +166,8 @@ container images the panel keeps for it ([how websites run](websites-runtime.md#
 PHP sites and the PHP apps have a **PHP** tab:
 
 - **PHP version**: only versions that PHP still supports with security fixes. When a version reaches the
-  end of its support it leaves the catalog, and the tab says so.
+  end of its support it leaves the catalog: a site still on it keeps it selected, marked "end of support", with a
+  note to choose a newer one. Only an administrator of the site can change the version; others see it read-only.
 - The common `php.ini` values: `memory_limit`, `upload_max_filesize`, `post_max_size`,
   `max_execution_time`, `max_input_time`, `max_input_vars`, `date.timezone` and `display_errors`. OWASP's
   figure is shown beside each one it has a figure for; a value above it shows a note and is saved

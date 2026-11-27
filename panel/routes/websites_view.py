@@ -12,6 +12,7 @@ import time
 
 from flask_login import current_user
 
+from panel.core import i18n
 from panel.core.config import load_config
 from panel.db.models import Group, RemoteServer, Website, WebsiteProxy, db
 from panel.security.auth import EDIT_WEBSITE_FILES, MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES
@@ -276,23 +277,53 @@ def _site_block(site, admin, probe):
     return out
 
 
+S_PHP_EOL = "PHP {version} reached the end of its security support and is no longer offered: choose a newer version."
+
+
+def php_in_force(site):
+    """{php.ini key: the value the site's php.ini holds}: its saved value where that is valid, else the panel's default.
+
+    What services.websites.php_ini writes, so the PHP and Performance tabs show the values in force from the first
+    visit (a new site has saved none), never an empty field.
+    """
+    from panel.services import websites as _svc
+    try:
+        saved = json.loads(site.php_settings or "{}")
+    except ValueError:
+        saved = {}
+    saved = saved if isinstance(saved, dict) else {}
+    return {key: (saved[key] if key in saved and not check(saved[key]) else default)
+            for key, default, check in _svc.PHP_FORM}
+
+
 def _php(site):
-    settings = json.loads(site.php_settings or "{}")
-    return {"versions": [{"version": v, "eol": False} for v in php_versions()], "version": site.php_version or "",
-            "settings": {k: v for k, v in settings.items() if not k.startswith("opcache.")},
-            "custom": site.php_ini_custom or "", "eol_note": ""}
+    versions = [{"version": v, "eol": False} for v in php_versions()]
+    current = site.php_version or ""
+    left = bool(current) and current not in {v["version"] for v in versions}
+    if left:        # a version the catalog no longer offers stays in the list, marked, so the select is never blank
+        versions.append({"version": current, "eol": True})
+    return {"versions": versions, "version": current,
+            "settings": {k: v for k, v in php_in_force(site).items() if not k.startswith("opcache.")},
+            "custom": site.php_ini_custom or "", "eol_note": i18n.tr(S_PHP_EOL, version=current) if left else ""}
+
+
+def _page_cache_state(site):
+    """(whether the page cache takes effect on the site's host, why not as a sentence or "")."""
+    from panel.routes import websites_settings
+    from panel.routes.websites import page_cache_ready
+    if page_cache_ready(site.remote):
+        return True, ""
+    return False, i18n.tr(websites_settings.S_PURGE_NOT_BUILT)
 
 
 def _perf(site):
-    settings = json.loads(site.php_settings or "{}")
-    return {"opcache": bool(site.opcache), "opcache_memory_mb": _int(settings.get("opcache.memory_consumption")),
-            "opcache_revalidate_s": _int(settings.get("opcache.revalidate_freq")), "object_cache": bool(site.object_cache),
+    values = php_in_force(site)
+    ready, why = _page_cache_state(site)
+    return {"opcache": bool(site.opcache), "opcache_memory_mb": int(values["opcache.memory_consumption"]),
+            "opcache_revalidate_s": int(values["opcache.revalidate_freq"]), "object_cache": bool(site.object_cache),
             "object_cache_host": "127.0.0.1" if site.object_cache else "", "object_cache_port": 6379 if site.object_cache else None,
-            "page_cache": bool(site.page_cache), "page_cache_ttl": site.page_cache_ttl, "static_cache": bool(site.static_cache)}
-
-
-def _int(v):
-    return int(v) if isinstance(v, str) and v.isdecimal() else None
+            "page_cache": bool(site.page_cache), "page_cache_ttl": site.page_cache_ttl, "static_cache": bool(site.static_cache),
+            "page_cache_ready": ready, "page_cache_why": why}
 
 
 def _app(site):
