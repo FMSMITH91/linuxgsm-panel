@@ -58,6 +58,11 @@ password you type needs at least 15 characters). The panel then:
    failing is undone like any other failed step;
 5. turns HTTPS on and shows **Open the site** and **Open the admin page** (the app's own admin address).
 
+Every app needs a database server on the host. When it has none, the dialog says so before anything is made,
+with **Set up databases** for a superadmin (MariaDB, reached from this machine only, the same setup as the
+Databases tab of a game server); create the app again once it is done. The site's Database tab offers the same
+button.
+
 The admin password and the database password never appear on a command line or in a log: each reaches the
 installer as a file that only the site's account can read, removed when the step ends, and the installers'
 output is never written to the system journal.

@@ -291,6 +291,9 @@ def _s1_version_change(st, site):
 
 def _s1_apps(st):
     _p9_patch(_w305, "threading", _NS305(Thread=_Inline305))
+    # The app install asks the Databases code whether the host has a server (part315's C4); none known here.
+    _p9_patch(__import__("panel.routes.databases", fromlist=["x"]), "host_state",
+              lambda remote, may_probe=False: ("unknown", None, {}))
     _p9_patch(_wapps305, "_worker", lambda app, sid, uid, secrets: None)
     su = _Client305(st.su.id)
     form = {"app": "phpbb", "name": "p305-bb", "remote_id": st.host.id, "admin_user": "boardowner",
@@ -408,6 +411,9 @@ def _s6_phpbb(st):
     su = _Client305(st.su.id)
     _p9_patch(_wapps305, "_worker", lambda app, sid, uid, secrets: None)
     _p9_patch(_w305, "threading", _NS305(Thread=_Inline305))
+    # The app install asks the Databases code whether the host has a server (part315's C4); none known here.
+    _p9_patch(__import__("panel.routes.databases", fromlist=["x"]), "host_state",
+              lambda remote, may_probe=False: ("unknown", None, {}))
     form = {"app": "phpbb", "name": "p305-nodom", "remote_id": st.host.id, "admin_user": "boardowner",
             "admin_email": "owner@example.org"}
     r = su.post("/websites/install-app", json=form)

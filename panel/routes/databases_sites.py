@@ -173,7 +173,10 @@ def register(app):
         _w.audit(site, "website_db_create", "created database %s" % name if ok else "database %s not created: %s"
                  % (name, i18n.tr(said)), ok)
         if not ok:
-            return _w.done(ok, said, id=None)
+            # No database server the panel can use: the tab offers the button that sets one up (a superadmin).
+            from panel.routes.websites_view import database_missing
+            entry = database_missing(site.remote)
+            return _w.done(ok, said, id=None, missing=[entry] if entry else [])
         return _w.done(*_reach(site), id=row.id)
 
     @app.route("/websites/<int:site_id>/databases/credentials", methods=["POST"])

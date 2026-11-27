@@ -324,7 +324,22 @@ def _start_refusal(data):
     version, bad = app_php_version(recipe, data) if not refusal else (None, None)
     if refusal or bad:
         return None, _w.say(*(refusal or bad))
+    no_db = _database_refusal(remote, recipe)
+    if no_db is not None:
+        return None, no_db
     return (recipe_name, dict(recipe, _php_version=version), fields, remote, group, name), None
+
+
+def _database_refusal(remote, recipe):
+    """The refusal of an app that needs a database on a host with no server it could use, or None.
+
+    Asked before anything is made (the host is probed when the Databases code knows nothing yet), so the install
+    no longer fails at its database step after the account and container were made. The answer carries the add
+    dialog's entry, with the button that sets databases up for a superadmin.
+    """
+    from panel.routes.websites_view import database_missing
+    entry = database_missing(remote, probe=True) if recipe.get("database") else None
+    return _w.say(409, entry["text"], missing=[entry]) if entry else None
 
 
 def _start(data):

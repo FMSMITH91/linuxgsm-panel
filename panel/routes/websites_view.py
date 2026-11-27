@@ -117,15 +117,43 @@ def _ports(sites):
     return {"mode": mode, "open": bool(online) and mode != "tunnel", "sites_enabled": len(online), "firewall": "unknown"}
 
 
+S_NO_DB = ("This host has no database server yet, and an app needs one. Set up databases first: MariaDB, reached "
+           "from this machine only.")
+S_DB_SETTING_UP = "Databases are being set up on this host. An app can be installed once that is done."
+S_DB_NOT_READY = ("This host's database server cannot be used by the panel yet, and an app needs one. See the "
+                  "Databases tab of a game server on this host.")
+
+
+def database_missing(remote, probe=False):
+    """The add dialog's entry for a host with no database server an app could use, or None.
+
+    Read from what the Databases code knows (its stored server, or its 10-minute probe); `probe` True asks the host
+    when nothing is known (the app install's own check, before anything is made). Nothing known and nothing asked,
+    or a host that did not answer, is no entry: the install's database step still refuses then.
+    """
+    from panel.routes import databases as _d
+    if remote is None:
+        return None
+    state = _d.host_state(remote, may_probe=probe)[0]
+    if state in ("ready", "unknown", "unreadable"):
+        return None
+    text = S_NO_DB if state == "none" else S_DB_SETTING_UP if state == "setting_up" else S_DB_NOT_READY
+    return {"key": "database" if state == "none" else "database-wait", "text": text, "kinds": ["install"],
+            "host_id": remote.id, "fix_url": ""}
+
+
 def _missing(admin):
     if not admin:
         return []
-    if WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").first() is not None:
-        return []
-    fix = "" if not current_user.is_superadmin else "/websites#proxy"
-    # Not blocking: a site can be made without the proxy, so Create stays available beside the note.
-    return [{"key": "proxy", "text": "The web proxy is not installed yet: sites can be made, but none can go online.",
-             "fix_url": fix, "blocking": False}]
+    from panel.routes.websites import _local_host
+    out = []
+    if WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").first() is None:
+        fix = "" if not current_user.is_superadmin else "/websites#proxy"
+        # Not blocking: a site can be made without the proxy, so Create stays available beside the note.
+        out.append({"key": "proxy", "text": "The web proxy is not installed yet: sites can be made, but none can go "
+                    "online.", "fix_url": fix, "blocking": False})
+    db_entry = database_missing(_local_host())
+    return out + ([db_entry] if db_entry else [])
 
 
 def _admin_host_ids():

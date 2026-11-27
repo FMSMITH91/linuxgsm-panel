@@ -126,7 +126,8 @@
   // who to ask. An entry that blocks (any entry unless it says blocking: false) keeps Create on screen,
   // unavailable, with the reason beside it; one that does not is a note, and Create stays available, so
   // the line and the button never disagree. An entry with `kinds` concerns only those kinds of site.
-  var FIX = {proxy: {label: 'Install the web proxy', action: 'wsProxyInstall', icon: 'download'}};
+  var FIX = {proxy: {label: 'Install the web proxy', action: 'wsProxyInstall', icon: 'download'},
+    database: {label: 'Set up databases', action: 'wsDbSetup', icon: 'database-add', host: true}};
   function blocks(m) { return !!m && m.blocking !== false; }
   WS.renderMissing = function (missing) {
     var box = WS.el('ws-missing');
@@ -137,20 +138,23 @@
     if (create) create.disabled = blocks(first);
     if (!first) { WS.say('ws-add-msg', ''); return; }
     WS.el('ws-missing-text').textContent = first.text || WS.T('Something this host needs for websites is missing.');
-    var fix = WS.clear(WS.el('ws-missing-fix'));
-    var f = WS.pick(FIX, first.key, null);
-    var path = WS.safePath(first.fix_url);
+    missingFix(WS.clear(WS.el('ws-missing-fix')), first);
+    WS.say('ws-add-msg', blocks(first) ? WS.T('Create is available once this is fixed.') : '', 'err');
+  };
+  // The one button that fixes `m` for a superadmin (or a link to the page that does); "ask" for anyone else.
+  function missingFix(fix, m) {
+    var f = WS.pick(FIX, m.key, null);
+    var path = WS.safePath(m.fix_url);
     if (FLAGS.super !== '1') {
       fix.appendChild(WS.node('span', 'text-secondary', WS.T('Ask a superadmin to set this up.')));
     } else if (f) {
-      fix.appendChild(WS.button(WS.T(f.label), f.icon, f.action, f.args || [], 'btn-warning'));
+      fix.appendChild(WS.button(WS.T(f.label), f.icon, f.action, f.host ? [Number(m.host_id) || 0] : (f.args || []), 'btn-warning'));
     } else if (path) {
       var a = WS.node('a', 'btn btn-sm btn-warning', WS.T('Fix this'));
       a.href = WS.url(path);
       fix.appendChild(a);
     }
-    WS.say('ws-add-msg', blocks(first) ? WS.T('Create is available once this is fixed.') : '', 'err');
-  };
+  }
   window.wsOpenAdd = function () {
     var m = WS.el('ws-add-modal');
     if (!m || !window.bootstrap) return;
@@ -218,10 +222,22 @@
     WS.post(st.kind === 'install' ? WS.R.installApp : WS.R.add, body).then(function (d) {
       var pass = WS.el('ws-add-admin-pass');
       if (pass) pass.value = '';
-      if (!d || !d.id) { WS.done(d, 'ws-add-msg'); return; }
+      if (!d || !d.id) { refused(d); return; }
       startProgress(Number(d.id), d.password || '');
     });
   };
+
+  // Create refused. Before anything was made for a missing precondition (no database server for an app), the
+  // answer carries the dialog's entry: its first line then says so, with the button that fixes it.
+  function refused(d) {
+    var more = (d && d.missing) || [];
+    if (more.length && st.d) {
+      var key = more[0].key;
+      st.d.missing = (st.d.missing || []).filter(function (m) { return m.key !== key; }).concat(more);
+      WS.renderMissing(st.d.missing);
+    }
+    WS.done(d, 'ws-add-msg');
+  }
 
   // After Create: the steps as they run (a job, like an add-on install), then the result.
   function startProgress(id, password) {
@@ -268,18 +284,18 @@
     a.rel = 'noopener noreferrer';
     return a;
   }
+  // Nothing of it is left on the host or in the list: no link to a page that is not there.
+  function finishGone(box, row, inst) {
+    row.appendChild(WS.node('span', 'text-danger small', WS.T('The install failed, and nothing of it was left on the host.')));
+    if (inst.error) row.appendChild(WS.raw('span', 'text-danger small w-100', inst.error));
+    row.appendChild(WS.button(WS.T('Try again'), 'arrow-counterclockwise', 'wsAddAgain', [], 'btn-primary'));
+    box.appendChild(row);
+    load();
+  }
   function finish(d, inst) {
     var box = WS.el('ws-result');
     var row = WS.node('div', 'd-flex flex-wrap gap-2 align-items-center');
-    if (d.gone) {
-      // Nothing of it is left on the host or in the list: no link to a page that is not there.
-      row.appendChild(WS.node('span', 'text-danger small', WS.T('The install failed, and nothing of it was left on the host.')));
-      if (inst.error) row.appendChild(WS.raw('span', 'text-danger small w-100', inst.error));
-      row.appendChild(WS.button(WS.T('Try again'), 'arrow-counterclockwise', 'wsAddAgain', [], 'btn-primary'));
-      box.appendChild(row);
-      load();
-      return;
-    }
+    if (d.gone) { finishGone(box, row, inst); return; }
     if (inst.state === 'failed' || (d.site && d.site.state === 'failed')) {
       row.appendChild(WS.node('span', 'text-danger small', inst.error || (d.site && d.site.state_reason) || WS.T('A step failed, and every step done before it was undone.')));
     } else {
@@ -294,6 +310,18 @@
     box.appendChild(row);
     load();
   }
+
+  // MariaDB installed on the host, reached from this machine only (the Databases code's own setup, in the
+  // background); the dialog says to create the app again once it is done.
+  window.wsDbSetup = function (hostId) {
+    WS.stepUp(function () {
+      WS.say('ws-add-msg', WS.T('Setting up databases…'));
+      WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) {
+        if (d && d.success) WS.say('ws-add-msg', WS.T('Databases are being set up. Create the app again in a few minutes.'), 'ok');
+        else WS.done(d, 'ws-add-msg');
+      });
+    });
+  };
 
   // Back to the form as it was filled in (the typed password is never kept), to change something and Create again.
   window.wsAddAgain = function () {

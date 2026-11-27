@@ -261,7 +261,18 @@
     var inp = WS.el('wdb-name');
     WS.say('wdb-msg', WS.T('Creating…'));
     WS.post(WS.R.act(ID, 'databases/add'), {name: inp.value.trim()}).then(function (d) {
-      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); }
+      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); return; }
+      var need = d && d.missing && d.missing[0];
+      if (need && need.key === 'database' && WS.can.sup) {
+        WS.el('wdb-msg').appendChild(WS.button(WS.T('Set up databases'), 'database-add', 'wsDbSetupHost', [Number(need.host_id) || 0], 'btn-warning ms-2'));
+      }
+    });
+  };
+  // A host with no database server (a superadmin): MariaDB set up in the background by the Databases code.
+  window.wsDbSetupHost = function (hostId) {
+    WS.stepUp(function () {
+      WS.say('wdb-msg', WS.T('Setting up databases…'));
+      WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
     });
   };
   // A new password for the database's own user (the app's settings must then be given it).

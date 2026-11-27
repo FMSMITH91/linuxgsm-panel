@@ -3,10 +3,16 @@
   "Database added, but the website could not be set up to reach it ({why}). Retry from its page.": "Base de données ajoutée, mais le site web n'a pas pu être configuré pour y accéder ({why}). Réessayez depuis sa page.",
   "Database added. The website reaches it from its next start.": "Base de données ajoutée. Le site web y accédera dès son prochain démarrage.",
   "Database added. The website was restarted so it can reach it.": "Base de données ajoutée. Le site web a été redémarré pour qu'il puisse y accéder.",
+  "Databases are being set up on this host. An app can be installed once that is done.": "Les bases de données sont en cours de configuration sur cet hôte. Une application pourra être installée une fois cela terminé.",
+  "Databases are being set up. Create the app again in a few minutes.": "Les bases de données sont en cours de configuration. Créez à nouveau l'application dans quelques minutes.",
   "Delete and add again": "Supprimer et ajouter à nouveau",
   "Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.": "Ses fichiers, bases de données, sauvegardes et compte sont supprimés définitivement. Une copie de chaque base de données est conservée sur l'hôte pendant 30 jours. Saisissez le nom du site web pour confirmer.",
+  "Set up databases": "Configurer les bases de données",
+  "Setting up databases…": "Configuration des bases de données…",
   "The install failed, and nothing of it was left on the host.": "L'installation a échoué et rien n'en est resté sur l'hôte.",
   "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again.": "L'installation de cette application ne s'est pas terminée, elle ne peut donc pas être reconfigurée ici. Supprimez le site web et ajoutez-le à nouveau.",
+  "This host has no database server yet, and an app needs one. Set up databases first: MariaDB, reached from this machine only.": "Cet hôte n'a pas encore de serveur de bases de données, et une application en a besoin. Configurez d'abord les bases de données : MariaDB, accessible depuis cette machine uniquement.",
+  "This host's database server cannot be used by the panel yet, and an app needs one. See the Databases tab of a game server on this host.": "Le panneau ne peut pas encore utiliser le serveur de bases de données de cet hôte, et une application en a besoin. Consultez l'onglet Bases de données d'un serveur de jeu sur cet hôte.",
   "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Ce site web est encore en cours de configuration. Attendez que cela se termine (ou échoue), puis supprimez-le.",
   "Try again": "Réessayer"
 }

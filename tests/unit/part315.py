@@ -22,6 +22,11 @@ M7  The add dialog's "the web proxy is not installed yet: sites can be made, but
     (blocking: false): Create stays available beside it, as the sentence says and as the server allows. An entry
     that concerns only some kinds of site (kinds) shows, and blocks, only for those.
 
+C4  A host with no database server: an app install is refused BEFORE anything is made (the host probed when the
+    Databases code knows nothing), its answer carrying the add dialog's entry with the button that sets databases
+    up (a superadmin); the list's missing entries carry it once known, for app installs only; the Database tab's
+    refusal offers the same button.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -119,8 +124,15 @@ _LIST315 = {"success": True, "sites": [], "missing": [], "php_versions": ["8.4"]
 
 
 # ── B2. A failed app install that undid every step ────────────────────────────────────────────────
+def _no_db_check315(state="unknown"):
+    """The Databases code's answer for the host (part315's C4 asks it before an app install)."""
+    from panel.routes import databases as _dbr315
+    _p9_patch(_dbr315, "host_state", lambda remote, may_probe=False: (state, None, {}))
+
+
 def _b2_job(st):
     """POST /websites/install-app whose first step fails; its job runs in this thread. -> (response, site id)."""
+    _no_db_check315()
     _p9_patch(_w315, "threading", _NS315(Thread=_Inline315))
     _p9_patch(_wapps315, "_worker", _REAL315["_worker"])
     _p9_patch(_sw315, "install", lambda remote, site, db=None, *a, **k: (False, "The host refused the account."))
@@ -372,6 +384,105 @@ def _m7_note(st):
        ({"shown": False, "disabled": False}, {"shown": True, "disabled": True, "text": "No database server."}))
 
 
+# ── C4. No database server on the host ────────────────────────────────────────────────────────────
+def _c4_form(name):
+    return {"app": "wordpress", "name": name, "remote_id": None, "admin_user": "siteowner",
+            "admin_email": "owner@example.org", "domain": "%s.example.org" % name}
+
+
+def _c4_no_db(st):
+    from panel.routes import databases as _dbr315
+    asked = []
+    _p9_patch(_dbr315, "host_state", lambda remote, may_probe=False: asked.append(may_probe) or ("none", None, {}))
+    _p9_patch(_w315, "start_install", lambda site: None)
+    su = _Client315(st.su.id)
+    form = dict(_c4_form("p315-nodb"), remote_id=st.host.id)
+    r = su.post("/websites/install-app", json=form)
+    body = _p9_json(r)
+    made = _Site315.query.filter_by(remote_id=st.host.id, name="p315-nodb").first()
+    eq("C4 (POST /websites/install-app on a host with no database server): refused before anything is made (no site "
+       "row, no account), the host asked when nothing was known, and the answer carries the dialog's entry with the "
+       "host to set databases up on",
+       (r.status_code, body.get("message"), made is None, asked[-1:], [(m.get("key"), m.get("kinds"), m.get("host_id"))
+                                                                      for m in body.get("missing") or []]),
+       (409, _view315().S_NO_DB, True, [True], [("database", ["install"], st.host.id)]))
+    lst = _p9_json(su.get("/api/websites")).get("missing") or []
+    eq("C4 (GET /api/websites): the list's missing entries say so too, for app installs only, from what is known (no "
+       "probe on a list read)", ([(m.get("key"), m.get("kinds")) for m in lst if m.get("key") == "database"], asked[-1:]),
+       ([("database", ["install"])], [False]))
+    plain = su.post("/websites/add", json={"name": "p315-plain-nodb", "kind": "static", "host_id": st.host.id})
+    eq("C4 control (a plain site on the same host): made as before, a database is no business of it",
+       (plain.status_code, _p9_json(plain).get("success")), (200, True))
+    _no_db_check315("ready")
+    _p9_patch(_wapps315, "_worker", lambda app, sid, uid, secrets: None)
+    _p9_patch(_w315, "threading", _NS315(Thread=_Inline315))
+    ready = su.post("/websites/install-app", json=dict(form, name="p315-withdb", domain="p315-withdb.example.org"))
+    _ROWS315["sites"].append(_p9_json(ready).get("id") or 0)
+    eq("C4 control (a host whose database server is ready): the install starts", (ready.status_code,
+                                                                                  bool(_p9_json(ready).get("id"))),
+       (200, True))
+    _c4_tab(st)
+    _c4_dialog(st)
+
+
+def _view315():
+    from panel.routes import websites_view
+    return websites_view
+
+
+def _c4_tab(st):
+    from panel.routes import databases_sites as _ds315
+    _no_db_check315("none")
+    _p9_patch(_ds315, "create_for", lambda site, slug: (False, "This host has no database server.", None, ""))
+    site = _site315(st, "p315-tabnodb", kind="php")
+    r = _Client315(st.su.id).post("/websites/%d/databases/add" % site.id, json={"name": "shop"})
+    eq("C4 (POST /websites/<id>/databases/add, no database server): the refusal carries the entry for the button that "
+       "sets databases up", (r.status_code, [m.get("key") for m in _p9_json(r).get("missing") or []]), (502, ["database"]))
+    got = _node315(_site_page315(), ["websites_common.js", "website_site.js"], r"""
+      $('wdb-name').value = 'shop'; window.wsDbAdd({preventDefault: function () {}});
+      for (let i = 0; i < 6; i++) await tick();
+      const b = $('wdb-msg').querySelector('button');
+      if (b) window.wsDbSetupHost(JSON.parse(b.getAttribute('data-args'))[0]);
+      for (let i = 0; i < 6; i++) await tick();
+      return {action: b ? b.getAttribute('data-action') : null, posts: calls.filter(function (c) { return c[0] === 'POST'; })
+              .map(function (c) { return c[1]; })};
+    """, {"/api/websites/7": _b3_site_answer(state="running"),
+          "/websites/7/databases/add": {"success": False, "message": "No server.", "missing": [
+              {"key": "database", "host_id": 4, "kinds": ["install"]}]},
+          "/api/remote/4/databases/setup": {"success": True, "message": "Setting up databases on this host."}})
+    eq("C4 (the Database tab, js/website_site.js): a superadmin gets Set up databases beside the refusal, and it "
+       "starts the host's database setup", (got.get("action"), got.get("posts")),
+       ("wsDbSetupHost", ["/m/websites/7/databases/add", "/m/api/remote/4/databases/setup"]))
+
+
+def _c4_dialog(st):
+    entry = {"key": "database", "text": "No database server yet.", "kinds": ["install"], "host_id": 4, "fix_url": ""}
+    got = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      window.wsOpenAdd();
+      $('ws-kind-install').checked = true; window.wsKind('install'); window.wsPickApp('wordpress');
+      $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
+      $('ws-add-admin-user').value = 'boss'; $('ws-add-admin-email').value = 'boss@example.org';
+      const before = !$('ws-missing').hidden;
+      window.wsAddSubmit({preventDefault: function () {}});
+      for (let i = 0; i < 6; i++) await tick();
+      const b = $('ws-missing-fix').querySelector('button');
+      const after = {shown: !$('ws-missing').hidden, text: $('ws-missing-text').textContent,
+                     action: b ? b.getAttribute('data-action') : null, disabled: $('ws-add-create').disabled};
+      if (b) window.wsDbSetup(JSON.parse(b.getAttribute('data-args'))[0]);
+      for (let i = 0; i < 6; i++) await tick();
+      return {before: before, after: after, msg: $('ws-add-msg').textContent,
+              posts: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[1]; })};
+    """, {"/api/websites": _LIST315, "/websites/install-app": {"success": False, "message": "No database server yet.",
+                                                               "missing": [entry]},
+          "/api/remote/4/databases/setup": {"success": True, "message": "Setting up databases on this host."}})
+    eq("C4 (the add dialog, js/websites.js): the app install's refusal becomes the dialog's first line with Set up "
+       "databases, Create unavailable; the button starts the host's database setup and says to create the app again",
+       (got.get("before"), got.get("after"), got.get("posts"), got.get("msg")),
+       (False, {"shown": True, "text": "No database server yet.", "action": "wsDbSetup", "disabled": True},
+        ["/m/websites/install-app", "/m/api/remote/4/databases/setup"],
+        "Databases are being set up. Create the app again in a few minutes."))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -409,7 +520,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

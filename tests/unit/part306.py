@@ -328,6 +328,9 @@ def _f25_app_job(st, name, drop_ok):
     from panel.routes import databases_sites as _ds306
     _p9_patch(_wapps306, "_worker", lambda app, sid, uid, secrets: None)
     _p9_patch(_w306, "threading", _NS306(Thread=_Inline306))
+    # The app install asks the Databases code whether the host has a server (part315's C4); none known here.
+    _p9_patch(__import__("panel.routes.databases", fromlist=["x"]), "host_state",
+              lambda remote, may_probe=False: ("unknown", None, {}))
     form = {"app": "wordpress", "name": name, "remote_id": st.host.id, "admin_user": "siteowner",
             "admin_email": "owner@example.org", "domain": "%s.example.org" % name}
     r = _Client306(st.su.id).post("/websites/install-app", json=form)
