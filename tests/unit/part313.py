@@ -20,6 +20,17 @@
    be read says why instead of an empty bar.
 8. A site that finished installing but is offline leads with Put it online (for an administrator of it), and
    its page's Overview says it is offline with the same button.
+9. The domains' journey: the add dialog's domain is checked at once and Put online checks every domain again;
+   no web proxy is said in words with where to install it; the panel host's IPv4 and IPv6 interface addresses
+   count (AAAA records match and are listed); a domain still without a certificate 10 minutes after it was
+   served says so; Make primary on WordPress says how to move WordPress's own address; the records table names
+   records as providers ask (@, www); the list's lock counts every trusted certificate.
+
+HOW IT RUNS. part12's app and its database; every host call is a stand-in (ssh_manager.websites), the proxy's
+configuration is rendered for real and the files website-proxy-apply would get are computed from what the
+stand-in received. Certificates are made with the cryptography package on the spot. tools/panel-helper is loaded
+by path with its folders under a scratch tree. The scripts run in node over the real rendered pages with
+part301's harness. Nothing reaches a host (part12's tripwire is armed).
 """
 import datetime as _dt313
 import importlib.machinery as _mach313
@@ -738,6 +749,23 @@ def _s9_add_and_enable(st, rec):
     su.post("/websites/%d/disable" % site.id)
 
 
+def _s9_no_proxy(st, _rec):
+    bare = _host313("p313-bare")
+    site = _site313(bare, "p313-bare-site", [("bare.p313.example.org", True, "matching")])
+    _p9_patch(_dns313, "socket", _resolver313({"bare.p313.example.org": [_HOST_IP313]}))
+    r = _Client313(st.su.id).post("/websites/%d/enable" % site.id)
+    got = _p9_json(r)
+    _db313.session.expire_all()
+    eq("online: a site on a host without the web proxy is not put online; a superadmin is told to install it and "
+       "where (fix: proxy), not to read the site's log",
+       (r.status_code, got.get("message"), got.get("fix"), _db313.session.get(_Site313, site.id).enabled),
+       (409, _w313.S_NO_PROXY_SUPER, "proxy", False))
+    admin = _user313("bare-admin", [_auth313.VIEW_WEBSITES, _auth313.MANAGE_WEBSITES], [site])
+    r = _Client313(admin.id).post("/websites/%d/enable" % site.id)
+    eq("online: ...and anyone else is told to ask a superadmin", (r.status_code, _p9_json(r).get("message")),
+       (409, _w313.S_NO_PROXY))
+
+
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
 def _state313():
     host = _host313("p313-host")
@@ -785,7 +813,7 @@ with _p9.app_context():
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s7_overview, _s8_scripts, _s9_add_and_enable):
+                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

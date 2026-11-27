@@ -784,6 +784,8 @@ def _s11_read_log(st):
 
 def _state300():
     host = _host300("p300-host")
+    _w300.proxy_row(host.id).installed_version = "2.10.2"     # a site goes online only where the web proxy is
+    _db300.session.commit()
     a, b = _site300(host, "p300-a", kind="php"), _site300(host, "p300-b")
     W = _auth300
     st = _NS300(host=host, a=a, b=b, su=_super300())

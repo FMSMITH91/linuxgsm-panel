@@ -88,6 +88,12 @@
     if (msgId) WS.say(msgId, text, ok ? 'ok' : 'err'); else WS.toast(text, ok ? 'success' : 'danger');
     return ok;
   };
+  function isSuper() {
+    var page = WS.el('ws-page');
+    return (WS.siteFlags && WS.siteFlags.super === '1') || !!(page && page.dataset.super === '1');
+  }
+  var FIXES = {domains: {label: 'Open the Domains tab', path: function (id) { return WS.R.page(id) + '?tab=domains'; }},
+    proxy: {label: 'Install the web proxy', path: function () { return '/websites#wp-card'; }}};
   // Put site `id` online (POST /websites/<id>/enable, administrators of the site; the server decides).
   // Its answer is said in `msgId`; a refusal the Domains tab fixes (fix: "domains") gets a link there.
   // `then(ok)` runs after the answer.
@@ -97,9 +103,11 @@
       WS.post('/websites/' + Number(id) + '/enable', {}).then(function (d) {
         var ok = WS.done(d, msgId);
         var m = WS.el(msgId);
-        if (!ok && d && d.fix === 'domains' && m) {
-          var a = WS.node('a', 'ms-1', WS.T('Open the Domains tab'));
-          a.href = WS.url(WS.R.page(Number(id)) + '?tab=domains');
+        // The one place that fixes the refusal: the Domains tab, or (no web proxy) the proxy card on the list.
+        var fix = !ok && d ? WS.pick(FIXES, d.fix, null) : null;
+        if (fix && m && (d.fix !== 'proxy' || isSuper())) {
+          var a = WS.node('a', 'ms-1', WS.T(fix.label));
+          a.href = WS.url(fix.path(Number(id)));
           m.appendChild(a);
         }
         if (then) then(ok, d);

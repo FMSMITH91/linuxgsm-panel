@@ -557,6 +557,9 @@ S_NOT_SERVED = ("None of this website's domains would be served: {domains}. A do
                 "finds it pointing at this host or going through Cloudflare. Check its DNS on the Domains tab, then "
                 "try again.")
 S_ONLINE_PART = "It does not answer on {domains} yet: their DNS does not point here."
+S_NO_PROXY_SUPER = ("The web proxy is not installed on this host yet. Install it on the Websites page (Web proxy and "
+                    "public access), then put the website online.")
+S_NO_PROXY = "The web proxy is not installed on this host yet. Ask a superadmin to install it."
 
 
 def _unserved(site):
@@ -579,6 +582,8 @@ def online_refusal(site):
     domains = list(site.domains or [])
     if not domains:
         return i18n.Sentence("Add a domain to this website before putting it online.")
+    if not proxy_row(site.remote_id).installed_version:
+        return i18n.Sentence(S_NO_PROXY_SUPER if current_user.is_superadmin else S_NO_PROXY)
     if not current_user.is_superadmin and any(d.dns_state not in website_dns.VERIFIED for d in domains):
         return i18n.Sentence("A domain of this website does not point at its host yet. Check its DNS on the "
                              "Domains tab, then try again.")
@@ -597,7 +602,8 @@ def _admin_routes(app):
         why = online_refusal(site)
         if why:
             audit(site, "website_refused", "not put online: %s" % why)
-            return say(409, why, fix="domains")
+            fix = "proxy" if why.template in (S_NO_PROXY_SUPER, S_NO_PROXY) else "domains"
+            return say(409, why, fix=fix)
         site.enabled = True
         db.session.commit()
         ok, said = reconcile_proxy(site.remote)
