@@ -44,8 +44,13 @@ ALLOWED_HOSTS = ("github.com", "download.phpbb.com", "ftp.drupal.org", "download
 _URL_PATH = r"/[A-Za-z0-9._~/+-]{1,200}"
 _CADDY_URL = "https://github.com/caddyserver/caddy/releases/download/v{v}/caddy_{v}_linux_{a}.tar.gz"
 # The hosts a site may reach while it builds or runs (WordPress's updates, npm's registry): relayed
-# one by one, never a route to the internet.
-EGRESS_HOSTS = ("api.wordpress.org", "downloads.wordpress.org", "registry.npmjs.org")
+# one by one, never a route to the internet. WordPress core's own server-side requests reach api.wordpress.org
+# (version, plugin, theme and translation checks, checksums, Site Health's PHP check), downloads.wordpress.org
+# (core, plugin, theme and translation packages, and their .sig signatures beside them), downloads.w.org (the
+# package host of the version check's background "autoupdate" offer) and developer.wordpress.org (where
+# https://api.wordpress.org itself redirects: Site Health's "Could not reach WordPress.org" test follows it).
+EGRESS_HOSTS = ("api.wordpress.org", "developer.wordpress.org", "downloads.w.org", "downloads.wordpress.org",
+                "registry.npmjs.org")
 SITE_KEYS = ("caddy", "caddy_cache", "static", "php", "wordpress", "wpcli", "tunnel", "object_cache", "runtimes",
              "presets", "origin_pull", "recipes")
 # Optional: what the pages call each CDN preset and, for a CDN with its own origin certificates, their name and its

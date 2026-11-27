@@ -26,9 +26,11 @@ checked first in the server's own rewrite rules, before the site's `.htaccess` i
 (`ErrorDocument 403 /index.php`, written by a plugin or by hand) can no longer turn a refused request into one that
 runs PHP. The token is made once, with the site, and no action changes it.
 
-A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
-downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local
-address; the panel's must-use plugin lets WordPress's HTTPS requests to those two hosts past its own name lookup
+A site has no route to the internet. WordPress reaches only the hosts its own update and Site Health checks use
+(api.wordpress.org, downloads.wordpress.org, downloads.w.org for background updates, and developer.wordpress.org,
+where api.wordpress.org redirects), through a small proxy that refuses any other host, port 443 only, and any name
+resolving to a private or local address; each redirect is a new connection the proxy checks the same way. The
+panel's must-use plugin lets WordPress's HTTPS requests to those hosts past its own name lookup
 (the container has no name server, so update downloads failed), as the proxy checks the addresses itself. A
 WordPress site with full egress has no proxy, and the plugin then sends nothing to it. A Node.js app reaches npm's registry only while it is being built. The egress guard (an
 nftables table) keeps site accounts away from the host's other addresses (its LAN, tailnet and public

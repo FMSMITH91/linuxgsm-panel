@@ -148,13 +148,18 @@ def _ids(remote, site):
 
 
 def _egress_hosts(site):
-    """The hosts the site's egress proxy may reach: its recipe's (WordPress's update hosts), an app's build hosts."""
+    """The hosts the site's egress proxy may reach: an app's build hosts; WordPress's update hosts and its recipe's.
+
+    WordPress always gets WP_EGRESS_HOSTS, so a signed catalog published before a host was added there (its recipe
+    lists fewer) still lets WordPress core's own checks through.
+    """
     from panel.services import websites_catalog as _wc
     if site.kind == "app":
         return _wc.runtimes().get(site.runtime, {}).get("egress", [])
     if not _ws().needs_egress(site):
         return []
-    return (_wc.recipe(site.app_recipe) or {}).get("egress") or ["api.wordpress.org", "downloads.wordpress.org"]
+    listed = (_wc.recipe(site.app_recipe) or {}).get("egress") or []
+    return sorted(set(listed) | set(_ws().WP_EGRESS_HOSTS))
 
 
 def _site_bundle(site, ids, probe, db=None):

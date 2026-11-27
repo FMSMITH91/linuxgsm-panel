@@ -102,8 +102,9 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # folder of files the site's code reads (RUN_IN: WordPress's loopback token, the object cache's password), WordPress's
 # loopback plugin, and the egress proxy's unit (each checked address tried, its task limit). 4: the gate checked in
 # the virtual host's rewrite rules too (an error page a .htaccess names is refused without the token), WordPress's
-# egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches.
-SITE_FILES_REV = "files-4"
+# egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches. 5: WordPress's
+# egress hosts gain developer.wordpress.org and downloads.w.org (WP_EGRESS_HOSTS), in its proxy's unit and hosts file.
+SITE_FILES_REV = "files-5"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -120,6 +121,10 @@ CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
 # The hosts WordPress's egress proxy reaches, one a line, while the site has the proxy (needs_egress); none with full
 # egress, which has no proxy. WordPress's loopback plugin reads it (see EGRESS FOR WORDPRESS).
 EGRESS_HOSTS_FILE = RUN_DIR + "/egress-hosts"
+# The hosts WordPress core's own update and Site Health requests reach (websites_catalog.EGRESS_HOSTS says which
+# request reaches which). Each redirect is a new CONNECT the proxy checks against the list on its own, so a redirect
+# to a host not listed here is refused like any other.
+WP_EGRESS_HOSTS = ("api.wordpress.org", "developer.wordpress.org", "downloads.w.org", "downloads.wordpress.org")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _ACCOUNT_RE = re.compile(r"ws[1-9][0-9]{0,8}\Z")
 

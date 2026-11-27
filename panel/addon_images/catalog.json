@@ -520,6 +520,8 @@
         "database": true,
         "egress": [
           "api.wordpress.org",
+          "developer.wordpress.org",
+          "downloads.w.org",
           "downloads.wordpress.org"
         ],
         "kind": "wordpress",

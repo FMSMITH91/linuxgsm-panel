@@ -14,6 +14,9 @@
    on every request and redirect) refuse it; a rewritten request, a subrequest and the site's own error page after
    a refusal of a request that had the token are still served.
 6. Put online's answer handled: a failure while handling it is said, not left as an unhandled rejection.
+7. WordPress's egress proxy reaches every host WordPress core's update and Site Health checks use, whatever the
+   signed catalog's recipe lists: https://api.wordpress.org redirects to developer.wordpress.org, and the version
+   check's background update downloads from downloads.w.org; a redirect's hop to a host not listed is refused.
 
 HOW IT RUNS. part12's app and its database. ssh_manager.websites' install runs for real down to the account's
 shell, which is recorded (nothing reaches a host: part12's tripwire is armed). Section 1 starts the egress proxy
@@ -42,6 +45,11 @@ from panel.services import websites as _ws319
 _TOKEN319 = "q" * 40
 _ROWS319 = {"sites": [], "remotes": [], "users": []}
 _SH319 = []
+# WordPress core's own update and Site Health hosts, as the proxy's unit lists them (sorted). Pinned as literals:
+# api.wordpress.org answers https://api.wordpress.org with a redirect to developer.wordpress.org (Site Health's
+# "Could not reach WordPress.org" test follows it), and the version check's background-update offer downloads from
+# downloads.w.org.
+_WP_HOSTS319 = ("api.wordpress.org", "developer.wordpress.org", "downloads.w.org", "downloads.wordpress.org")
 _PROBE319 = {"uid": 1005, "gid": 1005, "splice": True, "cpu_delegated": True, "os": "26.04",
              "podman": "podman version 5.7.0"}
 
@@ -137,10 +145,10 @@ def _s1_proxy(host, su):
             or _re319.match("()", "")).group(1).split()
     eq("egress (POST /websites/<id>/update-image, a WordPress site): the container's 127.0.0.1:3128 is forwarded to "
        "the very port the proxy's unit listens on, the unit is enabled and restarted with the site, and it reaches "
-       "WordPress's two update hosts only",
+       "the hosts WordPress core's update and Site Health checks use only",
        (code, _forward319(quadlet) is not None and [str(_forward319(quadlet))] == argv[:1], argv[1:],
         "enable %s.service" % _ws319.EGRESS_UNIT in start, "disable --now %s" % _ws319.EGRESS_UNIT in sh),
-       (200, True, ["api.wordpress.org", "downloads.wordpress.org"], True, False))
+       (200, True, list(_WP_HOSTS319), True, False))
     plugin = _plugin319(sh)
     hosts = _file319(stdin, _ws319.EGRESS_HOSTS_FILE)
     mount = "Volume=%s%s:%s:ro" % (home, _ws319.RUN_DIR, _ws319.RUN_IN)
@@ -149,7 +157,7 @@ def _s1_proxy(host, su):
        "reads it (the plugin reads exactly that file), and it names the proxy's hosts",
        (hosts, mount in quadlet.splitlines(),
         bool(read) and read.group(1) == _ws319.RUN_IN + _ws319.EGRESS_HOSTS_FILE[len(_ws319.RUN_DIR):]),
-       ("api.wordpress.org\ndownloads.wordpress.org\n", True, True))
+       ("".join(h + "\n" for h in _WP_HOSTS319), True, True))
     check("egress: the loopback plugin lets an HTTPS request (no user, port 443) to one of the proxy's hosts past "
           "WordPress's own address check, which looks the name up where there is no name server (download_url "
           "refused every update download)",
@@ -202,6 +210,7 @@ def _s1_listening(stdin, argv):
                         stdout=_sp319.DEVNULL, stderr=_sp319.PIPE)
     try:
         refused = _ask319(port, "CONNECT example.com:443 HTTP/1.1")
+        unlisted_hop = _ask319(port, "CONNECT wordpress.org:443 HTTP/1.1")
         wrong_port = _ask319(port, "CONNECT api.wordpress.org:80 HTTP/1.1")
         not_connect = _ask319(port, "GET http://api.wordpress.org/ HTTP/1.1")
     finally:
@@ -213,6 +222,8 @@ def _s1_listening(stdin, argv):
        "list, an allowed host on another port and anything but CONNECT (403), saying why in its journal",
        (refused, wrong_port, not_connect, "refused CONNECT example.com:443: not an allowed host on 443" in _err),
        (b"HTTP/1.1 403 Forbidden", b"HTTP/1.1 403 Forbidden", b"HTTP/1.1 403 Forbidden", True))
+    eq("F1 (egress): a redirect is a new CONNECT the proxy checks on its own, so a hop to a host not on its list "
+       "(wordpress.org) is refused like any other", unlisted_hop, b"HTTP/1.1 403 Forbidden")
 
 
 # ── 2. WordPress with full egress ─────────────────────────────────────────────────────────────────
@@ -406,6 +417,37 @@ def _s6_put_online(_host, su):
        (broken, fine), ({"msg": "That did not work. Nothing was changed.", "then": False}, {"msg": "Online.", "then": True}))
 
 
+# ── 7. WordPress core's hosts, whatever the signed catalog lists ──────────────────────────────────
+def _s7_core_hosts(host, su):
+    """F1: Site Health said "Could not reach WordPress.org": https://api.wordpress.org redirects to a host not listed."""
+    from panel.services import websites_catalog as _wc319
+    from panel.services import websites_egress as _eg319
+    real = _wc319.recipe
+    _p9_patch(_wc319, "recipe", lambda name: dict(real(name) or {}, egress=["api.wordpress.org",
+                                                                          "downloads.wordpress.org"]))
+    try:
+        site = _site319(host, "p319-oldcat")
+        code, _sh, stdin, _start = _install319(su, site)
+    finally:
+        _p9_patch(_wc319, "recipe", real)
+    unit = _file319(stdin, "%s/%s.service" % (_ws319.USER_UNIT_DIR, _ws319.EGRESS_UNIT)) or ""
+    argv = (_re319.search(r"^ExecStart=\S+ -I %h/\S+/egress_proxy\.py \d+ (.+)$", unit, _re319.M)
+            or _re319.match("()", "")).group(1).split()
+    allowed = frozenset(argv)
+    hops = ["CONNECT %s:443 HTTP/1.1" % h for h in ("api.wordpress.org", "developer.wordpress.org",
+                                                     "downloads.w.org", "downloads.wordpress.org")]
+    eq("F1 (POST /websites/<id>/update-image, a signed catalog whose WordPress recipe lists api.wordpress.org and "
+       "downloads.wordpress.org only): the proxy's unit and the hosts file still name every host WordPress core's "
+       "update and Site Health checks reach, and the proxy lets a CONNECT to each through, the redirect's "
+       "developer.wordpress.org and the background update's downloads.w.org included",
+       (code, argv, _file319(stdin, _ws319.EGRESS_HOSTS_FILE), [_eg319.target(h, allowed) for h in hops]),
+       (200, list(_WP_HOSTS319), "".join(h + "\n" for h in _WP_HOSTS319), [(h, 443) for h in _WP_HOSTS319]))
+    eq("F1 control: the catalog's own WordPress recipe lists the same hosts, every one of them on the catalog's "
+       "allow list (websites_catalog.EGRESS_HOSTS)",
+       (sorted((real("wordpress") or {}).get("egress") or []), all(h in _wc319.EGRESS_HOSTS for h in _WP_HOSTS319)),
+       (list(_WP_HOSTS319), True))
+
+
 def _cleanup319():
     _db319.session.rollback()
     for model, ids in ((_Site319, _ROWS319["sites"]), (_User319, _ROWS319["users"]), (_Remote319, _ROWS319["remotes"])):
@@ -436,7 +478,7 @@ with _p9.app_context():
         _p9_arm(who="part319")
         _seams319()
         _host319, _su319 = _rows319()
-        for _sec319 in (_s1_proxy, _s2_full, _s3_switch, _s5_gate):
+        for _sec319 in (_s1_proxy, _s2_full, _s3_switch, _s5_gate, _s7_core_hosts):
             check("part319: %s ran to the end" % _sec319.__name__, _ran319(_sec319, _host319, _su319), _ran319.last)
         check("part319: _s4_update ran to the end", _ran319(_s4_update, _host319), _ran319.last)
         check("part319: _s6_put_online ran to the end", _ran319(_s6_put_online, _host319, _su319), _ran319.last)
