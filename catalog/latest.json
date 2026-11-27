@@ -14,10 +14,10 @@
       "tag": "2026.2.4.1-prerelease"
     }
   },
-  "expires": "2026-12-27T09:33:00Z",
-  "issued": "2026-11-27T09:33:00Z",
+  "expires": "2026-12-27T19:50:15Z",
+  "issued": "2026-11-27T19:50:15Z",
   "schema": 1,
-  "seq": 2,
+  "seq": 3,
   "sites": {
     "caddy": {
       "assets": {
@@ -38,6 +38,16 @@
       "caddy": "2.11.9",
       "module": "github.com/caddyserver/cache-handler",
       "version": "v0.17.0"
+    },
+    "cdn": {
+      "cloudflare": {
+        "name": "Cloudflare",
+        "origin_cert": "Cloudflare Origin CA",
+        "strict_mode": "Full (strict)"
+      },
+      "fastly": {
+        "name": "Fastly"
+      }
     },
     "object_cache": {
       "image": "docker.io/valkey/valkey@sha256:3ad5a213cb1bc2fd4a113c89b6248a88655a6bf1dda69519d04e03cd3e3d2742",
@@ -84,6 +94,32 @@
         "2405:8100::/32",
         "2a06:98c0::/29",
         "2c0f:f248::/32"
+      ],
+      "fastly": [
+        "23.235.32.0/20",
+        "43.249.72.0/22",
+        "90.98.0.0/17",
+        "90.98.128.0/18",
+        "103.244.50.0/24",
+        "103.245.222.0/23",
+        "103.245.224.0/24",
+        "104.156.80.0/20",
+        "140.248.64.0/18",
+        "140.248.128.0/17",
+        "146.75.0.0/17",
+        "151.101.0.0/16",
+        "157.52.64.0/18",
+        "167.82.0.0/17",
+        "167.82.128.0/20",
+        "167.82.160.0/20",
+        "167.82.224.0/20",
+        "172.111.64.0/18",
+        "185.31.16.0/22",
+        "199.27.72.0/21",
+        "199.232.0.0/16",
+        "2a04:4e40::/32",
+        "2a04:4e42::/31",
+        "2a04:4e44::/32"
       ]
     },
     "recipes": {
@@ -487,6 +523,8 @@
         "database": true,
         "egress": [
           "api.wordpress.org",
+          "developer.wordpress.org",
+          "downloads.w.org",
           "downloads.wordpress.org"
         ],
         "kind": "wordpress",
@@ -513,7 +551,7 @@
           {
             "dest": "wp-config.php",
             "escape": "php",
-            "template": "<?php\n/* Written by linuxgsm-panel when it installed this site. */\ndefine( 'DB_NAME', '{db_name}' );\ndefine( 'DB_USER', '{db_user}' );\ndefine( 'DB_PASSWORD', '{db_password}' );\ndefine( 'DB_HOST', '{db_host}' );\ndefine( 'DB_CHARSET', 'utf8mb4' );\ndefine( 'DB_COLLATE', '' );\ndefine( 'AUTH_KEY', '{salt}' );\ndefine( 'SECURE_AUTH_KEY', '{salt}' );\ndefine( 'LOGGED_IN_KEY', '{salt}' );\ndefine( 'NONCE_KEY', '{salt}' );\ndefine( 'AUTH_SALT', '{salt}' );\ndefine( 'SECURE_AUTH_SALT', '{salt}' );\ndefine( 'LOGGED_IN_SALT', '{salt}' );\ndefine( 'NONCE_SALT', '{salt}' );\n$table_prefix = 'wp_';\ndefine( 'WP_DEBUG', false );\ndefine( 'DISALLOW_FILE_EDIT', true );\ndefine( 'WP_AUTO_UPDATE_CORE', 'minor' );\ndefine( 'FORCE_SSL_ADMIN', true );\n/* Scheduled tasks run from the panel's timer, never during a visitor's request. */\ndefine( 'DISABLE_WP_CRON', true );\n/* The site's only way out: its egress proxy (update hosts only). */\ndefine( 'WP_PROXY_HOST', '127.0.0.1' );\ndefine( 'WP_PROXY_PORT', '3128' );\nif ( isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) && 'https' === $_SERVER['HTTP_X_FORWARDED_PROTO'] ) {\n\t$_SERVER['HTTPS'] = 'on';\n}\nif ( ! defined( 'ABSPATH' ) ) {\n\tdefine( 'ABSPATH', __DIR__ . '/' );\n}\nrequire_once ABSPATH . 'wp-settings.php';\n",
+            "template": "<?php\n/* Written by linuxgsm-panel when it installed this site. */\ndefine( 'DB_NAME', '{db_name}' );\ndefine( 'DB_USER', '{db_user}' );\ndefine( 'DB_PASSWORD', '{db_password}' );\ndefine( 'DB_HOST', '{db_host}' );\ndefine( 'DB_CHARSET', 'utf8mb4' );\ndefine( 'DB_COLLATE', '' );\ndefine( 'AUTH_KEY', '{salt}' );\ndefine( 'SECURE_AUTH_KEY', '{salt}' );\ndefine( 'LOGGED_IN_KEY', '{salt}' );\ndefine( 'NONCE_KEY', '{salt}' );\ndefine( 'AUTH_SALT', '{salt}' );\ndefine( 'SECURE_AUTH_SALT', '{salt}' );\ndefine( 'LOGGED_IN_SALT', '{salt}' );\ndefine( 'NONCE_SALT', '{salt}' );\n$table_prefix = 'wp_';\ndefine( 'WP_DEBUG', false );\ndefine( 'DISALLOW_FILE_EDIT', true );\ndefine( 'WP_AUTO_UPDATE_CORE', 'minor' );\ndefine( 'FORCE_SSL_ADMIN', true );\n/* Scheduled tasks run from the panel's timer, never during a visitor's request. */\ndefine( 'DISABLE_WP_CRON', true );\n/* The site's only way out: its egress proxy (update hosts only). */\ndefine( 'WP_PROXY_HOST', '127.0.0.1' );\ndefine( 'WP_PROXY_PORT', '3128' );\n/* The site's object cache, while it is turned on in the panel: the Redis Object Cache plugin reads these. The password\n   is a file the panel mounts read-only, never written here. */\nif ( is_readable( '/run/panel/object-cache-password' ) ) {\n\tdefine( 'WP_REDIS_HOST', '127.0.0.1' );\n\tdefine( 'WP_REDIS_PORT', 6379 );\n\tdefine( 'WP_REDIS_PASSWORD', trim( (string) file_get_contents( '/run/panel/object-cache-password' ) ) );\n}\nif ( isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) && 'https' === $_SERVER['HTTP_X_FORWARDED_PROTO'] ) {\n\t$_SERVER['HTTPS'] = 'on';\n}\nif ( ! defined( 'ABSPATH' ) ) {\n\tdefine( 'ABSPATH', __DIR__ . '/' );\n}\nrequire_once ABSPATH . 'wp-settings.php';\n",
             "type": "render-config"
           },
           {
@@ -531,6 +569,15 @@
               "SITE_NAME": "site_name",
               "SITE_URL": "site_url"
             }
+          },
+          {
+            "argv": [
+              "sh",
+              "-c",
+              "wp plugin list --status=inactive --field=name | xargs -r wp plugin delete && d=\"$(wp eval 'echo WP_DEFAULT_THEME;')\" && wp theme list --status=inactive --field=name | grep -vxF -- \"$d\" | xargs -r wp theme delete"
+            ],
+            "image": "wpcli",
+            "type": "run-in-container"
           },
           {
             "readonly": [
