@@ -947,6 +947,32 @@ def _s9_wp_shell(wp):
     eq("domains: an address that is not a domain never reaches the code", bad, "refused")
 
 
+def _s9_public_ip(st, _rec):
+    looked = []
+    answers = ["11.22.33.99", "11.22.33.98"]
+    _p9_patch(_dns313, "_lookup_public_ip", lambda remote: looked.append(remote.id) or answers.pop(0))
+    _dns313._PUBLIC_AT.clear()
+    nat = _host313("p313-nat")
+    _w313.proxy_row(nat.id).installed_version = "2.10.2"
+    site = _site313(nat, "p313-nat-site", [("moved.p313.example.org", False, "mismatch")])
+    _p9_patch(_dns313, "socket", _resolver313({"moved.p313.example.org": ["11.22.33.99"]}))
+    su = _Client313(st.su.id)
+    dom = _dom313(site, "moved.p313.example.org")
+    got = _p9_json(su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id}))
+    _db313.session.expire_all()
+    eq("dns (route): Check again looks the host's public address up again (a NAT host's moved), so a domain pointing at "
+       "its address now matches; the new address is kept",
+       (got.get("dns_state"), _db313.session.get(_Remote313, nat.id).public_ip, looked), ("matching", "11.22.33.99", [nat.id]))
+    su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id})
+    eq("dns (route): ...at most once per 10 minutes per host (control)", looked, [nat.id])
+    _dns313._PUBLIC_AT.clear()
+    _p9_patch(_dns313, "_lookup_public_ip", lambda remote: "")
+    su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id})
+    _db313.session.expire_all()
+    eq("dns (route): a lookup that finds nothing (the outside-address switch off) keeps the stored address (control)",
+       _db313.session.get(_Remote313, nat.id).public_ip, "11.22.33.99")
+
+
 def _s9_scripts(_st, _rec):
     page = _ran301("records and lock", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
   const rows = $('wd-records').querySelectorAll('tr').map(function (tr) {
@@ -1018,7 +1044,7 @@ with _p9.app_context():
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
                          _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing,
-                         _s9_wp_primary, _s9_scripts):
+                         _s9_wp_primary, _s9_public_ip, _s9_scripts):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:
@@ -1029,4 +1055,5 @@ with _p9.app_context():
         _wcert313._ALERTED.clear()
         _wd313._MISSING_SINCE.clear()
         _dns313._LOCAL.update(at=None, addrs=set())
+        _dns313._PUBLIC_AT.clear()
         _cleanup313()

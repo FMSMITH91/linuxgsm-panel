@@ -106,6 +106,36 @@ def local_addresses(now=None):
     return set(addrs)
 
 
+# A host's public address (RemoteServer.public_ip) was found once by the Servers page and kept for good. A DNS check
+# from the Websites page looks it up again, at most once per PUBLIC_IP_FRESH seconds per host, with the panel's own
+# lookup (ssh_manager remote_public_ip: the host's default-route address, and only behind NAT the one outside service
+# Settings > Outside services allows; with that switch off nothing is asked and the stored address stays).
+PUBLIC_IP_FRESH = 600
+_PUBLIC_AT = {}                   # remote id -> monotonic time of its last lookup
+
+
+def _lookup_public_ip(remote):
+    from panel.ops.ssh_manager import remote_public_ip
+    return remote_public_ip(remote)
+
+
+def refresh_public_ip(remote, now=None):
+    """Look the host's public IPv4 up again (PUBLIC_IP_FRESH); store a new one. -> whether it changed."""
+    now = time.monotonic() if now is None else now
+    last = _PUBLIC_AT.get(remote.id)
+    if last is not None and now - last < PUBLIC_IP_FRESH:
+        return False
+    _PUBLIC_AT[remote.id] = now
+    try:
+        ip = _address((_lookup_public_ip(remote) or "").strip())
+    except Exception:  # noqa: BLE001 - a lookup that fails keeps the stored address
+        return False
+    if ip is None or not ip.is_global or str(ip) == (remote.public_ip or ""):
+        return False
+    remote.public_ip = str(ip)
+    return True
+
+
 def host_addresses(remote):
     """The host's public addresses a domain must point at.
 

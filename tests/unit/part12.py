@@ -474,6 +474,8 @@ def _p9_arm(patch=None, who="part12"):
     # part313 drives the reader with stand-in `ip -o addr` lines.
     from panel.services import website_dns as _p9_wdns
     patch(_p9_wdns, "_read_ip", lambda: "")
+    # ...and its look-up of the host's public address (remote_public_ip runs commands on the host).
+    patch(_p9_wdns, "_lookup_public_ip", lambda remote: "")
 
 
 try:

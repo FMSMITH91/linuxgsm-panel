@@ -427,6 +427,7 @@ def register(app):
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
+        _dns.refresh_public_ip(site.remote)     # the host's address now, never only what was found once
         got = _check(site, row)
         _w.audit(site, "website_domain_check", "%s: %s" % (row.domain, got["dns_state"]))
         return jsonify(dict(got, success=True))
