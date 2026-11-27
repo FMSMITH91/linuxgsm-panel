@@ -8,5 +8,9 @@
   "The database server did not start. Look at its log on the host (journalctl -u {unit}).": "El servidor de bases de datos no se inició. Revisa su registro en el host (journalctl -u {unit}).",
   "This host's database server is not one the panel can start: it is not installed and stopped.": "El servidor de bases de datos de este host no es uno que el panel pueda iniciar: no está instalado y detenido.",
   "Start the database server": "Iniciar el servidor de bases de datos",
-  "Starting the database server…": "Iniciando el servidor de bases de datos…"
+  "Starting the database server…": "Iniciando el servidor de bases de datos…",
+  "Run the app's setup": "Ejecutar la configuración de la aplicación",
+  "Check the install": "Comprobar la instalación",
+  "{step} ({n} of {total})": "{step} ({n} de {total})",
+  "Install step {n}": "Paso de instalación {n}"
 }

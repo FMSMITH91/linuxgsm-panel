@@ -38,6 +38,16 @@ DB_STEP = "create-database"
 S_DB_LEFT = ("The database {name} could not be removed ({why}), so it is still on the database server; delete the "
              "website to try again.")
 S_ALL_UNDONE = "Every step was undone."
+# The install steps in plain words, by the recipe engine's step type (websites_catalog.STEP_TYPES), and a plain
+# site's parts (ssh_manager.websites.INSTALL_PARTS): the dialog, a failure and the audit name a step by these, never
+# by its id (create-database-0). A type a recipe uses more than once is numbered (S_STEP_PART).
+STEP_WORDS = {"account": "Create the site account", "image": "Build or download the site image (a few minutes on a "
+              "small host)", "container": "Start the site container", "create-database": "Create the database",
+              "download-verify-unpack": "Download and check the app", "render-config": "Write the app settings",
+              "run-in-container": "Run the app's setup", "set-permissions": "Set file permissions",
+              "drive-web-installer": "Run the app installer", "verify-install": "Check the install"}
+S_STEP_PART = "{step} ({n} of {total})"
+S_STEP_OTHER = "Install step {n}"
 # site id -> the job's state while it runs and after: {"state", "step", "error"}. Never a password.
 _JOBS = {}
 _LOCK = threading.Lock()
@@ -79,6 +89,21 @@ def _steps(site):
     """The recipe's steps for `site` (a list of dicts with a "name" and a "type")."""
     steps = _svc.recipe_steps(site.app_recipe)
     return [s for s in steps if isinstance(s, dict) and s.get("name")]
+
+
+def step_labels(steps):
+    """{step name: its plain words, an i18n.Sentence} for the site account and the recipe's `steps`.
+
+    As a str each is English (the audit's); i18n.tr() gives the viewer's language (the page's).
+    """
+    out = {"account": i18n.Sentence(STEP_WORDS["account"])}
+    for i, step in enumerate(steps):
+        same = [t.get("name") for t in steps if t.get("type") == step.get("type")]
+        words = STEP_WORDS.get(step.get("type"))
+        label = i18n.Sentence(words) if words else i18n.Sentence(S_STEP_OTHER, n=i + 1)
+        out[step["name"]] = label if len(same) < 2 else i18n.Sentence(S_STEP_PART, step=label,
+                                                                       n=same.index(step["name"]) + 1, total=len(same))
+    return out
 
 
 def _mark(site, step_name, finished):
@@ -127,13 +152,13 @@ def undo(site, steps, done):
     """
     import json
     failed, left = [], set()
-    by_name = {s["name"]: s for s in steps}
+    by_name, labels = {s["name"]: s for s in steps}, step_labels(steps)
     for name in reversed(done):
         if name == "account":
             continue
         ok, said = _undo_step(site, by_name.get(name, {"name": name, "type": ""}))
         if not ok:
-            failed.append("%s: %s" % (name, i18n.tr(said)))
+            failed.append("%s: %s" % (i18n.tr(labels.get(name, name)), i18n.tr(said)))
             left.add(name)
     if "account" in done:
         ok, said = _w.host_call(_sw.remove, site.remote, site)
@@ -207,7 +232,7 @@ def _finish(site, user, ok, step, said, steps):
     # The step's own sentence never speaks for the undo (it is worded before the undo runs): this line does.
     _job(site.id, state="failed", step=step, error=("%s %s" % (reason, left or i18n.tr(S_ALL_UNDONE))).strip())
     _w.audit_as(user, site, "website_app_install", "%s failed at %s: %s; %s" % (
-        site.app_recipe, step, reason, left or "undone"), False)
+        site.app_recipe, str(step_labels(steps).get(step, step)), reason, left or "undone"), False)
     if failed:
         # The site's row stays (failed, saying what is left), and so do its database rows: a delete retries them.
         site.state, site.state_reason = "failed", left[:200]
@@ -274,8 +299,10 @@ def install_json(site):
     state = _job_state(site, job)
     done = json.loads(site.install_steps_done or "[]")
     current = job.get("step") or site.install_step or ""
-    order = ["account"] + [s["name"] for s in _safe_steps(site)]
-    steps = [{"key": n, "label": n, "state": _step_word(n, done, current, state, order)} for n in order]
+    recipe_steps = _safe_steps(site)
+    order, labels = ["account"] + [s["name"] for s in recipe_steps], step_labels(recipe_steps)
+    steps = [{"key": n, "label": i18n.tr(labels.get(n, n)), "state": _step_word(n, done, current, state, order)}
+             for n in order]
     site_url, admin_url = _urls(site, state)
     return {"state": state, "steps": steps, "error": job.get("error", "") or (site.state_reason or ""),
             "site_url": site_url, "admin_url": admin_url}
@@ -294,7 +321,7 @@ def _plain_json(site):
     parts = list(_sw.INSTALL_PARTS)
     at = parts.index(got["step"]) if got["step"] in parts else 0
     state = got["state"]
-    steps = [{"key": p, "label": p, "state": "done" if i < at or state == "done" else
+    steps = [{"key": p, "label": i18n.tr(STEP_WORDS.get(p, p)), "state": "done" if i < at or state == "done" else
               ("pending" if i > at else "running" if state == "running" else "failed")} for i, p in enumerate(parts)]
     return dict(_NO_INSTALL, state=state, steps=steps, error=(site.state_reason or "") if state == "failed" else "")
 

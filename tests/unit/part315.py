@@ -70,6 +70,9 @@ U8  A database server installed but stopped is the add dialog's own entry with S
     starts and enables it through the helper's service verb (POST /api/remote/<id>/databases/start) and then reads
     the host again; another unusable server keeps its sentence.
 
+U2  An app install's steps are named in plain words (a type used more than once numbered) in the dialog, a
+    failure and the audit, never by their ids (create-database-0).
+
 U1  The add dialog reads the host's state again when it opens and after Set up databases (every 5 seconds while a
     database entry is still listed), so Create is available once the database server is ready, with no reload.
 
@@ -739,6 +742,43 @@ def _u8_dialog():
         ["/m/websites/install-app", "/m/api/remote/4/databases/start"]))
 
 
+# ── U2. The install steps in plain words ──────────────────────────────────────────────────────────
+def _u2_labels(st):
+    """U2: the dialog, the failure and the audit named the steps by their ids (create-database-0, run-in-container-1)."""
+    from panel.db.models import AuditLog as _Audit315
+    from panel.routes import databases_sites as _dsites315
+    _no_db_check315()
+    _p9_patch(_w315, "threading", _NS315(Thread=_Inline315))
+    _p9_patch(_wapps315, "_worker", _REAL315["_worker"])
+    _p9_patch(_sw315, "install", lambda remote, site, db=None, *a, **k: (True, "installed"))
+    _p9_patch(_sw315, "remove", lambda remote, site: (True, _sw315.OK_REMOVED))
+    _p9_patch(_dsites315, "create_for", lambda site, slug: (False, "The database server refused to create it.", None, ""))
+    form = dict(_c4_form("p315-labels"), remote_id=st.host.id)
+    r = _Client315(st.su.id).post("/websites/install-app", json=form)
+    sid = _p9_json(r).get("id") or 0
+    _ROWS315["sites"].append(sid)
+    job = _p9_json(_Client315(st.su.id).get("/websites/install-app/status?id=%d" % sid)).get("install") or {}
+    steps = [(x.get("label"), x.get("state")) for x in job.get("steps") or []]
+    audit = (_Audit315.query.filter_by(action="website_app_install").order_by(_Audit315.id.desc()).first())
+    detail = getattr(audit, "detail", "") or ""
+    eq("U2 (POST /websites/install-app, WordPress, its database step fails; then GET /websites/install-app/status): "
+       "every step is named in plain words, a type the recipe uses three times numbered, and the audit says which "
+       "step failed in the same words; no step id (create-database-0) is shown or recorded",
+       (r.status_code, steps, "failed at Create the database:" in detail,
+        any(_re_id315(x) for x in [lbl for lbl, _st in steps] + [detail, job.get("error") or ""])),
+       (200, [("Create the site account", "undone"), ("Create the database", "failed"),
+              ("Run the app's setup (1 of 3)", "pending"), ("Write the app settings", "pending"),
+              ("Run the app's setup (2 of 3)", "pending"), ("Run the app's setup (3 of 3)", "pending"),
+              ("Set file permissions", "pending"), ("Check the install", "pending")], True, False))
+
+
+def _re_id315(text):
+    """Whether `text` holds a recipe step's id (a step type, a hyphen and its index)."""
+    import re as _re315
+    return bool(_re315.search(r"\b(?:create-database|download-verify-unpack|render-config|run-in-container|"
+                              r"set-permissions|drive-web-installer|verify-install)-\d", text or ""))
+
+
 # ── C5. Hosts that cannot run websites ────────────────────────────────────────────────────────────
 def _c5_hosts(st):
     managed = _Remote315(name="p315-managed", host="198.51.100.89", port=22, username="u", auth_method="key",
@@ -1267,7 +1307,7 @@ with _p9.app_context():
         _p9_arm(who="part315")
         _st315 = _rows315()
         for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db,
-                        _u8_db_stopped, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache,
+                        _u8_db_stopped, _u2_labels, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache,
                         _wp2_clean):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
