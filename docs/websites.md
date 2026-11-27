@@ -30,7 +30,10 @@ a superadmin. A site that fails to start shows why, its last log lines and a **R
 
 Websites run in Podman, like add-ons. The first website on a host installs Podman and its two helpers from
 Ubuntu's archive; a host where that fails is refused before anything is made. A first install that fails
-later removes the site's account and folders again, so nothing half-made is left behind.
+later removes the site's account and folders again, so nothing half-made is left behind. If the panel
+stops while a site is still being set up (a restart in the first seconds of an add or an app install), the
+site cannot finish: the next time the Websites page is read it shows as failed, saying to delete it and add
+it again. The delete removes whatever part of it reached the host.
 
 ## Installing an app
 

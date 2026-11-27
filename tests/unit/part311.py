@@ -15,6 +15,9 @@
    status names the connector's unit state.
 4. An app's build turns npm's update notice off, so the build log's last lines are the build's own.
 5. The page-cache build removes Podman's blob-info cache folder only when the build made it.
+6. From the sixth round (P6): a site a stopped panel left "creating" (its install thread ended with the process) is
+   marked failed, with a reason that says to delete it and add it again, on the first read of the sites after the
+   start; a site whose install job is alive is never touched, and an install thread that raises ends failed.
 
 HOW IT RUNS. part12's app and its database for the routes. ssh_manager.websites' seams answer for the host (Podman
 ready, the helper, the account's ids), and every shell it would run as a site's account runs in real bash over a
@@ -32,6 +35,7 @@ import shutil as _shutil311
 import subprocess as _sp311  # nosec B404 - bash over the panel's own account shells, in a scratch home
 import sys as _sys311
 import tempfile as _tf311
+from datetime import timedelta as _td311
 from types import SimpleNamespace as _NS311
 
 from flask import g as _g311
@@ -504,6 +508,68 @@ def _s5_podman_cache():
        "held", _cache_verb311(True), (0, ["another-tool", "blob-info-cache-v1.sqlite"]))
 
 
+# ── 6. A site a stopped panel left "creating" ─────────────────────────────────────────────────────
+def _stranded_rows311(st):
+    old = _w311._STARTED - _td311(minutes=5)
+    wp = {"kind": "wordpress", "app_recipe": "wordpress"}
+    rows = {}
+    for name, kw, made in (("plain", {}, old), ("app", wp, old), ("held", {}, old), ("app-held", wp, old),
+                           ("new", {}, None), ("running", {}, old)):
+        site = _site311(st, "p311-st-" + name, **kw)
+        site.state = "running" if name == "running" else "creating"
+        if made is not None:
+            site.created_at = made
+        rows[name] = site
+    _db311.session.commit()
+    return rows
+
+
+def _s6_stranded(st):
+    rows = _stranded_rows311(st)
+    _w311._INSTALLING.add(rows["held"].id)
+    _wapps311._job(rows["app-held"].id, state="running", step="account")
+    saved = list(_w311._SWEPT)
+    del _w311._SWEPT[:]
+    try:
+        r = _Client311(st.su.id).get("/api/websites")
+    finally:
+        _w311._INSTALLING.discard(rows["held"].id)
+        _wapps311._JOBS.pop(rows["app-held"].id, None)
+        _w311._SWEPT[:] = saved or [True]
+    _db311.session.expire_all()
+    got = {n: (_db311.session.get(_Site311, s.id).state, _db311.session.get(_Site311, s.id).state_reason or "")
+           for n, s in rows.items()}
+    stranded = ("failed", _w311.S_STRANDED)
+    eq("I5 (GET /api/websites after a panel restart): a site left \"creating\" from before this process started, "
+       "plain or an app install, with no install job alive, is marked failed with a reason that says to delete it and "
+       "add it again; one whose install or app job is alive, one made since the start and a running one stay as they "
+       "were (control)",
+       (r.status_code, got), (200, {"plain": stranded, "app": stranded, "held": ("creating", ""),
+                                    "app-held": ("creating", ""), "new": ("creating", ""), "running": ("running", "")}))
+
+
+def _s6_worker_raised(st):
+    site = _site311(st, "p311-st-raised")
+    site.state = "creating"
+    _db311.session.commit()
+
+    def _raise(_site):
+        raise RuntimeError("p311: the install raised")
+
+    _p9_patch(_w311, "install_site", _raise)
+    _w311._INSTALLING.add(site.id)
+    try:
+        _w311._install_worker(_p9, site.id)
+        raised = ""
+    except RuntimeError as e:
+        raised = str(e)
+    _db311.session.expire_all()
+    row = _db311.session.get(_Site311, site.id)
+    eq("I5 (the add's install thread raises): the site ends failed with the unreachable sentence, not \"creating\" "
+       "for good, and no longer counts as an install running",
+       (raised, row.state, row.state_reason, site.id in _w311._INSTALLING), ("", "failed", _w311.S_UNREACHABLE, False))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup311():
     _db311.session.rollback()
@@ -547,7 +613,7 @@ with _p9.app_context():
         _p9_patch(_sw311, "quota_set", lambda *a, **k: (True, _sw311.OK_QUOTA))
         _p9_patch(_sw311, "cpu_limit", lambda *a, **k: (True, "container"))
         _st311 = _rows311()
-        for _sec311 in (_s1_resolv, _s2_cron, _s3_tunnel):
+        for _sec311 in (_s1_resolv, _s2_cron, _s3_tunnel, _s6_stranded, _s6_worker_raised):
             check("part311: %s ran to the end" % _sec311.__name__, _ran311(_sec311, _st311), _ran311.last)
         _s5_podman_cache()
         eq("part311: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips311:], [])

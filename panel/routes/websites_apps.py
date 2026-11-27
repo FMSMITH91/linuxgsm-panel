@@ -150,6 +150,12 @@ def _job(site_id, **fields):
         _JOBS.setdefault(site_id, {}).update(fields)
 
 
+def job_running(site_id):
+    """Whether an app install job of this process is running for the site now."""
+    with _LOCK:
+        return (_JOBS.get(site_id) or {}).get("state") == "running"
+
+
 def _install(site, secret_vals):
     """The job body: (ok, the step that failed or "", why)."""
     steps = _steps(site)

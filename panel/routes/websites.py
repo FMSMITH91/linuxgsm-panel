@@ -28,6 +28,7 @@ from flask import abort, current_app, jsonify, render_template, request
 from flask_login import current_user, login_required
 from jinja2 import TemplateNotFound
 from panel.core import i18n
+from panel.core.clock import utcnow
 from panel.core.config import encrypt_secret
 from panel.core.http import _json_body, _json_str
 from panel.core.validation import WEBSITE_KINDS, WEBSITE_PORT_MAX, WEBSITE_PORT_MIN, website_name_problem
@@ -47,8 +48,15 @@ S_NO_HOST = "Choose the host the website runs on."
 S_QUOTA = "Your group already has as many websites as it may have."
 S_CONFIRM = "Type the website's name to confirm."
 S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
+S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
+# An install runs in a thread of the process that started it, so a site still "creating" from before this
+# process started has no install running any more (sweep_stranded). _INSTALLING holds the sites whose plain
+# install runs now; an app install's job is websites_apps.job_running.
+_STARTED = utcnow()
+_INSTALLING = set()
+_SWEPT = []                       # [True] once this process has swept
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
@@ -256,11 +264,13 @@ def _list_routes(app):
     def api_websites():
         if not _wa.can_open_page(current_user):
             return jsonify({"success": True, "sites": [], "can_create": False})
+        sweep_stranded()
         return jsonify(_view.list_answer(site_json))
 
     @app.route("/api/websites/<int:site_id>")
     @login_required
     def api_website(site_id):
+        sweep_stranded()
         site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
         from panel.routes import websites_apps, websites_domains
         websites_domains.refresh_certs(site.remote)
@@ -412,7 +422,28 @@ def add_refusal(remote, name, kind):
 def start_install(site):
     """Run the site's install (account, folders, image, unit, start) in the background."""
     app = current_app._get_current_object()
+    _INSTALLING.add(site.id)
     threading.Thread(target=_install_worker, args=(app, site.id), daemon=True).start()
+
+
+def sweep_stranded():
+    """Mark failed each site a stopped panel left "creating" (once per process): it can never finish.
+
+    Only a site made before this process started, and never one whose install job is alive here. Its
+    reason says to delete it and add it again (the delete removes whatever part of it reached the host).
+    """
+    if _SWEPT:
+        return
+    from panel.routes.websites_apps import job_running
+    rows = Website.query.filter(Website.state == "creating",
+                                db.or_(Website.created_at < _STARTED, Website.created_at.is_(None))).all()
+    stranded = [site for site in rows if site.id not in _INSTALLING and not job_running(site.id)]
+    for site in stranded:
+        site.state, site.state_reason = "failed", i18n.tr(S_STRANDED)[:200]
+        _log.warning("website %s was left creating by a panel that stopped; marked failed", site.id)
+    if stranded:
+        db.session.commit()
+    _SWEPT.append(True)
 
 
 def note_run_state(site, ok, said):
@@ -431,13 +462,20 @@ def note_run_state(site, ok, said):
 
 def _install_worker(app, site_id):
     with app.app_context():
-        site = db.session.get(Website, site_id)
-        if site is None:
-            return
-        ok, said = install_site(site)
-        site.state = "running"          # a new site's "creating" ends here, whatever the outcome
-        note_run_state(site, ok, said)
-        forget_status(site_id)
+        try:
+            site = db.session.get(Website, site_id)
+            if site is None:
+                return
+            try:
+                ok, said = install_site(site)
+            except Exception:  # noqa: BLE001 - an install that raised ends failed, never "creating" for good
+                _log.warning("website install raised", exc_info=True)
+                ok, said = False, S_UNREACHABLE
+            site.state = "running"          # a new site's "creating" ends here, whatever the outcome
+            note_run_state(site, ok, said)
+            forget_status(site_id)
+        finally:
+            _INSTALLING.discard(site_id)
 
 
 def _add_route(app):
