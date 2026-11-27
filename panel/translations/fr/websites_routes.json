@@ -20,6 +20,7 @@
   "Paste the tunnel's token: one line of at most 4096 characters.": "Collez le jeton du tunnel : une ligne de 4096 caractères au plus.",
   "A restricted host needs at least one network or preset in its allow list.": "Un hôte restreint a besoin d'au moins un réseau ou un préréglage dans sa liste d'autorisation.",
   "A tunnel needs its token.": "Un tunnel a besoin de son jeton.",
+  "A tunnel needs its provider.": "Un tunnel a besoin de son fournisseur.",
   "At most {n} networks.": "Au plus {n} réseaux.",
   "{key} must be one of {allowed}.": "{key} doit être l'un de {allowed}.",
   "{key} must be a whole number from {low} to {high}.": "{key} doit être un nombre entier de {low} à {high}.",

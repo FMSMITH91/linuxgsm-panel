@@ -38,6 +38,7 @@ S_CIDR = "{cidr} is not a network address like 203.0.113.0/24 or 2001:db8::/32."
 S_TOKEN = "Paste the tunnel's token: one line of at most 4096 characters."  # nosec B105 - a sentence for the page, not a credential
 S_RESTRICTED_EMPTY = "A restricted host needs at least one network or preset in its allow list."
 S_TUNNEL_NO_TOKEN = "A tunnel needs its token."  # nosec B105 - a sentence for the page, not a credential
+S_TUNNEL_NO_PROVIDER = "A tunnel needs its provider."
 S_CACHE_BUILDING = ("Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; "
                     "the websites' page caches start when it is done.")
 
@@ -127,9 +128,14 @@ def _mode_problems(row, changes):
         presets = json.loads(changes.get("allow_presets", row.allow_presets or "[]"))
         if not cidrs and not presets:
             return [i18n.tr(S_RESTRICTED_EMPTY)]
-    if mode == "tunnel" and not (changes.get("tunnel_token_enc") or row.tunnel_token_enc):
-        return [i18n.tr(S_TUNNEL_NO_TOKEN)]
-    return []
+    if mode != "tunnel":
+        return []
+    # Both are needed: without a provider the apply only stops the connector, while the firewall's
+    # public 80/443 rules are taken away for tunnel mode, so the sites would go offline under "applied".
+    problems = [] if changes.get("tunnel_provider", row.tunnel_provider) else [i18n.tr(S_TUNNEL_NO_PROVIDER)]
+    if not (changes.get("tunnel_token_enc") or row.tunnel_token_enc):
+        problems.append(i18n.tr(S_TUNNEL_NO_TOKEN))
+    return problems
 
 
 def _detail(changes):

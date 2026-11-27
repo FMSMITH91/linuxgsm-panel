@@ -486,6 +486,15 @@ def _s5_sftp(st):
 
 
 # ── 6. Secrets ──────────────────────────────────────────────────────────────────────────────────
+def _s6_no_provider(st, su, url, token):
+    bare = su.post(url, json={"exposure_mode": "tunnel", "tunnel_token": token})
+    row = _Proxy300.query.filter_by(remote_id=st.host.id).first()
+    eq("proxy settings: tunnel mode without a provider is refused (400, saying so) and nothing is stored, so no apply "
+       "stops the connector and takes the public rules away under 'applied'",
+       (bare.status_code, "A tunnel needs its provider." in bare.get_data(as_text=True),
+        row is None or (row.exposure_mode, bool(row.tunnel_token_enc))), (400, True, row is None or ("public", False)))
+
+
 def _s6_secrets(st):
     token = "p300-tunnel-value-" + "q" * 24
     url = "/websites/proxy/settings?remote_id=%d" % st.host.id
@@ -496,6 +505,7 @@ def _s6_secrets(st):
     eq("proxy settings: a bad network in the allow list is refused and nothing is stored",
        (bad.status_code, _Proxy300.query.filter_by(remote_id=st.host.id).first() is None
         or _Proxy300.query.filter_by(remote_id=st.host.id).first().exposure_mode), (400, "public"))
+    _s6_no_provider(st, su, url, token)
     good = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
         "exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": token}})
     row = _Proxy300.query.filter_by(remote_id=st.host.id).first()
