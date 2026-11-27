@@ -21,7 +21,6 @@
   "Admin username": "Nom de l'administrateur",
   "Advanced php.ini": "php.ini avancé",
   "Always added after your settings, and cannot be removed:": "Toujours ajouté après vos réglages, et impossible à retirer :",
-  "An address or a network, IPv4 or IPv6, for example 203.0.113.0/24. The visitor's own address is read from the CDN's header only when the request comes from one of these networks.": "Une adresse ou un réseau, IPv4 ou IPv6, par exemple 203.0.113.0/24. L'adresse réelle du visiteur n'est lue dans l'en-tête du CDN que si la requête vient de l'un de ces réseaux.",
   "An app needs its domain.": "Une application a besoin de son domaine.",
   "Anyone on the internet reaches your sites on ports 80 and 443.": "N'importe qui sur Internet atteint vos sites sur les ports 80 et 443.",
   "App": "Application",

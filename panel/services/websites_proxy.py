@@ -31,9 +31,12 @@ FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     Each preset carries its CDN's header (PRESET_HEADERS): CF-Connecting-IP, which Cloudflare sets on
     every request, is read only while every trusted network is Cloudflare's, since a request through
     any other trusted proxy could carry one a visitor made up. Otherwise (Fastly, whose Fastly-Client-IP
-    keeps a visitor's own value; presets of two CDNs; the operator's networks) the address is read from
-    X-Forwarded-For right to left: the first address that is not a trusted proxy, which every one of
-    them appends. A tunnel reads CF-Connecting-IP from the connector on loopback.
+    keeps a visitor's own value; presets of two CDNs; the operator's trusted networks) the address is read
+    from X-Forwarded-For right to left: the first address that is not a trusted proxy, which every one of
+    them appends. The operator's own networks are allow-only: the firewall admits them, but they are
+    trusted proxies only when the superadmin says so (WebsiteProxy.custom_trusted), since anyone on a
+    trusted network can make the sites see any address. A tunnel reads CF-Connecting-IP from the
+    connector on loopback.
 
 HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
     Strict-Transport-Security with the operator's max-age (OWASP's 63072000 by default), with
@@ -130,16 +133,23 @@ def _preset_nets(proxy):
     return nets
 
 
+def _own_nets(proxy):
+    """The operator's own networks: the ones typed on the card."""
+    return proxy.cidrs()
+
+
 def allow_list(proxy):
-    """The canonical networks `proxy` admits in 'restricted' mode: its CIDRs plus its presets' ranges."""
+    """The canonical networks `proxy` admits in 'restricted' mode: the operator's networks plus its presets' ranges."""
     if proxy is None:
         return []
-    return _canonical(proxy.cidrs() + _preset_nets(proxy))
+    return _canonical(_own_nets(proxy) + _preset_nets(proxy))
 
 
 def trusted_list(proxy):
-    """The networks whose requests may give the visitor's address in a header: the allow list."""
-    return allow_list(proxy)
+    """The networks whose requests may name the visitor's address: the presets', the operator's when trusted."""
+    if proxy is None:
+        return []
+    return _canonical(_preset_nets(proxy) + (_own_nets(proxy) if proxy.custom_trusted else []))
 
 
 def client_header(proxy):
@@ -148,7 +158,7 @@ def client_header(proxy):
     A preset's own header only while every trusted network is that one CDN's; X-Forwarded-For otherwise.
     """
     headers = {PRESET_HEADERS.get(p, XFF) for p in proxy.presets()}
-    if proxy.cidrs():
+    if proxy.custom_trusted and _own_nets(proxy):
         headers.add(XFF)
     return headers.pop() if len(headers) == 1 else XFF
 

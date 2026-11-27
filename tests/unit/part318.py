@@ -4,6 +4,8 @@
    job (.github/scripts/cdn_ranges.py, .github/workflows/cdn-ranges.yml) reads both CDNs' official lists; the
    proxy reads a CDN's own header only for requests from that CDN's networks; the card has one button per
    CDN, each with its folded list, source and date.
+2. The operator's own networks are allow-only: the firewall admits them, and the proxy trusts them (reads a
+   visitor's address from their requests) only when the superadmin marks them as trusted proxies, with a note.
 
 HOW IT RUNS. part12's app and its database. ssh_manager.websites' seams answer for the host and record what the
 routes ask of it; nothing reaches a host (part12's tripwire is armed). The card runs in node over part301's
@@ -304,6 +306,54 @@ def _s1_card():
         True, True, True, [False, False]))
 
 
+# ── 2. the operator's networks: allow-only unless trusted ─────────────────────────────────────────
+def _s2_trust(st):
+    su = _Client318(st.su.id)
+    cf = _SITES318["presets"]["cloudflare"]
+    own = ["203.0.113.0/24", "2001:db8:318::/48"]
+    off = _save318(su, st, {"exposure_mode": "restricted", "allow_presets": ["cloudflare"], "allow_cidrs": own,
+                            "custom_trusted": False})
+    nets, lines = _trust318(off[1])
+    eq("trusted proxies (POST /websites/proxy/settings, the operator's networks not trusted): the firewall admits "
+       "them beside Cloudflare's, the proxy trusts Cloudflare's alone and keeps reading CF-Connecting-IP (no request "
+       "from the operator's networks can name a visitor's address)",
+       (off[0], all(n in off[2] for n in own), sorted(nets) == sorted(_wp318._canonical(cf)), lines),
+       (200, True, True, ["client_ip_headers CF-Connecting-IP"]))
+    on = _save318(su, st, {"exposure_mode": "restricted", "allow_presets": ["cloudflare"], "allow_cidrs": own,
+                           "custom_trusted": True})
+    nets, lines = _trust318(on[1])
+    row = _Proxy318.query.filter_by(remote_id=st.host.id).first()
+    _db318.session.refresh(row)
+    eq("trusted proxies: marked as trusted, they join the trusted networks and the address is read from "
+       "X-Forwarded-For right to left (CF-Connecting-IP from them could be made up); the choice is stored and sent "
+       "back to the card",
+       (all(n in nets for n in own), lines, row.custom_trusted,
+        _j(su.get("/websites/proxy/status?host_id=%d" % st.host.id)).get("custom_trusted")),
+       (True, ["client_ip_headers X-Forwarded-For", "trusted_proxies_strict"], True, True))
+    alone = _save318(su, st, {"exposure_mode": "restricted", "allow_presets": [], "allow_cidrs": own,
+                              "custom_trusted": False})
+    eq("trusted proxies: only the operator's networks, not trusted: the firewall admits them, and the proxy trusts "
+       "no network at all (every forwarded header replaced)",
+       (alone[2] == sorted(own), _trust318(alone[1]), "trusted_proxies" in alone[1]), (True, ([], []), False))
+
+
+def _s2_card():
+    answer = dict(_LIST301, proxies=[{"host_id": 1, "host_name": "h", "installed": True, "version": "2.11.9",
+                                      "exposure_mode": "restricted", "allow_cidrs": ["203.0.113.0/24"],
+                                      "allow_presets": [], "custom_trusted": True, "preset_info": {}}], options={})
+    got = _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const start = [$('wp-custom-trusted').checked, !$('wp-custom-trusted-note').hidden, WS.exposureBody().custom_trusted];
+  $('wp-custom-trusted').checked = false; window.wsTrustCheck();
+  return {start: start, off: [!$('wp-custom-trusted-note').hidden, WS.exposureBody().custom_trusted],
+          wired: [$('wp-custom-trusted').getAttribute('data-action'), $('wp-custom-trusted').getAttribute('data-on')]};
+""", routes={"/api/websites": answer})
+    eq("trusted proxies (card): the switch shows the saved choice and is sent with the form; while it is on, a "
+       "note says what trusting them means; off, the note goes",
+       (got.get("start"), got.get("off"), got.get("wired")),
+       ([True, True, True], [False, False], ["wsTrustCheck", "change"]))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup318():
     _db318.session.rollback()
@@ -341,9 +391,9 @@ with _p9.app_context():
         _p9_arm(who="part318")
         _seams318()
         _st318 = _rows318()
-        for _sec318 in (_s1_render,):
+        for _sec318 in (_s1_render, _s2_trust):
             check("part318: %s ran to the end" % _sec318.__name__, _ran318(_sec318, _st318), _ran318.last)
-        for _sec318 in (_s1_catalog, _s1_script, _s1_workflow, _s1_card):
+        for _sec318 in (_s1_catalog, _s1_script, _s1_workflow, _s1_card, _s2_card):
             check("part318: %s ran to the end" % _sec318.__name__, _ran318(_sec318), _ran318.last)
         eq("part318: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips318:], [])
     finally:

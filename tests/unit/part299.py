@@ -213,9 +213,9 @@ def _site299(**kw):
     return _NS299(**base)
 
 
-def _proxy299(mode="public", cidrs=(), presets=(), mtls=False, provider=""):
+def _proxy299(mode="public", cidrs=(), presets=(), mtls=False, provider="", trusted=False):
     return _NS299(exposure_mode=mode, cidrs=lambda: list(cidrs), presets=lambda: list(presets),
-                  origin_pull_mtls=mtls, tunnel_provider=provider)
+                  origin_pull_mtls=mtls, tunnel_provider=provider, custom_trusted=trusted)
 
 
 def _render299(sites, proxy=None, opts=None):
@@ -284,10 +284,10 @@ def _s299_proxy_base2():
 
 
 def _s299_proxy_modes():
-    restricted = _render299([_site299()], _proxy299("restricted", ["203.0.113.0/24", "203.0.113.7/32"]))
+    restricted = _render299([_site299()], _proxy299("restricted", ["203.0.113.0/24", "203.0.113.7/32"], trusted=True))
     glob = _block299(restricted, "{")
-    eq("proxy config (restricted, custom networks): trusted_proxies is exactly the allow list (a network inside "
-       "another dropped) and the client address is read from X-Forwarded-For right to left, only from it",
+    eq("proxy config (restricted, custom networks marked trusted): trusted_proxies is exactly the allow list (a network "
+       "inside another dropped) and the client address is read from X-Forwarded-For right to left, only from it",
        [ln.strip() for ln in glob if "trusted" in ln or "client_ip" in ln],
        ["trusted_proxies static 203.0.113.0/24", "client_ip_headers X-Forwarded-For", "trusted_proxies_strict"])
     cf = _render299([_site299()], _proxy299("restricted", [], ["cloudflare"], mtls=True))

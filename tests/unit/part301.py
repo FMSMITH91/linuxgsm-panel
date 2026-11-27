@@ -505,7 +505,7 @@ eq("node: exposure: Public shows neither list nor token; Restricted shows the al
    (_exp301.get("start"), _exp301.get("r"), _exp301.get("tv")), ([True, True], [False, True], [True, False]))
 eq("node: Restricted sends the Cloudflare preset and the typed networks, trimmed, blank lines dropped",
    _exp301.get("rb"), {"exposure_mode": "restricted", "allow_presets": ["cloudflare"],
-                       "allow_cidrs": ["203.0.113.0/24", "2001:db8::/32"]})
+                       "allow_cidrs": ["203.0.113.0/24", "2001:db8::/32"], "custom_trusted": False})
 eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed one is sent once and the box emptied",
    (_exp301.get("tb"), _exp301.get("tb2"), _exp301.get("sent"), _exp301.get("tokenAfter"), _exp301.get("saved")),
    ({"exposure_mode": "tunnel", "tunnel_provider": "cloudflare"},

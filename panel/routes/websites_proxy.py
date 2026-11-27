@@ -78,7 +78,8 @@ def proxy_json(row):
             "presets": list(WEBSITE_ALLOW_PRESETS), "preset_info": _preset_infos(),
             "tunnel_service": "http://localhost:%d" % TUNNEL_PORT, "tunnel_provider": row.tunnel_provider or "",
             "tunnel_token_set": bool(row.tunnel_token_enc), "origin_tls": row.origin_tls,
-            "origin_pull_mtls": bool(row.origin_pull_mtls), "installed_version": row.installed_version or "",
+            "origin_pull_mtls": bool(row.origin_pull_mtls), "custom_trusted": bool(row.custom_trusted),
+            "installed_version": row.installed_version or "",
             "last_error": row.last_error or ""}
 
 
@@ -132,8 +133,9 @@ def parse_settings(row, data):
         presets = data.get("allow_presets") if isinstance(data.get("allow_presets"), list) else []
         changes["allow_presets"] = json.dumps(sorted({p for p in presets if p in WEBSITE_ALLOW_PRESETS}))
     _choices(data, changes, problems)
-    if "origin_pull_mtls" in data:
-        changes["origin_pull_mtls"] = _w.flag(data, "origin_pull_mtls")
+    for key in ("origin_pull_mtls", "custom_trusted"):
+        if key in data:
+            changes[key] = _w.flag(data, key)
     _token(data, changes, problems)
     return changes, problems + _mode_problems(row, changes)
 

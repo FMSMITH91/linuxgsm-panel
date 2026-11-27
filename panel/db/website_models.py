@@ -266,7 +266,8 @@ class WebsiteProxy(db.Model):
 
     exposure_mode 'public' opens 80/443 to everyone while a site is enabled; 'restricted' opens them
     only to `allow_cidrs` plus the networks of `allow_presets` (the catalog's CDN ranges), and
-    the proxy trusts a client-address header only from those; 'tunnel' opens nothing and connects out
+    the proxy trusts a client-address header only from the presets' networks, and from `allow_cidrs`
+    only when `custom_trusted` is on; 'tunnel' opens nothing and connects out
     with `tunnel_token_enc` (encrypt_secret, at_rest.SECRET_COLUMNS; never logged, never on argv).
     allow_cidrs / allow_presets are JSON lists, written only through validation.website_cidr and
     WEBSITE_ALLOW_PRESETS. Settings that are the same for every host (HSTS, TLS minimum, ACME contact)
@@ -285,6 +286,9 @@ class WebsiteProxy(db.Model):
     tunnel_token_enc = db.Column(db.Text, default="")
     origin_tls = db.Column(db.String(12), default="letsencrypt", nullable=False)
     origin_pull_mtls = db.Column(db.Boolean, default=False, nullable=False)
+    # Whether the operator's own networks are trusted proxies: their requests may give the visitor's address in
+    # X-Forwarded-For. Off, they are allow-only (services/websites_proxy.py, FORWARDED HEADERS).
+    custom_trusted = db.Column(db.Boolean, default=False, nullable=False)
     installed_version = db.Column(db.String(40), default="")
     applied_at = db.Column(db.DateTime, nullable=True)
     last_error = db.Column(db.String(200), default="")

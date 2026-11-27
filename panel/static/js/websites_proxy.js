@@ -82,6 +82,9 @@
     renderPresets();
     var c = WS.el('wp-cidrs');
     if (c) c.value = (p.allow_cidrs || []).join('\n');
+    var tr = WS.el('wp-custom-trusted');
+    if (tr) tr.checked = !!p.custom_trusted;
+    window.wsTrustCheck();
     var tok = WS.el('wp-token');
     if (tok) tok.value = '';
     WS.show('wp-token-state', !!p.tunnel_token_set);
@@ -145,6 +148,8 @@
   };
   window.wsProxyHost = function () { var s = WS.el('wp-host'); st.host = s ? s.value : null; renderHost(); };
   window.wsExposure = function (mode) { setMode(mode); };
+  // Trusting the operator's networks lets anyone on them choose the visitor's address the sites see: a note, never a block.
+  window.wsTrustCheck = function () { WS.show('wp-custom-trusted-note', switchOn('wp-custom-trusted') === true); };
   window.wsPreset = function (name) {
     if (!PRESETS[name]) return;
     var i = st.presets.indexOf(name);
@@ -162,6 +167,7 @@
     if (m === 'restricted') {
       body.allow_presets = st.presets.slice();
       body.allow_cidrs = (WS.el('wp-cidrs').value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      body.custom_trusted = switchOn('wp-custom-trusted') === true;
     }
     if (m === 'tunnel') {
       body.tunnel_provider = 'cloudflare';

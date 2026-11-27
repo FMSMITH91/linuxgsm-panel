@@ -1,8 +1,12 @@
 {
+  "An address or a network, IPv4 or IPv6, for example 203.0.113.0/24.": "Una dirección o una red, IPv4 o IPv6, por ejemplo 203.0.113.0/24.",
   "Fastly's networks": "Redes de Fastly",
   "Fastly's networks ({n})": "Redes de Fastly ({n})",
   "List at least one network, or use a CDN's networks.": "Indica al menos una red, o usa las redes de una CDN.",
+  "Off: your networks only reach the sites. On: their requests may name the visitor's address (X-Forwarded-For), which the sites then see and log.": "Desactivado: tus redes solo llegan a los sitios. Activado: sus peticiones pueden indicar la dirección del visitante (X-Forwarded-For), que los sitios ven y registran.",
   "On the list: {names}. Tap a button again to remove its networks.": "En la lista: {names}. Pulsa de nuevo un botón para quitar sus redes.",
+  "Only for proxies you run or trust: anyone on these networks can make your sites see any address they choose.": "Solo para proxies que gestionas o en los que confías: cualquiera en estas redes puede hacer que tus sitios vean la dirección que quiera.",
   "Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor's address only for HTTPS visitors: turn on Force TLS for the service at Fastly.": "Se leen de api.fastly.com/public-ip-list en una comprobación diaria y se actualizan solas con el catálogo firmado. Fastly da la dirección del visitante solo para visitantes HTTPS: activa Force TLS para el servicio en Fastly.",
+  "Trust my networks as proxies": "Confiar en mis redes como proxies",
   "Use Fastly's networks": "Usar las redes de Fastly"
 }

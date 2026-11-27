@@ -79,7 +79,11 @@ the Websites page:
   real address is read from a CDN's header only for requests from that CDN's networks: Cloudflare's
   `CF-Connecting-IP` while Cloudflare's are the only trusted networks, otherwise `X-Forwarded-For`, read
   from the right to the first address that is not a trusted network. Fastly adds the visitor's address
-  only for HTTPS visitors, so turn on Force TLS for the service at Fastly.
+  only for HTTPS visitors, so turn on Force TLS for the service at Fastly. Your own networks are
+  allow-only: they reach the sites, but the proxy reads no visitor's address from their requests unless
+  you switch on **Trust my networks as proxies** (then `X-Forwarded-For` from them is believed, so turn
+  it on only for proxies you run or trust: anyone on those networks could otherwise make your sites see
+  any address).
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
   and Cloudflare brings visitors in. In Cloudflare's dashboard, give each website's domain a **Public
   Hostname** on that tunnel with the service `http://localhost:19080` (the card and each site's Domains tab
