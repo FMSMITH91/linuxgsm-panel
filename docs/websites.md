@@ -59,7 +59,9 @@ installer as a file that only the site's account can read, removed when the step
 output is never written to the system journal.
 
 The dialog shows each step as it runs. If one fails, every step done before it is undone: no half
-installed site, account, database or container is left behind. If a step cannot be undone (a database
+installed site, account, database or container is left behind. The dialog then says the install failed, why,
+and that nothing was left on the host, with **Try again**, which brings the form back as you filled it in
+(the password field empty). If a step cannot be undone (a database
 server that does not answer, say), the dialog marks that step **Not undone** and says what is left; the
 site stays in the list, and deleting it tries again. New app versions arrive through the
 signed catalog, like add-on updates.

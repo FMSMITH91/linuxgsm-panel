@@ -238,11 +238,22 @@
   }
   function pollOnce() {
     WS.get(WS.R.site(st.siteId)).then(function (d) {
-      var inst = (d && d.install) || {};
+      if (!d || !d.site) { pollGone(); return; }
+      var inst = d.install || {};
       WS.renderSteps(WS.el('ws-progress'), inst);
-      var running = inst.state === 'running' || (d && d.site && d.site.state === 'creating' && inst.state !== 'failed');
+      var running = inst.state === 'running' || (d.site.state === 'creating' && inst.state !== 'failed');
       if (running) { st.poll = setTimeout(pollOnce, 2000); return; }
-      finish(d || {}, inst);
+      finish(d, inst);
+    });
+  }
+  // The site is gone: an app install that failed undid every step and removed it. Its job still says why
+  // (the starter only); without that answer it is still a failure, never "Done."
+  function pollGone() {
+    WS.get('/websites/install-app/status?id=' + Number(st.siteId)).then(function (j) {
+      var inst = (j && j.success && j.install) || {};
+      if (inst.state === 'running') { st.poll = setTimeout(pollOnce, 2000); return; }
+      WS.renderSteps(WS.el('ws-progress'), inst);
+      finish({gone: true}, {state: 'failed', error: inst.error || ''});
     });
   }
   function link(text, href, cls) {
@@ -255,6 +266,15 @@
   function finish(d, inst) {
     var box = WS.el('ws-result');
     var row = WS.node('div', 'd-flex flex-wrap gap-2 align-items-center');
+    if (d.gone) {
+      // Nothing of it is left on the host or in the list: no link to a page that is not there.
+      row.appendChild(WS.node('span', 'text-danger small', WS.T('The install failed, and nothing of it was left on the host.')));
+      if (inst.error) row.appendChild(WS.raw('span', 'text-danger small w-100', inst.error));
+      row.appendChild(WS.button(WS.T('Try again'), 'arrow-counterclockwise', 'wsAddAgain', [], 'btn-primary'));
+      box.appendChild(row);
+      load();
+      return;
+    }
     if (inst.state === 'failed' || (d.site && d.site.state === 'failed')) {
       row.appendChild(WS.node('span', 'text-danger small', inst.error || (d.site && d.site.state_reason) || WS.T('A step failed, and every step done before it was undone.')));
     } else {
@@ -269,6 +289,16 @@
     box.appendChild(row);
     load();
   }
+
+  // Back to the form as it was filled in (the typed password is never kept), to change something and Create again.
+  window.wsAddAgain = function () {
+    clearTimeout(st.poll);
+    WS.show('ws-progress-wrap', false);
+    WS.show('ws-add-form', true);
+    WS.show('ws-add-footer', true);
+    WS.clear(WS.el('ws-result'));
+    WS.renderMissing(st.d ? st.d.missing : []);
+  };
 
   window.wsProxyInstall = function () {
     WS.stepUp(function () {

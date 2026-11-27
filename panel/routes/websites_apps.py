@@ -19,7 +19,7 @@ import re
 import secrets
 import threading
 
-from flask import abort, current_app, jsonify
+from flask import abort, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from panel.core import i18n
@@ -212,6 +212,9 @@ def _finish(site, user, ok, step, said, steps):
         site.state, site.state_reason = "failed", left[:200]
         db.session.commit()
     else:
+        # Nothing is left, so the row goes; the job keeps its outcome and its steps for the dialog that started it
+        # (job_status), which would otherwise read the deleted site as a finished one.
+        _job(site.id, steps=install_json(site)["steps"], gone=True)
         db.session.delete(site)
         db.session.commit()
 
@@ -341,7 +344,7 @@ def _start(data):
         return _w.say(400, refused)
     _w.audit(site, "website_app_install", "started %s %s, admin %s%s" % (recipe_name, site.app_version, user,
                                                                          " (generated password)" if generated else ""))
-    _job(site.id, state="running", step="account", error="")
+    _job(site.id, state="running", step="account", error="", uid=current_user.id, gone=False)
     secret_vals = {"admin_user": user, "admin_email": email, "admin_password": password}
     app = current_app._get_current_object()
     _w.threading.Thread(target=_worker, args=(app, site.id, current_user.id, secret_vals), daemon=True).start()
@@ -351,8 +354,35 @@ def _start(data):
     return resp
 
 
+def job_status(site_id, user):
+    """GET /websites/install-app/status?id=<site id>: an app install's outcome for the user who started it, or None.
+
+    A failed install that undid every step deletes its site, so the site's own answer is a 404; the job (in
+    this process) keeps its state, steps and reason. Only its starter reads it: anyone else gets None (a 404,
+    the same answer as for no job at all; OWASP Insecure Direct Object Reference Prevention Cheat Sheet,
+    "Mitigation"). Never a password: the job holds none.
+    """
+    with _LOCK:
+        job = dict(_JOBS.get(site_id) or {})
+    if not job or job.get("uid") != getattr(user, "id", None):
+        return None
+    return {"state": job.get("state") or "running", "steps": list(job.get("steps") or []), "error": job.get("error", ""),
+            "site_url": "", "admin_url": "", "gone": bool(job.get("gone"))}
+
+
 def register(app):
     """The one-click install routes."""
+    @app.route("/websites/install-app/status")
+    @login_required
+    def website_install_status():
+        # Only someone who may add sites starts an install, and only its starter reads its outcome. The id is a
+        # query value, not part of the path: the site it names is gone (there is nothing for site_for to find).
+        sid = request.args.get("id", type=int)
+        got = job_status(sid, current_user) if sid and _wa.can_create(current_user) else None
+        if got is None:
+            abort(404)
+        return jsonify({"success": True, "install": got})
+
     @app.route("/websites/install-app", methods=["POST"])
     @login_required
     def website_install_app():
