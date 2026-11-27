@@ -309,6 +309,12 @@
     });
   };
 
+  // Build and start: the app's install and build command over its current files, then a restart (its settings as saved).
+  window.wsAppBuild = function () {
+    WS.say('wapp-msg', WS.T('Building…'));
+    WS.post(WS.R.act(ID, 'app/build'), {}).then(function (d) { if (WS.done(d, 'wapp-msg')) WS.reload(); });
+  };
+
   // Each panel is filled once, from the first answer: a status poll while the site starts must not
   // overwrite what is being typed.
   function renderRulesOnce(d) {

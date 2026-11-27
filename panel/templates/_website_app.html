@@ -32,6 +32,7 @@
     <p class="form-text">The app runs in its own container from an official Node.js image, not on the host's Node.js: that copy is shared with the panel, and the container keeps this site's limits and network rules. The build may reach the npm registry; the running app has no internet access unless an administrator allows it.</p>
     <div class="d-flex flex-wrap gap-2 align-items-center">
       <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-hammer"></i> Save and rebuild</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsAppBuild"><i class="bi bi-arrow-repeat"></i> Build and start</button>
       <span id="wapp-msg" class="small" role="status"></span>
     </div>
   </form>

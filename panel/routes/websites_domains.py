@@ -31,7 +31,6 @@ from panel.core.validation import website_domain
 from panel.db.models import Website, WebsiteDomain, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
-from panel.security.auth import VIEW_WEBSITES
 from panel.services import website_dns as _dns
 from panel.services import websites_access as _wa
 
@@ -181,13 +180,6 @@ def domain_json(site, row, tunnel=None):
 
 def register(app):
     """The domain routes."""
-    @app.route("/websites/<int:site_id>/domains")
-    @login_required
-    def website_domains(site_id):
-        site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
-        refresh_certs(site.remote)
-        return jsonify({"domains": [domain_json(site, d) for d in site.domains]})
-
     @app.route("/websites/<int:site_id>/domains/add", methods=["POST"])
     @login_required
     def website_domain_add(site_id):

@@ -85,7 +85,8 @@ the Websites page:
   connector cannot start (a wrong token, or the host cannot reach the internet), the card says so;
   applying again tries at once, even after several failures in a row. An apply waits a few seconds after
   starting the connector and says it did not start when it stopped in that time (Cloudflare refuses a
-  wrong token only once the connector has started), and the proxy's status shows the connector's state.
+  wrong token only once the connector has started). **Check the web proxy** on the card shows the proxy's
+  version and state and, in tunnel mode, the connector's; **Apply again** applies the host's settings again.
 
 In Public and Restricted mode, ports 80 and 443 are opened in the host's firewall when the first site
 goes online and closed again when the last one goes offline; the web proxy stops too, so nothing

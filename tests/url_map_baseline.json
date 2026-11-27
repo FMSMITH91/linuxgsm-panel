@@ -1257,16 +1257,6 @@
       "GET"
     ]
   },
-  "GET /websites/<int:site_id>/domains": {
-    "endpoint": "website_domains",
-    "guards": [
-      "utils.py:decorated_view",
-      "view:website_domains"
-    ],
-    "methods": [
-      "GET"
-    ]
-  },
   "GET /websites/<int:site_id>/files/download": {
     "endpoint": "website_files_download",
     "guards": [

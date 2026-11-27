@@ -59,10 +59,24 @@ def _remote():
     return remote
 
 
+def _preset_infos():
+    """{preset: {ranges, issued}} of the signed catalog's allow-list presets, as the card lists them."""
+    from panel.services import websites_catalog
+    out = {}
+    for name in WEBSITE_ALLOW_PRESETS:
+        try:
+            out[name] = websites_catalog.preset_info(name)
+        except (KeyError, NotImplementedError):
+            continue
+    return out
+
+
 def proxy_json(row):
     """The proxy row as the Settings card reads it: never the tunnel token, only whether one is set."""
+    from panel.services.websites_proxy import TUNNEL_PORT
     return {"exposure_mode": row.exposure_mode, "allow_cidrs": row.cidrs(), "allow_presets": row.presets(),
-            "presets": list(WEBSITE_ALLOW_PRESETS), "tunnel_provider": row.tunnel_provider or "",
+            "presets": list(WEBSITE_ALLOW_PRESETS), "preset_info": _preset_infos(),
+            "tunnel_service": "http://localhost:%d" % TUNNEL_PORT, "tunnel_provider": row.tunnel_provider or "",
             "tunnel_token_set": bool(row.tunnel_token_enc), "origin_tls": row.origin_tls,
             "origin_pull_mtls": bool(row.origin_pull_mtls), "installed_version": row.installed_version or "",
             "last_error": row.last_error or ""}
