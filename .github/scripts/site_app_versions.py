@@ -20,7 +20,8 @@ sites_problems) before anything is written.
 
     site_app_versions.py plan          print what would change; write nothing
     site_app_versions.py check BODY    when a release passed, write the catalog and the pull request's text
-                                       to BODY; print "changed=true|false" and "refused=<apps>"
+                                       to BODY (a path inside the folder it runs in: the workspace);
+                                       print "changed=true|false" and "refused=<apps>"
 
 Run daily by .github/workflows/site-app-versions.yml, which opens one pull request when the catalog changed.
 """
@@ -54,7 +55,7 @@ ARCHIVE_MAX = 96 * 1024 * 1024
 MEMBERS_MAX = 100000
 USER_AGENT = "linuxgsm-panel-site-app-versions"
 WP_CHECK = "https://api.wordpress.org/core/version-check/1.7/"
-WP_TOKEN = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/wordpress:pull"
+WP_REGISTRY_AUTH_URL = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/wordpress:pull"
 WP_MANIFEST = "https://registry-1.docker.io/v2/library/wordpress/manifests/%s"
 WP_INDEX = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
 DRUPAL_HISTORY = "https://updates.drupal.org/release-history/drupal/current"
@@ -332,7 +333,7 @@ def wordpress(get, wp):
     if offer.get("response") not in ("upgrade", "latest"):
         raise Refused("WordPress's version check offers no release")
     v = _version(offer.get("current"), r"[0-9]{1,2}\.[0-9]{1,2}(?:\.[0-9]{1,3})?")
-    token = _json(get, WP_TOKEN).get("token")
+    token = _json(get, WP_REGISTRY_AUTH_URL).get("token")
     if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9._-]{20,8192}", token):
         raise Refused("Docker Hub gave no pull token")
     images = {}
@@ -427,6 +428,11 @@ def main(argv, get=fetch, catalog=CATALOG):
     if not (argv[1:] == ["plan"] or (len(argv) == 3 and argv[1] == "check")):
         sys.stderr.write(__doc__)
         return 2
+    try:
+        body = inside(argv[2]) if argv[1] == "check" else None
+    except Refused as e:
+        sys.stderr.write("site_app_versions: %s\n" % e)
+        return 2
     with open(catalog, encoding="utf-8") as fh:
         text = fh.read()
     doc = json.loads(text)
@@ -436,8 +442,21 @@ def main(argv, get=fetch, catalog=CATALOG):
     changes, refused = plan(doc, get)
     _say(changes, refused, sys.stdout if argv[1] == "plan" else sys.stderr)
     if argv[1] == "check":
-        _write(doc, changes, refused, catalog, argv[2])
+        _write(doc, changes, refused, catalog, body)
     return 0
+
+
+def inside(path):
+    """`path` resolved (links and `..` followed) when it is inside the folder the script runs in; Refused when not.
+
+    The pull request's text is written to the path named on the command line, so it may not leave that folder (CI
+    runs the script in the workspace): OWASP Path Traversal Prevention Cheat Sheet, "Validate the Resolved Path":
+    resolve it, compare its components with the base's, then use the path checked.
+    """
+    resolved, base = os.path.realpath(path), os.path.realpath(os.getcwd())
+    if resolved == base or os.path.commonpath([resolved, base]) != base:
+        raise Refused("%s is outside the folder site_app_versions.py runs in (%s)" % (path, base))
+    return resolved
 
 
 def _say(changes, refused, out):

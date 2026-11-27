@@ -388,7 +388,7 @@ def _upstream314(**over):
               {"tag_name": "v3.0.0", "prerelease": True}, {"tag_name": "v2.1.9"}, {"tag_name": "v2.1.8"}]).encode(),
           "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.9.tar.gz": smf,
           _SAV314.WP_CHECK: _json314.dumps({"offers": [{"response": "upgrade", "current": "7.1.6"}]}).encode(),
-          _SAV314.WP_TOKEN: _json314.dumps({"token": "t" * 40}).encode()}
+          _SAV314.WP_REGISTRY_AUTH_URL: _json314.dumps({"token": "t" * 40}).encode()}
     up.update(wp)
     up.update(over)
     return up
@@ -410,18 +410,23 @@ def _getter314(up):
     return get
 
 
-def _run314(argv_tail, up, catalog_text=None):
-    """(exit status, stdout, the catalog after, the body file's text or None) of main() over a scratch catalog."""
+def _run314(argv_tail, up, catalog_text=None, body_name="body.md"):
+    """(exit status, stdout, the catalog after, the body file's text or None) of main() over a scratch catalog.
+
+    main() runs in the scratch folder (CI runs it in the workspace), so the body (`body_name` there) is inside it.
+    """
     d = _tf314.mkdtemp(prefix="run-", dir=_TMP314)
-    path, body = os.path.join(d, "catalog.json"), os.path.join(d, "body.md")
+    path, body = os.path.join(d, "catalog.json"), os.path.join(d, body_name)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(catalog_text or _TEXT314)
     argv = ["site_app_versions.py"] + [body if a == "BODY" else a for a in argv_tail]
-    out, saved = _io314.StringIO(), (_sys314.stdout, _sys314.stderr)
+    out, saved, cwd = _io314.StringIO(), (_sys314.stdout, _sys314.stderr), os.getcwd()
     _sys314.stdout, _sys314.stderr = out, _io314.StringIO()
     try:
+        os.chdir(d)
         rc = _SAV314.main(argv, get=_getter314(up), catalog=path)
     finally:
+        os.chdir(cwd)
         _sys314.stdout, _sys314.stderr = saved
     with open(path, encoding="utf-8") as fh:
         after = fh.read()
@@ -446,6 +451,39 @@ def _s314_script_writes():
              ("mybb", "1.8.42", "https://github.com/mybb/mybb/releases/download/mybb_1842/mybb_1842.zip"),
              ("phpbb", "3.3.20", "https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip"),
              ("smf", "2.1.9", "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.9.tar.gz")], True))
+
+
+def _s314_script_confined():
+    asked = []
+    up = _upstream314()
+
+    def get(url, *a, **k):
+        asked.append(url)
+        return _getter314(up)(url, *a, **k)
+    outside = os.path.join(_TMP314, "outside-body.md")
+    got = {}
+    for label, name in (("an absolute path outside", outside), ("a path climbing out", "../climbed-body.md")):
+        d = _tf314.mkdtemp(prefix="run-", dir=_TMP314)
+        path, cwd = os.path.join(d, "catalog.json"), os.getcwd()
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(_TEXT314)
+        try:
+            os.chdir(d)
+            saved, _sys314.stderr = _sys314.stderr, _io314.StringIO()
+            rc = _SAV314.main(["site_app_versions.py", "check", name], get=get, catalog=path)
+            said = _sys314.stderr.getvalue()
+        finally:
+            _sys314.stderr = saved
+            os.chdir(cwd)
+        with open(path, encoding="utf-8") as fh:
+            got[label] = (rc, "is outside the folder site_app_versions.py runs in" in said, fh.read() == _TEXT314,
+                          os.path.exists(os.path.join(os.path.dirname(d), os.path.basename(name))))
+    rc, out, _after, text = _run314(["check", "BODY"], up, body_name="inside.md")
+    eq("site app versions (main, check BODY): a body path outside the folder the script runs in (absolute, or "
+       "climbing out with ..) is refused before anything is fetched or written; a body inside it is written (control)",
+       (got, asked, rc, out.startswith("changed=true"), bool(text)),
+       ({"an absolute path outside": (2, True, True, False), "a path climbing out": (2, True, True, False)}, [], 0, True,
+        True))
 
 
 def _s314_script_text():
@@ -616,9 +654,9 @@ def _s314_workflow_steps():
        "is opened only when the catalog changed and no other from this workflow is open, with the script's text, and "
        "a refused release fails the run",
        (_step_has314(steps, "Find, download and check the newest releases",
-                     'python3 -I .github/scripts/site_app_versions.py check "${RUNNER_TEMP}/site-app-versions.md" >> "$GITHUB_OUTPUT"'),
+                     'python3 -I .github/scripts/site_app_versions.py check site-app-versions.md >> "$GITHUB_OUTPUT"'),
         _step_has314(steps, "Open a pull request with the new releases", "if: steps.check.outputs.changed == 'true'",
-                     'startswith("site-app-versions/")', '--body-file "${RUNNER_TEMP}/site-app-versions.md"'),
+                     'startswith("site-app-versions/")', '--body-file site-app-versions.md'),
         pr[0].count("exit 0"),
         _step_has314(steps, "Fail when a release source or archive was refused", "if: steps.check.outputs.refused != ''",
                      "exit 1")),
@@ -641,7 +679,7 @@ def _s314_gate():
 
 
 for _step314 in (_s314_renovate_pins, _s314_renovate_apart, _s314_renovate_controls, _s314_renovate_updates, _s314_rules,
-                 _s314_daily, _s314_shape, _s314_script_writes, _s314_script_text, _s314_script_refuses, _s314_script_skips,
-                 _s314_fetch, _s314_workflow, _s314_workflow_steps, _s314_gate):
+                 _s314_daily, _s314_shape, _s314_script_writes, _s314_script_confined, _s314_script_text,
+                 _s314_script_refuses, _s314_script_skips, _s314_fetch, _s314_workflow, _s314_workflow_steps, _s314_gate):
     _step314()
 _sh314.rmtree(_TMP314, ignore_errors=True)

@@ -63,7 +63,7 @@ jobs:
           persist-credentials: false
       - name: Find, download and check the newest releases
         id: check
-        run: python3 -I .github/scripts/site_app_versions.py check "${RUNNER_TEMP}/site-app-versions.md" >> "$GITHUB_OUTPUT"
+        run: python3 -I .github/scripts/site_app_versions.py check site-app-versions.md >> "$GITHUB_OUTPUT"
       - name: Open a pull request with the new releases
         if: steps.check.outputs.changed == 'true'
         env:
@@ -87,7 +87,7 @@ jobs:
             -f content="$(base64 -w0 "${path}")" >/dev/null
           gh pr create --repo "${REPO}" --base main --head "${branch}" \
             --title "Catalog: new app releases for website installs" \
-            --body-file "${RUNNER_TEMP}/site-app-versions.md"
+            --body-file site-app-versions.md
       - name: Fail when a release source or archive was refused
         if: steps.check.outputs.refused != ''
         env:
