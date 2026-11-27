@@ -38,6 +38,7 @@ import importlib.util as _ilu313
 import io as _io313
 import json as _json313
 import os
+import re as _re313
 import shutil as _shutil313
 import socket as _socket313
 import tempfile as _tf313
@@ -46,7 +47,7 @@ from types import SimpleNamespace as _NS313
 
 from cryptography import x509 as _x509_313
 from cryptography.hazmat.primitives import hashes as _hashes313, serialization as _ser313
-from cryptography.hazmat.primitives.asymmetric import ec as _ec313, rsa as _rsa313
+from cryptography.hazmat.primitives.asymmetric import ec as _ec313
 from cryptography.x509.oid import NameOID as _OID313
 from flask import g as _g313
 from sqlalchemy import inspect as _inspect313, text as _text313
@@ -225,6 +226,11 @@ def _resolver313(answers):
             raise _socket313.gaierror("no such name")
         return [(None, None, None, "", (a, 0)) for a in got]
     return _NS313(getaddrinfo=getaddrinfo, gaierror=_socket313.gaierror, SOCK_STREAM=_socket313.SOCK_STREAM)
+
+
+def _names313(text, *names):
+    """Which of `names` `text` holds as a whole host name (sorted); never a substring match."""
+    return sorted({t.strip(".") for t in _re313.split(r"[^a-z0-9.-]+", text)} & set(names))
 
 
 def _cf_address313():
@@ -430,9 +436,10 @@ def _notes_for313(st, cert, key):
 
 
 def _s4_notes(st, _rec):
-    weak = _rsa313.generate_private_key(65537, 1024)
+    # A key browsers do not accept (an ECDSA curve outside P-256 and P-384); part232 holds the RSA size verdicts.
+    weak = _ec313.generate_private_key(_ec313.SECP256K1())
     cases = {
-        "weak key": (_pem313(_cert313(weak, [_DOMAIN313])) + _ca_pem313(), _keypem313(weak), "OWASP recommends at least 2048"),
+        "weak key": (_pem313(_cert313(weak, [_DOMAIN313])) + _ca_pem313(), _keypem313(weak), "Browsers accept P-256 and P-384"),
         "self-signed": (_pem313(_cert313(_KEY313, [_DOMAIN313], issuer_key=_KEY313, issuer=_name313(_DOMAIN313))), _KEYPEM313,
                         "well-known CA"),
         "no chain": (_pem313(_cert313(_KEY313, [_DOMAIN313])), _KEYPEM313, "Paste the full chain"),
@@ -566,8 +573,9 @@ def _s5_cdn(st, rec):
     text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
     eq("dns (route): a domain behind Cloudflare is checked as cdn, verified and served; a domain pointing at a foreign "
        "address stays a mismatch and is not served",
-       (got, _wp313.site_domains(site), "cf.p313.example.org {" in text, "far.p313.example.org" in text),
-       (["cdn", "mismatch"], ["cf.p313.example.org"], True, False))
+       (got, _wp313.site_domains(site), "cf.p313.example.org {" in text.split("\n"),
+        _names313(text, "far.p313.example.org")),
+       (["cdn", "mismatch"], ["cf.p313.example.org"], True, []))
     site.enabled = False
     _db313.session.commit()
     rows = {d["domain"]: d for d in _p9_json(su.get("/api/websites/%d" % site.id)).get("domains", [])}
@@ -590,7 +598,7 @@ def _s5_online(st, rec, site):
     r = su.post("/websites/%d/enable" % site.id)
     msg = _p9_json(r).get("message") or ""
     eq("online: a site served on only some of its domains goes online and says which it does not answer on yet",
-       (r.status_code, "far.p313.example.org" in msg, "cf.p313.example.org" in msg), (200, True, False))
+       (r.status_code, _names313(msg, "far.p313.example.org", "cf.p313.example.org")), (200, ["far.p313.example.org"]))
     su.post("/websites/%d/disable" % site.id)
     cust = _Client313(st.cust_cdn.id)
     r = cust.post("/websites/%d/enable" % st.c.id)
@@ -610,8 +618,8 @@ def _s6_check_applies(st, rec):
     r = su.post("/websites/%d/domains/check" % site.id, json={"id": late.id})
     eq("dns check (route): a domain of an online site newly found pointing here is applied at once: the proxy's "
        "configuration then serves it, and the answer says so",
-       (r.status_code, len(rec.applies), "late.p313.example.org" in (rec.applies[-1]["text"] if rec.applies else ""),
-        _p9_json(r).get("message")), (200, 1, True, _wd313.S_SERVED_NOW))
+       (r.status_code, len(rec.applies), _names313(rec.applies[-1]["text"] if rec.applies else "", "late.p313.example.org"),
+        _p9_json(r).get("message")), (200, 1, ["late.p313.example.org"], _wd313.S_SERVED_NOW))
     su.post("/websites/%d/domains/check" % site.id, json={"id": late.id})
     eq("dns check (route): checking an already verified domain applies nothing again (control)", len(rec.applies), 1)
     off = _site313(st.host, "p313-off", [("off.p313.example.org", False, "mismatch")])
@@ -843,7 +851,8 @@ def _s9_wp_primary(st, _rec):
                              json={"id": _dom313(plain, "four.p313.example.org").id})).get("message") or ""
     eq("domains: Make primary on a WordPress site says WordPress keeps its old address and how to change it to the "
        "new one; another site's answer has no such line (control)",
-       ("WordPress Address" in msg and "https://two.p313.example.org" in msg, "WordPress" in other), (True, False))
+       ("WordPress Address" in msg, _names313(msg, "two.p313.example.org"), "WordPress" in other),
+       (True, ["two.p313.example.org"], False))
 
 
 def _s9_scripts(_st, _rec):
