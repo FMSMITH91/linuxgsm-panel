@@ -41,7 +41,7 @@
     i.setAttribute('aria-hidden', 'true');
     return i;
   };
-  WS.clear = function (e) { while (e && e.firstChild) e.removeChild(e.firstChild); return e; };
+  WS.clear = function (e) { if (e) e.replaceChildren(); return e; };
   WS.show = function (id, on) { var e = typeof id === 'string' ? WS.el(id) : id; if (e) e.hidden = !on; };
   WS.button = function (text, icon, action, args, cls) {
     var b = WS.node('button', 'btn btn-sm ' + (cls || 'btn-outline-secondary'));

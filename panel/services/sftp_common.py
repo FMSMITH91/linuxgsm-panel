@@ -207,14 +207,6 @@ def _tailnet_addresses(ips):
 TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))  # NOSONAR - Tailscale's fixed ranges
 
 
-# Addresses that are not reachable from the internet: RFC 1918, the shared CGNAT range (RFC 6598, which
-# holds Tailscale's), loopback, link-local, and IPv6 unique local addresses (RFC 4193, which holds
-# Tailscale's IPv6 range). Any other address of the host is public, and the card says so beside it.
-NOT_PUBLIC = tuple(ipaddress.ip_network(n) for n in (  # NOSONAR - the fixed private and local ranges
-    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
-    "::1/128", "fe80::/10", "fc00::/7"))
-
-
 def address_or(value):
     """`value` as one IP address in its canonical text, else "".
 
@@ -231,12 +223,12 @@ def address_or(value):
 
 
 def is_public(address):
-    """Whether `address` is reachable from the internet: not private, CGNAT, loopback, link-local or ULA."""
+    """Whether `address` is reachable from the internet: ipaddress's own is_global, so none of the special-purpose ranges."""
     try:
         addr = ipaddress.ip_address(str(address or "").strip())
     except ValueError:
         return False
-    return not any(addr.version == n.version and addr in n for n in NOT_PUBLIC)
+    return addr.is_global   # not RFC 1918, CGNAT (RFC 6598), loopback, link-local, ULA, documentation or reserved
 
 
 def host_addresses(rows):

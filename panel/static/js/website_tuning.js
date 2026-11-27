@@ -85,7 +85,7 @@
     WS.get(WS.R.act(ID, 'php/effective')).then(function (d) {
       var body = WS.clear(WS.el('wphp-eff-rows'));
       var vals = (d && d.values) || {};
-      var keys = Object.keys(vals).sort();
+      var keys = Object.keys(vals).sort(function (a, b) { return a.localeCompare(b); });
       if (!keys.length) {
         var tr0 = WS.node('tr');
         tr0.appendChild(WS.node('td', 'text-secondary', (d && d.message) || WS.T('PHP did not answer. Is the site running?')));

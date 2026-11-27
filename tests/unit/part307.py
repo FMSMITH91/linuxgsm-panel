@@ -33,14 +33,14 @@ from panel.services import sftp_broker as _br307, sftp_common as _sc307
 _ROOT307 = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _CFG_SNAP307 = _cfg307.CONFIG_FILE.read_bytes() if _cfg307.CONFIG_FILE.exists() else None
 # Documentation and private ranges only (RFC 5737 TEST-NET, RFC 3849, RFC 1918, Tailscale's CGNAT range).
-_PUB307, _LAN307, _V6_307, _TSA307 = "203.0.113.5", "192.168.1.20", "2001:db8::5", "100.101.102.103"
-_ELSEWHERE307 = "198.51.100.7"
+_PUB307, _LAN307, _V6_307, _TSA307 = "9.9.9.9", "192.168.1.20", "2620:fe::fe", "100.101.102.103"
+_ELSEWHERE307 = "149.112.112.112"
 _IP_OUT307 = (
     "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
     "1: lo    inet6 ::1/128 scope host noprefixroute \\       valid_lft forever preferred_lft forever\n"
     "2: eth0    inet 192.168.1.20/24 brd 192.168.1.255 scope global eth0\\       valid_lft forever\n"
-    "2: eth0    inet 203.0.113.5/24 scope global secondary eth0\\       valid_lft forever\n"
-    "2: eth0    inet6 2001:db8::5/64 scope global \\       valid_lft forever preferred_lft forever\n"
+    "2: eth0    inet 9.9.9.9/24 scope global secondary eth0\\       valid_lft forever\n"
+    "2: eth0    inet6 2620:fe::fe/64 scope global \\       valid_lft forever preferred_lft forever\n"
     "2: eth0    inet6 fe80::1/64 scope link \\       valid_lft forever preferred_lft forever\n"
     "3: tailscale0    inet 100.101.102.103/32 scope global tailscale0\\       valid_lft forever\n")
 _ROWS307 = {"rows": _uf307.parse_ip_addr(_IP_OUT307)}
@@ -100,9 +100,13 @@ eq("sftp address: public is any address not private, CGNAT (Tailscale's too), lo
                                                                        "fd7a:115c:a1e0::1", "169.254.1.1", "::1",
                                                                        _ELSEWHERE307, "bogus")],
    [False, True, False, True] + [False] * 5 + [False, True, False])
+eq("sftp address: documentation, CGNAT, unique-local and reserved addresses are not public; real public ones are",
+   [_sc307.is_public(x) for x in ("203.0.113.5", "198.51.100.7", "2001:db8::5", "100.64.0.1", "fc00::1", "240.0.0.1",
+                                  "9.9.9.9", "2620:fe::fe")],
+   [False] * 6 + [True, True])
 eq("sftp address: the stored address is never an every-address form, multicast, IPv6 link-local or junk",
-   [_sc307.address_or(x) for x in ("0.0.0.0", "::", "224.0.0.1", "fe80::1", "x", "", None, " 203.0.113.5 ",
-                                   "2001:DB8::5")],  # nosec B104 - refused here, never bound
+   [_sc307.address_or(x) for x in ("0.0.0.0", "::", "224.0.0.1", "fe80::1", "x", "", None, " 9.9.9.9 ",
+                                   "2620:FE::FE")],  # nosec B104 - refused here, never bound
    [""] * 7 + [_PUB307, _V6_307])
 eq("sftp address: the choice binds that address alone, and nothing at all without one (never 0.0.0.0 or ::)",
    [_sc307.bind_addresses("address", [_TSA307], True, a) for a in (_PUB307, "", "0.0.0.0", "::")],  # nosec B104
@@ -156,7 +160,7 @@ check("sftp card: ...and the card shows it chosen, with the public warning besid
 with _p9.app_context():
     _row307 = _AL307.query.filter_by(action="settings_update").order_by(_AL307.id.desc()).first()
 check("sftp card: the save's audit row names the address", _row307 is not None
-      and "SFTP specific address (none) -> 203.0.113.5" in (_row307.detail or ""), getattr(_row307, "detail", None))
+      and "SFTP specific address (none) -> 9.9.9.9" in (_row307.detail or ""), getattr(_row307, "detail", None))
 
 _save307(sftp_bind="address", sftp_bind_address=_LAN307)
 _f307 = _flashed307()

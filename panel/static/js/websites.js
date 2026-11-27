@@ -169,8 +169,15 @@
     var name = WS.el('ws-add-name'), dom = WS.el('ws-add-domain');
     if (!name || !dom || name.dataset.typed === '1') return;
     var label = dom.value.trim().toLowerCase().replace(/^www\./, '').split('.')[0] || '';
-    name.value = label.replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').slice(0, 32);
+    name.value = trimHyphens(label.replace(/[^a-z0-9-]/g, '')).slice(0, 32);
   };
+  // `text` without its leading and trailing hyphens (an index scan, not a backtracking pattern).
+  function trimHyphens(text) {
+    var a = 0, b = text.length;
+    while (a < b && text.charAt(a) === '-') a++;
+    while (b > a && text.charAt(b - 1) === '-') b--;
+    return text.slice(a, b);
+  }
   function val(id) { var e = WS.el(id); return e ? e.value.trim() : ''; }
   function addBody() {
     var body = {name: val('ws-add-name'), domain: val('ws-add-domain'), host_id: val('ws-add-host-id') || null,
