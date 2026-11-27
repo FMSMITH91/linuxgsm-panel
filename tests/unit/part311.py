@@ -62,7 +62,8 @@ _REAL311 = {n: getattr(_sw311, n) for n in ("install", "remove", "tunnel_apply",
 # The stand-in tools. Each records its argv (one JSON line). systemctl models a unit's start limit: a unit with
 # "$HOME/.limit-<unit>" is refused by start/restart until `reset-failed <unit>` removes it; FAKE_RESTART_RC fails
 # every start; `show` answers ActiveState with FAKE_ACTIVE (active), and NRestarts with 0, then with
-# FAKE_RESTARTS_LATER; journalctl prints FAKE_JOURNAL (the unit's log, "" as when it cannot be read). podman answers `image exists` with FAKE_IMAGE_EXISTS, a build with FAKE_BUILD_RC, and a run prints
+# FAKE_RESTARTS_LATER; journalctl prints FAKE_JOURNAL (the unit's log, "" as when it cannot be read). podman
+# answers `image exists` with FAKE_IMAGE_EXISTS, a build with FAKE_BUILD_RC, and a run prints
 # npm's update notice unless the run turns it off (as npm does at the end of a build).
 _FAKE311 = r'''
 import json, os, sys

@@ -67,7 +67,8 @@ S_OWN_EXPIRED = ("The certificate you gave this domain has expired, so browsers 
                  "switch back to automatic.")
 S_OWN_SOON = "The certificate you gave this domain expires in {days} day(s). Paste the renewed one before then."
 # A self-signed certificate is noted once when it is saved (tls_own's chain notes); the domain's line keeps saying
-# so, as browsers keep warning (OWASP Transport Layer Security Cheat Sheet, "Use Certificates from a Trusted CA").
+# so, as browsers keep warning (OWASP Transport Layer Security Cheat Sheet, "Use an Appropriate
+# Certification Authority for the Application's User Base").
 S_OWN_SELF_SIGNED = ("The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a "
                      "well-known authority, or switch back to automatic (Let's Encrypt).")
 S_CERT_MODE = "Choose Automatic (Let's Encrypt) or Your own certificate."
