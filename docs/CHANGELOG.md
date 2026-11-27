@@ -27,12 +27,28 @@ dated section below lists what that day's releases changed, newest first; the nu
   shows which month it has. With DB-IP turned off in Outside services, B3 keeps the copy it has.
 - **History goes back a year.** The server and host History charts now offer 30 days, 90 days, 6 months and 1
   year beside 24 hours and 7 days, from hourly summaries the panel keeps on its own host for a year.
+- **A website domain can use your own certificate.** On a site's Domains tab, each domain can use an automatic
+  Let's Encrypt certificate or one you paste in, such as a Cloudflare Origin CA certificate. The panel checks
+  it covers the domain and has not expired, keeps the key encrypted, and warns 30 days before it expires.
+- **New website installs get the newest app version without a panel update.** WordPress, phpBB, Drupal, MyBB
+  and Simple Machines Forum versions, and the images websites run on, now update by themselves through the
+  signed catalog your panel fetches every day, checked against each project's own published checksum.
 
 ### Fixed
 
 - **Website pages reached through WordPress's pretty links load again.** On websites, robots.txt, the favicon,
   post links and WordPress's REST API were refused with an error page. Press Update on each website's Overview
   to apply the fix; the site is offline for a few seconds while it restarts.
+- **Websites behind Cloudflare's proxy are served.** A domain whose DNS goes through Cloudflare (the orange
+  cloud) is now recognised and served, a site is never shown online while none of its domains is served, and
+  Check again puts a domain that now points here straight online.
+- **A new WordPress site passes Site Health.** WordPress can reach its own update servers and call itself, its
+  REST API answers, the object cache is connected, and the unused plugins and themes it ships with are
+  removed.
+- **The Websites pages say what is really happening.** After an install the main button is Put it online,
+  failed installs show why and Retry works, the Overview shows real memory, disk and CPU, saving the proxy's
+  security settings applies them, tunnel mode serves sites, and settings that do not apply are shown greyed
+  out with the reason instead of hidden.
 
 ### Security
 
