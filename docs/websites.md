@@ -26,7 +26,10 @@ processes, largest upload) takes the defaults from the web proxy card's Security
 
 If something the host needs is missing (for example the web proxy is not installed yet), the dialog
 says so on its first line, with one button that fixes it for a superadmin; anyone else is told to ask
-a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button.
+a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button. Retry sets
+the site up again (its account, files, image and container) and starts it, so it also recovers a site whose
+first install failed. An app whose install stopped part-way cannot be set up again: an administrator
+gets **Delete and add again** instead, and anyone else is told to ask one.
 
 Websites run in Podman, like add-ons. The first website on a host installs Podman and its two helpers from
 Ubuntu's archive; a host where that fails is refused before anything is made. A first install that fails

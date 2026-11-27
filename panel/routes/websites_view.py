@@ -200,12 +200,18 @@ def _open_url(site):
     return "https://%s/" % dom.domain if dom and site.enabled else ""
 
 
+def _setup_unfinished(site):
+    """Whether `site` is an app whose install stopped part-way (it is deleted and added again, never retried)."""
+    return bool(site.app_recipe and site.install_step)
+
+
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
            "image": {"name": site.image_key or "", "version": (site.image_digest or "")[-12:], "update_available": False},
            "app_version": site.app_version or "", "php_version": site.php_version or "",
-           "runtime_version": site.runtime_version or "", "last_backup": None, "usage": _usage(probe)}
+           "runtime_version": site.runtime_version or "", "last_backup": None, "usage": _usage(probe),
+           "setup_unfinished": _setup_unfinished(site)}
     if admin:
         out["limits"] = {k: getattr(site, k) for k in ("mem_mb", "cpu_milli", "pids", "disk_mb", "max_body_mb", "backup_keep")}
         out.update(access_log=bool(site.access_log), full_egress=bool(site.full_egress), customer_note=site.customer_note or "")

@@ -31,6 +31,8 @@
     failed: {label: 'Retry', icon: 'arrow-repeat', cls: 'btn-warning', verb: 'start'},
     creating: {label: 'Setting up…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''},
     removing: {label: 'Removing…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''}};
+  var UNFINISHED = {label: 'Delete and add again', icon: 'trash', cls: 'btn-outline-danger', verb: 'delete'};
+  var UNFINISHED_ASK = {label: 'Ask an administrator to delete it', icon: 'info-circle', cls: 'btn-secondary', verb: ''};
   function renderHead(s) {
     var dot = WS.el('ws-dot');
     if (dot) dot.className = WS.dot(s.state).className;
@@ -41,6 +43,8 @@
     var b = WS.el('ws-main');
     if (!b) return;
     var m = WS.pick(MAIN, s.state, MAIN.creating);
+    // An app whose install stopped part-way cannot be set up again: it is deleted and added again (administrators).
+    if (s.state === 'failed' && s.setup_unfinished) m = WS.can.admin ? UNFINISHED : UNFINISHED_ASK;
     b.className = 'btn btn-sm ' + m.cls;
     b.disabled = !m.verb;
     b.dataset.verb = m.verb;
@@ -51,6 +55,7 @@
     var b = WS.el('ws-main');
     var verb = b ? b.dataset.verb : 'start';
     if (!verb) return;
+    if (verb === 'delete') { window.wsDelete(); return; }
     if (verb === 'stop') {
       window.confirmDialog({title: WS.T('Stop this website?'), icon: 'stop-circle', confirmClass: 'btn-danger',
         confirmLabel: WS.T('Stop'), bodyText: WS.T('Visitors see an error until it is started again.'),
@@ -71,6 +76,8 @@
     WS.show('ws-failed', failed);
     if (!failed) return;
     WS.el('ws-failed-reason').textContent = d.site.state_reason || WS.T('No reason was recorded.');
+    // Retry installs the site again; an app whose install stopped part-way is deleted instead (the main button).
+    WS.show('ws-failed-retry', !d.site.setup_unfinished);
     WS.el('ws-failed-log').textContent = (d.logs || []).slice(-20).join('\n') || WS.T('No log lines yet.');
   }
   function renderInstall(d) {

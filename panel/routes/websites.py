@@ -49,6 +49,7 @@ S_QUOTA = "Your group already has as many websites as it may have."
 S_CONFIRM = "Type the website's name to confirm."
 S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
 S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
+S_RETRY_APP = "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
 # An install runs in a thread of the process that started it, so a site still "creating" from before this
@@ -510,6 +511,8 @@ def _run_routes(app):
     @login_required
     def website_start(site_id):
         site = _wa.site_for(current_user, site_id, manage_perm(site_id))
+        if site.state == "failed":
+            return _retry(site)
         ok, said = host_call(_sw.start, site.remote, site)
         return _ran(site, "website_start", ok, said, "running")
 
@@ -539,6 +542,21 @@ def _run_routes(app):
         ok, said = host_call(reader, site.remote, site)
         lines = said.splitlines()[-500:] if ok and isinstance(said, str) else []
         return jsonify({"success": bool(ok), "lines": lines, "message": "" if ok else i18n.tr(said)})
+
+
+def _retry(site):
+    """Retry a failed site (its page's Retry): install it again, then start it, as an image update does.
+
+    A start alone could never recover a failed first install, which removed the site's account. An app whose
+    install stopped part-way (install_step still names a step) is not set up again here: its steps are undone by
+    deleting the site, which is then added again.
+    """
+    if site.app_recipe and site.install_step:
+        return say(409, S_RETRY_APP)
+    ok, said = install_site(site)
+    note_run_state(site, ok, said)
+    forget_status(site.id)
+    return acted(site, "website_start", ok, said, "set up again after it failed" if ok else "")
 
 
 def _ran(site, action, ok, said, state):

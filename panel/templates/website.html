@@ -33,7 +33,7 @@
     <div id="ws-failed-reason" data-no-i18n></div>
     <pre id="ws-failed-log" class="ws-log mt-2 mb-2"></pre>
     {% if can_manage|default(false) %}
-    <button type="button" class="btn btn-sm btn-light" data-action="wsMain"><i class="bi bi-arrow-repeat"></i> Retry</button>
+    <button type="button" id="ws-failed-retry" class="btn btn-sm btn-light" data-action="wsMain"><i class="bi bi-arrow-repeat"></i> Retry</button>
     {% endif %}
   </div>
   <div id="ws-install" class="card mb-2" hidden>

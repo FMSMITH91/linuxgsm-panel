@@ -4,6 +4,9 @@ WordPress Site Health on a fresh install.
 B2  An app install that failed and undid every step: its site is gone, so the dialog reads the job's outcome
     (GET /websites/install-app/status?id=<id>, the starter only) and says it failed, why, and that nothing was left,
     with Try again (the form back as filled in); never "Done." and a link to a page that is not there.
+B3  Retry on a failed site installs it again (account, files, image, units) and starts it: a start alone could
+    never recover a first install that removed the account. An app whose install stopped part-way is refused
+    there, and its page offers Delete and add again (administrators) instead of a Retry that cannot work.
 
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
@@ -175,6 +178,70 @@ def _b2_dialog():
        (True, True, True, "blog", ""))
 
 
+# ── B3. Retry on a failed site ────────────────────────────────────────────────────────────────────
+def _b3_retry(st):
+    calls = []
+    _p9_patch(_sw315, "install", lambda remote, site, db=None, *a, **k: calls.append(("install", site.id))
+              or (True, _sw315.OK_STARTED))
+    _p9_patch(_sw315, "start", lambda remote, site, *a, **k: calls.append(("start", site.id)) or (True, _sw315.OK_STARTED))
+    su = _Client315(st.su.id)
+    failed = _site315(st, "p315-failed", kind="php", state="failed", state_reason="The host refused the account.")
+    r = su.post("/websites/%d/start" % failed.id)
+    _db315.session.expire_all()
+    row = _db315.session.get(_Site315, failed.id)
+    eq("B3 (POST /websites/<id>/start on a failed site, its page's Retry): the site is installed again (account, "
+       "files, image and units, then started), not only started, and it runs again",
+       (r.status_code, calls, row.state, row.state_reason), (200, [("install", failed.id)], "running", ""))
+    stopped = _site315(st, "p315-stopped", kind="php", state="stopped")
+    del calls[:]
+    r = su.post("/websites/%d/start" % stopped.id)
+    eq("B3 control (a stopped site's Start): only started, as before", (r.status_code, calls),
+       (200, [("start", stopped.id)]))
+    app = _site315(st, "p315-cut", kind="wordpress", app_recipe="wordpress", state="failed",
+                   install_step="verify-install-6", install_steps_done="[]")
+    del calls[:]
+    r = su.post("/websites/%d/start" % app.id)
+    eq("B3 (an app whose install stopped part-way): refused with the sentence saying to delete it and add it again, "
+       "nothing run on the host", (r.status_code, (_p9_json(r).get("message") or ""), calls),
+       (409, _w315.S_RETRY_APP, []))
+    _b3_page()
+
+
+def _b3_site_answer(**site):
+    base = {"id": 7, "name": "shop", "kind": "wordpress", "state": "failed", "state_reason": "It failed.", "enabled": False,
+            "setup_unfinished": False}
+    return {"success": True, "site": dict(base, **site), "install": {"state": "", "steps": []}, "domains": [],
+            "dns": {}, "logs": [], "can": {"manage": True, "files": True, "admin": True}}
+
+
+def _site_page315(admin=True):
+    from unit.part12 import P9_ADMIN
+    from unit.part301 import _page301
+    site = _NS315(id=7, name="shop", kind="wordpress")
+    return _page301("website.html", P9_ADMIN, site=site, can_manage=True, can_files=True, site_admin=admin)
+
+
+def _b3_page():
+    scenario = r"""
+      return {label: $('ws-main-label').textContent, verb: $('ws-main').getAttribute('data-verb'),
+              disabled: $('ws-main').disabled, retryShown: !$('ws-failed-retry').hidden};
+    """
+    scripts = ["websites_common.js", "website_site.js"]
+    cut = _node315(_site_page315(), scripts, scenario, {"/api/websites/7": _b3_site_answer(setup_unfinished=True)})
+    ask = _node315(_site_page315(admin=False), scripts, scenario,
+                   {"/api/websites/7": _b3_site_answer(setup_unfinished=True)})
+    plain = _node315(_site_page315(), scripts, scenario, {"/api/websites/7": _b3_site_answer()})
+    eq("B3 (the site page, js/website_site.js): an app whose install stopped part-way offers an administrator Delete "
+       "and add again, and hides the alert's Retry (it could never work)",
+       (cut.get("label"), cut.get("verb"), cut.get("disabled"), cut.get("retryShown")),
+       ("Delete and add again", "delete", False, False))
+    eq("B3 (...anyone else): told to ask an administrator, with nothing to press",
+       (ask.get("label"), ask.get("disabled")), ("Ask an administrator to delete it", True))
+    eq("B3 control (any other failed site): Retry, which installs it again", (plain.get("label"), plain.get("verb"),
+                                                                              plain.get("retryShown")),
+       ("Retry", "start", True))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -211,7 +278,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone,):
+        for _sec315 in (_b2_failed_undone, _b3_retry):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:
