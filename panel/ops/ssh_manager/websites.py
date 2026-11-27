@@ -543,10 +543,13 @@ def tunnel_apply(remote, proxy):
           + "systemctl --user daemon-reload && { systemctl --user reset-failed %s 2>/dev/null; "
             "systemctl --user restart %s; }" % (unit, unit))
     ok, out = _as_site(remote, acct, sh, timeout=1800, stdin_text=_ws().bundle(files))
-    if ok:
-        return True, OK_TUNNEL
+    return (True, OK_TUNNEL) if ok else (False, _tunnel_failure(out))
+
+
+def _tunnel_failure(out):
+    """The sentence for a failed tunnel apply: a mark's own (a failed build), else TUNNEL_FAILED (never the site's log)."""
     said = _mark(out)
-    return False, TUNNEL_FAILED if said == FAILED else said
+    return TUNNEL_FAILED if said == FAILED else said
 
 
 def egress_guard(remote):

@@ -274,16 +274,21 @@ def _s1_build(st):
 _CRON_DIR311 = ".config/systemd/user/"
 
 
+def _order311(calls):
+    """(index of the site's restart, index of the timer's enable --now) in systemctl's calls; None for one not made."""
+    started = next((i for i, a in enumerate(calls) if "restart" in a and "lgsm-site.service" in a), None)
+    enabled = next((i for i, a in enumerate(calls) if a[-3:] == ["enable", "--now", "lgsm-site-cron.timer"]), None)
+    return started, enabled
+
+
 def _s2_cron(st):
     _seams311()
     su = _Client311(st.su.id)
     wp = _site311(st, "p311-cron", kind="wordpress", app_recipe="wordpress")
     _reset311()
     r = su.post("/websites/%d/update-image" % wp.id)
-    calls = _calls311("systemctl")
     timer, service = (_read311(wp.account, _CRON_DIR311 + "lgsm-site-cron." + x) or "" for x in ("timer", "service"))
-    started = next((i for i, a in enumerate(calls) if "restart" in a and "lgsm-site.service" in a), None)
-    enabled = next((i for i, a in enumerate(calls) if a[-3:] == ["enable", "--now", "lgsm-site-cron.timer"]), None)
+    started, enabled = _order311(_calls311("systemctl"))
     eq("F34 (POST /websites/<id>/update-image, WordPress): its scheduled tasks get a timer of the site's account, "
        "every 5 minutes at a fixed offset per site, started once the site runs",
        (r.status_code, "OnCalendar=*:0/5" in timer, "FixedRandomDelay=true" in timer, "WantedBy=timers.target" in timer,
