@@ -226,7 +226,7 @@ newest 7 by default). Restoring stops the site, takes a safety backup first, the
 databases back. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
 their connection settings on request, which is written to the audit log. Deleting a site (on its Settings
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
-site stays offline for another try.
+site stays offline for another try. A site still being set up cannot be deleted until that finishes or fails.
 
 ## Access logs
 

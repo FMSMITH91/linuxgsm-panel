@@ -49,6 +49,7 @@ S_QUOTA = "Your group already has as many websites as it may have."
 S_CONFIRM = "Type the website's name to confirm."
 S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
 S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
+S_BUSY = "This website is still being set up. Wait until that finishes (or fails), then delete it."
 S_RETRY_APP = "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
@@ -447,6 +448,16 @@ def sweep_stranded():
     _SWEPT.append(True)
 
 
+def setting_up(site_id):
+    """Whether this process is setting the site up now: its plain install's thread, or its app install's job.
+
+    A delete then would remove the account while the install still runs as it, and the install's last write
+    would land on a deleted row.
+    """
+    from panel.routes.websites_apps import job_running
+    return site_id in _INSTALLING or job_running(site_id)
+
+
 def note_run_state(site, ok, said):
     """Record on `site` what an install, update or rebuild that ran it left (committed).
 
@@ -619,6 +630,8 @@ def _admin_routes(app):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
         if field(body(), "confirm") != site.name:
             return say(400, S_CONFIRM)
+        if setting_up(site.id):
+            return say(409, S_BUSY)
         return _delete(site)
 
     @app.route("/websites/<int:site_id>/update-image", methods=["POST"])

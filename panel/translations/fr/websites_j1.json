@@ -3,5 +3,6 @@
   "Delete and add again": "Supprimer et ajouter à nouveau",
   "The install failed, and nothing of it was left on the host.": "L'installation a échoué et rien n'en est resté sur l'hôte.",
   "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again.": "L'installation de cette application ne s'est pas terminée, elle ne peut donc pas être reconfigurée ici. Supprimez le site web et ajoutez-le à nouveau.",
+  "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Ce site web est encore en cours de configuration. Attendez que cela se termine (ou échoue), puis supprimez-le.",
   "Try again": "Réessayer"
 }

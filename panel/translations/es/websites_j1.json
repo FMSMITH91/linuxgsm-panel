@@ -3,5 +3,6 @@
   "Delete and add again": "Eliminar y volver a añadir",
   "The install failed, and nothing of it was left on the host.": "La instalación falló y no quedó nada de ella en el servidor.",
   "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again.": "La instalación de esta aplicación no terminó, así que no se puede volver a configurar aquí. Elimina el sitio web y vuelve a añadirlo.",
+  "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Este sitio web todavía se está configurando. Espera a que termine (o falle) y luego elimínalo.",
   "Try again": "Intentar de nuevo"
 }

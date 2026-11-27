@@ -8,6 +8,9 @@ B3  Retry on a failed site installs it again (account, files, image, units) and 
     never recover a first install that removed the account. An app whose install stopped part-way is refused
     there, and its page offers Delete and add again (administrators) instead of a Retry that cannot work.
 
+C9  Delete is refused while the site's install (a plain install's thread, or an app install's job) runs, plainly:
+    it would remove the account the install still runs as.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -242,6 +245,31 @@ def _b3_page():
        ("Retry", "start", True))
 
 
+# ── C9. Delete while the site is being set up ─────────────────────────────────────────────────────
+def _c9_delete_busy(st):
+    removed = []
+    _p9_patch(_sw315, "remove", lambda remote, site: removed.append(site.id) or (True, _sw315.OK_REMOVED))
+    su = _Client315(st.su.id)
+    plain = _site315(st, "p315-busy", kind="php", state="creating")
+    app = _site315(st, "p315-busyapp", kind="wordpress", app_recipe="wordpress", state="creating")
+    _w315._INSTALLING.add(plain.id)
+    _wapps315._job(app.id, state="running", step="render-config-2")
+    try:
+        r1 = su.post("/websites/%d/delete" % plain.id, json={"confirm": plain.name})
+        r2 = su.post("/websites/%d/delete" % app.id, json={"confirm": app.name})
+    finally:
+        _w315._INSTALLING.discard(plain.id)
+        _wapps315._JOBS.pop(app.id, None)
+    _db315.session.expire_all()
+    eq("C9 (POST /websites/<id>/delete while its install thread or app job runs): refused, saying to wait until "
+       "setup finishes or fails; nothing removed, both rows kept",
+       (r1.status_code, r2.status_code, _p9_json(r1).get("message"), removed,
+        _db315.session.get(_Site315, plain.id) is not None, _db315.session.get(_Site315, app.id) is not None),
+       (409, 409, _w315.S_BUSY, [], True, True))
+    r3 = su.post("/websites/%d/delete" % plain.id, json={"confirm": plain.name})
+    eq("C9 control (the same site once its install ended): deleted", (r3.status_code, removed), (200, [plain.id]))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -278,7 +306,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:
