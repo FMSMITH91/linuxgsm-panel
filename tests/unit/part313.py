@@ -842,6 +842,29 @@ def _s9_wp_primary(st, _rec):
        ("WordPress Address" in msg and "https://two.p313.example.org" in msg, "WordPress" in other), (True, False))
 
 
+def _s9_scripts(_st, _rec):
+    page = _ran301("records and lock", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  const rows = $('wd-records').querySelectorAll('tr').map(function (tr) {
+    return tr.children.map(function (td) { return td.textContent; }); });
+  return {rows: rows, names: ['example.org', 'www.example.org', 'shop.example.co.uk', 'example.co.uk', 'a.b.example.org']
+          .map(function (n) { return WS.shortName(n); })};
+""", routes={"/api/websites/7": dict(_SITE_API313, domains=[{"id": 1, "domain": "www.example.org", "dns_state": "mismatch"}],
+                                     dns={"a": ["11.22.33.70"], "aaaa": ["2001:db8::7"]})}))
+    eq("node: the records table names each record as providers ask for it (@ or www) with the full name beside it, "
+       "an AAAA row as well as an A row",
+       page.get("rows"), [["A", "wwwwww.example.org", "11.22.33.70"], ["AAAA", "wwwwww.example.org", "2001:db8::7"]])
+    eq("node: ...@ for the zone itself, the labels before it otherwise, a two-letter country's co. zone counted",
+       page.get("names"), ["@", "www", "shop", "@", "a.b"])
+    lst = _ran301("list locks", _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+  return $('ws-list').querySelectorAll('.ws-lock').map(function (l) { return l.querySelector('i').className; });
+""", routes={"/api/websites": {"success": True, "missing": [], "hosts": [], "sites": [
+        {"id": 1, "name": "a", "state": "running", "domain": "a.example.org", "cert_state": "zerossl"},
+        {"id": 2, "name": "b", "state": "running", "domain": "b.example.org", "cert_state": "own"},
+        {"id": 3, "name": "c", "state": "running", "domain": "c.example.org", "cert_state": "pending"}]}}))
+    eq("node: the list's lock counts every trusted certificate (ZeroSSL, another CA's, your own) as one; a pending one "
+       "is not (control)", lst, ["bi bi-lock-fill text-success", "bi bi-lock-fill text-success", "bi bi-hourglass-split text-secondary"])
+
+
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
 def _state313():
     host = _host313("p313-host")
@@ -890,7 +913,7 @@ with _p9.app_context():
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
                          _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing,
-                         _s9_wp_primary):
+                         _s9_wp_primary, _s9_scripts):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

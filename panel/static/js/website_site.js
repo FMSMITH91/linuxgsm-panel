@@ -222,6 +222,22 @@
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
     renderRecords(doms, d.dns || {});
   }
+  // The record's name as most DNS providers ask for it inside the domain's zone: @ for the zone itself, else the
+  // labels before it ("www"). The zone is guessed as the last two labels (three under a two-letter country code
+  // with a common second level such as co.uk), so the full name stays beside it.
+  var SLD = ['co', 'com', 'org', 'net', 'ac', 'gov', 'edu'];
+  function shortName(domain) {
+    var labels = String(domain).split('.');
+    var n = labels.length > 2 && labels[labels.length - 1].length === 2 && SLD.indexOf(labels[labels.length - 2]) >= 0 ? 3 : 2;
+    return labels.length <= n ? '@' : labels.slice(0, labels.length - n).join('.');
+  }
+  WS.shortName = shortName;
+  function nameCell(domain) {
+    var td = WS.node('td', 'text-break');
+    td.appendChild(WS.raw('span', 'font-monospace fw-semibold', shortName(domain)));
+    td.appendChild(WS.raw('span', 'd-block small text-secondary font-monospace', domain));
+    return td;
+  }
   function renderRecords(doms, dns) {
     var body = WS.clear(WS.el('wd-records'));
     var want = doms.filter(function (x) { return SERVED.indexOf(x.dns_state) < 0; });
@@ -233,7 +249,9 @@
     WS.show('wd-dns', rows.length > 0);
     rows.forEach(function (r) {
       var tr = WS.node('tr');
-      r.forEach(function (c) { tr.appendChild(WS.raw('td', 'text-break font-monospace', c)); });
+      tr.appendChild(WS.raw('td', 'text-break font-monospace', r[0]));
+      tr.appendChild(nameCell(r[1]));
+      tr.appendChild(WS.raw('td', 'text-break font-monospace', r[2]));
       body.appendChild(tr);
     });
   }
