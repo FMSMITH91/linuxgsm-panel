@@ -38,6 +38,17 @@ THE NETWORK (pasta; see addons.network)
     443 only. The egress guard (helper verb website-egress-guard) keeps the site's uid off the host's
     other local addresses, which pasta on Ubuntu 24.04 does not. An object cache (Valkey) and a runtime
     app's gate join the site's own network namespace (Network=container:), so they are private to it.
+
+EGRESS FOR WORDPRESS
+    The recipe's wp-config names the proxy (WP_PROXY_HOST 127.0.0.1, WP_PROXY_PORT 3128) once, at install.
+    A site with full egress (the superadmin's switch) has no proxy and no 3128 forward, so every request
+    WordPress made failed at once ("Failed to connect to 127.0.0.1 port 3128"); and a site with the proxy
+    could check for updates but not download one: download_url() uses WordPress's own address check,
+    which looks the name up, and the container has no name server. The loopback plugin (LOOPBACK_PLUGIN,
+    written at every install) reads EGRESS_HOSTS_FILE, written only while the site has the proxy: with
+    no hosts nothing is sent to the proxy (full egress connects directly); with hosts, an HTTPS request to
+    one of them skips WordPress's lookup, as the proxy resolves the name, checks every address and
+    connects for those hosts on 443 only. Switching full egress installs the site again (its network).
 """
 import base64
 import hashlib
@@ -81,8 +92,9 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # them must reach the sites already installed: a site installed with an older one is offered Update, which installs
 # it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN). 3: the
 # folder of files the site's code reads (RUN_IN: WordPress's loopback token, the object cache's password), WordPress's
-# loopback plugin, and the egress proxy's unit (each checked address tried, its task limit).
-SITE_FILES_REV = "files-3"
+# loopback plugin, and the egress proxy's unit (each checked address tried, its task limit). 4: WordPress's egress
+# hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches.
+SITE_FILES_REV = "files-4"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -96,6 +108,9 @@ RUN_DIR = "site/conf/panel"
 RUN_IN = "/run/panel"
 TOKEN_FILE = RUN_DIR + "/proxy-token"
 CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
+# The hosts WordPress's egress proxy reaches, one a line, while the site has the proxy (needs_egress); none with full
+# egress, which has no proxy. WordPress's loopback plugin reads it (see EGRESS FOR WORDPRESS).
+EGRESS_HOSTS_FILE = RUN_DIR + "/egress-hosts"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _ACCOUNT_RE = re.compile(r"ws[1-9][0-9]{0,8}\Z")
 
@@ -886,7 +901,7 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
               CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token",
-              TOKEN_FILE, CACHE_PASSWORD_FILE)
+              TOKEN_FILE, CACHE_PASSWORD_FILE, EGRESS_HOSTS_FILE)
 
 
 def bundle(files):
@@ -962,6 +977,8 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
     if egress_hosts:
         files[HOME_DIR + "/egress_proxy.py"] = egress_proxy_source()
         files["%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT)] = egress_unit(site, egress_hosts)
+        if needs_egress(site):
+            files[EGRESS_HOSTS_FILE] = "".join(h + "\n" for h in sorted(set(egress_hosts)))
     return files
 
 
@@ -1002,7 +1019,7 @@ def install_sh(account, site, image=None):
         # An app with no files yet (a new site) is not started: its start command has nothing to run.
         pull += "[ -n \"$(ls -A %s 2>/dev/null)\" ] || echo %s; " % (_q(HTML), MARK_APP_EMPTY)
     if site.kind == "wordpress":
-        pull += loopback_sh()
+        pull += loopback_sh() + no_egress_sh(site)
     run_dir = "umask 077; mkdir -p %s || exit 1; " % _q(RUN_DIR) if site.kind in KINDS_PHP else ""
     return (_ENV + run_dir + write_files_sh(bool(b)) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
@@ -1027,6 +1044,7 @@ _LOOPBACK_PHP = r"""<?php
 defined( 'ABSPATH' ) || exit;
 defined( 'LGSM_PANEL_TOKEN_FILE' ) || define( 'LGSM_PANEL_TOKEN_FILE', '@TOKEN@' );
 defined( 'LGSM_PANEL_PORT' ) || define( 'LGSM_PANEL_PORT', @PORT@ );
+defined( 'LGSM_PANEL_EGRESS_FILE' ) || define( 'LGSM_PANEL_EGRESS_FILE', '@EGRESS@' );
 
 /* The site's own names: the host of its home and site addresses. */
 function lgsm_panel_own_hosts() {
@@ -1079,11 +1097,42 @@ function lgsm_panel_loopback( $pre, $args, $url ) {
 }
 add_filter( 'pre_http_request', 'lgsm_panel_loopback', 10, 3 );
 
-/* The container's own loopback never goes through the egress proxy (WP_PROXY_HOST): it would refuse it. */
+/* The hosts the site's egress proxy reaches (written by the panel, one a line); none when the site has no proxy. */
+function lgsm_panel_egress_hosts() {
+	static $hosts = null;
+	if ( null === $hosts ) {
+		$text  = is_readable( LGSM_PANEL_EGRESS_FILE ) ? (string) file_get_contents( LGSM_PANEL_EGRESS_FILE ) : '';
+		$hosts = array_values( array_filter( array_map( 'trim', explode( "\n", strtolower( $text ) ) ) ) );
+	}
+	return $hosts;
+}
+
+/* Nothing goes to the egress proxy (WP_PROXY_HOST) when the site has none (full egress: it connects directly), and
+   the container's own loopback never does: the proxy would refuse it. */
 function lgsm_panel_no_proxy( $send, $uri, $check ) {
+	if ( array() === lgsm_panel_egress_hosts() ) {
+		return false;
+	}
 	return ( isset( $check['host'] ) && '127.0.0.1' === $check['host'] ) ? false : $send;
 }
 add_filter( 'pre_http_send_through_proxy', 'lgsm_panel_no_proxy', 10, 3 );
+
+/* An HTTPS request to one of the proxy's hosts skips WordPress's own address check, which looks the name up: the
+   container has no name server, so it refused every update download (download_url). The proxy makes that check
+   where it connects, on every hop of a redirect too: it resolves the name itself, connects only to global
+   addresses, and only for those hosts on 443. */
+function lgsm_panel_egress_args( $args, $url ) {
+	$parts = wp_parse_url( $url );
+	if ( ! is_array( $parts ) || empty( $parts['host'] ) || empty( $parts['scheme'] ) || 'https' !== strtolower( $parts['scheme'] )
+		|| isset( $parts['user'] ) || isset( $parts['pass'] ) || ( isset( $parts['port'] ) && 443 !== (int) $parts['port'] ) ) {
+		return $args;
+	}
+	if ( in_array( strtolower( $parts['host'] ), lgsm_panel_egress_hosts(), true ) ) {
+		$args['reject_unsafe_urls'] = false;
+	}
+	return $args;
+}
+add_filter( 'http_request_args', 'lgsm_panel_egress_args', 10, 2 );
 """
 # The writer (python3 -I -c, as the account; arguments: the path inside ~/site/html, the file's text in base64). Each
 # folder on the path is made when missing and refused when it is a link; the file is written beside, then renamed.
@@ -1112,12 +1161,19 @@ print("loopback=written")
 def loopback_plugin():
     """The text of WordPress's must-use plugin for its requests to its own address (LOOPBACK_PLUGIN)."""
     return (_LOOPBACK_PHP.replace("@TOKEN@", RUN_IN + "/proxy-token").replace("@PORT@", str(INNER_PORT))
-            .replace("@HEADER@", GATE_HEADER))
+            .replace("@HEADER@", GATE_HEADER).replace("@EGRESS@", RUN_IN + "/" + EGRESS_HOSTS_FILE.rsplit("/", 1)[1]))
 
 
 def loopback_sh():
     """Shell (as the account) writing loopback_plugin() into the site's files; no secret is in it (the token is a file)."""
     return "python3 -I -c %s %s %s; " % (_q(_LOOPBACK_PY), _q(LOOPBACK_PLUGIN), _q(_b64(loopback_plugin())))
+
+
+def no_egress_sh(site):
+    """Shell (as the account): a WordPress site with full egress has no proxy, so its unit and its hosts file go."""
+    if needs_egress(site):
+        return ""
+    return "systemctl --user disable --now %s.service 2>/dev/null; rm -f %s; " % (EGRESS_UNIT, _q(EGRESS_HOSTS_FILE))
 
 
 def image_build_sh(b, path=BUILD_FILE):

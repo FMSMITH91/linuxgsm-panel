@@ -867,9 +867,9 @@ def _settings_flags(site, form):
 def _settings_apply(site, changed, form, log_was):
     """Apply a saved Settings form on the host: (ok, sentence).
 
-    The site is installed again (and restarted) only when a limit's value changed: the form sends every field, and
-    a note or the access log alone never restarts the site. The proxy is applied again only when the access log
-    of an online site was switched.
+    The site is installed again (and restarted) only when a limit's value or the full-internet switch changed: the
+    form sends every field, and a note or the access log alone never restarts the site. The proxy is applied again
+    only when the access log of an online site was switched.
     """
     ok, said = install_site(site) if changed else (True, "Saved.")
     if ok and "disk_mb" in changed:
@@ -896,7 +896,10 @@ def _settings(site, form):
     if refused is not None:
         return refused
     words = ["%s=%s" % (k, limits[k]) for k in sorted(limits) if k in LIMITS or k == "backup_keep"]
+    egress_was = bool(site.full_egress)
     words += _settings_flags(site, form)
+    # The full-internet switch changes the site's network and WordPress's egress proxy: installed again, like a limit.
+    changed += ["full_egress"] if bool(site.full_egress) != egress_was else []
     db.session.commit()
     ok, said = _settings_apply(site, changed, form, log_was)
     return acted(site, "website_settings", ok, said, ", ".join(words) or "none")

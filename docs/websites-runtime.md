@@ -26,7 +26,9 @@ made once, with the site, and no action changes it.
 
 A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
 downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local
-address. A Node.js app reaches npm's registry only while it is being built. The egress guard (an
+address; the panel's must-use plugin lets WordPress's HTTPS requests to those two hosts past its own name lookup
+(the container has no name server, so update downloads failed), as the proxy checks the addresses itself. A
+WordPress site with full egress has no proxy, and the plugin then sends nothing to it. A Node.js app reaches npm's registry only while it is being built. The egress guard (an
 nftables table) keeps site accounts away from the host's other addresses (its LAN, tailnet and public
 addresses), so a site cannot reach the panel's port or SSH. Its rules apply only to packets that carry a
 site account's uid; a packet the kernel sends without a socket of its own (a reset for a closed port, a

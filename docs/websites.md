@@ -367,7 +367,8 @@ is the one exception: it may reach WordPress's own update servers, so its securi
 through a small proxy that connects only to those servers on port 443, trying each of their checked addresses
 in turn; when it refuses or cannot connect, its journal (the site account's `lgsm-site-egress` unit) says
 which host and why, and nothing more. An
-administrator can give one site full internet access on its Settings tab, with a warning; even then it
+administrator can give one site full internet access on its Settings tab, with a warning; saving the switch
+installs the site again, and WordPress then connects directly instead of through the proxy. Even then it
 never reaches the host's other services. Plugins and themes for other apps are uploaded through Files.
 
 WordPress also calls its own address (Site Health's REST API and loopback tests, the editor's checks). Inside
