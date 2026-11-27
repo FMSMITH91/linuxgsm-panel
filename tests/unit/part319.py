@@ -13,6 +13,7 @@
    Apache does not run authorization again on that redirect. The virtual host's rewrite rules (before any .htaccess,
    on every request and redirect) refuse it; a rewritten request, a subrequest and the site's own error page after
    a refusal of a request that had the token are still served.
+6. Put online's answer handled: a failure while handling it is said, not left as an unhandled rejection.
 
 HOW IT RUNS. part12's app and its database. ssh_manager.websites' install runs for real down to the account's
 shell, which is recorded (nothing reaches a host: part12's tripwire is armed). Section 1 starts the egress proxy
@@ -31,6 +32,7 @@ from flask import g as _g319
 
 from unit.part01 import check, eq
 from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from unit.part301 import _COMMON301, _node301, _page301
 from panel.core import config as _cfg319
 from panel.db.models import RemoteServer as _Remote319, User as _User319, Website as _Site319, db as _db319
 from panel.ops.ssh_manager import websites as _sw319
@@ -374,6 +376,27 @@ def _s5_gate(host, su):
        (True, True, True))
 
 
+# ── 6. Put online's answer handled ────────────────────────────────────────────────────────────────
+def _s6_put_online(_host, su):
+    from types import SimpleNamespace
+    page = _page301("website.html", su.id, site=SimpleNamespace(id=7, name="shop", kind="php"), can_manage=True,
+                    can_files=False, site_admin=True)
+    scenario = r"""
+  const seen = {};
+  WS.post = function () { return Promise.resolve(@ANSWER@); };
+  WS.putOnline(7, 'ws-offline-msg', function (ok) { seen.then = ok; });
+  for (let i = 0; i < 6; i++) await tick();
+  return {msg: $('ws-offline-msg').textContent, then: seen.then === undefined ? 'not run' : seen.then};
+"""
+    broken = _node301(page, _COMMON301 + ["website_site.js"], scenario.replace("@ANSWER@", "{get success() { throw new Error('x'); }}"),
+                      routes={"/api/websites/7": {"success": True, "site": {"id": 7, "name": "shop", "kind": "php"}}})
+    fine = _node301(page, _COMMON301 + ["website_site.js"], scenario.replace("@ANSWER@", "{success: true, message: 'Online.'}"),
+                    routes={"/api/websites/7": {"success": True, "site": {"id": 7, "name": "shop", "kind": "php"}}})
+    eq("Put online (js/websites_common.js WS.putOnline): a failure while its answer is handled is said in the message "
+       "and the caller is told it failed, not left as an unhandled rejection; a plain answer is said as before (control)",
+       (broken, fine), ({"msg": "That did not work. Nothing was changed.", "then": False}, {"msg": "Online.", "then": True}))
+
+
 def _cleanup319():
     _db319.session.rollback()
     for model, ids in ((_Site319, _ROWS319["sites"]), (_User319, _ROWS319["users"]), (_Remote319, _ROWS319["remotes"])):
@@ -407,6 +430,7 @@ with _p9.app_context():
         for _sec319 in (_s1_proxy, _s2_full, _s3_switch, _s5_gate):
             check("part319: %s ran to the end" % _sec319.__name__, _ran319(_sec319, _host319, _su319), _ran319.last)
         check("part319: _s4_update ran to the end", _ran319(_s4_update, _host319), _ran319.last)
+        check("part319: _s6_put_online ran to the end", _ran319(_s6_put_online, _host319, _su319), _ran319.last)
         eq("part319: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips319:], [])
     finally:
         _p9_restore_all()

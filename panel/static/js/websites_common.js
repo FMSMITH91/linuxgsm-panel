@@ -84,7 +84,7 @@
   WS.toast = function (msg, kind) { if (window.toast) window.toast(msg, kind || 'info'); };
   // A size in bytes as people read it: 512 B, 3.4 KB, 12 MB, 1.2 GB (1024 per step); '' for no number.
   WS.size = function (n) {
-    if (typeof n !== 'number' || !isFinite(n) || n < 0) return '';
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
     var units = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return (i === 0 || n >= 10 ? String(Math.round(n)) : n.toFixed(1)) + ' ' + units[i];
@@ -118,6 +118,10 @@
           m.appendChild(a);
         }
         if (then) then(ok, d);
+      }).catch(function () {
+        // A failure in the answer's handling is said, never left as an unhandled rejection.
+        WS.say(msgId, WS.T('That did not work. Nothing was changed.'), 'err');
+        if (then) then(false, null);
       });
     });
   };
