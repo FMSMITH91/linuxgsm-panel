@@ -61,6 +61,10 @@ B4  The object cache is usable: while it is on, its password is a 0600 file in t
     Cache plugin's WP_REDIS_* constants from it, and the Performance tab shows the address, the plugin to install,
     and Show connection settings (step-up, audited, no-store) for other code.
 
+WP2 A fresh WordPress install removes the bundled plugins and the default themes it does not use (keeping the
+    active theme and WordPress's default one as its fallback), so Site Health has no inactive plugin or theme to
+    recommend removing.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -1053,21 +1057,45 @@ def _b4_reveal(st):
        (True, "wsCacheReveal", True))
 
 
+# ── WP2. No inactive plugin or theme on a fresh WordPress ─────────────────────────────────────────
+def _wp2_clean(st):
+    steps = _ws315.recipe_steps("wordpress")
+    names = [x["name"] for x in steps]
+    core = next(i for i, x in enumerate(steps) if "wp core install" in " ".join(x.get("argv", [])))
+    clean = steps[core + 1]
+    cmd = " ".join(clean.get("argv", []))
+    eq("WP2 (the WordPress recipe): right after wp core install, a wp-cli step deletes every inactive plugin (the bundled "
+       "Akismet and Hello Dolly on a fresh site) and every inactive theme but WordPress's default one, before the "
+       "files are made read-only and the install is checked",
+       (clean.get("type"), clean.get("image"), "wp plugin list --status=inactive --field=name | xargs -r wp plugin delete"
+        in cmd, "WP_DEFAULT_THEME" in cmd, "wp theme list --status=inactive --field=name | grep -vxF" in cmd,
+        "xargs -r wp theme delete" in cmd, names.index(clean["name"]) < names.index(next(
+            x["name"] for x in steps if x["type"] == "set-permissions"))),
+       ("run-in-container", "wpcli", True, True, True, True, True))
+    _seams315()
+    site = _site315(st, "p315-wpclean", kind="wordpress", app_recipe="wordpress")
+    os.makedirs(os.path.join(_home315(site.account), "site", "html"), exist_ok=True)
+    _reset315()
+    ok, _said = _sw315.app_install_step(st.host, site, clean, values={})
+    run = next((a for a in _calls315("podman") if a[:1] == ["run"]), [])
+    eq("WP2 (ssh_manager.websites.app_install_step, that step): it runs in the wp-cli image's one-off container, "
+       "hardened like every step (no capabilities, read-only, no name server)",
+       (ok, "--cap-drop=all" in run, "--read-only" in run, "--dns=none" in run, run[-2:] == ["-c", clean["argv"][2]]
+        if len(run) > 3 else False), (True, True, True, True, True))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
-    sites = set(_ROWS315["sites"]) | {s.id for s in _Site315.query.filter(
-        _Site315.remote_id.in_(_ROWS315["remotes"] or [0])).all()}
-    for d in _Dom315.query.filter(_Dom315.website_id.in_(sorted(sites) or [0])).all():
-        _db315.session.delete(d)
-    _b5_cleanup(sorted(sites) or [0])
-    for p in _Proxy315.query.filter(_Proxy315.remote_id.in_(_ROWS315["remotes"] or [0])).all():
-        _db315.session.delete(p)
-    for model, ids in ((_Site315, sorted(sites)), (_User315, _ROWS315["users"]), (_Remote315, _ROWS315["remotes"])):
-        for i in ids:
-            row = _db315.session.get(model, i)
-            if row is not None:
-                _db315.session.delete(row)
+    sites = sorted(set(_ROWS315["sites"]) | {s.id for s in _Site315.query.filter(
+        _Site315.remote_id.in_(_ROWS315["remotes"] or [0])).all()}) or [0]
+    _b5_cleanup(sites)
+    _Dom315.query.filter(_Dom315.website_id.in_(sites)).delete(synchronize_session=False)
+    _Proxy315.query.filter(_Proxy315.remote_id.in_(_ROWS315["remotes"] or [0])).delete(synchronize_session=False)
+    _db315.session.commit()
+    for model, ids in ((_Site315, sites), (_User315, _ROWS315["users"]), (_Remote315, _ROWS315["remotes"])):
+        for row in [r for r in (_db315.session.get(model, i) for i in ids) if r is not None]:
+            _db315.session.delete(row)
     _db315.session.commit()
     _shutil315.rmtree(_TREE315, ignore_errors=True)
 
@@ -1092,7 +1120,9 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db,
+                        _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache,
+                        _wp2_clean):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

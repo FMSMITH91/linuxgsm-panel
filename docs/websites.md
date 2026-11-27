@@ -56,6 +56,9 @@ password you type needs at least 15 characters). The panel then:
    container, before the site is public. SMF and MyBB have no command-line installer, so the panel walks
    their install pages over the site's own local address, then removes their `install` folder: a
    leftover installer would let anyone take the site over;
+   A fresh WordPress also has the bundled plugins (Akismet, Hello Dolly) and the default themes it does not use
+   removed, keeping its active theme and WordPress's default one as the fallback, so its Site Health has none
+   to recommend removing;
 4. checks what the installer left before calling it done: the app's settings file is there and not empty,
    its tables are in its database, and its first page answers. An installer that reports success after
    failing is undone like any other failed step;

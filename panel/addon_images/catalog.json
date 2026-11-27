@@ -530,6 +530,15 @@
             }
           },
           {
+            "argv": [
+              "sh",
+              "-c",
+              "wp plugin list --status=inactive --field=name | xargs -r wp plugin delete && d=\"$(wp eval 'echo WP_DEFAULT_THEME;')\" && wp theme list --status=inactive --field=name | grep -vxF -- \"$d\" | xargs -r wp theme delete"
+            ],
+            "image": "wpcli",
+            "type": "run-in-container"
+          },
+          {
             "readonly": [
               "wp-config.php"
             ],
