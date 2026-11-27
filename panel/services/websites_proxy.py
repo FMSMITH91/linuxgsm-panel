@@ -205,10 +205,16 @@ def _secret_of(site):
     return decrypt_secret(site.proxy_secret or "")
 
 
-def _domains(site):
-    """The site's domains the proxy serves: verified, valid, primary first."""
+def _domains(site, mode="public"):
+    """The site's domains the proxy serves: verified, valid, primary first.
+
+    In tunnel mode every valid domain of the site, checked or not: its DNS points at the tunnel's provider, never
+    at this host, so no check could ever pass. The tunnel is the only way in (the proxy listens on the loopback
+    and asks for no certificate), and it reaches only the names the operator routes to it in the provider's
+    dashboard; a domain is still unique across sites and never the panel's own name (websites_domains).
+    """
     rows = sorted(site.domains or [], key=lambda d: (not d.is_primary, d.id or 0))
-    return [d.domain for d in rows if d.verified_at is not None and _DOMAIN_RE.match(d.domain or "")]
+    return [d.domain for d in rows if (mode == "tunnel" or d.verified_at is not None) and _DOMAIN_RE.match(d.domain or "")]
 
 
 def _global(mode, opts, proxy, trusted):
@@ -321,7 +327,7 @@ def _snippet_lines(site):
 
 
 def _site_lines(site, opts, proxy, mode, secret_of):
-    names = _domains(site)
+    names = _domains(site, mode)
     token = secret_of(site) or ""
     if not (names and site.port and _TOKEN_RE.match(token)):
         return []

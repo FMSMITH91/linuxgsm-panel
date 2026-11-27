@@ -77,7 +77,10 @@ the Websites page:
   extra); you can add any other network, IPv4 or IPv6, such as another CDN's or your own. The visitor's
   real address is read from the CDN's header only when a request comes from one of those networks.
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
-  and Cloudflare brings visitors in. Paste the token once: the panel stores it encrypted, never shows it
+  and Cloudflare brings visitors in. In Cloudflare's dashboard, give each website's domain a **Public
+  Hostname** on that tunnel with the service `http://localhost:19080` (the card and each site's Domains tab
+  show it). A domain needs no DNS check in this mode (its DNS points at Cloudflare, not the host): the web
+  proxy serves every domain of an online site, and its Domains tab says HTTPS comes from the tunnel. Paste the token once: the panel stores it encrypted, never shows it
   again, and keeps it off every command line and log. Leave the box empty to keep the saved one. If the
   connector cannot start (a wrong token, or the host cannot reach the internet), the card says so;
   applying again tries at once, even after several failures in a row. An apply waits a few seconds after

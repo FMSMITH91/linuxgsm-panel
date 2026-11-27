@@ -207,6 +207,12 @@ def proxy_row(remote_id):
     return row
 
 
+def tunnel_mode(remote_id):
+    """Whether the host's web proxy is in tunnel mode (visitors come in through the operator's tunnel)."""
+    row = WebsiteProxy.query.filter_by(remote_id=remote_id).first()
+    return row is not None and row.exposure_mode == "tunnel"
+
+
 def _cache_checked(remote, opts):
     """`opts` with the page cache left out unless this host's proxy was built with its module."""
     if opts.get("cache_build"):
@@ -567,11 +573,14 @@ def online_refusal(site):
     """Why `site` may not go online now (a sentence), or None.
 
     It needs a domain, and every domain's DNS must point at the host (website_dns) unless a
-    superadmin puts it online anyway, which is audited as such.
+    superadmin puts it online anyway, which is audited as such. A host in tunnel mode has no DNS rule:
+    its domains point at the tunnel's provider, and the tunnel is the way in.
     """
     domains = list(site.domains or [])
     if not domains:
         return i18n.Sentence("Add a domain to this website before putting it online.")
+    if tunnel_mode(site.remote_id):
+        return None
     if not current_user.is_superadmin and any(d.dns_state != "matching" for d in domains):
         return i18n.Sentence("A domain of this website does not point at its host yet. Check its DNS on the "
                              "Domains tab, then try again.")

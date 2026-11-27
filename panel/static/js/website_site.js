@@ -194,10 +194,16 @@
     var doms = d.domains || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
-    renderRecords(doms, d.dns || {});
+    renderRecords(doms, d.dns || {}, d.tunnel);
   }
-  function renderRecords(doms, dns) {
+  // On a host in tunnel mode no record points here: the domain is routed to the tunnel in the provider's
+  // dashboard, to the service address the server sends. The A/AAAA table is for the other modes.
+  function renderRecords(doms, dns, tunnel) {
+    WS.show('wd-tunnel', !!tunnel);
+    var svc = WS.el('wd-tunnel-service');
+    if (svc) svc.textContent = tunnel ? String(tunnel.service || '') : '';
     var body = WS.clear(WS.el('wd-records'));
+    if (tunnel) { WS.show('wd-dns', false); return; }
     var want = doms.filter(function (x) { return x.dns_state !== 'matching'; });
     var rows = [];
     want.forEach(function (x) {

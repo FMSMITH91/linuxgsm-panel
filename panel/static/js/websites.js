@@ -44,7 +44,7 @@
     if (q && q.max) e.textContent = WS.TF('{used} of {max} websites used', {used: q.used || 0, max: q.max});
   }
   function lock(cert) {
-    var ok = cert === 'issued';
+    var ok = WS.TRUSTED.indexOf(cert) >= 0;
     // The icon is decoration; its meaning is a hidden text node, which the translator reaches.
     var box = WS.node('span', 'ws-lock');
     box.appendChild(WS.icon(ok ? 'lock-fill text-success' : cert === 'failed' ? 'unlock text-danger' : 'hourglass-split text-secondary'));

@@ -169,6 +169,19 @@ def _admin_parts(out, sites, admin):
         out["options"] = options()
 
 
+def _listed(row, site, tunnels):
+    """A list row, its certificate said as the tunnel's on a host in tunnel mode (the provider serves HTTPS there)."""
+    if site.remote_id in tunnels and row.get("domain"):
+        row["cert_state"] = "tunnel"
+    return row
+
+
+def _tunnel_part(tunnel):
+    """What the Domains tab says on a host in tunnel mode (the service address to route in the provider), or None."""
+    from panel.services.websites_proxy import TUNNEL_PORT
+    return {"service": "http://localhost:%d" % TUNNEL_PORT} if tunnel else None
+
+
 def list_answer(site_json):
     """GET /api/websites."""
     from sqlalchemy.orm import selectinload
@@ -178,7 +191,8 @@ def list_answer(site_json):
     sites = _wa.visible_sites(current_user, VIEW_WEBSITES).options(selectinload(Website.domains)).all()
     admin = is_admin(current_user)
     mine = {sid for (sid,) in _wa.visible_sites(current_user, MANAGE_WEBSITES).with_entities(Website.id)}
-    out = {"success": True, "sites": [site_json(s, s.id in mine) for s in sites],
+    tunnels = {p.remote_id for p in WebsiteProxy.query.filter_by(exposure_mode="tunnel")}
+    out = {"success": True, "sites": [_listed(site_json(s, s.id in mine), s, tunnels) for s in sites],
            "can_create": _wa.can_create(current_user), "missing": _missing(admin), "quota": _quota(),
            "php_versions": php_versions(), "runtimes": runtime_versions(), "apps": _apps()}
     _admin_parts(out, sites, admin)
@@ -266,14 +280,15 @@ def _failed_logs(site):
 
 def site_answer(site, probe, install):
     """GET /api/websites/<id>."""
-    from panel.routes.websites import is_admin
+    from panel.routes.websites import is_admin, tunnel_mode
     from panel.routes.websites_domains import domain_json
     from panel.services import website_dns
     admin = is_admin(current_user, site)
     manage = admin or _holds(site, MANAGE_WEBSITE)
     records = website_dns.records(site.remote)
-    out = {"success": True, "site": _site_block(site, admin, probe), "install": install, "logs": [],
-           "domains": [domain_json(site, d) for d in site.domains],
+    tunnel = tunnel_mode(site.remote_id)
+    out = {"success": True, "site": _site_block(site, admin, probe), "install": install, "logs": _failed_logs(site),
+           "domains": [domain_json(site, d, tunnel) for d in site.domains], "tunnel": _tunnel_part(tunnel),
            "dns": {"a": [v for t, v in records if t == "A"], "aaaa": [v for t, v in records if t == "AAAA"]},
            "can": {"manage": manage, "files": _holds(site, EDIT_WEBSITE_FILES), "admin": admin}}
     if manage:

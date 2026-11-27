@@ -164,12 +164,17 @@ def _row(site, form):
     return next((d for d in site.domains if d.domain == clean), None) if clean else None
 
 
-def domain_json(site, row):
-    """A domain as the Domains tab shows it."""
-    note = cert_note(row)
+def domain_json(site, row, tunnel=None):
+    """A domain as the Domains tab shows it.
+
+    On a host in tunnel mode (`tunnel`, read from the host's proxy row when None) the proxy holds no certificate:
+    the tunnel's provider serves HTTPS, so the state is "tunnel", never a certificate pending for good.
+    """
+    tunnel = _w.tunnel_mode(site.remote_id) if tunnel is None else tunnel
+    note = "" if tunnel else cert_note(row)
     return {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
-            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
-            "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
+            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after and not tunnel else None,
+            "cert_state": "tunnel" if tunnel else row.cert_state or "pending", "cert_error": row.cert_error or "",
             "cert_warning": i18n.tr(note) if note else "",
             "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
 
