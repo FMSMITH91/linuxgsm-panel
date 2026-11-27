@@ -826,6 +826,22 @@ def _s9_cert_missing(st, _rec):
     _db313.session.commit()
 
 
+def _s9_wp_primary(st, _rec):
+    wp = _site313(st.host, "p313-wp", [("one.p313.example.org", True, "matching"), ("two.p313.example.org", True, "matching")])
+    wp.app_recipe = "wordpress"
+    _db313.session.commit()
+    plain = _site313(st.host, "p313-plain", [("three.p313.example.org", True, "matching"),
+                                             ("four.p313.example.org", True, "matching")])
+    su = _Client313(st.su.id)
+    msg = _p9_json(su.post("/websites/%d/domains/primary" % wp.id,
+                           json={"id": _dom313(wp, "two.p313.example.org").id})).get("message") or ""
+    other = _p9_json(su.post("/websites/%d/domains/primary" % plain.id,
+                             json={"id": _dom313(plain, "four.p313.example.org").id})).get("message") or ""
+    eq("domains: Make primary on a WordPress site says WordPress keeps its old address and how to change it to the "
+       "new one; another site's answer has no such line (control)",
+       ("WordPress Address" in msg and "https://two.p313.example.org" in msg, "WordPress" in other), (True, False))
+
+
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
 def _state313():
     host = _host313("p313-host")
@@ -873,7 +889,8 @@ with _p9.app_context():
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing):
+                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing,
+                         _s9_wp_primary):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

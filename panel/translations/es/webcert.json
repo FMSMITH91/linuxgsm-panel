@@ -45,6 +45,7 @@
   "This is a Cloudflare Origin CA certificate: only Cloudflare trusts it, so keep the domain's DNS record proxied through Cloudflare and Cloudflare's SSL/TLS mode at Full (strict).": "Es un certificado Cloudflare Origin CA: solo Cloudflare confía en él, así que mantén el registro DNS del dominio pasando por el proxy de Cloudflare y el modo SSL/TLS de Cloudflare en Full (strict).",
   "This opens ports 80 and 443 to the internet and gets a certificate for its domains. Each domain must point at this host first.": "Esto abre los puertos 80 y 443 a internet y obtiene un certificado para sus dominios. Antes, cada dominio debe apuntar a este servidor.",
   "This website is offline: visitors cannot reach it.": "Este sitio web está fuera de línea: los visitantes no pueden llegar a él.",
+  "WordPress still sends visitors to its old address. In WordPress, open Settings, General and set WordPress Address and Site Address to https://{domain}.": "WordPress sigue enviando a los visitantes a su dirección anterior. En WordPress, abre Ajustes, Generales y pon Dirección de WordPress y Dirección del sitio en https://{domain}.",
   "Your own certificate": "Tu propio certificado",
   "issuer": "emisor"
 }
