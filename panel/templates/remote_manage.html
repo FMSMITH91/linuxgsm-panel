@@ -1070,7 +1070,9 @@
   </div>
   <div class="card-body hh-body">
     <div id="hh-empty" class="text-secondary small text-center py-4"{% if hh_has_history %} data-start-hidden{% endif %}>
-      <i class="bi bi-hourglass-split"></i> No history in this range yet. A sample is recorded every minute while this host has a game server installed.
+      <span id="hh-empty-none"><i class="bi bi-hourglass-split"></i> No history in this range yet. A sample is recorded every minute while this host has a game server installed.</span>
+      <span id="hh-empty-older" data-start-hidden><i class="bi bi-clock-history"></i> Nothing was recorded in this range, but there is older history.
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-1" data-hist-go="30d" data-hist-go-for="data-hh-range">Last 30 days</button></span>
     </div>
     <div id="hh-charts" class="row g-3"{% if not hh_has_history %} data-start-hidden{% endif %}>
       <div class="col-md-6">

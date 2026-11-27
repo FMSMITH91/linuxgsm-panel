@@ -656,8 +656,12 @@
     </div>
   </div>
   <div class="card-body">
+    {# Two ways to be empty: nothing recorded yet, or nothing in this range while a longer one has history
+       (the reply's "older"), which is offered as one button (history_charts.js _histOlder). #}
     <div id="hist-empty" class="text-secondary small text-center py-4" data-start-hidden>
-      <i class="bi bi-hourglass-split"></i> No history in this range yet — a sample is recorded every minute. Check back shortly.
+      <span id="hist-empty-none"><i class="bi bi-hourglass-split"></i> No history in this range yet — a sample is recorded every minute. Check back shortly.</span>
+      <span id="hist-empty-older" data-start-hidden><i class="bi bi-clock-history"></i> Nothing was recorded in this range, but there is older history.
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-1" data-hist-go="30d" data-hist-go-for="data-hist-range">Last 30 days</button></span>
     </div>
     <div id="hist-charts">
       <div class="small text-secondary mb-1"><i class="bi bi-people-fill"></i> Players</div>

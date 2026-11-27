@@ -137,6 +137,30 @@ function _histDue(key, rng, now){
   return true;
 }
 
+// Which "nothing here" line an empty reply shows (prefix: 'hist' on the server page, 'hh' on the host
+// page). With `older` (the shortest longer range that has history, from the reply) it says there is
+// older history and offers that range as one button, labelled as that range's own button is titled;
+// without it, the "nothing recorded yet" line.
+function _histOlder(prefix, older){
+  var none = document.getElementById(prefix + '-empty-none'), more = document.getElementById(prefix + '-empty-older');
+  if (none) none.style.display = older ? 'none' : '';
+  if (!more) return;
+  more.style.display = older ? '' : 'none';
+  var go = more.querySelector('[data-hist-go]');
+  if (!older || !go) return;
+  go.setAttribute('data-hist-go', older);
+  var target = document.querySelector('[' + go.getAttribute('data-hist-go-for') + '="' + older + '"]');
+  if (target && target.getAttribute('title')) go.textContent = target.getAttribute('title');
+}
+
+// The offered range's button: presses that range's own button, so the toggle, the active state and the
+// reload are the ones a direct tap gives.
+document.addEventListener('click', function(e){
+  var go = e.target.closest && e.target.closest('[data-hist-go]'); if (!go) return;
+  var target = document.querySelector('[' + go.getAttribute('data-hist-go-for') + '="' + go.getAttribute('data-hist-go') + '"]');
+  if (target) target.click();
+});
+
 // A dashed "Peak" line beside an average, for the ranges whose points are hourly rollups (they carry
 // cpu_max and the like); none for the 24h and 7d ranges, whose points are single samples.
 function _hch_peak(datasets, points, key, color){

@@ -368,7 +368,8 @@ def _census71():
     texts = {d: _data71._audit_ips_text((None, d), None) for d in (90, 10 ** 6, 10 ** 12, -5)}
     check("debug report: a very large audit_ip_retention_days builds the Database section's queries "
           "(1e12 days raised OSError outside any guard, and the whole section read \"could not be read\")",
-          all((q[10 ** 12] == q[10 ** 300] == ["audit_log", "host_sample", "metric_sample"],
+          all((q[10 ** 12] == q[10 ** 300] == ["audit_log", "host_hourly", "host_sample", "metric_hourly",
+                                               "metric_sample"],
                "audit_ips" in q[90])), repr(q))
     check("debug report: ...and says IP reduction is off for such a value (the panel's own ageing "
           "raises on it), not \"IPs reduced after N d\"; a normal value still says it (control)",

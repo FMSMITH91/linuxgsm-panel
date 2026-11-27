@@ -225,6 +225,9 @@ def _r17b_ip_ageing_fails(ip_days):
 def _census_queries(ip_days):
     q = {"metric_sample": ("SELECT COUNT(*), MIN(ts) FROM metric_sample", ()),
          "host_sample": ("SELECT COUNT(*), MIN(ts) FROM host_sample", ()),
+         # The hourly History rollups (panel/services/history_rollup.py), kept a year.
+         "metric_hourly": ("SELECT COUNT(*), MIN(hour) FROM metric_hourly", ()),
+         "host_hourly": ("SELECT COUNT(*), MIN(hour) FROM host_hourly", ()),
          "audit_log": ("SELECT COUNT(*), MIN(timestamp) FROM audit_log", ())}
     if ip_days and ip_days > 0 and not _r17b_ip_ageing_fails(ip_days):
         try:
@@ -242,6 +245,8 @@ def _count_age(rows):
 
 
 def _sample_line(name, rows, keep_days, res):
+    if rows is None:
+        rows = "error:NoAnswer"
     if isinstance(rows, str):
         res.add("- **%s**: could not count (%s)" % (name, rows.split(":", 1)[-1]))
         return
@@ -363,6 +368,9 @@ def _volume_lines(got, conf, res):
     keep = monitoring._METRIC_RETENTION_DAYS
     _sample_line("metric_sample", got.get("metric_sample"), keep, res)
     _sample_line("host_sample", got.get("host_sample"), keep, res)
+    from panel.services import history_rollup
+    for name in ("metric_hourly", "host_hourly"):
+        _sample_line(name, got.get(name), history_rollup.ROLLUP_RETENTION_DAYS, res)
     _audit_line(got.get("audit_log"), got.get("audit_ips"), conf, res)
 
 

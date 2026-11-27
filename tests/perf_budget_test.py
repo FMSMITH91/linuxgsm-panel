@@ -572,10 +572,10 @@ def _check_api_servers_scans_concurrently(client):
 
 # The History ranges: the sweep above asks each history page once, at its default range (24h). This asks
 # every range, with no history and then with a year of it (a day of per-minute samples and 8,760 hourly
-# rows for one server and its host), and holds each to the same few queries either way: a read that grew
+# rows for one server and its host), and holds each to no more queries with the year than without: a read that grew
 # with the rows (a query per hour, a lazy load per row) would run thousands at a year.
 HIST_RANGES = ("24h", "7d", "30d", "90d", "6mo", "1y")
-HIST_QUERY_BUDGET = 8
+HIST_QUERY_BUDGET = 12
 
 
 def _seed_year_of_history(sid, rid):
@@ -609,13 +609,17 @@ def _history_paths():
 
 
 def _history_grew(paths, empty, year):
-    """The reads whose query count changed with a year of rows, or went past HIST_QUERY_BUDGET, described."""
+    """The reads that ran more queries with a year of rows than with none, or went past HIST_QUERY_BUDGET.
+
+    An empty reply runs a few more than a full one (it looks up the longer range that has history), so the
+    year may read fewer; never more.
+    """
     return ["%s %d->%d" % (p, empty.get(p, -1), year.get(p, -1)) for p in paths
-            if empty.get(p) != year.get(p) or year.get(p, 99) > HIST_QUERY_BUDGET]
+            if year.get(p, 99) > min(empty.get(p, -1), HIST_QUERY_BUDGET)]
 
 
 def _check_history_ranges_bounded(client):
-    """Each History range of the server and host pages reads the same few queries with a year of rows as with none."""
+    """Each History range of the server and host pages reads no more queries with a year of rows than with none."""
     sid, rid, paths = _history_paths()
     st_empty, st_year = {}, {}
     empty = probe(client, paths, st_empty)
@@ -627,7 +631,7 @@ def _check_history_ranges_bounded(client):
           "of it (the year's replies are not empty)",
           {(a, b) for _p, a, b in answered} == {(200, 200)} and all(replies), repr((answered, replies)))
     grew = _history_grew(paths, empty, year)
-    check("perf: each History range reads the same few queries (at most %d) with a year of rows as with none"
+    check("perf: each History range reads no more queries with a year of rows than with none (at most %d)"
           % HIST_QUERY_BUDGET, not grew, "; ".join(grew[:6]))
 
 

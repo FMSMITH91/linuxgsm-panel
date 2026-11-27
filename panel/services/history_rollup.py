@@ -126,6 +126,13 @@ def tick(now, raw_retention_days):
     return rolled
 
 
+def newest(kind, key_id):
+    """(newest sample's time, newest rolled hour's start) for `key_id`, each None when there is none."""
+    raw, hourly = kind.raw, kind.hourly
+    return (db.session.scalar(select(func.max(raw.ts)).where(getattr(raw, kind.key) == key_id)),
+            db.session.scalar(select(func.max(hourly.hour)).where(getattr(hourly, kind.key) == key_id)))
+
+
 def _bucketed_select(kind, key_id, start, width):
     """`key_id`'s rolled hours from `start` merged in SQL into buckets of `width` seconds, one row per bucket.
 

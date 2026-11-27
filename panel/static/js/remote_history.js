@@ -42,6 +42,7 @@ window.loadHostHistory = function(){
       if (!d || d.error) return;
       var h = d.host || [];
       _hch_showEmpty(!h.length);
+      if (!h.length) _histOlder('hh', d.older);
       if (h.length) _hch_drawHost(h);
     }).catch(function(){});
 };

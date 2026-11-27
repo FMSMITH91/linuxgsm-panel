@@ -50,6 +50,7 @@
     "_histCharts": "writable",
     "_histDue": "writable",
     "_histLbl": "writable",
+    "_histOlder": "writable",
     "_histTimes": "writable",
     "_histX": "writable",
     "_histXScale": "writable",

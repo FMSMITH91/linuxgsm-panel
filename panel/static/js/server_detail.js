@@ -2055,7 +2055,9 @@ window.loadHistory = function(){
       if(_r25c_histUnread(d)) return;
       var s = d.server || [], h = d.host || [];
       var empty = document.getElementById('hist-empty'), charts = document.getElementById('hist-charts');
-      if(!s.length && !h.length){ if(empty)empty.style.display=''; if(charts)charts.style.display='none'; return; }
+      if(!s.length && !h.length){
+        if(empty)empty.style.display=''; if(charts)charts.style.display='none'; _histOlder('hist', d.older); return;
+      }
       if(empty)empty.style.display='none'; if(charts)charts.style.display='';
       var sL = s.map(function(p){ return _histLbl(p.t, _histRange); }), hL = h.map(function(p){ return _histLbl(p.t, _histRange); });
       // Parsed timestamps for the date-aware 24h axis; refreshed every load so in-place updates stay in sync.

@@ -15,6 +15,8 @@ panel/routes/remotes.py, panel/db/models.py, the two pages and their scripts):
   whatever the number of rows.
 * The pages: six range buttons on each, which wrap at phone width; the scripts in node: the axis and
   labels per range, the peak lines, a long range polled every ten minutes.
+* The debug report's Database section lists the rollups; an empty range's reply names the shortest longer
+  range that has history, and the page offers it as one button.
 
 HOW IT RUNS. No host is reached: part12's transport tripwire is armed and the pages' outside reads are
 stubbed as part177 does. The sample and rollup tables of part12's database are set aside first and put
@@ -36,6 +38,8 @@ from panel.core.clock import utcnow as _utcnow309
 from panel.db import models as _m309
 from panel.db.models import db as _db309
 from panel.ops import system_ops as _so309, tailscale_integration as _ts309
+from panel.ops.debug_report import _src_db as _srcdb309, data as _dbgdata309
+from panel.ops.debug_report._base import Ctx as _Ctx309
 from panel.ops.ssh_manager import _core as _core309
 from panel.routes import api as _api309, server_detail as _sd309
 from panel.services import history_rollup as _hr309
@@ -342,10 +346,10 @@ eq("long ranges: the hour the tick has not rolled yet is built from its samples,
     (_last309[1] or [{}])[-1].get("cpu_max")), (9, 80.0, 80.0))
 _qs309 = [v[2] for v in _y309.values()] + [_g309.get("hyear", (0, {}, 0))[2]]
 _q0309 = [_e30[2], _e1y[2], (_g309.get("hempty") or (0, {}, 0))[2]]
-check("long ranges: a fixed number of queries whatever the rows (a year of them reads as many as none), at most "
-      "8 a request",
-      _qs309 and len(set(_qs309[:4] + _q0309[:2])) == 1 and _qs309[4] == _q0309[2] and max(_qs309 + _q0309) <= 8,
-      repr((_qs309, _q0309)))
+check("long ranges: a fixed number of queries whatever the rows (a year of them reads no more than none, which "
+      "also looks up the range that has history), at most 12 a request",
+      _qs309 and len(set(_qs309[:4])) == 1 and _qs309[0] <= _q0309[0] and _qs309[4] <= _q0309[2]
+      and max(_qs309 + _q0309) <= 12, repr((_qs309, _q0309)))
 _b309 = [p for p in (_g309.get("bucket") or {}).get("server") or [] if p.get("t") == _A30.isoformat() + "Z"]
 eq("long ranges: two hours in one point: CPU and RAM averaged by their samples (17.5, 200), the higher peak, the "
    "lower low, the most players (a None count is not 0)",
@@ -397,6 +401,12 @@ eq("pages: the server page's History card and the host page's each offer 24h, 7d
    ([b for b, _t in _sb309], [b for b, _t in _hb2309], [t for _b, t in _sb309]),
    (_RANGES309, _RANGES309, ["Last 24 hours", "Last 7 days", "Last 30 days", "Last 90 days", "Last 6 months",
                              "Last year"]))
+_eh309 = [(_pg309[k].get_data(as_text=True) if _pg309[k].status_code == 200 else "") for k in ("server", "host")]
+check("pages: each card's empty block holds the nothing-recorded line and, hidden until a reply names a longer range, "
+      "the older-history line with its one button",
+      all(('id="%s-empty-none"' % p) in h and ('id="%s-empty-older" data-start-hidden' % p) in h
+          and ('data-hist-go-for="%s"' % a) in h
+          for h, p, a in zip(_eh309, ("hist", "hh"), ("data-hist-range", "data-hh-range"))), "")
 check("pages: each card header wraps (flex-wrap), so at phone width the six buttons take their own line instead "
       "of running past the card", "flex-wrap" in _sh309 and "flex-wrap" in _hh2309, repr((_sh309, _hh2309)))
 
@@ -419,7 +429,8 @@ _stage309 = r"""
 process.env.TZ = 'UTC';
 global.window = global;
 const els = {}, built = {}, urls = [];
-let replyWith, clickFn = null, pollFn = null;
+let replyWith, pollFn = null;
+const clickFns = [], clickFn = e => clickFns.forEach(f => f(e));
 const canvas = id => ({id, getContext: () => ({id})});
 ['hh-cpu', 'hh-ram', 'hh-disk', 'hh-net', 'hist-players', 'hist-server', 'hist-host', 'hist-net']
   .forEach(id => { els[id] = canvas(id); });
@@ -431,7 +442,8 @@ els['hh-charts'] = {style: {}};
 els['hist-empty'] = {style: {display: 'none'}};
 els['hist-charts'] = {style: {}};
 global.document = {getElementById: id => (id in els ? els[id] : null),
-                   addEventListener: (t, fn) => { if (t === 'click') clickFn = fn; }};
+                   querySelector: sel => (global.qs ? global.qs(sel) : null),
+                   addEventListener: (t, fn) => { if (t === 'click') clickFns.push(fn); }};
 global.MOUNT = ''; global.REMOTE_ID = 7; global.serverId = 3;
 global.pollWhenVisible = fn => { pollFn = fn; };
 global.fetch = u => { urls.push(u); return Promise.resolve({json: () => Promise.resolve(replyWith)}); };
@@ -523,6 +535,114 @@ if _o309s is not None:
        "it once, on 24h each poll reads it",
        _o309s, {"url": "/api/server/3/history?range=90d", "ids": ["hist-host", "hist-net", "hist-players", "hist-server"],
                 "longPolls": 1, "rawPolls": 2})
+
+# ── 10. the debug report lists the rollups ─────────────────────────────────────────────────────
+
+
+def _ro309(queries, timeout=None):
+    """_src_db.run_ro on part12's database: each query's rows, or "error:<class>" as run_ro answers."""
+    out = {}
+    with _p9.app_context():
+        conn = _db309.engine.raw_connection()
+        try:
+            for name, (sql, params) in queries.items():
+                try:
+                    out[name] = [tuple(r) for r in conn.cursor().execute(sql, params).fetchall()]
+                except Exception as exc:  # noqa: BLE001 - answered as run_ro answers it
+                    out[name] = "error:%s" % type(exc).__name__
+        finally:
+            conn.close()
+    return out
+
+
+_dbg309 = ""
+try:
+    _p9_arm(who="part309")
+    _clear309()
+    _put309([_MH(server_id=_SRV309, hour=_F309 - _td309(days=400), n=1),
+             _HH(remote_id=_HOST309, hour=_F309 - _td309(days=2), n=1)])
+    _p9_patch(_srcdb309, "run_ro", _ro309)
+    _dbg_res309 = _dbgdata309.section_database(_Ctx309(app=None, deadline_s=5.0))
+    _dbg309 = "\n".join(_dbg_res309.lines)
+    _dbg_find309 = [f["text"] for f in _dbg_res309.findings]
+finally:
+    _p9_restore_all()
+    _clear309()
+check("debug report: the Database section lists the hourly rollups like the sample tables: rows, oldest, a year's "
+      "retention, flagged when older than it",
+      "**metric_hourly** 1 rows · oldest 400.0 d (retention 366 d ✗)" in _dbg309
+      and "**host_hourly** 1 rows · oldest 2.0 d (retention 366 d ✓)" in _dbg309
+      and any("metric_hourly is older" in t for t in _dbg_find309), _dbg309)
+
+# ── 11. an empty range names the longer one that has history ───────────────────────────────────
+_o309 = {}
+try:
+    _p9_arm(who="part309")
+    _p9_patch(_api309, "utcnow", lambda: _NOW309)
+    _A309 = _p9_client(P9_ADMIN)
+    _clear309()
+    _o309["nothing"] = _A309.get("/api/server/%d/history?range=24h" % P9_GM).get_json(silent=True) or {}
+    _put309([_MH(server_id=P9_GM, hour=_F309 - _td309(days=20), n=60, cpu_avg=5.0)])
+    _o309["rolled"] = [(_A309.get("/api/server/%d/history?range=%s" % (P9_GM, r)).get_json(silent=True) or {})
+                       .get("older", "absent") for r in ("24h", "7d", "30d")]
+    _put309([_ms309(_NOW309 - _td309(days=3), sid=P9_GM)])
+    _o309["sample"] = (_A309.get("/api/server/%d/history?range=24h" % P9_GM).get_json(silent=True) or {}).get("older")
+    _put309([_HH(remote_id=P9_HOST2, hour=_F309 - _td309(days=100), n=60, cpu_avg=5.0)])
+    _o309["host"] = [(_A309.get("/api/remote/%d/history?range=%s" % (P9_HOST2, r)).get_json(silent=True) or {})
+                     .get("older", "absent") for r in ("24h", "90d", "6mo")]
+finally:
+    _p9_restore_all()
+    _clear309()
+eq("empty range: a reply with nothing names no longer range when there is no history at all (older None)",
+   _o309.get("nothing", {}).get("older", "absent"), None)
+eq("empty range: a server whose only history is an hour rolled 20 days ago is offered 30d from its empty 24h and 7d; "
+   "the 30d reply has its point and no offer",
+   _o309.get("rolled"), ["30d", "30d", "absent"])
+eq("empty range: a sample from 3 days ago makes the offer from 24h the 7d range (the shortest with history)",
+   _o309.get("sample"), "7d")
+eq("empty range: a host whose newest hour is 100 days old is offered 6mo from 24h and from 90d; the 6mo reply has "
+   "its point and no offer", _o309.get("host"), ["6mo", "6mo", "absent"])
+
+_prog309o = _stage309 + _hist_js309 + "\n" + _host_js309 + "\n" + r"""
+(async () => {
+  const out = {}, clicked = [];
+  const go = {attrs: {'data-hist-go': '30d', 'data-hist-go-for': 'data-hh-range'}, textContent: 'Last 30 days',
+              getAttribute(k){ return this.attrs[k]; }, setAttribute(k, v){ this.attrs[k] = v; }};
+  els['hh-empty-none'] = {style: {display: ''}};
+  els['hh-empty-older'] = {style: {display: 'none'}, querySelector: () => go};
+  global.qs = sel => (sel === '[data-hh-range="6mo"]' ? {getAttribute: k => (k === 'title' ? 'Last 6 months' : null),
+                                                          click: () => clicked.push('6mo')} : null);
+  replyWith = {host: [], older: '6mo'}; window.loadHostHistory(); await settle();
+  out.older = [els['hh-empty-none'].style.display, els['hh-empty-older'].style.display, go.attrs['data-hist-go'],
+               go.textContent];
+  clickFn({target: {closest: s => (s === '[data-hist-go]' ? go : null)}});
+  out.clicked = clicked;
+  replyWith = {host: [], older: null}; window.loadHostHistory(); await settle();
+  out.none = [els['hh-empty-none'].style.display, els['hh-empty-older'].style.display];
+  console.log(JSON.stringify(out));
+})();
+"""
+_o309o = _run_js75("History: an empty range offers the longer one with history", _prog309o)
+if _o309o is not None:
+    eq("host History card: an empty reply naming 6mo says there is older history and offers one button labelled as "
+       "the 6mo button is titled; tapping it presses the 6mo button",
+       [_o309o.get("older"), _o309o.get("clicked")], [["none", "", "6mo", "Last 6 months"], ["6mo"]])
+    eq("host History card: an empty reply naming none shows the nothing-recorded line (control)", _o309o.get("none"),
+       ["", "none"])
+
+_prog309p = _stage309 + _hist_js309 + "\nvar _histRange = '24h';\n" + _sd_cut309 + "\n" + r"""
+(async () => {
+  els['hist-empty-none'] = {style: {display: ''}};
+  els['hist-empty-older'] = {style: {display: 'none'}, querySelector: () => null};
+  replyWith = {server: [], host: [], older: '30d'}; window.loadHistory(); await settle();
+  console.log(JSON.stringify([els['hist-empty'].style.display, els['hist-empty-none'].style.display,
+                              els['hist-empty-older'].style.display]));
+})();
+"""
+_o309p = _run_js75("History: the server page's empty range offers the longer one", _prog309p)
+if _o309p is not None:
+    eq("server History: an empty reply naming 30d shows the older-history line instead of nothing-recorded",
+       _o309p, ["", "none", ""])
 
 # Part12's sample and rollup rows, put back as they were.
 with _p9.app_context():
