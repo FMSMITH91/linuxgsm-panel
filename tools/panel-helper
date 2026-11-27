@@ -3782,7 +3782,7 @@ def _web_deny_dir(gid):
     """
     os.makedirs(WEB_DENY_DIR, mode=0o700, exist_ok=True)
     os.chown(WEB_DENY_DIR, 0, gid)
-    os.chmod(WEB_DENY_DIR, 0o710)
+    os.chmod(WEB_DENY_DIR, stat.S_IRWXU | stat.S_IXGRP)       # 0710: the group may search, never read or write
 
 
 def _web_log_dir(pw):
