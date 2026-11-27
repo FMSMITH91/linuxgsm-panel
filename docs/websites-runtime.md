@@ -67,7 +67,7 @@ now fails at once instead of waiting.
 
 ## CPU limits
 
-A site's CPU limit is applied in one of three ways, and the site card says which one:
+A site's CPU limit is applied in one of three ways, which the panel picks for the host:
 
 - **On the container**, when the host lets the site's account control its own CPU (the usual case on
   Ubuntu 24.04 and later).
