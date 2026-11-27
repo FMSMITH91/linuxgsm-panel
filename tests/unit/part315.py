@@ -80,6 +80,7 @@ HOW IT RUNS. part12's app and its database for the routes, every host call at ss
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
 """
+import importlib as _ilib315
 import json as _json315
 import os
 import shutil as _shutil315
@@ -98,7 +99,6 @@ from panel.db.models import (RemoteServer as _Remote315, User as _User315, Websi
 from panel.ops.ssh_manager import websites as _sw315
 from panel.services import websites as _ws315
 from panel.routes import websites as _w315
-from panel.routes import databases as _dbroutes315
 from panel.routes import websites_apps as _wapps315
 
 _TOKEN315 = "q" * 40
@@ -109,7 +109,7 @@ _BLANK315 = ""
 _SHOWN_ONCE315 = "shown-once"
 _DB_PW315 = "p"
 _REAL315 = {"_worker": _wapps315._worker}
-_REAL315["host_state"] = _dbroutes315.host_state
+_REAL315["host_state"] = _ilib315.import_module("panel.routes.databases").host_state
 
 
 class _Client315:

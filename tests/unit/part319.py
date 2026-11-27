@@ -396,11 +396,21 @@ def _s5_gate(host, su):
         in conf),
        (True, True, True))
     reads = [ln.strip() for ln in conf.splitlines() if _ws319.GATE_HEADER in ln]
+    _f3_vary(reads)
+
+
+def _f3_vary(reads):
+    """F3: the lines of the Apache config that read the token's header: each keeps the header's name out of Vary."""
     eq("F3 (POST /websites/<id>/update-image, a PHP site's Apache config): every line that reads the token's header "
        "keeps its name out of Vary (a RewriteCond with [NV], or req_novary() in an expression: %{HTTP:...} in the "
        "<If> made every answer say \"Vary: X-Panel-Proxy-Token\"); the header is still read twice and unset (control)",
-       ([r for r in reads if not ("[NV" in r or "req_novary('%s')" % _ws319.GATE_HEADER in r
-                                  or r == "RequestHeader unset %s" % _ws319.GATE_HEADER)], len(reads)), ([], 3))
+       ([r for r in reads if not _novary319(r)], len(reads)), ([], 3))
+
+
+def _novary319(line):
+    """Whether a config line that names the token's header keeps it out of Vary ([NV], req_novary()) or unsets it."""
+    return ("[NV" in line or "req_novary('%s')" % _ws319.GATE_HEADER in line
+            or line == "RequestHeader unset %s" % _ws319.GATE_HEADER)
 
 
 # ── 6. Put online's answer handled ────────────────────────────────────────────────────────────────
@@ -430,16 +440,13 @@ def _s7_core_hosts(host, su):
     from panel.services import websites_catalog as _wc319
     from panel.services import websites_egress as _eg319
     real = _wc319.recipe
-    _p9_patch(_wc319, "recipe", lambda name: dict(real(name) or {}, egress=["api.wordpress.org",
-                                                                          "downloads.wordpress.org"]))
+    _p9_patch(_wc319, "recipe", lambda name: _old_recipe319(real, name))
     try:
         site = _site319(host, "p319-oldcat")
         code, _sh, stdin, _start = _install319(su, site)
     finally:
         _p9_patch(_wc319, "recipe", real)
-    unit = _file319(stdin, "%s/%s.service" % (_ws319.USER_UNIT_DIR, _ws319.EGRESS_UNIT)) or ""
-    argv = (_re319.search(r"^ExecStart=\S+ -I %h/\S+/egress_proxy\.py \d+ (.+)$", unit, _re319.M)
-            or _re319.match("()", "")).group(1).split()
+    argv = _unit_hosts319(stdin)
     allowed = frozenset(argv)
     hops = ["CONNECT %s:443 HTTP/1.1" % h for h in ("api.wordpress.org", "developer.wordpress.org",
                                                      "downloads.w.org", "downloads.wordpress.org")]
@@ -451,8 +458,20 @@ def _s7_core_hosts(host, su):
        (200, list(_WP_HOSTS319), "".join(h + "\n" for h in _WP_HOSTS319), [(h, 443) for h in _WP_HOSTS319]))
     eq("F1 control: the catalog's own WordPress recipe lists the same hosts, every one of them on the catalog's "
        "allow list (websites_catalog.EGRESS_HOSTS)",
-       (sorted((real("wordpress") or {}).get("egress") or []), all(h in _wc319.EGRESS_HOSTS for h in _WP_HOSTS319)),
+       (sorted(real("wordpress").get("egress")), all(h in _wc319.EGRESS_HOSTS for h in _WP_HOSTS319)),
        (list(_WP_HOSTS319), True))
+
+
+def _old_recipe319(real, name):
+    """The catalog's recipe `name` as a signed catalog published before this change has it: two WordPress hosts."""
+    return dict(real(name) or {}, egress=["api.wordpress.org", "downloads.wordpress.org"])
+
+
+def _unit_hosts319(stdin):
+    """The hosts the egress proxy's unit in an install bundle passes the proxy ([] when there is none)."""
+    unit = _file319(stdin, "%s/%s.service" % (_ws319.USER_UNIT_DIR, _ws319.EGRESS_UNIT)) or ""
+    m = _re319.search(r"^ExecStart=\S+ -I %h/\S+/egress_proxy\.py \d+ (.+)$", unit, _re319.M)
+    return m.group(1).split() if m else []
 
 
 def _cleanup319():

@@ -532,14 +532,18 @@ def parse_proxy_status(out):
         elif line.startswith("cert_error="):
             _cert_error_line(got["cert_errors"], line)
         elif "=" in line:
-            key, _sep, value = line.partition("=")
-            if key in ("installed", "version", "active", "cache", "tunnel"):
-                got[key] = (value == "yes") if key in ("installed", "cache") else value[:40]
-            elif key == "tunnel_link" and value in ("connected", "refused"):
-                got[key] = value
-            elif key == "tunnel_restarts" and value.isdecimal():
-                got[key] = int(value)
+            _status_value(got, *line.split("=", 1))
     return got
+
+
+def _status_value(got, key, value):
+    """One key=value line of proxy_status into `got` (parse_proxy_status's): a known key with a value of its shape."""
+    if key in ("installed", "version", "active", "cache", "tunnel"):
+        got[key] = (value == "yes") if key in ("installed", "cache") else value[:40]
+    elif key == "tunnel_link" and value in ("connected", "refused"):
+        got[key] = value
+    elif key == "tunnel_restarts" and value.isdecimal():
+        got[key] = int(value)
 
 
 def _cert_error_line(errors, line):
