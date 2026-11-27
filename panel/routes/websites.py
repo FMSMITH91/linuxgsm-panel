@@ -16,7 +16,7 @@ limits, image updates, removal); a superadmin may also give it the internet. Add
 websites_access.can_create. Everything on the host goes through ssh_manager.websites, which answers
 (ok, sentence) and never a command's raw output.
 
-The sibling modules (websites_domains, _files, _backups, _settings, _apps, _customers, _proxy and
+The sibling modules (websites_domains, _files, _backups, _settings, _apps, _customers, _proxy, _guard and
 databases_sites) share the helpers here and are registered by register().
 """
 import logging
@@ -908,12 +908,12 @@ def _settings(site, form):
 def register(app):
     """The Websites routes: these, and the sibling modules'."""
     from panel.routes import (databases_sites, websites_apps, websites_backups, websites_customers, websites_domains,
-                              websites_files, websites_proxy, websites_settings, websites_view)
+                              websites_files, websites_guard, websites_proxy, websites_settings, websites_view)
     app.jinja_env.globals["websites_nav"] = websites_view.nav_url
     _list_routes(app)
     _add_route(app)
     _run_routes(app)
     _admin_routes(app)
     for mod in (websites_domains, websites_files, websites_backups, websites_settings, websites_apps,
-                websites_customers, websites_proxy, databases_sites):
+                websites_customers, websites_proxy, websites_guard, databases_sites):
         mod.register(app)

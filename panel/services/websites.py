@@ -104,8 +104,9 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # the virtual host's rewrite rules too (an error page a .htaccess names is refused without the token), WordPress's
 # egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches. 5: WordPress's
 # egress hosts gain developer.wordpress.org and downloads.w.org (WP_EGRESS_HOSTS), in its proxy's unit and hosts file.
-# 6: the gate's <If> reads the token's header with req_novary(), so no answer names that header in Vary.
-SITE_FILES_REV = "files-6"
+# 6: the gate's <If> reads the token's header with req_novary(), so no answer names that header in Vary. 7: WordPress's
+# loopback plugin reports the web proxy's own page cache state in Site Health (PAGE_CACHE_FILE).
+SITE_FILES_REV = "files-7"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -122,6 +123,10 @@ CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
 # The hosts WordPress's egress proxy reaches, one a line, while the site has the proxy (needs_egress); none with full
 # egress, which has no proxy. WordPress's loopback plugin reads it (see EGRESS FOR WORDPRESS).
 EGRESS_HOSTS_FILE = RUN_DIR + "/egress-hosts"
+# Whether the web proxy caches this site's pages, as the configuration it is running says (page_cache_text): "on <ttl
+# seconds>" or "off". Written by the proxy's apply (ssh_manager.websites.proxy_apply), read by WordPress's loopback
+# plugin for Site Health's page cache test. No secret in it.
+PAGE_CACHE_FILE = RUN_DIR + "/page-cache"
 # The hosts WordPress core's own update and Site Health requests reach (websites_catalog.EGRESS_HOSTS says which
 # request reaches which). Each redirect is a new CONNECT the proxy checks against the list on its own, so a redirect
 # to a host not listed here is refused like any other.
@@ -940,7 +945,7 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
               CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token",
-              TOKEN_FILE, CACHE_PASSWORD_FILE, EGRESS_HOSTS_FILE)
+              TOKEN_FILE, CACHE_PASSWORD_FILE, EGRESS_HOSTS_FILE, PAGE_CACHE_FILE)
 
 
 def bundle(files):
@@ -1087,6 +1092,7 @@ defined( 'ABSPATH' ) || exit;
 defined( 'LGSM_PANEL_TOKEN_FILE' ) || define( 'LGSM_PANEL_TOKEN_FILE', '@TOKEN@' );
 defined( 'LGSM_PANEL_PORT' ) || define( 'LGSM_PANEL_PORT', @PORT@ );
 defined( 'LGSM_PANEL_EGRESS_FILE' ) || define( 'LGSM_PANEL_EGRESS_FILE', '@EGRESS@' );
+defined( 'LGSM_PANEL_PAGE_CACHE_FILE' ) || define( 'LGSM_PANEL_PAGE_CACHE_FILE', '@PAGECACHE@' );
 
 /* The site's own names: the host of its home and site addresses. */
 function lgsm_panel_own_hosts() {
@@ -1175,6 +1181,42 @@ function lgsm_panel_egress_args( $args, $url ) {
 	return $args;
 }
 add_filter( 'http_request_args', 'lgsm_panel_egress_args', 10, 2 );
+
+/* The web proxy's page cache for this site, as the panel wrote it: array( on, ttl in seconds ). No file: off. */
+function lgsm_panel_page_cache_state() {
+	$text = is_readable( LGSM_PANEL_PAGE_CACHE_FILE ) ? trim( (string) file_get_contents( LGSM_PANEL_PAGE_CACHE_FILE ) ) : '';
+	if ( 1 === preg_match( '/^on ([0-9]{1,6})$/', $text, $m ) ) {
+		return array( true, (int) $m[1] );
+	}
+	return array( false, 0 );
+}
+
+/* Site Health's page cache test, answered from the panel's word. WordPress's own test looks for caching headers on
+   requests to the site's own address, which this plugin sends to the site's own server inside its container, never
+   through the web proxy that caches the pages: it could only ever say "not detected". */
+function lgsm_panel_page_cache_test() {
+	list( $on, $ttl ) = lgsm_panel_page_cache_state();
+	$result = array(
+		'label'       => $on ? __( 'Page cache is enabled' ) : __( 'Page cache is not enabled' ),
+		'status'      => $on ? 'good' : 'recommended',
+		'badge'       => array( 'label' => __( 'Performance' ), 'color' => 'blue' ),
+		'actions'     => '',
+		'test'        => 'page_cache',
+	);
+	$on_text  = 'The web proxy in front of this site caches its pages for %d seconds. '
+		. 'Logged-in visitors, comments and the admin pages are never cached.';
+	$off_text = 'The web proxy in front of this site does not cache its pages. '
+		. 'An administrator can turn the page cache on in the panel, on this site\'s Performance settings.';
+	$result['description'] = '<p>' . esc_html( $on ? sprintf( $on_text, $ttl ) : $off_text ) . '</p>';
+	return $result;
+}
+
+function lgsm_panel_site_status_tests( $tests ) {
+	unset( $tests['async']['page_cache'] );
+	$tests['direct']['page_cache'] = array( 'label' => __( 'Page cache' ), 'test' => 'lgsm_panel_page_cache_test' );
+	return $tests;
+}
+add_filter( 'site_status_tests', 'lgsm_panel_site_status_tests' );
 """
 # The writer (python3 -I -c, as the account; arguments: the path inside ~/site/html, the file's text in base64). Each
 # folder on the path is made when missing and refused when it is a link; the file is written beside, then renamed.
@@ -1203,7 +1245,13 @@ print("loopback=written")
 def loopback_plugin():
     """The text of WordPress's must-use plugin for its requests to its own address (LOOPBACK_PLUGIN)."""
     return (_LOOPBACK_PHP.replace("@TOKEN@", RUN_IN + "/proxy-token").replace("@PORT@", str(INNER_PORT))
-            .replace("@HEADER@", GATE_HEADER).replace("@EGRESS@", RUN_IN + "/" + EGRESS_HOSTS_FILE.rsplit("/", 1)[1]))
+            .replace("@HEADER@", GATE_HEADER).replace("@EGRESS@", RUN_IN + "/" + EGRESS_HOSTS_FILE.rsplit("/", 1)[1])
+            .replace("@PAGECACHE@", RUN_IN + "/" + PAGE_CACHE_FILE.rsplit("/", 1)[1]))
+
+
+def page_cache_text(ttl):
+    """PAGE_CACHE_FILE's text: "on <ttl>" while the proxy caches the site's pages for `ttl` seconds, "off" for None."""
+    return "off\n" if ttl is None else "on %d\n" % int(ttl)
 
 
 def loopback_sh():

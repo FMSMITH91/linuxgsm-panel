@@ -38,6 +38,12 @@ FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     trusted network can make the sites see any address. A tunnel reads CF-Connecting-IP from the
     connector on loopback.
 
+BLOCKED VISITORS (services/websites_guard)
+    While a host's guard is on, each site block starts with the deny list's 403 (`order error first`: before the
+    page cache, a redirect or anything else), and the requests fail2ban counts go to the proxy's security log.
+    Requests the guard does not watch are logged only by a site's own access log, as before; the catch-alls log
+    nothing.
+
 HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
     Strict-Transport-Security with the operator's max-age (OWASP's 63072000 by default), with
     includeSubDomains and preload only when the operator turns them on: the panel cannot know a
@@ -51,6 +57,8 @@ HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
 import ipaddress
 import json
 import re
+
+from panel.services import websites_guard as _wg
 
 # The panel-wide options the Websites settings card edits (config.json), and OWASP's recommended
 # value of each where OWASP gives one (the card prints it beside the field and notes a value outside it).
@@ -279,37 +287,57 @@ def _admin_line(opts):
     return "\tadmin unix/%s|0200" % ADMIN_SOCKET if opts["cache_build"] else "\tadmin off"
 
 
+def cert_source(domain):
+    """(file stem, chain PEM, encrypted key) of the operator's certificate the proxy serves `domain` with, or None.
+
+    A domain on its site's certificate (cert_mode 'site') names the site's one pair, under the stem site-<id> (a
+    domain always holds a dot, so no domain's own stem is ever one); a domain with a certificate of its own ('own',
+    pasted before sites had one) names its own, under its name. Only a verified domain is served at all.
+    """
+    if domain.verified_at is None:
+        return None
+    site = getattr(domain, "website", None) if domain.cert_mode == "site" else None
+    if site is not None and site.own_cert_pem and site.own_key_secret:
+        return "site-%d" % site.id, site.own_cert_pem, site.own_key_secret
+    if domain.cert_mode == "own" and domain.own_cert_pem and domain.own_key_secret:
+        return domain.domain, domain.own_cert_pem, domain.own_key_secret
+    return None
+
+
 def own_cert(domain):
     """Whether the proxy serves `domain` (a WebsiteDomain) with the operator's own certificate files.
 
-    The same test decides the configuration's `tls <file> <file>` line and the files website-proxy-apply
-    is sent (ssh_manager.websites.apply_doc), so a configuration never names a file that is not shipped.
+    The same test (cert_source) decides the configuration's `tls <file> <file>` line and the files
+    website-proxy-apply is sent (ssh_manager.websites.apply_doc), so a configuration never names a file that is
+    not shipped.
     """
-    return (domain.cert_mode == "own" and domain.verified_at is not None and bool(domain.own_cert_pem)
-            and bool(domain.own_key_secret))
+    return cert_source(domain) is not None
 
 
 def _cert_groups(site):
-    """[(names, own domain or None)]: one site block per certificate source.
+    """[(names, certificate file stem or None)]: one site block per certificate source.
 
-    The automatic names share one block; each name with its own certificate gets a block of its own, since
-    a block's `tls <cert> <key>` line covers every name in it and turns automatic certificates off for all
-    of them. The primary name's block comes first. Not used in tunnel mode, where the tunnel's provider holds
-    the certificate and every name shares one plain-HTTP block.
+    The automatic names share one block, and so do the names on the site's own certificate; a name with a
+    certificate of its own gets a block of its own. A block's `tls <cert> <key>` line covers every name in it
+    and turns automatic certificates off for all of them. Blocks come in the order of their first name, the
+    primary first. Not used in tunnel mode, where the tunnel's provider holds the certificate and every name
+    shares one plain-HTTP block.
     """
-    groups, auto = [], []
+    groups, by_stem = [], {}
     for d in _served(site):
-        if own_cert(d):
-            groups.append(([d.domain], d))
-        else:
-            if not auto:
-                groups.append((auto, None))
-            auto.append(d.domain)
+        src = cert_source(d)
+        stem = src[0] if src else None
+        if stem not in by_stem:
+            by_stem[stem] = []
+            groups.append((by_stem[stem], stem))
+        by_stem[stem].append(d.domain)
     return groups
 
 
 def _global(mode, opts, proxy, trusted):
     lines = ["{", _admin_line(opts), "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
+    if _wg.enabled(proxy):
+        lines.append("\torder error first")        # a banned visitor's 403 before the page cache or a redirect
     if mode == "tunnel":
         lines += ["\tauto_https off", "\tdefault_bind 127.0.0.1", "\thttp_port %d" % TUNNEL_PORT]
     else:
@@ -344,15 +372,15 @@ def _hsts(opts):
     return value
 
 
-def _tls_lines(own, opts, proxy):
-    """A site block's `tls` block: protocols, the domain `own`'s certificate files, the CDN's client certificate."""
+def _tls_lines(stem, opts, proxy):
+    """A site block's `tls` block: protocols, the certificate files named `stem` (None: automatic), the CDN's one."""
     inner = ["\t\tprotocols tls%s tls1.3" % opts["tls_min"]] if opts["tls_min"] != "1.3" else ["\t\tprotocols tls1.3"]
     if proxy is not None and proxy.origin_pull_mtls:
         inner += ["\t\tclient_auth {", "\t\t\tmode require_and_verify", "\t\t\ttrust_pool file %s" % ORIGIN_PULL_CA,
                   "\t\t}"]
     head = "\ttls {"
-    if own is not None:
-        head = "\ttls %s/%s.crt %s/%s.key {" % (CERT_DIR, own.domain, CERT_DIR, own.domain)
+    if stem is not None:
+        head = "\ttls %s/%s.crt %s/%s.key {" % (CERT_DIR, stem, CERT_DIR, stem)
     return [head] + inner + ["\t}"]
 
 
@@ -395,15 +423,20 @@ def _cache_lines(site, opts):
     if not (opts["cache_build"] and site.page_cache):
         return []
     ttl = max(10, min(int(site.page_cache_ttl or 300), 86400))
+    # The cache module puts its default_cache_control, empty unless set, on a response whose site sent no
+    # Cache-Control: every such page went out with an empty `Cache-Control:` header. Setting a default would change
+    # what the module stores (it reads a missing header as public), so the empty header alone is taken away, as the
+    # response leaves; a site's own value, WordPress's no-cache for a signed-in visitor among them, is left as sent.
     return ["\t@pagecache {", "\t\tmethod GET HEAD", "\t\tnot header_regexp Cookie %s" % _quote(CACHE_BYPASS_COOKIES),
             "\t\tnot path %s" % " ".join(CACHE_BYPASS_PATHS), "\t}",
-            "\tcache @pagecache {", "\t\tttl %ds" % ttl, "\t}"]
+            "\tcache @pagecache {", "\t\tttl %ds" % ttl, "\t}",
+            "\theader {", "\t\t-Cache-Control", '\t\tmatch header Cache-Control ""', "\t}"]
 
 
-def _log_lines(site):
+def _log_lines(site, name=None):
     if not site.access_log:
         return []
-    return ["\tlog {", "\t\toutput stderr", "\t\tformat filter {", "\t\t\twrap json",
+    return ["\tlog %s {" % name if name else "\tlog {", "\t\toutput stderr", "\t\tformat filter {", "\t\t\twrap json",
             "\t\t\trequest>remote_ip ip_mask {", "\t\t\t\tipv4 24", "\t\t\t\tipv6 48", "\t\t\t}",
             "\t\t\trequest>client_ip ip_mask {", "\t\t\t\tipv4 24", "\t\t\t\tipv6 48", "\t\t\t}",
             "\t\t\trequest>headers delete", "\t\t\tresp_headers delete", "\t\t}", "\t}"]
@@ -416,24 +449,32 @@ def _snippet_lines(site):
         "\t" + ln for ln in site.raw_proxy_snippet.strip("\n").split("\n")]
 
 
+def _site_body(site, opts, mode, token, guard, block):
+    """A site block's body. With the guard on (`guard`), its lines first and the access logger named per block."""
+    body = _wg.guard_lines(site.id, block, [r["path"] for r in _rules(site) if r["type"] == "deny"],
+                           bool(site.access_log)) if guard else []
+    body += ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
+    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts)
+             + _log_lines(site, _wg.access_name(site.id, block) if guard else None) + _snippet_lines(site))
+    return body + ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
+                   "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
+                   "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
+                   "\t}", "}", ""]
+
+
 def _site_lines(site, opts, proxy, mode, secret_of):
     names = _domains(site, mode)
     token = secret_of(site) or ""
     if not (names and site.port and _TOKEN_RE.match(token)):
         return []
-    tunnel = mode == "tunnel"
-    body = ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
-    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
-             + _snippet_lines(site))
-    body += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
-             "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
-             "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
-             "\t}", "}", ""]
-    if tunnel:        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
-        return ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)] + body
+    guard = _wg.enabled(proxy)
+    if mode == "tunnel":        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
+        return (["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)]
+                + _site_body(site, opts, mode, token, guard, 0))
     lines = []
-    for group, own in _cert_groups(site):
-        lines += ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(own, opts, proxy) + body
+    for block, (group, stem) in enumerate(_cert_groups(site)):
+        lines += (["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(stem, opts, proxy)
+                  + _site_body(site, opts, mode, token, guard, block))
     return lines
 
 
@@ -453,12 +494,38 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     for site in sorted(sites, key=lambda s: s.id or 0):
         if site.enabled:
             lines += _site_lines(site, opts, proxy, mode, secret_of)
+    quiet = ["\tlog_skip"] if _wg.enabled(proxy) else []      # the guard's loggers never see a catch-all's request
     if mode != "tunnel":
         # A request over HTTPS whose Host is none of the names above (a served certificate's name, any Host):
         # aborted too, never Caddy's empty 200 with its Server header.
-        lines += ["# Any other Host over HTTPS: the request is aborted.", "https:// {", "\tabort", "}", ""]
-    lines += ["# Any other name, and the bare address: the connection is closed.", "http:// {", "\tabort", "}", ""]
+        lines += ["# Any other Host over HTTPS: the request is aborted.", "https:// {"] + quiet + ["\tabort", "}", ""]
+    lines += ["# Any other name, and the bare address: the connection is closed.", "http:// {"] + quiet + ["\tabort", "}", ""]
     return "\n".join(lines)
+
+
+_SITE_MARK_RE = re.compile(r"# site ([0-9]+) \(")
+_CACHE_TTL_RE = re.compile(r"\t\tttl ([0-9]+)s\Z")
+
+
+def cached_sites(text):
+    """{site id: ttl seconds} of the sites whose block in the rendered configuration `text` has the page cache.
+
+    Read from what render() wrote, so the answer is what the proxy really runs: a site's page cache turned on while
+    the proxy has no cache module is left out of the configuration, and so out of this.
+    """
+    out, site, in_cache = {}, None, False
+    for line in (text or "").split("\n"):
+        m = _SITE_MARK_RE.match(line)
+        if m:
+            site, in_cache = int(m.group(1)), False
+        elif line == "\tcache @pagecache {":
+            in_cache = True
+        elif in_cache and site is not None:
+            t = _CACHE_TTL_RE.match(line)
+            if t:
+                out[site] = int(t.group(1))
+            in_cache = False
+    return out
 
 
 def served_domains(sites):

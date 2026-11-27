@@ -74,6 +74,12 @@ def _alert_website_certs(app):
         app.logger.debug("website certificate expiry tick failed", exc_info=True)
 
 
+def _web_guard_tick(app):
+    """The websites' ban events into the audit log (routes/websites_guard.tick). Never raises."""
+    from panel.routes import websites_guard     # imported here: the Websites routes import far more than this module
+    websites_guard.tick(app)
+
+
 def _renew_tls(app):
     """The daily Let's Encrypt refresh (tls_own.maybe_renew), in an app context. Never raises.
 
@@ -170,6 +176,7 @@ def register(app, supervise):
             _addon_catalog.daily_tick()    # the signed add-on catalog: at the first pass, then daily
             _addons_geoip.tick(app)        # B3's country database: this month's, once DB-IP has it
             _allow_url.tick(app)           # web proxy allow lists read from an address: once a day
+            _web_guard_tick(app)           # websites' ban events (fail2ban's, kept by the helper) into the audit log
             time.sleep(1800)
 
     # This module owns both the ticker and the helper the tests drive, so it supervises and

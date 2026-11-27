@@ -2673,6 +2673,8 @@ UMask=0077
 ReadWritePaths=/var/lib/lgsm-web-proxy
 RuntimeDirectory=lgsm-web-proxy
 RuntimeDirectoryMode=0700
+LogsDirectory=lgsm-web-proxy
+LogsDirectoryMode=0700
 LogNamespace=lgsm-web-proxy
 
 [Install]
@@ -3005,19 +3007,18 @@ def do_website_proxy_install(args, content):
 
 
 def _web_apply_doc(content):
-    """(caddyfile text, {cert file name: pem}) from website-proxy-apply's stdin JSON, or raise ValueError."""
+    """(caddyfile text, {cert file name: pem}, guard or None) from website-proxy-apply's stdin JSON, or ValueError."""
     doc = json.loads(content)
-    if not isinstance(doc, dict) or set(doc) - {"caddyfile", "files"}:
+    if not isinstance(doc, dict) or set(doc) - {"caddyfile", "files", "guard"}:
         raise ValueError("not an apply document")
     text, files = doc.get("caddyfile"), doc.get("files") or {}
     if not _web_conf_ok(text):
         raise ValueError("not a configuration the panel wrote")
     if not isinstance(files, dict) or len(files) > 400:
         raise ValueError("too many files")
-    bad = [name for name, pem in files.items() if not _web_cert_file_ok(name, pem)]
-    if bad:
+    if any(not _web_cert_file_ok(name, pem) for name, pem in files.items()):
         raise ValueError("not a certificate file name or not a PEM file")
-    return text, files
+    return text, files, (web_guard_doc(doc["guard"]) if "guard" in doc else None)
 
 
 def _web_conf_ok(text):
@@ -3202,7 +3203,7 @@ def do_website_proxy_apply(args, content):
     if args[0] == "purge":         # one site's page cache emptied through the cache's API; nothing restarts
         return _web_purge(content)
     try:
-        text, files = _web_apply_doc(content)
+        text, files, guard = _web_apply_doc(content)
     except ValueError as e:
         sys.stderr.write("refused: %s\n" % e)
         return 2
@@ -3223,6 +3224,8 @@ def do_website_proxy_apply(args, content):
     rc = _web_start(old, pw)
     if rc == 0:
         _web_prune_certs(files)
+        if guard is not None:
+            _web_guard_apply(guard, pw)       # its outcome is printed (guard=); the proxy runs either way
     return rc
 
 
@@ -3651,11 +3654,445 @@ def do_website_cpu_limit(args, content):
 
 
 def do_website_proxy_stop(args, content):
-    """Stop and disable the web proxy and its address timer (the last site went offline): nothing listens on 80/443."""
+    """Stop and disable the web proxy and its address timer (the last site went offline): nothing listens on 80/443.
+
+    The websites' jails go too (nothing is served, nothing is logged): _web_guard_off.
+    """
     _run_quiet([resolve("systemctl"), "disable", "--now", WEB_REBIND_TIMER], timeout=60)
     rc, _out = _run_quiet([resolve("systemctl"), "disable", "--now", WEB_PROXY_UNIT], timeout=120)
     sys.stdout.write("stopped=%s\n" % ("yes" if rc == 0 else "no"))
+    _web_guard_off()
     return rc
+
+
+# ── Websites: blocked visitors (fail2ban for the sites, the ban kept inside the proxy) ──────────────
+# The proxy writes to its security log (WEB_SECURITY_LOG) only the requests the panel watches, each tagged
+# "lgsm":"login" or "lgsm":"scan" with the visitor's address as the trusted-proxy rules decided it (client_ip),
+# never a header a visitor sent (panel/services/websites_guard.py). Two jails count them per address and ban
+# through WEB_GUARD_ACTION_FILE, which runs this helper: the address becomes a file in WEB_DENY_DIR, which every
+# site block's `file` matcher reads on each request and answers 403, so a ban works behind a CDN (whose address
+# is all a firewall sees) and nothing is reloaded. In public mode the jails also ban on 80/443 at the firewall.
+# An address in the never list (WEB_GUARD_NEVER: the panel's list plus this host's own addresses, read here) is
+# refused by the ban verb as well as ignored by fail2ban, so a CDN's own address is never in the deny list.
+WEB_LOG_DIR = "/var/log/lgsm-web-proxy"
+WEB_SECURITY_LOG = WEB_LOG_DIR + "/security.log"
+WEB_DENY_DIR = WEB_PROXY_ETC + "/deny"
+WEB_GUARD_NEVER = WEB_PROXY_ETC + "/guard-never"
+WEB_GUARD_JAILS = {"lgsm-web-login": "login", "lgsm-web-scan": "scan"}
+WEB_F2B_DIR = "/etc/fail2ban"
+WEB_GUARD_JAIL_FILE = "/etc/fail2ban/jail.d/lgsm-web.conf"
+WEB_GUARD_FILTER_FILE = "/etc/fail2ban/filter.d/%s.conf"
+WEB_GUARD_ACTION_FILE = "/etc/fail2ban/action.d/lgsm-web-deny.conf"
+WEB_GUARD_MAX = 5000            # entries the deny list holds at most; a ban past it is still the firewall's
+WEB_GUARD_TAIL = 262144         # bytes of the security log read to name the site a banned address asked for
+# Every ban and unban, numbered, for the panel's audit log (it reads those after the last it recorded): the panel
+# cannot be told at the moment fail2ban bans, so the record is kept here until it reads it.
+WEB_GUARD_EVENTS = WEB_PROXY_ETC + "/guard-events"
+WEB_GUARD_EVENTS_KEEP = 2000
+WEB_GUARD_ACTION_TEXT = """# Written by linuxgsm-panel: a website ban kept inside the web proxy. The panel rewrites it.
+[Definition]
+actionstart =
+actionstop = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-flush <name>
+actioncheck =
+actionban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-ban <ip> <name> <bantime>
+actionunban = /usr/local/lib/linuxgsm-panel/panel-helper website-guard-unban <ip> <name>
+
+[Init]
+name = lgsm-web-login
+"""
+_WEB_GUARD_NUMBERS = {"login": (1, 1000), "scan": (1, 1000), "findtime": (60, 86400), "bantime": (60, 2592000),
+                      "maxtime": (60, 31536000)}
+_WEB_GUARD_KEYS = set(_WEB_GUARD_NUMBERS) | {"enabled", "increment", "firewall", "never"}
+
+
+def _web_net(text):
+    """`text` as ipaddress spells a network, or None: no zone, nothing but an address or a network."""
+    if not isinstance(text, str) or len(text) > 64 or not re.fullmatch(r"[0-9A-Fa-f:.]+(?:/[0-9]{1,3})?", text):
+        return None
+    try:
+        return str(ipaddress.ip_network(text, strict=False))
+    except ValueError:
+        return None
+
+
+def web_guard_doc(doc):
+    """The guard part of website-proxy-apply's document, checked whole: numbers in range, flags, networks. ValueError."""
+    if not isinstance(doc, dict) or set(doc) != _WEB_GUARD_KEYS:
+        raise ValueError("not a guard document")
+    if not all(_web_guard_number(doc[k], low, high) for k, (low, high) in _WEB_GUARD_NUMBERS.items()):
+        raise ValueError("a guard number is out of range")
+    if any(not isinstance(doc[k], bool) for k in ("enabled", "increment", "firewall")):
+        raise ValueError("a guard switch is not true or false")
+    if not _web_guard_nets(doc["never"]):
+        raise ValueError("not a list of networks")
+    return dict(doc, never=[_web_net(n) for n in doc["never"]], maxtime=max(doc["maxtime"], doc["bantime"]))
+
+
+def _web_guard_nets(never):
+    """Whether `never` is a list of at most 2000 networks, each one _web_net reads."""
+    return isinstance(never, list) and len(never) <= 2000 and all(_web_net(n) is not None for n in never)
+
+
+def _web_guard_number(value, low, high):
+    """Whether `value` is a whole number (never a bool) from `low` to `high`."""
+    return not isinstance(value, bool) and isinstance(value, int) and low <= value <= high
+
+
+def web_guard_filter(tag):
+    """A jail's filter: the security log's lines tagged `tag`, the visitor's address from the proxy's client_ip."""
+    return ("# Written by linuxgsm-panel: the web proxy's security log lines tagged %s. The panel rewrites it.\n"
+            "[Definition]\nfailregex = ^\\{.*\"client_ip\":\"<ADDR>\".*\"lgsm\":\"%s\"\nignoreregex =\n" % (tag, tag))
+
+
+def web_guard_jails(guard, own):
+    """The jail file's text for `guard` (web_guard_doc's) and this host's own addresses `own`."""
+    never = " ".join(sorted(set(guard["never"]) | set(own), key=lambda n: (":" in n, n)))
+    out = ["# Written by linuxgsm-panel: the websites' jails (blocked visitors). The panel rewrites it."]
+    for jail, tag in sorted(WEB_GUARD_JAILS.items()):
+        out += ["", "[%s]" % jail, "enabled = true", "backend = auto", "filter = %s" % jail,
+                "logpath = %s" % WEB_SECURITY_LOG, "maxretry = %d" % guard[tag], "findtime = %d" % guard["findtime"],
+                "bantime = %d" % guard["bantime"], "bantime.increment = %s" % ("true" if guard["increment"] else "false"),
+                "bantime.maxtime = %d" % guard["maxtime"], "ignoreip = %s" % never,
+                "action = lgsm-web-deny[name=%s]" % jail]
+        if guard["firewall"]:
+            out.append('         iptables-multiport[name=%s, port="80,443", protocol=tcp]' % jail)
+    return "\n".join(out) + "\n"
+
+
+def _web_own_nets():
+    """Every address of this host (loopback, link-local and tailnet included), as /32 and /128 networks."""
+    try:
+        _rc, out = _run_quiet([resolve("ip"), "-j", "addr", "show"], timeout=20)
+        links = json.loads(out or "[]")
+    except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
+        return []
+    nets = set()
+    for link in links if isinstance(links, list) else []:
+        for info in (link.get("addr_info") or []) if isinstance(link, dict) else []:
+            net = _web_net(str(info.get("local", ""))) if isinstance(info, dict) else None
+            if net:
+                nets.add(net)
+    return sorted(nets)
+
+
+def _web_deny_dir(gid):
+    """The deny folder, made when missing: root's, searchable (never listable) by the proxy's group `gid`.
+
+    The proxy's file matcher stats one name in it, which needs search permission alone (0710).
+    """
+    os.makedirs(WEB_DENY_DIR, mode=0o700, exist_ok=True)
+    os.chown(WEB_DENY_DIR, 0, gid)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0710, group search only
+    os.chmod(WEB_DENY_DIR, stat.S_IRWXU | stat.S_IXGRP)
+
+
+def _web_log_dir(pw):
+    """The proxy's log folder, made when missing: the proxy's own, nobody else's (0700)."""
+    os.makedirs(WEB_LOG_DIR, mode=0o700, exist_ok=True)
+    os.chown(WEB_LOG_DIR, pw.pw_uid, pw.pw_gid)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- owner-only folder
+    os.chmod(WEB_LOG_DIR, 0o700)
+
+
+def _web_security_log(pw):
+    """The security log, made empty and the proxy's own when missing: fail2ban starts no jail whose log is missing."""
+    _web_log_dir(pw)
+    if not os.path.exists(WEB_SECURITY_LOG):
+        fd = os.open(WEB_SECURITY_LOG, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.fchown(fd, pw.pw_uid, pw.pw_gid)
+        os.close(fd)
+
+
+def _web_guard_files(guard, pw):
+    """Write the deny folder, the never list, the security log and fail2ban's three files for `guard`."""
+    _web_deny_dir(pw.pw_gid)
+    own = _web_own_nets()
+    _web_write(WEB_GUARD_NEVER, "".join(n + "\n" for n in sorted(set(guard["never"]) | set(own))).encode(),
+               WEB_FILE_ROOT)
+    _web_security_log(pw)
+    for jail, tag in WEB_GUARD_JAILS.items():
+        _web_write(WEB_GUARD_FILTER_FILE % jail, web_guard_filter(tag).encode(), 0o644)
+    _web_write(WEB_GUARD_ACTION_FILE, WEB_GUARD_ACTION_TEXT.encode(), 0o644)
+    _web_write(WEB_GUARD_JAIL_FILE, web_guard_jails(guard, own).encode(), 0o644)
+    _web_deny_prune()
+
+
+def _web_f2b_reload():
+    """fail2ban reloaded: "yes", "no", or "absent" when fail2ban is not installed."""
+    try:
+        rc, _out = _run_quiet([resolve(F2B), "reload"], timeout=60)
+    except FileNotFoundError:
+        return "absent"
+    except subprocess.TimeoutExpired:
+        return "no"
+    return "yes" if rc == 0 else "no"
+
+
+def _web_guard_apply(guard, pw):
+    """Write (or, switched off, remove) the websites' jails, then reload fail2ban. Prints guard=on|off fail2ban=."""
+    if not guard["enabled"]:
+        _web_guard_off()
+        return
+    if not os.path.isdir(WEB_F2B_DIR):
+        sys.stdout.write("guard=on\nfail2ban=absent\n")
+        return
+    _web_guard_files(guard, pw)
+    sys.stdout.write("guard=on\nfail2ban=%s\n" % _web_f2b_reload())
+
+
+def _web_guard_off():
+    """The websites' jails removed (fail2ban reloaded) and the deny list emptied. Prints guard=off."""
+    gone = False
+    for path in [WEB_GUARD_JAIL_FILE, WEB_GUARD_ACTION_FILE] + [WEB_GUARD_FILTER_FILE % j for j in WEB_GUARD_JAILS]:
+        try:
+            os.unlink(path)
+            gone = True
+        except FileNotFoundError:
+            pass    # never written, or removed already: nothing to take away
+    if gone:
+        _web_f2b_reload()
+    _web_deny_flush(None)
+    sys.stdout.write("guard=off\n")
+
+
+def v_guard_jail(s):
+    """One of the websites' two jails."""
+    if s not in WEB_GUARD_JAILS:
+        raise ValueError("not a website jail")
+    return s
+
+
+def v_guard_ip(s):
+    """A visitor's address as fail2ban and the proxy spell it: an IPv4 or IPv6 address, no zone, nothing else."""
+    if not re.fullmatch(r"[0-9a-fA-F:.]{2,45}", s):
+        raise ValueError("not an address")
+    try:
+        ipaddress.ip_address(s)
+    except ValueError:
+        raise ValueError("not an address") from None
+    return s.lower()
+
+
+def v_guard_seq(s):
+    """The number of the last guard event the panel recorded (0: none yet)."""
+    if not (s.isdecimal() and len(s) <= 12):
+        raise ValueError("not an event number")
+    return s
+
+
+def v_guard_bantime(s):
+    """fail2ban's <bantime> for a ban: seconds, whole or not (it may grow up to a year); -1 is refused (never forever)."""
+    if not (re.fullmatch(r"[0-9]{1,9}(?:\.[0-9]{1,6})?", s) and 1 <= float(s) <= 31536000):
+        raise ValueError("not a ban time")
+    return str(int(float(s)))
+
+
+def _web_never(ip):
+    """Whether `ip` is in the never list (or the list cannot be read: then nothing is banned)."""
+    try:
+        with open(WEB_GUARD_NEVER, encoding="ascii") as fh:
+            nets = [ipaddress.ip_network(n.strip()) for n in fh if n.strip()]
+    except (OSError, ValueError):
+        return True
+    addr = ipaddress.ip_address(ip)
+    return any(addr.version == n.version and addr in n for n in nets)
+
+
+def web_guard_host(lines, ip):
+    """The site name (Host) of the newest security log line from `ip` among `lines`, or "-"."""
+    needle = '"client_ip":"%s"' % ip
+    for line in reversed(lines):
+        if needle not in line:
+            continue
+        try:
+            host = str(json.loads(line).get("request", {}).get("host") or "")
+        except (ValueError, AttributeError):
+            continue
+        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+        if re.fullmatch(r"[a-z0-9.-]{1,253}", host.lower()):
+            return host.lower()
+    return "-"
+
+
+def _web_log_tail():
+    try:
+        with open(WEB_SECURITY_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - WEB_GUARD_TAIL))
+            return fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+
+
+def web_guard_event_line(seq, when, kind, ip, jail, host):
+    """One numbered line of the events file."""
+    return "%d %d %s %s %s %s\n" % (seq, when, kind, ip, jail, host)
+
+
+def web_guard_events_after(lines, after):
+    """The events of `lines` numbered after `after`, as (seq, epoch, kind, ip, jail, host); malformed lines left out."""
+    out = []
+    for line in lines:
+        m = re.fullmatch(r"([0-9]{1,12}) ([0-9]{1,12}) (ban|unban|release|flush) ([0-9a-f:.]{2,45}|-) "
+                         r"(lgsm-web-login|lgsm-web-scan|-) ([a-z0-9.-]{1,253})", line.strip())
+        if m and int(m.group(1)) > after:
+            out.append((int(m.group(1)), int(m.group(2)), m.group(3), m.group(4), m.group(5), m.group(6)))
+    return out
+
+
+def _web_guard_event(kind, ip, jail, host="-"):
+    """Append one numbered event (the file keeps its last WEB_GUARD_EVENTS_KEEP lines)."""
+    try:
+        with open(WEB_GUARD_EVENTS, encoding="ascii", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        lines = []
+    last = web_guard_events_after(lines[-1:], 0)
+    seq = (last[0][0] if last else 0) + 1
+    lines = lines[-(WEB_GUARD_EVENTS_KEEP - 1):] + [web_guard_event_line(seq, int(time.time()), kind, ip, jail, host)
+                                                     .rstrip("\n")]
+    _web_write(WEB_GUARD_EVENTS, ("\n".join(lines) + "\n").encode(), WEB_FILE_ROOT)
+
+
+def do_website_guard_ban(args, content):
+    """fail2ban's ban (lgsm-web-deny): the address becomes a deny list entry the proxy refuses. Prints ban=."""
+    ip, jail, bantime = args
+    if _web_never(ip):
+        sys.stdout.write("ban=refused\n")
+        return 1
+    if len(os.listdir(WEB_DENY_DIR)) >= WEB_GUARD_MAX:
+        sys.stdout.write("ban=full\n")
+        return 1
+    now = int(time.time())
+    host = web_guard_host(_web_log_tail(), ip)
+    entry = "jail=%s at=%d until=%d host=%s\n" % (jail, now, now + int(bantime), host)
+    _web_write(os.path.join(WEB_DENY_DIR, ip), entry.encode(), WEB_FILE_ROOT)    # stat needs no read
+    _web_guard_event("ban", ip, jail, host)
+    sys.stdout.write("ban=yes\n")
+    return 0
+
+
+def web_guard_entry(text):
+    """{jail, at, until, host} of one deny list file's text, or None when it is not one the helper wrote."""
+    m = re.fullmatch(r"jail=(lgsm-web-login|lgsm-web-scan) at=([0-9]{1,12}) until=([0-9]{1,12}) host=([a-z0-9.-]{1,253})\n?",
+                     text or "")
+    if not m:
+        return None
+    return {"jail": m.group(1), "at": int(m.group(2)), "until": int(m.group(3)), "host": m.group(4)}
+
+
+def _web_deny_entries():
+    """{address: entry} of the deny list; a file of another shape is left out (and removed by a flush)."""
+    out = {}
+    try:
+        names = os.listdir(WEB_DENY_DIR)
+    except OSError:
+        return out
+    for name in names:
+        try:
+            with open(os.path.join(WEB_DENY_DIR, name), encoding="ascii", errors="replace") as fh:
+                entry = web_guard_entry(fh.read(400))
+        except OSError:
+            continue
+        if entry is not None:
+            out[name] = entry
+    return out
+
+
+def _web_deny_remove(ip):
+    try:
+        os.unlink(os.path.join(WEB_DENY_DIR, ip))
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def do_website_guard_unban(args, content):
+    """fail2ban's unban: the address's deny list entry goes, when it is that jail's. Prints unban=."""
+    ip, jail = args
+    entry = _web_deny_entries().get(ip)
+    done = entry is not None and entry["jail"] == jail and _web_deny_remove(ip)
+    if done:
+        _web_guard_event("unban", ip, jail, entry["host"])
+    sys.stdout.write("unban=%s\n" % ("yes" if done else "none"))
+    return 0
+
+
+def _web_deny_flush(jail):
+    """Remove the deny list's entries of `jail` (None: every entry, and anything else in the folder)."""
+    try:
+        names = os.listdir(WEB_DENY_DIR)
+    except OSError:
+        return 0
+    entries, n = _web_deny_entries(), 0
+    for name in names:
+        if jail is None or (entries.get(name) or {}).get("jail") == jail:
+            try:
+                os.unlink(os.path.join(WEB_DENY_DIR, name))
+                n += 1
+            except OSError:
+                pass    # gone already (fail2ban's own unban), or not removable: the next flush tries again
+    return n
+
+
+def do_website_guard_flush(args, content):
+    """fail2ban stopping a jail (lgsm-web-deny's actionstop): its entries go. Prints flushed=<n>."""
+    n = _web_deny_flush(args[0])
+    if n:
+        _web_guard_event("flush", "-", args[0])
+    sys.stdout.write("flushed=%d\n" % n)
+    return 0
+
+
+def web_guard_stale(entry, now):
+    """Whether a deny list entry is past its end by a day: fail2ban was stopped, or never unbanned it."""
+    return entry["until"] + 86400 < now
+
+
+def _web_deny_prune():
+    """Remove the stale entries (web_guard_stale); run by each apply, never by the list (a read)."""
+    now = int(time.time())
+    for ip, entry in _web_deny_entries().items():
+        if web_guard_stale(entry, now):
+            _web_deny_remove(ip)
+
+
+def do_website_guard_list(args, content):
+    """Print the deny list and the ban events numbered after args[0] (the last the panel recorded; 0 for all).
+
+    One `event=<seq> <epoch> <kind> <address> <jail> <host>` line per event, then one
+    `ban=<address> <jail> <at> <until> <host>` line per entry, a stale entry left out (a read: it is removed by the
+    next apply), then entries=<n>.
+    """
+    try:
+        with open(WEB_GUARD_EVENTS, encoding="ascii", errors="replace") as fh:
+            events = web_guard_events_after(fh.read().splitlines(), int(args[0]))
+    except OSError:
+        events = []
+    sys.stdout.write("".join("event=%d %d %s %s %s %s\n" % e for e in events))
+    now, lines = int(time.time()), []
+    for ip, e in sorted(_web_deny_entries().items()):
+        if web_guard_stale(e, now):
+            continue
+        lines.append("ban=%s %s %d %d %s\n" % (ip, e["jail"], e["at"], e["until"], e["host"]))
+    sys.stdout.write("".join(lines) + "entries=%d\n" % len(lines))
+    return 0
+
+
+def do_website_guard_release(args, content):
+    """The panel's Unban: fail2ban told to lift the address (its firewall ban too), and its entry removed. Prints released=."""
+    ip = args[0]
+    entry = _web_deny_entries().get(ip)
+    for jail in ([entry["jail"]] if entry else sorted(WEB_GUARD_JAILS)):
+        try:
+            _run_quiet([resolve(F2B), "set", jail, "unbanip", ip], timeout=30)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass    # no fail2ban, or it did not answer: the proxy's entry is removed below all the same
+    removed = _web_deny_remove(ip)
+    if removed:
+        _web_guard_event("release", ip, entry["jail"], entry["host"])
+    sys.stdout.write("released=%s\n" % ("yes" if removed or entry is None else "no"))
+    return 0
 
 
 def web_issuer_in_use(conf):
@@ -4228,6 +4665,13 @@ VERBS = {
     "website-proxy-install-cache": ([v_caddy_version, v_image_digest, v_image_digest, v_module_version],
                                     lambda a: [], None),
     "website-cpu-limit": ([v_website_account, v_cpu_milli], lambda a: [], None),
+    # Blocked visitors: ban, unban and flush are fail2ban's own (the lgsm-web-deny action runs them as root); list and
+    # release are the panel's (the Blocked visitors list and its Unban).
+    "website-guard-ban": ([v_guard_ip, v_guard_jail, v_guard_bantime], lambda a: [], None),
+    "website-guard-unban": ([v_guard_ip, v_guard_jail], lambda a: [], None),
+    "website-guard-flush": ([v_guard_jail], lambda a: [], None),
+    "website-guard-list": ([v_guard_seq], lambda a: [], None),
+    "website-guard-release": ([v_guard_ip], lambda a: [], None),
     # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
     # once its rollout reaches this host; the OS Updates card lists it apart until then.
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
@@ -10335,6 +10779,11 @@ ACTIONS = {
     "website-proxy-install-cache": do_website_proxy_install_cache,
     "website-cpu-limit": do_website_cpu_limit,
     "website-proxy-rebind": do_website_proxy_rebind,
+    "website-guard-ban": do_website_guard_ban,
+    "website-guard-unban": do_website_guard_unban,
+    "website-guard-flush": do_website_guard_flush,
+    "website-guard-list": do_website_guard_list,
+    "website-guard-release": do_website_guard_release,
     "addon-account-release": do_addon_account_release,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
@@ -10433,7 +10882,7 @@ READ_VERBS = frozenset({
     "listening-sockets", "listening-sockets-owner", "log-tail", "os-update-log", "os-update-own-running",
     "pro-status",
     "restart-flags", "root-crontab-read", "sshd-effective-config", "sshd-socket-active", "sshd-validate", "tailscale-serve-status",
-    "ufw-show-added", "ufw-status", "ufw-stored-rules",
+    "ufw-show-added", "ufw-status", "ufw-stored-rules", "website-guard-list",
 })
 # ...of which these stream a download for as long as it takes, so they have no deadline: they end
 # when the caller stops reading (their next write fails) or by the two signals above.

@@ -67,7 +67,7 @@ SECRET_COLUMNS = {
     "host_database_server": ("admin_secret", "panel_admin_secret"),
     "database_endpoint": ("admin_secret",),
     # A website's proxy token, object-cache password and app environment, an operator's own certificate key, and a host's tunnel token.
-    "website": ("proxy_secret", "object_cache_secret", "env_enc"),
+    "website": ("proxy_secret", "object_cache_secret", "env_enc", "own_key_secret"),
     "website_domain": ("own_key_secret",),
     "website_proxy": ("tunnel_token_enc",),
 }

@@ -118,6 +118,7 @@
     try { history.replaceState(null, '', '?tab=' + encodeURIComponent(name)); } catch (e) { /* the address bar is a nicety */ }
     if (name === 'files' && window.wsFilesOpen) window.wsFilesOpen();
     if (name === 'backups' && WS.loadBackups) WS.loadBackups();
+    if (name === 'rules' && WS.loadBlocked) WS.loadBlocked();
     return false;
   };
 
@@ -223,14 +224,22 @@
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
   }
+  // An operator's certificate (the site's, or one of the domain's own), unless a tunnel serves its own.
+  function ownCert(dm) {
+    return (dm.cert_mode === 'own' || dm.cert_mode === 'site') && !!dm.own_cert && dm.cert_state !== 'tunnel';
+  }
+  function certLabel(dm, own) {
+    if (!own) return WS.T(WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'));
+    return WS.T(dm.cert_mode === 'site' ? "Uses the site's certificate" : 'Your own certificate');
+  }
   // DNS state · certificate (yours: its issuer) · expiry.
   function domainInfo(dm) {
     var info = WS.node('div', 'small text-secondary');
     info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', dnsLabel(dm)));
     info.appendChild(document.createTextNode(' · '));
     var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
-    var own = dm.cert_mode === 'own' && dm.own_cert && dm.cert_state !== 'tunnel';   // a tunnel serves its own
-    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(own ? 'Your own certificate' : WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
+    var own = ownCert(dm);
+    info.appendChild(WS.node('span', trusted ? 'text-success' : '', certLabel(dm, own)));
     if (own) {
       info.appendChild(document.createTextNode(' · '));
       info.appendChild(WS.node('span', null, WS.T('issuer')));
@@ -247,6 +256,7 @@
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
     if (dm.cert_warning && WS.can.sup) li.appendChild(proxyLink());
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
+    if (dm.cert_uncovered && dm.cert_state !== 'tunnel') li.appendChild(WS.raw('div', 'small text-secondary text-break', dm.cert_uncovered));
     if (dm.cdn_note) {
       // Folded: the steps matter once, and the row stays short on a phone.
       var det = WS.node('details', 'small text-secondary');
@@ -265,7 +275,6 @@
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     row.appendChild(WS.button(WS.T('Check again'), 'arrow-repeat', 'wsDomain', ['check', Number(dm.id)]));
     if (!dm.is_primary) row.appendChild(WS.button(WS.T('Make primary'), 'star', 'wsDomain', ['primary', Number(dm.id)]));
-    row.appendChild(WS.button(WS.T('Certificate'), 'shield-lock', 'wsCertOpen', [Number(dm.id)]));
     row.appendChild(WS.button(WS.T('Remove'), 'x-lg', 'wsDomain', ['remove', Number(dm.id)], 'btn-outline-danger'));
     return row;
   }
@@ -274,6 +283,7 @@
     var doms = d.domains || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
+    renderSiteCert(d.site_cert);
     renderRecords(doms, d.dns || {}, d.tunnel);
   }
   // The record's name as most DNS providers ask for it inside the domain's zone: @ for the zone itself, else the
@@ -323,15 +333,24 @@
       if (WS.done(d, 'wd-msg')) { inp.value = ''; WS.reload(); }
     });
   };
-  // ── a domain's certificate: automatic, or the operator's own (chain and key pasted) ──
-  var certFor = null;
-  window.wsCertOpen = function (domainId) {
-    var dm = ((st.d && st.d.domains) || []).filter(function (x) { return Number(x.id) === Number(domainId); })[0];
+  // The site's certificate line: its issuer, the domains on it and its expiry, or automatic.
+  function renderSiteCert(sc) {
+    var box = WS.clear(WS.el('wd-site-cert-text'));
+    if (!box) return;
+    if (!sc) { box.appendChild(WS.node('span', null, WS.T("Automatic (Let's Encrypt) for every domain"))); return; }
+    box.appendChild(WS.raw('span', null, String(sc.issuer || '')));
+    box.appendChild(document.createTextNode(' · '));
+    box.appendChild(WS.node('span', null, WS.T('used for')));
+    box.appendChild(WS.raw('span', 'ms-1', (sc.domains || []).join(', ') || '-'));
+    box.appendChild(document.createTextNode(' · '));
+    box.appendChild(WS.node('span', null, WS.T('expires')));
+    box.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(sc.not_after || '')));
+  }
+  // ── the site's certificate: automatic, or the operator's own (chain and key pasted once for the site) ──
+  window.wsCertOpen = function () {
     var form = WS.el('wd-cert');
-    if (!dm || !form) return;
-    certFor = Number(dm.id);
-    WS.el('wd-cert-domain').textContent = dm.domain;
-    WS.el(dm.cert_mode === 'own' ? 'wd-cert-own' : 'wd-cert-acme').checked = true;
+    if (!form) return;
+    WS.el(st.d && st.d.site_cert ? 'wd-cert-own' : 'wd-cert-acme').checked = true;
     WS.el('wd-cert-pem').value = '';
     WS.el('wd-cert-key').value = '';
     WS.say('wd-cert-msg', '');
@@ -345,12 +364,12 @@
   window.wsCertSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     var own = WS.el('wd-cert-own').checked;
-    var body = {id: certFor, mode: own ? 'own' : 'acme'};
+    var body = {mode: own ? 'own' : 'acme'};
     var key = WS.el('wd-cert-key');
     if (own) { body.cert = WS.el('wd-cert-pem').value; body.key = key.value; }
     key.value = '';                         // the key never stays in the page after it is sent
     WS.say('wd-cert-msg', WS.T('Saving…'));
-    WS.post(WS.R.act(ID, 'domains/cert'), body).then(function (d) {
+    WS.post(WS.R.act(ID, 'cert'), body).then(function (d) {
       var ok = WS.done(d, 'wd-cert-msg');
       var notes = WS.clear(WS.el('wd-cert-notes'));
       ((d && d.notes) || []).forEach(function (n) { notes.appendChild(WS.raw('li', 'text-warning-emphasis', n)); });

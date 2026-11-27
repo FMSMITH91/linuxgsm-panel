@@ -1277,6 +1277,16 @@
       "GET"
     ]
   },
+  "GET /websites/<int:site_id>/blocked": {
+    "endpoint": "website_blocked",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_blocked"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /websites/<int:site_id>/databases": {
     "endpoint": "website_databases",
     "guards": [
@@ -3902,11 +3912,31 @@
       "POST"
     ]
   },
+  "POST /websites/<int:site_id>/blocked/unban": {
+    "endpoint": "website_blocked_unban",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_blocked_unban"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/<int:site_id>/cache/purge": {
     "endpoint": "website_cache_purge",
     "guards": [
       "utils.py:decorated_view",
       "view:website_cache_purge"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/cert": {
+    "endpoint": "website_site_cert",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_site_cert"
     ],
     "methods": [
       "POST"

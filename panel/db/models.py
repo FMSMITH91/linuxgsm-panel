@@ -15,7 +15,7 @@ from sqlalchemy.orm import validates
 from panel.db.sqla import db
 from panel.db.history_models import HostHourly, MetricHourly
 from panel.db.website_models import (Website, WebsiteDomain, WebsiteProxy,
-                                     group_websites)
+                                     group_websites, site_certs_from_domains)
 
 _log = logging.getLogger("panel.models")
 
@@ -1137,7 +1137,7 @@ AUDIT_HOST_ACTIONS = frozenset({
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
     "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
     "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
-    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start",
+    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start", "website_guard_settings",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
@@ -1145,7 +1145,7 @@ AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # about itself (autoblock_toggle's panel variant targets 'panel host'). A host named like one of
 # those targets must not inherit the panel host's rows.
 AUDIT_HOST_ACTIONS_CALL_ONLY = frozenset({
-    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle",
+    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle", "website_ban", "website_unban",
 })
 
 
@@ -2011,6 +2011,11 @@ _LIGHT_MIGRATIONS = {
     ("website_proxy", "allow_url_error"): "ALTER TABLE website_proxy ADD COLUMN allow_url_error VARCHAR(300) DEFAULT ''",
     # Empty on upgrade: a domain checked as cdn before then went through Cloudflare, the only preset (website_dns).
     ("website_domain", "dns_cdn"): "ALTER TABLE website_domain ADD COLUMN dns_cdn VARCHAR(20) DEFAULT ''",
+    # Empty on upgrade: a site's own certificate was pasted per domain before (data migration 5 moves those).
+    ("website", "own_cert_pem"): "ALTER TABLE website ADD COLUMN own_cert_pem TEXT DEFAULT ''",
+    ("website", "own_key_secret"): "ALTER TABLE website ADD COLUMN own_key_secret TEXT DEFAULT ''",
+    # The defaults on upgrade (blocking on): websites_guard.settings fills every key an empty object lacks.
+    ("website_proxy", "guard"): "ALTER TABLE website_proxy ADD COLUMN guard TEXT DEFAULT '{}'",
 }
 
 
@@ -2214,6 +2219,7 @@ _DATA_MIGRATIONS = (
     (_r21b_canonical_remote_hosts, "PRAGMA user_version = 2"),
     (_fpm_grant_file_permissions, "PRAGMA user_version = 3"),
     (_layer_legacy_password_hashes, "PRAGMA user_version = 4"),
+    (site_certs_from_domains, "PRAGMA user_version = 5"),
 )
 
 
