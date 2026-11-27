@@ -451,12 +451,14 @@ class _Sub306:
     PIPE, STDOUT, TimeoutExpired = _sp306.PIPE, _sp306.STDOUT, _sp306.TimeoutExpired
 
     def __init__(self, build_rc=0, build_out=b""):
-        self.calls, self.build_rc, self.build_out = [], build_rc, build_out
+        self.calls, self.build_rc, self.build_out, self.containerfile = [], build_rc, build_out, ""
 
     def run(self, argv, **_kw):
         argv = list(argv)
         self.calls.append(argv)
         if argv[1:2] == ["build"]:
+            with open(argv[argv.index("-f") + 1], encoding="utf-8") as fh:
+                self.containerfile = fh.read()
             return _NS306(returncode=self.build_rc, stdout=self.build_out, stderr=b"")
         if argv[1:2] == ["create"]:
             return _NS306(returncode=0, stdout=b"c0ffee\n", stderr=b"")
@@ -499,6 +501,7 @@ def _f27_cache_build(st):
                            "XCADDY_SETCAP=0" in env.split()), ([], True, True))
     _f27_build_argv()
     _f27_build_failure()
+    _f27_build_scan()
 
 
 def _first306(calls, verb):
@@ -515,6 +518,21 @@ def _f27_build_argv():
        "iptables chains, which stayed); the version reaches the build as PANEL_CADDY_VERSION",
        (rc, "--network=host" in build, "--network=none" in create, "PANEL_CADDY_VERSION=%s" % c["caddy"] in build,
         [a for a in build if a.startswith("CADDY_VERSION=")]), (0, True, True, True, []))
+
+
+def _f27_build_scan():
+    sub = _Sub306()
+    _rc, _err, _calls = _cache_verb306(sub)
+    cf = sub.containerfile
+    stage = cf[cf.index(" AS build"):cf.index("\nFROM ${BASE_IMAGE}")]
+    run = stage[stage.index("\nRUN "):]
+    env = " ".join(ln for ln in stage.split("\n") if ln.startswith("ENV "))
+    eq("F27e (website-proxy-install-cache, the Containerfile its build reads; the image scan's hadolint): the build "
+       "unsets GOPRIVATE, GONOSUMDB, GONOPROXY and GOINSECURE (env -u: an empty GONOSUMDB falls back to GOPRIVATE) "
+       "instead of an ENV naming GOPRIVATE (DL3064), its RUN has no pipe (DL4006), and the module check still runs",
+       (sorted(_re306.findall(r"-u (GO[A-Z]+)", run)), "GOPRIVATE" in env, "|" in run,
+        'grep -qx "http.handlers.cache"' in run, "GOSUMDB=sum.golang.org" in env.split()),
+       (["GOINSECURE", "GONOPROXY", "GONOSUMDB", "GOPRIVATE"], False, False, True, True))
 
 
 def _f27_build_failure():
