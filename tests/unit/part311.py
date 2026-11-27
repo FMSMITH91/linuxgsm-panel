@@ -11,12 +11,18 @@
    removed with it, by a delete and by an install's undo.
 3. Re-applying tunnel mode clears the connector's start limit first, and a failure names the tunnel.
 4. An app's build turns npm's update notice off, so the build log's last lines are the build's own.
+5. The page-cache build removes Podman's blob-info cache folder only when the build made it.
 
 HOW IT RUNS. part12's app and its database for the routes. ssh_manager.websites' seams answer for the host (Podman
 ready, the helper, the account's ids), and every shell it would run as a site's account runs in real bash over a
 scratch home, with stand-in podman and systemctl first on PATH that record their argv (systemctl models a unit's
-start limit). Nothing reaches a host (part12's tripwire is armed).
+start limit). Section 5 runs the root helper's verb with its subprocess standing in and its cache folder moved to
+the scratch tree. Nothing reaches a host (part12's tripwire is armed).
 """
+import contextlib as _ctx311
+import importlib.machinery as _mach311
+import importlib.util as _ilu311
+import io as _io311
 import json as _json311
 import os
 import shutil as _shutil311
@@ -27,7 +33,7 @@ from types import SimpleNamespace as _NS311
 
 from flask import g as _g311
 
-from unit.part01 import check, eq
+from unit.part01 import _root, check, eq
 from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
 from panel.core import config as _cfg311
 from panel.db.models import (RemoteServer as _Remote311, User as _User311, Website as _Site311,
@@ -36,6 +42,7 @@ from panel.ops.ssh_manager import websites as _sw311
 from panel.routes import websites as _w311
 from panel.routes import websites_apps as _wapps311
 from panel.services import websites as _ws311
+from panel.services import websites_catalog as _wc311
 
 _TREE311 = _tf311.mkdtemp(prefix="lgsm-unit-p311-")
 _BIN311 = os.path.join(_TREE311, "bin")
@@ -382,6 +389,70 @@ def _s4_npm(r, run, log):
        (200, True, False, True))
 
 
+# ── 5. The page-cache build's leftover ────────────────────────────────────────────────────────────
+_hspec311 = _ilu311.spec_from_loader("panel_helper_p311", _mach311.SourceFileLoader(
+    "panel_helper_p311", os.path.join(_root, "tools", "panel-helper")))
+_H311 = _ilu311.module_from_spec(_hspec311)
+_hspec311.loader.exec_module(_H311)
+
+
+class _Sub311:
+    """The helper's subprocess, standing in: the build makes Podman's blob-info cache folder, as root Podman does."""
+
+    PIPE, STDOUT, TimeoutExpired = _sp311.PIPE, _sp311.STDOUT, _sp311.TimeoutExpired
+
+    def run(self, argv, **_kw):
+        argv = list(argv)
+        if argv[1:2] == ["build"]:
+            os.makedirs(_H311.WEB_PODMAN_CACHE, exist_ok=True)
+            with open(os.path.join(_H311.WEB_PODMAN_CACHE, "blob-info-cache-v1.sqlite"), "wb") as fh:
+                fh.write(b"cache")
+        if argv[1:2] == ["cp"]:
+            with open(argv[3], "wb") as fh:
+                fh.write(b"caddy")
+        return _NS311(returncode=0, stdout=b"inactive\n", stderr=b"")
+
+
+def _write311(path, data, *_a, **_k):
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def _cache_verb311(before):
+    """website-proxy-install-cache with its cache folder in the scratch tree, there before the build or not."""
+    names = ("subprocess", "resolve", "pwd", "WEB_PROXY_BIN", "WEB_PODMAN_CACHE", "_web_has_cache", "_web_write")
+    saved = {n: getattr(_H311, n) for n in names}
+    base = _tf311.mkdtemp(prefix="p311-cache-", dir=_TREE311)
+    cache = os.path.join(base, "containers", "cache")
+    if before:
+        os.makedirs(cache)
+        with open(os.path.join(cache, "another-tool"), "w", encoding="utf-8") as fh:
+            fh.write("kept")
+    binary = os.path.join(base, "caddy")
+    with open(binary, "wb") as fh:
+        fh.write(b"plain")
+    try:
+        _H311.subprocess, _H311.resolve, _H311.WEB_PROXY_BIN = _Sub311(), lambda name: "/usr/bin/" + name, binary
+        _H311.WEB_PODMAN_CACHE = cache
+        _H311.pwd = _NS311(getpwnam=lambda name: _NS311(pw_uid=1500, pw_gid=1500, pw_dir="/var/lib/lgsm-web-proxy"))
+        _H311._web_has_cache = lambda path, pw: True
+        _H311._web_write = _write311
+        c = _wc311.pins("caddy_cache")
+        with _ctx311.redirect_stderr(_io311.StringIO()), _ctx311.redirect_stdout(_io311.StringIO()):
+            rc = _H311.do_website_proxy_install_cache([c["caddy"], c["builder"], c["base"], c["version"]], "")
+    finally:
+        for n, v in saved.items():
+            setattr(_H311, n, v)
+    return rc, (sorted(os.listdir(cache)) if os.path.isdir(cache) else None)
+
+
+def _s5_podman_cache():
+    eq("I2 (website-proxy-install-cache): Podman's blob-info cache folder the build made in root's store is removed "
+       "after it (it stayed, 36 K, after every build)", _cache_verb311(False), (0, None))
+    eq("I2 control: a cache folder that was there before the build belongs to another tool and stays, with what it "
+       "held", _cache_verb311(True), (0, ["another-tool", "blob-info-cache-v1.sqlite"]))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup311():
     _db311.session.rollback()
@@ -427,6 +498,7 @@ with _p9.app_context():
         _st311 = _rows311()
         for _sec311 in (_s1_resolv, _s2_cron, _s3_tunnel):
             check("part311: %s ran to the end" % _sec311.__name__, _ran311(_sec311, _st311), _ran311.last)
+        _s5_podman_cache()
         eq("part311: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips311:], [])
     finally:
         _p9_restore_all()

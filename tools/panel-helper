@@ -3403,6 +3403,9 @@ def v_cpu_milli(s):
 # iptables chains, which stay after the build (and after Podman is removed). The build's last lines go to the
 # helper's stderr, which the panel logs: they hold the public pins and Go's output, no secret.
 WEB_CACHE_TAIL = 20
+# Podman's blob-info cache in root's store, which the first root build on a host makes (a few KB). The cache build
+# removes it afterwards only when it was not there before the build: one that was belongs to another tool's Podman.
+WEB_PODMAN_CACHE = "/var/lib/containers/cache"
 
 
 def _web_images(podman):
@@ -3448,6 +3451,7 @@ def _web_cache_build(args, d):
              "--build-arg", "PANEL_CADDY_VERSION=" + version, "--build-arg", "CACHE_MODULE=" + WEB_CACHE_MODULE,
              "--build-arg", "CACHE_VERSION=" + module_version, "-f", os.path.join(d, "Containerfile"), d]
     before = _web_images(podman)
+    podman_cache_was_there = os.path.lexists(WEB_PODMAN_CACHE)
     try:
         r = subprocess.run(build, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B603
                            timeout=1800, env=_clean_env())
@@ -3459,6 +3463,14 @@ def _web_cache_build(args, d):
         return _web_cache_copy_out(podman, d)
     finally:
         _web_cache_clean(podman, before)
+        _web_podman_cache_clean(podman_cache_was_there)
+
+
+def _web_podman_cache_clean(was_there):
+    """Remove WEB_PODMAN_CACHE when the cache build made it (`was_there` False); never one that was there, or a link."""
+    if was_there or os.path.islink(WEB_PODMAN_CACHE) or not os.path.isdir(WEB_PODMAN_CACHE):
+        return
+    shutil.rmtree(WEB_PODMAN_CACHE, ignore_errors=True)
 
 
 def _web_cache_copy_out(podman, d):
