@@ -394,11 +394,9 @@ def _upstream314(**over):
     return up
 
 
-def _getter314(up, seen=None):
+def _getter314(up):
     """A stand-in for the script's fetch over `up`: an unknown url is an error, None answers 404."""
-    def get(url, limit=_SAV314.META_MAX, headers=None, method="GET"):
-        if seen is not None:
-            seen.append(url)
+    def get(url, limit=_SAV314.META_MAX, _headers=None, method="GET"):
         _SAV314.allowed(url)
         if url not in up:
             raise OSError("no stand-in for %s" % url)
@@ -432,7 +430,7 @@ def _run314(argv_tail, up, catalog_text=None):
 
 
 def _s314_script_writes():
-    rc, out, after, body = _run314(["check", "BODY"], _upstream314())
+    rc, out, after, _text = _run314(["check", "BODY"], _upstream314())
     old, new = _json314.loads(_TEXT314), _json314.loads(after)
     r = new["sites"]["recipes"]
     eq("site app versions (main, check): a newer stable release of every app whose publisher's checksum matches is "
