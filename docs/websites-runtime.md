@@ -24,7 +24,10 @@ A site has no route to the internet. WordPress reaches only its own update hosts
 downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local
 address. A Node.js app reaches npm's registry only while it is being built. The egress guard (an
 nftables table) keeps site accounts away from the host's other addresses (its LAN, tailnet and public
-addresses), so a site cannot reach the panel's port or SSH.
+addresses), so a site cannot reach the panel's port or SSH. Its rules apply only to packets that carry a
+site account's uid; a packet the kernel sends without a socket of its own (a reset for a closed port, a
+ping reply, the last ACK of a closed connection) has no uid and is never dropped, so the host keeps
+answering ping and refusing closed ports for every account while a website is online.
 
 A site has no name server either. Its container gets a read-only `/etc/resolv.conf` from the panel
 (`~/site/conf/resolv.conf`) that names no server and allows one try of one second, so a name lookup is

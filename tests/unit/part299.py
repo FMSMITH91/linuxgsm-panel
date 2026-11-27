@@ -658,19 +658,48 @@ def _s299_helper_apply():
        _refused299(_H299._web_apply_doc, doc), False)
 
 
+def _chains299(rules):
+    """{chain name: [its rule lines]} of a rendered nftables table (one level of chains, as the guard writes)."""
+    chains, name = {}, None
+    for ln in (x.strip() for x in rules.split("\n")):
+        if ln.startswith("chain ") and ln.endswith("{"):
+            name = ln.split()[1]
+            chains[name] = []
+        elif ln == "}":
+            name = None
+        elif name:
+            chains[name].append(ln)
+    return chains
+
+
 def _s299_helper_guard():
     rules = _H299.web_guard_ruleset([1005, 1006])
     lines = [ln.strip() for ln in rules.split("\n")]
+    chains = _chains299(rules)
+    site = chains.get("site_out", [])
     eq("egress guard: only the site accounts' uids, loopback addresses allowed first, then every other address of "
        "this host and the private, link-local, tailnet, mapped and NAT64 ranges dropped (never 'oif lo', which a "
        "packet to the host's own tailnet address leaves by)",
-       ("elements = { 1005, 1006 }" in lines, [ln for ln in lines if ln in (
-           "meta skuid != @site_uids accept", "ip daddr 127.0.0.0/8 accept", "fib daddr type local counter drop")]
-        == ["meta skuid != @site_uids accept", "ip daddr 127.0.0.0/8 accept", "fib daddr type local counter drop"],
-        'oif "lo" accept' in lines, any("100.64.0.0/10" in ln and "192.168.0.0/16" in ln for ln in lines),
-        any("fc00::/7" in ln and "::ffff:0:0/96" in ln for ln in lines),
+       ("elements = { 1005, 1006 }" in lines, [ln for ln in site if ln in (
+           "ip daddr 127.0.0.0/8 accept", "ip6 daddr ::1 accept", "fib daddr type local counter drop")]
+        == ["ip daddr 127.0.0.0/8 accept", "ip6 daddr ::1 accept", "fib daddr type local counter drop"],
+        'oif "lo" accept' in lines, any("100.64.0.0/10" in ln and "192.168.0.0/16" in ln for ln in site),
+        any("fc00::/7" in ln and "::ffff:0:0/96" in ln for ln in site),
         lines[1:3] == ["table inet lgsm_web {}", "delete table inet lgsm_web"]),
        (True, True, False, True, True, True))
+
+
+def _s299_helper_guard_jump():
+    rules = _H299.web_guard_ruleset([1005, 1006])
+    lines = [ln.strip() for ln in rules.split("\n")]
+    chains = _chains299(rules)
+    site = chains.get("site_out", [])
+    eq("egress guard: the hooked chain only sends a site uid's packet to site_out (a positive match), so a packet "
+       "with no socket uid (the kernel's resets, ICMP replies, TIME_WAIT ACKs) meets the chain's accept and no "
+       "drop; no rule tests the uid with != or accepts on it",
+       (chains.get("output"), [ln for ln in lines if "skuid" in ln and ("!=" in ln or ln.endswith("accept"))],
+        len(site), [ln for ln in site if "skuid" in ln]),
+       (["type filter hook output priority 0; policy accept;", "meta skuid @site_uids jump site_out"], [], 5, []))
 
 
 def _s299_helper_guard2():
@@ -1247,7 +1276,7 @@ def _w3_checks299(sent, secrets, results, logs):
 
 for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s299_generator, _s299_proxy_base,
                  _s299_proxy_modes, _s299_proxy_rules, _s299_quadlet, _s299_servers, _s299_php, _s299_app_cache_tunnel,
-                 _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard,
+                 _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard, _s299_helper_guard_jump,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
                  _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):

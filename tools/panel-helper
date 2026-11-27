@@ -3667,17 +3667,27 @@ def web_guard_ruleset(uids):
     SSH) is dropped, and so are the private, link-local, tailnet, mapped and NAT64 ranges.
     The internet stays reachable for what needs it (an image pull, an app's download, the egress
     proxy, the tunnel); a container without egress cannot leave its loopback anyway.
+
+    The uid test is a positive match that jumps to site_out. A packet with no full socket of its own
+    (the kernel's TCP resets and ICMP replies, a TIME_WAIT pair's ACK) has no uid to read: the
+    kernel's meta skuid expression then ends the rule without a match (NFT_BREAK). With a negative
+    test ("!= @site_uids accept") such a packet skipped the accept and met the drops, for every
+    account; with a positive one it falls through to the chain's accept. A site account's own
+    connection still starts from a socket that has its uid, so nothing it opens gets past site_out.
     """
     elements = ", ".join(str(int(u)) for u in uids) or "0"
     return "\n".join([
         "# Written by linuxgsm-panel: the websites' egress guard.",
         "table inet lgsm_web {}", "delete table inet lgsm_web", "table inet lgsm_web {",
         "\tset site_uids {", "\t\ttype uid", "\t\telements = { %s }" % elements, "\t}",
-        "\tchain output {", "\t\ttype filter hook output priority 0; policy accept;",
-        "\t\tmeta skuid != @site_uids accept", "\t\tip daddr 127.0.0.0/8 accept", "\t\tip6 daddr ::1 accept",
+        "\tchain site_out {",
+        "\t\tip daddr 127.0.0.0/8 accept", "\t\tip6 daddr ::1 accept",
         "\t\tfib daddr type local counter drop",
         "\t\tip daddr { %s } counter drop" % ", ".join(WEB_GUARD_V4),
         "\t\tip6 daddr { %s } counter drop" % ", ".join(WEB_GUARD_V6),
+        "\t}",
+        "\tchain output {", "\t\ttype filter hook output priority 0; policy accept;",
+        "\t\tmeta skuid @site_uids jump site_out",
         "\t}", "}", ""])
 
 

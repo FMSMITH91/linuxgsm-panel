@@ -588,6 +588,23 @@ def _s7_guard():
         eq("website-egress-guard off (verb): the table is deleted only when it is there (no nft error when the unit "
            "already removed it)%s" % (" (control)" if deleted else ""),
            (rc, ["delete", "table", "inet", "lgsm_web"] in [c[1:] for c in calls]), (0, deleted))
+    loaded = []
+
+    def _on():
+        rc = _H302.do_website_egress_guard(["on"], "")
+        with open(_H302.WEB_GUARD_FILE, encoding="utf-8") as fh:
+            loaded.append(fh.read())
+        return rc
+
+    rc, out, calls, _conf, _t = _helper302(_on, {})
+    text = loaded[0] if loaded else ""
+    eq("website-egress-guard on (verb): the ruleset it writes and loads with nft -f tests the uid only as a positive "
+       "jump to site_out (a packet whose uid cannot be read, such as the kernel's own reset or ping reply, is never "
+       "dropped), and site_out still drops the host's own addresses",
+       (rc, "guard=on" in out, any(os.path.basename(c[0]) == "nft" and c[1:2] == ["-f"] for c in calls),
+        "meta skuid @site_uids jump site_out" in text, "skuid !=" in text,
+        "fib daddr type local counter drop" in text.split("chain site_out {", 1)[-1].split("}", 1)[0]),
+       (0, True, True, True, False, True))
 
 
 # ── 10. the listen addresses at boot and while running ──────────────────────────────────────────
