@@ -79,8 +79,8 @@
     return card;
   }
 
-  function row(r) {
-    var wrap = el('div', 'upd-row py-2');
+  // A row's first line: its name (a link to its page), its host, and the security mark.
+  function rowHead(r) {
     var top = el('div', 'd-flex flex-wrap gap-2 align-items-baseline');
     var name = r.link ? el('a', 'fw-semibold text-break', r.name) : el('span', 'fw-semibold text-break', r.name);
     if (r.link) name.href = r.link;
@@ -88,7 +88,11 @@
     top.appendChild(name);
     if (r.host) { var h = el('span', 'small text-secondary', r.host); h.setAttribute('data-no-i18n', ''); top.appendChild(h); }
     if (r.security) top.appendChild(el('span', 'badge text-bg-danger', T('Security update')));
-    wrap.appendChild(top);
+    return top;
+  }
+  function row(r) {
+    var wrap = el('div', 'upd-row py-2');
+    wrap.appendChild(rowHead(r));
     wrap.appendChild(lines(r.what));
     if ((r.notes || []).length) wrap.appendChild(notes(r.notes));
     wrap.appendChild(line('hourglass-split', r.cost, 'text-secondary'));

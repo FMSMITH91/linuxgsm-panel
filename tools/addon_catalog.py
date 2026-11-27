@@ -113,8 +113,12 @@ def source_problems(obj, need_sites=True):
         return ["the catalog must hold exactly %s" % ", ".join("`%s`" % k for k in keys)]
     out = [] if obj["schema"] == SCHEMA and _whole(obj["schema"]) else ["schema %r is not %d" % (obj["schema"], SCHEMA)]
     out += _sites_problems(obj["sites"]) if need_sites else []
-    out += _CS.security_problems(obj["security"]) if "security" in obj else []
-    return out + _addons_problems(obj["addons"])
+    return out + _security_problems(obj) + _addons_problems(obj["addons"])
+
+
+def _security_problems(obj):
+    """catalog_security.security_problems of the source's optional `security` section ([] without one)."""
+    return _CS.security_problems(obj["security"]) if "security" in obj else []
 
 
 def _addons_problems(addons):

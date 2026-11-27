@@ -145,6 +145,11 @@
     var ver = s.app_version || s.php_version || s.runtime_version;
     setText('ws-ov-version', ver);
     setText('ws-ov-backup', backupText(s.last_backup));
+    renderUpdate(img);
+    renderUsage(u, s.limits || {}, why);
+  }
+  // An update waiting: how many and what, and when it installs by itself (or the note that it waits).
+  function renderUpdate(img) {
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-box', !!img.update_available);
     setText('ws-update-ready', img.ready || '');
@@ -152,7 +157,6 @@
     setText('ws-update-off', img.note || '');
     WS.show('ws-update-off', !!img.note);
     WS.show('ws-update-when', !img.note);     // the note already says it waits for Update now
-    renderUsage(u, s.limits || {}, why);
   }
   // Limits are an administrator's; anyone else sees the figure alone.
   function mbText(used, max) { return max ? used + ' / ' + max + ' MB' : used + ' MB'; }

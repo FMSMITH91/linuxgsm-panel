@@ -140,25 +140,25 @@ def _addon_rows(user, servers, cfg, sec):
     if not _may_addons(user):
         return []
     from panel.services import addons as _ad
-    rows = []
-    for gs in servers:
-        for k, seen in sorted(U.addons_seen(gs.id).items()):
-            if seen.get("reason") != "image" or k not in _ad.CATALOG:
-                continue
-            ref, security = "addon:%d:%s" % (gs.id, k), k in sec["addons"]
-            auto = U.auto_on(ref, cfg)
-            rows.append(_row("addon", ref, "%s · %s" % (_ad.CATALOG[k]["name"], gs.name),
-                             host=gs.remote.display_name if gs.remote else "",
-                             what=[U.tr("{old} to {new}.", old=seen.get("version") or "?",
-                                        new=seen.get("new") or U.tr("a newer version of the add-on"))]
-                             + ([sec["note"]] if security and sec["note"] else []),
-                             notes=[{"title": U.tr("Release notes"), "url": _ad.CATALOG[k]["source"] + "/releases"}],
-                             cost=U.tr(U.COST_ADDON), safe=True, security=security, auto=auto, auto_editable=True,
-                             when=_when_auto(auto, security, cfg),
-                             action={"post": url_for("api_server_addon_update", server_id=gs.id, addon_id=k),
-                                     "step_up": True},
-                             link=url_for("server_detail", server_id=gs.id)))
-    return rows
+    return [_addon_row(gs, k, seen, cfg, sec) for gs in servers for k, seen in sorted(U.addons_seen(gs.id).items())
+            if seen.get("reason") == "image" and k in _ad.CATALOG]
+
+
+def _addon_row(gs, k, seen, cfg, sec):
+    """The row of add-on `k` on server `gs`, whose image differs from the catalog's (`seen`: note_addons's)."""
+    from panel.services import addons as _ad
+    ref, security = "addon:%d:%s" % (gs.id, k), k in sec["addons"]
+    auto = U.auto_on(ref, cfg)
+    what = [U.tr("{old} to {new}.", old=seen.get("version") or "?",
+                 new=seen.get("new") or U.tr("a newer version of the add-on"))]
+    return _row("addon", ref, "%s · %s" % (_ad.CATALOG[k]["name"], gs.name),
+                host=gs.remote.display_name if gs.remote else "",
+                what=what + ([sec["note"]] if security and sec["note"] else []),
+                notes=[{"title": U.tr("Release notes"), "url": _ad.CATALOG[k]["source"] + "/releases"}],
+                cost=U.tr(U.COST_ADDON), safe=True, security=security, auto=auto, auto_editable=True,
+                when=_when_auto(auto, security, cfg),
+                action={"post": url_for("api_server_addon_update", server_id=gs.id, addon_id=k), "step_up": True},
+                link=url_for("server_detail", server_id=gs.id))
 
 
 def site_changes(site):
@@ -281,6 +281,19 @@ def _run_one(app, user, ref):
         _run_action(app, gs, gs.remote, _LGSM, user)
 
 
+def _auto_target(ref, on):
+    """(the viewer's row `ref`, None) when they may switch its automatic updates to `on`, else (None, the refusal).
+
+    Only a row the viewer sees with its switch (who may update that item): anything else is refused.
+    """
+    if not isinstance(on, bool) or not isinstance(ref, str) or not U.REF_RE.match(ref):
+        return None, (jsonify({"success": False, "message": i18n.tr(U.S_BAD_REF)}), 400)
+    row = next((r for g in collect(current_user)["groups"] for r in g["items"] if r["ref"] == ref), None)
+    if row is None or not row["auto_editable"]:
+        return None, (jsonify({"success": False, "message": i18n.tr(S_DENIED)}), 403)
+    return row, None
+
+
 def register(app, supervise):
     """The page, its API, the nav entry (updates_nav) and the nightly window's loop."""
     app.jinja_env.globals["updates_nav"] = nav_url
@@ -326,11 +339,9 @@ def register(app, supervise):
     def api_updates_auto():
         data = _json_body()
         ref, on = data.get("ref"), data.get("on")
-        if not isinstance(on, bool) or not isinstance(ref, str) or not U.REF_RE.match(ref):
-            return jsonify({"success": False, "message": i18n.tr(U.S_BAD_REF)}), 400
-        row = next((r for g in collect(current_user)["groups"] for r in g["items"] if r["ref"] == ref), None)
-        if row is None or not row["auto_editable"]:
-            return jsonify({"success": False, "message": i18n.tr(S_DENIED)}), 403
+        row, refused = _auto_target(ref, on)
+        if refused:
+            return refused
         U.set_auto(ref, on)
         log_action(current_user, "updates_auto", target=row["name"], detail="%s %s" % (ref, "on" if on else "off"))
         U.forget_counts()

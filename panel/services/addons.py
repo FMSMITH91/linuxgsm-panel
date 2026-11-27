@@ -1325,7 +1325,7 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     secret = shlex.quote("%s/%s" % (d, a["settings"]))
     early = [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())] or ["true"]
     record = "%s || { echo ADDON_WRITE_FAILED; exit 21; }; " % _put_sh("%s/%s" % (d, META_FILE), meta_text)
-    keep = _keep_previous_sh(user, addon_id) if how.get("keep_prev") else ("", "")
+    keep = _keep_previous_sh(user, addon_id, how.get("keep_prev"))
     record = keep[0] + record
     late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
     late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
@@ -1356,12 +1356,14 @@ def _previous_paths(user, addon_id):
     return [shlex.quote(p) for p in (rec, unit, rec + ".prev", unit + ".prev")]
 
 
-def _keep_previous_sh(user, addon_id):
+def _keep_previous_sh(user, addon_id, keep):
     """(shell keeping a copy of the record and the unit before an update writes its own, shell removing them).
 
     The copies are what rollback_sh puts back when the updated add-on does not start (an automatic update:
-    services/updates_auto); a change that ended well removes them.
+    services/updates_auto); a change that ended well removes them. ("", "") when `keep` is false.
     """
+    if not keep:
+        return "", ""
     rec, unit, rec_prev, unit_prev = _previous_paths(user, addon_id)
     return ("cp -pf %s %s 2>/dev/null; cp -pf %s %s 2>/dev/null; " % (rec, rec_prev, unit, unit_prev),
             "rm -f %s %s; " % (rec_prev, unit_prev))

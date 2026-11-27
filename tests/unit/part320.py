@@ -131,7 +131,7 @@ def _rows_of(uid):
 def _s1_page(host, su):
     pend, fresh = _site320(host, "p320-pending"), _site320(host, "p320-current", pending=False)
     page = _get320(su.id, "/updates")
-    rows, d = _rows_of(su.id)
+    rows = _rows_of(su.id)[0]
     mine = {r["ref"]: r for r in rows if r["kind"] == "website"}
     r = mine.get("website:%d" % pend.id) or {}
     eq("updates (GET /updates, /api/updates as a superadmin): the page opens, a website with a new image and new "
@@ -225,18 +225,14 @@ def _s3_window(host, su, pend, other):
        "updated through its own Update, once (a second pass in the same window leaves it), and a website switched "
        "off is left",
        (out, first, again), ([], [pend.id], []))
-    row = (_Audit320.query.filter(_Audit320.website_id == pend.id, _Audit320.action == "website_update")
-           .order_by(_Audit320.id.desc()).first())
-    eq("nightly window: the update is in the history as automatic, done",
-       (row.username, row.success, row.detail) if row else None, ("automatic", True, "automatic: image updated"))
+    eq("nightly window: the update is in the history as automatic, done", _last_row320(pend.id, "website_update"),
+       (True, "automatic: image updated"))
     _ua320._DONE.clear()
     _p9_patch(_sw320, "recent_requests", lambda remote, site: 2)
     busy = _tick320(_NEXT320)
-    skip = (_Audit320.query.filter(_Audit320.website_id == pend.id, _Audit320.action == "update_skipped")
-            .order_by(_Audit320.id.desc()).first())
     eq("nightly window: a website with open connections from the web proxy (visitors in the last minutes) waits for "
        "the next window, and the history says so",
-       (busy, bool(skip) and "answered visitors" in skip.detail), ([], True))
+       (busy, "answered visitors" in _last_row320(pend.id, "update_skipped")[1]), ([], True))
     _ua320._DONE.clear()
     _p9_patch(_sw320, "recent_requests", lambda remote, site: 0)
     _p9_patch(_u320, "security", lambda: _cs320.parsed({"sites": ["php"]}))
@@ -244,7 +240,7 @@ def _s3_window(host, su, pend, other):
     eq("nightly window: a security update (the catalog's security section names php) is applied even to the website "
        "switched off; the other pending site with automatic on is updated too, one after the other",
        sorted(sec), sorted([pend.id, other.id]))
-    rows, _d = _rows_of(su.id)
+    rows = _rows_of(su.id)[0]
     r = next((x for x in rows if x["ref"] == "website:%d" % other.id), {})
     eq("nightly window: its row is marked a security update that installs by itself though automatic updates are off",
        (r.get("security"), r.get("when")),
@@ -278,19 +274,33 @@ def _s4_rollback(host, su):
     del _RAN320[:]
     _ua320.tick(_p9, now=_IN320 + 1200)
     mine = [pin for sid, pin in _RAN320 if sid == site.id]
-    row = (_Audit320.query.filter(_Audit320.website_id == site.id, _Audit320.action == "website_update")
-           .order_by(_Audit320.id.desc()).first())
+    ok, detail = _last_row320(site.id, "website_update")
     eq("rollback: a failed automatic update installs the website again from the image it ran before (pinned), says "
        "so in the history and sends the auto_update_failed alert",
-       (mine, row.success if row else None, "put back on its previous image" in (row.detail if row else ""),
-        [a[0] for a in sent]),
+       (mine, ok, "put back on its previous image" in detail, [a[0] for a in sent]),
        (["", "localhost/p320-old:1"], False, True, ["auto_update_failed"]))
+    return site
+
+
+def _last_row320(site_id, action):
+    """(success, detail) of the site's newest audit row of `action`; (None, "") when there is none."""
+    row = (_Audit320.query.filter(_Audit320.website_id == site_id, _Audit320.action == action)
+           .order_by(_Audit320.id.desc()).first())
+    return (row.success, row.detail or "") if row is not None else (None, "")
+
+
+def _last_install320():
+    """The install shell of the last install recorded ("" when none ran)."""
+    inst = [sh for _a, sh, _i in _SH320 if "SITE_FILES_REFUSED" in sh]
+    return inst[-1] if inst else ""
+
+
+def _s4_rollback_shell(site):
     _p9_restore_one(_w320, "install_site")
     _seams320()
     del _SH320[:]
     ok, _said = _ua320.rollback_site(site, "localhost/p320-old:1")
-    inst = [sh for _a, sh, _i in _SH320 if "SITE_FILES_REFUSED" in sh]
-    sh = inst[-1] if inst else ""
+    sh = _last_install320()
     eq("rollback (the real install down to the account's shell): the previous image must still be on the host "
        "(podman image exists), and nothing is built or pulled",
        (ok, "podman image exists localhost/p320-old:1 || { echo SITE_PULL_FAILED; exit 23; }" in sh,
@@ -298,7 +308,7 @@ def _s4_rollback(host, su):
        (True, True, False, False, ""))
     del _SH320[:]
     _w320.install_site(site)
-    sh = ([s for _a, s, _i in _SH320 if "SITE_FILES_REFUSED" in s] or [""])[-1]
+    sh = _last_install320()
     check("rollback control: the website's own Update still builds its image from the catalog",
           "podman build" in sh and "podman image exists localhost/p320-old:1" not in sh, sh[-400:])
 
@@ -441,17 +451,21 @@ def _s8_rows(host, su, cust, gs):
     rows, d = _rows_of(su.id)
     lg = next((x for x in rows if x["ref"] == "lgsm:%d" % gs.id), {})
     os_ = next((x for x in rows if x["kind"] == "os"), {})
+    _osseen320.pop(local, None)
+    _u320.forget_server(gs.id)
     eq("updates rows: a server behind LinuxGSM's latest release is listed as safe with update-lgsm through its own "
        "action route and the notes of the release it moves to; the panel host's packages with their security count and the host card's Update",
        (lg.get("safe"), (lg.get("action") or {}).get("body"), lg.get("notes"), bool(os_), os_.get("security"),
         ((os_.get("action") or {}).get("href") or "").endswith("?update=os#os-updates")),
        (True, {"action": "update-lgsm"}, [{"title": "v26.6.0", "url": _url320}], True, True, True))
+    return d
+
+
+def _s8_history(d, cust):
     hist = d.get("history") or []
     eq("updates history: the automatic runs are in it, by 'automatic'; a customer reads only their own site's rows",
        (any(h["who"] == "automatic" and h["action"] == "website_update" for h in hist),
         {h["target"] for h in _rows_of(cust.id)[1].get("history") or []} <= {"p320-pending"}), (True, True))
-    _osseen320.pop(local, None)
-    _u320.forget_server(gs.id)
 
 
 def _cleanup320():
@@ -498,7 +512,7 @@ with _p9.app_context():
                 ("_s2_settings", _s2_settings, (_host320, _su320, _pend320, _cust320)),
                 ("_s3_window", _s3_window, (_host320, _su320, _pend320, _other320)),
                 ("_s3_busy_read", _s3_busy_read, (_host320,)),
-                ("_s4_rollback", _s4_rollback, (_host320, _su320)),
+                ("_s4_rollback", lambda h, s: _s4_rollback_shell(_s4_rollback(h, s)), (_host320, _su320)),
                 ("_s4_change_steps", _s4_change_steps, ()),
                 ("_s5_overview", _s5_overview, (_host320, _su320, _pend320)),
                 ("_s6_catalog", _s6_catalog, ())):
@@ -507,8 +521,10 @@ with _p9.app_context():
         check("part320: _s4_addon ran to the end", _gs320v, _ran320.last)
         if isinstance(_gs320v, _GS320):
             check("part320: _s7_safe ran to the end", _ran320(_s7_safe, _host320, _su320, _gs320v), _ran320.last)
-            check("part320: _s8_rows ran to the end", _ran320(_s8_rows, _host320, _su320, _cust320, _gs320v),
-                  _ran320.last)
+            _d320 = _ran320(_s8_rows, _host320, _su320, _cust320, _gs320v)
+            check("part320: _s8_rows ran to the end", _d320, _ran320.last)
+            check("part320: _s8_history ran to the end", _ran320(_s8_history, _d320 if isinstance(_d320, dict) else {},
+                                                                 _cust320), _ran320.last)
         eq("part320: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips320:], [])
     finally:
         _p9_restore_all()
