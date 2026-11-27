@@ -39,6 +39,9 @@ S_TOKEN = "Paste the tunnel's token: one line of at most 4096 characters."  # no
 S_RESTRICTED_EMPTY = "A restricted host needs at least one network or preset in its allow list."
 S_TUNNEL_NO_TOKEN = "A tunnel needs its token."  # nosec B105 - a sentence for the page, not a credential
 S_TUNNEL_NO_PROVIDER = "A tunnel needs its provider."
+S_APPLIED = "Saved and applied: the web proxy now uses these settings."
+S_NOT_APPLIED = "Not saved: the web proxy refused the new settings, so it kept the running ones. {why}"
+_UNSET = object()
 S_CACHE_BUILDING = ("Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; "
                     "the websites' page caches start when it is done.")
 
@@ -196,20 +199,78 @@ def parse_options(form):
     return out, problems
 
 
-def _save_options(form):
+def _options_detail(values):
+    return ", ".join("%s=%s" % (k, "set" if k == "acme_contact" and v else v) for k, v in sorted(values.items()))
+
+
+def _put_options(values):
+    """Store `values` under their config keys; {config key: the value before, or _UNSET} for putting them back."""
+    from panel.core.config import load_config, update_config
+    from panel.routes.websites_view import config_key
+    cfg = load_config()
+    before = {config_key(k): cfg.get(config_key(k), _UNSET) for k in values}
+    update_config(lambda c: c.update({config_key(k): v for k, v in values.items()}))
+    return before
+
+
+def _restore_options(before):
     from panel.core.config import update_config
+
+    def put_back(cfg):
+        for key, value in before.items():
+            if value is _UNSET:
+                cfg.pop(key, None)
+            else:
+                cfg[key] = value
+    update_config(put_back)
+
+
+def _apply_options(changed):
+    """Apply changed proxy options to every host with an online site: (ok, sentence, [hosts applied]).
+
+    Only the options the proxy's configuration reads (websites_view.PROXY_OPTION_NAMES) are applied; the page
+    cache's own switch is applied by its build (cache_build_start). Stops at the first host that refuses.
+    """
+    from panel.routes.websites_view import PROXY_OPTION_NAMES
+    if not {k for k in changed if k != "cache_build"} & set(PROXY_OPTION_NAMES):
+        return True, "", []
+    hosts = sorted({s.remote_id for s in Website.query.filter_by(enabled=True)})
+    done = []
+    for rid in hosts:
+        remote = db.session.get(RemoteServer, rid)
+        ok, said = _w.reconcile_proxy(remote)
+        if not ok:
+            return False, said, done
+        done.append(remote)
+    return True, S_APPLIED if done else "", done
+
+
+def _save_options(form):
+    """Store the global website settings and apply the proxy's to every host with an online site.
+
+    A host that refuses the new configuration (its proxy kept the running one) puts every value back, and the
+    hosts already applied are applied again with them: the saved settings and the running proxies never disagree.
+    """
     values, problems = parse_options(form if isinstance(form, dict) else {})
     if problems:
         return _w.say(400, " ".join(problems))
-    from panel.routes.websites_view import config_key, options
-    cache_before = options()["cache_build"]
-    update_config(lambda cfg: cfg.update({config_key(k): v for k, v in values.items()}))
+    from panel.routes.websites_view import options
+    old = options()
+    changed = {k: v for k, v in values.items() if old.get(k) != v}
+    before = _put_options(values)
+    ok, said, done = _apply_options(changed)
+    if not ok:
+        _restore_options(before)
+        for remote in done:
+            _w.reconcile_proxy(remote)
+        log_action(current_user, "website_settings_global", target="websites", success=False,
+                   detail="not saved (%s): %s" % (_options_detail(changed), i18n.tr(said)))
+        return _w.done(False, i18n.Sentence(S_NOT_APPLIED, why=i18n.tr(said)))
     if "require_2fa" in values:
         current_app.config["WEBSITES_CUSTOMER_2FA"] = values["require_2fa"]
-    log_action(current_user, "website_settings_global", target="websites",
-               detail=", ".join("%s=%s" % (k, "set" if k == "acme_contact" and v else v) for k, v in sorted(values.items())))
-    started = _cache_turned_on(values, cache_before)
-    return _w.done(True, S_CACHE_BUILDING if started else "Saved.")
+    log_action(current_user, "website_settings_global", target="websites", detail=_options_detail(values))
+    started = _cache_turned_on(values, old["cache_build"])
+    return _w.done(True, S_CACHE_BUILDING if started else said or "Saved.")
 
 
 def _cache_turned_on(values, before):

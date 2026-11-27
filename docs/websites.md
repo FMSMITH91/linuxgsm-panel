@@ -103,8 +103,11 @@ really runs; otherwise the previous settings are put back and the proxy's own er
 
 ### Security settings
 
-The same card has a folded **Security settings** section. Every value can be changed; OWASP's
-recommended value is printed beside the field, and a value outside it shows a note but is still saved.
+The same card has a folded **Security settings** section (the **Web proxy & security settings** button at the
+top of the Websites page leads to the card). Every value can be changed; OWASP's recommended value is printed
+beside the field, and a value outside it shows a note but is still saved. **Save settings** applies the proxy's
+settings to every host with an online site at once; if a host's proxy refuses them, nothing is saved and the card
+says why.
 
 | Setting | Default | OWASP's recommendation |
 |---------|---------|------------------------|
