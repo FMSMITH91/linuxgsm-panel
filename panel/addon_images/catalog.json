@@ -575,7 +575,7 @@
       }
     },
     "static": {
-      "image": "docker.io/nginxinc/nginx-unprivileged@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03",
+      "image": "docker.io/nginx/nginx-unprivileged@sha256:04c98c78c1de60ddeada00d7d2207dcd146ecd07b61b9941c9a5799cfb258d28",
       "version": "1.30"
     },
     "tunnel": {
