@@ -395,7 +395,8 @@ def _s293_no_defaults():
 def _s293_renovate():
     cat = _json293.loads(_read293(_CATALOG293))
     cfg = _json293.loads(_read293(os.path.join(_root, ".github", "renovate.json")))
-    addon_mgrs = [m for m in cfg["customManagers"] if any("addon_images" in f for f in m.get("managerFilePatterns") or [])]
+    addon_mgrs = [m for m in cfg["customManagers"] if any("addon_images" in f for f in m.get("managerFilePatterns") or [])
+                  and not m.get("description", "").startswith("Websites:")]   # the websites' managers: part314
     caught = _caught293(addon_mgrs, _read293(_CATALOG293))
     pins = {v.split("@")[-1] for e in cat["addons"].values() for v in e.values()}
     eq("Renovate: the five add-on managers read the catalog alone (never addons.py or a Containerfile) and between "

@@ -648,7 +648,7 @@ with open(os.path.join(_rn_root, ".github", "renovate.json"), encoding="utf-8") 
     _rn_cfg = _sg_json.load(_rn_fh)
 _rn_all = _rn_cfg.get("customManagers") or [{}]
 # The managers over the workflows; the add-ons' pins (panel/services/addons.py, the B3 Containerfile) have
-# managers of their own, which part257 checks.
+# managers of their own, which part257 checks, and so do the websites' pins in the same catalog (part314).
 _rn_mgrs = [_m for _m in _rn_all if not all(_p.startswith("/^panel/") for _p in _m.get("managerFilePatterns") or ["x"])]
 # A second regex manager and the github-actions manager keep the pinned container images current;
 # what they match is part242's.
@@ -660,7 +660,7 @@ check("renovate: two regex managers over the workflows (downloads first), the do
       _rn_cfg.get("enabledManagers") == ["custom.regex", "dockerfile", "github-actions"]
       and _rn_cfg.get("dockerfile") == {"managerFilePatterns": ["/^\\.clusterfuzzlite/Dockerfile$/"]}
       and _rn_cfg.get("github-actions") == {"managerFilePatterns": ["/^\\.github/actions/cflite-[a-z-]+/action\\.yml$/"]}
-      and len(_rn_mgrs) == 2 and len(_rn_all) == 7
+      and len(_rn_mgrs) == 2 and len(_rn_all) == 18
       and all(_m.get("customType") == "regex" for _m in _rn_mgrs)
       and all(_m.get("managerFilePatterns") == ["/^\\.github/workflows/[^/]+\\.ya?ml$/"] for _m in _rn_mgrs)
       and all(len(_m.get("matchStrings") or []) == 1 for _m in _rn_mgrs)

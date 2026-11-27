@@ -502,14 +502,19 @@ def _manager_hits257(m):
             for path in paths if path.startswith("panel/") for pat in pats for x in pat.finditer(_read257(*path.split("/")))]
 
 
+def _addons_only257(items):
+    """The managers or package rules that are the add-ons': the websites' read the same catalog's `sites` (part314)."""
+    return [x for x in items or [] if not x.get("description", "").startswith("Websites:")]
+
+
 def _renovate257():
     cfg = _json257.loads(_read257(".github", "renovate.json"))
     found = {}
-    for m in cfg.get("customManagers") or []:
+    for m in _addons_only257(cfg.get("customManagers")):
         hits = _manager_hits257(m)
         if hits:
             found.setdefault("%s %s" % (m.get("datasourceTemplate"), m.get("currentValueTemplate", "tag")), []).extend(hits)
-    daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
+    daily = [r for r in _addons_only257(cfg.get("packageRules")) if r.get("schedule") == ["* 0-5 * * *"]]
     base, iwbase = _ad257.B3_BASE.split("@")[1], _ad257.IW4MADMIN_BASE.split("@")[1]
     iw = (_ad257.IW4MADMIN_SHA256, _ad257.IW4MADMIN_TAG)
     cat = "panel/addon_images/catalog.json"
