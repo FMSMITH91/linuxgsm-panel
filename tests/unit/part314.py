@@ -527,7 +527,8 @@ def _curl_run314(responses, url, headers=None, limit=_SAV314.META_MAX):
     d = _tf314.mkdtemp(prefix="curl-", dir=_TMP314)
     with open(os.path.join(d, "curl"), "w", encoding="utf-8") as fh:
         fh.write("#!%s -I\n%s" % (_sys314.executable, _FAKE_CURL314))
-    os.chmod(os.path.join(d, "curl"), 0o700)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+    os.chmod(os.path.join(d, "curl"), 0o700)  # nosec B103 - this part's own scratch directory
     with open(os.path.join(d, "responses.json"), "w", encoding="utf-8") as fh:
         _json314.dump(responses, fh)
     old = os.environ.get("PATH", "")
