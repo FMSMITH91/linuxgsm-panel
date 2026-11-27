@@ -3910,6 +3910,16 @@
       "POST"
     ]
   },
+  "POST /websites/<int:site_id>/domains/cert": {
+    "endpoint": "website_domain_cert",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domain_cert"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/<int:site_id>/domains/check": {
     "endpoint": "website_domain_check",
     "guards": [
