@@ -30,6 +30,14 @@ THE PROXY TOKEN
     REDIRECT_STATUS=200 on it, and a client cannot set a request's environment). A redirect to an error
     page after a refusal carries REDIRECT_STATUS=403 and is refused too. The token lives in
     ~/site/conf (0600), written from stdin, never on a command line.
+    That <If> is authorization, and Apache does not run authorization again on an internal redirect
+    whose merged configuration is the same as the request it came from: a site's own .htaccess line
+    `ErrorDocument 403 /index.php` turned every refused request into one that ran index.php. So the
+    gate is checked first in the virtual host's own rewrite rules (translate_name, before any .htaccess
+    is read, on every request and every internal redirect alike), which a .htaccess cannot change: a
+    request with the token is marked (PANEL_GATE=1), an internal redirect is marked only when the request
+    it came from was (Apache renames its variables REDIRECT_*: REDIRECT_PANEL_GATE, set by nothing a
+    client sends), and anything else is refused (403) before a .htaccess or PHP sees it.
 
 THE NETWORK (pasta; see addons.network)
     No route out: the container reaches only what pasta forwards to the host's loopback: its database
@@ -92,8 +100,9 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # them must reach the sites already installed: a site installed with an older one is offered Update, which installs
 # it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN). 3: the
 # folder of files the site's code reads (RUN_IN: WordPress's loopback token, the object cache's password), WordPress's
-# loopback plugin, and the egress proxy's unit (each checked address tried, its task limit). 4: WordPress's egress
-# hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches.
+# loopback plugin, and the egress proxy's unit (each checked address tried, its task limit). 4: the gate checked in
+# the virtual host's rewrite rules too (an error page a .htaccess names is refused without the token), WordPress's
+# egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches.
 SITE_FILES_REV = "files-4"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
@@ -424,8 +433,14 @@ def apache_conf(token):
         "# Written by linuxgsm-panel. Requests without the web proxy's token are refused.",
         "Listen %d" % INNER_PORT, "ServerName localhost", "ServerTokens Prod", "ServerSignature Off", "TraceEnable Off",
         "<IfModule !headers_module>", "    LoadModule headers_module /usr/lib/apache2/modules/mod_headers.so",
-        "</IfModule>",
+        "</IfModule>", "<IfModule !rewrite_module>",
+        "    LoadModule rewrite_module /usr/lib/apache2/modules/mod_rewrite.so", "</IfModule>",
         "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP,
+        # The gate before authorization and before any .htaccess (THE PROXY TOKEN): [NV] keeps the header's name
+        # out of Vary; a subrequest ([NS]) is only ever made inside a request that passed here.
+        "    RewriteEngine On", "    RewriteCond %%{HTTP:%s} =%s [NV,OR]" % (GATE_HEADER, token),
+        "    RewriteCond %{ENV:REDIRECT_PANEL_GATE} =1", "    RewriteRule ^ - [E=PANEL_GATE:1]",
+        "    RewriteCond %{ENV:PANEL_GATE} !=1", "    RewriteRule ^ - [F,NS]",
         "    <Directory %s>" % DOCROOT_PHP, "        Options -Indexes +SymLinksIfOwnerMatch", "        AllowOverride All",
         "        Require all granted", "    </Directory>",
         '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),

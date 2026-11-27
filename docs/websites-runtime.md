@@ -22,7 +22,9 @@ does not carry the web proxy's secret token, so another account on the host cann
 A PHP site's server checks the token once per request: a path its `.htaccess` rewrites (WordPress sends every
 path that is not a file to `index.php`) continues as the same request, so real visitors are never refused
 there, while a request that did not come through the proxy is refused, its error page included. The token is
-made once, with the site, and no action changes it.
+checked first in the server's own rewrite rules, before the site's `.htaccess` is read, so a site's own error page
+(`ErrorDocument 403 /index.php`, written by a plugin or by hand) can no longer turn a refused request into one that
+runs PHP. The token is made once, with the site, and no action changes it.
 
 A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
 downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local

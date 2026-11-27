@@ -1,4 +1,4 @@
-"""Part 319 of the unit suite: WordPress's way out through its egress proxy.
+"""Part 319 of the unit suite: WordPress's way out through its egress proxy, and the PHP gate under an error page.
 
 1. A WordPress site with the egress proxy: the container's 127.0.0.1:3128 is forwarded to the host port the proxy's
    unit listens on, the proxy started from that unit listens and refuses a host not on its list, the hosts file the
@@ -9,6 +9,11 @@
    "Failed to connect to 127.0.0.1 port 3128").
 3. Switching full egress on the Settings tab installs the site again (its network changes); a note alone does not.
 4. A site installed with the files of before is offered Update (the files' revision was raised).
+5. The PHP gate: a site's own `ErrorDocument 403 /index.php` turned a refused request into one that ran PHP, as
+   Apache does not run authorization again on that redirect. The virtual host's rewrite rules (before any .htaccess,
+   on every request and redirect) refuse it; a rewritten request, a subrequest and the site's own error page after
+   a refusal of a request that had the token are still served.
+
 HOW IT RUNS. part12's app and its database. ssh_manager.websites' install runs for real down to the account's
 shell, which is recorded (nothing reaches a host: part12's tripwire is armed). Section 1 starts the egress proxy
 the bundle carries as its own process on a free loopback port.
@@ -254,8 +259,119 @@ def _s4_update(host):
     old = _w319.update_available(site)
     _w319.note_installed(site)
     eq("Update: a site installed with the files of before (revision files-3) is offered Update, which writes the "
-       "hosts file and the plugin; once installed again it is not (control)",
+       "gate's rewrite rules, the hosts file and the plugin; once installed again it is not (control)",
        (old, _w319.update_available(site)), (True, False))
+
+
+# ── 5. the PHP gate ───────────────────────────────────────────────────────────────────────────────
+def _vhost_rewrites(conf):
+    """The rewrite lines directly in <VirtualHost> (in no <Directory>, <Location>, <Files> or <If> in it)."""
+    out, depth, in_vhost = [], 0, False
+    for raw in conf.splitlines():
+        ln = raw.strip()
+        if ln.startswith("<VirtualHost"):
+            in_vhost, depth = True, 0
+        elif ln.startswith("</VirtualHost"):
+            in_vhost = False
+        elif in_vhost and ln.startswith("</"):
+            depth -= 1
+        elif in_vhost and ln.startswith("<"):
+            depth += 1
+        elif in_vhost and depth == 0 and ln.startswith("Rewrite"):
+            out.append(ln)
+    return out
+
+
+def _cond319(test, pattern, headers, env):
+    m = _re319.fullmatch(r"%\{(HTTP|ENV):([A-Za-z0-9_-]+)\}", test)
+    c = _re319.fullmatch(r"(!?)=(.*)", pattern)
+    if not m or not c:
+        raise ValueError("part319's model reads only %{HTTP:x} or %{ENV:x} against =v or !=v: " + test + " " + pattern)
+    have = (headers if m.group(1) == "HTTP" else env).get(m.group(2), "")
+    return (have == c.group(2)) != bool(c.group(1))
+
+
+def _conds_hold(conds, headers, env):
+    """mod_rewrite's conditions: all must hold, a condition flagged [OR] joined with the next."""
+    ok, cur, joined = True, False, False
+    for test, pattern, flags in conds:
+        v = _cond319(test, pattern, headers, env)
+        cur = (cur or v) if joined else v
+        joined = "OR" in flags
+        if not joined:
+            ok, cur = ok and cur, False
+    return ok and (cur if joined else True)
+
+
+def _gate_refuses(rules, headers, env, sub=False):
+    """(refused, the environment after) of the virtual host's rewrite rules for one request.
+
+    `env` is what Apache gives the request: empty for a client's request; on an internal redirect, the variables of
+    the request it came from renamed REDIRECT_<name>, and REDIRECT_STATUS. A client's headers never reach it.
+    """
+    env, conds = dict(env), []
+    if "RewriteEngine On" not in rules:
+        return False, env
+    for ln in rules:
+        words = ln.split()
+        if words[0] == "RewriteCond":
+            conds.append((words[1], words[2], words[3].strip("[]").split(",") if len(words) > 3 else []))
+        elif words[0] == "RewriteRule":
+            flags = words[3].strip("[]").split(",") if len(words) > 3 else []
+            hold, conds = _conds_hold(conds, headers, env), []
+            if not hold or (sub and "NS" in flags):
+                continue
+            env.update(f[2:].split(":", 1) for f in flags if f.startswith("E="))
+            if "F" in flags:
+                return True, env
+    return False, env
+
+
+def _redirect319(env, status):
+    """The environment of an internal redirect from a request with `env` that ended with `status`."""
+    return dict({"REDIRECT_" + k: v for k, v in env.items()}, REDIRECT_STATUS=str(status))
+
+
+def _s5_gate(host, su):
+    site = _site319(host, "p319-php", kind="php")
+    _code, _sh, stdin, _start = _install319(su, site)
+    conf = _file319(stdin, _ws319.CONF + "/apache.conf") or ""
+    rules = _vhost_rewrites(conf)
+    tok = {_ws319.GATE_HEADER: _TOKEN319}
+    _r1, env1 = _gate_refuses(rules, tok, {})
+    _r2, env2 = _gate_refuses(rules, {}, _redirect319(env1, 200))
+    _rf, env_f = _gate_refuses(rules, {}, {})
+    cases = {
+        "through the proxy, a file that is there": (tok, {}, False),
+        "through the proxy, rewritten to index.php by .htaccess (the header removed in fixups)":
+            ({}, _redirect319(env1, 200), False),
+        "rewritten twice": ({}, _redirect319(env2, 200), False),
+        "an index lookup (a subrequest) inside a request that passed": ({}, {}, True),
+        "the site's own error page after its .htaccess refused a request that had the token":
+            ({}, _redirect319(env1, 403), False),
+        "on the loopback port with no token": ({}, {}, False),
+        "no token, then the error page the site's .htaccess names (ErrorDocument 403 /index.php)":
+            ({}, _redirect319(env_f, 403), False),
+        "headers forging the marks": ({"REDIRECT_PANEL_GATE": "1", "PANEL_GATE": "1", "Redirect-Status": "200",
+                                       "REDIRECT_STATUS": "200"}, {}, False),
+        "a wrong token": ({_ws319.GATE_HEADER: "x" * 40}, {}, False),
+        "the token with more after it": ({_ws319.GATE_HEADER: _TOKEN319 + "x"}, {}, False)}
+    got = {k: _gate_refuses(rules, h, e, sub)[0] for k, (h, e, sub) in cases.items()}
+    want = {k: k in ("on the loopback port with no token", "headers forging the marks", "a wrong token",
+                     "the token with more after it",
+                     "no token, then the error page the site's .htaccess names (ErrorDocument 403 /index.php)")
+            for k in cases}
+    eq("gate (POST /websites/<id>/update-image, a PHP site's Apache config): the virtual host's rewrite rules, which "
+       "no .htaccess changes and which run on every request and internal redirect, refuse a token-less request and "
+       "the error page a .htaccess sends it to (Apache skipped the <If> there and ran PHP); rewritten requests, "
+       "subrequests and the site's own error pages behind the token are served",
+       (bool(rules), got), (True, want))
+    loads = "<IfModule !rewrite_module>\n    LoadModule rewrite_module /usr/lib/apache2/modules/mod_rewrite.so\n</IfModule>"
+    eq("gate: mod_rewrite is loaded where the image has it off, the token's header is kept out of Vary ([NV]), and "
+       "the <If> gate stays behind the rules (control: the authorization check is unchanged)",
+       (loads in conf, any("[NV,OR]" in r and _ws319.GATE_HEADER in r for r in rules),
+        "<If \"%%{HTTP:%s} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (_ws319.GATE_HEADER, _TOKEN319) in conf),
+       (True, True, True))
 
 
 def _cleanup319():
@@ -288,7 +404,7 @@ with _p9.app_context():
         _p9_arm(who="part319")
         _seams319()
         _host319, _su319 = _rows319()
-        for _sec319 in (_s1_proxy, _s2_full, _s3_switch):
+        for _sec319 in (_s1_proxy, _s2_full, _s3_switch, _s5_gate):
             check("part319: %s ran to the end" % _sec319.__name__, _ran319(_sec319, _host319, _su319), _ran319.last)
         check("part319: _s4_update ran to the end", _ran319(_s4_update, _host319), _ran319.last)
         eq("part319: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips319:], [])
