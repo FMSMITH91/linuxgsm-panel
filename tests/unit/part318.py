@@ -6,6 +6,9 @@
    CDN, each with its folded list, source and date.
 2. The operator's own networks are allow-only: the firewall admits them, and the proxy trusts them (reads a
    visitor's address from their requests) only when the superadmin marks them as trusted proxies, with a note.
+3. A list read from an https address a superadmin types: checked (https, port 443, public addresses only, no
+   redirect), used whole or not at all, read when saved and once a day on the update-check thread (the last good
+   list kept on failure), behind its Outside services switch, audited, shown on the card.
 
 HOW IT RUNS. part12's app and its database. ssh_manager.websites' seams answer for the host and record what the
 routes ask of it; nothing reaches a host (part12's tripwire is armed). The card runs in node over part301's
@@ -23,13 +26,16 @@ from types import SimpleNamespace as _NS318
 from flask import g as _g318
 
 from unit.part01 import _root, check, eq
-from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_patch, _p9_restore_all
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_audit, _p9_client, _p9_patch, _p9_restore_all
 from unit.part301 import _COMMON301, _LIST301, _list_sa301, _node301
 from panel.core import config as _cfg318
+from panel.core import outside_services as _outside318
 from panel.db.models import (RemoteServer as _Remote318, User as _User318, Website as _Site318,
                              WebsiteDomain as _Dom318, WebsiteProxy as _Proxy318, db as _db318)
 from panel.ops.ssh_manager import websites as _sw318
 from panel.routes import websites as _w318
+from panel.services import public_https as _https318
+from panel.services import websites_allow_url as _wau318
 from panel.services import websites_catalog as _wc318
 from panel.services import websites_proxy as _wp318
 
@@ -43,6 +49,7 @@ _SPEC318.loader.exec_module(_CDN318)
 _TOKEN318 = "t" * 40
 _ROWS318 = {"sites": [], "remotes": [], "users": []}
 _REC318 = {"apply": [], "ports": []}
+_REAL_GET318 = _wau318._get
 _CF_URLS318 = _CDN318.PROVIDERS["cloudflare"][1]
 _FASTLY_URL318 = _CDN318.PROVIDERS["fastly"][1][0]
 
@@ -354,6 +361,183 @@ def _s2_card():
        ([True, True, True], [False, False], ["wsTrustCheck", "change"]))
 
 
+# ── 3. an allow list read from an address ─────────────────────────────────────────────────────────
+_LIST_URL318 = "https://lists.example.org/office.txt?key=abc"
+
+
+def _answer318(body):
+    """Stand in for the list's host at the module's one request: record the address, answer `body` (or a failure)."""
+    asked = []
+
+    def get(url):
+        asked.append(url)
+        return (None, body) if body in ("HTTPError", "URLError") else (body, None)
+    _p9_patch(_wau318, "_get", get)
+    return asked
+
+
+def _s3_rules():
+    bad = ["http://lists.example.org/a.txt", "https://lists.example.org:8443/a.txt", "https://u:p@lists.example.org/a",
+           "https:///a.txt", "https://lists.example.org/a.txt#x", "https://lists.example.org/a b", "ftp://x.org/a",
+           "https://" + "a" * 500 + ".org/", 7]
+    eq("allow list from an address (url_problem): only https on port 443, with a host, no user, password or "
+       "fragment, printable and at most 500 characters; a plain https address (with a query) passes",
+       ([bool(_wau318.url_problem(u)) for u in bad], _wau318.url_problem(_LIST_URL318),
+        _wau318.url_problem("https://lists.example.org:443/a.txt")),
+       ([True] * len(bad), "", ""))
+    text = "# office\n\n203.0.113.0/24\n2001:db8::1\n203.0.113.0/24\nnot-a-network\n0.0.0.0/0\n198.51.100.7/24 # x\n"
+    eq("allow list from an address (parse): comments and blank lines skipped, an address taken as its /32 or /128, a "
+       "repeat kept once; a line that is not a network, a network wider than /8, or a trailing comment, is listed "
+       "with its line number, never dropped quietly",
+       _wau318.parse(text), (["203.0.113.0/24", "2001:db8::1/128"],
+                             [(6, "not-a-network"), (7, "0.0.0.0/0"), (8, "198.51.100.7/24 # x")]))
+    eq("allow list from an address (where): the audit log keeps scheme, host and path, never the query",
+       _wau318.where(_LIST_URL318), "https://lists.example.org/office.txt?…")
+
+
+def _s3_ssrf():
+    real = _REAL_GET318
+    got = [real("https://localhost/list.txt"), real("http://203.0.113.9/list.txt"), real("https://127.0.0.1/list.txt")]
+    eq("allow list from an address (_get, OWASP SSRF Case 2): a name that resolves to the loopback, a plain-http address "
+       "and a loopback address are each refused before any request is made (public_https: every answer must be a "
+       "public address; no redirect, no proxy)",
+       [(body, bool(why)) for body, why in got], [(None, True)] * 3)
+    used, handlers = [], _https318.handlers
+    _p9_patch(_https318, "handlers", lambda: used.append(1) or handlers())
+    try:
+        body, why = real("https://localhost/list.txt")
+    finally:
+        _https318.handlers = handlers
+    eq("allow list from an address (_get): the request is opened with public_https's handlers (no redirect, the "
+       "checked connect, no proxy), and the loopback answer is refused by them",
+       ([type(h).__name__ for h in handlers()], used, body, bool(why)), (["NoRedirect", "_Handler", "ProxyHandler"], [1], None, True))
+
+
+def _s3_save(st):
+    su = _Client318(st.su.id)
+    admin = _User318(username="p318-admin", password_hash=os.urandom(8).hex(), is_superadmin=False, is_active=True)
+    _db318.session.add(admin)
+    _db318.session.commit()
+    _ROWS318["users"].append(admin.id)
+    asked = _answer318(b"203.0.113.0/24\n")
+    r = _Client318(admin.id).post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
+        "exposure_mode": "restricted", "allow_url": _LIST_URL318}})
+    eq("allow list from an address: an account below superadmin cannot set one (sent away, not served), and nothing "
+       "is fetched", (r.status_code in (302, 403), asked), (True, []))
+    asked = _answer318(b"# office\n203.0.113.0/24\n2001:db8:318::/48\n")
+    r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
+        "exposure_mode": "restricted", "allow_presets": [], "allow_cidrs": [], "allow_url": _LIST_URL318,
+        "custom_trusted": False}})
+    text, froms = (_REC318["apply"] or [""])[-1], sorted({f for f, _p in (_REC318["ports"] or [[]])[-1] if f})
+    row = _Proxy318.query.filter_by(remote_id=st.host.id).first()
+    _db318.session.refresh(row)
+    audit = _p9_audit("remote_website_proxy_settings")
+    eq("allow list from an address (POST /websites/proxy/settings): a new address is read once, its networks stored "
+       "with the date and opened in the firewall (allow-only: not trusted by the proxy), and the audit row names "
+       "the address without its query",
+       (r.status_code, asked, row.allow_url, row.url_nets(), row.allow_url_at is not None, froms,
+        _trust318(text)[0], "office.txt?…" in (audit.detail or ""), "key=abc" in (audit.detail or "")),
+       (200, [_LIST_URL318], _LIST_URL318, ["203.0.113.0/24", "2001:db8:318::/48"], True,
+        ["2001:db8:318::/48", "203.0.113.0/24"], [], True, False))
+    asked = _answer318(b"203.0.113.0/24\nnope\n")
+    _reset318()
+    r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
+        "exposure_mode": "restricted", "allow_url": "https://lists.example.org/other.txt"}})
+    _db318.session.refresh(row)
+    eq("allow list from an address: a list with a line that is not a network is refused whole, the line named; "
+       "nothing is saved or applied, the last good list stays",
+       (r.status_code, "2: nope" in (_j(r).get("message") or ""), row.allow_url, row.url_nets(), _REC318["apply"]),
+       (400, True, _LIST_URL318, ["203.0.113.0/24", "2001:db8:318::/48"], []))
+    asked = _answer318(b"203.0.113.0/24\n")
+    r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
+        "exposure_mode": "restricted", "allow_url": _LIST_URL318}})
+    eq("allow list from an address: saving the same address again does not read it again (control: the daily "
+       "refresh does)", (r.status_code, asked), (200, []))
+    _cfg318.update_config(lambda c: c.update({_outside318.WEBSITE_ALLOW_URL: False}))
+    try:
+        asked = _answer318(b"203.0.113.0/24\n")
+        r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
+            "exposure_mode": "restricted", "allow_url": "https://lists.example.org/new.txt"}})
+    finally:
+        _cfg318.update_config(lambda c: c.pop(_outside318.WEBSITE_ALLOW_URL, None))
+    eq("allow list from an address: with its Outside services switch off, a new address is refused in words and "
+       "nothing is fetched", (r.status_code, asked, _wau318.S_OFF.split(" in ")[0] in (_j(r).get("message") or "")),
+       (400, [], True))
+
+
+def _s3_tick(st):
+    row = _Proxy318.query.filter_by(remote_id=st.host.id).first()
+    row.exposure_mode, row.allow_url, row.allow_url_nets = "restricted", _LIST_URL318, '["203.0.113.0/24"]'
+    from datetime import timedelta
+    from panel.core.clock import utcnow
+    row.allow_url_at = utcnow() - timedelta(days=2)
+    _db318.session.commit()
+    _wau318._TRIED.clear()
+    asked = _answer318(b"203.0.113.0/24\n198.51.100.0/24\n")
+    _reset318()
+    _wau318.tick(_p9)
+    _db318.session.refresh(row)
+    audit = _p9_audit("remote_website_proxy_allow_url")
+    eq("allow list from an address (the daily tick): a list a day old is read again; a changed list is stored and "
+       "applied to the host with a site online, and audited",
+       (asked, row.url_nets(), len(_REC318["apply"]), sorted({f for f, _p in (_REC318["ports"] or [[]])[-1] if f}),
+        bool(audit) and audit.success, "2 networks" in (audit.detail if audit else "")),
+       ([_LIST_URL318], ["203.0.113.0/24", "198.51.100.0/24"], 1, ["198.51.100.0/24", "203.0.113.0/24"], True, True))
+    asked = _answer318(b"203.0.113.0/24\n")
+    _wau318.tick(_p9)
+    eq("allow list from an address (tick): a list read today is not read again (control)", asked, [])
+    row.allow_url_at = utcnow() - timedelta(days=2)
+    _db318.session.commit()
+    _wau318._TRIED.clear()
+    asked = _answer318("URLError")
+    _reset318()
+    _wau318.tick(_p9)
+    _db318.session.refresh(row)
+    audit = _p9_audit("remote_website_proxy_allow_url")
+    eq("allow list from an address (tick): a read that fails keeps the last good list, records why, applies "
+       "nothing and is audited as a failure",
+       (asked, row.url_nets(), "URLError" in row.allow_url_error, _REC318["apply"], audit.success,
+        "last good list is kept" in audit.detail),
+       ([_LIST_URL318], ["203.0.113.0/24", "198.51.100.0/24"], True, [], False, True))
+    asked = _answer318(b"203.0.113.0/24\n")
+    _wau318.tick(_p9)
+    eq("allow list from an address (tick): after a failure the address is not asked again for hours", asked, [])
+    _wau318._TRIED.clear()
+    _cfg318.update_config(lambda c: c.update({_outside318.WEBSITE_ALLOW_URL: False}))
+    try:
+        asked = _answer318(b"203.0.113.0/24\n")
+        _wau318.tick(_p9)
+    finally:
+        _cfg318.update_config(lambda c: c.pop(_outside318.WEBSITE_ALLOW_URL, None))
+    eq("allow list from an address (tick): with the Outside services switch off nothing is fetched", asked, [])
+
+
+def _s3_card():
+    base = {"host_id": 1, "host_name": "h", "installed": True, "version": "2.11.9", "exposure_mode": "restricted",
+            "allow_cidrs": [], "allow_presets": [], "preset_info": {}, "allow_url": "https://lists.example.org/a.txt",
+            "allow_url_nets": ["203.0.113.0/24", "2001:db8::/32"], "allow_url_at": "2026-11-26",
+            "allow_url_error": "The list at that address could not be read (URLError).", "allow_url_on": False}
+    got = _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const shown = {url: $('wp-url').value, sum: $('wp-url-sum').textContent, state: $('wp-url-state').textContent,
+                 nets: $('wp-url-nets').children.length, folded: $('wp-url-box').hasAttribute('open')};
+  $('wp-url').value = '  https://lists.example.org/b.txt ';
+  const body = WS.exposureBody();
+  $('wp-url').value = ''; const empty = WS.exposureBody();
+  return {shown: shown, sent: body.allow_url, empty: empty.allow_url};
+""", routes={"/api/websites": dict(_LIST301, proxies=[base], options={})})
+    shown = got.get("shown") or {}
+    eq("allow list from an address (card): folded with its count in the summary; open, the address, when it was read, "
+       "the networks, why the last read failed (the old list kept) and that reading is switched off; the typed "
+       "address is sent trimmed, an emptied box clears it",
+       (shown.get("url"), shown.get("sum"), shown.get("nets"), shown.get("folded"),
+        "Read on 2026-11-26: 2 networks." in (shown.get("state") or ""), "URLError" in (shown.get("state") or ""),
+        "list read before is kept" in (shown.get("state") or ""), "turned off" in (shown.get("state") or ""),
+        got.get("sent"), got.get("empty")),
+       ("https://lists.example.org/a.txt", "A list from an address: 2 networks", 2, False, True, True, True, True,
+        "https://lists.example.org/b.txt", ""))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup318():
     _db318.session.rollback()
@@ -391,12 +575,13 @@ with _p9.app_context():
         _p9_arm(who="part318")
         _seams318()
         _st318 = _rows318()
-        for _sec318 in (_s1_render, _s2_trust):
+        for _sec318 in (_s1_render, _s2_trust, _s3_save, _s3_tick):
             check("part318: %s ran to the end" % _sec318.__name__, _ran318(_sec318, _st318), _ran318.last)
-        for _sec318 in (_s1_catalog, _s1_script, _s1_workflow, _s1_card, _s2_card):
+        for _sec318 in (_s1_catalog, _s1_script, _s1_workflow, _s1_card, _s2_card, _s3_rules, _s3_ssrf, _s3_card):
             check("part318: %s ran to the end" % _sec318.__name__, _ran318(_sec318), _ran318.last)
         eq("part318: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips318:], [])
     finally:
         _p9_restore_all()
         _w318._STATUS.clear()
+        _wau318._TRIED.clear()
         _cleanup318()

@@ -33,7 +33,7 @@ FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     any other trusted proxy could carry one a visitor made up. Otherwise (Fastly, whose Fastly-Client-IP
     keeps a visitor's own value; presets of two CDNs; the operator's trusted networks) the address is read
     from X-Forwarded-For right to left: the first address that is not a trusted proxy, which every one of
-    them appends. The operator's own networks are allow-only: the firewall admits them, but they are
+    them appends. The operator's own networks (typed, or a list read from an address) are allow-only: the firewall admits them, but they are
     trusted proxies only when the superadmin says so (WebsiteProxy.custom_trusted), since anyone on a
     trusted network can make the sites see any address. A tunnel reads CF-Connecting-IP from the
     connector on loopback.
@@ -134,8 +134,8 @@ def _preset_nets(proxy):
 
 
 def _own_nets(proxy):
-    """The operator's own networks: the ones typed on the card."""
-    return proxy.cidrs()
+    """The operator's own networks: the ones typed on the card and the list read from an address."""
+    return proxy.cidrs() + proxy.url_nets()
 
 
 def allow_list(proxy):

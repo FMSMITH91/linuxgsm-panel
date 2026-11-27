@@ -1,8 +1,12 @@
 """HTTPS to the fixed outside hosts the panel reads data files from: no redirect, no proxy, public addresses only.
 
-Used by services/geoip.py (DB-IP's country database) and services/addons_bluemap.py (Mojang's version
-list and a version's details). Each caller checks its own URL against its own host allowlist first
-(scheme https, its hosts, port 443, no userinfo); this module adds what an allowlist alone cannot.
+Used by services/geoip.py (DB-IP's country database), services/addons_bluemap.py (Mojang's version
+list and a version's details) and services/websites_allow_url.py (a web proxy allow list at an address a
+superadmin typed). The first two check their URL against their own host allowlist first (scheme https,
+their hosts, port 443, no userinfo); this module adds what an allowlist alone cannot. The allow-list
+address has no host allowlist (the SSRF cheat sheet's Case 2: any external host), so there this module's
+public-address check is the block list the cheat sheet asks for, after url_problem's https, port 443 and
+no-userinfo check.
 
 OWASP Server Side Request Forgery Prevention Cheat Sheet, "Case 1: Application can send request only to
 identified and trusted applications", "Available protections" -> "Application layer":

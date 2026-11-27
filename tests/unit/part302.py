@@ -220,7 +220,7 @@ def _site302(**kw):
 
 def _proxy302(mode="public", provider=""):
     return _NS302(exposure_mode=mode, cidrs=lambda: [], presets=lambda: [], origin_pull_mtls=False,
-                  tunnel_provider=provider, custom_trusted=False)
+                  tunnel_provider=provider, custom_trusted=False, url_nets=lambda: [])
 
 
 def _doc302(proxy=None):

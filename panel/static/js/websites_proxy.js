@@ -63,6 +63,21 @@
     var ul = WS.clear(WS.el('wp-' + p.id + '-ranges'));
     if (ul) ranges.forEach(function (r) { ul.appendChild(WS.node('li', null, String(r))); });
   }
+  // The list read from an address: its networks, when it was read, and why the last read failed (the old list kept).
+  function renderUrl(p) {
+    var u = WS.el('wp-url'), nets = p.allow_url_nets || [];
+    if (u) u.value = p.allow_url || '';
+    var sum = WS.el('wp-url-sum');
+    if (sum) sum.textContent = p.allow_url ? WS.TF('A list from an address: {n} networks', {n: nets.length}) : WS.T('A list from an address');
+    var parts = [];
+    if (p.allow_url && p.allow_url_at) parts.push(WS.TF('Read on {date}: {n} networks.', {date: p.allow_url_at, n: nets.length}));
+    if (p.allow_url_error) parts.push(WS.TF('The last read failed, so the list read before is kept: {why}', {why: p.allow_url_error}));
+    if (p.allow_url && p.allow_url_on === false) parts.push(WS.T('Reading lists from an address is turned off in Settings, Outside services: this list is not read again.'));
+    var s = WS.el('wp-url-state');
+    if (s) s.textContent = parts.join(' ');
+    var ul = WS.clear(WS.el('wp-url-nets'));
+    if (ul) nets.forEach(function (n) { ul.appendChild(WS.node('li', null, String(n))); });
+  }
   function stateLine(p) {
     var e = WS.el('wp-state');
     if (!e) return;
@@ -82,6 +97,7 @@
     renderPresets();
     var c = WS.el('wp-cidrs');
     if (c) c.value = (p.allow_cidrs || []).join('\n');
+    renderUrl(p);
     var tr = WS.el('wp-custom-trusted');
     if (tr) tr.checked = !!p.custom_trusted;
     window.wsTrustCheck();
@@ -167,6 +183,7 @@
     if (m === 'restricted') {
       body.allow_presets = st.presets.slice();
       body.allow_cidrs = (WS.el('wp-cidrs').value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      body.allow_url = (WS.el('wp-url').value || '').trim();
       body.custom_trusted = switchOn('wp-custom-trusted') === true;
     }
     if (m === 'tunnel') {
@@ -177,7 +194,7 @@
     return body;
   };
   function exposureProblem(body) {
-    if (body.exposure_mode === 'restricted' && !body.allow_presets.length && !body.allow_cidrs.length) {
+    if (body.exposure_mode === 'restricted' && !body.allow_presets.length && !body.allow_cidrs.length && !body.allow_url) {
       return WS.T("List at least one network, or use a CDN's networks.");
     }
     if (body.exposure_mode === 'tunnel' && !body.tunnel_token && !cur().tunnel_token_set) return WS.T('Paste the tunnel token first.');

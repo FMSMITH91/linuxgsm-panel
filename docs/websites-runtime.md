@@ -204,4 +204,4 @@ reads each CDN's official list from fixed https URLs (no redirect, size capped),
 canonical public network, and opens one pull request when they change. Other CDNs are not presets: Amazon
 CloudFront's list is over the 200-network cap (each network is two firewall rules), Bunny's and Gcore's
 are single server addresses by the hundred that change often, and Sucuri and KeyCDN publish no official
-machine-readable list. Add their networks by hand.
+machine-readable list. Add their networks by hand, or as a list from an address.

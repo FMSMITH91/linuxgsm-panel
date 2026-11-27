@@ -2004,6 +2004,11 @@ _LIGHT_MIGRATIONS = {
     ("group", "max_sites"): "ALTER TABLE `group` ADD COLUMN max_sites INTEGER DEFAULT 3 NOT NULL",
     # 0 on upgrade: the operator's networks are allow-only until a superadmin marks them as trusted proxies.
     ("website_proxy", "custom_trusted"): "ALTER TABLE website_proxy ADD COLUMN custom_trusted BOOLEAN DEFAULT 0 NOT NULL",
+    # Empty on upgrade: no host had a list read from an address before.
+    ("website_proxy", "allow_url"): "ALTER TABLE website_proxy ADD COLUMN allow_url VARCHAR(500) DEFAULT '' NOT NULL",
+    ("website_proxy", "allow_url_nets"): "ALTER TABLE website_proxy ADD COLUMN allow_url_nets TEXT DEFAULT '[]'",
+    ("website_proxy", "allow_url_at"): "ALTER TABLE website_proxy ADD COLUMN allow_url_at DATETIME",
+    ("website_proxy", "allow_url_error"): "ALTER TABLE website_proxy ADD COLUMN allow_url_error VARCHAR(300) DEFAULT ''",
 }
 
 

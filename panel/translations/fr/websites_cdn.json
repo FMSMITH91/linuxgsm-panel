@@ -1,12 +1,27 @@
 {
+  "A list from an address": "Une liste depuis une adresse",
+  "A list from an address: {n} networks": "Une liste depuis une adresse : {n} réseaux",
   "An address or a network, IPv4 or IPv6, for example 203.0.113.0/24.": "Une adresse ou un réseau, IPv4 ou IPv6, par exemple 203.0.113.0/24.",
+  "An https address with one network a line (lines starting with # are skipped). Read when you save a new address, then once a day; a list is used only when every line is a network.": "Une adresse https avec un réseau par ligne (les lignes commençant par # sont ignorées). Lue quand vous enregistrez une nouvelle adresse, puis une fois par jour ; une liste n'est utilisée que si chaque ligne est un réseau.",
   "Fastly's networks": "Réseaux de Fastly",
   "Fastly's networks ({n})": "Réseaux de Fastly ({n})",
   "List at least one network, or use a CDN's networks.": "Indiquez au moins un réseau, ou utilisez les réseaux d'un CDN.",
+  "Not used: some lines of the list are not networks ({lines}).": "Non utilisée : certaines lignes de la liste ne sont pas des réseaux ({lines}).",
   "Off: your networks only reach the sites. On: their requests may name the visitor's address (X-Forwarded-For), which the sites then see and log.": "Désactivé : vos réseaux accèdent seulement aux sites. Activé : leurs requêtes peuvent indiquer l'adresse du visiteur (X-Forwarded-For), que les sites voient et journalisent.",
   "On the list: {names}. Tap a button again to remove its networks.": "Dans la liste : {names}. Touchez de nouveau un bouton pour retirer ses réseaux.",
+  "Only for a web proxy in Restricted mode with a list's address set: the panel reads that list when it is saved and once a day. Off: nothing is read, and the host keeps the last list it read.": "Seulement pour un proxy web en mode Restreint avec l'adresse d'une liste : le panneau lit cette liste à l'enregistrement puis une fois par jour. Désactivé : rien n'est lu, et l'hôte garde la dernière liste lue.",
   "Only for proxies you run or trust: anyone on these networks can make your sites see any address they choose.": "Seulement pour des proxys que vous gérez ou auxquels vous faites confiance : n'importe qui sur ces réseaux peut faire voir à vos sites l'adresse de son choix.",
   "Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor's address only for HTTPS visitors: turn on Force TLS for the service at Fastly.": "Lus sur api.fastly.com/public-ip-list par une vérification quotidienne, et mis à jour d'eux-mêmes avec le catalogue signé. Fastly donne l'adresse du visiteur seulement pour les visiteurs en HTTPS : activez Force TLS pour le service chez Fastly.",
+  "Read on {date}: {n} networks.": "Lue le {date} : {n} réseaux.",
+  "Reading an allow list from an address is turned off in Settings → Outside services. Turn it on there, or clear the address.": "La lecture d'une liste autorisée depuis une adresse est désactivée dans Paramètres → Services externes. Activez-la là, ou videz l'adresse.",
+  "Reading lists from an address is turned off in Settings, Outside services: this list is not read again.": "La lecture de listes depuis une adresse est désactivée dans Paramètres, Services externes : cette liste n'est plus relue.",
+  "The last read failed, so the list read before is kept: {why}": "La dernière lecture a échoué, donc la liste lue avant est conservée : {why}",
+  "The list at that address could not be read ({why}).": "La liste à cette adresse n'a pas pu être lue ({why}).",
+  "The list at that address holds more than {n} networks.": "La liste à cette adresse contient plus de {n} réseaux.",
+  "The list at that address holds no network.": "La liste à cette adresse ne contient aucun réseau.",
+  "The list's address": "L'adresse de la liste",
+  "The list's address is an https:// address on port 443, without a user name or password.": "L'adresse de la liste est une adresse https:// sur le port 443, sans nom d'utilisateur ni mot de passe.",
   "Trust my networks as proxies": "Faire confiance à mes réseaux comme proxys",
-  "Use Fastly's networks": "Utiliser les réseaux de Fastly"
+  "Use Fastly's networks": "Utiliser les réseaux de Fastly",
+  "Website allow lists read from an address (the address you enter)": "Listes autorisées des sites web lues depuis une adresse (celle que vous saisissez)"
 }

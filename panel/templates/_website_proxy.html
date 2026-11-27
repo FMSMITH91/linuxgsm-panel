@@ -64,6 +64,15 @@
         <textarea id="wp-cidrs" class="form-control form-control-sm font-monospace" rows="3" maxlength="4000"
                   spellcheck="false" autocomplete="off" aria-describedby="wp-cidrs-help"></textarea>
         <div id="wp-cidrs-help" class="form-text mt-0">An address or a network, IPv4 or IPv6, for example 203.0.113.0/24.</div>
+        <details id="wp-url-box" class="mt-1">
+          <summary class="small" id="wp-url-sum">A list from an address</summary>
+          <label for="wp-url" class="form-label small mb-1 mt-1">The list's address</label>
+          <input type="url" id="wp-url" class="form-control form-control-sm font-monospace" maxlength="500" spellcheck="false"
+                 autocomplete="off" inputmode="url" placeholder="https://" data-no-i18n aria-describedby="wp-url-help wp-url-state">
+          <div id="wp-url-help" class="form-text mt-0">An https address with one network a line (lines starting with # are skipped). Read when you save a new address, then once a day; a list is used only when every line is a network.</div>
+          <div id="wp-url-state" class="form-text mt-0" role="status"></div>
+          <ul id="wp-url-nets" class="small font-monospace list-unstyled mb-1 ws-ranges" data-no-i18n></ul>
+        </details>
         <div class="form-check form-switch mt-1 mb-0">
           <input class="form-check-input" type="checkbox" role="switch" id="wp-custom-trusted" data-action="wsTrustCheck" data-on="change"
                  aria-describedby="wp-custom-trusted-help">

@@ -215,7 +215,8 @@ def _site299(**kw):
 
 def _proxy299(mode="public", cidrs=(), presets=(), mtls=False, provider="", trusted=False):
     return _NS299(exposure_mode=mode, cidrs=lambda: list(cidrs), presets=lambda: list(presets),
-                  origin_pull_mtls=mtls, tunnel_provider=provider, custom_trusted=trusted)
+                  origin_pull_mtls=mtls, tunnel_provider=provider, custom_trusted=trusted,
+                  url_nets=lambda: [])
 
 
 def _render299(sites, proxy=None, opts=None):

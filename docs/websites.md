@@ -83,7 +83,14 @@ the Websites page:
   allow-only: they reach the sites, but the proxy reads no visitor's address from their requests unless
   you switch on **Trust my networks as proxies** (then `X-Forwarded-For` from them is believed, so turn
   it on only for proxies you run or trust: anyone on those networks could otherwise make your sites see
-  any address).
+  any address). **A list from an address** reads more networks from an https address you give (one
+  network a line; lines starting with `#` are skipped): when you save a new address, then once a day. A
+  list is used only whole, when every line is a network no wider than /8 (IPv4) or /16 (IPv6) and there
+  are at most 200; otherwise the save is refused naming the lines at fault, and a daily read that fails
+  keeps the last good list and says why on the card. A changed list is applied at once. The address must
+  be https on port 443 and resolve only to public addresses; Settings → Outside services → *Website allow
+  lists read from an address* turns the reading off. These networks count as your own networks: allow-only
+  unless trusted.
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
   and Cloudflare brings visitors in. In Cloudflare's dashboard, give each website's domain a **Public
   Hostname** on that tunnel with the service `http://localhost:19080` (the card and each site's Domains tab
