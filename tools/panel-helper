@@ -3723,10 +3723,14 @@ def web_guard_doc(doc):
         raise ValueError("a guard number is out of range")
     if any(not isinstance(doc[k], bool) for k in ("enabled", "increment", "firewall")):
         raise ValueError("a guard switch is not true or false")
-    never = doc["never"]
-    if not isinstance(never, list) or len(never) > 2000 or any(_web_net(n) is None for n in never):
+    if not _web_guard_nets(doc["never"]):
         raise ValueError("not a list of networks")
-    return dict(doc, never=[_web_net(n) for n in never], maxtime=max(doc["maxtime"], doc["bantime"]))
+    return dict(doc, never=[_web_net(n) for n in doc["never"]], maxtime=max(doc["maxtime"], doc["bantime"]))
+
+
+def _web_guard_nets(never):
+    """Whether `never` is a list of at most 2000 networks, each one _web_net reads."""
+    return isinstance(never, list) and len(never) <= 2000 and all(_web_net(n) is not None for n in never)
 
 
 def _web_guard_number(value, low, high):
