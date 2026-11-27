@@ -457,6 +457,20 @@ def _p8_delete_text(st):
     eq("P8 (Delete website's confirmation, js/website_site.js): it says the databases are removed too and that a "
        "copy of each is kept on the host for 30 days; the name is still typed to confirm",
        ("databases" in body, "kept on the host for 30 days" in body, got.get("need")), (True, True, "shop"))
+    named = {}
+    for name, dbs in (("two databases", [{"id": 1, "name": "ws7_app", "user": "ws7_app"},
+                                         {"id": 2, "name": "ws7_custdb", "user": "ws7_custdb"}]), ("none", [])):
+        g = _node315(_site_page315(), ["websites_common.js", "website_site.js"], r"""
+      for (let i = 0; i < 4; i++) await tick();
+      window.wsDelete();
+      return {body: dialogs.length ? dialogs[0].bodyText : ''};
+    """, {"/api/websites/7": dict(_b3_site_answer(state="running"), databases=dbs)})
+        text = g.get("body") or ""
+        named[name] = ("ws7_app" in text and "ws7_custdb" in text, "kept on the host for 30 days" in text,
+                       "databases" in text)
+    eq("U7 (Delete website's confirmation over the site's own database list, js/website_site.js): it names each "
+       "database that is dropped (ws7_app, ws7_custdb) and the 30-day copy; a site with none says nothing of "
+       "databases (control)", named, {"two databases": (True, True, True), "none": (False, False, False)})
 
 
 # ── B5. A database made on the Database tab ───────────────────────────────────────────────────────

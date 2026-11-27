@@ -528,9 +528,17 @@
     if (eg && !eg.disabled) body.full_egress = eg.checked;
     WS.stepUp(function () { WS.say('wset-msg', WS.T('Saving…')); WS.siteAct('settings', body, 'wset-msg'); });
   };
+  // What Delete removes, the site's databases by name (the list the page last read), each kept as a 30-day copy.
+  var siteDbs = null;
+  function deleteText() {
+    var names = (siteDbs || []).map(function (x) { return String(x.name || ''); }).filter(Boolean);
+    if (names.length) return WS.TF('Its files, backups and account are removed for good, and its databases: {names}. A copy of each database is kept on the host for 30 days. Type the website name to confirm.', {names: names.join(', ')});
+    if (siteDbs) return WS.T('Its files, backups and account are removed for good. Type the website name to confirm.');
+    return WS.T('Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.');
+  }
   window.wsDelete = function () {
     window.confirmDialog({title: WS.T('Delete this website?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete website'),
-      bodyText: WS.T('Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.'),
+      bodyText: deleteText(),
       requireText: F.name, requireLabel: WS.T('Website name'), onConfirm: function () {
         WS.stepUp(function () {
           WS.post(WS.R.act(ID, 'delete'), {confirm: F.name}).then(function (d) {
@@ -540,7 +548,7 @@
       }});
   };
   WS.loadBackups = loadBackups;
-  WS.onSite(function (d) { renderSettings(d.site || {}); });
+  WS.onSite(function (d) { renderSettings(d.site || {}); siteDbs = Array.isArray(d.databases) ? d.databases : null; });
 })();
 
 // Start: the panel the address names, then the site's state.

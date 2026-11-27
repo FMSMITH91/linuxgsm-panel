@@ -13,5 +13,6 @@
   "Check the install": "Vérifier l'installation",
   "{step} ({n} of {total})": "{step} ({n} sur {total})",
   "Install step {n}": "Étape d'installation {n}",
-  "The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a well-known authority, or switch back to automatic (Let's Encrypt).": "Le certificat que vous avez donné à ce domaine est auto-signé : les navigateurs des visiteurs avertissent. Utilisez-en un d'une autorité reconnue, ou revenez à l'automatique (Let's Encrypt)."
+  "The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a well-known authority, or switch back to automatic (Let's Encrypt).": "Le certificat que vous avez donné à ce domaine est auto-signé : les navigateurs des visiteurs avertissent. Utilisez-en un d'une autorité reconnue, ou revenez à l'automatique (Let's Encrypt).",
+  "Its files, backups and account are removed for good, and its databases: {names}. A copy of each database is kept on the host for 30 days. Type the website name to confirm.": "Ses fichiers, sauvegardes et compte sont supprimés définitivement, ainsi que ses bases de données : {names}. Une copie de chaque base de données est conservée sur l'hôte pendant 30 jours. Saisissez le nom du site web pour confirmer."
 }
