@@ -155,7 +155,7 @@ eq("sftp card: saving a public address stores that address, restarts the service
    (302, "address", _PUB307, 1, True))
 _html307 = _A307.get("/settings").get_data(as_text=True)
 check("sftp card: ...and the card shows it chosen, with the public warning beside the field",
-      _re307.search(r'<option value="203\.0\.113\.5" selected>', _html307) is not None
+      _re307.search(r'<option value="9\.9\.9\.9" selected>', _html307) is not None
       and 'id="sftp-public-warning"' in _html307 and "reachable from the internet" in _html307, _html307[:0])
 with _p9.app_context():
     _row307 = _AL307.query.filter_by(action="settings_update").order_by(_AL307.id.desc()).first()
