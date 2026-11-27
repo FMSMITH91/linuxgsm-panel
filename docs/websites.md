@@ -127,9 +127,28 @@ takes a few minutes; until then the sites' page caches are left out and nothing 
 ## Domains and certificates
 
 On a site's **Domains** tab, add a domain and the page shows the exact DNS records to create at your
-domain's provider (an A record and, when the host has IPv6, an AAAA record). Press **Check again** once
-they are in place. The panel looks the domain up and compares the answer with the host's address; it
-never connects to the domain itself. A domain that points at a private address is refused.
+domain's provider (an A record and, when the host has IPv6, an AAAA record). Each record's name is shown
+the way most providers ask for it, `@` for the domain itself or `www` for its www name, with the full
+name beside it. The host's addresses are its interfaces' public IPv4 and IPv6 addresses, read again at
+each check (never its Tailscale or temporary ones), plus the public address the Servers page found. A
+domain is checked as soon as it is added, from the add dialog too; press **Check again** once the records
+are in place. The panel looks the domain up and compares the answer with the host's address; it
+never connects to the domain itself. A domain that points at a private address is refused. A domain whose
+answers are all Cloudflare addresses (its record is proxied, the orange cloud) is shown as **going
+through Cloudflare** and is served too: see [Behind Cloudflare](#behind-cloudflare). Any other answer is
+"points elsewhere", and the web proxy does not serve that domain until a check finds it pointing here.
+When a check finds a domain of a site that is already online pointing here for the first time, the web
+proxy is updated at once and the site answers on it; nothing has to be taken offline and back.
+
+**Put online** checks every domain's DNS again first. A website goes online only when at least one of its
+domains would be served. If none would be (none points here or goes through Cloudflare yet), it refuses
+and names each domain with its DNS state, with a link to the Domains tab, so a site is never shown online
+while it answers on nothing. It also refuses, in words, while the web proxy is not installed on the
+host: a superadmin gets a link to install it, anyone else is told to ask one. A new site starts offline:
+when an app install finishes, the dialog's main button is **Put it online** (for an administrator of the
+site, who can also tick **Put it online when it is installed** before Create), and the site's Overview
+says it is offline with the same button. When some of its domains are served
+and others are not yet, the answer says which ones it does not answer on.
 
 Certificates come from Let's Encrypt automatically, for the domains you added and no others.
 Let's Encrypt sees your domain names, the host's address and, if you set one, the contact email. A
@@ -140,7 +159,67 @@ Each domain on the Domains tab shows the certificate the web proxy really serves
 and when it expires (read from the host at most every 5 minutes). A test or local certificate is
 marked as one browsers do not trust. A certificate with fewer than 10 days left gets a warning, as does
 an expired one. The proxy renews a certificate once a third of its lifetime is left, so a warning means
-renewal has been failing for days, usually because ports 80 and 443 do not reach the host.
+renewal has been failing for days, usually because ports 80 and 443 do not reach the host. A domain of an
+online site that still has no certificate 10 minutes after it was first served says so, as failed, with
+that likely reason, instead of "pending".
+
+**Make primary** decides which name the web proxy lists first. WordPress keeps the address it was
+installed with: after Make primary on a WordPress site, the answer says to set WordPress Address and Site
+Address to the new domain in WordPress (Settings, General).
+
+### Your own certificate
+
+Each domain has a **Certificate** button on the Domains tab: **Automatic (Let's Encrypt)**, the default,
+or **Your own certificate**. For your own, paste the certificate followed by its intermediate
+certificates (a `fullchain.pem`), and its private key without a passphrase, then **Save**. A
+[Cloudflare Origin CA](#behind-cloudflare) certificate is this case. Switch back to Automatic the same
+way at any time; the web proxy then gets a Let's Encrypt certificate for the domain again, and its copy of
+your certificate and key is removed from the host the next time its settings are applied (at once when the
+site is online).
+
+What is checked (OWASP Transport Layer Security Cheat Sheet, "Certificates"):
+
+| Refused (nothing is saved) | Noted, and saved anyway (OWASP's value beside it) |
+|----------------------------|----------------------------------------------------|
+| a certificate or key that cannot be read, or input over 64 KB | an RSA key under 2048 bits, or an ECDSA key not on P-256 or P-384 ("Use Strong Keys and Protect Them": at least 2048 bits) |
+| a key protected by a passphrase | a certificate signed with SHA-1 or MD5 ("Use Strong Cryptographic Hashing Algorithms": SHA-256) |
+| a key that is not the certificate's | a self-signed certificate ("Use an Appropriate Certification Authority": a well-known CA) |
+| a certificate already expired, or not valid yet | only the server certificate, with no intermediates, or a chain out of order |
+| a certificate that does not cover the domain (its subjectAltName; a wildcard covers one label) | 30 days or fewer left |
+
+OWASP gives no number of days for the expiry warning and does not cover the chain; the chain's order is
+the one TLS itself requires (RFC 8446, section 4.4.2) and 30 days is the panel's own warning, the same as
+for the panel's own certificate. The private key is stored encrypted, is never shown again or returned by
+any page, and never goes into a log, an audit row or a command line: it reaches the host on the
+privileged helper's input and is written there readable by the web proxy alone. The audit log records
+the domain, the certificate's issuer, its expiry and its SHA-256 fingerprint.
+
+If the site is online, saving updates the web proxy at once. If the proxy does not take the new
+certificate, the domain keeps the one it had, the proxy is put back as it was, and the page says why. The
+panel never renews your certificate: the domain's line warns from 30 days before it expires, and so does
+the **A TLS certificate is expiring soon** alert (once a week per domain, under Settings > Notifications).
+A host in Tunnel mode serves no certificate of its own: the tunnel's provider serves the one visitors see.
+
+### Behind Cloudflare
+
+A domain whose DNS record is proxied by Cloudflare (the orange cloud) resolves to Cloudflare's
+addresses, not the host's. The panel recognises Cloudflare's published ranges (from the signed catalog,
+the same list as the Restricted mode's preset) and serves the domain. Two ways to give it a certificate:
+
+1. **Recommended: a Cloudflare Origin CA certificate.** In Cloudflare, open SSL/TLS > Origin Server and
+   create a certificate for the domain (or a wildcard for it). Paste the certificate and its private key
+   on the domain's **Certificate** button as **Your own certificate**. Then set Cloudflare's SSL/TLS mode
+   to **Full (strict)**, so Cloudflare checks the host's certificate on every connection. Only Cloudflare
+   trusts an Origin CA certificate, so keep the record proxied; the panel notes this when you save.
+2. **Automatic (Let's Encrypt) through Cloudflare.** It works only while Cloudflare passes plain HTTP to
+   the host: turn off **Always Use HTTPS** in Cloudflare, and the first certificate can need the record
+   set to **DNS only** (grey cloud) until it is issued. Set the SSL/TLS mode to Full (strict) once it is.
+   The domain's line says this while it is on Automatic.
+
+With either, the host's ports can be limited to Cloudflare in **Restricted** mode with **Use Cloudflare's
+networks**. Cloudflare's "Flexible" mode sends visitors' traffic to the host unencrypted: use Full
+(strict). (OWASP Transport Layer Security Cheat Sheet: "Use an Appropriate Certification Authority for
+the Application's User Base", "Use Correct Domain Names".)
 
 ## Files
 
@@ -228,6 +307,11 @@ site stays offline for another try.
 Off by default, for visitors' privacy. When an administrator turns them on for a site, visitor
 addresses are shortened before they are kept, and they are kept for the days set in Security settings.
 The site's own error log is always readable on its Overview tab.
+
+The Overview shows what the site runs (the image of its container) and what it uses: memory, disk and CPU,
+read from the host when the page is opened. A figure that cannot be read says so and why (the site is not
+running, the host did not answer, or Podman's own words), never an empty bar. On a host that does not let
+a site's account limit its own containers, it also says the CPU limit is set on the whole account.
 
 ## Customers
 
