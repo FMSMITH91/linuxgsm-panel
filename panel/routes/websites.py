@@ -590,6 +590,8 @@ def _admin_routes(app):
     @login_required
     def website_enable(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
+        from panel.routes import websites_domains
+        websites_domains.check_all(site)          # DNS as it is now, never the answer of an earlier check
         why = online_refusal(site)
         if why:
             audit(site, "website_refused", "not put online: %s" % why)

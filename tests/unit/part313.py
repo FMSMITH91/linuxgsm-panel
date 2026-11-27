@@ -15,6 +15,7 @@
    served; any other foreign answer stays a mismatch and is not served; a site that would be served on no
    domain is never put online, and one served on only some says which it does not answer on; the Domains tab
    notes what an automatic certificate needs behind Cloudflare.
+6. A DNS check that newly verifies a domain of a site already online applies the proxy at once.
 """
 import datetime as _dt313
 import importlib.machinery as _mach313
@@ -579,6 +580,47 @@ def _s5_online(st, rec, site):
     cust.post("/websites/%d/disable" % st.c.id)
 
 
+# ── 6. a DNS check that newly verifies a domain of an online site applies the proxy ──────────────
+def _s6_check_applies(st, rec):
+    _p9_patch(_dns313, "socket", _resolver313({"late.p313.example.org": [_HOST_IP313]}))
+    site = _site313(st.host, "p313-late", [("first.p313.example.org", True, "matching"),
+                                           ("late.p313.example.org", False, "mismatch")], enabled=True)
+    su = _Client313(st.su.id)
+    late = _dom313(site, "late.p313.example.org")
+    del rec.applies[:]
+    r = su.post("/websites/%d/domains/check" % site.id, json={"id": late.id})
+    eq("dns check (route): a domain of an online site newly found pointing here is applied at once: the proxy's "
+       "configuration then serves it, and the answer says so",
+       (r.status_code, len(rec.applies), "late.p313.example.org" in (rec.applies[-1]["text"] if rec.applies else ""),
+        _p9_json(r).get("message")), (200, 1, True, _wd313.S_SERVED_NOW))
+    su.post("/websites/%d/domains/check" % site.id, json={"id": late.id})
+    eq("dns check (route): checking an already verified domain applies nothing again (control)", len(rec.applies), 1)
+    off = _site313(st.host, "p313-off", [("off.p313.example.org", False, "mismatch")])
+    _p9_patch(_dns313, "socket", _resolver313({"off.p313.example.org": [_HOST_IP313]}))
+    su.post("/websites/%d/domains/check" % off.id, json={"id": _dom313(off, "off.p313.example.org").id})
+    eq("dns check (route): a site that is offline is not applied (control)", len(rec.applies), 1)
+
+
+def _s9_add_and_enable(st, rec):
+    _p9_patch(_dns313, "socket", _resolver313({"new.p313.example.org": [_HOST_IP313], "later.p313.example.org": [_HOST_IP313]}))
+    _p9_patch(_w313, "start_install", lambda site: None)
+    su = _Client313(st.su.id)
+    r = su.post("/websites/add", json={"name": "p313-new", "kind": "static", "domain": "new.p313.example.org",
+                                        "host_id": st.host.id})
+    sid = _p9_json(r).get("id") or 0
+    row = _Dom313.query.filter_by(website_id=sid, domain="new.p313.example.org").first()
+    _db313.session.expire_all()
+    eq("domains (add dialog): the new site's domain is checked at once, so it is verified without a Check again",
+       (r.status_code, row.dns_state if row else None, row is not None and row.verified_at is not None), (200, "matching", True))
+    site = _site313(st.host, "p313-later", [("later.p313.example.org", False, "unchecked")])
+    del rec.applies[:]
+    r = su.post("/websites/%d/enable" % site.id)
+    eq("online: putting a site online checks its domains' DNS first, so a domain pointing here now is served (never "
+       "an earlier check's answer)",
+       (r.status_code, "later.p313.example.org {" in (rec.applies[-1]["text"] if rec.applies else "")), (200, True))
+    su.post("/websites/%d/disable" % site.id)
+
+
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
 def _state313():
     host = _host313("p313-host")
@@ -625,7 +667,8 @@ with _p9.app_context():
         _rec313 = _stub_host313()
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
-                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn):
+                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
+                         _s9_add_and_enable):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

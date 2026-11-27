@@ -73,6 +73,7 @@ S_CERT_ROLLED_BACK = "The web proxy did not take the change, so {domain} keeps i
 S_CERT_NOT_SERVED = "It is used once the domain's DNS points here and the website is online."
 S_CERT_TUNNEL = ("This host's websites are reached through a tunnel, so the tunnel's provider serves the "
                  "certificate visitors see. This one is used if the host stops using the tunnel.")
+S_SERVED_NOW = "The domain points here: the website now answers on it."
 S_CDN_AUTO = ("This domain goes through Cloudflare. Its automatic certificate works only while Cloudflare passes "
               "plain HTTP to this host: turn off Always Use HTTPS there, and the first certificate can need the "
               "record set to DNS only. Or paste a Cloudflare Origin CA certificate as your own certificate, with "
@@ -179,20 +180,33 @@ def add_first(site, text):
     clean, refused = domain_refusal(site, text)
     if refused:
         return refused[1]
-    if _store(site, clean) is None:
+    row = _store(site, clean)
+    if row is None:
         return S_TAKEN
     _w.audit(site, "website_domain_add", "added domain %s" % clean)
+    _check(site, row)         # its DNS at once, so it is verified (and served once online) without a Check again
     return None
 
 
+def check_all(site):
+    """Check every domain of `site` again (before it goes online): a domain now pointing here is verified."""
+    for row in list(site.domains or []):
+        _check(site, row)
+
+
 def _check(site, row):
+    """Check the domain's DNS; one newly verified on a site online is applied at once (served from now on)."""
     state, addrs, hosts = _dns.check(row.domain, site.remote)
     row.dns_state, row.last_check_at = state, utcnow()
-    if state in _dns.VERIFIED and row.verified_at is None:
+    newly = state in _dns.VERIFIED and row.verified_at is None
+    if newly:
         row.verified_at = utcnow()
     db.session.commit()
-    return {"domain": row.domain, "dns_state": state, "answers": addrs, "host": hosts,
-            "message": i18n.tr(_dns.S_STATES[state])}
+    said = _dns.S_STATES[state]
+    if newly and site.enabled:
+        ok, why = _w.reconcile_proxy(site.remote)
+        said = S_SERVED_NOW if ok else why
+    return {"domain": row.domain, "dns_state": state, "answers": addrs, "host": hosts, "message": i18n.tr(said)}
 
 
 def _row(site, form):
