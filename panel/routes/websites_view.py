@@ -11,6 +11,7 @@ import json
 
 from flask_login import current_user
 
+from panel.core import i18n
 from panel.core.config import load_config
 from panel.db.models import Group, RemoteServer, Website, WebsiteProxy, db
 from panel.security.auth import EDIT_WEBSITE_FILES, MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES
@@ -190,9 +191,47 @@ def _holds(site, perm):
     return _wa.visible_sites(current_user, perm).filter(Website.id == site.id).first() is not None
 
 
+S_UNREAD_HOST = "The website's host did not answer."
+S_UNREAD_STOPPED = "The website is not running."
+S_UNREAD_PODMAN = "Podman said: {why}"
+S_UNREAD_DISK = "Its folder could not be measured."
+S_CPU_ACCOUNT = ("This host does not let the website's account limit its own containers, so the CPU limit is set on "
+                 "the whole account (its share and its quota).")
+
+
+def _unread(probe, facts, key):
+    """Why figure `key` (mem_mb, cpu_pct, disk_mb, image) could not be read, as the viewer's sentence."""
+    if not (probe or {}).get("ok"):
+        return i18n.tr(S_UNREAD_HOST)
+    if key == "disk_mb":
+        return i18n.tr(S_UNREAD_DISK)
+    if facts.get("state") != "running":
+        return i18n.tr(S_UNREAD_STOPPED)
+    why = facts.get("image_error" if key == "image" else "stats_error") or ""
+    return i18n.tr(S_UNREAD_PODMAN, why=why)
+
+
 def _usage(probe):
+    """The Overview's figures: each value read, or in `unread` why not (never an empty bar that looks measured)."""
     facts = (probe or {}).get("facts") or {}
-    return {k: facts[k] for k in ("mem_mb", "disk_mb", "cpu_pct") if isinstance(facts.get(k), (int, float))}
+    out = {k: facts[k] for k in ("mem_mb", "disk_mb", "cpu_pct") if isinstance(facts.get(k), (int, float))}
+    out["unread"] = {k: _unread(probe, facts, k) for k in ("mem_mb", "disk_mb", "cpu_pct", "image") if
+                     not (out.get(k) is not None or (k == "image" and facts.get("image")))}
+    if facts and not facts.get("cpu_delegated"):
+        out["cpu_note"] = i18n.tr(S_CPU_ACCOUNT)
+    return out
+
+
+def _image(site, probe):
+    """The Software line: the signed image the panel recorded, else the reference the running container names."""
+    if site.image_key:
+        return site.image_key, (site.image_digest or "")[-12:]
+    ref = ((probe or {}).get("facts") or {}).get("image") or ""
+    name, _sep, digest = ref.partition("@sha256:")
+    if digest:
+        return name, digest[:12]
+    head, colon, tag = name.rpartition(":")
+    return (head, tag) if colon and "/" not in tag else (name, "")
 
 
 def _open_url(site):
@@ -203,7 +242,7 @@ def _open_url(site):
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
-           "image": {"name": site.image_key or "", "version": (site.image_digest or "")[-12:], "update_available": False},
+           "image": dict(zip(("name", "version"), _image(site, probe)), update_available=False),
            "app_version": site.app_version or "", "php_version": site.php_version or "",
            "runtime_version": site.runtime_version or "", "last_backup": None, "usage": _usage(probe)}
     if admin:

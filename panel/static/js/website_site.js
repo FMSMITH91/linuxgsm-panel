@@ -101,9 +101,13 @@
 
   // ── overview ──
   function setText(id, text) { var e = WS.el(id); if (e) e.textContent = text == null || text === '' ? '—' : String(text); }
-  function meter(id, used, max, text) {
+  // A figure that could not be read says so, with why: never an empty bar that looks like a measurement.
+  function unread(why) { return WS.T("Couldn't read") + (why ? ': ' + why : ''); }
+  function meter(id, used, max, text, why) {
     var m = WS.el(id);
     if (!m) return;
+    m.hidden = used == null;
+    if (used == null) { setText(id + '-text', unread(why)); return; }
     m.max = max > 0 ? max : 1;
     // Amber from 80 % of the limit and red from 95 %, as the disk warning works.
     m.low = m.max * 0.8;
@@ -114,17 +118,20 @@
   }
   function renderOverview(s) {
     setText('ws-ov-kind', WS.kindLabel(s.kind));
-    var img = s.image || {};
-    setText('ws-ov-image', [img.name, img.version].filter(Boolean).join(' '));
+    var img = s.image || {}, u = s.usage || {}, why = u.unread || {};
+    setText('ws-ov-image', img.name ? [img.name, img.version].filter(Boolean).join(' ') : unread(why.image));
     var ver = s.app_version || s.php_version || s.runtime_version;
     setText('ws-ov-version', ver);
     setText('ws-ov-backup', s.last_backup || WS.T('None yet'));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
-    var u = s.usage || {}, l = s.limits || {};
-    meter('ws-mem', u.mem_mb, l.mem_mb, u.mem_mb != null ? u.mem_mb + ' / ' + l.mem_mb + ' MB' : '');
-    meter('ws-disk', u.disk_mb, l.disk_mb, u.disk_mb != null ? u.disk_mb + ' / ' + l.disk_mb + ' MB' : '');
-    meter('ws-cpu', u.cpu_pct, 100, u.cpu_pct != null ? u.cpu_pct + ' %' : '');
+    var l = s.limits || {};
+    // Limits are an administrator's; anyone else sees the figure alone.
+    meter('ws-mem', u.mem_mb, l.mem_mb || u.mem_mb, l.mem_mb ? u.mem_mb + ' / ' + l.mem_mb + ' MB' : u.mem_mb + ' MB', why.mem_mb);
+    meter('ws-disk', u.disk_mb, l.disk_mb || u.disk_mb, l.disk_mb ? u.disk_mb + ' / ' + l.disk_mb + ' MB' : u.disk_mb + ' MB', why.disk_mb);
+    meter('ws-cpu', u.cpu_pct, 100, u.cpu_pct + ' %', why.cpu_pct);
+    var note = WS.el('ws-cpu-note');
+    if (note) { note.textContent = u.cpu_note || ''; WS.show(note, !!u.cpu_note); }
   }
   window.wsLoadLogs = function () {
     WS.get(WS.R.act(ID, 'logs')).then(function (d) {

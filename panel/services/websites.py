@@ -1032,8 +1032,9 @@ def probe_sh(account, site):
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
             "echo \"state=$(systemctl --user is-active %s 2>/dev/null | head -n 1)\"; " % unit_service(UNIT)
             + "echo \"result=$(systemctl --user show -p Result --value %s 2>/dev/null)\"; " % unit_service(UNIT)
-            + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>/dev/null)\"; " % UNIT
-            + "echo \"mem=$(podman stats --no-stream --format '{{.MemUsage}}' %s 2>/dev/null | head -n 1)\"; " % UNIT
+            + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>&1 | head -n 1)\"; " % UNIT
+            + "echo \"stats=$(podman stats --no-stream --format '{{.MemUsage}}|{{.CPUPerc}}' %s 2>&1 | head -n 1)\"; "
+            % UNIT
             + "d=$(du -sxm %s 2>/dev/null) && echo \"disk_mb=${d%%%%[[:space:]]*}\"; " % _q(SITE)
             + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
               '2>/dev/null && echo cpu_delegated=1; '
@@ -1044,12 +1045,47 @@ _STATES = {"active": "running", "activating": "starting", "deactivating": "stopp
            "failed": "failed", "reloading": "running"}
 
 
+# podman stats' MemUsage|CPUPerc line: "47.21MB / 536.9MB|0.52%" (decimal units; kB, MB, GB, or B).
+_STATS_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(B|[kKMGT]i?B)\s*/[^|]*\|\s*([0-9]+(?:\.[0-9]+)?)%\s*\Z")
+_MB = {"B": 1e-6, "kB": 1e-3, "KB": 1e-3, "KiB": 1.024e-3, "MB": 1.0, "MiB": 1.048576, "GB": 1e3, "GiB": 1073.741824,
+       "TB": 1e6, "TiB": 1099511.627776}
+# What podman inspect prints for a container: an image reference (registry/name, then @digest or :tag).
+_IMAGE_REF_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}(?::[A-Za-z0-9._-]{1,128})?(?:@sha256:[0-9a-f]{64})?\Z")
+
+
+def _plain_reason(text):
+    """A tool's error line, printable and short (it goes to the page as data, never as markup)."""
+    text = "".join(c if c.isprintable() else " " for c in (text or "")).strip()
+    return text[:160]
+
+
+def _stats(text):
+    """(memory MB, CPU %, why it could not be read) from probe_sh's stats= line."""
+    m = _STATS_RE.match(text or "")
+    if not m or m.group(2) not in _MB:
+        return None, None, _plain_reason(text) or "no answer"
+    return round(float(m.group(1)) * _MB[m.group(2)]), round(float(m.group(3)), 1), ""
+
+
+def _image(text):
+    """(image reference, why it could not be read) from probe_sh's image= line."""
+    text = (text or "").strip()
+    return (text, "") if _IMAGE_REF_RE.match(text) else ("", _plain_reason(text) or "no answer")
+
+
 def parse_probe(out):
-    """probe_sh's output as a dict: state, result, image, mem, disk_mb (int or None), uid, gid, installed, splice."""
+    """probe_sh's output as a dict: state, result, image, mem_mb, cpu_pct, disk_mb, uid, gid, installed, splice.
+
+    A figure that could not be read is None (image ""), with podman's own words in stats_error / image_error:
+    an empty value is never a measurement.
+    """
     kv = _ad.kv_lines(out)
     disk = kv.get("disk_mb", "")
+    mem_mb, cpu_pct, stats_error = _stats(kv.get("stats", ""))
+    image, image_error = _image(kv.get("image", ""))
     return {"state": _STATES.get(kv.get("state", ""), "unknown"), "result": kv.get("result", ""),
-            "image": kv.get("image", ""), "mem": kv.get("mem", ""), "disk_mb": int(disk) if disk.isdecimal() else None,
+            "image": image, "image_error": image_error, "mem_mb": mem_mb, "cpu_pct": cpu_pct, "stats_error": stats_error,
+            "disk_mb": int(disk) if disk.isdecimal() else None,
             "uid": int(kv["uid"]) if kv.get("uid", "").isdecimal() else None,
             "gid": int(kv["gid"]) if kv.get("gid", "").isdecimal() else None,
             "installed": kv.get("installed") == "1", "splice": kv.get("splice") == "1",

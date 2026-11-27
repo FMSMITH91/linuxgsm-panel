@@ -284,8 +284,10 @@ def _status(site):
     if hit and now - hit[0] < STATUS_FRESH:
         return hit[1]
     ok, said = host_call(_sw.site_probe, site.remote, site)
-    probe = {"ok": bool(ok), "text": i18n.tr(said) if not isinstance(said, dict) else "",
-             "facts": said if isinstance(said, dict) else {}}
+    # site_probe answers probe_sh's key=value lines (or why it failed): parsed here, or the Overview's figures
+    # stay empty however the site is doing.
+    from panel.services import websites as _ws
+    probe = {"ok": bool(ok), "text": "" if ok else i18n.tr(said), "facts": _ws.parse_probe(said) if ok else {}}
     _STATUS[site.id] = (now, probe)
     return probe
 

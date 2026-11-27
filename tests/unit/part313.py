@@ -16,6 +16,8 @@
    domain is never put online, and one served on only some says which it does not answer on; the Domains tab
    notes what an automatic certificate needs behind Cloudflare.
 6. A DNS check that newly verifies a domain of a site already online applies the proxy at once.
+7. The Overview's figures: the probe is parsed (memory, CPU, disk, the running image), and a figure that cannot
+   be read says why instead of an empty bar.
 """
 import datetime as _dt313
 import importlib.machinery as _mach313
@@ -601,6 +603,46 @@ def _s6_check_applies(st, rec):
     eq("dns check (route): a site that is offline is not applied (control)", len(rec.applies), 1)
 
 
+# ── 7. the Overview's figures ─────────────────────────────────────────────────────────────────────
+_DIGEST313 = "ab" * 32
+_PROBE_UP313 = ("os=24.04\npodman=podman version 4.9.3\nuid=1201\ngid=1201\nstate=active\nresult=success\n"
+                "image=docker.io/library/wordpress@sha256:%s\nstats=47.21MB / 536.9MB|0.52%%\ndisk_mb=120\ninstalled=1\n"
+                % _DIGEST313)
+_PROBE_DOWN313 = ("uid=1201\ngid=1201\nstate=inactive\nresult=success\nimage=Error: no such container lgsm-site\n"
+                  "stats=Error: no container with name or ID \"lgsm-site\" found: no such container\ndisk_mb=120\n")
+
+
+def _overview313(st, probe_out, ok=True):
+    _p9_patch(_sw313, "site_probe", lambda remote, site: (ok, probe_out))
+    _w313._STATUS.clear()
+    got = _p9_json(_Client313(st.su.id).get("/api/websites/%d" % st.a.id)).get("site") or {}
+    return got.get("usage") or {}, got.get("image") or {}
+
+
+def _s7_overview(st, _rec):
+    usage, image = _overview313(st, _PROBE_UP313)
+    eq("overview (route): a running site's probe is parsed: memory in MB, CPU %, disk and the image it runs, and a "
+       "host that does not delegate CPU says where its limit is set",
+       (usage.get("mem_mb"), usage.get("cpu_pct"), usage.get("disk_mb"), usage.get("unread"), image.get("name"),
+        image.get("version"), bool(usage.get("cpu_note"))),
+       (47, 0.5, 120, {}, "docker.io/library/wordpress", _DIGEST313[:12], True))
+    usage, image = _overview313(st, _PROBE_DOWN313)
+    unread = usage.get("unread") or {}
+    eq("overview (route): a stopped site's memory, CPU and image are not shown as measurements: each says the site is "
+       "not running; its disk is still read",
+       ("mem_mb" in usage, "cpu_pct" in usage, unread.get("mem_mb"), unread.get("cpu_pct"), unread.get("image"),
+        usage.get("disk_mb"), image.get("name")),
+       (False, False, "The website is not running.", "The website is not running.", "The website is not running.", 120, ""))
+    usage, _image = _overview313(st, "", ok=False)
+    eq("overview (route): a host that does not answer says so for every figure",
+       sorted(set((usage.get("unread") or {}).values())), ["The website's host did not answer."])
+    sh = _ws313.probe_sh("ws5", None)
+    eq("overview: the probe asks podman for memory and CPU in one read, and keeps podman's own words when it fails",
+       ("{{.MemUsage}}|{{.CPUPerc}}" in sh, "lgsm-site 2>&1" in sh), (True, True))
+    _p9_patch(_sw313, "site_probe", lambda *a, **k: (True, ""))
+    _w313._STATUS.clear()
+
+
 def _s9_add_and_enable(st, rec):
     _p9_patch(_dns313, "socket", _resolver313({"new.p313.example.org": [_HOST_IP313], "later.p313.example.org": [_HOST_IP313]}))
     _p9_patch(_w313, "start_install", lambda site: None)
@@ -668,7 +710,7 @@ with _p9.app_context():
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s9_add_and_enable):
+                         _s7_overview, _s9_add_and_enable):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:
