@@ -170,7 +170,8 @@ BlueMap's command-line build renders the world, keeps watching it for changes, a
   refused, since BlueMap can't render anything without that file. The audit log records who accepted it and
   when (the install's entry), and so do the add-on's `addon.json` and a comment in its `core.conf`.
 - **The client file.** The container reaches no network at all, so the panel fetches the file for it: the
-  panel's host reads Mojang's version list (`piston-meta.mojang.com`, the version's details checked against
+  panel's host reads Mojang's version list (`piston-meta.mojang.com` over HTTPS, following no redirect and
+  connecting only when every address the name resolves to is public; the version's details checked against
   the list's SHA-1), and the game's host downloads the client jar (`piston-data.mojang.com`, about 30 MB)
   into the add-on's `data` folder and checks the SHA-1 Mojang publishes for it. BlueMap then starts with
   that version (`-v`); its own attempt to reach Mojang fails, and it uses the file it was given.

@@ -26,8 +26,10 @@ MOJANG'S CLIENT FILE AND ITS LICENCE
     (the detail checked against the list's SHA-1), and the game's host fetches the client jar from
     piston-data with curl and checks the SHA-1 Mojang publishes for it, as BlueMap itself would. BlueMap
     then runs with -v <version>: when it cannot reach Mojang it uses data/minecraft-client-<version>.jar
-    (MinecraftVersion.load). OWASP's cheat sheets have no rule for a downloaded data file; this follows
-    the Top 10's A08 advice: a trusted source over TLS and an integrity check before use.
+    (MinecraftVersion.load). The panel's two reads go through services/public_https.py (OWASP SSRF
+    Prevention Cheat Sheet, Case 1: piston-meta only, no redirect, no proxy, public addresses only); the
+    game host's curl follows no redirect either (no -L) and takes https only. The checks follow the Top
+    10's A08 advice: a trusted source over TLS and an integrity check (Mojang's SHA-1) before use.
 
 THE VERSION, AND A GAME UPDATE
     The world's version is the one the server logged at its last start (serverfiles/logs/latest.log,
@@ -51,7 +53,7 @@ import urllib.request
 from collections import namedtuple
 
 from panel.core import i18n
-from panel.services import geoip as _geoip, world_reset as _wr
+from panel.services import geoip as _geoip, public_https as _https, world_reset as _wr
 
 # Mojang's EULA, which accept-download stands for (BlueMap's core.conf names account.mojang.com's old
 # address of it, which redirects here).
@@ -293,25 +295,16 @@ def _allowed(url):
             and not p.username and not p.password)
 
 
-class _AllowedRedirect(urllib.request.HTTPRedirectHandler):
-    """Follow a redirect only to an https URL on piston-meta."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Refuse (None) a redirect off piston-meta; follow one on it."""
-        if not _allowed(newurl):
-            return None
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def _get(url, cap):
     """GET `url` from piston-meta: the body's bytes, or None. Never raises."""
     if not _allowed(url):
         return None
-    opener = urllib.request.build_opener(_AllowedRedirect)
+    # No redirect, no proxy, public addresses only (services/public_https.py).
+    opener = urllib.request.build_opener(*_https.handlers())
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
     try:
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with opener.open(req, timeout=TIMEOUT) as resp:  # nosec B310 - https on piston-meta only, checked above
+        with opener.open(req, timeout=TIMEOUT) as resp:  # nosec B310 - https on piston-meta only, checked above, no redirect
             body = resp.read(cap + 1) if getattr(resp, "status", 200) == 200 else None
     except Exception:  # noqa: BLE001 - every failure is "could not be read"
         return None

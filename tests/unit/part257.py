@@ -38,7 +38,7 @@ from panel.core.config import encrypt_secret as _enc257
 from panel.db.models import GameDatabase as _GD257, db as _db257
 from panel.routes import addons as _ra257, addons_change as _ch257
 from panel.security import privileged as _pv257
-from panel.services import addons as _ad257, geoip as _geo257
+from panel.services import addons as _ad257, geoip as _geo257, public_https as _ph257
 
 _trips257 = len(_P9_TRIPPED)
 _TMP257 = _tf257.mkdtemp(prefix="p257-")
@@ -172,7 +172,7 @@ def _geoip257():
     asked = _geo_stub257({_geo257.PAGE: (_PAGE257.encode(), None)}, switch=False)
     eq("DB-IP: turned off in Outside services, nothing is asked", (_geo257.latest(), asked),
        ((None, "", _geo257.OFF), []))
-    redirect, req = _geo257._NoRedirect(), _urlreq257.Request(_geo257.PAGE)
+    redirect, req = _ph257.NoRedirect(), _urlreq257.Request(_geo257.PAGE)
     eq("DB-IP: only db-ip.com's two hosts over https are asked, and no redirect is followed (not even to them)",
        [_geo257._allowed(u) for u in ("https://download.db-ip.com/x", "http://db-ip.com/x", "https://evil.example/x",
                                       "https://db-ip.com:8443/x")]

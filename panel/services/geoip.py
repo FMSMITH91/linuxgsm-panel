@@ -25,7 +25,7 @@ HOW IT IS FETCHED
     to any host (neither db-ip.com URL redirects, checked 2026-11-26); and since a host-name allowlist
     alone does not stop DNS rebinding, the connection goes only to an address the name resolved to, and
     only when every address it resolved to is a public one, with the name kept for TLS's SNI and
-    certificate check (_connect_checked, the checks web push uses). No proxy is used.
+    certificate check (services/public_https.py, web push's checked connect). No proxy is used.
     File Upload Cheat Sheet ("Upload and Download Limits", "File Signature Validation", "Filename
     Safety", "Filesystem Permissions"): caps before and after unpacking, the MMDB marker and the
     published SHA1, a file name the panel picks, mode 0600. Input Validation Cheat Sheet (syntactic and
@@ -33,18 +33,17 @@ HOW IT IS FETCHED
 """
 import gzip
 import hashlib
-import http.client
 import io
 import json
 import os
 import re
-import socket
 import time
 import urllib.parse
 import urllib.request
 
 from panel import REPO_ROOT as _ROOT
 from panel.core import outside_services as _outside
+from panel.services import public_https as _https
 
 PAGE = "https://db-ip.com/db/download/ip-to-country-lite"
 HOSTS = frozenset({"db-ip.com", "download.db-ip.com"})
@@ -92,51 +91,12 @@ def _allowed(url):
             and not p.username and not p.password)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Follow no redirect: the 3xx itself is then the answer, an HTTPError ("could not be downloaded")."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Refuse (None) every redirect, to any host (SSRF Prevention Cheat Sheet, Case 1)."""
-        return None
-
-
-def _connect_checked(address, timeout=None, source_address=None):
-    """Resolve once, refuse when ANY answer is not a public unicast address, then connect to those answers.
-
-    The panel's reviewed checked connect, as web push uses it (webpush.address_refused, then
-    notifications._connect_infos over the checked answers): a name that leads anywhere else (a
-    rebinding, a hostile resolver) is never connected to.
-    """
-    from panel.services import notifications as _notif, webpush as _wp   # read at call time
-    infos = socket.getaddrinfo(address[0], address[1], 0, socket.SOCK_STREAM)
-    if not infos or any(_wp.address_refused(info[4][0]) for info in infos):
-        raise OSError("refused address")
-    return _notif._connect_infos(infos, timeout, source_address)
-
-
-class _PublicHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS whose socket _connect_checked opens; the certificate and SNI still name the host."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._create_connection = _connect_checked
-
-
-class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
-    """urllib's https handler, connecting through _PublicHTTPSConnection."""
-
-    def https_open(self, req):
-        """Open `req` over _PublicHTTPSConnection."""
-        return self.do_open(_PublicHTTPSConnection, req, context=self._context)
-
-
 def _get(url, cap):
     """GET `url` from HOSTS: (body bytes, None) or (None, why). Never raises."""
     if not _allowed(url):
         return None, "not an allowed URL"
-    # No proxy (an empty ProxyHandler stands in for the one urllib would build from the environment), so
-    # the address checked is the address connected to.
-    opener = urllib.request.build_opener(_NoRedirect, _PublicHTTPSHandler, urllib.request.ProxyHandler({}))
+    # No redirect, no proxy, public addresses only (services/public_https.py).
+    opener = urllib.request.build_opener(*_https.handlers())
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "*/*"})
     try:
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected

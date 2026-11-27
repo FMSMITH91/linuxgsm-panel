@@ -1,9 +1,10 @@
-"""Part 308 of the unit suite: B3's country database, fetched as OWASP's SSRF Prevention Cheat Sheet asks, and
-refreshed by itself every month.
+"""Part 308 of the unit suite: B3's country database and BlueMap's Mojang reads, fetched as OWASP's SSRF Prevention
+Cheat Sheet asks, and the country database refreshed by itself every month.
 
-1. The fetch (services/geoip._get and latest, through urllib's own opener): the connection goes only to a
-   public address the host name resolved to, and only when every address it resolved to is public; no
-   redirect is followed, even to db-ip.com; a month that has not begun is refused; the file kept is 0600.
+1. The fetches (services/geoip._get and latest; services/addons_bluemap.client_download), through urllib's own
+   opener as services/public_https builds it: the connection goes only to a public address the host name
+   resolved to, and only when every address it resolved to is public; no redirect is followed, even to the
+   caller's own host; no proxy; a month that has not begun is refused; the country file kept is 0600.
 2. The monthly refresh (routes/addons_geoip.tick, as the update-check thread calls it): one download a month
    for the whole panel, and only when an offline B3 needs it; a back-off between failed tries; each offline
    B3 gets the file and reloads it without a restart, holding the add-on's job slot; an older B3 (no reload)
@@ -11,9 +12,10 @@ refreshed by itself every month.
    first; the card says what waits. Its shells run under bash; the card runs in node.
 
 HOW IT RUNS. Section 2 drives part12's app: every host call is a recorder standing in for the game hosts.
-The resolver and the connect are stand-ins on geoip's own `socket` name, and the opener it builds
-gets no proxy (geoip's own `urllib` name), so nothing reaches db-ip.com or any address. (The code before the fix
-used the process's own socket: its mutation proof ran in a network namespace with no network.)
+The resolver and the connect are stand-ins on the panel's checked connect (webpush._resolve,
+notifications._connect_infos), and the opener each caller builds is captured through its own `urllib` name, so
+nothing reaches db-ip.com, Mojang or any address. (The code before each fix used the process's own socket: its
+mutation proofs ran in a network namespace with no network.)
 """
 import base64 as _b64m308
 import email.message as _msg308
@@ -41,7 +43,8 @@ from unit.part257 import _HARNESS257
 from panel.core import i18n as _i18n308, outside_services as _os308
 from panel.services import notifications as _notif308
 from panel.routes import addons as _ra308, addons_geoip as _gr308
-from panel.services import addons as _ad308, geoip as _geo308, monitoring as _mon308
+from panel.services import addons as _ad308, addons_bluemap as _bm308, geoip as _geo308, monitoring as _mon308
+from panel.services import webpush as _wp308
 
 _trips308 = len(_P9_TRIPPED)
 _TMP308 = _tf308.mkdtemp(prefix="p308-")
@@ -65,10 +68,10 @@ def _file_url308(month):
 
 
 def _net308(addrs, built=None):
-    """Stand-ins for the resolver (answers `addrs`) and the connect (recorded, then refused): geoip's names, and the
-    panel's checked connect (notifications._connect_infos) it hands the answers to.
+    """Stand-ins for the resolver (answers `addrs`) and the connect (recorded, then refused) of the panel's checked
+    connect (webpush._resolve, notifications._connect_infos).
 
-    The opener geoip builds is appended to `built`, with the handlers geoip passed for it.
+    The opener each caller builds (geoip, addons_bluemap) is appended to `built`, with the handlers it passed.
     """
     seen = []
     real = _urlreq308.build_opener
@@ -79,52 +82,67 @@ def _net308(addrs, built=None):
             built.append((opener, handlers))
         return opener
 
-    def resolve(host, port, *a, **k):
+    def resolve(host, *a, **k):
         seen.append(("resolve", host))
-        return [(_sock308.AF_INET6 if ":" in x else _sock308.AF_INET, _sock308.SOCK_STREAM, 6, "", (x, port))
+        return [(_sock308.AF_INET6 if ":" in x else _sock308.AF_INET, _sock308.SOCK_STREAM, 6, "", (x, 443))
                 for x in addrs]
 
     def connect(infos, *a, **k):
         seen.append(("connect", infos[0][4][0]))
         raise OSError("part308: no network")
-    _p9_patch(_geo308, "socket", _Over(_sock308, getaddrinfo=resolve))
+    _p9_patch(_wp308, "_resolve", resolve)
     _p9_patch(_notif308, "_connect_infos", connect)
-    _p9_patch(_geo308, "urllib", _Over(_geo308.urllib, request=_Over(_urlreq308, build_opener=build)))
+    for mod in (_geo308, _bm308):
+        _p9_patch(mod, "urllib", _Over(mod.urllib, request=_Over(_urlreq308, build_opener=build)))
     return seen
 
 
-def _connects308():
-    """For each resolver answer: (what _get returned, the addresses it connected to)."""
+# Each fetch, through its caller: (call it, the URL it asks first, a redirect to its own host).
+_FETCHES308 = {
+    "DB-IP": (lambda: _geo308._get(_geo308.PAGE, 1000)[0], _geo308.PAGE, "https://download.db-ip.com/free/x.mmdb.gz"),
+    "Mojang": (lambda: _bm308.client_download("1.21.4")[0], _bm308.MANIFEST,
+               "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"),
+}
+
+
+def _connects308(fetch):
+    """For each resolver answer: (what the fetch returned, the addresses it connected to)."""
     out = {}
     for label, addrs in (("loopback", ["127.0.0.1"]), ("private", ["10.1.2.3"]), ("link-local v6", ["fe80::1"]),
                          ("public and private", ["1.0.0.1", "192.168.1.9"]), ("public", ["1.0.0.1"]),
                          ("public v6", ["2606:4700:4700::1001"])):
         seen = _net308(addrs)
-        got = _geo308._get(_geo308.PAGE, 1000)
-        out[label] = (got[0], [s[1] for s in seen if s[0] == "connect"])
+        got = _FETCHES308[fetch][0]()
+        out[label] = (got, [s[1] for s in seen if s[0] == "connect"])
         _p9_restore_all()
     return out
 
 
-def _redirects308():
-    """What the opener _get builds does with a 302 to db-ip.com's own file host and to another host."""
+def _redirect308(opener, url, where):
+    """What `opener` does with a 302 from `url` to `where`: "refused 302", "followed" or what it raised."""
+    hdrs = _msg308.Message()
+    hdrs["Location"] = where
+    req = _urlreq308.Request(url)
+    req.timeout = 5                       # as the opener's open() sets it
+    try:
+        opener.error("https", req, _io308.BytesIO(b""), 302, "Found", hdrs)
+        return "followed"
+    except _urlerr308.HTTPError as e:
+        return "refused %d" % e.code
+    except _urlerr308.URLError:
+        return "followed"
+    except Exception as e:  # noqa: BLE001 - named in the check's answer rather than ending the part
+        return "raised %s" % e.__class__.__name__
+
+
+def _redirects308(fetch):
+    """What the opener the fetch uses does with a 302 to its own host and to another host."""
+    call, url, own = _FETCHES308[fetch]
     built, out = [], {}
-    for where in ("https://download.db-ip.com/free/x.mmdb.gz", "https://evil.example/x"):
+    for label, where in (("own host", own), ("other host", "https://evil.example/x")):
         _net308(["1.0.0.1"], built)
-        _geo308._get(_geo308.PAGE, 1000)
-        hdrs = _msg308.Message()
-        hdrs["Location"] = where
-        req = _urlreq308.Request(_geo308.PAGE)
-        req.timeout = 5                       # as the opener's open() sets it
-        try:
-            built[-1][0].error("https", req, _io308.BytesIO(b""), 302, "Found", hdrs)
-            out[where] = "followed"
-        except _urlerr308.HTTPError as e:
-            out[where] = "refused %d" % e.code
-        except _urlerr308.URLError:
-            out[where] = "followed"
-        except Exception as e:  # noqa: BLE001 - named in the check's answer rather than ending the part
-            out[where] = "raised %s" % e.__class__.__name__
+        call()
+        out[label] = _redirect308(built[-1][0], url, where) if built else "no opener built"
         _p9_restore_all()
     return out
 
@@ -152,27 +170,31 @@ def _latest308(page, folder, before=None):
         _p9_restore_all()
 
 
-def _proxy308():
-    """The proxies of the ProxyHandlers geoip passes to the opener it builds."""
+def _proxy308(fetch):
+    """The proxies of the ProxyHandlers passed to the opener the fetch builds."""
     built = []
     _net308(["1.0.0.1"], built)
-    _geo308._get(_geo308.PAGE, 1000)
+    _FETCHES308[fetch][0]()
     _p9_restore_all()
     return [h.proxies for h in (built[-1][1] if built else ()) if isinstance(h, _urlreq308.ProxyHandler)]
 
 
-def _fetch_checks308():
-    eq("DB-IP fetch: the opener is given an empty ProxyHandler (no proxy from the environment), so the address "
-       "checked is the address connected to", _proxy308(), [{}])
-    eq("DB-IP fetch (_get through urllib's opener): it connects only to the address db-ip.com resolved to, and only "
-       "when every address is public; loopback, private, link-local or a mix is never connected to "
-       "(SSRF Prevention Cheat Sheet, Case 1: DNS rebinding)",
-       _connects308(),
+def _public_checks308(fetch, host):
+    eq("%s fetch: the opener is given an empty ProxyHandler (no proxy from the environment), so the address "
+       "checked is the address connected to" % fetch, _proxy308(fetch), [{}])
+    eq("%s fetch (through urllib's opener): it connects only to the address %s resolved to, and only when every "
+       "address is public; loopback, private, link-local or a mix is never connected to (SSRF Prevention Cheat "
+       "Sheet, Case 1: DNS rebinding)" % (fetch, host),
+       _connects308(fetch),
        {"loopback": (None, []), "private": (None, []), "link-local v6": (None, []), "public and private": (None, []),
         "public": (None, ["1.0.0.1"]), "public v6": (None, ["2606:4700:4700::1001"])})
-    eq("DB-IP fetch: a redirect is not followed, not even to db-ip.com's own file host (SSRF Prevention Cheat Sheet, "
-       "Case 1: disable redirects)", _redirects308(),
-       {"https://download.db-ip.com/free/x.mmdb.gz": "refused 302", "https://evil.example/x": "refused 302"})
+    eq("%s fetch: a redirect is not followed, not even to %s itself (SSRF Prevention Cheat Sheet, Case 1: disable "
+       "redirects)" % (fetch, host), _redirects308(fetch), {"own host": "refused 302", "other host": "refused 302"})
+
+
+def _fetch_checks308():
+    _public_checks308("DB-IP", "db-ip.com")
+    _public_checks308("Mojang", "piston-meta.mojang.com")
     got, asked = _latest308(_page308(_NEXT308), "future")
     eq("DB-IP: a page naming a month that has not begun is refused, and its file is never asked for",
        (got, asked), ((None, "", _geo308.UNREADABLE), [_geo308.PAGE]))
