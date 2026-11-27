@@ -729,6 +729,20 @@ def _s8_scripts(_st, _rec):
        (True, False, True))
 
 
+# ── 9. the domains' journey: checked on add and before online, no web proxy, IPv6, failed certificates ──
+# `ip -o addr show` in the C locale (documentation and made-up tailnet addresses).
+_IPO313 = r"""1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host noprefixroute \       valid_lft forever preferred_lft forever
+2: ens3    inet 11.22.33.70/24 brd 11.22.33.255 scope global ens3\       valid_lft forever preferred_lft forever
+2: ens3    inet 100.101.1.2/10 scope global ens3\       valid_lft forever preferred_lft forever
+2: ens3    inet6 2c0f:313::beef/64 scope global temporary dynamic \       valid_lft 86000sec preferred_lft 14000sec
+2: ens3    inet6 2c0f:313::dead/64 scope global deprecated dynamic \       valid_lft 86000sec preferred_lft 0sec
+2: ens3    inet6 2c0f:313::7/64 scope global \       valid_lft forever preferred_lft forever
+2: ens3    inet6 fe80::7/64 scope link \       valid_lft forever preferred_lft forever
+3: tailscale0    inet 100.100.1.2/32 scope global tailscale0\       valid_lft forever preferred_lft forever
+"""
+
+
 def _s9_add_and_enable(st, rec):
     _p9_patch(_dns313, "socket", _resolver313({"new.p313.example.org": [_HOST_IP313], "later.p313.example.org": [_HOST_IP313]}))
     _p9_patch(_w313, "start_install", lambda site: None)
@@ -764,6 +778,30 @@ def _s9_no_proxy(st, _rec):
     r = _Client313(admin.id).post("/websites/%d/enable" % site.id)
     eq("online: ...and anyone else is told to ask a superadmin", (r.status_code, _p9_json(r).get("message")),
        (409, _w313.S_NO_PROXY))
+
+
+def _s9_ipv6(st, _rec):
+    eq("dns: the host's own addresses are its interfaces' public IPv4 and IPv6 ones: not temporary, deprecated, "
+       "link-local, loopback or the tailnet's",
+       sorted(_dns313._iface_addresses(_IPO313)), ["11.22.33.70", "2c0f:313::7"])
+    _p9_patch(_dns313, "_read_ip", lambda: _IPO313)
+    _dns313._LOCAL.update(at=None, addrs=set())
+    local = _Remote313(name="p313-local", host="127.0.0.1", port=22, username="u", auth_method="local",
+                       auth_credential="", is_local=True, public_ip="")
+    _db313.session.add(local)
+    _db313.session.commit()
+    _ROWS313["remotes"].append(local.id)
+    _w313.proxy_row(local.id).installed_version = "2.10.2"
+    site = _site313(local, "p313-v6", [("v6.p313.example.org", False, "unchecked")])
+    _p9_patch(_dns313, "socket", _resolver313({"v6.p313.example.org": ["2c0f:313::7", "11.22.33.70"]}))
+    su = _Client313(st.su.id)
+    dom = _dom313(site, "v6.p313.example.org")
+    got = _p9_json(su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id}))
+    dns = _p9_json(su.get("/api/websites/%d" % site.id)).get("dns") or {}
+    eq("dns (route): on the panel's host, a domain whose A and AAAA records both point at its interfaces is "
+       "matching, and the records to create list the AAAA address too",
+       (got.get("dns_state"), dns.get("a"), dns.get("aaaa")), ("matching", ["11.22.33.70"], ["2c0f:313::7"]))
+    _dns313._LOCAL.update(at=None, addrs=set())
 
 
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
@@ -813,7 +851,7 @@ with _p9.app_context():
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy):
+                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:
