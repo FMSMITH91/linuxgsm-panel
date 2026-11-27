@@ -36,6 +36,12 @@
   var WAITING = {label: 'Build and start', icon: 'hammer', cls: 'btn-success', verb: 'app/build'};
   var UNFINISHED_ASK = {label: 'Ask an administrator to delete it', icon: 'info-circle', cls: 'btn-secondary', verb: ''};
   function waiting(s) { return s.state === 'stopped' && s.kind === 'app' && !!s.state_reason; }
+  // The main button: by state; an app whose install stopped part-way cannot be set up again, so it is deleted and
+  // added again (administrators); a new app waiting for its files is built and started.
+  function mainFor(s) {
+    if (s.state === 'failed' && s.setup_unfinished) return WS.can.admin ? UNFINISHED : UNFINISHED_ASK;
+    return waiting(s) ? WAITING : WS.pick(MAIN, s.state, MAIN.creating);
+  }
   function renderHead(s) {
     var dot = WS.el('ws-dot');
     if (dot) dot.className = WS.dot(s.state).className;
@@ -46,10 +52,7 @@
     WS.show('ws-offline', !s.enabled && s.state !== 'creating' && s.state !== 'removing');
     var b = WS.el('ws-main');
     if (!b) return;
-    var m = WS.pick(MAIN, s.state, MAIN.creating);
-    // An app whose install stopped part-way cannot be set up again: it is deleted and added again (administrators).
-    if (s.state === 'failed' && s.setup_unfinished) m = WS.can.admin ? UNFINISHED : UNFINISHED_ASK;
-    if (waiting(s)) m = WAITING;
+    var m = mainFor(s);
     b.className = 'btn btn-sm ' + m.cls;
     b.disabled = !m.verb;
     b.dataset.verb = m.verb;

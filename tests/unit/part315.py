@@ -865,6 +865,11 @@ def _c1_steps(st):
        "revision it wrote, so Update is not offered to a site that was just made",
        (getattr(_db315.session.get(_Site315, sid), "image_key", None), (added.get("image") or {}).get("update_available")),
        (_ws315.SITE_FILES_REV, False))
+    _c1_update(su, sid)
+    _c1_dialog()
+
+
+def _c1_update(su, sid):
     real_image = _ws315.image_for
     _p9_patch(_ws315, "image_for", lambda s: "localhost/lgsm-site-php:8.4-p315")
     try:
@@ -881,7 +886,6 @@ def _c1_steps(st):
        "which brings it the folder its code reads, WordPress's loopback plugin and the egress unit; one installed with "
        "the current revision is not (control)",
        (_ws315.SITE_FILES_REV, offered), ("files-3", {"files-2": True, "files-3": False}))
-    _c1_dialog()
 
 
 def _c1_dialog():
