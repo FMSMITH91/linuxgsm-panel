@@ -74,6 +74,10 @@ S_CERT_NOT_SERVED = "It is used once the domain's DNS points here and the websit
 S_CERT_TUNNEL = ("This host's websites are reached through a tunnel, so the tunnel's provider serves the "
                  "certificate visitors see. This one is used if the host stops using the tunnel.")
 S_SERVED_NOW = "The domain points here: the website now answers on it."
+S_CERT_MISSING = ("No certificate yet. Usually ports 80 and 443 of this host do not reach it from the internet: check "
+                  "the host's firewall and your cloud provider's.")
+CERT_MISSING_AFTER = 600          # seconds a served domain may wait for its first certificate before it is called failed
+_MISSING_SINCE = {}               # domain name -> monotonic time apply_certs first found it served without a certificate
 S_CDN_AUTO = ("This domain goes through Cloudflare. Its automatic certificate works only while Cloudflare passes "
               "plain HTTP to this host: turn off Always Use HTTPS there, and the first certificate can need the "
               "record set to DNS only. Or paste a Cloudflare Origin CA certificate as your own certificate, with "
@@ -103,9 +107,23 @@ def apply_certs(remote, status):
     for row in rows:
         got = certs.get(row.domain)
         if got:
-            row.cert_state = cert_kind(got["issuer"])
+            _MISSING_SINCE.pop(row.domain, None)
+            row.cert_state, row.cert_error = cert_kind(got["issuer"]), ""
             row.cert_not_after = datetime.fromtimestamp(got["not_after"], timezone.utc).replace(tzinfo=None)
+        else:
+            _note_missing(row)
     db.session.commit()
+
+
+def _note_missing(row, now=None):
+    """A domain served by an online site with no certificate after CERT_MISSING_AFTER seconds is failed, and says why."""
+    if row.verified_at is None or row.website is None or not row.website.enabled:
+        _MISSING_SINCE.pop(row.domain, None)
+        return
+    now = time.monotonic() if now is None else now
+    since = _MISSING_SINCE.setdefault(row.domain, now)
+    if now - since >= CERT_MISSING_AFTER and row.cert_state == "pending":
+        row.cert_state, row.cert_error = "failed", S_CERT_MISSING
 
 
 def refresh_certs(remote):

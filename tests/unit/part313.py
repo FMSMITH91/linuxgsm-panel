@@ -804,6 +804,28 @@ def _s9_ipv6(st, _rec):
     _dns313._LOCAL.update(at=None, addrs=set())
 
 
+def _s9_cert_missing(st, _rec):
+    site = _site313(st.host, "p313-nocert", [("nocert.p313.example.org", True, "matching")], enabled=True)
+    _wd313._MISSING_SINCE.clear()
+    _wd313.apply_certs(st.host, {"certs": {}})
+    first = _dom313(site, "nocert.p313.example.org").cert_state
+    since = _wd313._MISSING_SINCE.get("nocert.p313.example.org", 0.0)
+    _wd313._MISSING_SINCE["nocert.p313.example.org"] = since - _wd313.CERT_MISSING_AFTER - 1
+    _wd313.apply_certs(st.host, {"certs": {}})
+    dom = _dom313(site, "nocert.p313.example.org")
+    shown = _wd313.domain_json(site, dom)
+    eq("certificates: a served domain of an online site still without a certificate after 10 minutes is failed, "
+       "with a plain reason the Domains tab shows; before that it is pending",
+       (first, dom.cert_state, shown["cert_error"] == _wd313.S_CERT_MISSING), ("pending", "failed", True))
+    _wd313.apply_certs(st.host, {"certs": {"nocert.p313.example.org": {"issuer": "acme-v02.api.letsencrypt.org-directory",
+                                                                      "not_after": 1900000000}}})
+    dom = _dom313(site, "nocert.p313.example.org")
+    eq("certificates: once the proxy has it, the domain says so and the reason is gone (control)",
+       (dom.cert_state, dom.cert_error), ("issued", ""))
+    site.enabled = False
+    _db313.session.commit()
+
+
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
 def _state313():
     host = _host313("p313-host")
@@ -851,7 +873,7 @@ with _p9.app_context():
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6):
+                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

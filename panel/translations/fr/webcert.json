@@ -12,6 +12,7 @@
   "It does not answer on {domains} yet: their DNS does not point here.": "Il ne répond pas encore sur {domains} : leur DNS ne pointe pas ici.",
   "It is used once the domain's DNS points here and the website is online.": "Il est utilisé dès que le DNS du domaine pointe ici et que le site web est en ligne.",
   "Its folder could not be measured.": "Son dossier n'a pas pu être mesuré.",
+  "No certificate yet. Usually ports 80 and 443 of this host do not reach it from the internet: check the host's firewall and your cloud provider's.": "Pas encore de certificat. Le plus souvent, les ports 80 et 443 de cet hôte ne lui parviennent pas depuis Internet : vérifiez le pare-feu de l'hôte et celui de votre fournisseur cloud.",
   "None of this website's domains would be served: {domains}. A domain is served once a DNS check finds it pointing at this host or going through Cloudflare. Check its DNS on the Domains tab, then try again.": "Aucun des domaines de ce site web ne serait servi : {domains}. Un domaine est servi dès qu'une vérification DNS le trouve pointant vers cet hôte ou passant par Cloudflare. Vérifiez son DNS dans l'onglet Domaines, puis réessayez.",
   "Open the Domains tab": "Ouvrir l'onglet Domaines",
   "Opens ports 80 and 443 and gets a certificate. Its domain must point at this host first.": "Ouvre les ports 80 et 443 et obtient un certificat. Son domaine doit d'abord pointer vers cet hôte.",
