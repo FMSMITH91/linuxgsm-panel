@@ -88,14 +88,29 @@ def allowed(url):
     return url
 
 
+def _request_headers(path, headers):
+    """Write `headers` for curl's --header @file, readable by this user alone."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("".join("%s: %s\n" % kv for kv in (headers or {}).items()))
+
+
+def _response_headers(path):
+    """{name: value} of the last response curl's --dump-header wrote to `path`."""
+    with open(path, encoding="latin-1") as fh:
+        lines = fh.read().splitlines()
+    starts = [i for i, ln in enumerate(lines) if ln.startswith("HTTP/")] or [0]
+    pairs = (ln.partition(":") for ln in lines[starts[-1] + 1:])
+    return {k.strip().lower(): v.strip() for k, sep, v in pairs if sep}
+
+
 def _curl(curl, url, limit, headers, method, tmp):
     """(status, {header: value}, body path) of one request, no redirect followed.
 
     The request headers go to curl in a file, never on its command line (the registry's token is one).
     """
     hin, hout, out = (os.path.join(tmp, n) for n in ("request-headers", "response-headers", "body"))
-    with open(os.open(hin, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as fh:
-        fh.write("".join("%s: %s\n" % kv for kv in (headers or {}).items()))
+    _request_headers(hin, headers)
     # A HEAD's Content-Length is the size of what a GET would send, so its size cap is the caller's own check.
     size = ["--head"] if method == "HEAD" else ["--max-filesize", str(max(limit, 1))]
     argv = [curl, "--silent", "--show-error", "--proto", "=https", "--max-redirs", "0", "--max-time", "300",
@@ -103,11 +118,7 @@ def _curl(curl, url, limit, headers, method, tmp):
     run = subprocess.run(argv, capture_output=True, text=True, timeout=330, check=False)  # nosec B603 - fixed argv, allowed() URL
     if run.returncode != 0 or not run.stdout.isdigit():
         raise Refused("%s: curl failed (%s)" % (url[:120], run.stderr.strip()[:200]))
-    with open(hout, encoding="latin-1") as fh:
-        lines = fh.read().splitlines()
-    starts = [i for i, ln in enumerate(lines) if ln.startswith("HTTP/")] or [0]
-    got = dict((k.strip().lower(), v.strip()) for k, _s, v in (ln.partition(":") for ln in lines[starts[-1] + 1:]) if _s)
-    return int(run.stdout), got, out
+    return int(run.stdout), _response_headers(hout), out
 
 
 def fetch(url, limit=META_MAX, headers=None, method="GET"):
@@ -400,15 +411,15 @@ def plan(doc, get):
 def pr_text(changes):
     """The pull request's text: each app's old and new version, its release notes and how it was checked."""
     names = dict([(app, name) for app, name, _f in FINDERS], wordpress="WordPress")
-    lines = ["New app releases for new website installs (sites.recipes in the add-on catalog), found and checked "
-             "by .github/scripts/site_app_versions.py:", ""]
-    lines += ["- **%s** %s -> %s: [release notes](%s). %s." % (names[app], old, new, note, HOW[app][:1].upper() + HOW[app][1:])
-              for app, old, new, note in changes]
-    lines += ["", "An existing site is not changed: a new install uses these releases once panels have the next "
-              "signed catalog. GitHub holds the checks of a pull request a workflow's own token opened until "
-              "someone with write access approves them: press Approve workflows to run in the merge box to run "
-              "the required checks (the add-on image scan and the unit suite's catalog checks) before merging."]
-    return "\n".join(lines) + "\n"
+    head = ("New app releases for new website installs (sites.recipes in the add-on catalog), found and checked "
+            "by .github/scripts/site_app_versions.py:")
+    tail = ("An existing site is not changed: a new install uses these releases once panels have the next "
+            "signed catalog. GitHub holds the checks of a pull request a workflow's own token opened until "
+            "someone with write access approves them: press Approve workflows to run in the merge box to run "
+            "the required checks (the add-on image scan and the unit suite's catalog checks) before merging.")
+    items = ["- **%s** %s -> %s: [release notes](%s). %s." % (names[app], old, new, note, HOW[app][:1].upper() + HOW[app][1:])
+             for app, old, new, note in changes]
+    return "\n".join([head, ""] + items + ["", tail]) + "\n"
 
 
 def main(argv, get=fetch, catalog=CATALOG):
@@ -423,20 +434,28 @@ def main(argv, get=fetch, catalog=CATALOG):
         sys.stderr.write("site_app_versions: the catalog is not in its written form (indent 2, sorted keys)\n")
         return 1
     changes, refused = plan(doc, get)
-    out = sys.stdout if argv[1] == "plan" else sys.stderr
+    _say(changes, refused, sys.stdout if argv[1] == "plan" else sys.stderr)
+    if argv[1] == "check":
+        _write(doc, changes, refused, catalog, argv[2])
+    return 0
+
+
+def _say(changes, refused, out):
+    """One line per changed or refused app, on `out`."""
     for app, old, new, note in changes:
         out.write("%s: %s -> %s (%s)\n" % (app, old, new, note))
     for app, why in refused:
         out.write("%s: refused: %s\n" % (app, why))
-    if argv[1] == "check" and changes:
+
+
+def _write(doc, changes, refused, catalog, body_path):
+    """`check`'s writes: the catalog and the pull request's text when something changed, and the step's outputs."""
+    if changes:
         with open(catalog, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(doc, indent=2, sort_keys=True) + "\n")
-        with open(argv[2], "w", encoding="utf-8") as fh:
+        with open(body_path, "w", encoding="utf-8") as fh:
             fh.write(pr_text(changes))
-    if argv[1] == "check":
-        sys.stdout.write("changed=%s\nrefused=%s\n" % ("true" if changes else "false",
-                                                       ",".join(app for app, _w in refused)))
-    return 0
+    sys.stdout.write("changed=%s\nrefused=%s\n" % ("true" if changes else "false", ",".join(a for a, _w in refused)))
 
 
 if __name__ == "__main__":

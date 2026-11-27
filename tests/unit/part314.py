@@ -163,14 +163,19 @@ def _s314_renovate_pins():
        "wordpress:cli-<version>-php8.4, valkey:<major>-alpine, nginx-unprivileged:<x.y>-alpine-slim, cloudflared's "
        "release, debian:trixie-slim, caddy:<version> and its builder), and npm's exact version; no pin is left over",
        (sorted(got, key=repr), unknown, len(got)), (want, [], 17))
-    addon = [m for m in _RN314["customManagers"] if m not in _site_mgrs314()
-             and any("addon_images" in f for f in m.get("managerFilePatterns") or [])]
-    sites_digests = {v.split("@")[1] for _p, v in _walk314(_json314.loads(_TEXT314)["sites"]) if _PIN314.fullmatch(v)}
+
+
+def _s314_renovate_apart():
+    sites = _site_mgrs314()
+    addon = [m for m in _RN314["customManagers"] if m not in sites and "addon_images" in str(m.get("managerFilePatterns"))]
+    digests = {v.split("@")[1] for _p, v in _walk314(_json314.loads(_TEXT314)["sites"]) if _PIN314.fullmatch(v)}
     eq("renovate (websites): the add-ons' managers take no websites pin, and every websites manager reads the catalog "
        "alone",
-       ([d for d in _deps314(addon, _TEXT314) if d["currentDigest"] in sites_digests],
-        [m["managerFilePatterns"] for m in _site_mgrs314() if m["managerFilePatterns"] != ["/^panel/addon_images/catalog\\.json$/"]]),
-       ([], []))
+       ([d for d in _deps314(addon, _TEXT314) if d["currentDigest"] in digests], {str(m["managerFilePatterns"]) for m in sites}),
+       ([], {str(["/^panel/addon_images/catalog\\.json$/"])}))
+
+
+def _s314_renovate_controls():
     # Controls: a fourth PHP series is extracted with its own tag; without the PHP manager its pins are left over.
     doc = _json314.loads(_TEXT314)
     doc["sites"]["php"]["8.6"] = dict(doc["sites"]["php"]["8.5"], image="docker.io/library/php@sha256:" + "6" * 64)
@@ -250,34 +255,49 @@ def _s314_rules():
        "cloudflared's release tag moves (a new year included), npm stays on its major; (control) without the "
        "cloudflared rule its new release would not be raised",
        ([_rule_on314(rules, *c) for c in cases], _rule_on314(without, *cases[5])), (want, False))
-    daily = [r for r in rules if r.get("schedule") == ["* 0-5 * * *"] and r.get("description", "").startswith("Websites:")]
+
+
+def _s314_daily():
+    sites = [r for r in _RN314["packageRules"] if r.get("description", "").startswith("Websites:")]
+    daily = [r for r in sites if r.get("schedule") == ["* 0-5 * * *"]]
     deps = sorted({d["depName"] for d in _deps314(_site_mgrs314(), _TEXT314)})
     eq("renovate (websites): every websites dependency is checked daily, like the add-ons' pins",
        [sorted(r.get("matchDepNames") or []) for r in daily], [deps])
 
 
 # ── 2. the catalog's recipes and images are whole ───────────────────────────────────────────────
+def _wordpress_bad314(name, r, sites):
+    """The WordPress recipe's problems: its code is its image's, so it carries that image's version and no download."""
+    if r.get("version") != sites["wordpress"]["version"] or "url" in r or "sha256" in r:
+        return ["%s: WordPress's code is its image's: the recipe's version is sites.wordpress's" % name]
+    return []
+
+
+def _download_bad314(name, r):
+    """A download recipe's version, https url on an allowed host that names it, and sha256."""
+    url, version = str(r.get("url") or ""), str(r.get("version"))
+    host = url[len("https://"):].split("/")[0] if url.startswith("https://") else ""
+    named = version in url.replace(version.replace(".", ""), version)
+    bad = []
+    if not any(s.get("type") == "download-verify-unpack" for s in r.get("steps", [])):
+        bad.append("%s: a download step and a version" % name)
+    elif host not in _wc314.ALLOWED_HOSTS or not named:
+        bad.append("%s: an https url on an allowed host that names its version" % name)
+    if not _re314.fullmatch(r"[0-9a-f]{64}", str(r.get("sha256"))):
+        bad.append("%s: a 64-hex sha256" % name)
+    return bad
+
+
 def _shape_bad314(sites):
     """What a catalog's sites section lacks for a new install to use its newest releases and images."""
     bad = []
     for name, r in sorted(sites["recipes"].items()):
-        downloads = any(s.get("type") == "download-verify-unpack" for s in r.get("steps", []))
-        if r.get("kind") == "wordpress":
-            if r.get("version") != sites["wordpress"]["version"] or "url" in r or "sha256" in r:
-                bad.append("%s: WordPress's code is its image's: the recipe's version is sites.wordpress's" % name)
-            continue
-        url = r.get("url") if isinstance(r.get("url"), str) else ""
-        host = url[len("https://"):].split("/")[0] if url.startswith("https://") else ""
-        if not downloads or not _re314.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", str(r.get("version"))):
-            bad.append("%s: a download step and a version" % name)
-        elif host not in _wc314.ALLOWED_HOSTS or r["version"] not in url.replace(r["version"].replace(".", ""),
-                                                                                  r["version"]):
-            bad.append("%s: an https url on an allowed host that names its version" % name)
-        if not _re314.fullmatch(r"[0-9a-f]{64}", str(r.get("sha256"))):
-            bad.append("%s: a 64-hex sha256" % name)
-    for path, value in _walk314({k: v for k, v in sites.items() if k not in ("recipes", "origin_pull", "presets")}):
-        if path[-1] in ("image", "base", "builder", "certs") and not _PIN314.fullmatch(value):
-            bad.append("%s: not pinned by digest" % ".".join(map(str, path)))
+        good_version = _re314.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", str(r.get("version"))) is not None
+        bad += ([] if good_version else ["%s: a download step and a version" % name]) + (
+            _wordpress_bad314(name, r, sites) if r.get("kind") == "wordpress" else _download_bad314(name, r))
+    images = {k: v for k, v in sites.items() if k not in ("recipes", "origin_pull", "presets")}
+    bad += ["%s: not pinned by digest" % ".".join(map(str, path)) for path, value in _walk314(images)
+            if path[-1] in ("image", "base", "builder", "certs") and not _PIN314.fullmatch(value)]
     return bad
 
 
@@ -428,17 +448,22 @@ def _s314_script_writes():
              ("mybb", "1.8.42", "https://github.com/mybb/mybb/releases/download/mybb_1842/mybb_1842.zip"),
              ("phpbb", "3.3.20", "https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip"),
              ("smf", "2.1.9", "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.9.tar.gz")], True))
+
+
+def _s314_script_text():
     up = _upstream314()
+    _rc, _out, after, body = _run314(["check", "BODY"], up)
+    r = _json314.loads(after)["sites"]["recipes"]
     eq("site app versions: the sha256 written is the archive's own, and the pull request names each old and new "
        "version with its release notes and how it was checked",
        ([r["phpbb"]["sha256"] == _sha314(up["https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip"]),
          r["drupal"]["steps"][1]["strip"], r["smf"]["steps"][1]["strip"]],
         [ln[:ln.index(":")] for ln in (body or "").splitlines() if ln.startswith("- ")],
         "https://www.drupal.org/project/drupal/releases/11.4.15" in (body or ""),
-        "An existing site is not changed" in (body or "") and "Approve workflows to run" in (body or "")),
+        ["An existing site is not changed" in (body or ""), "Approve workflows to run" in (body or "")]),
        ([True, "drupal-11.4.15", "SMF-2.1.9"],
         ["- **Drupal** 11.4.14 -> 11.4.15", "- **MyBB** 1.8.41 -> 1.8.42", "- **phpBB** 3.3.19 -> 3.3.20",
-         "- **SMF** 2.1.8 -> 2.1.9", "- **WordPress** 7.1.5 -> 7.1.6"], True, True))
+         "- **SMF** 2.1.8 -> 2.1.9", "- **WordPress** 7.1.5 -> 7.1.6"], True, [True, True]))
 
 
 def _s314_script_refuses():
@@ -566,31 +591,43 @@ def _s314_fetch():
 def _s314_workflow():
     text = _wf29("site-app-versions.yml")
     code, job = _code29(text), _job29(text, "versions")
-    steps = _steps29(job)
+    steps = _steps29(job) + ["", ""]
     mode, hosts = _egress223(job)
     on = code[code.find("\non:"):code.find("\nconcurrency:")]
-    check_step = [s for s in steps if _name29(s) == "Find, download and check the newest releases"]
-    pr_step = [s for s in steps if _name29(s) == "Open a pull request with the new releases"]
-    fail_step = [s for s in steps if _name29(s) == "Fail when a release source or archive was refused"]
     eq("site app versions (workflow): daily and on demand only, no top-level grant, the job token may write contents "
        "and pull requests and nothing else, Harden-Runner first in block mode with exactly the script's hosts, a "
        "checkout that keeps no credentials, and no secret but the job token",
        (_re314.findall(r"^  ([a-z_]+):", on, _re314.M), "permissions: {}" in code,
-        _re314.findall(r"^      ([a-z-]+): write", job, _re314.M), _name29(steps[0]) if steps else None, mode,
-        sorted(hosts), "persist-credentials: false" in steps[1] if len(steps) > 1 else False,
+        _re314.findall(r"^      ([a-z-]+): write", job, _re314.M), _name29(steps[0]), mode,
+        sorted(hosts), "persist-credentials: false" in steps[1],
         sorted(set(_re314.findall(r"secrets\.[A-Za-z0-9_]+", code)))),
        (["schedule", "workflow_dispatch"], True, ["contents", "pull-requests"], "Harden Runner", "block",
         sorted(h + ":443" for h in _SAV314.HOSTS), True, []))
+
+
+def _step_has314(steps, name, *needles):
+    """Whether exactly one step is named `name` and its text holds every needle."""
+    found = [s for s in steps if _name29(s) == name]
+    return len(found) == 1 and all(n in found[0] for n in needles)
+
+
+def _s314_workflow_steps():
+    steps = _steps29(_job29(_wf29("site-app-versions.yml"), "versions"))
+    pr = [s for s in steps if _name29(s) == "Open a pull request with the new releases"] + [""]
     eq("site app versions (workflow): the check step runs the script isolated into the step's outputs, a pull request "
        "is opened only when the catalog changed and no other from this workflow is open, with the script's text, and "
        "a refused release fails the run",
-       (len(check_step) == 1 and 'python3 -I .github/scripts/site_app_versions.py check "${RUNNER_TEMP}/site-app-versions.md"'
-        ' >> "$GITHUB_OUTPUT"' in check_step[0],
-        len(pr_step) == 1 and "if: steps.check.outputs.changed == 'true'" in pr_step[0]
-        and 'startswith("site-app-versions/")' in pr_step[0] and '--body-file "${RUNNER_TEMP}/site-app-versions.md"' in pr_step[0]
-        and pr_step[0].count("exit 0") == 1,
-        len(fail_step) == 1 and "if: steps.check.outputs.refused != ''" in fail_step[0] and "exit 1" in fail_step[0]),
-       (True, True, True))
+       (_step_has314(steps, "Find, download and check the newest releases",
+                     'python3 -I .github/scripts/site_app_versions.py check "${RUNNER_TEMP}/site-app-versions.md" >> "$GITHUB_OUTPUT"'),
+        _step_has314(steps, "Open a pull request with the new releases", "if: steps.check.outputs.changed == 'true'",
+                     'startswith("site-app-versions/")', '--body-file "${RUNNER_TEMP}/site-app-versions.md"'),
+        pr[0].count("exit 0"),
+        _step_has314(steps, "Fail when a release source or archive was refused", "if: steps.check.outputs.refused != ''",
+                     "exit 1")),
+       (True, True, 1, True))
+
+
+def _s314_gate():
     scan = _code29(_wf29("addon-images.yml"))
     with open(os.path.join(_root, ".github", "required-checks.txt"), encoding="utf-8") as fh:
         required = fh.read()
@@ -605,7 +642,8 @@ def _s314_workflow():
        [True])
 
 
-for _step314 in (_s314_renovate_pins, _s314_renovate_updates, _s314_rules, _s314_shape, _s314_script_writes,
-                 _s314_script_refuses, _s314_script_skips, _s314_fetch, _s314_workflow):
+for _step314 in (_s314_renovate_pins, _s314_renovate_apart, _s314_renovate_controls, _s314_renovate_updates, _s314_rules,
+                 _s314_daily, _s314_shape, _s314_script_writes, _s314_script_text, _s314_script_refuses, _s314_script_skips,
+                 _s314_fetch, _s314_workflow, _s314_workflow_steps, _s314_gate):
     _step314()
 _sh314.rmtree(_TMP314, ignore_errors=True)
