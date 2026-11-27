@@ -24,6 +24,7 @@
   "No App tab: that one is for Node.js apps.": "Pas d'onglet App : il sert aux apps Node.js.",
   "No PHP tab: this app runs on Node.js.": "Pas d'onglet PHP : cette app tourne sous Node.js.",
   "Not saved: the web proxy refused the new settings, so it kept the running ones. {why}": "Non enregistré : le proxy web a refusé les nouveaux réglages et a gardé ceux en cours. {why}",
+  "Only a superadmin can change this.": "Seul un superadministrateur peut changer ceci.",
   "Only an administrator of this website can change the PHP version.": "Seul un administrateur de ce site peut changer la version de PHP.",
   "Only an administrator of this website can change the version, the port and the commands.": "Seul un administrateur de ce site peut changer la version, le port et les commandes.",
   "Only an administrator of this website can turn it on or off.": "Seul un administrateur de ce site peut l'activer ou la désactiver.",

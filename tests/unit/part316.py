@@ -554,6 +554,28 @@ def _s9_perf():
                 "ready": (False, False, "")})
 
 
+def _s9_egress():
+    from unit.part12 import P9_ADMIN
+    got = {}
+    for who, uid in (("admin", _CUST316), ("super", P9_ADMIN)):
+        page = _page301("website.html", uid, site=_NS316(id=7, name="shop", kind="php"), can_manage=True,
+                        can_files=False, site_admin=True)
+        got[who] = _node301(page, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  window.wsSettingsSave({preventDefault: function () {}});
+  for (let i = 0; i < 4; i++) await tick();
+  const sent = calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[2]; })[0] || {};
+  return {shown: !!$('wset-egress'), disabled: !!($('wset-egress') && $('wset-egress').disabled),
+          on: !!($('wset-egress') && $('wset-egress').checked), sends: 'full_egress' in sent};
+""", routes={"/api/websites/7": {"success": True, "site": {"id": 7, "name": "shop", "kind": "php", "state": "running",
+                                                        "full_egress": True, "limits": {}}, "domains": []},
+             "/websites/7/settings": {"success": True}})
+    eq("Settings (an administrator below superadmin): the site's full internet access is shown with its state, "
+       "read-only, never hidden, and a save does not send it; a superadmin's switch is live (control)",
+       got, {"admin": {"shown": True, "disabled": True, "on": True, "sends": False},
+             "super": {"shown": True, "disabled": False, "on": True, "sends": True}})
+
+
 def _s9_perf_server(st):
     site = _site316(st, "p316-perf")
     su = _Client316(st.su.id)
@@ -700,7 +722,7 @@ with _p9.app_context():
         for _sec316 in (_s1_gate, _s2_logs, _s3_tunnel, _s4_options, _s5_route, _s6_overview, _s8_settings,
                         _s9_perf_server, _s10_rest):
             check("part316: %s ran to the end" % _sec316.__name__, _ran316(_sec316, _st316), _ran316.last)
-        for _sec316 in (_s3_page, _s5_render, _s5_helper, _s8_bounds, _s7_upload, _s9_perf, _s9_proxy_card):
+        for _sec316 in (_s3_page, _s5_render, _s5_helper, _s8_bounds, _s7_upload, _s9_perf, _s9_egress, _s9_proxy_card):
             check("part316: %s ran to the end" % _sec316.__name__, _ran316(_sec316), _ran316.last)
         eq("part316: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips316:], [])
     finally:

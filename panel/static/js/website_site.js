@@ -386,8 +386,8 @@
       if (v != null) inp.value = String(v);
     });
     WS.el('wset-log').checked = !!s.access_log;
-    var eg = WS.el('wset-egress');      // a superadmin's page only
-    if (eg) eg.checked = !!s.full_egress;
+    var eg = WS.el('wset-egress');      // read-only below a superadmin
+    if (eg) { eg.checked = !!s.full_egress; eg.disabled = !WS.can.sup; }
     WS.el('wset-note').value = s.customer_note || '';
     window.wsEgressCheck();
   }
@@ -404,7 +404,7 @@
     });
     var body = {limits: limits, access_log: WS.el('wset-log').checked, customer_note: WS.el('wset-note').value};
     var eg = WS.el('wset-egress');
-    if (eg) body.full_egress = eg.checked;
+    if (eg && !eg.disabled) body.full_egress = eg.checked;
     WS.stepUp(function () { WS.say('wset-msg', WS.T('Saving…')); WS.siteAct('settings', body, 'wset-msg'); });
   };
   window.wsDelete = function () {
