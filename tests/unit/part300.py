@@ -325,6 +325,58 @@ def _refused300(fh, room=10 ** 9):
     return None
 
 
+def _read300(path):
+    """The bytes at `path`, or None when there is no such file (the check then says what it got)."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+class _Spooled310:
+    """Werkzeug's upload stream as Python 3.10 makes it: a SpooledTemporaryFile had seek and tell, no seekable()."""
+
+    def __init__(self):
+        self._buf = _io300.BytesIO()
+
+    def write(self, b):
+        return self._buf.write(b)
+
+    def read(self, n=-1):
+        return self._buf.read(n)
+
+    def seek(self, pos, whence=0):
+        return self._buf.seek(pos, whence)
+
+    def tell(self):
+        return self._buf.tell()
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self._buf.close()
+
+
+def _s3_py310_stream(st, c):
+    cls = _p9.request_class
+    saved = cls.__dict__.get("_get_file_stream")
+    cls._get_file_stream = lambda self, *a, **k: _Spooled310()
+    try:
+        ok = _zip300([("py310/", b"", 0o40755), ("py310/x/y.txt", b"three-ten", 0o100644)])
+        r = c.post("/websites/%d/files/extract" % st.a.id, data={"path": "", "file": (ok, "site.zip")},
+                   content_type="multipart/form-data")
+    finally:
+        if saved is None:
+            del cls._get_file_stream
+        else:
+            cls._get_file_stream = saved
+    eq("archives (POST /websites/<id>/files/extract): a zip held in Python 3.10's upload stream (no seekable()) "
+       "unpacks too (zipfile raised AttributeError opening its first entry: a 500 on Ubuntu 22.04)",
+       (r.status_code, _read300(_docroot300(st.a) + "/py310/x/y.txt")), (200, b"three-ten"))
+
+
 def _s3_archives(st):
     reg, sym = 0o100644, 0o120777
     cases = {
@@ -356,7 +408,8 @@ def _s3_archives(st):
     r = c.post("/websites/%d/files/extract" % st.a.id, data={"path": "", "file": (ok, "site.zip")},
                content_type="multipart/form-data")
     eq("archives (real bash): a plain zip unpacks into the document root with its folders (control)",
-       (r.status_code, open(_docroot300(st.a) + "/wp/a/b/c.txt", "rb").read()), (200, b"deep"))
+       (r.status_code, _read300(_docroot300(st.a) + "/wp/a/b/c.txt")), (200, b"deep"))
+    _s3_py310_stream(st, c)
     bad = c.post("/websites/%d/files/extract" % st.a.id, data={"path": "", "file": (_zip300([("../evil.php", b"x", reg)]),
                                                                                    "evil.zip")},
                  content_type="multipart/form-data")
