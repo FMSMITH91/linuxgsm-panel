@@ -3533,7 +3533,7 @@ def _web_unlink(path):
     try:
         os.unlink(path)
     except FileNotFoundError:
-        pass
+        pass    # already gone: there is nothing to remove
 
 
 def do_website_cpu_limit(args, content):
