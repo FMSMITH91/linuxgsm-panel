@@ -14,6 +14,10 @@ C9  Delete is refused while the site's install (a plain install's thread, or an 
 P8  The delete confirmation says the site's databases are dropped too, and that a copy of each is kept on the host
     for 30 days (the database archive's retention).
 
+B5  The first database made on a site's Database tab is reachable at once: the site is installed again with the
+    database server's port forwarded (a running site restarted, a stopped one from its next start); a later
+    database is on the same server, so nothing is reinstalled.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -79,8 +83,8 @@ def _rows315():
 
 def _site315(st, name, kind="php", **kw):
     extra = {"php_version": "8.4"} if kind in ("php", "wordpress", "phpbb") else {}
-    s = _Site315(remote_id=st.host.id, name=name, kind=kind, state="running",
-                 proxy_secret=_cfg315.encrypt_secret(_TOKEN315), **dict(extra, **kw))
+    s = _Site315(remote_id=st.host.id, name=name, kind=kind, proxy_secret=_cfg315.encrypt_secret(_TOKEN315),
+                 **dict(dict(extra, state="running"), **kw))
     _db315.session.add(s)
     _db315.session.flush()
     s.account, s.port = "ws%d" % s.id, 20000 + s.id % 900
@@ -285,6 +289,46 @@ def _p8_delete_text(st):
        ("databases" in body, "kept on the host for 30 days" in body, got.get("need")), (True, True, "shop"))
 
 
+# ── B5. A database made on the Database tab ───────────────────────────────────────────────────────
+def _b5_create_for(site, slug):
+    from panel.db.models import GameDatabase
+    row = GameDatabase(remote_id=site.remote_id, website_id=site.id, name="ws%d_%s" % (site.id, slug), secret="")
+    _db315.session.add(row)
+    _db315.session.commit()
+    return True, "", row, "Db-" + "y" * 30
+
+
+def _b5_database(st):
+    from panel.routes import databases_sites as _ds315
+    calls = []
+    _p9_patch(_ds315, "create_for", _b5_create_for)
+    _p9_patch(_sw315, "install", lambda remote, site, db=None, start_it=True, restart=True: calls.append(
+        (site.name, db, start_it)) or (True, _sw315.OK_STARTED))
+    su = _Client315(st.su.id)
+    run = _site315(st, "p315-db", kind="php")
+    r1 = su.post("/websites/%d/databases/add" % run.id, json={"name": "shop"})
+    r2 = su.post("/websites/%d/databases/add" % run.id, json={"name": "logs"})
+    eq("B5 (POST /websites/<id>/databases/add, a running site's first database): the site is installed again with "
+       "the database server's port forwarded and restarted, and the answer says so (its code reached nothing until "
+       "a reinstall)", (r1.status_code, _p9_json(r1).get("message"), calls[:1]),
+       (200, "Database added. The website was restarted so it can reach it.", [("p315-db", ("127.0.0.1", 3306), True)]))
+    eq("B5 control (its second database: the same server, already forwarded): nothing reinstalled",
+       (r2.status_code, _p9_json(r2).get("message"), len(calls)), (200, "Database added.", 1))
+    stopped = _site315(st, "p315-dbstop", kind="php", state="stopped")
+    r3 = su.post("/websites/%d/databases/add" % stopped.id, json={"name": "shop"})
+    eq("B5 (a stopped site's first database): its units are written with the forward and nothing is started",
+       (r3.status_code, _p9_json(r3).get("message"), calls[1:]),
+       (200, "Database added. The website reaches it from its next start.", [("p315-dbstop", ("127.0.0.1", 3306), False)]))
+    _b5_cleanup([run.id, stopped.id])
+
+
+def _b5_cleanup(site_ids):
+    from panel.db.models import GameDatabase
+    for row in GameDatabase.query.filter(GameDatabase.website_id.in_(site_ids)).all():
+        _db315.session.delete(row)
+    _db315.session.commit()
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -292,6 +336,7 @@ def _cleanup315():
         _Site315.remote_id.in_(_ROWS315["remotes"] or [0])).all()}
     for d in _Dom315.query.filter(_Dom315.website_id.in_(sorted(sites) or [0])).all():
         _db315.session.delete(d)
+    _b5_cleanup(sorted(sites) or [0])
     for p in _Proxy315.query.filter(_Proxy315.remote_id.in_(_ROWS315["remotes"] or [0])).all():
         _db315.session.delete(p)
     for model, ids in ((_Site315, sorted(sites)), (_User315, _ROWS315["users"]), (_Remote315, _ROWS315["remotes"])):
@@ -321,7 +366,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

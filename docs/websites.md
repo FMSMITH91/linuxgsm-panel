@@ -224,7 +224,8 @@ never reaches the host's other services. Plugins and themes for other apps are u
 **Backups** holds the site's files and its databases, kept on the host as the site's own account (the
 newest 7 by default). Restoring stops the site, takes a safety backup first, then puts the files and
 databases back. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
-their connection settings on request, which is written to the audit log. Deleting a site (on its Settings
+their connection settings on request, which is written to the audit log. The site's first database restarts a
+running site (a stopped one from its next start), so its code reaches the database server at once. Deleting a site (on its Settings
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
 site stays offline for another try. A site still being set up cannot be deleted until that finishes or fails.
 

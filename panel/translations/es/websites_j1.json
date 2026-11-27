@@ -1,5 +1,8 @@
 {
   "Ask an administrator to delete it": "Pide a un administrador que lo elimine",
+  "Database added, but the website could not be set up to reach it ({why}). Retry from its page.": "Base de datos añadida, pero el sitio web no se pudo configurar para acceder a ella ({why}). Vuelve a intentarlo desde su página.",
+  "Database added. The website reaches it from its next start.": "Base de datos añadida. El sitio web accederá a ella a partir de su próximo arranque.",
+  "Database added. The website was restarted so it can reach it.": "Base de datos añadida. El sitio web se reinició para que pueda acceder a ella.",
   "Delete and add again": "Eliminar y volver a añadir",
   "Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.": "Sus archivos, bases de datos, copias de seguridad y cuenta se eliminan para siempre. Se guarda una copia de cada base de datos en el servidor durante 30 días. Escribe el nombre del sitio web para confirmar.",
   "The install failed, and nothing of it was left on the host.": "La instalación falló y no quedó nada de ella en el servidor.",
