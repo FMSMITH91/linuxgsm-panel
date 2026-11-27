@@ -63,9 +63,12 @@ def _site_of(remote, host):
 def _event_detail(kind, ip, jail, host, at):
     label = _wg.JAIL_LABELS.get(jail, jail)
     if kind == "ban":
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
         return "%s blocked: %s, on %s, at %s" % (ip, label, host, _when(at))
     if kind == "flush":
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
         return "every address the %s jail held was unblocked (the jail stopped), at %s" % (jail, _when(at))
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
     return "%s unblocked: its ban ended, at %s" % (ip, _when(at))
 
 

@@ -40,7 +40,7 @@ SITE_STATES = ("running", "stopped", "failed")
 
 
 def loop(app):
-    """The supervised loop ("auto-updates"): a tick every TICK seconds. Never raises."""
+    """Run the supervised "auto-updates" loop: a tick every TICK seconds. Never raises."""
     runtime_stats.loop_started("auto-updates", FIRST_DELAY)
     time.sleep(FIRST_DELAY)
     while True:

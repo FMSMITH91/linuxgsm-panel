@@ -464,6 +464,7 @@ def _site_detail(got):
         return "site certificate: automatic for every domain"
     covered, uncovered, first = got
     s = tls_own.summary(first.chain)
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string -- audit-log text for a helper, not a view
     return "site certificate for %s, issuer %s, expires %s, sha256 %s%s" % (
         ", ".join(d.domain for d, _c in covered), s["issuer"], s["not_after"], s["fingerprint"],
         "; automatic: %s" % ", ".join(d.domain for d, _w in uncovered) if uncovered else "")
