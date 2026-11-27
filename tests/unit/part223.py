@@ -80,15 +80,16 @@ check("CI secrets: no workflow runs on pull_request_target, and none a pull requ
 # Read from each job's own Harden-Runner log over four or more runs of every event it runs on: the
 # hosts it called beyond the GitHub Actions service names the agent allows by itself.
 # The unit suites' legs add apt's: the cloud region's plain-http mirror (a wildcard: Azure's or AWS's),
-# the https archive and security mirrors the runner image lists after it, Microsoft's package
-# repository and Ubuntu Pro's; Lighthouse adds the two hosts its throwaway panel fetches pages' data from;
+# the https archive and security mirrors the runner image lists after it, and Ubuntu Pro's (not Microsoft's
+# package repository: the install step takes that source out of apt's list first); Lighthouse adds the two
+# hosts its throwaway panel fetches pages' data from;
 # Codacy's gates add its two API hosts (app.codacy.com for the issues, api.codacy.com for the coverage reporter).
 # The main-only jobs that block are tried by a manual run on the branch that changes them (part297 says how).
 _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "objects.githubusercontent.com:443",
              "release-assets.githubusercontent.com:443", "pypi.org:443", "files.pythonhosted.org:443",
              "registry.npmjs.org:443", "api.osv.dev:443", "semgrep.dev:443", "sonarcloud.io:443",
              "*.archive.ubuntu.com:80", "archive.ubuntu.com:443", "security.ubuntu.com:443",
-             "packages.microsoft.com:443", "esm.ubuntu.com:443",
+             "esm.ubuntu.com:443",
              "raw.githubusercontent.com:443", "linuxgsm.com:443", "app.codacy.com:443", "api.codacy.com:443",
              # The CDN ranges job's non-GitHub hosts: the published lists it checks.
              "www.cloudflare.com:443", "api.fastly.com:443",

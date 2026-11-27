@@ -406,7 +406,7 @@ check("harden-runner: the unit suites' checks matrix blocks all but GitHub, PyPI
       "the two hosts its panel fetches from",
       _hr242 == {"checks": ("block", ["*.archive.ubuntu.com:80", "api.github.com:443", "archive.ubuntu.com:443",
                                       "esm.ubuntu.com:443", "files.pythonhosted.org:443", "github.com:443",
-                                      "objects.githubusercontent.com:443", "packages.microsoft.com:443",
+                                      "objects.githubusercontent.com:443",
                                       "pypi.org:443", "release-assets.githubusercontent.com:443",
                                       "security.ubuntu.com:443"]),
                  "lighthouse": ("block", ["api.github.com:443", "files.pythonhosted.org:443", "github.com:443",

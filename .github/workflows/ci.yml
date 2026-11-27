@@ -98,7 +98,9 @@ jobs:
       # plain-http one, azure.archive.ubuntu.com or us-east-2.ec2.archive.ubuntu.com, so it is a
       # wildcard on port 80 (the agent matches `*.` as a suffix: docs.stepsecurity.io, "Endpoint
       # match precedence"), then the https archive and security mirrors the runner image lists after
-      # it (actions/runner-images configure-apt-sources.sh), packages.microsoft.com and esm.ubuntu.com.
+      # it (actions/runner-images configure-apt-sources.sh) and esm.ubuntu.com. Not
+      # packages.microsoft.com: the install step below takes the runner image's own Microsoft
+      # source out of apt's list first, so apt never asks it.
       # Everything else is refused with a REJECT (step-security/agent firewall.go), so a suite's
       # TEST-NET address gets "connection refused" at once, as tools/nosudo_runner.py refuses it
       # locally, and an unlisted name resolves to the agent's sinkhole address and is refused too.
@@ -114,7 +116,6 @@ jobs:
             files.pythonhosted.org:443
             github.com:443
             objects.githubusercontent.com:443
-            packages.microsoft.com:443
             pypi.org:443
             release-assets.githubusercontent.com:443
             security.ubuntu.com:443
@@ -204,9 +205,21 @@ jobs:
         # binary, not the service: the package's socket would listen on 19532, so its units are
         # masked before it is installed, and the step fails if anything listens there after. Not on
         # a documentation-only pull request: the two checks skip there, as they did everywhere.
+        #
+        # The runner image lists packages.microsoft.com among its apt sources, and that repository
+        # answered 403 twice on 2026-11-27, failing `apt-get update` and with it the whole leg,
+        # though nothing installed here comes from it. Each source file that names it is moved out
+        # of apt's list for this job only, so the update reads the Ubuntu archive alone: the same
+        # signed Release files, the same packages, one source fewer to go down.
         run: |
           sudo systemctl mask systemd-journal-remote.socket systemd-journal-remote.service \
             systemd-journal-upload.service
+          for src in /etc/apt/sources.list.d/*; do
+            if [ -f "$src" ] && grep -qs 'packages\.microsoft\.com' "$src"; then
+              sudo mv "$src" "$RUNNER_TEMP/"
+              echo "apt source taken out for this job: $src"
+            fi
+          done
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends zsh systemd-journal-remote
           test -x /usr/lib/systemd/systemd-journal-remote
