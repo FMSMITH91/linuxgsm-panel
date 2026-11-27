@@ -166,12 +166,16 @@ def _admin_host_ids():
 
 
 def _hosts():
-    if current_user.is_superadmin:
-        rows = RemoteServer.query.order_by(RemoteServer.id).all()
-    else:
-        rows = RemoteServer.query.filter(RemoteServer.id.in_(sorted(_admin_host_ids()) or [0])).all()
-        rows = [r for r in rows if not r.is_local and r.auth_method != "local"]
-    return [{"id": r.id, "name": r.name} for r in rows]
+    """The hosts the add dialog offers: those that run websites (the panel's own host, today) the viewer may add on.
+
+    A managed host would make the site and then fail it (ssh_manager.websites.ONLY_LOCAL), so none is listed: a
+    superadmin gets the panel's own host, and an administrator below one none (websites_access keeps the panel's
+    host out of their scope).
+    """
+    rows = RemoteServer.query.filter(db.or_(RemoteServer.is_local.is_(True), RemoteServer.auth_method == "local"))
+    if not current_user.is_superadmin:
+        rows = rows.filter(RemoteServer.id.in_(sorted(_admin_host_ids()) or [0]))
+    return [{"id": r.id, "name": r.name} for r in rows.order_by(RemoteServer.id).all()]
 
 
 def _quota():

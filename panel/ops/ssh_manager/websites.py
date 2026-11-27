@@ -127,6 +127,11 @@ def _as_site(remote, account, sh, timeout=120, stdin_text=None):
     return rc == 0, out or ""
 
 
+def runs_websites(remote):
+    """Whether `remote` can run websites: the panel's own host only, for now (ONLY_LOCAL for any other)."""
+    return _core.is_local_server(remote)
+
+
 def _secret(value):
     from panel.core.config import decrypt_secret
     return decrypt_secret(value or "") or ""

@@ -414,6 +414,8 @@ def add_refusal(remote, name, kind):
         return 400, problem
     if kind not in WEBSITE_KINDS:
         return 400, i18n.Sentence("Choose what kind of website it is.")
+    if not _sw.runs_websites(remote):
+        return 409, _sw.ONLY_LOCAL      # refused before the row is made: the install would fail it at once
     if Website.query.filter_by(remote_id=remote.id, name=name).first() is not None:
         return 409, S_NAME_TAKEN
     if _free_port(remote.id) is None:

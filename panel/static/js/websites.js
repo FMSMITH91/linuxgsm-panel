@@ -126,7 +126,7 @@
   // who to ask. An entry that blocks (any entry unless it says blocking: false) keeps Create on screen,
   // unavailable, with the reason beside it; one that does not is a note, and Create stays available, so
   // the line and the button never disagree. An entry with `kinds` concerns only those kinds of site.
-  var FIX = {proxy: {label: 'Install the web proxy', action: 'wsProxyInstall', icon: 'download'},
+  var FIX = {proxy: {label: 'Install the web proxy', action: 'wsProxyInstall', icon: 'download', args: ['add']},
     database: {label: 'Set up databases', action: 'wsDbSetup', icon: 'database-add', host: true}};
   function blocks(m) { return !!m && m.blocking !== false; }
   WS.renderMissing = function (missing) {
@@ -333,10 +333,12 @@
     WS.renderMissing(st.d ? st.d.missing : []);
   };
 
-  window.wsProxyInstall = function () {
+  // From the add dialog's note (`where` 'add'): the dialog's host; from the proxy card: the card's own host.
+  window.wsProxyInstall = function (where) {
+    var host = where === 'add' ? val('ws-add-host-id') : val('wp-host');
     WS.stepUp(function () {
       WS.say('ws-add-msg', WS.T('Installing the web proxy…'));
-      WS.post('/websites/proxy/install', {host_id: val('ws-add-host-id') || val('wp-host') || null}).then(function (d) {
+      WS.post('/websites/proxy/install', {host_id: host || val('ws-add-host-id') || null}).then(function (d) {
         WS.done(d);
         load();
       });

@@ -27,6 +27,10 @@ C4  A host with no database server: an app install is refused BEFORE anything is
     up (a superadmin); the list's missing entries carry it once known, for app installs only; the Database tab's
     refusal offers the same button.
 
+C5  The add dialog lists only the hosts that run websites (the panel's own host, today), and an add naming any
+    other host is refused before its row is made (it failed at once and led to the failed-site dead end). The
+    web proxy card's Install acts on the card's host, the dialog's note on the dialog's host.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -483,6 +487,36 @@ def _c4_dialog(st):
         "Databases are being set up. Create the app again in a few minutes."))
 
 
+# ── C5. Hosts that cannot run websites ────────────────────────────────────────────────────────────
+def _c5_hosts(st):
+    managed = _Remote315(name="p315-managed", host="198.51.100.89", port=22, username="u", auth_method="key",
+                         auth_credential="", is_local=False)
+    _db315.session.add(managed)
+    _db315.session.commit()
+    _ROWS315["remotes"].append(managed.id)
+    _p9_patch(_w315, "start_install", lambda site: None)
+    su = _Client315(st.su.id)
+    hosts = [h.get("id") for h in _p9_json(su.get("/api/websites")).get("hosts") or []]
+    eq("C5 (GET /api/websites, a superadmin with a managed host too): the add dialog lists only the hosts that run "
+       "websites, so the panel's own host, never the managed one", (st.host.id in hosts, managed.id in hosts),
+       (True, False))
+    r = su.post("/websites/add", json={"name": "p315-elsewhere", "kind": "static", "host_id": managed.id})
+    eq("C5 (POST /websites/add naming a managed host): refused with the reason before anything is made (it was made "
+       "and then failed at once)", (r.status_code, _p9_json(r).get("message"),
+                                    _Site315.query.filter_by(name="p315-elsewhere").count()),
+       (409, _sw315.ONLY_LOCAL, 0))
+    ok = su.post("/websites/add", json={"name": "p315-here", "kind": "static", "host_id": st.host.id})
+    eq("C5 control (the panel's own host): added", (ok.status_code, _p9_json(ok).get("success")), (200, True))
+    got = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      const o = document.createElement('option'); o.value = '9'; $('wp-host').appendChild(o);
+      window.wsProxyInstall(); for (let i = 0; i < 4; i++) await tick();
+      window.wsProxyInstall('add'); for (let i = 0; i < 4; i++) await tick();
+      return {sent: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[2].host_id; })};
+    """, {"/api/websites": dict(_LIST315, hosts=[{"id": 1, "name": "h"}]), "/websites/proxy/install": {"success": True}})
+    eq("C5 (js/websites.js): the proxy card's Install sends the card's host, the add dialog's note the dialog's host "
+       "(the card used the dialog's)", got.get("sent"), ["9", "1"])
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -520,7 +554,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:
