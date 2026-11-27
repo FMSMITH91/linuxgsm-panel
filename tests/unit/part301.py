@@ -526,10 +526,11 @@ _cust301 = _ran301("add a customer", _node301(_list_sa301, _COMMON301 + ["websit
   return {post: post, shown: $('wc-result').querySelectorAll('code').map(function (c) { return c.textContent; }),
           hidden: $('wc-result').hidden};
 """, routes={"/api/websites": _LIST301, "/websites/customers/add": {"success": True, "invite": "https://panel.test/i/T", "code": "C0DE"}}))
-eq("node: Add a customer posts the name, the ticked sites and the limit (after the password check), then shows the "
+eq("node: Add a customer posts the name and the ticked sites (no limit: they may not add their own), after the "
+   "password check, then shows the "
    "invite link and its code once, as text",
    (_cust301.get("post"), _cust301.get("shown"), _cust301.get("hidden")),
-   ([["POST", "/m/websites/customers/add", {"name": "acme", "sites": [3], "max_sites": 2}]], ["https://panel.test/i/T", "C0DE"], False))
+   ([["POST", "/m/websites/customers/add", {"name": "acme", "sites": [3]}]], ["https://panel.test/i/T", "C0DE"], False))
 eq("list: the Add a customer form is an administrator's only",
    ("id=\"wc-form\"" in _list_sa301, "id=\"wc-form\"" in _list_cq301), (True, False))
 _dbx301 = _ran301("database reset and delete", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""

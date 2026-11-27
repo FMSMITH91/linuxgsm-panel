@@ -291,6 +291,9 @@ def _s1_version_change(st, site):
 
 def _s1_apps(st):
     _p9_patch(_w305, "threading", _NS305(Thread=_Inline305))
+    # The app install asks the Databases code whether the host has a server (part315's C4); none known here.
+    _p9_patch(__import__("panel.routes.databases", fromlist=["x"]), "host_state",
+              lambda remote, may_probe=False: ("unknown", None, {}))
     _p9_patch(_wapps305, "_worker", lambda app, sid, uid, secrets: None)
     su = _Client305(st.su.id)
     form = {"app": "phpbb", "name": "p305-bb", "remote_id": st.host.id, "admin_user": "boardowner",
@@ -408,6 +411,9 @@ def _s6_phpbb(st):
     su = _Client305(st.su.id)
     _p9_patch(_wapps305, "_worker", lambda app, sid, uid, secrets: None)
     _p9_patch(_w305, "threading", _NS305(Thread=_Inline305))
+    # The app install asks the Databases code whether the host has a server (part315's C4); none known here.
+    _p9_patch(__import__("panel.routes.databases", fromlist=["x"]), "host_state",
+              lambda remote, may_probe=False: ("unknown", None, {}))
     form = {"app": "phpbb", "name": "p305-nodom", "remote_id": st.host.id, "admin_user": "boardowner",
             "admin_email": "owner@example.org"}
     r = su.post("/websites/install-app", json=form)
@@ -668,9 +674,11 @@ def _s3_wpcli(st):
        "`wp core install` always failed); the site-image step builds nothing (control)",
        ([ok for _t, ok, _s in steps], tools, "BASE_IMAGE=%s" % _wc305.pins("wpcli")["image"] in build,
         "site/image/wpcli.Containerfile" in build),
-       ([True, True], [(["run", "--rm"], False), (["image", "exists"], True), (["build", "-q"], True),
-                       (["rmi", "-i"], False), (["images", "--format"], False), (["image", "prune"], False),
-                       (["run", "--rm"], True)], True, True))
+       # Two wp-cli steps since part315's WP2 (wp core install, then the unused plugins and themes removed): each
+       # looks for the image and, missing in this stand-in, builds it.
+       ([True, True, True], [(["run", "--rm"], False)] + 2 * [
+           (["image", "exists"], True), (["build", "-q"], True), (["rmi", "-i"], False), (["images", "--format"], False),
+           (["image", "prune"], False), (["run", "--rm"], True)], True, True))
 
 
 def _s10_verify(st):
@@ -746,7 +754,7 @@ def _s11_wordpress(runs):
     check("secrets (catalog): a recipe step that asks its command for a prompt is refused (wp-cli echoes the answer)",
           any("prompt" in p for p in _wc305.recipe_problems("wordpress", prompt)), repr(_wc305.recipe_problems("wordpress", prompt)))
     wp = [c for c in runs if _ws305.wpcli_build()["tag"] in c["argv"]]
-    got = (wp[-1].get("values") or {}) if wp else {}
+    got = (wp[0].get("values") or {}) if wp else {}     # wp core install: the first of WordPress's wp-cli steps
     eq("secrets: WordPress's admin password reaches wp-cli as a 0600 file in a 0700 folder (and is set from it), "
        "not on its prompt (wp-cli echoed it into the journal)",
        (got.get("ADMIN_PASSWORD"), wp[-1].get("values_dir_mode") if wp else None),

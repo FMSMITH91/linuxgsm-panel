@@ -46,6 +46,7 @@ PURGE_EVERY = 60                  # seconds between two purges of one site's pag
 _PURGED = {}                      # site id -> monotonic time of its last purge
 S_CACHE_ON = "The object cache was turned on and started beside the website, which was not restarted."
 S_CACHE_OFF = "The object cache was turned off and removed; the website was not restarted."
+S_CACHE_NOT_ON = "This website's object cache is off."
 
 
 def _php_versions():
@@ -189,6 +190,25 @@ def _cache_install(site):
     return ok, (S_CACHE_ON if site.object_cache else S_CACHE_OFF) if ok else said
 
 
+def _cache_credentials(site):
+    """POST: the object cache's address and password, once, no-store, audited (as a database's connection settings).
+
+    For code other than WordPress's (which reads them itself, from the file the panel mounts): the password leaves
+    the panel only here, never in a list, a log or an audit row (OWASP Secrets Management Cheat Sheet, "8.3
+    Detection lifecycle"; Logging Cheat Sheet, "Data to exclude").
+    """
+    if not site.object_cache or not site.object_cache_secret:
+        return _w.say(409, S_CACHE_NOT_ON)
+    secret = decrypt_secret(site.object_cache_secret)
+    if not secret:
+        return _w.say(500, "The stored password can't be read on this panel.")
+    _w.audit(site, "website_cache_reveal", "revealed the object cache's password")
+    from panel.routes.websites_view import _svc_run_file
+    resp = jsonify({"success": True, "host": "127.0.0.1", "port": 6379, "password": secret, "file": _svc_run_file()})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 def _php_restart(site):
     """A PHP site's php.ini rewritten and the site restarted (nothing for another kind): (ok, sentence)."""
     return _w.host_call(_sw.php_apply, site.remote, site) if site.kind in PHP_KINDS else (True, "")
@@ -324,6 +344,15 @@ def _perf_routes(app):
     def website_rules(site_id):
         site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
         return _rules(site, _w.body())
+
+    @app.route("/websites/<int:site_id>/object-cache/credentials", methods=["POST"])
+    @login_required
+    def website_cache_credentials(site_id):
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
+        if site.kind not in PHP_KINDS:
+            return _w.say(409, S_NOT_PHP)
+        from panel.security.account_guard import step_up_needed, step_up_refusal
+        return step_up_refusal() if step_up_needed() else _cache_credentials(site)
 
 
 # ── runtime apps ────────────────────────────────────────────────────────────────────────────────

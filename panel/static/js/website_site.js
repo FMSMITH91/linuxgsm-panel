@@ -31,6 +31,11 @@
     failed: {label: 'Retry', icon: 'arrow-repeat', cls: 'btn-warning', verb: 'start'},
     creating: {label: 'Setting up…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''},
     removing: {label: 'Removing…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''}};
+  var UNFINISHED = {label: 'Delete and add again', icon: 'trash', cls: 'btn-outline-danger', verb: 'delete'};
+  // A new Node.js app waits for its files: Start could only fail; building installs its packages and starts it.
+  var WAITING = {label: 'Build and start', icon: 'hammer', cls: 'btn-success', verb: 'app/build'};
+  var UNFINISHED_ASK = {label: 'Ask an administrator to delete it', icon: 'info-circle', cls: 'btn-secondary', verb: ''};
+  function waiting(s) { return s.state === 'stopped' && s.kind === 'app' && !!s.state_reason; }
   function renderHead(s) {
     var dot = WS.el('ws-dot');
     if (dot) dot.className = WS.dot(s.state).className;
@@ -42,6 +47,9 @@
     var b = WS.el('ws-main');
     if (!b) return;
     var m = WS.pick(MAIN, s.state, MAIN.creating);
+    // An app whose install stopped part-way cannot be set up again: it is deleted and added again (administrators).
+    if (s.state === 'failed' && s.setup_unfinished) m = WS.can.admin ? UNFINISHED : UNFINISHED_ASK;
+    if (waiting(s)) m = WAITING;
     b.className = 'btn btn-sm ' + m.cls;
     b.disabled = !m.verb;
     b.dataset.verb = m.verb;
@@ -52,13 +60,14 @@
     var b = WS.el('ws-main');
     var verb = b ? b.dataset.verb : 'start';
     if (!verb) return;
+    if (verb === 'delete') { window.wsDelete(); return; }
     if (verb === 'stop') {
       window.confirmDialog({title: WS.T('Stop this website?'), icon: 'stop-circle', confirmClass: 'btn-danger',
         confirmLabel: WS.T('Stop'), bodyText: WS.T('Visitors see an error until it is started again.'),
         onConfirm: function () { WS.siteAct('stop', {}, 'ws-msg'); }});
       return;
     }
-    WS.say('ws-msg', WS.T('Starting…'));
+    WS.say('ws-msg', WS.T(verb === 'app/build' ? 'Building…' : 'Starting…'));
     WS.siteAct(verb, {}, 'ws-msg');
   };
   window.wsPutOnline = function () { WS.putOnline(ID, 'ws-offline-msg', function (ok) { if (ok) WS.reload(); }); };
@@ -73,7 +82,15 @@
     WS.show('ws-failed', failed);
     if (!failed) return;
     WS.el('ws-failed-reason').textContent = d.site.state_reason || WS.T('No reason was recorded.');
+    // Retry installs the site again; an app whose install stopped part-way is deleted instead (the main button).
+    WS.show('ws-failed-retry', !d.site.setup_unfinished);
     WS.el('ws-failed-log').textContent = (d.logs || []).slice(-20).join('\n') || WS.T('No log lines yet.');
+  }
+  // Why a stopped app is not running (it waits for its files): said under the header, with the way to them.
+  function renderWaiting(s) {
+    var on = waiting(s);
+    WS.show('ws-waiting', on);
+    if (on) WS.el('ws-waiting-reason').textContent = s.state_reason;
   }
   function renderInstall(d) {
     var inst = d.install || {};
@@ -151,6 +168,7 @@
     st.d = d;
     var s = d.site || {};
     renderHead(s);
+    renderWaiting(s);
     renderFailed(d);
     var installing = renderInstall(d);
     renderOverview(s);
@@ -357,7 +375,18 @@
     var inp = WS.el('wdb-name');
     WS.say('wdb-msg', WS.T('Creating…'));
     WS.post(WS.R.act(ID, 'databases/add'), {name: inp.value.trim()}).then(function (d) {
-      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); }
+      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); return; }
+      var need = d && d.missing && d.missing[0];
+      if (need && need.key === 'database' && WS.can.sup) {
+        WS.el('wdb-msg').appendChild(WS.button(WS.T('Set up databases'), 'database-add', 'wsDbSetupHost', [Number(need.host_id) || 0], 'btn-warning ms-2'));
+      }
+    });
+  };
+  // A host with no database server (a superadmin): MariaDB set up in the background by the Databases code.
+  window.wsDbSetupHost = function (hostId) {
+    WS.stepUp(function () {
+      WS.say('wdb-msg', WS.T('Setting up databases…'));
+      WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
     });
   };
   // A new password for the database's own user (the app's settings must then be given it).
@@ -493,7 +522,7 @@
   };
   window.wsDelete = function () {
     window.confirmDialog({title: WS.T('Delete this website?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete website'),
-      bodyText: WS.T('Its files, backups and account are removed for good. Type the website name to confirm.'),
+      bodyText: WS.T('Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.'),
       requireText: F.name, requireLabel: WS.T('Website name'), onConfirm: function () {
         WS.stepUp(function () {
           WS.post(WS.R.act(ID, 'delete'), {confirm: F.name}).then(function (d) {

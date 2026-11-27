@@ -26,7 +26,14 @@ processes, largest upload) takes the defaults from the web proxy card's Security
 
 If something the host needs is missing (for example the web proxy is not installed yet), the dialog
 says so on its first line, with one button that fixes it for a superadmin; anyone else is told to ask
-a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button. In a site's log
+a superadmin. Websites run on the panel's own host for now, so the dialog offers no other host, and an
+administrator below a superadmin (who never manages that host) gets no **Add a website** button: the list says
+why instead. A missing web
+proxy does not hold **Create** back: a site can be made first and put online once
+the proxy is installed. A site that fails to start shows why, its last log lines and a **Retry** button. Retry sets
+the site up again (its account, files, image and container) and starts it, so it also recovers a site whose
+first install failed. An app whose install stopped part-way cannot be set up again: an administrator
+gets **Delete and add again** instead, and anyone else is told to ask one. In a site's log
 lines, requests its server refused ("client denied", nearly always scanners trying private pages such as
 `/server-status`) are counted in one line instead of being listed.
 
@@ -51,17 +58,28 @@ password you type needs at least 15 characters). The panel then:
    container, before the site is public. SMF and MyBB have no command-line installer, so the panel walks
    their install pages over the site's own local address, then removes their `install` folder: a
    leftover installer would let anyone take the site over;
+   A fresh WordPress also has the bundled plugins (Akismet, Hello Dolly) and the default themes it does not use
+   removed, keeping its active theme and WordPress's default one as the fallback, so its Site Health has none
+   to recommend removing;
 4. checks what the installer left before calling it done: the app's settings file is there and not empty,
    its tables are in its database, and its first page answers. An installer that reports success after
    failing is undone like any other failed step;
 5. turns HTTPS on and shows **Open the site** and **Open the admin page** (the app's own admin address).
 
+Every app needs a database server on the host. When it has none, the dialog says so before anything is made,
+with **Set up databases** for a superadmin (MariaDB, reached from this machine only, the same setup as the
+Databases tab of a game server); create the app again once it is done. The site's Database tab offers the same
+button.
+
 The admin password and the database password never appear on a command line or in a log: each reaches the
 installer as a file that only the site's account can read, removed when the step ends, and the installers'
 output is never written to the system journal.
 
-The dialog shows each step as it runs. If one fails, every step done before it is undone: no half
-installed site, account, database or container is left behind. If a step cannot be undone (a database
+The dialog shows each step as it runs (a plain, PHP or Node.js site shows its own: the account, the image
+built or downloaded, which takes a few minutes for PHP on a small host, and the container). If one fails, every step done before it is undone: no half
+installed site, account, database or container is left behind. The dialog then says the install failed, why,
+and that nothing was left on the host, with **Try again**, which brings the form back as you filled it in
+(the password field empty). If a step cannot be undone (a database
 server that does not answer, say), the dialog marks that step **Not undone** and says what is left; the
 site stays in the list, and deleting it tries again. New app versions arrive through the
 signed catalog, like add-on updates: see [New app versions](#new-app-versions).
@@ -298,8 +316,12 @@ Saving restarts the site's PHP gracefully.
 
 - **OPcache** (PHP): keeps compiled PHP in memory. On by default.
 - **Object cache** (PHP): a private Redis-compatible store for this site only, with no copy on disk. Off
-  by default. The tab shows the address to enter in WordPress's object-cache plugin. Turning it on or off
-  starts or removes the cache beside the running site; the site itself is not restarted.
+  by default. Turning it on or off starts or removes the cache beside the running site; the site itself is
+  not restarted. Its password is kept in a file the site reads (`/run/panel/object-cache-password`, read-only),
+  there only while the cache is on. A WordPress site the panel installs has the address and password set in its
+  `wp-config.php` already: install the **Redis Object Cache** plugin in WordPress and press **Enable Object
+  Cache**. For other code, **Show connection settings** gives the address and password once, after the password
+  check, and is written to the audit log.
 - **Page cache**: the web proxy keeps whole pages for visitors who are not signed in, for the time you
   set. Sign-ins, form posts, any answer that sets a cookie, and admin pages (`/wp-admin`, `/adm`,
   `/admin`) always skip it. **Purge cache** empties this site's cached pages only, through the page cache's own
@@ -323,6 +345,9 @@ install and build command (`npm ci --omit=dev` by default), the start command (`
 app listens on, and environment variables. Variables are stored encrypted and never shown again; leave a
 saved one empty to keep it.
 
+A new app has no files yet, so it is not started: its page says it waits for its files, with **Upload its
+files** (the Files tab), and its main button is **Build and start**, which installs its packages and starts it.
+
 The app runs in its own container from an official Node.js image, not on the host's own Node.js (which
 the panel installs for its server queries): that copy is shared with the panel and every account, so an
 app there would escape its site's limits and network rules. The build step may reach the npm registry;
@@ -338,9 +363,19 @@ left as it was.
 
 A site's container reaches its own database and nothing else: it cannot call out to the internet or
 reach the host's other services. This keeps a compromised site from attacking anything else. WordPress
-is the one exception: it may reach WordPress's own update servers, so its security updates work. An
+is the one exception: it may reach WordPress's own update servers, so its security updates work. It goes
+through a small proxy that connects only to those servers on port 443, trying each of their checked addresses
+in turn; when it refuses or cannot connect, its journal (the site account's `lgsm-site-egress` unit) says
+which host and why, and nothing more. An
 administrator can give one site full internet access on its Settings tab, with a warning; even then it
 never reaches the host's other services. Plugins and themes for other apps are uploaded through Files.
+
+WordPress also calls its own address (Site Health's REST API and loopback tests, the editor's checks). Inside
+the container that address leads nowhere, so the panel writes a small must-use plugin,
+`wp-content/mu-plugins/lgsm-panel-loopback.php`, at every install of a WordPress site: it sends a request for
+the site's own name to the site's own server inside its container, with the web proxy's token read from a file
+only the site's account can read (never a command line or a log). The request never leaves the container, so no
+outbound access is added. The panel writes the file again at the next install if it is changed or removed.
 
 ## Backups and databases
 
@@ -348,9 +383,10 @@ never reaches the host's other services. Plugins and themes for other apps are u
 newest 7 by default). Restoring stops the site, takes a safety backup first, then puts the files and
 databases back, and starts the site again only if it was running. The Overview shows when the newest backup
 was taken. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
-their connection settings on request, which is written to the audit log. Deleting a site (on its Settings
+their connection settings on request, which is written to the audit log. The site's first database restarts a
+running site (a stopped one from its next start), so its code reaches the database server at once. Deleting a site (on its Settings
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
-site stays offline for another try.
+site stays offline for another try. A site still being set up cannot be deleted until that finishes or fails.
 
 ## Updates and settings
 
@@ -380,5 +416,7 @@ Controls a customer may see but not change (the PHP version, the object cache, a
 commands) are shown read-only with who can change them. The invite link uses the panel's site domain from
 Settings; without one it uses the address the administrator is on, and says so, since a customer must be able
 to reach it.
-A customer group can be allowed to add its own sites up to a limit (3 by default). Two-factor sign-in
+**Add a customer** gives them the sites you tick. Turn on **They may add their own websites** to let them add
+more, up to the number beside it (it starts at the **Sites per customer** setting on the Websites security
+settings); their list then says how many they have used. Without it they have only the sites given. Two-factor sign-in
 is required for customers by default. The permissions are in [permissions.md](permissions.md#permissions).

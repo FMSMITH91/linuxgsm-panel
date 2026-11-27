@@ -154,14 +154,43 @@ def _firewall(remotes):
     return "off" if "off" in states else "on" if states == {"on"} else "unknown"
 
 
+S_NO_DB = ("This host has no database server yet, and an app needs one. Set up databases first: MariaDB, reached "
+           "from this machine only.")
+S_DB_SETTING_UP = "Databases are being set up on this host. An app can be installed once that is done."
+S_DB_NOT_READY = ("This host's database server cannot be used by the panel yet, and an app needs one. See the "
+                  "Databases tab of a game server on this host.")
+
+
+def database_missing(remote, probe=False):
+    """The add dialog's entry for a host with no database server an app could use, or None.
+
+    Read from what the Databases code knows (its stored server, or its 10-minute probe); `probe` True asks the host
+    when nothing is known (the app install's own check, before anything is made). Nothing known and nothing asked,
+    or a host that did not answer, is no entry: the install's database step still refuses then.
+    """
+    from panel.routes import databases as _d
+    if remote is None:
+        return None
+    state = _d.host_state(remote, may_probe=probe)[0]
+    if state in ("ready", "unknown", "unreadable"):
+        return None
+    text = S_NO_DB if state == "none" else S_DB_SETTING_UP if state == "setting_up" else S_DB_NOT_READY
+    return {"key": "database" if state == "none" else "database-wait", "text": text, "kinds": ["install"],
+            "host_id": remote.id, "fix_url": ""}
+
+
 def _missing(admin):
     if not admin:
         return []
-    if WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").first() is not None:
-        return []
-    fix = "" if not current_user.is_superadmin else "/websites#proxy"
-    return [{"key": "proxy", "text": "The web proxy is not installed yet: sites can be made, but none can go online.",
-             "fix_url": fix}]
+    from panel.routes.websites import _local_host
+    out = []
+    if WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").first() is None:
+        fix = "" if not current_user.is_superadmin else "/websites#proxy"
+        # Not blocking: a site can be made without the proxy, so Create stays available beside the note.
+        out.append({"key": "proxy", "text": "The web proxy is not installed yet: sites can be made, but none can go "
+                    "online.", "fix_url": fix, "blocking": False})
+    db_entry = database_missing(_local_host())
+    return out + ([db_entry] if db_entry else [])
 
 
 def _admin_host_ids():
@@ -174,16 +203,23 @@ def _admin_host_ids():
 
 
 def _hosts():
-    if current_user.is_superadmin:
-        rows = RemoteServer.query.order_by(RemoteServer.id).all()
-    else:
-        rows = RemoteServer.query.filter(RemoteServer.id.in_(sorted(_admin_host_ids()) or [0])).all()
-        rows = [r for r in rows if not r.is_local and r.auth_method != "local"]
-    return [{"id": r.id, "name": r.name} for r in rows]
+    """The hosts the add dialog offers: those that run websites (the panel's own host, today) the viewer may add on.
+
+    A managed host would make the site and then fail it (ssh_manager.websites.ONLY_LOCAL), so none is listed: a
+    superadmin gets the panel's own host, and an administrator below one none (websites_access keeps the panel's
+    host out of their scope).
+    """
+    rows = RemoteServer.query.filter(db.or_(RemoteServer.is_local.is_(True), RemoteServer.auth_method == "local"))
+    if not current_user.is_superadmin:
+        rows = rows.filter(RemoteServer.id.in_(sorted(_admin_host_ids()) or [0]))
+    return [{"id": r.id, "name": r.name} for r in rows.order_by(RemoteServer.id).all()]
 
 
 def _quota():
-    group = next((g for g in current_user.groups if g.is_customer), None) if not current_user.is_superadmin else None
+    """A customer's "{used} of {max} websites used": only for a group that may add its own sites (CREATE_WEBSITES)."""
+    from panel.security.auth import CREATE_WEBSITES
+    group = next((g for g in current_user.groups if g.is_customer and CREATE_WEBSITES in g.get_permissions()),
+                 None) if not current_user.is_superadmin else None
     return {"used": len(group.websites or []), "max": int(group.max_sites or 0)} if group is not None else None
 
 
@@ -200,6 +236,7 @@ def _admin_parts(out, sites, admin):
     if creates_as_admin(current_user):
         out["hosts"] = _hosts()
         out["customers"] = [{"id": g.id, "name": g.name} for g in Group.query.filter_by(is_customer=True).order_by(Group.name)]
+        out["customer_max_sites"] = options()["max_sites"]      # the Add a customer card's default
     if current_user.is_superadmin:
         rows = {p.remote_id: p for p in WebsiteProxy.query.all()}
         out["proxies"] = [_proxy_json(r, rows.get(r.id)) for r in RemoteServer.query.order_by(RemoteServer.id)]
@@ -312,12 +349,18 @@ def _open_url(site):
     return "https://%s/" % dom.domain if dom and site.enabled else ""
 
 
+def _setup_unfinished(site):
+    """Whether `site` is an app whose install stopped part-way (it is deleted and added again, never retried)."""
+    return bool(site.app_recipe and site.install_step)
+
+
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
            "image": _image(site, probe),
            "app_version": site.app_version or "", "php_version": site.php_version or "",
-           "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe)}
+           "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe),
+           "setup_unfinished": _setup_unfinished(site)}
     if admin:
         out["limits"] = {k: getattr(site, k) for k in ("mem_mb", "cpu_milli", "pids", "disk_mb", "max_body_mb", "backup_keep")}
         out.update(access_log=bool(site.access_log), full_egress=bool(site.full_egress), customer_note=site.customer_note or "")
@@ -369,8 +412,15 @@ def _perf(site):
     return {"opcache": bool(site.opcache), "opcache_memory_mb": int(values["opcache.memory_consumption"]),
             "opcache_revalidate_s": int(values["opcache.revalidate_freq"]), "object_cache": bool(site.object_cache),
             "object_cache_host": "127.0.0.1" if site.object_cache else "", "object_cache_port": 6379 if site.object_cache else None,
+            "object_cache_file": _svc_run_file() if site.object_cache else "", "object_cache_wordpress": site.kind == "wordpress",
             "page_cache": bool(site.page_cache), "page_cache_ttl": site.page_cache_ttl, "static_cache": bool(site.static_cache),
             "page_cache_ready": ready, "page_cache_why": why}
+
+
+def _svc_run_file():
+    """Where a PHP site's code reads the object cache's password: a read-only file of the panel's (websites.RUN_IN)."""
+    from panel.services import websites as _svc
+    return _svc.RUN_IN + "/" + _svc.CACHE_PASSWORD_FILE.rsplit("/", 1)[1]
 
 
 def _app(site):

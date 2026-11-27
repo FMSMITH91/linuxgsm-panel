@@ -79,11 +79,23 @@ STOP_TIMEOUT = 20
 KINDS_PHP = ("php", "wordpress", "phpbb")
 # The revision of the files an install writes for a site (its server's config, its units). Raised when a change to
 # them must reach the sites already installed: a site installed with an older one is offered Update, which installs
-# it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN).
-SITE_FILES_REV = "files-2"
+# it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN). 3: the
+# folder of files the site's code reads (RUN_IN: WordPress's loopback token, the object cache's password), WordPress's
+# loopback plugin, and the egress proxy's unit (each checked address tried, its task limit).
+SITE_FILES_REV = "files-3"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
+# What a PHP site's own code reads from the panel: a 0700 folder of 0600 files in ~/site/conf, mounted read-only at
+# RUN_IN (always, so a file added or removed there reaches the running site with no restart). WordPress's proxy
+# token, for its requests to its own address (LOOPBACK_PLUGIN), and the object cache's password while the cache is
+# on (the recipe's wp-config reads it for the Redis Object Cache plugin). Written from stdin, never on a command line
+# or in an environment, never logged (OWASP Secrets Management Cheat Sheet, "5.1 Injection of Secrets (file,
+# in-memory)", "8.3 Detection lifecycle").
+RUN_DIR = "site/conf/panel"
+RUN_IN = "/run/panel"
+TOKEN_FILE = RUN_DIR + "/proxy-token"
+CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _ACCOUNT_RE = re.compile(r"ws[1-9][0-9]{0,8}\Z")
 
@@ -626,6 +638,7 @@ def quadlet(site, ids, net, image=None, cpu=True):
                   "Volume=%s/%s/apache.conf:/etc/apache2/sites-enabled/000-default.conf:ro" % (home, CONF),
                   "Volume=%s/%s/ports.conf:/etc/apache2/ports.conf:ro" % (home, CONF),
                   "Volume=%s/%s/php.ini:/usr/local/etc/php/conf.d/zz-panel.ini:ro" % (home, CONF),
+                  "Volume=%s/%s:%s:ro" % (home, RUN_DIR, RUN_IN),
                   "Tmpfs=/tmp:rw,mode=1777,size=256m", "Tmpfs=/run/apache2:rw,mode=1777,size=16m",
                   "Tmpfs=/run/lock/apache2:rw,mode=1777,size=4m"]
     lines += _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site, cpu))]
@@ -709,6 +722,11 @@ def tunnel_quadlet(proxy, ids, image=None):
     return "\n".join(lines + _tail())
 
 
+# Two threads per connection (one each way) at the proxy's connection cap (websites_egress.MAX_CONNECTIONS), its main
+# thread and a margin: the old 64 fell one short at the cap, and the proxy's accept loop then died for want of a thread.
+EGRESS_TASKS = 2 * 32 + 8
+
+
 def egress_unit(site, hosts):
     """The site's egress proxy user unit: CONNECT to `hosts` on 443 only, listening on 127.0.0.1."""
     from panel.services import websites_catalog as _wc
@@ -719,8 +737,8 @@ def egress_unit(site, hosts):
     return ("# Written by linuxgsm-panel: this website's only way out (CONNECT to the listed hosts on 443).\n"
             "[Unit]\nDescription=linuxgsm-panel website egress proxy\n\n[Service]\n"
             "ExecStart=/usr/bin/python3 -I %%h/%s/egress_proxy.py %d %s\nRestart=on-failure\nRestartSec=10\n"
-            "MemoryMax=64M\nTasksMax=64\n\n[Install]\nWantedBy=default.target\n"
-            % (HOME_DIR, port, " ".join(sorted(set(hosts)))))
+            "MemoryMax=64M\nTasksMax=%d\n\n[Install]\nWantedBy=default.target\n"
+            % (HOME_DIR, port, " ".join(sorted(set(hosts))), EGRESS_TASKS))
 
 
 # WordPress's scheduled tasks (wp-cron). Its recipe's wp-config sets DISABLE_WP_CRON, so no visitor's request
@@ -867,7 +885,8 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               "%s/%s.timer" % (USER_UNIT_DIR, CRON_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
-              CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
+              CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token",
+              TOKEN_FILE, CACHE_PASSWORD_FILE)
 
 
 def bundle(files):
@@ -900,6 +919,19 @@ def egress_proxy_source():
         return fh.read()
 
 
+def _cache_and_run_files(site, ids, token, cache_password):
+    """{path: text} of the object cache (its config, unit, and its password in RUN_DIR) and WordPress's TOKEN_FILE."""
+    files = {}
+    if site.object_cache and cache_password:
+        files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
+        files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
+        if site.kind in KINDS_PHP:
+            files[CACHE_PASSWORD_FILE] = cache_password
+    if site.kind == "wordpress":
+        files[TOKEN_FILE] = _token(token)
+    return files
+
+
 def site_files(site, ids, net, token, cache_password=None, image=None, egress_hosts=(), cpu=True):
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
     files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
@@ -926,9 +958,7 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
     b = site_build(site)
     if b:
         files[BUILD_FILE] = containerfile(b["folder"])
-    if site.object_cache and cache_password:
-        files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
-        files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
+    files.update(_cache_and_run_files(site, ids, token, cache_password))
     if egress_hosts:
         files[HOME_DIR + "/egress_proxy.py"] = egress_proxy_source()
         files["%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT)] = egress_unit(site, egress_hosts)
@@ -963,15 +993,131 @@ def install_sh(account, site, image=None):
             _wc.pins("object_cache")["image"])
     else:
         # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
-        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
-            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
+        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s %s; " % (
+            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"),
+            _q(CACHE_PASSWORD_FILE))
     if not b:
         pull += "rmdir %s 2>/dev/null; " % _q(BUILD_DIR)     # the empty folder an earlier install made
     if site.kind == "app":
         # An app with no files yet (a new site) is not started: its start command has nothing to run.
         pull += "[ -n \"$(ls -A %s 2>/dev/null)\" ] || echo %s; " % (_q(HTML), MARK_APP_EMPTY)
-    return (_ENV + write_files_sh(bool(b)) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
+    if site.kind == "wordpress":
+        pull += loopback_sh()
+    run_dir = "umask 077; mkdir -p %s || exit 1; " % _q(RUN_DIR) if site.kind in KINDS_PHP else ""
+    return (_ENV + run_dir + write_files_sh(bool(b)) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
+
+
+# WordPress's requests to its own address (Site Health's REST API and loopback tests, the editor's checks): inside the
+# site's container that address leads nowhere (no name server, no route out, and the site's server refuses a request
+# without the proxy token), so they failed, and Site Health said so as critical issues. This must-use plugin, written
+# into the site's files at every install, sends a request for one of the site's own names to its own server on the
+# container's loopback (INNER_PORT), with the name, the scheme and the token the server expects, read from TOKEN_FILE
+# (mounted read-only at RUN_IN) and never logged; every other request goes its usual way. No new way out: the request
+# never leaves the container. Written by a writer that refuses a link anywhere on its path (the site's own code may
+# change its files), so it can only ever land in the site's files; a refusal leaves the install going, without it.
+LOOPBACK_PLUGIN = "wp-content/mu-plugins/lgsm-panel-loopback.php"
+_LOOPBACK_PHP = r"""<?php
+/**
+ * Plugin Name: linuxgsm-panel loopback
+ * Description: Sends this site's requests to its own address to its own server, inside its container. Written by
+ * linuxgsm-panel at every install of the site: a change here is replaced.
+ */
+
+defined( 'ABSPATH' ) || exit;
+defined( 'LGSM_PANEL_TOKEN_FILE' ) || define( 'LGSM_PANEL_TOKEN_FILE', '@TOKEN@' );
+defined( 'LGSM_PANEL_PORT' ) || define( 'LGSM_PANEL_PORT', @PORT@ );
+
+/* The site's own names: the host of its home and site addresses. */
+function lgsm_panel_own_hosts() {
+	$hosts = array();
+	foreach ( array( home_url(), site_url() ) as $address ) {
+		$host = wp_parse_url( $address, PHP_URL_HOST );
+		if ( $host ) {
+			$hosts[] = strtolower( $host );
+		}
+	}
+	return $hosts;
+}
+
+/* A request for one of the site's own names, sent to its own server on the container's loopback. */
+function lgsm_panel_loopback( $pre, $args, $url ) {
+	if ( false !== $pre || ! empty( $args['lgsm_panel_loopback'] ) ) {
+		return $pre;
+	}
+	$parts = wp_parse_url( $url );
+	if ( empty( $parts['host'] ) || ! in_array( strtolower( $parts['host'] ), lgsm_panel_own_hosts(), true ) ) {
+		return $pre;
+	}
+	$token = is_readable( LGSM_PANEL_TOKEN_FILE ) ? trim( (string) file_get_contents( LGSM_PANEL_TOKEN_FILE ) ) : '';
+	if ( '' === $token ) {
+		return $pre;
+	}
+	$headers = isset( $args['headers'] ) ? $args['headers'] : array();
+	if ( is_string( $headers ) ) {
+		$processed = WP_Http::processHeaders( $headers );
+		$headers   = $processed['headers'];
+	}
+	$headers['Host']                = $parts['host'] . ( isset( $parts['port'] ) ? ':' . $parts['port'] : '' );
+	$headers['X-Forwarded-Proto']   = ( isset( $parts['scheme'] ) && 'https' === $parts['scheme'] ) ? 'https' : 'http';
+	$headers['@HEADER@'] = $token;
+	$left                           = isset( $args['redirection'] ) ? (int) $args['redirection'] : 5;
+	$inner                          = $args;
+	$inner['headers']               = $headers;
+	$inner['redirection']           = 0;
+	$inner['reject_unsafe_urls']    = false;
+	$inner['lgsm_panel_loopback']   = true;
+	$path     = ( isset( $parts['path'] ) ? $parts['path'] : '/' ) . ( isset( $parts['query'] ) ? '?' . $parts['query'] : '' );
+	$response = wp_remote_request( 'http://127.0.0.1:' . LGSM_PANEL_PORT . $path, $inner );
+	$code     = (int) wp_remote_retrieve_response_code( $response );
+	$next     = wp_remote_retrieve_header( $response, 'location' );
+	if ( $left > 0 && $code >= 300 && $code < 400 && is_string( $next ) && '' !== $next ) {
+		$args['redirection'] = $left - 1;
+		return wp_remote_request( WP_Http::make_absolute_url( $next, $url ), $args );
+	}
+	return $response;
+}
+add_filter( 'pre_http_request', 'lgsm_panel_loopback', 10, 3 );
+
+/* The container's own loopback never goes through the egress proxy (WP_PROXY_HOST): it would refuse it. */
+function lgsm_panel_no_proxy( $send, $uri, $check ) {
+	return ( isset( $check['host'] ) && '127.0.0.1' === $check['host'] ) ? false : $send;
+}
+add_filter( 'pre_http_send_through_proxy', 'lgsm_panel_no_proxy', 10, 3 );
+"""
+# The writer (python3 -I -c, as the account; arguments: the path inside ~/site/html, the file's text in base64). Each
+# folder on the path is made when missing and refused when it is a link; the file is written beside, then renamed.
+_LOOPBACK_PY = r"""
+import base64, os, sys
+html = os.path.realpath(os.path.expanduser("~/site/html"))
+parts = sys.argv[1].split("/")
+d = html
+for part in parts[:-1]:
+    d = os.path.join(d, part)
+    if os.path.islink(d):
+        print("loopback=refused"); sys.exit(0)
+    if not os.path.isdir(d):
+        os.mkdir(d, 0o755)
+path = os.path.join(d, parts[-1])
+if os.path.realpath(d) != d or os.path.islink(path):
+    print("loopback=refused"); sys.exit(0)
+fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+with os.fdopen(fd, "wb") as fh:
+    fh.write(base64.b64decode(sys.argv[2]))
+os.replace(path + ".new", path)
+print("loopback=written")
+"""
+
+
+def loopback_plugin():
+    """The text of WordPress's must-use plugin for its requests to its own address (LOOPBACK_PLUGIN)."""
+    return (_LOOPBACK_PHP.replace("@TOKEN@", RUN_IN + "/proxy-token").replace("@PORT@", str(INNER_PORT))
+            .replace("@HEADER@", GATE_HEADER))
+
+
+def loopback_sh():
+    """Shell (as the account) writing loopback_plugin() into the site's files; no secret is in it (the token is a file)."""
+    return "python3 -I -c %s %s %s; " % (_q(_LOOPBACK_PY), _q(LOOPBACK_PLUGIN), _q(_b64(loopback_plugin())))
 
 
 def image_build_sh(b, path=BUILD_FILE):

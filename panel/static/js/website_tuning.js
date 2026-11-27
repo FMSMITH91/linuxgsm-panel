@@ -131,11 +131,35 @@
       WS.clear(info);
       WS.show(info, !!(p.object_cache && p.object_cache_host));
       if (p.object_cache && p.object_cache_host) {
-        info.appendChild(WS.node('div', null, WS.T('For WordPress, enter these in its object-cache plugin:')));
-        info.appendChild(WS.raw('code', 'user-select-all', p.object_cache_host + ':' + p.object_cache_port));
+        // WordPress reads the address and password itself (its wp-config, from the panel's read-only file); other
+        // code reads the file, or is given them here, once, after the password check.
+        info.appendChild(WS.node('div', null, p.object_cache_wordpress
+          ? WS.T('WordPress sites the panel installs have its address and password set already: install the Redis Object Cache plugin in WordPress and press Enable Object Cache.')
+          : WS.T("Your code reads the password from this file, or press Show connection settings:")));
+        if (!p.object_cache_wordpress && p.object_cache_file) info.appendChild(WS.raw('code', 'd-block user-select-all', p.object_cache_file));
+        info.appendChild(WS.raw('code', 'd-block user-select-all', p.object_cache_host + ':' + p.object_cache_port));
+        info.appendChild(WS.button(WS.T('Show connection settings'), 'key', 'wsCacheReveal', [], 'btn-outline-secondary mt-1'));
+        var conn = WS.node('div', 'small font-monospace ws-db-conn mt-1', '');
+        conn.id = 'wperf-obj-conn';
+        info.appendChild(conn);
       }
     }
   }
+  window.wsCacheReveal = function () {
+    WS.stepUp(function () {
+      WS.post('/websites/' + ID + '/object-cache/credentials', {}).then(function (d) {
+        var box = WS.el('wperf-obj-conn');
+        if (!box || !d || !d.success) { WS.done(d, 'wperf-msg'); return; }
+        WS.clear(box);
+        [['Host', d.host], ['Port', d.port], ['Password', d.password]].forEach(function (kv) {
+          var line = WS.node('div');
+          line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
+          line.appendChild(WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
+          box.appendChild(line);
+        });
+      });
+    });
+  };
   function checked(id) { var e = WS.el(id); return e ? e.checked : undefined; }
   function num(id) { var e = WS.el(id); return e && e.value !== '' ? Number(e.value) : undefined; }
   window.wsPerfSave = function (e) {

@@ -21,12 +21,15 @@
     {% endif %}
     </div>
   </div>
+  {% if no_add_host|default(false) %}
+  <p id="ws-add-why" class="small text-secondary mb-2">Websites run on the panel's own host, which only a superadmin manages, so a superadmin adds them.</p>
+  {% endif %}
   <p id="ws-ports" class="small mb-1 ws-ports" role="status" hidden></p>
   <p id="ws-quota" class="small text-secondary mb-2" hidden></p>
   <div id="ws-list" class="ws-list" aria-live="polite">
     <p class="small text-secondary mb-0">Loading websites…</p>
   </div>
-  {% if site_admin|default(false) %}{% include "_website_customer.html" %}{% endif %}
+  {% if customers_card|default(site_admin|default(false)) %}{% include "_website_customer.html" %}{% endif %}
   {% if current_user.is_superadmin %}{% include "_website_proxy.html" %}{% endif %}
 </div>
 {% if can_add|default(false) %}{% include "_website_add.html" %}{% endif %}

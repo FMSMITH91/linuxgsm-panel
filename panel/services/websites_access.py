@@ -179,18 +179,31 @@ def create_target(user):
     return None
 
 
+def admin_website_hosts(user):
+    """The ids of the hosts a non-superadmin administrator may add a site on: theirs that run websites.
+
+    Websites run on the panel's own host only (ssh_manager.websites.runs_websites), and MANAGE_WEBSITES never
+    reaches that host for anyone below a superadmin (_off_panel_host), so this is empty today: an administrator
+    in an ordinary group cannot add a site, and every Create of theirs failed for want of a host.
+    """
+    if not _signed_in(user):
+        return set()
+    return _scopes(user)[MANAGE_WEBSITES][1] & _local_host_ids()
+
+
 def can_create(user):
     """Whether `user` may add a website at all (the Add button).
 
-    A superadmin, a non-customer group holding MANAGE_WEBSITES, or a customer group holding
-    CREATE_WEBSITES with room under its max_sites (create_target).
+    A superadmin, a non-customer group holding MANAGE_WEBSITES with a host that runs websites
+    (admin_website_hosts), or a customer group holding CREATE_WEBSITES with room under its max_sites
+    (create_target).
     """
     if getattr(user, "is_superadmin", False):
         return True
     if not _signed_in(user):
         return False
-    return any(MANAGE_WEBSITES in g.get_permissions() and not g.is_customer for g in _groups(user)) \
-        or create_target(user) is not None
+    admin = any(MANAGE_WEBSITES in g.get_permissions() and not g.is_customer for g in _groups(user))
+    return bool(admin and admin_website_hosts(user)) or create_target(user) is not None
 
 
 def can_open_page(user):

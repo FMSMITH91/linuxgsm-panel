@@ -52,6 +52,8 @@ S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
 LIMIT_LABELS = {"mem_mb": "Memory (MB)", "cpu_milli": "CPU (1000 = one core)", "pids": "Processes", "disk_mb": "Disk (MB)",
                 "max_body_mb": "Largest upload (MB)", "backup_keep": "Backups to keep"}
 S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
+S_BUSY = "This website is still being set up. Wait until that finishes (or fails), then delete it."
+S_RETRY_APP = "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
 # An install runs in a thread of the process that started it, so a site still "creating" from before this
@@ -60,6 +62,9 @@ _STATUS = {}                      # site id -> (monotonic time, probe dict)
 _STARTED = utcnow()
 _INSTALLING = set()
 _SWEPT = []                       # [True] once this process has swept
+# A plain install's progress, for the add dialog (websites_apps.install_json): site id -> {"step", "state"}, the step
+# one of ssh_manager.websites.INSTALL_PARTS as the install reports it, the state running, done or failed.
+PLAIN = {}
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
@@ -150,13 +155,16 @@ def site_db(site):
     return "127.0.0.1", int(getattr(hd, "port", None) or 3306)
 
 
-def install_site(site, restart=True):
+def install_site(site, restart=True, progress=None):
     """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
 
     `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
     A done install records the image and the files' revision it wrote (note_installed), which Update compares.
+    `progress` is told each part of the install as it begins (ssh_manager.websites.install).
     """
-    if restart:
+    if progress is not None:
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site), True, restart, progress)
+    elif restart:
         ok, said = host_call(_sw.install, site.remote, site, site_db(site))
     else:
         ok, said = host_call(_sw.install, site.remote, site, site_db(site), True, False)
@@ -297,7 +305,7 @@ def _list_routes(app):
     def websites_page():
         if not _wa.can_open_page(current_user):
             abort(404)
-        return page("websites.html", can_add=_wa.can_create(current_user), site_admin=is_admin(current_user))
+        return page("websites.html", **_list_flags())
 
     @app.route("/websites/<int:site_id>")
     @login_required
@@ -323,6 +331,19 @@ def _list_routes(app):
         from panel.routes import websites_apps, websites_domains
         websites_domains.refresh_certs(site.remote)
         return jsonify(_view.site_answer(site, _status(site), websites_apps.install_json(site)))
+
+
+def _list_flags():
+    """The Websites list's flags: can_add, site_admin, and for an administrator who cannot add one, why not.
+
+    no_add_host: an administrator below a superadmin, who has no host that runs websites (websites_access.
+    admin_website_hosts), sees the reason instead of an Add button whose every Create failed. customers_card: the
+    Add a customer card only for someone who administers a site to grant (each of its sites is checked again).
+    """
+    can_add, admin = _wa.can_create(current_user), is_admin(current_user)
+    holds = current_user.is_superadmin or _wa.visible_sites(current_user, MANAGE_WEBSITES).first() is not None
+    return {"can_add": can_add, "site_admin": admin, "customers_card": admin and holds,
+            "no_add_host": admin and not can_add and creates_as_admin(current_user)}
 
 
 def _status(site):
@@ -462,6 +483,8 @@ def add_refusal(remote, name, kind):
         return 400, problem
     if kind not in WEBSITE_KINDS:
         return 400, i18n.Sentence("Choose what kind of website it is.")
+    if not _sw.runs_websites(remote):
+        return 409, _sw.ONLY_LOCAL      # refused before the row is made: the install would fail it at once
     if Website.query.filter_by(remote_id=remote.id, name=name).first() is not None:
         return 409, S_NAME_TAKEN
     if _free_port(remote.id) is None:
@@ -496,6 +519,16 @@ def sweep_stranded():
     _SWEPT.append(True)
 
 
+def setting_up(site_id):
+    """Whether this process is setting the site up now: its plain install's thread, or its app install's job.
+
+    A delete then would remove the account while the install still runs as it, and the install's last write
+    would land on a deleted row.
+    """
+    from panel.routes.websites_apps import job_running
+    return site_id in _INSTALLING or job_running(site_id)
+
+
 def note_run_state(site, ok, said):
     """Record on `site` what an install, update or rebuild that ran it left (committed).
 
@@ -517,15 +550,21 @@ def _install_worker(app, site_id):
             if site is None:
                 return
             try:
-                ok, said = install_site(site)
+                ok, said = install_site(site, progress=lambda part: _plain(site_id, part, "running"))
             except Exception:  # noqa: BLE001 - an install that raised ends failed, never "creating" for good
                 _log.warning("website install raised", exc_info=True)
                 ok, said = False, S_UNREACHABLE
+            _plain(site_id, PLAIN.get(site_id, {}).get("step") or "account", "done" if ok else "failed")
             site.state = "running"          # a new site's "creating" ends here, whatever the outcome
             note_run_state(site, ok, said)
             forget_status(site_id)
         finally:
             _INSTALLING.discard(site_id)
+
+
+def _plain(site_id, step, state):
+    """Record a plain install's progress (PLAIN)."""
+    PLAIN[site_id] = {"step": step, "state": state}
 
 
 def _add_route(app):
@@ -560,6 +599,8 @@ def _run_routes(app):
     @login_required
     def website_start(site_id):
         site = _wa.site_for(current_user, site_id, manage_perm(site_id))
+        if site.state == "failed":
+            return _retry(site)
         ok, said = host_call(_sw.start, site.remote, site)
         return _ran(site, "website_start", ok, said, "running")
 
@@ -596,6 +637,21 @@ def readable_logs(lines):
     kept = [ln for ln in lines if DENIED_MARK not in ln]
     left = len(lines) - len(kept)
     return kept + ([i18n.tr(S_DENIED, n=left)] if left else [])
+
+
+def _retry(site):
+    """Retry a failed site (its page's Retry): install it again, then start it, as an image update does.
+
+    A start alone could never recover a failed first install, which removed the site's account. An app whose
+    install stopped part-way (install_step still names a step) is not set up again here: its steps are undone by
+    deleting the site, which is then added again.
+    """
+    if site.app_recipe and site.install_step:
+        return say(409, S_RETRY_APP)
+    ok, said = install_site(site)
+    note_run_state(site, ok, said)
+    forget_status(site.id)
+    return acted(site, "website_start", ok, said, "set up again after it failed" if ok else "")
 
 
 def _ran(site, action, ok, said, state):
@@ -697,6 +753,8 @@ def _admin_routes(app):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
         if field(body(), "confirm") != site.name:
             return say(400, S_CONFIRM)
+        if setting_up(site.id):
+            return say(409, S_BUSY)
         return _delete(site)
 
     @app.route("/websites/<int:site_id>/update-image", methods=["POST"])
@@ -746,6 +804,7 @@ def _delete(site):
         db.session.commit()
         return acted(site, "website_delete", False, said)
     sid = site.id
+    PLAIN.pop(sid, None)
     audit(site, "website_delete", "removed website %s, its databases and its account" % name)
     db.session.delete(site)
     db.session.commit()

@@ -758,6 +758,7 @@ _IPO313 = r"""1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever p
 def _s9_add_and_enable(st, rec):
     _p9_patch(_dns313, "socket", _resolver313({"new.p313.example.org": [_HOST_IP313], "later.p313.example.org": [_HOST_IP313]}))
     _p9_patch(_w313, "start_install", lambda site: None)
+    _p9_patch(_sw313, "runs_websites", lambda remote: True)     # this part's host stands for one that runs websites
     su = _Client313(st.su.id)
     r = su.post("/websites/add", json={"name": "p313-new", "kind": "static", "domain": "new.p313.example.org",
                                         "host_id": st.host.id})

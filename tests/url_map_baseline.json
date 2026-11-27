@@ -1307,6 +1307,16 @@
       "GET"
     ]
   },
+  "GET /websites/install-app/status": {
+    "endpoint": "website_install_status",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_install_status"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /websites/proxy/status": {
     "endpoint": "website_proxy_status",
     "guards": [
@@ -4015,6 +4025,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:website_install_undo"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/object-cache/credentials": {
+    "endpoint": "website_cache_credentials",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_cache_credentials"
     ],
     "methods": [
       "POST"
