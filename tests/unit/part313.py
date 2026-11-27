@@ -595,8 +595,9 @@ def _s5_cdn(st, rec):
 
 
 def _fastly_address313():
-    """An address inside the first IPv4 range of Fastly's preset (the signed catalog's list)."""
-    net = next(n for n in _dns313.cdn_networks("fastly") if n.version == 4)
+    """An address inside the first IPv4 range of Fastly's preset, read from the signed catalog itself."""
+    import ipaddress
+    net = next(n for n in map(ipaddress.ip_network, _wcat313.preset_ranges("fastly")) if n.version == 4)
     return str(net.network_address + 7)
 
 
