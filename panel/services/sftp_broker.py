@@ -103,7 +103,7 @@ def run_loop(app):
         _WAKE.clear()
         spawn, why = spawn_config(app)
         if spawn is None:
-            _set_status("off" if why is None else "waiting", error=why or "")
+            _set_status("off" if why is None else "waiting", error=why or "", detail=_STATE.pop("wait_detail", ""))
             _WAKE.wait(None if why is None else RETRY_SECONDS)
             continue
         ended_ok = run_once(app, spawn)
@@ -122,13 +122,88 @@ def spawn_config(app):
         return None, None
     ts_ips = tailscale_ips()
     choice = s["bind"] or sc.default_bind(bool(ts_ips))
-    binds = sc.bind_addresses(choice, ts_ips, sc.host_has_ipv6())
+    if choice == sc.BIND_ADDRESS:
+        why = address_wait(app, s["address"])
+        if why:
+            return None, why
+    binds = sc.bind_addresses(choice, ts_ips, sc.host_has_ipv6(), s["address"])
     if not binds:
         return None, "Waiting for this host's Tailscale address."
     key = sc.ensure_host_key(update_config, load_config, encrypt_secret, decrypt_secret)
     return {"ok": True, "binds": binds, "port": s["port"], "password": s["password"],
             "cap_mb": s["cap_mb"], "idle_min": s["idle_min"], "absolute_h": s["absolute_h"],
             "absolute_grace_min": sc.ABSOLUTE_GRACE_MINUTES, "host_key": key, "choice": choice}, None
+
+
+# ── "A specific address" ───────────────────────────────────────────────────────────────────────
+# The service listens on that address alone. When the host no longer has it (a DHCP lease moved, an
+# interface went down), the service stops and waits for it, saying so on the card and in the audit
+# log; it never listens on any other address instead.
+ADDRESS_GONE = ("The chosen address is not on this host now, so the SFTP service has stopped. It starts again "
+                "when the address is back, and never listens on another address instead.")
+ADDRESS_UNREAD = "This host's addresses could not be read; the SFTP service waits to check its address."
+ADDRESS_CHECK_SECONDS = RETRY_SECONDS
+
+
+def host_address_rows():
+    """This host's addresses as `ip -o addr show` lists them in the C locale (ufweval); None when unread."""
+    from panel.ops.ssh_manager import ufweval
+    return ufweval.local_addrs()
+
+
+def address_present(address):
+    """True when this host has `address` now, False when it does not, None when its addresses were not read."""
+    rows = host_address_rows()
+    if rows is None:
+        return None
+    return any(str(addr) == address for _iface, addr, _scope in rows)
+
+
+def address_wait(app, address):
+    """Why the service waits instead of listening on `address`, or None when the host has it.
+
+    Its going and its coming back are each audited once (_STATE["address_gone"] holds the address
+    that went), with the address in the card's detail line.
+    """
+    present = address_present(address) if address else False
+    if present is None:
+        return ADDRESS_UNREAD
+    gone = _STATE.get("address_gone")
+    if present:
+        _STATE.pop("address_gone", None)
+        if gone == address:
+            _address_audit(app, "sftp_address_back", "SFTP service starting again: %s is an address of this "
+                                                     "host again" % address)
+        return None
+    _STATE["wait_detail"] = address
+    if gone != address:
+        _STATE["address_gone"] = address
+        _address_audit(app, "sftp_address_gone", "SFTP service stopped: %s is no longer an address of this "
+                                                 "host. It waits for the address and listens nowhere else."
+                       % (address or "(none chosen)"))
+    return ADDRESS_GONE
+
+
+def _address_audit(app, action, detail):
+    """One audit row about the service's address, by the panel itself."""
+    try:
+        with app.app_context():
+            _sftp_audit("unknown", None, action, target="SFTP", detail=detail, actor="system")
+    except Exception:  # noqa: BLE001 - a lost audit row must not stop the service loop
+        _log.exception("SFTP address audit row failed")
+
+
+def _watch_address(address, ended):
+    """While the service runs on `address`, stop it once the host no longer has that address.
+
+    Asked every ADDRESS_CHECK_SECONDS until `ended` is set. An unread address list changes nothing.
+    The loop then waits in address_wait, which audits the address's going.
+    """
+    while not ended.wait(ADDRESS_CHECK_SECONDS):
+        if address_present(address) is False:
+            _set_status("waiting", error=ADDRESS_GONE, detail=address)
+            _stop_child()
+            return
 
 
 def tailscale_ips():
@@ -160,9 +235,14 @@ def run_once(app, spawn, argv=None):
     theirs.close()
     _STATE.update(proc=proc, spawn=spawn)
     listening = False
+    ended = threading.Event()
+    if spawn.get("choice") == sc.BIND_ADDRESS:
+        threading.Thread(target=_watch_address, args=(spawn["binds"][0], ended), name="sftp-address",
+                         daemon=True).start()
     try:
         listening = serve(app, ours, spawn)
     finally:
+        ended.set()
         ours.close()
         _stop_child()
         _STATE["proc"] = None

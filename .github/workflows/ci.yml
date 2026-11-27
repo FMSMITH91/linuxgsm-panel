@@ -804,6 +804,14 @@ jobs:
     # report Codacy reads, and reports the `js coverage` check the ruleset requires.
     name: js coverage · ${{ matrix.part }}
     runs-on: ubuntu-24.04
+    # QUEUED AFTER THE UNIT SHARDS. A pull request starts about 58 jobs across every workflow and the
+    # account runs 20 at once (GitHub's concurrent-job limit), the rest queued; measured on PR #615, the four parts took
+    # runners at once while two unit shards (12-16 min each, the longest required jobs) waited 6 and 7
+    # minutes for one, and the last of those set the run's end. Behind the gamedig legs (about 25 s)
+    # these ~7-minute parts are queued after the shards and still end well inside them. `!cancelled()`:
+    # a failed gamedig leg reports itself; the parts run regardless, so `js coverage` stays its own answer.
+    needs: gamedig-lockfile
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
