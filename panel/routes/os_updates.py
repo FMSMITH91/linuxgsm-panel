@@ -9,6 +9,7 @@ from panel.ops import (system_ops as so)
 from panel.services import (notifications)
 from panel.services.certs import (_maybe_alert_cert_expiring)
 from panel.services import tls_own
+from panel.services import website_certs
 from panel.services import schedules as _schedules
 from panel.services import addons_catalog as _addon_catalog
 from panel.routes import addons_geoip as _addons_geoip
@@ -61,6 +62,15 @@ def _os_update_seeds(remote, seeding, first_read):
         return False
     created = getattr(remote, "created_at", None)
     return created is None or created < _PROCESS_STARTED
+
+
+def _alert_website_certs(app):
+    """The weekly alert for a website domain's own certificate close to expiry (website_certs), in an app context."""
+    try:
+        with app.app_context():
+            website_certs.alert_expiring()
+    except Exception:
+        app.logger.debug("website certificate expiry tick failed", exc_info=True)
 
 
 def _renew_tls(app):
@@ -154,6 +164,7 @@ def register(app, supervise):
             # is the exact way the OS-update alert was dead before. Each swallows its own errors.
             _renew_tls(app)                          # a renewed Let's Encrypt certificate, once a day
             _maybe_alert_cert_expiring(app.config)   # periodic TLS-cert expiry check
+            _alert_website_certs(app)      # ...and the certificates operators gave website domains
             _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             _addon_catalog.daily_tick()    # the signed add-on catalog: at the first pass, then daily
             _addons_geoip.tick(app)        # B3's country database: this month's, once DB-IP has it

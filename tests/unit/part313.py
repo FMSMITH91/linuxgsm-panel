@@ -2,6 +2,15 @@
 
 1. The per-host certificate choice nothing read (website_proxy.origin_tls) is gone: an older database's column is
    dropped at start, and the proxy settings no longer carry it.
+2. The web proxy's configuration gives each domain with its own certificate a site block of its own, naming its
+   files, while the automatic domains share one block; the files shipped are exactly the ones it names.
+3. The helper removes the certificate files of the proxy's folder that the configuration now running does not
+   name, after an apply that left the proxy running only.
+4. Your own certificate (POST /websites/<id>/domains/cert): who may, what is refused and what is only noted
+   (tls_own.check_for_domain, OWASP Transport Layer Security Cheat Sheet), the key encrypted and never returned
+   or audited, the route rendering and shipping the files, a failed apply putting the previous certificate
+   back, switching back to automatic, the domain's warning 30 days ahead, the renewal read leaving it alone,
+   and the weekly expiry alert through the update-check ticker's hook.
 """
 import datetime as _dt313
 import importlib.machinery as _mach313
@@ -246,6 +255,29 @@ def _heads313(text):
                                                                                                                  "http"))]
 
 
+def _s2_blocks(_st, _rec):
+    key_enc = _enc313(_KEYPEM313)
+    site = _ns_site313([_ns_dom313("a.p313.example.org", 1), _ns_dom313("b.p313.example.org", 2, "own", _CHAIN313, key_enc),
+                        _ns_dom313("c.p313.example.org", 3)])
+    text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
+    crt = "%s/b.p313.example.org" % _wp313.CERT_DIR
+    eq("proxy config: the automatic domains share one block with automatic certificates; the domain with its own "
+       "certificate has a block of its own naming its files",
+       _heads313(text), [("a.p313.example.org, c.p313.example.org {", "tls {"),
+                         ("b.p313.example.org {", "tls %s.crt %s.key {" % (crt, crt))])
+    files = _json313.loads(_sw313.apply_doc(text, [site], None))["files"]
+    eq("proxy config: the files shipped are exactly those the configuration names, the key in clear on stdin only",
+       (sorted(files), files.get("b.p313.example.org.key") == _KEYPEM313), (["b.p313.example.org.crt", "b.p313.example.org.key"], True))
+    only = _ns_site313([_ns_dom313("a.p313.example.org", 1), _ns_dom313("c.p313.example.org", 3)])
+    eq("proxy config: a site with automatic certificates only is one block (control)",
+       _heads313(_wp313.render([only], None, None, secret_of=lambda s: "t" * 40)),
+       [("a.p313.example.org, c.p313.example.org {", "tls {")])
+    half = _ns_site313([_ns_dom313("a.p313.example.org", 1, "own", _CHAIN313, "")])
+    t2 = _wp313.render([half], None, None, secret_of=lambda s: "t" * 40)
+    eq("proxy config: an own certificate without its key is not named (no file the apply would not ship)",
+       (_heads313(t2), _json313.loads(_sw313.apply_doc(t2, [half], None))["files"]), ([("a.p313.example.org {", "tls {")], {}))
+
+
 # ── 3. the helper prunes certificate files no configuration names ────────────────────────────────
 _HSPEC313 = _ilu313.spec_from_loader("panel_helper_p313", _mach313.SourceFileLoader(
     "panel_helper_p313", os.path.join(_root, "tools", "panel-helper")))
@@ -288,9 +320,51 @@ def _apply_in_tree313(started_rc):
         _shutil313.rmtree(d, ignore_errors=True)
 
 
+def _s3_prune(_st, _rec):
+    eq("helper: after an apply that left the proxy running, the certificate files no configuration names are removed "
+       "(a key switched back to automatic does not stay on the host); the new pair and a file of another shape stay",
+       _apply_in_tree313(0), (0, ["b.p313.example.org.crt", "b.p313.example.org.key", "notes.txt"]))
+    eq("helper: a failed apply removes nothing (the configuration put back may still name them) (control)",
+       _apply_in_tree313(1)[1], ["b.p313.example.org.crt", "b.p313.example.org.key", "notes.txt", "old.p313.example.org.crt",
+                                 "old.p313.example.org.key"])
+
+
 # ── 4. your own certificate through the route ────────────────────────────────────────────────────
 def _post_cert313(client, site, dom, **body):
     return client.post("/websites/%d/domains/cert" % site.id, json=dict({"id": dom.id}, **body))
+
+
+def _s4_own_route(st, rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    del rec.applies[:]
+    r = _post_cert313(c, st.a, dom, mode="own", cert=_CHAIN313, key=_KEYPEM313)
+    got, body = _p9_json(r), r.get_data(as_text=True)
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert (route): a customer managing their own online site saves a pasted chain and key; the domain says "
+       "'Your own certificate' with its issuer and expiry",
+       (r.status_code, dom.cert_mode, dom.cert_state, (got.get("domain") or {}).get("cert_mode"),
+        ((got.get("domain") or {}).get("own_cert") or {}).get("issuer"), dom.cert_not_after is not None),
+       (200, "own", "own", "own", "P313 Test CA", True))
+    eq("own cert (route): the key is stored encrypted, decrypts to the key given, and is in no answer",
+       (_KEYPEM313.strip() in (dom.own_key_secret or ""), _dec313(dom.own_key_secret).strip() == _KEYPEM313.strip(),
+        "PRIVATE KEY" in body), (False, True, False))
+    sent = rec.applies[-1] if rec.applies else {"text": "", "files": {}}
+    crt = "%s/%s" % (_wp313.CERT_DIR, _DOMAIN313)
+    eq("own cert (route -> render -> shipped files): saving applies the proxy at once with the domain's own block "
+       "and its two files",
+       ("tls %s.crt %s.key {" % (crt, crt) in sent["text"], sorted(sent["files"]),
+        (sent["files"].get(_DOMAIN313 + ".key") or "").strip() == _KEYPEM313.strip()),
+       (True, [_DOMAIN313 + ".crt", _DOMAIN313 + ".key"], True))
+    row = _Audit313.query.filter_by(action="website_domain_cert").order_by(_Audit313.id.desc()).first()
+    fp = _own313.summary(_own313._load_chain(_CHAIN313.encode()))["fingerprint"]
+    eq("own cert (route): the audit row names the domain, issuer, expiry and fingerprint, and holds no key",
+       (row is not None and _DOMAIN313 in row.detail and "P313 Test CA" in row.detail and fp in row.detail,
+        "PRIVATE" in (row.detail if row else "") or "BEGIN" in (row.detail if row else "")), (True, False))
+    other = _dom313(st.b, "other.p313.example.org")
+    eq("own cert (route): the customer of site A gets 404 on site B's domain, and a viewer of A gets 404 too",
+       (_post_cert313(c, st.b, other, mode="own", cert=_CHAIN313, key=_KEYPEM313).status_code,
+        _post_cert313(_Client313(st.viewer.id), st.a, dom, mode="acme").status_code), (404, 404))
 
 
 def _refusals313():
@@ -309,12 +383,142 @@ def _refusals313():
     ]
 
 
+def _s4_refusals(st, _rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    before = (dom.cert_mode, dom.own_cert_pem, dom.own_key_secret)
+    got = {label: _post_cert313(c, st.a, dom, mode="own", cert=cert, key=key).status_code
+           for label, cert, key in _refusals313()}
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert (route): a mismatched key, a passphrase key, an expired or not-yet-valid certificate, one that does "
+       "not cover the domain (a wildcard covers one label), malformed PEM and oversize input are each refused (400)",
+       got, {label: 400 for label, _c, _k in _refusals313()})
+    eq("own cert (route): a refusal changes nothing on the domain", (dom.cert_mode, dom.own_cert_pem, dom.own_key_secret),
+       before)
+    wild = _pem313(_cert313(_KEY313, ["*.p313.example.org"]))
+    eq("own cert (route): a wildcard covering the domain's one left-most label is accepted (control)",
+       _post_cert313(c, st.a, dom, mode="own", cert=wild + _ca_pem313(), key=_KEYPEM313).status_code, 200)
+
+
 def _notes_for313(st, cert, key):
     r = _post_cert313(_Client313(st.cust.id), st.a, _dom313(st.a, _DOMAIN313), mode="own", cert=cert, key=key)
     return r.status_code, " | ".join(_p9_json(r).get("notes") or [])
 
 
+def _s4_notes(st, _rec):
+    weak = _rsa313.generate_private_key(65537, 1024)
+    cases = {
+        "weak key": (_pem313(_cert313(weak, [_DOMAIN313])) + _ca_pem313(), _keypem313(weak), "OWASP recommends at least 2048"),
+        "self-signed": (_pem313(_cert313(_KEY313, [_DOMAIN313], issuer_key=_KEY313, issuer=_name313(_DOMAIN313))), _KEYPEM313,
+                        "well-known CA"),
+        "no chain": (_pem313(_cert313(_KEY313, [_DOMAIN313])), _KEYPEM313, "Paste the full chain"),
+        "30 days left": (_pem313(_cert313(_KEY313, [_DOMAIN313], start=-1, days=20)) + _ca_pem313(), _KEYPEM313, "expires in"),
+        "Cloudflare origin": (_pem313(_cert313(_KEY313, [_DOMAIN313], issuer=_name313(
+            "CloudFlare Origin Certificate", "CloudFlare Origin SSL Certificate Authority"))), _KEYPEM313, "Full (strict)"),
+    }
+    got = {}
+    for label, (cert, key, want) in cases.items():
+        code, notes = _notes_for313(st, cert, key)
+        got[label] = (code, want in notes)
+    eq("own cert (route): a weak key, a self-signed certificate, a missing chain and 30 days or fewer left are saved "
+       "with a note carrying OWASP's value; a Cloudflare Origin CA certificate is named as one",
+       got, {k: (200, True) for k in cases})
+    _p9_patch(_own313, "_hash_notes", lambda leaf: ["p313: the signature check ran"])
+    code, notes = _notes_for313(st, _CHAIN313, _KEYPEM313)
+    eq("own cert (route): the signature-algorithm check (SHA-1/MD5 noted; part232 holds its verdicts) runs on a "
+       "website's certificate too", (code, "p313: the signature check ran" in notes), (200, True))
+    _p9_patch(_own313, "_hash_notes", _HASH_NOTES313)
+
+
 _HASH_NOTES313 = _own313._hash_notes
+
+
+def _s4_rollback(st, rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    _post_cert313(c, st.a, dom, mode="acme")
+    del rec.applies[:]
+    rec.fail.append("The web proxy did not start: p313 refused.")
+    r = _post_cert313(c, st.a, dom, mode="own", cert=_CHAIN313, key=_KEYPEM313)
+    dom = _dom313(st.a, _DOMAIN313)
+    msg = _p9_json(r).get("message") or ""
+    eq("own cert (route): a failed apply puts the previous certificate back (automatic), applies that again, and "
+       "says why in plain words",
+       (r.status_code, dom.cert_mode, dom.own_cert_pem, len(rec.applies), _DOMAIN313 in msg, "p313 refused" in msg,
+        sorted(rec.applies[-1]["files"]) if rec.applies else None),
+       (502, "acme", "", 2, True, True, []))
+
+
+def _s4_back_to_auto(st, rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    _post_cert313(c, st.a, dom, mode="own", cert=_CHAIN313, key=_KEYPEM313)
+    del rec.applies[:]
+    r = _post_cert313(c, st.a, dom, mode="acme")
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert (route): switching back to automatic clears the chain and the key and applies a configuration with "
+       "no file for the domain",
+       (r.status_code, dom.cert_mode, dom.own_cert_pem, dom.own_key_secret, dom.cert_state,
+        [sorted(a["files"]) for a in rec.applies]), (200, "acme", "", "", "pending", [[]]))
+    eq("own cert (route): a mode that is neither is refused (400)", _post_cert313(c, st.a, dom, mode="custom").status_code, 400)
+
+
+def _s4_warning_and_renewal(st, _rec):
+    dom = _dom313(st.a, _DOMAIN313)
+    dom.cert_mode, dom.cert_state, dom.own_cert_pem = "own", "own", _CHAIN313
+    now = _dt313.datetime(2026, 6, 1)
+    notes = {}
+    for days in (40, 30, 10, -1):
+        dom.cert_not_after = now + _dt313.timedelta(days=days, hours=1)
+        notes[days] = str(_wd313.cert_note(dom, now))[:40]
+    eq("own cert: the domain's line warns from 30 days before its own certificate expires, and says when it has "
+       "expired; 40 days left says nothing (control)",
+       notes, {40: "", 30: "The certificate you gave this domain exp", 10: "The certificate you gave this domain exp",
+               -1: "The certificate you gave this domain has"})
+    dom.cert_not_after = _dt313.datetime(2030, 1, 1)
+    _db313.session.commit()
+    _wd313.apply_certs(st.host, {"certs": {_DOMAIN313: {"issuer": "acme-v02.api.letsencrypt.org-directory",
+                                                        "not_after": 1900000000}}})
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert: the read of the proxy's automatic certificates leaves a domain with its own alone",
+       (dom.cert_state, dom.cert_not_after), ("own", _dt313.datetime(2030, 1, 1)))
+
+
+def _s4_alert(st, _rec):
+    sent = []
+    _p9_patch(_notif313, "notify", lambda key, title, body="", server=None, remote=None: sent.append((key, body, remote)))
+    _wcert313._ALERTED.clear()
+    dom = _dom313(st.a, _DOMAIN313)
+    dom.cert_mode, dom.cert_not_after = "own", _utcnow313() + _dt313.timedelta(days=10)
+    _db313.session.commit()
+    _osu313._alert_website_certs(_p9)
+    _osu313._alert_website_certs(_p9)
+    eq("own cert: the update-check ticker's hook sends cert_expiring for an own certificate within 30 days, naming "
+       "the domain and the site, once a week",
+       [(k, _DOMAIN313 in b and st.a.name in b, getattr(r, "id", None)) for k, b, r in sent],
+       [("cert_expiring", True, st.host.id)])
+    del sent[:]
+    _wcert313._ALERTED.clear()
+    dom = _dom313(st.a, _DOMAIN313)
+    dom.cert_not_after = _utcnow313() + _dt313.timedelta(days=60)
+    _db313.session.commit()
+    _osu313._alert_website_certs(_p9)
+    eq("own cert: 60 days left sends nothing (control)", sent, [])
+
+
+def _s4_i18n(_st, _rec):
+    import glob
+    keys = {}
+    for lang in ("es", "fr"):
+        keys[lang] = set()
+        for f in glob.glob(os.path.join(_root, "panel", "translations", lang, "*.json")):
+            with open(f, encoding="utf-8") as fh:
+                keys[lang] |= set(_json313.load(fh))
+    said = [_own313.S_CDN_ORIGIN, "The certificate does not cover {domain}: its names are {names}.",
+            "The certificate names no domain in its subjectAltName, so browsers accept it for none.",
+            _notif313.EVENTS["cert_expiring"][0]]
+    eq("i18n: the own-certificate checks' new sentences and the alert's label are in the es and fr catalogs",
+       {lang: [s for s in said if s not in keys[lang]] for lang in keys}, {"es": [], "fr": []})
 
 
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
@@ -362,7 +566,8 @@ with _p9.app_context():
         _p9_arm(who="part313")
         _rec313 = _stub_host313()
         _st313 = _state313()
-        for _step313 in (_s1_origin_tls,):
+        for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
+                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

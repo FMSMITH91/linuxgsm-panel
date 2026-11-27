@@ -205,10 +205,43 @@ def _secret_of(site):
     return decrypt_secret(site.proxy_secret or "")
 
 
-def _domains(site):
-    """The site's domains the proxy serves: verified, valid, primary first."""
+def _served(site):
+    """The site's domain rows the proxy serves: verified, valid, primary first."""
     rows = sorted(site.domains or [], key=lambda d: (not d.is_primary, d.id or 0))
-    return [d.domain for d in rows if d.verified_at is not None and _DOMAIN_RE.match(d.domain or "")]
+    return [d for d in rows if d.verified_at is not None and _DOMAIN_RE.match(d.domain or "")]
+
+
+def _domains(site):
+    """The names of the site's domains the proxy serves (_served)."""
+    return [d.domain for d in _served(site)]
+
+
+def own_cert(domain):
+    """Whether the proxy serves `domain` (a WebsiteDomain) with the operator's own certificate files.
+
+    The same test decides the configuration's `tls <file> <file>` line and the files website-proxy-apply
+    is sent (ssh_manager.websites.apply_doc), so a configuration never names a file that is not shipped.
+    """
+    return (domain.cert_mode == "own" and domain.verified_at is not None and bool(domain.own_cert_pem)
+            and bool(domain.own_key_secret))
+
+
+def _cert_groups(site):
+    """[(names, own domain or None)]: one site block per certificate source.
+
+    The automatic names share one block; each name with its own certificate gets a block of its own, since
+    a block's `tls <cert> <key>` line covers every name in it and turns automatic certificates off for all
+    of them. The primary name's block comes first.
+    """
+    groups, auto = [], []
+    for d in _served(site):
+        if own_cert(d):
+            groups.append(([d.domain], d))
+        else:
+            if not auto:
+                groups.append((auto, None))
+            auto.append(d.domain)
+    return groups
 
 
 def _global(mode, opts, proxy, trusted):
@@ -247,16 +280,15 @@ def _hsts(opts):
     return value
 
 
-def _tls_lines(site, opts, proxy):
-    """The site's `tls` block: protocols, its own certificate files, and the CDN's client certificate."""
+def _tls_lines(own, opts, proxy):
+    """A site block's `tls` block: protocols, the domain `own`'s certificate files, the CDN's client certificate."""
     inner = ["\t\tprotocols tls%s tls1.3" % opts["tls_min"]] if opts["tls_min"] != "1.3" else ["\t\tprotocols tls1.3"]
     if proxy is not None and proxy.origin_pull_mtls:
         inner += ["\t\tclient_auth {", "\t\t\tmode require_and_verify", "\t\t\ttrust_pool file %s" % ORIGIN_PULL_CA,
                   "\t\t}"]
-    own = [d for d in (site.domains or []) if d.cert_mode == "own" and d.verified_at is not None]
     head = "\ttls {"
-    if own:
-        head = "\ttls %s/%s.crt %s/%s.key {" % (CERT_DIR, own[0].domain, CERT_DIR, own[0].domain)
+    if own is not None:
+        head = "\ttls %s/%s.crt %s/%s.key {" % (CERT_DIR, own.domain, CERT_DIR, own.domain)
     return [head] + inner + ["\t}"]
 
 
@@ -326,16 +358,18 @@ def _site_lines(site, opts, proxy, mode, secret_of):
     if not (names and site.port and _TOKEN_RE.match(token)):
         return []
     tunnel = mode == "tunnel"
-    addresses = ", ".join(("http://%s" % n) if tunnel else n for n in names)
-    lines = ["# site %s (%s)" % (site.id, site.name), "%s {" % addresses]
-    lines += [] if tunnel else _tls_lines(site, opts, proxy)
-    lines += ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
-    lines += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
-              + _snippet_lines(site))
-    lines += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
-              "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
-              "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
-              "\t}", "}", ""]
+    body = ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
+    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
+             + _snippet_lines(site))
+    body += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
+             "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
+             "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
+             "\t}", "}", ""]
+    if tunnel:        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
+        return ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)] + body
+    lines = []
+    for group, own in _cert_groups(site):
+        lines += ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(own, opts, proxy) + body
     return lines
 
 

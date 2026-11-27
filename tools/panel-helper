@@ -3220,7 +3220,31 @@ def do_website_proxy_apply(args, content):
     if not _web_validated(text, pw):
         return 1
     sys.stdout.write("valid=yes\nbind=%s\n" % " ".join(binds))
-    return _web_start(old, pw)
+    rc = _web_start(old, pw)
+    if rc == 0:
+        _web_prune_certs(files)
+    return rc
+
+
+def _web_prune_certs(keep):
+    """Remove the certificate files of the proxy's folder that the configuration now running does not name.
+
+    A domain switched back to automatic certificates, or removed, leaves its .crt and .key behind otherwise:
+    an operator's private key on the host after the panel stopped using it (OWASP Key Management Cheat
+    Sheet, "Zeroization and Destruction"). Only after an apply that left the proxy running, so the files a
+    configuration put back by a failed apply still names are never taken; only names of the panel's own
+    shape (_WEB_CERT_NAME_RE), and the link itself, never what a link points at.
+    """
+    try:
+        names = os.listdir(WEB_PROXY_CERTS)
+    except OSError:
+        return
+    for name in names:
+        if re.fullmatch(_WEB_CERT_NAME_RE, name) and name not in keep:
+            try:
+                os.unlink(os.path.join(WEB_PROXY_CERTS, name))
+            except OSError:
+                pass    # gone already, or not removable: the next successful apply tries again
 
 
 def _web_listen_ok(text, pw):

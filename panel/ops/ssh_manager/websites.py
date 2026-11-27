@@ -345,7 +345,7 @@ def apply_doc(text, sites=(), proxy=None):
     files = {}
     for site in sites:
         for d in site.domains or []:
-            if d.cert_mode == "own" and d.verified_at is not None and d.own_cert_pem:
+            if _wp().own_cert(d):
                 files["%s.crt" % d.domain] = d.own_cert_pem
                 files["%s.key" % d.domain] = _secret(d.own_key_secret)
     if proxy is not None and proxy.origin_pull_mtls:

@@ -158,6 +158,7 @@
   var WS = window.WS;
   if (!WS || !WS.siteId) return;
   var ID = WS.siteId;
+  var st = {d: null};
   // ── domains ──
   var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', mismatch: 'DNS points elsewhere',
     private: 'DNS points to a private address', failed: 'DNS check failed'};
@@ -171,10 +172,17 @@
     info.appendChild(WS.node('span', dm.dns_state === 'matching' ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
     info.appendChild(document.createTextNode(' · '));
     var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
-    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
+    var own = dm.cert_mode === 'own' && dm.own_cert;
+    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(own ? 'Your own certificate' : WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
+    if (own) {
+      info.appendChild(document.createTextNode(' · '));
+      info.appendChild(WS.node('span', null, WS.T('issuer')));
+      info.appendChild(WS.raw('span', 'ms-1 text-break', String(dm.own_cert.issuer || '')));
+      info.appendChild(document.createTextNode(' ·'));
+    }
     if (dm.cert_not_after) {
       info.appendChild(WS.node('span', 'ms-1', WS.T('expires')));
-      info.appendChild(WS.raw('span', 'ms-1', String(dm.cert_not_after).slice(0, 10)));
+      info.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(dm.cert_not_after).slice(0, 10)));
     }
     li.appendChild(info);
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
@@ -186,6 +194,7 @@
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     row.appendChild(WS.button(WS.T('Check again'), 'arrow-repeat', 'wsDomain', ['check', Number(dm.id)]));
     if (!dm.is_primary) row.appendChild(WS.button(WS.T('Make primary'), 'star', 'wsDomain', ['primary', Number(dm.id)]));
+    row.appendChild(WS.button(WS.T('Certificate'), 'shield-lock', 'wsCertOpen', [Number(dm.id)]));
     row.appendChild(WS.button(WS.T('Remove'), 'x-lg', 'wsDomain', ['remove', Number(dm.id)], 'btn-outline-danger'));
     return row;
   }
@@ -217,6 +226,40 @@
     WS.say('wd-msg', WS.T('Adding…'));
     WS.post(WS.R.act(ID, 'domains/add'), {domain: inp.value.trim()}).then(function (d) {
       if (WS.done(d, 'wd-msg')) { inp.value = ''; WS.reload(); }
+    });
+  };
+  // ── a domain's certificate: automatic, or the operator's own (chain and key pasted) ──
+  var certFor = null;
+  window.wsCertOpen = function (domainId) {
+    var dm = ((st.d && st.d.domains) || []).filter(function (x) { return Number(x.id) === Number(domainId); })[0];
+    var form = WS.el('wd-cert');
+    if (!dm || !form) return;
+    certFor = Number(dm.id);
+    WS.el('wd-cert-domain').textContent = dm.domain;
+    WS.el(dm.cert_mode === 'own' ? 'wd-cert-own' : 'wd-cert-acme').checked = true;
+    WS.el('wd-cert-pem').value = '';
+    WS.el('wd-cert-key').value = '';
+    WS.say('wd-cert-msg', '');
+    WS.clear(WS.el('wd-cert-notes'));
+    window.wsCertMode();
+    WS.show(form, true);
+    form.scrollIntoView({block: 'nearest'});
+  };
+  window.wsCertMode = function () { WS.show('wd-cert-own-fields', WS.el('wd-cert-own').checked); };
+  window.wsCertCancel = function () { WS.el('wd-cert-key').value = ''; WS.show('wd-cert', false); };
+  window.wsCertSave = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var own = WS.el('wd-cert-own').checked;
+    var body = {id: certFor, mode: own ? 'own' : 'acme'};
+    var key = WS.el('wd-cert-key');
+    if (own) { body.cert = WS.el('wd-cert-pem').value; body.key = key.value; }
+    key.value = '';                         // the key never stays in the page after it is sent
+    WS.say('wd-cert-msg', WS.T('Saving…'));
+    WS.post(WS.R.act(ID, 'domains/cert'), body).then(function (d) {
+      var ok = WS.done(d, 'wd-cert-msg');
+      var notes = WS.clear(WS.el('wd-cert-notes'));
+      ((d && d.notes) || []).forEach(function (n) { notes.appendChild(WS.raw('li', 'text-warning-emphasis', n)); });
+      if (ok) { WS.el('wd-cert-pem').value = ''; WS.reload(); }
     });
   };
   window.wsDomain = function (verb, domainId) {
@@ -294,7 +337,7 @@
       });
     });
   };
-  WS.onSite(function (d) { renderDomains(d); renderDatabases(d); });
+  WS.onSite(function (d) { st.d = d; renderDomains(d); renderDatabases(d); });
 })();
 
 // Backups and the administrators' Settings panel.

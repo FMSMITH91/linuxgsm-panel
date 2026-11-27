@@ -104,8 +104,8 @@
   // A domain's cert_state: the certificate the web proxy serves (websites_domains.cert_kind), by its issuer.
   WS.CERT = {issued: "Certificate active (Let's Encrypt)", zerossl: 'Certificate active (ZeroSSL)', other: 'Certificate active',
     staging: 'Test certificate (browsers do not trust it)', local: 'Local certificate (browsers do not trust it)',
-    pending: 'Certificate pending', failed: 'Certificate failed'};
-  WS.TRUSTED = ['issued', 'zerossl', 'other'];
+    pending: 'Certificate pending', failed: 'Certificate failed', own: 'Your own certificate'};
+  WS.TRUSTED = ['issued', 'zerossl', 'other', 'own'];
   // A map's own entry for a value the server sent, else the fallback ("constructor" is no state).
   WS.pick = function (map, key, fallback) {
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback;
