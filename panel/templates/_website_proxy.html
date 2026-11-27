@@ -43,12 +43,12 @@
         </div>
       </fieldset>
       <div id="wp-restricted" class="mb-2" hidden>
-        <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-1" role="group" aria-labelledby="wp-presets-label">
+          <span id="wp-presets-label" class="small">A CDN's networks:</span>
           <button type="button" id="wp-cf" class="btn btn-sm btn-outline-secondary" data-action="wsPreset" data-args='["cloudflare"]' aria-pressed="false">
-            <i class="bi bi-cloud"></i> Use Cloudflare's networks</button>
+            <i class="bi bi-cloud"></i> <span data-no-i18n>Cloudflare</span></button>
           <button type="button" id="wp-fastly" class="btn btn-sm btn-outline-secondary" data-action="wsPreset" data-args='["fastly"]' aria-pressed="false">
-            <i class="bi bi-cloud"></i> Use Fastly's networks</button>
-          <span id="wp-preset-state" class="small text-secondary"></span>
+            <i class="bi bi-cloud"></i> <span data-no-i18n>Fastly</span></button>
         </div>
         <details id="wp-cf-list" class="mb-1">
           <summary class="small" id="wp-cf-sum">Cloudflare's networks</summary>
@@ -63,7 +63,7 @@
         <label for="wp-cidrs" class="form-label small mb-1">Other networks, one per line</label>
         <textarea id="wp-cidrs" class="form-control form-control-sm font-monospace" rows="3" maxlength="4000"
                   spellcheck="false" autocomplete="off" aria-describedby="wp-cidrs-help"></textarea>
-        <div id="wp-cidrs-help" class="form-text mt-0">An address or a network, IPv4 or IPv6, for example 203.0.113.0/24.</div>
+        <div id="wp-cidrs-help" class="form-text mt-0">IPv4 or IPv6, for example 203.0.113.0/24.</div>
         <details id="wp-url-box" class="mt-1">
           <summary class="small" id="wp-url-sum">A list from an address</summary>
           <label for="wp-url" class="form-label small mb-1 mt-1">The list's address</label>
@@ -78,7 +78,7 @@
                  aria-describedby="wp-custom-trusted-help">
           <label class="form-check-label small" for="wp-custom-trusted">Trust my networks as proxies</label>
         </div>
-        <div id="wp-custom-trusted-help" class="form-text mt-0">Off: your networks only reach the sites. On: their requests may name the visitor's address (X-Forwarded-For), which the sites then see and log.</div>
+        <div id="wp-custom-trusted-help" class="form-text mt-0">On: the sites see the visitor's address their requests name (X-Forwarded-For).</div>
         <div id="wp-custom-trusted-note" class="form-text text-warning mt-0" hidden>Only for proxies you run or trust: anyone on these networks can make your sites see any address they choose.</div>
       </div>
       <div id="wp-tunnel" class="mb-2" hidden>

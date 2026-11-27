@@ -1,14 +1,14 @@
 {
+  "A CDN's networks:": "Redes de una CDN:",
   "A list from an address": "Una lista desde una dirección",
   "A list from an address: {n} networks": "Una lista desde una dirección: {n} redes",
-  "An address or a network, IPv4 or IPv6, for example 203.0.113.0/24.": "Una dirección o una red, IPv4 o IPv6, por ejemplo 203.0.113.0/24.",
   "An https address with one network a line (lines starting with # are skipped). Read when you save a new address, then once a day; a list is used only when every line is a network.": "Una dirección https con una red por línea (las líneas que empiezan por # se omiten). Se lee al guardar una dirección nueva y luego una vez al día; una lista solo se usa si todas sus líneas son redes.",
   "Fastly's networks": "Redes de Fastly",
   "Fastly's networks ({n})": "Redes de Fastly ({n})",
+  "IPv4 or IPv6, for example 203.0.113.0/24.": "IPv4 o IPv6, por ejemplo 203.0.113.0/24.",
   "List at least one network, or use a CDN's networks.": "Indica al menos una red, o usa las redes de una CDN.",
   "Not used: some lines of the list are not networks ({lines}).": "No se usa: algunas líneas de la lista no son redes ({lines}).",
-  "Off: your networks only reach the sites. On: their requests may name the visitor's address (X-Forwarded-For), which the sites then see and log.": "Desactivado: tus redes solo llegan a los sitios. Activado: sus peticiones pueden indicar la dirección del visitante (X-Forwarded-For), que los sitios ven y registran.",
-  "On the list: {names}. Tap a button again to remove its networks.": "En la lista: {names}. Pulsa de nuevo un botón para quitar sus redes.",
+  "On: the sites see the visitor's address their requests name (X-Forwarded-For).": "Activado: los sitios ven la dirección del visitante que indican sus peticiones (X-Forwarded-For).",
   "Only for a web proxy in Restricted mode with a list's address set: the panel reads that list when it is saved and once a day. Off: nothing is read, and the host keeps the last list it read.": "Solo para un proxy web en modo Restringido con la dirección de una lista: el panel lee esa lista al guardarla y una vez al día. Desactivado: no se lee nada y el host conserva la última lista leída.",
   "Only for proxies you run or trust: anyone on these networks can make your sites see any address they choose.": "Solo para proxies que gestionas o en los que confías: cualquiera en estas redes puede hacer que tus sitios vean la dirección que quiera.",
   "Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor's address only for HTTPS visitors: turn on Force TLS for the service at Fastly.": "Se leen de api.fastly.com/public-ip-list en una comprobación diaria y se actualizan solas con el catálogo firmado. Fastly da la dirección del visitante solo para visitantes HTTPS: activa Force TLS para el servicio en Fastly.",
@@ -22,6 +22,5 @@
   "The list's address": "La dirección de la lista",
   "The list's address is an https:// address on port 443, without a user name or password.": "La dirección de la lista es una dirección https:// en el puerto 443, sin usuario ni contraseña.",
   "Trust my networks as proxies": "Confiar en mis redes como proxies",
-  "Use Fastly's networks": "Usar las redes de Fastly",
   "Website allow lists read from an address (the address you enter)": "Listas de permitidos de sitios web leídas desde una dirección (la que indiques)"
 }

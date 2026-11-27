@@ -298,18 +298,18 @@ def _s1_card():
   window.wsPreset('fastly');
   const after = [$('wp-cf').getAttribute('aria-pressed'), $('wp-fastly').getAttribute('aria-pressed')];
   const body = WS.exposureBody();
-  return {wired: wired, before: before, after: after, presets: body.allow_presets, state: $('wp-preset-state').textContent,
+  return {wired: wired, before: before, after: after, presets: body.allow_presets, label: $('wp-presets-label').textContent,
           sum: $('wp-fastly-sum').textContent, ranges: $('wp-fastly-ranges').children.length,
           src: $('wp-fastly-src').textContent, folded: [$('wp-cf-list').hasAttribute('open'), $('wp-fastly-list').hasAttribute('open')]};
 """, routes={"/api/websites": answer})
     eq("CDN presets (card): one button per CDN, each pressed by its own tap and sent with the form; each CDN's list "
        "folded under the buttons with its count, every network, the catalog's date and its source (Fastly's with "
        "the Force TLS note)",
-       (got.get("wired"), got.get("before"), got.get("after"), sorted(got.get("presets") or []), got.get("state"), got.get("sum"),
+       (got.get("wired"), got.get("before"), got.get("after"), sorted(got.get("presets") or []), got.get("label"), got.get("sum"),
         got.get("ranges"), "2026-11-20" in (got.get("src") or ""), "api.fastly.com/public-ip-list" in (got.get("src") or ""),
         "Force TLS" in (got.get("src") or ""), got.get("folded")),
        (['["cloudflare"]', '["fastly"]', "wsPreset"], ["true", "false"], ["true", "true"], ["cloudflare", "fastly"],
-        "On the list: Cloudflare, Fastly. Tap a button again to remove its networks.", "Fastly's networks (3)", 3,
+        "A CDN's networks:", "Fastly's networks (3)", 3,
         True, True, True, [False, False]))
 
 

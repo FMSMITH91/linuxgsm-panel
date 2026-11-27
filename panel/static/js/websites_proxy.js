@@ -31,24 +31,21 @@
   }
   // The allow-list presets: each CDN's networks from the signed catalog, its elements (wp-<id>-...) and its source.
   var PRESETS = {
-    cloudflare: {id: 'cf', name: 'Cloudflare', sum: "Cloudflare's networks ({n})",
+    cloudflare: {id: 'cf', sum: "Cloudflare's networks ({n})",
       src: 'Read from cloudflare.com/ips-v4 and /ips-v6 by a daily check, and updated by themselves with the signed catalog.'},
-    fastly: {id: 'fastly', name: 'Fastly', sum: "Fastly's networks ({n})",
+    fastly: {id: 'fastly', sum: "Fastly's networks ({n})",
       src: 'Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor\'s address only for HTTPS visitors: turn on Force TLS for the service at Fastly.'}
   };
+  // A pressed button (aria-pressed, filled) is a CDN whose networks are on the list.
   function renderPresets() {
-    var on = [];
     Object.keys(PRESETS).forEach(function (name) {
       var pressed = st.presets.indexOf(name) >= 0, b = WS.el('wp-' + PRESETS[name].id);
-      if (pressed) on.push(PRESETS[name].name);
       if (b) {
         b.setAttribute('aria-pressed', pressed ? 'true' : 'false');
         b.className = 'btn btn-sm ' + (pressed ? 'btn-secondary' : 'btn-outline-secondary');
       }
       renderPresetList(name);
     });
-    var s = WS.el('wp-preset-state');
-    if (s) s.textContent = on.length ? WS.TF('On the list: {names}. Tap a button again to remove its networks.', {names: on.join(', ')}) : '';
   }
   // Every network a preset admits, from the signed catalog, and where they come from.
   function renderPresetList(name) {
