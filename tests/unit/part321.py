@@ -1,10 +1,13 @@
-"""Part 321 of the unit suite: CI's apt step, the tunnel's closed ports.
+"""Part 321 of the unit suite: CI's apt step, the tunnel's closed ports, a stopped database server, website bans.
 
 1. CI: the unit legs' apt step takes the runner image's own packages.microsoft.com source out of apt's list before
    `apt-get update` (that repository answered 403 and failed the whole leg), and only that source; the step's own
    loop is run over a scratch sources folder.
 2. Tunnel mode closes ports 80 and 443 whatever becomes of the tunnel: a token the provider refuses ended the apply
    before its firewall step, and the public rules stayed open while the saved mode said tunnel. The answer says so.
+3. A database server the panel set up and that stopped since: an app install and a site's database create ask the
+   host again instead of trusting the row's "ready" (up to 10 minutes old), so they are refused with the Start
+   button's entry before anything is made, and the add dialog's list shows that entry at once.
 
 HOW IT RUNS. part12's app and its database for the routes; every host call at ssh_manager's seams (part12's
 tripwire is armed, so nothing reaches a host). The workflow is read as text (part06's run-block reader).
@@ -22,16 +25,21 @@ from unit.part06 import _wf_run_block
 from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
 from panel.core import config as _cfg321
 from panel.core.clock import utcnow as _utcnow321
-from panel.db.models import (RemoteServer as _Remote321, User as _User321, Website as _Site321,
-                             WebsiteDomain as _Dom321, WebsiteProxy as _Proxy321, db as _db321)
+from panel.db.models import (HostDatabaseServer as _HDS321, RemoteServer as _Remote321, User as _User321,
+                             Website as _Site321, WebsiteDomain as _Dom321, WebsiteProxy as _Proxy321, db as _db321)
+from panel.ops.ssh_manager import databases as _dbs321
 from panel.ops.ssh_manager import websites as _sw321
+from panel.routes import databases as _dbr321
 from panel.routes import websites as _w321
+from panel.routes import websites_apps as _wapps321
+from panel.routes import websites_view as _wview321
 
 _TOKEN321 = "k" * 40
 _ROWS321 = {"sites": [], "remotes": [], "users": []}
 _REC321 = {"ports": [], "apply": []}
 # The sentence a failed tunnel-mode apply ends with, pinned as written (a revert of the fix has no such name).
 _CLOSED321 = "Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel."
+_STOPPED321 = {"state": "unsupported", "detail": "stopped", "flavor": "mariadb"}
 
 
 class _Client321:
@@ -45,6 +53,16 @@ class _Client321:
     def get(self, *a, **k):
         _g321.pop("_login_user", None)
         return self.c.get(*a, **k)
+
+
+class _Inline321:
+    """threading.Thread that runs its target at start(), in the caller's thread."""
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._t, self._a, self._k = target, args, kwargs or {}
+
+    def start(self):
+        self._t(*self._a, **self._k)
 
 
 def _rows321():
@@ -170,14 +188,73 @@ def _s2_tunnel(st):
        (502, ["tunnel"], True))
 
 
+# ── 3. A database server stopped since it was set up ──────────────────────────────────────────────
+def _hds321(st):
+    hd = _HDS321(remote_id=st.host.id, flavor="mariadb", version="11.8.3-MariaDB", installed_by_panel=True,
+                 auth_mode="socket", port=3306, checked_at=_dbr321._now())
+    _db321.session.add(hd)
+    _db321.session.commit()
+    return hd
+
+
+def _install_form321(st, name):
+    return {"app": "wordpress", "name": name, "remote_id": st.host.id, "admin_user": "siteowner",
+            "admin_email": "owner@example.org", "domain": "%s.example.org" % name}
+
+
+def _s3_db_stopped(st):
+    _hds321(st)
+    _dbr321._PROBES.pop(st.host.id, None)
+    asked, answers = [], [dict(_STOPPED321)]
+    _p9_patch(_dbs321, "probe", lambda remote: asked.append(remote.id) or (answers.pop(0) if answers else
+                                                                           {"state": "ready"}))
+    _p9_patch(_wapps321, "_worker", lambda app, sid, uid, secrets: None)
+    _p9_patch(_w321, "threading", _NS321(Thread=_Inline321))
+    eq("stopped database (before: the row checked a minute ago): the add dialog's list, which never probes, reads it "
+       "ready", (_wview321.database_missing(st.host), asked), (None, []))
+    su = _Client321(st.su.id)
+    r = su.post("/websites/install-app", json=_install_form321(st, "p321-wp"))
+    body = _p9_json(r)
+    made = _Site321.query.filter_by(remote_id=st.host.id, name="p321-wp").first()
+    if made is not None:
+        _ROWS321["sites"].append(made.id)
+    eq("stopped database (POST /websites/install-app, WordPress, the server stopped since its row was checked): the "
+       "host is asked again, and the install is refused before anything is made with the entry the Start button "
+       "fixes",
+       (r.status_code, asked, made is None, [(m.get("key"), m.get("host_id")) for m in body.get("missing") or []]),
+       (409, [st.host.id], True, [("database-stopped", st.host.id)]))
+    eq("stopped database (the add dialog's list after it, which does not probe): the newer probe's word wins over the "
+       "row, so the Start button shows at once, not 10 minutes later",
+       ((_wview321.database_missing(st.host) or {}).get("key"), asked), ("database-stopped", [st.host.id]))
+    created = []
+    _p9_patch(_dbs321, "create", lambda *a, **k: created.append(a[2]) or (True, "created"))
+    site = _site321(st, "p321-dbsite", kind="php")
+    answers[:] = [dict(_STOPPED321)]
+    r = su.post("/websites/%d/databases/add" % site.id, json={"name": "app"})
+    eq("stopped database (POST /websites/<id>/databases/add): asked again, refused with nothing created on the "
+       "host, and the answer carries the Start button's entry",
+       (r.status_code, created, [m.get("key") for m in _p9_json(r).get("missing") or []]),
+       (502, [], ["database-stopped"]))
+    answers[:] = [{"state": "ready", "flavor": "mariadb", "version": "11.8.3-MariaDB"}]
+    r = su.post("/websites/install-app", json=_install_form321(st, "p321-wp2"))
+    made = _Site321.query.filter_by(remote_id=st.host.id, name="p321-wp2").first()
+    if made is not None:
+        _ROWS321["sites"].append(made.id)
+    eq("stopped database (control: the server started again, the host answers ready): the install starts, and the "
+       "dialog's list reads ready", (r.status_code, made is not None, _wview321.database_missing(st.host)),
+       (200, True, None))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup321():
     _db321.session.rollback()
     remotes = _ROWS321["remotes"] or [0]
     sites = set(_ROWS321["sites"]) | {s.id for s in _Site321.query.filter(_Site321.remote_id.in_(remotes)).all()}
+    from panel.db.models import GameDatabase as _GDB321
+    _GDB321.query.filter(_GDB321.remote_id.in_(remotes)).delete(synchronize_session=False)
     for d in _Dom321.query.filter(_Dom321.website_id.in_(sorted(sites) or [0])).all():
         _db321.session.delete(d)
-    for model in (_Proxy321,):
+    for model in (_Proxy321, _HDS321):
         for p in model.query.filter(model.remote_id.in_(remotes)).all():
             _db321.session.delete(p)
     for model, ids in ((_Site321, sorted(sites)), (_User321, _ROWS321["users"]), (_Remote321, _ROWS321["remotes"])):
@@ -186,6 +263,8 @@ def _cleanup321():
             if row is not None:
                 _db321.session.delete(row)
     _db321.session.commit()
+    for rid in _ROWS321["remotes"]:
+        _dbr321._PROBES.pop(rid, None)
 
 
 def _ran321(step, *args):
@@ -208,7 +287,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part321")
         _st321 = _rows321()
-        for _sec321 in (_s2_tunnel,):
+        for _sec321 in (_s2_tunnel, _s3_db_stopped):
             check("part321: %s ran to the end" % _sec321.__name__, _ran321(_sec321, _st321), _ran321.last)
         eq("part321: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips321:], [])
     finally:

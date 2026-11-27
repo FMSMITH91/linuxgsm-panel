@@ -166,13 +166,15 @@ def database_missing(remote, probe=False):
     """The add dialog's entry for a host with no database server an app could use, or None.
 
     Read from what the Databases code knows (its stored server, or its 10-minute probe); `probe` True asks the host
-    when nothing is known (the app install's own check, before anything is made). Nothing known and nothing asked,
-    or a host that did not answer, is no entry: the install's database step still refuses then.
+    now, even with a stored server (the app install's own check, before anything is made): a server set up a few
+    minutes ago and stopped since read as ready from its row, so the install went ahead and failed at its database
+    step instead of offering the Start button. Nothing known and nothing asked, or a host that did not answer, is no
+    entry: the install's database step still refuses then.
     """
     from panel.routes import databases as _d
     if remote is None:
         return None
-    state = _d.host_state(remote, may_probe=probe)[0]
+    state = _d.host_state(remote, may_probe="force" if probe else False)[0]
     if state in ("ready", "unknown", "unreadable"):
         return None
     if state == "unsupported" and _d.probe_detail(remote) == "stopped":

@@ -70,8 +70,10 @@ Every app needs a database server on the host. When it has none, the dialog says
 with **Set up databases** for a superadmin (MariaDB, reached from this machine only, the same setup as the
 Databases tab of a game server). The dialog follows the setup and makes **Create** available once the server is
 ready, with no reload; it reads the host's state again each time it opens. A database server that is installed
-but stopped gets **Start the database server** instead, which starts it and enables it at boot. The site's
-Database tab offers Set up databases too.
+but stopped gets **Start the database server** instead, which starts it and enables it at boot. **Create**
+asks the host again before anything is made, so a server that stopped after it was set up is caught there
+(with the Start button), not at the install's database step. The site's Database tab offers Set up databases
+too, and asks the host again before it creates a database.
 
 The admin password and the database password never appear on a command line or in a log: each reaches the
 installer as a file that only the site's account can read, removed when the step ends, and the installers'
@@ -145,7 +147,9 @@ the Websites page:
   connector cannot start (a wrong token, or the host cannot reach the internet), the card says so;
   applying again tries at once, even after several failures in a row. An apply waits a few seconds after
   starting the connector and says it did not start when it stopped in that time (Cloudflare refuses a
-  wrong token only once the connector has started). **Check the web proxy** on the card shows the proxy's
+  wrong token only once the connector has started). Switching to Tunnel closes ports 80 and 443 first, so
+  the sites are never reachable straight at the host while the mode says Tunnel, even when the connector
+  fails; a failed apply says the ports were closed. **Check the web proxy** on the card shows the proxy's
   version and state and, in tunnel mode, the connector's; **Apply again** applies the host's settings again.
 
 In Public and Restricted mode, ports 80 and 443 are opened in the host's firewall when the first site

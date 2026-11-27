@@ -202,19 +202,39 @@ def _probe_mode(manage):
     return "force" if request.args.get("refresh") else True
 
 
+def _newer_probe_state(remote, hd):
+    """The state a probe NEWER than `hd` (and under 10 minutes old) found, else "ready", the row's own answer.
+
+    A row says only that the server was ready when it was last checked. A probe made since (a create's or an
+    install's own check, _recheck) that found it stopped is the newer word: the add dialog showed "ready" and no
+    Start button for up to 10 minutes after the server stopped, and a Create in that time went ahead and failed at
+    its database step. A login-mode host's needs_login is ready, as _recheck has it.
+    """
+    hit = _PROBES.get(remote.id)
+    if not hit:
+        return "ready"
+    age = time.monotonic() - hit[0]
+    row_age = (_now() - hd.checked_at).total_seconds() if hd.checked_at else float("inf")
+    state = hit[1].get("state") or "ready"
+    if age >= _PROBE_FRESH or age >= row_age or (state == "needs_login" and hd.auth_mode == "login"):
+        return "ready"
+    return state
+
+
 def host_state(remote, may_probe):
     """(state, HostDatabaseServer row or None, probe dict) for `remote`.
 
-    A host with a row was found ready before: it is probed again once its row is 10 minutes old.
-    A host without one is probed (cached 10 minutes); found ready, it gets its row (an existing
-    server, used as it is). `may_probe` False reads only what is stored; "force" (the tab's Refresh)
-    probes now whatever is stored.
+    A host with a row was found ready before: it is probed again once its row is 10 minutes old, and
+    a probe made since the row was checked has the newer word (_newer_probe_state). A host without
+    one is probed (cached 10 minutes); found ready, it gets its row (an existing server, used as it
+    is). `may_probe` False reads only what is stored; "force" (the tab's Refresh, and a create's or
+    an install's own check) probes now whatever is stored.
     """
     hd = _host_row(remote.id)
     if _SETUP.get(remote.id, {}).get("running"):
         return "setting_up", hd, {}
     if hd is not None:
-        return (_recheck(remote, hd) if _probe_again(hd, may_probe) else "ready"), hd, {}
+        return (_recheck(remote, hd) if _probe_again(hd, may_probe) else _newer_probe_state(remote, hd)), hd, {}
     if not may_probe:
         hit = _PROBES.get(remote.id)
         return ((hit[1].get("state") or "unreadable") if hit else "unknown"), None, {}

@@ -569,11 +569,11 @@ def _c4_no_db(st):
     body = _p9_json(r)
     made = _Site315.query.filter_by(remote_id=st.host.id, name="p315-nodb").first()
     eq("C4 (POST /websites/install-app on a host with no database server): refused before anything is made (no site "
-       "row, no account), the host asked when nothing was known, and the answer carries the dialog's entry with the "
-       "host to set databases up on",
+       "row, no account), the host asked now (forced: a stored server's ready may be stale), and the answer carries "
+       "the dialog's entry with the host to set databases up on",
        (r.status_code, body.get("message"), made is None, asked[-1:], [(m.get("key"), m.get("kinds"), m.get("host_id"))
                                                                       for m in body.get("missing") or []]),
-       (409, _view315().S_NO_DB, True, [True], [("database", ["install"], st.host.id)]))
+       (409, _view315().S_NO_DB, True, ["force"], [("database", ["install"], st.host.id)]))
     lst = _p9_json(su.get("/api/websites")).get("missing") or []
     eq("C4 (GET /api/websites): the list's missing entries say so too, for app installs only, from what is known (no "
        "probe on a list read)", ([(m.get("key"), m.get("kinds")) for m in lst if m.get("key") == "database"], asked[-1:]),
