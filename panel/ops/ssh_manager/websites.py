@@ -529,13 +529,15 @@ def tunnel_apply(remote, proxy):
     ids = _tunnel_ids(remote) if ok else None
     if ids is None:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    from panel.services import websites_catalog as _wc
-    image = _wc.pins("tunnel")["cloudflare"]["image"]
-    files = {"%s/%s.container" % (_ws().QUADLET_DIR, _ws().TUNNEL_UNIT): _ws().tunnel_quadlet(proxy, ids, image),
-             "tunnel/token": token}
-    sh = (_ws()._ENV + _ws().write_files_sh() + "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; "
-          "systemctl --user daemon-reload && systemctl --user restart %s" % (image, unit))
-    ok, out = _as_site(remote, acct, sh, timeout=600, stdin_text=_ws().bundle(files))
+    # The connector's image is built on the host from its pinned program (websites.tunnel_build), as its account.
+    b = _ws().tunnel_build(proxy.tunnel_provider)
+    if b is None:
+        return False, NO_IMAGE
+    files = {"%s/%s.container" % (_ws().QUADLET_DIR, _ws().TUNNEL_UNIT): _ws().tunnel_quadlet(proxy, ids, b["tag"]),
+             "tunnel/token": token, _ws().BUILD_FILE: _ws().containerfile(b["folder"])}
+    sh = (_ws()._ENV + _ws().write_files_sh(True) + _ws().image_build_sh(b)
+          + "systemctl --user daemon-reload && systemctl --user restart %s" % unit)
+    ok, out = _as_site(remote, acct, sh, timeout=1800, stdin_text=_ws().bundle(files))
     return (True, OK_TUNNEL) if ok else (False, _mark(out))
 
 

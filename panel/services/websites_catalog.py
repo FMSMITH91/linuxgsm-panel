@@ -158,11 +158,18 @@ def _wordpress_problems(entry):
 
 
 def _tunnel_problems(entry):
+    """The tunnel connectors' pins: each provider's image, and the image its certificate authorities come from.
+
+    The connector is built on the host on an empty base (panel/website_images/cloudflared), with the certificate
+    authorities taken from `certs` (a Debian image, by digest): both are required.
+    """
     if not isinstance(entry, dict) or not entry or not set(entry) <= set(TUNNEL_PROVIDERS):
         return ["tunnel: one entry per provider of %s" % ", ".join(TUNNEL_PROVIDERS)]
     out = []
     for name, e in sorted(entry.items()):
-        out += _image_problems(e, "tunnel.%s" % name)
+        out += _image_problems(e, "tunnel.%s" % name, ("version", "certs"))
+        if isinstance(e, dict) and not _full(_DIGEST, e.get("certs")):
+            out.append("tunnel.%s.certs: the certificate authorities' image pinned by a full sha256 digest" % name)
     return out
 
 
@@ -170,9 +177,9 @@ def _runtime_problems(name, entry):
     key = "runtimes.%s" % name
     if not _full(r"[a-z][a-z0-9]{0,15}", name):
         return ["%s: not a runtime name" % key]
-    if not _obj(entry, ("versions", "build", "start", "port"), ("egress",)):
+    if not _obj(entry, ("versions", "build", "start", "port"), ("egress", "npm")):
         return ["%s: needs versions, build, start and port" % key]
-    out = _versions_problems(entry["versions"], key + ".versions", _RUNTIME_VERSION, True)
+    out = _versions_problems(entry["versions"], key + ".versions", _RUNTIME_VERSION, True) + _npm_problems(name, entry)
     for cmd in ("build", "start"):
         if not (isinstance(entry[cmd], str) and 0 < len(entry[cmd]) <= 1000 and _full(_ARGV_WORD, entry[cmd])):
             out.append("%s.%s: one line of at most 1000 characters" % (key, cmd))
@@ -180,6 +187,13 @@ def _runtime_problems(name, entry):
         out.append("%s.port: 1024-65535" % key)
     out += _egress_problems(entry.get("egress", []), key)
     return out
+
+
+def _npm_problems(name, entry):
+    """Node.js's image is built on the host with npm at this exact version (panel/website_images/node): required."""
+    if (name == "node" or "npm" in entry) and not _full(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", entry.get("npm")):
+        return ["runtimes.%s.npm: an exact npm version x.y.z" % name]
+    return []
 
 
 def _egress_problems(hosts, key):
@@ -543,16 +557,18 @@ def origin_pull_ca(name):
 
 
 def runtimes(today=None):
-    """The runtimes the catalog offers: {name: {versions: {version: image}, build, start, port, egress}}.
+    """The runtimes the catalog offers: {name: {versions: {version: image}, build, start, port, egress, npm}}.
 
-    Only versions still supported upstream today are listed.
+    Only versions still supported upstream today are listed. `npm` is the exact npm version a runtime's image is
+    built with (Node.js), or None.
     """
     sites, _source = section()
     out = {}
     for name, entry in sites["runtimes"].items():
         live = supported(entry["versions"], today)
         out[name] = {"versions": {v: entry["versions"][v]["image"] for v in live}, "build": entry["build"],
-                     "start": entry["start"], "port": entry["port"], "egress": list(entry.get("egress", []))}
+                     "start": entry["start"], "port": entry["port"], "egress": list(entry.get("egress", [])),
+                     "npm": entry.get("npm")}
     return out
 
 

@@ -52,7 +52,8 @@ from panel.services import websites_recipes as _wr305
 
 _TREE305 = _tf305.mkdtemp(prefix="lgsm-unit-p305-")
 # The real functions a section stands in for, put back by the next section that needs them.
-_REAL305 = {n: getattr(_sw305, n) for n in ("install", "php_apply", "_as_site", "app_install_step", "remove")}
+_REAL305 = {n: getattr(_sw305, n) for n in ("install", "php_apply", "_as_site", "app_install_step", "remove",
+                                             "tunnel_apply")}
 _BIN305 = os.path.join(_TREE305, "bin")
 _CALLS305 = os.path.join(_TREE305, "calls.jsonl")
 _TOKEN305 = "t" * 40
@@ -472,7 +473,7 @@ def _s9_php_image(st):
     su.post("/websites/%d/update-image" % site.id)
     sh, stdin = [x for x in seen if "SITE_INSTALLED" in x[0]][-1]
     base = _wc305.php_image("php", "8.4")
-    tag = _ws305.php_build_tag("8.4", base)
+    tag = _ws305.build("php", "8.4", [("BASE_IMAGE", base)])["tag"]
     with open(_CF305, encoding="utf-8") as fh:
         cf = fh.read()
     eq("PHP image (POST /websites/<id>/update-image): a PHP site's image is built on the host from the catalog's PHP "
@@ -508,6 +509,87 @@ def _s9_ci():
         sorted(e["image"] for e in _wc305.pins("php").values()), [], True))
 
 
+# ── 13. Images built on the host from their pinned bases ───────────────────────────────────────────────
+def _built305(seen):
+    """(install shell, its bundle) of the last install shell `seen` recorded."""
+    sh, stdin = [x for x in seen if "SITE_INSTALLED" in x[0]][-1]
+    return sh, _bundle305(stdin)
+
+
+def _s13_wordpress(st):
+    seen = _host_seams305()
+    site = _site305(st, "p305-wpimg", kind="wordpress", app_recipe="wordpress")
+    _Client305(st.su.id).post("/websites/%d/update-image" % site.id)
+    sh, files = _built305(seen)
+    base = _wc305.php_image("wordpress", "8.4")
+    tag = _ws305.build("wordpress", "php8.4", [("BASE_IMAGE", base)])["tag"]
+    eq("WordPress image (POST /websites/<id>/update-image): built on the host from the catalog's WordPress image (by "
+       "digest) and panel/website_images/wordpress, which applies Debian's updates (the pinned image ran as it was, "
+       "with fixed issues upstream had not rebuilt for); its unit runs the build, wp-cli's Containerfile is written "
+       "for its install steps",
+       ("podman image exists %s ||" % tag in sh, "--build-arg BASE_IMAGE=%s" % base in sh,
+        files.get("site/image/Containerfile") == _ws305.containerfile("wordpress"), "Image=%s" % tag in _quadlet305(seen),
+        "podman pull -q %s" % base in sh, files.get("site/image/wpcli.Containerfile") == _ws305.containerfile("wpcli"),
+        "apt-get upgrade -y" in files.get("site/image/Containerfile", "")),
+       (True, True, True, True, False, True, True))
+    eq("image builds (install_sh): only the built image stays in the account's store: no intermediate image "
+       "(--layers=false), its base removed once it is built (the layers it shares stay, as its own), the build's "
+       "network the host's for the build only",
+       ("podman build -q --format docker --layers=false --pull=missing --network=host" in sh,
+        "podman rmi -i %s >/dev/null 2>&1; }" % base in sh, "--network=host" in _quadlet305(seen)), (True, True, False))
+    _s13_node(st)
+
+
+def _s13_node(st):
+    seen = _host_seams305()
+    site = _site305(st, "p305-nodeimg", kind="app", runtime="node", runtime_version="24", app_port=3000)
+    _Client305(st.su.id).post("/websites/%d/update-image" % site.id)
+    sh, files = _built305(seen)
+    rt = _wc305.runtimes()["node"]
+    args = [("BASE_IMAGE", rt["versions"]["24"]), ("NPM_VERSION", rt["npm"])]
+    tag = _ws305.build("node", "24", args)["tag"]
+    eq("Node.js image (POST /websites/<id>/update-image): built on the host from the catalog's Node.js image and npm "
+       "at the catalog's exact version (the pinned image ran with its own npm, whose bundled packages had fixed High "
+       "issues); the app runs it and builds with it; the gate still pulls its pinned nginx (control)",
+       ("podman image exists %s ||" % tag in sh, "--build-arg NPM_VERSION=%s" % rt["npm"] in sh,
+        files.get("site/image/Containerfile") == _ws305.containerfile("node"), "Image=%s" % tag in _quadlet305(seen),
+        tag in _ws305.build_sh(site.account, site, (1005, 1005)), "podman pull -q %s" % _wc305.static_image() in sh,
+        bool(_re305.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", rt["npm"] or ""))),
+       (True, True, True, True, True, True, True))
+    no_npm = _json305.loads(_json305.dumps(_wc305.section()[0]))
+    del no_npm["runtimes"]["node"]["npm"]
+    eq("Node.js image (catalog): a sites section without npm's exact version is refused (a build would take whatever "
+       "npm is newest), and a build with an ARG the catalog lacks is not offered",
+       (any("runtimes.node.npm" in x for x in _wc305.sites_problems(no_npm)),
+        _ws305.build("node", "24", args[:1])), (True, None))
+    _s13_tunnel(st)
+
+
+def _s13_tunnel(st):
+    seen = _host_seams305()
+    _p9_patch(_sw305, "_tunnel_ids", lambda remote: (1100, 1100))
+    proxy = _NS305(exposure_mode="tunnel", tunnel_provider="cloudflare", tunnel_token_enc=_cfg305.encrypt_secret("tk-305"))
+    ok, _said = _REAL305["tunnel_apply"](_NS305(is_local=True), proxy)
+    sh, stdin = seen[-1]
+    files = _bundle305(stdin)
+    pin = _wc305.pins("tunnel")["cloudflare"]
+    tag = _ws305.build("cloudflared", pin["version"], [("BASE_IMAGE", pin["image"]), ("CERTS_IMAGE", pin["certs"])])["tag"]
+    unit = files.get(".config/containers/systemd/lgsm-tunnel.container", "")
+    cf = files.get("site/image/Containerfile", "")
+    eq("tunnel connector (tunnel_apply): built on the host as its account, cloudflared alone on an empty image with "
+       "the certificate authorities from a pinned Debian stage (the distroless image ran with a system library it "
+       "never loads, unfixed); its unit runs the build, nothing is pulled to run as it is",
+       (ok, "podman image exists %s ||" % tag in sh, "--build-arg CERTS_IMAGE=%s" % pin["certs"] in sh,
+        "Image=%s" % tag in unit, "podman pull" in sh, cf == _ws305.containerfile("cloudflared"),
+        "\nFROM scratch\n" in cf, "USER 65532:65532" in cf),
+       (True, True, True, True, False, True, True, True))
+    no_certs = _json305.loads(_json305.dumps(_wc305.section()[0]))
+    del no_certs["tunnel"]["cloudflare"]["certs"]
+    eq("tunnel connector (catalog): a sites section without the certificate authorities' image is refused",
+       [x for x in _wc305.sites_problems(no_certs) if "tunnel" in x],
+       ["tunnel.cloudflare.certs: the certificate authorities' image pinned by a full sha256 digest"])
+
+
 # ── the step shells in bash (sections 3, 10, 11) ────────────────────────────────────────────────
 def _app_site305(app, kind):
     return _NS305(id=900, account="ws905", name="p305app", kind=kind, php_version="8.4", port=20905, pids=256,
@@ -531,6 +613,10 @@ def _app_home305(site, recipe):
     html = os.path.join(home, "site", "html")
     for d in ("install", "sites/default", "inc", "other"):
         os.makedirs(os.path.join(html, d), exist_ok=True)
+    os.makedirs(os.path.join(home, "site", "conf"), exist_ok=True)      # what the site's install made
+    os.makedirs(os.path.join(home, "site", "image"), exist_ok=True)
+    with open(os.path.join(home, _ws305.WPCLI_FILE), "w", encoding="utf-8") as fh:
+        fh.write(_ws305.containerfile("wpcli"))
     for f in ("config.php", "sites/default/settings.php", "inc/config.php", "Settings.php", "wp-config.php"):
         with open(os.path.join(html, f), "w", encoding="utf-8") as fh:
             fh.write("<?php // written by the installer\n")
@@ -573,13 +659,18 @@ def _s3_wpcli(st):
     _reset305()
     steps, _site = _run_app305("wordpress", skip=("download-verify-unpack", "create-database", "render-config",
                                                   "set-permissions", "verify-install"))
-    wpcli = _wc305.pins("wpcli")["image"]
-    tools = [(c["argv"][:2], wpcli in c["argv"]) for c in _calls305() if c["tool"] == "podman"]
-    eq("wp-cli (app_install_step): its pinned image is looked for and pulled by digest before the step runs it (it was "
-       "never pulled: `wp core install` always failed); the site-image step pulls nothing (control)",
-       ([ok for _t, ok, _s in steps], tools),
-       ([True, True], [(["run", "--rm"], False), (["image", "exists"], True), (["pull", "-q"], True),
-                       (["run", "--rm"], True)]))
+    wpcli = _ws305.wpcli_build()["tag"]
+    calls = [c for c in _calls305() if c["tool"] == "podman"]
+    tools = [(c["argv"][:2], wpcli in c["argv"]) for c in calls]
+    build = next((c["argv"] for c in calls if c["argv"][:1] == ["build"]), [])
+    eq("wp-cli (app_install_step): its image is looked for and, missing, built on the host from the wp-cli "
+       "Containerfile the install wrote and the catalog's pinned base before the step runs it (it was never there: "
+       "`wp core install` always failed); the site-image step builds nothing (control)",
+       ([ok for _t, ok, _s in steps], tools, "BASE_IMAGE=%s" % _wc305.pins("wpcli")["image"] in build,
+        "site/image/wpcli.Containerfile" in build),
+       ([True, True], [(["run", "--rm"], False), (["image", "exists"], True), (["build", "-q"], True),
+                       (["rmi", "-i"], False), (["images", "--format"], False), (["image", "prune"], False),
+                       (["run", "--rm"], True)], True, True))
 
 
 def _s10_verify(st):
@@ -654,7 +745,7 @@ def _s11_wordpress(runs):
     prompt["steps"][3]["argv"] = ["wp", "core", "install", "--prompt=admin_password"]
     check("secrets (catalog): a recipe step that asks its command for a prompt is refused (wp-cli echoes the answer)",
           any("prompt" in p for p in _wc305.recipe_problems("wordpress", prompt)), repr(_wc305.recipe_problems("wordpress", prompt)))
-    wp = [c for c in runs if _wc305.pins("wpcli")["image"] in c["argv"]]
+    wp = [c for c in runs if _ws305.wpcli_build()["tag"] in c["argv"]]
     got = (wp[-1].get("values") or {}) if wp else {}
     eq("secrets: WordPress's admin password reaches wp-cli as a 0600 file in a 0700 folder (and is set from it), "
        "not on its prompt (wp-cli echoed it into the journal)",
@@ -752,8 +843,8 @@ with _p9.app_context():
         check("part305: _s4_db_forward ran to the end", _got305 is not _ran305, _ran305.last)
         if _got305 is not _ran305:
             check("part305: _s5_restart ran to the end", _ran305(_s5_restart, _st305, *_got305) is not _ran305, _ran305.last)
-        for _sec305 in (_s4_apps_forward, _s6_phpbb, _s7_admin_url, _s8_delete, _s9_php_image, _s3_wpcli, _s10_verify,
-                        _s11_secrets, _s12_ui):
+        for _sec305 in (_s4_apps_forward, _s6_phpbb, _s7_admin_url, _s8_delete, _s9_php_image, _s13_wordpress, _s3_wpcli,
+                        _s10_verify, _s11_secrets, _s12_ui):
             check("part305: %s ran to the end" % _sec305.__name__, _ran305(_sec305, _st305) is not _ran305, _ran305.last)
         eq("part305: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips305:], [])
     finally:

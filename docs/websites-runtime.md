@@ -14,9 +14,10 @@ websites need." Websites on managed hosts will come in a later version.
 ## One account and one container per site
 
 Each site runs under its own account (`ws` followed by the site's number), in rootless Podman, from an
-image pinned by digest in the signed catalog. The container runs as that account's own user, with every
-capability dropped, no new privileges, a read-only system and limits on memory (no swap), processes and
-open files. Its server listens only on the host's loopback address, and it refuses any request that
+image the panel builds on the host from a base pinned by digest in the signed catalog (a static site runs its
+pinned image as it is; see "Images built on the host" below). The container runs as that account's own user,
+with every capability dropped, no new privileges, a read-only system and limits on memory (no swap), processes
+and open files. Its server listens only on the host's loopback address, and it refuses any request that
 does not carry the web proxy's secret token, so another account on the host cannot reach it directly.
 
 A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
@@ -46,8 +47,8 @@ could not be measured. A write that would pass the limit is refused.
 
 The site's container images do not count toward that limit. They come from the signed catalog, they are the same
 for every site of a kind, and old ones are removed after an update. Each site account keeps its own copy: about
-2 GB for a WordPress site (its image and wp-cli's), about 1.1 GB for a PHP site whose image is built on the host,
-and about 0.6 GB for a Node.js site. On a host where `/home` has user quotas on, the panel also sets the site
+1.1 GB for a WordPress site (its image and wp-cli's), about 1.1 GB for a PHP site, and about 0.3 GB for a Node.js
+site (its image and the gate's nginx). On a host where `/home` has user quotas on, the panel also sets the site
 account's quota, to the site's limit plus 4096 MB for those images.
 
 ## The web proxy
@@ -78,6 +79,36 @@ touched. Until then, a site's page cache is left out and nothing breaks, and a s
 whether the proxy is still being built or why its build failed.
 The page cache is off by default. Logged-in visitors, form posts and admin pages always bypass it.
 
+## Images built on the host
+
+A pinned upstream image keeps every security issue its distribution has fixed since the image was last rebuilt,
+and the official images are rebuilt days (Debian) or weeks (Alpine) after a fix is published. So the panel does
+not run the pinned images as they are: it builds each site's image on the host, as the site's own account, from
+a file in `panel/website_images/`, with the pinned image as the base. The build applies the distribution's
+security updates, keeps no package lists or caches, and is built again only when the catalog pins a new base or
+the panel ships a changed file. Only the built image stays in the account's store: the build makes no
+intermediate images and removes its bases once it is done.
+
+- **WordPress** (`wordpress/`): the official WordPress image for the site's PHP version, with Debian's updates.
+- **wp-cli** (`wpcli/`), which WordPress's install steps run: the official wp-cli image (Alpine) with Alpine's
+  updates. It runs as `www-data` (82), as upstream's does. It is built when the first step needs it.
+- **Node.js** (`node/`): the official Node.js image for the app's version, with Debian's updates and npm at the
+  exact version the catalog names (`sites.runtimes.node.npm`), which npm checks against the registry's sha512
+  before installing it. A Node.js release keeps the npm it shipped with, and npm's bundled packages get their
+  fixes in later npm releases. The app's `npm ci` runs this npm.
+- **The tunnel connector** (`cloudflared/`): Cloudflare's image is a Debian "distroless" image with no package
+  manager, so its libraries cannot be updated in place. cloudflared is a single static program that loads none
+  of them, so the panel copies it onto an empty image with only the certificate authorities (from Debian's
+  `ca-certificates`, upgraded in a pinned `debian:trixie-slim` stage, `sites.tunnel.cloudflare.certs`) and the
+  account files. It runs as user 65532, as upstream's does, with no shell.
+- **PHP** (`php/`): see the next section.
+
+Each build reaches the distribution's archive (and, for Node.js, npm's registry) through the host's network,
+for the build only; the site's container never does. A first install takes a few minutes longer on a small
+host. A build that fails says so ("The site's image could not be built") and shows the build's last lines.
+CI builds every one of these files from the catalog's pins and scans the built images, which are what the
+sites run (see "Pinned images and downloads").
+
 ## The PHP sites' image
 
 PHP sites and the one-click apps other than WordPress run on the official PHP image (Apache) pinned in the
@@ -87,8 +118,8 @@ from `panel/website_images/php/Containerfile` the first time a site needs it (a 
 and again only when the catalog pins a new PHP image. It is built in Docker's image format, which keeps the
 file's `SHELL` line (Podman's default format ignores it), and its commands are plain POSIX shell as well. The
 build fetches Debian's packages, each checked by apt against Debian's signing keys, and keeps only the
-libraries the extensions load. CI builds the same file for every PHP version the catalog pins and scans it
-like the pinned images.
+libraries the extensions load, after applying Debian's security updates. CI builds the same file for every PHP
+version the catalog pins and scans the built image.
 
 ## An app's variables
 
@@ -101,15 +132,18 @@ other account. They are never on a command line, in a unit file, in the journal 
 
 Every image and download a site uses is pinned in the signed catalog (`panel/addon_images/catalog.json`,
 section `sites`): images by sha256 digest, downloads by sha256 and an https address on a fixed list of
-hosts. A refused catalog changes nothing. CI scans every pinned image with Trivy and fails on a High or
-Critical issue that has a fix.
+hosts. A refused catalog changes nothing. CI scans what the sites run with Trivy and fails on a High or
+Critical issue that has a fix: each image built on the host, built in CI from the same file and the catalog's
+pins, and each image a site runs as pinned (the static sites' nginx, the object cache's Valkey). A pinned image
+that is only a build's base is not scanned on its own, as no site runs it: the issues the build's updates fix
+would fail the scan although no host has them.
 
 How the one-click app releases were pinned:
 
 - **phpBB**: the release archive and the `.sha256` file phpBB publishes beside it.
 - **Drupal**: the release archive and the SHA-256 on its release page.
 - **MyBB**: the release archive and the sha256 GitHub records for the release asset.
-- **WordPress**: comes inside the official WordPress image, pinned by digest.
+- **WordPress**: comes inside the official WordPress image, pinned by digest (the base of the site's image).
 - **Simple Machines Forum**: simplemachines.org's downloads sit behind a browser check that automated
   clients cannot pass, so neither the panel nor the maintainer's tools can fetch them. The pin is the
   official repository's tag archive (`github.com/SimpleMachines/SMF`, tag v2.1.8). It was downloaded twice

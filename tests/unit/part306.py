@@ -1040,10 +1040,10 @@ def _m11_build_dir(st):
     os.makedirs(os.path.join(_home306(sites["static"].account), "site", "image"))
     _reset306(FAKE_IMAGE_EXISTS=0)
     codes = [_Client306(st.su.id).post("/websites/%d/update-image" % s.id).status_code for s in sites.values()]
-    eq("M11 (POST /websites/<id>/update-image): only the kind whose PHP image is built on the host has ~/site/image "
-       "(every site, static and WordPress included, got an empty one); the empty one an earlier install left is gone",
+    eq("M11 (POST /websites/<id>/update-image): only a kind whose image is built on the host (PHP, WordPress) has "
+       "~/site/image (every site, static included, got an empty one); the empty one an earlier install left is gone",
        (codes, {k: os.path.isdir(os.path.join(_home306(s.account), "site", "image")) for k, s in sites.items()}),
-       ([200, 200, 200], {"static": False, "wordpress": False, "php": True}))
+       ([200, 200, 200], {"static": False, "wordpress": True, "php": True}))
 
 
 # ── S11. The website account's enrolment ──────────────────────────────────────────────────────

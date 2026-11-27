@@ -317,18 +317,20 @@ def _run_sh(account, site, step, values):
 
     The container's output reaches only this shell (--log-driver=none): never the journal, where an
     installer's echo of a value would stay (OWASP Logging Cheat Sheet, "Data to exclude"). The wp-cli image
-    is pulled by its digest before its first use.
+    is built on the host from its pinned base before its first use (websites.image_build_sh), from the
+    Containerfile the site's install wrote.
     """
-    from panel.services import websites_catalog as _wc
-    image = _ws.image_for(site) if step["image"] == "site" else _wc.pins("wpcli")["image"]
+    wpcli = _ws.wpcli_build() if step["image"] == "wpcli" else None
+    if step["image"] == "wpcli" and wpcli is None:
+        return "echo SITE_BUILD_FAILED; exit 24", ""     # the catalog names no wp-cli image to build from
+    image = wpcli["tag"] if wpcli else _ws.image_for(site)
     named = step.get("values", {})
     lines = ["val %s %s" % (name, _b64(values.get(ph, ""))) for name, ph in sorted(named.items())]
     if "stdin" in step:
         lines.append("in %s" % _b64(values.get(step["stdin"], "")))
     args = _container_args(account, site, values, image, [step["argv"][0]]
                            + [_argv_word(w, values) for w in step["argv"][1:]])
-    pull = ("podman image exists %s || podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; "
-            % (_q(image), _q(image)) if step["image"] == "wpcli" else "")
+    pull = _ws.image_build_sh(wpcli, _ws.WPCLI_FILE) if wpcli else ""
     body = (_values_prelude(named) + pull
             + "%s < \"$d/in\" 2>&1 | tail -n 40; rc=${PIPESTATUS[0]}; " % _shell_words(args)
             + "[ \"$rc\" -eq 0 ] || { echo SITE_STEP_FAILED; exit \"$rc\"; }")

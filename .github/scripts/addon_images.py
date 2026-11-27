@@ -5,10 +5,12 @@ What is scanned is what the add-on catalog names, read from the repository, neve
 workflow. panel/addon_images/catalog.json is the source of the catalog that tools/sign-catalog.sh
 signs and panels fetch, so a catalog change cannot merge without this scan passing:
   * every add-on whose entry has an `image` (`registry/name@sha256:...`), pulled by that digest;
-  * every image the catalog's `sites` section names (the websites' static, PHP, WordPress, wp-cli,
-    tunnel, object cache and Node images), pulled by digest, and each image the panel builds for the
-    websites (panel/website_images/<name>/Containerfile: the page cache's proxy, and the PHP sites'
-    image once per PHP version the catalog pins, labelled php@<version>), built from `sites`;
+  * the websites' images as hosts run them: each image the panel builds on the host from a `sites` pin
+    (panel/website_images/<name>/Containerfile: php@<version> and wordpress@php<version> per PHP version,
+    node@<version> per Node.js version with the catalog's npm, wpcli, cloudflared and the page cache's
+    proxy), built from `sites`, and each image a site runs exactly as pinned (static, object cache, and
+    any runtime or tunnel the panel has no Containerfile for), pulled by digest. A pin that is only a
+    build's base is not scanned on its own: no host runs it (sites_images, site_builds);
   * every add-on the panel builds on the host (panel/addon_images/<name>/Containerfile, an entry with
     a `base`), built here with the catalog's values passed as build arguments, as the panel passes
     them (BASE_IMAGE is `base`; <NAME>_TAG, <NAME>_SHA256 and <NAME>_COMMIT are `tag`, `sha256` and
@@ -152,24 +154,80 @@ def _versioned(prefix, entries):
     return {prefix + v: _image_of(e) for v, e in (entries or {}).items()}
 
 
-def sites_images(sites):
-    """{label: image} of every image the `sites` section names, as the websites pull them."""
-    out = {"sites-static": _image_of(sites.get("static")), "sites-wpcli": _image_of(sites.get("wpcli")),
-           "sites-object-cache": _image_of(sites.get("object_cache"))}
-    out.update(_versioned("sites-php-", sites.get("php")))
-    out.update(_versioned("sites-wordpress-php", (sites.get("wordpress") or {}).get("php")))
-    out.update(_versioned("sites-tunnel-", sites.get("tunnel")))
-    for runtime, entry in (sites.get("runtimes") or {}).items():
-        out.update(_versioned("sites-%s-" % runtime, (entry or {}).get("versions")))
+# The website images the panel builds on the host from an upstream pin (each pin is then that build's base
+# and only its build is scanned): {folder of panel/website_images: (what the folder builds, sites key it reads)}.
+# A runtime (sites.runtimes.<name>) is built when a folder has its name; the tunnel's provider by its program.
+TUNNEL_FOLDERS = {"cloudflare": "cloudflared"}
+
+
+def _pin_groups(sites):
+    """[(the folder that would build them, {label: image})] of every image pin of the `sites` section.
+
+    The folder is "" for the images no folder builds (static, object cache).
+    """
+    groups = [("", {"sites-static": _image_of(sites.get("static")),
+                    "sites-object-cache": _image_of(sites.get("object_cache"))}),
+              ("wpcli", {"sites-wpcli": _image_of(sites.get("wpcli"))}),
+              ("php", _versioned("sites-php-", sites.get("php"))),
+              ("wordpress", _versioned("sites-wordpress-php", (sites.get("wordpress") or {}).get("php")))]
+    groups += [(TUNNEL_FOLDERS.get(k, ""), _versioned("sites-tunnel-", {k: v}))
+               for k, v in (sites.get("tunnel") or {}).items()]
+    return groups + [(r, _versioned("sites-%s-" % r, (e or {}).get("versions")))
+                     for r, e in (sites.get("runtimes") or {}).items()]
+
+
+def sites_images(sites, folders=()):
+    """{label: image} of every image a website runs as the `sites` section pins it, unmodified.
+
+    An image the panel builds on the host from a pin (a folder of `folders` builds it: site_builds) is a build
+    input there, not run, so it is scanned as that build's result and not here.
+    """
+    out = {}
+    for folder, images in _pin_groups(sites):
+        if not folder or folder not in folders:
+            out.update(images)
     return {k: v for k, v in sorted(out.items()) if isinstance(v, str)}
 
 
-def site_builds(name, sites):
-    """{label: [(ARG, value)]} of the builds of website folder `name`: the PHP image once per pinned PHP version."""
-    if name != "php":
-        return {name: site_build_args(name, sites)}
-    return {"php@" + v: [("BASE_IMAGE", e["image"])] for v, e in sorted((sites.get("php") or {}).items())
+def _bases(prefix, entries, extra=()):
+    """{prefix + version: [("BASE_IMAGE", image)] + extra} for {version: {"image": ...}}."""
+    return {prefix + v: [("BASE_IMAGE", e["image"])] + list(extra) for v, e in sorted((entries or {}).items())
             if isinstance(e, dict) and isinstance(e.get("image"), str)}
+
+
+def _tunnel_builds(name, sites):
+    """The tunnel connector's build: its provider's program image and the certificate authorities' image."""
+    provider = {v: k for k, v in TUNNEL_FOLDERS.items()}[name]
+    e = (sites.get("tunnel") or {}).get(provider) or {}
+    return _bases(name, {"": e}, [("CERTS_IMAGE", e["certs"])] if isinstance(e.get("certs"), str) else [])
+
+
+def _runtime_builds(name, runtime):
+    """A runtime's builds, once per version, with the runtime's exact npm version when it names one."""
+    npm = [("NPM_VERSION", runtime["npm"])] if isinstance(runtime.get("npm"), str) else []
+    return _bases(name + "@", runtime.get("versions"), npm)
+
+
+_FOLDER_BUILDS = {"php": lambda sites: _bases("php@", sites.get("php")),
+                  "wordpress": lambda sites: _bases("wordpress@php", (sites.get("wordpress") or {}).get("php")),
+                  "wpcli": lambda sites: _bases("wpcli", {"": sites.get("wpcli")})}
+
+
+def site_builds(name, sites):
+    """{label: [(ARG, value)]} of the builds of website folder `name`, each from its catalog pins.
+
+    php: once per PHP version (php@8.4); wordpress: once per PHP version (wordpress@php8.4); a runtime's
+    folder (node): once per version, with the runtime's npm (node@24); cloudflared: the tunnel's program on
+    an empty base, with the certificate authorities' image; wpcli and caddy-cache: once.
+    """
+    if name in _FOLDER_BUILDS:
+        return _FOLDER_BUILDS[name](sites)
+    if name in TUNNEL_FOLDERS.values():
+        return _tunnel_builds(name, sites)
+    runtime = (sites.get("runtimes") or {}).get(name)
+    if isinstance(runtime, dict):
+        return _runtime_builds(name, runtime)
+    return {name: site_build_args(name, sites)}
 
 
 def build_folder(label):
@@ -190,10 +248,11 @@ def sites_plan(catalog_path, images_dir, problems):
     sites = read_sites(catalog_path)
     if not sites:
         return {"upstream": {}, "builds": {}}
-    up = sites_images(sites)
+    folders = build_dirs(images_dir)
+    up = sites_images(sites, folders)
     problems.extend("%s: image %s is not pinned by digest" % (k, v) for k, v in up.items() if not PINNED_RE.match(v))
     builds = {label: _build_plan(b, {}, images_dir, problems, args)
-              for b in build_dirs(images_dir) for label, args in site_builds(b, sites).items()}
+              for b in folders for label, args in site_builds(b, sites).items()}
     problems.extend("%s: base %s is not pinned by digest" % (b, v) for b, args in builds.items() for n, v in args
                     if n.endswith("_IMAGE") and not PINNED_RE.match(v))
     return {"upstream": up, "builds": builds}

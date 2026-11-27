@@ -556,6 +556,7 @@
         "egress": [
           "registry.npmjs.org"
         ],
+        "npm": "11.21.3",
         "port": 3000,
         "start": "npm start",
         "versions": {
@@ -580,6 +581,7 @@
     },
     "tunnel": {
       "cloudflare": {
+        "certs": "docker.io/library/debian@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0",
         "image": "docker.io/cloudflare/cloudflared@sha256:55c7e3e8d89d5e8d20b75a82f3602cbf98e06db406e73e282073cfdc5a9a3af6",
         "version": "2026.11.2"
       }

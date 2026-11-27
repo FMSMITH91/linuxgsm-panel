@@ -82,7 +82,7 @@ _MARK_REMOVED = "SITE_REMOVED"
 MARK_APP_EMPTY = "SITE_APP_EMPTY"
 FAIL_MARKS = {
     "SITE_PULL_FAILED": "The site's image could not be downloaded. Check the host's internet connection and try again.",
-    "SITE_BUILD_FAILED": ("The site's PHP image could not be built. Check the host's internet connection and free "
+    "SITE_BUILD_FAILED": ("The site's image could not be built. Check the host's internet connection and free "
                           "disk space, then try again."),
     "SITE_FILES_REFUSED": "The panel refused to write one of the site's files. Nothing was changed.",
     "SITE_START_LIMIT": "The site was started too often in a short time. Wait ten minutes, then start it again.",
@@ -428,50 +428,102 @@ def _tail(restart="always"):
             "", "[Install]", "WantedBy=default.target", ""]
 
 
-# The PHP kinds' image: the catalog's PHP image (by digest) with the extensions the apps need, built on the host
-# as the site's account from panel/website_images/php/Containerfile (install_sh). Its tag names the PHP version
-# and a hash of the base and the Containerfile, so a new pin or a changed Containerfile is a new build.
-PHP_IMAGE_REPO = "localhost/lgsm-site-php"
-PHP_BUILT_KINDS = ("php", "phpbb")         # the kinds whose image is built on the host (the others are pulled)
-PHP_BUILD_DIR = SITE + "/image"
-PHP_CONTAINERFILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "website_images", "php",
-                                 "Containerfile")
+# The images the panel builds on the host, as the account that runs them, from the catalog's pinned images: each
+# from panel/website_images/<folder>/Containerfile, which install_sh writes into BUILD_DIR and builds there with
+# rootless Podman. The pins are only the builds' bases: the builds apply the distribution's security updates (and
+# Node.js's npm at the catalog's version), so a fix published after upstream's last rebuild still reaches the site.
+# A built image's tag names its folder, version and a hash of its build arguments and Containerfile, so a new pin
+# or a changed Containerfile is a new build. Every kind but static runs one (an app's runtime when a folder has its
+# name); WordPress's install steps run wp-cli from one (WPCLI_FOLDER), and the tunnel connector is one (tunnel_apply).
+IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "website_images")
+IMAGE_REPO = "localhost/lgsm-site-"        # + the folder's name
+BUILD_DIR = SITE + "/image"
+BUILD_FILE = BUILD_DIR + "/Containerfile"   # the image the account runs
+WPCLI_FOLDER = "wpcli"
+WPCLI_FILE = BUILD_DIR + "/wpcli.Containerfile"
+TUNNEL_FOLDER = "cloudflared"
+_ARG_RE = re.compile(r"^ARG[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.M)
 
 
-def php_containerfile():
-    """The PHP sites' Containerfile (panel/website_images/php/Containerfile), as the panel ships it."""
-    with open(PHP_CONTAINERFILE, encoding="utf-8") as fh:
+def containerfile(folder):
+    """The Containerfile of website image `folder` (panel/website_images/<folder>/Containerfile), as shipped."""
+    with open(os.path.join(IMAGES_DIR, folder, "Containerfile"), encoding="utf-8") as fh:
         return fh.read()
 
 
-def php_build_tag(version, base):
-    """The local tag of the PHP image built from `base` (the catalog's PHP image for `version`)."""
-    mark = hashlib.sha256(("%s\n%s" % (base, php_containerfile())).encode("utf-8")).hexdigest()[:20]
-    return "%s:%s-%s" % (PHP_IMAGE_REPO, version, mark)
+def builds_image(folder):
+    """Whether the panel builds website image `folder` (it ships a Containerfile for it)."""
+    return bool(re.fullmatch(r"[a-z][a-z0-9-]{0,31}", folder or "")) and os.path.isfile(
+        os.path.join(IMAGES_DIR, folder, "Containerfile"))
 
 
-def php_base_for(site):
-    """The catalog's PHP image a PHP site's own image is built from, or None when the catalog offers none."""
+def build_tag(folder, label, args):
+    """The local tag of `folder`'s image built with `args` ([(ARG, value)]); `label` names its version."""
+    text = "".join("%s=%s\n" % a for a in args) + containerfile(folder)
+    return "%s%s:%s-%s" % (IMAGE_REPO, folder, re.sub(r"[^A-Za-z0-9_.-]", "-", label)[:40],
+                           hashlib.sha256(text.encode("utf-8")).hexdigest()[:20])
+
+
+def build(folder, label, args):
+    """{folder, tag, args} of `folder`'s image built with `args`, or None when an ARG lacks its value.
+
+    Every ARG the Containerfile declares must have a value from the catalog: without one a build would fail, or
+    take whatever the tool installs by default (npm@ with no version is the newest release).
+    """
+    if any(not v for _n, v in args) or set(_ARG_RE.findall(containerfile(folder))) - {n for n, _v in args}:
+        return None
+    return {"folder": folder, "tag": build_tag(folder, label, args), "args": list(args)}
+
+
+def site_build(site):
+    """The build of the image `site` runs ({folder, tag, args}), or None when it runs a pulled image or none."""
+    from panel.services import websites_catalog as _wc     # imported here: the unit text is tested without it
+    if site.kind in ("php", "phpbb", "wordpress"):
+        base = _wc.php_image("wordpress" if site.kind == "wordpress" else "php", site.php_version)
+        folder, label = ("wordpress", "php") if site.kind == "wordpress" else ("php", "")
+        return build(folder, label + site.php_version, [("BASE_IMAGE", base)]) if base else None
+    if site.kind == "app" and builds_image(site.runtime):
+        rt = _wc.runtimes().get(site.runtime, {})
+        base = rt.get("versions", {}).get(site.runtime_version)
+        args = [("BASE_IMAGE", base)] + ([("NPM_VERSION", rt["npm"])] if rt.get("npm") else [])
+        return build(site.runtime, site.runtime_version, args) if base else None
+    return None
+
+
+def wpcli_build():
+    """The build of the wp-cli image WordPress's install steps run ({folder, tag, args}), or None."""
     from panel.services import websites_catalog as _wc
-    return _wc.php_image("php", site.php_version) if site.kind in ("php", "phpbb") else None
+    return build(WPCLI_FOLDER, _wc.pins("wpcli").get("version") or "cli", [("BASE_IMAGE", _wc.pins("wpcli")["image"])])
+
+
+def tunnel_build(provider="cloudflare"):
+    """The build of the tunnel connector's image ({folder, tag, args}), or None when the catalog lacks a pin."""
+    from panel.services import websites_catalog as _wc
+    e = _wc.pins("tunnel").get(provider) or {}
+    return build(TUNNEL_FOLDER, e.get("version") or provider, [("BASE_IMAGE", e.get("image")),
+                                                               ("CERTS_IMAGE", e.get("certs"))])
+
+
+def uses_wpcli(site):
+    """Whether one of the install steps of `site`'s recipe runs in the wp-cli image (WordPress's do)."""
+    from panel.services import websites_catalog as _wc
+    rec = _wc.recipe(getattr(site, "app_recipe", None) or "") or {}
+    return any(step.get("image") == "wpcli" for step in rec.get("steps", []))
 
 
 def image_for(site):
     """The image `site` runs (its kind and PHP or runtime version), or None when the catalog offers none.
 
-    A pinned image by digest, except a PHP site's, which is built on the host from its pinned base (php_build_tag).
+    The tag of the image built on the host from its pinned base (site_build), except a static site's (and an app
+    runtime the panel has no Containerfile for), which runs its pinned image by digest.
     """
-    from panel.services import websites_catalog as _wc     # imported here: the unit text is tested without it
+    from panel.services import websites_catalog as _wc
     if site.kind == "static":
         return _wc.static_image()
-    if site.kind in ("php", "phpbb"):
-        base = php_base_for(site)
-        return php_build_tag(site.php_version, base) if base else None
-    if site.kind == "wordpress":
-        return _wc.php_image("wordpress", site.php_version)
-    if site.kind == "app":
+    if site.kind == "app" and not builds_image(site.runtime):
         return _wc.runtimes().get(site.runtime, {}).get("versions", {}).get(site.runtime_version)
-    return None
+    b = site_build(site)
+    return b["tag"] if b else None
 
 
 def network(site, db_port=None, relays=(), splice=False):
@@ -585,8 +637,9 @@ def tunnel_quadlet(proxy, ids, image=None):
     if (proxy.tunnel_provider or "") != "cloudflare":
         raise ValueError("no tunnel provider is set")
     if image is None:
-        from panel.services import websites_catalog as _wc
-        image = _wc.pins("tunnel")["cloudflare"]["image"]
+        image = (tunnel_build(proxy.tunnel_provider) or {}).get("tag")
+        if not image:
+            raise ValueError("the catalog has no tunnel connector to build")
     home = _home(TUNNEL_ACCOUNT)
     lines = _head("web proxy tunnel") + [
         "", "[Container]", "Image=%s" % image, "ContainerName=%s" % TUNNEL_UNIT, "Pull=never",
@@ -723,7 +776,7 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               "%s/%s.container" % (QUADLET_DIR, GATE_UNIT), "%s/%s.container" % (QUADLET_DIR, TUNNEL_UNIT),
               "%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT), "%s/%s.socket" % (USER_UNIT_DIR, DB_RELAY_UNIT),
               "%s/%s.service" % (USER_UNIT_DIR, DB_RELAY_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
-              PHP_BUILD_DIR + "/Containerfile",
+              BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
               CONF + "/build.sh", HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
 
@@ -740,15 +793,15 @@ def write_files_sh(build_dir=False):
     """Shell (as the account) writing each file of the stdin bundle, 0600 or 0700 folders, atomically.
 
     Every path is matched against FILE_NAMES in the shell too; anything else prints SITE_FILES_REFUSED
-    and writes nothing more. No content is ever on the command line. `build_dir`: the PHP image's build
-    folder (PHP_BUILD_DIR) is made too, for a kind whose image is built on the host; other kinds get none.
+    and writes nothing more. No content is ever on the command line. `build_dir`: the image build folder
+    (BUILD_DIR) is made too, for an account whose image is built on the host; others get none.
     """
     names = "|".join(FILE_NAMES)
     return ("umask 077; mkdir -p %s %s %s %s %s %stunnel || exit 1; chmod 0700 %s %s; "
             "while read -r p b; do case \"$p\" in %s) ;; *) echo SITE_FILES_REFUSED; exit 25 ;; esac; "
             "printf %%s \"$b\" | base64 -d > \"$p.new\" && mv -f -T \"$p.new\" \"$p\" || exit 1; done; "
             % (_q(QUADLET_DIR), _q(USER_UNIT_DIR), _q(CONF), _q(HOME_DIR), _q(HTML),
-               _q(PHP_BUILD_DIR) + " " if build_dir else "", _q(CONF), _q(HOME_DIR), names))
+               _q(BUILD_DIR) + " " if build_dir else "", _q(CONF), _q(HOME_DIR), names))
 
 
 def egress_proxy_source():
@@ -776,8 +829,11 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
         files[CONF + "/apache.conf"] = apache_conf(token)
         files[CONF + "/ports.conf"] = APACHE_PORTS
         files[CONF + "/php.ini"] = php_ini(site)
-        if site.kind in ("php", "phpbb"):
-            files[PHP_BUILD_DIR + "/Containerfile"] = php_containerfile()
+        if uses_wpcli(site):
+            files[WPCLI_FILE] = containerfile(WPCLI_FOLDER)     # its install steps' wp-cli, built when one runs
+    b = site_build(site)
+    if b:
+        files[BUILD_FILE] = containerfile(b["folder"])
     if site.object_cache and cache_password:
         files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
         files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
@@ -798,14 +854,14 @@ def _units(site):
 
 
 def install_sh(account, site, image=None):
-    """Bash that lays out the site's folders, writes its files from stdin, pulls its pinned image and reloads units.
+    """Bash that lays out the site's folders, writes its files from stdin, builds or pulls its image and reloads units.
 
     stdin is bundle(site_files(...)). Prints SITE_INSTALLED, or a FAIL_MARKS key and exits non-zero.
     """
     _home(account)
     image = image or image_for(site)
-    pull = php_build_sh(site, image) if site.kind in PHP_BUILT_KINDS else (
-        "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image))
+    b = site_build(site)
+    pull = image_build_sh(b) if b else "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image)
     if site.kind == "app":
         from panel.services import websites_catalog as _wc
         pull += "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(_wc.static_image())
@@ -817,32 +873,36 @@ def install_sh(account, site, image=None):
         # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
         pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
             unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
-    if site.kind not in PHP_BUILT_KINDS:
-        pull += "rmdir %s 2>/dev/null; " % _q(PHP_BUILD_DIR)     # the empty folder an earlier install made
+    if not b:
+        pull += "rmdir %s 2>/dev/null; " % _q(BUILD_DIR)     # the empty folder an earlier install made
     if site.kind == "app":
         # An app with no files yet (a new site) is not started: its start command has nothing to run.
         pull += "[ -n \"$(ls -A %s 2>/dev/null)\" ] || echo %s; " % (_q(HTML), MARK_APP_EMPTY)
-    return (_ENV + write_files_sh(site.kind in PHP_BUILT_KINDS) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
+    return (_ENV + write_files_sh(bool(b)) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
 
 
-def php_build_sh(site, tag):
-    """Shell (as the account) that builds a PHP site's image `tag` from its pinned base, unless it is there already.
+def image_build_sh(b, path=BUILD_FILE):
+    """Shell (as the account) that builds image `b` (site_build, wpcli_build, tunnel_build) unless it is there already.
 
-    Built from the Containerfile the bundle wrote (PHP_BUILD_DIR), the base pulled by its digest; the build
-    reaches Debian's archive through the host's network (the site's own container never does). In Docker's
-    image format (--format docker): Podman's default OCI format ignores the Containerfile's SHELL line. A
-    failure prints SITE_BUILD_FAILED and the build's last lines. Older builds of the site's image are removed
-    (one still in use stays until the next install).
+    Built from the Containerfile the bundle wrote at `path` (in BUILD_DIR), its bases pulled by their digests; the
+    build reaches the distribution's archive (and npm's registry) through the host's network, the build only (the
+    site's own container never does). In Docker's image format (--format docker): Podman's default OCI format
+    ignores a Containerfile's SHELL line. A failure prints SITE_BUILD_FAILED and the build's last lines. Only the
+    built image stays: no intermediate image (--layers=false), its bases removed once it is built (the layers it
+    shares with them stay, as its own), older builds of the same image removed (one still in use stays until the
+    next install).
     """
     log = _q(CONF + "/image-build.log")
-    return ("podman image exists %s || { podman build -q --format docker --pull=missing --network=host "
-            "--build-arg BASE_IMAGE=%s "
-            "-t %s -f %s %s > %s 2>&1 || { echo SITE_BUILD_FAILED; tail -n 20 %s; exit 24; }; }; "
-            % (_q(tag), _q(php_base_for(site) or ""), _q(tag), _q(PHP_BUILD_DIR + "/Containerfile"), _q(PHP_BUILD_DIR),
-               log, log)
+    tag = b["tag"]
+    flags = "".join("--build-arg %s " % _q("%s=%s" % a) for a in b["args"])
+    bases = " ".join(_q(v) for n, v in b["args"] if n.endswith("_IMAGE"))
+    return ("podman image exists %s || { podman build -q --format docker --layers=false --pull=missing --network=host "
+            "%s-t %s -f %s %s > %s 2>&1 || { echo SITE_BUILD_FAILED; tail -n 20 %s; exit 24; }; "
+            "podman rmi -i %s >/dev/null 2>&1; }; "
+            % (_q(tag), flags, _q(tag), _q(path), _q(BUILD_DIR), log, log, bases)
             + "podman images --format '{{.Repository}}:{{.Tag}}' %s | grep -vxF %s | xargs -r podman rmi >/dev/null "
-              "2>&1; podman image prune -f >/dev/null 2>&1; " % (_q(PHP_IMAGE_REPO), _q(tag)))
+              "2>&1; podman image prune -f >/dev/null 2>&1; " % (_q(tag.rsplit(":", 1)[0]), _q(tag)))
 
 
 def start_sh(account, site, restart=False):

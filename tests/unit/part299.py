@@ -1106,28 +1106,33 @@ def _s299_cpu():
 
 
 def _floor_digests299():
-    """Every image of the floor's sites section (the pulled ones; the cache build's images are built from)."""
+    """Every image of the floor's sites section (run as pinned or a build's base; not the cache build's images)."""
     out = [_SITES299["static"]["image"], _SITES299["wpcli"]["image"], _SITES299["object_cache"]["image"]]
     out += [e["image"] for e in _SITES299["php"].values()] + [e["image"] for e in _SITES299["wordpress"]["php"].values()]
-    out += [e["image"] for e in _SITES299["tunnel"].values()]
+    out += [e[k] for e in _SITES299["tunnel"].values() for k in ("image", "certs")]
     return out + [e["image"] for r in _SITES299["runtimes"].values() for e in r["versions"].values()]
 
 
-def _php_builds299():
-    """The PHP sites' image builds the scan names: php@<version> for each PHP version the floor pins."""
-    return sorted("php@" + v for v in _SITES299["php"])
+def _built_bases299(p):
+    """Every image the scan's website builds take as a base (BASE_IMAGE, CERTS_IMAGE)."""
+    return {b[1] for args in p["sites"]["builds"].values() for b in args if b[0] in ("BASE_IMAGE", "CERTS_IMAGE")}
 
 
 def _s299_image_scan():
     p = _AI299.plan()
     sites_up = p["sites"]["upstream"]
     want = set(_floor_digests299())
-    eq("image scan (plan): every image of the catalog's sites section is pulled and scanned, the page cache's proxy is "
-       "built from the catalog's values, nothing wrong on this tree",
-       (set(sites_up.values()) == want, sorted(p["sites"]["builds"]), [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
+    built = _built_bases299(p)
+    eq("image scan (plan): every image a site runs is scanned: the ones it runs as pinned pulled, the others built "
+       "from the catalog's pins (each pin of the sites section is one or the other), nothing wrong on this tree",
+       (sorted(sites_up), set(sites_up.values()) | built >= want, [n for n, _v in p["sites"]["builds"]["caddy-cache"]],
         p["problems"]),
-       (True, ["caddy-cache"] + _php_builds299(),
+       (["sites-object-cache", "sites-static"], True,
         ["BUILDER_IMAGE", "BASE_IMAGE", "PANEL_CADDY_VERSION", "CACHE_MODULE", "CACHE_VERSION"], []))
+    _s299_image_scan_builds(p)
+
+
+def _s299_image_scan_builds(p):
     seen, real_run = [], _AI299._run
     _AI299._run = lambda argv, **kw: seen.append(argv) or 0
     try:
@@ -1139,11 +1144,13 @@ def _s299_image_scan():
        "--build-arg, and hadolint lints its Containerfile",
        (len(build), sum(1 for f in build[0] if f == "--build-arg") if build else 0,
         any(t.endswith(os.path.join("website_images", "caddy-cache", "Containerfile")) for _l, t in _AI299.lint_targets(p))),
-       (1 + len(_SITES299["php"]), 5, True))
+       (len(p["sites"]["builds"]), 5, True))
 
 
 def _s299_image_scan2():
-    bad_cat = dict(_FLOOR_DOC299, sites=_bad299(("php", "8.4", "image"), "docker.io/library/php:8.4-apache"))
+    bad_sites = _bad299(("php", "8.4", "image"), "docker.io/library/php:8.4-apache")
+    bad_sites["static"]["image"] = "docker.io/nginx/nginx-unprivileged:1.30-alpine-slim"
+    bad_cat = dict(_FLOOR_DOC299, sites=bad_sites)
     d = _tf299.mkdtemp(prefix="ww2-scan-")
     try:
         path = os.path.join(d, "catalog.json")
@@ -1152,8 +1159,9 @@ def _s299_image_scan2():
         probs = _AI299.plan(path, os.path.join(_root, "panel", "addon_images"))["problems"]
     finally:
         __import__("shutil").rmtree(d, ignore_errors=True)
-    eq("image scan (plan): a sites image pinned by tag stops the scan before anything is pulled",
-       any("sites-php-8.4" in x for x in probs), True)
+    eq("image scan (plan): a sites image pinned by tag, run as pinned or a build's base, stops the scan before "
+       "anything is pulled",
+       (any("sites-static" in x for x in probs), any(x.startswith("php@8.4: base ") for x in probs)), (True, True))
     static = _ws299.image_for(_NS299(kind="static"))
     gate = _ws299.gate_quadlet(_NS299(name="s1", account="ws1", pids=64), (1001, 1001), _wc299.static_image())
     eq("static image (image_for, gate_quadlet): static sites and app gates run nginx-unprivileged from docker.io/nginx/, "

@@ -1,0 +1,35 @@
+# The Node.js websites' image for linuxgsm-panel: the official Node.js image the signed catalog pins for one
+# Node.js version, with Debian's security updates applied and npm at the version the catalog names. Built on
+# the host, as the site's own account, by rootless Podman (panel/services/websites.py install_sh writes this
+# file into the site's home and runs `podman build` with the build arguments below); CI builds this copy
+# and scans the result.
+#
+# Why built and not pulled: the official images are rebuilt some days after Debian publishes a fix, and a
+# Node.js release keeps the npm it shipped with, whose bundled packages get their fixes in later npm
+# releases (OWASP Docker Security Cheat Sheet, rule 0: keep images up to date). The app's own install and
+# build (`npm ci`) run this npm.
+#
+# What the build trusts: the base image, by its digest; Debian's packages, each checked by apt against
+# Debian's signing keys; npm at an exact version from the npm registry, which npm checks against the
+# registry's integrity hash (sha512) before installing it. The package lists and npm's cache are removed in
+# the same layer.
+#
+# The values have no default here: they come from the signed add-on catalog (its source is
+# panel/addon_images/catalog.json), passed as --build-arg by the panel and by CI's image scan. So a new
+# Node.js image or npm release changes no file a panel runs.
+#   BASE_IMAGE   the catalog's sites.runtimes.node.versions.<version>.image: node:<version>-bookworm-slim by digest
+#   NPM_VERSION  the catalog's sites.runtimes.node.npm: an exact npm version x.y.z
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG NPM_VERSION
+LABEL org.opencontainers.image.title="Node.js for linuxgsm-panel websites"
+# The base image runs as root (no USER); the site's unit sets its own account's user. The last line fails the
+# build when the npm that runs is not the one asked for.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global --no-audit --no-fund --no-update-notifier "npm@${NPM_VERSION}" \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /tmp/* \
+    && test "$(npm --version)" = "${NPM_VERSION}"
