@@ -29,6 +29,10 @@ M11. Only a site whose PHP image is built on the host gets the build folder (~/s
 S11. A new website account is enrolled in the panel's game group first (with user-create's checks, its home
      0700), before its subordinate ids and lingering; a refused enrolment stops there.
 
+From the fourth round (P4a):
+F30. The page cache's proxy is checked as the proxy's user where that user can reach it (it ran inside root's 0700
+     build folder and was never installed), each failure has its own sentence, and the build's images are removed.
+
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
 podman and systemctl first on PATH that record their argv (one JSON line each). Nothing reaches a host (part12's
@@ -73,6 +77,7 @@ _NONE306 = ""   # a stand-in value, named so no credential-shaped literal sits b
 _REAL_NAMES306 = ("install", "_as_site", "remove", "start", "php_apply", "app_install_step", "app_undo_step")
 _REAL306 = {n: getattr(_sw306, n) for n in _REAL_NAMES306}
 _REAL306["_worker"] = _wapps306._worker
+_REAL306["proxy_install_cache"] = _sw306.proxy_install_cache
 _BIN306 = os.path.join(_TREE306, "bin")
 _CALLS306 = os.path.join(_TREE306, "calls.jsonl")
 _TOKEN306 = "t" * 40
@@ -466,6 +471,12 @@ class _Sub306:
         return _NS306(returncode=0, stdout=b"inactive\n", stderr=b"")
 
 
+def _plain_write306(path, data, *_a, **_k):
+    """The helper's _web_write without its owner (chown needs root): the bytes only."""
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
 def _cache_verb306(sub):
     """website-proxy-install-cache run by the helper with `sub` for its subprocess: (rc, stderr, calls)."""
     names = ("subprocess", "resolve", "pwd", "WEB_PROXY_BIN", "_web_has_cache", "_web_write")
@@ -478,7 +489,7 @@ def _cache_verb306(sub):
         _H306.subprocess, _H306.resolve, _H306.WEB_PROXY_BIN = sub, lambda name: "/usr/bin/" + name, binary
         _H306.pwd = _NS306(getpwnam=lambda name: _NS306(pw_uid=1500, pw_gid=1500, pw_dir="/var/lib/lgsm-web-proxy"))
         _H306._web_has_cache = lambda path, pw: True
-        _H306._web_write = lambda *a, **k: None
+        _H306._web_write = _plain_write306
         c = _wc306.pins("caddy_cache")
         with _ctx306.redirect_stderr(err):
             rc = _H306.do_website_proxy_install_cache([c["caddy"], c["builder"], c["base"], c["version"]], "")
@@ -723,6 +734,144 @@ def _f29_quota():
        "limit of 0 stays no quota", (rcs, soft), ([0, 0], [str((2048 + 4096) * 1024), "0"]))
 
 
+# ── F30. The page cache's proxy: checked where its user can reach it, the build's images removed ──────
+_PROXY_UID306 = 1500
+
+
+class _ReachSub306(_Sub306):
+    """The helper's subprocess with the proxy's user modelled: it runs a binary only through a folder it may enter.
+
+    `podman images` answers `before` on its first call and `before + made` after; `list-modules` answers with
+    the cache module unless `module` is False. The user is not this test's, so it enters a folder by its
+    "other" search bit (or by group, for a file written for its group), as the kernel would.
+    """
+
+    def __init__(self, written, module=True, before="", made="", images_rc=0, build_rc=0):
+        super().__init__(build_rc=build_rc, build_out=b"one line of the build\n")
+        self.written, self.module, self.images = written, module, [before, before + made]
+        self.images_rc, self.checked = images_rc, []
+
+    def _reaches(self, path):
+        folder = os.stat(os.path.dirname(path))
+        if not folder.st_mode & 0o001:
+            raise PermissionError(13, "Permission denied", path)
+        gid, mode = self.written.get(path, (os.stat(path).st_gid, os.stat(path).st_mode))
+        if not (mode & 0o001 or (gid == _PROXY_UID306 and mode & 0o010)):
+            raise PermissionError(13, "Permission denied", path)
+
+    def run(self, argv, **kw):
+        argv = list(argv)
+        if argv[1:2] == ["list-modules"]:
+            self.calls.append(argv)
+            self.checked.append((argv[0], kw.get("user")))
+            self._reaches(argv[0])
+            return _NS306(returncode=0, stdout=b"http.handlers.cache\n" if self.module else b"http.handlers.file_server\n",
+                          stderr=b"")
+        if argv[1:2] == ["images"]:
+            self.calls.append(argv)
+            out = self.images.pop(0) if len(self.images) > 1 else self.images[0]
+            return _NS306(returncode=self.images_rc, stdout=out.encode(), stderr=b"")
+        return super().run(argv, **kw)
+
+
+def _reach_verb306(**kw):
+    """website-proxy-install-cache with the proxy's user modelled (_ReachSub306): (rc, out, sub, the proxy folder)."""
+    names = ("subprocess", "resolve", "pwd", "WEB_PROXY_BIN", "_web_write")
+    saved = {n: getattr(_H306, n) for n in names}
+    proxy_dir = _tf306.mkdtemp(prefix="p306-proxy-", dir=_TREE306)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- the proxy's folder as install.sh leaves it (0755, root's)
+    os.chmod(proxy_dir, 0o755)  # nosec B103 - the proxy's folder shape, in this part's scratch tree
+    binary, written = os.path.join(proxy_dir, "caddy"), {}
+    with open(binary, "wb") as fh:
+        fh.write(b"plain")
+
+    def web_write(path, data, mode, uid=0, gid=0):
+        with open(path, "wb") as fh:
+            fh.write(data)
+        os.chmod(path, mode & 0o700)
+        written[path] = (gid, mode)
+    sub, out = _ReachSub306(written, **kw), _io306.StringIO()
+    try:
+        _H306.subprocess, _H306.resolve, _H306.WEB_PROXY_BIN = sub, lambda name: "/usr/bin/" + name, binary
+        _H306.pwd = _NS306(getpwnam=lambda name: _NS306(pw_uid=_PROXY_UID306, pw_gid=_PROXY_UID306, pw_dir="/var/lib/x"))
+        _H306._web_write = web_write
+        c = _wc306.pins("caddy_cache")
+        with _ctx306.redirect_stderr(out), _ctx306.redirect_stdout(out):
+            try:
+                rc = _H306.do_website_proxy_install_cache([c["caddy"], c["builder"], c["base"], c["version"]], "")
+            except OSError as exc:
+                rc = "raised %s" % type(exc).__name__
+    finally:
+        for n, v in saved.items():
+            setattr(_H306, n, v)
+    return rc, out.getvalue(), sub, proxy_dir
+
+
+def _installed306(proxy_dir):
+    with open(os.path.join(proxy_dir, "caddy"), "rb") as fh:
+        return fh.read(), sorted(os.listdir(proxy_dir))
+
+
+def _f30_reach(st):
+    rc, _out, sub, proxy_dir = _reach_verb306()
+    eq("F30 (website-proxy-install-cache): the new binary is checked as the proxy's user where that user can reach it "
+       "(beside the installed one), then installed (it ran it inside root's 0700 build folder: PermissionError, "
+       "nothing installed)", (rc, [(os.path.dirname(b), u) for b, u in sub.checked], _installed306(proxy_dir)),
+       (0, [(proxy_dir, _PROXY_UID306)], (b"caddy", ["caddy"])))
+    rc2, out2, _sub2, proxy_dir2 = _reach_verb306(module=False)
+    eq("F30 (website-proxy-install-cache): a binary without the cache module is not installed, its staged copy is "
+       "removed, and the verb says the check failed", (rc2, "failed=check" in out2, _installed306(proxy_dir2)),
+       (1, True, (b"plain", ["caddy"])))
+    _f30_sentences(out2)
+
+
+def _f30_page(out):
+    """proxy_install_cache's sentence when the helper answered `out`."""
+    _p9_patch(_sw306, "_helper", lambda remote, verb, args=(), timeout=120, doc=None: (False, out))
+    _p9_patch(_sw306, "proxy_install_cache", _REAL306["proxy_install_cache"])
+    rec = _Records306()
+    _core306._log.addHandler(rec)
+    try:
+        return _sw306.proxy_install_cache(_NS306(is_local=True))[1], rec.lines
+    finally:
+        _core306._log.removeHandler(rec)
+
+
+def _f30_sentences(check_out):
+    rc, build_out, _sub, _d = _reach_verb306(build_rc=1)
+    said = {cause: _f30_page(out)[0] for cause, out in (("check", check_out), ("build", build_out),
+                                                        ("install", "install the web proxy first\nfailed=install\n"))}
+    logged = _f30_page(check_out)[1]
+    eq("F30 (ssh_manager.websites.proxy_install_cache): each failure has its own plain sentence and none blames the "
+       "internet connection (a check that could not run said to check it); the reason goes to the panel's log",
+       (rc, said == {"check": getattr(_sw306, "CACHE_CHECK_FAILED", "(none)"), "build": _sw306.CACHE_BUILD_FAILED,
+                     "install": getattr(_sw306, "CACHE_INSTALL_FAILED", "(none)")},
+        [c for c, t in said.items() if "internet" in t], any("did not list the cache module" in ln for ln in logged)),
+       (1, True, [], True))
+
+
+_KEEP306 = "aaa docker.io/library/keep:1\nbbb <none>:<none>\n"
+_MADE306 = ("ccc localhost/lgsm-web-proxy-cache:build\nddd <none>:<none>\neee docker.io/library/caddy:<none>\n"
+            "fff docker.io/library/other:latest\n")
+
+
+def _rmi306(sub):
+    return [a for c in sub.calls if c[1:2] == ["rmi"] for a in c[2:] if a != "-f"]
+
+
+def _f30_store(st):
+    rc, _out, sub, _d = _reach_verb306(before=_KEEP306, made=_MADE306)
+    eq("F30 (website-proxy-install-cache): every image the build made is removed from root's store (its builder "
+       "stage and the images it pulled stayed, about 3 GB: only its tag went), and no other image is",
+       (rc, sorted(_rmi306(sub)), "--layers=false" in _first306(sub.calls, "build")), (0, ["ccc", "ddd", "eee"], True))
+    rc2, _out2, sub2, _d2 = _reach_verb306(before=_KEEP306, made=_MADE306, build_rc=1)
+    eq("F30 (website-proxy-install-cache): a build that fails is cleaned up the same way", (rc2, sorted(_rmi306(sub2))),
+       (1, ["ccc", "ddd", "eee"]))
+    rc3, _out3, sub3, _d3 = _reach_verb306(before=_KEEP306, made=_MADE306, images_rc=125)
+    eq("F30 (website-proxy-install-cache): where root's store cannot be listed, only the build's own tag is removed "
+       "(control)", (rc3, _rmi306(sub3)), (0, [_H306.WEB_CACHE_TAG]))
+
+
 # ── M3. Removing a website account while its user manager stops ────────────────────────────────
 class _UserdelSub306(_Sub306):
     """The helper's subprocess with userdel refusing (exit 8: a process still running) `busy` times first."""
@@ -926,7 +1075,7 @@ def _ran306(step, st):
 _ran306.last = ""
 _SECTIONS306 = (_f23_php_build, _f24_append, _f25_undo, _f26_dns, _f26a_cache_switch, _f27_cache_build,
                 _f27_wiring, _f28_node, _f29_disk, _m3_userdel, _m5_snippet, _m6_update_state,
-                _m11_build_dir, _s11_enrol)
+                _m11_build_dir, _s11_enrol, _f30_reach, _f30_store)
 _tools306()
 _trips306 = len(_P9_TRIPPED)
 with _p9.app_context():

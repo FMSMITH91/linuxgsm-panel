@@ -49,8 +49,15 @@ OK_STOPPED = "The website was stopped."
 OK_REMOVED = "The website and its account were removed."
 OK_PROXY = "The web proxy was installed."
 OK_CACHE_BUILD = "The web proxy with the page cache was built and installed."
-CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so the plain one was kept. Check the "
-                      "host's internet connection and try again.")
+# The helper says which part failed (failed=build|check|install); each part has its own sentence, the reason and
+# the build's last lines go to the panel's log only (OWASP Error Handling Cheat Sheet).
+CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so the plain one was kept. The panel's "
+                      "log has the build's last lines.")
+CACHE_CHECK_FAILED = ("The web proxy with the page cache was built, but the new program failed its check, so the plain "
+                      "one was kept. The panel's log has the reason.")
+CACHE_INSTALL_FAILED = ("The web proxy with the page cache could not be installed, so the plain one was kept. The "
+                        "panel's log has the reason.")
+CACHE_FAILURES = {"build": CACHE_BUILD_FAILED, "check": CACHE_CHECK_FAILED, "install": CACHE_INSTALL_FAILED}
 OK_APPLIED = "The web proxy's configuration was checked and applied."
 BAD_CONFIG = "The web proxy refused the new configuration, so the running one was kept: {why}"
 NOT_STARTED = "The web proxy did not start with the new configuration, so the previous one was put back: {why}"
@@ -321,7 +328,8 @@ def proxy_install_cache(remote):
         return False, out
     # The helper's reason and the build's last lines (public pins and Go's output) go to the panel's log only.
     _core._log.warning("web proxy page cache build failed: %s", " | ".join(out.splitlines()[-24:])[-3000:])
-    return False, CACHE_BUILD_FAILED
+    cause = next((ln[7:] for ln in out.splitlines() if ln.startswith("failed=")), "build")
+    return False, CACHE_FAILURES.get(cause, CACHE_BUILD_FAILED)
 
 
 def _host_machine(remote):
