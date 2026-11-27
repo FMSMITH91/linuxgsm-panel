@@ -3658,6 +3658,20 @@ def _web_site_uids():
     return uids
 
 
+def web_guard_uid_refusal(uids):
+    """Why `uids` cannot go in the egress guard's set, or None.
+
+    A website account is made by useradd as an ordinary account, so its uid is in login.defs'
+    UID_MIN..UID_MAX (_login_defs); root (0) is refused whatever that file says.
+    """
+    defs = _login_defs()
+    low, high = max(defs["UID_MIN"], 1), defs["UID_MAX"]
+    bad = [u for u in uids if isinstance(u, bool) or not isinstance(u, int) or not low <= u <= high]
+    if bad:
+        return "uid %s is not a website account's (they are %d to %d)" % (bad[0], low, high)
+    return None
+
+
 def web_guard_ruleset(uids):
     """The egress guard's nftables text (loaded atomically with nft -f) for site account `uids`.
 
@@ -3674,12 +3688,20 @@ def web_guard_ruleset(uids):
     test ("!= @site_uids accept") such a packet skipped the accept and met the drops, for every
     account; with a positive one it falls through to the chain's accept. A site account's own
     connection still starts from a socket that has its uid, so nothing it opens gets past site_out.
+
+    With no site account the set is empty (no elements line), so the jump matches nothing. A uid outside
+    the host's range for ordinary accounts (web_guard_uid_refusal) is refused with ValueError: uid 0 or a
+    service's uid in the set would hold root or that service to site_out, and the replies of every
+    listener it owns (sshd's handshake among them) to the host's other addresses would be dropped.
     """
-    elements = ", ".join(str(int(u)) for u in uids) or "0"
+    reason = web_guard_uid_refusal(uids)
+    if reason:
+        raise ValueError(reason)
+    elements = ["\t\telements = { %s }" % ", ".join(str(u) for u in uids)] if uids else []
     return "\n".join([
         "# Written by linuxgsm-panel: the websites' egress guard.",
         "table inet lgsm_web {}", "delete table inet lgsm_web", "table inet lgsm_web {",
-        "\tset site_uids {", "\t\ttype uid", "\t\telements = { %s }" % elements, "\t}",
+        "\tset site_uids {", "\t\ttype uid"] + elements + ["\t}",
         "\tchain site_out {",
         "\t\tip daddr 127.0.0.0/8 accept", "\t\tip6 daddr ::1 accept",
         "\t\tfib daddr type local counter drop",
@@ -3699,7 +3721,12 @@ def _web_guard_refresh():
 
 
 def _web_guard_load():
-    _web_write(WEB_GUARD_FILE, web_guard_ruleset(_web_site_uids()).encode(), WEB_FILE_ROOT)
+    try:
+        text = web_guard_ruleset(_web_site_uids())
+    except ValueError as e:
+        sys.stderr.write("refusing to load the egress guard: %s\n" % e)
+        return 1
+    _web_write(WEB_GUARD_FILE, text.encode(), WEB_FILE_ROOT)
     rc, _out = _run_quiet([resolve("nft"), "-f", WEB_GUARD_FILE])
     if rc == 0:
         sys.stdout.write("guard=on\n")

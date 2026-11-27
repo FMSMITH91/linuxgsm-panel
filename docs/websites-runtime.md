@@ -27,7 +27,10 @@ nftables table) keeps site accounts away from the host's other addresses (its LA
 addresses), so a site cannot reach the panel's port or SSH. Its rules apply only to packets that carry a
 site account's uid; a packet the kernel sends without a socket of its own (a reset for a closed port, a
 ping reply, the last ACK of a closed connection) has no uid and is never dropped, so the host keeps
-answering ping and refusing closed ports for every account while a website is online.
+answering ping and refusing closed ports for every account while a website is online. With no website
+on the host the guard holds no account at all, and it never holds root or a system account: the helper
+refuses to load it with such a uid in its list, because the replies of every service that account runs
+(SSH among them) would then be dropped too.
 
 A site has no name server either. Its container gets a read-only `/etc/resolv.conf` from the panel
 (`~/site/conf/resolv.conf`) that names no server and allows one try of one second, so a name lookup is

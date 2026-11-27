@@ -702,6 +702,84 @@ def _s299_helper_guard_jump():
        (["type filter hook output priority 0; policy accept;", "meta skuid @site_uids jump site_out"], [], 5, []))
 
 
+def _guard_verb299(verb, accounts, marks, uid_min=1000, prior=None):
+    """Run a helper verb that reloads the egress guard: (rc, guard text written or None, argvs run, stderr).
+
+    `accounts` is the passwd stand-in {name: uid}; `marks` the website accounts the helper made; `prior`
+    the guard file already on disk (the guard is on). login.defs is a scratch file with UID_MIN `uid_min`.
+    """
+    d = _tf299.mkdtemp(prefix="wp7-p299-")
+    names = ("pwd", "subprocess", "WEB_MARK_DIR", "WEB_PROXY_ETC", "WEB_GUARD_FILE", "LOGIN_DEFS", "resolve",
+             "_web_made", "_web_write", "_addon_forget_account", "_forget_account_tmp")
+    saved = {n: getattr(_H299, n) for n in names}
+    written, sub, err = {}, _Sub299(), _io299.StringIO()
+    for name in marks:
+        open(os.path.join(d, name), "w").close()
+    with open(os.path.join(d, "login.defs"), "w", encoding="utf-8") as fh:
+        fh.write("UID_MIN %d\nUID_MAX 60000\n" % uid_min)
+    guard = os.path.join(d, "egress-guard.nft")
+    if prior is not None:
+        with open(guard, "w", encoding="utf-8") as fh:
+            fh.write(prior)
+    try:
+        _H299.pwd, _H299.subprocess, _H299.WEB_MARK_DIR, _H299.WEB_PROXY_ETC = _Pw299(accounts), sub, d, d
+        _H299.WEB_GUARD_FILE, _H299.LOGIN_DEFS = guard, os.path.join(d, "login.defs")
+        _H299.resolve = lambda prog: "/usr/sbin/" + prog
+        # The mark's root ownership is what a non-root run cannot make: here a mark that exists is the helper's.
+        _H299._web_made = lambda user: os.path.isfile(os.path.join(d, user))
+        _H299._web_write = lambda path, data, *_a, **_k: written.__setitem__(path, data.decode())
+        _H299._addon_forget_account = _H299._forget_account_tmp = lambda *_a: 0
+        with _ctx299.redirect_stdout(_io299.StringIO()), _ctx299.redirect_stderr(err):
+            try:
+                rc = verb()
+            except Exception as e:  # noqa: BLE001 - a verb that raises instead of refusing is a result, not a crash
+                rc = "raised %s" % type(e).__name__
+        return rc, written.get(guard), sub.calls, err.getvalue()
+    finally:
+        for n, v in saved.items():
+            setattr(_H299, n, v)
+        __import__("shutil").rmtree(d, ignore_errors=True)
+
+
+def _set_lines299(text):
+    """The lines of the guard's site_uids set, or None when no guard was written."""
+    if text is None:
+        return None
+    lines = [ln.strip() for ln in text.split("\n")]
+    start = lines.index("set site_uids {")
+    return lines[start + 1:lines.index("}", start)]
+
+
+def _s299_guard_no_accounts():
+    on = lambda: _H299.do_website_egress_guard(["on"], "")  # noqa: E731 - the verb as the panel calls it
+    rc, text, calls, _err = _guard_verb299(on, {}, ())
+    eq("egress guard on (verb) with no website account: the uid set is empty (no elements line, never a placeholder "
+       "uid 0 that would hold root and its listeners' replies to site_out), and nft loads it",
+       (rc, _set_lines299(text), any(c[1:2] == ["-f"] for c in calls)), (0, ["type uid"], True))
+    rc, text, _calls, _err = _guard_verb299(on, {"ws7": 1007, "lgsmtunnel": 1008}, ("ws7", "lgsmtunnel"))
+    eq("egress guard on (verb), control: the site and tunnel accounts the helper made are the set's elements",
+       (rc, _set_lines299(text)), (0, ["type uid", "elements = { 1008, 1007 }"]))
+    remove = lambda: _H299.do_website_account_remove(["ws7"], "")  # noqa: E731 - the verb as the panel calls it
+    rc, text, _calls, _err = _guard_verb299(remove, {"ws7": 1007}, ("ws7",), prior="old")
+    eq("website-account-remove (verb) of the last site with the guard on: the guard is rewritten with an empty set",
+       (rc, _set_lines299(text)), (0, ["type uid"]))
+
+
+def _s299_guard_refuses_root():
+    on = lambda: _H299.do_website_egress_guard(["on"], "")  # noqa: E731 - the verb as the panel calls it
+    got = []
+    for accounts, uid_min in (({"ws7": 0}, 1000), ({"ws7": 999}, 1000), ({"ws7": 0}, 0), ({"ws7": 1007, "ws8": 0}, 1000)):
+        rc, text, calls, err = _guard_verb299(on, accounts, tuple(accounts), uid_min=uid_min)
+        got.append((rc, text, calls, "refusing to load the egress guard" in err))
+    eq("egress guard on (verb): a website account whose uid is root's (0, even when login.defs' UID_MIN is 0) or a "
+       "system account's (below UID_MIN) is refused: nothing is written, nft never runs, and stderr says why",
+       got, [(1, None, [], True)] * 4)
+    direct = lambda: [_refused299(_H299.web_guard_ruleset, u)  # noqa: E731 - read under the scratch login.defs
+                      for u in ([0], [1005, 999], [60001], [True], ["1005"], [1005, 60000])]
+    eq("egress guard ruleset: uid 0, a system uid, a uid above UID_MAX and a non-integer are refused by the helper "
+       "itself, whatever list the caller passes; uids inside UID_MIN..UID_MAX pass",
+       _guard_verb299(direct, {}, ())[0], [True] * 5 + [False])
+
 def _s299_helper_guard2():
     unit = _H299.WEB_PROXY_UNIT_TEXT
     eq("web proxy unit: its own user, CAP_NET_BIND_SERVICE alone, no new privileges, a read-only system with only "
@@ -1277,6 +1355,7 @@ def _w3_checks299(sent, secrets, results, logs):
 for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s299_generator, _s299_proxy_base,
                  _s299_proxy_modes, _s299_proxy_rules, _s299_quadlet, _s299_servers, _s299_php, _s299_app_cache_tunnel,
                  _s299_shell, _s299_helper_validators, _s299_helper_accounts, _s299_helper_apply, _s299_helper_guard, _s299_helper_guard_jump,
+                 _s299_guard_no_accounts, _s299_guard_refuses_root,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
                  _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
