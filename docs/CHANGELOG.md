@@ -10,6 +10,30 @@ dated section below lists what that day's releases changed, newest first; the nu
      Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
 <!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
 
+## [2026.11.27] — 2026-11-27
+
+### Added
+
+- **Host websites from the panel.** A new Websites page runs plain HTML, PHP and Node.js sites, and installs
+  WordPress, phpBB, Drupal, MyBB or Simple Machines Forum in one step, each in its own locked-down container
+  with automatic HTTPS. A site can be public, open only to networks you list (Cloudflare's in one tap) or
+  reached through a Cloudflare Tunnel; files go in through the file manager or SFTP, each site has its own PHP
+  settings and caching, and customers can have logins that see only their own sites.
+- **SFTP can listen on one address you choose.** Settings → SFTP has a new choice that lists this host's own
+  addresses and listens only on the one you pick. A public address shows a warning and puts the SFTP port
+  under fail2ban; if the address goes away, SFTP stops and says why until it is back.
+- **B3's country database updates itself every month.** B3 add-ons with offline geolocation now get DB-IP's
+  new country database once a month by themselves and load it without a restart where B3 can; the add-on card
+  shows which month it has. With DB-IP turned off in Outside services, B3 keeps the copy it has.
+- **History goes back a year.** The server and host History charts now offer 30 days, 90 days, 6 months and 1
+  year beside 24 hours and 7 days, from hourly summaries the panel keeps on its own host for a year.
+
+### Security
+
+- **Add-on downloads go only to public addresses.** The panel's downloads of DB-IP's country database and of
+  Mojang's version list for BlueMap now refuse redirects and private addresses, and no longer go through a web
+  proxy set for the panel.
+
 ## [2026.11.26] — 2026-11-26
 
 ### Added
@@ -18,11 +42,6 @@ dated section below lists what that day's releases changed, newest first; the nu
   add-on list your panel checks every day. A newer version lights up Update on the add-on's card without a
   panel update, and the card says which list it came from. Each installed B3 and IW4MAdmin is offered one
   image update after this release.
-- **Host websites from the panel.** A new Websites page runs plain HTML, PHP and Node.js sites, and installs
-  WordPress, phpBB, Drupal, MyBB or Simple Machines Forum in one step, each in its own locked-down container
-  with automatic HTTPS. A site can be public, open only to networks you list (Cloudflare's in one tap) or
-  reached through a Cloudflare Tunnel; files go in through the file manager or SFTP, each site has its own PHP
-  settings and caching, and customers can have logins that see only their own sites.
 
 ### Changed
 

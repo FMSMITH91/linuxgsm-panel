@@ -961,3 +961,7 @@ bfd743a9 Every form carries its own security token from the server.
 909e1791 Database password resets wait their turn.
 e39699e0 Panel updates wait for the secret and dependency scans.
 568cbfc9 Host websites from the panel.
+1f5d093f SFTP can listen on one address you choose.
+012055d0 B3's country database updates itself every month.
+5a5f18f1 History goes back a year.
+1b49a096 Add-on downloads go only to public addresses.
