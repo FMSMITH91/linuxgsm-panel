@@ -275,7 +275,7 @@ def register(app):
         remote = _remote()
         row = _w.proxy_row(remote.id)
         db.session.commit()
-        ok, said = _w.host_call(_sw.proxy_status, remote)
+        ok, said = _w.host_call(_sw.proxy_status, remote, row)
         status = _sw.parse_proxy_status(said) if ok else {}
         if ok:
             from panel.routes.websites_domains import apply_certs

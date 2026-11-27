@@ -411,9 +411,26 @@ def proxy_stop(remote):
     return (True, OK_PROXY_STOPPED) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
 
 
-def proxy_status(remote):
-    """The web proxy's state and each domain's certificate state: (ok, key=value lines)."""
-    return _helper(remote, "website-proxy-status", timeout=60)
+def proxy_status(remote, proxy=None):
+    """The web proxy's state and each domain's certificate state: (ok, key=value lines).
+
+    With the host's `proxy` row in tunnel mode, also the connector's unit state, read as its account:
+    `tunnel=<ActiveState>` and `tunnel_restarts=<NRestarts>` (tunnel=unknown when it cannot be read).
+    """
+    ok, out = _helper(remote, "website-proxy-status", timeout=60)
+    if ok and proxy is not None and proxy.exposure_mode == "tunnel" and proxy.tunnel_provider:
+        out = (out or "").rstrip("\n") + "\n" + _tunnel_state(remote)
+    return ok, out
+
+
+def _tunnel_state(remote):
+    """`tunnel=` and `tunnel_restarts=` lines of the connector's user unit, read as the tunnel's account."""
+    unit = _ws().unit_service(_ws().TUNNEL_UNIT)
+    sh = (_ws()._ENV + "printf 'tunnel=%%s\\ntunnel_restarts=%%s\\n' \"$(systemctl --user show -p ActiveState --value %s)\" "
+          "\"$(systemctl --user show -p NRestarts --value %s)\"" % (unit, unit))
+    ok, out = _as_site(remote, _ws().TUNNEL_ACCOUNT, sh, timeout=30)
+    lines = [ln for ln in (out or "").splitlines() if ln.startswith(("tunnel=", "tunnel_restarts="))]
+    return "\n".join(lines) + "\n" if ok and lines else "tunnel=unknown\n"
 
 
 def _cert_line(certs, line):
@@ -432,14 +449,17 @@ def parse_proxy_status(out):
     The helper prints the served certificate of each domain; should a domain still come twice (an older
     helper printed every issuer's), the later not_after wins, never simply the last line.
     """
-    got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}}
+    got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}, "tunnel": "",
+           "tunnel_restarts": 0}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             _cert_line(got["certs"], line)
         elif "=" in line:
             key, _sep, value = line.partition("=")
-            if key in ("installed", "version", "active", "cache"):
-                got[key] = (value == "yes") if key in ("installed", "cache") else value
+            if key in ("installed", "version", "active", "cache", "tunnel"):
+                got[key] = (value == "yes") if key in ("installed", "cache") else value[:40]
+            elif key == "tunnel_restarts" and value.isdecimal():
+                got[key] = int(value)
     return got
 
 
@@ -541,9 +561,27 @@ def tunnel_apply(remote, proxy):
     # window (a bad token, the network down) was refused by systemd until the window passed.
     sh = (_ws()._ENV + _ws().write_files_sh(True) + _ws().image_build_sh(b)
           + "systemctl --user daemon-reload && { systemctl --user reset-failed %s 2>/dev/null; "
-            "systemctl --user restart %s; }" % (unit, unit))
+            "systemctl --user restart %s; } && %s" % (unit, unit, _tunnel_settle_sh(unit)))
     ok, out = _as_site(remote, acct, sh, timeout=1800, stdin_text=_ws().bundle(files))
     return (True, OK_TUNNEL) if ok else (False, _tunnel_failure(out))
+
+
+# How long the connector must stay up after its restart before an apply says it was updated. The restart returns
+# once Podman has started the container; cloudflared refuses a bad token a moment later (about 0.4 s on the test
+# host) and the unit waits RestartSec=10 to try again, so a failure shows as a state other than active well
+# inside this window, before any automatic restart.
+TUNNEL_SETTLE_S = 5
+
+
+def _tunnel_settle_sh(unit):
+    """Shell that checks the connector once a second for TUNNEL_SETTLE_S seconds after the apply's restart.
+
+    It fails, printing the unit's state, once the unit is not active or systemd has restarted it since.
+    """
+    show = "systemctl --user show -p %%s --value %s" % unit
+    return ("n0=$(%s); ok=1; i=0; while [ $i -lt %d ]; do sleep 1; i=$((i+1)); st=$(%s); n=$(%s); "
+            "[ \"$st\" = active ] && [ \"$n\" = \"$n0\" ] || { ok=0; echo \"tunnel=$st restarts=$n\"; break; }; "
+            "done; [ $ok = 1 ]" % (show % "NRestarts", TUNNEL_SETTLE_S, show % "ActiveState", show % "NRestarts"))
 
 
 def _tunnel_failure(out):

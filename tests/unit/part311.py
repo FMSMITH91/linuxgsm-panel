@@ -9,7 +9,10 @@
    the recipe's wp-config turns off the run a visitor's request started (a request to the site's own name, which
    the visitor waited for, a 504 behind the page cache). The timer is written and started with the site and
    removed with it, by a delete and by an install's undo.
-3. Re-applying tunnel mode clears the connector's start limit first, and a failure names the tunnel.
+3. Re-applying tunnel mode clears the connector's start limit first, and a failure names the tunnel. From the
+   sixth round (P6): the apply waits TUNNEL_SETTLE_S seconds after the restart and fails when the connector is then
+   not active or systemd restarted it (cloudflared refuses a bad token after the restart returned), and the proxy's
+   status names the connector's unit state.
 4. An app's build turns npm's update notice off, so the build log's last lines are the build's own.
 5. The page-cache build removes Podman's blob-info cache folder only when the build made it.
 
@@ -52,7 +55,8 @@ _REAL311 = {n: getattr(_sw311, n) for n in ("install", "remove", "tunnel_apply",
 
 # The stand-in tools. Each records its argv (one JSON line). systemctl models a unit's start limit: a unit with
 # "$HOME/.limit-<unit>" is refused by start/restart until `reset-failed <unit>` removes it; FAKE_RESTART_RC fails
-# every start. podman answers `image exists` with FAKE_IMAGE_EXISTS, a build with FAKE_BUILD_RC, and a run prints
+# every start; `show` answers ActiveState with FAKE_ACTIVE (active), and NRestarts with 0, then with
+# FAKE_RESTARTS_LATER. podman answers `image exists` with FAKE_IMAGE_EXISTS, a build with FAKE_BUILD_RC, and a run prints
 # npm's update notice unless the run turns it off (as npm does at the end of a build).
 _FAKE311 = r'''
 import json, os, sys
@@ -71,6 +75,14 @@ if tool == "systemctl":
         if int(os.environ.get("FAKE_RESTART_RC", "0")) or any(os.path.exists(os.path.join(home, ".limit-" + u))
                                                               for u in units):
             rc = 1
+    elif "show" in argv and "ActiveState" in argv:
+        sys.stdout.write(os.environ.get("FAKE_ACTIVE", "active") + "\n")
+    elif "show" in argv and "NRestarts" in argv:
+        # FAKE_RESTARTS_LATER: the first read says 0, every later one this value (systemd restarted the unit).
+        seen = os.path.join(home, ".nrestarts-read")
+        later = os.environ.get("FAKE_RESTARTS_LATER", "")
+        sys.stdout.write((later if later and os.path.exists(seen) else "0") + "\n")
+        open(seen, "a").close()
     elif "show" in argv:
         sys.stdout.write("success\n")
 elif tool == "podman":
@@ -162,6 +174,10 @@ class _Client311:
     def post(self, *a, **k):
         _g311.pop("_login_user", None)
         return self.c.post(*a, **k)
+
+    def get(self, *a, **k):
+        _g311.pop("_login_user", None)
+        return self.c.get(*a, **k)
 
 
 _ROWS311 = {"sites": [], "remotes": [], "users": []}
@@ -384,6 +400,36 @@ def _s3_tunnel(st):
     r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
     eq("M15 control (the connector's image build fails): that failure keeps its own sentence",
        (r.status_code, (r.get_json() or {}).get("message")), (502, _ws311.FAIL_MARKS["SITE_BUILD_FAILED"]))
+    _s3_tunnel_settle(st, su, proxy)
+
+
+def _s3_tunnel_settle(st, su, proxy):
+    """M16: the restart returned, then the connector stopped (cloudflared refused its token a moment later)."""
+    eq("M16: the connector must stay up 5 seconds after its restart (pinned)", _sw311.TUNNEL_SETTLE_S, 5)
+    _p9_patch(_sw311, "TUNNEL_SETTLE_S", 1)
+    got = {}
+    for name, env in (("auto-restart", {"FAKE_ACTIVE": "activating"}), ("failed", {"FAKE_ACTIVE": "failed"}),
+                      ("restarted", {"FAKE_RESTARTS_LATER": 1}), ("up", {})):
+        _reset311(**env)
+        home = _home311(_ws311.TUNNEL_ACCOUNT)
+        if os.path.exists(os.path.join(home, ".nrestarts-read")):
+            os.unlink(os.path.join(home, ".nrestarts-read"))
+        r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
+        _db311.session.expire_all()
+        got[name] = (r.status_code, (r.get_json() or {}).get("message"), _db311.session.get(_Proxy311, proxy.id).last_error)
+    bad = (502, _sw311.TUNNEL_FAILED, _sw311.TUNNEL_FAILED)
+    eq("M16 (POST /websites/proxy/apply, the restart returned but the connector is then not active, failed, or "
+       "restarted by systemd): the apply says the tunnel did not start, stored as the proxy's last_error; a connector "
+       "that stays up is applied with last_error cleared (control)",
+       got, {"auto-restart": bad, "failed": bad, "restarted": bad, "up": (200, _sw311.OK_PORTS, "")})
+    _reset311(FAKE_ACTIVE="activating", FAKE_RESTARTS_LATER=3)
+    open(os.path.join(_home311(_ws311.TUNNEL_ACCOUNT), ".nrestarts-read"), "a", encoding="utf-8").close()
+    body = (su.get("/websites/proxy/status?host_id=%d" % st.host.id).get_json() or {}).get("status") or {}
+    _reset311()
+    up = (su.get("/websites/proxy/status?host_id=%d" % st.host.id).get_json() or {}).get("status") or {}
+    eq("M16 (GET /websites/proxy/status, tunnel mode): the status names the connector's unit state and restarts, read "
+       "as the tunnel's account; a connector that is up says active (control)",
+       ((body.get("tunnel"), body.get("tunnel_restarts")), up.get("tunnel")), (("activating", 3), "active"))
 
 
 # ── 4. An app's build log ─────────────────────────────────────────────────────────────────────────

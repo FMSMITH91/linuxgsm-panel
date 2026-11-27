@@ -324,11 +324,11 @@ def _s2_proxy_version(st):
     eq("proxy (POST /websites/proxy/install): the installed version is recorded, so the page stops saying the proxy "
        "is not installed", (r.status_code, getattr(row, "installed_version", None), "proxy" in missing),
        (200, _wc305.pins("caddy")["version"], False))
-    _p9_patch(_sw305, "proxy_status", lambda remote: (True, "installed=no\nversion=\nactive=inactive\n"))
+    _p9_patch(_sw305, "proxy_status", lambda remote, proxy=None: (True, "installed=no\nversion=\nactive=inactive\n"))
     su.get("/websites/proxy/status?host_id=%d" % st.host.id)
     _db305.session.expire_all()
     gone = getattr(_Proxy305.query.filter_by(remote_id=st.host.id).first(), "installed_version", None)
-    _p9_patch(_sw305, "proxy_status", lambda remote: (True, "installed=yes\nversion=v2.11.9\nactive=active\n"))
+    _p9_patch(_sw305, "proxy_status", lambda remote, proxy=None: (True, "installed=yes\nversion=v2.11.9\nactive=active\n"))
     su.get("/websites/proxy/status?host_id=%d" % st.host.id)
     _db305.session.expire_all()
     back = getattr(_Proxy305.query.filter_by(remote_id=st.host.id).first(), "installed_version", None)

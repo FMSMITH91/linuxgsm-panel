@@ -528,7 +528,7 @@ def _s5_timezone():
 
 def _s5_route(st):
     lines = "installed=yes\nversion=v2.11.9\ncache=no\nactive=active\ncert=p302.example.org issuer=local not_after=1795757485\n"
-    _p9_patch(_sw302, "proxy_status", lambda remote: (True, lines))
+    _p9_patch(_sw302, "proxy_status", lambda remote, proxy=None: (True, lines))
     body = _p9_json(_Client302(st.su.id).get("/websites/proxy/status?host_id=%d" % st.host.id))
     eq("proxy status (route): the host's status is answered parsed (installed, active, each domain's certificate)",
        (body.get("status_ok"), (body.get("status") or {}).get("active"), (body.get("status") or {}).get("certs")),
