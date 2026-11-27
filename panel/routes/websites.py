@@ -251,7 +251,7 @@ def _list_routes(app):
     def websites_page():
         if not _wa.can_open_page(current_user):
             abort(404)
-        return page("websites.html", can_add=_wa.can_create(current_user), site_admin=is_admin(current_user))
+        return page("websites.html", **_list_flags())
 
     @app.route("/websites/<int:site_id>")
     @login_required
@@ -277,6 +277,19 @@ def _list_routes(app):
         from panel.routes import websites_apps, websites_domains
         websites_domains.refresh_certs(site.remote)
         return jsonify(_view.site_answer(site, _status(site), websites_apps.install_json(site)))
+
+
+def _list_flags():
+    """The Websites list's flags: can_add, site_admin, and for an administrator who cannot add one, why not.
+
+    no_add_host: an administrator below a superadmin, who has no host that runs websites (websites_access.
+    admin_website_hosts), sees the reason instead of an Add button whose every Create failed. customers_card: the
+    Add a customer card only for someone who administers a site to grant (each of its sites is checked again).
+    """
+    can_add, admin = _wa.can_create(current_user), is_admin(current_user)
+    holds = current_user.is_superadmin or _wa.visible_sites(current_user, MANAGE_WEBSITES).first() is not None
+    return {"can_add": can_add, "site_admin": admin, "customers_card": admin and holds,
+            "no_add_host": admin and not can_add and creates_as_admin(current_user)}
 
 
 def _status(site):

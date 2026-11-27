@@ -26,7 +26,9 @@ processes, largest upload) takes the defaults from the web proxy card's Security
 
 If something the host needs is missing (for example the web proxy is not installed yet), the dialog
 says so on its first line, with one button that fixes it for a superadmin; anyone else is told to ask
-a superadmin. Websites run on the panel's own host for now, so the dialog offers no other host. A missing web
+a superadmin. Websites run on the panel's own host for now, so the dialog offers no other host, and an
+administrator below a superadmin (who never manages that host) gets no **Add a website** button: the list says
+why instead. A missing web
 proxy does not hold **Create** back: a site can be made first and put online once
 the proxy is installed. A site that fails to start shows why, its last log lines and a **Retry** button. Retry sets
 the site up again (its account, files, image and container) and starts it, so it also recovers a site whose

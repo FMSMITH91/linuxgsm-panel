@@ -31,6 +31,9 @@ C5  The add dialog lists only the hosts that run websites (the panel's own host,
     other host is refused before its row is made (it failed at once and led to the failed-site dead end). The
     web proxy card's Install acts on the card's host, the dialog's note on the dialog's host.
 
+B10 An administrator below a superadmin has no host that runs websites (the panel's own host is a superadmin's),
+    so Add a website is not offered to them (every Create failed for want of a host): the list says why instead.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -517,6 +520,52 @@ def _c5_hosts(st):
        "(the card used the dialog's)", got.get("sent"), ["9", "1"])
 
 
+# ── B10. An administrator below a superadmin ──────────────────────────────────────────────────────
+def _b10_admin(st):
+    from panel.db.models import Group
+    from panel.security.auth import MANAGE_WEBSITES, VIEW_WEBSITES
+    managed = _Remote315(name="p315-theirs", host="198.51.100.90", port=22, username="u", auth_method="key",
+                         auth_credential="", is_local=False)
+    _db315.session.add(managed)
+    _db315.session.commit()
+    _ROWS315["remotes"].append(managed.id)
+    user = _user315("p315-webadmin")
+    group = Group(name="p315-webadmins", description="", is_default=False, is_customer=False)
+    group.set_permissions([MANAGE_WEBSITES, VIEW_WEBSITES])
+    group.servers.append(managed)
+    group.users.append(user)
+    _db315.session.add(group)
+    _db315.session.commit()
+    theirs = _Site315(remote_id=managed.id, name="p315-theirsite", kind="static", state="running",
+                      proxy_secret=_cfg315.encrypt_secret(_TOKEN315))
+    _db315.session.add(theirs)
+    _db315.session.flush()
+    theirs.account, theirs.port = "ws%d" % theirs.id, 20899
+    _db315.session.commit()
+    _ROWS315["sites"].append(theirs.id)
+    try:
+        _b10_checks(st, user)
+    finally:
+        _db315.session.rollback()
+        _db315.session.delete(_db315.session.get(Group, group.id))
+        _db315.session.commit()
+
+
+def _b10_checks(st, user):
+    me = _Client315(user.id)
+    page = me.get("/websites").get_data(as_text=True)
+    add = me.post("/websites/add", json={"name": "p315-tryadd", "kind": "static", "host_id": st.host.id})
+    eq("B10 (GET /websites, an administrator in an ordinary group): no Add a website button, and the list says why "
+       "(websites run on the panel's own host, a superadmin's); their customer card stays, for the site they "
+       "administer", ('id="ws-add-open"' in page, 'id="ws-add-why"' in page, 'id="wc-box"' in page), (False, True, True))
+    eq("B10 (POST /websites/add and GET /api/websites for them): the add is not theirs (404, as for no route), and "
+       "the list says they cannot create", (add.status_code, _p9_json(me.get("/api/websites")).get("can_create")),
+       (404, False))
+    su_page = _Client315(st.su.id).get("/websites").get_data(as_text=True)
+    eq("B10 control (a superadmin): Add a website, and no such sentence",
+       ('id="ws-add-open"' in su_page, 'id="ws-add-why"' in su_page), (True, False))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -554,7 +603,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

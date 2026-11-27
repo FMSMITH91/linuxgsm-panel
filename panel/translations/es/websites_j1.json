@@ -14,5 +14,6 @@
   "This host has no database server yet, and an app needs one. Set up databases first: MariaDB, reached from this machine only.": "Este servidor aún no tiene servidor de bases de datos, y una aplicación necesita uno. Configura primero las bases de datos: MariaDB, accesible solo desde esta máquina.",
   "This host's database server cannot be used by the panel yet, and an app needs one. See the Databases tab of a game server on this host.": "El panel aún no puede usar el servidor de bases de datos de este servidor, y una aplicación necesita uno. Mira la pestaña Bases de datos de un servidor de juego en este servidor.",
   "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Este sitio web todavía se está configurando. Espera a que termine (o falle) y luego elimínalo.",
-  "Try again": "Intentar de nuevo"
+  "Try again": "Intentar de nuevo",
+  "Websites run on the panel's own host, which only a superadmin manages, so a superadmin adds them.": "Los sitios web se ejecutan en el propio servidor del panel, que solo gestiona un superadministrador, así que es un superadministrador quien los añade."
 }
