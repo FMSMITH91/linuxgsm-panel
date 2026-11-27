@@ -2074,13 +2074,14 @@ def _run_light_migrations():
     db.session.commit()
 
 
-# Columns no version reads any more: (table, column) -> the ALTER TABLE that drops it from a database an
-# older version created. website_proxy.origin_tls was a per-host certificate choice that nothing rendered
+# Columns no version reads any more: (table, column, the ALTER TABLE that drops it from a database an
+# older version created). A tuple, not the light migrations' map shape: smoke part04 reads that shape as
+# columns that must exist. website_proxy.origin_tls was a per-host certificate choice that nothing rendered
 # or applied; a domain's own certificate is WebsiteDomain.cert_mode. Dropped only where SQLite has DROP
 # COLUMN (3.35); an older SQLite keeps the column, which has a default and is never read or written.
-_RETIRED_COLUMNS = {
-    ("website_proxy", "origin_tls"): "ALTER TABLE website_proxy DROP COLUMN origin_tls",
-}
+_RETIRED_COLUMNS = (
+    ("website_proxy", "origin_tls", "ALTER TABLE website_proxy DROP COLUMN origin_tls"),
+)
 
 
 def _drop_retired_columns(existing):
@@ -2088,7 +2089,7 @@ def _drop_retired_columns(existing):
     import sqlite3
     if sqlite3.sqlite_version_info < (3, 35, 0):
         return
-    for (table, col), ddl in _RETIRED_COLUMNS.items():
+    for table, col, ddl in _RETIRED_COLUMNS:
         if col in existing.get(table, ()):
             db.session.execute(text(ddl))
             existing[table].discard(col)
