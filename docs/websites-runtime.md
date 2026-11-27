@@ -65,7 +65,9 @@ proxy when a superadmin turns on **Page cache in the web proxy** in the Websites
 after the plain proxy is installed while it is on). The build runs in the background and takes a few minutes;
 a failure is shown on the security settings card, with the build's last lines in the panel's log. A container
 build from the pinned Caddy builder image runs `xcaddy` with the module at the exact version the catalog
-names. Go checks every module against its checksum database. The build runs with every capability dropped
+names. Go checks every module against its checksum database. Where the pinned Caddy asks for a library version
+with a known flaw, the build raises it to the fixed version (today golang.org/x/net, to v0.62.0); that only sets a
+minimum, so a later Caddy that needs a newer one still gets it. The build runs with every capability dropped
 and on the host's own network, so Podman sets up no network of its own: it never turns on the host's IP
 forwarding or adds firewall chains. The binary is then taken out of the image, checked to contain the module,
 and installed in place of the plain proxy. Until then, a site's page cache is left out and nothing breaks.

@@ -522,9 +522,14 @@ def _f27_build_argv():
 
 def _f27_build_scan():
     sub = _Sub306()
-    _rc, _err, _calls = _cache_verb306(sub)
+    rc, _err, _calls = _cache_verb306(sub)
     cf = sub.containerfile
     stage = cf[cf.index(" AS build"):cf.index("\nFROM ${BASE_IMAGE}")]
+    floor = _re306.search(r"--with golang\.org/x/net/html@v([0-9]+)\.([0-9]+)\.([0-9]+) ", stage)
+    eq("F27d (website-proxy-install-cache, the Containerfile its build reads): golang.org/x/net is raised to v0.62.0 "
+       "or later (Caddy 2.11.9 asks for v0.60.0, CVE-2026-78661 in the linked HTML parser) as a minimum through --with, "
+       "never a --replace that would pin it and could take a later Caddy's newer x/net back down",
+       (rc, bool(floor) and tuple(int(n) for n in floor.groups()) >= (0, 62, 0), "--replace" in stage), (0, True, False))
     run = stage[stage.index("\nRUN "):]
     env = " ".join(ln for ln in stage.split("\n") if ln.startswith("ENV "))
     eq("F27e (website-proxy-install-cache, the Containerfile its build reads; the image scan's hadolint): the build "
