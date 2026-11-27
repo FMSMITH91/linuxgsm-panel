@@ -3268,3 +3268,8 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
   padding: .5rem 0;
 }
 .ad-row:first-child { border-top: 0; }
+
+/* The Updates page (templates/updates.html): rows divided by a rule, the window and history side by side on a wide screen. */
+.upd-row + .upd-row { border-top: 1px solid var(--bs-border-color); }
+.upd-cols { display: grid; gap: .5rem; }
+@media (min-width: 992px) { .upd-cols { grid-template-columns: 1fr 1fr; align-items: start; } }

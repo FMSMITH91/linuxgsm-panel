@@ -276,7 +276,8 @@ def _change_steps(gs, addon_id, who, kind, choice=None):
     unit, units, net, web = _unit(gs, addon_id, p, meta, geo, own)
     rec.update(network=net, port=web, changed_by=who)
     how = {"rebuild": kind == "update", "settings": new_ini is not None, "extra": extra, "after": after,
-           "old_image": meta.get("image", ""), "dirs": [_ad.B3_OWN_PLUGINS] if own else []}
+           "old_image": meta.get("image", ""), "dirs": [_ad.B3_OWN_PLUGINS] if own else [],
+           "keep_prev": kind == "update"}       # an update keeps the record and unit it replaces (rollback_sh)
     how.update(_b3_apply_steps(gs, p, meta, (kind, now, new_ini, files.get(_ad.B3_GEO_INI)), who))
     sh = _ad.reconfigure_sh(gs.short_name, addon_id, unit, json.dumps(rec) + "\n", files, units, how)
     out, _err, rc = _sm.shell_as_game_user(gs.remote, gs.short_name, sh, timeout=_ad.INSTALL_TIMEOUT,

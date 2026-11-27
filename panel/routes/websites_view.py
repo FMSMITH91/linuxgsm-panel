@@ -318,10 +318,22 @@ def _usage(probe):
 
 
 def _image(site, probe):
-    """The Software line and whether Update would bring the site a newer image (websites.update_available)."""
+    """The Software line and whether Update would bring the site a newer image (websites.update_available).
+
+    With an update waiting: `ready` ("N updates ready: what") and `when` (the nightly window's time, or why it
+    waits), the Overview's words for it (routes/updates.site_changes, site_schedule), and `note` while automatic
+    updates are off for it.
+    """
+    from panel.routes import updates as _ru
     from panel.routes.websites import update_available
     name, version = _image_ref(site, probe)
-    return {"name": name, "version": version, "update_available": update_available(site)}
+    out = {"name": name, "version": version, "update_available": update_available(site)}
+    if out["update_available"]:
+        what = _ru.site_changes(site)
+        sched = _ru.site_schedule(site)
+        out.update(ready=i18n.tr(i18n.Sentence("{n} update(s) ready: {what}", n=len(what), what=" ".join(what))),
+                   when=sched["when"], note=sched["note"], security=sched["security"], auto=sched["auto"])
+    return out
 
 
 def _image_ref(site, probe):

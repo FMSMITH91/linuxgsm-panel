@@ -6013,8 +6013,11 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 379, was 378: panel/routes/websites_settings.py's object cache connection settings (MANAGE_WEBSITE on the site, step-up).
 # 380, was 379: panel/routes/databases.py's start of a stopped database server (MANAGE_DATABASES and MANAGE_REMOTES,
 # step-up), the add-website dialog's fix for it.
-check("register_routes: every one of the 380 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 380,
+# 386, was 380: panel/routes/updates.py's Updates page: the page, its list and the nav's count (each viewer sees what
+# they may update), the nightly window (superadmin), an item's automatic switch (who may update that item) and Update
+# everything safe now (step-up).
+check("register_routes: every one of the 386 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 386,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

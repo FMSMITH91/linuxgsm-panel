@@ -146,7 +146,11 @@
     setText('ws-ov-version', ver);
     setText('ws-ov-backup', backupText(s.last_backup));
     WS.show('ws-update', !!img.update_available);
-    WS.show('ws-update-note', !!img.update_available);
+    WS.show('ws-update-box', !!img.update_available);
+    setText('ws-update-ready', img.ready || '');
+    setText('ws-update-when', img.when || '');
+    setText('ws-update-off', img.note || '');
+    WS.show('ws-update-off', !!img.note);
     renderUsage(u, s.limits || {}, why);
   }
   // Limits are an administrator's; anyone else sees the figure alone.

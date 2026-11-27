@@ -44,6 +44,7 @@ WORKERS = (
     ("autoblock", "Auto-block", "Blocks addresses with too many failed logins, when Auto-block is on."),
     ("ban-watch", "Bans", "Watches fail2ban for new bans to report."),
     ("update-check", "Update checks", "Checks for panel and OS updates, and certificate expiry."),
+    ("auto-updates", "Automatic updates", "Updates websites and add-ons in the nightly window, one at a time."),
     ("node-tools", "Node.js tools", "Keeps the tools the panel uses to query games installed."),
     ("host-reboot", "Host reboots", "Carries out a reboot you started, and brings servers back after it."),
     ("reboot-when-empty", "Reboot when empty", "Reboots a host you queued, once its players leave."),

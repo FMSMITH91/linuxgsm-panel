@@ -481,6 +481,8 @@ def _lg265_after_update_lgsm(app, gs, who, run):
     name, before, rc, clean = run
     after = _lgu.script_release(*who[:3])
     ok, msg = _lgu.outcome(name, before, after, rc, _action_failure_reason(clean)[:280] if rc else "")
+    from panel.services import updates as _upd
+    _upd.note_lgsm(who[3], msg.lgsm)      # the Updates page's LinuxGSM row follows the run
     _console_push(app, who[3], f"[panel] update-lgsm: {msg}")
     if rc == 0:
         _lg265_refresh_after_update(gs)

@@ -2841,6 +2841,11 @@ def panel_update_status(force=False):
         return data
 
 
+def panel_update_cached():
+    """The panel update status the last check cached (None before the first): never fetches (the Updates page)."""
+    return _update_cache["data"]
+
+
 def panel_self_update():
     """Update the panel with the SAME safety as the SSH installer.
 

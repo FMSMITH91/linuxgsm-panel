@@ -179,6 +179,8 @@ def register(app, supervise):
     # still naming functions that had gone.
     supervise("update-check", update_check_ticker)
     app._maybe_alert_os_updates = _maybe_alert_os_updates
+    from panel.routes import updates as _r_updates      # the Updates page and the nightly window's loop
+    _r_updates.register(app, supervise)
 
 
 def _check_hosts_for_updates(remotes):

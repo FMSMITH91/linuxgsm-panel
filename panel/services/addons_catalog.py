@@ -65,8 +65,8 @@ FIELDS = {
 _TOP = {"schema", "seq", "issued", "expires", "addons"}
 # Top-level sections other features read through section(); this module only carries them. The
 # floor may hold them, and a signed catalog's copy is passed on unchecked: its owner checks it and
-# falls back to the floor's (websites_catalog for "sites").
-SECTIONS = ("sites",)
+# falls back to the floor's (websites_catalog for "sites", catalog_security for "security").
+SECTIONS = ("sites", "security")
 _TIME = "%Y-%m-%dT%H:%M:%SZ"
 _TIME_RE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
 

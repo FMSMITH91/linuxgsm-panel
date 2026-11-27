@@ -1116,6 +1116,48 @@ def _current_os_updates(snapshot):
              if rid in born and _os_update_current(seen, born[rid])], local_id)
 
 
+def os_update_hosts(user):
+    """[{id, name, local, count, security, at, url}] of each host `user` may see with OS updates waiting.
+
+    What the login banner and the Updates page show, from the daily sweep's answers held in memory: never
+    asks a host. The panel host is a superadmin's only; another host only when `user` may manage it.
+    """
+    # .copy() rather than iterating the live dict: the daily sweep writes to it from its own
+    # thread, and a resize mid-iteration would 500 the page this banner sits on.
+    snapshot = _os_update_seen.copy()
+    if not snapshot:
+        return []     # nothing known yet — don't spend a query finding out
+    hosts = []
+    current, local_id = _current_os_updates(snapshot)
+    # The accessible set, resolved ONCE. can_access_remote per host is the same answer and
+    # costs a query set each time it is asked — fine when the grants were lazily cached on the
+    # user, and three queries per host now that they are eagerly loaded. Same check, same
+    # result, asked once instead of once per host in the snapshot.
+    # Less the panel host: its patch state is a superadmin's, as its OS Updates card and every
+    # read behind it are (get_host_remote). A delegated grant covering the panel host reaches
+    # it nowhere else, so the banner must not hand it over either.
+    _allowed = None if user.is_superadmin \
+        else accessible_remote_ids(user) - {local_id}
+    for rid, seen in current:
+        if not seen.get("count"):
+            continue
+        # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
+        # must not learn the name or patch state of another's from this summary.
+        if _allowed is not None and rid not in _allowed:
+            continue
+        # The panel host's fixed label in the viewer's language (the banner's link guards the
+        # name from the page's translator, which is right for a remote's own words only).
+        name = i18n.tr(LOCAL_HOST_LABEL) if rid == local_id else seen["name"]
+        # `local`: the page names the panel host with its own catalog (nags.js), so a live
+        # language switch follows it; `name` stays the label in the viewer's language.
+        hosts.append({"id": rid, "name": name, "local": rid == local_id, "count": seen["count"],
+                      "security": seen["security"], "at": seen["at"],
+                      # The panel host has a dedicated page (superadmin-only, as is its line).
+                      "url": url_for("server_management") if rid == local_id
+                             else url_for("remote_manage", remote_id=rid)})
+    return hosts
+
+
 def _register_os_update_checks(app):
     """OS updates: check, summarise, read the cache, run."""
     @app.route("/api/remote/<int:remote_id>/check-updates")
@@ -1158,40 +1200,7 @@ def _register_os_update_checks(app):
         `apt update` (a network fetch per host, 60s timeout each), so they read the daily sweep's
         answer instead; the Check button is there for anyone who wants it re-asked now.
         """
-        # .copy() rather than iterating the live dict: the daily sweep writes to it from its own
-        # thread, and a resize mid-iteration would 500 the page this banner sits on.
-        snapshot = _os_update_seen.copy()
-        if not snapshot:
-            return jsonify({"hosts": []})     # nothing known yet — don't spend a query finding out
-        hosts = []
-        current, local_id = _current_os_updates(snapshot)
-        # The accessible set, resolved ONCE. can_access_remote per host is the same answer and
-        # costs a query set each time it is asked — fine when the grants were lazily cached on the
-        # user, and three queries per host now that they are eagerly loaded. Same check, same
-        # result, asked once instead of once per host in the snapshot.
-        # Less the panel host: its patch state is a superadmin's, as its OS Updates card and every
-        # read behind it are (get_host_remote). A delegated grant covering the panel host reaches
-        # it nowhere else, so the banner must not hand it over either.
-        _allowed = None if current_user.is_superadmin \
-            else accessible_remote_ids(current_user) - {local_id}
-        for rid, seen in current:
-            if not seen.get("count"):
-                continue
-            # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
-            # must not learn the name or patch state of another's from this summary.
-            if _allowed is not None and rid not in _allowed:
-                continue
-            # The panel host's fixed label in the viewer's language (the banner's link guards the
-            # name from the page's translator, which is right for a remote's own words only).
-            name = i18n.tr(LOCAL_HOST_LABEL) if rid == local_id else seen["name"]
-            # `local`: the page names the panel host with its own catalog (nags.js), so a live
-            # language switch follows it; `name` stays the label in the viewer's language.
-            hosts.append({"id": rid, "name": name, "local": rid == local_id, "count": seen["count"],
-                          "security": seen["security"], "at": seen["at"],
-                          # The panel host has a dedicated page (superadmin-only, as is its line).
-                          "url": url_for("server_management") if rid == local_id
-                                 else url_for("remote_manage", remote_id=rid)})
-        return jsonify({"hosts": hosts})
+        return jsonify({"hosts": os_update_hosts(current_user)})
 
     @app.route("/api/remote/<int:remote_id>/updates-cached")
     @login_required

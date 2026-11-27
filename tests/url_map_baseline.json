@@ -898,6 +898,26 @@
       "GET"
     ]
   },
+  "GET /api/updates": {
+    "endpoint": "api_updates",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /api/updates/count": {
+    "endpoint": "api_updates_count",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates_count"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /api/websites": {
     "endpoint": "api_websites",
     "guards": [
@@ -1191,6 +1211,16 @@
       "auth.py:decorated_function(use_terminal)",
       "account_guard.py:wrapped",
       "view:host_terminal"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /updates": {
+    "endpoint": "updates_page",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:updates_page"
     ],
     "methods": [
       "GET"
@@ -3371,6 +3401,38 @@
       "auth.py:decorated_function(super_admin)",
       "account_guard.py:wrapped",
       "view:api_tailscale_up"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/auto": {
+    "endpoint": "api_updates_auto",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_updates_auto"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/safe": {
+    "endpoint": "api_updates_safe",
+    "guards": [
+      "utils.py:decorated_view",
+      "account_guard.py:wrapped",
+      "view:api_updates_safe"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/updates/window": {
+    "endpoint": "api_updates_window",
+    "guards": [
+      "utils.py:decorated_view(super_admin)",
+      "auth.py:decorated_function(super_admin)",
+      "view:api_updates_window"
     ],
     "methods": [
       "POST"

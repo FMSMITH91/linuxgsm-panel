@@ -584,9 +584,22 @@ def build(folder, label, args):
     return {"folder": folder, "tag": build_tag(folder, label, args), "args": list(args)}
 
 
+def pinned_image(site):
+    """The image an automatic update's rollback puts `site` back on (services/updates_auto), "" for the catalog's.
+
+    Set on the row object for that one install only (never stored): the image the site ran before, which the
+    failed update left on the host. image_for answers it, and site_build answers None, so the install neither
+    builds nor pulls anything new.
+    """
+    got = getattr(site, "rollback_image", "")
+    return got if isinstance(got, str) else ""
+
+
 def site_build(site):
     """The build of the image `site` runs ({folder, tag, args}), or None when it runs a pulled image or none."""
     from panel.services import websites_catalog as _wc     # imported here: the unit text is tested without it
+    if pinned_image(site):
+        return None
     if site.kind in ("php", "phpbb", "wordpress"):
         base = _wc.php_image("wordpress" if site.kind == "wordpress" else "php", site.php_version)
         folder, label = ("wordpress", "php") if site.kind == "wordpress" else ("php", "")
@@ -627,6 +640,8 @@ def image_for(site):
     runtime the panel has no Containerfile for), which runs its pinned image by digest.
     """
     from panel.services import websites_catalog as _wc
+    if pinned_image(site):
+        return pinned_image(site)
     if site.kind == "static":
         return _wc.static_image()
     if site.kind == "app" and not builds_image(site.runtime):
@@ -1025,6 +1040,9 @@ def install_sh(account, site, image=None):
     image = image or image_for(site)
     b = site_build(site)
     pull = image_build_sh(b) if b else "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image)
+    if pinned_image(site):
+        # A rollback: the image the site ran before is still on the host (a built one has no registry to pull from).
+        pull = "podman image exists %s || { echo SITE_PULL_FAILED; exit 23; }; " % _q(image)
     if site.kind == "app":
         from panel.services import websites_catalog as _wc
         pull += "podman pull -q %s >/dev/null || { echo SITE_PULL_FAILED; exit 23; }; " % _q(_wc.static_image())

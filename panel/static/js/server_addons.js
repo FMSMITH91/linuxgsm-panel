@@ -60,6 +60,13 @@
     return sel;
   }
 
+  // The Updates page, where every update waiting (this one too) is listed with when it installs by itself.
+  function allUpdates() {
+    var a = node('a', 'btn btn-sm btn-link px-1', T('All updates'));
+    a.href = (window.MOUNT || '') + '/updates';
+    return a;
+  }
+
   function installedRow(a, box) {
     if (a.database) box.appendChild(node('div', 'small text-secondary text-break', TF('Database {db}.', {db: a.database})));
     if (a.port) {
@@ -77,6 +84,7 @@
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
     if (a.update) bar.appendChild(button(T('Update'), 'bi-arrow-up-circle', 'adUpdate', [a.id], 'btn-outline-primary'));
+    if (a.update) bar.appendChild(allUpdates());
     bar.appendChild(button(T('Log'), 'bi-journal-text', 'adLog', [a.id]));
     bar.appendChild(button(T('Remove'), 'bi-trash', 'adRemove', [a.id], 'btn-outline-danger'));
     box.appendChild(bar);

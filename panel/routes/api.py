@@ -508,7 +508,10 @@ def _lgsm_version_info(gs):
     be read. `behind` only when both are known and the server's is older: a release the panel has
     not read yet is never reported as out of date.
     """
-    return _lgsm_update.state(_lgsm_update.script_release(gs.remote, gs.short_name, gs.lgsm_name))
+    info = _lgsm_update.state(_lgsm_update.script_release(gs.remote, gs.short_name, gs.lgsm_name))
+    from panel.services import updates as _upd
+    _upd.note_lgsm(gs.id, info)           # what the Updates page lists for this server
+    return info
 
 
 def _register_installs(app):

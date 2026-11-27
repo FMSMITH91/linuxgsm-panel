@@ -329,6 +329,20 @@ def site_probe(remote, site):
     return _as_site(remote, site.account, _ws().probe_sh(site.account, site), timeout=60)
 
 
+def recent_requests(remote, site):
+    """How many connections the web proxy holds open to the site now (its port on 127.0.0.1), or None when unread.
+
+    The proxy keeps an idle connection to a site open for a while after its last request (Caddy's reverse proxy
+    keep-alive, two minutes by default), so a count above 0 means the site answered a visitor in the last
+    minutes: the nightly window leaves it for the next night (services/updates_auto). Read with ss as the
+    site's account (sockets of the host's network are listed to any account), in the C locale.
+    """
+    ok, out = _as_site(remote, site.account, "LC_ALL=C ss -Htn state established '( sport = :%d )' | wc -l"
+                       % int(site.port), timeout=30)
+    words = (out or "").split()
+    return int(words[-1]) if ok and words and words[-1].isdecimal() else None
+
+
 WP_NOT_RUNNING = "The website is not running, so WordPress could not be told its new address. Start it, then try again."
 
 

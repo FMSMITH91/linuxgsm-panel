@@ -1325,10 +1325,13 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
     secret = shlex.quote("%s/%s" % (d, a["settings"]))
     early = [_put_sh("%s/%s" % (d, rel), text) for rel, text in sorted((files or {}).items())] or ["true"]
     record = "%s || { echo ADDON_WRITE_FAILED; exit 21; }; " % _put_sh("%s/%s" % (d, META_FILE), meta_text)
+    keep = _keep_previous_sh(user, addon_id) if how.get("keep_prev") else ("", "")
+    record = keep[0] + record
     late = [_put_sh("%s/%s.container" % (q, unit), unit_text)]
     late += [_put_sh("%s/%s" % (uu, name), text) for name, text in sorted((units or {}).items())]
     stdin, move = _settings_io(secret, settings)
     drop = ("podman rmi %s >/dev/null 2>&1; " % shlex.quote(old_image)) if old_image and old_image != a["image"] else ""
+    drop += keep[1]
     # The user manager first: B3's check runs Podman, which needs it, before anything is written.
     return (_ENV + "umask 077; mkdir -p %s %s %s || { echo ADDON_WRITE_FAILED; exit 20; }; "
             "[ -S \"$XDG_RUNTIME_DIR/bus\" ] || { echo ADDON_NO_USER_MANAGER; exit 22; }; "
@@ -1344,6 +1347,42 @@ def reconfigure_sh(user, addon_id, unit_text, meta_text, files=None, units=None,
                " && ".join(late), _fresh_start_sh(addon_id, "restart"), unit, _tail_sh(user, addon_id),
                _settle_sh(user, addon_id), drop,
                _MARK_INSTALLED))
+
+
+def _previous_paths(user, addon_id):
+    """(the record, the unit) of an installed add-on, as shell words, and their .prev copies'."""
+    rec = "%s/%s" % (addon_dir(user, addon_id), META_FILE)
+    unit = "/home/%s/%s/%s.container" % (user, QUADLET_DIR, unit_name(addon_id))
+    return [shlex.quote(p) for p in (rec, unit, rec + ".prev", unit + ".prev")]
+
+
+def _keep_previous_sh(user, addon_id):
+    """(shell keeping a copy of the record and the unit before an update writes its own, shell removing them).
+
+    The copies are what rollback_sh puts back when the updated add-on does not start (an automatic update:
+    services/updates_auto); a change that ended well removes them.
+    """
+    rec, unit, rec_prev, unit_prev = _previous_paths(user, addon_id)
+    return ("cp -pf %s %s 2>/dev/null; cp -pf %s %s 2>/dev/null; " % (rec, rec_prev, unit, unit_prev),
+            "rm -f %s %s; " % (rec_prev, unit_prev))
+
+
+def rollback_sh(user, addon_id):
+    """Shell, as the account, putting an add-on back on the record and unit it had before an update, and starting it.
+
+    The image those name is still on the host: an update removes the old image only once the new one has run for
+    SETTLE_SECONDS. Prints ADDON_ROLLED_BACK once it runs again and is watched as an install is; ADDON_NO_PREVIOUS
+    when no copy was kept; otherwise the install's marks (ADDON_START_FAILED, ADDON_DIED) and the log's tail.
+    """
+    rec, unit, rec_prev, unit_prev = _previous_paths(user, addon_id)
+    name = unit_name(addon_id)
+    return (_ENV + "[ -f %s ] && [ -f %s ] || { echo ADDON_NO_PREVIOUS; exit 27; }; "
+            "mv -f %s %s && mv -f %s %s || { echo ADDON_WRITE_FAILED; exit 21; }; "
+            "systemctl --user daemon-reload && { %s; } "
+            "|| { systemctl --user stop %s.service 2>/dev/null; echo ADDON_START_FAILED; "
+            "%s | tail -c 4000 | base64 -w0 | sed 's/^/tail.b64=/'; echo; exit 25; }; %secho ADDON_ROLLED_BACK"
+            % (rec_prev, unit_prev, rec_prev, rec, unit_prev, unit, _fresh_start_sh(addon_id, "restart"), name,
+               _tail_sh(user, addon_id), _settle_sh(user, addon_id)))
 
 
 def _settings_io(secret, settings):
