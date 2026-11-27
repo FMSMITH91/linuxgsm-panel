@@ -2297,6 +2297,16 @@
       "POST"
     ]
   },
+  "POST /api/remote/<int:remote_id>/databases/start": {
+    "endpoint": "api_remote_databases_start",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_remote_databases_start"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /api/remote/<int:remote_id>/firewall/allow-from": {
     "endpoint": "api_remote_firewall_allow_from",
     "guards": [
