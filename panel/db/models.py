@@ -1137,7 +1137,7 @@ AUDIT_HOST_ACTIONS = frozenset({
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
     "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
     "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
-    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start",
+    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start", "website_guard_settings",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
@@ -1145,7 +1145,7 @@ AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # about itself (autoblock_toggle's panel variant targets 'panel host'). A host named like one of
 # those targets must not inherit the panel host's rows.
 AUDIT_HOST_ACTIONS_CALL_ONLY = frozenset({
-    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle",
+    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle", "website_ban", "website_unban",
 })
 
 

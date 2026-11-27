@@ -183,7 +183,7 @@ def never_list(proxy, whitelist=()):
     for _preset, ranges in sorted(_wc.cdn_ranges().items()):
         nets += ranges
     if proxy is not None:
-        nets += proxy.cidrs() + proxy.url_nets() + settings(proxy.guard)["allow"]
+        nets += proxy.cidrs() + proxy.url_nets() + settings(getattr(proxy, "guard", "{}"))["allow"]
     nets += [n for n in (_net(w) for w in whitelist) if n]
     out = []
     for n in nets:
@@ -195,7 +195,7 @@ def never_list(proxy, whitelist=()):
 
 def doc(proxy, whitelist=()):
     """The guard part of website-proxy-apply's document: the jails' numbers, the never list, the firewall ban."""
-    s = settings(proxy.guard if proxy is not None else "{}")
+    s = settings(getattr(proxy, "guard", "{}") if proxy is not None else "{}")
     return {"enabled": bool(s["enabled"]), "login": s["login"], "scan": s["scan"], "findtime": s["findtime"],
             "bantime": s["bantime"], "maxtime": s["maxtime"], "increment": bool(s["increment"]),
             "firewall": proxy is None or proxy.exposure_mode == "public", "never": never_list(proxy, whitelist)}
@@ -203,7 +203,7 @@ def doc(proxy, whitelist=()):
 
 def enabled(proxy):
     """Whether the guard's lines go into the proxy's configuration (a host's settings; never with no row)."""
-    return proxy is not None and settings(proxy.guard)["enabled"]
+    return proxy is not None and hasattr(proxy, "guard") and settings(proxy.guard)["enabled"]
 
 
 # ── the proxy's lines ────────────────────────────────────────────────────────────────────────────

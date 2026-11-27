@@ -93,9 +93,10 @@ def _audit_event(remote, event):
     detail = _event_detail(kind, ip, jail, host, at)
     if site is not None:
         log_website_action(None, site, _KINDS[kind], detail, kind != "ban")
+    elif kind == "ban":
+        log_action(None, "website_ban", target=ip, detail=detail, success=False, remote=remote)
     else:
-        log_action(None, _KINDS[kind], target=ip if ip != "-" else remote.name, detail=detail,
-                   success=kind != "ban", remote=remote)
+        log_action(None, "website_unban", target=ip if ip != "-" else remote.name, detail=detail, remote=remote)
 
 
 def read(remote):
