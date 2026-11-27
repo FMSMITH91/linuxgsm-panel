@@ -266,20 +266,21 @@ def _s4_update(host):
 
 
 # ── 5. the PHP gate ───────────────────────────────────────────────────────────────────────────────
+def _depth_step(ln):
+    """How a config line changes the section depth: +1 opening a section, -1 closing one, 0 otherwise."""
+    return -1 if ln.startswith("</") else 1 if ln.startswith("<") else 0
+
+
 def _vhost_rewrites(conf):
     """The rewrite lines directly in <VirtualHost> (in no <Directory>, <Location>, <Files> or <If> in it)."""
-    out, depth, in_vhost = [], 0, False
-    for raw in conf.splitlines():
-        ln = raw.strip()
-        if ln.startswith("<VirtualHost"):
-            in_vhost, depth = True, 0
-        elif ln.startswith("</VirtualHost"):
-            in_vhost = False
-        elif in_vhost and ln.startswith("</"):
-            depth -= 1
-        elif in_vhost and ln.startswith("<"):
-            depth += 1
-        elif in_vhost and depth == 0 and ln.startswith("Rewrite"):
+    lines = [raw.strip() for raw in conf.splitlines()]
+    start = next((i for i, ln in enumerate(lines) if ln.startswith("<VirtualHost")), len(lines))
+    out, depth = [], 0
+    for ln in lines[start + 1:]:
+        if ln.startswith("</VirtualHost"):
+            break
+        depth += _depth_step(ln)
+        if depth == 0 and ln.startswith("Rewrite"):
             out.append(ln)
     return out
 
@@ -305,6 +306,19 @@ def _conds_hold(conds, headers, env):
     return ok and (cur if joined else True)
 
 
+def _flags319(words):
+    """The [flags] word of a rewrite line split into its flags, [] when it has none."""
+    return words[3].strip("[]").split(",") if len(words) > 3 else []
+
+
+def _rule319(flags, env, sub):
+    """Apply a matched RewriteRule's flags to `env`: whether it refuses the request ([F]; never a subrequest's [NS])."""
+    if sub and "NS" in flags:
+        return False
+    env.update(f[2:].split(":", 1) for f in flags if f.startswith("E="))
+    return "F" in flags
+
+
 def _gate_refuses(rules, headers, env, sub=False):
     """(refused, the environment after) of the virtual host's rewrite rules for one request.
 
@@ -314,18 +328,13 @@ def _gate_refuses(rules, headers, env, sub=False):
     env, conds = dict(env), []
     if "RewriteEngine On" not in rules:
         return False, env
-    for ln in rules:
-        words = ln.split()
+    for words in (ln.split() for ln in rules):
         if words[0] == "RewriteCond":
-            conds.append((words[1], words[2], words[3].strip("[]").split(",") if len(words) > 3 else []))
-        elif words[0] == "RewriteRule":
-            flags = words[3].strip("[]").split(",") if len(words) > 3 else []
-            hold, conds = _conds_hold(conds, headers, env), []
-            if not hold or (sub and "NS" in flags):
-                continue
-            env.update(f[2:].split(":", 1) for f in flags if f.startswith("E="))
-            if "F" in flags:
-                return True, env
+            conds.append((words[1], words[2], _flags319(words)))
+            continue
+        hold, conds = words[0] == "RewriteRule" and _conds_hold(conds, headers, env), []
+        if hold and _rule319(_flags319(words), env, sub):
+            return True, env
     return False, env
 
 
