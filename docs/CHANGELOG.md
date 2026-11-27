@@ -33,6 +33,9 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **New website installs get the newest app version without a panel update.** WordPress, phpBB, Drupal, MyBB
   and Simple Machines Forum versions, and the images websites run on, now update by themselves through the
   signed catalog your panel fetches every day, checked against each project's own published checksum.
+- **Restricted websites can allow Fastly's networks or a list from a web address.** Beside Cloudflare's
+  one-tap list there is now Fastly's, and you can give an address the panel fetches an allow list from each
+  day, keeping the last good copy if a fetch fails; you can turn that fetch off under Outside services.
 
 ### Fixed
 

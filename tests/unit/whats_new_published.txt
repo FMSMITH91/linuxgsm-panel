@@ -971,3 +971,4 @@ d80953e8 A website domain can use your own certificate.
 bf24fd09 Websites behind Cloudflare's proxy are served.
 6aa66d75 A new WordPress site passes Site Health.
 58e1395b The Websites pages say what is really happening.
+e46d92b2 Restricted websites can allow Fastly's networks or a list from a web address.
