@@ -60,6 +60,11 @@ _SWEPT = []                       # [True] once this process has swept
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
+# Apache's "client denied" line (AH01630): a request the site's server refused. Nearly always a scanner reaching for a
+# private page such as /server-status; hundreds of them would bury the site's own lines, so the page gets their count.
+DENIED_MARK = "AH01630"
+S_DENIED = ("{n} refused requests (client denied by server configuration) are left out: nearly always scanners "
+            "trying private pages such as /server-status.")
 
 
 # ── answers ─────────────────────────────────────────────────────────────────────────────────────
@@ -537,8 +542,15 @@ def _run_routes(app):
         if reader is None:
             return say(501, S_NOT_READY)
         ok, said = host_call(reader, site.remote, site)
-        lines = said.splitlines()[-500:] if ok and isinstance(said, str) else []
+        lines = readable_logs(said.splitlines()[-500:]) if ok and isinstance(said, str) else []
         return jsonify({"success": bool(ok), "lines": lines, "message": "" if ok else i18n.tr(said)})
+
+
+def readable_logs(lines):
+    """The site's log lines for the page: refused requests (DENIED_MARK) left out and counted in one last line."""
+    kept = [ln for ln in lines if DENIED_MARK not in ln]
+    left = len(lines) - len(kept)
+    return kept + ([i18n.tr(S_DENIED, n=left)] if left else [])
 
 
 def _ran(site, action, ok, said, state):

@@ -26,7 +26,9 @@ processes, largest upload) takes the defaults from the web proxy card's Security
 
 If something the host needs is missing (for example the web proxy is not installed yet), the dialog
 says so on its first line, with one button that fixes it for a superadmin; anyone else is told to ask
-a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button.
+a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button. In a site's log
+lines, requests its server refused ("client denied", nearly always scanners trying private pages such as
+`/server-status`) are counted in one line instead of being listed.
 
 Websites run in Podman, like add-ons. The first website on a host installs Podman and its two helpers from
 Ubuntu's archive; a host where that fails is refused before anything is made. A first install that fails

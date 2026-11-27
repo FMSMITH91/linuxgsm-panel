@@ -186,6 +186,9 @@ def list_answer(site_json):
 
 
 # ── one site ────────────────────────────────────────────────────────────────────────────────────
+FAILED_LOG_LINES = 20             # the last lines a failed site's alert shows
+
+
 def _holds(site, perm):
     return _wa.visible_sites(current_user, perm).filter(Website.id == site.id).first() is not None
 
@@ -249,6 +252,16 @@ def _manager_parts(out, site):
     out["app"] = _app(site) if site.kind == "app" else None
     if current_user.is_superadmin:
         out["raw_rules"] = site.raw_proxy_snippet or ""
+
+
+def _failed_logs(site):
+    """A failed site's last log lines, read from its host (refused requests counted, not listed); [] otherwise."""
+    if site.state != "failed":
+        return []
+    from panel.ops.ssh_manager import websites as _sw
+    from panel.routes.websites import host_call, readable_logs
+    ok, said = host_call(_sw.site_logs, site.remote, site)
+    return readable_logs(said.splitlines())[-FAILED_LOG_LINES:] if ok and isinstance(said, str) else []
 
 
 def site_answer(site, probe, install):
