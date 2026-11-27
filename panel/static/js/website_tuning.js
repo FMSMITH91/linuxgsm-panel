@@ -53,7 +53,8 @@
   }
   window.wsIniCheck = function () {
     var box = WS.clear(WS.el('wphp-ini-problems'));
-    var sum = WS.el('wphp-adv-sum'), count = iniCount(WS.el('wphp-ini').value);
+    var count = iniCount(WS.el('wphp-ini').value);
+    var sum = WS.el('wphp-adv-sum');
     if (sum) sum.textContent = WS.TF('Advanced php.ini: {n} settings', {n: count});
     var probs = WS.iniProblems(WS.el('wphp-ini').value);
     probs.slice(0, 10).forEach(function (p) {
