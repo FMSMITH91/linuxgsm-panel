@@ -885,7 +885,7 @@ def _c1_update(su, sid):
     eq("Update (GET /api/websites/<id>): a site installed with files revision 2 (the gate fix alone) is offered Update, "
        "which brings it the folder its code reads, WordPress's loopback plugin and the egress unit; one installed with "
        "the current revision is not (control)",
-       (_ws315.SITE_FILES_REV, offered), ("files-3", {"files-2": True, "files-3": False}))
+       (_ws315.SITE_FILES_REV, offered), ("files-4", {"files-2": True, "files-4": False}))
 
 
 def _c1_dialog():
