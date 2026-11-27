@@ -105,7 +105,41 @@
     if (tok) tok.value = '';
     WS.show('wp-token-state', !!p.tunnel_token_set);
     renderTools(p);
+    renderGuard(p.guard || {});
   }
+  // ── blocked visitors: the host's numbers, OWASP's words beside them (from the server), a note outside them ──
+  var GUARD_FIELDS = {login: 'wp-guard-login', scan: 'wp-guard-scan', findtime: 'wp-guard-findtime',
+    bantime: 'wp-guard-bantime', maxtime: 'wp-guard-maxtime'};
+  function renderGuard(g) {
+    if (!WS.el('wp-guard')) return;
+    setVal('wp-guard-on', g.enabled !== false);
+    setVal('wp-guard-increment', g.increment !== false);
+    Object.keys(GUARD_FIELDS).forEach(function (k) { setVal(GUARD_FIELDS[k], g[k]); });
+    Object.keys(g.owasp || {}).forEach(function (k) {
+      var e = WS.el('wp-guard-' + k + '-owasp');
+      if (e) e.textContent = String(g.owasp[k]);
+    });
+    var allow = WS.el('wp-guard-allow');
+    if (allow) allow.value = (g.allow || []).join('\n');
+    WS.show('wp-guard-f2b', g.fail2ban === 'absent');
+    window.wsGuardCheck();
+  }
+  window.wsGuardCheck = function () {
+    WS.show('wp-guard-on-note', switchOn('wp-guard-on') === false);
+    WS.show('wp-guard-increment-note', switchOn('wp-guard-increment') === false);
+  };
+  window.wsSaveGuard = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var body = {enabled: switchOn('wp-guard-on') === true, increment: switchOn('wp-guard-increment') === true,
+      allow: (WS.el('wp-guard-allow').value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean)};
+    Object.keys(GUARD_FIELDS).forEach(function (k) { body[k] = String(WS.el(GUARD_FIELDS[k]).value || '').trim(); });
+    WS.stepUp(function () {
+      WS.say('wp-guard-msg', WS.T('Saving…'));
+      WS.post('/websites/proxy/settings', {host_id: st.host, guard: body}).then(function (d) {
+        if (WS.done(d, 'wp-guard-msg') && WS.loadList) WS.loadList();
+      });
+    });
+  };
   function renderTools(p) {
     var svc = WS.el('wp-tunnel-service');
     if (svc) svc.textContent = p.tunnel_service || '';

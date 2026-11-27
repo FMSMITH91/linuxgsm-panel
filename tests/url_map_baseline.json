@@ -1247,6 +1247,16 @@
       "GET"
     ]
   },
+  "GET /websites/<int:site_id>/blocked": {
+    "endpoint": "website_blocked",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_blocked"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
   "GET /websites/<int:site_id>/databases": {
     "endpoint": "website_databases",
     "guards": [
@@ -3835,6 +3845,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:website_backups_restore"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/blocked/unban": {
+    "endpoint": "website_blocked_unban",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_blocked_unban"
     ],
     "methods": [
       "POST"

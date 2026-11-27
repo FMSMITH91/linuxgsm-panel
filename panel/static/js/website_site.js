@@ -118,6 +118,7 @@
     try { history.replaceState(null, '', '?tab=' + encodeURIComponent(name)); } catch (e) { /* the address bar is a nicety */ }
     if (name === 'files' && window.wsFilesOpen) window.wsFilesOpen();
     if (name === 'backups' && WS.loadBackups) WS.loadBackups();
+    if (name === 'rules' && WS.loadBlocked) WS.loadBlocked();
     return false;
   };
 

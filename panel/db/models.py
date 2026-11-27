@@ -2014,6 +2014,8 @@ _LIGHT_MIGRATIONS = {
     # Empty on upgrade: a site's own certificate was pasted per domain before (data migration 5 moves those).
     ("website", "own_cert_pem"): "ALTER TABLE website ADD COLUMN own_cert_pem TEXT DEFAULT ''",
     ("website", "own_key_secret"): "ALTER TABLE website ADD COLUMN own_key_secret TEXT DEFAULT ''",
+    # The defaults on upgrade (blocking on): websites_guard.settings fills every key an empty object lacks.
+    ("website_proxy", "guard"): "ALTER TABLE website_proxy ADD COLUMN guard TEXT DEFAULT '{}'",
 }
 
 

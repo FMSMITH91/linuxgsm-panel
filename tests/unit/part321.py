@@ -12,6 +12,13 @@
    both), the others kept automatic with the reason; a domain added later that it covers uses it; one Back to
    automatic; the proxy serves the covered names from one block with one pair of files; per-domain certificates of
    before move to their site (data migration 5).
+6. Blocked visitors (fail2ban for the websites, the ban kept inside the web proxy): every site block refuses an
+   address in the deny list first, by the proxy's own client_ip (the trusted-proxy rules), and sends only the watched
+   requests (sign-in POSTs, scanner paths, the site's denied paths) to the security log, tagged; nothing else is
+   logged. The helper's jails read that tag and the visitor's address, never a CDN's: a client banned behind
+   Cloudflare gets its deny entry, a Cloudflare address never does. Public mode adds the firewall ban. A site's list
+   shows only its own, Unblock lifts one (audited), every ban event is audited, and the host card's settings carry
+   OWASP's words with a note outside them.
 4. WordPress's Site Health page cache test answers from the web proxy's real state: each proxy apply writes, into
    every WordPress site's files, whether the configuration it runs caches that site's pages (and for how long), and
    the loopback plugin replaces WordPress's own test (which looks for caching headers on requests that never pass
@@ -469,6 +476,234 @@ def _s5_migration(st):
        ["_site_certs_from_domains", "PRAGMA user_version = 5"])
 
 
+# ── 6. Blocked visitors ──────────────────────────────────────────────────────────────────────────
+def _helper321():
+    import importlib.machinery as _mach
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_loader("panel_helper_p321", _mach.SourceFileLoader(
+        "panel_helper_p321", os.path.join(_root, "tools", "panel-helper")))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_H321 = _helper321()
+_CF_ADDR321 = "173.245.48.10"        # inside Cloudflare's published 173.245.48.0/20
+_VISITOR321 = "198.51.100.77"
+
+
+def _proxy321(st, mode="public", presets=(), guard=None):
+    import json
+    row = _w321.proxy_row(st.host.id)
+    row.exposure_mode, row.allow_presets = mode, json.dumps(sorted(presets))
+    row.guard = json.dumps(guard if guard is not None else {})
+    _db321.session.commit()
+    return row
+
+
+def _s6_render(st):
+    from panel.services import websites_proxy as _wp
+    site = _site321(st, "p321g", enabled=True, custom_rules='[{"type": "deny", "path": "/private*"}]')
+    logged = _site321(st, "p321gl", enabled=True, access_log=True)
+    row = _proxy321(st, "restricted", ["cloudflare"])
+    text = _wp.render([site, logged], row, {}, secret_of=lambda s: _TOKEN321)
+    block = text.split("# site %d (" % site.id)[1].split("\n}\n")[0]
+    lblock = text.split("# site %d (" % logged.id)[1].split("\n}\n")[0]
+    first = block.split("\n")[5:10]
+    eq("guard (render, a host with blocking on): the deny list's 403 is ordered first and is the block's first matcher, "
+       "by the proxy's own client_ip (the address the trusted-proxy rules decided: a CDN's header only from the CDN)",
+       ("\torder error first" in text, first, "client_ip_headers CF-Connecting-IP" in text),
+       (True, ["\t@lgsmdeny file {", "\t\troot /etc/lgsm-web-proxy/deny", "\t\ttry_files {client_ip}", "\t}",
+               "\terror @lgsmdeny 403"], True))
+    eq("guard (render): sign-in POSTs (WordPress, Drupal, MyBB, phpBB, SMF), scanner paths and the site's own denied "
+       "paths go to the security log tagged login or scan; with no access log of its own every other request is "
+       "skipped by every logger, and the security log keeps no path, query or header",
+       ("\tlog_append @lgsmlogin lgsm login" in block, "\tlog_append @lgsmscan lgsm scan" in block,
+        "/private*" in block.split("@lgsmscan path ")[1].split("\n")[0], "\tlog_skip @lgsmquiet" in block,
+        "\t\toutput file /var/log/lgsm-web-proxy/security.log {" in block,
+        all("\t\t\t%s delete" % f in block for f in ("request>uri", "request>headers", "request>remote_ip"))),
+       (True, True, True, True, True, True))
+    eq("guard (render, a site with its own access log): its logger is named and a watched request goes to both; "
+       "nothing is skipped; the catch-alls log nothing",
+       ("\tlog lgsmacc%d_0 {" % logged.id in lblock, "\tlog_name @lgsmlogin lgsmsec%d_0 lgsmacc%d_0" % (logged.id, logged.id)
+        in lblock, "log_skip @lgsmquiet" in lblock, text.count("\tlog_skip\n\tabort")), (True, True, False, 2))
+    _proxy321(st, "public", [], {"enabled": False})
+    off = _wp.render([site, logged], row, {}, secret_of=lambda s: _TOKEN321)
+    eq("guard (render, control: blocking off on the host, or no host row): none of its lines",
+       [w for w in ("order error first", "@lgsmdeny", "lgsmsec", "log_skip") if w in off or w in _wp.render(
+           [site], None, {}, secret_of=lambda s: _TOKEN321)], [])
+    for s_ in (site, logged):
+        s_.enabled = False
+    _db321.session.commit()
+
+
+def _line321(ip, tag, host="p321g.example.org"):
+    import json
+    return json.dumps({"level": "info", "ts": "2026-11-27T10:00:00.000Z", "logger": "http.log.access.lgsmsec5_0",
+                       "msg": "handled request", "request": {"client_ip": ip, "method": "POST", "host": host},
+                       "status": 200, "lgsm": tag}, separators=(",", ":"))
+
+
+def _s6_jails(st):
+    import re
+    from panel.services import websites_guard as _wg
+    from panel.ops.ssh_manager import websites as _smw
+    row = _proxy321(st, "restricted", ["cloudflare"])
+    doc = _smw.guard_doc(row)
+    g = _H321.web_guard_doc(doc)
+    jails = _H321.web_guard_jails(g, ["203.0.113.5/32"])
+    ignore = jails.split("ignoreip = ")[1].split("\n")[0].split()
+    eq("guard (the apply's document -> the jails): a CDN host's jails never ban a Cloudflare network, the tailnet, the "
+       "loopback or the host's own address, and ban inside the proxy only (no firewall ban behind a CDN)",
+       ("173.245.48.0/20" in ignore, "100.64.0.0/10" in ignore, "127.0.0.0/8" in ignore, "203.0.113.5/32" in ignore,
+        "iptables-multiport" in jails, jails.count("action = lgsm-web-deny[name=")), (True, True, True, True, False, 2))
+    pub = _H321.web_guard_jails(_H321.web_guard_doc(_smw.guard_doc(_proxy321(st, "public"))), [])
+    eq("guard (control, public mode): each jail also bans at the firewall on 80 and 443",
+       pub.count('iptables-multiport[name=lgsm-web-'), 2)
+    rx = _H321.web_guard_filter("login").split("failregex = ")[1].split("\n")[0]
+    rx = re.compile(rx.replace("<ADDR>", "(?P<ip>[0-9a-fA-F:.]+)"))
+    hits = [(m.group("ip") if m else None) for m in (rx.search(_line321(_VISITOR321, "login")),
+                                                       rx.search(_line321(_VISITOR321, "scan")))]
+    eq("guard (the login filter over a security log line): the visitor's address is taken from client_ip of a line "
+       "tagged login; a line tagged scan is the other jail's", hits, [_VISITOR321, None])
+    bad = {"a number out of range": dict(doc, login=0), "an extra key": dict(doc, action="x"),
+           "a network with a zone": dict(doc, never=["fe80::1%eth0"]), "a command": dict(doc, never=["1.2.3.4; id"])}
+    refused = []
+    for name, d in bad.items():
+        try:
+            _H321.web_guard_doc(d)
+        except ValueError:
+            refused.append(name)
+    eq("guard (helper): a guard document with a number out of range, an unknown key or anything but networks in its "
+       "never list is refused whole", sorted(refused), sorted(bad))
+    eq("guard (settings): OWASP's words for each field, a note when blocking or the growing ban is off, none at the "
+       "defaults", (sorted(_wg.OWASP_TEXT), sorted(_wg.owasp_notes(_wg.settings({"enabled": False, "increment": False}))),
+                    _wg.owasp_notes(_wg.settings("{}"))),
+       (["bantime", "findtime", "increment", "login", "maxtime", "scan"], ["enabled", "increment"], {}))
+
+
+def _guard_tree321(d):
+    """The helper's guard paths moved into scratch folder `d`, its writes as the current account."""
+    import pwd as _pwd
+    me = _pwd.getpwuid(os.getuid())
+    paths = {"WEB_DENY_DIR": os.path.join(d, "deny"), "WEB_GUARD_NEVER": os.path.join(d, "guard-never"),
+             "WEB_GUARD_EVENTS": os.path.join(d, "guard-events"), "WEB_LOG_DIR": os.path.join(d, "log"),
+             "WEB_SECURITY_LOG": os.path.join(d, "log", "security.log"), "WEB_F2B_DIR": d,
+             "WEB_GUARD_JAIL_FILE": os.path.join(d, "jail.conf"), "WEB_GUARD_FILTER_FILE": os.path.join(d, "%s.conf"),
+             "WEB_GUARD_ACTION_FILE": os.path.join(d, "action.conf")}
+
+    def write(path, data, mode, uid=0, gid=0):
+        with open(path, "wb") as fh:
+            fh.write(data)
+    stubs = dict(paths, pwd=_NS321(getpwnam=lambda n: me), _web_write=write, _web_own_nets=lambda: ["203.0.113.5/32"],
+                 _web_owned_dir=lambda path, mode, uid, gid: os.makedirs(path, exist_ok=True),
+                 _run_quiet=lambda argv, timeout=60, **k: (0, ""))
+    saved = {k: getattr(_H321, k) for k in stubs}
+    for k, v in stubs.items():
+        setattr(_H321, k, v)
+    return saved, me
+
+
+def _quiet321(fn, *a):
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = fn(*a)
+    return rc, out.getvalue()
+
+
+def _s6_ban(st):
+    """A client banned behind Cloudflare gets its deny entry, which the proxy reads by client_ip; Cloudflare never."""
+    from panel.ops.ssh_manager import websites as _smw
+    d = _tf321.mkdtemp(prefix="lgsm-unit-p321-guard-")
+    saved, me = _guard_tree321(d)
+    try:
+        row = _proxy321(st, "restricted", ["cloudflare"])
+        _quiet321(_H321._web_guard_apply, _H321.web_guard_doc(_smw.guard_doc(row)), me)
+        with open(_H321.WEB_SECURITY_LOG, "a", encoding="utf-8") as fh:
+            fh.write(_line321(_VISITOR321, "login") + "\n")
+        ban = _quiet321(_H321.do_website_guard_ban, [_VISITOR321, "lgsm-web-login", "600"], "")
+        cdn = _quiet321(_H321.do_website_guard_ban, [_CF_ADDR321, "lgsm-web-login", "600"], "")
+        own = _quiet321(_H321.do_website_guard_ban, ["203.0.113.5", "lgsm-web-scan", "600"], "")
+        deny = sorted(os.listdir(_H321.WEB_DENY_DIR))
+        with open(os.path.join(_H321.WEB_DENY_DIR, _VISITOR321), encoding="ascii") as fh:
+            entry = _H321.web_guard_entry(fh.read())
+        listed = _quiet321(_H321.do_website_guard_list, ["0"], "")[1]
+        unban = _quiet321(_H321.do_website_guard_unban, [_VISITOR321, "lgsm-web-login"], "")
+        after = sorted(os.listdir(_H321.WEB_DENY_DIR))
+    finally:
+        for k, v in saved.items():
+            setattr(_H321, k, v)
+        _shutil321.rmtree(d, ignore_errors=True)
+    eq("guard (helper, behind Cloudflare): fail2ban's ban of the visitor makes the deny entry the proxy's file matcher "
+       "finds by that client_ip (the site it attacked named from the security log); a ban of a Cloudflare address or "
+       "of the host's own is refused and no entry is made",
+       (ban, cdn, own, deny, (entry or {}).get("host"), (entry or {}).get("jail")),
+       ((0, "ban=yes\n"), (1, "ban=refused\n"), (1, "ban=refused\n"), [_VISITOR321], "p321g.example.org",
+        "lgsm-web-login"))
+    eq("guard (helper): the list prints the entry and its numbered ban event; fail2ban's unban takes the entry away",
+       (("ban=%s lgsm-web-login" % _VISITOR321) in listed, ("event=1 " in listed and " ban %s " % _VISITOR321 in listed),
+        unban, after), (True, True, (0, "unban=yes\n"), []))
+
+
+def _s6_routes(st):
+    import time
+    from panel.db.models import AuditLog as _Audit321
+    from panel.routes import websites_guard as _rg
+    site = _site321(st, "p321b")
+    other_ip, now = "192.0.2.44", int(time.time())
+    entries = [{"ip": _VISITOR321, "jail": "lgsm-web-login", "at": now, "until": now + 600, "host": "p321b.example.org"},
+               {"ip": other_ip, "jail": "lgsm-web-scan", "at": now, "until": now + 600, "host": "elsewhere.example.org"}]
+    events = [(7, now, "ban", _VISITOR321, "lgsm-web-login", "p321b.example.org"),
+              (8, now, "unban", other_ip, "lgsm-web-scan", "elsewhere.example.org")]
+    asked, released = [], []
+    _p9_patch(_sw321, "guard_list", lambda remote, after=0: asked.append(after) or (True, (list(entries),
+                                                                                           [e for e in events if e[0] > after])))
+    _p9_patch(_sw321, "guard_release", lambda remote, ip: released.append(ip) or (True, _sw321.OK_RELEASED))
+    _rg._set_cursor(st.host.id, 0)
+    su = _Client321(st.su.id)
+    before = _Audit321.query.filter(_Audit321.action.in_(("website_ban", "website_unban"))).count()
+    r = su.get("/websites/%d/blocked" % site.id)
+    body = _p9_json(r)
+    rows = _Audit321.query.filter(_Audit321.action.in_(("website_ban", "website_unban"))).count() - before
+    eq("blocked visitors (GET /websites/<id>/blocked): only the addresses banned while asking for this site's names, "
+       "with why and until when; the new ban events are audited (one row each) and read again from the last one",
+       (r.status_code, [e.get("ip") for e in body.get("entries") or []], (body.get("entries") or [{}])[0].get("reason"),
+        rows, asked), (200, [_VISITOR321], "Too many sign-in attempts", 2, [0]))
+    su.get("/websites/%d/blocked" % site.id)
+    eq("blocked visitors (the next read): no event audited twice", (asked[-1], _Audit321.query.filter(
+        _Audit321.action.in_(("website_ban", "website_unban"))).count() - before), (8, 2))
+    r = su.post("/websites/%d/blocked/unban" % site.id, json={"ip": other_ip})
+    eq("blocked visitors (Unblock of an address another site's attack banned): refused, nothing lifted",
+       (r.status_code, released), (404, []))
+    r = su.post("/websites/%d/blocked/unban" % site.id, json={"ip": _VISITOR321})
+    row = _Audit321.query.filter_by(action="website_unban", website_id=site.id).order_by(_Audit321.id.desc()).first()
+    eq("blocked visitors (POST /websites/<id>/blocked/unban): the host lifts the address, audited with who asked",
+       (r.status_code, released, bool(row) and "unblocked by hand" in (row.detail or "")), (200, [_VISITOR321], True))
+
+
+def _s6_settings(st):
+    import json
+    _seams321((True, _sw321.OK_TUNNEL))
+    su = _Client321(st.su.id)
+    _proxy321(st, "public")
+    r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "guard": {
+        "enabled": True, "login": "8", "scan": "2", "findtime": "15", "bantime": "20", "maxtime": "48",
+        "increment": False, "allow": ["203.0.113.0/24", "2001:db8::1"]}})
+    row = _Proxy321.query.filter_by(remote_id=st.host.id).first()
+    _db321.session.refresh(row)
+    g = (_p9_json(r).get("proxy") or {}).get("guard") or {}
+    eq("guard settings (POST /websites/proxy/settings {guard}): stored in seconds, the card reads minutes and hours, "
+       "OWASP's words and the note for a ban that does not grow, applied",
+       (r.status_code, json.loads(row.guard)["findtime"], json.loads(row.guard)["maxtime"], g.get("bantime"),
+        sorted(g.get("notes") or {}), bool((g.get("owasp") or {}).get("bantime")), g.get("allow")),
+       (200, 900, 172800, 20, ["increment"], True, ["2001:db8::1/128", "203.0.113.0/24"]))
+    r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "guard": {"login": "0", "allow": ["nope"]}})
+    eq("guard settings (out of range, not a network): refused with the field named, nothing stored",
+       (r.status_code, json.loads(_Proxy321.query.filter_by(remote_id=st.host.id).first().guard)["login"]), (400, 8))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup321():
     _db321.session.rollback()
@@ -514,7 +749,8 @@ with _p9.app_context():
     try:
         _p9_arm(who="part321")
         _st321 = _rows321()
-        for _sec321 in (_s2_tunnel, _s3_db_stopped, _s4_apply, _s5_site_cert, _s5_migration):
+        for _sec321 in (_s2_tunnel, _s3_db_stopped, _s4_apply, _s5_site_cert, _s5_migration, _s6_render, _s6_jails,
+                        _s6_ban, _s6_routes, _s6_settings):
             check("part321: %s ran to the end" % _sec321.__name__, _ran321(_sec321, _st321), _ran321.last)
         eq("part321: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips321:], [])
     finally:

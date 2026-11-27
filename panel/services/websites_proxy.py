@@ -38,6 +38,12 @@ FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     trusted network can make the sites see any address. A tunnel reads CF-Connecting-IP from the
     connector on loopback.
 
+BLOCKED VISITORS (services/websites_guard)
+    While a host's guard is on, each site block starts with the deny list's 403 (`order error first`: before the
+    page cache, a redirect or anything else), and the requests fail2ban counts go to the proxy's security log.
+    Requests the guard does not watch are logged only by a site's own access log, as before; the catch-alls log
+    nothing.
+
 HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
     Strict-Transport-Security with the operator's max-age (OWASP's 63072000 by default), with
     includeSubDomains and preload only when the operator turns them on: the panel cannot know a
@@ -51,6 +57,8 @@ HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
 import ipaddress
 import json
 import re
+
+from panel.services import websites_guard as _wg
 
 # The panel-wide options the Websites settings card edits (config.json), and OWASP's recommended
 # value of each where OWASP gives one (the card prints it beside the field and notes a value outside it).
@@ -328,6 +336,8 @@ def _cert_groups(site):
 
 def _global(mode, opts, proxy, trusted):
     lines = ["{", _admin_line(opts), "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
+    if _wg.enabled(proxy):
+        lines.append("\torder error first")        # a banned visitor's 403 before the page cache or a redirect
     if mode == "tunnel":
         lines += ["\tauto_https off", "\tdefault_bind 127.0.0.1", "\thttp_port %d" % TUNNEL_PORT]
     else:
@@ -423,10 +433,10 @@ def _cache_lines(site, opts):
             "\theader {", "\t\t-Cache-Control", '\t\tmatch header Cache-Control ""', "\t}"]
 
 
-def _log_lines(site):
+def _log_lines(site, name=None):
     if not site.access_log:
         return []
-    return ["\tlog {", "\t\toutput stderr", "\t\tformat filter {", "\t\t\twrap json",
+    return ["\tlog %s {" % name if name else "\tlog {", "\t\toutput stderr", "\t\tformat filter {", "\t\t\twrap json",
             "\t\t\trequest>remote_ip ip_mask {", "\t\t\t\tipv4 24", "\t\t\t\tipv6 48", "\t\t\t}",
             "\t\t\trequest>client_ip ip_mask {", "\t\t\t\tipv4 24", "\t\t\t\tipv6 48", "\t\t\t}",
             "\t\t\trequest>headers delete", "\t\t\tresp_headers delete", "\t\t}", "\t}"]
@@ -439,24 +449,32 @@ def _snippet_lines(site):
         "\t" + ln for ln in site.raw_proxy_snippet.strip("\n").split("\n")]
 
 
+def _site_body(site, opts, mode, token, guard, block):
+    """A site block's body. With the guard on (`guard`), its lines first and the access logger named per block."""
+    body = _wg.guard_lines(site.id, block, [r["path"] for r in _rules(site) if r["type"] == "deny"],
+                           bool(site.access_log)) if guard else []
+    body += ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
+    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts)
+             + _log_lines(site, _wg.access_name(site.id, block) if guard else None) + _snippet_lines(site))
+    return body + ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
+                   "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
+                   "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
+                   "\t}", "}", ""]
+
+
 def _site_lines(site, opts, proxy, mode, secret_of):
     names = _domains(site, mode)
     token = secret_of(site) or ""
     if not (names and site.port and _TOKEN_RE.match(token)):
         return []
-    tunnel = mode == "tunnel"
-    body = ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
-    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
-             + _snippet_lines(site))
-    body += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
-             "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
-             "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
-             "\t}", "}", ""]
-    if tunnel:        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
-        return ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)] + body
+    guard = _wg.enabled(proxy)
+    if mode == "tunnel":        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
+        return (["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)]
+                + _site_body(site, opts, mode, token, guard, 0))
     lines = []
-    for group, stem in _cert_groups(site):
-        lines += ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(stem, opts, proxy) + body
+    for block, (group, stem) in enumerate(_cert_groups(site)):
+        lines += (["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(stem, opts, proxy)
+                  + _site_body(site, opts, mode, token, guard, block))
     return lines
 
 
@@ -476,11 +494,12 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     for site in sorted(sites, key=lambda s: s.id or 0):
         if site.enabled:
             lines += _site_lines(site, opts, proxy, mode, secret_of)
+    quiet = ["\tlog_skip"] if _wg.enabled(proxy) else []      # the guard's loggers never see a catch-all's request
     if mode != "tunnel":
         # A request over HTTPS whose Host is none of the names above (a served certificate's name, any Host):
         # aborted too, never Caddy's empty 200 with its Server header.
-        lines += ["# Any other Host over HTTPS: the request is aborted.", "https:// {", "\tabort", "}", ""]
-    lines += ["# Any other name, and the bare address: the connection is closed.", "http:// {", "\tabort", "}", ""]
+        lines += ["# Any other Host over HTTPS: the request is aborted.", "https:// {"] + quiet + ["\tabort", "}", ""]
+    lines += ["# Any other name, and the bare address: the connection is closed.", "http:// {"] + quiet + ["\tabort", "}", ""]
     return "\n".join(lines)
 
 

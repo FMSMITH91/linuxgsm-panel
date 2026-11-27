@@ -302,6 +302,8 @@ class WebsiteProxy(db.Model):
     allow_url_nets = db.Column(db.Text, default="[]")
     allow_url_at = db.Column(db.DateTime, nullable=True)
     allow_url_error = db.Column(db.String(300), default="")
+    # Blocked visitors (services/websites_guard): the jails' numbers, the ban times and the allow list, as JSON.
+    guard = db.Column(db.Text, default="{}")
     installed_version = db.Column(db.String(40), default="")
     applied_at = db.Column(db.DateTime, nullable=True)
     last_error = db.Column(db.String(200), default="")

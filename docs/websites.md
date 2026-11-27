@@ -197,6 +197,51 @@ a customer's domain is served over HTTPS; the card notes each one while it is of
 together with includeSubDomains. Turning on the page cache builds the web proxy with it on the host, which
 takes a few minutes; until then the sites' page caches are left out and nothing breaks.
 
+### Blocked visitors
+
+A visitor that tries too many sign-ins on the websites, or asks for paths only scanners ask for, is blocked
+for a while by the web proxy itself (fail2ban counts, the proxy refuses). It works behind Cloudflare or a
+tunnel, where a firewall would only ever see Cloudflare's addresses: the proxy refuses the visitor's own
+address, as the trusted-proxy rules above decide it (a CDN's header is believed only from that CDN's
+networks). In Public mode the firewall blocks the address on ports 80 and 443 as well. A blocked visitor
+gets a 403 from every website on the host, before anything else runs (no cached page, no redirect), and
+nothing is reloaded or restarted for a ban.
+
+What is counted, per address:
+
+- **Sign-in attempts**: POSTs to the sign-in pages of the apps the panel installs (WordPress's
+  `wp-login.php` and `xmlrpc.php`, Drupal's `/user/login`, phpBB's `ucp.php?mode=login`, MyBB's
+  `member.php`, SMF's `index.php?action=login2`). WordPress answers 200 to a wrong password, so attempts
+  are counted, not failures: 10 in 10 minutes by default.
+- **Scanner requests**: paths nobody but a scanner asks for (`.env`, `.git`, backups of `wp-config.php`,
+  `server-status`, phpMyAdmin and the like) and the site's own **Block a path** rules: 3 in 10 minutes by
+  default.
+
+Only those requests are written to the web proxy's security log (`/var/log/lgsm-web-proxy/security.log`,
+readable by root alone, kept two days), and only the time, the visitor's address, the method, the site's
+name and the answer's status: no path, query, header or cookie. Every other request is logged only where a
+site's own access log is on, as before.
+
+Settings, per host, under **Blocked visitors** on the web proxy's card (superadmin): blocking on or off,
+the two limits, the window, the first ban (10 minutes by default, OWASP's example of a fixed lockout), a ban
+that grows for an address banned again (on by default, OWASP's exponential backoff), the longest ban (24
+hours by default; OWASP asks for temporary blocks) and addresses never to block. OWASP gives no number for
+a limit or a window; the card shows OWASP's words beside each field, and a note, never a block, when
+blocking or the growing ban is off (OWASP Authentication Cheat Sheet, "Login Throttling"; Credential
+Stuffing Prevention Cheat Sheet, "IP Mitigation and Intelligence"). Never blocked, whatever the settings:
+the host's own addresses, the loopback, your tailnet, every CDN preset's networks, the allow list above and
+the panel's login whitelist, so a CDN's own address is never blocked.
+
+Each website's **Rules** tab lists the addresses blocked while attacking it (why, and until when), with
+**Unblock**. Every ban, every ban's end and every Unblock is in the audit log (a ban is recorded within 30
+minutes even when nobody opens the list, with the time it happened). Blocking needs fail2ban on the host
+(the panel's installer puts it there); the card says when it is missing.
+
+The proxy has no request rate limiting of its own: Caddy's rate-limit module is not one of its official
+modules, has no tagged release to pin, would need the web proxy rebuilt on every host (as the page cache's
+optional build is), and keys on the address the proxy is connected from, which behind a CDN is the CDN's.
+The sign-in limit above is the throttle instead, keyed on the visitor's own address.
+
 ## Domains and certificates
 
 On a site's **Domains** tab, add a domain and the page shows the exact DNS records to create at your

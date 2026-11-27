@@ -402,7 +402,14 @@ def apply_doc(text, sites=(), proxy=None):
     if proxy is not None and proxy.origin_pull_mtls:
         from panel.services import websites_catalog as _wc
         files["origin-pull-ca.pem"] = _wc.origin_pull_ca("cloudflare")
-    return json.dumps({"caddyfile": text, "files": files})
+    return json.dumps({"caddyfile": text, "files": files, "guard": guard_doc(proxy)})
+
+
+def guard_doc(proxy):
+    """The guard's part of the apply (services/websites_guard.doc), with the panel's login whitelist never banned."""
+    from panel.core.config import load_config
+    from panel.services import websites_guard as _wg
+    return _wg.doc(proxy, list(load_config().get("security_whitelist", []) or []))
 
 
 def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
@@ -417,6 +424,7 @@ def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
                       doc=apply_doc(text, sites, proxy))
     if ok:
         note_page_cache(remote, text, sites)
+        note_guard(remote, out)
         return True, OK_APPLIED
     if out in (ONLY_LOCAL, NO_HELPER):
         return False, out
@@ -485,9 +493,57 @@ def apply_refusal(out):
     return i18n.Sentence(NOT_STARTED if kv.get("applied") == "no" else BAD_CONFIG, why=_plain(errors[-1]))
 
 
+# remote id -> what the last apply or stop said of the guard: {"guard": "on"|"off", "fail2ban": "yes"|"no"|"absent"}.
+GUARD_STATE = {}
+
+
+def note_guard(remote, out):
+    """Keep what the helper's apply or stop printed of the guard (guard=, fail2ban=) for the host's card."""
+    kv = _ws()._ad.kv_lines(out)
+    if kv.get("guard") in ("on", "off"):
+        GUARD_STATE[remote.id] = {"guard": kv["guard"], "fail2ban": kv.get("fail2ban", "")
+                                  if kv.get("fail2ban") in ("yes", "no", "absent") else ""}
+
+
+GUARD_LIST_FAILED = "The host's list of blocked visitors could not be read. Try again."
+OK_RELEASED = "{ip} is no longer blocked."
+
+
+def parse_guard_list(out):
+    """website-guard-list's lines as (entries [{ip, jail, at, until, host}], events [(seq, at, kind, ip, jail, host)])."""
+    entries, events = [], []
+    for line in (out or "").splitlines():
+        key, _sep, rest = line.partition("=")
+        parts = rest.split()
+        if key == "ban" and len(parts) == 5 and parts[2].isdecimal() and parts[3].isdecimal():
+            entries.append({"ip": parts[0], "jail": parts[1], "at": int(parts[2]), "until": int(parts[3]),
+                            "host": parts[4]})
+        elif key == "event" and len(parts) == 6 and parts[0].isdecimal() and parts[1].isdecimal():
+            events.append((int(parts[0]), int(parts[1]), parts[2], parts[3], parts[4], parts[5]))
+    return entries, events
+
+
+def guard_list(remote, after=0):
+    """(ok, (entries, events) or a sentence): the host's blocked visitors and the ban events after number `after`."""
+    ok, out = _helper(remote, "website-guard-list", [str(int(after))], timeout=60)
+    if not ok:
+        return False, out if out in (ONLY_LOCAL, NO_HELPER) else GUARD_LIST_FAILED
+    return True, parse_guard_list(out)
+
+
+def guard_release(remote, ip):
+    """Unban `ip` on the host: fail2ban lifts it (and its firewall ban) and the proxy's deny list drops it."""
+    from panel.core import i18n
+    ok, out = _helper(remote, "website-guard-release", [ip], timeout=60)
+    if ok and "released=yes" in out:
+        return True, i18n.Sentence(OK_RELEASED, ip=ip)
+    return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
+
+
 def proxy_stop(remote):
     """Stop the web proxy (the last enabled site went offline)."""
     ok, out = _helper(remote, "website-proxy-stop", timeout=120)
+    note_guard(remote, out)
     return (True, OK_PROXY_STOPPED) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
 
 

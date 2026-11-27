@@ -6015,8 +6015,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # step-up), the add-website dialog's fix for it.
 # 381, was 380: panel/routes/websites_domains.py's certificate of a whole site (POST /websites/<id>/cert, through
 # site_for like the other domain routes).
-check("register_routes: every one of the 381 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 381,
+# 383, was 381: panel/routes/websites_guard.py's Blocked visitors of a site and its Unblock (through site_for, the
+# site's manage permission, like the other per-site routes).
+check("register_routes: every one of the 383 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 383,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

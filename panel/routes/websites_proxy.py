@@ -83,7 +83,37 @@ def proxy_json(row):
             "allow_url": row.allow_url or "", "allow_url_nets": row.url_nets(), "allow_url_error": row.allow_url_error or "",
             "allow_url_at": row.allow_url_at.strftime("%Y-%m-%d") if row.allow_url_at else "",
             "allow_url_on": _wau.allowed(), "installed_version": row.installed_version or "",
-            "last_error": row.last_error or ""}
+            "last_error": row.last_error or "", "guard": guard_json(row)}
+
+
+def guard_json(row):
+    """The host's blocked-visitors settings as the card shows them: minutes and hours, OWASP's words, the notes."""
+    from panel.ops.ssh_manager import websites as _sm
+    from panel.services import websites_guard as _wg
+    s = _wg.settings(row.guard)
+    return {"enabled": s["enabled"], "login": s["login"], "scan": s["scan"], "findtime": s["findtime"] // 60,
+            "bantime": s["bantime"] // 60, "increment": s["increment"], "maxtime": s["maxtime"] // 3600,
+            "allow": s["allow"], "owasp": {k: i18n.tr(v) for k, v in _wg.OWASP_TEXT.items()},
+            "notes": {k: i18n.tr(v) for k, v in _wg.owasp_notes(s).items()},
+            "fail2ban": (_sm.GUARD_STATE.get(row.remote_id) or {}).get("fail2ban", "")}
+
+
+def _save_guard(remote, row, form):
+    """POST the card's Blocked visitors settings: checked, stored, applied with the proxy's configuration, audited."""
+    from panel.services import websites_guard as _wg
+    before = _wg.settings(row.guard)
+    values, problems = _wg.parse(form, before)
+    if problems:
+        return _w.say(400, " ".join(i18n.tr(p) for p in problems))
+    row.guard = json.dumps(values, sort_keys=True)
+    db.session.commit()
+    ok, said = _apply(remote, row)
+    detail = "blocked visitors %s: sign-in %d, scanner %d per %d s, ban %d s%s up to %d s, %d allowed" % (
+        "on" if values["enabled"] else "off", values["login"], values["scan"], values["findtime"], values["bantime"],
+        " growing" if values["increment"] else "", values["maxtime"], len(values["allow"]))
+    log_action(current_user, "website_guard_settings", target=remote.name, remote=remote, success=bool(ok),
+               detail=detail + ("" if ok else "; not applied: %s" % i18n.tr(said)))
+    return _w.done(ok, said or "Saved and applied.", proxy=proxy_json(row))
 
 
 def _cidrs(data, problems):
@@ -470,6 +500,8 @@ def register(app):
             return _save_options(form["options"])
         remote = _remote()
         row = _w.proxy_row(remote.id)
+        if isinstance(form.get("guard"), dict):
+            return _save_guard(remote, row, form["guard"])
         exposure = form.get("exposure") if isinstance(form.get("exposure"), dict) else form
         changes, problems = parse_settings(row, exposure)
         if problems:
