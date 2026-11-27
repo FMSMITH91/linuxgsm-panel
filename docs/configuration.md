@@ -18,6 +18,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `session_absolute_hours` | 8 | ...or this long after sign-in, however active |
 | `remember_days` | 3 | A "Remember me" sign-in signs back in by itself until this many days after sign-in, then asks for the password |
 | `step_up_minutes` | 10 | How long a sign-in or password confirmation covers the high-risk actions listed under [Security](security-features.md) (0 = never ask again) |
+| `auto_updates` | `{"start": "04:00", "end": "05:00", "off": []}` | The nightly window in which websites and add-ons update by themselves (each host's own clock), and the items whose automatic updates are off (`website:<id>`, `addon:<server id>:<add-on>`). Set on the Updates page; see [updates.md](updates.md) |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |
 | `reboot_wait_max_hours` | 24 | How long "reboot when everyone has left" waits before it gives up (0 = no limit) |
 | `reboot_restore_no_autostart` | true | After a panel reboot, start again the servers that were running without Autostart |

@@ -5,7 +5,8 @@ WHERE THEY COME FROM
     the panel) and the signed catalog, read through addons_catalog.section(): one signature, one
     store, one rollback and freeze rule. A signed catalog's section is used only when every part of
     it passes sites_problems(); otherwise the floor's is used and the refusal is logged once. So a
-    refused section changes nothing, and nothing here installs anything: a person presses Update.
+    refused section changes nothing, and nothing here installs anything: a site's Update does (pressed, or run by
+    the nightly window: services/updates_auto.py).
 
 WHAT IS CHECKED (OWASP Input Validation Cheat Sheet: allow-list, fullmatch; Docker Security Cheat
 Sheet rule 13: images pinned by digest; SSRF Prevention Cheat Sheet, application layer: downloads

@@ -23,7 +23,8 @@ WHICH WINS (effective())
     catalog entry older than the floor's release (B3's and IW4MAdmin's tags) is never used either. An
     expired catalog keeps its pins (going back to the floor would offer an older image as an update) but
     offers no update from them until a newer one is fetched. Nothing is ever installed by this module:
-    the add-on card's Update button offers what differs, and only a person pressing it installs.
+    the add-on card's Update button offers what differs, and that Update installs it (pressed, or run by the
+    nightly window: services/updates_auto.py).
 
 The last accepted catalog is kept in data/ (0600) with its signature, and checked again when the panel
 starts. Fetching uses the update check's own source (git over the checkout's origin remote, the same

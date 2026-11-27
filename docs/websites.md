@@ -424,7 +424,10 @@ When the signed catalog has a newer image for a site (a security rebuild), or th
 writes for a site (its web server's settings, for example), the site's Overview offers **Update**, which installs
 it again from that image and restarts it (a few seconds offline; building a PHP image can take a few minutes
 first). Its files, databases, settings and secrets stay. A site installed before the panel recorded these is
-offered Update once. Saving a site's Settings restarts it only when one of its limits changed; the note and the
+offered Update once. The Overview says how many updates are ready and what they are, and when the site updates by
+itself: websites update in the nightly window (04:00-05:00 on the host's clock by default), one at a time, unless a
+visitor reached the site in the last minutes; a failed update puts the site back on the image it ran before. See
+[updates.md](updates.md). Saving a site's Settings restarts it only when one of its limits changed; the note and the
 access log alone never do.
 
 ## Access logs

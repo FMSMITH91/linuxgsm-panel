@@ -3273,3 +3273,5 @@ details.card:not([open]) > .uid-summary-card{ border-bottom:0; }
 .upd-row + .upd-row { border-top: 1px solid var(--bs-border-color); }
 .upd-cols { display: grid; gap: .5rem; }
 @media (min-width: 992px) { .upd-cols { grid-template-columns: 1fr 1fr; align-items: start; } }
+/* Two columns of groups on a wide screen, each group whole in one column: half the scrolling. */
+@media (min-width: 1200px) { #upd-list { column-count: 2; column-gap: .5rem; } #upd-list > .card { break-inside: avoid; } }

@@ -283,8 +283,10 @@ and the panel's own pins are used.
   own is never used either.
 - **An expired catalog offers nothing.** It keeps naming the version you may have installed from it, but offers no
   update until a newer one is fetched, and the card says it has expired.
-- **Nothing installs by itself.** A newer pin only lights the card's **Update** button; the row says where the version
-  came from (*built into this panel*, or *signed add-on catalog #N of date*).
+- **It installs in the nightly window.** A newer pin lights the card's **Update** button (the row says where the
+  version came from: *built into this panel*, or *signed add-on catalog #N of date*), and the add-on is updated by
+  itself in the next nightly window unless its automatic updates are off on the Updates page, or its game server has
+  players on. A pin the catalog marks as a security update installs even then. See [updates.md](updates.md).
 
 The catalog moves digests, release tags and commits. A Renovate bump that changes B3's or IW4MAdmin's build files
 (their Containerfile, entrypoint or B3's locked requirements) still ships with a panel update, because the build files

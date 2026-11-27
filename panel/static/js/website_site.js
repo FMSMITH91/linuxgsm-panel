@@ -151,6 +151,7 @@
     setText('ws-update-when', img.when || '');
     setText('ws-update-off', img.note || '');
     WS.show('ws-update-off', !!img.note);
+    WS.show('ws-update-when', !img.note);     // the note already says it waits for Update now
     renderUsage(u, s.limits || {}, why);
   }
   // Limits are an administrator's; anyone else sees the figure alone.
