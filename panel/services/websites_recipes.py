@@ -299,12 +299,14 @@ def _container_args(account, site, values, image, argv):
     if not (str(values.get("_uid", "")).isdecimal() and str(values.get("_gid", "")).isdecimal()):
         raise ValueError("a container step needs the account's uid and gid")
     home = _ws._home(account)
+    # The site's own no-name-server file (websites.RESOLV_CONF): a lookup is refused at once, as in the site.
+    resolv = _ws.resolv_mount(site)
     return (["podman", "run", "--rm", "-i", "--name", STEP_CONTAINER, "--pull=never", "--log-driver=none",
              "--userns=keep-id", "--user", "%s:%s" % (values["_uid"], values["_gid"]), "--read-only", "--cap-drop=all",
              "--security-opt=no-new-privileges", "--pids-limit=%d" % int(site.pids), "--memory=%dm" % int(site.mem_mb),
              "--dns=none", "--network=%s" % values.get("_network", "none"), "--tmpfs=/tmp:rw,mode=1777,size=256m",
              "-v", "%s/%s:%s" % (home, _ws.HTML, _ws.DOCROOT_PHP), "-w", _ws.DOCROOT_PHP, "-e", "HOME=/tmp",
-             "-v", _VALUES_MOUNT, "--entrypoint", argv[0], image] + list(argv[1:]))
+             "-v", _VALUES_MOUNT] + (["-v", resolv] if resolv else []) + ["--entrypoint", argv[0], image] + list(argv[1:]))
 
 
 def _shell_words(args):

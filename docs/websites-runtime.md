@@ -26,6 +26,13 @@ address. A Node.js app reaches npm's registry only while it is being built. The 
 nftables table) keeps site accounts away from the host's other addresses (its LAN, tailnet and public
 addresses), so a site cannot reach the panel's port or SSH.
 
+A site has no name server either. Its container gets a read-only `/etc/resolv.conf` from the panel
+(`~/site/conf/resolv.conf`) that names no server and allows one try of one second, so a name lookup is
+refused at once. Before, the container kept its image's own file (WordPress's names 1.1.1.1 and
+1.0.0.1), which it cannot reach, and every lookup waited about 20 seconds. The same file is used by an
+app's build and by an app's install steps. A site with **full egress** (a superadmin's switch) keeps the
+name servers Podman gives it.
+
 ## CPU limits
 
 A site's CPU limit is applied in one of three ways, and the site card says which one:

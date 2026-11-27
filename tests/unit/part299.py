@@ -393,7 +393,7 @@ def _s299_quadlet():
     static = _ws299.quadlet(_site299(kind="static"), (1005, 1005), "pasta:-4,-o,127.0.0.1", image="x/y@sha256:" + "c" * 64)
     eq("static site: its files mounted read-only, no interpreter (nginx), tmpfs for nginx's own temp files",
        _lines299(static, ("Volume=", "Tmpfs=")),
-       ["Volume=/home/ws5/site/html:/usr/share/nginx/html:ro",
+       ["Volume=/home/ws5/site/conf/resolv.conf:/etc/resolv.conf:ro", "Volume=/home/ws5/site/html:/usr/share/nginx/html:ro",
         "Volume=/home/ws5/site/conf/nginx.conf:/etc/nginx/conf.d/default.conf:ro", "Tmpfs=/tmp:rw,mode=1777,size=64m"])
     refused = []
     for acct in ("root", "ubuntu", "ws0", "ws1;id", "../ws1", "lgsmpanel"):

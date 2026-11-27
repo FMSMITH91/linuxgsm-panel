@@ -14,7 +14,8 @@ images by digest; the same hardening as panel/services/addons.py)
     UserNS=keep-id with the account's own numeric uid and gid (an image's USER wins over keep-id's
     default on Podman 4.9.3), DropCapability=all, NoNewPrivileges, ReadOnly with tmpfs for /tmp and the
     server's run folders, memory with no swap, CPU, pids and open files limited, a start limit, no
-    DNS. Its server listens on 8080 inside and is published on 127.0.0.1:<site port> only.
+    name server (RESOLV_CONF over /etc/resolv.conf: a lookup is refused at once). Its server listens on
+    8080 inside and is published on 127.0.0.1:<site port> only.
 
 THE PROXY TOKEN
     Every request the web proxy forwards carries X-Panel-Proxy-Token, the site's own secret. The
@@ -397,6 +398,31 @@ def _limits(site, cpu=True):
     return out if site.full_egress else out + ["--dns=none"]
 
 
+# A site container has no route out, so no name server can answer it. With --dns=none Podman left the image's own
+# /etc/resolv.conf (WordPress's names 1.1.1.1 and 1.0.0.1), and every lookup waited about 20 seconds for servers
+# it cannot reach: WordPress's visitor-triggered scheduled-task run looks up the site's own name, so one visit a
+# minute waited, and the page cache's 10-second limit answered 504. This file names no server (the resolver then
+# asks 127.0.0.1:53 in the container's own network namespace, where nothing listens, and is refused at once) and
+# caps a lookup at one try of one second. Mounted read-only over /etc/resolv.conf; the network is unchanged.
+RESOLV_FILE = CONF + "/resolv.conf"
+RESOLV_CONF = ("# Written by linuxgsm-panel: this website has no route out, so it has no name server either; a\n"
+               "# lookup is refused at once instead of waiting for servers it cannot reach.\n"
+               "options timeout:1 attempts:1\n")
+
+
+def resolv_mount(site):
+    """The no-name-server file over /etc/resolv.conf (RESOLV_FILE) as a podman -v value; None with full egress.
+
+    A site with full egress (the superadmin's switch) keeps the name servers Podman gives it.
+    """
+    return None if site.full_egress else "%s/%s:/etc/resolv.conf:ro" % (_home(site.account), RESOLV_FILE)
+
+
+def _resolv_lines(site):
+    mount = resolv_mount(site)
+    return ["Volume=%s" % mount] if mount else []
+
+
 # Where a site's CPU limit is enforced (the site card and docs say which, never silently none):
 #   container: --cpus on the container (the account's user manager has the cpu controller);
 #   account:   the host does not delegate it, so the helper's website-cpu-limit sets CPUQuota and
@@ -558,7 +584,7 @@ def quadlet(site, ids, net, image=None, cpu=True):
     lines = _head("website %s" % site.name, [DB_RELAY_UNIT + ".socket"] if "-T,3306:%d" % (
         DB_RELAY_PORT_BASE + int(site.port) - 20000) in net else []) + [
         "", "[Container]", "Image=%s" % image, "ContainerName=%s" % UNIT, "Pull=never", "Network=%s" % net,
-        "PublishPort=127.0.0.1:%d:%d" % (int(site.port), INNER_PORT)]
+        "PublishPort=127.0.0.1:%d:%d" % (int(site.port), INNER_PORT)] + _resolv_lines(site)
     if site.kind == "static":
         lines += ["Volume=%s/%s:%s:ro" % (home, HTML, DOCROOT["static"]),
                   "Volume=%s/%s/nginx.conf:/etc/nginx/conf.d/default.conf:ro" % (home, CONF),
@@ -585,7 +611,7 @@ def app_quadlet(site, ids, net, image=None, cpu=True):
         raise ValueError("an app's port is 1024-65535 and not %d (the gate's)" % INNER_PORT)
     lines = _head("website %s (app)" % site.name) + [
         "", "[Container]", "Image=%s" % image, "ContainerName=%s" % UNIT, "Pull=never", "Network=%s" % net,
-        "PublishPort=127.0.0.1:%d:%d" % (int(site.port), INNER_PORT),
+        "PublishPort=127.0.0.1:%d:%d" % (int(site.port), INNER_PORT)] + _resolv_lines(site) + [
         "Volume=%s/%s:/app" % (home, HTML), "Volume=%s/%s/start.sh:/panel/start.sh:ro" % (home, CONF),
         "EnvironmentFile=%s/%s/app.env" % (home, CONF), "Environment=PORT=%d" % port, "Environment=NODE_ENV=production",
         "Environment=HOME=/tmp", "WorkingDir=/app", "Tmpfs=/tmp:rw,mode=1777,size=256m",
@@ -746,7 +772,8 @@ def build_sh(account, site, ids=None, image=None):
     A one-off container with the same hardening, its files at /app, and the build-time egress proxy
     (the runtime's hosts only: npm's registry) at 127.0.0.1:3128 through HTTPS_PROXY. The proxy is a
     unit started for the build and stopped after it; the running app gets none unless granted. With no
-    files yet it builds nothing and prints MARK_APP_EMPTY.
+    files yet it builds nothing and prints MARK_APP_EMPTY. The build has no name server either (RESOLV_CONF,
+    written first where an install from before it has none): npm hands its registry's name to the proxy.
     """
     home = _home(account)
     image = image or image_for(site)
@@ -758,6 +785,7 @@ def build_sh(account, site, ids=None, image=None):
             "--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb), "--dns=none",
             "--network=pasta:-4,-o,127.0.0.1,-T,%d:%d" % (EGRESS_INNER_PORT, eport),
             "--tmpfs=/tmp:rw,mode=1777,size=512m", "-v", "%s/%s:/app" % (home, HTML),
+            "-v", "%s/%s:/etc/resolv.conf:ro" % (home, RESOLV_FILE),
             "-v", "%s/%s/build.sh:/panel/build.sh:ro" % (home, CONF), "-w", "/app",
             "-e", "HOME=/tmp", "-e", "HTTPS_PROXY=http://127.0.0.1:%d" % EGRESS_INNER_PORT,
             "-e", "npm_config_https_proxy=http://127.0.0.1:%d" % EGRESS_INNER_PORT, "-e", "npm_config_cache=/tmp/npm"]
@@ -765,6 +793,7 @@ def build_sh(account, site, ids=None, image=None):
         args += ["--user", "%d:%d" % (int(ids[0]), int(ids[1]))]
     args += [image, "/bin/sh", "/panel/build.sh"]
     return (_ENV + "[ -n \"$(ls -A %s 2>/dev/null)\" ] || { echo %s; exit 0; }; " % (_q(HTML), MARK_APP_EMPTY)
+            + "[ -f %s ] || (umask 077; printf %%s %s > %s) || exit 1; " % (_q(RESOLV_FILE), _q(RESOLV_CONF), _q(RESOLV_FILE))
             + "systemctl --user start %s.service || exit 1; " % EGRESS_UNIT
             + "%s > %s/build.log 2>&1; rc=$?; systemctl --user stop %s.service; " % (shlex.join(args), _q(home + "/" + CONF), EGRESS_UNIT)
             + "tail -n 40 %s/build.log; echo \"build_rc=$rc\"; exit $rc" % _q(home + "/" + CONF))
@@ -778,7 +807,7 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               "%s/%s.service" % (USER_UNIT_DIR, DB_RELAY_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
-              CONF + "/build.sh", HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
+              CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
 
 
 def bundle(files):
@@ -815,7 +844,8 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
     files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
              HOME_DIR + "/" + META_FILE: json.dumps({"kind": site.kind, "image": image or image_for(site),
-                                                     "port": int(site.port), "name": site.name}, sort_keys=True)}
+                                                     "port": int(site.port), "name": site.name}, sort_keys=True),
+             RESOLV_FILE: RESOLV_CONF}
     if site.kind == "static":
         files[CONF + "/nginx.conf"] = nginx_conf(token)
     elif site.kind == "app":
