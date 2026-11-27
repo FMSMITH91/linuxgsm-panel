@@ -33,6 +33,28 @@ refused at once. Before, the container kept its image's own file (WordPress's na
 app's build and by an app's install steps. A site with **full egress** (a superadmin's switch) keeps the
 name servers Podman gives it.
 
+### WordPress's scheduled tasks
+
+WordPress normally runs its scheduled tasks (publishing scheduled posts, update checks, plugins' jobs)
+during a visitor's request, by sending a request to the site's own address. That visitor waited for it,
+and with the page cache on the visit ended in an error. A WordPress site installed by the panel turns
+that off (`DISABLE_WP_CRON` in its `wp-config.php`) and runs the tasks from a timer of the site's own
+account instead (`lgsm-site-cron.timer`), every 5 minutes, inside the site's running container
+(`podman exec lgsm-site php /var/www/html/wp-cron.php`). Each site keeps a fixed offset within the 5
+minutes, so a host's sites do not all run at once. A run is skipped while the site is stopped or before
+WordPress is installed. The page output is thrown away; PHP's errors go to the site account's journal,
+without function arguments. The timer is written and started with the site, and removed with the site
+(an install that fails and is undone removes it too).
+
+Running the tasks in the running container costs about 0.13 s of Podman's own time per run, where a
+separate wp-cli container took about 0.29 s and a second copy of PHP in memory (measured on Podman with
+a Debian image).
+
+The other apps need no timer. phpBB, MyBB and Simple Machines Forum start their tasks from an image in
+the page that the visitor's browser fetches (`cron.php` or `task.php`), never from the server itself;
+Drupal's automatic cron runs in the same PHP process after the page is sent. A task that looks a name up
+now fails at once instead of waiting.
+
 ## CPU limits
 
 A site's CPU limit is applied in one of three ways, and the site card says which one:

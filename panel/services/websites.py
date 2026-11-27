@@ -15,7 +15,8 @@ images by digest; the same hardening as panel/services/addons.py)
     default on Podman 4.9.3), DropCapability=all, NoNewPrivileges, ReadOnly with tmpfs for /tmp and the
     server's run folders, memory with no swap, CPU, pids and open files limited, a start limit, no
     name server (RESOLV_CONF over /etc/resolv.conf: a lookup is refused at once). Its server listens on
-    8080 inside and is published on 127.0.0.1:<site port> only.
+    8080 inside and is published on 127.0.0.1:<site port> only. WordPress's scheduled tasks run from a
+    user timer in the running container (cron_units), never during a visitor's request.
 
 THE PROXY TOKEN
     Every request the web proxy forwards carries X-Panel-Proxy-Token, the site's own secret. The
@@ -56,6 +57,7 @@ CACHE_UNIT = "lgsm-site-cache"
 GATE_UNIT = "lgsm-site-gate"
 EGRESS_UNIT = "lgsm-site-egress"
 DB_RELAY_UNIT = "lgsm-site-db"
+CRON_UNIT = "lgsm-site-cron"
 TUNNEL_ACCOUNT = "lgsmtunnel"
 TUNNEL_UNIT = "lgsm-tunnel"
 INNER_PORT = 8080
@@ -691,6 +693,31 @@ def egress_unit(site, hosts):
             % (HOME_DIR, port, " ".join(sorted(set(hosts)))))
 
 
+# WordPress's scheduled tasks (wp-cron). Its recipe's wp-config sets DISABLE_WP_CRON, so no visitor's request
+# starts them (that run is a request to the site's own address, which the visitor waited for); this user timer
+# runs them in the site's running container instead, as the site's account, every CRON_MINUTES minutes. One
+# `podman exec` in the running container (about 0.13 s of Podman's own time where a one-off wp-cli container took
+# 0.29 s, before a second PHP and its memory). Each site's timer keeps a fixed offset within the interval
+# (FixedRandomDelay, per account), so a host's sites do not all run at once. The page output goes nowhere
+# (StandardOutput=null); PHP's errors reach the account's journal through stderr, its arguments left out
+# (zend.exception_ignore_args). It is skipped while the site is stopped or WordPress is not installed yet.
+CRON_MINUTES = 5
+
+
+def cron_units():
+    """{path: text} of WordPress's scheduled-task timer and its service (USER_UNIT_DIR/CRON_UNIT.*)."""
+    head = "# Written by linuxgsm-panel: WordPress's scheduled tasks, run in this website's container.\n"
+    service = (head + "[Unit]\nDescription=linuxgsm-panel website scheduled tasks\n\n[Service]\nType=oneshot\n"
+               "ExecCondition=/usr/bin/test -f %%h/%s/wp-config.php\n" % HTML
+               + "ExecCondition=/usr/bin/systemctl --user -q is-active %s\n" % unit_service(UNIT)
+               + "ExecStart=/usr/bin/podman exec %s php %s/wp-cron.php\n" % (UNIT, DOCROOT_PHP)
+               + "StandardOutput=null\nTimeoutStartSec=15min\n")
+    timer = (head + "[Unit]\nDescription=linuxgsm-panel website scheduled tasks, every %d minutes\n\n[Timer]\n"
+             "OnCalendar=*:0/%d\nRandomizedDelaySec=%dmin\nFixedRandomDelay=true\nAccuracySec=10s\n\n"
+             "[Install]\nWantedBy=timers.target\n" % (CRON_MINUTES, CRON_MINUTES, CRON_MINUTES - 1))
+    return {"%s/%s.service" % (USER_UNIT_DIR, CRON_UNIT): service, "%s/%s.timer" % (USER_UNIT_DIR, CRON_UNIT): timer}
+
+
 def db_relay_units(site, target):
     """A database on another machine: a socket on the host's loopback relaying to `target` ("host:port")."""
     if not re.fullmatch(r"[0-9a-f.:]{3,45}:[0-9]{1,5}", target or ""):
@@ -804,7 +831,8 @@ def build_sh(account, site, ids=None, image=None):
 FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUADLET_DIR, CACHE_UNIT),
               "%s/%s.container" % (QUADLET_DIR, GATE_UNIT), "%s/%s.container" % (QUADLET_DIR, TUNNEL_UNIT),
               "%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT), "%s/%s.socket" % (USER_UNIT_DIR, DB_RELAY_UNIT),
-              "%s/%s.service" % (USER_UNIT_DIR, DB_RELAY_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
+              "%s/%s.service" % (USER_UNIT_DIR, DB_RELAY_UNIT), "%s/%s.service" % (USER_UNIT_DIR, CRON_UNIT),
+              "%s/%s.timer" % (USER_UNIT_DIR, CRON_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
               CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
@@ -846,6 +874,8 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
              HOME_DIR + "/" + META_FILE: json.dumps({"kind": site.kind, "image": image or image_for(site),
                                                      "port": int(site.port), "name": site.name}, sort_keys=True),
              RESOLV_FILE: RESOLV_CONF}
+    if site.kind == "wordpress":
+        files.update(cron_units())
     if site.kind == "static":
         files[CONF + "/nginx.conf"] = nginx_conf(token)
     elif site.kind == "app":
@@ -947,8 +977,11 @@ def start_sh(account, site, restart=False):
     if needs_egress(site):
         egress = ("systemctl --user enable %s.service; systemctl --user restart %s.service; " % (EGRESS_UNIT, EGRESS_UNIT)
                   if restart else "systemctl --user enable --now %s.service; " % EGRESS_UNIT)
+    # WordPress's scheduled-task timer (cron_units) once the site runs; it skips its runs while the site is stopped.
+    cron = "systemctl --user enable --now %s.timer; " % CRON_UNIT if site.kind == "wordpress" else ""
     return (_ENV + egress + "systemctl --user reset-failed %s 2>/dev/null; " % units
-            + "if systemctl --user %s %s; then echo %s; else " % ("restart" if restart else "start", units, _MARK_STARTED)
+            + "if systemctl --user %s %s; then %secho %s; else " % ("restart" if restart else "start", units, cron,
+                                                                   _MARK_STARTED)
             + "[ \"$(systemctl --user show -p Result --value %s 2>/dev/null)\" = start-limit-hit ] "
               "&& echo SITE_START_LIMIT || echo SITE_START_FAILED; " % unit_service(UNIT)
             + "journalctl --user -u %s -n 20 --no-pager -o cat 2>/dev/null | tail -n 20; exit 1; fi" % unit_service(UNIT))
@@ -958,7 +991,9 @@ def stop_sh(account, site):
     """Bash that stops the site's container (its gate, object cache and egress proxy with it)."""
     _home(account)
     units = " ".join(unit_service(u) for u in reversed(_units(site)))
-    return (_ENV + "systemctl --user stop %s %s.service 2>/dev/null; echo %s" % (units, EGRESS_UNIT, _MARK_STOPPED))
+    # WordPress's scheduled-task timer on its own line: one unit a site does not have must not keep the others running.
+    return (_ENV + "systemctl --user stop %s.timer 2>/dev/null; " % CRON_UNIT
+            + "systemctl --user stop %s %s.service 2>/dev/null; echo %s" % (units, EGRESS_UNIT, _MARK_STOPPED))
 
 
 def remove_sh(account, site):
@@ -966,7 +1001,8 @@ def remove_sh(account, site):
     _home(account)
     units = " ".join(unit_service(u) for u in (UNIT, GATE_UNIT, CACHE_UNIT))
     files = " ".join(_q(p) for p in FILE_NAMES if p.startswith((QUADLET_DIR, USER_UNIT_DIR)))
-    return (_ENV + "systemctl --user disable --now %s.service %s.socket 2>/dev/null; " % (EGRESS_UNIT, DB_RELAY_UNIT)
+    return (_ENV + "systemctl --user disable --now %s.timer 2>/dev/null; " % CRON_UNIT
+            + "systemctl --user disable --now %s.service %s.socket 2>/dev/null; " % (EGRESS_UNIT, DB_RELAY_UNIT)
             + "systemctl --user stop %s 2>/dev/null; rm -f %s; systemctl --user daemon-reload; " % (units, files)
             + "podman rm -f -i %s %s %s >/dev/null 2>&1; podman image prune -a -f >/dev/null 2>&1; echo %s"
             % (UNIT, GATE_UNIT, CACHE_UNIT, _MARK_REMOVED))

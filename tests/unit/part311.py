@@ -5,6 +5,10 @@
    1.1.1.1 and 1.0.0.1, unreachable from a site), and every lookup waited about 20 seconds. The site's network
    and its --dns=none stay as they were; an app's build and an app's install steps get the same file, and a site
    with full egress keeps Podman's name servers.
+2. WordPress's scheduled tasks run from a timer of the site's account, in its running container, every 5 minutes;
+   the recipe's wp-config turns off the run a visitor's request started (a request to the site's own name, which
+   the visitor waited for, a 504 behind the page cache). The timer is written and started with the site and
+   removed with it, by a delete and by an install's undo.
 
 HOW IT RUNS. part12's app and its database for the routes. ssh_manager.websites' seams answer for the host (Podman
 ready, the helper, the account's ids), and every shell it would run as a site's account runs in real bash over a
@@ -256,6 +260,83 @@ def _s1_build(st):
         any(a.endswith("/site/conf/resolv.conf:/etc/resolv.conf:ro") for a in run)), (200, True, True))
 
 
+# ── 2. WordPress's scheduled tasks ────────────────────────────────────────────────────────────────
+_CRON_DIR311 = ".config/systemd/user/"
+
+
+def _s2_cron(st):
+    _seams311()
+    su = _Client311(st.su.id)
+    wp = _site311(st, "p311-cron", kind="wordpress", app_recipe="wordpress")
+    _reset311()
+    r = su.post("/websites/%d/update-image" % wp.id)
+    calls = _calls311("systemctl")
+    timer, service = (_read311(wp.account, _CRON_DIR311 + "lgsm-site-cron." + x) or "" for x in ("timer", "service"))
+    started = next((i for i, a in enumerate(calls) if "restart" in a and "lgsm-site.service" in a), None)
+    enabled = next((i for i, a in enumerate(calls) if a[-3:] == ["enable", "--now", "lgsm-site-cron.timer"]), None)
+    eq("F34 (POST /websites/<id>/update-image, WordPress): its scheduled tasks get a timer of the site's account, "
+       "every 5 minutes at a fixed offset per site, started once the site runs",
+       (r.status_code, "OnCalendar=*:0/5" in timer, "FixedRandomDelay=true" in timer, "WantedBy=timers.target" in timer,
+        started is not None and enabled is not None and enabled > started),
+       (200, True, True, True, True))
+    eq("F34 (the timer's service): WordPress's cron in the site's running container as its account, skipped while the "
+       "site is stopped or WordPress is not installed, its page output thrown away and no secret in the unit",
+       ("ExecStart=/usr/bin/podman exec lgsm-site php /var/www/html/wp-cron.php" in service,
+        "ExecCondition=/usr/bin/systemctl --user -q is-active lgsm-site.service" in service,
+        "ExecCondition=/usr/bin/test -f %h/site/html/wp-config.php" in service, "StandardOutput=null" in service,
+        _TOKEN311 in service + timer), (True, True, True, True, False))
+    php = _site311(st, "p311-nocron", kind="php")
+    _reset311()
+    su.post("/websites/%d/update-image" % php.id)
+    eq("F34 control (a PHP site): no scheduled-task timer is written or started",
+       (_read311(php.account, _CRON_DIR311 + "lgsm-site-cron.timer"),
+        any("lgsm-site-cron.timer" in a and "enable" in a for a in _calls311("systemctl"))), (None, False))
+    _s2_config(st, wp)
+    _s2_stop(st, wp)
+    _s2_removed(st)
+
+
+def _s2_config(st, wp):
+    render = next(s for s in _ws311.recipe_steps("wordpress") if s["type"] == "render-config")
+    secrets = {"db_name": "ws_wp", "db_user": "ws_wp", "db_password": "Db-" + "k" * 30, "admin_user": "p311admin",
+               "admin_email": "a@example.org", "admin_password": "Ad-" + "m" * 30}
+    os.makedirs(os.path.join(_home311(wp.account), "site", "html"), exist_ok=True)
+    ok, _said = _sw311.app_install_step(st.host, wp, dict(render, secrets=secrets))
+    conf = _read311(wp.account, "site/html/wp-config.php") or ""
+    eq("F34 (ssh_manager.websites.app_install_step, WordPress's wp-config): no visitor's request starts WordPress's "
+       "scheduled tasks (DISABLE_WP_CRON), before wp-settings.php is loaded",
+       (ok, "define( 'DISABLE_WP_CRON', true );" in conf,
+        0 < conf.find("DISABLE_WP_CRON") < conf.find("require_once ABSPATH . 'wp-settings.php';")), (True, True, True))
+
+
+def _s2_stop(st, wp):
+    _reset311()
+    r = _Client311(st.su.id).post("/websites/%d/stop" % wp.id)
+    eq("F34 (POST /websites/<id>/stop): the timer stops with the site", (r.status_code, any(
+        a[-2:] == ["stop", "lgsm-site-cron.timer"] for a in _calls311("systemctl"))), (200, True))
+
+
+def _s2_removed(st):
+    su = _Client311(st.su.id)
+    got = {}
+    for how in ("undo", "delete"):
+        site = _site311(st, "p311-rm-%s" % how, kind="wordpress", app_recipe="wordpress")
+        _reset311()
+        su.post("/websites/%d/update-image" % site.id)
+        written = _read311(site.account, _CRON_DIR311 + "lgsm-site-cron.timer") is not None
+        if how == "undo":
+            site.state, site.install_steps_done = "creating", '["account"]'
+            _db311.session.commit()
+        _reset311()
+        r = su.post("/websites/%d/install/undo" % site.id if how == "undo" else "/websites/%d/delete" % site.id,
+                    json={"confirm": site.name})
+        got[how] = (written, r.status_code, any(a[-3:] == ["disable", "--now", "lgsm-site-cron.timer"]
+                                                for a in _calls311("systemctl")),
+                    [n for n in ("timer", "service") if _read311(site.account, _CRON_DIR311 + "lgsm-site-cron." + n)])
+    eq("F34 (POST /websites/<id>/install/undo and /delete): the timer is disabled and its unit files removed with the "
+       "site", got, {"undo": (True, 200, True, []), "delete": (True, 200, True, [])})
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup311():
     _db311.session.rollback()
@@ -299,7 +380,7 @@ with _p9.app_context():
         _p9_patch(_sw311, "quota_set", lambda *a, **k: (True, _sw311.OK_QUOTA))
         _p9_patch(_sw311, "cpu_limit", lambda *a, **k: (True, "container"))
         _st311 = _rows311()
-        for _sec311 in (_s1_resolv,):
+        for _sec311 in (_s1_resolv, _s2_cron):
             check("part311: %s ran to the end" % _sec311.__name__, _ran311(_sec311, _st311), _ran311.last)
         eq("part311: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips311:], [])
     finally:
