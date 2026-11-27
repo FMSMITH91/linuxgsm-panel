@@ -76,11 +76,7 @@
     WEB.open(a, bar);
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
     else bar.appendChild(button(T('Start'), 'bi-play-circle', 'adAct', [a.id, 'start']));
-    if (a.update) {
-      bar.appendChild(button(T('Update'), 'bi-arrow-up-circle', 'adUpdate', [a.id], 'btn-outline-primary'));
-      // The Updates page, where every update waiting (this one too) is listed with when it installs by itself.
-      bar.appendChild(node('a', 'btn btn-sm btn-link px-1', T('All updates'))).href = (window.MOUNT || '') + '/updates';
-    }
+    if (a.update) bar.appendChild(button(T('Update'), 'bi-arrow-up-circle', 'adUpdate', [a.id], 'btn-outline-primary'));
     bar.appendChild(button(T('Log'), 'bi-journal-text', 'adLog', [a.id]));
     bar.appendChild(button(T('Remove'), 'bi-trash', 'adRemove', [a.id], 'btn-outline-danger'));
     box.appendChild(bar);

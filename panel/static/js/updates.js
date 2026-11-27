@@ -124,9 +124,10 @@
     return p;
   }
   function line(ic, text, cls) {
-    var d = el('div', 'small ' + (cls || ''));
+    var d = el('div', 'small');
+    if (cls) d.classList.add(cls);
     d.appendChild(icon(ic));
-    var s = el('span', '', ' ' + (text || ''));
+    var s = el('span', 'ms-1', text || '');
     s.setAttribute('data-no-i18n', '');
     d.appendChild(s);
     return d;

@@ -56,6 +56,7 @@
   "You don't manage anything that has updates.": "Vous ne gérez rien qui ait des mises à jour.",
   "a newer version of the add-on": "une version plus récente du module",
   "automatic": "automatique",
+  "the panel had not recorded its previous image": "le panneau n'avait pas enregistré son image précédente",
   "{n} package(s), {sec} of them security updates.": "{n} paquet(s), dont {sec} de sécurité.",
   "{n} update(s) can run now without kicking players.": "{n} mise(s) à jour peuvent s'exécuter maintenant sans expulser de joueurs.",
   "{n} update(s) ready: {what}": "{n} mise(s) à jour prête(s) : {what}",

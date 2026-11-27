@@ -109,6 +109,10 @@ def _as_site320(remote, account, sh, timeout=120, stdin_text=None):
 
 
 def _seams320():
+    # The window's passes see this part's rows only: other parts leave websites and game servers in the full run.
+    _p9_patch(_ua320, "_site_ids", lambda: list(_ROWS320["sites"]))
+    _p9_patch(_ua320, "_server_ids", lambda: list(_ROWS320["servers"]))
+    _p9_patch(_ua320, "_pending_addons", lambda gs, cfg: [])
     _p9_patch(_sw320, "_as_site", _as_site320)
     _p9_patch(_sw320, "_ids", lambda remote, site: ((1005, 1005), dict(_PROBE320)))
     _p9_patch(_sw320, "runtime_ready", lambda remote: "")
@@ -396,7 +400,7 @@ def _s4_addon_once(gs):
     _ua320.tick(_p9, now=_OUT320)
     eq("nightly window: each game server's add-ons are read once per window (two passes inside it, one outside)",
        reads.count(gs.id), 1)
-    _p9_restore_one(_ua320, "_pending_addons")
+    _p9_patch(_ua320, "_pending_addons", lambda server, cfg: [])
 
 
 def _s4_addon_switch(gs):

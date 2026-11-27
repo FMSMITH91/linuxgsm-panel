@@ -32,6 +32,7 @@ from panel.services import updates as U
 _log = logging.getLogger("panel.updates.auto")
 
 TICK = 300
+FIRST_DELAY = 90          # the loop's first pass waits for the start to settle (the player poll's first counts)
 ACTOR = "automatic"
 _DONE = {}                 # item ref -> the window key it was tried in
 RUN_LOCK = threading.Lock()
@@ -40,8 +41,8 @@ SITE_STATES = ("running", "stopped", "failed")
 
 def loop(app):
     """The supervised loop ("auto-updates"): a tick every TICK seconds. Never raises."""
-    runtime_stats.loop_started("auto-updates", TICK)
-    time.sleep(90)            # let the start settle (the player poll's first counts)
+    runtime_stats.loop_started("auto-updates", FIRST_DELAY)
+    time.sleep(FIRST_DELAY)
     while True:
         t0 = time.time()
         try:
