@@ -2133,6 +2133,8 @@ _r16d_wrap_ts_handles()
 # git, bash and ssh-keygen over scratch repositories with a stand-in gh; imports part01.
 # part298 (websites' core: models, permissions, tenancy, site_for) drives part12's app and database; imports part01
 # and 12. part299 to part302, part305, part306 and part311 (websites' runtime, routes, pages, and the proofs' fixes) follow it.
+# part313 (a website domain's own certificate, Cloudflare in front, the Overview's figures, Put it online) drives
+# part12's app, the helper loaded by path and part301's node harness; imports part01, 12 and 301.
 # part303 (the unit suite in shards: tests/unit/shard.py's split, the runner's and run-tests.sh's refusals, ci.yml's
 # shard jobs and their verdicts) runs child Pythons and bash over ci.yml's own steps; imports part01, 06 and 29.
 # part295 (the js coverage walk in parallel parts: run.py --part through main(), merge.py, ci.yml's parts and their
@@ -2164,7 +2166,7 @@ _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", 
     "part264", "part265", "part267", "part268", "part269", "part270", "part271", "part274", "part275", "part272", "part273", "part276", "part277", "part278",
     "part279", "part281", "part280", "part282", "part284", "part285", "part286", "part287", "part288", "part289", "part290", "part291", "part292", "part293",
     "part298", "part299", "part300", "part301", "part302", "part305", "part306", "part294", "part297", "part296", "part295", "part303",
-    "part307", "part308", "part309", "part310", "part311", "part15")
+    "part307", "part308", "part309", "part310", "part311", "part313", "part15")
 
 
 # ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────

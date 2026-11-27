@@ -12,7 +12,7 @@ from sqlalchemy.orm import validates
 from panel.core.clock import utcnow
 from panel.core.validation import (WEBSITE_ACCOUNT_RE, WEBSITE_ALLOW_PRESETS, WEBSITE_APP_PORT_MIN,
                                    WEBSITE_APP_RECIPE_RE, WEBSITE_APP_VERSION_RE, WEBSITE_COMMAND_MAX,
-                                   WEBSITE_EXPOSURE_MODES, WEBSITE_KINDS, WEBSITE_ORIGIN_TLS,
+                                   WEBSITE_EXPOSURE_MODES, WEBSITE_KINDS,
                                    WEBSITE_PHP_VERSION_RE, WEBSITE_PORT_MAX, WEBSITE_PORT_MIN,
                                    WEBSITE_RUNTIME_RE, WEBSITE_RUNTIME_VERSION_RE, WEBSITE_STATES,
                                    WEBSITE_TUNNEL_PROVIDERS, website_cidr, website_domain,
@@ -283,7 +283,6 @@ class WebsiteProxy(db.Model):
     allow_presets = db.Column(db.Text, default="[]")
     tunnel_provider = db.Column(db.String(16), default="")
     tunnel_token_enc = db.Column(db.Text, default="")
-    origin_tls = db.Column(db.String(12), default="letsencrypt", nullable=False)
     origin_pull_mtls = db.Column(db.Boolean, default=False, nullable=False)
     installed_version = db.Column(db.String(40), default="")
     applied_at = db.Column(db.DateTime, nullable=True)
@@ -296,10 +295,6 @@ class WebsiteProxy(db.Model):
     @validates("tunnel_provider")
     def _v_tunnel(self, key, value):
         return _website_choice(key, value, WEBSITE_TUNNEL_PROVIDERS)
-
-    @validates("origin_tls")
-    def _v_origin_tls(self, key, value):
-        return _website_choice(key, value, WEBSITE_ORIGIN_TLS)
 
     @validates("allow_cidrs")
     def _v_cidrs(self, key, value):

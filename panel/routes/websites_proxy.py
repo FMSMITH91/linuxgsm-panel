@@ -23,8 +23,7 @@ from flask_login import current_user, login_required
 
 from panel.core import i18n
 from panel.core.config import encrypt_secret
-from panel.core.validation import (WEBSITE_ALLOW_PRESETS, WEBSITE_EXPOSURE_MODES, WEBSITE_ORIGIN_TLS,
-                                   WEBSITE_TUNNEL_PROVIDERS, website_cidr)
+from panel.core.validation import WEBSITE_ALLOW_PRESETS, WEBSITE_EXPOSURE_MODES, WEBSITE_TUNNEL_PROVIDERS, website_cidr
 from panel.db.models import RemoteServer, User, Website, WebsiteProxy, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
@@ -60,7 +59,7 @@ def proxy_json(row):
     """The proxy row as the Settings card reads it: never the tunnel token, only whether one is set."""
     return {"exposure_mode": row.exposure_mode, "allow_cidrs": row.cidrs(), "allow_presets": row.presets(),
             "presets": list(WEBSITE_ALLOW_PRESETS), "tunnel_provider": row.tunnel_provider or "",
-            "tunnel_token_set": bool(row.tunnel_token_enc), "origin_tls": row.origin_tls,
+            "tunnel_token_set": bool(row.tunnel_token_enc),
             "origin_pull_mtls": bool(row.origin_pull_mtls), "installed_version": row.installed_version or "",
             "last_error": row.last_error or ""}
 
@@ -81,8 +80,8 @@ def _cidrs(data, problems):
 
 
 def _choices(data, changes, problems):
-    """The tunnel provider and origin TLS choice from the form, each held to its list."""
-    for key, allowed in (("tunnel_provider", WEBSITE_TUNNEL_PROVIDERS), ("origin_tls", WEBSITE_ORIGIN_TLS)):
+    """The tunnel provider from the form, held to its list."""
+    for key, allowed in (("tunnel_provider", WEBSITE_TUNNEL_PROVIDERS),):
         if key in data:
             value = _w.field(data, key)
             if value not in allowed:

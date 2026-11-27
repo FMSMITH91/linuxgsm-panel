@@ -2056,6 +2056,7 @@ def _run_light_migrations():
     for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    _drop_retired_columns(existing)
     if _has_user:
         _cmpb_stamp_whats_new()
         _ensure_one_owner()
@@ -2071,6 +2072,26 @@ def _run_light_migrations():
     _give_keyed_tables_autoincrement()
     _create_declared_indexes(existing)
     db.session.commit()
+
+
+# Columns no version reads any more: (table, column) -> the ALTER TABLE that drops it from a database an
+# older version created. website_proxy.origin_tls was a per-host certificate choice that nothing rendered
+# or applied; a domain's own certificate is WebsiteDomain.cert_mode. Dropped only where SQLite has DROP
+# COLUMN (3.35); an older SQLite keeps the column, which has a default and is never read or written.
+_RETIRED_COLUMNS = {
+    ("website_proxy", "origin_tls"): "ALTER TABLE website_proxy DROP COLUMN origin_tls",
+}
+
+
+def _drop_retired_columns(existing):
+    """Drop the _RETIRED_COLUMNS an existing database still has (a no-op once they are gone)."""
+    import sqlite3
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        return
+    for (table, col), ddl in _RETIRED_COLUMNS.items():
+        if col in existing.get(table, ()):
+            db.session.execute(text(ddl))
+            existing[table].discard(col)
 
 
 def _autostart_off_for_unfinished_installs():
