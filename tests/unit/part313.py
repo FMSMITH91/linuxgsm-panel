@@ -838,21 +838,59 @@ def _s9_cert_missing(st, _rec):
     _db313.session.commit()
 
 
+def _primary_of313(site):
+    _db313.session.expire_all()
+    return next((d.domain for d in _Dom313.query.filter_by(website_id=site.id).all() if d.is_primary), None)
+
+
 def _s9_wp_primary(st, _rec):
     wp = _site313(st.host, "p313-wp", [("one.p313.example.org", True, "matching"), ("two.p313.example.org", True, "matching")])
     wp.app_recipe = "wordpress"
     _db313.session.commit()
     plain = _site313(st.host, "p313-plain", [("three.p313.example.org", True, "matching"),
                                              ("four.p313.example.org", True, "matching")])
+    calls, answers = [], [(False, _sw313.WP_NOT_RUNNING), (True, "")]
+    _p9_patch(_sw313, "wp_set_address", lambda remote, site, domain: calls.append((site.id, domain)) or answers.pop(0))
     su = _Client313(st.su.id)
-    msg = _p9_json(su.post("/websites/%d/domains/primary" % wp.id,
-                           json={"id": _dom313(wp, "two.p313.example.org").id})).get("message") or ""
-    other = _p9_json(su.post("/websites/%d/domains/primary" % plain.id,
-                             json={"id": _dom313(plain, "four.p313.example.org").id})).get("message") or ""
-    eq("domains: Make primary on a WordPress site says WordPress keeps its old address and how to change it to the "
-       "new one; another site's answer has no such line (control)",
-       ("WordPress Address" in msg, _names313(msg, "two.p313.example.org"), "WordPress" in other),
-       (True, ["two.p313.example.org"], False))
+    two = _dom313(wp, "two.p313.example.org").id
+    r = su.post("/websites/%d/domains/primary" % wp.id, json={"id": two})
+    msg = _p9_json(r).get("message") or ""
+    eq("domains: Make primary on a WordPress site whose address cannot be changed keeps the old primary and says why "
+       "in plain words",
+       (r.status_code, _primary_of313(wp), _names313(msg, "one.p313.example.org", "two.p313.example.org"),
+        _sw313.WP_NOT_RUNNING in msg), (502, "one.p313.example.org", ["one.p313.example.org", "two.p313.example.org"], True))
+    r = su.post("/websites/%d/domains/primary" % wp.id, json={"id": two})
+    msg = _p9_json(r).get("message") or ""
+    eq("domains: Make primary on a WordPress site sets WordPress's own address (home, siteurl) to the new domain "
+       "first, then the primary, and says so",
+       (r.status_code, _primary_of313(wp), calls, "WordPress now uses" in msg),
+       (200, "two.p313.example.org", [(wp.id, "two.p313.example.org"), (wp.id, "two.p313.example.org")], True))
+    other = su.post("/websites/%d/domains/primary" % plain.id, json={"id": _dom313(plain, "four.p313.example.org").id})
+    eq("domains: another site's Make primary asks nothing of WordPress (control)",
+       (other.status_code, len(calls), _primary_of313(plain)), (200, 2, "four.p313.example.org"))
+    _p9_patch(_sw313, "wp_set_address", _WP_SET313)
+    _s9_wp_shell(wp)
+
+
+_WP_SET313 = _sw313.wp_set_address
+
+
+def _s9_wp_shell(wp):
+    ran = []
+    outs = ["WP_URL_SET\n", "Error: no container with name or ID \"lgsm-site\" found: no such container\n"]
+    _p9_patch(_sw313, "_as_site", lambda remote, account, sh, timeout=60: ran.append((account, sh)) or (True, outs.pop(0)))
+    got = [_sw313.wp_set_address(wp.remote, wp, "two.p313.example.org") for _i in range(2)]
+    sh = ran[0][1] if ran else ""
+    eq("domains: WordPress's address is set as the site's own account, by WordPress's API in its running container "
+       "(podman exec, as the scheduled-task timer runs), checked back before it says done; a stopped container says so",
+       (ran[0][0] if ran else None, "podman exec lgsm-site php -r " in sh, "wp-load.php" in sh, sh.count("https://two.p313.example.org"),
+        got), (wp.account, True, True, 4, [(True, ""), (False, _sw313.WP_NOT_RUNNING)]))
+    bad = None
+    try:
+        _ws313.wp_address_sh(wp.account, "x'); system('id")
+    except ValueError:
+        bad = "refused"
+    eq("domains: an address that is not a domain never reaches the code", bad, "refused")
 
 
 def _s9_scripts(_st, _rec):

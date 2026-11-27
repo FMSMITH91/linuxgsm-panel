@@ -74,8 +74,8 @@ S_CERT_NOT_SERVED = "It is used once the domain's DNS points here and the websit
 S_CERT_TUNNEL = ("This host's websites are reached through a tunnel, so the tunnel's provider serves the "
                  "certificate visitors see. This one is used if the host stops using the tunnel.")
 S_SERVED_NOW = "The domain points here: the website now answers on it."
-S_WP_PRIMARY = ("WordPress still sends visitors to its old address. In WordPress, open Settings, General and set "
-                "WordPress Address and Site Address to https://{domain}.")
+S_WP_ADDRESS_SET = "WordPress now uses https://{domain} as its address."
+S_WP_ADDRESS_FAILED = "WordPress's address could not be changed to https://{domain}, so the primary domain stays {old}. {why}"
 S_CERT_MISSING = ("No certificate yet. Usually ports 80 and 443 of this host do not reach it from the internet: check "
                   "the host's firewall and your cloud provider's.")
 CERT_MISSING_AFTER = 600          # seconds a served domain may wait for its first certificate before it is called failed
@@ -345,6 +345,25 @@ def set_cert(site, row, form):
                     "domain": domain_json(site, row)})
 
 
+def _primary_name(site):
+    dom = site.primary_domain
+    return dom.domain if dom is not None else ""
+
+
+def _wp_address(site, row):
+    """For a WordPress site, set its own address (home, siteurl) to `row`'s domain first: (ok, sentence), else None.
+
+    WordPress keeps the address it was installed with and sends visitors there, whatever the proxy's order. A
+    failure keeps the old primary domain (the caller changes nothing) and says why.
+    """
+    if site.app_recipe != "wordpress":
+        return None
+    ok, why = _w.host_call(_sw.wp_set_address, site.remote, site, row.domain)
+    if ok:
+        return True, i18n.Sentence(S_WP_ADDRESS_SET, domain=row.domain)
+    return False, i18n.Sentence(S_WP_ADDRESS_FAILED, domain=row.domain, old=_primary_name(site), why=i18n.tr(why))
+
+
 def register(app):
     """The domain routes."""
     @app.route("/websites/<int:site_id>/domains")
@@ -415,12 +434,15 @@ def register(app):
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
+        wp_said = _wp_address(site, row)
+        if wp_said is not None and not wp_said[0]:
+            return _w.acted(site, "website_domain_primary", False, wp_said[1],
+                            "primary domain %s kept: WordPress's address not changed" % _primary_name(site))
         for d in site.domains:
             d.is_primary = d is row
         db.session.commit()
         ok, said = _w.reconcile_proxy(site.remote) if site.enabled else (True, "")
         said = said or "Primary domain set."
-        if ok and site.app_recipe == "wordpress":
-            # WordPress keeps the address it was installed with (its home and siteurl options), not the proxy's.
-            said = i18n.Sentences(said, i18n.Sentence(S_WP_PRIMARY, domain=row.domain))
+        if ok and wp_said is not None:
+            said = i18n.Sentences(said, wp_said[1])
         return _w.acted(site, "website_domain_primary", ok, said, "primary domain %s" % row.domain)

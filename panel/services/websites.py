@@ -321,6 +321,27 @@ def php_effective_sh(account):
     return _ENV + "podman exec %s php -r %s" % (UNIT, _q(code))
 
 
+# WordPress's own address (its home and siteurl options), set to the site's primary domain after Make primary. WordPress's
+# API in the site's running container, through `podman exec` as the scheduled-task timer runs it (the site's PHP image has no
+# wp-cli; a one-off wp-cli container would need the database password on its values). The address is a validated domain
+# (validation.website_domain: letters, digits, hyphens, dots), never a secret, so it travels inside the code. WP_URL_SET
+# is printed only when both options hold it afterwards.
+WP_URL_MARK = "WP_URL_SET"
+
+
+def wp_address_sh(account, domain):
+    """Shell (as the account) setting WordPress's home and siteurl to https://<domain> in its running container."""
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", domain or ""):
+        raise ValueError("not a domain")
+    url = "https://%s" % domain
+    code = ("define('WP_USE_THEMES', false); require '%s/wp-load.php'; "
+            "update_option('home', '%s'); update_option('siteurl', '%s'); "
+            "if (get_option('home') === '%s' && get_option('siteurl') === '%s') { echo '%s', PHP_EOL; } else { exit(3); }"
+            % (DOCROOT_PHP, url, url, url, url, WP_URL_MARK))
+    _home(account)
+    return _ENV + "podman exec %s php -r %s" % (UNIT, _q(code))
+
+
 def parse_effective(out):
     """php_effective_sh's output as {key: value} (quotes of var_export removed)."""
     got = {}

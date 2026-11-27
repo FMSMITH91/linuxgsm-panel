@@ -299,6 +299,21 @@ def site_probe(remote, site):
     return _as_site(remote, site.account, _ws().probe_sh(site.account, site), timeout=60)
 
 
+WP_NOT_RUNNING = "The website is not running, so WordPress could not be told its new address. Start it, then try again."
+
+
+def wp_set_address(remote, site, domain):
+    """Set WordPress's home and siteurl to https://<domain> in the site's running container: (ok, sentence)."""
+    ok, out = _as_site(remote, site.account, _ws().wp_address_sh(site.account, domain), timeout=60)
+    if ok and _ws().WP_URL_MARK in (out or ""):
+        return True, ""
+    if out in (ONLY_LOCAL, NO_HELPER):
+        return False, out
+    if "no such container" in (out or "").lower() or "is not running" in (out or "").lower():
+        return False, WP_NOT_RUNNING
+    return False, FAILED
+
+
 def proxy_install(remote):
     """Install the pinned web proxy binary and its service on the host."""
     from panel.services import websites_catalog as _wc
