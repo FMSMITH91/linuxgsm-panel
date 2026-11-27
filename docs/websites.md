@@ -155,9 +155,10 @@ On a site's **Domains** tab, add a domain and the page shows the exact DNS recor
 domain's provider (an A record and, when the host has IPv6, an AAAA record). Each record's name is shown
 the way most providers ask for it, `@` for the domain itself or `www` for its www name, with the full
 name beside it. The host's addresses are its interfaces' public IPv4 and IPv6 addresses, read again at
-each check (never its Tailscale or temporary ones), plus the public address the Servers page found. A
-domain is checked as soon as it is added, from the add dialog too; press **Check again** once the records
-are in place. The panel looks the domain up and compares the answer with the host's address; it
+each check (never its Tailscale or temporary ones), plus the host's public address, which **Check again**
+looks up again (at most every 10 minutes, with the same lookup as the Servers page: behind NAT it asks the
+outside service only while Settings > Outside services allows it). A domain is checked as soon as it is
+added, from the add dialog too; press **Check again** once the records are in place. The panel looks the domain up and compares the answer with the host's address; it
 never connects to the domain itself. A domain that points at a private address is refused. A domain whose
 answers are all Cloudflare addresses (its record is proxied, the orange cloud) is shown as **going
 through Cloudflare** and is served too: see [Behind Cloudflare](#behind-cloudflare). Any other answer is
@@ -185,12 +186,15 @@ and when it expires (read from the host at most every 5 minutes). A test or loca
 marked as one browsers do not trust. A certificate with fewer than 10 days left gets a warning, as does
 an expired one. The proxy renews a certificate once a third of its lifetime is left, so a warning means
 renewal has been failing for days, usually because ports 80 and 443 do not reach the host. A domain of an
-online site that still has no certificate 10 minutes after it was first served says so, as failed, with
-that likely reason, instead of "pending".
+online site that has no certificate shows the web proxy's own reason as soon as the proxy logs one (for
+example the certificate authority's "Timeout during connect"), read from the proxy's own journal; still
+without one 10 minutes after it was first served, it says so, as failed, with that reason or, when the proxy
+said nothing, the usual one (ports 80 and 443 do not reach the host), instead of "pending".
 
-**Make primary** decides which name the web proxy lists first. WordPress keeps the address it was
-installed with: after Make primary on a WordPress site, the answer says to set WordPress Address and Site
-Address to the new domain in WordPress (Settings, General).
+**Make primary** decides which name the web proxy lists first. On a WordPress site it first sets
+WordPress's own address (WordPress Address and Site Address, its home and siteurl options) to the new
+domain, with WordPress's own code in the site's running container. If that cannot be done (the site is
+stopped, say), the primary domain stays as it was and the answer says why.
 
 ### Your own certificate
 
