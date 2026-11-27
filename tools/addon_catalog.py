@@ -175,11 +175,24 @@ def _loaded(text, check):
     return (None, "; ".join(bad)) if bad else (obj, "")
 
 
+def previous_problems(obj):
+    """Why `obj` cannot be the published catalog a new one is built on; [] when it can.
+
+    Only its frame is checked (a schema, its add-ons, a whole seq, issue and expiry times): its signature was
+    verified before this runs, and it was valid under the rules of the commit that published it. Holding it to
+    today's rules would refuse every catalog published before a field became required (a new preset, say), and
+    nothing could ever be published again.
+    """
+    if not isinstance(obj, dict) or not {"schema", "addons", "seq", "issued", "expires"} <= set(obj):
+        return ["a published catalog holds at least schema, addons, seq, issued and expires"]
+    return _published_extra(obj, [])
+
+
 def _previous(latest, now):
     """(the published catalog or None when there is none, "" or why it cannot be built on)."""
     if not latest.strip():
         return None, ""
-    prev, why = _loaded(latest, published_problems)
+    prev, why = _loaded(latest, previous_problems)
     if why:
         return None, "the published catalog/latest.json is not a catalog: " + why
     if now < _parse_time(prev["issued"]):
