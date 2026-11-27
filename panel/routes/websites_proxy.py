@@ -395,6 +395,21 @@ def _note_version(row, status):
         db.session.commit()
 
 
+def _note_tunnel(row, status):
+    """Store what the connector's log says of its token: Cloudflare's refusal as last_error, cleared once connected.
+
+    Only the tunnel's own sentences are cleared: another failure (the proxy refused its settings) stays.
+    """
+    if row.exposure_mode != "tunnel":
+        return
+    said = {"refused": i18n.tr(_sw.TUNNEL_REFUSED)[:200], "connected": ""}.get(status.get("tunnel_link"))
+    ours = {i18n.tr(_sw.TUNNEL_REFUSED)[:200], i18n.tr(_sw.TUNNEL_FAILED)[:200]}
+    if said is None or row.last_error == said or (not said and (row.last_error or "") not in ours):
+        return
+    row.last_error = said
+    db.session.commit()
+
+
 def register(app):
     """The proxy routes."""
     @app.route("/websites/proxy/status")
@@ -410,6 +425,7 @@ def register(app):
             from panel.routes.websites_domains import apply_certs
             apply_certs(remote, status)
             _note_version(row, status)
+            _note_tunnel(row, status)
         online = Website.query.filter_by(remote_id=remote.id, enabled=True).count()
         return jsonify(dict(proxy_json(row), online_sites=online, status_ok=bool(ok), status=status,
                             message="" if ok else i18n.tr(said)))

@@ -68,6 +68,8 @@ OK_PROXY_STOPPED = "The web proxy was stopped: nothing listens on ports 80 and 4
 FAILED = "That did not work on the host. Try again; if it keeps failing, look at the site's log."
 OK_PORTS = "Ports 80 and 443 are set for the web proxy's exposure mode."
 OK_TUNNEL = "The tunnel connector was updated."
+TUNNEL_REFUSED = ("Cloudflare refused the tunnel's token, so no visitor gets through. Copy this tunnel's token from "
+                  "Cloudflare's dashboard, paste it again, then apply.")
 TUNNEL_FAILED = ("The tunnel connector did not start on the host. Check its token, and that the host can reach the "
                  "internet, then apply again.")
 OK_GUARD = "The egress guard is on: websites cannot reach this host's other addresses."
@@ -472,13 +474,38 @@ def proxy_status(remote, proxy=None):
 
 
 def _tunnel_state(remote):
-    """`tunnel=` and `tunnel_restarts=` lines of the connector's user unit, read as the tunnel's account."""
+    """`tunnel=`, `tunnel_restarts=` and `tunnel_link=` lines of the connector's user unit, read as the tunnel's account.
+
+    tunnel_link is what cloudflared last said of its connection to Cloudflare in its log (_tunnel_link_sh):
+    connected, refused, or empty when its log says neither or cannot be read.
+    """
     unit = _ws().unit_service(_ws().TUNNEL_UNIT)
     sh = (_ws()._ENV + "printf 'tunnel=%%s\\ntunnel_restarts=%%s\\n' \"$(systemctl --user show -p ActiveState --value %s)\" "
-          "\"$(systemctl --user show -p NRestarts --value %s)\"" % (unit, unit))
+          "\"$(systemctl --user show -p NRestarts --value %s)\"; " % (unit, unit) + _tunnel_link_sh(unit))
     ok, out = _as_site(remote, _ws().TUNNEL_ACCOUNT, sh, timeout=30)
-    lines = [ln for ln in (out or "").splitlines() if ln.startswith(("tunnel=", "tunnel_restarts="))]
+    lines = [ln for ln in (out or "").splitlines() if ln.startswith(("tunnel=", "tunnel_restarts=", "tunnel_link="))]
     return "\n".join(lines) + "\n" if ok and lines else "tunnel=unknown\n"
+
+
+# What cloudflared logs (its connection/observer.go and supervisor/tunnel.go, supervisor.go, subcommands.go): a
+# connection to Cloudflare's edge registered, or the edge refusing the tunnel (a token of no tunnel, a wrong secret),
+# or the token refused before any connection. With a well-formed token Cloudflare refuses, cloudflared keeps running
+# and retries for about two minutes, so the unit reads active with no restart all that time: only its log tells.
+TUNNEL_START_LINE = "Starting tunnel"
+TUNNEL_UP_LINE = "Registered tunnel connection"
+TUNNEL_REFUSED_LINES = ("Register tunnel error from server side", "initial tunnel connection failed",
+                        "Unauthorized", "tunnel token is not valid", "Tunnel token is not valid")
+
+
+def _grep_lines(lines):
+    return "grep -F %s" % " ".join("-e %s" % _ws()._q(x) for x in lines)
+
+
+def _tunnel_link_sh(unit):
+    """Shell printing `tunnel_link=connected|refused|` from the newest of those lines in the connector's last 400."""
+    return ("l=$(journalctl --user -q -u %s -n 400 -o cat --no-pager 2>/dev/null | %s | tail -n 1); "
+            "case \"$l\" in *%s*) k=connected;; '') k=;; *) k=refused;; esac; printf 'tunnel_link=%%s\\n' \"$k\""
+            % (unit, _grep_lines((TUNNEL_UP_LINE,) + TUNNEL_REFUSED_LINES), _ws()._q(TUNNEL_UP_LINE)))
 
 
 def _cert_line(certs, line):
@@ -498,7 +525,7 @@ def parse_proxy_status(out):
     helper printed every issuer's), the later not_after wins, never simply the last line.
     """
     got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}, "tunnel": "",
-           "tunnel_restarts": 0, "cert_errors": {}}
+           "tunnel_restarts": 0, "tunnel_link": "", "cert_errors": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             _cert_line(got["certs"], line)
@@ -508,6 +535,8 @@ def parse_proxy_status(out):
             key, _sep, value = line.partition("=")
             if key in ("installed", "version", "active", "cache", "tunnel"):
                 got[key] = (value == "yes") if key in ("installed", "cache") else value[:40]
+            elif key == "tunnel_link" and value in ("connected", "refused"):
+                got[key] = value
             elif key == "tunnel_restarts" and value.isdecimal():
                 got[key] = int(value)
     return got
@@ -618,32 +647,48 @@ def tunnel_apply(remote, proxy):
     # The start limit is cleared first (as start_sh does for a site): a connector that failed five times in its
     # window (a bad token, the network down) was refused by systemd until the window passed.
     sh = (_ws()._ENV + _ws().write_files_sh(True) + _ws().image_build_sh(b)
-          + "systemctl --user daemon-reload && { systemctl --user reset-failed %s 2>/dev/null; "
+          + "systemctl --user daemon-reload && { t0=$(date +%%s); systemctl --user reset-failed %s 2>/dev/null; "
             "systemctl --user restart %s; } && %s" % (unit, unit, _tunnel_settle_sh(unit)))
     ok, out = _as_site(remote, acct, sh, timeout=1800, stdin_text=_ws().bundle(files))
     return (True, OK_TUNNEL) if ok else (False, _tunnel_failure(out))
 
 
-# How long the connector must stay up after its restart before an apply says it was updated. The restart returns
-# once Podman has started the container; cloudflared refuses a bad token a moment later (about 0.4 s on the test
-# host) and the unit waits RestartSec=10 to try again, so a failure shows as a state other than active well
-# inside this window, before any automatic restart.
-TUNNEL_SETTLE_S = 5
+# How long an apply watches the connector after its restart, once a second. It is updated as soon as cloudflared
+# logs a registered connection (about a second with a good token). It failed when the unit stops being active or
+# systemd restarts it (a malformed token: cloudflared exits at once), or when the window ends with no connection
+# registered: with a well-formed token Cloudflare refuses, cloudflared logs the refusal at once but keeps running
+# and retrying for about two minutes, so the unit's state alone said "updated". Where the connector's log cannot be
+# read (no journal for the account), the unit staying active for the whole window is all there is to go on.
+TUNNEL_SETTLE_S = 20
 
 
 def _tunnel_settle_sh(unit):
-    """Shell that checks the connector once a second for TUNNEL_SETTLE_S seconds after the apply's restart.
+    """Shell that watches the connector for up to TUNNEL_SETTLE_S seconds after the apply's restart (at $t0).
 
-    It fails, printing the unit's state, once the unit is not active or systemd has restarted it since.
+    It succeeds once the connector's log since $t0 has a registered connection, or, with no cloudflared line to
+    read (no journal for the account), when the unit stayed active with no restart. It fails, printing
+    tunnel=<state> restarts=<n>, once the unit is not active or was restarted; tunnel=refused when the window ends
+    after cloudflared logged a refusal; tunnel=unconnected when it logged neither.
     """
     show = "systemctl --user show -p %%s --value %s" % unit
-    return ("n0=$(%s); ok=1; i=0; while [ $i -lt %d ]; do sleep 1; i=$((i+1)); st=$(%s); n=$(%s); "
+    log = "journalctl --user -q -u %s --since \"@$t0\" -o cat --no-pager 2>/dev/null" % unit
+    return ("n0=$(%s); ok=1; up=0; log=; i=0; while [ $i -lt %d ]; do sleep 1; i=$((i+1)); st=$(%s); n=$(%s); "
             "[ \"$st\" = active ] && [ \"$n\" = \"$n0\" ] || { ok=0; echo \"tunnel=$st restarts=$n\"; break; }; "
-            "done; [ $ok = 1 ]" % (show % "NRestarts", TUNNEL_SETTLE_S, show % "ActiveState", show % "NRestarts"))
+            "log=$(%s); case \"$log\" in *%s*) up=1; break;; esac; done; "
+            "case \"$log\" in *%s*) ;; *) log=;; esac; "
+            "if [ $ok = 1 ] && [ $up = 0 ] && [ -n \"$log\" ]; then ok=0; "
+            "if printf '%%s\\n' \"$log\" | %s -q; then echo tunnel=refused; else echo tunnel=unconnected; fi; fi; "
+            "[ $ok = 1 ]" % (show % "NRestarts", TUNNEL_SETTLE_S, show % "ActiveState", show % "NRestarts", log,
+                             _ws()._q(TUNNEL_UP_LINE), _ws()._q(TUNNEL_START_LINE), _grep_lines(TUNNEL_REFUSED_LINES)))
 
 
 def _tunnel_failure(out):
-    """The sentence for a failed tunnel apply: a mark's own (a failed build), else TUNNEL_FAILED (never the site's log)."""
+    """The sentence for a failed tunnel apply: Cloudflare's refusal, a mark's own (a failed build), else TUNNEL_FAILED.
+
+    Never the connector's log itself: only which of its known lines it held.
+    """
+    if "tunnel=refused" in (out or "").splitlines():
+        return TUNNEL_REFUSED
     said = _mark(out)
     return TUNNEL_FAILED if said == FAILED else said
 

@@ -118,9 +118,12 @@
     WS.get('/websites/proxy/status?host_id=' + encodeURIComponent(st.host)).then(function (d) {
       if (!d || !d.status_ok) { WS.done(d, 'wp-status'); return; }
       var s = d.status || {}, parts = [WS.TF('Caddy {version}: {state}.', {version: s.version || '?', state: WS.T(WS.pick(ACTIVE, s.active, 'state unknown'))})];
-      if (d.exposure_mode === 'tunnel') parts.push(WS.TF('Tunnel connector: {state}.', {state: WS.T(WS.pick(ACTIVE, s.tunnel, 'state unknown'))}));
+      // A tunnel whose token Cloudflare refuses stays active (cloudflared retries for minutes): its log says so.
+      var refused = d.exposure_mode === 'tunnel' && s.tunnel_link === 'refused';
+      if (refused) parts.push(WS.T("Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again."));
+      else if (d.exposure_mode === 'tunnel') parts.push(WS.TF('Tunnel connector: {state}.', {state: WS.T(WS.pick(ACTIVE, s.tunnel, 'state unknown'))}));
       parts.push(WS.TF('{n} websites online.', {n: d.online_sites || 0}));
-      WS.say('wp-status', parts.join(' '), 'ok');
+      WS.say('wp-status', parts.join(' '), refused ? 'err' : 'ok');
     });
   };
   // Apply the host's configuration again (after a failure the card shows, or a change made on the host).

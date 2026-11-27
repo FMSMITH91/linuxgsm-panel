@@ -150,10 +150,16 @@ intermediate images and removes its bases once it is done.
   manager, so its libraries cannot be updated in place. cloudflared is a single static program that loads none
   of them, so the panel copies it onto an empty image with only the certificate authorities (from Debian's
   `ca-certificates`, upgraded in a pinned `debian:trixie-slim` stage, `sites.tunnel.cloudflare.certs`) and the
-  account files. It runs as user 65532, as upstream's does, with no shell. After starting it, an apply checks
-  its unit once a second for 5 seconds: if it is no longer active, or systemd has restarted it, the apply
-  fails with "The tunnel connector did not start on the host" and the proxy's card shows that sentence.
-  `/websites/proxy/status` reports the unit's state as `tunnel` and its restart count as `tunnel_restarts`.
+  account files. It runs as user 65532, as upstream's does, with no shell. After starting it, an apply watches
+  it once a second for up to 20 seconds and reads cloudflared's log (the tunnel account's journal). It is
+  updated once cloudflared logs a registered connection. If the unit stops being active or systemd restarts it,
+  or the window ends with no connection, the apply fails with "The tunnel connector did not start on the host";
+  if cloudflared logged that Cloudflare refused the tunnel (a well-formed token of no tunnel keeps cloudflared
+  running and retrying for minutes, so the unit stays active), it says "Cloudflare refused the tunnel's token".
+  Where the log cannot be read, the unit staying active for the window is what counts. The proxy's card shows
+  that sentence. `/websites/proxy/status` reports the unit's state as `tunnel`, its restart count as
+  `tunnel_restarts`, and what the log last said as `tunnel_link` (`connected` or `refused`); a refusal is stored
+  as the card's error, cleared once a connection is registered.
 - **PHP** (`php/`): see the next section.
 
 Each build reaches the distribution's archive (and, for Node.js, npm's registry) through the host's network,

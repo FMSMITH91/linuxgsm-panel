@@ -1,0 +1,4 @@
+{
+  "Cloudflare refused the tunnel's token, so no visitor gets through. Copy this tunnel's token from Cloudflare's dashboard, paste it again, then apply.": "Cloudflare rechazó el token del túnel, así que ningún visitante llega. Copia el token de este túnel desde el panel de Cloudflare, pégalo de nuevo y aplica.",
+  "Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again.": "Conector del túnel: Cloudflare rechazó su token, así que ningún visitante llega. Vuelve a pegar el token del túnel."
+}
