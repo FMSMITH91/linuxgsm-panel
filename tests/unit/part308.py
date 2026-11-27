@@ -39,6 +39,7 @@ from unit.part12 import (P9_ADMIN, P9_HOST, _P9_TRIPPED, _p9, _p9_arm, _p9_audit
                          _p9_delete_server, _p9_new_server, _p9_patch, _p9_patch_sm, _p9_restore_all)
 from unit.part257 import _HARNESS257
 from panel.core import i18n as _i18n308, outside_services as _os308
+from panel.services import notifications as _notif308
 from panel.routes import addons as _ra308, addons_geoip as _gr308
 from panel.services import addons as _ad308, geoip as _geo308, monitoring as _mon308
 
@@ -64,18 +65,18 @@ def _file_url308(month):
 
 
 def _net308(addrs, built=None):
-    """Stand-ins for the resolver (answers `addrs`) and the connect (recorded, then refused), on geoip's names only.
+    """Stand-ins for the resolver (answers `addrs`) and the connect (recorded, then refused): geoip's names, and the
+    panel's checked connect (notifications._connect_infos) it hands the answers to.
 
-    The opener geoip builds is given an empty ProxyHandler (an https_proxy in the environment would otherwise
-    carry the connection), and is appended to `built`.
+    The opener geoip builds is appended to `built`, with the handlers geoip passed for it.
     """
     seen = []
     real = _urlreq308.build_opener
 
     def build(*handlers):
-        opener = real(*(handlers + (_urlreq308.ProxyHandler({}),)))
+        opener = real(*handlers)
         if built is not None:
-            built.append(opener)
+            built.append((opener, handlers))
         return opener
 
     def resolve(host, port, *a, **k):
@@ -83,10 +84,11 @@ def _net308(addrs, built=None):
         return [(_sock308.AF_INET6 if ":" in x else _sock308.AF_INET, _sock308.SOCK_STREAM, 6, "", (x, port))
                 for x in addrs]
 
-    def connect(address, *a, **k):
-        seen.append(("connect", address[0]))
+    def connect(infos, *a, **k):
+        seen.append(("connect", infos[0][4][0]))
         raise OSError("part308: no network")
-    _p9_patch(_geo308, "socket", _Over(_sock308, getaddrinfo=resolve, create_connection=connect))
+    _p9_patch(_geo308, "socket", _Over(_sock308, getaddrinfo=resolve))
+    _p9_patch(_notif308, "_connect_infos", connect)
     _p9_patch(_geo308, "urllib", _Over(_geo308.urllib, request=_Over(_urlreq308, build_opener=build)))
     return seen
 
@@ -115,7 +117,7 @@ def _redirects308():
         req = _urlreq308.Request(_geo308.PAGE)
         req.timeout = 5                       # as the opener's open() sets it
         try:
-            built[-1].error("https", req, _io308.BytesIO(b""), 302, "Found", hdrs)
+            built[-1][0].error("https", req, _io308.BytesIO(b""), 302, "Found", hdrs)
             out[where] = "followed"
         except _urlerr308.HTTPError as e:
             out[where] = "refused %d" % e.code
@@ -150,7 +152,18 @@ def _latest308(page, folder, before=None):
         _p9_restore_all()
 
 
+def _proxy308():
+    """The proxies of the ProxyHandlers geoip passes to the opener it builds."""
+    built = []
+    _net308(["1.0.0.1"], built)
+    _geo308._get(_geo308.PAGE, 1000)
+    _p9_restore_all()
+    return [h.proxies for h in (built[-1][1] if built else ()) if isinstance(h, _urlreq308.ProxyHandler)]
+
+
 def _fetch_checks308():
+    eq("DB-IP fetch: the opener is given an empty ProxyHandler (no proxy from the environment), so the address "
+       "checked is the address connected to", _proxy308(), [{}])
     eq("DB-IP fetch (_get through urllib's opener): it connects only to the address db-ip.com resolved to, and only "
        "when every address is public; loopback, private, link-local or a mix is never connected to "
        "(SSRF Prevention Cheat Sheet, Case 1: DNS rebinding)",

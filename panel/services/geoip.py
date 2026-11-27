@@ -25,7 +25,7 @@ HOW IT IS FETCHED
     to any host (neither db-ip.com URL redirects, checked 2026-11-26); and since a host-name allowlist
     alone does not stop DNS rebinding, the connection goes only to an address the name resolved to, and
     only when every address it resolved to is a public one, with the name kept for TLS's SNI and
-    certificate check (_PublicHTTPSConnection). Through a proxy the operator set, the proxy connects.
+    certificate check (_connect_checked, the checks web push uses). No proxy is used.
     File Upload Cheat Sheet ("Upload and Download Limits", "File Signature Validation", "Filename
     Safety", "Filesystem Permissions"): caps before and after unpacking, the MMDB marker and the
     published SHA1, a file name the panel picks, mode 0600. Input Validation Cheat Sheet (syntactic and
@@ -35,7 +35,6 @@ import gzip
 import hashlib
 import http.client
 import io
-import ipaddress
 import json
 import os
 import re
@@ -101,41 +100,26 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def public_address(host, port):
-    """The address to connect to for `host`: the first it resolves to, when every one is public. Else OSError.
+def _connect_checked(address, timeout=None, source_address=None):
+    """Resolve once, refuse when ANY answer is not a public unicast address, then connect to those answers.
 
-    One that is not (loopback, private, link-local, reserved, the panel's own networks) means the name
-    does not lead to db-ip.com as published (a rebinding, or a hostile resolver), so nothing is asked.
+    The panel's reviewed checked connect, as web push uses it (webpush.address_refused, then
+    notifications._connect_infos over the checked answers): a name that leads anywhere else (a
+    rebinding, a hostile resolver) is never connected to.
     """
-    found = []
-    for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            raise OSError("an address that is not an IP address") from None
-        if not ip.is_global or ip.is_multicast:
-            raise OSError("an address that is not a public one")
-        found.append(str(ip))
-    if not found:
-        raise OSError("no address")
-    return found[0]
+    from panel.services import notifications as _notif, webpush as _wp   # read at call time
+    infos = socket.getaddrinfo(address[0], address[1], 0, socket.SOCK_STREAM)
+    if not infos or any(_wp.address_refused(info[4][0]) for info in infos):
+        raise OSError("refused address")
+    return _notif._connect_infos(infos, timeout, source_address)
 
 
 class _PublicHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS to the address public_address checked; the host name is kept for SNI and the certificate."""
+    """HTTPS whose socket _connect_checked opens; the certificate and SNI still name the host."""
 
-    def connect(self):
-        """Connect to the checked address (through the operator's proxy, as http.client does)."""
-        if self._tunnel_host:
-            super().connect()
-            return
-        sock = socket.create_connection((public_address(self.host, self.port), self.port), self.timeout,
-                                        self.source_address)
-        try:
-            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-        except Exception:
-            sock.close()
-            raise
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_checked
 
 
 class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
@@ -150,7 +134,9 @@ def _get(url, cap):
     """GET `url` from HOSTS: (body bytes, None) or (None, why). Never raises."""
     if not _allowed(url):
         return None, "not an allowed URL"
-    opener = urllib.request.build_opener(_NoRedirect, _PublicHTTPSHandler)
+    # No proxy (an empty ProxyHandler stands in for the one urllib would build from the environment), so
+    # the address checked is the address connected to.
+    opener = urllib.request.build_opener(_NoRedirect, _PublicHTTPSHandler, urllib.request.ProxyHandler({}))
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "*/*"})
     try:
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected

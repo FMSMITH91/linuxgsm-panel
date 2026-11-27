@@ -104,8 +104,9 @@ paths-ignore:
 #                                      and tunnel._ssh_cli_argv (ssh -W, Tailscale hosts). Not HTTP and
 #                                      sending nothing: hosts._tcp_reachable, the SSH-address reach test.
 # The three HTTP requests in notifications and the ones in game_icons, modrinth, steam_workshop,
-# breached_passwords and webpush refuse every redirect; geoip follows one only to db-ip.com's two hosts,
-# addons_bluemap only to piston-meta.mojang.com.
+# breached_passwords, webpush and geoip refuse every redirect (geoip, like webpush, connects only when every
+# address db-ip.com's name resolves to is public: its _connect_checked); addons_bluemap follows one only to
+# piston-meta.mojang.com.
 # The three others use urlopen, which follows one, but only from GitHub's own fixed hosts. Of the fourteen, only webpush takes a host and path from a
 # request (the add-on page proxy above takes a path, never a host), and only one parse_endpoint accepts as a known push service. The ntfy server is the one host
 # an admin chooses: it is stored in config.json and read back later, a flow neither SSRF query traces,
