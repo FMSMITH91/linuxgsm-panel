@@ -100,7 +100,10 @@ through it.
 
 ### Page cache
 
-The page cache needs Caddy built with the cache module. The panel builds it on each host that has a web
+The page cache needs Caddy built with the cache module. While it is on, Caddy's admin interface listens on a
+unix socket in the proxy's runtime folder (owner-only; never a network port), so **Purge cache** empties one
+site's pages through the cache module's own interface without restarting the proxy; with the page cache off
+the admin interface stays off. The panel builds it on each host that has a web
 proxy when a superadmin turns on **Page cache in the web proxy** in the Websites security settings (and again
 after the plain proxy is installed while it is on). The build runs in the background and takes a few minutes;
 a failure is shown on the security settings card, saying which part failed (the build, the check or the

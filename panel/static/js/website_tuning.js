@@ -115,6 +115,9 @@
     Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id]; });
     var nums = {'wperf-op-mem': p.opcache_memory_mb, 'wperf-op-reval': p.opcache_revalidate_s, 'wperf-ttl': p.page_cache_ttl};
     Object.keys(nums).forEach(function (id) { var e = WS.el(id); if (e && nums[id] != null) e.value = String(nums[id]); });
+    adminOnly(WS.el('wperf-obj'), 'wperf-obj-who');
+    st.perf = p;
+    window.wsPageCacheCheck();
     var info = WS.el('wperf-obj-info');
     if (info) {
       WS.clear(info);
@@ -135,6 +138,20 @@
     WS.post(WS.R.act(ID, 'performance'), body).then(function (d) {
       if (WS.done(d, 'wperf-msg')) { st.perfDone = false; WS.reload(); }
     });
+  };
+  // Keep pages for and Purge cache only do something while the page cache is on (saved) and the host's web proxy
+  // has it: otherwise they stay in view, disabled, with the reason and where to change it.
+  window.wsPageCacheCheck = function () {
+    var p = st.perf || {}, box = WS.el('wperf-page');
+    var on = !!(box && box.checked);
+    var why = !on ? WS.T('Turn the page cache on first.') : (p.page_cache_ready ? '' : (p.page_cache_why || ''));
+    var ttl = WS.el('wperf-ttl'), purge = WS.el('wperf-purge');
+    if (ttl) ttl.disabled = !!why;
+    // Purge empties what the saved setting stores: never while the switch is only flipped and not yet saved.
+    if (purge) purge.disabled = !!why || !p.page_cache;
+    var line = WS.el('wperf-page-why');
+    if (line) { line.textContent = why || (!p.page_cache ? WS.T('Save first: the page cache starts with the next visits.') : ''); WS.show(line, !!line.textContent); }
+    WS.show('wperf-page-link', !!why && on && WS.can.sup);
   };
   window.wsPurge = function () {
     WS.say('wperf-msg', WS.T('Purging…'));

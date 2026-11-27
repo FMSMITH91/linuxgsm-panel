@@ -185,7 +185,10 @@ Saving restarts the site's PHP gracefully.
   starts or removes the cache beside the running site; the site itself is not restarted.
 - **Page cache**: the web proxy keeps whole pages for visitors who are not signed in, for the time you
   set. Sign-ins, form posts, any answer that sets a cookie, and admin pages (`/wp-admin`, `/adm`,
-  `/admin`) always skip it. **Purge cache** empties it. Off by default.
+  `/admin`) always skip it. **Purge cache** empties this site's cached pages only, through the page cache's own
+  interface: nothing restarts and other sites keep theirs. It can be pressed once a minute. **Keep pages for**
+  and **Purge cache** stay disabled, with the reason, while the page cache is off or the host's web proxy was
+  not built with it. Off by default.
 - **Static file caching**: browsers keep images, styles and scripts longer, and pages are sent
   compressed. On by default.
 

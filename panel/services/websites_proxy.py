@@ -6,7 +6,10 @@ helper verb website-proxy-apply validates the text with the proxy's own `caddy v
 user before it replaces the running file, so a bad site rule never takes down the other sites.
 
 WHAT EVERY CONFIGURATION HOLDS
-    `admin off` and `persist_config off` (no admin API, nothing written back); HTTP/1.1 and HTTP/2 only
+    `persist_config off` (nothing written back) and `admin off` (no admin API), except while the page cache is on:
+    then the admin API listens on a unix socket in the proxy's runtime folder (ADMIN_SOCKET, mode 0200: the proxy's
+    own user, and root), never on a TCP port, so the root helper can empty one site's cache through the cache's
+    API without restarting the proxy (website-proxy-apply purge); a site's account cannot reach it. HTTP/1.1 and HTTP/2 only
     (no HTTP/3: no UDP port to open); server timeouts against slow clients; a catch-all that aborts any
     request for a name the configuration does not hold, the bare IP included, so the panel's own name
     and port are never reachable through the proxy (an `http://` catch-all and, outside tunnel mode, an
@@ -52,6 +55,7 @@ STORAGE = "/var/lib/lgsm-web-proxy"
 CERT_DIR = "/etc/lgsm-web-proxy/certs"
 ORIGIN_PULL_CA = "/etc/lgsm-web-proxy/origin-pull-ca.pem"
 GATE_HEADER = "X-Panel-Proxy-Token"
+ADMIN_SOCKET = "/run/lgsm-web-proxy/admin.sock"
 # Tunnel mode: the proxy listens on this loopback port only, plain HTTP; the connector reaches it.
 TUNNEL_PORT = 19080
 LE_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -218,7 +222,8 @@ def _domains(site, mode="public"):
 
 
 def _global(mode, opts, proxy, trusted):
-    lines = ["{", "\tadmin off", "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
+    admin = "\tadmin unix/%s|0200" % ADMIN_SOCKET if opts["cache_build"] else "\tadmin off"
+    lines = ["{", admin, "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
     if mode == "tunnel":
         lines += ["\tauto_https off", "\tdefault_bind 127.0.0.1", "\thttp_port %d" % TUNNEL_PORT]
     else:
@@ -230,7 +235,7 @@ def _global(mode, opts, proxy, trusted):
             lines.append("\tacme_ca %s" % LE_STAGING)
         lines.append("\tskip_install_trust")
     if opts["cache_build"]:
-        lines += ["\torder cache before rewrite", "\tcache {", "\t\tttl 300s", "\t}"]
+        lines += ["\torder cache before rewrite", "\tcache {", "\t\tttl 300s", "\t\tapi {", "\t\t\tsouin", "\t\t}", "\t}"]
     lines += ["\tservers {", "\t\tprotocols h1 h2",
               "\t\ttimeouts {", "\t\t\tread_header 10s", "\t\t\tread_body 60s", "\t\t\twrite 120s", "\t\t\tidle 2m",
               "\t\t}"]

@@ -74,7 +74,9 @@ OK_GUARD = "The egress guard is on: websites cannot reach this host's other addr
 OK_QUOTA = "The website's disk quota is set."
 NO_QUOTA = "This host's file system has no user quotas, so the panel measures the website's disk use instead."
 OK_PHP = "The website's PHP settings were written and it was restarted."
-OK_PURGED = "The page cache was emptied (the web proxy restarted)."
+OK_PURGED = "This website's page cache was emptied. Nothing was restarted; other websites kept theirs."
+PURGE_FAILED = ("The page cache could not be emptied: the web proxy's page cache did not answer. A superadmin can apply "
+                "the web proxy again from the Websites page.")
 OK_BUILT = "The app was built."
 OK_BUILT_STARTED = "The app was built and started."
 BUILD_FAILED = ("The app's install and build command failed, so the running app was left as it was. Check the "
@@ -625,9 +627,21 @@ def php_effective(remote, site):
 
 
 def cache_purge(remote, site):
-    """Empty the site's page cache at the proxy: a restart (its admin API is off, so nothing else can)."""
-    ok, out = _helper(remote, "website-proxy-apply", ["restart"], timeout=120, doc="")
-    return (True, OK_PURGED) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
+    """Empty this site's page cache at the proxy, without a restart: the cache's own API, the site's domains only.
+
+    The helper reaches the API on the proxy's admin socket (root only; see website-proxy-apply purge), so every
+    other site keeps its cache and its visitors' connections.
+    """
+    domains = sorted({d.domain for d in site.domains or [] if re.fullmatch(r"[a-z0-9.-]{1,253}", d.domain or "")})
+    if not domains:
+        return True, OK_PURGED
+    ok, out = _helper(remote, "website-proxy-apply", ["purge"], timeout=60, doc=json.dumps({"purge": domains}))
+    if ok:
+        return True, OK_PURGED
+    if out in (ONLY_LOCAL, NO_HELPER):
+        return False, out
+    _core._log.warning("page cache purge refused: %s", " | ".join(out.splitlines())[-300:])
+    return False, PURGE_FAILED
 
 
 def app_build(remote, site):

@@ -28,15 +28,18 @@
     {% endif %}
     <div class="ws-opt">
       <div class="form-check form-switch mb-1">
-        <input class="form-check-input" type="checkbox" role="switch" id="wperf-page">
+        <input class="form-check-input" type="checkbox" role="switch" id="wperf-page" data-action="wsPageCacheCheck" data-on="change">
         <label class="form-check-label small fw-semibold" for="wperf-page">Page cache</label>
       </div>
       <div class="form-text mt-0 mb-1">The web proxy keeps whole pages for visitors who are not signed in. Sign-ins, form posts and admin pages always skip it.</div>
       <div class="d-flex flex-wrap gap-2 align-items-end">
         <div><label for="wperf-ttl" class="form-label small mb-1">Keep pages for (s)</label>
           <input type="number" id="wperf-ttl" class="form-control form-control-sm fx-12" min="10" max="86400" step="1"></div>
-        <button type="button" class="btn btn-sm btn-outline-warning" data-action="wsPurge"><i class="bi bi-trash3"></i> Purge cache</button>
+        <button type="button" id="wperf-purge" class="btn btn-sm btn-outline-warning" data-action="wsPurge"><i class="bi bi-trash3"></i> Purge cache</button>
       </div>
+      <div class="form-text">Purge empties this site's cached pages only; nothing restarts. Once a minute at most.</div>
+      <div id="wperf-page-why" class="small text-warning" hidden></div>
+      <a id="wperf-page-link" class="small" href="{{ url_for('websites_page') }}#wp-opts-box" hidden>Open the web proxy's security settings</a>
     </div>
     <div class="ws-opt">
       <div class="form-check form-switch mb-1">

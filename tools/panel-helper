@@ -2671,6 +2671,8 @@ SystemCallFilter=~@privileged @resources
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 UMask=0077
 ReadWritePaths=/var/lib/lgsm-web-proxy
+RuntimeDirectory=lgsm-web-proxy
+RuntimeDirectoryMode=0700
 LogNamespace=lgsm-web-proxy
 
 [Install]
@@ -3197,10 +3199,8 @@ def do_website_proxy_apply(args, content):
     only when the unit is really running afterwards (_web_running); otherwise the previous file is put
     back and the journal's last error line is printed in plain words (applied=no, error=).
     """
-    if args[0] == "restart":       # the page cache's purge: the running configuration, restarted
-        rc, _out = _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
-        sys.stdout.write("restarted=%s\n" % ("yes" if rc == 0 else "no"))
-        return rc
+    if args[0] == "purge":         # one site's page cache emptied through the cache's API; nothing restarts
+        return _web_purge(content)
     try:
         text, files = _web_apply_doc(content)
     except ValueError as e:
@@ -3221,6 +3221,53 @@ def do_website_proxy_apply(args, content):
         return 1
     sys.stdout.write("valid=yes\nbind=%s\n" % " ".join(binds))
     return _web_start(old, pw)
+
+
+# The page cache's purge (website-proxy-apply purge). The cache module's API is served on the proxy's admin
+# endpoint only, which the configuration puts on this unix socket, mode 0200 for the proxy's own user, only while
+# the page cache is on (the proxy's RuntimeDirectory; `admin off` otherwise). root reaches it here; a site's account
+# cannot. Each key the cache stores is "<method>-<scheme>-<host>-<path>...", so one site's pages are the keys
+# naming one of its domains as the host: one PURGE of the regular expression `.*-<domain>-/.*` per domain, the
+# domain's dots matched literally ([.]). stdin: {"purge": [domain, ...]}, each a lowercase DNS name.
+WEB_PROXY_ADMIN = "/run/lgsm-web-proxy/admin.sock"
+_WEB_PURGE_DOMAIN_RE = r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?"
+
+
+def _web_purge_doc(content):
+    """The domains of a purge's stdin document, or raise ValueError."""
+    doc = json.loads(content or "{}")
+    domains = doc.get("purge") if isinstance(doc, dict) and set(doc) == {"purge"} else None
+    if not isinstance(domains, list) or not 1 <= len(domains) <= 100 or not all(
+            isinstance(d, str) and re.fullmatch(_WEB_PURGE_DOMAIN_RE, d) for d in domains):
+        raise ValueError("not a purge document")
+    return domains
+
+
+def _web_admin_purge(pattern):
+    """PURGE one key pattern at the cache's API over the admin socket: True when it answered 2xx."""
+    req = ("PURGE /souin-api/souin/%s HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+           % pattern).encode("ascii")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(10)
+        conn.connect(WEB_PROXY_ADMIN)
+        conn.sendall(req)
+        head = conn.recv(64)
+    return re.match(rb"HTTP/1\.[01] 2[0-9][0-9] ", head) is not None
+
+
+def _web_purge(content):
+    try:
+        domains = _web_purge_doc(content)
+    except ValueError as e:
+        sys.stderr.write("refused: %s\n" % e)
+        return 2
+    try:
+        ok = all(_web_admin_purge(".*-%s-/.*" % d.replace(".", "[.]")) for d in domains)
+    except OSError as e:
+        sys.stderr.write("the page cache's API did not answer: %s\n" % e.strerror)
+        ok = False
+    sys.stdout.write("purged=%s\n" % ("yes" if ok else "no"))
+    return 0 if ok else 1
 
 
 def _web_listen_ok(text, pw):
@@ -4101,7 +4148,7 @@ VERBS = {
     "website-account-create": ([v_website_account], lambda a: [], None),
     "website-account-remove": ([v_website_account], lambda a: [], None),
     "website-proxy-install": ([v_caddy_version, v_choice("amd64", "arm64"), v_sha256], lambda a: [], None),
-    "website-proxy-apply": ([v_choice("start", "reload", "restart")], lambda a: [], None),
+    "website-proxy-apply": ([v_choice("start", "reload", "purge")], lambda a: [], None),
     "website-proxy-stop": ([], lambda a: [], None),
     "website-proxy-rebind": ([v_choice("start", "check")], lambda a: [], None),
     "website-proxy-status": ([], lambda a: [], None),
