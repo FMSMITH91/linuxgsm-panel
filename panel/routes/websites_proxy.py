@@ -155,10 +155,17 @@ def _detail(changes):
 _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 
 
+# The Security settings card's labels, so a refusal names the field the way the card does.
+OPTION_LABELS = {"hsts_max_age": "HSTS max-age (seconds)", "access_log_days": "Keep access logs (days)",
+                 "max_sites": "Sites per customer", "mem_mb": "Memory per site (MB)",
+                 "cpu_milli": "CPU per site (1000 = one core)", "pids": "Processes per site",
+                 "disk_mb": "Disk per site (MB)", "max_body_mb": "Largest upload (MB)"}
+
+
 def _number_option(key, value, low, high):
     ok = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
     return (value, None) if ok else (None, i18n.tr("{key} must be a whole number from {low} to {high}.",
-                                                   key=key, low=low, high=high))
+                                                   key=i18n.Sentence(OPTION_LABELS[key]), low=low, high=high))
 
 
 def _contact_option(value):

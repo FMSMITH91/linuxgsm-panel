@@ -48,6 +48,9 @@ S_NO_HOST = "Choose the host the website runs on."
 S_QUOTA = "Your group already has as many websites as it may have."
 S_CONFIRM = "Type the website's name to confirm."
 S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
+# The Settings form's labels, so a refusal names the field the way the page does (never the column's name).
+LIMIT_LABELS = {"mem_mb": "Memory (MB)", "cpu_milli": "CPU (1000 = one core)", "pids": "Processes", "disk_mb": "Disk (MB)",
+                "max_body_mb": "Largest upload (MB)", "backup_keep": "Backups to keep"}
 S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
