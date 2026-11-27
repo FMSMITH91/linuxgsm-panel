@@ -18,7 +18,8 @@ from panel.core.validation import website_name_problem
 from panel.db.models import Group, Invite, db
 from panel.routes import websites as _w
 from panel.security.account_guard import step_up_required
-from panel.security.auth import EDIT_WEBSITE_FILES, MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES, has_permission
+from panel.security.auth import (CREATE_WEBSITES, EDIT_WEBSITE_FILES, MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES,
+                                 has_permission)
 from panel.services import websites_access as _wa
 
 DEFAULT_PERMS = (VIEW_WEBSITES, EDIT_WEBSITE_FILES, MANAGE_WEBSITE)
@@ -47,11 +48,20 @@ def _perms(data):
     return sorted(p for p in keep if current_user.is_superadmin or has_permission(current_user, p))
 
 
-def _max_sites(data, held):
+def _max_sites(data, held, perms):
+    """How many sites the new customer group may have.
+
+    A group that may add its own sites (CREATE_WEBSITES) gets the number the card sends, else the superadmin's
+    "Sites per customer" setting (websites_max_sites); one that may not is held to the sites it is given, so no
+    quota line promises sites it cannot add. Never fewer than the sites given, never more than 100.
+    """
+    if CREATE_WEBSITES not in perms:
+        return held
+    from panel.routes.websites_view import options
     try:
         n = int(str(data.get("max_sites", "")).strip())
     except ValueError:
-        n = 3
+        n = options()["max_sites"]
     return max(held, min(n, 100))
 
 
@@ -85,7 +95,7 @@ def register(app):
         if live >= Invite.MAX_LIVE:
             return _w.say(409, i18n.Sentence(S_TOO_MANY_INVITES, n=live))
         perms = _perms(data)
-        group, token, code = _make(name, perms, sites, _max_sites(data, len(sites)))
+        group, token, code = _make(name, perms, sites, _max_sites(data, len(sites), perms))
         for site in sites:
             _w.audit(site, "website_customer_add", "customer group %s (%s), invite made" % (group.name, ", ".join(perms)))
         # Shown once to the administrator who made it, on the address they reached the panel by.

@@ -357,6 +357,7 @@
       renderList(d.sites);
       if (WS.el('ws-add-modal')) { fillAdd(d); WS.renderMissing(d.missing); }
       if (WS.customerSites) WS.customerSites(d.sites || []);
+      if (WS.customerDefaults) WS.customerDefaults(d);
       if (window.wsProxyRender) window.wsProxyRender(d);
     });
   }
@@ -387,10 +388,24 @@
     });
     if (!sites.length) box.appendChild(WS.node('span', 'small text-secondary', WS.T('Add a website first.')));
   };
+  // A customer gets the sites ticked; only with "They may add their own websites" may they add more, up to the
+  // number given (it starts at the superadmin's Sites per customer setting).
+  var GRANT = ['view_websites', 'edit_website_files', 'manage_website'];
   WS.customerBody = function () {
     var ids = [];
     document.querySelectorAll('[data-wc-site]').forEach(function (cb) { if (cb.checked) ids.push(Number(cb.value)); });
-    return {name: WS.el('wc-name').value.trim().toLowerCase(), sites: ids, max_sites: Number(WS.el('wc-max').value) || 3};
+    var body = {name: WS.el('wc-name').value.trim().toLowerCase(), sites: ids};
+    var create = WS.el('wc-create');
+    if (create && create.checked) {
+      body.permissions = GRANT.concat(['create_websites']);
+      body.max_sites = Number(WS.el('wc-max').value) || 1;
+    }
+    return body;
+  };
+  window.wsCustomerCreate = function () { var c = WS.el('wc-create'); WS.show('wc-max-wrap', !!(c && c.checked)); };
+  WS.customerDefaults = function (d) {
+    var max = WS.el('wc-max');
+    if (max && d && d.customer_max_sites && max.dataset.typed !== '1') max.value = String(Number(d.customer_max_sites));
   };
   function showInvite(d) {
     var box = WS.clear(WS.el('wc-result'));

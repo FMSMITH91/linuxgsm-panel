@@ -34,6 +34,10 @@ C5  The add dialog lists only the hosts that run websites (the panel's own host,
 B10 An administrator below a superadmin has no host that runs websites (the panel's own host is a superadmin's),
     so Add a website is not offered to them (every Create failed for want of a host): the list says why instead.
 
+M2  Customers' site limits are true: Add a customer grants "add their own websites" (CREATE_WEBSITES) only when its
+    switch is on, with the limit the card sends, else the superadmin's Sites per customer setting (read nowhere
+    before); a group that may not add sites is held to the sites it is given, and its customers see no quota line.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -566,6 +570,87 @@ def _b10_checks(st, user):
        ('id="ws-add-open"' in su_page, 'id="ws-add-why"' in su_page), (True, False))
 
 
+# ── M2. Customers' site limits ────────────────────────────────────────────────────────────────────
+def _m2_limits(st):
+    from panel.db.models import Group
+    from panel.routes.websites_view import options
+    from panel.security.auth import CREATE_WEBSITES
+    site = _site315(st, "p315-cust", kind="static")
+    su = _Client315(st.su.id)
+    made = {}
+    for label, extra in (("p315-plain", {}), ("p315-adds", {"permissions": ["view_websites", "manage_website",
+                                                                             CREATE_WEBSITES], "max_sites": 5}),
+                         ("p315-default", {"permissions": [CREATE_WEBSITES, "view_websites"]})):
+        r = su.post("/websites/customers/add", json=dict({"name": label, "sites": [site.id]}, **extra))
+        g = Group.query.filter_by(name="customer-" + label).first()
+        made[label] = (r.status_code, CREATE_WEBSITES in g.get_permissions() if g else None, g.max_sites if g else None)
+    try:
+        eq("M2 (POST /websites/customers/add): a customer who may not add sites gets none to add (held to the 1 given); "
+           "one who may gets the limit sent, else the Sites per customer setting (it was read nowhere)", made,
+           {"p315-plain": (200, False, 1), "p315-adds": (200, True, 5),
+            "p315-default": (200, True, max(1, options()["max_sites"]))})
+        _m2_quota(st, site)
+    finally:
+        _m2_cleanup(["customer-p315-plain", "customer-p315-adds", "customer-p315-default"])
+    _m2_card()
+
+
+def _m2_cleanup(names):
+    from panel.db.models import Group, Invite
+    _db315.session.rollback()
+    for inv in Invite.query.filter(Invite.note.like("customer p315-%")).all():
+        _db315.session.delete(inv)
+    for g in Group.query.filter(Group.name.in_(names)).all():
+        g.users = []
+        _db315.session.delete(g)
+    _db315.session.commit()
+
+
+def _m2_quota(st, site):
+    from panel.db.models import Group
+    from panel.security.auth import CREATE_WEBSITES
+    saved = _p9.config.get("WEBSITES_CUSTOMER_2FA", True)
+    _p9.config["WEBSITES_CUSTOMER_2FA"] = False
+    got = {}
+    try:
+        for label in ("p315-plain", "p315-adds"):
+            user = _user315("p315-u-" + label[5:])
+            group = Group.query.filter_by(name="customer-" + label).first()
+            group.users.append(user)
+            _db315.session.commit()
+            got[label] = _p9_json(_Client315(user.id).get("/api/websites")).get("quota")
+    finally:
+        _p9.config["WEBSITES_CUSTOMER_2FA"] = saved
+    eq("M2 (GET /api/websites for a customer): the \"{used} of {max} websites used\" line only for a group that may "
+       "add its own sites", got, {"p315-plain": None, "p315-adds": {"used": 1, "max": 5}})
+    lst = _p9_json(_Client315(st.su.id).get("/api/websites"))
+    eq("M2 (GET /api/websites for an administrator): the card's limit starts at the Sites per customer setting",
+       isinstance(lst.get("customer_max_sites"), int) and lst.get("customer_max_sites") >= 1, True)
+    assert CREATE_WEBSITES
+
+
+def _m2_card():
+    scenario = r"""
+      for (let i = 0; i < 4; i++) await tick();
+      const start = $('wc-max').value, wrapHidden = $('wc-max-wrap').hidden;
+      $('wc-name').value = 'acme'; document.querySelectorAll('[data-wc-site]')[0].checked = true;
+      const off = WS.customerBody();
+      $('wc-create').checked = true; window.wsCustomerCreate();
+      $('wc-max').value = '4';
+      return {start: start, wrapHidden: wrapHidden, off: off, wrapShown: !$('wc-max-wrap').hidden, on: WS.customerBody()};
+    """
+    got = _node315(_list_page315(), ["websites_common.js", "websites.js"], scenario,
+                   {"/api/websites": dict(_LIST315, customer_max_sites=7, sites=[
+                       {"id": 3, "name": "shop", "kind": "static", "state": "running", "enabled": False}])})
+    eq("M2 (the Add a customer card, js/websites.js): by default the customer gets the ticked sites and nothing to add "
+       "(no limit sent, its field hidden); turned on, the card sends the right to add their own and the limit, which "
+       "starts at the Sites per customer setting",
+       (got.get("start"), got.get("wrapHidden"), got.get("off"), got.get("wrapShown"), got.get("on")),
+       ("7", True, {"name": "acme", "sites": [3]}, True,
+        {"name": "acme", "sites": [3], "permissions": ["view_websites", "edit_website_files", "manage_website",
+                                                       "create_websites"], "max_sites": 4}))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -603,7 +688,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

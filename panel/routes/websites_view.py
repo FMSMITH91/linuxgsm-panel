@@ -179,7 +179,10 @@ def _hosts():
 
 
 def _quota():
-    group = next((g for g in current_user.groups if g.is_customer), None) if not current_user.is_superadmin else None
+    """A customer's "{used} of {max} websites used": only for a group that may add its own sites (CREATE_WEBSITES)."""
+    from panel.security.auth import CREATE_WEBSITES
+    group = next((g for g in current_user.groups if g.is_customer and CREATE_WEBSITES in g.get_permissions()),
+                 None) if not current_user.is_superadmin else None
     return {"used": len(group.websites or []), "max": int(group.max_sites or 0)} if group is not None else None
 
 
@@ -196,6 +199,7 @@ def _admin_parts(out, sites, admin):
     if creates_as_admin(current_user):
         out["hosts"] = _hosts()
         out["customers"] = [{"id": g.id, "name": g.name} for g in Group.query.filter_by(is_customer=True).order_by(Group.name)]
+        out["customer_max_sites"] = options()["max_sites"]      # the Add a customer card's default
     if current_user.is_superadmin:
         rows = {p.remote_id: p for p in WebsiteProxy.query.all()}
         out["proxies"] = [_proxy_json(r, rows.get(r.id)) for r in RemoteServer.query.order_by(RemoteServer.id)]

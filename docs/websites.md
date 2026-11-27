@@ -249,5 +249,7 @@ The site's own error log is always readable on its Overview tab.
 A customer is a panel user whose group holds only website permissions and has their sites in it. They
 see only those sites and none of the administrator's controls (limits, putting a site online, deleting
 it, full internet access), and cannot see other users, hosts, game servers or other customers' sites.
-A customer group can be allowed to add its own sites up to a limit (3 by default). Two-factor sign-in
+**Add a customer** gives them the sites you tick. Turn on **They may add their own websites** to let them add
+more, up to the number beside it (it starts at the **Sites per customer** setting on the Websites security
+settings); their list then says how many they have used. Without it they have only the sites given. Two-factor sign-in
 is required for customers by default. The permissions are in [permissions.md](permissions.md#permissions).

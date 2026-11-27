@@ -11,9 +11,17 @@
              aria-describedby="wc-name-help">
       <div id="wc-name-help" class="form-text">Lowercase letters, digits and hyphens.</div>
     </div>
-    <div class="col-sm-6">
+    <div class="col-sm-6 d-flex align-items-end">
+      <div class="form-check form-switch mb-1">
+        <input class="form-check-input" type="checkbox" role="switch" id="wc-create" data-action="wsCustomerCreate" data-on="change">
+        <label class="form-check-label small" for="wc-create">They may add their own websites</label>
+      </div>
+    </div>
+    <div class="col-sm-6" id="wc-max-wrap" hidden>
       <label for="wc-max" class="form-label small mb-1">Most websites they may have</label>
-      <input type="number" id="wc-max" class="form-control form-control-sm" min="1" max="100" step="1" value="3">
+      <input type="number" id="wc-max" class="form-control form-control-sm" min="1" max="100" step="1" value="3"
+             aria-describedby="wc-max-help">
+      <div id="wc-max-help" class="form-text">Starts at the Sites per customer setting.</div>
     </div>
     <fieldset class="col-12">
       <legend class="form-label small mb-1">Their websites</legend>
