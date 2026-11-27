@@ -579,6 +579,13 @@ _RCON_LINES_SH = ('grep -iE "^[[:space:]]*(seta?[[:space:]]+)?rcon_?password[[:s
                   '| head -c 4000 | base64 -w0')
 
 
+# `podman --version` in a runtime folder of its own, removed after it. An account whose add-ons were all removed
+# has no user manager, so no /run/user/<uid>; rootless Podman then made its fallback folders in /tmp
+# (/tmp/podman-run-<uid>, /tmp/containers-user-<uid>) at every card read, just after the release had removed them.
+PODMAN_VERSION_SH = ('t=$(mktemp -d) && echo "podman=$(XDG_RUNTIME_DIR="$t" podman --version 2>/dev/null | head -n 1)"; '
+                     '[ -n "$t" ] && rm -rf -- "$t"; ')
+
+
 def probe_sh(addon_id, selfname, server_id, game_type, nports):
     """The install's first read, as the account: the host, the game's log folder, RCON, free ports.
 
@@ -595,8 +602,7 @@ def probe_sh(addon_id, selfname, server_id, game_type, nports):
     RCON password: its lines are addons_bluemap.world_sh's instead.
     """
     ports = " ".join(str(PORT_BASE + int(server_id) + i) for i in range(_PORT_TRIES))
-    return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
-            'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; '
+    return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; ' + PODMAN_VERSION_SH +
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
             + _game_reads_sh(addon_id, game_type, selfname) +
             'f=""; n=0; for p in %s; do [ $n -ge %d ] && break; '
@@ -670,8 +676,7 @@ def status_sh():
         rows.append('[ -f %s ] && { echo "meta.%s=$(head -c 4000 %s | base64 -w0)"; '
                     'echo "state.%s=$(systemctl --user is-active %s.service 2>/dev/null | head -n 1)"; %s}; '
                     % (meta, k, meta, k, unit_name(k), _world_status_sh(k) + _b3_status_sh(k)))
-    return (_ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; '
-            'echo "podman=$(podman --version 2>/dev/null | head -n 1)"; ' + "".join(rows) + "true")
+    return _ENV + '. /etc/os-release 2>/dev/null; echo "os=${VERSION_ID:-}"; ' + PODMAN_VERSION_SH + "".join(rows) + "true"
 
 
 def _world_status_sh(k):

@@ -1,6 +1,6 @@
-r"""Part 310 of the unit suite: the website images built on the host, as CI scans them.
+r"""Part 310 of the unit suite: the website images built on the host, as CI scans them; the add-ons' Podman read.
 
-Held here (.github/scripts/addon_images.py, panel/website_images/*/Containerfile):
+Held here (.github/scripts/addon_images.py, panel/website_images/*/Containerfile, panel/services/addons.py):
 * The image scan scans what the sites run: every pinned image a site runs unmodified is pulled and scanned,
   every image the panel builds on the host from a pin is built from its Containerfile with the catalog's
   values (WordPress per PHP version, Node.js per version with npm's version, wp-cli, the tunnel connector
@@ -9,17 +9,23 @@ Held here (.github/scripts/addon_images.py, panel/website_images/*/Containerfile
 * The Containerfiles: each applies its distribution's security updates and leaves no package lists or cache;
   wp-cli's goes back to upstream's user (numerically); Node.js's installs npm at the catalog's exact version
   and fails the build otherwise; the tunnel connector is the program alone on an empty image, non-root.
+* The add-on card's read (status_sh, in bash with a stand-in podman) and the install probe ask Podman's
+  version in a runtime folder of their own, removed after: an account with no user manager (all its add-ons
+  removed) got rootless Podman's fallback folders back in /tmp at every read.
 
-HOW IT RUNS. Nothing is pulled or built: the scan's docker calls are recorded. The route-level builds (install_sh
-through POST /websites/<id>/update-image and tunnel_apply) are part305's section 13.
+HOW IT RUNS. Nothing is pulled or built: the scan's docker calls are recorded, and bash runs status_sh over a
+scratch folder with a stand-in podman and id first on PATH. The route-level builds (install_sh through
+POST /websites/<id>/update-image and tunnel_apply) are part305's section 13.
 """
 import importlib.util as _ilu310
 import json as _json310
 import os
 import shutil as _shutil310
+import subprocess as _sp310  # nosec B404 - bash over the panel's own status shell, in a scratch folder
 import tempfile as _tf310
 
-from unit.part01 import _root, eq
+from unit.part01 import _root, check, eq
+from panel.services import addons as _ad310
 
 _spec310 = _ilu310.spec_from_file_location("addon_images_p310", os.path.join(_root, ".github", "scripts", "addon_images.py"))
 _AI310 = _ilu310.module_from_spec(_spec310)
@@ -127,5 +133,60 @@ def _s2_containerfiles():
        {f: [] for f in ("wordpress", "wpcli", "node", "cloudflared")})
 
 
+# ── 3. the add-ons' Podman version read ───────────────────────────────────────────────────────────────
+# A stand-in podman: records the XDG_RUNTIME_DIR it got and whether that folder existed; with no usable one it
+# makes rootless Podman's fallback folders in $TMPDIR, as Podman 4.9 and 5 do in /tmp.
+_PODMAN310 = r'''#!/bin/bash
+if [ -n "$XDG_RUNTIME_DIR" ] && [ -d "$XDG_RUNTIME_DIR" ]; then seen=1; else seen=0
+  mkdir -p "$TMPDIR/podman-run-$(id -u)" "$TMPDIR/containers-user-$(id -u)"; fi
+echo "$XDG_RUNTIME_DIR $seen" >> "$P310_LOG"
+[ "$seen" = 1 ] && mkdir -p "$XDG_RUNTIME_DIR/libpod"
+echo "podman version 5.4.2"
+'''
+# A stand-in id: `id -u` answers a uid with no /run/user folder (an account with no user manager).
+_ID310 = '#!/bin/bash\n[ "$1" = -u ] && { echo 99931; exit 0; }\nexec /usr/bin/id "$@"\n'
+
+
+def _status_run310(sh):
+    """Run `sh` (an add-on account shell) in bash over a scratch folder: (output, podman's log, $TMPDIR's entries)."""
+    base = _tf310.mkdtemp(prefix="p310-podman-")
+    try:
+        bin_, tmp = os.path.join(base, "bin"), os.path.join(base, "tmp")
+        os.makedirs(bin_)
+        os.makedirs(tmp)
+        for name, text in (("podman", _PODMAN310), ("id", _ID310)):
+            with open(os.path.join(bin_, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+            os.chmod(os.path.join(bin_, name), 0o700)
+        env = {"PATH": bin_ + ":/usr/bin:/bin", "TMPDIR": tmp, "P310_LOG": os.path.join(base, "log"), "LC_ALL": "C.UTF-8"}
+        out = _sp310.run(["bash", "-c", sh], capture_output=True, text=True, env=env, timeout=60, check=False).stdout
+        log = []
+        if os.path.exists(env["P310_LOG"]):
+            with open(env["P310_LOG"], encoding="utf-8") as fh:
+                log = fh.read().split()
+        return out, log, sorted(os.listdir(tmp))
+    finally:
+        _shutil310.rmtree(base, ignore_errors=True)
+
+
+def _s3_podman_read():
+    if not _shutil310.which("bash"):
+        check("add-on card (status_sh): SKIP: no bash on this machine", True)
+        return
+    out, log, left = _status_run310(_ad310.status_sh())
+    eq("add-on card (status_sh): an account with no user manager (its add-ons all removed) asks Podman's version in "
+       "a runtime folder of its own, removed after it, so rootless Podman makes nothing in /tmp (its fallback "
+       "folders came back at every card read, just after the release had removed them)",
+       (log[1:] if log else None, bool(log) and log[0].startswith(os.sep) and "/run/user/" not in log[0], left),
+       (["1"], True, []))
+    eq("add-on card (status_sh): the version still reaches the card's check (control)",
+       _ad310.parse_status(out)["podman"], "podman version 5.4.2")
+    probe = _ad310.probe_sh("b3", "cod4server", 4, "cod4", 1)
+    check("add-on install probe (probe_sh): reads Podman's version the same way",
+          _ad310.PODMAN_VERSION_SH in probe and probe.count("podman --version") == 1, probe[:400])
+
+
 _s1_scope()
 _s2_containerfiles()
+_s3_podman_read()
