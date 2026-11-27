@@ -44,6 +44,7 @@ S_NOT_APPLIED = "Not saved: the web proxy refused the new settings, so it kept t
 _UNSET = object()
 S_CACHE_BUILDING = ("Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; "
                     "the websites' page caches start when it is done.")
+S_TUNNEL_CLOSED = "Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel."
 
 
 def _remote():
@@ -378,12 +379,23 @@ def _cache_build_worker(app, remote_id, uid):
 
 
 def _apply(remote, row):
-    """Apply the host's proxy settings now: tunnel, then ports and proxy. -> (ok, sentence)."""
+    """Apply the host's proxy settings now: tunnel, then ports and proxy. -> (ok, sentence).
+
+    In tunnel mode ports 80 and 443 are closed first, whatever becomes of the tunnel. A token the tunnel's provider
+    refused, or a connector that did not start, ended the apply before its firewall step, so the public rules of the
+    mode before stayed open (the sites still reachable straight at the host) while the saved mode said tunnel. A
+    failed apply then says the ports were closed (or why they were not). last_error keeps the tunnel's own sentence,
+    which _note_tunnel clears once the connector connects.
+    """
+    tunnel = row.exposure_mode == "tunnel"
+    closed = _w.host_call(_sw.ports_apply, remote, row, False) if tunnel else (True, "")
     ok, said = _w.host_call(_sw.tunnel_apply, remote, row)
     if ok:
         ok, said = _w.reconcile_proxy(remote)
     row.last_error = "" if ok else i18n.tr(said)[:200]
     db.session.commit()
+    if tunnel and not ok:
+        said = i18n.Sentences(said, S_TUNNEL_CLOSED if closed[0] else closed[1])
     return ok, said
 
 
