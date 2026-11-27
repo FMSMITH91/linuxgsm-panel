@@ -19,7 +19,10 @@
   "This host has no database server yet, and an app needs one. Set up databases first: MariaDB, reached from this machine only.": "Cet hôte n'a pas encore de serveur de bases de données, et une application en a besoin. Configurez d'abord les bases de données : MariaDB, accessible depuis cette machine uniquement.",
   "This host's database server cannot be used by the panel yet, and an app needs one. See the Databases tab of a game server on this host.": "Le panneau ne peut pas encore utiliser le serveur de bases de données de cet hôte, et une application en a besoin. Consultez l'onglet Bases de données d'un serveur de jeu sur cet hôte.",
   "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Ce site web est encore en cours de configuration. Attendez que cela se termine (ou échoue), puis supprimez-le.",
+  "This website's object cache is off.": "Le cache d'objets de ce site web est désactivé.",
   "Try again": "Réessayer",
   "Upload its files": "Téléverser ses fichiers",
-  "Websites run on the panel's own host, which only a superadmin manages, so a superadmin adds them.": "Les sites web tournent sur l'hôte du panneau lui-même, que seul un superadministrateur gère : c'est donc un superadministrateur qui les ajoute."
+  "Websites run on the panel's own host, which only a superadmin manages, so a superadmin adds them.": "Les sites web tournent sur l'hôte du panneau lui-même, que seul un superadministrateur gère : c'est donc un superadministrateur qui les ajoute.",
+  "WordPress sites the panel installs have its address and password set already: install the Redis Object Cache plugin in WordPress and press Enable Object Cache.": "Les sites WordPress installés par le panneau ont déjà son adresse et son mot de passe : installez l'extension Redis Object Cache dans WordPress et cliquez sur Enable Object Cache.",
+  "Your code reads the password from this file, or press Show connection settings:": "Votre code lit le mot de passe dans ce fichier, ou cliquez sur Afficher les paramètres de connexion :"
 }

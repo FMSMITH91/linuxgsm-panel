@@ -267,7 +267,14 @@ def _perf(site):
     return {"opcache": bool(site.opcache), "opcache_memory_mb": _int(settings.get("opcache.memory_consumption")),
             "opcache_revalidate_s": _int(settings.get("opcache.revalidate_freq")), "object_cache": bool(site.object_cache),
             "object_cache_host": "127.0.0.1" if site.object_cache else "", "object_cache_port": 6379 if site.object_cache else None,
+            "object_cache_file": _svc_run_file() if site.object_cache else "", "object_cache_wordpress": site.kind == "wordpress",
             "page_cache": bool(site.page_cache), "page_cache_ttl": site.page_cache_ttl, "static_cache": bool(site.static_cache)}
+
+
+def _svc_run_file():
+    """Where a PHP site's code reads the object cache's password: a read-only file of the panel's (websites.RUN_IN)."""
+    from panel.services import websites as _svc
+    return _svc.RUN_IN + "/" + _svc.CACHE_PASSWORD_FILE.rsplit("/", 1)[1]
 
 
 def _int(v):

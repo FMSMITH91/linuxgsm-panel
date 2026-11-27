@@ -6008,8 +6008,9 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 377, was 324: the Websites tab's 53 views (panel/routes/websites*.py and databases_sites.py), every per-site
 # one through websites_access.site_for (404 for no access and no site alike), the proxy ones superadmin only.
 # 378, was 377: panel/routes/websites_apps.py's install outcome (the user who started the install only).
-check("register_routes: every one of the 378 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 378,
+# 379, was 378: panel/routes/websites_settings.py's object cache connection settings (MANAGE_WEBSITE on the site, step-up).
+check("register_routes: every one of the 379 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 379,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

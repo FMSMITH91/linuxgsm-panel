@@ -188,8 +188,12 @@ Saving restarts the site's PHP gracefully.
 
 - **OPcache** (PHP): keeps compiled PHP in memory. On by default.
 - **Object cache** (PHP): a private Redis-compatible store for this site only, with no copy on disk. Off
-  by default. The tab shows the address to enter in WordPress's object-cache plugin. Turning it on or off
-  starts or removes the cache beside the running site; the site itself is not restarted.
+  by default. Turning it on or off starts or removes the cache beside the running site; the site itself is
+  not restarted. Its password is kept in a file the site reads (`/run/panel/object-cache-password`, read-only),
+  there only while the cache is on. A WordPress site the panel installs has the address and password set in its
+  `wp-config.php` already: install the **Redis Object Cache** plugin in WordPress and press **Enable Object
+  Cache**. For other code, **Show connection settings** gives the address and password once, after the password
+  check, and is written to the audit log.
 - **Page cache**: the web proxy keeps whole pages for visitors who are not signed in, for the time you
   set. Sign-ins, form posts, any answer that sets a cookie, and admin pages (`/wp-admin`, `/adm`,
   `/admin`) always skip it. **Purge cache** empties it. Off by default.

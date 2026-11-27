@@ -76,13 +76,15 @@ DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
 # What a PHP site's own code reads from the panel: a 0700 folder of 0600 files in ~/site/conf, mounted read-only at
-# RUN_IN (always, so a file added or removed there reaches the running site with no restart): WordPress's proxy
-# token, for its requests to its own address (LOOPBACK_PLUGIN). Written from stdin, never on a command line or in an
-# environment, never logged (OWASP Secrets Management Cheat Sheet, "5.1 Injection of Secrets (file,
+# RUN_IN (always, so a file added or removed there reaches the running site with no restart). WordPress's proxy
+# token, for its requests to its own address (LOOPBACK_PLUGIN), and the object cache's password while the cache is
+# on (the recipe's wp-config reads it for the Redis Object Cache plugin). Written from stdin, never on a command line
+# or in an environment, never logged (OWASP Secrets Management Cheat Sheet, "5.1 Injection of Secrets (file,
 # in-memory)", "8.3 Detection lifecycle").
 RUN_DIR = "site/conf/panel"
 RUN_IN = "/run/panel"
 TOKEN_FILE = RUN_DIR + "/proxy-token"
+CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _ACCOUNT_RE = re.compile(r"ws[1-9][0-9]{0,8}\Z")
 
@@ -852,7 +854,7 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
               CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token",
-              TOKEN_FILE)
+              TOKEN_FILE, CACHE_PASSWORD_FILE)
 
 
 def bundle(files):
@@ -885,6 +887,19 @@ def egress_proxy_source():
         return fh.read()
 
 
+def _cache_and_run_files(site, ids, token, cache_password):
+    """{path: text} of the object cache (its config, unit, and its password in RUN_DIR) and WordPress's TOKEN_FILE."""
+    files = {}
+    if site.object_cache and cache_password:
+        files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
+        files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
+        if site.kind in KINDS_PHP:
+            files[CACHE_PASSWORD_FILE] = cache_password
+    if site.kind == "wordpress":
+        files[TOKEN_FILE] = _token(token)
+    return files
+
+
 def site_files(site, ids, net, token, cache_password=None, image=None, egress_hosts=(), cpu=True):
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
     files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
@@ -911,11 +926,7 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
     b = site_build(site)
     if b:
         files[BUILD_FILE] = containerfile(b["folder"])
-    if site.object_cache and cache_password:
-        files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
-        files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
-    if site.kind == "wordpress":
-        files[TOKEN_FILE] = _token(token)
+    files.update(_cache_and_run_files(site, ids, token, cache_password))
     if egress_hosts:
         files[HOME_DIR + "/egress_proxy.py"] = egress_proxy_source()
         files["%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT)] = egress_unit(site, egress_hosts)
@@ -950,8 +961,9 @@ def install_sh(account, site, image=None):
             _wc.pins("object_cache")["image"])
     else:
         # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
-        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
-            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
+        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s %s; " % (
+            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"),
+            _q(CACHE_PASSWORD_FILE))
     if not b:
         pull += "rmdir %s 2>/dev/null; " % _q(BUILD_DIR)     # the empty folder an earlier install made
     if site.kind == "app":

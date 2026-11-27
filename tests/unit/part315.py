@@ -56,6 +56,11 @@ WP3 The egress proxy (WordPress's only way to WordPress.org): each validated add
     host and the reason only), a thread it cannot start costs one connection and not the proxy, and its unit's
     task limit fits its connection cap.
 
+B4  The object cache is usable: while it is on, its password is a 0600 file in the site's /run/panel folder
+    (present and gone with the switch, with no restart), the WordPress recipe's wp-config defines the Redis Object
+    Cache plugin's WP_REDIS_* constants from it, and the Performance tab shows the address, the plugin to install,
+    and Show connection settings (step-up, audited, no-store) for other code.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -972,6 +977,82 @@ def _wp3_handle(st, eg):
                                                          _ws315.EGRESS_TASKS >= 2 * eg.MAX_CONNECTIONS + 1), (True, True))
 
 
+# ── B4. The object cache wired to the site ────────────────────────────────────────────────────────
+_CACHE_PW315 = "c" * 40
+
+
+def _b4_cache(st):
+    _seams315()
+    su = _Client315(st.su.id)
+    wp = _site315(st, "p315-wpcache", kind="wordpress", app_recipe="wordpress",
+                  object_cache_secret=_cfg315.encrypt_secret(_CACHE_PW315))
+    _reset315()
+    on = su.post("/websites/%d/performance" % wp.id, json={"object_cache": True})
+    pw_file = "site/conf/panel/object-cache-password"
+    got_on = (on.status_code, _read315(wp.account, pw_file), _mode315(wp.account, pw_file),
+              any("restart" in a and "lgsm-site.service" in a for a in _calls315("systemctl")),
+              any(_CACHE_PW315 in " ".join(a) for a in _calls315()), any(_CACHE_PW315 in sh for sh in _RUN315["shells"]))
+    _reset315()
+    off = su.post("/websites/%d/performance" % wp.id, json={"object_cache": False})
+    eq("B4 (POST /websites/<id>/performance, object cache on then off): its password is a 0600 file in the site's "
+       "read-only /run/panel folder while it is on and gone when it is off, the site never restarted, the password "
+       "never in a program's arguments or a shell's text (it was set in the cache and written nowhere the site reads)",
+       (got_on, off.status_code, _read315(wp.account, pw_file)),
+       ((200, _CACHE_PW315, "0o600", False, False, False), 200, None))
+    _b4_recipe()
+    _b4_reveal(st)
+
+
+def _b4_recipe():
+    from panel.services import websites_recipes as _wr315
+    step = next(x for x in _ws315.recipe_steps("wordpress") if x["type"] == "render-config")
+    text = _wr315.render_template(step["template"], {"db_password": "p"}, step["escape"])
+    block = text[text.find("is_readable( '/run/panel/object-cache-password' )"):]
+    eq("B4 (the WordPress recipe's wp-config): the Redis Object Cache plugin's host, port and password constants, "
+       "defined while the panel's password file is there and read from it (no password written into the site's files), "
+       "before WordPress loads", (bool(block), "define( 'WP_REDIS_HOST', '127.0.0.1' );" in block,
+                                  "define( 'WP_REDIS_PORT', 6379 );" in block,
+                                  "file_get_contents( '/run/panel/object-cache-password' )" in block,
+                                  block.find("WP_REDIS_PASSWORD") < block.find("wp-settings.php")),
+       (True, True, True, True, True))
+
+
+def _b4_reveal(st):
+    from panel.db.models import AuditLog
+    su = _Client315(st.su.id)
+    site = _site315(st, "p315-phpcache", kind="php", object_cache=True,
+                    object_cache_secret=_cfg315.encrypt_secret(_CACHE_PW315))
+    off = _site315(st, "p315-phpnocache", kind="php")
+    r = su.post("/websites/%d/object-cache/credentials" % site.id)
+    rows = AuditLog.query.filter(AuditLog.website_id == site.id, AuditLog.action == "website_cache_reveal").all()
+    eq("B4 (POST /websites/<id>/object-cache/credentials): the address, port and password once, no-store, one audit "
+       "row that holds no password",
+       (r.status_code, _p9_json(r).get("password"), _p9_json(r).get("port"), _p9_json(r).get("file"),
+        r.headers.get("Cache-Control"), len(rows), any(_CACHE_PW315 in (x.detail or "") for x in rows)),
+       (200, _CACHE_PW315, 6379, "/run/panel/object-cache-password", "no-store", 1, False))
+    eq("B4 control (a site whose cache is off, and another superadmin's view of no site): refused, nothing revealed",
+       (su.post("/websites/%d/object-cache/credentials" % off.id).status_code,
+        su.post("/websites/%d/object-cache/credentials" % (site.id + 100000)).status_code), (409, 404))
+    perf = {"opcache": True, "object_cache": True, "object_cache_host": "127.0.0.1", "object_cache_port": 6379,
+            "object_cache_file": "/run/panel/object-cache-password", "page_cache": False, "static_cache": False}
+    got = _node315(_site_page315(), ["websites_common.js", "website_site.js", "website_tuning.js"], r"""
+      for (let i = 0; i < 6; i++) await tick();
+      const info = $('wperf-obj-info');
+      const b = info.querySelector('button');
+      if (b) window.wsCacheReveal();
+      for (let i = 0; i < 6; i++) await tick();
+      return {text: info.textContent, action: b ? b.getAttribute('data-action') : null,
+              conn: $('wperf-obj-conn') ? $('wperf-obj-conn').textContent : ''};
+    """, {"/api/websites/7": dict(_b3_site_answer(state="running"), perf=dict(perf, object_cache_wordpress=True),
+                                  rules=[]),
+          "/websites/7/object-cache/credentials": {"success": True, "host": "127.0.0.1", "port": 6379,
+                                                   "password": "shown-once"}})
+    eq("B4 (the Performance tab, js/website_tuning.js): WordPress is told its address and password are set and which "
+       "plugin to install; Show connection settings gives the password after the password check",
+       ("Redis Object Cache plugin" in (got.get("text") or ""), got.get("action"), "shown-once" in (got.get("conn") or "")),
+       (True, "wsCacheReveal", True))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -1011,7 +1092,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:
