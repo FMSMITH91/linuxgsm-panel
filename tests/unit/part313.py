@@ -369,6 +369,10 @@ def _s4_own_route(st, rec):
     eq("own cert (route): the key is stored encrypted, decrypts to the key given, and is in no answer",
        (_KEYPEM313.strip() in (dom.own_key_secret or ""), _dec313(dom.own_key_secret).strip() == _KEYPEM313.strip(),
         "PRIVATE KEY" in body), (False, True, False))
+    _s4_shipped_and_audited(st, rec, c, dom)
+
+
+def _s4_shipped_and_audited(st, rec, c, dom):
     sent = rec.applies[-1] if rec.applies else {"text": "", "files": {}}
     crt = "%s/%s" % (_wp313.CERT_DIR, _DOMAIN313)
     eq("own cert (route -> render -> shipped files): saving applies the proxy at once with the domain's own block "

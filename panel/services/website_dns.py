@@ -65,19 +65,25 @@ _LOCAL = {"at": None, "addrs": set()}
 
 def _iface_addresses(text):
     """The public addresses in `ip -o addr show`'s lines: global scope, not temporary or deprecated, not the tailnet's."""
+    return {ip for ip in map(_iface_address, (text or "").splitlines()) if ip}
+
+
+def _iface_address(line):
+    """One `ip -o addr` line's address when a domain may point at it, else ""."""
     from panel.ops.ssh_manager import ufweval
-    out = set()
-    for line in (text or "").splitlines():
-        row = ufweval._ip_addr_row(line)
-        if row is None or row[0].startswith("tailscale") or row[2] != "global":
-            continue
-        words = line.split()
-        ip = _address(str(row[1]))
-        if (ip is None or not ip.is_global or "temporary" in words or "deprecated" in words
-                or any(ip.version == n.version and ip in n for n in _TAILNET)):
-            continue
-        out.add(str(ip))
-    return out
+    row = ufweval._ip_addr_row(line)
+    if row is None or row[0].startswith("tailscale") or row[2] != "global":
+        return ""
+    words = line.split()
+    ip = _address(str(row[1]))
+    if ip is None or not ip.is_global or "temporary" in words or "deprecated" in words or _inside(ip, _TAILNET):
+        return ""
+    return str(ip)
+
+
+def _inside(ip, nets):
+    """Whether address `ip` is inside one of `nets` (of its own family)."""
+    return any(ip.version == n.version and ip in n for n in nets)
 
 
 def _read_ip():
@@ -122,13 +128,21 @@ def classify(addresses, host_addrs, cdn_nets=()):
     if not addresses:
         return "failed"
     ips = [_address(a) for a in addresses]
-    if any(ip is None or not ip.is_global for ip in ips):
+    if not all(_public(ip) for ip in ips):
         return "private"
-    if host_addrs and all(str(ip) in host_addrs for ip in ips):
+    if host_addrs and {str(ip) for ip in ips} <= set(host_addrs):
         return "matching"
-    if cdn_nets and all(any(ip.version == net.version and ip in net for net in cdn_nets) for ip in ips):
-        return "cdn"
-    return "mismatch"
+    return "cdn" if _all_inside(ips, cdn_nets) else "mismatch"
+
+
+def _all_inside(ips, nets):
+    """Whether every address of `ips` is inside one of `nets` (False when there are no networks)."""
+    return bool(nets) and all(_inside(ip, nets) for ip in ips)
+
+
+def _public(ip):
+    """Whether parsed answer `ip` is a public address (None, an unparsable answer, is not)."""
+    return ip is not None and ip.is_global
 
 
 def cdn_networks():

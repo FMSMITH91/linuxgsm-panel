@@ -244,15 +244,22 @@ def _row(site, form):
 def domain_json(site, row):
     """A domain as the Domains tab shows it."""
     note = cert_note(row)
+    out = {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
+           "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
+           "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
+           "cert_warning": i18n.tr(note) if note else "",
+           "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
+    out.update(_cert_json(row))
+    return out
+
+
+def _cert_json(row):
+    """A domain's certificate source for the Domains tab: its own certificate's public facts, or the CDN note."""
     own = _wcert.info(row.own_cert_pem) if row.cert_mode == "own" else None
-    return {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
-            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
-            "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
-            "cert_warning": i18n.tr(note) if note else "", "cert_mode": "own" if own else "acme",
-            "cdn_note": i18n.tr(S_CDN_AUTO) if row.dns_state == "cdn" and not own else "",
-            "own_cert": {k: own[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")}
-            if own else None,
-            "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
+    if own:
+        return {"cert_mode": "own", "cdn_note": "",
+                "own_cert": {k: own[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")}}
+    return {"cert_mode": "acme", "own_cert": None, "cdn_note": i18n.tr(S_CDN_AUTO) if row.dns_state == "cdn" else ""}
 
 
 # ── a domain's own certificate ────────────────────────────────────────────────────────────────

@@ -127,10 +127,13 @@
     setText('ws-ov-backup', s.last_backup || WS.T('None yet'));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
-    var l = s.limits || {};
-    // Limits are an administrator's; anyone else sees the figure alone.
-    meter('ws-mem', u.mem_mb, l.mem_mb || u.mem_mb, l.mem_mb ? u.mem_mb + ' / ' + l.mem_mb + ' MB' : u.mem_mb + ' MB', why.mem_mb);
-    meter('ws-disk', u.disk_mb, l.disk_mb || u.disk_mb, l.disk_mb ? u.disk_mb + ' / ' + l.disk_mb + ' MB' : u.disk_mb + ' MB', why.disk_mb);
+    renderUsage(u, s.limits || {}, why);
+  }
+  // Limits are an administrator's; anyone else sees the figure alone.
+  function mbText(used, max) { return max ? used + ' / ' + max + ' MB' : used + ' MB'; }
+  function renderUsage(u, l, why) {
+    meter('ws-mem', u.mem_mb, l.mem_mb || u.mem_mb, mbText(u.mem_mb, l.mem_mb), why.mem_mb);
+    meter('ws-disk', u.disk_mb, l.disk_mb || u.disk_mb, mbText(u.disk_mb, l.disk_mb), why.disk_mb);
     meter('ws-cpu', u.cpu_pct, 100, u.cpu_pct + ' %', why.cpu_pct);
     var note = WS.el('ws-cpu-note');
     if (note) { note.textContent = u.cpu_note || ''; WS.show(note, !!u.cpu_note); }
@@ -178,6 +181,13 @@
     top.appendChild(WS.raw('strong', 'text-break', dm.domain));
     if (dm.is_primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
     li.appendChild(top);
+    li.appendChild(domainInfo(dm));
+    domainNotes(li, dm);
+    if (WS.can.manage) li.appendChild(domainButtons(dm));
+    return li;
+  }
+  // DNS state · certificate (yours: its issuer) · expiry.
+  function domainInfo(dm) {
     var info = WS.node('div', 'small text-secondary');
     info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
     info.appendChild(document.createTextNode(' · '));
@@ -194,7 +204,9 @@
       info.appendChild(WS.node('span', 'ms-1', WS.T('expires')));
       info.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(dm.cert_not_after).slice(0, 10)));
     }
-    li.appendChild(info);
+    return info;
+  }
+  function domainNotes(li, dm) {
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
     if (dm.cdn_note) {
@@ -204,8 +216,6 @@
       det.appendChild(WS.raw('div', 'text-break', dm.cdn_note));
       li.appendChild(det);
     }
-    if (WS.can.manage) li.appendChild(domainButtons(dm));
-    return li;
   }
   function domainButtons(dm) {
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');

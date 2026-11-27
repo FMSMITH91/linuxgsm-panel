@@ -215,8 +215,8 @@ def _usage(probe):
     """The Overview's figures: each value read, or in `unread` why not (never an empty bar that looks measured)."""
     facts = (probe or {}).get("facts") or {}
     out = {k: facts[k] for k in ("mem_mb", "disk_mb", "cpu_pct") if isinstance(facts.get(k), (int, float))}
-    out["unread"] = {k: _unread(probe, facts, k) for k in ("mem_mb", "disk_mb", "cpu_pct", "image") if
-                     not (out.get(k) is not None or (k == "image" and facts.get("image")))}
+    read = set(out) | ({"image"} if facts.get("image") else set())
+    out["unread"] = {k: _unread(probe, facts, k) for k in ("mem_mb", "disk_mb", "cpu_pct", "image") if k not in read}
     if facts and not facts.get("cpu_delegated"):
         out["cpu_note"] = i18n.tr(S_CPU_ACCOUNT)
     return out
