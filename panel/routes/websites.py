@@ -681,9 +681,14 @@ def _delete(site):
     return done(True, "Website removed.")
 
 
+def _bad_limit(key, low, high):
+    db.session.rollback()
+    return say(400, i18n.Sentence(S_BAD_LIMIT, field=i18n.Sentence(LIMIT_LABELS[key]), low=low, high=high))
+
+
 def _limits(site, fields):
-    """Set the limits in `fields` on `site` (not committed): None, or the refusal naming the first bad one."""
-    changed = {}
+    """Set the limits in `fields` on `site` (not committed): (None, [the limits whose value changed]) or (refusal, [])."""
+    given = {}
     for key, (low, high) in LIMITS.items():
         if key not in fields:
             continue
@@ -692,12 +697,12 @@ def _limits(site, fields):
         except (TypeError, ValueError):
             v = None
         if v is None or not low <= v <= high:
-            db.session.rollback()
-            return say(400, i18n.Sentence(S_BAD_LIMIT, field=key, low=low, high=high))
-        changed[key] = v
-    for key, v in changed.items():
-        setattr(site, key, v)
-    return None
+            return _bad_limit(key, low, high), []
+        given[key] = v
+    changed = sorted(k for k, v in given.items() if v != getattr(site, k))
+    for key in changed:
+        setattr(site, key, given[key])
+    return None, changed
 
 
 def _keep(site, fields):
@@ -709,8 +714,7 @@ def _keep(site, fields):
     except (TypeError, ValueError):
         keep = 0
     if not 1 <= keep <= 60:
-        db.session.rollback()
-        return say(400, i18n.Sentence(S_BAD_LIMIT, field="backup_keep", low=1, high=60))
+        return _bad_limit("backup_keep", 1, 60)
     site.backup_keep = keep
     return None
 
@@ -728,15 +732,17 @@ def _settings_flags(site, form):
     return words
 
 
-def _settings_apply(site, limits, form):
-    """Apply a saved Settings form on the host: (ok, sentence)."""
-    if not any(k in LIMITS for k in limits):
-        ok, said = True, "Saved."
-    else:
-        ok, said = install_site(site)
-    if ok and "disk_mb" in limits:
+def _settings_apply(site, changed, form, log_was):
+    """Apply a saved Settings form on the host: (ok, sentence).
+
+    The site is installed again (and restarted) only when a limit's value changed: the form sends every field, and
+    a note or the access log alone never restarts the site. The proxy is applied again only when the access log
+    of an online site was switched.
+    """
+    ok, said = install_site(site) if changed else (True, "Saved.")
+    if ok and "disk_mb" in changed:
         host_call(_sw.quota_set, site.remote, site)
-    if ok and site.enabled and "access_log" in form:
+    if ok and site.enabled and "access_log" in form and bool(site.access_log) != log_was:
         ok, said = reconcile_proxy(site.remote)
     return ok, said
 
@@ -752,13 +758,15 @@ def _settings(site, form):
     """The Settings form: {limits: {..., backup_keep}, access_log, full_egress, customer_note}."""
     limits = dict(form.get("limits")) if isinstance(form.get("limits"), dict) else {}
     _egress_refusal(site, form)
-    refused = _limits(site, limits) or _keep(site, limits)
+    log_was = bool(site.access_log)
+    refused, changed = _limits(site, limits)
+    refused = refused or _keep(site, limits)
     if refused is not None:
         return refused
     words = ["%s=%s" % (k, limits[k]) for k in sorted(limits) if k in LIMITS or k == "backup_keep"]
     words += _settings_flags(site, form)
     db.session.commit()
-    ok, said = _settings_apply(site, limits, form)
+    ok, said = _settings_apply(site, changed, form, log_was)
     return acted(site, "website_settings", ok, said, ", ".join(words) or "none")
 
 
