@@ -1,5 +1,18 @@
 {# Overview: what runs, its software and what it uses (js/website_site.js renderOverview). #}
 <section data-ws-pane="overview">
+  {# Offline: the one button that puts it online (an administrator of the site), or who can. #}
+  <div id="ws-offline" class="alert alert-warning py-2 px-2 small mb-2" hidden>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <span class="fw-semibold">This website is offline: visitors cannot reach it.</span>
+      {% if site_admin|default(false) %}
+      <button type="button" class="btn btn-sm btn-success" data-action="wsPutOnline"><i class="bi bi-globe"></i> Put it online</button>
+      {% else %}
+      <span>An administrator of this website can put it online.</span>
+      {% endif %}
+    </div>
+    <div class="form-text mt-1">Putting it online opens ports 80 and 443 to the internet and gets a certificate for its domains. Each domain must point at this host first.</div>
+    <div id="ws-offline-msg" class="small" role="status"></div>
+  </div>
   <div class="ws-grid">
     <div class="card">
       <div class="card-body py-2">

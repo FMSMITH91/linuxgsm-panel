@@ -38,6 +38,7 @@
     WS.el('ws-online').textContent = WS.T(s.enabled ? 'Online' : 'Offline');
     var open = WS.el('ws-open'), url = WS.safeUrl(s.open_url);
     if (open) { WS.show(open, !!url); if (url) open.href = url; }
+    WS.show('ws-offline', !s.enabled && s.state !== 'creating' && s.state !== 'removing');
     var b = WS.el('ws-main');
     if (!b) return;
     var m = WS.pick(MAIN, s.state, MAIN.creating);
@@ -60,6 +61,7 @@
     WS.say('ws-msg', WS.T('Starting…'));
     WS.siteAct(verb, {}, 'ws-msg');
   };
+  window.wsPutOnline = function () { WS.putOnline(ID, 'ws-offline-msg', function (ok) { if (ok) WS.reload(); }); };
   window.wsRestart = function () { WS.say('ws-msg', WS.T('Restarting…')); WS.siteAct('restart', {}, 'ws-msg'); };
   window.wsUpdateImage = function () {
     WS.stepUp(function () { WS.say('ws-msg', WS.T('Updating…')); WS.siteAct('update-image', {}, 'ws-msg'); });

@@ -18,6 +18,8 @@
 6. A DNS check that newly verifies a domain of a site already online applies the proxy at once.
 7. The Overview's figures: the probe is parsed (memory, CPU, disk, the running image), and a figure that cannot
    be read says why instead of an empty bar.
+8. A site that finished installing but is offline leads with Put it online (for an administrator of it), and
+   its page's Overview says it is offline with the same button.
 """
 import datetime as _dt313
 import importlib.machinery as _mach313
@@ -643,6 +645,79 @@ def _s7_overview(st, _rec):
     _w313._STATUS.clear()
 
 
+# ── 8. the scripts: Put it online, and figures that could not be read ────────────────────────────
+_SITE_API313 = {"success": True, "site": {"id": 7, "name": "shop", "kind": "wordpress", "state": "running", "enabled": False,
+                                          "image": {"name": "", "version": ""},
+                                          "usage": {"disk_mb": 12, "unread": {"mem_mb": "The website is not running.",
+                                                                              "cpu_pct": "The website is not running.",
+                                                                              "image": "The website is not running."}},
+                                          "limits": {"mem_mb": 512, "disk_mb": 2048}},
+                "install": {}, "domains": [], "dns": {}, "can": {"manage": True, "admin": True}}
+
+
+def _finish_scenario313(enabled, admin, enable_answer):
+    api = {"success": True, "site": {"id": 5, "state": "running", "enabled": enabled},
+           "install": {"state": "done", "steps": [], "site_url": "https://blog.example.org/",
+                       "admin_url": "https://blog.example.org/wp-admin/"},
+           "can": {"admin": admin, "manage": True}}
+    return _ran301("finish (enabled=%s admin=%s)" % (enabled, admin), _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+  window.wsOpenAdd();
+  $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
+  window.wsAddSubmit({preventDefault: function () {}});
+  for (let i = 0; i < 8; i++) await tick();
+  const res = $('ws-result');
+  const before = {links: res.querySelectorAll('a').map(function (a) { return a.textContent; }),
+                  buttons: res.querySelectorAll('button').map(function (b) { return [b.textContent.trim(), b.getAttribute('data-action')]; }),
+                  text: res.textContent};
+  if (window.wsFinishOnline && res.querySelector('button')) { window.wsFinishOnline(); for (let i = 0; i < 8; i++) await tick(); }
+  return {before: before, after: res.querySelectorAll('a').map(function (a) { return a.textContent; }),
+          msg: $('ws-result-msg') ? $('ws-result-msg').textContent : null,
+          fixLink: $('ws-result-msg') && $('ws-result-msg').querySelector('a') ? $('ws-result-msg').querySelector('a').href : null,
+          posted: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[1]; })};
+""", routes={"/api/websites": {"success": True, "sites": [], "missing": [], "hosts": [{"id": 1, "name": "h"}]},
+             "/websites/add": {"success": True, "id": 5}, "/api/websites/5": api, "/websites/5/enable": enable_answer}))
+
+
+def _s8_scripts(_st, _rec):
+    off = _finish_scenario313(False, True, {"success": True, "message": "The website is online."})
+    eq("node: a finished site that is offline leads with Put it online (no links that would not open), and once it is "
+       "online the links come",
+       ((off.get("before") or {}).get("links"), (off.get("before") or {}).get("buttons"), off.get("after"), off.get("posted")),
+       (["Go to the website"], [["Put it online", "wsFinishOnline"]],
+        ["Open the site", "Open the admin page", "Go to the website"], ["/m/websites/add", "/m/websites/5/enable"]))
+    refused = _finish_scenario313(False, True, {"success": False, "fix": "domains",
+                                                "message": "A domain of this website does not point at its host yet."})
+    eq("node: a refusal is said beside the button with a link to the Domains tab, and no link to the site appears",
+       ((refused.get("msg", "") or "").startswith("A domain of this website"), refused.get("fixLink"), refused.get("after")),
+       (True, "/m/websites/5?tab=domains", ["Open the Domains tab", "Go to the website"]))
+    nobody = _finish_scenario313(False, False, {"success": True})
+    eq("node: someone who may not put it online is told who can, with no button and no links",
+       ((nobody.get("before") or {}).get("buttons"), (nobody.get("before") or {}).get("links"),
+        "until an administrator of it puts it online" in (nobody.get("before") or {}).get("text", "")),
+       ([], ["Go to the website"], True))
+    on = _finish_scenario313(True, True, {"success": True})
+    eq("node: a site already online keeps the links (control)", (on.get("before") or {}).get("links"),
+       ["Open the site", "Open the admin page", "Go to the website"])
+    page = _ran301("overview offline", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  const b = $('ws-offline').querySelector('button');
+  return {shown: !$('ws-offline').hidden, action: b ? b.getAttribute('data-action') : null,
+          mem: $('ws-mem-text').textContent, memBar: $('ws-mem').hidden, disk: $('ws-disk-text').textContent,
+          diskBar: $('ws-disk').hidden, image: $('ws-ov-image').textContent};
+""", routes={"/api/websites/7": _SITE_API313}))
+    eq("node: the site's Overview says it is offline with the Put it online button for its administrator",
+       (page.get("shown"), page.get("action")), (True, "wsPutOnline"))
+    eq("node: a figure that could not be read says so with why, its bar hidden; a figure read keeps its bar (control)",
+       (page.get("mem"), page.get("memBar"), page.get("image"), page.get("disk"), page.get("diskBar")),
+       ("Couldn't read: The website is not running.", True, "Couldn't read: The website is not running.", "12 / 2048 MB",
+        False))
+    cust = _ran301("overview offline (manager)", _node301(_site_cu301, _COMMON301 + ["website_site.js"], r"""
+  return {shown: !$('ws-offline').hidden, button: !!$('ws-offline').querySelector('button'), text: $('ws-offline').textContent};
+""", routes={"/api/websites/7": dict(_SITE_API313, can={"manage": True, "admin": False})}))
+    eq("node: someone who runs the site but may not put it online is told who can (no button)",
+       (cust.get("shown"), cust.get("button"), "An administrator of this website can put it online." in (cust.get("text") or "")),
+       (True, False, True))
+
+
 def _s9_add_and_enable(st, rec):
     _p9_patch(_dns313, "socket", _resolver313({"new.p313.example.org": [_HOST_IP313], "later.p313.example.org": [_HOST_IP313]}))
     _p9_patch(_w313, "start_install", lambda site: None)
@@ -710,7 +785,7 @@ with _p9.app_context():
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
                          _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s7_overview, _s9_add_and_enable):
+                         _s7_overview, _s8_scripts, _s9_add_and_enable):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

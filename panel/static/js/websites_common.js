@@ -88,6 +88,24 @@
     if (msgId) WS.say(msgId, text, ok ? 'ok' : 'err'); else WS.toast(text, ok ? 'success' : 'danger');
     return ok;
   };
+  // Put site `id` online (POST /websites/<id>/enable, administrators of the site; the server decides).
+  // Its answer is said in `msgId`; a refusal the Domains tab fixes (fix: "domains") gets a link there.
+  // `then(ok)` runs after the answer.
+  WS.putOnline = function (id, msgId, then) {
+    WS.stepUp(function () {
+      WS.say(msgId, WS.T('Putting it online…'));
+      WS.post('/websites/' + Number(id) + '/enable', {}).then(function (d) {
+        var ok = WS.done(d, msgId);
+        var m = WS.el(msgId);
+        if (!ok && d && d.fix === 'domains' && m) {
+          var a = WS.node('a', 'ms-1', WS.T('Open the Domains tab'));
+          a.href = WS.url(WS.R.page(Number(id)) + '?tab=domains');
+          m.appendChild(a);
+        }
+        if (then) then(ok, d);
+      });
+    });
+  };
 
   window.WS = WS;
 })();

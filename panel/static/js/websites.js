@@ -252,6 +252,41 @@
     a.rel = 'noopener noreferrer';
     return a;
   }
+  function openLinks(box, inst) {
+    var site = WS.safeUrl(inst.site_url), admin = WS.safeUrl(inst.admin_url);
+    if (site) box.appendChild(link(WS.T('Open the site'), site, 'btn-outline-primary'));
+    if (admin) box.appendChild(link(WS.T('Open the admin page'), admin, 'btn-outline-primary'));
+  }
+  // A new site starts offline: its links would not open. Its main button is then Put it online (for an
+  // administrator of the site), and the links come once it is; anyone else is told who can.
+  function offlineRow(row, d, inst) {
+    var can = (d.can || {}).admin;
+    if (!can) {
+      row.appendChild(WS.node('span', 'small text-secondary', WS.T('The website is offline until an administrator of it puts it online.')));
+      return;
+    }
+    var wrap = WS.node('div', 'w-100 d-flex flex-wrap gap-2 align-items-center');
+    wrap.id = 'ws-result-online';
+    wrap.appendChild(WS.button(WS.T('Put it online'), 'globe', 'wsFinishOnline', [], 'btn-success'));
+    wrap.appendChild(WS.node('span', 'small text-secondary', WS.T('This opens ports 80 and 443 to the internet and gets a certificate for its domains. Each domain must point at this host first.')));
+    var msg = WS.node('div', 'w-100 small');
+    msg.id = 'ws-result-msg';
+    msg.setAttribute('role', 'status');
+    wrap.appendChild(msg);
+    row.appendChild(wrap);
+    st.inst = inst;
+    var auto = WS.el('ws-add-online');
+    if (auto && auto.checked) window.wsFinishOnline();
+  }
+  window.wsFinishOnline = function () {
+    WS.putOnline(st.siteId, 'ws-result-msg', function (ok) {
+      var wrap = WS.el('ws-result-online');
+      if (!ok || !wrap) return;
+      wrap.querySelectorAll('button').forEach(function (b) { b.remove(); });
+      openLinks(wrap, st.inst || {});
+      load();
+    });
+  };
   function finish(d, inst) {
     var box = WS.el('ws-result');
     var row = WS.node('div', 'd-flex flex-wrap gap-2 align-items-center');
@@ -259,9 +294,7 @@
       row.appendChild(WS.node('span', 'text-danger small', inst.error || (d.site && d.site.state_reason) || WS.T('A step failed, and every step done before it was undone.')));
     } else {
       row.appendChild(WS.node('span', 'text-success small', WS.T('Done.')));
-      var site = WS.safeUrl(inst.site_url), admin = WS.safeUrl(inst.admin_url);
-      if (site) row.appendChild(link(WS.T('Open the site'), site, 'btn-outline-primary'));
-      if (admin) row.appendChild(link(WS.T('Open the admin page'), admin, 'btn-outline-primary'));
+      if (d.site && d.site.enabled) openLinks(row, inst); else offlineRow(row, d, inst);
     }
     var go = WS.node('a', 'btn btn-sm btn-primary', WS.T('Go to the website'));
     go.href = WS.url(WS.R.page(st.siteId));
