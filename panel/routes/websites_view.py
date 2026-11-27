@@ -123,8 +123,9 @@ def _missing(admin):
     if WebsiteProxy.query.filter(WebsiteProxy.installed_version != "").first() is not None:
         return []
     fix = "" if not current_user.is_superadmin else "/websites#proxy"
+    # Not blocking: a site can be made without the proxy, so Create stays available beside the note.
     return [{"key": "proxy", "text": "The web proxy is not installed yet: sites can be made, but none can go online.",
-             "fix_url": fix}]
+             "fix_url": fix, "blocking": False}]
 
 
 def _admin_host_ids():

@@ -18,6 +18,10 @@ B5  The first database made on a site's Database tab is reachable at once: the s
     database server's port forwarded (a running site restarted, a stopped one from its next start); a later
     database is on the same server, so nothing is reinstalled.
 
+M7  The add dialog's "the web proxy is not installed yet: sites can be made, but none can go online" is a note
+    (blocking: false): Create stays available beside it, as the sentence says and as the server allows. An entry
+    that concerns only some kinds of site (kinds) shows, and blocks, only for those.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -329,6 +333,45 @@ def _b5_cleanup(site_ids):
     _db315.session.commit()
 
 
+# ── M7. The missing-proxy note and Create ─────────────────────────────────────────────────────────
+def _m7_note(st):
+    installed = _Proxy315.query.filter(_Proxy315.installed_version != "").all()
+    kept = [(p, p.installed_version) for p in installed]
+    for p in installed:
+        p.installed_version = ""
+    _db315.session.commit()
+    try:
+        got = _p9_json(_Client315(st.su.id).get("/api/websites")).get("missing") or []
+    finally:
+        for p, v in kept:
+            p.installed_version = v
+        _db315.session.commit()
+    eq("M7 (GET /api/websites, no web proxy installed): the note says sites can be made and does not block Create",
+       [(m.get("key"), m.get("blocking")) for m in got if m.get("key") == "proxy"], [("proxy", False)])
+    note = {"key": "proxy", "text": "The web proxy is not installed yet: sites can be made, but none can go online.",
+            "fix_url": "/websites#proxy", "blocking": False}
+    only = {"key": "database", "text": "No database server.", "kinds": ["install"]}
+    got = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      window.wsOpenAdd();
+      const a = {shown: !$('ws-missing').hidden, disabled: $('ws-add-create').disabled, msg: $('ws-add-msg').textContent,
+                 fix: $('ws-missing-fix').textContent.trim()};
+      return a;
+    """, {"/api/websites": dict(_LIST315, missing=[note])})
+    eq("M7 (the add dialog, js/websites.js): the missing-proxy line shows with its Install button, and Create stays "
+       "available with no \"available once this is fixed\" beside it (the line said sites can be made)",
+       (got.get("shown"), got.get("disabled"), got.get("msg"), got.get("fix")), (True, False, "", "Install the web proxy"))
+    kinds = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      window.wsOpenAdd();
+      const plain = {shown: !$('ws-missing').hidden, disabled: $('ws-add-create').disabled};
+      $('ws-kind-install').checked = true; window.wsKind('install');
+      return {plain: plain, app: {shown: !$('ws-missing').hidden, disabled: $('ws-add-create').disabled,
+                                  text: $('ws-missing-text').textContent}};
+    """, {"/api/websites": dict(_LIST315, missing=[only])})
+    eq("M7 control (an entry for app installs only): a plain site is not held back by it; choosing Install an app "
+       "shows it and makes Create unavailable", (kinds.get("plain"), kinds.get("app")),
+       ({"shown": False, "disabled": False}, {"shown": True, "disabled": True, "text": "No database server."}))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -366,7 +409,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

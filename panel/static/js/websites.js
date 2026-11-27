@@ -123,14 +123,18 @@
   }
 
   // The dialog's first line: what is missing, and the one button that fixes it (a superadmin), or
-  // who to ask. Create stays on screen, unavailable, with the reason beside it.
+  // who to ask. An entry that blocks (any entry unless it says blocking: false) keeps Create on screen,
+  // unavailable, with the reason beside it; one that does not is a note, and Create stays available, so
+  // the line and the button never disagree. An entry with `kinds` concerns only those kinds of site.
   var FIX = {proxy: {label: 'Install the web proxy', action: 'wsProxyInstall', icon: 'download'}};
+  function blocks(m) { return !!m && m.blocking !== false; }
   WS.renderMissing = function (missing) {
     var box = WS.el('ws-missing');
-    var first = (missing || [])[0];
+    var mine = (missing || []).filter(function (m) { return !m.kinds || m.kinds.indexOf(st.kind) >= 0; });
+    var first = mine.filter(blocks)[0] || mine[0];
     WS.show(box, !!first);
     var create = WS.el('ws-add-create');
-    if (create) create.disabled = !!first;
+    if (create) create.disabled = blocks(first);
     if (!first) { WS.say('ws-add-msg', ''); return; }
     WS.el('ws-missing-text').textContent = first.text || WS.T('Something this host needs for websites is missing.');
     var fix = WS.clear(WS.el('ws-missing-fix'));
@@ -139,13 +143,13 @@
     if (FLAGS.super !== '1') {
       fix.appendChild(WS.node('span', 'text-secondary', WS.T('Ask a superadmin to set this up.')));
     } else if (f) {
-      fix.appendChild(WS.button(WS.T(f.label), f.icon, f.action, [], 'btn-warning'));
+      fix.appendChild(WS.button(WS.T(f.label), f.icon, f.action, f.args || [], 'btn-warning'));
     } else if (path) {
       var a = WS.node('a', 'btn btn-sm btn-warning', WS.T('Fix this'));
       a.href = WS.url(path);
       fix.appendChild(a);
     }
-    WS.say('ws-add-msg', WS.T('Create is available once this is fixed.'), 'err');
+    WS.say('ws-add-msg', blocks(first) ? WS.T('Create is available once this is fixed.') : '', 'err');
   };
   window.wsOpenAdd = function () {
     var m = WS.el('ws-add-modal');
@@ -158,6 +162,7 @@
   };
   window.wsKind = function (kind) {
     st.kind = kind;
+    WS.renderMissing(st.d ? st.d.missing : []);
     WS.show('ws-add-php', kind === 'php');
     WS.show('ws-add-node', kind === 'app');
     WS.show('ws-add-apps', kind === 'install');
