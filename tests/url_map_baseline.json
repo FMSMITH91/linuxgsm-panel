@@ -3850,6 +3850,16 @@
       "POST"
     ]
   },
+  "POST /websites/<int:site_id>/cert": {
+    "endpoint": "website_site_cert",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_site_cert"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/<int:site_id>/databases/<int:db_id>/delete": {
     "endpoint": "website_database_delete",
     "guards": [

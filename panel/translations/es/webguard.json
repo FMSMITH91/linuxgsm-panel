@@ -1,3 +1,14 @@
 {
-  "Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel.": "Los puertos 80 y 443 están cerrados: en el modo túnel los visitantes entran solo a través del túnel."
+  "Add a domain first: a certificate is checked against the site's domains.": "Añade primero un dominio: el certificado se comprueba con los dominios del sitio.",
+  "Automatic (Let's Encrypt) for every domain": "Automático (Let's Encrypt) para todos los dominios",
+  "Certificate for this website": "Certificado de este sitio web",
+  "Paste the certificate followed by its intermediates (fullchain.pem), then its private key, once for the whole site: each of its domains the certificate covers uses it, now and when added later, and the others stay automatic. A Cloudflare Origin CA certificate works the same way: create it in Cloudflare (SSL/TLS, Origin Server), paste both here, and set Cloudflare's SSL/TLS mode to Full (strict). The key is stored encrypted and never shown again. You renew this certificate yourself: the panel warns 30 days before it expires.": "Pega el certificado seguido de sus intermedios (fullchain.pem) y después su clave privada, una sola vez para todo el sitio: cada uno de sus dominios que el certificado cubre lo usa, ahora y cuando se añada más tarde, y los demás siguen en automático. Un certificado Cloudflare Origin CA funciona igual: créalo en Cloudflare (SSL/TLS, Origin Server), pega ambos aquí y pon el modo SSL/TLS de Cloudflare en Full (strict). La clave se guarda cifrada y no se vuelve a mostrar. Este certificado lo renuevas tú: el panel avisa 30 días antes de que caduque.",
+  "Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel.": "Los puertos 80 y 443 están cerrados: en el modo túnel los visitantes entran solo a través del túnel.",
+  "Saved: every domain of this site gets its certificate automatically from Let's Encrypt again.": "Guardado: todos los dominios de este sitio vuelven a obtener su certificado automáticamente de Let's Encrypt.",
+  "Saved: the site's certificate is used for {names}.": "Guardado: el certificado del sitio se usa para {names}.",
+  "The certificate covers none of this site's domains, so nothing was saved. {why}": "El certificado no cubre ninguno de los dominios de este sitio, así que no se guardó nada. {why}",
+  "The web proxy did not take the change, so the site keeps its previous certificates. {why}": "El proxy web no aceptó el cambio, así que el sitio conserva sus certificados anteriores. {why}",
+  "Uses the site's certificate": "Usa el certificado del sitio",
+  "used for": "usado para",
+  "{domain} stays automatic: {why}": "{domain} sigue en automático: {why}"
 }

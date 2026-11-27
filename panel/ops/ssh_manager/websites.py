@@ -395,9 +395,10 @@ def apply_doc(text, sites=(), proxy=None):
     tunnel = proxy is not None and proxy.exposure_mode == "tunnel"
     for site in () if tunnel else sites:
         for d in site.domains or []:
-            if _wp().own_cert(d):
-                files["%s.crt" % d.domain] = d.own_cert_pem
-                files["%s.key" % d.domain] = _secret(d.own_key_secret)
+            src = _wp().cert_source(d)
+            if src is not None and "%s.crt" % src[0] not in files:     # a site's one pair is sent once
+                files["%s.crt" % src[0]] = src[1]
+                files["%s.key" % src[0]] = _secret(src[2])
     if proxy is not None and proxy.origin_pull_mtls:
         from panel.services import websites_catalog as _wc
         files["origin-pull-ca.pem"] = _wc.origin_pull_ca("cloudflare")

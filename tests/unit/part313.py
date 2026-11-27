@@ -499,8 +499,9 @@ def _s4_self_signed_row(st):
   return {notes: $('wd-cert-notes').querySelectorAll('li').map(function (li) { return li.textContent; }),
           shown: !$('wd-cert').hidden, key: $('wd-cert-key').value, row: $('wd-list').textContent};
 """, routes={"/api/websites/7": dict(_SITE_API313, domains=[_SS_DOM313]),
-             "/websites/7/domains/cert": {"success": True, "message": "Saved.", "notes": [note]}}))
-    eq("U3 (the Domains tab, js/website_site.js): the save's notes are listed under the form, which stays open after the "
+             "/websites/7/cert": {"success": True, "message": "Saved.", "notes": [note]}}))
+    eq("U3 (the Domains tab, js/website_site.js, the site's one Certificate form): the save's notes are listed under "
+       "the form, which stays open after the "
        "page reloads the site, the key field emptied; the domain's line shows its warning",
        (page.get("notes"), page.get("shown"), page.get("key"), _SS_WARN313 in (page.get("row") or "")),
        ([note], True, "", True))

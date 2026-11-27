@@ -2011,6 +2011,9 @@ _LIGHT_MIGRATIONS = {
     ("website_proxy", "allow_url_error"): "ALTER TABLE website_proxy ADD COLUMN allow_url_error VARCHAR(300) DEFAULT ''",
     # Empty on upgrade: a domain checked as cdn before then went through Cloudflare, the only preset (website_dns).
     ("website_domain", "dns_cdn"): "ALTER TABLE website_domain ADD COLUMN dns_cdn VARCHAR(20) DEFAULT ''",
+    # Empty on upgrade: a site's own certificate was pasted per domain before (data migration 5 moves those).
+    ("website", "own_cert_pem"): "ALTER TABLE website ADD COLUMN own_cert_pem TEXT DEFAULT ''",
+    ("website", "own_key_secret"): "ALTER TABLE website ADD COLUMN own_key_secret TEXT DEFAULT ''",
 }
 
 
@@ -2203,6 +2206,36 @@ def _layered_history(text, layer):
     return json.dumps(new) if new != history else None
 
 
+def _site_certs_from_domains():
+    """Migration 5: an own certificate pasted per domain becomes its site's one certificate.
+
+    For each site with domains in cert_mode 'own' and no certificate of its own yet: the chain held by the most of
+    those domains (the first such domain on a tie) is stored once on the site, key and all (the ciphertext copied as
+    it is), and each domain that held that same chain uses the site's (cert_mode 'site', its own copy cleared). A
+    domain that held a different chain keeps it (still served for that domain alone). Safe to repeat: a site that has
+    a certificate is skipped, and a domain already on 'site' is no longer 'own'.
+    """
+    from panel.db.website_models import Website, WebsiteDomain
+    rows = (WebsiteDomain.query.filter(WebsiteDomain.cert_mode == "own").order_by(WebsiteDomain.id).all())
+    by_site = {}
+    for d in rows:
+        if d.own_cert_pem and d.own_key_secret:
+            by_site.setdefault(d.website_id, []).append(d)
+    for site_id, doms in by_site.items():
+        site = db.session.get(Website, site_id)
+        if site is None or site.own_cert_pem:
+            continue
+        counts = {}
+        for d in doms:
+            counts[d.own_cert_pem] = counts.get(d.own_cert_pem, 0) + 1
+        pem = max(counts, key=lambda k: (counts[k], -next(i for i, d in enumerate(doms) if d.own_cert_pem == k)))
+        first = next(d for d in doms if d.own_cert_pem == pem)
+        site.own_cert_pem, site.own_key_secret = pem, first.own_key_secret
+        for d in doms:
+            if d.own_cert_pem == pem:
+                d.cert_mode, d.own_cert_pem, d.own_key_secret = "site", "", ""
+
+
 # The data migrations, in order. PRAGMA user_version in the database file records how many have
 # run, so each runs ONCE per database, on the start that first finds it missing: a fresh database
 # (on its empty tables), an upgraded one, and a backup taken before it and restored later, which
@@ -2214,6 +2247,7 @@ _DATA_MIGRATIONS = (
     (_r21b_canonical_remote_hosts, "PRAGMA user_version = 2"),
     (_fpm_grant_file_permissions, "PRAGMA user_version = 3"),
     (_layer_legacy_password_hashes, "PRAGMA user_version = 4"),
+    (_site_certs_from_domains, "PRAGMA user_version = 5"),
 )
 
 

@@ -8,6 +8,10 @@
 3. A database server the panel set up and that stopped since: an app install and a site's database create ask the
    host again instead of trusting the row's "ready" (up to 10 minutes old), so they are refused with the Start
    button's entry before anything is made, and the add dialog's list shows that entry at once.
+5. One certificate per SITE: pasted once, used for each of the site's domains it covers (a name and its wildcard
+   both), the others kept automatic with the reason; a domain added later that it covers uses it; one Back to
+   automatic; the proxy serves the covered names from one block with one pair of files; per-domain certificates of
+   before move to their site (data migration 5).
 4. WordPress's Site Health page cache test answers from the web proxy's real state: each proxy apply writes, into
    every WordPress site's files, whether the configuration it runs caches that site's pages (and for how long), and
    the loopback plugin replaces WordPress's own test (which looks for caching headers on requests that never pass
@@ -338,6 +342,133 @@ def _s4_plugin():
        (True, "site/conf/panel/page-cache", "files-7"))
 
 
+# ── 5. One certificate per site ────────────────────────────────────────────────────────────────────
+def _pem321(names, days=90):
+    """A self-signed P-256 certificate for `names` (subjectAltName) and its key, as PEM text."""
+    from datetime import datetime, timedelta, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[0])])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=days))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(n) for n in names]), critical=False)
+            .sign(key, hashes.SHA256()))
+    return (cert.public_bytes(serialization.Encoding.PEM).decode(),
+            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                              serialization.NoEncryption()).decode())
+
+
+def _sc_site321(st, name, extra):
+    site = _site321(st, name)
+    for d in extra:
+        _db321.session.add(_Dom321(website_id=site.id, domain=d, verified_at=_utcnow321(), dns_state="matching"))
+    _db321.session.commit()
+    _db321.session.refresh(site)
+    return site
+
+
+def _modes321(site):
+    _db321.session.expire_all()
+    site = _db321.session.get(_Site321, site.id)
+    return {d.domain: (d.cert_mode, bool(d.own_cert_pem), bool(d.own_key_secret)) for d in site.domains}
+
+
+def _api_domains321(su, site):
+    got = _p9_json(su.get("/api/websites/%d" % site.id))
+    doms = (got.get("site") or {}).get("domains") or got.get("domains") or []
+    return {d.get("domain"): d for d in doms}
+
+
+def _s5_site_cert(st):
+    import json
+    from panel.services import websites_proxy as _wp
+    from panel.routes import websites_domains as _wd
+    site = _sc_site321(st, "p321c", ["www.p321c.example.org", "p321c.example.net"])
+    pem, key = _pem321(["p321c.example.org", "*.p321c.example.org"])
+    su = _Client321(st.su.id)
+    r = su.post("/websites/%d/cert" % site.id, json={"mode": "own", "cert": pem, "key": key})
+    body = _p9_json(r)
+    modes = _modes321(site)
+    site = _db321.session.get(_Site321, site.id)
+    eq("site certificate (POST /websites/<id>/cert, one paste for a name and its wildcard): both names use the site's "
+       "certificate (no copy of their own), the other domain stays automatic and the answer says why, the pair is "
+       "stored once on the site, and the key never comes back",
+       (r.status_code, modes, bool(site.own_cert_pem) and bool(site.own_key_secret),
+        any(n.startswith("p321c.example.net stays automatic") for n in body.get("notes") or []),
+        "PRIVATE KEY" in r.get_data(as_text=True), sorted((body.get("site_cert") or {}).get("domains") or [])),
+       (200, {"p321c.example.org": ("site", False, False), "www.p321c.example.org": ("site", False, False),
+              "p321c.example.net": ("acme", False, False)}, True, True, False,
+        ["p321c.example.org", "www.p321c.example.org"]))
+    site.enabled = True
+    text = _wp.render([site], None, {}, secret_of=lambda s: _TOKEN321)
+    doc = json.loads(_sw321.apply_doc(text, [site], None))
+    site.enabled = False
+    _db321.session.commit()
+    stem = "site-%d" % site.id
+    eq("site certificate (render and the apply's files): the covered names share ONE block naming the site's one pair "
+       "of files, sent once; the uncovered name keeps its automatic block",
+       ("p321c.example.org, www.p321c.example.org {\n\ttls /etc/lgsm-web-proxy/certs/%s.crt "
+        "/etc/lgsm-web-proxy/certs/%s.key {" % (stem, stem) in text, "p321c.example.net {\n\ttls {" in text,
+        sorted(doc["files"])), (True, True, [stem + ".crt", stem + ".key"]))
+    rows = _api_domains321(su, site)
+    eq("site certificate (GET /api/websites/<id>): the covered domains say they use the site's certificate, the "
+       "uncovered one is automatic with the reason on its line",
+       ((rows.get("www.p321c.example.org") or {}).get("cert_mode"),
+        ((rows.get("p321c.example.net") or {}).get("cert_uncovered") or "").startswith("p321c.example.net stays automatic")),
+       ("site", True))
+    _p9_patch(_wd._dns, "check", lambda domain, remote: ("mismatch", [], []))
+    r = su.post("/websites/%d/domains/add" % site.id, json={"domain": "shop.p321c.example.org"})
+    eq("site certificate (POST .../domains/add of a name the certificate covers): the new domain uses the site's "
+       "certificate at once; its DNS state is its own (not verified, so not served yet)",
+       (r.status_code, _modes321(site).get("shop.p321c.example.org")), (200, ("site", False, False)))
+    su.post("/websites/%d/domains/add" % site.id, json={"domain": "blog.p321c.example.net"})
+    eq("site certificate (control: a later name it does not cover): automatic", _modes321(site).get(
+        "blog.p321c.example.net"), ("acme", False, False))
+    r = su.post("/websites/%d/cert" % site.id, json={"mode": "acme"})
+    site = _db321.session.get(_Site321, site.id)
+    eq("site certificate (Back to automatic, one action for the site): every domain automatic, the site's pair gone",
+       (r.status_code, sorted(set(m for m, _p, _k in _modes321(site).values())), site.own_cert_pem,
+        site.own_key_secret), (200, ["acme"], "", ""))
+    other_pem, other_key = _pem321(["elsewhere.example.com"])
+    r = su.post("/websites/%d/cert" % site.id, json={"mode": "own", "cert": other_pem, "key": other_key})
+    eq("site certificate (a certificate that covers none of the site's domains): refused, nothing stored",
+       (r.status_code, _db321.session.get(_Site321, site.id).own_cert_pem), (400, ""))
+
+
+def _s5_migration(st):
+    import importlib
+    from panel.core.config import encrypt_secret
+    models = importlib.import_module("panel.db.models")
+    site = _sc_site321(st, "p321m", ["www.p321m.example.org", "p321m.example.net"])
+    pem, key = _pem321(["p321m.example.org", "*.p321m.example.org"])
+    lone_pem, lone_key = _pem321(["p321m.example.net"])
+    for d in site.domains:
+        mine = d.domain == "p321m.example.net"
+        d.cert_mode, d.cert_state = "own", "own"
+        d.own_cert_pem = lone_pem if mine else pem
+        d.own_key_secret = encrypt_secret(lone_key if mine else key)
+    _db321.session.commit()
+    models._site_certs_from_domains()
+    _db321.session.commit()
+    after = _modes321(site)
+    site = _db321.session.get(_Site321, site.id)
+    models._site_certs_from_domains()
+    _db321.session.commit()
+    eq("site certificate (data migration 5): the chain most of a site's domains held moves to the site once, those "
+       "domains point at it; a domain with a different chain keeps its own; running it again changes nothing",
+       (after, site.own_cert_pem == pem, bool(site.own_key_secret), _modes321(site)),
+       ({"p321m.example.org": ("site", False, False), "www.p321m.example.org": ("site", False, False),
+         "p321m.example.net": ("own", True, True)}, True, True, after))
+    eq("site certificate (data migration 5 is listed, numbered after the ones before it)",
+       [m.__name__ for m, _mark in models._DATA_MIGRATIONS][-1:] + [models._DATA_MIGRATIONS[-1][1]],
+       ["_site_certs_from_domains", "PRAGMA user_version = 5"])
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup321():
     _db321.session.rollback()
@@ -383,7 +514,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part321")
         _st321 = _rows321()
-        for _sec321 in (_s2_tunnel, _s3_db_stopped, _s4_apply):
+        for _sec321 in (_s2_tunnel, _s3_db_stopped, _s4_apply, _s5_site_cert, _s5_migration):
             check("part321: %s ran to the end" % _sec321.__name__, _ran321(_sec321, _st321), _ran321.last)
         eq("part321: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips321:], [])
     finally:

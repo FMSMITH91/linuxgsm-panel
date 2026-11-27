@@ -249,13 +249,20 @@ stopped, say), the primary domain stays as it was and the answer says why.
 
 ### Your own certificate
 
-Each domain has a **Certificate** button on the Domains tab: **Automatic (Let's Encrypt)**, the default,
-or **Your own certificate**. For your own, paste the certificate followed by its intermediate
-certificates (a `fullchain.pem`), and its private key without a passphrase, then **Save**. A
-[Cloudflare Origin CA](#cloudflare) certificate is this case. Switch back to Automatic the same
-way at any time; the web proxy then gets a Let's Encrypt certificate for the domain again, and its copy of
-your certificate and key is removed from the host the next time its settings are applied (at once when the
-site is online).
+A website has one **Certificate** button, at the top of its Domains tab: **Automatic (Let's Encrypt)**,
+the default, or **Your own certificate**. For your own, paste the certificate followed by its intermediate
+certificates (a `fullchain.pem`), and its private key without a passphrase, once for the whole site, then
+**Save**. The panel checks it against each of the site's domains: every domain it covers uses it (a
+certificate for `example.org` and `*.example.org` covers both, pasted once), and every domain it does not
+cover stays automatic, listed with the reason. A domain you add later that the certificate covers uses it
+at once; its DNS check and when it goes online are unchanged. Each covered domain's line says **Uses the
+site's certificate**. A [Cloudflare Origin CA](#cloudflare) certificate is this case. Switch the site
+back to Automatic the same way at any time, one action for every domain; the web proxy then gets Let's
+Encrypt certificates again, and its copy of your certificate and key is removed from the host the next
+time its settings are applied (at once when the site is online). The certificate and key are stored once
+for the site, whatever the number of domains on them; a certificate pasted for one domain before this
+existed was moved to its site on the update (a domain whose certificate differed from the rest keeps its
+own).
 
 What is checked (OWASP Transport Layer Security Cheat Sheet, "Certificates"):
 
@@ -301,8 +308,8 @@ A domain whose DNS record is proxied by Cloudflare (the orange cloud) resolves t
 addresses. Two ways to give it a certificate:
 
 1. **Recommended: a Cloudflare Origin CA certificate.** In Cloudflare, open SSL/TLS > Origin Server and
-   create a certificate for the domain (or a wildcard for it). Paste the certificate and its private key
-   on the domain's **Certificate** button as **Your own certificate**. Then set Cloudflare's SSL/TLS mode
+   create a certificate for the domain and its wildcard. Paste the certificate and its private key once,
+   on the site's **Certificate** button as **Your own certificate**. Then set Cloudflare's SSL/TLS mode
    to **Full (strict)**, so Cloudflare checks the host's certificate on every connection. Only Cloudflare
    trusts an Origin CA certificate, so keep the record proxied; the panel notes this when you save.
 2. **Automatic (Let's Encrypt) through Cloudflare.** It works only while Cloudflare passes plain HTTP to
