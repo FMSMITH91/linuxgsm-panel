@@ -159,7 +159,8 @@ def install_site(site, restart=True, progress=None):
     """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
 
     `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
-    A done install records the image and the files' revision it wrote (note_installed), which Update compares.
+    A done install that restarted the site records the image and the files' revision it wrote (note_installed), which
+    Update compares; one that left a running site alone does not, as its server still runs the files it started with.
     `progress` is told each part of the install as it begins (ssh_manager.websites.install).
     """
     if progress is not None:
@@ -167,8 +168,8 @@ def install_site(site, restart=True, progress=None):
     elif restart:
         ok, said = host_call(_sw.install, site.remote, site, site_db(site))
     else:
-        ok, said = host_call(_sw.install, site.remote, site, site_db(site), True, False)
-    if ok:
+        return host_call(_sw.install, site.remote, site, site_db(site), True, False)
+    if ok and restart:
         note_installed(site)
     return ok, said
 

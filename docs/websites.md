@@ -391,10 +391,11 @@ site stays offline for another try. A site still being set up cannot be deleted 
 ## Updates and settings
 
 When the signed catalog has a newer image for a site (a security rebuild), or the panel changed the files it
-writes for a site, the site's Overview offers **Update**, which installs it again from that image and restarts
-it (a few seconds offline; building a PHP image can take a few minutes first). Its files, databases and settings
-stay. Saving a site's Settings restarts it only when one of its limits changed; the note and the access log
-alone never do.
+writes for a site (its web server's settings, for example), the site's Overview offers **Update**, which installs
+it again from that image and restarts it (a few seconds offline; building a PHP image can take a few minutes
+first). Its files, databases, settings and secrets stay. A site installed before the panel recorded these is
+offered Update once. Saving a site's Settings restarts it only when one of its limits changed; the note and the
+access log alone never do.
 
 ## Access logs
 
