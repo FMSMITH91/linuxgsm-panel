@@ -615,6 +615,10 @@ def _s9_proxy_card():
 
 
 # ── 10. the rest ──────────────────────────────────────────────────────────────────────────────────
+def _forget_domain316(cfg):
+    cfg.pop("site_domain", None)
+
+
 def _s10_rest(st):
     su = _Client316(st.su.id)
     site = _site316(st, "p316-rest")
@@ -629,11 +633,12 @@ def _s10_rest(st):
         with _p9.test_request_context("/websites/customers/add", base_url="https://100.64.0.9:5000"):
             here, note2 = _wc.invite_link("tok")
     finally:
-        _cfg316.update_config(lambda c: c.pop("site_domain", None))
+        _cfg316.update_config(_forget_domain316)
     eq("customer invite: the link uses the panel's site domain (with the panel's port), not the address the "
        "administrator happens to use; without one it says which address the customer must reach",
-       (link.split("/invite")[0], "panel.example.org:5000" in note, here.split("/invite")[0], "100.64.0.9:5000" in note2),
-       ("https://panel.example.org:5000", True, "https://100.64.0.9:5000", True))
+       (link.split("/invite")[0], note, here.split("/invite")[0], note2),
+       ("https://panel.example.org:5000", _wc.S_INVITE_AT.replace("{address}", "panel.example.org:5000"),
+        "https://100.64.0.9:5000", _wc.S_INVITE_HERE.replace("{address}", "100.64.0.9:5000")))
     _s10_more(st, su, site)
 
 
