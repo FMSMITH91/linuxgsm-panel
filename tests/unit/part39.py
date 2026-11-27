@@ -830,6 +830,8 @@ _READ_VERBS39 = frozenset({
     "pro-status",
     "restart-flags", "root-crontab-read", "sshd-effective-config", "sshd-socket-active", "sshd-validate",
     "tailscale-serve-status", "ufw-show-added", "ufw-status", "ufw-stored-rules",
+    # The websites' blocked visitors list: it reads the deny folder and the ban events, and changes nothing.
+    "website-guard-list",
 })
 
 

@@ -532,7 +532,7 @@ def parse_guard_list(out):
 
 def guard_list(remote, after=0):
     """(ok, (entries, events) or a sentence): the host's blocked visitors and the ban events after number `after`."""
-    ok, out = _helper(remote, "website-guard-list", [str(int(after))], timeout=60)
+    ok, out = _helper(remote, "website-guard-list", [str(int(after))], timeout=45)      # under the helper's read deadline
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else GUARD_LIST_FAILED
     return True, parse_guard_list(out)
