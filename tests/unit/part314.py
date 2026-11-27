@@ -467,9 +467,10 @@ def _s314_script_confined():
         path, cwd = os.path.join(d, "catalog.json"), os.getcwd()
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(_TEXT314)
+        saved = _sys314.stderr
         try:
             os.chdir(d)
-            saved, _sys314.stderr = _sys314.stderr, _io314.StringIO()
+            _sys314.stderr = _io314.StringIO()
             rc = _SAV314.main(["site_app_versions.py", "check", name], get=get, catalog=path)
             said = _sys314.stderr.getvalue()
         finally:
