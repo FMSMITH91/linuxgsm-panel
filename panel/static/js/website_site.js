@@ -158,7 +158,6 @@
   var WS = window.WS;
   if (!WS || !WS.siteId) return;
   var ID = WS.siteId;
-  var F = WS.siteFlags;
   // ── domains ──
   var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', mismatch: 'DNS points elsewhere',
     private: 'DNS points to a private address', failed: 'DNS check failed'};

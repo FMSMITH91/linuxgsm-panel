@@ -33,7 +33,7 @@
     var line = portsLine(p);
     e.textContent = line.text;
     e.className = 'small mb-1 ws-ports ' + line.cls;
-    if (p && p.firewall === 'off' && p.mode !== 'tunnel') {
+    if (p.firewall === 'off' && p.mode !== 'tunnel') {
       e.appendChild(WS.node('span', 'd-block text-warning', WS.T('Firewall is off: 80 and 443 are reachable regardless.')));
     }
   }
