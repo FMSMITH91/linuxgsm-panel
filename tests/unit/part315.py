@@ -48,6 +48,9 @@ C1  A plain, PHP or Node.js site being added shows its setup's steps as an app i
     image built or downloaded, the container started), from the install's own progress: the dialog showed a heading
     over nothing for minutes while a PHP image was built.
 
+C2  A new Node.js app that waits for its files says so under its header, with the way to upload them, and its main
+    button builds and starts it (it showed Stopped and a Start that could only fail).
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -862,6 +865,32 @@ def _c1_dialog():
         "Start the site container"])
 
 
+# ── C2. A Node.js app waiting for its files ───────────────────────────────────────────────────────
+def _c2_waiting(st):
+    reason = _sw315.OK_WAITING
+    scenario = r"""
+      const shown = !$('ws-waiting').hidden;
+      const out = {shown: shown, reason: $('ws-waiting-reason').textContent, label: $('ws-main-label').textContent,
+                   verb: $('ws-main').getAttribute('data-verb'),
+                   upload: $('ws-waiting').querySelector('button') ? $('ws-waiting').querySelector('button').getAttribute('data-args') : null};
+      window.wsMain();
+      for (let i = 0; i < 4; i++) await tick();
+      out.posts = calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[1]; });
+      return out;
+    """
+    routes = {"/api/websites/7": _b3_site_answer(kind="app", state="stopped", state_reason=reason),
+              "/websites/7/app/build": {"success": True, "message": "Built."}}
+    got = _node315(_site_page315(), ["websites_common.js", "website_site.js"], scenario, routes)
+    eq("C2 (the site page, js/website_site.js): a new Node.js app says it waits for its files, with Upload its files "
+       "(the Files tab), and its main button is Build and start, which builds it (it showed Stopped and a Start)",
+       (got.get("shown"), got.get("reason"), got.get("upload"), got.get("label"), got.get("verb"), got.get("posts")),
+       (True, reason, '["files"]', "Build and start", "app/build", ["/m/websites/7/app/build"]))
+    plain = _node315(_site_page315(), ["websites_common.js", "website_site.js"], scenario,
+                     {"/api/websites/7": _b3_site_answer(kind="static", state="stopped")})
+    eq("C2 control (a stopped plain site): no such note, and Start", (plain.get("shown"), plain.get("label")),
+       (False, "Start"))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -901,7 +930,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

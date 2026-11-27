@@ -36,6 +36,12 @@
     <button type="button" id="ws-failed-retry" class="btn btn-sm btn-light" data-action="wsMain"><i class="bi bi-arrow-repeat"></i> Retry</button>
     {% endif %}
   </div>
+  <div id="ws-waiting" class="alert alert-info py-2 px-2 small" role="status" hidden>
+    <div id="ws-waiting-reason" data-no-i18n></div>
+    {% if can_files|default(false) %}
+    <button type="button" class="btn btn-sm btn-light mt-1" data-action="wsTab" data-args='["files"]'><i class="bi bi-upload"></i> Upload its files</button>
+    {% endif %}
+  </div>
   <div id="ws-install" class="card mb-2" hidden>
     <div class="card-body py-2">
       <div class="small fw-semibold mb-1">Setting up this website</div>

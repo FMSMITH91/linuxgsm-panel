@@ -210,6 +210,9 @@ install and build command (`npm ci --omit=dev` by default), the start command (`
 app listens on, and environment variables. Variables are stored encrypted and never shown again; leave a
 saved one empty to keep it.
 
+A new app has no files yet, so it is not started: its page says it waits for its files, with **Upload its
+files** (the Files tab), and its main button is **Build and start**, which installs its packages and starts it.
+
 The app runs in its own container from an official Node.js image, not on the host's own Node.js (which
 the panel installs for its server queries): that copy is shared with the panel and every account, so an
 app there would escape its site's limits and network rules. The build step may reach the npm registry;

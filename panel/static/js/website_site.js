@@ -32,7 +32,10 @@
     creating: {label: 'Setting up…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''},
     removing: {label: 'Removing…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''}};
   var UNFINISHED = {label: 'Delete and add again', icon: 'trash', cls: 'btn-outline-danger', verb: 'delete'};
+  // A new Node.js app waits for its files: Start could only fail; building installs its packages and starts it.
+  var WAITING = {label: 'Build and start', icon: 'hammer', cls: 'btn-success', verb: 'app/build'};
   var UNFINISHED_ASK = {label: 'Ask an administrator to delete it', icon: 'info-circle', cls: 'btn-secondary', verb: ''};
+  function waiting(s) { return s.state === 'stopped' && s.kind === 'app' && !!s.state_reason; }
   function renderHead(s) {
     var dot = WS.el('ws-dot');
     if (dot) dot.className = WS.dot(s.state).className;
@@ -45,6 +48,7 @@
     var m = WS.pick(MAIN, s.state, MAIN.creating);
     // An app whose install stopped part-way cannot be set up again: it is deleted and added again (administrators).
     if (s.state === 'failed' && s.setup_unfinished) m = WS.can.admin ? UNFINISHED : UNFINISHED_ASK;
+    if (waiting(s)) m = WAITING;
     b.className = 'btn btn-sm ' + m.cls;
     b.disabled = !m.verb;
     b.dataset.verb = m.verb;
@@ -62,7 +66,7 @@
         onConfirm: function () { WS.siteAct('stop', {}, 'ws-msg'); }});
       return;
     }
-    WS.say('ws-msg', WS.T('Starting…'));
+    WS.say('ws-msg', WS.T(verb === 'app/build' ? 'Building…' : 'Starting…'));
     WS.siteAct(verb, {}, 'ws-msg');
   };
   window.wsRestart = function () { WS.say('ws-msg', WS.T('Restarting…')); WS.siteAct('restart', {}, 'ws-msg'); };
@@ -79,6 +83,12 @@
     // Retry installs the site again; an app whose install stopped part-way is deleted instead (the main button).
     WS.show('ws-failed-retry', !d.site.setup_unfinished);
     WS.el('ws-failed-log').textContent = (d.logs || []).slice(-20).join('\n') || WS.T('No log lines yet.');
+  }
+  // Why a stopped app is not running (it waits for its files): said under the header, with the way to them.
+  function renderWaiting(s) {
+    var on = waiting(s);
+    WS.show('ws-waiting', on);
+    if (on) WS.el('ws-waiting-reason').textContent = s.state_reason;
   }
   function renderInstall(d) {
     var inst = d.install || {};
@@ -144,6 +154,7 @@
     st.d = d;
     var s = d.site || {};
     renderHead(s);
+    renderWaiting(s);
     renderFailed(d);
     var installing = renderInstall(d);
     renderOverview(s);
