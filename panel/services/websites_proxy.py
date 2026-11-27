@@ -27,8 +27,16 @@ WHERE IT LISTENS
 FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     Caddy replaces every incoming X-Forwarded-* header with its own unless the peer is a trusted proxy.
     Only exposure mode 'restricted' (the allow list) and 'tunnel' (the connector on loopback) name any:
-    exactly the allow list, or 127.0.0.1 and ::1. The client address header is read only from them
-    (CF-Connecting-IP with the Cloudflare preset or a tunnel, else X-Forwarded-For read right to left).
+    exactly the allow list, or 127.0.0.1 and ::1. The client address header is read only from them.
+    Each preset carries its CDN's header (PRESET_HEADERS): CF-Connecting-IP, which Cloudflare sets on
+    every request, is read only while every trusted network is Cloudflare's, since a request through
+    any other trusted proxy could carry one a visitor made up. Otherwise (Fastly, whose Fastly-Client-IP
+    keeps a visitor's own value; presets of two CDNs; the operator's trusted networks) the address is read
+    from X-Forwarded-For right to left: the first address that is not a trusted proxy, which every one of
+    them appends. The operator's own networks (typed, or a list read from an address) are allow-only: the firewall admits them, but they are
+    trusted proxies only when the superadmin says so (WebsiteProxy.custom_trusted), since anyone on a
+    trusted network can make the sites see any address. A tunnel reads CF-Connecting-IP from the
+    connector on loopback.
 
 HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
     Strict-Transport-Security with the operator's max-age (OWASP's 63072000 by default), with
@@ -104,20 +112,55 @@ def owasp_notes(opts):
 
 
 # ── the allow list ──────────────────────────────────────────────────────────────────────────────
-def allow_list(proxy):
-    """The canonical networks `proxy` admits in 'restricted' mode: its CIDRs plus its presets' ranges.
+XFF = "X-Forwarded-For"
+CF_HEADER = "CF-Connecting-IP"
+# The header each preset's CDN gives the visitor's address in (see FORWARDED HEADERS above).
+PRESET_HEADERS = {"cloudflare": CF_HEADER, "fastly": XFF}
 
-    Sorted IPv4 first, without duplicates and without a network another one already holds.
-    """
-    if proxy is None:
-        return []
-    from panel.services import websites_catalog as _wc    # imported here: render's tests need no catalog
-    nets = set(proxy.cidrs())
-    for preset in proxy.presets():
-        nets.update(_wc.preset_ranges(preset))
+
+def _canonical(nets):
+    """`nets` sorted IPv4 first, without duplicates and without a network another one already holds."""
     parsed = sorted({ipaddress.ip_network(n) for n in nets}, key=lambda n: (n.version, n.network_address, n.prefixlen))
     kept = [n for n in parsed if not any(o != n and o.version == n.version and n.subnet_of(o) for o in parsed)]
     return [str(n) for n in kept]
+
+
+def _preset_nets(proxy):
+    from panel.services import websites_catalog as _wc    # imported here: render's tests need no catalog
+    nets = []
+    for preset in proxy.presets():
+        nets += _wc.preset_ranges(preset)
+    return nets
+
+
+def _own_nets(proxy):
+    """The operator's own networks: the ones typed on the card and the list read from an address."""
+    return proxy.cidrs() + proxy.url_nets()
+
+
+def allow_list(proxy):
+    """The canonical networks `proxy` admits in 'restricted' mode: the operator's networks plus its presets' ranges."""
+    if proxy is None:
+        return []
+    return _canonical(_own_nets(proxy) + _preset_nets(proxy))
+
+
+def trusted_list(proxy):
+    """The networks whose requests may name the visitor's address: the presets', the operator's when trusted."""
+    if proxy is None:
+        return []
+    return _canonical(_preset_nets(proxy) + (_own_nets(proxy) if proxy.custom_trusted else []))
+
+
+def client_header(proxy):
+    """The header the visitor's address is read from in 'restricted' mode (FORWARDED HEADERS above).
+
+    A preset's own header only while every trusted network is that one CDN's; X-Forwarded-For otherwise.
+    """
+    headers = {PRESET_HEADERS.get(p, XFF) for p in proxy.presets()}
+    if proxy.custom_trusted and _own_nets(proxy):
+        headers.add(XFF)
+    return headers.pop() if len(headers) == 1 else XFF
 
 
 # ── custom rules ────────────────────────────────────────────────────────────────────────────────
@@ -284,10 +327,10 @@ def _global(mode, opts, proxy, trusted):
               "\t\t}"]
     if trusted:
         lines.append("\t\ttrusted_proxies static %s" % " ".join(trusted))
-        if mode == "tunnel" or (proxy is not None and "cloudflare" in proxy.presets()):
-            lines.append("\t\tclient_ip_headers CF-Connecting-IP")
+        if mode == "tunnel" or client_header(proxy) == CF_HEADER:
+            lines.append("\t\tclient_ip_headers %s" % CF_HEADER)
         else:
-            lines += ["\t\tclient_ip_headers X-Forwarded-For", "\t\ttrusted_proxies_strict"]
+            lines += ["\t\tclient_ip_headers %s" % XFF, "\t\ttrusted_proxies_strict"]
     lines += ["\t}", "}", ""]
     return lines
 
@@ -404,7 +447,7 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     opts = options(opts)
     secret_of = secret_of or _secret_of
     mode = proxy.exposure_mode if proxy is not None else "public"
-    trusted = {"restricted": allow_list(proxy), "tunnel": ["127.0.0.1/32", "::1/128"]}.get(mode, [])
+    trusted = {"restricted": trusted_list(proxy), "tunnel": ["127.0.0.1/32", "::1/128"]}.get(mode, [])
     lines = ["# Written by linuxgsm-panel from its database: the panel rewrites this file; edits are lost.", ""]
     lines += _global(mode, opts, proxy, trusted)
     for site in sorted(sites, key=lambda s: s.id or 0):

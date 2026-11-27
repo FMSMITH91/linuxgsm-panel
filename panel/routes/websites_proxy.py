@@ -6,7 +6,7 @@ superadmin). The host is named by `remote_id` in the query or the body.
 
 Exposure modes (WebsiteProxy.exposure_mode): 'public' opens 80/443 to everyone while a site is
 online; 'restricted' opens them only to an allow list (custom networks, held to
-validation.website_cidr, and presets such as the signed catalog's Cloudflare ranges), and the proxy
+validation.website_cidr, and presets: the signed catalog's CDN ranges), and the proxy
 trusts a client-address header only from those; 'tunnel' opens nothing and connects out with the
 operator's tunnel token. The token is stored encrypted (encrypt_secret), sent to the host on stdin by
 the runtime layer, never shown back, never logged; the page sees only whether one is set (OWASP
@@ -29,6 +29,7 @@ from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
 from panel.security.account_guard import step_up_required
 from panel.security.auth import log_action, superadmin_required
+from panel.services import websites_allow_url as _wau
 
 MAX_CIDRS = 200
 TOKEN_MAX = 4096
@@ -77,7 +78,10 @@ def proxy_json(row):
             "presets": list(WEBSITE_ALLOW_PRESETS), "preset_info": _preset_infos(),
             "tunnel_service": "http://localhost:%d" % TUNNEL_PORT, "tunnel_provider": row.tunnel_provider or "",
             "tunnel_token_set": bool(row.tunnel_token_enc),
-            "origin_pull_mtls": bool(row.origin_pull_mtls), "installed_version": row.installed_version or "",
+            "origin_pull_mtls": bool(row.origin_pull_mtls), "custom_trusted": bool(row.custom_trusted),
+            "allow_url": row.allow_url or "", "allow_url_nets": row.url_nets(), "allow_url_error": row.allow_url_error or "",
+            "allow_url_at": row.allow_url_at.strftime("%Y-%m-%d") if row.allow_url_at else "",
+            "allow_url_on": _wau.allowed(), "installed_version": row.installed_version or "",
             "last_error": row.last_error or ""}
 
 
@@ -94,6 +98,35 @@ def _cidrs(data, problems):
     if len(raw) > MAX_CIDRS:
         problems.append(i18n.tr("At most {n} networks.", n=MAX_CIDRS))
     return out
+
+
+def _allow_url(row, data, changes, problems):
+    """A new list address from the form: checked (https, port 443, the Outside services switch), or cleared.
+
+    The list itself is read by the route once the change is staged (_read_new_list); an unchanged address is
+    not read again here (the daily refresh does).
+    """
+    url = data.get("allow_url") if isinstance(data.get("allow_url"), str) else ""
+    url = url.strip()
+    if url == (row.allow_url or ""):
+        return
+    if not url:
+        changes.update(allow_url="", allow_url_nets="[]", allow_url_at=None, allow_url_error="")
+        return
+    why = _wau.url_problem(url) or ("" if _wau.allowed() else _wau.S_OFF)
+    if why:
+        problems.append(i18n.tr(why))
+    else:
+        changes["allow_url"] = url
+
+
+def _read_new_list(row, changes):
+    """Read the list at the address just staged on `row`: "" when it is used, else the sentence refusing the save."""
+    if not changes.get("allow_url"):
+        return ""
+    from panel.core.clock import utcnow
+    _changed, why = _wau.refresh(row, utcnow())
+    return i18n.tr(why[0], **why[1]) if why else ""
 
 
 def _choices(data, changes, problems):
@@ -130,20 +163,27 @@ def parse_settings(row, data):
     if "allow_presets" in data:
         presets = data.get("allow_presets") if isinstance(data.get("allow_presets"), list) else []
         changes["allow_presets"] = json.dumps(sorted({p for p in presets if p in WEBSITE_ALLOW_PRESETS}))
+    if "allow_url" in data:
+        _allow_url(row, data, changes, problems)
     _choices(data, changes, problems)
-    if "origin_pull_mtls" in data:
-        changes["origin_pull_mtls"] = _w.flag(data, "origin_pull_mtls")
+    for key in ("origin_pull_mtls", "custom_trusted"):
+        if key in data:
+            changes[key] = _w.flag(data, key)
     _token(data, changes, problems)
     return changes, problems + _mode_problems(row, changes)
 
 
+def _allows_nothing(row, changes):
+    """Whether a restricted host would be left with no network, preset or list address at all."""
+    cidrs = json.loads(changes.get("allow_cidrs", row.allow_cidrs or "[]"))
+    presets = json.loads(changes.get("allow_presets", row.allow_presets or "[]"))
+    return not cidrs and not presets and not changes.get("allow_url", row.allow_url)
+
+
 def _mode_problems(row, changes):
     mode = changes.get("exposure_mode", row.exposure_mode)
-    if mode == "restricted":
-        cidrs = json.loads(changes.get("allow_cidrs", row.allow_cidrs or "[]"))
-        presets = json.loads(changes.get("allow_presets", row.allow_presets or "[]"))
-        if not cidrs and not presets:
-            return [i18n.tr(S_RESTRICTED_EMPTY)]
+    if mode == "restricted" and _allows_nothing(row, changes):
+        return [i18n.tr(S_RESTRICTED_EMPTY)]
     if mode != "tunnel":
         return []
     # Both are needed: without a provider the apply only stops the connector, while the firewall's
@@ -160,7 +200,9 @@ def _detail(changes):
     for key in sorted(changes):
         if key == "tunnel_token_enc":
             words.append("tunnel token replaced")
-        else:
+        elif key == "allow_url":
+            words.append("allow_url=%s" % (_wau.where(changes[key]) if changes[key] else "none"))
+        elif not key.startswith("allow_url_"):
             words.append("%s=%s" % (key, changes[key]))
     return ", ".join(words)
 
@@ -407,10 +449,15 @@ def register(app):
             return _w.say(400, " ".join(problems))
         for key, value in changes.items():
             setattr(row, key, value)
+        refused = _read_new_list(row, changes)
+        if refused:
+            db.session.rollback()
+            return _w.say(400, refused)
         db.session.commit()
         ok, said = _apply(remote, row)
+        read = "; the list read: %d networks" % len(row.url_nets()) if changes.get("allow_url") else ""
         log_action(current_user, "remote_website_proxy_settings", target=remote.name, remote=remote, success=bool(ok),
-                   detail=_detail(changes) + ("" if ok else "; not applied: %s" % i18n.tr(said)))
+                   detail=_detail(changes) + read + ("" if ok else "; not applied: %s" % i18n.tr(said)))
         return _w.done(ok, said or "Saved and applied.", proxy=proxy_json(row))
 
     @app.route("/websites/proxy/options", methods=["POST"])

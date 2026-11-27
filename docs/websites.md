@@ -116,9 +116,24 @@ the Websites page:
 
 - **Public**: anyone on the internet reaches your sites on ports 80 and 443.
 - **Restricted**: ports 80 and 443 are open only to the networks you list. **Use Cloudflare's networks**
-  adds Cloudflare's published ranges (they come with the signed catalog, so the panel fetches nothing
-  extra); you can add any other network, IPv4 or IPv6, such as another CDN's or your own. The visitor's
-  real address is read from the CDN's header only when a request comes from one of those networks.
+  and **Use Fastly's networks** add that CDN's official published ranges (they come with the signed
+  catalog, so the panel fetches nothing extra; each list folds open under the buttons, with its source
+  and the catalog's date); you can add any other network, IPv4 or IPv6, such as your own. The visitor's
+  real address is read from a CDN's header only for requests from that CDN's networks: Cloudflare's
+  `CF-Connecting-IP` while Cloudflare's are the only trusted networks, otherwise `X-Forwarded-For`, read
+  from the right to the first address that is not a trusted network. Fastly adds the visitor's address
+  only for HTTPS visitors, so turn on Force TLS for the service at Fastly. Your own networks are
+  allow-only: they reach the sites, but the proxy reads no visitor's address from their requests unless
+  you switch on **Trust my networks as proxies** (then `X-Forwarded-For` from them is believed, so turn
+  it on only for proxies you run or trust: anyone on those networks could otherwise make your sites see
+  any address). **A list from an address** reads more networks from an https address you give (one
+  network a line; lines starting with `#` are skipped): when you save a new address, then once a day. A
+  list is used only whole, when every line is a network no wider than /8 (IPv4) or /16 (IPv6) and there
+  are at most 200; otherwise the save is refused naming the lines at fault, and a daily read that fails
+  keeps the last good list and says why on the card. A changed list is applied at once. The address must
+  be https on port 443 and resolve only to public addresses; Settings → Outside services → *Website allow
+  lists read from an address* turns the reading off. These networks count as your own networks: allow-only
+  unless trusted.
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
   and Cloudflare brings visitors in. In Cloudflare's dashboard, give each website's domain a **Public
   Hostname** on that tunnel with the service `http://localhost:19080` (the card and each site's Domains tab

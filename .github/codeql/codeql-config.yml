@@ -83,7 +83,15 @@ paths-ignore:
 #                                      public_https's. Only on a BlueMap install or update whose admin
 #                                      accepted Mojang's EULA. A size cap, a timeout; the detail is used
 #                                      only when its SHA-1 is the list's.
-#   public_https.handlers              The handlers geoip._get and addons_bluemap._get build their opener
+#   websites_allow_url._get            GET on the https address a SUPERADMIN typed for a web proxy's allow
+#                                      list (after a fresh step-up). url_problem runs at the call (https,
+#                                      a host name, port 443, no userinfo or fragment, printable, at most
+#                                      500 characters), and the opener's handlers are public_https's, so it
+#                                      connects only when every address the name resolves to is public (OWASP
+#                                      SSRF Prevention Cheat Sheet, Case 2). Only while outside_website_allow_url
+#                                      is not off, when the address is saved and once a day. A size cap, a
+#                                      timeout; the answer is only parsed as networks.
+#   public_https.handlers              The handlers geoip._get, addons_bluemap._get and websites_allow_url._get build their opener
 #                                      with: every redirect refused, no proxy, and a connect only when every
 #                                      address the host name resolves to is public (webpush._connect_checked).
 #   webpush._post                      POST (http.client, a _PushConnection) of an encrypted web-push
@@ -113,12 +121,14 @@ paths-ignore:
 #                                      address tried in turn and no other; TLS passes through
 #                                      untouched, the proxy writes no request of its own.
 # The three HTTP requests in notifications and the ones in game_icons, modrinth, steam_workshop,
-# breached_passwords, webpush, geoip and addons_bluemap refuse every redirect (geoip and addons_bluemap, like
-# webpush, connect only when every address the name resolves to is public: services/public_https.py).
-# The three others use urlopen, which follows one, but only from GitHub's own fixed hosts. Of the fourteen, only webpush takes a host and path from a
-# request (the add-on page proxy above takes a path, never a host), and only one parse_endpoint accepts as a known push service. The ntfy server is the one host
+# breached_passwords, webpush, geoip, addons_bluemap and websites_allow_url refuse every redirect (geoip,
+# addons_bluemap and websites_allow_url, like webpush, connect only when every address the name resolves to is
+# public: services/public_https.py).
+# The three others use urlopen, which follows one, but only from GitHub's own fixed hosts. Of the fifteen, only webpush takes a host and path from a
+# request (the add-on page proxy above takes a path, never a host), and only one parse_endpoint accepts as a known push service. The ntfy server is one of two hosts
 # an admin chooses: it is stored in config.json and read back later, a flow neither SSRF query traces,
-# so _NTFY_URL_RE bounds it.
+# so _NTFY_URL_RE bounds it. The web proxy's allow-list address is the other: a superadmin's, stored in the
+# database and read back by the route and the daily refresh, bounded by url_problem and public_https.
 query-filters:
   - exclude:
       id: py/partial-ssrf

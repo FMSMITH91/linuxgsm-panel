@@ -265,8 +265,9 @@ class WebsiteProxy(db.Model):
     """The web proxy on one host: how its sites are reached, and what the panel last applied.
 
     exposure_mode 'public' opens 80/443 to everyone while a site is enabled; 'restricted' opens them
-    only to `allow_cidrs` plus the networks of `allow_presets` (the catalog's Cloudflare ranges), and
-    the proxy trusts a client-address header only from those; 'tunnel' opens nothing and connects out
+    only to `allow_cidrs` plus the networks of `allow_presets` (the catalog's CDN ranges), and
+    the proxy trusts a client-address header only from the presets' networks, and from `allow_cidrs`
+    and the list read from `allow_url` only when `custom_trusted` is on; 'tunnel' opens nothing and connects out
     with `tunnel_token_enc` (encrypt_secret, at_rest.SECRET_COLUMNS; never logged, never on argv).
     allow_cidrs / allow_presets are JSON lists, written only through validation.website_cidr and
     WEBSITE_ALLOW_PRESETS. Settings that are the same for every host (HSTS, TLS minimum, ACME contact)
@@ -284,6 +285,15 @@ class WebsiteProxy(db.Model):
     tunnel_provider = db.Column(db.String(16), default="")
     tunnel_token_enc = db.Column(db.Text, default="")
     origin_pull_mtls = db.Column(db.Boolean, default=False, nullable=False)
+    # Whether the operator's own networks are trusted proxies: their requests may give the visitor's address in
+    # X-Forwarded-For. Off, they are allow-only (services/websites_proxy.py, FORWARDED HEADERS).
+    custom_trusted = db.Column(db.Boolean, default=False, nullable=False)
+    # A list of networks read from an https address (services/websites_allow_url.py): the address, the last good
+    # list (JSON, canonical networks), when it was read, and why the last try failed ("" when it did not).
+    allow_url = db.Column(db.String(500), default="", nullable=False)
+    allow_url_nets = db.Column(db.Text, default="[]")
+    allow_url_at = db.Column(db.DateTime, nullable=True)
+    allow_url_error = db.Column(db.String(300), default="")
     installed_version = db.Column(db.String(40), default="")
     applied_at = db.Column(db.DateTime, nullable=True)
     last_error = db.Column(db.String(200), default="")
@@ -317,3 +327,11 @@ class WebsiteProxy(db.Model):
     def presets(self):
         """The allow-list presets as a list of names."""
         return list(json.loads(self.allow_presets or "[]"))
+
+    @validates("allow_url_nets")
+    def _v_url_nets(self, key, value):
+        return self._v_cidrs(key, value)
+
+    def url_nets(self):
+        """The last good list read from `allow_url`, as canonical network strings."""
+        return list(json.loads(self.allow_url_nets or "[]"))

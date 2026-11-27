@@ -705,7 +705,7 @@ WEBSITE_PORT_MAX = 20999
 # of networks, or through an outbound tunnel with no inbound port at all.
 WEBSITE_EXPOSURE_MODES = ("public", "restricted", "tunnel")
 WEBSITE_TUNNEL_PROVIDERS = ("", "cloudflare")
-WEBSITE_ALLOW_PRESETS = ("cloudflare",)
+WEBSITE_ALLOW_PRESETS = ("cloudflare", "fastly")
 WEBSITE_DOMAIN_MAX = 253
 _DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _DOMAIN_TLD_RE = re.compile(r"^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})\Z")

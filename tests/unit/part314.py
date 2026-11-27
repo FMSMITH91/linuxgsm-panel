@@ -672,8 +672,8 @@ def _s314_gate():
        "changes the catalog",
        ("github-actions | Add-on images (Trivy, hadolint)" in required.splitlines(), "    name: Add-on images (Trivy, hadolint)"
         in scan, "              'panel/addon_images/**'" in scan), (True, True, True))
-    cf = [s for s in _steps29(_job29(_wf29("cloudflare-ranges.yml"), "ranges")) if "gh pr create" in s]
-    eq("cloudflare ranges (workflow): its pull request says to approve the checks GitHub holds for a pull request a "
+    cf = [s for s in _steps29(_job29(_wf29("cdn-ranges.yml"), "ranges")) if "gh pr create" in s]
+    eq("CDN ranges (workflow): its pull request says to approve the checks GitHub holds for a pull request a "
        "workflow's own token opened, before merging",
        [("press Approve workflows to run in the merge box to run the required checks before merging" in s) for s in cf],
        [True])

@@ -488,7 +488,7 @@ _exp301 = _ran301('exposure', _node301(_list_sa301, _COMMON301 + ["websites.js",
   const vis = function () { return [$('wp-restricted').hidden, $('wp-tunnel').hidden]; };
   const start = vis();
   $('wp-mode-restricted').checked = true; window.wsExposure('restricted'); const r = vis();
-  window.wsCfPreset(); $('wp-cidrs').value = ' 203.0.113.0/24 \n\n2001:db8::/32 ';
+  window.wsPreset('cloudflare'); $('wp-cidrs').value = ' 203.0.113.0/24 \n\n2001:db8::/32 ';
   const rb = WS.exposureBody();
   $('wp-mode-restricted').checked = false; $('wp-mode-tunnel').checked = true; window.wsExposure('tunnel'); const tv = vis();
   const tb = WS.exposureBody();
@@ -505,7 +505,7 @@ eq("node: exposure: Public shows neither list nor token; Restricted shows the al
    (_exp301.get("start"), _exp301.get("r"), _exp301.get("tv")), ([True, True], [False, True], [True, False]))
 eq("node: Restricted sends the Cloudflare preset and the typed networks, trimmed, blank lines dropped",
    _exp301.get("rb"), {"exposure_mode": "restricted", "allow_presets": ["cloudflare"],
-                       "allow_cidrs": ["203.0.113.0/24", "2001:db8::/32"]})
+                       "allow_cidrs": ["203.0.113.0/24", "2001:db8::/32"], "allow_url": "", "custom_trusted": False})
 eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed one is sent once and the box emptied",
    (_exp301.get("tb"), _exp301.get("tb2"), _exp301.get("sent"), _exp301.get("tokenAfter"), _exp301.get("saved")),
    ({"exposure_mode": "tunnel", "tunnel_provider": "cloudflare"},

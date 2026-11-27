@@ -13,6 +13,7 @@ from panel.services import website_certs
 from panel.services import schedules as _schedules
 from panel.services import addons_catalog as _addon_catalog
 from panel.routes import addons_geoip as _addons_geoip
+from panel.services import websites_allow_url as _allow_url
 from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
@@ -168,6 +169,7 @@ def register(app, supervise):
             _maybe_alert_os_updates()      # ...and the once-a-day OS package check
             _addon_catalog.daily_tick()    # the signed add-on catalog: at the first pass, then daily
             _addons_geoip.tick(app)        # B3's country database: this month's, once DB-IP has it
+            _allow_url.tick(app)           # web proxy allow lists read from an address: once a day
             time.sleep(1800)
 
     # This module owns both the ticker and the helper the tests drive, so it supervises and
