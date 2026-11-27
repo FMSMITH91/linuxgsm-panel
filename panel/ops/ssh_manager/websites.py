@@ -49,8 +49,15 @@ OK_STOPPED = "The website was stopped."
 OK_REMOVED = "The website and its account were removed."
 OK_PROXY = "The web proxy was installed."
 OK_CACHE_BUILD = "The web proxy with the page cache was built and installed."
-CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so the plain one was kept. Check the "
-                      "host's internet connection and try again.")
+# The helper says which part failed (failed=build|check|install); each part has its own sentence, the reason and
+# the build's last lines go to the panel's log only (OWASP Error Handling Cheat Sheet).
+CACHE_BUILD_FAILED = ("The web proxy with the page cache could not be built, so the plain one was kept. The panel's "
+                      "log has the build's last lines.")
+CACHE_CHECK_FAILED = ("The web proxy with the page cache was built, but the new program failed its check, so the plain "
+                      "one was kept. The panel's log has the reason.")
+CACHE_INSTALL_FAILED = ("The web proxy with the page cache could not be installed, so the plain one was kept. The "
+                        "panel's log has the reason.")
+CACHE_FAILURES = {"build": CACHE_BUILD_FAILED, "check": CACHE_CHECK_FAILED, "install": CACHE_INSTALL_FAILED}
 OK_APPLIED = "The web proxy's configuration was checked and applied."
 BAD_CONFIG = "The web proxy refused the new configuration, so the running one was kept: {why}"
 NOT_STARTED = "The web proxy did not start with the new configuration, so the previous one was put back: {why}"
@@ -200,7 +207,7 @@ def runtime_ready(remote):
     return _ws().runtime_refusal(os_version, podman) if podman else NO_PODMAN
 
 
-def install(remote, site, db=None, start_it=True):
+def install(remote, site, db=None, start_it=True, restart=True):
     """Create the site's account and folders, pull its image, write its unit and start it.
 
     `db` is (host, port) of the site's database as the host sees it, or None. Podman is made ready
@@ -208,7 +215,8 @@ def install(remote, site, db=None, start_it=True):
     (remove), so a failed first install leaves no account, folder or unit behind. An account that was
     already there (an update, a settings change) is never removed by a failure. A runtime app with no
     files yet is installed and not started (OK_WAITING): its first start could only fail. `start_it`
-    False writes everything and starts nothing (an app's rebuild starts it after its build).
+    False writes everything and starts nothing (an app's rebuild starts it after its build). `restart` False
+    starts what is not running and leaves a running site alone (a unit only added beside it, the object cache).
     """
     why = runtime_ready(remote)
     if why:
@@ -216,14 +224,14 @@ def install(remote, site, db=None, start_it=True):
     ok, out = _helper(remote, "website-account-create", [site.account])
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    ok, said = _install_made(remote, site, db, start_it)
+    ok, said = _install_made(remote, site, db, start_it, restart)
     if not ok and "account=created" in out.splitlines():
         undone, _t = remove(remote, site)
         _core._log.warning("website %s: the failed install was %s", site.id, "undone" if undone else "NOT undone")
     return ok, said
 
 
-def _install_made(remote, site, db, start_it=True):
+def _install_made(remote, site, db, start_it=True, restart=True):
     """Run install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
@@ -248,7 +256,7 @@ def _install_made(remote, site, db, start_it=True):
     if site.kind == "app" and _ws().MARK_APP_EMPTY in out.split():
         # Installed, not started: the app's files come next (a start now would fail, and undo the install).
         return True, OK_WAITING
-    return start(remote, site, restart=True) if start_it else (True, OK_INSTALLED)
+    return start(remote, site, restart=restart) if start_it else (True, OK_INSTALLED)
 
 
 def cpu_limit(remote, site, probe=None):
@@ -321,7 +329,8 @@ def proxy_install_cache(remote):
         return False, out
     # The helper's reason and the build's last lines (public pins and Go's output) go to the panel's log only.
     _core._log.warning("web proxy page cache build failed: %s", " | ".join(out.splitlines()[-24:])[-3000:])
-    return False, CACHE_BUILD_FAILED
+    cause = next((ln[7:] for ln in out.splitlines() if ln.startswith("failed=")), "build")
+    return False, CACHE_FAILURES.get(cause, CACHE_BUILD_FAILED)
 
 
 def _host_machine(remote):

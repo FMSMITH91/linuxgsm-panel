@@ -287,5 +287,6 @@
   "Certificate active (Let's Encrypt)": "Certificado activo (Let's Encrypt)",
   "Certificate active (ZeroSSL)": "Certificado activo (ZeroSSL)",
   "Test certificate (browsers do not trust it)": "Certificado de prueba (los navegadores no confían en él)",
-  "Local certificate (browsers do not trust it)": "Certificado local (los navegadores no confían en él)"
+  "Local certificate (browsers do not trust it)": "Certificado local (los navegadores no confían en él)",
+  "Not undone": "No deshecho"
 }

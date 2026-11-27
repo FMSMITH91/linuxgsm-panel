@@ -211,6 +211,24 @@ def _from_tar(fh, budget, pack):
                 pack.file(clean, size, tmp)
 
 
+class _Seekable:
+    """An upload's stream with seekable(), which zipfile reads to open an entry.
+
+    Werkzeug keeps an upload in a SpooledTemporaryFile; before Python 3.11 that class had no seekable()
+    (only seek and tell), so opening a zip's first entry raised AttributeError on Ubuntu 22.04's
+    Python 3.10 and the extract route answered 500. Everything else is the stream's own.
+    """
+
+    def __init__(self, fh):
+        self._fh = fh
+
+    def seekable(self):
+        return True
+
+    def __getattr__(self, name):
+        return getattr(self._fh, name)
+
+
 def repack(fh, room):
     """The archive in file `fh` (zip, tar, tar.gz) checked and written again as a clean tar.
 
@@ -219,6 +237,7 @@ def repack(fh, room):
     in bytes.
     """
     budget = _Budget(room)
+    fh = fh if hasattr(fh, "seekable") else _Seekable(fh)
     out = tempfile.SpooledTemporaryFile(max_size=_SPOOL)  # pylint: disable=consider-using-with
     pack = _Repack(out)
     try:

@@ -56,7 +56,9 @@ installer as a file that only the site's account can read, removed when the step
 output is never written to the system journal.
 
 The dialog shows each step as it runs. If one fails, every step done before it is undone: no half
-installed site, account, database or container is left behind. New app versions arrive through the
+installed site, account, database or container is left behind. If a step cannot be undone (a database
+server that does not answer, say), the dialog marks that step **Not undone** and says what is left; the
+site stays in the list, and deleting it tries again. New app versions arrive through the
 signed catalog, like add-on updates.
 
 ## How visitors reach your sites
@@ -164,7 +166,8 @@ Saving restarts the site's PHP gracefully.
 
 - **OPcache** (PHP): keeps compiled PHP in memory. On by default.
 - **Object cache** (PHP): a private Redis-compatible store for this site only, with no copy on disk. Off
-  by default. The tab shows the address to enter in WordPress's object-cache plugin.
+  by default. The tab shows the address to enter in WordPress's object-cache plugin. Turning it on or off
+  starts or removes the cache beside the running site; the site itself is not restarted.
 - **Page cache**: the web proxy keeps whole pages for visitors who are not signed in, for the time you
   set. Sign-ins, form posts, any answer that sets a cookie, and admin pages (`/wp-admin`, `/adm`,
   `/admin`) always skip it. **Purge cache** empties it. Off by default.

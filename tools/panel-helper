@@ -3393,39 +3393,102 @@ def v_cpu_milli(s):
 WEB_CACHE_TAIL = 20
 
 
+def _web_images(podman):
+    """{image id: its names} of every image in root's Podman store, intermediate ones included; None when unread."""
+    rc, out = _run_quiet([podman, "images", "-a", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}}"],
+                         timeout=120)
+    if rc != 0:
+        return None
+    images = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            images.setdefault(parts[0], set()).add(parts[1])
+    return images
+
+
+def _web_cache_clean(podman, before):
+    """Remove every image the cache build made, and no other: each id new since `before` that only the build names.
+
+    The build leaves its builder stage (about 2 GB), the images it pulled by digest and its own tag in root's
+    store; an image that was there before, or one with a name of its own (pulled or tagged meanwhile), stays.
+    Where the store could not be read before the build, only the build's own tag is removed.
+    """
+    after = _web_images(podman) if before is not None else None
+    made = sorted(i for i, names in (after or {}).items()
+                  if i not in before and all(n == WEB_CACHE_TAG or n.endswith(":<none>") for n in names))
+    _run_quiet([podman, "rmi", "-f"] + (made or [WEB_CACHE_TAG]), timeout=300)
+
+
 def _web_cache_build(args, d):
-    """Build the cache-enabled proxy image from WEB_CACHE_CONTAINERFILE in `d`; the binary's path, or None."""
+    """Build the cache-enabled proxy image from WEB_CACHE_CONTAINERFILE in `d`; the binary's path, or None.
+
+    --layers=false: no image is committed per instruction (each was a few hundred MB). Whatever the build
+    still made is removed afterwards, the binary already copied out (_web_cache_clean).
+    """
     version, builder, base, module_version = args
     with open(os.path.join(d, "Containerfile"), "w", encoding="utf-8") as fh:
         fh.write(WEB_CACHE_CONTAINERFILE)
     podman = resolve("podman")
-    build = [podman, "build", "--no-cache", "--pull=missing", "--network=host", "--cap-drop=ALL",
+    build = [podman, "build", "--no-cache", "--layers=false", "--pull=missing", "--network=host", "--cap-drop=ALL",
              "--security-opt", "no-new-privileges", "-t", WEB_CACHE_TAG,
              "--build-arg", "BUILDER_IMAGE=" + builder, "--build-arg", "BASE_IMAGE=" + base,
              "--build-arg", "PANEL_CADDY_VERSION=" + version, "--build-arg", "CACHE_MODULE=" + WEB_CACHE_MODULE,
              "--build-arg", "CACHE_VERSION=" + module_version, "-f", os.path.join(d, "Containerfile"), d]
-    r = subprocess.run(build, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B603 - fixed argv
-                       timeout=1800, env=_clean_env())
-    if r.returncode != 0:
-        tail = (r.stdout or b"").decode("utf-8", "replace").splitlines()[-WEB_CACHE_TAIL:]
-        sys.stderr.write("the build failed (rc %d); its last lines:\n%s" % (
-            r.returncode, "".join("build: %s\n" % ln[:300] for ln in tail)))
-        return None
+    before = _web_images(podman)
+    try:
+        r = subprocess.run(build, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B603
+                           timeout=1800, env=_clean_env())
+        if r.returncode != 0:
+            tail = (r.stdout or b"").decode("utf-8", "replace").splitlines()[-WEB_CACHE_TAIL:]
+            sys.stderr.write("the build failed (rc %d); its last lines:\n%s" % (
+                r.returncode, "".join("build: %s\n" % ln[:300] for ln in tail)))
+            return None
+        return _web_cache_copy_out(podman, d)
+    finally:
+        _web_cache_clean(podman, before)
+
+
+def _web_cache_copy_out(podman, d):
+    """Copy the built binary out of WEB_CACHE_TAG (a container with no network, removed after): its path, or None."""
     rc, cid = _run_quiet([podman, "create", "--network=none", WEB_CACHE_TAG], timeout=120)
     out = os.path.join(d, "caddy")
     try:
         rc = rc or _run_quiet([podman, "cp", cid.strip() + ":/usr/bin/caddy", out], timeout=120)[0]
     finally:
         _run_quiet([podman, "rm", "-f", cid.strip()], timeout=120)
-        _run_quiet([podman, "rmi", "-f", WEB_CACHE_TAG], timeout=120)
     return out if rc == 0 and os.path.isfile(out) else None
 
 
 def _web_has_cache(binary, pw):
-    """Whether `binary`, run as the proxy's user, lists the cache handler module."""
-    r = subprocess.run([binary, "list-modules"], shell=False, capture_output=True, timeout=60,  # nosec B603
-                       user=pw.pw_uid, group=pw.pw_gid, extra_groups=[], cwd="/", env=_clean_env())
-    return r.returncode == 0 and "http.handlers.cache" in r.stdout.decode("utf-8", "replace").split()
+    """Whether `binary`, run as the proxy's user, lists the cache handler module (why not: on stderr)."""
+    try:
+        r = subprocess.run([binary, "list-modules"], shell=False, capture_output=True, timeout=60,  # nosec B603
+                           user=pw.pw_uid, group=pw.pw_gid, extra_groups=[], cwd="/", env=_clean_env())
+    except (OSError, subprocess.SubprocessError) as exc:
+        sys.stderr.write("the new binary could not be run as %s: %s\n" % (WEB_PROXY_USER, type(exc).__name__))
+        return False
+    if r.returncode != 0 or "http.handlers.cache" not in r.stdout.decode("utf-8", "replace").split():
+        sys.stderr.write("the new binary did not list the cache module (rc %d)\n" % r.returncode)
+        return False
+    return True
+
+
+def _web_cache_failed(cause, why):
+    """End website-proxy-install-cache on a failure: `why` on stderr (the panel's log), failed=<cause> for its page."""
+    sys.stderr.write("%s: nothing was installed\n" % why)
+    sys.stdout.write("failed=%s\n" % cause)
+    return 1
+
+
+def _web_cache_stage(binary, staged, pw):
+    """Write the built binary to `staged`, beside the installed one with its owner and mode; an error, or ""."""
+    try:
+        with open(binary, "rb") as fh:
+            _web_write(staged, fh.read(), WEB_FILE_EXEC, 0, pw.pw_gid)
+    except OSError as exc:
+        return "the new binary could not be written: %s" % type(exc).__name__
+    return ""
 
 
 def do_website_proxy_install_cache(args, content):
@@ -3434,23 +3497,43 @@ def do_website_proxy_install_cache(args, content):
     args: Caddy version, builder image, base image (both by digest), the module's exact version. The
     plain proxy must be installed first (its user, folders and unit). Nothing is installed unless the
     build succeeds and the binary holds the module; the running proxy is restarted only when active.
+    The binary is checked as the proxy's own user (never root: OWASP Docker Security Cheat Sheet, rule #2,
+    an unprivileged user), so it is checked where that user can reach it: written first beside the installed
+    one with the installed one's owner and mode (the build's own folder is root's, 0700), then moved over it.
+    A failure prints failed=build, check or install (the page's sentence) and its reason on stderr.
     """
     if not os.path.isfile(WEB_PROXY_BIN):
-        sys.stderr.write("install the web proxy first\n")
-        return 1
+        return _web_cache_failed("install", "install the web proxy first")
     pw = pwd.getpwnam(WEB_PROXY_USER)
+    staged = WEB_PROXY_BIN + ".lgsm-check"
     with tempfile.TemporaryDirectory(prefix="lgsm-web-cache-") as d:
         binary = _web_cache_build(args, d)
-        if not binary or not _web_has_cache(binary, pw):
-            sys.stderr.write("the cache-enabled web proxy could not be built: nothing was installed\n")
-            return 1
-        with open(binary, "rb") as fh:
-            _web_write(WEB_PROXY_BIN, fh.read(), WEB_FILE_EXEC, 0, pw.pw_gid)
+        if not binary:
+            return _web_cache_failed("build", "the cache-enabled web proxy could not be built")
+        why = _web_cache_stage(binary, staged, pw)
+    if why:
+        return _web_cache_failed("install", why)
+    if not _web_has_cache(staged, pw):
+        _web_unlink(staged)
+        return _web_cache_failed("check", "the cache-enabled web proxy failed its check")
+    try:
+        os.replace(staged, WEB_PROXY_BIN)
+    except OSError as exc:
+        _web_unlink(staged)
+        return _web_cache_failed("install", "the new binary could not be installed: %s" % type(exc).__name__)
     _rc, active = _run_quiet([resolve("systemctl"), "is-active", WEB_PROXY_UNIT], timeout=20)
     if active.strip() == "active":
         _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
     sys.stdout.write("version=%s\ncache=yes\n" % args[0])
     return 0
+
+
+def _web_unlink(path):
+    """Remove `path` when it is there."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass    # already gone: there is nothing to remove
 
 
 def do_website_cpu_limit(args, content):

@@ -91,11 +91,11 @@ FAIL_MARKS = {
     "SITE_SHA_MISMATCH": "The downloaded file did not match the catalog's checksum and was deleted. Nothing was installed.",
     "SITE_DOWNLOAD_FAILED": "The app's release could not be downloaded. Try again later.",
     "SITE_UNPACK_FAILED": "The app's archive could not be unpacked safely, so nothing was kept.",
-    "SITE_STEP_FAILED": "An install step failed. Its output is below; the steps already done were undone.",
+    "SITE_STEP_FAILED": "An install step failed. Its output is below.",
     "SITE_WRITE_FAILED": "A file of the app's configuration could not be written.",
     "SITE_INSTALLER_LEFT": "The app's installer folder is still there after install, so the site was not made public.",
     "SITE_VERIFY_FAILED": ("The app's installer did not finish: its settings, its database tables or its first page "
-                           "are missing. Every step was undone."),
+                           "are missing."),
 }
 
 # The account's shell starts here (the addons' _ENV: the user manager's runtime folder, home, cd).
@@ -698,7 +698,9 @@ def build_sh(account, site, ids=None, image=None):
     home = _home(account)
     image = image or image_for(site)
     eport = EGRESS_PORT_BASE + int(site.port) - 20000
-    args = ["podman", "run", "--rm", "--name", "lgsm-site-build", "--pull=never", "--userns=keep-id",
+    # --log-driver=none: the build's output reaches only build.log (the page shows its last lines), never the
+    # account's journal; nothing reads lgsm-site-build there (logs_sh reads the site's own containers).
+    args = ["podman", "run", "--rm", "--name", "lgsm-site-build", "--pull=never", "--log-driver=none", "--userns=keep-id",
             "--read-only", "--cap-drop=all", "--security-opt=no-new-privileges", "--pids-limit=%d" % int(site.pids),
             "--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb), "--dns=none",
             "--network=pasta:-4,-o,127.0.0.1,-T,%d:%d" % (EGRESS_INNER_PORT, eport),

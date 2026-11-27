@@ -37,6 +37,7 @@ _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 DB_STEP = "create-database"
 S_DB_LEFT = ("The database {name} could not be removed ({why}), so it is still on the database server; delete the "
              "website to try again.")
+S_ALL_UNDONE = "Every step was undone."
 # site id -> the job's state while it runs and after: {"state", "step", "error"}. Never a password.
 _JOBS = {}
 _LOCK = threading.Lock()
@@ -119,8 +120,13 @@ def _undo_step(site, step):
 
 
 def undo(site, steps, done):
-    """Undo the finished steps `done` (names) in reverse, then the site's container and account. -> [failures]."""
-    failed = []
+    """Undo the finished steps `done` (names) in reverse, then the site's container and account. -> [failures].
+
+    The site's install_steps_done becomes the steps still in place (those whose undo failed): the page shows
+    them as not undone, and a later undo or delete tries only them again.
+    """
+    import json
+    failed, left = [], set()
     by_name = {s["name"]: s for s in steps}
     for name in reversed(done):
         if name == "account":
@@ -128,10 +134,14 @@ def undo(site, steps, done):
         ok, said = _undo_step(site, by_name.get(name, {"name": name, "type": ""}))
         if not ok:
             failed.append("%s: %s" % (name, i18n.tr(said)))
+            left.add(name)
     if "account" in done:
         ok, said = _w.host_call(_sw.remove, site.remote, site)
         if not ok:
             failed.append("site: %s" % i18n.tr(said))
+            left.add("account")
+    site.install_steps_done = json.dumps([n for n in done if n in left])
+    db.session.commit()
     return failed
 
 
@@ -187,7 +197,8 @@ def _finish(site, user, ok, step, said, steps):
     failed = undo(site, steps, json.loads(site.install_steps_done or "[]"))
     reason = i18n.tr(said)[:200]
     left = "NOT undone: %s" % "; ".join(failed) if failed else ""
-    _job(site.id, state="failed", step=step, error=("%s %s" % (reason, left)).strip())
+    # The step's own sentence never speaks for the undo (it is worded before the undo runs): this line does.
+    _job(site.id, state="failed", step=step, error=("%s %s" % (reason, left or i18n.tr(S_ALL_UNDONE))).strip())
     _w.audit_as(user, site, "website_app_install", "%s failed at %s: %s; %s" % (
         site.app_recipe, step, reason, left or "undone"), False)
     if failed:
@@ -202,13 +213,26 @@ def _finish(site, user, ok, step, said, steps):
 _NO_INSTALL = {"state": "", "steps": [], "error": "", "site_url": "", "admin_url": ""}
 
 
-def _step_word(name, done, current, state):
-    """One install step's state for the page: done/undone, running/failed, or pending."""
+def _step_word(name, done, current, state, order=()):
+    """One install step's state for the page: done, running, or pending; once the install failed, _failed_word's."""
+    if state == "failed":
+        return _failed_word(name, done, current, order)
     if name in done:
-        return "undone" if state == "failed" else "done"
+        return "done"
+    return "running" if name == current else "pending"
+
+
+def _failed_word(name, done, current, order):
+    """A step's state after a failed install's undo: left (its undo failed: still in `done`), failed, undone or pending.
+
+    The steps run in `order`, so every step before the one that failed was done; undo() kept in `done` only
+    those it could not undo.
+    """
+    if name in done:
+        return "left"
     if name == current:
-        return "failed" if state == "failed" else "running"
-    return "pending"
+        return "failed"
+    return "undone" if current in order and order.index(name) < order.index(current) else "pending"
 
 
 def _job_state(site, job):
@@ -240,8 +264,8 @@ def install_json(site):
     state = _job_state(site, job)
     done = json.loads(site.install_steps_done or "[]")
     current = job.get("step") or site.install_step or ""
-    steps = [{"key": n, "label": n, "state": _step_word(n, done, current, state)}
-             for n in ["account"] + [s["name"] for s in _safe_steps(site)]]
+    order = ["account"] + [s["name"] for s in _safe_steps(site)]
+    steps = [{"key": n, "label": n, "state": _step_word(n, done, current, state, order)} for n in order]
     site_url, admin_url = _urls(site, state)
     return {"state": state, "steps": steps, "error": job.get("error", "") or (site.state_reason or ""),
             "site_url": site_url, "admin_url": admin_url}
