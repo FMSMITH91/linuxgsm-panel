@@ -221,9 +221,13 @@ def _domains(site, mode="public"):
     return [d.domain for d in rows if (mode == "tunnel" or d.verified_at is not None) and _DOMAIN_RE.match(d.domain or "")]
 
 
+def _admin_line(opts):
+    """The admin API's line: on the owner-only unix socket while the page cache is on (its purge), else off."""
+    return "\tadmin unix/%s|0200" % ADMIN_SOCKET if opts["cache_build"] else "\tadmin off"
+
+
 def _global(mode, opts, proxy, trusted):
-    admin = "\tadmin unix/%s|0200" % ADMIN_SOCKET if opts["cache_build"] else "\tadmin off"
-    lines = ["{", admin, "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
+    lines = ["{", _admin_line(opts), "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
     if mode == "tunnel":
         lines += ["\tauto_https off", "\tdefault_bind 127.0.0.1", "\thttp_port %d" % TUNNEL_PORT]
     else:

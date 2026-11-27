@@ -38,7 +38,10 @@
     }
     var s = WS.el('wp-cf-state');
     if (s) s.textContent = on ? WS.T("Cloudflare's networks are on the list (from the signed catalog). Tap again to remove them.") : '';
-    // Every network the preset admits, from the signed catalog, and where they come from.
+    renderCfList();
+  }
+  // Every network the preset admits, from the signed catalog, and where they come from.
+  function renderCfList() {
     var info = (cur().preset_info || {}).cloudflare || {}, ranges = info.ranges || [];
     var sum = WS.el('wp-cf-sum');
     if (sum) sum.textContent = WS.TF("Cloudflare's networks ({n})", {n: ranges.length});
@@ -72,11 +75,12 @@
     var tok = WS.el('wp-token');
     if (tok) tok.value = '';
     WS.show('wp-token-state', !!p.tunnel_token_set);
+    renderTools(p);
+  }
+  function renderTools(p) {
     var svc = WS.el('wp-tunnel-service');
     if (svc) svc.textContent = p.tunnel_service || '';
-    var check = WS.el('wp-check'), apply = WS.el('wp-apply');
-    if (check) check.disabled = !p.installed;
-    if (apply) apply.disabled = !p.installed;
+    ['wp-check', 'wp-apply'].forEach(function (id) { var b = WS.el(id); if (b) b.disabled = !p.installed; });
   }
   // The proxy's state as the host reports it (version, running, the tunnel connector's state in tunnel mode).
   var ACTIVE = {active: 'running', inactive: 'stopped', failed: 'failed', activating: 'starting'};
@@ -120,6 +124,9 @@
     var o = d.options || {};
     Object.keys(OPT_FIELDS).forEach(function (k) { setVal(OPT_FIELDS[k], o[k]); });
     window.wsOptCheck();
+    foldedSections();
+  };
+  function foldedSections() {
     var sum = WS.el('wp-opts-sum');
     if (sum) sum.textContent = WS.TF('Security settings: {n} settings', {n: Object.keys(OPT_FIELDS).length});
     // A link to a folded section (from a site's page) opens it, so the setting it points at is in view.

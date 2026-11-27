@@ -118,8 +118,7 @@
     setText('ws-ov-image', [img.name, img.version].filter(Boolean).join(' '));
     var ver = s.app_version || s.php_version || s.runtime_version;
     setText('ws-ov-version', ver);
-    // The newest backup's time; "" when the host said there is none; null when it could not be read (a dash).
-    setText('ws-ov-backup', s.last_backup || (s.last_backup === '' ? WS.T('None yet') : ''));
+    setText('ws-ov-backup', backupText(s.last_backup));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
     WS.show('ws-ov-offline', !s.enabled);
@@ -128,6 +127,8 @@
     meter('ws-disk', u.disk_mb, l.disk_mb, u.disk_mb != null ? u.disk_mb + ' / ' + l.disk_mb + ' MB' : '');
     meter('ws-cpu', u.cpu_pct, 100, u.cpu_pct != null ? u.cpu_pct + ' %' : '');
   }
+  // The newest backup's time; "" when the host said there is none; null when it could not be read (a dash).
+  function backupText(when) { return when || (when === '' ? WS.T('None yet') : ''); }
   window.wsLoadLogs = function () {
     WS.get(WS.R.act(ID, 'logs')).then(function (d) {
       WS.el('ws-logs').textContent = (d && d.lines && d.lines.length) ? d.lines.join('\n') : WS.T('No log lines yet.');
@@ -179,11 +180,14 @@
       info.appendChild(WS.raw('span', 'ms-1', String(dm.cert_not_after).slice(0, 10)));
     }
     li.appendChild(info);
+    certNotes(li, dm);
+    if (WS.can.manage) li.appendChild(domainButtons(dm));
+    return li;
+  }
+  function certNotes(li, dm) {
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
     if (dm.cert_warning && WS.can.sup) li.appendChild(proxyLink());
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
-    if (WS.can.manage) li.appendChild(domainButtons(dm));
-    return li;
   }
   // Where a host-wide setting is changed (a superadmin's Websites page), from the line that names it.
   function proxyLink() {

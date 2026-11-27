@@ -148,16 +148,21 @@
   };
   // Keep pages for and Purge cache only do something while the page cache is on (saved) and the host's web proxy
   // has it: otherwise they stay in view, disabled, with the reason and where to change it.
+  function pageCacheWhy(p, on) {
+    if (!on) return WS.T('Turn the page cache on first.');
+    return p.page_cache_ready ? '' : (p.page_cache_why || '');
+  }
+  function setDisabled(id, off) { var e = WS.el(id); if (e) e.disabled = off; }
   window.wsPageCacheCheck = function () {
     var p = st.perf || {}, box = WS.el('wperf-page');
     var on = !!(box && box.checked);
-    var why = !on ? WS.T('Turn the page cache on first.') : (p.page_cache_ready ? '' : (p.page_cache_why || ''));
-    var ttl = WS.el('wperf-ttl'), purge = WS.el('wperf-purge');
-    if (ttl) ttl.disabled = !!why;
+    var why = pageCacheWhy(p, on);
+    setDisabled('wperf-ttl', !!why);
     // Purge empties what the saved setting stores: never while the switch is only flipped and not yet saved.
-    if (purge) purge.disabled = !!why || !p.page_cache;
+    setDisabled('wperf-purge', !!why || !p.page_cache);
+    var text = why || (p.page_cache ? '' : WS.T('Save first: the page cache starts with the next visits.'));
     var line = WS.el('wperf-page-why');
-    if (line) { line.textContent = why || (!p.page_cache ? WS.T('Save first: the page cache starts with the next visits.') : ''); WS.show(line, !!line.textContent); }
+    if (line) { line.textContent = text; WS.show(line, !!text); }
     WS.show('wperf-page-link', !!why && on && WS.can.sup);
   };
   window.wsPurge = function () {

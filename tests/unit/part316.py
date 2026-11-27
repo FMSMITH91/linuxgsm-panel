@@ -129,7 +129,7 @@ def _bundle_conf(stdin, name):
 def _seams316():
     """The host at ssh_manager.websites' seams: installs build the real bundle, applies and helpers are recorded."""
     def install(remote, site, db=None, start_it=True, restart=True):
-        stdin, image, refused = _sw316._site_bundle(site, (1005, 1005), {"splice": True, "cpu_delegated": True}, db)
+        stdin, _image, refused = _sw316._site_bundle(site, (1005, 1005), {"splice": True, "cpu_delegated": True}, db)
         _REC316["install"].append((site.id, stdin or "", refused))
         return (False, refused) if refused else (True, _sw316.OK_STARTED)
 
@@ -612,6 +612,11 @@ def _s10_rest(st):
        "administrator happens to use; without one it says which address the customer must reach",
        (link.split("/invite")[0], "panel.example.org:5000" in note, here.split("/invite")[0], "100.64.0.9:5000" in note2),
        ("https://panel.example.org:5000", True, "https://100.64.0.9:5000", True))
+    _s10_more(st, su, site)
+
+
+def _s10_more(st, su, site):
+    """The firewall line, a restore of a stopped site, the disk-full sentence and the removed domains route."""
     _wv316._FIREWALL.clear()
     from panel.ops.ssh_manager import firewall as _fw
     _p9_patch(_fw, "remote_ufw_status", lambda remote: {"installed": True, "enabled": False})
@@ -650,14 +655,18 @@ def _s10_rest(st):
 
 
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
-def _cleanup316():
-    _db316.session.rollback()
-    sites = set(_ROWS316["sites"]) | {s.id for s in _Site316.query.filter(
-        _Site316.remote_id.in_(_ROWS316["remotes"] or [0])).all()}
+def _cleanup316_children(sites):
     for d in _Dom316.query.filter(_Dom316.website_id.in_(sorted(sites) or [0])).all():
         _db316.session.delete(d)
     for p in _Proxy316.query.filter(_Proxy316.remote_id.in_(_ROWS316["remotes"] or [0])).all():
         _db316.session.delete(p)
+
+
+def _cleanup316():
+    _db316.session.rollback()
+    sites = set(_ROWS316["sites"]) | {s.id for s in _Site316.query.filter(
+        _Site316.remote_id.in_(_ROWS316["remotes"] or [0])).all()}
+    _cleanup316_children(sites)
     for model, ids in ((_Site316, sorted(sites)), (_User316, _ROWS316["users"]), (_Remote316, _ROWS316["remotes"])):
         for i in ids:
             row = _db316.session.get(model, i)

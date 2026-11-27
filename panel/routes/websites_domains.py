@@ -170,12 +170,18 @@ def domain_json(site, row, tunnel=None):
     the tunnel's provider serves HTTPS, so the state is "tunnel", never a certificate pending for good.
     """
     tunnel = _w.tunnel_mode(site.remote_id) if tunnel is None else tunnel
-    note = "" if tunnel else cert_note(row)
-    return {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
-            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after and not tunnel else None,
-            "cert_state": "tunnel" if tunnel else row.cert_state or "pending", "cert_error": row.cert_error or "",
-            "cert_warning": i18n.tr(note) if note else "",
-            "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
+    return dict(_cert_part(row, tunnel), id=row.id, domain=row.domain, is_primary=bool(row.is_primary),
+                dns_state=row.dns_state or "unchecked", cert_error=row.cert_error or "",
+                records=[{"type": t, "value": a} for t, a in _dns.records(site.remote)])
+
+
+def _cert_part(row, tunnel):
+    """The domain's certificate fields: its state, expiry and warning; the tunnel's state in tunnel mode."""
+    if tunnel:
+        return {"cert_state": "tunnel", "cert_not_after": None, "cert_warning": ""}
+    note = cert_note(row)
+    return {"cert_state": row.cert_state or "pending", "cert_warning": i18n.tr(note) if note else "",
+            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None}
 
 
 def register(app):

@@ -117,7 +117,12 @@ def _ports(sites):
     modes = [rows[s.remote_id].exposure_mode for s in online if s.remote_id in rows]
     mode = max(set(modes), key=modes.count) if modes else "public"
     return {"mode": mode, "open": bool(online) and mode != "tunnel", "sites_enabled": len(online),
-            "firewall": _firewall({s.remote for s in online}) if online and mode != "tunnel" else "unknown"}
+            "firewall": _ports_firewall(online, mode)}
+
+
+def _ports_firewall(online, mode):
+    """The firewall's state where it matters: hosts with an online site, outside tunnel mode (no port is open)."""
+    return _firewall({s.remote for s in online}) if online and mode != "tunnel" else "unknown"
 
 
 FIREWALL_FRESH = 60               # seconds a host's firewall reading is reused by the list
