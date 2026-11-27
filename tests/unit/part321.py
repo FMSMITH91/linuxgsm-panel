@@ -607,7 +607,8 @@ def _guard_tree321(d):
         with open(path, "wb") as fh:
             fh.write(data)
     stubs = dict(paths, pwd=_NS321(getpwnam=lambda n: me), _web_write=write, _web_own_nets=lambda: ["203.0.113.5/32"],
-                 _web_owned_dir=lambda path, mode, uid, gid: os.makedirs(path, exist_ok=True),
+                 _web_deny_dir=lambda gid: os.makedirs(paths["WEB_DENY_DIR"], exist_ok=True),
+                 _web_log_dir=lambda pw: os.makedirs(paths["WEB_LOG_DIR"], exist_ok=True),
                  _run_quiet=lambda argv, timeout=60, **k: (0, ""))
     saved = {k: getattr(_H321, k) for k in stubs}
     for k, v in stubs.items():

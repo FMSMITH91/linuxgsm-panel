@@ -3775,16 +3775,26 @@ def _web_own_nets():
     return sorted(nets)
 
 
-def _web_owned_dir(path, mode, uid, gid):
-    """Make folder `path` when missing, owned uid:gid with `mode`."""
-    os.makedirs(path, mode=mode, exist_ok=True)
-    os.chown(path, uid, gid)
-    os.chmod(path, mode)
+def _web_deny_dir(gid):
+    """The deny folder, made when missing: root's, searchable (never listable) by the proxy's group `gid`.
+
+    The proxy's file matcher stats one name in it, which needs search permission alone (0710).
+    """
+    os.makedirs(WEB_DENY_DIR, mode=0o700, exist_ok=True)
+    os.chown(WEB_DENY_DIR, 0, gid)
+    os.chmod(WEB_DENY_DIR, 0o710)
+
+
+def _web_log_dir(pw):
+    """The proxy's log folder, made when missing: the proxy's own, nobody else's (0700)."""
+    os.makedirs(WEB_LOG_DIR, mode=0o700, exist_ok=True)
+    os.chown(WEB_LOG_DIR, pw.pw_uid, pw.pw_gid)
+    os.chmod(WEB_LOG_DIR, 0o700)
 
 
 def _web_security_log(pw):
     """The security log, made empty and the proxy's own when missing: fail2ban starts no jail whose log is missing."""
-    _web_owned_dir(WEB_LOG_DIR, 0o700, pw.pw_uid, pw.pw_gid)
+    _web_log_dir(pw)
     if not os.path.exists(WEB_SECURITY_LOG):
         fd = os.open(WEB_SECURITY_LOG, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         os.fchown(fd, pw.pw_uid, pw.pw_gid)
@@ -3793,8 +3803,7 @@ def _web_security_log(pw):
 
 def _web_guard_files(guard, pw):
     """Write the deny folder, the never list, the security log and fail2ban's three files for `guard`."""
-    # Search only for the proxy's group (0710): its file matcher stats one name, it never lists the folder.
-    _web_owned_dir(WEB_DENY_DIR, 0o710, 0, pw.pw_gid)
+    _web_deny_dir(pw.pw_gid)
     own = _web_own_nets()
     _web_write(WEB_GUARD_NEVER, "".join(n + "\n" for n in sorted(set(guard["never"]) | set(own))).encode(),
                WEB_FILE_ROOT)
