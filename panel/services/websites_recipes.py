@@ -141,6 +141,7 @@ def render_template(template, values, escape):
 
 def _argv_word(word, values):
     from panel.services import websites_catalog as _wc
+
     def one(match):
         if match.group(1) in _wc.SECRETS:
             raise ValueError("a secret may not be put on a command line")
@@ -381,13 +382,16 @@ def _verify_sh(account, site, step, values, token):
 
 
 def _qd(word):
-    """`word` for the shell: double-quoted when it names the step's temp folder ($d; the panel's own text
-    of field names and fixed file names only), else single-quoted."""
+    """Quote `word` for the shell.
+
+    Double-quoted when it names the step's temp folder ($d; the panel's own text of field names and
+    fixed file names only), else single-quoted.
+    """
     return '"%s"' % word if "$d/" in word else _q(word)
 
 
 def _field_args(form, values):
-    """curl's --data-urlencode arguments for a page's form: a secret field read from its file, others inline."""
+    """Build curl's --data-urlencode arguments for a page's form: a secret field read from its file, others inline."""
     from panel.services import websites_catalog as _wc
     args = []
     for name, value in sorted(form.items()):

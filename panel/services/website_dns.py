@@ -25,7 +25,7 @@ S_STATES = {
 
 
 def _address(text):
-    """`text` as an ip_address (an IPv4-mapped IPv6 address as its IPv4), or None."""
+    """Parse `text` into an address object (an IPv4-mapped IPv6 address as its IPv4), or None."""
     try:
         ip = ipaddress.ip_address(str(text).split("%", 1)[0])
     except ValueError:

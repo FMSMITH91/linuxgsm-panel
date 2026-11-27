@@ -21,7 +21,7 @@
     var m = /^(-1|\d+)([KMG]?)$/i.exec(String(v || '').trim());
     if (!m) return null;
     if (m[1] === '-1') return Infinity;
-    return Number(m[1]) * ({'': 1, K: 1024, M: 1048576, G: 1073741824})[m[2].toUpperCase()];
+    return Number(m[1]) * ({'': 1, K: 1024, M: 1048576, G: 1024 * 1024 * 1024})[m[2].toUpperCase()];   // bytes per unit
   }
   WS.phpNotes = function () {
     var notes = [];

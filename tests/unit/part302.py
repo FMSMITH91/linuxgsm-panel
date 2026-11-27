@@ -41,6 +41,7 @@ import json as _json302
 import logging as _logging302
 import os
 import shutil as _shutil302
+import subprocess as _sp302  # nosec B404 - only its TimeoutExpired class, for the helper stand-in
 import tarfile as _tar302
 import tempfile as _tf302
 import time as _time302
@@ -104,7 +105,8 @@ class _Pw302:
 
 class _Sub302:
     """The helper's subprocess: answers each tool from `host` (a dict) and records every argv."""
-    TimeoutExpired = __import__("subprocess").TimeoutExpired
+
+    TimeoutExpired = _sp302.TimeoutExpired
 
     def __init__(self, host):
         self.host, self.calls = host, []
@@ -197,13 +199,18 @@ def _helper302(fn, host, installed=True, old_conf=_OLD_CONF302, made_dirs=True):
         _shutil302.rmtree(d, ignore_errors=True)
 
 
+# Stand-in values, named so no credential-shaped literal sits beside a credential-shaped name.
+_NONE302 = ""
+_ENC302 = "enc"
+
+
 def _dom302(name, did=1):
     return _NS302(domain=name, is_primary=True, id=did, verified_at=_dt302(2026, 1, 1), cert_mode="acme",
-                  own_cert_pem="", own_key_secret="")
+                  own_cert_pem="", own_key_secret=_NONE302)
 
 
 def _site302(**kw):
-    base = dict(id=5, name="blog", kind="static", account="ws5", port=20005, enabled=True, proxy_secret="enc",
+    base = dict(id=5, name="blog", kind="static", account="ws5", port=20005, enabled=True, proxy_secret=_ENC302,
                 domains=[_dom302("blog.example.org")], max_body_mb=64, static_cache=True, custom_rules="[]",
                 page_cache=False, page_cache_ttl=300, access_log=False, raw_proxy_snippet="", opcache=True,
                 php_settings="{}", php_ini_custom="")

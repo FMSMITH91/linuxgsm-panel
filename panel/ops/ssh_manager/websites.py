@@ -34,6 +34,7 @@ def _wp():
     from panel.services import websites_proxy as mod
     return mod
 
+
 ONLY_LOCAL = ("Websites run on the panel's own host for now: a managed host cannot run the panel's root "
               "helper, which websites need.")
 NO_HELPER = ("This host's panel helper is missing or out of date. Run install.sh again as root, then try "
@@ -223,7 +224,7 @@ def install(remote, site, db=None, start_it=True):
 
 
 def _install_made(remote, site, db, start_it=True):
-    """install's steps once the account exists: (ok, sentence)."""
+    """Run install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
         return False, FAILED

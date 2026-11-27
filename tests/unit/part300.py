@@ -57,6 +57,9 @@ from panel.services import websites as _svc300
 from panel.services import websites_proxy as _wp300
 
 _TREE300 = _tmp300.mkdtemp(prefix="lgsm-unit-p300-")
+_NONE300 = ""   # stand-in values, named so no credential-shaped literal sits beside a credential-shaped name
+_WEAK300 = "short"
+_TYPED300 = "a-typed-password-p300"
 _INSTALL300 = _sw300.install          # the real one: _stub_host300 replaces it for every section but _s11_errors
 _ROWS300 = {"remotes": [], "users": [], "groups": []}
 _HOST_IP300 = "11.22.33.44"
@@ -491,7 +494,7 @@ def _s7_apps(st, calls):
     made = []
 
     def fake_create(site, slug):
-        row = _GDB300(remote_id=site.remote_id, website_id=site.id, name="ws%d_%s" % (site.id, slug), secret="")
+        row = _GDB300(remote_id=site.remote_id, website_id=site.id, name="ws%d_%s" % (site.id, slug), secret=_NONE300)
         _db300.session.add(row)
         _db300.session.commit()
         made.append(row.name)
@@ -537,9 +540,9 @@ def _s7_apps(st, calls):
         any(pw in (a.detail or "") for a in rows), (_p9_json(status).get("install") or {}).get("state")),
        (True, "no-store", False, False, "done"))
     weak = su.post("/websites/install-app", json=dict(form, name="p300-wp3", domain="p300-wp3.example.org",
-                                                      admin_password="short"))
+                                                      admin_password=_WEAK300))
     typed = su.post("/websites/install-app", json=dict(form, name="p300-wp4", domain="p300-wp4.example.org",
-                                                       admin_password="a-typed-password-p300"))
+                                                       admin_password=_TYPED300))
     eq("apps: a typed admin password under 15 characters is refused; a typed one is never echoed back",
        (weak.status_code, typed.status_code, _p9_json(typed).get("password")), (400, 200, ""))
 

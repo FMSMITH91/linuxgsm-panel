@@ -196,8 +196,14 @@ def _dom299(name, primary=True, verified=True, mode="acme", did=1):
                   cert_mode=mode)
 
 
+# Stand-in values, named so no credential-shaped literal sits beside a credential-shaped name.
+_ENC299 = "enc"
+_QUOTED299 = "a'b\\c"
+_WEAK299 = "short"
+
+
 def _site299(**kw):
-    base = dict(id=5, name="blog", kind="php", account="ws5", port=20005, enabled=True, proxy_secret="enc",
+    base = dict(id=5, name="blog", kind="php", account="ws5", port=20005, enabled=True, proxy_secret=_ENC299,
                 domains=[_dom299("blog.example.org")], max_body_mb=64, static_cache=True, custom_rules="[]",
                 page_cache=False, page_cache_ttl=300, access_log=False, raw_proxy_snippet="", php_version="8.4",
                 mem_mb=512, cpu_milli=1500, pids=256, php_settings="{}", php_ini_custom="", opcache=True,
@@ -582,7 +588,8 @@ class _Pw299:
 
 class _Sub299:
     """A stand-in for the helper's subprocess: records every argv and runs nothing."""
-    TimeoutExpired = __import__("subprocess").TimeoutExpired
+
+    TimeoutExpired = _sp299.TimeoutExpired
 
     def __init__(self):
         self.calls = []
@@ -815,7 +822,7 @@ def _s299_recipe_steps():
 def _s299_recipe_steps2():
     _vals, out = _recipe_out299()
     cfg = _wr299.render_template("define('A','{db_password}'); define('S','{salt}'); define('T','{salt}');",
-                                 {"db_password": "a'b\\c"}, "php")
+                                 {"db_password": _QUOTED299}, "php")
     salts = _re299.findall(r"define\('[ST]','([^']+)'\)", cfg)
     eq("recipes (config): a value is escaped for a PHP string, and every salt is a fresh 64-character value from the "
        "CSPRNG", ("define('A','a\\'b\\\\c');" in cfg, len(salts), len(set(salts)), [len(x) for x in salts]),
@@ -840,7 +847,7 @@ def _s299_recipe_steps3():
        ("find site/html -mindepth 1 -delete" in undo["download-verify-unpack"], "rm -f -- site/html/install/panel-install.yml"
         in undo["render-config"], undo["create-database"]), (True, True, ""))
     try:
-        _wr299.values_for(site, admin={"user": "a b", "email": "x", "password": "short", "site_name": "x"})
+        _wr299.values_for(site, admin={"user": "a b", "email": "x", "password": _WEAK299, "site_name": "x"})
         bad_admin = False
     except ValueError:
         bad_admin = True

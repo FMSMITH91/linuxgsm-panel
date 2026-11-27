@@ -146,7 +146,7 @@ ADDRESS_CHECK_SECONDS = RETRY_SECONDS
 
 
 def host_address_rows():
-    """This host's addresses as `ip -o addr show` lists them in the C locale (ufweval); None when unread."""
+    """List this host's addresses as `ip -o addr show` lists them in the C locale (ufweval); None when unread."""
     from panel.ops.ssh_manager import ufweval
     return ufweval.local_addrs()
 

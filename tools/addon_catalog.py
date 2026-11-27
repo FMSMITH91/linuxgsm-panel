@@ -57,6 +57,7 @@ def _sites_problems(sites):
     """websites_catalog.sites_problems(sites): why the section is refused, [] when it passes."""
     return _WC.sites_problems(sites)
 
+
 # The checks a commit must have passed before its catalog is signed: the set deploy.yml's verify step
 # waits for (a unit check holds the two lists equal). A name ending in "(" is a prefix, for a matrix job.
 REQUIRED = ("checks (", "coverage", "js coverage", "gamedig lockfile (", "Analyze (", "Open code-scanning alerts",
@@ -66,10 +67,10 @@ IGNORED = ("deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "
 _FAILED = ("failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale")
 
 
-
 def _whole(value):
     """Whether `value` is an int and not a bool (True and False are ints in Python)."""
     return isinstance(value, int) and not isinstance(value, bool)
+
 
 def serialize(obj):
     """The exact bytes that are signed and published (and that panels verify)."""

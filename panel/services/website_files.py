@@ -53,6 +53,7 @@ class ArchiveRefused(Exception):
     """An archive the panel will not unpack; `sentence` (the panel's own words) is what the page is told."""
 
     def __init__(self, sentence):
+        """Keep `sentence`, the panel's own words, for the page."""
         super().__init__(sentence)
         self.sentence = sentence
 

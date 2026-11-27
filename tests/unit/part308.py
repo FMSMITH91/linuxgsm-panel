@@ -1,5 +1,7 @@
-"""Part 308 of the unit suite: B3's country database and BlueMap's Mojang reads, fetched as OWASP's SSRF Prevention
-Cheat Sheet asks, and the country database refreshed by itself every month.
+"""Part 308 of the unit suite: B3's country database and BlueMap's Mojang reads, and the monthly refresh.
+
+The fetches follow OWASP's SSRF Prevention Cheat Sheet, and the country database is refreshed by itself
+every month.
 
 1. The fetches (services/geoip._get and latest; services/addons_bluemap.client_download), through urllib's own
    opener as services/public_https builds it: the connection goes only to a public address the host name
@@ -68,8 +70,10 @@ def _file_url308(month):
 
 
 def _net308(addrs, built=None):
-    """Stand-ins for the resolver (answers `addrs`) and the connect (recorded, then refused) of the panel's checked
-    connect (webpush._resolve, notifications._connect_infos).
+    """Build stand-ins for the panel's checked connect: the resolver and the connect.
+
+    The resolver answers `addrs`; the connect is recorded, then refused (webpush._resolve,
+    notifications._connect_infos).
 
     The opener each caller builds (geoip, addons_bluemap) is appended to `built`, with the handlers it passed.
     """

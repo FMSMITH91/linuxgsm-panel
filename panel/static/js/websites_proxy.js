@@ -15,7 +15,7 @@
   'use strict';
   var WS = window.WS;
   var st = {proxies: [], host: null, presets: []};
-  var HSTS_OWASP = 63072000;
+  var HSTS_OWASP = 2 * 365 * 24 * 60 * 60;   // OWASP's two years, in seconds
 
   function cur() {
     for (var i = 0; i < st.proxies.length; i++) if (String(st.proxies[i].host_id) === String(st.host)) return st.proxies[i];

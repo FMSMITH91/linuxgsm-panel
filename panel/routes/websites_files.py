@@ -151,6 +151,8 @@ def _write_routes(app):
             ok, said = _files.write_file(site.remote, site.account, rel, content)
         return _write_answer(site, "website_files_save", ok, said, _wf.page_rel(rel))
 
+
+def _path_routes(app):
     @app.route("/websites/<int:site_id>/files/mkdir", methods=["POST"])
     @login_required
     def website_files_mkdir(site_id):
@@ -189,6 +191,8 @@ def _write_routes(app):
             ok, said = _files.delete_path(site.remote, site.account, rel)
         return _write_answer(site, "website_files_delete", ok, said, _wf.page_rel(rel))
 
+
+def _extract_routes(app):
     @app.route("/websites/<int:site_id>/files/extract", methods=["POST"])
     @login_required
     def website_files_extract(site_id):
@@ -222,3 +226,5 @@ def register(app):
     """The file manager routes."""
     _read_routes(app)
     _write_routes(app)
+    _path_routes(app)
+    _extract_routes(app)

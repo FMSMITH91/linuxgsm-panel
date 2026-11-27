@@ -101,8 +101,10 @@ def audit_as(user, site, action, detail="", success=True):
 
 
 def manage_perm(site_id):
-    """The permission a "run this site" route asks site_for for: MANAGE_WEBSITES when the user administers
-    the site (an administrator runs it too), else MANAGE_WEBSITE. Either way site_for decides, per site.
+    """Name the permission a "run this site" route asks site_for for.
+
+    MANAGE_WEBSITES when the user administers the site (an administrator runs it too), else
+    MANAGE_WEBSITE. Either way site_for decides, per site.
     """
     admin = _wa.visible_sites(current_user, MANAGE_WEBSITES).filter(Website.id == site_id).first()
     return MANAGE_WEBSITES if admin is not None else MANAGE_WEBSITE
@@ -295,8 +297,11 @@ def creates_as_admin(user):
 
 
 def _admin_host(data):
-    """The host an administrator named (host_id): any for a superadmin (the panel's own when none is named),
-    else one they have host-level access to (get_host_remote); None when none is named."""
+    """Find the host an administrator named (host_id).
+
+    Any for a superadmin (the panel's own when none is named), else one they have host-level access to
+    (get_host_remote); None when none is named.
+    """
     try:
         rid = int(data.get("host_id") or data.get("remote_id"))
     except (TypeError, ValueError):

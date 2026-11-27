@@ -56,7 +56,7 @@ class _Handler(urllib.request.HTTPSHandler):
 
 
 def handlers():
-    """The handlers for one request's opener (urllib.request.build_opener(*handlers())).
+    """Return the handlers for one request's opener, as urllib.request.build_opener takes them.
 
     No redirect, the checked connect with web push's verified TLS context (certificate and host name
     checked, TLS 1.2 at least), no proxy. The caller builds the opener itself, so its request stays a

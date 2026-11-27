@@ -352,8 +352,11 @@ def _app_words(fields, env, env_changed):
 
 
 def _app_apply(site, fields, env_changed):
-    """Save and rebuild: the units rewritten when a setting changed, the variables written, then the app built from
-    its current files and restarted, so the running app is the saved one. An app with no files yet waits for them.
+    """Save and rebuild.
+
+    The units are rewritten when a setting changed, the variables written, then the app built from its
+    current files and restarted, so the running app is the saved one. An app with no files yet waits
+    for them.
     """
     ok, said = True, ""
     if fields:

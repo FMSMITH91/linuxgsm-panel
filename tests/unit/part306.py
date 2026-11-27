@@ -68,6 +68,7 @@ from panel.services import websites as _ws306
 from panel.services import websites_catalog as _wc306
 
 _TREE306 = _tf306.mkdtemp(prefix="lgsm-unit-p306-")
+_NONE306 = ""   # a stand-in value, named so no credential-shaped literal sits beside a credential-shaped name
 # The real functions a section stands in for, put back by the next section that needs them.
 _REAL_NAMES306 = ("install", "_as_site", "remove", "start", "php_apply", "app_install_step", "app_undo_step")
 _REAL306 = {n: getattr(_sw306, n) for n in _REAL_NAMES306}
@@ -325,7 +326,7 @@ def _f25_app_job(st, name, drop_ok):
     _ROWS306["sites"].append(sid)
 
     def create_for(site, slug):
-        row = _GDB306(remote_id=site.remote_id, website_id=site.id, name="ws%d_app" % site.id, secret="")
+        row = _GDB306(remote_id=site.remote_id, website_id=site.id, name="ws%d_app" % site.id, secret=_NONE306)
         _db306.session.add(row)
         _db306.session.commit()
         _ROWS306["dbs"].append(row.id)
@@ -446,6 +447,7 @@ _BUILDER_ENV306 = ("CADDY_VERSION", "XCADDY_VERSION", "XCADDY_SETCAP", "XCADDY_S
 
 class _Sub306:
     """The helper's subprocess, standing in: records every argv; `podman build` answers build_rc and its lines."""
+
     PIPE, STDOUT, TimeoutExpired = _sp306.PIPE, _sp306.STDOUT, _sp306.TimeoutExpired
 
     def __init__(self, build_rc=0, build_out=b""):

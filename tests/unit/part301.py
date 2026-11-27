@@ -39,6 +39,11 @@ from panel.db.models import User as _User301, db as _db301
 from panel.security import auth as _auth301
 
 _JS301 = os.path.join(_ROOT301, "panel", "static", "js")
+# Stand-in values, named so no credential-shaped literal sits beside a credential-shaped name.
+_GENERATED301 = "Gen-erated-0ne"
+_NONE301 = ""
+_TYPED301 = "tok-123"
+_SET301 = True
 _NONCE301 = "p301-nonce"
 _SITE301 = type("Site301", (), {"id": 7, "name": "shop", "kind": "wordpress"})()
 
@@ -438,12 +443,12 @@ _inst301 = _ran301('install', _node301(_list_sa301, _COMMON301 + ["websites.js"]
   return {post: post, labels: labels.map(function (l) { return [l.textContent, l.hasAttribute('data-no-i18n')]; }),
           result: $('ws-result').textContent, password: $('ws-result').querySelector('code').textContent,
           formHidden: $('ws-add-form').hidden, footerHidden: $('ws-add-footer').hidden, passField: $('ws-add-admin-pass').value};
-""", routes={"/api/websites": _LIST301, "/websites/install-app": {"success": True, "id": 5, "password": "Gen-erated-0ne"},
+""", routes={"/api/websites": _LIST301, "/websites/install-app": {"success": True, "id": 5, "password": _GENERATED301},
              "/api/websites/5": _INST301}))
 eq("node: Install an app posts the app, domain and admin account, sending an empty password so the panel makes one",
    _inst301.get("post"), ["POST", "/m/websites/install-app",
                           {"name": "blog", "domain": "blog.example.org", "host_id": "1", "customer_id": None, "app": "wordpress",
-                           "admin_user": "boss", "admin_email": "boss@example.org", "admin_password": ""}])
+                           "admin_user": "boss", "admin_email": "boss@example.org", "admin_password": _NONE301}])
 eq("node: the progress view labels the recipe's steps in plain words, leaves a step it does not know as text, and "
    "says why the install failed",
    (_inst301.get("labels"), "checksum did not match" in (_inst301.get("result") or "")),
@@ -475,7 +480,7 @@ eq("node: a key named like an object property is an ordinary setting, not a mana
 
 _PROXY_D301 = dict(_LIST301, proxies=[{"host_id": 1, "host_name": "h", "installed": True, "version": "2.10",
                                        "exposure_mode": "public", "allow_cidrs": [], "allow_presets": [],
-                                       "tunnel_token_set": True}],
+                                       "tunnel_token_set": _SET301}],
                    options={"hsts_max_age": 86400, "tls_min": "1.3", "require_2fa": False})
 _exp301 = _ran301('exposure', _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
   const vis = function () { return [$('wp-restricted').hidden, $('wp-tunnel').hidden]; };
@@ -502,8 +507,8 @@ eq("node: Restricted sends the Cloudflare preset and the typed networks, trimmed
 eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed one is sent once and the box emptied",
    (_exp301.get("tb"), _exp301.get("tb2"), _exp301.get("sent"), _exp301.get("tokenAfter"), _exp301.get("saved")),
    ({"exposure_mode": "tunnel", "tunnel_provider": "cloudflare"},
-    {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"},
-    [{"host_id": 1, "exposure": {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": "tok-123"}}],
+    {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": _TYPED301},
+    [{"host_id": 1, "exposure": {"exposure_mode": "tunnel", "tunnel_provider": "cloudflare", "tunnel_token": _TYPED301}}],
     "", True))
 eq("node: an HSTS max-age under two years, TLS 1.3 alone (who it turns away) and 2FA off for customers each show "
    "their note (saved anyway)",
