@@ -11,7 +11,8 @@
 4. WordPress's Site Health page cache test answers from the web proxy's real state: each proxy apply writes, into
    every WordPress site's files, whether the configuration it runs caches that site's pages (and for how long), and
    the loopback plugin replaces WordPress's own test (which looks for caching headers on requests that never pass
-   the proxy) with one reading that word.
+   the proxy) with one reading that word. The page cache's block also takes away the empty Cache-Control header the
+   cache module put on a page whose site sent none, and only that one.
 
 HOW IT RUNS. part12's app and its database for the routes; every host call at ssh_manager's seams (part12's
 tripwire is armed, so nothing reaches a host). The workflow is read as text (part06's run-block reader).
@@ -250,13 +251,20 @@ def _s3_db_stopped(st):
        (200, True, None))
 
 
-# ── 4. The page cache, as WordPress's Site Health sees it ─────────────────────────────────────────────
+# ── 4. The page cache, as WordPress's Site Health and the response headers see it ──────────────────
 def _s4_render(st):
     from panel.services import websites_proxy as _wp
     wp = _site321(st, "p321-wpc", kind="wordpress", enabled=True, page_cache=True, page_cache_ttl=300)
     plain = _site321(st, "p321-wpn", kind="wordpress", enabled=True, page_cache=False)
     on = _wp.render([wp, plain], None, {"cache_build": True}, secret_of=lambda s: _TOKEN321)
     off = _wp.render([wp, plain], None, {"cache_build": False}, secret_of=lambda s: _TOKEN321)
+    blocks = {sid: on.split("# site %d (" % sid)[1].split("\n}\n")[0] for sid in (wp.id, plain.id)}
+    strip = ["\theader {", "\t\t-Cache-Control", '\t\tmatch header Cache-Control ""', "\t}"]
+    eq("page cache headers (render): a site whose pages the proxy caches has a header block that takes away a "
+       "Cache-Control header only when it is empty (as the response leaves); a site without the cache has none, and "
+       "no default Cache-Control is set anywhere (that would change what is stored)",
+       ("\n".join(strip) in blocks[wp.id], "\n".join(strip) in blocks[plain.id], "default_cache_control" in on),
+       (True, False, False))
     eq("page cache state (cached_sites over the rendered text): the cached site with its TTL; nothing when the proxy "
        "has no cache module, though the site's switch is on", (_wp.cached_sites(on), _wp.cached_sites(off)),
        ({wp.id: 300}, {}))

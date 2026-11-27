@@ -395,9 +395,14 @@ def _cache_lines(site, opts):
     if not (opts["cache_build"] and site.page_cache):
         return []
     ttl = max(10, min(int(site.page_cache_ttl or 300), 86400))
+    # The cache module puts its default_cache_control, empty unless set, on a response whose site sent no
+    # Cache-Control: every such page went out with an empty `Cache-Control:` header. Setting a default would change
+    # what the module stores (it reads a missing header as public), so the empty header alone is taken away, as the
+    # response leaves; a site's own value, WordPress's no-cache for a signed-in visitor among them, is left as sent.
     return ["\t@pagecache {", "\t\tmethod GET HEAD", "\t\tnot header_regexp Cookie %s" % _quote(CACHE_BYPASS_COOKIES),
             "\t\tnot path %s" % " ".join(CACHE_BYPASS_PATHS), "\t}",
-            "\tcache @pagecache {", "\t\tttl %ds" % ttl, "\t}"]
+            "\tcache @pagecache {", "\t\tttl %ds" % ttl, "\t}",
+            "\theader {", "\t\t-Cache-Control", '\t\tmatch header Cache-Control ""', "\t}"]
 
 
 def _log_lines(site):
