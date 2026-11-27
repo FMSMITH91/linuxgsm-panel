@@ -3787,7 +3787,8 @@ def _web_security_log(pw):
 
 def _web_guard_files(guard, pw):
     """Write the deny folder, the never list, the security log and fail2ban's three files for `guard`."""
-    _web_owned_dir(WEB_DENY_DIR, 0o750, 0, pw.pw_gid)
+    # Search only for the proxy's group (0710): its file matcher stats one name, it never lists the folder.
+    _web_owned_dir(WEB_DENY_DIR, 0o710, 0, pw.pw_gid)
     own = _web_own_nets()
     _web_write(WEB_GUARD_NEVER, "".join(n + "\n" for n in sorted(set(guard["never"]) | set(own))).encode(),
                WEB_FILE_ROOT)
@@ -3830,7 +3831,7 @@ def _web_guard_off():
             os.unlink(path)
             gone = True
         except FileNotFoundError:
-            pass
+            pass    # never written, or removed already: nothing to take away
     if gone:
         _web_f2b_reload()
     _web_deny_flush(None)
@@ -3947,9 +3948,8 @@ def do_website_guard_ban(args, content):
         return 1
     now = int(time.time())
     host = web_guard_host(_web_log_tail(), ip)
-    pw = pwd.getpwnam(WEB_PROXY_USER)
     entry = "jail=%s at=%d until=%d host=%s\n" % (jail, now, now + int(bantime), host)
-    _web_write(os.path.join(WEB_DENY_DIR, ip), entry.encode(), 0o640, 0, pw.pw_gid)
+    _web_write(os.path.join(WEB_DENY_DIR, ip), entry.encode(), WEB_FILE_ROOT)    # stat needs no read
     _web_guard_event("ban", ip, jail, host)
     sys.stdout.write("ban=yes\n")
     return 0
@@ -4014,7 +4014,7 @@ def _web_deny_flush(jail):
                 os.unlink(os.path.join(WEB_DENY_DIR, name))
                 n += 1
             except OSError:
-                pass
+                pass    # gone already (fail2ban's own unban), or not removable: the next flush tries again
     return n
 
 
@@ -4067,7 +4067,7 @@ def do_website_guard_release(args, content):
         try:
             _run_quiet([resolve(F2B), "set", jail, "unbanip", ip], timeout=30)
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
+            pass    # no fail2ban, or it did not answer: the proxy's entry is removed below all the same
     removed = _web_deny_remove(ip)
     if removed:
         _web_guard_event("release", ip, entry["jail"], entry["host"])

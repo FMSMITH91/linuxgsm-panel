@@ -80,17 +80,22 @@ def record_events(remote, events):
     after = _cursor(remote.id)
     if max(e[0] for e in events) < after:
         after = 0
-    for seq, at, kind, ip, jail, host in sorted(events):
-        if seq <= after or kind not in _KINDS:
-            continue
-        site = _site_of(remote, host) if host != "-" else None
-        detail = _event_detail(kind, ip, jail, host, at)
-        if site is not None:
-            log_website_action(None, site, _KINDS[kind], detail, kind != "ban")
-        else:
-            log_action(None, _KINDS[kind], target=ip if ip != "-" else remote.name, detail=detail,
-                       success=kind != "ban", remote=remote)
+    for event in sorted(events):
+        if event[0] > after and event[2] in _KINDS:
+            _audit_event(remote, event)
     _set_cursor(remote.id, max(e[0] for e in events))
+
+
+def _audit_event(remote, event):
+    """One audit row for one ban event: about the site it named when there is one, else about the host."""
+    _seq, at, kind, ip, jail, host = event
+    site = _site_of(remote, host) if host != "-" else None
+    detail = _event_detail(kind, ip, jail, host, at)
+    if site is not None:
+        log_website_action(None, site, _KINDS[kind], detail, kind != "ban")
+    else:
+        log_action(None, _KINDS[kind], target=ip if ip != "-" else remote.name, detail=detail,
+                   success=kind != "ban", remote=remote)
 
 
 def read(remote):

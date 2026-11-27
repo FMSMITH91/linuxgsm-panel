@@ -483,6 +483,19 @@ def _site_notes(site, got):
     return notes
 
 
+def _site_apply(site, before):
+    """Apply the site's certificates when it is online: "" when applied, else why (the previous ones put back)."""
+    _CERTS_AT.pop(site.remote_id, None)
+    if not site.enabled:
+        return ""
+    ok, said = _w.reconcile_proxy(site.remote)
+    if ok:
+        return ""
+    _site_restore(site, before)
+    _w.reconcile_proxy(site.remote)
+    return i18n.Sentence(S_SITE_CERT_ROLLED_BACK, why=i18n.tr(said))
+
+
 def set_site_cert(site, form):
     """POST .../cert's work: check the pair against every domain, store it once, apply (or put back)."""
     mode = _w.field(form, "mode")
@@ -500,12 +513,8 @@ def set_site_cert(site, form):
     else:
         _site_auto(site)
     db.session.commit()
-    _CERTS_AT.pop(site.remote_id, None)
-    ok, said = _w.reconcile_proxy(site.remote) if site.enabled else (True, "")
-    if not ok:
-        _site_restore(site, before)
-        _w.reconcile_proxy(site.remote)
-        why = i18n.Sentence(S_SITE_CERT_ROLLED_BACK, why=i18n.tr(said))
+    why = _site_apply(site, before)
+    if why:
         _w.audit(site, "website_cert", "%s: not applied: %s" % (_site_detail(got), why), False)
         return _w.done(False, why)
     _w.audit(site, "website_cert", _site_detail(got))

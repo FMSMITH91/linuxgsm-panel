@@ -215,15 +215,22 @@
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
   }
+  // An operator's certificate (the site's, or one of the domain's own), unless a tunnel serves its own.
+  function ownCert(dm) {
+    return (dm.cert_mode === 'own' || dm.cert_mode === 'site') && !!dm.own_cert && dm.cert_state !== 'tunnel';
+  }
+  function certLabel(dm, own) {
+    if (!own) return WS.T(WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'));
+    return WS.T(dm.cert_mode === 'site' ? "Uses the site's certificate" : 'Your own certificate');
+  }
   // DNS state · certificate (yours: its issuer) · expiry.
   function domainInfo(dm) {
     var info = WS.node('div', 'small text-secondary');
     info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', dnsLabel(dm)));
     info.appendChild(document.createTextNode(' · '));
     var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
-    var own = (dm.cert_mode === 'own' || dm.cert_mode === 'site') && dm.own_cert && dm.cert_state !== 'tunnel';   // a tunnel serves its own
-    var label = dm.cert_mode === 'site' ? "Uses the site's certificate" : 'Your own certificate';
-    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(own ? label : WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
+    var own = ownCert(dm);
+    info.appendChild(WS.node('span', trusted ? 'text-success' : '', certLabel(dm, own)));
     if (own) {
       info.appendChild(document.createTextNode(' · '));
       info.appendChild(WS.node('span', null, WS.T('issuer')));

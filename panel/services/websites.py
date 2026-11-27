@@ -1185,9 +1185,11 @@ function lgsm_panel_page_cache_test() {
 		'actions'     => '',
 		'test'        => 'page_cache',
 	);
-	$result['description'] = '<p>' . ( $on
-		? esc_html( sprintf( 'The web proxy in front of this site caches its pages for %d seconds. Logged-in visitors, comments and the admin pages are never cached.', $ttl ) )
-		: esc_html( 'The web proxy in front of this site does not cache its pages. An administrator can turn the page cache on in the panel, on this site\'s Performance settings.' ) ) . '</p>';
+	$on_text  = 'The web proxy in front of this site caches its pages for %d seconds. '
+		. 'Logged-in visitors, comments and the admin pages are never cached.';
+	$off_text = 'The web proxy in front of this site does not cache its pages. '
+		. 'An administrator can turn the page cache on in the panel, on this site\'s Performance settings.';
+	$result['description'] = '<p>' . esc_html( $on ? sprintf( $on_text, $ttl ) : $off_text ) . '</p>';
 	return $result;
 }
 

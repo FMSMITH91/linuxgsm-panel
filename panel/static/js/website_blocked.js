@@ -26,25 +26,28 @@
     return n ? '' : WS.T('No visitor is blocked.');
   }
   WS.loadBlocked = function () {
-    if (!WS.el('wb-list')) return;
-    WS.say('wb-msg', WS.T('Loading…'));
+    if (!WS.el('wv-list')) return;
+    WS.say('wv-msg', WS.T('Loading…'));
     WS.get(WS.R.act(ID, 'blocked')).then(function (d) {
-      var list = WS.clear(WS.el('wb-list'));
-      if (!d || !d.success) { WS.done(d, 'wb-msg'); return; }
-      WS.say('wb-msg', '');
+      var list = WS.clear(WS.el('wv-list'));
+      if (!d || !d.success) { WS.done(d, 'wv-msg'); return; }
+      WS.say('wv-msg', '');
       var entries = d.entries || [];
-      var count = WS.el('wb-count');
+      var count = WS.el('wv-count');
       if (count) count.textContent = String(entries.length);
-      var state = WS.el('wb-state');
+      var state = WS.el('wv-state');
       if (state) { state.textContent = stateText(d.guard, entries.length); WS.show(state, !!state.textContent); }
       entries.forEach(function (e) { list.appendChild(row(e)); });
     });
   };
   window.wsBlockedLoad = function () { WS.loadBlocked(); };
   window.wsUnblock = function (ip) {
-    WS.say('wb-msg', WS.T('Working…'));
+    WS.say('wv-msg', WS.T('Working…'));
     WS.post(WS.R.act(ID, 'blocked/unban'), {ip: String(ip)}).then(function (d) {
-      if (WS.done(d, 'wb-msg')) WS.loadBlocked();
+      if (WS.done(d, 'wv-msg')) WS.loadBlocked();
     });
   };
+  // Opened straight on the Rules tab (?tab=rules): website_site.js picked the tab before this file was loaded.
+  var pane = document.querySelector('[data-ws-pane="rules"]');
+  if (pane && !pane.hidden) WS.loadBlocked();
 })();

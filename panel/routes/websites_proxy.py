@@ -88,14 +88,13 @@ def proxy_json(row):
 
 def guard_json(row):
     """The host's blocked-visitors settings as the card shows them: minutes and hours, OWASP's words, the notes."""
-    from panel.ops.ssh_manager import websites as _sm
     from panel.services import websites_guard as _wg
     s = _wg.settings(row.guard)
     return {"enabled": s["enabled"], "login": s["login"], "scan": s["scan"], "findtime": s["findtime"] // 60,
             "bantime": s["bantime"] // 60, "increment": s["increment"], "maxtime": s["maxtime"] // 3600,
             "allow": s["allow"], "owasp": {k: i18n.tr(v) for k, v in _wg.OWASP_TEXT.items()},
             "notes": {k: i18n.tr(v) for k, v in _wg.owasp_notes(s).items()},
-            "fail2ban": (_sm.GUARD_STATE.get(row.remote_id) or {}).get("fail2ban", "")}
+            "fail2ban": (_sw.GUARD_STATE.get(row.remote_id) or {}).get("fail2ban", "")}
 
 
 def _save_guard(remote, row, form):

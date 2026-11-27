@@ -509,17 +509,24 @@ GUARD_LIST_FAILED = "The host's list of blocked visitors could not be read. Try 
 OK_RELEASED = "{ip} is no longer blocked."
 
 
+def _guard_ban(parts):
+    ok = len(parts) == 5 and parts[2].isdecimal() and parts[3].isdecimal()
+    return {"ip": parts[0], "jail": parts[1], "at": int(parts[2]), "until": int(parts[3]), "host": parts[4]} if ok else None
+
+
+def _guard_event(parts):
+    ok = len(parts) == 6 and parts[0].isdecimal() and parts[1].isdecimal()
+    return (int(parts[0]), int(parts[1]), parts[2], parts[3], parts[4], parts[5]) if ok else None
+
+
 def parse_guard_list(out):
     """website-guard-list's lines as (entries [{ip, jail, at, until, host}], events [(seq, at, kind, ip, jail, host)])."""
     entries, events = [], []
     for line in (out or "").splitlines():
         key, _sep, rest = line.partition("=")
-        parts = rest.split()
-        if key == "ban" and len(parts) == 5 and parts[2].isdecimal() and parts[3].isdecimal():
-            entries.append({"ip": parts[0], "jail": parts[1], "at": int(parts[2]), "until": int(parts[3]),
-                            "host": parts[4]})
-        elif key == "event" and len(parts) == 6 and parts[0].isdecimal() and parts[1].isdecimal():
-            events.append((int(parts[0]), int(parts[1]), parts[2], parts[3], parts[4], parts[5]))
+        got = _guard_ban(rest.split()) if key == "ban" else _guard_event(rest.split()) if key == "event" else None
+        if got is not None:
+            (entries if key == "ban" else events).append(got)
     return entries, events
 
 

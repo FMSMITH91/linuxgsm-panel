@@ -94,14 +94,22 @@ def settings(raw):
             raw = {}
     out = dict(DEFAULTS, allow=[])
     for key, value in (raw if isinstance(raw, dict) else {}).items():
-        if key in ("enabled", "increment") and isinstance(value, bool):
-            out[key] = value
-        elif key in LIMITS and _int(value, key) is not None:
-            out[key] = value
-        elif key == "allow" and isinstance(value, list):
-            out["allow"] = [n for n in (_net(v) for v in value[:ALLOW_MAX]) if n]
+        got = _setting(key, value)
+        if got is not None:
+            out[key] = got
     out["maxtime"] = max(out["maxtime"], out["bantime"])
     return out
+
+
+def _setting(key, value):
+    """One stored setting checked: its value, or None when it is not one of its shape."""
+    if key in ("enabled", "increment"):
+        return value if isinstance(value, bool) else None
+    if key in LIMITS:
+        return _int(value, key)
+    if key == "allow" and isinstance(value, list):
+        return [n for n in (_net(v) for v in value[:ALLOW_MAX]) if n]
+    return None
 
 
 # The card's number fields: (key, label, the unit the card uses in seconds).

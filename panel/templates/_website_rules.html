@@ -25,16 +25,16 @@
     <div class="form-text">The web proxy checks every change first. One that fails is refused, and every site keeps serving as before.</div>
   </form>
   {# Blocked visitors (js/website_blocked.js): the addresses the host blocks that attacked this site, each with Unblock. #}
-  <div id="wb-box" class="card mt-3">
+  <div id="wv-box" class="card mt-3">
     <div class="card-body py-2 small">
       <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
         <span class="fw-semibold">Blocked visitors</span>
-        <span id="wb-count" class="badge text-bg-secondary" data-no-i18n></span>
+        <span id="wv-count" class="badge text-bg-secondary" data-no-i18n></span>
         <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-action="wsBlockedLoad"><i class="bi bi-arrow-repeat"></i> Refresh</button>
       </div>
-      <p id="wb-state" class="text-secondary mb-1"></p>
-      <ul id="wb-list" class="list-unstyled mb-1"></ul>
-      <div id="wb-msg" role="status"></div>
+      <p id="wv-state" class="text-secondary mb-1"></p>
+      <ul id="wv-list" class="list-unstyled mb-1"></ul>
+      <div id="wv-msg" role="status"></div>
       <div class="form-text">An address that tried too many sign-ins or asked for paths only scanners ask for is kept off every website on this host for a while, even behind a CDN. Unblock one you know.</div>
     </div>
   </div>

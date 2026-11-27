@@ -460,11 +460,11 @@ def _s5_migration(st):
         d.own_cert_pem = lone_pem if mine else pem
         d.own_key_secret = encrypt_secret(lone_key if mine else key)
     _db321.session.commit()
-    models._site_certs_from_domains()
+    models.site_certs_from_domains()
     _db321.session.commit()
     after = _modes321(site)
     site = _db321.session.get(_Site321, site.id)
-    models._site_certs_from_domains()
+    models.site_certs_from_domains()
     _db321.session.commit()
     eq("site certificate (data migration 5): the chain most of a site's domains held moves to the site once, those "
        "domains point at it; a domain with a different chain keeps its own; running it again changes nothing",
@@ -473,7 +473,7 @@ def _s5_migration(st):
          "p321m.example.net": ("own", True, True)}, True, True, after))
     eq("site certificate (data migration 5 is listed, numbered after the ones before it)",
        [m.__name__ for m, _mark in models._DATA_MIGRATIONS][-1:] + [models._DATA_MIGRATIONS[-1][1]],
-       ["_site_certs_from_domains", "PRAGMA user_version = 5"])
+       ["site_certs_from_domains", "PRAGMA user_version = 5"])
 
 
 # ── 6. Blocked visitors ──────────────────────────────────────────────────────────────────────────
@@ -547,9 +547,8 @@ def _line321(ip, tag, host="p321g.example.org"):
 def _s6_jails(st):
     import re
     from panel.services import websites_guard as _wg
-    from panel.ops.ssh_manager import websites as _smw
     row = _proxy321(st, "restricted", ["cloudflare"])
-    doc = _smw.guard_doc(row)
+    doc = _sw321.guard_doc(row)
     g = _H321.web_guard_doc(doc)
     jails = _H321.web_guard_jails(g, ["203.0.113.5/32"])
     ignore = jails.split("ignoreip = ")[1].split("\n")[0].split()
@@ -557,7 +556,7 @@ def _s6_jails(st):
        "loopback or the host's own address, and ban inside the proxy only (no firewall ban behind a CDN)",
        ("173.245.48.0/20" in ignore, "100.64.0.0/10" in ignore, "127.0.0.0/8" in ignore, "203.0.113.5/32" in ignore,
         "iptables-multiport" in jails, jails.count("action = lgsm-web-deny[name=")), (True, True, True, True, False, 2))
-    pub = _H321.web_guard_jails(_H321.web_guard_doc(_smw.guard_doc(_proxy321(st, "public"))), [])
+    pub = _H321.web_guard_jails(_H321.web_guard_doc(_sw321.guard_doc(_proxy321(st, "public"))), [])
     eq("guard (control, public mode): each jail also bans at the firewall on 80 and 443",
        pub.count('iptables-multiport[name=lgsm-web-'), 2)
     rx = _H321.web_guard_filter("login").split("failregex = ")[1].split("\n")[0]
@@ -615,12 +614,11 @@ def _quiet321(fn, *a):
 
 def _s6_ban(st):
     """A client banned behind Cloudflare gets its deny entry, which the proxy reads by client_ip; Cloudflare never."""
-    from panel.ops.ssh_manager import websites as _smw
     d = _tf321.mkdtemp(prefix="lgsm-unit-p321-guard-")
     saved, me = _guard_tree321(d)
     try:
         row = _proxy321(st, "restricted", ["cloudflare"])
-        _quiet321(_H321._web_guard_apply, _H321.web_guard_doc(_smw.guard_doc(row)), me)
+        _quiet321(_H321._web_guard_apply, _H321.web_guard_doc(_sw321.guard_doc(row)), me)
         with open(_H321.WEB_SECURITY_LOG, "a", encoding="utf-8") as fh:
             fh.write(_line321(_VISITOR321, "login") + "\n")
         ban = _quiet321(_H321.do_website_guard_ban, [_VISITOR321, "lgsm-web-login", "600"], "")
@@ -674,6 +672,13 @@ def _s6_routes(st):
     su.get("/websites/%d/blocked" % site.id)
     eq("blocked visitors (the next read): no event audited twice", (asked[-1], _Audit321.query.filter(
         _Audit321.action.in_(("website_ban", "website_unban"))).count() - before), (8, 2))
+    import collections
+    import re
+    page = su.get("/websites/%d?tab=rules" % site.id).get_data(as_text=True)
+    ids = collections.Counter(re.findall(r'\bid="([^"]+)"', page))
+    eq("blocked visitors (GET /websites/<id>, the site's page): the list's box is there and no id on the page is used "
+       "twice (the Backups tab's list is wb-list: one script would fill the other's)",
+       ("wv-list" in ids, sorted(k for k, n in ids.items() if n > 1)), (True, []))
     r = su.post("/websites/%d/blocked/unban" % site.id, json={"ip": other_ip})
     eq("blocked visitors (Unblock of an address another site's attack banned): refused, nothing lifted",
        (r.status_code, released), (404, []))

@@ -345,3 +345,43 @@ class WebsiteProxy(db.Model):
     def url_nets(self):
         """The last good list read from `allow_url`, as canonical network strings."""
         return list(json.loads(self.allow_url_nets or "[]"))
+
+
+# ── data migration 5 (models._DATA_MIGRATIONS) ─────────────────────────────────────────────────────
+def _most_held(doms):
+    """The chain most of `doms` hold (the first such domain's on a tie)."""
+    counts = {}
+    for d in doms:
+        counts[d.own_cert_pem] = counts.get(d.own_cert_pem, 0) + 1
+    best = max(counts.values())
+    return next(d.own_cert_pem for d in doms if counts[d.own_cert_pem] == best)
+
+
+def _own_by_site():
+    """{site id: [its domains holding a certificate of their own, by id]}."""
+    out = {}
+    for d in WebsiteDomain.query.filter(WebsiteDomain.cert_mode == "own").order_by(WebsiteDomain.id).all():
+        if d.own_cert_pem and d.own_key_secret:
+            out.setdefault(d.website_id, []).append(d)
+    return out
+
+
+def site_certs_from_domains():
+    """Migration 5: an own certificate pasted per domain becomes its site's one certificate.
+
+    For each site with domains in cert_mode 'own' and no certificate of its own yet: the chain held by the most of
+    those domains (the first such domain on a tie) is stored once on the site, key and all (the ciphertext copied as
+    it is), and each domain that held that same chain uses the site's (cert_mode 'site', its own copy cleared). A
+    domain that held a different chain keeps it (still served for that domain alone). Safe to repeat: a site that has
+    a certificate is skipped, and a domain already on 'site' is no longer 'own'.
+    """
+    for site_id, doms in _own_by_site().items():
+        site = db.session.get(Website, site_id)
+        if site is None or site.own_cert_pem:
+            continue
+        pem = _most_held(doms)
+        site.own_cert_pem = pem
+        site.own_key_secret = next(d.own_key_secret for d in doms if d.own_cert_pem == pem)
+        for d in doms:
+            if d.own_cert_pem == pem:
+                d.cert_mode, d.own_cert_pem, d.own_key_secret = "site", "", ""
