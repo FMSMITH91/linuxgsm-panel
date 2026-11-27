@@ -150,7 +150,9 @@ function _histOlder(prefix, older){
   if (!older || !go) return;
   go.setAttribute('data-hist-go', older);
   var target = document.querySelector('[' + go.getAttribute('data-hist-go-for') + '="' + older + '"]');
-  if (target && target.getAttribute('title')) go.textContent = target.getAttribute('title');
+  // The range button's title, already in the viewer's language (the i18n walker translates titles).
+  var label = target && target.getAttribute('title');
+  if (label) go.textContent = label;  // i18n-ignore - an attribute name; the text is the translated title
 }
 
 // The offered range's button: presses that range's own button, so the toggle, the active state and the
