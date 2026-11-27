@@ -10,6 +10,7 @@
    the visitor waited for, a 504 behind the page cache). The timer is written and started with the site and
    removed with it, by a delete and by an install's undo.
 3. Re-applying tunnel mode clears the connector's start limit first, and a failure names the tunnel.
+4. An app's build turns npm's update notice off, so the build log's last lines are the build's own.
 
 HOW IT RUNS. part12's app and its database for the routes. ssh_manager.websites' seams answer for the host (Podman
 ready, the helper, the account's ids), and every shell it would run as a site's account runs in real bash over a
@@ -259,6 +260,7 @@ def _s1_build(st):
        "no-name-server file first and mounts it read-only; the build ran (control)",
        (r.status_code, _read311(app.account, "site/conf/resolv.conf") == _ws311.RESOLV_CONF,
         any(a.endswith("/site/conf/resolv.conf:/etc/resolv.conf:ro") for a in run)), (200, True, True))
+    _s4_npm(r, run, _read311(app.account, "site/conf/build.log") or "")
 
 
 # ── 2. WordPress's scheduled tasks ────────────────────────────────────────────────────────────────
@@ -370,6 +372,14 @@ def _s3_tunnel(st):
     r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
     eq("M15 control (the connector's image build fails): that failure keeps its own sentence",
        (r.status_code, (r.get_json() or {}).get("message")), (502, _ws311.FAIL_MARKS["SITE_BUILD_FAILED"]))
+
+
+# ── 4. An app's build log ─────────────────────────────────────────────────────────────────────────
+def _s4_npm(r, run, log):
+    eq("I3 (POST /websites/<id>/app/build): npm's update notice is off, so the build log's last lines (the page shows "
+       "them) are the build's own; the build still ran (control)",
+       (r.status_code, "npm_config_update_notifier=false" in run, "npm notice" in log, "added 12 packages" in log),
+       (200, True, False, True))
 
 
 # ── running the sections ──────────────────────────────────────────────────────────────────────────

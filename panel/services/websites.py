@@ -801,6 +801,7 @@ def build_sh(account, site, ids=None, image=None):
     unit started for the build and stopped after it; the running app gets none unless granted. With no
     files yet it builds nothing and prints MARK_APP_EMPTY. The build has no name server either (RESOLV_CONF,
     written first where an install from before it has none): npm hands its registry's name to the proxy.
+    npm's update notice is off, so the build's last lines on the page are the build's own.
     """
     home = _home(account)
     image = image or image_for(site)
@@ -815,7 +816,8 @@ def build_sh(account, site, ids=None, image=None):
             "-v", "%s/%s:/etc/resolv.conf:ro" % (home, RESOLV_FILE),
             "-v", "%s/%s/build.sh:/panel/build.sh:ro" % (home, CONF), "-w", "/app",
             "-e", "HOME=/tmp", "-e", "HTTPS_PROXY=http://127.0.0.1:%d" % EGRESS_INNER_PORT,
-            "-e", "npm_config_https_proxy=http://127.0.0.1:%d" % EGRESS_INNER_PORT, "-e", "npm_config_cache=/tmp/npm"]
+            "-e", "npm_config_https_proxy=http://127.0.0.1:%d" % EGRESS_INNER_PORT, "-e", "npm_config_cache=/tmp/npm",
+            "-e", "npm_config_update_notifier=false"]
     if ids:
         args += ["--user", "%d:%d" % (int(ids[0]), int(ids[1]))]
     args += [image, "/bin/sh", "/panel/build.sh"]

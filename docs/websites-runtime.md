@@ -124,7 +124,8 @@ intermediate images and removes its bases once it is done.
 - **Node.js** (`node/`): the official Node.js image for the app's version, with Debian's updates and npm at the
   exact version the catalog names (`sites.runtimes.node.npm`), which npm checks against the registry's sha512
   before installing it. A Node.js release keeps the npm it shipped with, and npm's bundled packages get their
-  fixes in later npm releases. The app's `npm ci` runs this npm.
+  fixes in later npm releases. The app's `npm ci` runs this npm. npm's update notice is turned off for the
+  app's build, so the build's last lines on the page are the build's own.
 - **The tunnel connector** (`cloudflared/`): Cloudflare's image is a Debian "distroless" image with no package
   manager, so its libraries cannot be updated in place. cloudflared is a single static program that loads none
   of them, so the panel copies it onto an empty image with only the certificate authorities (from Debian's
