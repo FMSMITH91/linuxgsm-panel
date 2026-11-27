@@ -434,6 +434,19 @@ def _s293_build_refusals():
        (got, _AC293.build(src, "", 1800000000, "auto")[0]), ([1, 1, 1, 1, 1], 0))
 
 
+def _s293_build_on_older():
+    src = _read293(_CATALOG293)
+    obj = _json293.loads(src)
+    older = dict(obj, sites=dict(obj["sites"], presets={"cloudflare": obj["sites"]["presets"]["cloudflare"]}),
+                 seq=2, issued="2026-11-26T09:33:00Z", expires="2026-12-27T09:33:00Z")
+    rc, out, _msg = _AC293.build(src, _json293.dumps(older), 1800000000, "auto")
+    eq("sign-catalog: a catalog published under older rules (no Fastly preset yet) is built on, the new one gets seq 3",
+       (rc, _json293.loads(out)["seq"] if rc == 0 else None), (0, 3))
+    frameless = {k: v for k, v in older.items() if k != "seq"}
+    eq("sign-catalog: a published catalog with no seq is still refused (its frame is checked)",
+       _AC293.build(src, _json293.dumps(frameless), 1800000000, "auto")[0], 1)
+
+
 if not (_sh293.which("git") and _sh293.which("ssh-keygen")):
     skip("sign-catalog: publish, refuse and sign-release's catalog-only rule", "git or ssh-keygen is not installed")
 else:
@@ -446,4 +459,5 @@ else:
 for _step293 in (_s293_static, _s293_scan, _s293_no_defaults, _s293_renovate, _s293_lists):
     _step293()
 _s293_build_refusals()
+_s293_build_on_older()
 _sh293.rmtree(_TMP293, ignore_errors=True)
