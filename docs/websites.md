@@ -250,5 +250,9 @@ The site's own error log is always readable on its Overview tab.
 A customer is a panel user whose group holds only website permissions and has their sites in it. They
 see only those sites and none of the administrator's controls (limits, putting a site online, deleting
 it, full internet access), and cannot see other users, hosts, game servers or other customers' sites.
+Controls a customer may see but not change (the PHP version, the object cache, an app's runtime, port and
+commands) are shown read-only with who can change them. The invite link uses the panel's site domain from
+Settings; without one it uses the address the administrator is on, and says so, since a customer must be able
+to reach it.
 A customer group can be allowed to add its own sites up to a limit (3 by default). Two-factor sign-in
 is required for customers by default. The permissions are in [permissions.md](permissions.md#permissions).

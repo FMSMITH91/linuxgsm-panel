@@ -16,6 +16,13 @@
   var ID = WS.siteId;
   var st = {envNames: [], rules: []};
 
+  // A control only an administrator of the site may change: shown to everyone who runs it, read-only with the
+  // reason for the others (the server refuses their change anyway).
+  function adminOnly(el, whoId) {
+    if (!el) return;
+    el.disabled = !WS.can.admin;
+    WS.show(whoId, !WS.can.admin);
+  }
   // ── PHP ──
   function bytes(v) {
     var m = /^(-1|\d+)([KMG]?)$/i.exec(String(v || '').trim());
@@ -58,6 +65,7 @@
       sel.appendChild(o);
     });
     sel.value = php.version || '';
+    adminOnly(sel, 'wphp-version-who');
     var eol = WS.el('wphp-eol');
     WS.show(eol, !!php.eol_note);
     if (php.eol_note) eol.textContent = php.eol_note;
@@ -245,6 +253,7 @@
     WS.el('wapp-port').value = app.port == null ? '' : String(app.port);
     WS.el('wapp-build').value = app.build || '';
     WS.el('wapp-start').value = app.start || '';
+    ['wapp-version', 'wapp-port', 'wapp-build', 'wapp-start'].forEach(function (id) { adminOnly(WS.el(id), 'wapp-who'); });
     st.envNames = (app.env_names || []).slice();
     var box = WS.clear(WS.el('wapp-env'));
     st.envNames.forEach(function (n) { box.appendChild(envRow(n, true)); });

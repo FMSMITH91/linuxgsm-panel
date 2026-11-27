@@ -122,6 +122,7 @@
     setText('ws-ov-backup', s.last_backup || (s.last_backup === '' ? WS.T('None yet') : ''));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
+    WS.show('ws-ov-offline', !s.enabled);
     var u = s.usage || {}, l = s.limits || {};
     meter('ws-mem', u.mem_mb, l.mem_mb, u.mem_mb != null ? u.mem_mb + ' / ' + l.mem_mb + ' MB' : '');
     meter('ws-disk', u.disk_mb, l.disk_mb, u.disk_mb != null ? u.disk_mb + ' / ' + l.disk_mb + ' MB' : '');
@@ -179,9 +180,16 @@
     }
     li.appendChild(info);
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
+    if (dm.cert_warning && WS.can.sup) li.appendChild(proxyLink());
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
+  }
+  // Where a host-wide setting is changed (a superadmin's Websites page), from the line that names it.
+  function proxyLink() {
+    var a = WS.node('a', 'small d-inline-block', WS.T("Open the web proxy's security settings"));
+    a.href = WS.url('/websites#wp-opts-box');
+    return a;
   }
   function domainButtons(dm) {
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');

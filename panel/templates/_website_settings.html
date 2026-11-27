@@ -5,7 +5,8 @@
   <div class="ws-opt d-flex flex-wrap gap-2 align-items-center">
     <span id="wset-online-text" class="small"></span>
     <button type="button" id="wset-online" class="btn btn-sm btn-outline-primary" data-action="wsToggleOnline">Put online</button>
-    <div class="form-text w-100 mt-0">The first site online opens ports 80 and 443 in Public or Restricted mode; the last one offline closes them.</div>
+    <div class="form-text w-100 mt-0">The first site online opens ports 80 and 443 in Public or Restricted mode; the last one offline closes them.
+      {% if current_user.is_superadmin %}<a href="{{ url_for('websites_page') }}#wp-mode-box">How visitors reach the sites (the web proxy)</a>{% else %}How visitors reach the sites is a superadmin's setting.{% endif %}</div>
   </div>
   <form id="wset-form" class="row g-2" data-action="wsSettingsSave" data-args='["@event"]' data-on="submit">
     <div class="col-6 col-sm-4"><label for="wset-mem" class="form-label small mb-1">Memory (MB)</label>
