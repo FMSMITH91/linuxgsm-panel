@@ -461,6 +461,31 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     return "\n".join(lines)
 
 
+_SITE_MARK_RE = re.compile(r"# site ([0-9]+) \(")
+_CACHE_TTL_RE = re.compile(r"\t\tttl ([0-9]+)s\Z")
+
+
+def cached_sites(text):
+    """{site id: ttl seconds} of the sites whose block in the rendered configuration `text` has the page cache.
+
+    Read from what render() wrote, so the answer is what the proxy really runs: a site's page cache turned on while
+    the proxy has no cache module is left out of the configuration, and so out of this.
+    """
+    out, site, in_cache = {}, None, False
+    for line in (text or "").split("\n"):
+        m = _SITE_MARK_RE.match(line)
+        if m:
+            site, in_cache = int(m.group(1)), False
+        elif line == "\tcache @pagecache {":
+            in_cache = True
+        elif in_cache and site is not None:
+            t = _CACHE_TTL_RE.match(line)
+            if t:
+                out[site] = int(t.group(1))
+            in_cache = False
+    return out
+
+
 def served_domains(sites):
     """Every domain render() serves for `sites`, sorted (what the certificate probe asks about)."""
     return sorted(d for s in sites if s.enabled for d in _domains(s))

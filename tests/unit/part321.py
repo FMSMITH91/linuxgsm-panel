@@ -8,6 +8,10 @@
 3. A database server the panel set up and that stopped since: an app install and a site's database create ask the
    host again instead of trusting the row's "ready" (up to 10 minutes old), so they are refused with the Start
    button's entry before anything is made, and the add dialog's list shows that entry at once.
+4. WordPress's Site Health page cache test answers from the web proxy's real state: each proxy apply writes, into
+   every WordPress site's files, whether the configuration it runs caches that site's pages (and for how long), and
+   the loopback plugin replaces WordPress's own test (which looks for caching headers on requests that never pass
+   the proxy) with one reading that word.
 
 HOW IT RUNS. part12's app and its database for the routes; every host call at ssh_manager's seams (part12's
 tripwire is armed, so nothing reaches a host). The workflow is read as text (part06's run-block reader).
@@ -39,6 +43,7 @@ _ROWS321 = {"sites": [], "remotes": [], "users": []}
 _REC321 = {"ports": [], "apply": []}
 # The sentence a failed tunnel-mode apply ends with, pinned as written (a revert of the fix has no such name).
 _CLOSED321 = "Ports 80 and 443 are closed: in tunnel mode visitors come in only through the tunnel."
+_REAL_APPLY321 = _sw321.proxy_apply      # the real apply for section 4; section 2's seams stub it
 _STOPPED321 = {"state": "unsupported", "detail": "stopped", "flavor": "mariadb"}
 
 
@@ -245,6 +250,86 @@ def _s3_db_stopped(st):
        (200, True, None))
 
 
+# ── 4. The page cache, as WordPress's Site Health sees it ─────────────────────────────────────────────
+def _s4_render(st):
+    from panel.services import websites_proxy as _wp
+    wp = _site321(st, "p321-wpc", kind="wordpress", enabled=True, page_cache=True, page_cache_ttl=300)
+    plain = _site321(st, "p321-wpn", kind="wordpress", enabled=True, page_cache=False)
+    on = _wp.render([wp, plain], None, {"cache_build": True}, secret_of=lambda s: _TOKEN321)
+    off = _wp.render([wp, plain], None, {"cache_build": False}, secret_of=lambda s: _TOKEN321)
+    eq("page cache state (cached_sites over the rendered text): the cached site with its TTL; nothing when the proxy "
+       "has no cache module, though the site's switch is on", (_wp.cached_sites(on), _wp.cached_sites(off)),
+       ({wp.id: 300}, {}))
+    return wp, plain
+
+
+def _s4_apply(st):
+    from panel.ops.ssh_manager import _core as _smcore
+    from panel.routes import _shared as _shared321
+    wp, plain = _s4_render(st)
+    static = _site321(st, "p321-wps", kind="static", enabled=True)
+    writes = []
+
+    def shell(server, user, sh, timeout=30, stdin_text=None, **k):
+        writes.append((user, stdin_text or ""))
+        return "", "", 0
+    _p9_patch(_sw321, "ports_apply", lambda *a, **k: (True, _sw321.OK_PORTS))
+    _p9_patch(_sw321, "proxy_apply", _REAL_APPLY321)
+    _p9_patch(_sw321, "_helper", lambda remote, verb, args=(), timeout=120, doc=None: (True, "applied=yes"))
+    _p9_patch(_sw321, "proxy_status", lambda remote, proxy=None: (True, "installed=yes\nversion=2.11.9\nactive=active\n"
+                                                                  "cache=yes\n"))
+    _p9_patch(_smcore, "shell_as_game_user", shell)
+    _p9_patch(_shared321, "game_account_write_refusal", lambda remote, user, *a, **k: None)
+    _p9_patch(_wview321, "proxy_options", lambda: {"cache_build": True})
+    _sw321._PAGE_CACHE_NOTED.clear()
+
+    def written():
+        import base64
+        out = {}
+        for user, stdin in writes:
+            for line in stdin.splitlines():
+                path, b64 = line.split(" ", 1)
+                out[(user, path)] = base64.b64decode(b64).decode()
+        writes[:] = []
+        return out
+    from panel.services import websites as _ws321
+    ok, _said = _w321.reconcile_proxy(st.host)
+    first = written()
+    eq("page cache state (reconcile_proxy -> proxy_apply, the proxy built with the cache): each WordPress site's "
+       "files get the state the applied configuration gives it (on with its TTL, off); a static site gets nothing",
+       (ok, first), (True, {(wp.account, _ws321.PAGE_CACHE_FILE): "on 300\n",
+                            (plain.account, _ws321.PAGE_CACHE_FILE): "off\n"}))
+    ok, _said = _w321.reconcile_proxy(st.host)
+    eq("page cache state (the same apply again): nothing is written when nothing changed", (ok, written()), (True, {}))
+    wp.page_cache = False
+    _db321.session.commit()
+    ok, _said = _w321.reconcile_proxy(st.host)
+    eq("page cache state (the site's page cache turned off, applied): its file says off", (ok, written()),
+       (True, {(wp.account, _ws321.PAGE_CACHE_FILE): "off\n"}))
+    for s in (wp, plain, static):
+        s.enabled = False
+    _db321.session.commit()
+
+
+def _s4_plugin():
+    from panel.services import websites as _ws321
+    php = _ws321.loopback_plugin()
+    test_fn = php[php.find("function lgsm_panel_site_status_tests"):] if "lgsm_panel_site_status_tests" in php else ""
+    eq("Site Health (the loopback plugin): WordPress's own page cache test (async, header-based) is taken out and a "
+       "direct one under the same key answers from the file the panel writes (/run/panel/page-cache, read-only in "
+       "the container); no header is made up",
+       ("add_filter( 'site_status_tests', 'lgsm_panel_site_status_tests' );" in php,
+        "unset( $tests['async']['page_cache'] );" in test_fn,
+        "$tests['direct']['page_cache'] = array( 'label' => __( 'Page cache' ), 'test' => 'lgsm_panel_page_cache_test' );"
+        in test_fn, "define( 'LGSM_PANEL_PAGE_CACHE_FILE', '/run/panel/page-cache' );" in php,
+        "'status'      => $on ? 'good' : 'recommended'," in php, "header(" in php.replace("wp_remote_retrieve_header(", "")),
+       (True, True, True, True, True, False))
+    eq("Site Health (the file the plugin reads): one of the files the panel writes for a site, and a new files "
+       "revision so installed WordPress sites are offered Update for the new plugin",
+       (_ws321.PAGE_CACHE_FILE in _ws321.FILE_NAMES, _ws321.PAGE_CACHE_FILE, _ws321.SITE_FILES_REV),
+       (True, "site/conf/panel/page-cache", "files-7"))
+
+
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
 def _cleanup321():
     _db321.session.rollback()
@@ -275,22 +360,26 @@ def _ran321(step, *args):
         _ran321.last = ""
         return True
     except Exception:  # noqa: BLE001 - a section that raises is reported by name and the rest still run
-        _db321.session.rollback()
+        from flask import has_app_context
+        if has_app_context():
+            _db321.session.rollback()
         _ran321.last = traceback.format_exc()[-1500:]
         return False
 
 
 _ran321.last = ""
 _trips321 = len(_P9_TRIPPED)
-check("part321: _s1_ci ran to the end", _ran321(_s1_ci), _ran321.last)
+for _sec321 in (_s1_ci, _s4_plugin):
+    check("part321: %s ran to the end" % _sec321.__name__, _ran321(_sec321), _ran321.last)
 with _p9.app_context():
     try:
         _p9_arm(who="part321")
         _st321 = _rows321()
-        for _sec321 in (_s2_tunnel, _s3_db_stopped):
+        for _sec321 in (_s2_tunnel, _s3_db_stopped, _s4_apply):
             check("part321: %s ran to the end" % _sec321.__name__, _ran321(_sec321, _st321), _ran321.last)
         eq("part321: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips321:], [])
     finally:
         _p9_restore_all()
         _w321._STATUS.clear()
+        _sw321._PAGE_CACHE_NOTED.clear()
         _cleanup321()

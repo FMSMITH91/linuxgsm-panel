@@ -415,11 +415,40 @@ def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
     ok, out = _helper(remote, "website-proxy-apply", ["start" if start_it else "reload"], timeout=180,
                       doc=apply_doc(text, sites, proxy))
     if ok:
+        note_page_cache(remote, text, sites)
         return True, OK_APPLIED
     if out in (ONLY_LOCAL, NO_HELPER):
         return False, out
     _core._log.warning("web proxy apply refused: %s", " | ".join(out.splitlines())[-600:])
     return False, apply_refusal(out)
+
+
+# site id -> the page cache text last written into that WordPress site's files by this process.
+_PAGE_CACHE_NOTED = {}
+
+
+def note_page_cache(remote, text, sites):
+    """Write each WordPress site's page cache state, as the applied configuration `text` has it, into its files.
+
+    Site Health's page cache test reads it (the loopback plugin): WordPress's own test looks for caching headers on
+    requests that never pass the proxy. Written as the site's account (PAGE_CACHE_FILE, no secret), and only when it
+    changed since this process last wrote it. A write that fails is logged and the apply still stands: Site Health
+    then keeps the last word.
+    """
+    cached = _wp().cached_sites(text)
+    for site in sites:
+        if site.kind != "wordpress" or not site.account:
+            continue
+        value = _ws().page_cache_text(cached.get(site.id))
+        if _PAGE_CACHE_NOTED.get(site.id) == value:
+            continue
+        sh = _ws()._ENV + "umask 077; mkdir -p %s || exit 1; " % _ws()._q(_ws().RUN_DIR) + _ws().write_files_sh()
+        ok, _out = _as_site(remote, site.account, sh, timeout=60,
+                            stdin_text=_ws().bundle({_ws().PAGE_CACHE_FILE: value}))
+        if ok:
+            _PAGE_CACHE_NOTED[site.id] = value
+        else:
+            _core._log.warning("page cache state not written for website %s", site.id)
 
 
 def _plain(why):
