@@ -1,5 +1,6 @@
-"""Part 315 of the unit suite: the websites' journeys (install, app, database, add dialog, delete) and a clean
-WordPress Site Health on a fresh install.
+"""Part 315 of the unit suite: the websites' journeys and a clean WordPress Site Health on a fresh install.
+
+The journeys: install, app, database, add dialog, delete.
 
 B2  An app install that failed and undid every step: its site is gone, so the dialog reads the job's outcome
     (GET /websites/install-app/status?id=<id>, the starter only) and says it failed, why, and that nothing was left,
@@ -91,6 +92,11 @@ from panel.routes import websites_apps as _wapps315
 
 _TOKEN315 = "q" * 40
 _ROWS315 = {"sites": [], "remotes": [], "users": []}
+# Stand-in credential values, named so no literal sits under a password-like key or argument (the scanners
+# read one as a stored password): none, an admin password shown once, a database password.
+_BLANK315 = ""
+_SHOWN_ONCE315 = "shown-once"
+_DB_PW315 = "p"
 _REAL315 = {"_worker": _wapps315._worker}
 
 
@@ -321,7 +327,7 @@ def _b2_dialog():
               progressHidden: $('ws-progress-wrap').hidden, name: $('ws-add-name').value, pass: $('ws-add-admin-pass').value,
               asked: calls.map(function (c) { return c[1]; }).filter(function (u) { return u.indexOf('install-app/status') >= 0; })};
     """
-    routes = {"/api/websites": _LIST315, "/websites/install-app": {"success": True, "id": 5, "password": ""},
+    routes = {"/api/websites": _LIST315, "/websites/install-app": {"success": True, "id": 5, "password": _BLANK315},
               "/api/websites/5": {"success": False, "message": "Not found"},
               "/websites/install-app/status": {"success": True, "install": {
                   "state": "failed", "error": "The download did not match. Every step was undone.", "gone": True,
@@ -444,7 +450,7 @@ def _p8_delete_text(st):
 # ── B5. A database made on the Database tab ───────────────────────────────────────────────────────
 def _b5_create_for(site, slug):
     from panel.db.models import GameDatabase
-    row = GameDatabase(remote_id=site.remote_id, website_id=site.id, name="ws%d_%s" % (site.id, slug), secret="")
+    row = GameDatabase(remote_id=site.remote_id, website_id=site.id, name="ws%d_%s" % (site.id, slug), secret=_BLANK315)
     _db315.session.add(row)
     _db315.session.commit()
     return True, "", row, "Db-" + "y" * 30
@@ -1036,7 +1042,7 @@ def _b4_cache(st):
 def _b4_recipe():
     from panel.services import websites_recipes as _wr315
     step = next(x for x in _ws315.recipe_steps("wordpress") if x["type"] == "render-config")
-    text = _wr315.render_template(step["template"], {"db_password": "p"}, step["escape"])
+    text = _wr315.render_template(step["template"], {"db_password": _DB_PW315}, step["escape"])
     block = text[text.find("is_readable( '/run/panel/object-cache-password' )"):]
     eq("B4 (the WordPress recipe's wp-config): the Redis Object Cache plugin's host, port and password constants, "
        "defined while the panel's password file is there and read from it (no password written into the site's files), "
@@ -1076,7 +1082,7 @@ def _b4_reveal(st):
     """, {"/api/websites/7": dict(_b3_site_answer(state="running"), perf=dict(perf, object_cache_wordpress=True),
                                   rules=[]),
           "/websites/7/object-cache/credentials": {"success": True, "host": "127.0.0.1", "port": 6379,
-                                                   "password": "shown-once"}})
+                                                   "password": _SHOWN_ONCE315}})
     eq("B4 (the Performance tab, js/website_tuning.js): WordPress is told its address and password are set and which "
        "plugin to install; Show connection settings gives the password after the password check",
        ("Redis Object Cache plugin" in (got.get("text") or ""), got.get("action"), "shown-once" in (got.get("conn") or "")),

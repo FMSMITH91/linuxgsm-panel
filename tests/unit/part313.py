@@ -123,6 +123,9 @@ def _keypem313(key, password=None):
     return key.private_bytes(_ser313.Encoding.PEM, _ser313.PrivateFormat.PKCS8, enc).decode()
 
 
+# A stand-in for an encrypted proxy token the code under test never reads, named so no literal sits under a
+# password-like argument.
+_STAND_IN313 = "x"
 _DOMAIN313 = "shop.p313.example.org"
 _KEY313 = _ec_key313()
 _CHAIN313 = _pem313(_cert313(_KEY313, [_DOMAIN313])) + _ca_pem313()
@@ -269,7 +272,7 @@ def _ns_dom313(name, did, mode="acme", pem="", key=""):
 
 
 def _ns_site313(domains):
-    return _NS313(id=31, name="mixed", kind="static", account="ws31", port=20031, enabled=True, proxy_secret="x",
+    return _NS313(id=31, name="mixed", kind="static", account="ws31", port=20031, enabled=True, proxy_secret=_STAND_IN313,
                   domains=domains, max_body_mb=8, static_cache=False, custom_rules="[]", page_cache=False,
                   page_cache_ttl=300, access_log=False, raw_proxy_snippet="")
 

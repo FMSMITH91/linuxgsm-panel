@@ -130,7 +130,7 @@ _FIREWALL = {}                    # remote id -> (monotonic time, "on" | "off" |
 
 
 def _firewall_of(remote):
-    """"on" or "off" for the host's firewall (ufw; not installed is off), "unknown" when it could not be read."""
+    """The host's firewall: "on" or "off" (ufw; not installed is off), "unknown" when it could not be read."""
     hit = _FIREWALL.get(remote.id)
     if hit and time.monotonic() - hit[0] < FIREWALL_FRESH:
         return hit[1]

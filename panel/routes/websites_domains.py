@@ -122,8 +122,11 @@ def apply_certs(remote, status):
 
 
 def _note_missing(row, why="", now=None):
-    """A domain served by an online site with no certificate: the proxy's own reason (`why`) as soon as it has one,
-    and failed after CERT_MISSING_AFTER seconds, with that reason or the usual one (S_CERT_MISSING)."""
+    """Note a domain served by an online site with no certificate.
+
+    The proxy's own reason (`why`) is kept as soon as it has one, and the domain is failed after CERT_MISSING_AFTER
+    seconds, with that reason or the usual one (S_CERT_MISSING).
+    """
     if row.verified_at is None or row.website is None or not row.website.enabled:
         _MISSING_SINCE.pop(row.domain, None)
         return
@@ -318,10 +321,10 @@ def _set_auto(row):
 def _cert_detail(row, checked):
     """The audit row's text: the domain, and of an own certificate its issuer, expiry and fingerprint (never the key)."""
     if checked is None:
-        return "%s: automatic certificate" % row.domain
+        return " ".join((row.domain + ":", "automatic certificate"))
     got = tls_own.summary(checked.chain)
-    return "%s: own certificate, issuer %s, expires %s, sha256 %s" % (
-        row.domain, got["issuer"], got["not_after"], got["fingerprint"])
+    return "".join((row.domain, ": own certificate, issuer ", str(got["issuer"]), ", expires ", str(got["not_after"]),
+                    ", sha256 ", str(got["fingerprint"])))
 
 
 def _apply_cert(site, row, before):

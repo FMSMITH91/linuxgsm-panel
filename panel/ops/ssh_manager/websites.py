@@ -217,7 +217,7 @@ def runtime_ready(remote):
 
 
 def _no_progress(_part):
-    """install's `progress` when nobody follows it."""
+    """Stand in for install's `progress` when nobody follows it."""
     return None
 
 
