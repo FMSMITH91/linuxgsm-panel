@@ -551,18 +551,37 @@ def _ran(site, action, ok, said, state):
 
 
 # ── administering a site ────────────────────────────────────────────────────────────────────────
+S_NOT_SERVED = ("None of this website's domains would be served: {domains}. A domain is served once a DNS check "
+                "finds it pointing at this host or going through Cloudflare. Check its DNS on the Domains tab, then "
+                "try again.")
+S_ONLINE_PART = "It does not answer on {domains} yet: their DNS does not point here."
+
+
+def _unserved(site):
+    """The site's domains the web proxy would not serve, each with its DNS state ("x.org (mismatch)")."""
+    from panel.services import websites_proxy as _wp
+    served = set(_wp.site_domains(site))
+    return ["%s (%s)" % (d.domain, d.dns_state or "unchecked") for d in site.domains or [] if d.domain not in served]
+
+
 def online_refusal(site):
     """Why `site` may not go online now (a sentence), or None.
 
-    It needs a domain, and every domain's DNS must point at the host (website_dns) unless a
-    superadmin puts it online anyway, which is audited as such.
+    It needs a domain, and every domain's DNS must point at the host or go through Cloudflare
+    (website_dns.VERIFIED) unless a superadmin puts it online anyway, which is audited as such. Even
+    then, a site the web proxy would serve on no domain at all (none verified yet) is refused: it would
+    say online and answer nothing.
     """
+    from panel.services import website_dns
+    from panel.services import websites_proxy as _wp
     domains = list(site.domains or [])
     if not domains:
         return i18n.Sentence("Add a domain to this website before putting it online.")
-    if not current_user.is_superadmin and any(d.dns_state != "matching" for d in domains):
+    if not current_user.is_superadmin and any(d.dns_state not in website_dns.VERIFIED for d in domains):
         return i18n.Sentence("A domain of this website does not point at its host yet. Check its DNS on the "
                              "Domains tab, then try again.")
+    if not _wp.site_domains(site):
+        return i18n.Sentence(S_NOT_SERVED, domains=", ".join(_unserved(site)))
     return None
 
 
@@ -574,7 +593,7 @@ def _admin_routes(app):
         why = online_refusal(site)
         if why:
             audit(site, "website_refused", "not put online: %s" % why)
-            return say(409, why)
+            return say(409, why, fix="domains")
         site.enabled = True
         db.session.commit()
         ok, said = reconcile_proxy(site.remote)
@@ -582,8 +601,12 @@ def _admin_routes(app):
             site.enabled = False
             db.session.commit()
             reconcile_proxy(site.remote)
-        unchecked = [d.domain for d in site.domains if d.dns_state != "matching"]
-        return acted(site, "website_enable", ok, said or "The website is online.",
+        unchecked = [d.domain for d in site.domains if d.dns_state not in ("matching", "cdn")]
+        said = said or "The website is online."
+        left = _unserved(site) if ok else []
+        if left:
+            said = i18n.Sentences(said, i18n.Sentence(S_ONLINE_PART, domains=", ".join(left)))
+        return acted(site, "website_enable", ok, said,
                      "put online" + (" with DNS not matching for %s" % ", ".join(unchecked) if unchecked else ""))
 
     @app.route("/websites/<int:site_id>/disable", methods=["POST"])

@@ -216,6 +216,11 @@ def _domains(site):
     return [d.domain for d in _served(site)]
 
 
+def site_domains(site):
+    """The names render() serves for `site` once it is online: [] means it would answer on none of them."""
+    return _domains(site)
+
+
 def own_cert(domain):
     """Whether the proxy serves `domain` (a WebsiteDomain) with the operator's own certificate files.
 

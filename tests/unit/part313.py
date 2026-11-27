@@ -11,6 +11,10 @@
    or audited, the route rendering and shipping the files, a failed apply putting the previous certificate
    back, switching back to automatic, the domain's warning 30 days ahead, the renewal read leaving it alone,
    and the weekly expiry alert through the update-check ticker's hook.
+5. Behind Cloudflare: a domain whose answers are all inside Cloudflare's published ranges is `cdn`, verified and
+   served; any other foreign answer stays a mismatch and is not served; a site that would be served on no
+   domain is never put online, and one served on only some says which it does not answer on; the Domains tab
+   notes what an automatic certificate needs behind Cloudflare.
 """
 import datetime as _dt313
 import importlib.machinery as _mach313
@@ -521,6 +525,60 @@ def _s4_i18n(_st, _rec):
        {lang: [s for s in said if s not in keys[lang]] for lang in keys}, {"es": [], "fr": []})
 
 
+# ── 5. behind Cloudflare ─────────────────────────────────────────────────────────────────────────
+def _s5_cdn(st, rec):
+    cf, foreign = _cf_address313(), "8.8.4.4"
+    nets = _dns313.cdn_networks()
+    eq("dns: every answer inside Cloudflare's published ranges is cdn; a foreign public answer, or a Cloudflare answer "
+       "beside a foreign one, is a mismatch; the host's own address is matching (controls)",
+       [_dns313.classify([cf], {_HOST_IP313}, nets), _dns313.classify([foreign], {_HOST_IP313}, nets),
+        _dns313.classify([cf, foreign], {_HOST_IP313}, nets), _dns313.classify([_HOST_IP313], {_HOST_IP313}, nets)],
+       ["cdn", "mismatch", "mismatch", "matching"])
+    _p9_patch(_dns313, "socket", _resolver313({"cf.p313.example.org": [cf], "far.p313.example.org": [foreign],
+                                               "cdn.p313.example.org": [cf]}))
+    su = _Client313(st.su.id)
+    site = _site313(st.host, "p313-cdn")
+    add = "/websites/%d/domains/add" % site.id
+    got = [_p9_json(su.post(add, json={"domain": d})).get("dns_state") for d in ("cf.p313.example.org", "far.p313.example.org")]
+    _db313.session.expire_all()
+    site = _db313.session.get(_Site313, site.id)
+    site.enabled = True
+    text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
+    eq("dns (route): a domain behind Cloudflare is checked as cdn, verified and served; a domain pointing at a foreign "
+       "address stays a mismatch and is not served",
+       (got, _wp313.site_domains(site), "cf.p313.example.org {" in text, "far.p313.example.org" in text),
+       (["cdn", "mismatch"], ["cf.p313.example.org"], True, False))
+    site.enabled = False
+    _db313.session.commit()
+    rows = {d["domain"]: d for d in _p9_json(su.get("/api/websites/%d" % site.id)).get("domains", [])}
+    eq("dns: the Domains tab notes what an automatic certificate needs behind Cloudflare, and recommends the Origin CA "
+       "certificate with Full (strict); a domain that is not behind Cloudflare gets no such note (control)",
+       ("Always Use HTTPS" in rows["cf.p313.example.org"]["cdn_note"], "Full (strict)" in rows["cf.p313.example.org"]["cdn_note"],
+        rows["far.p313.example.org"]["cdn_note"]), (True, True, ""))
+    _s5_online(st, rec, site)
+
+
+def _s5_online(st, rec, site):
+    su = _Client313(st.su.id)
+    none = _site313(st.host, "p313-none", [("none.p313.example.org", False, "mismatch")])
+    r = su.post("/websites/%d/enable" % none.id)
+    _db313.session.expire_all()
+    eq("online: a site the proxy would serve on no domain is not put online, even by a superadmin; the refusal names "
+       "the domain and its DNS state (checked again: no answer now) and points at the Domains tab",
+       (r.status_code, _db313.session.get(_Site313, none.id).enabled, "none.p313.example.org (failed)" in (
+           _p9_json(r).get("message") or ""), _p9_json(r).get("fix")), (409, False, True, "domains"))
+    r = su.post("/websites/%d/enable" % site.id)
+    msg = _p9_json(r).get("message") or ""
+    eq("online: a site served on only some of its domains goes online and says which it does not answer on yet",
+       (r.status_code, "far.p313.example.org" in msg, "cf.p313.example.org" in msg), (200, True, False))
+    su.post("/websites/%d/disable" % site.id)
+    cust = _Client313(st.cust_cdn.id)
+    r = cust.post("/websites/%d/enable" % st.c.id)
+    eq("online: an administrator (not a superadmin) puts a site whose only domain goes through Cloudflare online",
+       r.status_code, 200)
+    cust.post("/websites/%d/disable" % st.c.id)
+
+
 # ── setup and run ─────────────────────────────────────────────────────────────────────────────────
 def _state313():
     host = _host313("p313-host")
@@ -567,7 +625,7 @@ with _p9.app_context():
         _rec313 = _stub_host313()
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
-                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n):
+                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
     finally:

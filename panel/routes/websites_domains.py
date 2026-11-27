@@ -73,6 +73,10 @@ S_CERT_ROLLED_BACK = "The web proxy did not take the change, so {domain} keeps i
 S_CERT_NOT_SERVED = "It is used once the domain's DNS points here and the website is online."
 S_CERT_TUNNEL = ("This host's websites are reached through a tunnel, so the tunnel's provider serves the "
                  "certificate visitors see. This one is used if the host stops using the tunnel.")
+S_CDN_AUTO = ("This domain goes through Cloudflare. Its automatic certificate works only while Cloudflare passes "
+              "plain HTTP to this host: turn off Always Use HTTPS there, and the first certificate can need the "
+              "record set to DNS only. Or paste a Cloudflare Origin CA certificate as your own certificate, with "
+              "Cloudflare's SSL/TLS mode at Full (strict).")
 CERTS_FRESH = 300                 # seconds a host's certificate read is reused
 CERT_SOON_DAYS = 10
 _CERTS_AT = {}                    # remote id -> monotonic time of its last certificate read
@@ -184,7 +188,7 @@ def add_first(site, text):
 def _check(site, row):
     state, addrs, hosts = _dns.check(row.domain, site.remote)
     row.dns_state, row.last_check_at = state, utcnow()
-    if state == "matching" and row.verified_at is None:
+    if state in _dns.VERIFIED and row.verified_at is None:
         row.verified_at = utcnow()
     db.session.commit()
     return {"domain": row.domain, "dns_state": state, "answers": addrs, "host": hosts,
@@ -211,6 +215,7 @@ def domain_json(site, row):
             "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
             "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
             "cert_warning": i18n.tr(note) if note else "", "cert_mode": "own" if own else "acme",
+            "cdn_note": i18n.tr(S_CDN_AUTO) if row.dns_state == "cdn" and not own else "",
             "own_cert": {k: own[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")}
             if own else None,
             "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}

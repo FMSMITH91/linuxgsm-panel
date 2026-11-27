@@ -10,18 +10,25 @@ carries) marks the domain "private" and it cannot go online: a name pointing a c
 or a visitor at the host's internal networks is refused, not merely mismatched.
 
 States (WebsiteDomain.dns_state): matching (every answer is one of the host's public addresses),
-mismatch (a public answer that is not the host's), private (an answer that is not public), failed
-(no answer).
+cdn (every answer is inside Cloudflare's published ranges, the signed catalog's list the Restricted
+preset uses: the name goes through Cloudflare's proxy, which passes visitors on to the host), mismatch
+(a public answer that is neither), private (an answer that is not public), failed (no answer). A
+domain is verified, and served by the web proxy, once a check finds it matching or cdn (VERIFIED).
 """
 import ipaddress
 import socket
 
 S_STATES = {
     "matching": "The domain points at this website's host.",
+    "cdn": "This domain goes through Cloudflare, which passes its visitors on to this host.",
     "mismatch": "The domain points somewhere else. Create the A (and AAAA) record shown, then check again.",
     "private": "The domain points at a private or internal address, so it cannot be used for a public website.",
     "failed": "The domain has no A or AAAA record yet. Create the record shown, then check again.",
 }
+
+
+# The states that verify a domain: the web proxy serves it from then on.
+VERIFIED = ("matching", "cdn")
 
 
 def _address(text):
@@ -59,21 +66,34 @@ def host_addresses(remote):
     return out
 
 
-def classify(addresses, host_addrs):
-    """The dns_state for resolved `addresses` against the host's public `host_addrs`."""
+def classify(addresses, host_addrs, cdn_nets=()):
+    """The dns_state for resolved `addresses` against the host's public `host_addrs` and a CDN's `cdn_nets`."""
     if not addresses:
         return "failed"
     ips = [_address(a) for a in addresses]
     if any(ip is None or not ip.is_global for ip in ips):
         return "private"
-    return "matching" if host_addrs and all(str(ip) in host_addrs for ip in ips) else "mismatch"
+    if host_addrs and all(str(ip) in host_addrs for ip in ips):
+        return "matching"
+    if cdn_nets and all(any(ip.version == net.version and ip in net for net in cdn_nets) for ip in ips):
+        return "cdn"
+    return "mismatch"
+
+
+def cdn_networks():
+    """Cloudflare's published ranges from the signed catalog, as networks ([] when they cannot be read)."""
+    from panel.services import websites_catalog
+    try:
+        return [ipaddress.ip_network(n) for n in websites_catalog.preset_ranges("cloudflare")]
+    except Exception:  # noqa: BLE001 - no catalog section: a CDN answer stays a mismatch
+        return []
 
 
 def check(domain, remote, lookup=None):
     """(dns_state, the addresses the domain resolved to, the host's public addresses)."""
     addrs = resolve(domain, lookup)
     hosts = host_addresses(remote)
-    return classify(addrs, hosts), addrs, sorted(hosts)
+    return classify(addrs, hosts, cdn_networks()), addrs, sorted(hosts)
 
 
 def records(remote):

@@ -160,8 +160,9 @@
   var ID = WS.siteId;
   var st = {d: null};
   // ── domains ──
-  var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', mismatch: 'DNS points elsewhere',
-    private: 'DNS points to a private address', failed: 'DNS check failed'};
+  var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', cdn: 'DNS goes through Cloudflare',
+    mismatch: 'DNS points elsewhere', private: 'DNS points to a private address', failed: 'DNS check failed'};
+  var SERVED = ['matching', 'cdn'];
   function domainRow(dm) {
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
@@ -169,7 +170,7 @@
     if (dm.is_primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
     li.appendChild(top);
     var info = WS.node('div', 'small text-secondary');
-    info.appendChild(WS.node('span', dm.dns_state === 'matching' ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
+    info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
     info.appendChild(document.createTextNode(' · '));
     var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
     var own = dm.cert_mode === 'own' && dm.own_cert;
@@ -187,6 +188,13 @@
     li.appendChild(info);
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
+    if (dm.cdn_note) {
+      // Folded: the steps matter once, and the row stays short on a phone.
+      var det = WS.node('details', 'small text-secondary');
+      det.appendChild(WS.node('summary', null, WS.T('Behind Cloudflare: getting its certificate')));
+      det.appendChild(WS.raw('div', 'text-break', dm.cdn_note));
+      li.appendChild(det);
+    }
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
   }
@@ -207,7 +215,7 @@
   }
   function renderRecords(doms, dns) {
     var body = WS.clear(WS.el('wd-records'));
-    var want = doms.filter(function (x) { return x.dns_state !== 'matching'; });
+    var want = doms.filter(function (x) { return SERVED.indexOf(x.dns_state) < 0; });
     var rows = [];
     want.forEach(function (x) {
       (dns.a || []).forEach(function (ip) { rows.push(['A', x.domain, ip]); });
