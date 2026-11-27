@@ -24,7 +24,8 @@ path that is not a file to `index.php`) continues as the same request, so real v
 there, while a request that did not come through the proxy is refused, its error page included. The token is
 checked first in the server's own rewrite rules, before the site's `.htaccess` is read, so a site's own error page
 (`ErrorDocument 403 /index.php`, written by a plugin or by hand) can no longer turn a refused request into one that
-runs PHP. The token is made once, with the site, and no action changes it.
+runs PHP. The token is made once, with the site, and no action changes it. Neither check names the token's
+header in the answer's `Vary` header (a visitor sees only the `Vary` values Apache and the site set themselves).
 
 A site has no route to the internet. WordPress reaches only the hosts its own update and Site Health checks use
 (api.wordpress.org, downloads.wordpress.org, downloads.w.org for background updates, and developer.wordpress.org,

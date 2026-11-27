@@ -392,8 +392,15 @@ def _s5_gate(host, su):
     eq("gate: mod_rewrite is loaded where the image has it off, the token's header is kept out of Vary ([NV]), and "
        "the <If> gate stays behind the rules (control: the authorization check is unchanged)",
        (loads in conf, any("[NV,OR]" in r and _ws319.GATE_HEADER in r for r in rules),
-        "<If \"%%{HTTP:%s} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (_ws319.GATE_HEADER, _TOKEN319) in conf),
+        "<If \"req_novary('%s') != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (_ws319.GATE_HEADER, _TOKEN319)
+        in conf),
        (True, True, True))
+    reads = [ln.strip() for ln in conf.splitlines() if _ws319.GATE_HEADER in ln]
+    eq("F3 (POST /websites/<id>/update-image, a PHP site's Apache config): every line that reads the token's header "
+       "keeps its name out of Vary (a RewriteCond with [NV], or req_novary() in an expression: %{HTTP:...} in the "
+       "<If> made every answer say \"Vary: X-Panel-Proxy-Token\"); the header is still read twice and unset (control)",
+       ([r for r in reads if not ("[NV" in r or "req_novary('%s')" % _ws319.GATE_HEADER in r
+                                  or r == "RequestHeader unset %s" % _ws319.GATE_HEADER)], len(reads)), ([], 3))
 
 
 # ── 6. Put online's answer handled ────────────────────────────────────────────────────────────────

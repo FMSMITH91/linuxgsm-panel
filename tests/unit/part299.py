@@ -411,7 +411,7 @@ def _s299_servers():
     eq("site servers: nginx and Apache answer 403 without the web proxy's token; Apache checks it after every "
        ".htaccess (Location/If) and removes the header before PHP sees it",
        ('if ($http_x_panel_proxy_token != "%s") {' % _TOKEN299 in n, "return 403;" in n,
-        "<If \"%%{HTTP:X-Panel-Proxy-Token} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % _TOKEN299 in a,
+        "<If \"req_novary('X-Panel-Proxy-Token') != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % _TOKEN299 in a,
         "Require all denied" in a,
         a.index("<Location") < a.index("<If \"") < a.index("</Location>"), "RequestHeader unset X-Panel-Proxy-Token" in a,
         "Listen 8080" in a, "ServerTokens Prod" in a, "Options -Indexes +SymLinksIfOwnerMatch" in a),

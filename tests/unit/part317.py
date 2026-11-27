@@ -115,7 +115,8 @@ def _reset317():
 def _gate_denies(conf, headers, env):
     """Whether Apache's <Location "/"> <If> in `conf` refuses a request with these headers and environment.
 
-    The expression is the conf's own: every clause `%{HTTP:name} != 'v'` or `%{ENV:name} != 'v'`, joined by &&;
+    The expression is the conf's own: every clause `%{HTTP:name} != 'v'`, `req_novary('name') != 'v'` (the same
+    header read, its name kept out of Vary) or `%{ENV:name} != 'v'`, joined by &&;
     the request is refused when all hold. Headers are what the request carries when the authorization runs; the
     environment is the request's (Apache sets REDIRECT_STATUS on an internal redirect to the status of the request
     it came from; a client cannot set it). None when the conf has no such gate or a clause of another form.
@@ -124,6 +125,7 @@ def _gate_denies(conf, headers, env):
     if not m:
         return None
     for clause in m.group(1).split("&&"):
+        clause = _re317.sub(r"req_novary\('([A-Za-z0-9_-]+)'\)", r"%{HTTP:\1}", clause)
         c = _re317.fullmatch(r"\s*%\{(HTTP|ENV):([A-Za-z0-9_-]+)\} != '([^']*)'\s*", clause)
         if not c:
             return None

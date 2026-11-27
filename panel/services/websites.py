@@ -104,7 +104,8 @@ KINDS_PHP = ("php", "wordpress", "phpbb")
 # the virtual host's rewrite rules too (an error page a .htaccess names is refused without the token), WordPress's
 # egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches. 5: WordPress's
 # egress hosts gain developer.wordpress.org and downloads.w.org (WP_EGRESS_HOSTS), in its proxy's unit and hosts file.
-SITE_FILES_REV = "files-5"
+# 6: the gate's <If> reads the token's header with req_novary(), so no answer names that header in Vary.
+SITE_FILES_REV = "files-6"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -442,13 +443,16 @@ def apache_conf(token):
         "    LoadModule rewrite_module /usr/lib/apache2/modules/mod_rewrite.so", "</IfModule>",
         "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP,
         # The gate before authorization and before any .htaccess (THE PROXY TOKEN): [NV] keeps the header's name
-        # out of Vary; a subrequest ([NS]) is only ever made inside a request that passed here.
+        # out of Vary; a subrequest ([NS]) is only ever made inside a request that passed here. The <If> below reads
+        # it with req_novary() for the same reason: %{HTTP:...} in an expression adds the header's name to Vary, and
+        # every visitor's answer named the panel's internal header (Apache's expression docs, "Functions").
         "    RewriteEngine On", "    RewriteCond %%{HTTP:%s} =%s [NV,OR]" % (GATE_HEADER, token),
         "    RewriteCond %{ENV:REDIRECT_PANEL_GATE} =1", "    RewriteRule ^ - [E=PANEL_GATE:1]",
         "    RewriteCond %{ENV:PANEL_GATE} !=1", "    RewriteRule ^ - [F,NS]",
         "    <Directory %s>" % DOCROOT_PHP, "        Options -Indexes +SymLinksIfOwnerMatch", "        AllowOverride All",
         "        Require all granted", "    </Directory>",
-        '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),
+        '    <Location "/">',
+        "        <If \"req_novary('%s') != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),
         "            Require all denied", "        </If>", "    </Location>",
         "    RequestHeader unset %s" % GATE_HEADER,
         "    ErrorLog /proc/self/fd/2", "    CustomLog /dev/null common", "</VirtualHost>", ""])
