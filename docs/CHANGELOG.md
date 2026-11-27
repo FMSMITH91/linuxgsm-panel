@@ -28,6 +28,12 @@ dated section below lists what that day's releases changed, newest first; the nu
 - **History goes back a year.** The server and host History charts now offer 30 days, 90 days, 6 months and 1
   year beside 24 hours and 7 days, from hourly summaries the panel keeps on its own host for a year.
 
+### Fixed
+
+- **Website pages reached through WordPress's pretty links load again.** On websites, robots.txt, the favicon,
+  post links and WordPress's REST API were refused with an error page. Press Update on each website's Overview
+  to apply the fix; the site is offline for a few seconds while it restarts.
+
 ### Security
 
 - **Add-on downloads go only to public addresses.** The panel's downloads of DB-IP's country database and of
