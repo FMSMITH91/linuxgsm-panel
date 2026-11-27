@@ -464,9 +464,52 @@ def _s4_notes(st, _rec):
     eq("own cert (route): the signature-algorithm check (SHA-1/MD5 noted; part232 holds its verdicts) runs on a "
        "website's certificate too", (code, "p313: the signature check ran" in notes), (200, True))
     _p9_patch(_own313, "_hash_notes", _HASH_NOTES313)
+    _s4_self_signed_row(st)
 
 
 _HASH_NOTES313 = _own313._hash_notes
+
+
+def _s4_self_signed_row(st):
+    """U3: a self-signed own certificate was saved with its note once; the domain's line then said nothing of it."""
+    c = _Client313(st.cust.id)
+    self_signed = _pem313(_cert313(_KEY313, [_DOMAIN313], issuer_key=_KEY313, issuer=_name313(_DOMAIN313)))
+    origin = _pem313(_cert313(_KEY313, [_DOMAIN313], issuer=_name313("CloudFlare Origin Certificate",
+                                                                      "CloudFlare Origin SSL Certificate Authority")))
+    got = {}
+    for name, cert in (("self-signed", self_signed), ("a CA's chain", _CHAIN313), ("Cloudflare origin", origin)):
+        r = _post_cert313(c, st.a, _dom313(st.a, _DOMAIN313), mode="own", cert=cert, key=_KEYPEM313)
+        row = _domains313(c, st.a).get(_DOMAIN313) or {}
+        got[name] = (r.status_code, row.get("cert_mode"), _wd313.S_OWN_SELF_SIGNED in (row.get("cert_warning") or ""))
+    _post_cert313(c, st.a, _dom313(st.a, _DOMAIN313), mode="acme")
+    eq("U3 (POST /websites/<id>/domains/cert, then GET /api/websites/<id>): a self-signed own certificate keeps a "
+       "warning on the domain's line that browsers warn (it was said once, in the save's notes); a CA's chain and a "
+       "Cloudflare Origin CA certificate have none (control)",
+       got, {"self-signed": (200, "own", True), "a CA's chain": (200, "own", False),
+             "Cloudflare origin": (200, "own", False)})
+    note = "The certificate is self-signed, so browsers warn."
+    page = _ran301("own cert notes", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  $('wd-cert').scrollIntoView = function () {};
+  window.wsCertOpen(1);
+  $('wd-cert-own').checked = true; window.wsCertMode();
+  $('wd-cert-pem').value = 'CERT'; $('wd-cert-key').value = 'KEY';
+  window.wsCertSave({preventDefault: function () {}});
+  for (let i = 0; i < 8; i++) await tick();
+  return {notes: $('wd-cert-notes').querySelectorAll('li').map(function (li) { return li.textContent; }),
+          shown: !$('wd-cert').hidden, key: $('wd-cert-key').value, row: $('wd-list').textContent};
+""", routes={"/api/websites/7": dict(_SITE_API313, domains=[_SS_DOM313]),
+             "/websites/7/domains/cert": {"success": True, "message": "Saved.", "notes": [note]}}))
+    eq("U3 (the Domains tab, js/website_site.js): the save's notes are listed under the form, which stays open after the "
+       "page reloads the site, the key field emptied; the domain's line shows its warning",
+       (page.get("notes"), page.get("shown"), page.get("key"), _SS_WARN313 in (page.get("row") or "")),
+       ([note], True, "", True))
+
+
+_SS_WARN313 = "The certificate you gave this domain is self-signed, so visitors' browsers warn."
+_SS_DOM313 = {"id": 1, "domain": "own.p313.example.org", "is_primary": True, "dns_state": "matching",
+              "cert_state": "own", "cert_mode": "own", "cert_warning": _SS_WARN313 + " Use one from a well-known authority.",
+              "own_cert": {"issuer": "own.p313.example.org", "not_after": "2027-01-01"}, "records": []}
 
 
 def _s4_rollback(st, rec):
@@ -633,7 +676,21 @@ def _s5_fastly(st, _rec):
        ("Fastly", "If Fastly offers an origin certificate, paste it under Your own certificate and use its strict TLS "
         "mode. Otherwise the automatic certificate needs Fastly to pass plain HTTP to this host for "
         "/.well-known/acme-challenge/.", "", ""))
+    _s5_fastly_page(rows)
     _s5_catalog(su, site)
+
+
+def _s5_fastly_page(rows):
+    """The Domains tab over the route's own answer for the Fastly domain: it says the DNS goes through Fastly."""
+    answer = dict(_SITE_API313, domains=[dict(rows["fa.p313.example.org"], id=1)])
+    got = _ran301("fastly domain (route's answer)", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const t = $('wd-list').textContent;
+  return {dns: t.indexOf('DNS goes through Fastly') >= 0, behind: t.indexOf('Behind Fastly: getting its certificate') >= 0};
+""", routes={"/api/websites/7": answer}))
+    eq("dns (the Domains tab, over GET /api/websites/<id>'s own answer for a domain whose DNS answer is in Fastly's "
+       "ranges): the line says the DNS goes through Fastly, with the note folded under Behind Fastly", got,
+       {"dns": True, "behind": True})
 
 
 def _domains313(su, site):

@@ -274,6 +274,8 @@ If the site is online, saving updates the web proxy at once. If the proxy does n
 certificate, the domain keeps the one it had, the proxy is put back as it was, and the page says why. The
 panel never renews your certificate: the domain's line warns from 30 days before it expires, and so does
 the **A TLS certificate is expiring soon** alert (once a week per domain, under Settings > Notifications).
+A self-signed certificate is noted when it is saved, and the domain's line keeps saying that visitors'
+browsers warn for as long as it is in use (a CDN's origin certificate is named as one instead).
 A host in Tunnel mode serves no certificate of its own: the tunnel's provider serves the one visitors see.
 Your certificate stays saved and its key is not sent to the host while the tunnel is in use; it is
 served again if the host leaves Tunnel mode. In Tunnel mode no domain is marked as failing to get a

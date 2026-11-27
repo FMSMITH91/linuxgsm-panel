@@ -66,6 +66,10 @@ S_CERT_SOON = ("This domain's certificate expires in {days} days and should have
 S_OWN_EXPIRED = ("The certificate you gave this domain has expired, so browsers refuse it. Paste a renewed one, or "
                  "switch back to automatic.")
 S_OWN_SOON = "The certificate you gave this domain expires in {days} day(s). Paste the renewed one before then."
+# A self-signed certificate is noted once when it is saved (tls_own's chain notes); the domain's line keeps saying
+# so, as browsers keep warning (OWASP Transport Layer Security Cheat Sheet, "Use Certificates from a Trusted CA").
+S_OWN_SELF_SIGNED = ("The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a "
+                     "well-known authority, or switch back to automatic (Let's Encrypt).")
 S_CERT_MODE = "Choose Automatic (Let's Encrypt) or Your own certificate."
 S_CERT_OWN_SAVED = "Saved: {domain} uses your own certificate."
 S_CERT_AUTO_SAVED = "Saved: {domain} gets its certificate automatically from Let's Encrypt."
@@ -165,13 +169,16 @@ def refresh_certs(remote):
 
 
 def _own_note(row, now):
-    """The warning for a domain's own certificate: expired, or tls_own.SOON_DAYS days or fewer left."""
-    if row.cert_not_after is None:
-        return ""
-    left = row.cert_not_after - (now or utcnow())
-    if left.total_seconds() <= 0:
-        return S_OWN_EXPIRED
-    return i18n.Sentence(S_OWN_SOON, days=left.days) if left.days <= tls_own.SOON_DAYS else ""
+    """The warning for a domain's own certificate: self-signed, and expired or tls_own.SOON_DAYS days or fewer left."""
+    info = _wcert.info(row.own_cert_pem) or {}
+    notes = [S_OWN_SELF_SIGNED] if info.get("self_signed") and not info.get("cdn_origin") else []
+    if row.cert_not_after is not None:
+        left = row.cert_not_after - (now or utcnow())
+        if left.total_seconds() <= 0:
+            notes.append(S_OWN_EXPIRED)
+        elif left.days <= tls_own.SOON_DAYS:
+            notes.append(i18n.Sentence(S_OWN_SOON, days=left.days))
+    return i18n.Sentences(*notes) if notes else ""
 
 
 def cert_note(row, now=None):

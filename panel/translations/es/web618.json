@@ -12,5 +12,6 @@
   "Run the app's setup": "Ejecutar la configuración de la aplicación",
   "Check the install": "Comprobar la instalación",
   "{step} ({n} of {total})": "{step} ({n} de {total})",
-  "Install step {n}": "Paso de instalación {n}"
+  "Install step {n}": "Paso de instalación {n}",
+  "The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a well-known authority, or switch back to automatic (Let's Encrypt).": "El certificado que diste a este dominio es autofirmado, así que los navegadores de los visitantes avisan. Usa uno de una autoridad conocida, o vuelve al automático (Let's Encrypt)."
 }
