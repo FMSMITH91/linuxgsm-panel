@@ -77,6 +77,10 @@ OBJECT_CACHE_MB = 64
 TUNNEL_MEMORY_MB = 256
 STOP_TIMEOUT = 20
 KINDS_PHP = ("php", "wordpress", "phpbb")
+# The revision of the files an install writes for a site (its server's config, its units). Raised when a change to
+# them must reach the sites already installed: a site installed with an older one is offered Update, which installs
+# it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN).
+SITE_FILES_REV = "files-2"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
