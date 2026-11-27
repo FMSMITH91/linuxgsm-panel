@@ -19,6 +19,10 @@ pinned image as it is; see "Images built on the host" below). The container runs
 with every capability dropped, no new privileges, a read-only system and limits on memory (no swap), processes
 and open files. Its server listens only on the host's loopback address, and it refuses any request that
 does not carry the web proxy's secret token, so another account on the host cannot reach it directly.
+A PHP site's server checks the token once per request: a path its `.htaccess` rewrites (WordPress sends every
+path that is not a file to `index.php`) continues as the same request, so real visitors are never refused
+there, while a request that did not come through the proxy is refused, its error page included. The token is
+made once, with the site, and no action changes it.
 
 A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
 downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local
