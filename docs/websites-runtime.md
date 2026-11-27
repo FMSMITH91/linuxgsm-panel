@@ -178,18 +178,32 @@ pins, and each image a site runs as pinned (the static sites' nginx, the object 
 that is only a build's base is not scanned on its own, as no site runs it: the issues the build's updates fix
 would fail the scan although no host has them.
 
-How the one-click app releases were pinned:
+How the one-click app releases are pinned: a daily CI job (`.github/workflows/site-app-versions.yml`,
+running `.github/scripts/site_app_versions.py`) finds each app's newest stable release on the supported
+version line from the app's own release source, downloads the archive from the official host, checks it as
+below and that it still holds the folder the recipe unpacks, and opens a pull request with the new version,
+address and sha256. A release older than the pinned one is never proposed; an archive that fails a check
+fails the job and is left out.
 
-- **phpBB**: the release archive and the `.sha256` file phpBB publishes beside it.
-- **Drupal**: the release archive and the SHA-256 on its release page.
-- **MyBB**: the release archive and the sha256 GitHub records for the release asset.
+- **phpBB**: phpBB's own update check (`version.phpbb.com`), the release archive and the `.sha256` file phpBB
+  publishes beside it.
+- **Drupal**: Drupal's release history (a release covered by its security advisories, on a supported 11.x
+  branch), the release archive, the MD5 and size in that history and the SHA-256 on its release page.
+- **MyBB**: mybb.com's version check, and the sha256 GitHub records for the asset of that MyBB release.
 - **WordPress**: comes inside the official WordPress image, pinned by digest (the base of the site's image).
+  Its version is the newest one WordPress's own version check offers, and the job pins the official image's
+  tag for it on every PHP version by digest; the image's build checks the archive against wordpress.org's
+  SHA-1.
 - **Simple Machines Forum**: simplemachines.org's downloads sit behind a browser check that automated
-  clients cannot pass, so neither the panel nor the maintainer's tools can fetch them. The pin is the
-  official repository's tag archive (`github.com/SimpleMachines/SMF`, tag v2.1.8). It was downloaded twice
-  with the same sha256. Files inside it were checked against the tag's own git objects, and the
-  installer's form fields were read from the tagged source. To update it, download the new tag's archive,
-  record its sha256 in the catalog, and repeat both checks.
+  clients cannot pass, so neither the panel nor CI can fetch them. The pin is the official repository's tag
+  archive (`github.com/SimpleMachines/SMF`) of its newest published 2.1 release. SMF publishes no checksum
+  for it, so the sha256 is what GitHub served; the installer's form fields were read from the tagged source
+  when the recipe was written, so a new SMF release's pull request deserves a test install before it is
+  merged.
+
+The site images are kept current by Renovate (`.github/renovate.json`): each image's digest for the tag of
+its supported line (for example `php:8.3-apache`, `node:22-bookworm-slim`), cloudflared's release, and npm
+within its major. WordPress's image tag carries WordPress's version, so the daily job above moves it.
 
 The Cloudflare network list used by the "restricted" exposure mode is also part of the catalog. A daily CI
 job compares it with Cloudflare's published lists and opens a pull request when they change.

@@ -62,7 +62,32 @@ The dialog shows each step as it runs. If one fails, every step done before it i
 installed site, account, database or container is left behind. If a step cannot be undone (a database
 server that does not answer, say), the dialog marks that step **Not undone** and says what is left; the
 site stays in the list, and deleting it tries again. New app versions arrive through the
-signed catalog, like add-on updates.
+signed catalog, like add-on updates: see [New app versions](#new-app-versions).
+
+## New app versions
+
+A new install always uses the app release and the container images named in the signed catalog, which
+every panel fetches once a day, so a new release of WordPress, phpBB, Drupal, MyBB or SMF reaches new
+installs without a panel update. This is how a new release gets there:
+
+1. Every day a job in the project's CI looks for each app's newest stable release on the version line the
+   panel supports (phpBB 3.3, Drupal 11, MyBB 1.8, SMF 2.1; WordPress's newest release), from the app's
+   own release source. It downloads the official archive and checks it against the checksum the app's
+   publisher publishes: phpBB's `.sha256` file, the SHA-256 on Drupal's release page, the SHA-256 GitHub
+   records for MyBB's release. SMF publishes none, so its archive's SHA-256 is recorded as downloaded.
+   WordPress comes inside the official WordPress image, so its new version is that image's.
+2. When a release is newer, the job opens one pull request that changes the release's version, address and
+   SHA-256 in the catalog. The site images (PHP, Node.js, WordPress, the static sites' web server, the
+   object cache, the tunnel connector) and npm are kept current the same way, each within its supported
+   version line, by the project's dependency bot.
+3. A person with write access starts the pull request's checks (GitHub holds them for a pull request a job
+   opened), which build and scan the images and check the catalog, then reviews and merges it. The catalog
+   is then signed, and panels pick it up within a day.
+4. The next install uses the new release.
+
+**An existing site is not changed by any of this.** WordPress keeps itself up to date through WordPress's
+own update servers, which its site may reach. The other apps' existing sites are updated from the app's
+own admin page.
 
 ## How visitors reach your sites
 
