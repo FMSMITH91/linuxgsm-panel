@@ -1,5 +1,7 @@
 """The Updates page: every update waiting, in one list, the nightly window's settings, and one history.
 
+Registered from remote_vps.register (nothing is added to app.py); its loop is started by os_updates.register.
+
 GET /updates              the page (updates.html, js/updates.js), for anyone who can see a group below.
 GET /api/updates          {groups, count, safe, settings, history}: what this viewer may see, read from what the
                           panel already holds (services/updates). A row's action is its item's own route.
@@ -294,8 +296,8 @@ def _auto_target(ref, on):
     return row, None
 
 
-def register(app, supervise):
-    """The page, its API, the nav entry (updates_nav) and the nightly window's loop."""
+def register(app):
+    """The page, its API and the nav entry (updates_nav). The nightly window's loop is os_updates's to start."""
     app.jinja_env.globals["updates_nav"] = nav_url
 
     @app.route("/updates")
@@ -337,6 +339,9 @@ def register(app, supervise):
     @app.route("/api/updates/auto", methods=["POST"])
     @login_required
     def api_updates_auto():
+        # Who may update something with a switch (an add-on, a website); each item is checked again below.
+        if not (has_permission(current_user, MANAGE_ADDONS) or has_permission(current_user, MANAGE_WEBSITES)):
+            return jsonify({"success": False, "message": i18n.tr(S_DENIED)}), 403
         data = _json_body()
         ref, on = data.get("ref"), data.get("on")
         row, refused = _auto_target(ref, on)
@@ -351,13 +356,12 @@ def register(app, supervise):
     @login_required
     @step_up_required
     def api_updates_safe():
-        if not may_open(current_user):
-            return jsonify({"success": False, "message": i18n.tr(S_DENIED)}), 404
+        # Who may update a safe kind at all (LinuxGSM, an add-on, a website); each row is its own check (_safe_rows).
+        if not any(has_permission(current_user, p) for p in (MANAGE_ADDONS, MANAGE_WEBSITES, _perm_for_action(_LGSM))):
+            return jsonify({"success": False, "message": i18n.tr(S_DENIED)}), 403
         refs = _safe_rows(current_user)
         if not refs:
             return jsonify({"success": True, "started": 0, "message": i18n.tr(S_NOTHING_SAFE)})
         log_action(current_user, "updates_safe", target="updates", detail=", ".join(refs)[:400])
         threading.Thread(target=_run_safe, args=(app, current_user.id, refs), daemon=True).start()
         return jsonify({"success": True, "started": len(refs), "message": i18n.tr(S_SAFE_STARTED, n=len(refs))}), 202
-
-    supervise("auto-updates", lambda: UA.loop(app))

@@ -14,6 +14,7 @@
   "By itself tonight at {at} (the host's clock).": "Toute seule cette nuit à {at} (horloge de l'hôte).",
   "By itself: LinuxGSM's own weekly job, Sundays at 05:30 (the host's clock).": "Toute seule : la tâche hebdomadaire de LinuxGSM, le dimanche à 05:30 (horloge de l'hôte).",
   "Couldn't read the updates.": "Impossible de lire les mises à jour.",
+  "Couldn't save.": "Impossible d'enregistrer.",
   "Ends": "Fin",
   "Everything is up to date.": "Tout est à jour.",
   "Game update": "Mise à jour du jeu",

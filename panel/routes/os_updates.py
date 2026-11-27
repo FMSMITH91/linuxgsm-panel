@@ -179,8 +179,9 @@ def register(app, supervise):
     # still naming functions that had gone.
     supervise("update-check", update_check_ticker)
     app._maybe_alert_os_updates = _maybe_alert_os_updates
-    from panel.routes import updates as _r_updates      # the Updates page and the nightly window's loop
-    _r_updates.register(app, supervise)
+    # The nightly window's automatic updates (services/updates_auto.py); the Updates page is remote_vps's.
+    from panel.services import updates_auto as _updates_auto
+    supervise("auto-updates", lambda: _updates_auto.loop(app))
 
 
 def _check_hosts_for_updates(remotes):

@@ -399,6 +399,30 @@ def _s4_addon_once(gs):
     _p9_restore_one(_ua320, "_pending_addons")
 
 
+def _s4_addon_switch(gs):
+    """An add-on's automatic switch: refused for a holder of Manage add-ons who cannot reach that server."""
+    from panel.db.models import Group as _Grp320
+    grp = _Grp320(name="p320-addons", description="")
+    grp.set_permissions([_auth320.MANAGE_ADDONS])
+    _db320.session.add(grp)
+    _db320.session.commit()
+    _ROWS320["groups"].append(grp.id)
+    other = _user320("p320-addon-admin")
+    other.groups = [grp]
+    _db320.session.commit()
+    with _u320._SEEN_LOCK:
+        _u320._ADDONS_SEEN[gs.id] = {"at": 0, "rows": {"b3": {"reason": "image", "version": "1", "new": "2"}}}
+    ref = "addon:%d:b3" % gs.id
+    eq("updates settings (POST /api/updates/auto): an add-on's switch is refused for a user who holds Manage add-ons "
+       "but cannot reach its server, and works for one who can",
+       (_post320(other.id, "/api/updates/auto", {"ref": ref, "on": False}).status_code,
+        _post320(_ROWS320["users"][0], "/api/updates/auto", {"ref": ref, "on": False}).status_code,
+        ref in _u320.settings()["off"]), (403, 200, True))
+    _u320.set_auto(ref, True)
+    with _u320._SEEN_LOCK:
+        _u320._ADDONS_SEEN.pop(gs.id, None)
+
+
 def _s4_change_steps():
     """addons_change._change_steps passes keep_prev for an update only (read from the function it builds `how` in)."""
     import ast
@@ -553,7 +577,8 @@ with _p9.app_context():
         _gs320v = _ran320(_s4_addon, _host320, _su320)
         check("part320: _s4_addon ran to the end", _gs320v, _ran320.last)
         if isinstance(_gs320v, _GS320):
-            for _name320, _step320 in (("_s4_addon_guards", _s4_addon_guards), ("_s4_addon_once", _s4_addon_once)):
+            for _name320, _step320 in (("_s4_addon_guards", _s4_addon_guards), ("_s4_addon_once", _s4_addon_once),
+                                       ("_s4_addon_switch", _s4_addon_switch)):
                 check("part320: %s ran to the end" % _name320, _ran320(_step320, _gs320v), _ran320.last)
             check("part320: _s7_safe ran to the end", _ran320(_s7_safe, _host320, _su320, _gs320v), _ran320.last)
             _d320 = _ran320(_s8_rows, _host320, _su320, _cust320, _gs320v)

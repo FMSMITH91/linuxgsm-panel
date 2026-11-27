@@ -177,7 +177,7 @@
         if (!d.success) { cb.checked = !cb.checked; out.className = 'small mt-1 text-danger'; out.textContent = d.message || ''; return; }
         out.className = 'small mt-1 text-warning-emphasis';
         out.textContent = d.note || '';
-        load();
+        load().catch(function () {});
       }).catch(function () { cb.disabled = false; cb.checked = !cb.checked; });
     });
     box.appendChild(cb); box.appendChild(lab); box.appendChild(rec);
@@ -193,7 +193,7 @@
     var a = document.getElementById('upd-start').value, b = document.getElementById('upd-end').value;
     post(MOUNT + '/api/updates/window', {start: a, end: b}).then(function (d) {
       say('upd-window-msg', d.message || '', d.success ? 'ok' : 'error');
-    });
+    }).catch(function () { say('upd-window-msg', T('Couldn\'t save.'), 'error'); });
   };
 
   function historyItem(h) {
@@ -232,7 +232,7 @@
       post(MOUNT + '/api/updates/safe', {}).then(function (d) {
         say('upd-msg', d.message || '', d.success ? 'ok' : 'error');
         if (d.started) setTimeout(load, 20000);
-      });
+      }).catch(function () { say('upd-msg', T('The update failed.'), 'error'); });
     };
     var run = function () { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); };
     if (!window.confirmDialog) { run(); return; }
@@ -241,5 +241,5 @@
       bodyText: T('Websites, add-ons on servers with no players, and LinuxGSM update now, one at a time. Each website is offline for a few seconds; no player is kicked and nothing reboots.')});
   };
 
-  load();
+  load().catch(function () {});
 })();

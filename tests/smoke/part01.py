@@ -161,11 +161,13 @@ for _r28d_mod in ("panel.ops.system_ops", "panel.ops.ssh_manager._core"):
 # it settles a held restore through shell_as_game_user with whatever stub a check has in place then. The
 # console poller and the terminal sweepers still start: a check reads a running action's output from the
 # poller's own ticks (part05). The SFTP service's loop (sftp_broker.run_loop) is held too: off by default it
-# only waits, and a check that turns it on would start a real child process. Every worker that starts is named in _SMOKE_STARTED, so a new periodic ticker
+# only waits, and a check that turns it on would start a real child process. auto-updates (the nightly window,
+# 90 s then every 300 s) is held too: it installs websites and add-ons through whatever stub a check has in place.
+# Every worker that starts is named in _SMOKE_STARTED, so a new periodic ticker
 # fails the check below by name until it is held or listed.
 _smoke_app_mod = sys.modules["app"]   # the module create_app came from (one import form; part37)
 _SMOKE_NO_TICKERS = frozenset(("install-reconcile", "update-check", "due-actions", "priority-keeper",
-                               "backup-ticker", "wipe-schedule", "restore-recover", "sftp-service"))
+                               "backup-ticker", "wipe-schedule", "restore-recover", "sftp-service", "auto-updates"))
 _SMOKE_STARTED = frozenset(("console-poller", "terminal-idle-sweeper", "terminal-revocation-sweeper"))
 _smoke_real_supervisor = _smoke_app_mod._make_supervisor
 _smoke_supervised = []     # (name, started) for every worker create_app() handed the supervisor
@@ -217,7 +219,8 @@ def check(name, cond, detail=""):
 
 
 check("smoke: create_app's periodic tickers (install reconcile, the update check, due actions, priority "
-      "keeper, the backup ticker, the wipe sweep, the restore recovery, the SFTP service) are not started in this "
+      "keeper, the backup ticker, the wipe sweep, the restore recovery, the SFTP service, automatic updates) are not "
+      "started in this "
       "suite; only "
       "the console poller and the terminal sweepers are",
       sorted(_n for _n, _on in _smoke_supervised if not _on) == sorted(_SMOKE_NO_TICKERS)

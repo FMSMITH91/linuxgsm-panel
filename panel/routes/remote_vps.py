@@ -179,6 +179,8 @@ def register(app):
     _register_host_players(app)
     _register_reboot(app)
     _register_host_pages(app)
+    from panel.routes import updates as _r_updates     # the Updates page: every update waiting, in one list
+    _r_updates.register(app)
 
 
 def _register_firewall_view(app):
