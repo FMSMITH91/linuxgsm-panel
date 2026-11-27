@@ -118,7 +118,8 @@
     setText('ws-ov-image', [img.name, img.version].filter(Boolean).join(' '));
     var ver = s.app_version || s.php_version || s.runtime_version;
     setText('ws-ov-version', ver);
-    setText('ws-ov-backup', s.last_backup || WS.T('None yet'));
+    // The newest backup's time; "" when the host said there is none; null when it could not be read (a dash).
+    setText('ws-ov-backup', s.last_backup || (s.last_backup === '' ? WS.T('None yet') : ''));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
     var u = s.usage || {}, l = s.limits || {};

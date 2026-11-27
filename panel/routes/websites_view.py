@@ -8,6 +8,7 @@ administrator of that site, the proxy and its settings only for a superadmin, a 
 for someone who may manage it. The caller has already passed site_for.
 """
 import json
+import time
 
 from flask_login import current_user
 
@@ -212,6 +213,14 @@ def _usage(probe):
     return {k: facts[k] for k in ("mem_mb", "disk_mb", "cpu_pct") if isinstance(facts.get(k), (int, float))}
 
 
+def _last_backup(probe):
+    """The newest backup's time as the Backups tab writes it; "" when the host said there is none; None when unread."""
+    if not (probe or {}).get("ok"):
+        return None
+    when = ((probe or {}).get("facts") or {}).get("last_backup")
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(when)) if isinstance(when, int) else ""
+
+
 def _open_url(site):
     dom = site.primary_domain
     return "https://%s/" % dom.domain if dom and site.enabled else ""
@@ -222,7 +231,7 @@ def _site_block(site, admin, probe):
            "enabled": bool(site.enabled), "open_url": _open_url(site),
            "image": {"name": site.image_key or "", "version": (site.image_digest or "")[-12:], "update_available": False},
            "app_version": site.app_version or "", "php_version": site.php_version or "",
-           "runtime_version": site.runtime_version or "", "last_backup": None, "usage": _usage(probe)}
+           "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe)}
     if admin:
         out["limits"] = {k: getattr(site, k) for k in ("mem_mb", "cpu_milli", "pids", "disk_mb", "max_body_mb", "backup_keep")}
         out.update(access_log=bool(site.access_log), full_egress=bool(site.full_egress), customer_note=site.customer_note or "")

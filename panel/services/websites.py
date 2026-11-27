@@ -1040,6 +1040,9 @@ def probe_sh(account, site):
             + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>/dev/null)\"; " % UNIT
             + "echo \"mem=$(podman stats --no-stream --format '{{.MemUsage}}' %s 2>/dev/null | head -n 1)\"; " % UNIT
             + "d=$(du -sxm %s 2>/dev/null) && echo \"disk_mb=${d%%%%[[:space:]]*}\"; " % _q(SITE)
+            # The newest backup's time (seconds since the epoch), for the Overview's "Last backup".
+            + "b=$(find %s -maxdepth 1 -name 'backup-*.tar.gz' -printf '%%T@\\n' 2>/dev/null | sort -n | tail -n 1) "
+              "&& [ -n \"$b\" ] && echo \"last_backup=${b%%%%.*}\"; " % _q(SITE + "/backups")
             + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
               '2>/dev/null && echo cpu_delegated=1; '
             + "[ -f %s ] && echo installed=1; true" % _q(HOME_DIR + "/" + META_FILE))
@@ -1059,7 +1062,8 @@ def parse_probe(out):
             "gid": int(kv["gid"]) if kv.get("gid", "").isdecimal() else None,
             "installed": kv.get("installed") == "1", "splice": kv.get("splice") == "1",
             "cpu_delegated": kv.get("cpu_delegated") == "1",
-            "os": kv.get("os", ""), "podman": kv.get("podman", "")}
+            "os": kv.get("os", ""), "podman": kv.get("podman", ""),
+            "last_backup": int(kv["last_backup"]) if kv.get("last_backup", "").isdecimal() else None}
 
 
 def runtime_refusal(os_version, podman_version):
