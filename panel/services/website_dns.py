@@ -10,10 +10,11 @@ carries) marks the domain "private" and it cannot go online: a name pointing a c
 or a visitor at the host's internal networks is refused, not merely mismatched.
 
 States (WebsiteDomain.dns_state): matching (every answer is one of the host's public addresses),
-cdn (every answer is inside Cloudflare's published ranges, the signed catalog's list the Restricted
-preset uses: the name goes through Cloudflare's proxy, which passes visitors on to the host), mismatch
-(a public answer that is neither), private (an answer that is not public), failed (no answer). A
-domain is verified, and served by the web proxy, once a check finds it matching or cdn (VERIFIED).
+cdn (every answer is inside ONE CDN's published ranges, the signed catalog's allow-list presets:
+the name goes through that CDN, which passes visitors on to the host; WebsiteDomain.dns_cdn names
+the preset), mismatch (a public answer that is none of these, answers split between two CDNs
+included), private (an answer that is not public), failed (no answer). A domain is verified, and
+served by the web proxy, once a check finds it matching or cdn (VERIFIED).
 """
 import ipaddress
 import socket
@@ -21,7 +22,7 @@ import time
 
 S_STATES = {
     "matching": "The domain points at this website's host.",
-    "cdn": "This domain goes through Cloudflare, which passes its visitors on to this host.",
+    "cdn": "This domain goes through {provider}.",
     "mismatch": "The domain points somewhere else. Create the A (and AAAA) record shown, then check again.",
     "private": "The domain points at a private or internal address, so it cannot be used for a public website.",
     "failed": "The domain has no A or AAAA record yet. Create the record shown, then check again.",
@@ -154,7 +155,10 @@ def host_addresses(remote):
 
 
 def classify(addresses, host_addrs, cdn_nets=()):
-    """The dns_state for resolved `addresses` against the host's public `host_addrs` and a CDN's `cdn_nets`."""
+    """The dns_state for resolved `addresses` against the host's public `host_addrs` and the CDNs' `cdn_nets`.
+
+    `cdn_nets` is {preset: networks} (cdn_sets), or one CDN's networks as a list.
+    """
     if not addresses:
         return "failed"
     ips = [_address(a) for a in addresses]
@@ -162,7 +166,21 @@ def classify(addresses, host_addrs, cdn_nets=()):
         return "private"
     if host_addrs and {str(ip) for ip in ips} <= set(host_addrs):
         return "matching"
-    return "cdn" if _all_inside(ips, cdn_nets) else "mismatch"
+    return "cdn" if _provider(ips, cdn_nets) else "mismatch"
+
+
+def _provider(ips, cdn_nets):
+    """The preset whose networks hold EVERY address of `ips` ("" when none does; "cdn" for a bare list)."""
+    sets = cdn_nets if isinstance(cdn_nets, dict) else {"cdn": cdn_nets}
+    return next((name for name, nets in sorted(sets.items()) if _all_inside(ips, nets)), "")
+
+
+def provider(addresses, cdn_nets=None):
+    """The CDN preset every one of `addresses` goes through (cdn_sets() when `cdn_nets` is None), or ""."""
+    ips = [_address(a) for a in addresses or []]
+    if not ips or not all(_public(ip) for ip in ips):
+        return ""
+    return _provider(ips, cdn_sets() if cdn_nets is None else cdn_nets)
 
 
 def _all_inside(ips, nets):
@@ -175,20 +193,34 @@ def _public(ip):
     return ip is not None and ip.is_global
 
 
-def cdn_networks():
-    """Cloudflare's published ranges from the signed catalog, as networks ([] when they cannot be read)."""
+def cdn_sets():
+    """{preset: networks} for every CDN preset of the signed catalog ({} when it cannot be read)."""
     from panel.services import websites_catalog
     try:
-        return [ipaddress.ip_network(n) for n in websites_catalog.preset_ranges("cloudflare")]
+        return {name: [ipaddress.ip_network(n) for n in nets] for name, nets in websites_catalog.cdn_ranges().items()}
     except Exception:  # noqa: BLE001 - no catalog section: a CDN answer stays a mismatch
-        return []
+        return {}
+
+
+def cdn_networks(name="cloudflare"):
+    """One CDN preset's published ranges from the signed catalog, as networks ([] when they cannot be read)."""
+    return cdn_sets().get(name, [])
+
+
+def state_sentence(state, preset=""):
+    """What a check found, as the page's sentence: a cdn state names its CDN (websites_catalog.cdn_info)."""
+    from panel.core import i18n
+    if state != "cdn":
+        return S_STATES[state]
+    from panel.services import websites_catalog
+    return i18n.Sentence(S_STATES["cdn"], provider=websites_catalog.cdn_info(preset or "cloudflare")["name"])
 
 
 def check(domain, remote, lookup=None):
     """(dns_state, the addresses the domain resolved to, the host's public addresses)."""
     addrs = resolve(domain, lookup)
     hosts = host_addresses(remote)
-    return classify(addrs, hosts, cdn_networks()), addrs, sorted(hosts)
+    return classify(addrs, hosts, cdn_sets()), addrs, sorted(hosts)
 
 
 def records(remote):

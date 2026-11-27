@@ -239,6 +239,7 @@ class WebsiteDomain(db.Model):
     verified_at = db.Column(db.DateTime, nullable=True)
     last_check_at = db.Column(db.DateTime, nullable=True)
     dns_state = db.Column(db.String(12), default="unchecked")
+    dns_cdn = db.Column(db.String(20), default="")               # the CDN preset a 'cdn' state goes through
     cert_state = db.Column(db.String(12), default="pending")
     cert_not_after = db.Column(db.DateTime, nullable=True)
     cert_error = db.Column(db.String(200), default="")

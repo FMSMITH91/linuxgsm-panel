@@ -11,10 +11,11 @@
    or audited, the route rendering and shipping the files, a failed apply putting the previous certificate
    back, switching back to automatic, the domain's warning 30 days ahead, the renewal read leaving it alone,
    and the weekly expiry alert through the update-check ticker's hook.
-5. Behind Cloudflare: a domain whose answers are all inside Cloudflare's published ranges is `cdn`, verified and
-   served; any other foreign answer stays a mismatch and is not served; a site that would be served on no
-   domain is never put online, and one served on only some says which it does not answer on; the Domains tab
-   notes what an automatic certificate needs behind Cloudflare.
+5. Behind a CDN: a domain whose answers are all inside ONE CDN preset's published ranges (Cloudflare's, Fastly's)
+   is `cdn` through that CDN, verified and served; answers split between two CDNs, or any other foreign answer,
+   stay a mismatch and are not served; a site that would be served on no domain is never put online, and one
+   served on only some says which it does not answer on; the Domains tab names the CDN and notes what a
+   certificate needs behind it, the CDN's own origin certificate and strict mode as the signed catalog names them.
 6. A DNS check that newly verifies a domain of a site already online applies the proxy at once.
 7. The Overview's figures: the probe is parsed (memory, CPU, disk, the running image), and a figure that cannot
    be read says why instead of an empty bar.
@@ -71,6 +72,7 @@ from panel.services import tls_own as _own313
 from panel.services import website_certs as _wcert313
 from panel.services import website_dns as _dns313
 from panel.services import websites as _ws313
+from panel.services import websites_catalog as _wcat313
 from panel.services import websites_proxy as _wp313
 
 _ROWS313 = {"remotes": [], "users": [], "groups": []}
@@ -582,11 +584,97 @@ def _s5_cdn(st, rec):
     site.enabled = False
     _db313.session.commit()
     rows = {d["domain"]: d for d in _p9_json(su.get("/api/websites/%d" % site.id)).get("domains", [])}
-    eq("dns: the Domains tab notes what an automatic certificate needs behind Cloudflare, and recommends the Origin CA "
-       "certificate with Full (strict); a domain that is not behind Cloudflare gets no such note (control)",
-       ("Always Use HTTPS" in rows["cf.p313.example.org"]["cdn_note"], "Full (strict)" in rows["cf.p313.example.org"]["cdn_note"],
-        rows["far.p313.example.org"]["cdn_note"]), (True, True, ""))
+    eq("dns: the Domains tab notes what a certificate needs behind Cloudflare: the Origin CA certificate with Full "
+       "(strict), as the signed catalog names them, else plain HTTP for the ACME challenge; a domain that is not behind "
+       "a CDN gets no such note (control)",
+       (rows["cf.p313.example.org"]["cdn_note"], rows["cf.p313.example.org"]["cdn_name"], rows["far.p313.example.org"]["cdn_note"]),
+       ("Paste a Cloudflare Origin CA certificate under Your own certificate and set Cloudflare's encryption mode to "
+        "Full (strict). Otherwise the automatic certificate needs Cloudflare to pass plain HTTP to this host for "
+        "/.well-known/acme-challenge/.", "Cloudflare", ""))
     _s5_online(st, rec, site)
+
+
+def _fastly_address313():
+    """An address inside the first IPv4 range of Fastly's preset (the signed catalog's list)."""
+    net = next(n for n in _dns313.cdn_networks("fastly") if n.version == 4)
+    return str(net.network_address + 7)
+
+
+def _s5_fastly(st, _rec):
+    cf, fa, foreign = _cf_address313(), _fastly_address313(), "8.8.4.4"
+    sets = _dns313.cdn_sets()
+    eq("dns: an answer inside Fastly's published ranges is cdn through Fastly; answers split between Cloudflare and "
+       "Fastly, or a Fastly answer beside an unknown one, are a mismatch; Cloudflare's is cdn through Cloudflare (control)",
+       ([_dns313.classify(a, {_HOST_IP313}, sets) for a in ([fa], [cf, fa], [fa, foreign], [cf])],
+        [_dns313.provider(a, sets) for a in ([fa], [cf, fa], [fa, foreign], [cf])]),
+       (["cdn", "mismatch", "mismatch", "cdn"], ["fastly", "", "", "cloudflare"]))
+    _p9_patch(_dns313, "socket", _resolver313({"fa.p313.example.org": [fa], "mix.p313.example.org": [cf, fa]}))
+    su = _Client313(st.su.id)
+    site = _site313(st.host, "p313-fastly")
+    add = "/websites/%d/domains/add" % site.id
+    said = {d: _p9_json(su.post(add, json={"domain": d})) for d in ("fa.p313.example.org", "mix.p313.example.org")}
+    _db313.session.expire_all()
+    site = _db313.session.get(_Site313, site.id)
+    site.enabled = True
+    text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
+    eq("dns (route): a domain behind Fastly is checked as cdn, says it goes through Fastly, is verified and served; a "
+       "domain whose answers are split between Cloudflare and Fastly stays a mismatch and is not served",
+       ([said[d].get("dns_state") for d in sorted(said)], said["fa.p313.example.org"].get("message"),
+        _wp313.site_domains(site), "fa.p313.example.org {" in text.split("\n"), _names313(text, "mix.p313.example.org")),
+       (["cdn", "mismatch"], "This domain goes through Fastly.", ["fa.p313.example.org"], True, []))
+    site.enabled = False
+    _db313.session.commit()
+    rows = _domains313(su, site)
+    eq("dns (GET /api/websites/<id>): the Fastly domain names Fastly, and its note gives the general advice (an origin "
+       "certificate if Fastly offers one, else plain HTTP for the ACME challenge); the split one names no CDN (control)",
+       (rows["fa.p313.example.org"]["cdn_name"], rows["fa.p313.example.org"]["cdn_note"],
+        rows["mix.p313.example.org"]["cdn_name"], rows["mix.p313.example.org"]["cdn_note"]),
+       ("Fastly", "If Fastly offers an origin certificate, paste it under Your own certificate and use its strict TLS "
+        "mode. Otherwise the automatic certificate needs Fastly to pass plain HTTP to this host for "
+        "/.well-known/acme-challenge/.", "", ""))
+    _s5_catalog(su, site)
+
+
+def _domains313(su, site):
+    return {d["domain"]: d for d in _p9_json(su.get("/api/websites/%d" % site.id)).get("domains", [])}
+
+
+def _s5_catalog(su, site):
+    real = _wcat313.section
+    floor = _json313.loads(_json313.dumps(real()[0]))
+    named = dict(floor, cdn=dict(floor.get("cdn") or {}, fastly={"name": "Fastly", "origin_cert": "P313 Origin",
+                                                                   "strict_mode": "Strict P313"}))
+    plain = {k: v for k, v in floor.items() if k != "cdn"}
+    got = []
+    try:
+        for sites in (named, plain):
+            _p9_patch(_wcat313, "section", lambda sites=sites: (sites, {"kind": "floor"}))
+            got.append(_domains313(su, site)["fa.p313.example.org"])
+    finally:
+        _p9_patch(_wcat313, "section", real)
+    eq("dns: a CDN's own origin certificate and strict mode come from the signed catalog: with a catalog naming Fastly's, "
+       "the Fastly note names them; a catalog without the cdn section still names the CDN by its preset (control)",
+       (got[0]["cdn_note"].split(". Otherwise")[0], got[1]["cdn_name"], got[1]["cdn_note"].startswith("If Fastly offers")),
+       ("Paste a P313 Origin certificate under Your own certificate and set Fastly's encryption mode to Strict P313",
+        "Fastly", True))
+    bad = [dict(floor, cdn={"akamai": {"name": "Akamai"}}), dict(floor, cdn={"fastly": {"name": "Fast{ly}"}}),
+           dict(floor, cdn={"fastly": {"name": "Fastly", "origin_cert": "X"}})]
+    eq("catalog: the cdn section is optional; an unknown preset, a label with braces, or an origin certificate without "
+       "its strict mode is refused (the built-in catalog and one without the section pass)",
+       [bool(_wcat313.sites_problems(x)) for x in [floor, plain] + bad], [False, False, True, True, True])
+
+
+def _s5_page(_st, _rec):
+    dom = {"id": 1, "domain": "fa.example.org", "is_primary": True, "dns_state": "cdn", "cdn_name": "Fastly",
+           "cdn_note": "note", "cert_state": "pending", "cert_mode": "acme", "records": []}
+    got = _ran301("cdn domain", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const t = $('wd-list').textContent;
+  return {dns: t.indexOf('DNS goes through Fastly') >= 0, behind: t.indexOf('Behind Fastly: getting its certificate') >= 0,
+          cloudflare: t.indexOf('Cloudflare') >= 0};
+""", routes={"/api/websites/7": dict(_SITE_API313, domains=[dom])}))
+    eq("node: a domain behind Fastly says its DNS goes through Fastly and folds the note under Behind Fastly; nothing "
+       "names Cloudflare", got, {"dns": True, "behind": True, "cloudflare": False})
 
 
 def _s5_online(st, rec, site):
@@ -1046,8 +1134,8 @@ with _p9.app_context():
         _rec313 = _stub_host313()
         _st313 = _state313()
         for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
-                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s6_check_applies,
-                         _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing,
+                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s5_fastly, _s5_page,
+                         _s6_check_applies, _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing,
                          _s9_wp_primary, _s9_public_ip, _s9_scripts):
             check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
         eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])

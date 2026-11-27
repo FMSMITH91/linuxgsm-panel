@@ -666,8 +666,8 @@ def _ran(site, action, ok, said, state):
 
 # ── administering a site ────────────────────────────────────────────────────────────────────────
 S_NOT_SERVED = ("None of this website's domains would be served: {domains}. A domain is served once a DNS check "
-                "finds it pointing at this host or going through Cloudflare. Check its DNS on the Domains tab, then "
-                "try again.")
+                "finds it pointing at this host or going through a CDN whose networks the panel knows. Check its DNS on "
+                "the Domains tab, then try again.")
 S_ONLINE_PART = "It does not answer on {domains} yet: their DNS does not point here."
 S_NO_PROXY_SUPER = ("The web proxy is not installed on this host yet. Install it on the Websites page (Web proxy and "
                     "public access), then put the website online.")
@@ -690,7 +690,7 @@ def online_refusal(site):
     """Why `site` may not go online now (a sentence), or None.
 
     It needs a domain and the host's web proxy, and every domain's DNS must point at the host or go
-    through Cloudflare (website_dns.VERIFIED) unless a superadmin puts it online anyway, which is audited
+    through a known CDN (website_dns.VERIFIED) unless a superadmin puts it online anyway, which is audited
     as such. Even then, a site the web proxy would serve on no domain at all (none verified yet) is
     refused: it would say online and answer nothing. A host in tunnel mode has no DNS rule: its domains
     point at the tunnel's provider, the tunnel is the way in, and the proxy serves every valid domain.

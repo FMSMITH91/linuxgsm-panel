@@ -48,7 +48,9 @@ _CADDY_URL = "https://github.com/caddyserver/caddy/releases/download/v{v}/caddy_
 EGRESS_HOSTS = ("api.wordpress.org", "downloads.wordpress.org", "registry.npmjs.org")
 SITE_KEYS = ("caddy", "caddy_cache", "static", "php", "wordpress", "wpcli", "tunnel", "object_cache", "runtimes",
              "presets", "origin_pull", "recipes")
-OPTIONAL_KEYS = ()
+# Optional: what the pages call each CDN preset and, for a CDN with its own origin certificates, their name and its
+# strict TLS mode (cdn_info). A signed catalog without it names each preset by its key.
+OPTIONAL_KEYS = ("cdn",)
 # The page cache's proxy build (panel/website_images/caddy-cache/Containerfile, built on the host by the
 # helper): this module, at an exact version, compiled into Caddy by xcaddy in the pinned builder image.
 CACHE_MODULE = "github.com/caddyserver/cache-handler"
@@ -235,6 +237,24 @@ def _presets_problems(entry):
     if not _obj(entry, PRESETS):
         return ["presets: exactly %s" % ", ".join(PRESETS)]
     return [p for p in (_preset_problem(n, nets) for n, nets in sorted(entry.items())) if p]
+
+
+# A CDN's name, origin certificate or TLS mode as the pages show it: a short plain label (no braces or markup).
+_CDN_LABEL = r"[A-Za-z0-9][A-Za-z0-9 .()&+'-]{0,39}"
+
+
+def _cdn_problems(entry):
+    """Why the optional `cdn` section is unusable: {preset: {name[, origin_cert, strict_mode]}}, every key a preset."""
+    if not isinstance(entry, dict) or not set(entry) <= set(PRESETS):
+        return ["cdn: only the presets %s" % ", ".join(PRESETS)]
+    out = []
+    for name, info in sorted(entry.items()):
+        has = set(info) if isinstance(info, dict) else set()
+        if has not in ({"name"}, {"name", "origin_cert", "strict_mode"}):
+            out.append("cdn.%s: name, and origin_cert with strict_mode or neither" % name)
+        elif not all(_full(_CDN_LABEL, info[k]) for k in has):
+            out.append("cdn.%s: short plain labels" % name)
+    return out
 
 
 def _canonical_net(text):
@@ -460,6 +480,8 @@ def sites_problems(obj):
              _presets_problems(obj["presets"]), _origin_pull_problems(obj["origin_pull"]),
              _recipes_problems(obj["recipes"])]
     parts.append(_cache_build_problems(obj["caddy_cache"], obj["caddy"]))
+    if "cdn" in obj:
+        parts.append(_cdn_problems(obj["cdn"]))
     return [p for part in parts for p in part]
 
 
@@ -557,6 +579,24 @@ def preset_ranges(name):
     if name not in PRESETS:
         raise KeyError(name)
     return list(sites["presets"][name])
+
+
+def cdn_ranges():
+    """{preset: its networks} for every CDN preset of the catalog in use (each a list of canonical strings)."""
+    sites, _source = section()
+    return {name: list(sites["presets"][name]) for name in PRESETS if name in sites["presets"]}
+
+
+def cdn_info(name):
+    """{name, origin_cert, strict_mode}: what the pages call preset `name`'s CDN.
+
+    origin_cert and strict_mode are the CDN's own origin certificate and its strict TLS mode when the catalog names
+    them ("" otherwise). A catalog without the details names the CDN by its key.
+    """
+    sites, _source = section()
+    info = (sites.get("cdn") or {}).get(name) or {}
+    return {"name": info.get("name") or str(name).capitalize(), "origin_cert": info.get("origin_cert", ""),
+            "strict_mode": info.get("strict_mode", "")}
 
 
 def origin_pull_ca(name):

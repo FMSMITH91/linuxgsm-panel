@@ -50,6 +50,7 @@ from panel.services import tls_own
 from panel.services import website_certs as _wcert
 from panel.services import website_dns as _dns
 from panel.services import websites_access as _wa
+from panel.services import websites_catalog as _wcat
 
 S_BAD = "That is not a domain a public website can use: letters, digits, hyphens and dots, like www.example.org."
 S_TAKEN = "That domain is already used by a website."
@@ -80,10 +81,14 @@ S_CERT_MISSING = ("No certificate yet. Usually ports 80 and 443 of this host do 
 S_CERT_PROXY_SAID = "No certificate yet. The web proxy said: {why}"
 CERT_MISSING_AFTER = 600          # seconds a served domain may wait for its first certificate before it is called failed
 _MISSING_SINCE = {}               # domain name -> monotonic time apply_certs first found it served without a certificate
-S_CDN_AUTO = ("This domain goes through Cloudflare. Its automatic certificate works only while Cloudflare passes "
-              "plain HTTP to this host: turn off Always Use HTTPS there, and the first certificate can need the "
-              "record set to DNS only. Or paste a Cloudflare Origin CA certificate as your own certificate, with "
-              "Cloudflare's SSL/TLS mode at Full (strict).")
+# A domain behind a CDN (dns_state cdn): what its certificate needs. The CDN's name, and its own origin certificate
+# and strict TLS mode where the signed catalog names them, come from the catalog (websites_catalog.cdn_info).
+S_CDN_ACME = ("Otherwise the automatic certificate needs {provider} to pass plain HTTP to this host for "
+              "/.well-known/acme-challenge/.")
+S_CDN_MAYBE = ("If {provider} offers an origin certificate, paste it under Your own certificate and use its strict "
+               "TLS mode.")
+S_CDN_ORIGIN = ("Paste a {origin_cert} certificate under Your own certificate and set {provider}'s encryption mode to "
+                "{strict_mode}.")
 CERTS_FRESH = 300                 # seconds a host's certificate read is reused
 CERT_SOON_DAYS = 10
 _CERTS_AT = {}                    # remote id -> monotonic time of its last certificate read
@@ -237,11 +242,12 @@ def _check(site, row):
     """Check the domain's DNS; one newly verified on a site online is applied at once (served from now on)."""
     state, addrs, hosts = _dns.check(row.domain, site.remote)
     row.dns_state, row.last_check_at = state, utcnow()
+    row.dns_cdn = _dns.provider(addrs) if state == "cdn" else ""
     newly = state in _dns.VERIFIED and row.verified_at is None
     if newly:
         row.verified_at = utcnow()
     db.session.commit()
-    said = _dns.S_STATES[state]
+    said = _dns.state_sentence(state, row.dns_cdn)
     if newly and site.enabled:
         ok, why = _w.reconcile_proxy(site.remote)
         said = S_SERVED_NOW if ok else why
@@ -268,7 +274,7 @@ def domain_json(site, row, tunnel=None):
     """
     tunnel = _w.tunnel_mode(site.remote_id) if tunnel is None else tunnel
     return {**_cert_part(row, tunnel), **_cert_json(row, tunnel), "id": row.id, "domain": row.domain,
-            "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
+            "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked", "cdn_name": _cdn_name(row),
             "cert_error": "" if tunnel else _error_text(row),
             "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
 
@@ -293,7 +299,26 @@ def _cert_json(row, tunnel=False):
         return {"cert_mode": "own", "cdn_note": "",
                 "own_cert": {k: own[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")}}
     cdn = row.dns_state == "cdn" and not tunnel
-    return {"cert_mode": "acme", "own_cert": None, "cdn_note": i18n.tr(S_CDN_AUTO) if cdn else ""}
+    return {"cert_mode": "acme", "own_cert": None, "cdn_note": cdn_note(row.dns_cdn) if cdn else ""}
+
+
+def _cdn_name(row):
+    """The CDN a domain in the cdn state goes through, as the pages name it ("" in any other state)."""
+    return _wcat.cdn_info(row.dns_cdn or "cloudflare")["name"] if row.dns_state == "cdn" else ""
+
+
+def cdn_note(preset):
+    """What an automatic certificate needs behind CDN preset `preset`, in the viewer's language.
+
+    The CDN's own origin certificate and strict mode when the signed catalog names them, else the general advice;
+    either way the automatic certificate's need. A domain checked as cdn before dns_cdn existed went through
+    Cloudflare, the only preset then.
+    """
+    info = _wcat.cdn_info(preset or "cloudflare")
+    first = (i18n.Sentence(S_CDN_ORIGIN, provider=info["name"], origin_cert=info["origin_cert"],
+                           strict_mode=info["strict_mode"]) if info["origin_cert"] else
+             i18n.Sentence(S_CDN_MAYBE, provider=info["name"]))
+    return i18n.tr(i18n.Sentences(first, i18n.Sentence(S_CDN_ACME, provider=info["name"])))
 
 
 # ── a domain's own certificate ────────────────────────────────────────────────────────────────

@@ -195,9 +195,14 @@
   var ID = WS.siteId;
   var st = {d: null};
   // ── domains ──
-  var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', cdn: 'DNS goes through Cloudflare',
+  var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here',
     mismatch: 'DNS points elsewhere', private: 'DNS points to a private address', failed: 'DNS check failed'};
   var SERVED = ['matching', 'cdn'];
+  // A domain behind a CDN names it (the server's cdn_name, from the signed catalog's presets).
+  function dnsLabel(dm) {
+    if (dm.dns_state === 'cdn') return WS.TF('DNS goes through {provider}', {provider: String(dm.cdn_name || '')});
+    return WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked));
+  }
   function domainRow(dm) {
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
@@ -212,7 +217,7 @@
   // DNS state · certificate (yours: its issuer) · expiry.
   function domainInfo(dm) {
     var info = WS.node('div', 'small text-secondary');
-    info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
+    info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', dnsLabel(dm)));
     info.appendChild(document.createTextNode(' · '));
     var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
     var own = dm.cert_mode === 'own' && dm.own_cert && dm.cert_state !== 'tunnel';   // a tunnel serves its own
@@ -236,7 +241,7 @@
     if (dm.cdn_note) {
       // Folded: the steps matter once, and the row stays short on a phone.
       var det = WS.node('details', 'small text-secondary');
-      det.appendChild(WS.node('summary', null, WS.T('Behind Cloudflare: getting its certificate')));
+      det.appendChild(WS.node('summary', null, WS.TF('Behind {provider}: getting its certificate', {provider: String(dm.cdn_name || '')})));
       det.appendChild(WS.raw('div', 'text-break', dm.cdn_note));
       li.appendChild(det);
     }

@@ -2009,6 +2009,8 @@ _LIGHT_MIGRATIONS = {
     ("website_proxy", "allow_url_nets"): "ALTER TABLE website_proxy ADD COLUMN allow_url_nets TEXT DEFAULT '[]'",
     ("website_proxy", "allow_url_at"): "ALTER TABLE website_proxy ADD COLUMN allow_url_at DATETIME",
     ("website_proxy", "allow_url_error"): "ALTER TABLE website_proxy ADD COLUMN allow_url_error VARCHAR(300) DEFAULT ''",
+    # Empty on upgrade: a domain checked as cdn before then went through Cloudflare, the only preset (website_dns).
+    ("website_domain", "dns_cdn"): "ALTER TABLE website_domain ADD COLUMN dns_cdn VARCHAR(20) DEFAULT ''",
 }
 
 

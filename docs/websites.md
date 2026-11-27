@@ -202,9 +202,10 @@ looks up again (at most every 10 minutes, with the same lookup as the Servers pa
 outside service only while Settings > Outside services allows it). A domain is checked as soon as it is
 added, from the add dialog too; press **Check again** once the records are in place. The panel looks the domain up and compares the answer with the host's address; it
 never connects to the domain itself. A domain that points at a private address is refused. A domain whose
-answers are all Cloudflare addresses (its record is proxied, the orange cloud) is shown as **going
-through Cloudflare** and is served too: see [Behind Cloudflare](#behind-cloudflare). Any other answer is
-"points elsewhere", and the web proxy does not serve that domain until a check finds it pointing here.
+answers are all inside one CDN's published networks (Cloudflare's or Fastly's today, the signed catalog's
+allow-list presets) is shown as **going through** that CDN and is served too: see
+[Behind a CDN](#behind-a-cdn). Answers split between two CDNs, or any other answer, are "points elsewhere",
+and the web proxy does not serve that domain until a check finds it pointing here.
 When a check finds a domain of a site that is already online pointing here for the first time, the web
 proxy is updated at once and the site answers on it; nothing has to be taken offline and back.
 
@@ -245,7 +246,7 @@ stopped, say), the primary domain stays as it was and the answer says why.
 Each domain has a **Certificate** button on the Domains tab: **Automatic (Let's Encrypt)**, the default,
 or **Your own certificate**. For your own, paste the certificate followed by its intermediate
 certificates (a `fullchain.pem`), and its private key without a passphrase, then **Save**. A
-[Cloudflare Origin CA](#behind-cloudflare) certificate is this case. Switch back to Automatic the same
+[Cloudflare Origin CA](#cloudflare) certificate is this case. Switch back to Automatic the same
 way at any time; the web proxy then gets a Let's Encrypt certificate for the domain again, and its copy of
 your certificate and key is removed from the host the next time its settings are applied (at once when the
 site is online).
@@ -276,11 +277,20 @@ Your certificate stays saved and its key is not sent to the host while the tunne
 served again if the host leaves Tunnel mode. In Tunnel mode no domain is marked as failing to get a
 certificate, since the web proxy asks for none.
 
-### Behind Cloudflare
+### Behind a CDN
+
+A domain whose DNS goes through a CDN resolves to the CDN's addresses, not the host's. The panel
+recognises each CDN whose published networks the signed catalog carries (the Restricted mode's presets:
+Cloudflare and Fastly today) and serves the domain when every answer is inside ONE of them. The Domains
+tab names the CDN and says what its certificate needs: if the CDN offers an origin certificate, paste it
+as **Your own certificate** and use the CDN's strict TLS mode; otherwise the automatic certificate needs
+the CDN to pass plain HTTP to the host for `/.well-known/acme-challenge/`. Where the catalog names a
+CDN's own origin certificate and strict mode (Cloudflare's), the note names them.
+
+#### Cloudflare
 
 A domain whose DNS record is proxied by Cloudflare (the orange cloud) resolves to Cloudflare's
-addresses, not the host's. The panel recognises Cloudflare's published ranges (from the signed catalog,
-the same list as the Restricted mode's preset) and serves the domain. Two ways to give it a certificate:
+addresses. Two ways to give it a certificate:
 
 1. **Recommended: a Cloudflare Origin CA certificate.** In Cloudflare, open SSL/TLS > Origin Server and
    create a certificate for the domain (or a wildcard for it). Paste the certificate and its private key

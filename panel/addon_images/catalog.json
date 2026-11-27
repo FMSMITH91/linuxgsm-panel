@@ -36,6 +36,16 @@
       "module": "github.com/caddyserver/cache-handler",
       "version": "v0.17.0"
     },
+    "cdn": {
+      "cloudflare": {
+        "name": "Cloudflare",
+        "origin_cert": "Cloudflare Origin CA",
+        "strict_mode": "Full (strict)"
+      },
+      "fastly": {
+        "name": "Fastly"
+      }
+    },
     "object_cache": {
       "image": "docker.io/valkey/valkey@sha256:3ad5a213cb1bc2fd4a113c89b6248a88655a6bf1dda69519d04e03cd3e3d2742",
       "version": "9"
