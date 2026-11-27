@@ -3016,8 +3016,7 @@ def _web_apply_doc(content):
         raise ValueError("not a configuration the panel wrote")
     if not isinstance(files, dict) or len(files) > 400:
         raise ValueError("too many files")
-    bad = [name for name, pem in files.items() if not _web_cert_file_ok(name, pem)]
-    if bad:
+    if any(not _web_cert_file_ok(name, pem) for name, pem in files.items()):
         raise ValueError("not a certificate file name or not a PEM file")
     return text, files, (web_guard_doc(doc["guard"]) if "guard" in doc else None)
 
@@ -3720,16 +3719,19 @@ def web_guard_doc(doc):
     """The guard part of website-proxy-apply's document, checked whole: numbers in range, flags, networks. ValueError."""
     if not isinstance(doc, dict) or set(doc) != _WEB_GUARD_KEYS:
         raise ValueError("not a guard document")
-    for key, (low, high) in _WEB_GUARD_NUMBERS.items():
-        value = doc[key]
-        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
-            raise ValueError("a guard number is out of range")
+    if not all(_web_guard_number(doc[k], low, high) for k, (low, high) in _WEB_GUARD_NUMBERS.items()):
+        raise ValueError("a guard number is out of range")
     if any(not isinstance(doc[k], bool) for k in ("enabled", "increment", "firewall")):
         raise ValueError("a guard switch is not true or false")
     never = doc["never"]
     if not isinstance(never, list) or len(never) > 2000 or any(_web_net(n) is None for n in never):
         raise ValueError("not a list of networks")
     return dict(doc, never=[_web_net(n) for n in never], maxtime=max(doc["maxtime"], doc["bantime"]))
+
+
+def _web_guard_number(value, low, high):
+    """Whether `value` is a whole number (never a bool) from `low` to `high`."""
+    return not isinstance(value, bool) and isinstance(value, int) and low <= value <= high
 
 
 def web_guard_filter(tag):
@@ -4041,9 +4043,12 @@ def _web_deny_prune():
 
 
 def do_website_guard_list(args, content):
-    """The deny list, one `ban=<address> <jail> <at> <until> <host>` line each, a stale entry left out (a read: it is
-    removed by the next apply), then `event=<seq> <epoch> <kind> <address> <jail> <host>` for each event numbered
-    after args[0] (the last the panel recorded; 0 for all). Prints entries=<n>."""
+    """Print the deny list and the ban events numbered after args[0] (the last the panel recorded; 0 for all).
+
+    One `event=<seq> <epoch> <kind> <address> <jail> <host>` line per event, then one
+    `ban=<address> <jail> <at> <until> <host>` line per entry, a stale entry left out (a read: it is removed by the
+    next apply), then entries=<n>.
+    """
     try:
         with open(WEB_GUARD_EVENTS, encoding="ascii", errors="replace") as fh:
             events = web_guard_events_after(fh.read().splitlines(), int(args[0]))

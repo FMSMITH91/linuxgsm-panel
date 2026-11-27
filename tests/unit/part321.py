@@ -214,17 +214,28 @@ def _hds321(st):
     return hd
 
 
+def _made321(st, name):
+    """The site row an install made under `name` (kept for the cleanup), or None."""
+    made = _Site321.query.filter_by(remote_id=st.host.id, name=name).first()
+    if made is not None:
+        _ROWS321["sites"].append(made.id)
+    return made
+
+
 def _install_form321(st, name):
     return {"app": "wordpress", "name": name, "remote_id": st.host.id, "admin_user": "siteowner",
             "admin_email": "owner@example.org", "domain": "%s.example.org" % name}
+
+
+def _next321(answers):
+    return answers.pop(0) if answers else {"state": "ready"}
 
 
 def _s3_db_stopped(st):
     _hds321(st)
     _dbr321._PROBES.pop(st.host.id, None)
     asked, answers = [], [dict(_STOPPED321)]
-    _p9_patch(_dbs321, "probe", lambda remote: asked.append(remote.id) or (answers.pop(0) if answers else
-                                                                           {"state": "ready"}))
+    _p9_patch(_dbs321, "probe", lambda remote: asked.append(remote.id) or _next321(answers))
     _p9_patch(_wapps321, "_worker", lambda app, sid, uid, secrets: None)
     _p9_patch(_w321, "threading", _NS321(Thread=_Inline321))
     eq("stopped database (before: the row checked a minute ago): the add dialog's list, which never probes, reads it "
@@ -232,9 +243,7 @@ def _s3_db_stopped(st):
     su = _Client321(st.su.id)
     r = su.post("/websites/install-app", json=_install_form321(st, "p321-wp"))
     body = _p9_json(r)
-    made = _Site321.query.filter_by(remote_id=st.host.id, name="p321-wp").first()
-    if made is not None:
-        _ROWS321["sites"].append(made.id)
+    made = _made321(st, "p321-wp")
     eq("stopped database (POST /websites/install-app, WordPress, the server stopped since its row was checked): the "
        "host is asked again, and the install is refused before anything is made with the entry the Start button "
        "fixes",
@@ -254,9 +263,7 @@ def _s3_db_stopped(st):
        (502, [], ["database-stopped"]))
     answers[:] = [{"state": "ready", "flavor": "mariadb", "version": "11.8.3-MariaDB"}]
     r = su.post("/websites/install-app", json=_install_form321(st, "p321-wp2"))
-    made = _Site321.query.filter_by(remote_id=st.host.id, name="p321-wp2").first()
-    if made is not None:
-        _ROWS321["sites"].append(made.id)
+    made = _made321(st, "p321-wp2")
     eq("stopped database (control: the server started again, the host answers ready): the install starts, and the "
        "dialog's list reads ready", (r.status_code, made is not None, _wview321.database_missing(st.host)),
        (200, True, None))
@@ -394,7 +401,6 @@ def _api_domains321(su, site):
 def _s5_site_cert(st):
     import json
     from panel.services import websites_proxy as _wp
-    from panel.routes import websites_domains as _wd
     site = _sc_site321(st, "p321c", ["www.p321c.example.org", "p321c.example.net"])
     pem, key = _pem321(["p321c.example.org", "*.p321c.example.org"])
     su = _Client321(st.su.id)
@@ -428,6 +434,12 @@ def _s5_site_cert(st):
        ((rows.get("www.p321c.example.org") or {}).get("cert_mode"),
         ((rows.get("p321c.example.net") or {}).get("cert_uncovered") or "").startswith("p321c.example.net stays automatic")),
        ("site", True))
+    _s5_later(st, su, site)
+
+
+def _s5_later(st, su, site):
+    """A domain added later, Back to automatic, and a certificate that covers none of the site's domains."""
+    from panel.routes import websites_domains as _wd
     _p9_patch(_wd._dns, "check", lambda domain, remote: ("mismatch", [], []))
     r = su.post("/websites/%d/domains/add" % site.id, json={"domain": "shop.p321c.example.org"})
     eq("site certificate (POST .../domains/add of a name the certificate covers): the new domain uses the site's "
@@ -645,6 +657,20 @@ def _s6_ban(st):
         unban, after), (True, True, (0, "unban=yes\n"), []))
 
 
+def _after321(events, after):
+    return [e for e in events if e[0] > after]
+
+
+def _s6_page_ids(su, site):
+    import collections
+    import re
+    page = su.get("/websites/%d?tab=rules" % site.id).get_data(as_text=True)
+    ids = collections.Counter(re.findall(r'\bid="([^"]+)"', page))
+    eq("blocked visitors (GET /websites/<id>, the site's page): the list's box is there and no id on the page is used "
+       "twice (the Backups tab's list is wb-list: one script would fill the other's)",
+       ("wv-list" in ids, sorted(k for k, n in ids.items() if n > 1)), (True, []))
+
+
 def _s6_routes(st):
     import time
     from panel.db.models import AuditLog as _Audit321
@@ -656,8 +682,8 @@ def _s6_routes(st):
     events = [(7, now, "ban", _VISITOR321, "lgsm-web-login", "p321b.example.org"),
               (8, now, "unban", other_ip, "lgsm-web-scan", "elsewhere.example.org")]
     asked, released = [], []
-    _p9_patch(_sw321, "guard_list", lambda remote, after=0: asked.append(after) or (True, (list(entries),
-                                                                                           [e for e in events if e[0] > after])))
+    _p9_patch(_sw321, "guard_list", lambda remote, after=0: asked.append(after) or (True, (list(entries), _after321(
+        events, after))))
     _p9_patch(_sw321, "guard_release", lambda remote, ip: released.append(ip) or (True, _sw321.OK_RELEASED))
     _rg._set_cursor(st.host.id, 0)
     su = _Client321(st.su.id)
@@ -672,13 +698,7 @@ def _s6_routes(st):
     su.get("/websites/%d/blocked" % site.id)
     eq("blocked visitors (the next read): no event audited twice", (asked[-1], _Audit321.query.filter(
         _Audit321.action.in_(("website_ban", "website_unban"))).count() - before), (8, 2))
-    import collections
-    import re
-    page = su.get("/websites/%d?tab=rules" % site.id).get_data(as_text=True)
-    ids = collections.Counter(re.findall(r'\bid="([^"]+)"', page))
-    eq("blocked visitors (GET /websites/<id>, the site's page): the list's box is there and no id on the page is used "
-       "twice (the Backups tab's list is wb-list: one script would fill the other's)",
-       ("wv-list" in ids, sorted(k for k, n in ids.items() if n > 1)), (True, []))
+    _s6_page_ids(su, site)
     r = su.post("/websites/%d/blocked/unban" % site.id, json={"ip": other_ip})
     eq("blocked visitors (Unblock of an address another site's attack banned): refused, nothing lifted",
        (r.status_code, released), (404, []))
@@ -710,6 +730,13 @@ def _s6_settings(st):
 
 
 # ── running it ────────────────────────────────────────────────────────────────────────────────────
+def _delete321(model, ids):
+    for i in ids:
+        row = _db321.session.get(model, i)
+        if row is not None:
+            _db321.session.delete(row)
+
+
 def _cleanup321():
     _db321.session.rollback()
     remotes = _ROWS321["remotes"] or [0]
@@ -722,10 +749,7 @@ def _cleanup321():
         for p in model.query.filter(model.remote_id.in_(remotes)).all():
             _db321.session.delete(p)
     for model, ids in ((_Site321, sorted(sites)), (_User321, _ROWS321["users"]), (_Remote321, _ROWS321["remotes"])):
-        for i in ids:
-            row = _db321.session.get(model, i)
-            if row is not None:
-                _db321.session.delete(row)
+        _delete321(model, ids)
     _db321.session.commit()
     for rid in _ROWS321["remotes"]:
         _dbr321._PROBES.pop(rid, None)
