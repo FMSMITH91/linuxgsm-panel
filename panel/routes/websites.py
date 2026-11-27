@@ -59,6 +59,9 @@ _STATUS = {}                      # site id -> (monotonic time, probe dict)
 _STARTED = utcnow()
 _INSTALLING = set()
 _SWEPT = []                       # [True] once this process has swept
+# A plain install's progress, for the add dialog (websites_apps.install_json): site id -> {"step", "state"}, the step
+# one of ssh_manager.websites.INSTALL_PARTS as the install reports it, the state running, done or failed.
+PLAIN = {}
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
@@ -144,11 +147,14 @@ def site_db(site):
     return "127.0.0.1", int(getattr(hd, "port", None) or 3306)
 
 
-def install_site(site, restart=True):
+def install_site(site, restart=True, progress=None):
     """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
 
     `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
+    `progress` is told each part of the install as it begins (ssh_manager.websites.install).
     """
+    if progress is not None:
+        return host_call(_sw.install, site.remote, site, site_db(site), True, restart, progress)
     if restart:
         return host_call(_sw.install, site.remote, site, site_db(site))
     return host_call(_sw.install, site.remote, site, site_db(site), True, False)
@@ -494,15 +500,21 @@ def _install_worker(app, site_id):
             if site is None:
                 return
             try:
-                ok, said = install_site(site)
+                ok, said = install_site(site, progress=lambda part: _plain(site_id, part, "running"))
             except Exception:  # noqa: BLE001 - an install that raised ends failed, never "creating" for good
                 _log.warning("website install raised", exc_info=True)
                 ok, said = False, S_UNREACHABLE
+            _plain(site_id, PLAIN.get(site_id, {}).get("step") or "account", "done" if ok else "failed")
             site.state = "running"          # a new site's "creating" ends here, whatever the outcome
             note_run_state(site, ok, said)
             forget_status(site_id)
         finally:
             _INSTALLING.discard(site_id)
+
+
+def _plain(site_id, step, state):
+    """Record a plain install's progress (PLAIN)."""
+    PLAIN[site_id] = {"step": step, "state": state}
 
 
 def _add_route(app):
@@ -696,6 +708,7 @@ def _delete(site):
         db.session.commit()
         return acted(site, "website_delete", False, said)
     sid = site.id
+    PLAIN.pop(sid, None)
     audit(site, "website_delete", "removed website %s, its databases and its account" % name)
     db.session.delete(site)
     db.session.commit()

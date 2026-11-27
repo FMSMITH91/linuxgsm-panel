@@ -70,7 +70,8 @@ The admin password and the database password never appear on a command line or i
 installer as a file that only the site's account can read, removed when the step ends, and the installers'
 output is never written to the system journal.
 
-The dialog shows each step as it runs. If one fails, every step done before it is undone: no half
+The dialog shows each step as it runs (a plain, PHP or Node.js site shows its own: the account, the image
+built or downloaded, which takes a few minutes for PHP on a small host, and the container). If one fails, every step done before it is undone: no half
 installed site, account, database or container is left behind. The dialog then says the install failed, why,
 and that nothing was left on the host, with **Try again**, which brings the form back as you filled it in
 (the password field empty). If a step cannot be undone (a database

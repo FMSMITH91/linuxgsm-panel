@@ -44,6 +44,10 @@ WP1 WordPress's requests to its own address (Site Health's REST API and loopback
     in a read-only folder mounted at /run/panel (never on a command line, in a log or in the plugin). No new way
     out: the request never leaves the container.
 
+C1  A plain, PHP or Node.js site being added shows its setup's steps as an app install does (the account, the
+    image built or downloaded, the container started), from the install's own progress: the dialog showed a heading
+    over nothing for minutes while a PHP image was built.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -807,6 +811,57 @@ def _wp1_refused(st, su):
        (200, None, None, 1))
 
 
+# ── C1. A plain site's setup steps ────────────────────────────────────────────────────────────────
+def _c1_steps(st):
+    _seams315()
+    site = _site315(st, "p315-parts", kind="static")
+    seen = []
+    _reset315()
+    ok, _said = _sw315.install(st.host, site, None, True, True, seen.append)
+    eq("C1 (ssh_manager.websites.install): it reports each part as it begins: the account and folders, the image, the "
+       "container", (ok, seen), (True, ["account", "image", "container"]))
+    mid = {}
+
+    def fake(remote, s, db=None, start_it=True, restart=True, progress=None):
+        for part in ("account", "image"):
+            progress(part)
+        mid["json"] = _wapps315.install_json(s)
+        progress("container")
+        return True, _sw315.OK_STARTED
+    _p9_patch(_sw315, "install", fake)
+    _p9_patch(_w315, "start_install", lambda s: _w315._install_worker(_p9, s.id))
+    su = _Client315(st.su.id)
+    r = su.post("/websites/add", json={"name": "p315-plainsteps", "kind": "php", "host_id": st.host.id})
+    sid = _p9_json(r).get("id") or 0
+    _ROWS315["sites"].append(sid)
+    during = mid.get("json") or {}
+    after = _p9_json(su.get("/api/websites/%d" % sid)).get("install") or {}
+    eq("C1 (POST /websites/add, a PHP site, during its install): the install block has its steps, the account done and "
+       "the image being built or downloaded (it had none: empty steps until the end)",
+       (r.status_code, during.get("state"), [(x["key"], x["state"]) for x in during.get("steps") or []]),
+       (200, "running", [("account", "done"), ("image", "running"), ("container", "pending")]))
+    eq("C1 (GET /api/websites/<id> once it ran): every step done, so the dialog stops and says Done",
+       (after.get("state"), [x["state"] for x in after.get("steps") or []]), ("done", ["done", "done", "done"]))
+    _c1_dialog()
+
+
+def _c1_dialog():
+    got = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      window.wsOpenAdd();
+      $('ws-add-name').value = 'plain';
+      window.wsAddSubmit({preventDefault: function () {}});
+      for (let i = 0; i < 8; i++) await tick();
+      return {labels: $('ws-progress').querySelectorAll('.ws-step-label').map(function (l) { return l.textContent; })};
+    """, {"/api/websites": _LIST315, "/websites/add": {"success": True, "id": 5},
+          "/api/websites/5": {"success": True, "site": {"id": 5, "state": "creating"}, "install": {
+              "state": "running", "steps": [{"key": "account", "state": "done"}, {"key": "image", "state": "running"},
+                                            {"key": "container", "state": "pending"}]}}})
+    eq("C1 (the add dialog, js/websites.js): a plain site's steps are labelled in plain words, the image one saying it "
+       "takes a few minutes on a small host", got.get("labels"),
+       ["Create the site account", "Build or download the site image (a few minutes on a small host)",
+        "Start the site container"])
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -846,7 +901,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

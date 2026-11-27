@@ -129,7 +129,8 @@
   var STEP_LABEL = {account: 'Create the site account', database: 'Create the database',
     download: 'Download and check the app', config: 'Write the app settings', container: 'Start the site container',
     installer: 'Run the app installer', 'web-installer': 'Run the app installer', permissions: 'Set file permissions',
-    harden: 'Remove the app installer', https: 'Turn on HTTPS'};
+    harden: 'Remove the app installer', https: 'Turn on HTTPS',
+    image: 'Build or download the site image (a few minutes on a small host)'};
   WS.renderSteps = function (box, install) {
     WS.clear(box);
     var steps = (install && install.steps) || [];

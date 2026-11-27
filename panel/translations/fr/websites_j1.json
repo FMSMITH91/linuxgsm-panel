@@ -1,5 +1,8 @@
 {
   "Ask an administrator to delete it": "Demandez à un administrateur de le supprimer",
+  "Build and start": "Construire et démarrer",
+  "Build or download the site image (a few minutes on a small host)": "Construire ou télécharger l'image du site (quelques minutes sur un petit hôte)",
+  "Building…": "Construction…",
   "Database added, but the website could not be set up to reach it ({why}). Retry from its page.": "Base de données ajoutée, mais le site web n'a pas pu être configuré pour y accéder ({why}). Réessayez depuis sa page.",
   "Database added. The website reaches it from its next start.": "Base de données ajoutée. Le site web y accédera dès son prochain démarrage.",
   "Database added. The website was restarted so it can reach it.": "Base de données ajoutée. Le site web a été redémarré pour qu'il puisse y accéder.",
@@ -17,5 +20,6 @@
   "This host's database server cannot be used by the panel yet, and an app needs one. See the Databases tab of a game server on this host.": "Le panneau ne peut pas encore utiliser le serveur de bases de données de cet hôte, et une application en a besoin. Consultez l'onglet Bases de données d'un serveur de jeu sur cet hôte.",
   "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Ce site web est encore en cours de configuration. Attendez que cela se termine (ou échoue), puis supprimez-le.",
   "Try again": "Réessayer",
+  "Upload its files": "Téléverser ses fichiers",
   "Websites run on the panel's own host, which only a superadmin manages, so a superadmin adds them.": "Les sites web tournent sur l'hôte du panneau lui-même, que seul un superadministrateur gère : c'est donc un superadministrateur qui les ajoute."
 }

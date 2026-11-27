@@ -214,7 +214,12 @@ def runtime_ready(remote):
     return _ws().runtime_refusal(os_version, podman) if podman else NO_PODMAN
 
 
-def install(remote, site, db=None, start_it=True, restart=True):
+def _no_progress(_part):
+    """install's `progress` when nobody follows it."""
+    return None
+
+
+def install(remote, site, db=None, start_it=True, restart=True, progress=None):
     """Create the site's account and folders, pull its image, write its unit and start it.
 
     `db` is (host, port) of the site's database as the host sees it, or None. Podman is made ready
@@ -224,21 +229,28 @@ def install(remote, site, db=None, start_it=True, restart=True):
     files yet is installed and not started (OK_WAITING): its first start could only fail. `start_it`
     False writes everything and starts nothing (an app's rebuild starts it after its build). `restart` False
     starts what is not running and leaves a running site alone (a unit only added beside it, the object cache).
+    `progress`, when given, is called with the name of each part as it begins (INSTALL_PARTS: the account and
+    folders, the image built or pulled, the container started), for the add dialog's steps.
     """
+    progress = progress or _no_progress
+    progress("account")
     why = runtime_ready(remote)
     if why:
         return False, why
     ok, out = _helper(remote, "website-account-create", [site.account])
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    ok, said = _install_made(remote, site, db, start_it, restart)
+    ok, said = _install_made(remote, site, db, start_it, restart, progress)
     if not ok and "account=created" in out.splitlines():
         undone, _t = remove(remote, site)
         _core._log.warning("website %s: the failed install was %s", site.id, "undone" if undone else "NOT undone")
     return ok, said
 
 
-def _install_made(remote, site, db, start_it=True, restart=True):
+INSTALL_PARTS = ("account", "image", "container")
+
+
+def _install_made(remote, site, db, start_it=True, restart=True, progress=_no_progress):
     """Run install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
@@ -255,6 +267,7 @@ def _install_made(remote, site, db, start_it=True, restart=True):
     if refused:
         return False, refused
     # A PHP site builds its image on a first install (minutes on a small host): install_sh's timeout allows for it.
+    progress("image")
     ok, out = _as_site(remote, site.account, _ws().install_sh(site.account, site, image), timeout=1800, stdin_text=stdin)
     if not ok:
         return False, _mark(out)
@@ -263,7 +276,10 @@ def _install_made(remote, site, db, start_it=True, restart=True):
     if site.kind == "app" and _ws().MARK_APP_EMPTY in out.split():
         # Installed, not started: the app's files come next (a start now would fail, and undo the install).
         return True, OK_WAITING
-    return start(remote, site, restart=restart) if start_it else (True, OK_INSTALLED)
+    if not start_it:
+        return True, OK_INSTALLED
+    progress("container")
+    return start(remote, site, restart=restart)
 
 
 def cpu_limit(remote, site, probe=None):

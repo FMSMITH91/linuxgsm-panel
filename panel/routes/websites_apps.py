@@ -267,7 +267,7 @@ def install_json(site):
     """
     import json
     if not site.app_recipe:
-        return dict(_NO_INSTALL)
+        return _plain_json(site)
     with _LOCK:
         job = dict(_JOBS.get(site.id) or {})
     state = _job_state(site, job)
@@ -278,6 +278,24 @@ def install_json(site):
     site_url, admin_url = _urls(site, state)
     return {"state": state, "steps": steps, "error": job.get("error", "") or (site.state_reason or ""),
             "site_url": site_url, "admin_url": admin_url}
+
+
+def _plain_json(site):
+    """The install block of a site added without an app, while (and once) this process sets it up.
+
+    Its steps are ssh_manager.websites.INSTALL_PARTS as the install reports them (websites.PLAIN): the account,
+    the image (built on the host for a PHP site: minutes on a small one), the container. Empty when this process
+    did not set it up (an older site, or a panel restarted since).
+    """
+    got = _w.PLAIN.get(site.id)
+    if not got:
+        return dict(_NO_INSTALL)
+    parts = list(_sw.INSTALL_PARTS)
+    at = parts.index(got["step"]) if got["step"] in parts else 0
+    state = got["state"]
+    steps = [{"key": p, "label": p, "state": "done" if i < at or state == "done" else
+              ("pending" if i > at else "running" if state == "running" else "failed")} for i, p in enumerate(parts)]
+    return dict(_NO_INSTALL, state=state, steps=steps, error=(site.state_reason or "") if state == "failed" else "")
 
 
 def app_php_version(recipe, data):
