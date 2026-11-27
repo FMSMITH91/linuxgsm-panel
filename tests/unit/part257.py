@@ -505,11 +505,13 @@ def _manager_hits257(m):
 def _renovate257():
     cfg = _json257.loads(_read257(".github", "renovate.json"))
     found = {}
-    for m in cfg.get("customManagers") or []:
+    # The websites' managers and rules read the same catalog's `sites` section: part314's.
+    for m in [m for m in cfg.get("customManagers") or [] if not m.get("description", "").startswith("Websites:")]:
         hits = _manager_hits257(m)
         if hits:
             found.setdefault("%s %s" % (m.get("datasourceTemplate"), m.get("currentValueTemplate", "tag")), []).extend(hits)
-    daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]]
+    daily = [r for r in cfg.get("packageRules") or [] if r.get("schedule") == ["* 0-5 * * *"]
+             and not r.get("description", "").startswith("Websites:")]
     base, iwbase = _ad257.B3_BASE.split("@")[1], _ad257.IW4MADMIN_BASE.split("@")[1]
     iw = (_ad257.IW4MADMIN_SHA256, _ad257.IW4MADMIN_TAG)
     cat = "panel/addon_images/catalog.json"
