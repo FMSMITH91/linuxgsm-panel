@@ -228,6 +228,13 @@ is the one exception: it may reach WordPress's own update servers, so its securi
 administrator can give one site full internet access on its Settings tab, with a warning; even then it
 never reaches the host's other services. Plugins and themes for other apps are uploaded through Files.
 
+WordPress also calls its own address (Site Health's REST API and loopback tests, the editor's checks). Inside
+the container that address leads nowhere, so the panel writes a small must-use plugin,
+`wp-content/mu-plugins/lgsm-panel-loopback.php`, at every install of a WordPress site: it sends a request for
+the site's own name to the site's own server inside its container, with the web proxy's token read from a file
+only the site's account can read (never a command line or a log). The request never leaves the container, so no
+outbound access is added. The panel writes the file again at the next install if it is changed or removed.
+
 ## Backups and databases
 
 **Backups** holds the site's files and its databases, kept on the host as the site's own account (the

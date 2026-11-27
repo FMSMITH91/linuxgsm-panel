@@ -38,11 +38,22 @@ M2  Customers' site limits are true: Add a customer grants "add their own websit
     switch is on, with the limit the card sends, else the superadmin's Sites per customer setting (read nowhere
     before); a group that may not add sites is held to the sites it is given, and its customers see no quota line.
 
+WP1 WordPress's requests to its own address (Site Health's REST API and loopback tests) reach its own server: a
+    must-use plugin, written into the site's files at every install by a writer that refuses links, sends them
+    to the container's own listener with the site's name, the scheme and the proxy token, read from a 0600 file
+    in a read-only folder mounted at /run/panel (never on a command line, in a log or in the plugin). No new way
+    out: the request never leaves the container.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
 """
+import json as _json315
 import os
+import shutil as _shutil315
+import subprocess as _sp315  # nosec B404 - bash over the panel's own account shells, in a scratch home
+import sys as _sys315
+import tempfile as _tf315
 from types import SimpleNamespace as _NS315
 
 from flask import g as _g315
@@ -53,6 +64,7 @@ from panel.core import config as _cfg315
 from panel.db.models import (RemoteServer as _Remote315, User as _User315, Website as _Site315,
                              WebsiteDomain as _Dom315, WebsiteProxy as _Proxy315, db as _db315)
 from panel.ops.ssh_manager import websites as _sw315
+from panel.services import websites as _ws315
 from panel.routes import websites as _w315
 from panel.routes import websites_apps as _wapps315
 
@@ -82,6 +94,98 @@ class _Inline315:
 
     def start(self):
         self._t(*self._a, **self._k)
+
+
+# ── real bash over a scratch home (part311's pattern) ─────────────────────────────────────────────
+_TREE315 = _tf315.mkdtemp(prefix="lgsm-unit-p315-")
+_BIN315 = os.path.join(_TREE315, "bin")
+_CALLS315 = os.path.join(_TREE315, "calls.jsonl")
+_REAL315.update({n: getattr(_sw315, n) for n in ("install", "remove", "start", "stop")})
+# Stand-in podman and systemctl: each records its argv (one JSON line) and succeeds.
+_FAKE315 = r"""
+import json, os, sys
+with open(os.environ["FAKE_CALLS"], "a") as fh:
+    fh.write(json.dumps({"tool": os.path.basename(sys.argv[0]), "argv": sys.argv[1:]}) + "\n")
+if os.path.basename(sys.argv[0]) == "systemctl" and "show" in sys.argv:
+    sys.stdout.write("active\n")
+"""
+
+
+def _tools315():
+    os.makedirs(_BIN315, exist_ok=True)
+    for name in ("podman", "systemctl", "journalctl"):
+        path = os.path.join(_BIN315, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("#!%s\n%s" % (_sys315.executable, _FAKE315))
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
+        os.chmod(path, 0o700)
+
+
+def _home315(account):
+    return os.path.join(_TREE315, "home", account)
+
+
+_RUN315 = {"shells": [], "stdin": []}
+
+
+def _as_site315(remote, account, sh, timeout=120, stdin_text=None):
+    """ssh_manager.websites._as_site over a scratch home: the panel's account shell in real bash."""
+    _RUN315["shells"].append(sh)
+    _RUN315["stdin"].append(stdin_text or "")
+    if not sh.startswith(_ws315._ENV):
+        return False, "part315: not an account shell"
+    home = _home315(account)
+    os.makedirs(home, exist_ok=True)
+    text = 'cd "$HOME" || exit 1; ' + sh[len(_ws315._ENV):].replace("/home/%s" % account, home)
+    env = dict(os.environ, HOME=home, PATH=_BIN315 + os.pathsep + os.environ.get("PATH", ""), FAKE_CALLS=_CALLS315)
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    r = _sp315.run(["bash", "-c", text], input=(stdin_text or "").encode(), capture_output=True, timeout=120,  # nosec B603 B607
+                   env=env, check=False)
+    return r.returncode == 0, r.stdout.decode("utf-8", "replace")
+
+
+def _calls315(tool=None):
+    if not os.path.exists(_CALLS315):
+        return []
+    with open(_CALLS315, encoding="utf-8") as fh:
+        got = [_json315.loads(ln) for ln in fh if ln.strip()]
+    return [c["argv"] for c in got if tool is None or c["tool"] == tool]
+
+
+def _reset315():
+    if os.path.exists(_CALLS315):
+        os.unlink(_CALLS315)
+    _RUN315["shells"], _RUN315["stdin"] = [], []
+
+
+def _read315(account, rel):
+    path = os.path.join(_home315(account), rel)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _mode315(account, rel):
+    path = os.path.join(_home315(account), rel)
+    return oct(os.stat(path).st_mode & 0o777) if os.path.exists(path) else None
+
+
+def _seams315():
+    """The host's answers at ssh_manager.websites' own seams; every account shell runs in bash (_as_site315)."""
+    for name in ("install", "remove", "start", "stop"):
+        _p9_patch(_sw315, name, _REAL315[name])
+    _p9_patch(_sw315, "runtime_ready", lambda remote: "")
+    _p9_patch(_sw315, "_helper", lambda remote, verb, args=(), timeout=120, doc=None: (True, "account=exists"))
+    _p9_patch(_sw315, "_ids", lambda remote, site: ((1005, 1005), {"splice": True, "cpu_delegated": True, "os": "24.04",
+                                                                   "podman": "podman version 4.9.3"}))
+    _p9_patch(_sw315, "_as_site", _as_site315)
+    _p9_patch(_sw315, "quota_set", lambda *a, **k: (True, _sw315.OK_QUOTA))
+    _p9_patch(_sw315, "cpu_limit", lambda *a, **k: (True, "container"))
+
+
+def _quadlet315(account):
+    return _read315(account, ".config/containers/systemd/lgsm-site.container") or ""
 
 
 def _user315(name, superadmin=False):
@@ -651,6 +755,58 @@ def _m2_card():
                                                        "create_websites"], "max_sites": 4}))
 
 
+# ── WP1. WordPress's requests to its own address ──────────────────────────────────────────────────
+_PLUGIN315 = "site/html/wp-content/mu-plugins/lgsm-panel-loopback.php"
+
+
+def _wp1_loopback(st):
+    _seams315()
+    su = _Client315(st.su.id)
+    wp = _site315(st, "p315-wpself", kind="wordpress", app_recipe="wordpress")
+    _reset315()
+    r = su.post("/websites/%d/update-image" % wp.id)
+    plugin = _read315(wp.account, _PLUGIN315) or ""
+    token = _read315(wp.account, "site/conf/panel/proxy-token")
+    mount = "Volume=/home/%s/site/conf/panel:/run/panel:ro" % wp.account
+    eq("WP1 (POST /websites/<id>/update-image, WordPress): the must-use plugin is written into the site's files and "
+       "sends a request for the site's own names to its own listener (127.0.0.1:8080) with the scheme and the proxy "
+       "token's header, the token read from /run/panel; the egress proxy is bypassed for that loopback only",
+       (r.status_code, "add_filter( 'pre_http_request', 'lgsm_panel_loopback'" in plugin,
+        "define( 'LGSM_PANEL_PORT', 8080 )" in plugin, "'/run/panel/proxy-token'" in plugin,
+        "$headers['X-Panel-Proxy-Token']" in plugin, "X-Forwarded-Proto" in plugin,
+        "'pre_http_send_through_proxy'" in plugin and "'127.0.0.1' === $check['host']" in plugin),
+       (200, True, True, True, True, True, True))
+    argv = " ".join(" ".join(a) for a in _calls315())
+    eq("WP1 (the token): a 0600 file in the site's 0700 run folder, mounted read-only at /run/panel; never in the plugin, "
+       "a shell's text or a program's arguments (it travels on stdin only)",
+       (token, _mode315(wp.account, "site/conf/panel/proxy-token"), _mode315(wp.account, "site/conf/panel"),
+        _quadlet315(wp.account).count(mount), _TOKEN315 in plugin, any(_TOKEN315 in sh for sh in _RUN315["shells"]),
+        _TOKEN315 in argv),
+       (_TOKEN315, "0o600", "0o700", 1, False, False, False))
+    _wp1_refused(st, su)
+
+
+def _wp1_refused(st, su):
+    wp = _site315(st, "p315-wplink", kind="wordpress", app_recipe="wordpress")
+    home = _home315(wp.account)
+    outside = os.path.join(home, "elsewhere")
+    os.makedirs(os.path.join(home, "site", "html", "wp-content"), exist_ok=True)
+    os.makedirs(outside, exist_ok=True)
+    os.symlink(outside, os.path.join(home, "site", "html", "wp-content", "mu-plugins"))
+    _reset315()
+    r = su.post("/websites/%d/update-image" % wp.id)
+    eq("WP1 (a site whose own code made wp-content/mu-plugins a link): the writer refuses it (nothing written through "
+       "the link) and the install still goes on", (r.status_code, os.listdir(outside)), (200, []))
+    php = _site315(st, "p315-phpself", kind="php")
+    _reset315()
+    r = su.post("/websites/%d/update-image" % php.id)
+    eq("WP1 control (a PHP site): no plugin and no token file, but the same read-only run folder (for its object "
+       "cache's password)", (r.status_code, _read315(php.account, _PLUGIN315), _read315(php.account,
+                                                                                        "site/conf/panel/proxy-token"),
+                             _quadlet315(php.account).count("Volume=/home/%s/site/conf/panel:/run/panel:ro" % php.account)),
+       (200, None, None, 1))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -667,6 +823,7 @@ def _cleanup315():
             if row is not None:
                 _db315.session.delete(row)
     _db315.session.commit()
+    _shutil315.rmtree(_TREE315, ignore_errors=True)
 
 
 def _ran315(step, st):
@@ -683,12 +840,13 @@ def _ran315(step, st):
 
 
 _ran315.last = ""
+_tools315()
 _trips315 = len(_P9_TRIPPED)
 with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:
