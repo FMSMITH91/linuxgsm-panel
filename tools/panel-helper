@@ -3665,9 +3665,50 @@ def do_website_proxy_status(args, content):
         sys.stdout.write("cache=%s\n" % ("yes" if rc == 0 and "http.handlers.cache" in mods.split() else "no"))
     _rc, active = _run_quiet([resolve("systemctl"), "is-active", WEB_PROXY_UNIT], timeout=20)
     sys.stdout.write("active=%s\n" % (active.strip().splitlines() or ["unknown"])[0])
-    for line in _web_cert_lines():
+    for line in _web_cert_lines() + _web_cert_error_lines():
         sys.stdout.write(line + "\n")
     return 0
+
+
+# A certificate the proxy could not get: its own reason, from its own journal namespace (only the proxy's unit, the last
+# day, at most WEB_CERT_ERROR_LINES lines). Only records of its certificate manager (logger tls.*) that name a domain of
+# the panel's shape are read, and only their message and error are printed, in plain words (web_plain_error): an ACME
+# error names the domain, the authority's problem type and what it saw, never a key or a token's secret.
+WEB_CERT_ERROR_LINES = 400
+_WEB_DOMAIN_RE = r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?"
+
+
+def web_cert_errors(journal):
+    """{domain: plain reason} of the proxy's certificate failures in `journal`, the latest each.
+
+    A domain whose certificate was obtained after its last failure is left out.
+    """
+    got = {}
+    for line in (journal or "").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        dom = str(rec.get("identifier") or "")
+        if not str(rec.get("logger", "")).startswith("tls") or not re.fullmatch(_WEB_DOMAIN_RE, dom):
+            continue
+        if rec.get("level") == "error" and rec.get("error"):
+            got[dom] = web_plain_error(line)
+        elif "obtained" in str(rec.get("msg", "")):
+            got.pop(dom, None)
+    return got
+
+
+def _web_cert_error_lines():
+    """`cert_error=<domain> <reason>` lines for the certificates the proxy could not get (web_cert_errors)."""
+    try:
+        _rc, out = _run_quiet([resolve("journalctl"), "--namespace=lgsm-web-proxy", "-u", WEB_PROXY_UNIT, "--since",
+                               "-1d", "-n", str(WEB_CERT_ERROR_LINES), "--no-pager", "-q", "-o", "cat"], timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        out = ""
+    return ["cert_error=%s %s" % (dom, why) for dom, why in sorted(web_cert_errors(out).items()) if why]
 
 
 def _web_site_uids():

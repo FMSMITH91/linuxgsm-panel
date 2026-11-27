@@ -459,16 +459,20 @@ def _cert_line(certs, line):
 
 
 def parse_proxy_status(out):
-    """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}.
+    """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}, cert_errors}.
 
     The helper prints the served certificate of each domain; should a domain still come twice (an older
     helper printed every issuer's), the later not_after wins, never simply the last line.
     """
     got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}, "tunnel": "",
-           "tunnel_restarts": 0}
+           "tunnel_restarts": 0, "cert_errors": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             _cert_line(got["certs"], line)
+        elif line.startswith("cert_error="):
+            dom, _sep, why = line[len("cert_error="):].partition(" ")
+            if dom and why.strip():
+                got["cert_errors"][dom] = "".join(c for c in why.strip() if c.isprintable())[:200]
         elif "=" in line:
             key, _sep, value = line.partition("=")
             if key in ("installed", "version", "active", "cache", "tunnel"):

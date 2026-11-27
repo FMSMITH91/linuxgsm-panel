@@ -78,6 +78,7 @@ S_WP_ADDRESS_SET = "WordPress now uses https://{domain} as its address."
 S_WP_ADDRESS_FAILED = "WordPress's address could not be changed to https://{domain}, so the primary domain stays {old}. {why}"
 S_CERT_MISSING = ("No certificate yet. Usually ports 80 and 443 of this host do not reach it from the internet: check "
                   "the host's firewall and your cloud provider's.")
+S_CERT_PROXY_SAID = "No certificate yet. The web proxy said: {why}"
 CERT_MISSING_AFTER = 600          # seconds a served domain may wait for its first certificate before it is called failed
 _MISSING_SINCE = {}               # domain name -> monotonic time apply_certs first found it served without a certificate
 S_CDN_AUTO = ("This domain goes through Cloudflare. Its automatic certificate works only while Cloudflare passes "
@@ -104,6 +105,7 @@ def cert_kind(issuer):
 def apply_certs(remote, status):
     """Write the certificates the proxy serves (parse_proxy_status's certs) onto the host's automatic domains."""
     certs = (status or {}).get("certs") or {}
+    errors = (status or {}).get("cert_errors") or {}
     rows = (WebsiteDomain.query.join(Website, WebsiteDomain.website_id == Website.id)
             .filter(Website.remote_id == remote.id, WebsiteDomain.cert_mode == "acme").all())
     for row in rows:
@@ -113,19 +115,31 @@ def apply_certs(remote, status):
             row.cert_state, row.cert_error = cert_kind(got["issuer"]), ""
             row.cert_not_after = datetime.fromtimestamp(got["not_after"], timezone.utc).replace(tzinfo=None)
         else:
-            _note_missing(row)
+            _note_missing(row, errors.get(row.domain, ""))
     db.session.commit()
 
 
-def _note_missing(row, now=None):
-    """A domain served by an online site with no certificate after CERT_MISSING_AFTER seconds is failed, and says why."""
+def _note_missing(row, why="", now=None):
+    """A domain served by an online site with no certificate: the proxy's own reason (`why`) as soon as it has one,
+    and failed after CERT_MISSING_AFTER seconds, with that reason or the usual one (S_CERT_MISSING)."""
     if row.verified_at is None or row.website is None or not row.website.enabled:
         _MISSING_SINCE.pop(row.domain, None)
         return
     now = time.monotonic() if now is None else now
     since = _MISSING_SINCE.setdefault(row.domain, now)
-    if now - since >= CERT_MISSING_AFTER and row.cert_state == "pending":
-        row.cert_state, row.cert_error = "failed", S_CERT_MISSING
+    if why:
+        row.cert_error = why[:200]
+    if now - since >= CERT_MISSING_AFTER and row.cert_state in ("pending", "failed"):
+        row.cert_state, row.cert_error = "failed", why[:200] or S_CERT_MISSING
+
+
+def _error_text(row):
+    """The domain's certificate error for the page, in the viewer's language: the usual reason, or the proxy's words."""
+    if not row.cert_error:
+        return ""
+    if row.cert_error == S_CERT_MISSING:
+        return i18n.tr(S_CERT_MISSING)
+    return i18n.tr(S_CERT_PROXY_SAID, why=row.cert_error)
 
 
 def refresh_certs(remote):
@@ -246,7 +260,7 @@ def domain_json(site, row):
     note = cert_note(row)
     out = {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
-           "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
+           "cert_state": row.cert_state or "pending", "cert_error": _error_text(row),
            "cert_warning": i18n.tr(note) if note else "",
            "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
     out.update(_cert_json(row))

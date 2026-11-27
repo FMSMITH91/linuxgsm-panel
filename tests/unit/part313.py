@@ -829,6 +829,7 @@ def _s9_cert_missing(st, _rec):
     eq("certificates: a served domain of an online site still without a certificate after 10 minutes is failed, "
        "with a plain reason the Domains tab shows; before that it is pending",
        (first, dom.cert_state, shown["cert_error"] == _wd313.S_CERT_MISSING), ("pending", "failed", True))
+    _s9_cert_reason(st, site)
     _wd313.apply_certs(st.host, {"certs": {"nocert.p313.example.org": {"issuer": "acme-v02.api.letsencrypt.org-directory",
                                                                       "not_after": 1900000000}}})
     dom = _dom313(site, "nocert.p313.example.org")
@@ -873,6 +874,59 @@ def _s9_wp_primary(st, _rec):
 
 
 _WP_SET313 = _sw313.wp_set_address
+
+
+# The proxy's journal as `journalctl -o cat` prints it: an ACME failure for one domain, a failure later followed by a
+# certificate for another, and lines that are not the certificate manager's or name no domain of the panel's shape.
+_JOURNAL313 = "\n".join(_json313.dumps(r) for r in (
+    {"level": "info", "logger": "http", "msg": "server running"},
+    {"level": "error", "logger": "tls.obtain", "msg": "could not get certificate from issuer", "identifier": "nocert.p313.example.org",
+     "error": "HTTP 400 urn:ietf:params:acme:error:connection - Timeout during connect (likely firewall problem)"},
+    {"level": "error", "logger": "tls.obtain", "msg": "could not get certificate from issuer", "identifier": "fixed.p313.example.org",
+     "error": "HTTP 429 rateLimited"},
+    {"level": "info", "logger": "tls.obtain", "msg": "certificate obtained successfully", "identifier": "fixed.p313.example.org"},
+    {"level": "error", "logger": "http.log", "msg": "handled request", "identifier": "other.p313.example.org", "error": "x"},
+    {"level": "error", "logger": "tls.obtain", "msg": "bad", "identifier": "../../etc", "error": "y"})) + "\nnot json\n"
+
+
+def _helper_status313(journal):
+    """do_website_proxy_status's output with the proxy's journal answering `journal` (nothing installed, no certificate)."""
+    d = _tf313.mkdtemp(prefix="p313-status-")
+    names = ("WEB_PROXY_BIN", "WEB_PROXY_STATE", "WEB_PROXY_CONF", "_run_quiet", "resolve")
+    saved = {n: getattr(_H313, n) for n in names}
+    seen = []
+    try:
+        _H313.WEB_PROXY_BIN, _H313.WEB_PROXY_STATE = os.path.join(d, "caddy"), d
+        _H313.WEB_PROXY_CONF, _H313.resolve = os.path.join(d, "Caddyfile"), lambda prog: "/usr/bin/" + prog
+        _H313._run_quiet = lambda argv, timeout=60: seen.append(argv) or (0, journal if "journalctl" in argv[0] else "active\n")
+        out = _io313.StringIO()
+        with _rout313(out):
+            _H313.do_website_proxy_status([], "")
+        return out.getvalue(), [a for a in seen if "journalctl" in a[0]]
+    finally:
+        for n, v in saved.items():
+            setattr(_H313, n, v)
+        _shutil313.rmtree(d, ignore_errors=True)
+
+
+def _s9_cert_reason(st, site):
+    out, reads = _helper_status313(_JOURNAL313)
+    lines = [ln for ln in out.splitlines() if ln.startswith("cert_error=")]
+    eq("certificates (helper): the proxy's status names a certificate it could not get with its own reason in plain "
+       "words, from its own journal only; a domain that got one since, another logger's line and a name of another "
+       "shape are left out",
+       (lines, ["--namespace=lgsm-web-proxy", "-u", _H313.WEB_PROXY_UNIT] == (reads[0][1:4] if reads else None)),
+       (["cert_error=nocert.p313.example.org could not get certificate from issuer: HTTP 400 "
+         "urn:ietf:params:acme:error:connection - Timeout during connect (likely firewall problem)"], True))
+    _wd313._MISSING_SINCE.clear()
+    dom = _dom313(site, "nocert.p313.example.org")
+    dom.cert_state, dom.cert_error = "pending", ""
+    _db313.session.commit()
+    _wd313.apply_certs(st.host, _sw313.parse_proxy_status(out))
+    shown = _wd313.domain_json(site, _dom313(site, "nocert.p313.example.org"))["cert_error"]
+    eq("certificates: the Domains tab shows the proxy's own reason for a certificate it could not get",
+       shown, "No certificate yet. The web proxy said: could not get certificate from issuer: HTTP 400 "
+              "urn:ietf:params:acme:error:connection - Timeout during connect (likely firewall problem)")
 
 
 def _s9_wp_shell(wp):
