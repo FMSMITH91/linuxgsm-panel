@@ -1154,6 +1154,13 @@ def _s299_image_scan2():
         __import__("shutil").rmtree(d, ignore_errors=True)
     eq("image scan (plan): a sites image pinned by tag stops the scan before anything is pulled",
        any("sites-php-8.4" in x for x in probs), True)
+    static = _ws299.image_for(_NS299(kind="static"))
+    gate = _ws299.gate_quadlet(_NS299(name="s1", account="ws1", pids=64), (1001, 1001), _wc299.static_image())
+    eq("static image (image_for, gate_quadlet): static sites and app gates run nginx-unprivileged from docker.io/nginx/, "
+       "where its maintainers publish since 1.30.6 (docker.io/nginxinc/ gets no rebuilds: its last pin carried 26 fixed "
+       "High or Critical issues), by digest",
+       (static.split("@")[0], "Image=%s" % static in gate, bool(_AI299.PINNED_RE.match(static))),
+       ("docker.io/nginx/nginx-unprivileged", True, True))
 
 
 def _s299_cloudflare():
