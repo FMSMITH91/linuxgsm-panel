@@ -3685,20 +3685,26 @@ def web_cert_errors(journal):
     """
     got = {}
     for line in (journal or "").splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(rec, dict):
-            continue
-        dom = str(rec.get("identifier") or "")
-        if not str(rec.get("logger", "")).startswith("tls") or not re.fullmatch(_WEB_DOMAIN_RE, dom):
+        rec, dom = _web_tls_record(line)
+        if rec is None:
             continue
         if rec.get("level") == "error" and rec.get("error"):
             got[dom] = web_plain_error(line)
         elif "obtained" in str(rec.get("msg", "")):
             got.pop(dom, None)
     return got
+
+
+def _web_tls_record(line):
+    """(record, domain) when `line` is a JSON record of the certificate manager naming a domain, else (None, "")."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None, ""
+    dom = str(rec.get("identifier") or "") if isinstance(rec, dict) else ""
+    if not dom or not str(rec.get("logger", "")).startswith("tls") or not re.fullmatch(_WEB_DOMAIN_RE, dom):
+        return None, ""
+    return rec, dom
 
 
 def _web_cert_error_lines():

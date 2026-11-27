@@ -470,9 +470,7 @@ def parse_proxy_status(out):
         if line.startswith("cert="):
             _cert_line(got["certs"], line)
         elif line.startswith("cert_error="):
-            dom, _sep, why = line[len("cert_error="):].partition(" ")
-            if dom and why.strip():
-                got["cert_errors"][dom] = "".join(c for c in why.strip() if c.isprintable())[:200]
+            _cert_error_line(got["cert_errors"], line)
         elif "=" in line:
             key, _sep, value = line.partition("=")
             if key in ("installed", "version", "active", "cache", "tunnel"):
@@ -480,6 +478,14 @@ def parse_proxy_status(out):
             elif key == "tunnel_restarts" and value.isdecimal():
                 got[key] = int(value)
     return got
+
+
+def _cert_error_line(errors, line):
+    """Add one `cert_error=<domain> <reason>` line to `errors` ({domain: reason}, printable, at most 200 characters)."""
+    dom, _sep, why = line[len("cert_error="):].partition(" ")
+    why = "".join(c for c in why.strip() if c.isprintable())[:200]
+    if dom and why:
+        errors[dom] = why
 
 
 def wanted_rules(proxy, enabled):
