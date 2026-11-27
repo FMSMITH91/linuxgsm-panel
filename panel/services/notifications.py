@@ -46,7 +46,7 @@ EVENTS = {
     "backup_failed":      ("A backup fails", True),
     "update_available":   ("A panel update is available", True),
     "os_updates":         ("A host has OS package updates waiting (security ones called out)", True),
-    "cert_expiring":      ("The panel's TLS certificate is expiring soon", True),
+    "cert_expiring":      ("A TLS certificate is expiring soon: the panel's, or one you gave a website", True),
     "admin_login":        ("A super admin signs in", True),
     "admin_bruteforce":   ("A super admin account is being brute-forced", True),
     "account_change":     ("A user is created or a group's permissions change", True),

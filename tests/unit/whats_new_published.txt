@@ -966,3 +966,9 @@ e39699e0 Panel updates wait for the secret and dependency scans.
 5a5f18f1 History goes back a year.
 1b49a096 Add-on downloads go only to public addresses.
 46bdb6ce Website pages reached through WordPress's pretty links load again.
+d80953e8 A website domain can use your own certificate.
+011eb87b New website installs get the newest app version without a panel update.
+bf24fd09 Websites behind Cloudflare's proxy are served.
+6aa66d75 A new WordPress site passes Site Health.
+58e1395b The Websites pages say what is really happening.
+e46d92b2 Restricted websites can allow Fastly's networks or a list from a web address.

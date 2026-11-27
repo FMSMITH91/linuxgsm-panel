@@ -29,22 +29,61 @@
     WS.show('wp-restricted', mode === 'restricted');
     WS.show('wp-tunnel', mode === 'tunnel');
   }
-  function renderCf() {
-    var on = st.presets.indexOf('cloudflare') >= 0;
-    var b = WS.el('wp-cf');
-    if (b) {
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.className = 'btn btn-sm ' + (on ? 'btn-secondary' : 'btn-outline-secondary');
+  // The allow-list presets: each CDN's networks from the signed catalog, its elements (wp-<id>-...) and its source.
+  var PRESETS = {
+    cloudflare: {id: 'cf', sum: "Cloudflare's networks ({n})",
+      src: 'Read from cloudflare.com/ips-v4 and /ips-v6 by a daily check, and updated by themselves with the signed catalog.'},
+    fastly: {id: 'fastly', sum: "Fastly's networks ({n})",
+      src: 'Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor\'s address only for HTTPS visitors: turn on Force TLS for the service at Fastly.'}
+  };
+  // A pressed button (aria-pressed, filled) is a CDN whose networks are on the list.
+  function renderPresets() {
+    Object.keys(PRESETS).forEach(function (name) {
+      var pressed = st.presets.indexOf(name) >= 0, b = WS.el('wp-' + PRESETS[name].id);
+      if (b) {
+        b.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        b.className = 'btn btn-sm ' + (pressed ? 'btn-secondary' : 'btn-outline-secondary');
+      }
+      renderPresetList(name);
+    });
+  }
+  // Every network a preset admits, from the signed catalog, and where they come from.
+  function renderPresetList(name) {
+    var p = PRESETS[name], info = (cur().preset_info || {})[name] || {}, ranges = info.ranges || [];
+    var sum = WS.el('wp-' + p.id + '-sum');
+    if (sum) sum.textContent = WS.TF(p.sum, {n: ranges.length});
+    var src = WS.el('wp-' + p.id + '-src');
+    if (src) {
+      src.textContent = (info.issued ? WS.TF('From the signed catalog of {date}.', {date: info.issued}) : WS.T("From the panel's built-in catalog.")) + ' ' +
+        WS.T(p.src);
     }
-    var s = WS.el('wp-cf-state');
-    if (s) s.textContent = on ? WS.T("Cloudflare's networks are on the list (from the signed catalog). Tap again to remove them.") : '';
+    var ul = WS.clear(WS.el('wp-' + p.id + '-ranges'));
+    if (ul) ranges.forEach(function (r) { ul.appendChild(WS.node('li', null, String(r))); });
+  }
+  // The list read from an address: its networks, when it was read, and why the last read failed (the old list kept).
+  function urlState(p, n) {
+    var parts = [];
+    if (p.allow_url && p.allow_url_at) parts.push(WS.TF('Read on {date}: {n} networks.', {date: p.allow_url_at, n: n}));
+    if (p.allow_url_error) parts.push(WS.TF('The last read failed, so the list read before is kept: {why}', {why: p.allow_url_error}));
+    if (p.allow_url && p.allow_url_on === false) parts.push(WS.T('Reading lists from an address is turned off in Settings, Outside services: this list is not read again.'));
+    return parts.join(' ');
+  }
+  function renderUrl(p) {
+    var u = WS.el('wp-url'), nets = p.allow_url_nets || [];
+    if (u) u.value = p.allow_url || '';
+    var sum = WS.el('wp-url-sum');
+    if (sum) sum.textContent = p.allow_url ? WS.TF('A list from an address: {n} networks', {n: nets.length}) : WS.T('A list from an address');
+    var s = WS.el('wp-url-state');
+    if (s) s.textContent = urlState(p, nets.length);
+    var ul = WS.clear(WS.el('wp-url-nets'));
+    if (ul) nets.forEach(function (n) { ul.appendChild(WS.node('li', null, String(n))); });
   }
   function stateLine(p) {
     var e = WS.el('wp-state');
     if (!e) return;
     WS.show('wp-install', !p.installed);
     if (!p.installed) { e.textContent = WS.T('The web proxy is not installed on this host yet. Sites cannot go online until it is.'); return; }
-    e.textContent = WS.TF('Web proxy {version} is installed.', {version: p.version || '?'});
+    e.textContent = WS.TF('Web proxy: Caddy {version}, installed.', {version: p.version || '?'});
     if (p.last_error) e.appendChild(WS.raw('span', 'd-block text-danger', p.last_error));
   }
   var MODE_NAME = {public: 'Public', restricted: 'Restricted', tunnel: 'Tunnel'};
@@ -55,13 +94,43 @@
     if (sum) sum.textContent = WS.TF('How visitors reach your sites: {mode}', {mode: WS.T(WS.pick(MODE_NAME, p.exposure_mode, 'Public'))});
     st.presets = (p.allow_presets || []).slice();
     setMode(p.exposure_mode || 'public');
-    renderCf();
+    renderPresets();
     var c = WS.el('wp-cidrs');
     if (c) c.value = (p.allow_cidrs || []).join('\n');
+    renderUrl(p);
+    var tr = WS.el('wp-custom-trusted');
+    if (tr) tr.checked = !!p.custom_trusted;
+    window.wsTrustCheck();
     var tok = WS.el('wp-token');
     if (tok) tok.value = '';
     WS.show('wp-token-state', !!p.tunnel_token_set);
+    renderTools(p);
   }
+  function renderTools(p) {
+    var svc = WS.el('wp-tunnel-service');
+    if (svc) svc.textContent = p.tunnel_service || '';
+    ['wp-check', 'wp-apply'].forEach(function (id) { var b = WS.el(id); if (b) b.disabled = !p.installed; });
+  }
+  // The proxy's state as the host reports it (version, running, the tunnel connector's state in tunnel mode).
+  var ACTIVE = {active: 'running', inactive: 'stopped', failed: 'failed', activating: 'starting'};
+  window.wsProxyStatus = function () {
+    WS.say('wp-status', WS.T('Checking…'));
+    WS.get('/websites/proxy/status?host_id=' + encodeURIComponent(st.host)).then(function (d) {
+      if (!d || !d.status_ok) { WS.done(d, 'wp-status'); return; }
+      var s = d.status || {}, parts = [WS.TF('Caddy {version}: {state}.', {version: s.version || '?', state: WS.T(WS.pick(ACTIVE, s.active, 'state unknown'))})];
+      // A tunnel whose token Cloudflare refuses stays active (cloudflared retries for minutes): its log says so.
+      var refused = d.exposure_mode === 'tunnel' && s.tunnel_link === 'refused';
+      if (refused) parts.push(WS.T("Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again."));
+      else if (d.exposure_mode === 'tunnel') parts.push(WS.TF('Tunnel connector: {state}.', {state: WS.T(WS.pick(ACTIVE, s.tunnel, 'state unknown'))}));
+      parts.push(WS.TF('{n} websites online.', {n: d.online_sites || 0}));
+      WS.say('wp-status', parts.join(' '), refused ? 'err' : 'ok');
+    });
+  };
+  // Apply the host's configuration again (after a failure the card shows, or a change made on the host).
+  window.wsProxyApply = function () {
+    WS.say('wp-status', WS.T('Applying…'));
+    WS.post('/websites/proxy/apply', {host_id: st.host}).then(function (d) { if (WS.done(d, 'wp-status') && WS.loadList) WS.loadList(); });
+  };
   function setVal(id, v) {
     var e = WS.el(id);
     if (!e || v == null) return;
@@ -87,13 +156,24 @@
     var o = d.options || {};
     Object.keys(OPT_FIELDS).forEach(function (k) { setVal(OPT_FIELDS[k], o[k]); });
     window.wsOptCheck();
+    foldedSections();
+  };
+  function foldedSections() {
+    var sum = WS.el('wp-opts-sum');
+    if (sum) sum.textContent = WS.TF('Security settings: {n} settings', {n: Object.keys(OPT_FIELDS).length});
+    // A link to a folded section (from a site's page) opens it, so the setting it points at is in view.
+    var hash = String((window.location && window.location.hash) || '');
+    if (hash === '#wp-opts-box' || hash === '#wp-mode-box') { var box = WS.el(hash.slice(1)); if (box) box.open = true; }
   };
   window.wsProxyHost = function () { var s = WS.el('wp-host'); st.host = s ? s.value : null; renderHost(); };
   window.wsExposure = function (mode) { setMode(mode); };
-  window.wsCfPreset = function () {
-    var i = st.presets.indexOf('cloudflare');
-    if (i >= 0) st.presets.splice(i, 1); else st.presets.push('cloudflare');
-    renderCf();
+  // Trusting the operator's networks lets anyone on them choose the visitor's address the sites see: a note, never a block.
+  window.wsTrustCheck = function () { WS.show('wp-custom-trusted-note', switchOn('wp-custom-trusted') === true); };
+  window.wsPreset = function (name) {
+    if (!PRESETS[name]) return;
+    var i = st.presets.indexOf(name);
+    if (i >= 0) st.presets.splice(i, 1); else st.presets.push(name);
+    renderPresets();
   };
   function mode() {
     var m = 'public';
@@ -106,6 +186,8 @@
     if (m === 'restricted') {
       body.allow_presets = st.presets.slice();
       body.allow_cidrs = (WS.el('wp-cidrs').value || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      body.allow_url = (WS.el('wp-url').value || '').trim();
+      body.custom_trusted = switchOn('wp-custom-trusted') === true;
     }
     if (m === 'tunnel') {
       body.tunnel_provider = 'cloudflare';
@@ -115,8 +197,8 @@
     return body;
   };
   function exposureProblem(body) {
-    if (body.exposure_mode === 'restricted' && !body.allow_presets.length && !body.allow_cidrs.length) {
-      return WS.T("List at least one network, or use Cloudflare's networks.");
+    if (body.exposure_mode === 'restricted' && !body.allow_presets.length && !body.allow_cidrs.length && !body.allow_url) {
+      return WS.T("List at least one network, or use a CDN's networks.");
     }
     if (body.exposure_mode === 'tunnel' && !body.tunnel_token && !cur().tunnel_token_set) return WS.T('Paste the tunnel token first.');
     return '';

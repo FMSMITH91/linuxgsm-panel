@@ -6,7 +6,10 @@ helper verb website-proxy-apply validates the text with the proxy's own `caddy v
 user before it replaces the running file, so a bad site rule never takes down the other sites.
 
 WHAT EVERY CONFIGURATION HOLDS
-    `admin off` and `persist_config off` (no admin API, nothing written back); HTTP/1.1 and HTTP/2 only
+    `persist_config off` (nothing written back) and `admin off` (no admin API), except while the page cache is on:
+    then the admin API listens on a unix socket in the proxy's runtime folder (ADMIN_SOCKET, mode 0200: the proxy's
+    own user, and root), never on a TCP port, so the root helper can empty one site's cache through the cache's
+    API without restarting the proxy (website-proxy-apply purge); a site's account cannot reach it. HTTP/1.1 and HTTP/2 only
     (no HTTP/3: no UDP port to open); server timeouts against slow clients; a catch-all that aborts any
     request for a name the configuration does not hold, the bare IP included, so the panel's own name
     and port are never reachable through the proxy (an `http://` catch-all and, outside tunnel mode, an
@@ -24,8 +27,16 @@ WHERE IT LISTENS
 FORWARDED HEADERS (OWASP HTTP Headers Cheat Sheet; Caddy's trusted_proxies)
     Caddy replaces every incoming X-Forwarded-* header with its own unless the peer is a trusted proxy.
     Only exposure mode 'restricted' (the allow list) and 'tunnel' (the connector on loopback) name any:
-    exactly the allow list, or 127.0.0.1 and ::1. The client address header is read only from them
-    (CF-Connecting-IP with the Cloudflare preset or a tunnel, else X-Forwarded-For read right to left).
+    exactly the allow list, or 127.0.0.1 and ::1. The client address header is read only from them.
+    Each preset carries its CDN's header (PRESET_HEADERS): CF-Connecting-IP, which Cloudflare sets on
+    every request, is read only while every trusted network is Cloudflare's, since a request through
+    any other trusted proxy could carry one a visitor made up. Otherwise (Fastly, whose Fastly-Client-IP
+    keeps a visitor's own value; presets of two CDNs; the operator's trusted networks) the address is read
+    from X-Forwarded-For right to left: the first address that is not a trusted proxy, which every one of
+    them appends. The operator's own networks (typed, or a list read from an address) are allow-only: the firewall admits them, but they are
+    trusted proxies only when the superadmin says so (WebsiteProxy.custom_trusted), since anyone on a
+    trusted network can make the sites see any address. A tunnel reads CF-Connecting-IP from the
+    connector on loopback.
 
 HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
     Strict-Transport-Security with the operator's max-age (OWASP's 63072000 by default), with
@@ -52,6 +63,7 @@ STORAGE = "/var/lib/lgsm-web-proxy"
 CERT_DIR = "/etc/lgsm-web-proxy/certs"
 ORIGIN_PULL_CA = "/etc/lgsm-web-proxy/origin-pull-ca.pem"
 GATE_HEADER = "X-Panel-Proxy-Token"
+ADMIN_SOCKET = "/run/lgsm-web-proxy/admin.sock"
 # Tunnel mode: the proxy listens on this loopback port only, plain HTTP; the connector reaches it.
 TUNNEL_PORT = 19080
 LE_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -100,20 +112,55 @@ def owasp_notes(opts):
 
 
 # ── the allow list ──────────────────────────────────────────────────────────────────────────────
-def allow_list(proxy):
-    """The canonical networks `proxy` admits in 'restricted' mode: its CIDRs plus its presets' ranges.
+XFF = "X-Forwarded-For"
+CF_HEADER = "CF-Connecting-IP"
+# The header each preset's CDN gives the visitor's address in (see FORWARDED HEADERS above).
+PRESET_HEADERS = {"cloudflare": CF_HEADER, "fastly": XFF}
 
-    Sorted IPv4 first, without duplicates and without a network another one already holds.
-    """
-    if proxy is None:
-        return []
-    from panel.services import websites_catalog as _wc    # imported here: render's tests need no catalog
-    nets = set(proxy.cidrs())
-    for preset in proxy.presets():
-        nets.update(_wc.preset_ranges(preset))
+
+def _canonical(nets):
+    """`nets` sorted IPv4 first, without duplicates and without a network another one already holds."""
     parsed = sorted({ipaddress.ip_network(n) for n in nets}, key=lambda n: (n.version, n.network_address, n.prefixlen))
     kept = [n for n in parsed if not any(o != n and o.version == n.version and n.subnet_of(o) for o in parsed)]
     return [str(n) for n in kept]
+
+
+def _preset_nets(proxy):
+    from panel.services import websites_catalog as _wc    # imported here: render's tests need no catalog
+    nets = []
+    for preset in proxy.presets():
+        nets += _wc.preset_ranges(preset)
+    return nets
+
+
+def _own_nets(proxy):
+    """The operator's own networks: the ones typed on the card and the list read from an address."""
+    return proxy.cidrs() + proxy.url_nets()
+
+
+def allow_list(proxy):
+    """The canonical networks `proxy` admits in 'restricted' mode: the operator's networks plus its presets' ranges."""
+    if proxy is None:
+        return []
+    return _canonical(_own_nets(proxy) + _preset_nets(proxy))
+
+
+def trusted_list(proxy):
+    """The networks whose requests may name the visitor's address: the presets', the operator's when trusted."""
+    if proxy is None:
+        return []
+    return _canonical(_preset_nets(proxy) + (_own_nets(proxy) if proxy.custom_trusted else []))
+
+
+def client_header(proxy):
+    """The header the visitor's address is read from in 'restricted' mode (FORWARDED HEADERS above).
+
+    A preset's own header only while every trusted network is that one CDN's; X-Forwarded-For otherwise.
+    """
+    headers = {PRESET_HEADERS.get(p, XFF) for p in proxy.presets()}
+    if proxy.custom_trusted and _own_nets(proxy):
+        headers.add(XFF)
+    return headers.pop() if len(headers) == 1 else XFF
 
 
 # ── custom rules ────────────────────────────────────────────────────────────────────────────────
@@ -205,14 +252,64 @@ def _secret_of(site):
     return decrypt_secret(site.proxy_secret or "")
 
 
-def _domains(site):
-    """The site's domains the proxy serves: verified, valid, primary first."""
+def _served(site, mode="public"):
+    """The site's domain rows the proxy serves: verified, valid, primary first.
+
+    In tunnel mode every valid domain of the site, checked or not: its DNS points at the tunnel's provider, never
+    at this host, so no check could ever pass. The tunnel is the only way in (the proxy listens on the loopback
+    and asks for no certificate), and it reaches only the names the operator routes to it in the provider's
+    dashboard; a domain is still unique across sites and never the panel's own name (websites_domains).
+    """
     rows = sorted(site.domains or [], key=lambda d: (not d.is_primary, d.id or 0))
-    return [d.domain for d in rows if d.verified_at is not None and _DOMAIN_RE.match(d.domain or "")]
+    return [d for d in rows if (mode == "tunnel" or d.verified_at is not None) and _DOMAIN_RE.match(d.domain or "")]
+
+
+def _domains(site, mode="public"):
+    """The names of the site's domains the proxy serves (_served) under exposure mode `mode`."""
+    return [d.domain for d in _served(site, mode)]
+
+
+def site_domains(site, mode="public"):
+    """The names render() serves for `site` once it is online under exposure mode `mode`: [] means none."""
+    return _domains(site, mode)
+
+
+def _admin_line(opts):
+    """The admin API's line: on the owner-only unix socket while the page cache is on (its purge), else off."""
+    return "\tadmin unix/%s|0200" % ADMIN_SOCKET if opts["cache_build"] else "\tadmin off"
+
+
+def own_cert(domain):
+    """Whether the proxy serves `domain` (a WebsiteDomain) with the operator's own certificate files.
+
+    The same test decides the configuration's `tls <file> <file>` line and the files website-proxy-apply
+    is sent (ssh_manager.websites.apply_doc), so a configuration never names a file that is not shipped.
+    """
+    return (domain.cert_mode == "own" and domain.verified_at is not None and bool(domain.own_cert_pem)
+            and bool(domain.own_key_secret))
+
+
+def _cert_groups(site):
+    """[(names, own domain or None)]: one site block per certificate source.
+
+    The automatic names share one block; each name with its own certificate gets a block of its own, since
+    a block's `tls <cert> <key>` line covers every name in it and turns automatic certificates off for all
+    of them. The primary name's block comes first. Not used in tunnel mode, where the tunnel's provider holds
+    the certificate and every name shares one plain-HTTP block.
+    """
+    groups, auto = [], []
+    for d in _served(site):
+        if own_cert(d):
+            groups.append(([d.domain], d))
+        else:
+            if not auto:
+                groups.append((auto, None))
+            auto.append(d.domain)
+    return groups
 
 
 def _global(mode, opts, proxy, trusted):
-    lines = ["{", "\tadmin off", "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
+    lines = ["{", _admin_line(opts), "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
     if mode == "tunnel":
         lines += ["\tauto_https off", "\tdefault_bind 127.0.0.1", "\thttp_port %d" % TUNNEL_PORT]
     else:
@@ -224,16 +321,16 @@ def _global(mode, opts, proxy, trusted):
             lines.append("\tacme_ca %s" % LE_STAGING)
         lines.append("\tskip_install_trust")
     if opts["cache_build"]:
-        lines += ["\torder cache before rewrite", "\tcache {", "\t\tttl 300s", "\t}"]
+        lines += ["\torder cache before rewrite", "\tcache {", "\t\tttl 300s", "\t\tapi {", "\t\t\tsouin", "\t\t}", "\t}"]
     lines += ["\tservers {", "\t\tprotocols h1 h2",
               "\t\ttimeouts {", "\t\t\tread_header 10s", "\t\t\tread_body 60s", "\t\t\twrite 120s", "\t\t\tidle 2m",
               "\t\t}"]
     if trusted:
         lines.append("\t\ttrusted_proxies static %s" % " ".join(trusted))
-        if mode == "tunnel" or (proxy is not None and "cloudflare" in proxy.presets()):
-            lines.append("\t\tclient_ip_headers CF-Connecting-IP")
+        if mode == "tunnel" or client_header(proxy) == CF_HEADER:
+            lines.append("\t\tclient_ip_headers %s" % CF_HEADER)
         else:
-            lines += ["\t\tclient_ip_headers X-Forwarded-For", "\t\ttrusted_proxies_strict"]
+            lines += ["\t\tclient_ip_headers %s" % XFF, "\t\ttrusted_proxies_strict"]
     lines += ["\t}", "}", ""]
     return lines
 
@@ -247,16 +344,15 @@ def _hsts(opts):
     return value
 
 
-def _tls_lines(site, opts, proxy):
-    """The site's `tls` block: protocols, its own certificate files, and the CDN's client certificate."""
+def _tls_lines(own, opts, proxy):
+    """A site block's `tls` block: protocols, the domain `own`'s certificate files, the CDN's client certificate."""
     inner = ["\t\tprotocols tls%s tls1.3" % opts["tls_min"]] if opts["tls_min"] != "1.3" else ["\t\tprotocols tls1.3"]
     if proxy is not None and proxy.origin_pull_mtls:
         inner += ["\t\tclient_auth {", "\t\t\tmode require_and_verify", "\t\t\ttrust_pool file %s" % ORIGIN_PULL_CA,
                   "\t\t}"]
-    own = [d for d in (site.domains or []) if d.cert_mode == "own" and d.verified_at is not None]
     head = "\ttls {"
-    if own:
-        head = "\ttls %s/%s.crt %s/%s.key {" % (CERT_DIR, own[0].domain, CERT_DIR, own[0].domain)
+    if own is not None:
+        head = "\ttls %s/%s.crt %s/%s.key {" % (CERT_DIR, own.domain, CERT_DIR, own.domain)
     return [head] + inner + ["\t}"]
 
 
@@ -321,21 +417,23 @@ def _snippet_lines(site):
 
 
 def _site_lines(site, opts, proxy, mode, secret_of):
-    names = _domains(site)
+    names = _domains(site, mode)
     token = secret_of(site) or ""
     if not (names and site.port and _TOKEN_RE.match(token)):
         return []
     tunnel = mode == "tunnel"
-    addresses = ", ".join(("http://%s" % n) if tunnel else n for n in names)
-    lines = ["# site %s (%s)" % (site.id, site.name), "%s {" % addresses]
-    lines += [] if tunnel else _tls_lines(site, opts, proxy)
-    lines += ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
-    lines += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
-              + _snippet_lines(site))
-    lines += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
-              "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
-              "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
-              "\t}", "}", ""]
+    body = ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
+    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts) + _log_lines(site)
+             + _snippet_lines(site))
+    body += ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
+             "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
+             "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
+             "\t}", "}", ""]
+    if tunnel:        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
+        return ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)] + body
+    lines = []
+    for group, own in _cert_groups(site):
+        lines += ["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(own, opts, proxy) + body
     return lines
 
 
@@ -349,7 +447,7 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     opts = options(opts)
     secret_of = secret_of or _secret_of
     mode = proxy.exposure_mode if proxy is not None else "public"
-    trusted = {"restricted": allow_list(proxy), "tunnel": ["127.0.0.1/32", "::1/128"]}.get(mode, [])
+    trusted = {"restricted": trusted_list(proxy), "tunnel": ["127.0.0.1/32", "::1/128"]}.get(mode, [])
     lines = ["# Written by linuxgsm-panel from its database: the panel rewrites this file; edits are lost.", ""]
     lines += _global(mode, opts, proxy, trusted)
     for site in sorted(sites, key=lambda s: s.id or 0):

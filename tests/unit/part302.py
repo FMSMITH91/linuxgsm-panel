@@ -220,7 +220,7 @@ def _site302(**kw):
 
 def _proxy302(mode="public", provider=""):
     return _NS302(exposure_mode=mode, cidrs=lambda: [], presets=lambda: [], origin_pull_mtls=False,
-                  tunnel_provider=provider)
+                  tunnel_provider=provider, custom_trusted=False, url_nets=lambda: [])
 
 
 def _doc302(proxy=None):
@@ -737,7 +737,7 @@ def _site_domain302(st, issuer, days):
     _p9_patch(_sw302, "proxy_status", lambda remote: (asked.append(1) or True, _cert_lines302(issuer, days)))
     _wd302._CERTS_AT.clear()
     body = _p9_json(_Client302(st.su.id).get("/api/websites/%d" % st.site.id))
-    again = _p9_json(_Client302(st.su.id).get("/websites/%d/domains" % st.site.id))
+    again = _p9_json(_Client302(st.su.id).get("/api/websites/%d" % st.site.id))
     dom = (body.get("domains") or [{}])[0]
     return dom, len(asked), (again.get("domains") or [{}])[0].get("cert_state")
 
@@ -776,7 +776,7 @@ def _s13_page():
     site = {"success": True, "site": {"id": 7, "name": "shop", "kind": "php", "state": "running"}, "domains": [dom],
             "dns": {}}
     got = _node302(_node301(_site_ad301, _COMMON301 + ["website_site.js"], _DOMAINS302,
-                            routes={"/api/websites/7": site, "/websites/7/domains": {"domains": [dom]}}))
+                            routes={"/api/websites/7": site}))
     text = got.get("text") or ""
     eq("Domains tab: the certificate's issuer (a test one named as untrusted), its expiry date and the warning are shown",
        ("Test certificate (browsers do not trust it)" in text, "2027-01-29" in text, got.get("warn")),

@@ -1,0 +1,1209 @@
+"""Part 313 of the unit suite: a website domain's own certificate, Cloudflare in front, and the site page's fixes.
+
+1. The per-host certificate choice nothing read (website_proxy.origin_tls) is gone: an older database's column is
+   dropped at start, and the proxy settings no longer carry it.
+2. The web proxy's configuration gives each domain with its own certificate a site block of its own, naming its
+   files, while the automatic domains share one block; the files shipped are exactly the ones it names.
+3. The helper removes the certificate files of the proxy's folder that the configuration now running does not
+   name, after an apply that left the proxy running only.
+4. Your own certificate (POST /websites/<id>/domains/cert): who may, what is refused and what is only noted
+   (tls_own.check_for_domain, OWASP Transport Layer Security Cheat Sheet), the key encrypted and never returned
+   or audited, the route rendering and shipping the files, a failed apply putting the previous certificate
+   back, switching back to automatic, the domain's warning 30 days ahead, the renewal read leaving it alone,
+   and the weekly expiry alert through the update-check ticker's hook.
+5. Behind a CDN: a domain whose answers are all inside ONE CDN preset's published ranges (Cloudflare's, Fastly's)
+   is `cdn` through that CDN, verified and served; answers split between two CDNs, or any other foreign answer,
+   stay a mismatch and are not served; a site that would be served on no domain is never put online, and one
+   served on only some says which it does not answer on; the Domains tab names the CDN and notes what a
+   certificate needs behind it, the CDN's own origin certificate and strict mode as the signed catalog names them.
+6. A DNS check that newly verifies a domain of a site already online applies the proxy at once.
+7. The Overview's figures: the probe is parsed (memory, CPU, disk, the running image), and a figure that cannot
+   be read says why instead of an empty bar.
+8. A site that finished installing but is offline leads with Put it online (for an administrator of it), and
+   its page's Overview says it is offline with the same button.
+9. The domains' journey: the add dialog's domain is checked at once and Put online checks every domain again;
+   no web proxy is said in words with where to install it; the panel host's IPv4 and IPv6 interface addresses
+   count (AAAA records match and are listed); a domain still without a certificate 10 minutes after it was
+   served says so; Make primary on WordPress says how to move WordPress's own address; the records table names
+   records as providers ask (@, www); the list's lock counts every trusted certificate.
+
+HOW IT RUNS. part12's app and its database; every host call is a stand-in (ssh_manager.websites), the proxy's
+configuration is rendered for real and the files website-proxy-apply would get are computed from what the
+stand-in received. Certificates are made with the cryptography package on the spot. tools/panel-helper is loaded
+by path with its folders under a scratch tree. The scripts run in node over the real rendered pages with
+part301's harness. Nothing reaches a host (part12's tripwire is armed).
+"""
+import datetime as _dt313
+import importlib.machinery as _mach313
+import importlib.util as _ilu313
+import io as _io313
+import json as _json313
+import os
+import re as _re313
+import shutil as _shutil313
+import socket as _socket313
+import tempfile as _tf313
+from contextlib import redirect_stderr as _rerr313, redirect_stdout as _rout313
+from types import SimpleNamespace as _NS313
+
+from cryptography import x509 as _x509_313
+from cryptography.hazmat.primitives import hashes as _hashes313, serialization as _ser313
+from cryptography.hazmat.primitives.asymmetric import ec as _ec313
+from cryptography.x509.oid import NameOID as _OID313
+from flask import g as _g313
+from sqlalchemy import inspect as _inspect313, text as _text313
+
+from unit.part01 import _root, check, eq
+from unit.part12 import _P9_TRIPPED, _p9, _p9_arm, _p9_client, _p9_json, _p9_patch, _p9_restore_all
+from unit.part301 import _COMMON301, _list_sa301, _node301, _ran301, _site_ad301, _site_cu301
+from panel.core.clock import utcnow as _utcnow313
+from panel.core.config import decrypt_secret as _dec313, encrypt_secret as _enc313
+from panel.db import models as _models313
+from panel.db.models import (AuditLog as _Audit313, Group as _Group313, RemoteServer as _Remote313, User as _User313,
+                             Website as _Site313, WebsiteDomain as _Dom313, db as _db313)
+from panel.ops.ssh_manager import websites as _sw313
+from panel.routes import os_updates as _osu313
+from panel.routes import websites as _w313
+from panel.routes import websites_domains as _wd313
+from panel.routes import websites_proxy as _wpr313
+from panel.security import auth as _auth313
+from panel.services import notifications as _notif313
+from panel.services import tls_own as _own313
+from panel.services import website_certs as _wcert313
+from panel.services import website_dns as _dns313
+from panel.services import websites as _ws313
+from panel.services import websites_catalog as _wcat313
+from panel.services import websites_proxy as _wp313
+
+_ROWS313 = {"remotes": [], "users": [], "groups": []}
+_HOST_IP313 = "11.22.33.55"
+_SAVED2FA313 = []
+_NOW313 = _dt313.datetime.now(_dt313.timezone.utc)
+
+
+# ── certificates, made here ───────────────────────────────────────────────────────────────────────
+def _name313(cn, ou=None):
+    attrs = [_x509_313.NameAttribute(_OID313.COMMON_NAME, cn)]
+    if ou:
+        attrs.append(_x509_313.NameAttribute(_OID313.ORGANIZATIONAL_UNIT_NAME, ou))
+    return _x509_313.Name(attrs)
+
+
+def _ec_key313():
+    return _ec313.generate_private_key(_ec313.SECP256R1())
+
+
+_CA_KEY313 = _ec_key313()
+_CA_NAME313 = _name313("P313 Test CA")
+
+
+def _cert313(key, names, start=-1, days=90, issuer_key=None, issuer=None, cn=None):
+    """A leaf for `names` (subjectAltName), valid from `start` days from now for `days` days, signed by the test CA."""
+    issuer_key = issuer_key or _CA_KEY313
+    b = (_x509_313.CertificateBuilder().subject_name(_name313(cn or (names[0] if names else "none")))
+         .issuer_name(issuer or _CA_NAME313).public_key(key.public_key()).serial_number(_x509_313.random_serial_number())
+         .not_valid_before(_NOW313 + _dt313.timedelta(days=start))
+         .not_valid_after(_NOW313 + _dt313.timedelta(days=start + days)))
+    if names:
+        b = b.add_extension(_x509_313.SubjectAlternativeName([_x509_313.DNSName(n) for n in names]), critical=False)
+    return b.sign(issuer_key, _hashes313.SHA256())
+
+
+def _ca_pem313():
+    b = (_x509_313.CertificateBuilder().subject_name(_CA_NAME313).issuer_name(_CA_NAME313)
+         .public_key(_CA_KEY313.public_key()).serial_number(1).not_valid_before(_NOW313 - _dt313.timedelta(days=10))
+         .not_valid_after(_NOW313 + _dt313.timedelta(days=900)))
+    return b.sign(_CA_KEY313, _hashes313.SHA256()).public_bytes(_ser313.Encoding.PEM).decode()
+
+
+def _pem313(cert):
+    return cert.public_bytes(_ser313.Encoding.PEM).decode()
+
+
+def _keypem313(key, password=None):
+    enc = _ser313.BestAvailableEncryption(password) if password else _ser313.NoEncryption()
+    return key.private_bytes(_ser313.Encoding.PEM, _ser313.PrivateFormat.PKCS8, enc).decode()
+
+
+# A stand-in for an encrypted proxy token the code under test never reads, named so no literal sits under a
+# password-like argument.
+_STAND_IN313 = "x"
+_DOMAIN313 = "shop.p313.example.org"
+_KEY313 = _ec_key313()
+_CHAIN313 = _pem313(_cert313(_KEY313, [_DOMAIN313])) + _ca_pem313()
+_KEYPEM313 = _keypem313(_KEY313)
+
+
+# ── the app's rows ────────────────────────────────────────────────────────────────────────────────
+class _Client313:
+    """A test client for `uid` that never reuses another request's signed-in user (part300's reason)."""
+
+    def __init__(self, uid):
+        self.c = _p9_client(uid)
+
+    def get(self, *a, **k):
+        _g313.pop("_login_user", None)
+        return self.c.get(*a, **k)
+
+    def post(self, *a, **k):
+        _g313.pop("_login_user", None)
+        return self.c.post(*a, **k)
+
+
+def _host313(name):
+    r = _Remote313(name=name, host="198.51.100.%d" % (len(_ROWS313["remotes"]) + 60), port=22, username="u",
+                   auth_method="key", auth_credential="", is_local=False, public_ip=_HOST_IP313)
+    _db313.session.add(r)
+    _db313.session.commit()
+    _ROWS313["remotes"].append(r.id)
+    return r
+
+
+def _site313(remote, name, domains=(), enabled=False):
+    """A site with `domains` [(name, verified, dns_state)], its proxy token encrypted as the panel keeps it."""
+    s = _Site313(remote_id=remote.id, name=name, kind="static", state="running", enabled=enabled)
+    _db313.session.add(s)
+    _db313.session.flush()
+    s.account, s.port = "ws%d" % s.id, 20000 + s.id % 900
+    s.proxy_secret = _enc313("t" * 40)
+    for i, (dom, verified, state) in enumerate(domains):
+        _db313.session.add(_Dom313(website_id=s.id, domain=dom, is_primary=i == 0, dns_state=state,
+                                   verified_at=_dt313.datetime(2026, 1, 1) if verified else None))
+    _db313.session.commit()
+    return s
+
+
+def _user313(name, perms, sites=(), customer=False):
+    g = _Group313(name="p313-" + name, description="", is_default=False, is_customer=customer)
+    g.set_permissions(list(perms))
+    g.websites.extend(sites)
+    u = _User313(username="p313-" + name, password_hash=os.urandom(8).hex(), display_name=name,
+                 is_superadmin=False, is_active=True)
+    u.groups.append(g)
+    _db313.session.add_all([g, u])
+    _db313.session.commit()
+    _ROWS313["users"].append(u.id)
+    _ROWS313["groups"].append(g.id)
+    return u
+
+
+def _super313():
+    u = _User313(username="p313-super", password_hash=os.urandom(8).hex(), is_superadmin=True, is_active=True)
+    _db313.session.add(u)
+    _db313.session.commit()
+    _ROWS313["users"].append(u.id)
+    return u
+
+
+def _dom313(site, name):
+    _db313.session.expire_all()
+    return _Dom313.query.filter_by(website_id=site.id, domain=name).first()
+
+
+class _Applied313:
+    """The host stand-ins: every proxy apply recorded with the files website-proxy-apply would get."""
+
+    def __init__(self):
+        self.applies, self.fail = [], []
+
+    def proxy_apply(self, remote, text, sites=(), proxy=None, start_it=False):
+        files = _json313.loads(_sw313.apply_doc(text, sites, proxy))["files"]
+        self.applies.append({"text": text, "files": files})
+        if self.fail:
+            return False, self.fail.pop(0)
+        return True, _sw313.OK_APPLIED
+
+
+def _stub_host313():
+    rec = _Applied313()
+    for name in ("ports_apply", "proxy_stop", "proxy_status", "site_probe"):
+        _p9_patch(_sw313, name, lambda *a, **k: (True, ""))
+    _p9_patch(_sw313, "proxy_apply", rec.proxy_apply)
+    _SAVED2FA313.append(_p9.config.get("WEBSITES_CUSTOMER_2FA", True))
+    _p9.config["WEBSITES_CUSTOMER_2FA"] = False
+    return rec
+
+
+def _resolver313(answers):
+    def getaddrinfo(host, *_a, **_k):
+        got = answers.get(host)
+        if not got:
+            raise _socket313.gaierror("no such name")
+        return [(None, None, None, "", (a, 0)) for a in got]
+    return _NS313(getaddrinfo=getaddrinfo, gaierror=_socket313.gaierror, SOCK_STREAM=_socket313.SOCK_STREAM)
+
+
+def _names313(text, *names):
+    """Which of `names` `text` holds as a whole host name (sorted); never a substring match."""
+    return sorted({t.strip(".") for t in _re313.split(r"[^a-z0-9.-]+", text)} & set(names))
+
+
+def _cf_address313():
+    """An address inside the first IPv4 range of Cloudflare's preset (the signed catalog's list)."""
+    net = next(n for n in _dns313.cdn_networks() if n.version == 4)
+    return str(net.network_address + 7)
+
+
+# ── 1. origin_tls is gone ─────────────────────────────────────────────────────────────────────────
+def _columns313(table):
+    return {c["name"] for c in _inspect313(_db313.engine).get_columns(table)}
+
+
+def _s1_origin_tls(_st, _rec):
+    if "origin_tls" not in _columns313("website_proxy"):
+        _db313.session.execute(_text313("ALTER TABLE website_proxy ADD COLUMN origin_tls VARCHAR(12) NOT NULL "
+                                        "DEFAULT 'letsencrypt'"))
+        _db313.session.commit()
+    before = _columns313("website_proxy")
+    _models313._run_light_migrations()
+    after = _columns313("website_proxy")
+    eq("origin_tls: an older database's website_proxy.origin_tls (a choice nothing read) is dropped at start; the "
+       "table's other columns stay (control)",
+       ("origin_tls" in before, "origin_tls" in after, {"exposure_mode", "tunnel_token_enc", "origin_pull_mtls"} <= after),
+       (True, False, True))
+    _models313._run_light_migrations()
+    eq("origin_tls: a second start finds nothing to drop and changes nothing (control)", _columns313("website_proxy"), after)
+    row = _w313.proxy_row(_st.host.id)
+    eq("origin_tls: the proxy settings no longer carry it", "origin_tls" in _wpr313.proxy_json(row), False)
+
+
+# ── 2. one site block per certificate source ─────────────────────────────────────────────────────
+def _ns_dom313(name, did, mode="acme", pem="", key=""):
+    return _NS313(domain=name, is_primary=did == 1, id=did, verified_at=_dt313.datetime(2026, 1, 1), cert_mode=mode,
+                  own_cert_pem=pem, own_key_secret=key)
+
+
+def _ns_site313(domains):
+    return _NS313(id=31, name="mixed", kind="static", account="ws31", port=20031, enabled=True, proxy_secret=_STAND_IN313,
+                  domains=domains, max_body_mb=8, static_cache=False, custom_rules="[]", page_cache=False,
+                  page_cache_ttl=300, access_log=False, raw_proxy_snippet="")
+
+
+def _heads313(text):
+    """Each site block's address line and its tls line."""
+    lines = text.split("\n")
+    return [(ln, lines[i + 1].strip()) for i, ln in enumerate(lines) if ln.endswith(" {") and not ln.startswith(("\t", "{",
+                                                                                                                 "http"))]
+
+
+def _s2_blocks(_st, _rec):
+    key_enc = _enc313(_KEYPEM313)
+    site = _ns_site313([_ns_dom313("a.p313.example.org", 1), _ns_dom313("b.p313.example.org", 2, "own", _CHAIN313, key_enc),
+                        _ns_dom313("c.p313.example.org", 3)])
+    text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
+    crt = "%s/b.p313.example.org" % _wp313.CERT_DIR
+    eq("proxy config: the automatic domains share one block with automatic certificates; the domain with its own "
+       "certificate has a block of its own naming its files",
+       _heads313(text), [("a.p313.example.org, c.p313.example.org {", "tls {"),
+                         ("b.p313.example.org {", "tls %s.crt %s.key {" % (crt, crt))])
+    files = _json313.loads(_sw313.apply_doc(text, [site], None))["files"]
+    eq("proxy config: the files shipped are exactly those the configuration names, the key in clear on stdin only",
+       (sorted(files), files.get("b.p313.example.org.key") == _KEYPEM313), (["b.p313.example.org.crt", "b.p313.example.org.key"], True))
+    only = _ns_site313([_ns_dom313("a.p313.example.org", 1), _ns_dom313("c.p313.example.org", 3)])
+    eq("proxy config: a site with automatic certificates only is one block (control)",
+       _heads313(_wp313.render([only], None, None, secret_of=lambda s: "t" * 40)),
+       [("a.p313.example.org, c.p313.example.org {", "tls {")])
+    half = _ns_site313([_ns_dom313("a.p313.example.org", 1, "own", _CHAIN313, "")])
+    t2 = _wp313.render([half], None, None, secret_of=lambda s: "t" * 40)
+    eq("proxy config: an own certificate without its key is not named (no file the apply would not ship)",
+       (_heads313(t2), _json313.loads(_sw313.apply_doc(t2, [half], None))["files"]), ([("a.p313.example.org {", "tls {")], {}))
+
+
+# ── 3. the helper prunes certificate files no configuration names ────────────────────────────────
+_HSPEC313 = _ilu313.spec_from_loader("panel_helper_p313", _mach313.SourceFileLoader(
+    "panel_helper_p313", os.path.join(_root, "tools", "panel-helper")))
+_H313 = _ilu313.module_from_spec(_HSPEC313)
+_HSPEC313.loader.exec_module(_H313)
+
+
+def _plain_write313(path, data, _mode, _uid=0, _gid=0):
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def _apply_in_tree313(started_rc):
+    """do_website_proxy_apply over a scratch tree holding stale files: (rc, the certificate folder after)."""
+    d = _tf313.mkdtemp(prefix="p313-helper-")
+    names = ("WEB_PROXY_BIN", "WEB_PROXY_ETC", "WEB_PROXY_CERTS", "WEB_PROXY_CONF", "pwd", "_web_write", "_web_listen_ok",
+             "_web_validated", "_web_start")
+    saved = {n: getattr(_H313, n) for n in names}
+    try:
+        certs = os.path.join(d, "etc", "certs")
+        os.makedirs(certs)
+        for name in ("old.p313.example.org.crt", "old.p313.example.org.key", "notes.txt"):
+            with open(os.path.join(certs, name), "w", encoding="utf-8") as fh:
+                fh.write("x")
+        open(os.path.join(d, "caddy"), "wb").close()
+        _H313.WEB_PROXY_BIN, _H313.WEB_PROXY_ETC = os.path.join(d, "caddy"), os.path.join(d, "etc")
+        _H313.WEB_PROXY_CERTS, _H313.WEB_PROXY_CONF = certs, os.path.join(d, "etc", "Caddyfile")
+        _H313.pwd = _NS313(getpwnam=lambda n: _NS313(pw_uid=990, pw_gid=990))
+        _H313._web_write, _H313._web_validated = _plain_write313, lambda text, pw: True
+        _H313._web_listen_ok = lambda text, pw: (text, ["203.0.113.7"])
+        _H313._web_start = lambda old, pw: started_rc
+        doc = _json313.dumps({"caddyfile": _H313.WEB_CONF_HEAD + ": p313\n",
+                              "files": {"b.p313.example.org.crt": _CHAIN313, "b.p313.example.org.key": _KEYPEM313}})
+        with _rout313(_io313.StringIO()), _rerr313(_io313.StringIO()):
+            rc = _H313.do_website_proxy_apply(["reload"], doc)
+        return rc, sorted(os.listdir(certs))
+    finally:
+        for n, v in saved.items():
+            setattr(_H313, n, v)
+        _shutil313.rmtree(d, ignore_errors=True)
+
+
+def _s3_prune(_st, _rec):
+    eq("helper: after an apply that left the proxy running, the certificate files no configuration names are removed "
+       "(a key switched back to automatic does not stay on the host); the new pair and a file of another shape stay",
+       _apply_in_tree313(0), (0, ["b.p313.example.org.crt", "b.p313.example.org.key", "notes.txt"]))
+    eq("helper: a failed apply removes nothing (the configuration put back may still name them) (control)",
+       _apply_in_tree313(1)[1], ["b.p313.example.org.crt", "b.p313.example.org.key", "notes.txt", "old.p313.example.org.crt",
+                                 "old.p313.example.org.key"])
+
+
+# ── 4. your own certificate through the route ────────────────────────────────────────────────────
+def _post_cert313(client, site, dom, **body):
+    return client.post("/websites/%d/domains/cert" % site.id, json=dict({"id": dom.id}, **body))
+
+
+def _s4_own_route(st, rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    del rec.applies[:]
+    r = _post_cert313(c, st.a, dom, mode="own", cert=_CHAIN313, key=_KEYPEM313)
+    got, body = _p9_json(r), r.get_data(as_text=True)
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert (route): a customer managing their own online site saves a pasted chain and key; the domain says "
+       "'Your own certificate' with its issuer and expiry",
+       (r.status_code, dom.cert_mode, dom.cert_state, (got.get("domain") or {}).get("cert_mode"),
+        ((got.get("domain") or {}).get("own_cert") or {}).get("issuer"), dom.cert_not_after is not None),
+       (200, "own", "own", "own", "P313 Test CA", True))
+    eq("own cert (route): the key is stored encrypted, decrypts to the key given, and is in no answer",
+       (_KEYPEM313.strip() in (dom.own_key_secret or ""), _dec313(dom.own_key_secret).strip() == _KEYPEM313.strip(),
+        "PRIVATE KEY" in body), (False, True, False))
+    _s4_shipped_and_audited(st, rec, c, dom)
+
+
+def _s4_shipped_and_audited(st, rec, c, dom):
+    sent = rec.applies[-1] if rec.applies else {"text": "", "files": {}}
+    crt = "%s/%s" % (_wp313.CERT_DIR, _DOMAIN313)
+    eq("own cert (route -> render -> shipped files): saving applies the proxy at once with the domain's own block "
+       "and its two files",
+       ("tls %s.crt %s.key {" % (crt, crt) in sent["text"], sorted(sent["files"]),
+        (sent["files"].get(_DOMAIN313 + ".key") or "").strip() == _KEYPEM313.strip()),
+       (True, [_DOMAIN313 + ".crt", _DOMAIN313 + ".key"], True))
+    row = _Audit313.query.filter_by(action="website_domain_cert").order_by(_Audit313.id.desc()).first()
+    fp = _own313.summary(_own313._load_chain(_CHAIN313.encode()))["fingerprint"]
+    eq("own cert (route): the audit row names the domain, issuer, expiry and fingerprint, and holds no key",
+       (row is not None and _DOMAIN313 in row.detail and "P313 Test CA" in row.detail and fp in row.detail,
+        "PRIVATE" in (row.detail if row else "") or "BEGIN" in (row.detail if row else "")), (True, False))
+    other = _dom313(st.b, "other.p313.example.org")
+    eq("own cert (route): the customer of site A gets 404 on site B's domain, and a viewer of A gets 404 too",
+       (_post_cert313(c, st.b, other, mode="own", cert=_CHAIN313, key=_KEYPEM313).status_code,
+        _post_cert313(_Client313(st.viewer.id), st.a, dom, mode="acme").status_code), (404, 404))
+
+
+def _refusals313():
+    """(label, cert PEM, key PEM) each check_for_domain refuses."""
+    other_key = _ec_key313()
+    return [
+        ("a key that is not the certificate's", _CHAIN313, _keypem313(other_key)),
+        ("a passphrase key", _CHAIN313, _keypem313(_KEY313, b"p313-phrase")),
+        ("an expired certificate", _pem313(_cert313(_KEY313, [_DOMAIN313], start=-100, days=10)), _KEYPEM313),
+        ("a certificate not valid yet", _pem313(_cert313(_KEY313, [_DOMAIN313], start=5, days=90)), _KEYPEM313),
+        ("another domain's certificate", _pem313(_cert313(_KEY313, ["shop.p313.example.net"])), _KEYPEM313),
+        ("a wildcard one label too deep", _pem313(_cert313(_KEY313, ["*.example.org"])), _KEYPEM313),
+        ("no subjectAltName", _pem313(_cert313(_KEY313, [], cn=_DOMAIN313)), _KEYPEM313),
+        ("malformed PEM", "-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n", _KEYPEM313),
+        ("oversize input", _CHAIN313 + "x" * 70000, _KEYPEM313),
+    ]
+
+
+def _s4_refusals(st, _rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    before = (dom.cert_mode, dom.own_cert_pem, dom.own_key_secret)
+    got = {label: _post_cert313(c, st.a, dom, mode="own", cert=cert, key=key).status_code
+           for label, cert, key in _refusals313()}
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert (route): a mismatched key, a passphrase key, an expired or not-yet-valid certificate, one that does "
+       "not cover the domain (a wildcard covers one label), malformed PEM and oversize input are each refused (400)",
+       got, {label: 400 for label, _c, _k in _refusals313()})
+    eq("own cert (route): a refusal changes nothing on the domain", (dom.cert_mode, dom.own_cert_pem, dom.own_key_secret),
+       before)
+    wild = _pem313(_cert313(_KEY313, ["*.p313.example.org"]))
+    eq("own cert (route): a wildcard covering the domain's one left-most label is accepted (control)",
+       _post_cert313(c, st.a, dom, mode="own", cert=wild + _ca_pem313(), key=_KEYPEM313).status_code, 200)
+
+
+def _notes_for313(st, cert, key):
+    r = _post_cert313(_Client313(st.cust.id), st.a, _dom313(st.a, _DOMAIN313), mode="own", cert=cert, key=key)
+    return r.status_code, " | ".join(_p9_json(r).get("notes") or [])
+
+
+def _s4_notes(st, _rec):
+    # A key browsers do not accept (an ECDSA curve outside P-256 and P-384); part232 holds the RSA size verdicts.
+    weak = _ec313.generate_private_key(_ec313.SECP256K1())
+    cases = {
+        "weak key": (_pem313(_cert313(weak, [_DOMAIN313])) + _ca_pem313(), _keypem313(weak), "Browsers accept P-256 and P-384"),
+        "self-signed": (_pem313(_cert313(_KEY313, [_DOMAIN313], issuer_key=_KEY313, issuer=_name313(_DOMAIN313))), _KEYPEM313,
+                        "well-known CA"),
+        "no chain": (_pem313(_cert313(_KEY313, [_DOMAIN313])), _KEYPEM313, "Paste the full chain"),
+        "30 days left": (_pem313(_cert313(_KEY313, [_DOMAIN313], start=-1, days=20)) + _ca_pem313(), _KEYPEM313, "expires in"),
+        "Cloudflare origin": (_pem313(_cert313(_KEY313, [_DOMAIN313], issuer=_name313(
+            "CloudFlare Origin Certificate", "CloudFlare Origin SSL Certificate Authority"))), _KEYPEM313, "Full (strict)"),
+    }
+    got = {}
+    for label, (cert, key, want) in cases.items():
+        code, notes = _notes_for313(st, cert, key)
+        got[label] = (code, want in notes)
+    eq("own cert (route): a weak key, a self-signed certificate, a missing chain and 30 days or fewer left are saved "
+       "with a note carrying OWASP's value; a Cloudflare Origin CA certificate is named as one",
+       got, {k: (200, True) for k in cases})
+    _p9_patch(_own313, "_hash_notes", lambda leaf: ["p313: the signature check ran"])
+    code, notes = _notes_for313(st, _CHAIN313, _KEYPEM313)
+    eq("own cert (route): the signature-algorithm check (SHA-1/MD5 noted; part232 holds its verdicts) runs on a "
+       "website's certificate too", (code, "p313: the signature check ran" in notes), (200, True))
+    _p9_patch(_own313, "_hash_notes", _HASH_NOTES313)
+    _s4_self_signed_row(st)
+
+
+_HASH_NOTES313 = _own313._hash_notes
+
+
+def _s4_self_signed_row(st):
+    """U3: a self-signed own certificate was saved with its note once; the domain's line then said nothing of it."""
+    c = _Client313(st.cust.id)
+    self_signed = _pem313(_cert313(_KEY313, [_DOMAIN313], issuer_key=_KEY313, issuer=_name313(_DOMAIN313)))
+    origin = _pem313(_cert313(_KEY313, [_DOMAIN313], issuer=_name313("CloudFlare Origin Certificate",
+                                                                      "CloudFlare Origin SSL Certificate Authority")))
+    got = {}
+    for name, cert in (("self-signed", self_signed), ("a CA's chain", _CHAIN313), ("Cloudflare origin", origin)):
+        r = _post_cert313(c, st.a, _dom313(st.a, _DOMAIN313), mode="own", cert=cert, key=_KEYPEM313)
+        row = _domains313(c, st.a).get(_DOMAIN313) or {}
+        got[name] = (r.status_code, row.get("cert_mode"), _wd313.S_OWN_SELF_SIGNED in (row.get("cert_warning") or ""))
+    _post_cert313(c, st.a, _dom313(st.a, _DOMAIN313), mode="acme")
+    eq("U3 (POST /websites/<id>/domains/cert, then GET /api/websites/<id>): a self-signed own certificate keeps a "
+       "warning on the domain's line that browsers warn (it was said once, in the save's notes); a CA's chain and a "
+       "Cloudflare Origin CA certificate have none (control)",
+       got, {"self-signed": (200, "own", True), "a CA's chain": (200, "own", False),
+             "Cloudflare origin": (200, "own", False)})
+    note = "The certificate is self-signed, so browsers warn."
+    page = _ran301("own cert notes", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  $('wd-cert').scrollIntoView = function () {};
+  window.wsCertOpen(1);
+  $('wd-cert-own').checked = true; window.wsCertMode();
+  $('wd-cert-pem').value = 'CERT'; $('wd-cert-key').value = 'KEY';
+  window.wsCertSave({preventDefault: function () {}});
+  for (let i = 0; i < 8; i++) await tick();
+  return {notes: $('wd-cert-notes').querySelectorAll('li').map(function (li) { return li.textContent; }),
+          shown: !$('wd-cert').hidden, key: $('wd-cert-key').value, row: $('wd-list').textContent};
+""", routes={"/api/websites/7": dict(_SITE_API313, domains=[_SS_DOM313]),
+             "/websites/7/domains/cert": {"success": True, "message": "Saved.", "notes": [note]}}))
+    eq("U3 (the Domains tab, js/website_site.js): the save's notes are listed under the form, which stays open after the "
+       "page reloads the site, the key field emptied; the domain's line shows its warning",
+       (page.get("notes"), page.get("shown"), page.get("key"), _SS_WARN313 in (page.get("row") or "")),
+       ([note], True, "", True))
+
+
+_SS_WARN313 = "The certificate you gave this domain is self-signed, so visitors' browsers warn."
+_SS_DOM313 = {"id": 1, "domain": "own.p313.example.org", "is_primary": True, "dns_state": "matching",
+              "cert_state": "own", "cert_mode": "own", "cert_warning": _SS_WARN313 + " Use one from a well-known authority.",
+              "own_cert": {"issuer": "own.p313.example.org", "not_after": "2027-01-01"}, "records": []}
+
+
+def _s4_rollback(st, rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    _post_cert313(c, st.a, dom, mode="acme")
+    del rec.applies[:]
+    rec.fail.append("The web proxy did not start: p313 refused.")
+    r = _post_cert313(c, st.a, dom, mode="own", cert=_CHAIN313, key=_KEYPEM313)
+    dom = _dom313(st.a, _DOMAIN313)
+    msg = _p9_json(r).get("message") or ""
+    eq("own cert (route): a failed apply puts the previous certificate back (automatic), applies that again, and "
+       "says why in plain words",
+       (r.status_code, dom.cert_mode, dom.own_cert_pem, len(rec.applies), _DOMAIN313 in msg, "p313 refused" in msg,
+        sorted(rec.applies[-1]["files"]) if rec.applies else None),
+       (502, "acme", "", 2, True, True, []))
+
+
+def _s4_back_to_auto(st, rec):
+    c = _Client313(st.cust.id)
+    dom = _dom313(st.a, _DOMAIN313)
+    _post_cert313(c, st.a, dom, mode="own", cert=_CHAIN313, key=_KEYPEM313)
+    del rec.applies[:]
+    r = _post_cert313(c, st.a, dom, mode="acme")
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert (route): switching back to automatic clears the chain and the key and applies a configuration with "
+       "no file for the domain",
+       (r.status_code, dom.cert_mode, dom.own_cert_pem, dom.own_key_secret, dom.cert_state,
+        [sorted(a["files"]) for a in rec.applies]), (200, "acme", "", "", "pending", [[]]))
+    eq("own cert (route): a mode that is neither is refused (400)", _post_cert313(c, st.a, dom, mode="custom").status_code, 400)
+
+
+def _s4_warning_and_renewal(st, _rec):
+    dom = _dom313(st.a, _DOMAIN313)
+    dom.cert_mode, dom.cert_state, dom.own_cert_pem = "own", "own", _CHAIN313
+    now = _dt313.datetime(2026, 6, 1)
+    notes = {}
+    for days in (40, 30, 10, -1):
+        dom.cert_not_after = now + _dt313.timedelta(days=days, hours=1)
+        notes[days] = str(_wd313.cert_note(dom, now))[:40]
+    eq("own cert: the domain's line warns from 30 days before its own certificate expires, and says when it has "
+       "expired; 40 days left says nothing (control)",
+       notes, {40: "", 30: "The certificate you gave this domain exp", 10: "The certificate you gave this domain exp",
+               -1: "The certificate you gave this domain has"})
+    dom.cert_not_after = _dt313.datetime(2030, 1, 1)
+    _db313.session.commit()
+    _wd313.apply_certs(st.host, {"certs": {_DOMAIN313: {"issuer": "acme-v02.api.letsencrypt.org-directory",
+                                                        "not_after": 1900000000}}})
+    dom = _dom313(st.a, _DOMAIN313)
+    eq("own cert: the read of the proxy's automatic certificates leaves a domain with its own alone",
+       (dom.cert_state, dom.cert_not_after), ("own", _dt313.datetime(2030, 1, 1)))
+
+
+def _s4_alert(st, _rec):
+    sent = []
+    _p9_patch(_notif313, "notify", lambda key, title, body="", server=None, remote=None: sent.append((key, body, remote)))
+    _wcert313._ALERTED.clear()
+    dom = _dom313(st.a, _DOMAIN313)
+    dom.cert_mode, dom.cert_not_after = "own", _utcnow313() + _dt313.timedelta(days=10)
+    _db313.session.commit()
+    _osu313._alert_website_certs(_p9)
+    _osu313._alert_website_certs(_p9)
+    eq("own cert: the update-check ticker's hook sends cert_expiring for an own certificate within 30 days, naming "
+       "the domain and the site, once a week",
+       [(k, _DOMAIN313 in b and st.a.name in b, getattr(r, "id", None)) for k, b, r in sent],
+       [("cert_expiring", True, st.host.id)])
+    del sent[:]
+    _wcert313._ALERTED.clear()
+    dom = _dom313(st.a, _DOMAIN313)
+    dom.cert_not_after = _utcnow313() + _dt313.timedelta(days=60)
+    _db313.session.commit()
+    _osu313._alert_website_certs(_p9)
+    eq("own cert: 60 days left sends nothing (control)", sent, [])
+
+
+def _s4_i18n(_st, _rec):
+    import glob
+    keys = {}
+    for lang in ("es", "fr"):
+        keys[lang] = set()
+        for f in glob.glob(os.path.join(_root, "panel", "translations", lang, "*.json")):
+            with open(f, encoding="utf-8") as fh:
+                keys[lang] |= set(_json313.load(fh))
+    said = [_own313.S_CDN_ORIGIN, "The certificate does not cover {domain}: its names are {names}.",
+            "The certificate names no domain in its subjectAltName, so browsers accept it for none.",
+            _notif313.EVENTS["cert_expiring"][0]]
+    eq("i18n: the own-certificate checks' new sentences and the alert's label are in the es and fr catalogs",
+       {lang: [s for s in said if s not in keys[lang]] for lang in keys}, {"es": [], "fr": []})
+
+
+# ── 5. behind Cloudflare ─────────────────────────────────────────────────────────────────────────
+def _s5_cdn(st, rec):
+    cf, foreign = _cf_address313(), "8.8.4.4"
+    nets = _dns313.cdn_networks()
+    eq("dns: every answer inside Cloudflare's published ranges is cdn; a foreign public answer, or a Cloudflare answer "
+       "beside a foreign one, is a mismatch; the host's own address is matching (controls)",
+       [_dns313.classify([cf], {_HOST_IP313}, nets), _dns313.classify([foreign], {_HOST_IP313}, nets),
+        _dns313.classify([cf, foreign], {_HOST_IP313}, nets), _dns313.classify([_HOST_IP313], {_HOST_IP313}, nets)],
+       ["cdn", "mismatch", "mismatch", "matching"])
+    _p9_patch(_dns313, "socket", _resolver313({"cf.p313.example.org": [cf], "far.p313.example.org": [foreign],
+                                               "cdn.p313.example.org": [cf]}))
+    su = _Client313(st.su.id)
+    site = _site313(st.host, "p313-cdn")
+    add = "/websites/%d/domains/add" % site.id
+    got = [_p9_json(su.post(add, json={"domain": d})).get("dns_state") for d in ("cf.p313.example.org", "far.p313.example.org")]
+    _db313.session.expire_all()
+    site = _db313.session.get(_Site313, site.id)
+    site.enabled = True
+    text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
+    eq("dns (route): a domain behind Cloudflare is checked as cdn, verified and served; a domain pointing at a foreign "
+       "address stays a mismatch and is not served",
+       (got, _wp313.site_domains(site), "cf.p313.example.org {" in text.split("\n"),
+        _names313(text, "far.p313.example.org")),
+       (["cdn", "mismatch"], ["cf.p313.example.org"], True, []))
+    site.enabled = False
+    _db313.session.commit()
+    rows = {d["domain"]: d for d in _p9_json(su.get("/api/websites/%d" % site.id)).get("domains", [])}
+    eq("dns: the Domains tab notes what a certificate needs behind Cloudflare: the Origin CA certificate with Full "
+       "(strict), as the signed catalog names them, else plain HTTP for the ACME challenge; a domain that is not behind "
+       "a CDN gets no such note (control)",
+       (rows["cf.p313.example.org"]["cdn_note"], rows["cf.p313.example.org"]["cdn_name"], rows["far.p313.example.org"]["cdn_note"]),
+       ("Paste a Cloudflare Origin CA certificate under Your own certificate and set Cloudflare's encryption mode to "
+        "Full (strict). Otherwise the automatic certificate needs Cloudflare to pass plain HTTP to this host for "
+        "/.well-known/acme-challenge/.", "Cloudflare", ""))
+    _s5_online(st, rec, site)
+
+
+def _fastly_address313():
+    """An address inside the first IPv4 range of Fastly's preset, read from the signed catalog itself."""
+    import ipaddress
+    net = next(n for n in map(ipaddress.ip_network, _wcat313.preset_ranges("fastly")) if n.version == 4)
+    return str(net.network_address + 7)
+
+
+def _s5_fastly(st, _rec):
+    cf, fa, foreign = _cf_address313(), _fastly_address313(), "8.8.4.4"
+    sets = _dns313.cdn_sets()
+    eq("dns: an answer inside Fastly's published ranges is cdn through Fastly; answers split between Cloudflare and "
+       "Fastly, or a Fastly answer beside an unknown one, are a mismatch; Cloudflare's is cdn through Cloudflare (control)",
+       ([_dns313.classify(a, {_HOST_IP313}, sets) for a in ([fa], [cf, fa], [fa, foreign], [cf])],
+        [_dns313.provider(a, sets) for a in ([fa], [cf, fa], [fa, foreign], [cf])]),
+       (["cdn", "mismatch", "mismatch", "cdn"], ["fastly", "", "", "cloudflare"]))
+    _p9_patch(_dns313, "socket", _resolver313({"fa.p313.example.org": [fa], "mix.p313.example.org": [cf, fa]}))
+    su = _Client313(st.su.id)
+    site = _site313(st.host, "p313-fastly")
+    add = "/websites/%d/domains/add" % site.id
+    said = {d: _p9_json(su.post(add, json={"domain": d})) for d in ("fa.p313.example.org", "mix.p313.example.org")}
+    _db313.session.expire_all()
+    site = _db313.session.get(_Site313, site.id)
+    site.enabled = True
+    text = _wp313.render([site], None, None, secret_of=lambda s: "t" * 40)
+    eq("dns (route): a domain behind Fastly is checked as cdn, says it goes through Fastly, is verified and served; a "
+       "domain whose answers are split between Cloudflare and Fastly stays a mismatch and is not served",
+       ([said[d].get("dns_state") for d in sorted(said)], said["fa.p313.example.org"].get("message"),
+        _wp313.site_domains(site), "fa.p313.example.org {" in text.split("\n"), _names313(text, "mix.p313.example.org")),
+       (["cdn", "mismatch"], "This domain goes through Fastly.", ["fa.p313.example.org"], True, []))
+    site.enabled = False
+    _db313.session.commit()
+    rows = _domains313(su, site)
+    eq("dns (GET /api/websites/<id>): the Fastly domain names Fastly, and its note gives the general advice (an origin "
+       "certificate if Fastly offers one, else plain HTTP for the ACME challenge); the split one names no CDN (control)",
+       (rows["fa.p313.example.org"]["cdn_name"], rows["fa.p313.example.org"]["cdn_note"],
+        rows["mix.p313.example.org"]["cdn_name"], rows["mix.p313.example.org"]["cdn_note"]),
+       ("Fastly", "If Fastly offers an origin certificate, paste it under Your own certificate and use its strict TLS "
+        "mode. Otherwise the automatic certificate needs Fastly to pass plain HTTP to this host for "
+        "/.well-known/acme-challenge/.", "", ""))
+    _s5_fastly_page(rows)
+    _s5_catalog(su, site)
+
+
+def _s5_fastly_page(rows):
+    """The Domains tab over the route's own answer for the Fastly domain: it says the DNS goes through Fastly."""
+    answer = dict(_SITE_API313, domains=[dict(rows["fa.p313.example.org"], id=1)])
+    got = _ran301("fastly domain (route's answer)", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const t = $('wd-list').textContent;
+  return {dns: t.indexOf('DNS goes through Fastly') >= 0, behind: t.indexOf('Behind Fastly: getting its certificate') >= 0};
+""", routes={"/api/websites/7": answer}))
+    eq("dns (the Domains tab, over GET /api/websites/<id>'s own answer for a domain whose DNS answer is in Fastly's "
+       "ranges): the line says the DNS goes through Fastly, with the note folded under Behind Fastly", got,
+       {"dns": True, "behind": True})
+
+
+def _domains313(su, site):
+    return {d["domain"]: d for d in _p9_json(su.get("/api/websites/%d" % site.id)).get("domains", [])}
+
+
+def _s5_catalog(su, site):
+    real = _wcat313.section
+    floor = _json313.loads(_json313.dumps(real()[0]))
+    named = dict(floor, cdn=dict(floor.get("cdn") or {}, fastly={"name": "Fastly", "origin_cert": "P313 Origin",
+                                                                   "strict_mode": "Strict P313"}))
+    plain = {k: v for k, v in floor.items() if k != "cdn"}
+    got = []
+    try:
+        for sites in (named, plain):
+            _p9_patch(_wcat313, "section", lambda sites=sites: (sites, {"kind": "floor"}))
+            got.append(_domains313(su, site)["fa.p313.example.org"])
+    finally:
+        _p9_patch(_wcat313, "section", real)
+    eq("dns: a CDN's own origin certificate and strict mode come from the signed catalog: with a catalog naming Fastly's, "
+       "the Fastly note names them; a catalog without the cdn section still names the CDN by its preset (control)",
+       (got[0]["cdn_note"].split(". Otherwise")[0], got[1]["cdn_name"], got[1]["cdn_note"].startswith("If Fastly offers")),
+       ("Paste a P313 Origin certificate under Your own certificate and set Fastly's encryption mode to Strict P313",
+        "Fastly", True))
+    bad = [dict(floor, cdn={"akamai": {"name": "Akamai"}}), dict(floor, cdn={"fastly": {"name": "Fast{ly}"}}),
+           dict(floor, cdn={"fastly": {"name": "Fastly", "origin_cert": "X"}})]
+    eq("catalog: the cdn section is optional; an unknown preset, a label with braces, or an origin certificate without "
+       "its strict mode is refused (the built-in catalog and one without the section pass)",
+       [bool(_wcat313.sites_problems(x)) for x in [floor, plain] + bad], [False, False, True, True, True])
+
+
+def _s5_page(_st, _rec):
+    dom = {"id": 1, "domain": "fa.example.org", "is_primary": True, "dns_state": "cdn", "cdn_name": "Fastly",
+           "cdn_note": "note", "cert_state": "pending", "cert_mode": "acme", "records": []}
+    got = _ran301("cdn domain", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  const t = $('wd-list').textContent;
+  return {dns: t.indexOf('DNS goes through Fastly') >= 0, behind: t.indexOf('Behind Fastly: getting its certificate') >= 0,
+          cloudflare: t.indexOf('Cloudflare') >= 0};
+""", routes={"/api/websites/7": dict(_SITE_API313, domains=[dom])}))
+    eq("node: a domain behind Fastly says its DNS goes through Fastly and folds the note under Behind Fastly; nothing "
+       "names Cloudflare", got, {"dns": True, "behind": True, "cloudflare": False})
+
+
+def _s5_online(st, rec, site):
+    su = _Client313(st.su.id)
+    none = _site313(st.host, "p313-none", [("none.p313.example.org", False, "mismatch")])
+    r = su.post("/websites/%d/enable" % none.id)
+    _db313.session.expire_all()
+    eq("online: a site the proxy would serve on no domain is not put online, even by a superadmin; the refusal names "
+       "the domain and its DNS state (checked again: no answer now) and points at the Domains tab",
+       (r.status_code, _db313.session.get(_Site313, none.id).enabled, "none.p313.example.org (failed)" in (
+           _p9_json(r).get("message") or ""), _p9_json(r).get("fix")), (409, False, True, "domains"))
+    r = su.post("/websites/%d/enable" % site.id)
+    msg = _p9_json(r).get("message") or ""
+    eq("online: a site served on only some of its domains goes online and says which it does not answer on yet",
+       (r.status_code, _names313(msg, "far.p313.example.org", "cf.p313.example.org")), (200, ["far.p313.example.org"]))
+    su.post("/websites/%d/disable" % site.id)
+    cust = _Client313(st.cust_cdn.id)
+    r = cust.post("/websites/%d/enable" % st.c.id)
+    eq("online: an administrator (not a superadmin) puts a site whose only domain goes through Cloudflare online",
+       r.status_code, 200)
+    cust.post("/websites/%d/disable" % st.c.id)
+
+
+# ── 6. a DNS check that newly verifies a domain of an online site applies the proxy ──────────────
+def _s6_check_applies(st, rec):
+    _p9_patch(_dns313, "socket", _resolver313({"late.p313.example.org": [_HOST_IP313]}))
+    site = _site313(st.host, "p313-late", [("first.p313.example.org", True, "matching"),
+                                           ("late.p313.example.org", False, "mismatch")], enabled=True)
+    su = _Client313(st.su.id)
+    late = _dom313(site, "late.p313.example.org")
+    del rec.applies[:]
+    r = su.post("/websites/%d/domains/check" % site.id, json={"id": late.id})
+    eq("dns check (route): a domain of an online site newly found pointing here is applied at once: the proxy's "
+       "configuration then serves it, and the answer says so",
+       (r.status_code, len(rec.applies), _names313(rec.applies[-1]["text"] if rec.applies else "", "late.p313.example.org"),
+        _p9_json(r).get("message")), (200, 1, ["late.p313.example.org"], _wd313.S_SERVED_NOW))
+    su.post("/websites/%d/domains/check" % site.id, json={"id": late.id})
+    eq("dns check (route): checking an already verified domain applies nothing again (control)", len(rec.applies), 1)
+    off = _site313(st.host, "p313-off", [("off.p313.example.org", False, "mismatch")])
+    _p9_patch(_dns313, "socket", _resolver313({"off.p313.example.org": [_HOST_IP313]}))
+    su.post("/websites/%d/domains/check" % off.id, json={"id": _dom313(off, "off.p313.example.org").id})
+    eq("dns check (route): a site that is offline is not applied (control)", len(rec.applies), 1)
+
+
+# ── 7. the Overview's figures ─────────────────────────────────────────────────────────────────────
+_DIGEST313 = "ab" * 32
+_PROBE_UP313 = ("os=24.04\npodman=podman version 4.9.3\nuid=1201\ngid=1201\nstate=active\nresult=success\n"
+                "image=docker.io/library/wordpress@sha256:%s\nstats=47.21MB / 536.9MB|0.52%%\ndisk_mb=120\ninstalled=1\n"
+                % _DIGEST313)
+_PROBE_DOWN313 = ("uid=1201\ngid=1201\nstate=inactive\nresult=success\nimage=Error: no such container lgsm-site\n"
+                  "stats=Error: no container with name or ID \"lgsm-site\" found: no such container\ndisk_mb=120\n")
+
+
+def _overview313(st, probe_out, ok=True):
+    _p9_patch(_sw313, "site_probe", lambda remote, site: (ok, probe_out))
+    _w313._STATUS.clear()
+    got = _p9_json(_Client313(st.su.id).get("/api/websites/%d" % st.a.id)).get("site") or {}
+    return got.get("usage") or {}, got.get("image") or {}
+
+
+def _s7_overview(st, _rec):
+    usage, image = _overview313(st, _PROBE_UP313)
+    eq("overview (route): a running site's probe is parsed: memory in MB, CPU %, disk and the image it runs, and a "
+       "host that does not delegate CPU says where its limit is set",
+       (usage.get("mem_mb"), usage.get("cpu_pct"), usage.get("disk_mb"), usage.get("unread"), image.get("name"),
+        image.get("version"), bool(usage.get("cpu_note"))),
+       (47, 0.5, 120, {}, "docker.io/library/wordpress", _DIGEST313[:12], True))
+    usage, image = _overview313(st, _PROBE_DOWN313)
+    unread = usage.get("unread") or {}
+    eq("overview (route): a stopped site's memory, CPU and image are not shown as measurements: each says the site is "
+       "not running; its disk is still read",
+       ("mem_mb" in usage, "cpu_pct" in usage, unread.get("mem_mb"), unread.get("cpu_pct"), unread.get("image"),
+        usage.get("disk_mb"), image.get("name")),
+       (False, False, "The website is not running.", "The website is not running.", "The website is not running.", 120, ""))
+    usage, _image = _overview313(st, "", ok=False)
+    eq("overview (route): a host that does not answer says so for every figure",
+       sorted(set((usage.get("unread") or {}).values())), ["The website's host did not answer."])
+    sh = _ws313.probe_sh("ws5", None)
+    eq("overview: the probe asks podman for memory and CPU in one read, and keeps podman's own words when it fails",
+       ("{{.MemUsage}}|{{.CPUPerc}}" in sh, "lgsm-site 2>&1" in sh), (True, True))
+    _p9_patch(_sw313, "site_probe", lambda *a, **k: (True, ""))
+    _w313._STATUS.clear()
+
+
+# ── 8. the scripts: Put it online, and figures that could not be read ────────────────────────────
+_SITE_API313 = {"success": True, "site": {"id": 7, "name": "shop", "kind": "wordpress", "state": "running", "enabled": False,
+                                          "image": {"name": "", "version": ""},
+                                          "usage": {"disk_mb": 12, "unread": {"mem_mb": "The website is not running.",
+                                                                              "cpu_pct": "The website is not running.",
+                                                                              "image": "The website is not running."}},
+                                          "limits": {"mem_mb": 512, "disk_mb": 2048}},
+                "install": {}, "domains": [], "dns": {}, "can": {"manage": True, "admin": True}}
+
+
+def _finish_scenario313(enabled, admin, enable_answer):
+    api = {"success": True, "site": {"id": 5, "state": "running", "enabled": enabled},
+           "install": {"state": "done", "steps": [], "site_url": "https://blog.example.org/",
+                       "admin_url": "https://blog.example.org/wp-admin/"},
+           "can": {"admin": admin, "manage": True}}
+    return _ran301("finish (enabled=%s admin=%s)" % (enabled, admin), _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+  window.wsOpenAdd();
+  $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
+  window.wsAddSubmit({preventDefault: function () {}});
+  for (let i = 0; i < 8; i++) await tick();
+  const res = $('ws-result');
+  const before = {links: res.querySelectorAll('a').map(function (a) { return a.textContent; }),
+                  buttons: res.querySelectorAll('button').map(function (b) { return [b.textContent.trim(), b.getAttribute('data-action')]; }),
+                  text: res.textContent};
+  if (window.wsFinishOnline && res.querySelector('button')) { window.wsFinishOnline(); for (let i = 0; i < 8; i++) await tick(); }
+  return {before: before, after: res.querySelectorAll('a').map(function (a) { return a.textContent; }),
+          msg: $('ws-result-msg') ? $('ws-result-msg').textContent : null,
+          fixLink: $('ws-result-msg') && $('ws-result-msg').querySelector('a') ? $('ws-result-msg').querySelector('a').href : null,
+          posted: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[1]; })};
+""", routes={"/api/websites": {"success": True, "sites": [], "missing": [], "hosts": [{"id": 1, "name": "h"}]},
+             "/websites/add": {"success": True, "id": 5}, "/api/websites/5": api, "/websites/5/enable": enable_answer}))
+
+
+def _s8_scripts(_st, _rec):
+    off = _finish_scenario313(False, True, {"success": True, "message": "The website is online."})
+    eq("node: a finished site that is offline leads with Put it online (no links that would not open), and once it is "
+       "online the links come",
+       ((off.get("before") or {}).get("links"), (off.get("before") or {}).get("buttons"), off.get("after"), off.get("posted")),
+       (["Go to the website"], [["Put it online", "wsFinishOnline"]],
+        ["Open the site", "Open the admin page", "Go to the website"], ["/m/websites/add", "/m/websites/5/enable"]))
+    refused = _finish_scenario313(False, True, {"success": False, "fix": "domains",
+                                                "message": "A domain of this website does not point at its host yet."})
+    eq("node: a refusal is said beside the button with a link to the Domains tab, and no link to the site appears",
+       ((refused.get("msg", "") or "").startswith("A domain of this website"), refused.get("fixLink"), refused.get("after")),
+       (True, "/m/websites/5?tab=domains", ["Open the Domains tab", "Go to the website"]))
+    nobody = _finish_scenario313(False, False, {"success": True})
+    eq("node: someone who may not put it online is told who can, with no button and no links",
+       ((nobody.get("before") or {}).get("buttons"), (nobody.get("before") or {}).get("links"),
+        "until an administrator of it puts it online" in (nobody.get("before") or {}).get("text", "")),
+       ([], ["Go to the website"], True))
+    on = _finish_scenario313(True, True, {"success": True})
+    eq("node: a site already online keeps the links (control)", (on.get("before") or {}).get("links"),
+       ["Open the site", "Open the admin page", "Go to the website"])
+    page = _ran301("overview offline", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  const b = $('ws-offline').querySelector('button');
+  return {shown: !$('ws-offline').hidden, action: b ? b.getAttribute('data-action') : null,
+          mem: $('ws-mem-text').textContent, memBar: $('ws-mem').hidden, disk: $('ws-disk-text').textContent,
+          diskBar: $('ws-disk').hidden, image: $('ws-ov-image').textContent};
+""", routes={"/api/websites/7": _SITE_API313}))
+    eq("node: the site's Overview says it is offline with the Put it online button for its administrator",
+       (page.get("shown"), page.get("action")), (True, "wsPutOnline"))
+    eq("node: a figure that could not be read says so with why, its bar hidden; a figure read keeps its bar (control)",
+       (page.get("mem"), page.get("memBar"), page.get("image"), page.get("disk"), page.get("diskBar")),
+       ("Couldn't read: The website is not running.", True, "Couldn't read: The website is not running.", "12 / 2048 MB",
+        False))
+    cust = _ran301("overview offline (manager)", _node301(_site_cu301, _COMMON301 + ["website_site.js"], r"""
+  return {shown: !$('ws-offline').hidden, button: !!$('ws-offline').querySelector('button'), text: $('ws-offline').textContent};
+""", routes={"/api/websites/7": dict(_SITE_API313, can={"manage": True, "admin": False})}))
+    eq("node: someone who runs the site but may not put it online is told who can (no button)",
+       (cust.get("shown"), cust.get("button"), "An administrator of this website can put it online." in (cust.get("text") or "")),
+       (True, False, True))
+
+
+# ── 9. the domains' journey: checked on add and before online, no web proxy, IPv6, failed certificates ──
+# `ip -o addr show` in the C locale (documentation and made-up tailnet addresses).
+_IPO313 = r"""1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host noprefixroute \       valid_lft forever preferred_lft forever
+2: ens3    inet 11.22.33.70/24 brd 11.22.33.255 scope global ens3\       valid_lft forever preferred_lft forever
+2: ens3    inet 100.101.1.2/10 scope global ens3\       valid_lft forever preferred_lft forever
+2: ens3    inet6 2c0f:313::beef/64 scope global temporary dynamic \       valid_lft 86000sec preferred_lft 14000sec
+2: ens3    inet6 2c0f:313::dead/64 scope global deprecated dynamic \       valid_lft 86000sec preferred_lft 0sec
+2: ens3    inet6 2c0f:313::7/64 scope global \       valid_lft forever preferred_lft forever
+2: ens3    inet6 fe80::7/64 scope link \       valid_lft forever preferred_lft forever
+3: tailscale0    inet 100.100.1.2/32 scope global tailscale0\       valid_lft forever preferred_lft forever
+"""
+
+
+def _s9_add_and_enable(st, rec):
+    _p9_patch(_dns313, "socket", _resolver313({"new.p313.example.org": [_HOST_IP313], "later.p313.example.org": [_HOST_IP313]}))
+    _p9_patch(_w313, "start_install", lambda site: None)
+    _p9_patch(_sw313, "runs_websites", lambda remote: True)     # this part's host stands for one that runs websites
+    su = _Client313(st.su.id)
+    r = su.post("/websites/add", json={"name": "p313-new", "kind": "static", "domain": "new.p313.example.org",
+                                        "host_id": st.host.id})
+    sid = _p9_json(r).get("id") or 0
+    row = _Dom313.query.filter_by(website_id=sid, domain="new.p313.example.org").first()
+    _db313.session.expire_all()
+    eq("domains (add dialog): the new site's domain is checked at once, so it is verified without a Check again",
+       (r.status_code, row.dns_state if row else None, row is not None and row.verified_at is not None), (200, "matching", True))
+    site = _site313(st.host, "p313-later", [("later.p313.example.org", False, "unchecked")])
+    del rec.applies[:]
+    r = su.post("/websites/%d/enable" % site.id)
+    eq("online: putting a site online checks its domains' DNS first, so a domain pointing here now is served (never "
+       "an earlier check's answer)",
+       (r.status_code, "later.p313.example.org {" in (rec.applies[-1]["text"] if rec.applies else "")), (200, True))
+    su.post("/websites/%d/disable" % site.id)
+
+
+def _s9_no_proxy(st, _rec):
+    bare = _host313("p313-bare")
+    site = _site313(bare, "p313-bare-site", [("bare.p313.example.org", True, "matching")])
+    _p9_patch(_dns313, "socket", _resolver313({"bare.p313.example.org": [_HOST_IP313]}))
+    r = _Client313(st.su.id).post("/websites/%d/enable" % site.id)
+    got = _p9_json(r)
+    _db313.session.expire_all()
+    eq("online: a site on a host without the web proxy is not put online; a superadmin is told to install it and "
+       "where (fix: proxy), not to read the site's log",
+       (r.status_code, got.get("message"), got.get("fix"), _db313.session.get(_Site313, site.id).enabled),
+       (409, _w313.S_NO_PROXY_SUPER, "proxy", False))
+    admin = _user313("bare-admin", [_auth313.VIEW_WEBSITES, _auth313.MANAGE_WEBSITES], [site])
+    r = _Client313(admin.id).post("/websites/%d/enable" % site.id)
+    eq("online: ...and anyone else is told to ask a superadmin", (r.status_code, _p9_json(r).get("message")),
+       (409, _w313.S_NO_PROXY))
+
+
+def _s9_ipv6(st, _rec):
+    eq("dns: the host's own addresses are its interfaces' public IPv4 and IPv6 ones: not temporary, deprecated, "
+       "link-local, loopback or the tailnet's",
+       sorted(_dns313._iface_addresses(_IPO313)), ["11.22.33.70", "2c0f:313::7"])
+    _p9_patch(_dns313, "_read_ip", lambda: _IPO313)
+    _dns313._LOCAL.update(at=None, addrs=set())
+    local = _Remote313(name="p313-local", host="127.0.0.1", port=22, username="u", auth_method="local",
+                       auth_credential="", is_local=True, public_ip="")
+    _db313.session.add(local)
+    _db313.session.commit()
+    _ROWS313["remotes"].append(local.id)
+    _w313.proxy_row(local.id).installed_version = "2.10.2"
+    site = _site313(local, "p313-v6", [("v6.p313.example.org", False, "unchecked")])
+    _p9_patch(_dns313, "socket", _resolver313({"v6.p313.example.org": ["2c0f:313::7", "11.22.33.70"]}))
+    su = _Client313(st.su.id)
+    dom = _dom313(site, "v6.p313.example.org")
+    got = _p9_json(su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id}))
+    dns = _p9_json(su.get("/api/websites/%d" % site.id)).get("dns") or {}
+    eq("dns (route): on the panel's host, a domain whose A and AAAA records both point at its interfaces is "
+       "matching, and the records to create list the AAAA address too",
+       (got.get("dns_state"), dns.get("a"), dns.get("aaaa")), ("matching", ["11.22.33.70"], ["2c0f:313::7"]))
+    _dns313._LOCAL.update(at=None, addrs=set())
+
+
+def _s9_cert_missing(st, _rec):
+    site = _site313(st.host, "p313-nocert", [("nocert.p313.example.org", True, "matching")], enabled=True)
+    _wd313._MISSING_SINCE.clear()
+    _wd313.apply_certs(st.host, {"certs": {}})
+    first = _dom313(site, "nocert.p313.example.org").cert_state
+    since = _wd313._MISSING_SINCE.get("nocert.p313.example.org", 0.0)
+    _wd313._MISSING_SINCE["nocert.p313.example.org"] = since - _wd313.CERT_MISSING_AFTER - 1
+    _wd313.apply_certs(st.host, {"certs": {}})
+    dom = _dom313(site, "nocert.p313.example.org")
+    shown = _wd313.domain_json(site, dom)
+    eq("certificates: a served domain of an online site still without a certificate after 10 minutes is failed, "
+       "with a plain reason the Domains tab shows; before that it is pending",
+       (first, dom.cert_state, shown["cert_error"] == _wd313.S_CERT_MISSING), ("pending", "failed", True))
+    _s9_cert_reason(st, site)
+    _wd313.apply_certs(st.host, {"certs": {"nocert.p313.example.org": {"issuer": "acme-v02.api.letsencrypt.org-directory",
+                                                                      "not_after": 1900000000}}})
+    dom = _dom313(site, "nocert.p313.example.org")
+    eq("certificates: once the proxy has it, the domain says so and the reason is gone (control)",
+       (dom.cert_state, dom.cert_error), ("issued", ""))
+    site.enabled = False
+    _db313.session.commit()
+
+
+def _primary_of313(site):
+    _db313.session.expire_all()
+    return next((d.domain for d in _Dom313.query.filter_by(website_id=site.id).all() if d.is_primary), None)
+
+
+def _s9_wp_primary(st, _rec):
+    wp = _site313(st.host, "p313-wp", [("one.p313.example.org", True, "matching"), ("two.p313.example.org", True, "matching")])
+    wp.app_recipe = "wordpress"
+    _db313.session.commit()
+    plain = _site313(st.host, "p313-plain", [("three.p313.example.org", True, "matching"),
+                                             ("four.p313.example.org", True, "matching")])
+    calls, answers = [], [(False, _sw313.WP_NOT_RUNNING), (True, "")]
+    _p9_patch(_sw313, "wp_set_address", lambda remote, site, domain: calls.append((site.id, domain)) or answers.pop(0))
+    su = _Client313(st.su.id)
+    two = _dom313(wp, "two.p313.example.org").id
+    r = su.post("/websites/%d/domains/primary" % wp.id, json={"id": two})
+    msg = _p9_json(r).get("message") or ""
+    eq("domains: Make primary on a WordPress site whose address cannot be changed keeps the old primary and says why "
+       "in plain words",
+       (r.status_code, _primary_of313(wp), _names313(msg, "one.p313.example.org", "two.p313.example.org"),
+        _sw313.WP_NOT_RUNNING in msg), (502, "one.p313.example.org", ["one.p313.example.org", "two.p313.example.org"], True))
+    r = su.post("/websites/%d/domains/primary" % wp.id, json={"id": two})
+    msg = _p9_json(r).get("message") or ""
+    eq("domains: Make primary on a WordPress site sets WordPress's own address (home, siteurl) to the new domain "
+       "first, then the primary, and says so",
+       (r.status_code, _primary_of313(wp), calls, "WordPress now uses" in msg),
+       (200, "two.p313.example.org", [(wp.id, "two.p313.example.org"), (wp.id, "two.p313.example.org")], True))
+    other = su.post("/websites/%d/domains/primary" % plain.id, json={"id": _dom313(plain, "four.p313.example.org").id})
+    eq("domains: another site's Make primary asks nothing of WordPress (control)",
+       (other.status_code, len(calls), _primary_of313(plain)), (200, 2, "four.p313.example.org"))
+    _p9_patch(_sw313, "wp_set_address", _WP_SET313)
+    _s9_wp_shell(wp)
+
+
+_WP_SET313 = _sw313.wp_set_address
+
+
+# The proxy's journal as `journalctl -o cat` prints it: an ACME failure for one domain, a failure later followed by a
+# certificate for another, and lines that are not the certificate manager's or name no domain of the panel's shape.
+_JOURNAL313 = "\n".join(_json313.dumps(r) for r in (
+    {"level": "info", "logger": "http", "msg": "server running"},
+    {"level": "error", "logger": "tls.obtain", "msg": "could not get certificate from issuer", "identifier": "nocert.p313.example.org",
+     "error": "HTTP 400 urn:ietf:params:acme:error:connection - Timeout during connect (likely firewall problem)"},
+    {"level": "error", "logger": "tls.obtain", "msg": "could not get certificate from issuer", "identifier": "fixed.p313.example.org",
+     "error": "HTTP 429 rateLimited"},
+    {"level": "info", "logger": "tls.obtain", "msg": "certificate obtained successfully", "identifier": "fixed.p313.example.org"},
+    {"level": "error", "logger": "http.log", "msg": "handled request", "identifier": "other.p313.example.org", "error": "x"},
+    {"level": "error", "logger": "tls.obtain", "msg": "bad", "identifier": "../../etc", "error": "y"})) + "\nnot json\n"
+
+
+def _helper_status313(journal):
+    """do_website_proxy_status's output with the proxy's journal answering `journal` (nothing installed, no certificate)."""
+    d = _tf313.mkdtemp(prefix="p313-status-")
+    names = ("WEB_PROXY_BIN", "WEB_PROXY_STATE", "WEB_PROXY_CONF", "_run_quiet", "resolve")
+    saved = {n: getattr(_H313, n) for n in names}
+    seen = []
+    try:
+        _H313.WEB_PROXY_BIN, _H313.WEB_PROXY_STATE = os.path.join(d, "caddy"), d
+        _H313.WEB_PROXY_CONF, _H313.resolve = os.path.join(d, "Caddyfile"), lambda prog: "/usr/bin/" + prog
+        _H313._run_quiet = lambda argv, timeout=60: seen.append(argv) or (0, journal if "journalctl" in argv[0] else "active\n")
+        out = _io313.StringIO()
+        with _rout313(out):
+            _H313.do_website_proxy_status([], "")
+        return out.getvalue(), [a for a in seen if "journalctl" in a[0]]
+    finally:
+        for n, v in saved.items():
+            setattr(_H313, n, v)
+        _shutil313.rmtree(d, ignore_errors=True)
+
+
+def _s9_cert_reason(st, site):
+    out, reads = _helper_status313(_JOURNAL313)
+    lines = [ln for ln in out.splitlines() if ln.startswith("cert_error=")]
+    eq("certificates (helper): the proxy's status names a certificate it could not get with its own reason in plain "
+       "words, from its own journal only; a domain that got one since, another logger's line and a name of another "
+       "shape are left out",
+       (lines, ["--namespace=lgsm-web-proxy", "-u", _H313.WEB_PROXY_UNIT] == (reads[0][1:4] if reads else None)),
+       (["cert_error=nocert.p313.example.org could not get certificate from issuer: HTTP 400 "
+         "urn:ietf:params:acme:error:connection - Timeout during connect (likely firewall problem)"], True))
+    _wd313._MISSING_SINCE.clear()
+    dom = _dom313(site, "nocert.p313.example.org")
+    dom.cert_state, dom.cert_error = "pending", ""
+    _db313.session.commit()
+    _wd313.apply_certs(st.host, _sw313.parse_proxy_status(out))
+    shown = _wd313.domain_json(site, _dom313(site, "nocert.p313.example.org"))["cert_error"]
+    eq("certificates: the Domains tab shows the proxy's own reason for a certificate it could not get",
+       shown, "No certificate yet. The web proxy said: could not get certificate from issuer: HTTP 400 "
+              "urn:ietf:params:acme:error:connection - Timeout during connect (likely firewall problem)")
+
+
+def _s9_wp_shell(wp):
+    ran = []
+    outs = ["WP_URL_SET\n", "Error: no container with name or ID \"lgsm-site\" found: no such container\n"]
+    _p9_patch(_sw313, "_as_site", lambda remote, account, sh, timeout=60: ran.append((account, sh)) or (True, outs.pop(0)))
+    got = [_sw313.wp_set_address(wp.remote, wp, "two.p313.example.org") for _i in range(2)]
+    sh = ran[0][1] if ran else ""
+    eq("domains: WordPress's address is set as the site's own account, by WordPress's API in its running container "
+       "(podman exec, as the scheduled-task timer runs), checked back before it says done; a stopped container says so",
+       (ran[0][0] if ran else None, "podman exec lgsm-site php -r " in sh, "wp-load.php" in sh, sh.count("https://two.p313.example.org"),
+        got), (wp.account, True, True, 4, [(True, ""), (False, _sw313.WP_NOT_RUNNING)]))
+    bad = None
+    try:
+        _ws313.wp_address_sh(wp.account, "x'); system('id")
+    except ValueError:
+        bad = "refused"
+    eq("domains: an address that is not a domain never reaches the code", bad, "refused")
+
+
+def _s9_public_ip(st, _rec):
+    looked = []
+    answers = ["11.22.33.99", "11.22.33.98"]
+    _p9_patch(_dns313, "_lookup_public_ip", lambda remote: looked.append(remote.id) or answers.pop(0))
+    _dns313._PUBLIC_AT.clear()
+    nat = _host313("p313-nat")
+    _w313.proxy_row(nat.id).installed_version = "2.10.2"
+    site = _site313(nat, "p313-nat-site", [("moved.p313.example.org", False, "mismatch")])
+    _p9_patch(_dns313, "socket", _resolver313({"moved.p313.example.org": ["11.22.33.99"]}))
+    su = _Client313(st.su.id)
+    dom = _dom313(site, "moved.p313.example.org")
+    got = _p9_json(su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id}))
+    _db313.session.expire_all()
+    eq("dns (route): Check again looks the host's public address up again (a NAT host's moved), so a domain pointing at "
+       "its address now matches; the new address is kept",
+       (got.get("dns_state"), _db313.session.get(_Remote313, nat.id).public_ip, looked), ("matching", "11.22.33.99", [nat.id]))
+    su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id})
+    eq("dns (route): ...at most once per 10 minutes per host (control)", looked, [nat.id])
+    _dns313._PUBLIC_AT.clear()
+    _p9_patch(_dns313, "_lookup_public_ip", lambda remote: "")
+    su.post("/websites/%d/domains/check" % site.id, json={"id": dom.id})
+    _db313.session.expire_all()
+    eq("dns (route): a lookup that finds nothing (the outside-address switch off) keeps the stored address (control)",
+       _db313.session.get(_Remote313, nat.id).public_ip, "11.22.33.99")
+
+
+def _s9_scripts(_st, _rec):
+    page = _ran301("records and lock", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""
+  const rows = $('wd-records').querySelectorAll('tr').map(function (tr) {
+    return tr.children.map(function (td) { return td.textContent; }); });
+  return {rows: rows, names: ['example.org', 'www.example.org', 'shop.example.co.uk', 'example.co.uk', 'a.b.example.org']
+          .map(function (n) { return WS.shortName(n); })};
+""", routes={"/api/websites/7": dict(_SITE_API313, domains=[{"id": 1, "domain": "www.example.org", "dns_state": "mismatch"}],
+                                     dns={"a": ["11.22.33.70"], "aaaa": ["2001:db8::7"]})}))
+    eq("node: the records table names each record as providers ask for it (@ or www) with the full name beside it, "
+       "an AAAA row as well as an A row",
+       page.get("rows"), [["A", "wwwwww.example.org", "11.22.33.70"], ["AAAA", "wwwwww.example.org", "2001:db8::7"]])
+    eq("node: ...@ for the zone itself, the labels before it otherwise, a two-letter country's co. zone counted",
+       page.get("names"), ["@", "www", "shop", "@", "a.b"])
+    lst = _ran301("list locks", _node301(_list_sa301, _COMMON301 + ["websites.js"], r"""
+  return $('ws-list').querySelectorAll('.ws-lock').map(function (l) { return l.querySelector('i').className; });
+""", routes={"/api/websites": {"success": True, "missing": [], "hosts": [], "sites": [
+        {"id": 1, "name": "a", "state": "running", "domain": "a.example.org", "cert_state": "zerossl"},
+        {"id": 2, "name": "b", "state": "running", "domain": "b.example.org", "cert_state": "own"},
+        {"id": 3, "name": "c", "state": "running", "domain": "c.example.org", "cert_state": "pending"}]}}))
+    eq("node: the list's lock counts every trusted certificate (ZeroSSL, another CA's, your own) as one; a pending one "
+       "is not (control)", lst, ["bi bi-lock-fill text-success", "bi bi-lock-fill text-success", "bi bi-hourglass-split text-secondary"])
+
+
+# ── setup and run ─────────────────────────────────────────────────────────────────────────────────
+def _state313():
+    host = _host313("p313-host")
+    _w313.proxy_row(host.id).installed_version = "2.10.2"     # a site goes online only where the web proxy is
+    a = _site313(host, "p313-a", [(_DOMAIN313, True, "matching")], enabled=True)
+    b = _site313(host, "p313-b", [("other.p313.example.org", True, "matching")])
+    c = _site313(host, "p313-c", [("cdn.p313.example.org", True, "cdn")])
+    W = _auth313
+    st = _NS313(host=host, a=a, b=b, c=c, su=_super313())
+    st.cust = _user313("cust", [W.VIEW_WEBSITES, W.MANAGE_WEBSITE], [a], customer=True)
+    st.viewer = _user313("viewer", [W.VIEW_WEBSITES], [a], customer=True)
+    st.cust_cdn = _user313("admin-c", [W.VIEW_WEBSITES, W.MANAGE_WEBSITE, W.MANAGE_WEBSITES], [c])
+    return st
+
+
+def _cleanup313():
+    _db313.session.rollback()
+    for model, ids in ((_User313, _ROWS313["users"]), (_Group313, _ROWS313["groups"]), (_Remote313, _ROWS313["remotes"])):
+        for i in ids:
+            row = _db313.session.get(model, i)
+            if row is not None:
+                _db313.session.delete(row)
+    _db313.session.commit()
+
+
+def _ran313(step, st, rec):
+    """Run one section: None when it ran to the end, else the traceback."""
+    import traceback
+    try:
+        step(st, rec)
+        _ran313.last = ""
+        return None
+    except Exception:  # noqa: BLE001 - a section that raises is reported by name and the rest still run
+        _db313.session.rollback()
+        _ran313.last = traceback.format_exc()[-1500:]
+        return _ran313.last
+
+
+_ran313.last = ""
+_trips313 = len(_P9_TRIPPED)
+with _p9.app_context():
+    try:
+        _p9_arm(who="part313")
+        _rec313 = _stub_host313()
+        _st313 = _state313()
+        for _step313 in (_s1_origin_tls, _s2_blocks, _s3_prune, _s4_own_route, _s4_refusals, _s4_notes, _s4_rollback,
+                         _s4_back_to_auto, _s4_warning_and_renewal, _s4_alert, _s4_i18n, _s5_cdn, _s5_fastly, _s5_page,
+                         _s6_check_applies, _s7_overview, _s8_scripts, _s9_add_and_enable, _s9_no_proxy, _s9_ipv6, _s9_cert_missing,
+                         _s9_wp_primary, _s9_public_ip, _s9_scripts):
+            check("part313: %s ran to the end" % _step313.__name__, _ran313(_step313, _st313, _rec313) is None, _ran313.last)
+        eq("part313: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips313:], [])
+    finally:
+        _p9_restore_all()
+        _p9.config["WEBSITES_CUSTOMER_2FA"] = (_SAVED2FA313 or [True])[0]
+        _w313._STATUS.clear()
+        _wd313._CERTS_AT.clear()
+        _wcert313._ALERTED.clear()
+        _wd313._MISSING_SINCE.clear()
+        _dns313._LOCAL.update(at=None, addrs=set())
+        _dns313._PUBLIC_AT.clear()
+        _cleanup313()

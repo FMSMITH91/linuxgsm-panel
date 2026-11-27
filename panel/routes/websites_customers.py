@@ -18,7 +18,8 @@ from panel.core.validation import website_name_problem
 from panel.db.models import Group, Invite, db
 from panel.routes import websites as _w
 from panel.security.account_guard import step_up_required
-from panel.security.auth import EDIT_WEBSITE_FILES, MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES, has_permission
+from panel.security.auth import (CREATE_WEBSITES, EDIT_WEBSITE_FILES, MANAGE_WEBSITE, MANAGE_WEBSITES, VIEW_WEBSITES,
+                                 has_permission)
 from panel.services import websites_access as _wa
 
 DEFAULT_PERMS = (VIEW_WEBSITES, EDIT_WEBSITE_FILES, MANAGE_WEBSITE)
@@ -47,11 +48,20 @@ def _perms(data):
     return sorted(p for p in keep if current_user.is_superadmin or has_permission(current_user, p))
 
 
-def _max_sites(data, held):
+def _max_sites(data, held, perms):
+    """How many sites the new customer group may have.
+
+    A group that may add its own sites (CREATE_WEBSITES) gets the number the card sends, else the superadmin's
+    "Sites per customer" setting (websites_max_sites); one that may not is held to the sites it is given, so no
+    quota line promises sites it cannot add. Never fewer than the sites given, never more than 100.
+    """
+    if CREATE_WEBSITES not in perms:
+        return held
+    from panel.routes.websites_view import options
     try:
         n = int(str(data.get("max_sites", "")).strip())
     except ValueError:
-        n = 3
+        n = options()["max_sites"]
     return max(held, min(n, 100))
 
 
@@ -63,6 +73,34 @@ def _make(name, perms, sites, max_sites):
     db.session.add(inv)
     db.session.commit()
     return group, token, code
+
+
+S_INVITE_AT = "The customer opens this link at {address}, the panel's site domain. They must be able to reach the panel there."
+S_INVITE_HERE = ("The customer opens this link at {address}, the address you are using now, because the panel has no site "
+                 "domain in Settings. Check that they can reach the panel there (a tailnet-only address cannot be reached "
+                 "from outside it).")
+
+
+def invite_link(token):
+    """(the invite's address, the sentence saying where the customer opens it).
+
+    The panel's site domain (Settings) when one is set, with the port the panel answers on unless the domain names
+    its own; else the address the administrator reached the panel by, said plainly, since a customer may not reach
+    that one (a tailnet-only panel).
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    from panel.core.config import load_config
+    from panel.core.origins import _host_port
+    # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
+    link = url_for("redeem_invite", token=token, _external=True)
+    url = urlsplit(link)
+    domain = _host_port(load_config().get("site_domain"))
+    if not domain:
+        return link, i18n.tr(S_INVITE_HERE, address=url.netloc)
+    host, port = domain[0], domain[1] or url.port
+    host = "[%s]" % host if ":" in host else host
+    netloc = "%s:%d" % (host, port) if port else host
+    return urlunsplit(url._replace(netloc=netloc)), i18n.tr(S_INVITE_AT, address=netloc)
 
 
 def register(app):
@@ -85,13 +123,11 @@ def register(app):
         if live >= Invite.MAX_LIVE:
             return _w.say(409, i18n.Sentence(S_TOO_MANY_INVITES, n=live))
         perms = _perms(data)
-        group, token, code = _make(name, perms, sites, _max_sites(data, len(sites)))
+        group, token, code = _make(name, perms, sites, _max_sites(data, len(sites), perms))
         for site in sites:
             _w.audit(site, "website_customer_add", "customer group %s (%s), invite made" % (group.name, ", ".join(perms)))
-        # Shown once to the administrator who made it, on the address they reached the panel by.
-        # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
-        link = url_for("redeem_invite", token=token, _external=True)
-        resp = jsonify({"success": True, "group_id": group.id, "invite": link, "code": code,
+        link, where = invite_link(token)
+        resp = jsonify({"success": True, "group_id": group.id, "invite": link, "invite_note": where, "code": code,
                         "message": i18n.tr("Customer added. Send them the invite link and its code; both are shown once.")})
         resp.headers["Cache-Control"] = "no-store"
         return resp

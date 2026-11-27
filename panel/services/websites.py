@@ -30,6 +30,14 @@ THE PROXY TOKEN
     REDIRECT_STATUS=200 on it, and a client cannot set a request's environment). A redirect to an error
     page after a refusal carries REDIRECT_STATUS=403 and is refused too. The token lives in
     ~/site/conf (0600), written from stdin, never on a command line.
+    That <If> is authorization, and Apache does not run authorization again on an internal redirect
+    whose merged configuration is the same as the request it came from: a site's own .htaccess line
+    `ErrorDocument 403 /index.php` turned every refused request into one that ran index.php. So the
+    gate is checked first in the virtual host's own rewrite rules (translate_name, before any .htaccess
+    is read, on every request and every internal redirect alike), which a .htaccess cannot change: a
+    request with the token is marked (PANEL_GATE=1), an internal redirect is marked only when the request
+    it came from was (Apache renames its variables REDIRECT_*: REDIRECT_PANEL_GATE, set by nothing a
+    client sends), and anything else is refused (403) before a .htaccess or PHP sees it.
 
 THE NETWORK (pasta; see addons.network)
     No route out: the container reaches only what pasta forwards to the host's loopback: its database
@@ -38,6 +46,17 @@ THE NETWORK (pasta; see addons.network)
     443 only. The egress guard (helper verb website-egress-guard) keeps the site's uid off the host's
     other local addresses, which pasta on Ubuntu 24.04 does not. An object cache (Valkey) and a runtime
     app's gate join the site's own network namespace (Network=container:), so they are private to it.
+
+EGRESS FOR WORDPRESS
+    The recipe's wp-config names the proxy (WP_PROXY_HOST 127.0.0.1, WP_PROXY_PORT 3128) once, at install.
+    A site with full egress (the superadmin's switch) has no proxy and no 3128 forward, so every request
+    WordPress made failed at once ("Failed to connect to 127.0.0.1 port 3128"); and a site with the proxy
+    could check for updates but not download one: download_url() uses WordPress's own address check,
+    which looks the name up, and the container has no name server. The loopback plugin (LOOPBACK_PLUGIN,
+    written at every install) reads EGRESS_HOSTS_FILE, written only while the site has the proxy: with
+    no hosts nothing is sent to the proxy (full egress connects directly); with hosts, an HTTPS request to
+    one of them skips WordPress's lookup, as the proxy resolves the name, checks every address and
+    connects for those hosts on 443 only. Switching full egress installs the site again (its network).
 """
 import base64
 import hashlib
@@ -79,11 +98,34 @@ STOP_TIMEOUT = 20
 KINDS_PHP = ("php", "wordpress", "phpbb")
 # The revision of the files an install writes for a site (its server's config, its units). Raised when a change to
 # them must reach the sites already installed: a site installed with an older one is offered Update, which installs
-# it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN).
-SITE_FILES_REV = "files-2"
+# it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN). 3: the
+# folder of files the site's code reads (RUN_IN: WordPress's loopback token, the object cache's password), WordPress's
+# loopback plugin, and the egress proxy's unit (each checked address tried, its task limit). 4: the gate checked in
+# the virtual host's rewrite rules too (an error page a .htaccess names is refused without the token), WordPress's
+# egress hosts (EGRESS_HOSTS_FILE) and its plugin sending to the egress proxy only what it reaches. 5: WordPress's
+# egress hosts gain developer.wordpress.org and downloads.w.org (WP_EGRESS_HOSTS), in its proxy's unit and hosts file.
+# 6: the gate's <If> reads the token's header with req_novary(), so no answer names that header in Vary.
+SITE_FILES_REV = "files-6"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
+# What a PHP site's own code reads from the panel: a 0700 folder of 0600 files in ~/site/conf, mounted read-only at
+# RUN_IN (always, so a file added or removed there reaches the running site with no restart). WordPress's proxy
+# token, for its requests to its own address (LOOPBACK_PLUGIN), and the object cache's password while the cache is
+# on (the recipe's wp-config reads it for the Redis Object Cache plugin). Written from stdin, never on a command line
+# or in an environment, never logged (OWASP Secrets Management Cheat Sheet, "5.1 Injection of Secrets (file,
+# in-memory)", "8.3 Detection lifecycle").
+RUN_DIR = "site/conf/panel"
+RUN_IN = "/run/panel"
+TOKEN_FILE = RUN_DIR + "/proxy-token"
+CACHE_PASSWORD_FILE = RUN_DIR + "/object-cache-password"
+# The hosts WordPress's egress proxy reaches, one a line, while the site has the proxy (needs_egress); none with full
+# egress, which has no proxy. WordPress's loopback plugin reads it (see EGRESS FOR WORDPRESS).
+EGRESS_HOSTS_FILE = RUN_DIR + "/egress-hosts"
+# The hosts WordPress core's own update and Site Health requests reach (websites_catalog.EGRESS_HOSTS says which
+# request reaches which). Each redirect is a new CONNECT the proxy checks against the list on its own, so a redirect
+# to a host not listed here is refused like any other.
+WP_EGRESS_HOSTS = ("api.wordpress.org", "developer.wordpress.org", "downloads.w.org", "downloads.wordpress.org")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _ACCOUNT_RE = re.compile(r"ws[1-9][0-9]{0,8}\Z")
 
@@ -330,6 +372,27 @@ def php_effective_sh(account):
     return _ENV + "podman exec %s php -r %s" % (UNIT, _q(code))
 
 
+# WordPress's own address (its home and siteurl options), set to the site's primary domain after Make primary. WordPress's
+# API in the site's running container, through `podman exec` as the scheduled-task timer runs it (the site's PHP image has no
+# wp-cli; a one-off wp-cli container would need the database password on its values). The address is a validated domain
+# (validation.website_domain: letters, digits, hyphens, dots), never a secret, so it travels inside the code. WP_URL_SET
+# is printed only when both options hold it afterwards.
+WP_URL_MARK = "WP_URL_SET"
+
+
+def wp_address_sh(account, domain):
+    """Shell (as the account) setting WordPress's home and siteurl to https://<domain> in its running container."""
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", domain or ""):
+        raise ValueError("not a domain")
+    url = "https://%s" % domain
+    code = ("define('WP_USE_THEMES', false); require '%s/wp-load.php'; "
+            "update_option('home', '%s'); update_option('siteurl', '%s'); "
+            "if (get_option('home') === '%s' && get_option('siteurl') === '%s') { echo '%s', PHP_EOL; } else { exit(3); }"
+            % (DOCROOT_PHP, url, url, url, url, WP_URL_MARK))
+    _home(account)
+    return _ENV + "podman exec %s php -r %s" % (UNIT, _q(code))
+
+
 def parse_effective(out):
     """php_effective_sh's output as {key: value} (quotes of var_export removed)."""
     got = {}
@@ -376,11 +439,20 @@ def apache_conf(token):
         "# Written by linuxgsm-panel. Requests without the web proxy's token are refused.",
         "Listen %d" % INNER_PORT, "ServerName localhost", "ServerTokens Prod", "ServerSignature Off", "TraceEnable Off",
         "<IfModule !headers_module>", "    LoadModule headers_module /usr/lib/apache2/modules/mod_headers.so",
-        "</IfModule>",
+        "</IfModule>", "<IfModule !rewrite_module>",
+        "    LoadModule rewrite_module /usr/lib/apache2/modules/mod_rewrite.so", "</IfModule>",
         "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP,
+        # The gate before authorization and before any .htaccess (THE PROXY TOKEN): [NV] keeps the header's name
+        # out of Vary; a subrequest ([NS]) is only ever made inside a request that passed here. The <If> below reads
+        # it with req_novary() for the same reason: %{HTTP:...} in an expression adds the header's name to Vary, and
+        # every visitor's answer named the panel's internal header (Apache's expression docs, "Functions").
+        "    RewriteEngine On", "    RewriteCond %%{HTTP:%s} =%s [NV,OR]" % (GATE_HEADER, token),
+        "    RewriteCond %{ENV:REDIRECT_PANEL_GATE} =1", "    RewriteRule ^ - [E=PANEL_GATE:1]",
+        "    RewriteCond %{ENV:PANEL_GATE} !=1", "    RewriteRule ^ - [F,NS]",
         "    <Directory %s>" % DOCROOT_PHP, "        Options -Indexes +SymLinksIfOwnerMatch", "        AllowOverride All",
         "        Require all granted", "    </Directory>",
-        '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),
+        '    <Location "/">',
+        "        <If \"req_novary('%s') != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),
         "            Require all denied", "        </If>", "    </Location>",
         "    RequestHeader unset %s" % GATE_HEADER,
         "    ErrorLog /proc/self/fd/2", "    CustomLog /dev/null common", "</VirtualHost>", ""])
@@ -605,6 +677,7 @@ def quadlet(site, ids, net, image=None, cpu=True):
                   "Volume=%s/%s/apache.conf:/etc/apache2/sites-enabled/000-default.conf:ro" % (home, CONF),
                   "Volume=%s/%s/ports.conf:/etc/apache2/ports.conf:ro" % (home, CONF),
                   "Volume=%s/%s/php.ini:/usr/local/etc/php/conf.d/zz-panel.ini:ro" % (home, CONF),
+                  "Volume=%s/%s:%s:ro" % (home, RUN_DIR, RUN_IN),
                   "Tmpfs=/tmp:rw,mode=1777,size=256m", "Tmpfs=/run/apache2:rw,mode=1777,size=16m",
                   "Tmpfs=/run/lock/apache2:rw,mode=1777,size=4m"]
     lines += _hardening(ids, site.pids) + ["PodmanArgs=%s" % " ".join(_limits(site, cpu))]
@@ -688,6 +761,11 @@ def tunnel_quadlet(proxy, ids, image=None):
     return "\n".join(lines + _tail())
 
 
+# Two threads per connection (one each way) at the proxy's connection cap (websites_egress.MAX_CONNECTIONS), its main
+# thread and a margin: the old 64 fell one short at the cap, and the proxy's accept loop then died for want of a thread.
+EGRESS_TASKS = 2 * 32 + 8
+
+
 def egress_unit(site, hosts):
     """The site's egress proxy user unit: CONNECT to `hosts` on 443 only, listening on 127.0.0.1."""
     from panel.services import websites_catalog as _wc
@@ -698,8 +776,8 @@ def egress_unit(site, hosts):
     return ("# Written by linuxgsm-panel: this website's only way out (CONNECT to the listed hosts on 443).\n"
             "[Unit]\nDescription=linuxgsm-panel website egress proxy\n\n[Service]\n"
             "ExecStart=/usr/bin/python3 -I %%h/%s/egress_proxy.py %d %s\nRestart=on-failure\nRestartSec=10\n"
-            "MemoryMax=64M\nTasksMax=64\n\n[Install]\nWantedBy=default.target\n"
-            % (HOME_DIR, port, " ".join(sorted(set(hosts)))))
+            "MemoryMax=64M\nTasksMax=%d\n\n[Install]\nWantedBy=default.target\n"
+            % (HOME_DIR, port, " ".join(sorted(set(hosts))), EGRESS_TASKS))
 
 
 # WordPress's scheduled tasks (wp-cron). Its recipe's wp-config sets DISABLE_WP_CRON, so no visitor's request
@@ -846,7 +924,8 @@ FILE_NAMES = ("%s/%s.container" % (QUADLET_DIR, UNIT), "%s/%s.container" % (QUAD
               "%s/%s.timer" % (USER_UNIT_DIR, CRON_UNIT), CONF + "/nginx.conf", CONF + "/apache.conf",
               BUILD_FILE, WPCLI_FILE,
               CONF + "/ports.conf", CONF + "/php.ini", CONF + "/valkey.conf", CONF + "/app.env", CONF + "/start.sh",
-              CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token")
+              CONF + "/build.sh", RESOLV_FILE, HOME_DIR + "/" + META_FILE, HOME_DIR + "/egress_proxy.py", "tunnel/token",
+              TOKEN_FILE, CACHE_PASSWORD_FILE, EGRESS_HOSTS_FILE)
 
 
 def bundle(files):
@@ -879,6 +958,19 @@ def egress_proxy_source():
         return fh.read()
 
 
+def _cache_and_run_files(site, ids, token, cache_password):
+    """{path: text} of the object cache (its config, unit, and its password in RUN_DIR) and WordPress's TOKEN_FILE."""
+    files = {}
+    if site.object_cache and cache_password:
+        files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
+        files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
+        if site.kind in KINDS_PHP:
+            files[CACHE_PASSWORD_FILE] = cache_password
+    if site.kind == "wordpress":
+        files[TOKEN_FILE] = _token(token)
+    return files
+
+
 def site_files(site, ids, net, token, cache_password=None, image=None, egress_hosts=(), cpu=True):
     """{path: text} of every file `site` needs in its account's home (bundle() turns it into stdin)."""
     files = {"%s/%s.container" % (QUADLET_DIR, UNIT): quadlet(site, ids, net, image, cpu),
@@ -905,12 +997,12 @@ def site_files(site, ids, net, token, cache_password=None, image=None, egress_ho
     b = site_build(site)
     if b:
         files[BUILD_FILE] = containerfile(b["folder"])
-    if site.object_cache and cache_password:
-        files[CONF + "/valkey.conf"] = valkey_conf(cache_password)
-        files["%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)] = object_cache_quadlet(site, ids)
+    files.update(_cache_and_run_files(site, ids, token, cache_password))
     if egress_hosts:
         files[HOME_DIR + "/egress_proxy.py"] = egress_proxy_source()
         files["%s/%s.service" % (USER_UNIT_DIR, EGRESS_UNIT)] = egress_unit(site, egress_hosts)
+        if needs_egress(site):
+            files[EGRESS_HOSTS_FILE] = "".join(h + "\n" for h in sorted(set(egress_hosts)))
     return files
 
 
@@ -942,15 +1034,170 @@ def install_sh(account, site, image=None):
             _wc.pins("object_cache")["image"])
     else:
         # The object cache turned off: its container stopped, its unit and its config (with the password) removed.
-        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s; " % (
-            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"))
+        pull += "systemctl --user stop %s 2>/dev/null; rm -f %s %s %s; " % (
+            unit_service(CACHE_UNIT), _q("%s/%s.container" % (QUADLET_DIR, CACHE_UNIT)), _q(CONF + "/valkey.conf"),
+            _q(CACHE_PASSWORD_FILE))
     if not b:
         pull += "rmdir %s 2>/dev/null; " % _q(BUILD_DIR)     # the empty folder an earlier install made
     if site.kind == "app":
         # An app with no files yet (a new site) is not started: its start command has nothing to run.
         pull += "[ -n \"$(ls -A %s 2>/dev/null)\" ] || echo %s; " % (_q(HTML), MARK_APP_EMPTY)
-    return (_ENV + write_files_sh(bool(b)) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
+    if site.kind == "wordpress":
+        pull += loopback_sh() + no_egress_sh(site)
+    run_dir = "umask 077; mkdir -p %s || exit 1; " % _q(RUN_DIR) if site.kind in KINDS_PHP else ""
+    return (_ENV + run_dir + write_files_sh(bool(b)) + "mkdir -p %s && chmod 0700 %s %s || exit 1; " % (
         _q(BACKUPS), _q(SITE), _q(BACKUPS)) + pull + "systemctl --user daemon-reload; echo %s" % _MARK_INSTALLED)
+
+
+# WordPress's requests to its own address (Site Health's REST API and loopback tests, the editor's checks): inside the
+# site's container that address leads nowhere (no name server, no route out, and the site's server refuses a request
+# without the proxy token), so they failed, and Site Health said so as critical issues. This must-use plugin, written
+# into the site's files at every install, sends a request for one of the site's own names to its own server on the
+# container's loopback (INNER_PORT), with the name, the scheme and the token the server expects, read from TOKEN_FILE
+# (mounted read-only at RUN_IN) and never logged; every other request goes its usual way. No new way out: the request
+# never leaves the container. Written by a writer that refuses a link anywhere on its path (the site's own code may
+# change its files), so it can only ever land in the site's files; a refusal leaves the install going, without it.
+LOOPBACK_PLUGIN = "wp-content/mu-plugins/lgsm-panel-loopback.php"
+_LOOPBACK_PHP = r"""<?php
+/**
+ * Plugin Name: linuxgsm-panel loopback
+ * Description: Sends this site's requests to its own address to its own server, inside its container. Written by
+ * linuxgsm-panel at every install of the site: a change here is replaced.
+ */
+
+defined( 'ABSPATH' ) || exit;
+defined( 'LGSM_PANEL_TOKEN_FILE' ) || define( 'LGSM_PANEL_TOKEN_FILE', '@TOKEN@' );
+defined( 'LGSM_PANEL_PORT' ) || define( 'LGSM_PANEL_PORT', @PORT@ );
+defined( 'LGSM_PANEL_EGRESS_FILE' ) || define( 'LGSM_PANEL_EGRESS_FILE', '@EGRESS@' );
+
+/* The site's own names: the host of its home and site addresses. */
+function lgsm_panel_own_hosts() {
+	$hosts = array();
+	foreach ( array( home_url(), site_url() ) as $address ) {
+		$host = wp_parse_url( $address, PHP_URL_HOST );
+		if ( $host ) {
+			$hosts[] = strtolower( $host );
+		}
+	}
+	return $hosts;
+}
+
+/* A request for one of the site's own names, sent to its own server on the container's loopback. */
+function lgsm_panel_loopback( $pre, $args, $url ) {
+	if ( false !== $pre || ! empty( $args['lgsm_panel_loopback'] ) ) {
+		return $pre;
+	}
+	$parts = wp_parse_url( $url );
+	if ( empty( $parts['host'] ) || ! in_array( strtolower( $parts['host'] ), lgsm_panel_own_hosts(), true ) ) {
+		return $pre;
+	}
+	$token = is_readable( LGSM_PANEL_TOKEN_FILE ) ? trim( (string) file_get_contents( LGSM_PANEL_TOKEN_FILE ) ) : '';
+	if ( '' === $token ) {
+		return $pre;
+	}
+	$headers = isset( $args['headers'] ) ? $args['headers'] : array();
+	if ( is_string( $headers ) ) {
+		$processed = WP_Http::processHeaders( $headers );
+		$headers   = $processed['headers'];
+	}
+	$headers['Host']                = $parts['host'] . ( isset( $parts['port'] ) ? ':' . $parts['port'] : '' );
+	$headers['X-Forwarded-Proto']   = ( isset( $parts['scheme'] ) && 'https' === $parts['scheme'] ) ? 'https' : 'http';
+	$headers['@HEADER@'] = $token;
+	$left                           = isset( $args['redirection'] ) ? (int) $args['redirection'] : 5;
+	$inner                          = $args;
+	$inner['headers']               = $headers;
+	$inner['redirection']           = 0;
+	$inner['reject_unsafe_urls']    = false;
+	$inner['lgsm_panel_loopback']   = true;
+	$path     = ( isset( $parts['path'] ) ? $parts['path'] : '/' ) . ( isset( $parts['query'] ) ? '?' . $parts['query'] : '' );
+	$response = wp_remote_request( 'http://127.0.0.1:' . LGSM_PANEL_PORT . $path, $inner );
+	$code     = (int) wp_remote_retrieve_response_code( $response );
+	$next     = wp_remote_retrieve_header( $response, 'location' );
+	if ( $left > 0 && $code >= 300 && $code < 400 && is_string( $next ) && '' !== $next ) {
+		$args['redirection'] = $left - 1;
+		return wp_remote_request( WP_Http::make_absolute_url( $next, $url ), $args );
+	}
+	return $response;
+}
+add_filter( 'pre_http_request', 'lgsm_panel_loopback', 10, 3 );
+
+/* The hosts the site's egress proxy reaches (written by the panel, one a line); none when the site has no proxy. */
+function lgsm_panel_egress_hosts() {
+	static $hosts = null;
+	if ( null === $hosts ) {
+		$text  = is_readable( LGSM_PANEL_EGRESS_FILE ) ? (string) file_get_contents( LGSM_PANEL_EGRESS_FILE ) : '';
+		$hosts = array_values( array_filter( array_map( 'trim', explode( "\n", strtolower( $text ) ) ) ) );
+	}
+	return $hosts;
+}
+
+/* Nothing goes to the egress proxy (WP_PROXY_HOST) when the site has none (full egress: it connects directly), and
+   the container's own loopback never does: the proxy would refuse it. */
+function lgsm_panel_no_proxy( $send, $uri, $check ) {
+	if ( array() === lgsm_panel_egress_hosts() ) {
+		return false;
+	}
+	return ( isset( $check['host'] ) && '127.0.0.1' === $check['host'] ) ? false : $send;
+}
+add_filter( 'pre_http_send_through_proxy', 'lgsm_panel_no_proxy', 10, 3 );
+
+/* An HTTPS request to one of the proxy's hosts skips WordPress's own address check, which looks the name up: the
+   container has no name server, so it refused every update download (download_url). The proxy makes that check
+   where it connects, on every hop of a redirect too: it resolves the name itself, connects only to global
+   addresses, and only for those hosts on 443. */
+function lgsm_panel_egress_args( $args, $url ) {
+	$parts = wp_parse_url( $url );
+	if ( ! is_array( $parts ) || empty( $parts['host'] ) || empty( $parts['scheme'] ) || 'https' !== strtolower( $parts['scheme'] )
+		|| isset( $parts['user'] ) || isset( $parts['pass'] ) || ( isset( $parts['port'] ) && 443 !== (int) $parts['port'] ) ) {
+		return $args;
+	}
+	if ( in_array( strtolower( $parts['host'] ), lgsm_panel_egress_hosts(), true ) ) {
+		$args['reject_unsafe_urls'] = false;
+	}
+	return $args;
+}
+add_filter( 'http_request_args', 'lgsm_panel_egress_args', 10, 2 );
+"""
+# The writer (python3 -I -c, as the account; arguments: the path inside ~/site/html, the file's text in base64). Each
+# folder on the path is made when missing and refused when it is a link; the file is written beside, then renamed.
+_LOOPBACK_PY = r"""
+import base64, os, sys
+html = os.path.realpath(os.path.expanduser("~/site/html"))
+parts = sys.argv[1].split("/")
+d = html
+for part in parts[:-1]:
+    d = os.path.join(d, part)
+    if os.path.islink(d):
+        print("loopback=refused"); sys.exit(0)
+    if not os.path.isdir(d):
+        os.mkdir(d, 0o755)
+path = os.path.join(d, parts[-1])
+if os.path.realpath(d) != d or os.path.islink(path):
+    print("loopback=refused"); sys.exit(0)
+fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+with os.fdopen(fd, "wb") as fh:
+    fh.write(base64.b64decode(sys.argv[2]))
+os.replace(path + ".new", path)
+print("loopback=written")
+"""
+
+
+def loopback_plugin():
+    """The text of WordPress's must-use plugin for its requests to its own address (LOOPBACK_PLUGIN)."""
+    return (_LOOPBACK_PHP.replace("@TOKEN@", RUN_IN + "/proxy-token").replace("@PORT@", str(INNER_PORT))
+            .replace("@HEADER@", GATE_HEADER).replace("@EGRESS@", RUN_IN + "/" + EGRESS_HOSTS_FILE.rsplit("/", 1)[1]))
+
+
+def loopback_sh():
+    """Shell (as the account) writing loopback_plugin() into the site's files; no secret is in it (the token is a file)."""
+    return "python3 -I -c %s %s %s; " % (_q(_LOOPBACK_PY), _q(LOOPBACK_PLUGIN), _q(_b64(loopback_plugin())))
+
+
+def no_egress_sh(site):
+    """Shell (as the account): a WordPress site with full egress has no proxy, so its unit and its hosts file go."""
+    if needs_egress(site):
+        return ""
+    return "systemctl --user disable --now %s.service 2>/dev/null; rm -f %s; " % (EGRESS_UNIT, _q(EGRESS_HOSTS_FILE))
 
 
 def image_build_sh(b, path=BUILD_FILE):
@@ -1041,9 +1288,13 @@ def probe_sh(account, site):
             'pasta --help 2>&1 | grep -q -- "--splice-only" && echo splice=1; echo "uid=$(id -u)"; echo "gid=$(id -g)"; '
             "echo \"state=$(systemctl --user is-active %s 2>/dev/null | head -n 1)\"; " % unit_service(UNIT)
             + "echo \"result=$(systemctl --user show -p Result --value %s 2>/dev/null)\"; " % unit_service(UNIT)
-            + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>/dev/null)\"; " % UNIT
-            + "echo \"mem=$(podman stats --no-stream --format '{{.MemUsage}}' %s 2>/dev/null | head -n 1)\"; " % UNIT
+            + "echo \"image=$(podman inspect --format '{{.ImageName}}' %s 2>&1 | head -n 1)\"; " % UNIT
+            + "echo \"stats=$(podman stats --no-stream --format '{{.MemUsage}}|{{.CPUPerc}}' %s 2>&1 | head -n 1)\"; "
+            % UNIT
             + "d=$(du -sxm %s 2>/dev/null) && echo \"disk_mb=${d%%%%[[:space:]]*}\"; " % _q(SITE)
+            # The newest backup's time (seconds since the epoch), for the Overview's "Last backup".
+            + "b=$(find %s -maxdepth 1 -name 'backup-*.tar.gz' -printf '%%T@\\n' 2>/dev/null | sort -n | tail -n 1) "
+              "&& [ -n \"$b\" ] && echo \"last_backup=${b%%%%.*}\"; " % _q(SITE + "/backups")
             + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
               '2>/dev/null && echo cpu_delegated=1; '
             + "[ -f %s ] && echo installed=1; true" % _q(HOME_DIR + "/" + META_FILE))
@@ -1053,17 +1304,53 @@ _STATES = {"active": "running", "activating": "starting", "deactivating": "stopp
            "failed": "failed", "reloading": "running"}
 
 
+# podman stats' MemUsage|CPUPerc line: "47.21MB / 536.9MB|0.52%" (decimal units; kB, MB, GB, or B).
+_STATS_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(B|[kKMGT]i?B)\s*/[^|]*\|\s*([0-9]+(?:\.[0-9]+)?)%\s*\Z")
+_MB = {"B": 1e-6, "kB": 1e-3, "KB": 1e-3, "KiB": 1.024e-3, "MB": 1.0, "MiB": 1.048576, "GB": 1e3, "GiB": 1073.741824,
+       "TB": 1e6, "TiB": 1099511.627776}
+# What podman inspect prints for a container: an image reference (registry/name, then @digest or :tag).
+_IMAGE_REF_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,199}(?::[A-Za-z0-9._-]{1,128})?(?:@sha256:[0-9a-f]{64})?\Z")
+
+
+def _plain_reason(text):
+    """A tool's error line, printable and short (it goes to the page as data, never as markup)."""
+    text = "".join(c if c.isprintable() else " " for c in (text or "")).strip()
+    return text[:160]
+
+
+def _stats(text):
+    """(memory MB, CPU %, why it could not be read) from probe_sh's stats= line."""
+    m = _STATS_RE.match(text or "")
+    if not m or m.group(2) not in _MB:
+        return None, None, _plain_reason(text) or "no answer"
+    return round(float(m.group(1)) * _MB[m.group(2)]), round(float(m.group(3)), 1), ""
+
+
+def _image(text):
+    """(image reference, why it could not be read) from probe_sh's image= line."""
+    text = (text or "").strip()
+    return (text, "") if _IMAGE_REF_RE.match(text) else ("", _plain_reason(text) or "no answer")
+
+
 def parse_probe(out):
-    """probe_sh's output as a dict: state, result, image, mem, disk_mb (int or None), uid, gid, installed, splice."""
+    """probe_sh's output as a dict: state, result, image, mem_mb, cpu_pct, disk_mb, uid, gid, installed, splice.
+
+    A figure that could not be read is None (image ""), with podman's own words in stats_error / image_error:
+    an empty value is never a measurement.
+    """
     kv = _ad.kv_lines(out)
     disk = kv.get("disk_mb", "")
+    mem_mb, cpu_pct, stats_error = _stats(kv.get("stats", ""))
+    image, image_error = _image(kv.get("image", ""))
     return {"state": _STATES.get(kv.get("state", ""), "unknown"), "result": kv.get("result", ""),
-            "image": kv.get("image", ""), "mem": kv.get("mem", ""), "disk_mb": int(disk) if disk.isdecimal() else None,
+            "image": image, "image_error": image_error, "mem_mb": mem_mb, "cpu_pct": cpu_pct, "stats_error": stats_error,
+            "disk_mb": int(disk) if disk.isdecimal() else None,
             "uid": int(kv["uid"]) if kv.get("uid", "").isdecimal() else None,
             "gid": int(kv["gid"]) if kv.get("gid", "").isdecimal() else None,
             "installed": kv.get("installed") == "1", "splice": kv.get("splice") == "1",
             "cpu_delegated": kv.get("cpu_delegated") == "1",
-            "os": kv.get("os", ""), "podman": kv.get("podman", "")}
+            "os": kv.get("os", ""), "podman": kv.get("podman", ""),
+            "last_backup": int(kv["last_backup"]) if kv.get("last_backup", "").isdecimal() else None}
 
 
 def runtime_refusal(os_version, podman_version):

@@ -68,13 +68,17 @@ OK_PROXY_STOPPED = "The web proxy was stopped: nothing listens on ports 80 and 4
 FAILED = "That did not work on the host. Try again; if it keeps failing, look at the site's log."
 OK_PORTS = "Ports 80 and 443 are set for the web proxy's exposure mode."
 OK_TUNNEL = "The tunnel connector was updated."
+TUNNEL_REFUSED = ("Cloudflare refused the tunnel's token, so no visitor gets through. Copy this tunnel's token from "
+                  "Cloudflare's dashboard, paste it again, then apply.")
 TUNNEL_FAILED = ("The tunnel connector did not start on the host. Check its token, and that the host can reach the "
                  "internet, then apply again.")
 OK_GUARD = "The egress guard is on: websites cannot reach this host's other addresses."
 OK_QUOTA = "The website's disk quota is set."
 NO_QUOTA = "This host's file system has no user quotas, so the panel measures the website's disk use instead."
 OK_PHP = "The website's PHP settings were written and it was restarted."
-OK_PURGED = "The page cache was emptied (the web proxy restarted)."
+OK_PURGED = "This website's page cache was emptied. Nothing was restarted; other websites kept theirs."
+PURGE_FAILED = ("The page cache could not be emptied: the web proxy's page cache did not answer. A superadmin can apply "
+                "the web proxy again from the Websites page.")
 OK_BUILT = "The app was built."
 OK_BUILT_STARTED = "The app was built and started."
 BUILD_FAILED = ("The app's install and build command failed, so the running app was left as it was. Check the "
@@ -127,6 +131,11 @@ def _as_site(remote, account, sh, timeout=120, stdin_text=None):
     return rc == 0, out or ""
 
 
+def runs_websites(remote):
+    """Whether `remote` can run websites: the panel's own host only, for now (ONLY_LOCAL for any other)."""
+    return _core.is_local_server(remote)
+
+
 def _secret(value):
     from panel.core.config import decrypt_secret
     return decrypt_secret(value or "") or ""
@@ -141,13 +150,18 @@ def _ids(remote, site):
 
 
 def _egress_hosts(site):
-    """The hosts the site's egress proxy may reach: its recipe's (WordPress's update hosts), an app's build hosts."""
+    """The hosts the site's egress proxy may reach: an app's build hosts; WordPress's update hosts and its recipe's.
+
+    WordPress always gets WP_EGRESS_HOSTS, so a signed catalog published before a host was added there (its recipe
+    lists fewer) still lets WordPress core's own checks through.
+    """
     from panel.services import websites_catalog as _wc
     if site.kind == "app":
         return _wc.runtimes().get(site.runtime, {}).get("egress", [])
     if not _ws().needs_egress(site):
         return []
-    return (_wc.recipe(site.app_recipe) or {}).get("egress") or ["api.wordpress.org", "downloads.wordpress.org"]
+    listed = (_wc.recipe(site.app_recipe) or {}).get("egress") or []
+    return sorted(set(listed) | set(_ws().WP_EGRESS_HOSTS))
 
 
 def _site_bundle(site, ids, probe, db=None):
@@ -209,7 +223,12 @@ def runtime_ready(remote):
     return _ws().runtime_refusal(os_version, podman) if podman else NO_PODMAN
 
 
-def install(remote, site, db=None, start_it=True, restart=True):
+def _no_progress(_part):
+    """Stand in for install's `progress` when nobody follows it."""
+    return None
+
+
+def install(remote, site, db=None, start_it=True, restart=True, progress=None):
     """Create the site's account and folders, pull its image, write its unit and start it.
 
     `db` is (host, port) of the site's database as the host sees it, or None. Podman is made ready
@@ -219,21 +238,28 @@ def install(remote, site, db=None, start_it=True, restart=True):
     files yet is installed and not started (OK_WAITING): its first start could only fail. `start_it`
     False writes everything and starts nothing (an app's rebuild starts it after its build). `restart` False
     starts what is not running and leaves a running site alone (a unit only added beside it, the object cache).
+    `progress`, when given, is called with the name of each part as it begins (INSTALL_PARTS: the account and
+    folders, the image built or pulled, the container started), for the add dialog's steps.
     """
+    progress = progress or _no_progress
+    progress("account")
     why = runtime_ready(remote)
     if why:
         return False, why
     ok, out = _helper(remote, "website-account-create", [site.account])
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    ok, said = _install_made(remote, site, db, start_it, restart)
+    ok, said = _install_made(remote, site, db, start_it, restart, progress)
     if not ok and "account=created" in out.splitlines():
         undone, _t = remove(remote, site)
         _core._log.warning("website %s: the failed install was %s", site.id, "undone" if undone else "NOT undone")
     return ok, said
 
 
-def _install_made(remote, site, db, start_it=True, restart=True):
+INSTALL_PARTS = ("account", "image", "container")
+
+
+def _install_made(remote, site, db, start_it=True, restart=True, progress=_no_progress):
     """Run install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
@@ -250,6 +276,7 @@ def _install_made(remote, site, db, start_it=True, restart=True):
     if refused:
         return False, refused
     # A PHP site builds its image on a first install (minutes on a small host): install_sh's timeout allows for it.
+    progress("image")
     ok, out = _as_site(remote, site.account, _ws().install_sh(site.account, site, image), timeout=1800, stdin_text=stdin)
     if not ok:
         return False, _mark(out)
@@ -258,7 +285,10 @@ def _install_made(remote, site, db, start_it=True, restart=True):
     if site.kind == "app" and _ws().MARK_APP_EMPTY in out.split():
         # Installed, not started: the app's files come next (a start now would fail, and undo the install).
         return True, OK_WAITING
-    return start(remote, site, restart=restart) if start_it else (True, OK_INSTALLED)
+    if not start_it:
+        return True, OK_INSTALLED
+    progress("container")
+    return start(remote, site, restart=restart)
 
 
 def cpu_limit(remote, site, probe=None):
@@ -297,6 +327,21 @@ def remove(remote, site):
 def site_probe(remote, site):
     """Read the site's state (one SSH round trip): (ok, probe_sh's key=value lines)."""
     return _as_site(remote, site.account, _ws().probe_sh(site.account, site), timeout=60)
+
+
+WP_NOT_RUNNING = "The website is not running, so WordPress could not be told its new address. Start it, then try again."
+
+
+def wp_set_address(remote, site, domain):
+    """Set WordPress's home and siteurl to https://<domain> in the site's running container: (ok, sentence)."""
+    ok, out = _as_site(remote, site.account, _ws().wp_address_sh(site.account, domain), timeout=60)
+    if ok and _ws().WP_URL_MARK in (out or ""):
+        return True, ""
+    if out in (ONLY_LOCAL, NO_HELPER):
+        return False, out
+    if "no such container" in (out or "").lower() or "is not running" in (out or "").lower():
+        return False, WP_NOT_RUNNING
+    return False, FAILED
 
 
 def proxy_install(remote):
@@ -341,11 +386,16 @@ def _host_machine(remote):
 
 
 def apply_doc(text, sites=(), proxy=None):
-    """website-proxy-apply's stdin: the configuration and the certificate files it names (operators' own, the CA)."""
+    """website-proxy-apply's stdin: the configuration and the certificate files it names (operators' own, the CA).
+
+    In tunnel mode render() names no certificate (the tunnel's provider serves HTTPS), so no operator's key is
+    sent to the host: the helper's prune then removes any left from before.
+    """
     files = {}
-    for site in sites:
+    tunnel = proxy is not None and proxy.exposure_mode == "tunnel"
+    for site in () if tunnel else sites:
         for d in site.domains or []:
-            if d.cert_mode == "own" and d.verified_at is not None and d.own_cert_pem:
+            if _wp().own_cert(d):
                 files["%s.crt" % d.domain] = d.own_cert_pem
                 files["%s.key" % d.domain] = _secret(d.own_key_secret)
     if proxy is not None and proxy.origin_pull_mtls:
@@ -424,13 +474,38 @@ def proxy_status(remote, proxy=None):
 
 
 def _tunnel_state(remote):
-    """`tunnel=` and `tunnel_restarts=` lines of the connector's user unit, read as the tunnel's account."""
+    """`tunnel=`, `tunnel_restarts=` and `tunnel_link=` lines of the connector's user unit, read as the tunnel's account.
+
+    tunnel_link is what cloudflared last said of its connection to Cloudflare in its log (_tunnel_link_sh):
+    connected, refused, or empty when its log says neither or cannot be read.
+    """
     unit = _ws().unit_service(_ws().TUNNEL_UNIT)
     sh = (_ws()._ENV + "printf 'tunnel=%%s\\ntunnel_restarts=%%s\\n' \"$(systemctl --user show -p ActiveState --value %s)\" "
-          "\"$(systemctl --user show -p NRestarts --value %s)\"" % (unit, unit))
+          "\"$(systemctl --user show -p NRestarts --value %s)\"; " % (unit, unit) + _tunnel_link_sh(unit))
     ok, out = _as_site(remote, _ws().TUNNEL_ACCOUNT, sh, timeout=30)
-    lines = [ln for ln in (out or "").splitlines() if ln.startswith(("tunnel=", "tunnel_restarts="))]
+    lines = [ln for ln in (out or "").splitlines() if ln.startswith(("tunnel=", "tunnel_restarts=", "tunnel_link="))]
     return "\n".join(lines) + "\n" if ok and lines else "tunnel=unknown\n"
+
+
+# What cloudflared logs (its connection/observer.go and supervisor/tunnel.go, supervisor.go, subcommands.go): a
+# connection to Cloudflare's edge registered, or the edge refusing the tunnel (a token of no tunnel, a wrong secret),
+# or the token refused before any connection. With a well-formed token Cloudflare refuses, cloudflared keeps running
+# and retries for about two minutes, so the unit reads active with no restart all that time: only its log tells.
+TUNNEL_START_LINE = "Starting tunnel"
+TUNNEL_UP_LINE = "Registered tunnel connection"
+TUNNEL_REFUSED_LINES = ("Register tunnel error from server side", "initial tunnel connection failed",
+                        "Unauthorized", "tunnel token is not valid", "Tunnel token is not valid")
+
+
+def _grep_lines(lines):
+    return "grep -F %s" % " ".join("-e %s" % _ws()._q(x) for x in lines)
+
+
+def _tunnel_link_sh(unit):
+    """Shell printing `tunnel_link=connected|refused|` from the newest of those lines in the connector's last 400."""
+    return ("l=$(journalctl --user -q -u %s -n 400 -o cat --no-pager 2>/dev/null | %s | tail -n 1); "
+            "case \"$l\" in *%s*) k=connected;; '') k=;; *) k=refused;; esac; printf 'tunnel_link=%%s\\n' \"$k\""
+            % (unit, _grep_lines((TUNNEL_UP_LINE,) + TUNNEL_REFUSED_LINES), _ws()._q(TUNNEL_UP_LINE)))
 
 
 def _cert_line(certs, line):
@@ -444,23 +519,39 @@ def _cert_line(certs, line):
 
 
 def parse_proxy_status(out):
-    """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}}.
+    """proxy_status's lines as {installed, version, active, certs: {domain: {issuer, not_after}}, cert_errors}.
 
     The helper prints the served certificate of each domain; should a domain still come twice (an older
     helper printed every issuer's), the later not_after wins, never simply the last line.
     """
     got = {"installed": False, "version": "", "active": "unknown", "cache": False, "certs": {}, "tunnel": "",
-           "tunnel_restarts": 0}
+           "tunnel_restarts": 0, "tunnel_link": "", "cert_errors": {}}
     for line in (out or "").splitlines():
         if line.startswith("cert="):
             _cert_line(got["certs"], line)
+        elif line.startswith("cert_error="):
+            _cert_error_line(got["cert_errors"], line)
         elif "=" in line:
-            key, _sep, value = line.partition("=")
-            if key in ("installed", "version", "active", "cache", "tunnel"):
-                got[key] = (value == "yes") if key in ("installed", "cache") else value[:40]
-            elif key == "tunnel_restarts" and value.isdecimal():
-                got[key] = int(value)
+            _status_value(got, *line.split("=", 1))
     return got
+
+
+def _status_value(got, key, value):
+    """One key=value line of proxy_status into `got` (parse_proxy_status's): a known key with a value of its shape."""
+    if key in ("installed", "version", "active", "cache", "tunnel"):
+        got[key] = (value == "yes") if key in ("installed", "cache") else value[:40]
+    elif key == "tunnel_link" and value in ("connected", "refused"):
+        got[key] = value
+    elif key == "tunnel_restarts" and value.isdecimal():
+        got[key] = int(value)
+
+
+def _cert_error_line(errors, line):
+    """Add one `cert_error=<domain> <reason>` line to `errors` ({domain: reason}, printable, at most 200 characters)."""
+    dom, _sep, why = line[len("cert_error="):].partition(" ")
+    why = "".join(c for c in why.strip() if c.isprintable())[:200]
+    if dom and why:
+        errors[dom] = why
 
 
 def wanted_rules(proxy, enabled):
@@ -560,32 +651,48 @@ def tunnel_apply(remote, proxy):
     # The start limit is cleared first (as start_sh does for a site): a connector that failed five times in its
     # window (a bad token, the network down) was refused by systemd until the window passed.
     sh = (_ws()._ENV + _ws().write_files_sh(True) + _ws().image_build_sh(b)
-          + "systemctl --user daemon-reload && { systemctl --user reset-failed %s 2>/dev/null; "
+          + "systemctl --user daemon-reload && { t0=$(date +%%s); systemctl --user reset-failed %s 2>/dev/null; "
             "systemctl --user restart %s; } && %s" % (unit, unit, _tunnel_settle_sh(unit)))
     ok, out = _as_site(remote, acct, sh, timeout=1800, stdin_text=_ws().bundle(files))
     return (True, OK_TUNNEL) if ok else (False, _tunnel_failure(out))
 
 
-# How long the connector must stay up after its restart before an apply says it was updated. The restart returns
-# once Podman has started the container; cloudflared refuses a bad token a moment later (about 0.4 s on the test
-# host) and the unit waits RestartSec=10 to try again, so a failure shows as a state other than active well
-# inside this window, before any automatic restart.
-TUNNEL_SETTLE_S = 5
+# How long an apply watches the connector after its restart, once a second. It is updated as soon as cloudflared
+# logs a registered connection (about a second with a good token). It failed when the unit stops being active or
+# systemd restarts it (a malformed token: cloudflared exits at once), or when the window ends with no connection
+# registered: with a well-formed token Cloudflare refuses, cloudflared logs the refusal at once but keeps running
+# and retrying for about two minutes, so the unit's state alone said "updated". Where the connector's log cannot be
+# read (no journal for the account), the unit staying active for the whole window is all there is to go on.
+TUNNEL_SETTLE_S = 20
 
 
 def _tunnel_settle_sh(unit):
-    """Shell that checks the connector once a second for TUNNEL_SETTLE_S seconds after the apply's restart.
+    """Shell that watches the connector for up to TUNNEL_SETTLE_S seconds after the apply's restart (at $t0).
 
-    It fails, printing the unit's state, once the unit is not active or systemd has restarted it since.
+    It succeeds once the connector's log since $t0 has a registered connection, or, with no cloudflared line to
+    read (no journal for the account), when the unit stayed active with no restart. It fails, printing
+    tunnel=<state> restarts=<n>, once the unit is not active or was restarted; tunnel=refused when the window ends
+    after cloudflared logged a refusal; tunnel=unconnected when it logged neither.
     """
     show = "systemctl --user show -p %%s --value %s" % unit
-    return ("n0=$(%s); ok=1; i=0; while [ $i -lt %d ]; do sleep 1; i=$((i+1)); st=$(%s); n=$(%s); "
+    log = "journalctl --user -q -u %s --since \"@$t0\" -o cat --no-pager 2>/dev/null" % unit
+    return ("n0=$(%s); ok=1; up=0; log=; i=0; while [ $i -lt %d ]; do sleep 1; i=$((i+1)); st=$(%s); n=$(%s); "
             "[ \"$st\" = active ] && [ \"$n\" = \"$n0\" ] || { ok=0; echo \"tunnel=$st restarts=$n\"; break; }; "
-            "done; [ $ok = 1 ]" % (show % "NRestarts", TUNNEL_SETTLE_S, show % "ActiveState", show % "NRestarts"))
+            "log=$(%s); case \"$log\" in *%s*) up=1; break;; esac; done; "
+            "case \"$log\" in *%s*) ;; *) log=;; esac; "
+            "if [ $ok = 1 ] && [ $up = 0 ] && [ -n \"$log\" ]; then ok=0; "
+            "if printf '%%s\\n' \"$log\" | %s -q; then echo tunnel=refused; else echo tunnel=unconnected; fi; fi; "
+            "[ $ok = 1 ]" % (show % "NRestarts", TUNNEL_SETTLE_S, show % "ActiveState", show % "NRestarts", log,
+                             _ws()._q(TUNNEL_UP_LINE), _ws()._q(TUNNEL_START_LINE), _grep_lines(TUNNEL_REFUSED_LINES)))
 
 
 def _tunnel_failure(out):
-    """The sentence for a failed tunnel apply: a mark's own (a failed build), else TUNNEL_FAILED (never the site's log)."""
+    """The sentence for a failed tunnel apply: Cloudflare's refusal, a mark's own (a failed build), else TUNNEL_FAILED.
+
+    Never the connector's log itself: only which of its known lines it held.
+    """
+    if "tunnel=refused" in (out or "").splitlines():
+        return TUNNEL_REFUSED
     said = _mark(out)
     return TUNNEL_FAILED if said == FAILED else said
 
@@ -625,9 +732,21 @@ def php_effective(remote, site):
 
 
 def cache_purge(remote, site):
-    """Empty the site's page cache at the proxy: a restart (its admin API is off, so nothing else can)."""
-    ok, out = _helper(remote, "website-proxy-apply", ["restart"], timeout=120, doc="")
-    return (True, OK_PURGED) if ok else (False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED)
+    """Empty this site's page cache at the proxy, without a restart: the cache's own API, the site's domains only.
+
+    The helper reaches the API on the proxy's admin socket (root only; see website-proxy-apply purge), so every
+    other site keeps its cache and its visitors' connections.
+    """
+    domains = sorted({d.domain for d in site.domains or [] if re.fullmatch(r"[a-z0-9.-]{1,253}", d.domain or "")})
+    if not domains:
+        return True, OK_PURGED
+    ok, out = _helper(remote, "website-proxy-apply", ["purge"], timeout=60, doc=json.dumps({"purge": domains}))
+    if ok:
+        return True, OK_PURGED
+    if out in (ONLY_LOCAL, NO_HELPER):
+        return False, out
+    _core._log.warning("page cache purge refused: %s", " | ".join(out.splitlines())[-300:])
+    return False, PURGE_FAILED
 
 
 def app_build(remote, site):

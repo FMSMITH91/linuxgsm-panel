@@ -22,11 +22,18 @@ does not carry the web proxy's secret token, so another account on the host cann
 A PHP site's server checks the token once per request: a path its `.htaccess` rewrites (WordPress sends every
 path that is not a file to `index.php`) continues as the same request, so real visitors are never refused
 there, while a request that did not come through the proxy is refused, its error page included. The token is
-made once, with the site, and no action changes it.
+checked first in the server's own rewrite rules, before the site's `.htaccess` is read, so a site's own error page
+(`ErrorDocument 403 /index.php`, written by a plugin or by hand) can no longer turn a refused request into one that
+runs PHP. The token is made once, with the site, and no action changes it. Neither check names the token's
+header in the answer's `Vary` header (a visitor sees only the `Vary` values Apache and the site set themselves).
 
-A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
-downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local
-address. A Node.js app reaches npm's registry only while it is being built. The egress guard (an
+A site has no route to the internet. WordPress reaches only the hosts its own update and Site Health checks use
+(api.wordpress.org, downloads.wordpress.org, downloads.w.org for background updates, and developer.wordpress.org,
+where api.wordpress.org redirects), through a small proxy that refuses any other host, port 443 only, and any name
+resolving to a private or local address; each redirect is a new connection the proxy checks the same way. The
+panel's must-use plugin lets WordPress's HTTPS requests to those hosts past its own name lookup
+(the container has no name server, so update downloads failed), as the proxy checks the addresses itself. A
+WordPress site with full egress has no proxy, and the plugin then sends nothing to it. A Node.js app reaches npm's registry only while it is being built. The egress guard (an
 nftables table) keeps site accounts away from the host's other addresses (its LAN, tailnet and public
 addresses), so a site cannot reach the panel's port or SSH. Its rules apply only to packets that carry a
 site account's uid; a packet the kernel sends without a socket of its own (a reset for a closed port, a
@@ -67,7 +74,7 @@ now fails at once instead of waiting.
 
 ## CPU limits
 
-A site's CPU limit is applied in one of three ways, and the site card says which one:
+A site's CPU limit is applied in one of three ways, which the panel picks for the host:
 
 - **On the container**, when the host lets the site's account control its own CPU (the usual case on
   Ubuntu 24.04 and later).
@@ -100,7 +107,10 @@ through it.
 
 ### Page cache
 
-The page cache needs Caddy built with the cache module. The panel builds it on each host that has a web
+The page cache needs Caddy built with the cache module. While it is on, Caddy's admin interface listens on a
+unix socket in the proxy's runtime folder (owner-only; never a network port), so **Purge cache** empties one
+site's pages through the cache module's own interface without restarting the proxy; with the page cache off
+the admin interface stays off. The panel builds it on each host that has a web
 proxy when a superadmin turns on **Page cache in the web proxy** in the Websites security settings (and again
 after the plain proxy is installed while it is on). The build runs in the background and takes a few minutes;
 a failure is shown on the security settings card, saying which part failed (the build, the check or the
@@ -141,10 +151,16 @@ intermediate images and removes its bases once it is done.
   manager, so its libraries cannot be updated in place. cloudflared is a single static program that loads none
   of them, so the panel copies it onto an empty image with only the certificate authorities (from Debian's
   `ca-certificates`, upgraded in a pinned `debian:trixie-slim` stage, `sites.tunnel.cloudflare.certs`) and the
-  account files. It runs as user 65532, as upstream's does, with no shell. After starting it, an apply checks
-  its unit once a second for 5 seconds: if it is no longer active, or systemd has restarted it, the apply
-  fails with "The tunnel connector did not start on the host" and the proxy's card shows that sentence.
-  `/websites/proxy/status` reports the unit's state as `tunnel` and its restart count as `tunnel_restarts`.
+  account files. It runs as user 65532, as upstream's does, with no shell. After starting it, an apply watches
+  it once a second for up to 20 seconds and reads cloudflared's log (the tunnel account's journal). It is
+  updated once cloudflared logs a registered connection. If the unit stops being active or systemd restarts it,
+  or the window ends with no connection, the apply fails with "The tunnel connector did not start on the host";
+  if cloudflared logged that Cloudflare refused the tunnel (a well-formed token of no tunnel keeps cloudflared
+  running and retrying for minutes, so the unit stays active), it says "Cloudflare refused the tunnel's token".
+  Where the log cannot be read, the unit staying active for the window is what counts. The proxy's card shows
+  that sentence. `/websites/proxy/status` reports the unit's state as `tunnel`, its restart count as
+  `tunnel_restarts`, and what the log last said as `tunnel_link` (`connected` or `refused`); a refusal is stored
+  as the card's error, cleared once a connection is registered.
 - **PHP** (`php/`): see the next section.
 
 Each build reaches the distribution's archive (and, for Node.js, npm's registry) through the host's network,
@@ -182,18 +198,37 @@ pins, and each image a site runs as pinned (the static sites' nginx, the object 
 that is only a build's base is not scanned on its own, as no site runs it: the issues the build's updates fix
 would fail the scan although no host has them.
 
-How the one-click app releases were pinned:
+How the one-click app releases are pinned: a daily CI job (`.github/workflows/site-app-versions.yml`,
+running `.github/scripts/site_app_versions.py`) finds each app's newest stable release on the supported
+version line from the app's own release source, downloads the archive from the official host, checks it as
+below and that it still holds the folder the recipe unpacks, and opens a pull request with the new version,
+address and sha256. A release older than the pinned one is never proposed; an archive that fails a check
+fails the job and is left out.
 
-- **phpBB**: the release archive and the `.sha256` file phpBB publishes beside it.
-- **Drupal**: the release archive and the SHA-256 on its release page.
-- **MyBB**: the release archive and the sha256 GitHub records for the release asset.
+- **phpBB**: phpBB's own update check (`version.phpbb.com`), the release archive and the `.sha256` file phpBB
+  publishes beside it.
+- **Drupal**: Drupal's release history (a release covered by its security advisories, on a supported 11.x
+  branch), the release archive, the MD5 and size in that history and the SHA-256 on its release page.
+- **MyBB**: mybb.com's version check, and the sha256 GitHub records for the asset of that MyBB release.
 - **WordPress**: comes inside the official WordPress image, pinned by digest (the base of the site's image).
+  Its version is the newest one WordPress's own version check offers, and the job pins the official image's
+  tag for it on every PHP version by digest; the image's build checks the archive against wordpress.org's
+  SHA-1.
 - **Simple Machines Forum**: simplemachines.org's downloads sit behind a browser check that automated
-  clients cannot pass, so neither the panel nor the maintainer's tools can fetch them. The pin is the
-  official repository's tag archive (`github.com/SimpleMachines/SMF`, tag v2.1.8). It was downloaded twice
-  with the same sha256. Files inside it were checked against the tag's own git objects, and the
-  installer's form fields were read from the tagged source. To update it, download the new tag's archive,
-  record its sha256 in the catalog, and repeat both checks.
+  clients cannot pass, so neither the panel nor CI can fetch them. The pin is the official repository's tag
+  archive (`github.com/SimpleMachines/SMF`) of its newest published 2.1 release. SMF publishes no checksum
+  for it, so the sha256 is what GitHub served; the installer's form fields were read from the tagged source
+  when the recipe was written, so a new SMF release's pull request deserves a test install before it is
+  merged.
 
-The Cloudflare network list used by the "restricted" exposure mode is also part of the catalog. A daily CI
-job compares it with Cloudflare's published lists and opens a pull request when they change.
+The site images are kept current by Renovate (`.github/renovate.json`): each image's digest for the tag of
+its supported line (for example `php:8.3-apache`, `node:22-bookworm-slim`), cloudflared's release, and npm
+within its major. WordPress's image tag carries WordPress's version, so the daily job above moves it.
+
+The CDN network lists used by the "restricted" exposure mode (Cloudflare's and Fastly's presets) are also
+part of the catalog. A daily CI job (`.github/workflows/cdn-ranges.yml`, `.github/scripts/cdn_ranges.py`)
+reads each CDN's official list from fixed https URLs (no redirect, size capped), checks every entry is a
+canonical public network, and opens one pull request when they change. Other CDNs are not presets: Amazon
+CloudFront's list is over the 200-network cap (each network is two firewall rules), Bunny's and Gcore's
+are single server addresses by the hundred that change often, and Sucuri and KeyCDN publish no official
+machine-readable list. Add their networks by hand, or as a list from an address.

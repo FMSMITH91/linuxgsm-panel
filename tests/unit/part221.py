@@ -240,7 +240,9 @@ _STEP_UP_POSTS221 = ("/api/remote/{r}/close-port-22", "/api/remote/{r}/ssh-mode"
                      # A kept database's delete, a database server's admin login (the endpoint form), the
                      # tailscale0 allow after a join and the sync of a server's ports into the firewall.
                      "/api/remote/{r}/databases/1/delete", "/api/remote/{r}/databases/endpoint",
-                     "/api/remote/{r}/tailscale-finalize", "/api/server/{s}/sync-ports")
+                     "/api/remote/{r}/tailscale-finalize", "/api/server/{s}/sync-ports",
+                     # Starting a database server found installed but stopped (the add-website dialog's fix).
+                     "/api/remote/{r}/databases/start")
 
 
 def _stale221(minutes_ago=60):

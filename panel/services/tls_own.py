@@ -272,6 +272,55 @@ def check(cert_pem, key_pem, names=(), now=None):
     return Checked("", notes, chain, key)
 
 
+def check_for_domain(cert_pem, key_pem, domain, now=None):
+    """Check a certificate chain and its private key (bytes, PEM) for one website domain. -> Checked.
+
+    The panel's own checks (check()), stricter where a website needs it: the web proxy serves the
+    certificate for `domain` alone, so one that does not cover it (subjectAltName, a wildcard matching
+    one left-most label: OWASP TLS Cheat Sheet, "Use Correct Domain Names") or is not valid yet would
+    fail every visitor's handshake, and is refused. The rest stays a note: a weak key, a SHA-1 or MD5
+    signature, a self-signed certificate (a CDN's origin certificate is one a browser never sees), a
+    chain without its intermediates, fewer than SOON_DAYS days left.
+    """
+    now = now or aware_utcnow()
+    refusal, chain, key, moved = _parse(cert_pem, key_pem)
+    if refusal:
+        return Checked(refusal)
+    leaf = chain[0]
+    if leaf.not_valid_after_utc <= now:
+        return Checked(i18n.Sentence("The certificate expired on {date}.",
+                                     date=leaf.not_valid_after_utc.strftime("%Y-%m-%d")))
+    if leaf.not_valid_before_utc > now:
+        return Checked(i18n.Sentence("The certificate is not valid until {date}.",
+                                     date=leaf.not_valid_before_utc.strftime("%Y-%m-%d")))
+    if not covers(leaf, domain):
+        names = san_names(leaf)
+        if not names:
+            return Checked("The certificate names no domain in its subjectAltName, so browsers accept it for none.")
+        return Checked(i18n.Sentence("The certificate does not cover {domain}: its names are {names}.",
+                                     domain=domain, names=", ".join(names[:8])))
+    notes = ["The server certificate was not first in the file; it has been put first."] if moved else []
+    notes += _key_notes(leaf) + _hash_notes(leaf) + _site_chain_notes(chain) + _date_notes(leaf, now)
+    return Checked("", notes, chain, key)
+
+
+# The issuer a Cloudflare Origin CA certificate names (its common name and organisational unit).
+CDN_ORIGIN_ISSUERS = ("cloudflare origin",)
+S_CDN_ORIGIN = ("This is a Cloudflare Origin CA certificate: only Cloudflare trusts it, so keep the domain's DNS "
+                "record proxied through Cloudflare and Cloudflare's SSL/TLS mode at Full (strict).")
+
+
+def is_cdn_origin(leaf):
+    """Whether `leaf` was issued by a CDN's origin CA (trusted by that CDN alone, never by a browser)."""
+    issuer = leaf.issuer.rfc4514_string().lower()
+    return any(name in issuer for name in CDN_ORIGIN_ISSUERS)
+
+
+def _site_chain_notes(chain):
+    """_chain_notes, except that a CDN's origin certificate is said to be one (it needs no intermediate)."""
+    return [S_CDN_ORIGIN] if is_cdn_origin(chain[0]) else _chain_notes(chain)
+
+
 def panel_names(cfg, request_host=""):
     """The addresses to check a certificate against: site_domain, and the host this page was opened by."""
     out = []

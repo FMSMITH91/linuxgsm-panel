@@ -1,5 +1,18 @@
 {# Overview: what runs, its software and what it uses (js/website_site.js renderOverview). #}
 <section data-ws-pane="overview">
+  {# Offline: the one button that puts it online (an administrator of the site), or who can. #}
+  <div id="ws-offline" class="alert alert-warning py-2 px-2 small mb-2" hidden>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <span class="fw-semibold">This website is offline: visitors cannot reach it.</span>
+      {% if site_admin|default(false) %}
+      <button type="button" class="btn btn-sm btn-success" data-action="wsPutOnline"><i class="bi bi-globe"></i> Put it online</button>
+      {% else %}
+      <span>An administrator of this website can put it online.</span>
+      {% endif %}
+    </div>
+    <div class="form-text mt-1">Putting it online opens ports 80 and 443 to the internet and gets a certificate for its domains. Each domain must point at this host first.</div>
+    <div id="ws-offline-msg" class="small" role="status"></div>
+  </div>
   <div class="ws-grid">
     <div class="card">
       <div class="card-body py-2">
@@ -13,7 +26,8 @@
           {% if can_manage|default(false) %}<button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRestart"><i class="bi bi-arrow-clockwise"></i> Restart</button>{% endif %}
           {% if site_admin|default(false) %}<button type="button" id="ws-update" class="btn btn-sm btn-outline-primary" data-action="wsUpdateImage" hidden><i class="bi bi-cloud-arrow-down"></i> Update</button>{% endif %}
         </div>
-        <div id="ws-update-note" class="form-text" hidden>A newer signed image is available.</div>
+        <div id="ws-update-note" class="form-text" hidden>A newer signed image is available. Update installs the website again from it and restarts it: a few seconds offline (building a PHP image can take a few minutes first). Its files, databases and settings stay.</div>
+        <div class="form-text">{% if site.kind == 'static' %}A plain site has no PHP, Database or App tab: it serves its files as they are.{% elif site.kind == 'app' %}No PHP tab: this app runs on Node.js.{% else %}No App tab: that one is for Node.js apps.{% endif %}</div>
       </div>
     </div>
     <div class="card">
@@ -21,6 +35,7 @@
         <div class="ws-bar"><label for="ws-mem" class="small">Memory</label><meter id="ws-mem" min="0" max="1" value="0"></meter><span id="ws-mem-text" class="small text-secondary" data-no-i18n></span></div>
         <div class="ws-bar"><label for="ws-disk" class="small">Disk</label><meter id="ws-disk" min="0" max="1" value="0"></meter><span id="ws-disk-text" class="small text-secondary" data-no-i18n></span></div>
         <div class="ws-bar"><label for="ws-cpu" class="small">CPU</label><meter id="ws-cpu" min="0" max="100" value="0"></meter><span id="ws-cpu-text" class="small text-secondary" data-no-i18n></span></div>
+        <div id="ws-cpu-note" class="form-text mt-0" data-no-i18n hidden></div>
       </div>
     </div>
   </div>

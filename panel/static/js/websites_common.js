@@ -82,11 +82,48 @@
   // A high-risk action asks for the password again first when the sign-in is old (step_up_form.js).
   WS.stepUp = function (go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); };
   WS.toast = function (msg, kind) { if (window.toast) window.toast(msg, kind || 'info'); };
+  // A size in bytes as people read it: 512 B, 3.4 KB, 12 MB, 1.2 GB (1024 per step); '' for no number.
+  WS.size = function (n) {
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 || n >= 10 ? String(Math.round(n)) : n.toFixed(1)) + ' ' + units[i];
+  };
   WS.done = function (d, msgId) {
     var ok = !!(d && d.success);
     var text = (d && d.message) || (ok ? WS.T('Saved.') : WS.T('That did not work. Nothing was changed.'));
     if (msgId) WS.say(msgId, text, ok ? 'ok' : 'err'); else WS.toast(text, ok ? 'success' : 'danger');
     return ok;
+  };
+  function isSuper() {
+    var page = WS.el('ws-page');
+    return (WS.siteFlags && WS.siteFlags.super === '1') || !!(page && page.dataset.super === '1');
+  }
+  var FIXES = {domains: {label: 'Open the Domains tab', path: function (id) { return WS.R.page(id) + '?tab=domains'; }},
+    proxy: {label: 'Install the web proxy', path: function () { return '/websites#wp-card'; }}};
+  // Put site `id` online (POST /websites/<id>/enable, administrators of the site; the server decides).
+  // Its answer is said in `msgId`; a refusal the Domains tab fixes (fix: "domains") gets a link there.
+  // `then(ok)` runs after the answer.
+  WS.putOnline = function (id, msgId, then) {
+    WS.stepUp(function () {
+      WS.say(msgId, WS.T('Putting it online…'));
+      WS.post('/websites/' + Number(id) + '/enable', {}).then(function (d) {
+        var ok = WS.done(d, msgId);
+        var m = WS.el(msgId);
+        // The one place that fixes the refusal: the Domains tab, or (no web proxy) the proxy card on the list.
+        var fix = !ok && d ? WS.pick(FIXES, d.fix, null) : null;
+        if (fix && m && (d.fix !== 'proxy' || isSuper())) {
+          var a = WS.node('a', 'ms-1', WS.T(fix.label));
+          a.href = WS.url(fix.path(Number(id)));
+          m.appendChild(a);
+        }
+        if (then) then(ok, d);
+      }).catch(function () {
+        // A failure in the answer's handling is said, never left as an unhandled rejection.
+        WS.say(msgId, WS.T('That did not work. Nothing was changed.'), 'err');
+        if (then) then(false, null);
+      });
+    });
   };
 
   window.WS = WS;
@@ -104,8 +141,9 @@
   // A domain's cert_state: the certificate the web proxy serves (websites_domains.cert_kind), by its issuer.
   WS.CERT = {issued: "Certificate active (Let's Encrypt)", zerossl: 'Certificate active (ZeroSSL)', other: 'Certificate active',
     staging: 'Test certificate (browsers do not trust it)', local: 'Local certificate (browsers do not trust it)',
-    pending: 'Certificate pending', failed: 'Certificate failed'};
-  WS.TRUSTED = ['issued', 'zerossl', 'other'];
+    pending: 'Certificate pending', failed: 'Certificate failed', own: 'Your own certificate',
+    tunnel: 'HTTPS by the tunnel (Cloudflare)'};
+  WS.TRUSTED = ['issued', 'zerossl', 'other', 'own', 'tunnel'];
   // A map's own entry for a value the server sent, else the fallback ("constructor" is no state).
   WS.pick = function (map, key, fallback) {
     return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback;
@@ -129,7 +167,8 @@
   var STEP_LABEL = {account: 'Create the site account', database: 'Create the database',
     download: 'Download and check the app', config: 'Write the app settings', container: 'Start the site container',
     installer: 'Run the app installer', 'web-installer': 'Run the app installer', permissions: 'Set file permissions',
-    harden: 'Remove the app installer', https: 'Turn on HTTPS'};
+    harden: 'Remove the app installer', https: 'Turn on HTTPS',
+    image: 'Build or download the site image (a few minutes on a small host)'};
   WS.renderSteps = function (box, install) {
     WS.clear(box);
     var steps = (install && install.steps) || [];

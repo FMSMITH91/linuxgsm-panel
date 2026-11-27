@@ -48,7 +48,12 @@ S_NO_HOST = "Choose the host the website runs on."
 S_QUOTA = "Your group already has as many websites as it may have."
 S_CONFIRM = "Type the website's name to confirm."
 S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
+# The Settings form's labels, so a refusal names the field the way the page does (never the column's name).
+LIMIT_LABELS = {"mem_mb": "Memory (MB)", "cpu_milli": "CPU (1000 = one core)", "pids": "Processes", "disk_mb": "Disk (MB)",
+                "max_body_mb": "Largest upload (MB)", "backup_keep": "Backups to keep"}
 S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
+S_BUSY = "This website is still being set up. Wait until that finishes (or fails), then delete it."
+S_RETRY_APP = "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
 # An install runs in a thread of the process that started it, so a site still "creating" from before this
@@ -57,9 +62,17 @@ _STATUS = {}                      # site id -> (monotonic time, probe dict)
 _STARTED = utcnow()
 _INSTALLING = set()
 _SWEPT = []                       # [True] once this process has swept
+# A plain install's progress, for the add dialog (websites_apps.install_json): site id -> {"step", "state"}, the step
+# one of ssh_manager.websites.INSTALL_PARTS as the install reports it, the state running, done or failed.
+PLAIN = {}
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
+# Apache's "client denied" line (AH01630): a request the site's server refused. Nearly always a scanner reaching for a
+# private page such as /server-status; hundreds of them would bury the site's own lines, so the page gets their count.
+DENIED_MARK = "AH01630"
+S_DENIED = ("{n} refused requests (client denied by server configuration) are left out: nearly always scanners "
+            "trying private pages such as /server-status.")
 
 
 # ── answers ─────────────────────────────────────────────────────────────────────────────────────
@@ -142,17 +155,21 @@ def site_db(site):
     return "127.0.0.1", int(getattr(hd, "port", None) or 3306)
 
 
-def install_site(site, restart=True):
+def install_site(site, restart=True, progress=None):
     """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
 
     `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
     A done install that restarted the site records the image and the files' revision it wrote (note_installed), which
     Update compares; one that left a running site alone does not, as its server still runs the files it started with.
+    `progress` is told each part of the install as it begins (ssh_manager.websites.install).
     """
-    if not restart:
+    if progress is not None:
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site), True, restart, progress)
+    elif restart:
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site))
+    else:
         return host_call(_sw.install, site.remote, site, site_db(site), True, False)
-    ok, said = host_call(_sw.install, site.remote, site, site_db(site))
-    if ok:
+    if ok and restart:
         note_installed(site)
     return ok, said
 
@@ -236,6 +253,12 @@ def proxy_row(remote_id):
     return row
 
 
+def tunnel_mode(remote_id):
+    """Whether the host's web proxy is in tunnel mode (visitors come in through the operator's tunnel)."""
+    row = WebsiteProxy.query.filter_by(remote_id=remote_id).first()
+    return row is not None and row.exposure_mode == "tunnel"
+
+
 def _cache_checked(remote, opts):
     """`opts` with the page cache left out unless this host's proxy was built with its module."""
     if opts.get("cache_build"):
@@ -283,7 +306,7 @@ def _list_routes(app):
     def websites_page():
         if not _wa.can_open_page(current_user):
             abort(404)
-        return page("websites.html", can_add=_wa.can_create(current_user), site_admin=is_admin(current_user))
+        return page("websites.html", **_list_flags())
 
     @app.route("/websites/<int:site_id>")
     @login_required
@@ -311,6 +334,19 @@ def _list_routes(app):
         return jsonify(_view.site_answer(site, _status(site), websites_apps.install_json(site)))
 
 
+def _list_flags():
+    """The Websites list's flags: can_add, site_admin, and for an administrator who cannot add one, why not.
+
+    no_add_host: an administrator below a superadmin, who has no host that runs websites (websites_access.
+    admin_website_hosts), sees the reason instead of an Add button whose every Create failed. customers_card: the
+    Add a customer card only for someone who administers a site to grant (each of its sites is checked again).
+    """
+    can_add, admin = _wa.can_create(current_user), is_admin(current_user)
+    holds = current_user.is_superadmin or _wa.visible_sites(current_user, MANAGE_WEBSITES).first() is not None
+    return {"can_add": can_add, "site_admin": admin, "customers_card": admin and holds,
+            "no_add_host": admin and not can_add and creates_as_admin(current_user)}
+
+
 def _status(site):
     """The site's probe, reused for STATUS_FRESH seconds (one SSH round trip at most per site per window)."""
     now = time.monotonic()
@@ -318,8 +354,10 @@ def _status(site):
     if hit and now - hit[0] < STATUS_FRESH:
         return hit[1]
     ok, said = host_call(_sw.site_probe, site.remote, site)
-    probe = {"ok": bool(ok), "text": i18n.tr(said) if not isinstance(said, dict) else "",
-             "facts": said if isinstance(said, dict) else {}}
+    # site_probe answers probe_sh's key=value lines (or why it failed): parsed here, or the Overview's figures
+    # stay empty however the site is doing.
+    from panel.services import websites as _ws
+    probe = {"ok": bool(ok), "text": "" if ok else i18n.tr(said), "facts": _ws.parse_probe(said) if ok else {}}
     _STATUS[site.id] = (now, probe)
     return probe
 
@@ -446,6 +484,8 @@ def add_refusal(remote, name, kind):
         return 400, problem
     if kind not in WEBSITE_KINDS:
         return 400, i18n.Sentence("Choose what kind of website it is.")
+    if not _sw.runs_websites(remote):
+        return 409, _sw.ONLY_LOCAL      # refused before the row is made: the install would fail it at once
     if Website.query.filter_by(remote_id=remote.id, name=name).first() is not None:
         return 409, S_NAME_TAKEN
     if _free_port(remote.id) is None:
@@ -480,6 +520,16 @@ def sweep_stranded():
     _SWEPT.append(True)
 
 
+def setting_up(site_id):
+    """Whether this process is setting the site up now: its plain install's thread, or its app install's job.
+
+    A delete then would remove the account while the install still runs as it, and the install's last write
+    would land on a deleted row.
+    """
+    from panel.routes.websites_apps import job_running
+    return site_id in _INSTALLING or job_running(site_id)
+
+
 def note_run_state(site, ok, said):
     """Record on `site` what an install, update or rebuild that ran it left (committed).
 
@@ -501,15 +551,21 @@ def _install_worker(app, site_id):
             if site is None:
                 return
             try:
-                ok, said = install_site(site)
+                ok, said = install_site(site, progress=lambda part: _plain(site_id, part, "running"))
             except Exception:  # noqa: BLE001 - an install that raised ends failed, never "creating" for good
                 _log.warning("website install raised", exc_info=True)
                 ok, said = False, S_UNREACHABLE
+            _plain(site_id, PLAIN.get(site_id, {}).get("step") or "account", "done" if ok else "failed")
             site.state = "running"          # a new site's "creating" ends here, whatever the outcome
             note_run_state(site, ok, said)
             forget_status(site_id)
         finally:
             _INSTALLING.discard(site_id)
+
+
+def _plain(site_id, step, state):
+    """Record a plain install's progress (PLAIN)."""
+    PLAIN[site_id] = {"step": step, "state": state}
 
 
 def _add_route(app):
@@ -544,6 +600,8 @@ def _run_routes(app):
     @login_required
     def website_start(site_id):
         site = _wa.site_for(current_user, site_id, manage_perm(site_id))
+        if site.state == "failed":
+            return _retry(site)
         ok, said = host_call(_sw.start, site.remote, site)
         return _ran(site, "website_start", ok, said, "running")
 
@@ -571,8 +629,30 @@ def _run_routes(app):
         if reader is None:
             return say(501, S_NOT_READY)
         ok, said = host_call(reader, site.remote, site)
-        lines = said.splitlines()[-500:] if ok and isinstance(said, str) else []
+        lines = readable_logs(said.splitlines()[-500:]) if ok and isinstance(said, str) else []
         return jsonify({"success": bool(ok), "lines": lines, "message": "" if ok else i18n.tr(said)})
+
+
+def readable_logs(lines):
+    """The site's log lines for the page: refused requests (DENIED_MARK) left out and counted in one last line."""
+    kept = [ln for ln in lines if DENIED_MARK not in ln]
+    left = len(lines) - len(kept)
+    return kept + ([i18n.tr(S_DENIED, n=left)] if left else [])
+
+
+def _retry(site):
+    """Retry a failed site (its page's Retry): install it again, then start it, as an image update does.
+
+    A start alone could never recover a failed first install, which removed the site's account. An app whose
+    install stopped part-way (install_step still names a step) is not set up again here: its steps are undone by
+    deleting the site, which is then added again.
+    """
+    if site.app_recipe and site.install_step:
+        return say(409, S_RETRY_APP)
+    ok, said = install_site(site)
+    note_run_state(site, ok, said)
+    forget_status(site.id)
+    return acted(site, "website_start", ok, said, "set up again after it failed" if ok else "")
 
 
 def _ran(site, action, ok, said, state):
@@ -585,18 +665,50 @@ def _ran(site, action, ok, said, state):
 
 
 # ── administering a site ────────────────────────────────────────────────────────────────────────
+S_NOT_SERVED = ("None of this website's domains would be served: {domains}. A domain is served once a DNS check "
+                "finds it pointing at this host or going through a CDN whose networks the panel knows. Check its DNS on "
+                "the Domains tab, then try again.")
+S_ONLINE_PART = "It does not answer on {domains} yet: their DNS does not point here."
+S_NO_PROXY_SUPER = ("The web proxy is not installed on this host yet. Install it on the Websites page (Web proxy and "
+                    "public access), then put the website online.")
+S_NO_PROXY = "The web proxy is not installed on this host yet. Ask a superadmin to install it."
+
+
+def _exposure(site):
+    """How the proxy serves `site`'s domains: "tunnel" on a host in tunnel mode, else "public" (websites_proxy._served)."""
+    return "tunnel" if tunnel_mode(site.remote_id) else "public"
+
+
+def _unserved(site):
+    """The site's domains the web proxy would not serve, each with its DNS state ("x.org (mismatch)")."""
+    from panel.services import websites_proxy as _wp
+    served = set(_wp.site_domains(site, _exposure(site)))
+    return ["%s (%s)" % (d.domain, d.dns_state or "unchecked") for d in site.domains or [] if d.domain not in served]
+
+
 def online_refusal(site):
     """Why `site` may not go online now (a sentence), or None.
 
-    It needs a domain, and every domain's DNS must point at the host (website_dns) unless a
-    superadmin puts it online anyway, which is audited as such.
+    It needs a domain and the host's web proxy, and every domain's DNS must point at the host or go
+    through a known CDN (website_dns.VERIFIED) unless a superadmin puts it online anyway, which is audited
+    as such. Even then, a site the web proxy would serve on no domain at all (none verified yet) is
+    refused: it would say online and answer nothing. A host in tunnel mode has no DNS rule: its domains
+    point at the tunnel's provider, the tunnel is the way in, and the proxy serves every valid domain.
     """
+    from panel.services import website_dns
+    from panel.services import websites_proxy as _wp
     domains = list(site.domains or [])
     if not domains:
         return i18n.Sentence("Add a domain to this website before putting it online.")
-    if not current_user.is_superadmin and any(d.dns_state != "matching" for d in domains):
+    if not proxy_row(site.remote_id).installed_version:
+        return i18n.Sentence(S_NO_PROXY_SUPER if current_user.is_superadmin else S_NO_PROXY)
+    mode = _exposure(site)
+    if mode != "tunnel" and not current_user.is_superadmin and any(
+            d.dns_state not in website_dns.VERIFIED for d in domains):
         return i18n.Sentence("A domain of this website does not point at its host yet. Check its DNS on the "
                              "Domains tab, then try again.")
+    if not _wp.site_domains(site, mode):
+        return i18n.Sentence(S_NOT_SERVED, domains=", ".join(_unserved(site)))
     return None
 
 
@@ -605,10 +717,13 @@ def _admin_routes(app):
     @login_required
     def website_enable(site_id):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
+        from panel.routes import websites_domains
+        websites_domains.check_all(site)          # DNS as it is now, never the answer of an earlier check
         why = online_refusal(site)
         if why:
             audit(site, "website_refused", "not put online: %s" % why)
-            return say(409, why)
+            fix = "proxy" if why.template in (S_NO_PROXY_SUPER, S_NO_PROXY) else "domains"
+            return say(409, why, fix=fix)
         site.enabled = True
         db.session.commit()
         ok, said = reconcile_proxy(site.remote)
@@ -616,8 +731,12 @@ def _admin_routes(app):
             site.enabled = False
             db.session.commit()
             reconcile_proxy(site.remote)
-        unchecked = [d.domain for d in site.domains if d.dns_state != "matching"]
-        return acted(site, "website_enable", ok, said or "The website is online.",
+        unchecked = [d.domain for d in site.domains if d.dns_state not in ("matching", "cdn")]
+        said = said or "The website is online."
+        left = _unserved(site) if ok else []
+        if left:
+            said = i18n.Sentences(said, i18n.Sentence(S_ONLINE_PART, domains=", ".join(left)))
+        return acted(site, "website_enable", ok, said,
                      "put online" + (" with DNS not matching for %s" % ", ".join(unchecked) if unchecked else ""))
 
     @app.route("/websites/<int:site_id>/disable", methods=["POST"])
@@ -635,6 +754,8 @@ def _admin_routes(app):
         site = _wa.site_for(current_user, site_id, MANAGE_WEBSITES)
         if field(body(), "confirm") != site.name:
             return say(400, S_CONFIRM)
+        if setting_up(site.id):
+            return say(409, S_BUSY)
         return _delete(site)
 
     @app.route("/websites/<int:site_id>/update-image", methods=["POST"])
@@ -684,6 +805,7 @@ def _delete(site):
         db.session.commit()
         return acted(site, "website_delete", False, said)
     sid = site.id
+    PLAIN.pop(sid, None)
     audit(site, "website_delete", "removed website %s, its databases and its account" % name)
     db.session.delete(site)
     db.session.commit()
@@ -691,9 +813,14 @@ def _delete(site):
     return done(True, "Website removed.")
 
 
+def _bad_limit(key, low, high):
+    db.session.rollback()
+    return say(400, i18n.Sentence(S_BAD_LIMIT, field=i18n.Sentence(LIMIT_LABELS[key]), low=low, high=high))
+
+
 def _limits(site, fields):
-    """Set the limits in `fields` on `site` (not committed): None, or the refusal naming the first bad one."""
-    changed = {}
+    """Set the limits in `fields` on `site` (not committed): (None, [the limits whose value changed]) or (refusal, [])."""
+    given = {}
     for key, (low, high) in LIMITS.items():
         if key not in fields:
             continue
@@ -702,12 +829,12 @@ def _limits(site, fields):
         except (TypeError, ValueError):
             v = None
         if v is None or not low <= v <= high:
-            db.session.rollback()
-            return say(400, i18n.Sentence(S_BAD_LIMIT, field=key, low=low, high=high))
-        changed[key] = v
-    for key, v in changed.items():
-        setattr(site, key, v)
-    return None
+            return _bad_limit(key, low, high), []
+        given[key] = v
+    changed = sorted(k for k, v in given.items() if v != getattr(site, k))
+    for key in changed:
+        setattr(site, key, given[key])
+    return None, changed
 
 
 def _keep(site, fields):
@@ -719,8 +846,7 @@ def _keep(site, fields):
     except (TypeError, ValueError):
         keep = 0
     if not 1 <= keep <= 60:
-        db.session.rollback()
-        return say(400, i18n.Sentence(S_BAD_LIMIT, field="backup_keep", low=1, high=60))
+        return _bad_limit("backup_keep", 1, 60)
     site.backup_keep = keep
     return None
 
@@ -738,15 +864,17 @@ def _settings_flags(site, form):
     return words
 
 
-def _settings_apply(site, limits, form):
-    """Apply a saved Settings form on the host: (ok, sentence)."""
-    if not any(k in LIMITS for k in limits):
-        ok, said = True, "Saved."
-    else:
-        ok, said = install_site(site)
-    if ok and "disk_mb" in limits:
+def _settings_apply(site, changed, form, log_was):
+    """Apply a saved Settings form on the host: (ok, sentence).
+
+    The site is installed again (and restarted) only when a limit's value or the full-internet switch changed: the
+    form sends every field, and a note or the access log alone never restarts the site. The proxy is applied again
+    only when the access log of an online site was switched.
+    """
+    ok, said = install_site(site) if changed else (True, "Saved.")
+    if ok and "disk_mb" in changed:
         host_call(_sw.quota_set, site.remote, site)
-    if ok and site.enabled and "access_log" in form:
+    if ok and site.enabled and "access_log" in form and bool(site.access_log) != log_was:
         ok, said = reconcile_proxy(site.remote)
     return ok, said
 
@@ -762,13 +890,18 @@ def _settings(site, form):
     """The Settings form: {limits: {..., backup_keep}, access_log, full_egress, customer_note}."""
     limits = dict(form.get("limits")) if isinstance(form.get("limits"), dict) else {}
     _egress_refusal(site, form)
-    refused = _limits(site, limits) or _keep(site, limits)
+    log_was = bool(site.access_log)
+    refused, changed = _limits(site, limits)
+    refused = refused or _keep(site, limits)
     if refused is not None:
         return refused
     words = ["%s=%s" % (k, limits[k]) for k in sorted(limits) if k in LIMITS or k == "backup_keep"]
+    egress_was = bool(site.full_egress)
     words += _settings_flags(site, form)
+    # The full-internet switch changes the site's network and WordPress's egress proxy: installed again, like a limit.
+    changed += ["full_egress"] if bool(site.full_egress) != egress_was else []
     db.session.commit()
-    ok, said = _settings_apply(site, limits, form)
+    ok, said = _settings_apply(site, changed, form, log_was)
     return acted(site, "website_settings", ok, said, ", ".join(words) or "none")
 
 

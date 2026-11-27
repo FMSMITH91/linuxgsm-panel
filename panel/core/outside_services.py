@@ -22,6 +22,7 @@ STEAM_WORKSHOP = "outside_steam_workshop"
 MODRINTH = "outside_modrinth"
 PUBLIC_IP = "outside_public_ip"
 DBIP = "outside_dbip"
+WEBSITE_ALLOW_URL = "outside_website_allow_url"
 # The breached-password check (Have I Been Pwned's range API) keeps the key it was built with.
 BREACH_CHECK = "breach_check_online"
 
@@ -60,6 +61,9 @@ SERVICES = (
     {"key": DBIP, "label": "Country database for B3 (db-ip.com)",
      "note": "Only for a B3 add-on with offline geolocation: the panel downloads DB-IP's free country database "
              "once a month; no player address is sent. Off: no download, and B3 keeps the copy it has."},
+    {"key": WEBSITE_ALLOW_URL, "label": "Website allow lists read from an address (the address you enter)",
+     "note": "Only for a web proxy in Restricted mode with a list's address set: the panel reads that list when it is "
+             "saved and once a day. Off: nothing is read, and the host keeps the last list it read."},
 )
 KEYS = tuple(s["key"] for s in SERVICES)
 

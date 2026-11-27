@@ -1137,7 +1137,7 @@ AUDIT_HOST_ACTIONS = frozenset({
     "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
     "reboot_when_empty_cancel", "reboot_when_empty_fire", "reboot_when_empty_drop",
     "reboot_when_empty_expire", "add_remote", "edit_remote", "add_local_remote",
-    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow",
+    "db_setup", "db_admin_login", "db_admin_reveal", "db_delete", "db_endpoint_allow", "db_start",
 })
 AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
 # Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
@@ -2002,6 +2002,15 @@ _LIGHT_MIGRATIONS = {
     # 0 on upgrade: every group that exists is an ordinary one; a customer group is only ever made new.
     ("group", "is_customer"): "ALTER TABLE `group` ADD COLUMN is_customer BOOLEAN DEFAULT 0 NOT NULL",
     ("group", "max_sites"): "ALTER TABLE `group` ADD COLUMN max_sites INTEGER DEFAULT 3 NOT NULL",
+    # 0 on upgrade: the operator's networks are allow-only until a superadmin marks them as trusted proxies.
+    ("website_proxy", "custom_trusted"): "ALTER TABLE website_proxy ADD COLUMN custom_trusted BOOLEAN DEFAULT 0 NOT NULL",
+    # Empty on upgrade: no host had a list read from an address before.
+    ("website_proxy", "allow_url"): "ALTER TABLE website_proxy ADD COLUMN allow_url VARCHAR(500) DEFAULT '' NOT NULL",
+    ("website_proxy", "allow_url_nets"): "ALTER TABLE website_proxy ADD COLUMN allow_url_nets TEXT DEFAULT '[]'",
+    ("website_proxy", "allow_url_at"): "ALTER TABLE website_proxy ADD COLUMN allow_url_at DATETIME",
+    ("website_proxy", "allow_url_error"): "ALTER TABLE website_proxy ADD COLUMN allow_url_error VARCHAR(300) DEFAULT ''",
+    # Empty on upgrade: a domain checked as cdn before then went through Cloudflare, the only preset (website_dns).
+    ("website_domain", "dns_cdn"): "ALTER TABLE website_domain ADD COLUMN dns_cdn VARCHAR(20) DEFAULT ''",
 }
 
 
@@ -2056,6 +2065,7 @@ def _run_light_migrations():
     for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    _drop_retired_columns(existing)
     if _has_user:
         _cmpb_stamp_whats_new()
         _ensure_one_owner()
@@ -2071,6 +2081,27 @@ def _run_light_migrations():
     _give_keyed_tables_autoincrement()
     _create_declared_indexes(existing)
     db.session.commit()
+
+
+# Columns no version reads any more: (table, column, the ALTER TABLE that drops it from a database an
+# older version created). A tuple, not the light migrations' map shape: smoke part04 reads that shape as
+# columns that must exist. website_proxy.origin_tls was a per-host certificate choice that nothing rendered
+# or applied; a domain's own certificate is WebsiteDomain.cert_mode. Dropped only where SQLite has DROP
+# COLUMN (3.35); an older SQLite keeps the column, which has a default and is never read or written.
+_RETIRED_COLUMNS = (
+    ("website_proxy", "origin_tls", "ALTER TABLE website_proxy DROP COLUMN origin_tls"),
+)
+
+
+def _drop_retired_columns(existing):
+    """Drop the _RETIRED_COLUMNS an existing database still has (a no-op once they are gone)."""
+    import sqlite3
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        return
+    for table, col, ddl in _RETIRED_COLUMNS:
+        if col in existing.get(table, ()):
+            db.session.execute(text(ddl))
+            existing[table].discard(col)
 
 
 def _autostart_off_for_unfinished_installs():

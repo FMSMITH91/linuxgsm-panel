@@ -12,7 +12,9 @@
 3. Re-applying tunnel mode clears the connector's start limit first, and a failure names the tunnel. From the
    sixth round (P6): the apply waits TUNNEL_SETTLE_S seconds after the restart and fails when the connector is then
    not active or systemd restarted it (cloudflared refuses a bad token after the restart returned), and the proxy's
-   status names the connector's unit state.
+   status names the connector's unit state. A well-formed token Cloudflare refuses keeps the unit active (cloudflared
+   retries for minutes): the apply and the status read the connector's log, say Cloudflare refused the token and
+   store it as the proxy's last_error, and the proxy card says so.
 4. An app's build turns npm's update notice off, so the build log's last lines are the build's own.
 5. The page-cache build removes Podman's blob-info cache folder only when the build made it.
 6. From the sixth round (P6): a site a stopped panel left "creating" (its install thread ended with the process) is
@@ -60,7 +62,8 @@ _REAL311 = {n: getattr(_sw311, n) for n in ("install", "remove", "tunnel_apply",
 # The stand-in tools. Each records its argv (one JSON line). systemctl models a unit's start limit: a unit with
 # "$HOME/.limit-<unit>" is refused by start/restart until `reset-failed <unit>` removes it; FAKE_RESTART_RC fails
 # every start; `show` answers ActiveState with FAKE_ACTIVE (active), and NRestarts with 0, then with
-# FAKE_RESTARTS_LATER. podman answers `image exists` with FAKE_IMAGE_EXISTS, a build with FAKE_BUILD_RC, and a run prints
+# FAKE_RESTARTS_LATER; journalctl prints FAKE_JOURNAL (the unit's log, "" as when it cannot be read). podman
+# answers `image exists` with FAKE_IMAGE_EXISTS, a build with FAKE_BUILD_RC, and a run prints
 # npm's update notice unless the run turns it off (as npm does at the end of a build).
 _FAKE311 = r'''
 import json, os, sys
@@ -89,6 +92,8 @@ if tool == "systemctl":
         open(seen, "a").close()
     elif "show" in argv:
         sys.stdout.write("success\n")
+elif tool == "journalctl":
+    sys.stdout.write(os.environ.get("FAKE_JOURNAL", ""))
 elif tool == "podman":
     if argv[:2] == ["image", "exists"]:
         rc = int(os.environ.get("FAKE_IMAGE_EXISTS", "0"))
@@ -409,7 +414,7 @@ def _s3_tunnel(st):
 
 def _s3_tunnel_settle(st, su, proxy):
     """M16: the restart returned, then the connector stopped (cloudflared refused its token a moment later)."""
-    eq("M16: the connector must stay up 5 seconds after its restart (pinned)", _sw311.TUNNEL_SETTLE_S, 5)
+    eq("M16: the apply watches the connector for up to 20 seconds after its restart (pinned)", _sw311.TUNNEL_SETTLE_S, 20)
     _p9_patch(_sw311, "TUNNEL_SETTLE_S", 1)
     got = {}
     for name, env in (("auto-restart", {"FAKE_ACTIVE": "activating"}), ("failed", {"FAKE_ACTIVE": "failed"}),
@@ -434,6 +439,83 @@ def _s3_tunnel_settle(st, su, proxy):
     eq("M16 (GET /websites/proxy/status, tunnel mode): the status names the connector's unit state and restarts, read "
        "as the tunnel's account; a connector that is up says active (control)",
        ((body.get("tunnel"), body.get("tunnel_restarts")), up.get("tunnel")), (("activating", 3), "active"))
+    _s3_tunnel_refused(st, su, proxy)
+    _s3_tunnel_page()
+
+
+# cloudflared's own lines (as `journalctl -o cat` prints them), from a real run with a well-formed token of no tunnel:
+# it stays up retrying (about two minutes of backoff before it exits), so the unit reads active with no restart.
+_STARTING311 = "2026-11-27T16:02:50Z INF Starting tunnel tunnelID=00000000-0000-4000-8000-000000000000\n"
+_REFUSED311 = _STARTING311 + ('2026-11-27T16:02:50Z ERR Register tunnel error from server side error="Failed to get '
+                              'tunnel" connIndex=0 event=0 ip=198.41.192.67\n2026-11-27T16:02:50Z INF Retrying '
+                              'connection in up to 2s connIndex=0 event=0 ip=198.41.192.67\n')
+_UP311 = ("2026-11-27T16:09:12Z INF Registered tunnel connection connIndex=0 connection=00000000-0000-4000-8000-"
+          "000000000001 event=0 ip=198.41.192.67 location=fra08 protocol=quic\n")
+
+
+def _s3_tunnel_refused(st, su, proxy):
+    """F2: a bad token kept the unit active (cloudflared retries for minutes), so the apply and the status said running."""
+    _p9_patch(_sw311, "TUNNEL_SETTLE_S", 2)
+    got = {}
+    for name, log in (("refused", _REFUSED311), ("connected", _STARTING311 + _UP311), ("unreadable", ""),
+                      ("systemd's lines only", "Started lgsm-web-tunnel.service.\n"), ("silent", _STARTING311)):
+        _reset311(FAKE_JOURNAL=log)
+        r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
+        _db311.session.expire_all()
+        got[name] = (r.status_code, (r.get_json() or {}).get("message"), _db311.session.get(_Proxy311, proxy.id).last_error)
+    eq("F2 (POST /websites/proxy/apply, tunnel mode, a well-formed token Cloudflare refuses: the unit stays active "
+       "with no restart while cloudflared retries): the apply reads the connector's log and says Cloudflare refused "
+       "the token, stored as the proxy's last_error; a connector that registers a connection is applied (control); "
+       "one whose log cannot be read, or holds no line of cloudflared's, is judged by its unit state as before "
+       "(control); one that starts and registers nothing in the window did not start",
+       got, {"refused": (502, _sw311.TUNNEL_REFUSED, _sw311.TUNNEL_REFUSED),
+             "connected": (200, _sw311.OK_PORTS, ""), "unreadable": (200, _sw311.OK_PORTS, ""),
+             "systemd's lines only": (200, _sw311.OK_PORTS, ""),
+             "silent": (502, _sw311.TUNNEL_FAILED, _sw311.TUNNEL_FAILED)})
+    seen = {}
+    for name, log, before in (("refused", _REFUSED311, ""), ("connected", _REFUSED311 + _UP311, None),
+                              ("other error kept", _REFUSED311 + _UP311, "The web proxy refused its settings.")):
+        if before is not None:
+            _db311.session.get(_Proxy311, proxy.id).last_error = before
+            _db311.session.commit()
+        _reset311(FAKE_JOURNAL=log)
+        body = su.get("/websites/proxy/status?host_id=%d" % st.host.id).get_json() or {}
+        _db311.session.expire_all()
+        seen[name] = ((body.get("status") or {}).get("tunnel"), (body.get("status") or {}).get("tunnel_link"),
+                      body.get("last_error"), _db311.session.get(_Proxy311, proxy.id).last_error)
+    eq("F2 (GET /websites/proxy/status, tunnel mode, the unit active): the status reads the connector's log, says "
+       "Cloudflare refused the token and stores it as the proxy's last_error; once a connection is registered after "
+       "it, the status says connected and that error is cleared (control); another error stays (control)",
+       seen, {"refused": ("active", "refused", _sw311.TUNNEL_REFUSED, _sw311.TUNNEL_REFUSED),
+              "connected": ("active", "connected", "", ""),
+              "other error kept": ("active", "connected", "The web proxy refused its settings.",
+                                   "The web proxy refused its settings.")})
+    _db311.session.get(_Proxy311, proxy.id).last_error = ""
+    _db311.session.commit()
+
+
+def _s3_tunnel_page():
+    """F2 on the proxy card: Check the web proxy said "Tunnel connector: running" for a refused token."""
+    from unit.part301 import _COMMON301, _LIST301, _list_sa301, _node301
+    answer = dict(_LIST301, proxies=[{"host_id": 1, "host_name": "h", "installed": True, "version": "2.11.9",
+                                      "exposure_mode": "tunnel", "allow_cidrs": [], "allow_presets": [],
+                                      "tunnel_service": "http://localhost:19080"}], options={})
+    out = {}
+    for link in ("refused", "connected"):
+        status = {"status_ok": True, "exposure_mode": "tunnel", "online_sites": 1,
+                  "status": {"version": "2.11.9", "active": "active", "tunnel": "active", "tunnel_link": link}}
+        got = _node301(_list_sa301, _COMMON301 + ["websites.js", "websites_proxy.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  window.wsProxyStatus();
+  for (let i = 0; i < 4; i++) await tick();
+  return {text: $('wp-status').textContent, cls: $('wp-status').className};
+""", routes={"/api/websites": answer, "/websites/proxy/status": status})
+        out[link] = (got.get("text"), "text-danger" in (got.get("cls") or ""))
+    eq("F2 (the proxy card, js/websites_proxy.js): Check the web proxy says Cloudflare refused the tunnel's token, in "
+       "red, where it said \"Tunnel connector: running\"; a connected tunnel still reads running (control)", out,
+       {"refused": ("Caddy 2.11.9: running. Tunnel connector: Cloudflare refused its token, so no visitor gets "
+                    "through. Paste the tunnel's token again. 1 websites online.", True),
+        "connected": ("Caddy 2.11.9: running. Tunnel connector: running. 1 websites online.", False)})
 
 
 # ── 4. An app's build log ─────────────────────────────────────────────────────────────────────────

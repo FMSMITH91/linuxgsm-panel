@@ -45,21 +45,28 @@ def make_backup(site):
 
 
 def _restore(site, name):
+    """Restore backup `name`: the site stopped, a safety backup, the files and databases put back.
+
+    The site is started again only when it was running: a stopped site stays stopped, as its page says.
+    """
     why = _wb.check_archive(site.remote, site.account, name)
     if why:
         sentence = why if why == _wb.S_BAD_NAME else i18n.Sentence(_wb.S_REFUSED, name=repr(why))
         _w.audit(site, "website_restore", "refused %s: %s" % (name, i18n.tr(sentence)), False)
         return _w.say(422, sentence)
+    was_running = site.state == "running"
     _w.host_call(_sw.stop, site.remote, site)
     ok, said, safety = make_backup(site)
     if not ok:
-        _w.host_call(_sw.start, site.remote, site)
+        if was_running:
+            _w.host_call(_sw.start, site.remote, site)
         return _w.acted(site, "website_restore", False, said, "no safety backup, nothing restored")
     ok, said = _wb.restore(site.remote, site.account, name)
     if ok:
         from panel.routes import databases_sites
         ok, said = databases_sites.restore_after_backup(site)
-    _w.host_call(_sw.start, site.remote, site)
+    if was_running:
+        _w.host_call(_sw.start, site.remote, site)
     _w.forget_status(site.id)
     return _w.acted(site, "website_restore", ok, said, "restored %s (safety backup %s)" % (name, safety))
 

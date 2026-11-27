@@ -1,0 +1,18 @@
+{
+  "Cloudflare refused the tunnel's token, so no visitor gets through. Copy this tunnel's token from Cloudflare's dashboard, paste it again, then apply.": "Cloudflare rechazó el token del túnel, así que ningún visitante llega. Copia el token de este túnel desde el panel de Cloudflare, pégalo de nuevo y aplica.",
+  "Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again.": "Conector del túnel: Cloudflare rechazó su token, así que ningún visitante llega. Vuelve a pegar el token del túnel.",
+  "The database server is ready. Create the app now.": "El servidor de bases de datos está listo. Crea la aplicación ahora.",
+  "Databases are being set up. Create becomes available here when they are ready.": "Se están configurando las bases de datos. Crear estará disponible aquí cuando estén listas.",
+  "This host's database server is installed but stopped, and an app needs it running.": "El servidor de bases de datos de este host está instalado pero detenido, y una aplicación lo necesita en marcha.",
+  "The database server was started, and starts with the host from now on.": "Se inició el servidor de bases de datos, y a partir de ahora se inicia con el host.",
+  "The database server did not start. Look at its log on the host (journalctl -u {unit}).": "El servidor de bases de datos no se inició. Revisa su registro en el host (journalctl -u {unit}).",
+  "This host's database server is not one the panel can start: it is not installed and stopped.": "El servidor de bases de datos de este host no es uno que el panel pueda iniciar: no está instalado y detenido.",
+  "Start the database server": "Iniciar el servidor de bases de datos",
+  "Starting the database server…": "Iniciando el servidor de bases de datos…",
+  "Run the app's setup": "Ejecutar la configuración de la aplicación",
+  "Check the install": "Comprobar la instalación",
+  "{step} ({n} of {total})": "{step} ({n} de {total})",
+  "Install step {n}": "Paso de instalación {n}",
+  "The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a well-known authority, or switch back to automatic (Let's Encrypt).": "El certificado que diste a este dominio es autofirmado, así que los navegadores de los visitantes avisan. Usa uno de una autoridad conocida, o vuelve al automático (Let's Encrypt).",
+  "Its files, backups and account are removed for good, and its databases: {names}. A copy of each database is kept on the host for 30 days. Type the website name to confirm.": "Sus archivos, copias de seguridad y cuenta se eliminan para siempre, y sus bases de datos: {names}. Se guarda una copia de cada base de datos en el host durante 30 días. Escribe el nombre del sitio web para confirmar."
+}

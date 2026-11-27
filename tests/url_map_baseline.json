@@ -1257,16 +1257,6 @@
       "GET"
     ]
   },
-  "GET /websites/<int:site_id>/domains": {
-    "endpoint": "website_domains",
-    "guards": [
-      "utils.py:decorated_view",
-      "view:website_domains"
-    ],
-    "methods": [
-      "GET"
-    ]
-  },
   "GET /websites/<int:site_id>/files/download": {
     "endpoint": "website_files_download",
     "guards": [
@@ -1312,6 +1302,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:website_php_effective"
+    ],
+    "methods": [
+      "GET"
+    ]
+  },
+  "GET /websites/install-app/status": {
+    "endpoint": "website_install_status",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_install_status"
     ],
     "methods": [
       "GET"
@@ -2292,6 +2292,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:api_remote_databases_setup"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /api/remote/<int:remote_id>/databases/start": {
+    "endpoint": "api_remote_databases_start",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:api_remote_databases_start"
     ],
     "methods": [
       "POST"
@@ -3910,6 +3920,16 @@
       "POST"
     ]
   },
+  "POST /websites/<int:site_id>/domains/cert": {
+    "endpoint": "website_domain_cert",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_domain_cert"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "POST /websites/<int:site_id>/domains/check": {
     "endpoint": "website_domain_check",
     "guards": [
@@ -4015,6 +4035,16 @@
     "guards": [
       "utils.py:decorated_view",
       "view:website_install_undo"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
+  "POST /websites/<int:site_id>/object-cache/credentials": {
+    "endpoint": "website_cache_credentials",
+    "guards": [
+      "utils.py:decorated_view",
+      "view:website_cache_credentials"
     ],
     "methods": [
       "POST"

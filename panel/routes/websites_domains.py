@@ -16,6 +16,21 @@ Transport Layer Security Cheat Sheet, "Use an Appropriate Certification Authorit
 User Base"). So is one close to expiry: the proxy renews a certificate once a third of its lifetime is
 left (15 days or more for Let's Encrypt's 45- to 90-day certificates), so fewer than CERT_SOON_DAYS left
 means renewal has been failing for days.
+
+YOUR OWN CERTIFICATE (POST .../domains/cert, the same permission as the other domain routes). A domain may
+use a certificate the operator pastes (its chain and private key, PEM; a Cloudflare Origin CA certificate
+is this case) instead of the automatic one, and go back to automatic at any time. The pair is checked by
+tls_own.check_for_domain, the panel's own certificate checks (OWASP Transport Layer Security Cheat Sheet,
+"Use Strong Keys and Protect Them", "Use Strong Cryptographic Hashing Algorithms", "Use Correct Domain
+Names", "Use an Appropriate Certification Authority for the Application's User Base"): what would fail
+every visitor is refused, the rest is a note shown with OWASP's value. The chain is stored re-encoded from
+what was parsed; the key re-encoded and encrypted (encrypt_secret), never returned by any route, never in
+an audit row or a log line (OWASP Logging Cheat Sheet, "Data to exclude"; Key Management Cheat Sheet,
+"Storage"), and sent to the host only on the helper's stdin. The audit row names the domain, the issuer,
+the expiry and the SHA-256 fingerprint. A domain online is applied at once (websites.reconcile_proxy); a
+failed apply puts the previous certificate back, applies that again, and says why. The proxy never renews
+such a certificate: the domain's line warns from tls_own.SOON_DAYS days before expiry, and so does the
+cert_expiring alert (services/website_certs).
 """
 import time
 from datetime import datetime, timezone
@@ -26,14 +41,16 @@ from sqlalchemy.exc import IntegrityError
 
 from panel.core import i18n
 from panel.core.clock import utcnow
-from panel.core.config import load_config
+from panel.core.config import encrypt_secret, load_config
 from panel.core.validation import website_domain
 from panel.db.models import Website, WebsiteDomain, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
-from panel.security.auth import VIEW_WEBSITES
+from panel.services import tls_own
+from panel.services import website_certs as _wcert
 from panel.services import website_dns as _dns
 from panel.services import websites_access as _wa
+from panel.services import websites_catalog as _wcat
 
 S_BAD = "That is not a domain a public website can use: letters, digits, hyphens and dots, like www.example.org."
 S_TAKEN = "That domain is already used by a website."
@@ -46,6 +63,37 @@ S_CERT_EXPIRED = ("This domain's certificate has expired and was not renewed. Ch
                   "host are reachable from the internet.")
 S_CERT_SOON = ("This domain's certificate expires in {days} days and should have been renewed by now. Check that "
                "ports 80 and 443 of this host are reachable from the internet.")
+S_OWN_EXPIRED = ("The certificate you gave this domain has expired, so browsers refuse it. Paste a renewed one, or "
+                 "switch back to automatic.")
+S_OWN_SOON = "The certificate you gave this domain expires in {days} day(s). Paste the renewed one before then."
+# A self-signed certificate is noted once when it is saved (tls_own's chain notes); the domain's line keeps saying
+# so, as browsers keep warning (OWASP Transport Layer Security Cheat Sheet, "Use an Appropriate
+# Certification Authority for the Application's User Base").
+S_OWN_SELF_SIGNED = ("The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a "
+                     "well-known authority, or switch back to automatic (Let's Encrypt).")
+S_CERT_MODE = "Choose Automatic (Let's Encrypt) or Your own certificate."
+S_CERT_OWN_SAVED = "Saved: {domain} uses your own certificate."
+S_CERT_AUTO_SAVED = "Saved: {domain} gets its certificate automatically from Let's Encrypt."
+S_CERT_ROLLED_BACK = "The web proxy did not take the change, so {domain} keeps its previous certificate. {why}"
+S_CERT_NOT_SERVED = "It is used once the domain's DNS points here and the website is online."
+S_CERT_TUNNEL = ("This host's websites are reached through a tunnel, so the tunnel's provider serves the "
+                 "certificate visitors see. This one is used if the host stops using the tunnel.")
+S_SERVED_NOW = "The domain points here: the website now answers on it."
+S_WP_ADDRESS_SET = "WordPress now uses https://{domain} as its address."
+S_WP_ADDRESS_FAILED = "WordPress's address could not be changed to https://{domain}, so the primary domain stays {old}. {why}"
+S_CERT_MISSING = ("No certificate yet. Usually ports 80 and 443 of this host do not reach it from the internet: check "
+                  "the host's firewall and your cloud provider's.")
+S_CERT_PROXY_SAID = "No certificate yet. The web proxy said: {why}"
+CERT_MISSING_AFTER = 600          # seconds a served domain may wait for its first certificate before it is called failed
+_MISSING_SINCE = {}               # domain name -> monotonic time apply_certs first found it served without a certificate
+# A domain behind a CDN (dns_state cdn): what its certificate needs. The CDN's name, and its own origin certificate
+# and strict TLS mode where the signed catalog names them, come from the catalog (websites_catalog.cdn_info).
+S_CDN_ACME = ("Otherwise the automatic certificate needs {provider} to pass plain HTTP to this host for "
+              "/.well-known/acme-challenge/.")
+S_CDN_MAYBE = ("If {provider} offers an origin certificate, paste it under Your own certificate and use its strict "
+               "TLS mode.")
+S_CDN_ORIGIN = ("Paste a {origin_cert} certificate under Your own certificate and set {provider}'s encryption mode to "
+                "{strict_mode}.")
 CERTS_FRESH = 300                 # seconds a host's certificate read is reused
 CERT_SOON_DAYS = 10
 _CERTS_AT = {}                    # remote id -> monotonic time of its last certificate read
@@ -66,14 +114,47 @@ def cert_kind(issuer):
 def apply_certs(remote, status):
     """Write the certificates the proxy serves (parse_proxy_status's certs) onto the host's automatic domains."""
     certs = (status or {}).get("certs") or {}
+    errors = (status or {}).get("cert_errors") or {}
     rows = (WebsiteDomain.query.join(Website, WebsiteDomain.website_id == Website.id)
             .filter(Website.remote_id == remote.id, WebsiteDomain.cert_mode == "acme").all())
+    tunnel = _w.tunnel_mode(remote.id)      # the proxy asks for no certificate: none is missing
     for row in rows:
         got = certs.get(row.domain)
         if got:
-            row.cert_state = cert_kind(got["issuer"])
+            _MISSING_SINCE.pop(row.domain, None)
+            row.cert_state, row.cert_error = cert_kind(got["issuer"]), ""
             row.cert_not_after = datetime.fromtimestamp(got["not_after"], timezone.utc).replace(tzinfo=None)
+        elif tunnel:
+            _MISSING_SINCE.pop(row.domain, None)
+        else:
+            _note_missing(row, errors.get(row.domain, ""))
     db.session.commit()
+
+
+def _note_missing(row, why="", now=None):
+    """Note a domain served by an online site with no certificate.
+
+    The proxy's own reason (`why`) is kept as soon as it has one, and the domain is failed after CERT_MISSING_AFTER
+    seconds, with that reason or the usual one (S_CERT_MISSING).
+    """
+    if row.verified_at is None or row.website is None or not row.website.enabled:
+        _MISSING_SINCE.pop(row.domain, None)
+        return
+    now = time.monotonic() if now is None else now
+    since = _MISSING_SINCE.setdefault(row.domain, now)
+    if why:
+        row.cert_error = why[:200]
+    if now - since >= CERT_MISSING_AFTER and row.cert_state in ("pending", "failed"):
+        row.cert_state, row.cert_error = "failed", why[:200] or S_CERT_MISSING
+
+
+def _error_text(row):
+    """The domain's certificate error for the page, in the viewer's language: the usual reason, or the proxy's words."""
+    if not row.cert_error:
+        return ""
+    if row.cert_error == S_CERT_MISSING:
+        return i18n.tr(S_CERT_MISSING)
+    return i18n.tr(S_CERT_PROXY_SAID, why=row.cert_error)
 
 
 def refresh_certs(remote):
@@ -88,8 +169,23 @@ def refresh_certs(remote):
         apply_certs(remote, _sw.parse_proxy_status(out))
 
 
+def _own_note(row, now):
+    """The warning for a domain's own certificate: self-signed, and expired or tls_own.SOON_DAYS days or fewer left."""
+    info = _wcert.info(row.own_cert_pem) or {}
+    notes = [S_OWN_SELF_SIGNED] if info.get("self_signed") and not info.get("cdn_origin") else []
+    if row.cert_not_after is not None:
+        left = row.cert_not_after - (now or utcnow())
+        if left.total_seconds() <= 0:
+            notes.append(S_OWN_EXPIRED)
+        elif left.days <= tls_own.SOON_DAYS:
+            notes.append(i18n.Sentence(S_OWN_SOON, days=left.days))
+    return i18n.Sentences(*notes) if notes else ""
+
+
 def cert_note(row, now=None):
     """The plain warning for the certificate `row` is served, or "" when there is nothing to say."""
+    if row.cert_mode == "own":
+        return _own_note(row, now)
     if row.cert_state == "staging":
         return S_CERT_STAGING
     if row.cert_state == "local":
@@ -136,20 +232,34 @@ def add_first(site, text):
     clean, refused = domain_refusal(site, text)
     if refused:
         return refused[1]
-    if _store(site, clean) is None:
+    row = _store(site, clean)
+    if row is None:
         return S_TAKEN
     _w.audit(site, "website_domain_add", "added domain %s" % clean)
+    _check(site, row)         # its DNS at once, so it is verified (and served once online) without a Check again
     return None
 
 
+def check_all(site):
+    """Check every domain of `site` again (before it goes online): a domain now pointing here is verified."""
+    for row in list(site.domains or []):
+        _check(site, row)
+
+
 def _check(site, row):
+    """Check the domain's DNS; one newly verified on a site online is applied at once (served from now on)."""
     state, addrs, hosts = _dns.check(row.domain, site.remote)
     row.dns_state, row.last_check_at = state, utcnow()
-    if state == "matching" and row.verified_at is None:
+    row.dns_cdn = _dns.provider(addrs) if state == "cdn" else ""
+    newly = state in _dns.VERIFIED and row.verified_at is None
+    if newly:
         row.verified_at = utcnow()
     db.session.commit()
-    return {"domain": row.domain, "dns_state": state, "answers": addrs, "host": hosts,
-            "message": i18n.tr(_dns.S_STATES[state])}
+    said = _dns.state_sentence(state, row.dns_cdn)
+    if newly and site.enabled:
+        ok, why = _w.reconcile_proxy(site.remote)
+        said = S_SERVED_NOW if ok else why
+    return {"domain": row.domain, "dns_state": state, "answers": addrs, "host": hosts, "message": i18n.tr(said)}
 
 
 def _row(site, form):
@@ -164,25 +274,165 @@ def _row(site, form):
     return next((d for d in site.domains if d.domain == clean), None) if clean else None
 
 
-def domain_json(site, row):
-    """A domain as the Domains tab shows it."""
-    note = cert_note(row)
-    return {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
-            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
-            "cert_state": row.cert_state or "pending", "cert_error": row.cert_error or "",
-            "cert_warning": i18n.tr(note) if note else "",
+def domain_json(site, row, tunnel=None):
+    """A domain as the Domains tab shows it.
+
+    On a host in tunnel mode (`tunnel`, read from the host's proxy row when None) the proxy holds no certificate:
+    the tunnel's provider serves HTTPS, so the state is "tunnel", never a certificate pending for good.
+    """
+    tunnel = _w.tunnel_mode(site.remote_id) if tunnel is None else tunnel
+    return {**_cert_part(row, tunnel), **_cert_json(row, tunnel), "id": row.id, "domain": row.domain,
+            "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked", "cdn_name": _cdn_name(row),
+            "cert_error": "" if tunnel else _error_text(row),
             "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
+
+
+def _cert_part(row, tunnel):
+    """The domain's certificate fields: its state, expiry and warning; the tunnel's state in tunnel mode."""
+    if tunnel:
+        return {"cert_state": "tunnel", "cert_not_after": None, "cert_warning": ""}
+    note = cert_note(row)
+    return {"cert_state": row.cert_state or "pending", "cert_warning": i18n.tr(note) if note else "",
+            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None}
+
+
+def _cert_json(row, tunnel=False):
+    """A domain's certificate source for the Domains tab: its own certificate's public facts, or the CDN note.
+
+    In tunnel mode the tunnel's provider holds the certificate visitors see, so there is no CDN note about an
+    automatic one; an own certificate's facts still show (it is used again if the host stops using the tunnel).
+    """
+    own = _wcert.info(row.own_cert_pem) if row.cert_mode == "own" else None
+    if own:
+        return {"cert_mode": "own", "cdn_note": "",
+                "own_cert": {k: own[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")}}
+    cdn = row.dns_state == "cdn" and not tunnel
+    return {"cert_mode": "acme", "own_cert": None, "cdn_note": cdn_note(row.dns_cdn) if cdn else ""}
+
+
+def _cdn_name(row):
+    """The CDN a domain in the cdn state goes through, as the pages name it ("" in any other state)."""
+    return _wcat.cdn_info(row.dns_cdn or "cloudflare")["name"] if row.dns_state == "cdn" else ""
+
+
+def cdn_note(preset):
+    """What an automatic certificate needs behind CDN preset `preset`, in the viewer's language.
+
+    The CDN's own origin certificate and strict mode when the signed catalog names them, else the general advice;
+    either way the automatic certificate's need. A domain checked as cdn before dns_cdn existed went through
+    Cloudflare, the only preset then.
+    """
+    info = _wcat.cdn_info(preset or "cloudflare")
+    first = (i18n.Sentence(S_CDN_ORIGIN, provider=info["name"], origin_cert=info["origin_cert"],
+                           strict_mode=info["strict_mode"]) if info["origin_cert"] else
+             i18n.Sentence(S_CDN_MAYBE, provider=info["name"]))
+    return i18n.tr(i18n.Sentences(first, i18n.Sentence(S_CDN_ACME, provider=info["name"])))
+
+
+# ── a domain's own certificate ────────────────────────────────────────────────────────────────
+_CERT_COLUMNS = ("cert_mode", "own_cert_pem", "own_key_secret", "cert_state", "cert_not_after", "cert_error")
+
+
+def _pem_field(form, name):
+    """A pasted PEM field as bytes (b"" when absent or not text; tls_own bounds its size)."""
+    value = form.get(name)
+    return value.encode("utf-8", "replace") if isinstance(value, str) else b""
+
+
+def _set_own(row, checked):
+    row.cert_mode, row.cert_state, row.cert_error = "own", "own", ""
+    row.own_cert_pem = checked.cert_pem().decode("ascii")
+    row.own_key_secret = encrypt_secret(checked.key_pem().decode("ascii"))
+    row.cert_not_after = _wcert.not_after(checked)
+
+
+def _set_auto(row):
+    row.cert_mode, row.cert_state, row.cert_error = "acme", "pending", ""
+    row.own_cert_pem, row.own_key_secret, row.cert_not_after = "", "", None
+
+
+def _cert_detail(row, checked):
+    """The audit row's text: the domain, and of an own certificate its issuer, expiry and fingerprint (never the key)."""
+    if checked is None:
+        return " ".join((row.domain + ":", "automatic certificate"))
+    got = tls_own.summary(checked.chain)
+    return "".join((row.domain, ": own certificate, issuer ", str(got["issuer"]), ", expires ", str(got["not_after"]),
+                    ", sha256 ", str(got["fingerprint"])))
+
+
+def _apply_cert(site, row, before):
+    """Apply the domain's new certificate when the site is online: (ok, sentence); on failure `before` is put back."""
+    if not site.enabled:
+        return True, ""
+    ok, said = _w.reconcile_proxy(site.remote)
+    if ok:
+        return True, ""
+    for col, value in zip(_CERT_COLUMNS, before):
+        setattr(row, col, value)
+    db.session.commit()
+    _w.reconcile_proxy(site.remote)       # the previous configuration and files, written again
+    return False, i18n.Sentence(S_CERT_ROLLED_BACK, domain=row.domain, why=i18n.tr(said))
+
+
+def _cert_notes(site, row, checked):
+    """The notes the page shows after a save: the checks' notes, and where the certificate is not served yet."""
+    notes = [i18n.tr(n) for n in (checked.notes if checked is not None else [])]
+    if checked is not None and (row.verified_at is None or not site.enabled):
+        notes.append(i18n.tr(S_CERT_NOT_SERVED))
+    if checked is not None and _w.proxy_row(site.remote_id).exposure_mode == "tunnel":
+        notes.append(i18n.tr(S_CERT_TUNNEL))
+    return notes
+
+
+def set_cert(site, row, form):
+    """POST .../domains/cert's work: check, store, apply (or put back). -> the route's answer."""
+    mode = _w.field(form, "mode")
+    if mode not in ("acme", "own"):
+        return _w.say(400, S_CERT_MODE)
+    checked = None
+    if mode == "own":
+        checked = tls_own.check_for_domain(_pem_field(form, "cert"), _pem_field(form, "key"), row.domain)
+        if checked.refusal:
+            _w.audit(site, "website_domain_cert", "%s: own certificate refused: %s" % (row.domain, checked.refusal), False)
+            return _w.say(400, checked.refusal)
+    before = tuple(getattr(row, col) for col in _CERT_COLUMNS)
+    if checked is None:
+        _set_auto(row)
+    else:
+        _set_own(row, checked)
+    db.session.commit()
+    _CERTS_AT.pop(site.remote_id, None)   # the next read of the served certificates is a fresh one
+    ok, why = _apply_cert(site, row, before)
+    if not ok:
+        _w.audit(site, "website_domain_cert", "%s: not applied: %s" % (_cert_detail(row, checked), why), False)
+        return _w.done(False, why)
+    _w.audit(site, "website_domain_cert", _cert_detail(row, checked))
+    said = i18n.Sentence(S_CERT_OWN_SAVED if checked is not None else S_CERT_AUTO_SAVED, domain=row.domain)
+    return jsonify({"success": True, "message": i18n.tr(said), "notes": _cert_notes(site, row, checked),
+                    "domain": domain_json(site, row)})
+
+
+def _primary_name(site):
+    dom = site.primary_domain
+    return dom.domain if dom is not None else ""
+
+
+def _wp_address(site, row):
+    """For a WordPress site, set its own address (home, siteurl) to `row`'s domain first: (ok, sentence), else None.
+
+    WordPress keeps the address it was installed with and sends visitors there, whatever the proxy's order. A
+    failure keeps the old primary domain (the caller changes nothing) and says why.
+    """
+    if site.app_recipe != "wordpress":
+        return None
+    ok, why = _w.host_call(_sw.wp_set_address, site.remote, site, row.domain)
+    if ok:
+        return True, i18n.Sentence(S_WP_ADDRESS_SET, domain=row.domain)
+    return False, i18n.Sentence(S_WP_ADDRESS_FAILED, domain=row.domain, old=_primary_name(site), why=i18n.tr(why))
 
 
 def register(app):
     """The domain routes."""
-    @app.route("/websites/<int:site_id>/domains")
-    @login_required
-    def website_domains(site_id):
-        site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
-        refresh_certs(site.remote)
-        return jsonify({"domains": [domain_json(site, d) for d in site.domains]})
-
     @app.route("/websites/<int:site_id>/domains/add", methods=["POST"])
     @login_required
     def website_domain_add(site_id):
@@ -223,9 +473,20 @@ def register(app):
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
+        _dns.refresh_public_ip(site.remote)     # the host's address now, never only what was found once
         got = _check(site, row)
         _w.audit(site, "website_domain_check", "%s: %s" % (row.domain, got["dns_state"]))
         return jsonify(dict(got, success=True))
+
+    @app.route("/websites/<int:site_id>/domains/cert", methods=["POST"])
+    @login_required
+    def website_domain_cert(site_id):
+        site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
+        form = _w.body()
+        row = _row(site, form)
+        if row is None:
+            return _w.say(404, S_NO_SUCH)
+        return set_cert(site, row, form)
 
     @app.route("/websites/<int:site_id>/domains/primary", methods=["POST"])
     @login_required
@@ -234,8 +495,15 @@ def register(app):
         row = _row(site, _w.body())
         if row is None:
             return _w.say(404, S_NO_SUCH)
+        wp_said = _wp_address(site, row)
+        if wp_said is not None and not wp_said[0]:
+            return _w.acted(site, "website_domain_primary", False, wp_said[1],
+                            "primary domain %s kept: WordPress's address not changed" % _primary_name(site))
         for d in site.domains:
             d.is_primary = d is row
         db.session.commit()
         ok, said = _w.reconcile_proxy(site.remote) if site.enabled else (True, "")
-        return _w.acted(site, "website_domain_primary", ok, said or "Primary domain set.", "primary domain %s" % row.domain)
+        said = said or "Primary domain set."
+        if ok and wp_said is not None:
+            said = i18n.Sentences(said, wp_said[1])
+        return _w.acted(site, "website_domain_primary", ok, said, "primary domain %s" % row.domain)

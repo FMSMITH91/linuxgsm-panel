@@ -90,8 +90,13 @@ _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "
              "*.archive.ubuntu.com:80", "archive.ubuntu.com:443", "security.ubuntu.com:443",
              "packages.microsoft.com:443", "esm.ubuntu.com:443",
              "raw.githubusercontent.com:443", "linuxgsm.com:443", "app.codacy.com:443", "api.codacy.com:443",
-             # The Cloudflare ranges job's one non-GitHub host: the published lists it checks.
-             "www.cloudflare.com:443"}
+             # The CDN ranges job's non-GitHub hosts: the published lists it checks.
+             "www.cloudflare.com:443", "api.fastly.com:443",
+             # The site app versions job's: its script's fixed hosts (part314 holds the two lists equal), the apps'
+             # release sources and archives, GitHub's tag archives and Docker Hub's registry for WordPress's digests.
+             "codeload.github.com:443", "api.wordpress.org:443", "auth.docker.io:443", "registry-1.docker.io:443",
+             "version.phpbb.com:443", "download.phpbb.com:443", "updates.drupal.org:443", "www.drupal.org:443",
+             "ftp.drupal.org:443", "mybb.com:443"}
 _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("ci.yml", "coverage"),
              ("ci.yml", "js-coverage"), ("ci.yml", "checks"), ("ci.yml", "checks-verdict"),
              ("ci.yml", "coverage-verdict"), ("ci.yml", "js-coverage-verdict"), ("lighthouse.yml", "lighthouse"),
@@ -103,7 +108,8 @@ _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), (
              ("sonar-new-issues.yml", "sonar-new-issues"), ("zizmor.yml", "zizmor"), ("zizmor.yml", "upload"),
              ("codacy-alerts.yml", "open-errors"), ("codacy-coverage.yml", "upload"),
              ("sonar-main-issues.yml", "sonar-main-issues"), ("codeql-alerts.yml", "open-alerts"),
-             ("cflite_cleanup.yml", "cleanup"), ("cloudflare-ranges.yml", "ranges")}
+             ("cflite_cleanup.yml", "cleanup"), ("cdn-ranges.yml", "ranges"),
+             ("site-app-versions.yml", "versions")}
 _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no pull request can show a block list " \
                 "is complete before it holds every panel's update"
 _AUDIT223 = {

@@ -135,9 +135,10 @@ eq("site: ...and keeps the main button and the panels manage_website gives (PHP,
 eq("site: a viewer has no main button and no panel that changes anything",
    _has301(_site_vw301, 'id="ws-main"', 'data-ws-pane="files"', 'data-ws-pane="php"', 'data-ws-pane="rules"',
            'data-ws-pane="backups"', 'data-ws-pane="domains"', 'id="wd-add"'), (False, False, False, False, False, True, False))
-eq("site: an administrator who is not a superadmin gets Settings but not the full internet access switch "
-   "(the routes take it from a superadmin only)",
-   _has301(_site_na301, 'data-ws-pane="settings"', 'data-action="wsDelete"', 'id="wset-egress"'), (True, True, False))
+eq("site: an administrator who is not a superadmin gets Settings, and the full internet access switch only read-only "
+   "(the routes take a change from a superadmin only)",
+   _has301(_site_na301, 'data-ws-pane="settings"', 'data-action="wsDelete"', 'id="wset-egress" disabled',
+           'data-action="wsEgressCheck"'), (True, True, True, False))
 _side_re301 = _re301.compile(r'<a href="/websites" class="[^"]*">\s*<i class="bi bi-globe2"></i> Websites</a>')
 eq("sidebar: Websites appears when websites_nav() answers a URL, under 'Hosting' for a user with no server entry",
    (bool(_side_re301.search(_list_cu301)), '<div class="sidebar-section">Hosting</div>' in _list_cu301),
@@ -487,7 +488,7 @@ _exp301 = _ran301('exposure', _node301(_list_sa301, _COMMON301 + ["websites.js",
   const vis = function () { return [$('wp-restricted').hidden, $('wp-tunnel').hidden]; };
   const start = vis();
   $('wp-mode-restricted').checked = true; window.wsExposure('restricted'); const r = vis();
-  window.wsCfPreset(); $('wp-cidrs').value = ' 203.0.113.0/24 \n\n2001:db8::/32 ';
+  window.wsPreset('cloudflare'); $('wp-cidrs').value = ' 203.0.113.0/24 \n\n2001:db8::/32 ';
   const rb = WS.exposureBody();
   $('wp-mode-restricted').checked = false; $('wp-mode-tunnel').checked = true; window.wsExposure('tunnel'); const tv = vis();
   const tb = WS.exposureBody();
@@ -504,7 +505,7 @@ eq("node: exposure: Public shows neither list nor token; Restricted shows the al
    (_exp301.get("start"), _exp301.get("r"), _exp301.get("tv")), ([True, True], [False, True], [True, False]))
 eq("node: Restricted sends the Cloudflare preset and the typed networks, trimmed, blank lines dropped",
    _exp301.get("rb"), {"exposure_mode": "restricted", "allow_presets": ["cloudflare"],
-                       "allow_cidrs": ["203.0.113.0/24", "2001:db8::/32"]})
+                       "allow_cidrs": ["203.0.113.0/24", "2001:db8::/32"], "allow_url": "", "custom_trusted": False})
 eq("node: Tunnel with nothing typed keeps the saved token (sends none); a typed one is sent once and the box emptied",
    (_exp301.get("tb"), _exp301.get("tb2"), _exp301.get("sent"), _exp301.get("tokenAfter"), _exp301.get("saved")),
    ({"exposure_mode": "tunnel", "tunnel_provider": "cloudflare"},
@@ -525,10 +526,11 @@ _cust301 = _ran301("add a customer", _node301(_list_sa301, _COMMON301 + ["websit
   return {post: post, shown: $('wc-result').querySelectorAll('code').map(function (c) { return c.textContent; }),
           hidden: $('wc-result').hidden};
 """, routes={"/api/websites": _LIST301, "/websites/customers/add": {"success": True, "invite": "https://panel.test/i/T", "code": "C0DE"}}))
-eq("node: Add a customer posts the name, the ticked sites and the limit (after the password check), then shows the "
+eq("node: Add a customer posts the name and the ticked sites (no limit: they may not add their own), after the "
+   "password check, then shows the "
    "invite link and its code once, as text",
    (_cust301.get("post"), _cust301.get("shown"), _cust301.get("hidden")),
-   ([["POST", "/m/websites/customers/add", {"name": "acme", "sites": [3], "max_sites": 2}]], ["https://panel.test/i/T", "C0DE"], False))
+   ([["POST", "/m/websites/customers/add", {"name": "acme", "sites": [3]}]], ["https://panel.test/i/T", "C0DE"], False))
 eq("list: the Add a customer form is an administrator's only",
    ("id=\"wc-form\"" in _list_sa301, "id=\"wc-form\"" in _list_cq301), (True, False))
 _dbx301 = _ran301("database reset and delete", _node301(_site_ad301, _COMMON301 + ["website_site.js"], r"""

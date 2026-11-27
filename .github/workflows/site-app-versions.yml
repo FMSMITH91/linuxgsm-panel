@@ -1,0 +1,97 @@
+name: Site app versions
+
+# A new website install takes its one-click app (phpBB, Drupal, MyBB, SMF, WordPress) from the catalog's
+# sites.recipes (panel/addon_images/catalog.json), which panels get in the signed catalog. Daily,
+# .github/scripts/site_app_versions.py finds each app's newest stable release on the branch its recipe
+# supports, from the project's own release source; downloads the official archive over https; checks it
+# against the checksum the publisher publishes (where there is one: each app's source is named in the
+# script); and, when a release is newer and passed, this opens ONE pull request with the new version, url
+# and sha256 (one branch per run; the commit is made through GitHub's API, so GitHub signs it). WordPress's
+# code comes from the official WordPress image, so its version moves with that image's digests. Nothing
+# merges by itself: a person reviews the pull request, the required checks scan it, and the release reaches
+# panels with the next signed catalog. An existing site is never changed by it.
+#
+# GitHub holds the checks of a pull request the job's own token opened until someone with write access
+# approves them (its rule against workflows triggering workflows), so the body says to press "Approve
+# workflows to run" in the merge box first. While another pull request from this workflow is open, no
+# second one is opened.
+#
+# Egress is blocked except the release sources, the archives' hosts and GitHub's API (OWASP Top 10 CI/CD
+# Security Risks, CICD-SEC-3 and CICD-SEC-7); the job's token may write contents and pull requests only
+# (CICD-SEC-5), and no other secret is used (CICD-SEC-6).
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily 06:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  versions:
+    name: Site app versions
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write        # a branch and its one commit, through the API
+      pull-requests: write   # the pull request
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            codeload.github.com:443
+            release-assets.githubusercontent.com:443
+            objects.githubusercontent.com:443
+            api.wordpress.org:443
+            auth.docker.io:443
+            registry-1.docker.io:443
+            version.phpbb.com:443
+            download.phpbb.com:443
+            updates.drupal.org:443
+            www.drupal.org:443
+            ftp.drupal.org:443
+            mybb.com:443
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Find, download and check the newest releases
+        id: check
+        run: python3 -I .github/scripts/site_app_versions.py check site-app-versions.md >> "$GITHUB_OUTPUT"
+      - name: Open a pull request with the new releases
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          open="$(gh pr list --repo "${REPO}" --state open --limit 100 --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("site-app-versions/"))] | length')"
+          if [ "${open}" != "0" ]; then
+            echo "::notice::A pull request from this workflow is still open; no second one is opened."
+            exit 0
+          fi
+          branch="site-app-versions/$(date -u +%Y-%m-%d-%H%M%S)"
+          path="panel/addon_images/catalog.json"
+          base="$(gh api "repos/${REPO}/git/ref/heads/main" --jq .object.sha)"
+          gh api "repos/${REPO}/git/refs" -f ref="refs/heads/${branch}" -f sha="${base}" >/dev/null
+          blob="$(gh api "repos/${REPO}/contents/${path}?ref=${branch}" --jq .sha)"
+          gh api -X PUT "repos/${REPO}/contents/${path}" -f branch="${branch}" -f sha="${blob}" \
+            -f message="Catalog: new app releases for website installs" \
+            -f content="$(base64 -w0 "${path}")" >/dev/null
+          gh pr create --repo "${REPO}" --base main --head "${branch}" \
+            --title "Catalog: new app releases for website installs" \
+            --body-file site-app-versions.md
+      - name: Fail when a release source or archive was refused
+        if: steps.check.outputs.refused != ''
+        env:
+          REFUSED: ${{ steps.check.outputs.refused }}
+        run: |
+          echo "::error::Refused (the check step's log says why): ${REFUSED}"
+          exit 1

@@ -213,9 +213,10 @@ def _site299(**kw):
     return _NS299(**base)
 
 
-def _proxy299(mode="public", cidrs=(), presets=(), mtls=False, provider=""):
+def _proxy299(mode="public", cidrs=(), presets=(), mtls=False, provider="", trusted=False):
     return _NS299(exposure_mode=mode, cidrs=lambda: list(cidrs), presets=lambda: list(presets),
-                  origin_pull_mtls=mtls, tunnel_provider=provider)
+                  origin_pull_mtls=mtls, tunnel_provider=provider, custom_trusted=trusted,
+                  url_nets=lambda: [])
 
 
 def _render299(sites, proxy=None, opts=None):
@@ -284,10 +285,10 @@ def _s299_proxy_base2():
 
 
 def _s299_proxy_modes():
-    restricted = _render299([_site299()], _proxy299("restricted", ["203.0.113.0/24", "203.0.113.7/32"]))
+    restricted = _render299([_site299()], _proxy299("restricted", ["203.0.113.0/24", "203.0.113.7/32"], trusted=True))
     glob = _block299(restricted, "{")
-    eq("proxy config (restricted, custom networks): trusted_proxies is exactly the allow list (a network inside "
-       "another dropped) and the client address is read from X-Forwarded-For right to left, only from it",
+    eq("proxy config (restricted, custom networks marked trusted): trusted_proxies is exactly the allow list (a network "
+       "inside another dropped) and the client address is read from X-Forwarded-For right to left, only from it",
        [ln.strip() for ln in glob if "trusted" in ln or "client_ip" in ln],
        ["trusted_proxies static 203.0.113.0/24", "client_ip_headers X-Forwarded-For", "trusted_proxies_strict"])
     cf = _render299([_site299()], _proxy299("restricted", [], ["cloudflare"], mtls=True))
@@ -410,7 +411,7 @@ def _s299_servers():
     eq("site servers: nginx and Apache answer 403 without the web proxy's token; Apache checks it after every "
        ".htaccess (Location/If) and removes the header before PHP sees it",
        ('if ($http_x_panel_proxy_token != "%s") {' % _TOKEN299 in n, "return 403;" in n,
-        "<If \"%%{HTTP:X-Panel-Proxy-Token} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % _TOKEN299 in a,
+        "<If \"req_novary('X-Panel-Proxy-Token') != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % _TOKEN299 in a,
         "Require all denied" in a,
         a.index("<Location") < a.index("<If \"") < a.index("</Location>"), "RequestHeader unset X-Panel-Proxy-Token" in a,
         "Listen 8080" in a, "ServerTokens Prod" in a, "Options -Indexes +SymLinksIfOwnerMatch" in a),
@@ -1024,14 +1025,10 @@ def _s299_egress():
        [[], [], [], [], [], [], [], ["93.184.215.14"]])
 
 
-# ── 7. the page cache build, the CPU fallback, the image scan and the Cloudflare list ────────────
+# ── 7. the page cache build, the CPU fallback and the image scan (the CDN lists: part318) ────────
 _AI_SPEC299 = _ilu299.spec_from_file_location("addon_images_p299", os.path.join(_root, ".github", "scripts", "addon_images.py"))
 _AI299 = _ilu299.module_from_spec(_AI_SPEC299)
 _AI_SPEC299.loader.exec_module(_AI299)
-_CF_SPEC299 = _ilu299.spec_from_file_location("cloudflare_ranges_p299",
-                                              os.path.join(_root, ".github", "scripts", "cloudflare_ranges.py"))
-_CF299 = _ilu299.module_from_spec(_CF_SPEC299)
-_CF_SPEC299.loader.exec_module(_CF299)
 _CACHE_CF299 = os.path.join(_root, "panel", "website_images", "caddy-cache", "Containerfile")
 
 
@@ -1279,33 +1276,6 @@ def _s299_image_scan2():
        ("docker.io/nginx/nginx-unprivileged", True, True))
 
 
-def _s299_cloudflare():
-    lists = {_CF299.URLS[0]: "173.245.48.0/20\n103.21.244.0/22\n", _CF299.URLS[1]: "2400:cb00::/32\n"}
-    hostile = ["10.0.0.0/8\n", "173.245.48.1/20\n", "0.0.0.0/0\n", "173.245.48.0/20; rm -rf /\n", ""]
-    eq("cloudflare ranges: a private, non-canonical, too-wide, malformed or empty list is refused",
-       [_refused299(_CF299.networks, t) for t in hostile], [True] * 5)
-    d = _tf299.mkdtemp(prefix="ww2-cf-")
-    try:
-        path = os.path.join(d, "catalog.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            _json299.dump(_FLOOR_DOC299, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        rc = _CF299.main(["x", "check"], fetcher=lists.get, catalog=path)
-        with open(path, encoding="utf-8") as fh:
-            got = _json299.load(fh)["sites"]["presets"]["cloudflare"]
-        rc2 = _CF299.main(["x", "check"], fetcher=lambda u: "10.0.0.0/8\n", catalog=path)
-        with open(path, encoding="utf-8") as fh:
-            after = _json299.load(fh)["sites"]["presets"]["cloudflare"]
-    finally:
-        __import__("shutil").rmtree(d, ignore_errors=True)
-    eq("cloudflare ranges (main): published lists that pass replace the catalog's preset (and the result passes the "
-       "panel's own check); a bad list changes nothing",
-       (rc, got, rc2, after, _wc299.sites_problems(dict(_SITES299, presets={"cloudflare": got}))),
-       (0, ["173.245.48.0/20", "103.21.244.0/22", "2400:cb00::/32"], 1, got, []))
-    eq("cloudflare ranges: only the two fixed https URLs are ever fetched", _refused299(_CF299.fetch, "https://evil.example/ips"),
-       True)
-
-
 def _unb64_299(word):
     """`word` decoded from base64 when it is valid base64, else ""."""
     import binascii
@@ -1359,5 +1329,5 @@ for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s29
                  _s299_guard_no_accounts, _s299_guard_refuses_root,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
-                 _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
+                 _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_w3_calls, _s299_image_scan2):
     _step299()

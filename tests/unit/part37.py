@@ -91,6 +91,8 @@ _HTTP_REVIEWED37 = {
     ("panel/services/geoip.py", "_get", "opener.open"),
     ("panel/services/addons_bluemap.py", "_get", "build_opener"),
     ("panel/services/addons_bluemap.py", "_get", "opener.open"),
+    ("panel/services/websites_allow_url.py", "_get", "build_opener"),
+    ("panel/services/websites_allow_url.py", "_get", "opener.open"),
     ("panel/services/modrinth.py", "_mdr_http_get", "build_opener"),
     ("panel/services/modrinth.py", "_mdr_http_get", "opener.open"),
     ("panel/services/steam_workshop.py", "_wsc_http_post", "build_opener"),
@@ -265,7 +267,7 @@ _RAW_REVIEWED37 = {
     ("panel/ops/ssh_manager/tunnel.py", "_paramiko", "open_channel direct-tcpip"),
     ("panel/ops/ssh_manager/tunnel.py", "_ssh_cli_argv", "ssh -W"),
     ("panel/ops/ssh_manager/hosts.py", "_tcp_reachable", "socket.create_connection"),
-    ("panel/services/websites_egress.py", "handle", "socket.create_connection"),
+    ("panel/services/websites_egress.py", "connect", "socket.create_connection"),
 }
 # Every socket the shipped code makes itself (review 1124: `socket.socket` + `connect` opened a stream the
 # scanner did not see). None carries a browser's bytes to a host's port, so they are not named with the
@@ -277,6 +279,7 @@ _SOCK_REVIEWED37 = {
     ("panel/services/sftp_server.py", "listen", "socket.socket"),              # the SFTP listener
     ("panel/services/sftp_server.py", "main", "socket.socket"),                # the listener's inherited fd
     ("tools/panel-helper", "_sss_sudo_answers", "socket.socket"),              # SSSD's local unix socket
+    ("tools/panel-helper", "_web_admin_purge", "socket.socket"),               # the web proxy's admin unix socket
 }
 
 

@@ -67,7 +67,9 @@ F2B = "fail2ban-client"
 SYSTEMCTL = "systemctl"
 
 # The services the panel is allowed to touch, named exhaustively — see tools/panel-helper.
-UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager", "unattended-upgrades")
+# mariadb and mysql: the database server the Databases code found installed but stopped is started (enabled now)
+# from the add-website dialog, by a superadmin; the panel already runs that server's administration as root.
+UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager", "unattended-upgrades", "mariadb", "mysql")
 
 # The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
 # separate constant from UNITS: UNITS is what the panel may start/stop/reload on the host (ssh,

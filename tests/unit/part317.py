@@ -115,7 +115,8 @@ def _reset317():
 def _gate_denies(conf, headers, env):
     """Whether Apache's <Location "/"> <If> in `conf` refuses a request with these headers and environment.
 
-    The expression is the conf's own: every clause `%{HTTP:name} != 'v'` or `%{ENV:name} != 'v'`, joined by &&;
+    The expression is the conf's own: every clause `%{HTTP:name} != 'v'`, `req_novary('name') != 'v'` (the same
+    header read, its name kept out of Vary) or `%{ENV:name} != 'v'`, joined by &&;
     the request is refused when all hold. Headers are what the request carries when the authorization runs; the
     environment is the request's (Apache sets REDIRECT_STATUS on an internal redirect to the status of the request
     it came from; a client cannot set it). None when the conf has no such gate or a clause of another form.
@@ -124,6 +125,7 @@ def _gate_denies(conf, headers, env):
     if not m:
         return None
     for clause in m.group(1).split("&&"):
+        clause = _re317.sub(r"req_novary\('([A-Za-z0-9_-]+)'\)", r"%{HTTP:\1}", clause)
         c = _re317.fullmatch(r"\s*%\{(HTTP|ENV):([A-Za-z0-9_-]+)\} != '([^']*)'\s*", clause)
         if not c:
             return None
@@ -159,6 +161,10 @@ def _s1_gate(host, su):
 
 def _s1_token(su, site):
     c = _Client317(su.id)
+    proxy = _Proxy317.query.filter_by(remote_id=site.remote_id).first() or _Proxy317(remote_id=site.remote_id)
+    proxy.installed_version = "2.11.9"      # Put online refuses a host without the web proxy installed
+    _db317.session.add(proxy)
+    _db317.session.commit()
     _reset317()
     for verb, body in (("enable", {}), ("settings", {"limits": {"mem_mb": site.mem_mb + 64}, "customer_note": "n"}),
                        ("update-image", {}), ("disable", {}), ("enable", {})):

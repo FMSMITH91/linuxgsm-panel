@@ -1,0 +1,18 @@
+{
+  "Cloudflare refused the tunnel's token, so no visitor gets through. Copy this tunnel's token from Cloudflare's dashboard, paste it again, then apply.": "Cloudflare a refusé le jeton du tunnel : aucun visiteur ne passe. Copiez le jeton de ce tunnel depuis le tableau de bord de Cloudflare, collez-le à nouveau, puis appliquez.",
+  "Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again.": "Connecteur du tunnel : Cloudflare a refusé son jeton, aucun visiteur ne passe. Collez à nouveau le jeton du tunnel.",
+  "The database server is ready. Create the app now.": "Le serveur de bases de données est prêt. Créez l'application maintenant.",
+  "Databases are being set up. Create becomes available here when they are ready.": "Les bases de données sont en cours de configuration. Créer sera disponible ici quand elles seront prêtes.",
+  "This host's database server is installed but stopped, and an app needs it running.": "Le serveur de bases de données de cet hôte est installé mais arrêté, et une application a besoin qu'il tourne.",
+  "The database server was started, and starts with the host from now on.": "Le serveur de bases de données a été démarré, et démarre désormais avec l'hôte.",
+  "The database server did not start. Look at its log on the host (journalctl -u {unit}).": "Le serveur de bases de données n'a pas démarré. Consultez son journal sur l'hôte (journalctl -u {unit}).",
+  "This host's database server is not one the panel can start: it is not installed and stopped.": "Le serveur de bases de données de cet hôte n'est pas un serveur que le panneau peut démarrer : il n'est pas installé et arrêté.",
+  "Start the database server": "Démarrer le serveur de bases de données",
+  "Starting the database server…": "Démarrage du serveur de bases de données…",
+  "Run the app's setup": "Lancer la configuration de l'application",
+  "Check the install": "Vérifier l'installation",
+  "{step} ({n} of {total})": "{step} ({n} sur {total})",
+  "Install step {n}": "Étape d'installation {n}",
+  "The certificate you gave this domain is self-signed, so visitors' browsers warn. Use one from a well-known authority, or switch back to automatic (Let's Encrypt).": "Le certificat que vous avez donné à ce domaine est auto-signé : les navigateurs des visiteurs avertissent. Utilisez-en un d'une autorité reconnue, ou revenez à l'automatique (Let's Encrypt).",
+  "Its files, backups and account are removed for good, and its databases: {names}. A copy of each database is kept on the host for 30 days. Type the website name to confirm.": "Ses fichiers, sauvegardes et compte sont supprimés définitivement, ainsi que ses bases de données : {names}. Une copie de chaque base de données est conservée sur l'hôte pendant 30 jours. Saisissez le nom du site web pour confirmer."
+}

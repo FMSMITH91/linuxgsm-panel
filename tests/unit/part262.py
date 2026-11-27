@@ -23,6 +23,7 @@ _NAMED262 = {
     _os262.MODRINTH: ("Modrinth", "Modrinth"),
     _os262.PUBLIC_IP: ("the public address lookup", "the public address"),
     _os262.DBIP: ("DB-IP's country database for B3", "DB-IP's country database for B3"),
+    _os262.WEBSITE_ALLOW_URL: ("website allow lists read from an address", "website allow lists read from an address"),
 }
 
 

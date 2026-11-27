@@ -31,6 +31,17 @@
     failed: {label: 'Retry', icon: 'arrow-repeat', cls: 'btn-warning', verb: 'start'},
     creating: {label: 'Setting up…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''},
     removing: {label: 'Removing…', icon: 'hourglass-split', cls: 'btn-secondary', verb: ''}};
+  var UNFINISHED = {label: 'Delete and add again', icon: 'trash', cls: 'btn-outline-danger', verb: 'delete'};
+  // A new Node.js app waits for its files: Start could only fail; building installs its packages and starts it.
+  var WAITING = {label: 'Build and start', icon: 'hammer', cls: 'btn-success', verb: 'app/build'};
+  var UNFINISHED_ASK = {label: 'Ask an administrator to delete it', icon: 'info-circle', cls: 'btn-secondary', verb: ''};
+  function waiting(s) { return s.state === 'stopped' && s.kind === 'app' && !!s.state_reason; }
+  // The main button: by state; an app whose install stopped part-way cannot be set up again, so it is deleted and
+  // added again (administrators); a new app waiting for its files is built and started.
+  function mainFor(s) {
+    if (s.state === 'failed' && s.setup_unfinished) return WS.can.admin ? UNFINISHED : UNFINISHED_ASK;
+    return waiting(s) ? WAITING : WS.pick(MAIN, s.state, MAIN.creating);
+  }
   function renderHead(s) {
     var dot = WS.el('ws-dot');
     if (dot) dot.className = WS.dot(s.state).className;
@@ -38,9 +49,10 @@
     WS.el('ws-online').textContent = WS.T(s.enabled ? 'Online' : 'Offline');
     var open = WS.el('ws-open'), url = WS.safeUrl(s.open_url);
     if (open) { WS.show(open, !!url); if (url) open.href = url; }
+    WS.show('ws-offline', !s.enabled && s.state !== 'creating' && s.state !== 'removing');
     var b = WS.el('ws-main');
     if (!b) return;
-    var m = WS.pick(MAIN, s.state, MAIN.creating);
+    var m = mainFor(s);
     b.className = 'btn btn-sm ' + m.cls;
     b.disabled = !m.verb;
     b.dataset.verb = m.verb;
@@ -51,15 +63,17 @@
     var b = WS.el('ws-main');
     var verb = b ? b.dataset.verb : 'start';
     if (!verb) return;
+    if (verb === 'delete') { window.wsDelete(); return; }
     if (verb === 'stop') {
       window.confirmDialog({title: WS.T('Stop this website?'), icon: 'stop-circle', confirmClass: 'btn-danger',
         confirmLabel: WS.T('Stop'), bodyText: WS.T('Visitors see an error until it is started again.'),
         onConfirm: function () { WS.siteAct('stop', {}, 'ws-msg'); }});
       return;
     }
-    WS.say('ws-msg', WS.T('Starting…'));
+    WS.say('ws-msg', WS.T(verb === 'app/build' ? 'Building…' : 'Starting…'));
     WS.siteAct(verb, {}, 'ws-msg');
   };
+  window.wsPutOnline = function () { WS.putOnline(ID, 'ws-offline-msg', function (ok) { if (ok) WS.reload(); }); };
   window.wsRestart = function () { WS.say('ws-msg', WS.T('Restarting…')); WS.siteAct('restart', {}, 'ws-msg'); };
   window.wsUpdateImage = function () {
     WS.stepUp(function () { WS.say('ws-msg', WS.T('Updating…')); WS.siteAct('update-image', {}, 'ws-msg'); });
@@ -71,7 +85,15 @@
     WS.show('ws-failed', failed);
     if (!failed) return;
     WS.el('ws-failed-reason').textContent = d.site.state_reason || WS.T('No reason was recorded.');
+    // Retry installs the site again; an app whose install stopped part-way is deleted instead (the main button).
+    WS.show('ws-failed-retry', !d.site.setup_unfinished);
     WS.el('ws-failed-log').textContent = (d.logs || []).slice(-20).join('\n') || WS.T('No log lines yet.');
+  }
+  // Why a stopped app is not running (it waits for its files): said under the header, with the way to them.
+  function renderWaiting(s) {
+    var on = waiting(s);
+    WS.show('ws-waiting', on);
+    if (on) WS.el('ws-waiting-reason').textContent = s.state_reason;
   }
   function renderInstall(d) {
     var inst = d.install || {};
@@ -101,9 +123,13 @@
 
   // ── overview ──
   function setText(id, text) { var e = WS.el(id); if (e) e.textContent = text == null || text === '' ? '—' : String(text); }
-  function meter(id, used, max, text) {
+  // A figure that could not be read says so, with why: never an empty bar that looks like a measurement.
+  function unread(why) { return WS.T("Couldn't read") + (why ? ': ' + why : ''); }
+  function meter(id, used, max, text, why) {
     var m = WS.el(id);
     if (!m) return;
+    m.hidden = used == null;
+    if (used == null) { setText(id + '-text', unread(why)); return; }
     m.max = max > 0 ? max : 1;
     // Amber from 80 % of the limit and red from 95 %, as the disk warning works.
     m.low = m.max * 0.8;
@@ -114,18 +140,26 @@
   }
   function renderOverview(s) {
     setText('ws-ov-kind', WS.kindLabel(s.kind));
-    var img = s.image || {};
-    setText('ws-ov-image', [img.name, img.version].filter(Boolean).join(' '));
+    var img = s.image || {}, u = s.usage || {}, why = u.unread || {};
+    setText('ws-ov-image', img.name ? [img.name, img.version].filter(Boolean).join(' ') : unread(why.image));
     var ver = s.app_version || s.php_version || s.runtime_version;
     setText('ws-ov-version', ver);
-    setText('ws-ov-backup', s.last_backup || WS.T('None yet'));
+    setText('ws-ov-backup', backupText(s.last_backup));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
-    var u = s.usage || {}, l = s.limits || {};
-    meter('ws-mem', u.mem_mb, l.mem_mb, u.mem_mb != null ? u.mem_mb + ' / ' + l.mem_mb + ' MB' : '');
-    meter('ws-disk', u.disk_mb, l.disk_mb, u.disk_mb != null ? u.disk_mb + ' / ' + l.disk_mb + ' MB' : '');
-    meter('ws-cpu', u.cpu_pct, 100, u.cpu_pct != null ? u.cpu_pct + ' %' : '');
+    renderUsage(u, s.limits || {}, why);
   }
+  // Limits are an administrator's; anyone else sees the figure alone.
+  function mbText(used, max) { return max ? used + ' / ' + max + ' MB' : used + ' MB'; }
+  function renderUsage(u, l, why) {
+    meter('ws-mem', u.mem_mb, l.mem_mb || u.mem_mb, mbText(u.mem_mb, l.mem_mb), why.mem_mb);
+    meter('ws-disk', u.disk_mb, l.disk_mb || u.disk_mb, mbText(u.disk_mb, l.disk_mb), why.disk_mb);
+    meter('ws-cpu', u.cpu_pct, 100, u.cpu_pct + ' %', why.cpu_pct);
+    var note = WS.el('ws-cpu-note');
+    if (note) { note.textContent = u.cpu_note || ''; WS.show(note, !!u.cpu_note); }
+  }
+  // The newest backup's time; "" when the host said there is none; null when it could not be read (a dash).
+  function backupText(when) { return when || (when === '' ? WS.T('None yet') : ''); }
   window.wsLoadLogs = function () {
     WS.get(WS.R.act(ID, 'logs')).then(function (d) {
       WS.el('ws-logs').textContent = (d && d.lines && d.lines.length) ? d.lines.join('\n') : WS.T('No log lines yet.');
@@ -137,6 +171,7 @@
     st.d = d;
     var s = d.site || {};
     renderHead(s);
+    renderWaiting(s);
     renderFailed(d);
     var installing = renderInstall(d);
     renderOverview(s);
@@ -158,34 +193,70 @@
   var WS = window.WS;
   if (!WS || !WS.siteId) return;
   var ID = WS.siteId;
+  var st = {d: null};
   // ── domains ──
-  var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here', mismatch: 'DNS points elsewhere',
-    private: 'DNS points to a private address', failed: 'DNS check failed'};
+  var DNS = {unchecked: 'DNS not checked yet', matching: 'DNS points here',
+    mismatch: 'DNS points elsewhere', private: 'DNS points to a private address', failed: 'DNS check failed'};
+  var SERVED = ['matching', 'cdn'];
+  // A domain behind a CDN names it (the server's cdn_name, from the signed catalog's presets).
+  function dnsLabel(dm) {
+    if (dm.dns_state === 'cdn') return WS.TF('DNS goes through {provider}', {provider: String(dm.cdn_name || '')});
+    return WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked));
+  }
   function domainRow(dm) {
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
     top.appendChild(WS.raw('strong', 'text-break', dm.domain));
     if (dm.is_primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
     li.appendChild(top);
-    var info = WS.node('div', 'small text-secondary');
-    info.appendChild(WS.node('span', dm.dns_state === 'matching' ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
-    info.appendChild(document.createTextNode(' · '));
-    var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
-    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
-    if (dm.cert_not_after) {
-      info.appendChild(WS.node('span', 'ms-1', WS.T('expires')));
-      info.appendChild(WS.raw('span', 'ms-1', String(dm.cert_not_after).slice(0, 10)));
-    }
-    li.appendChild(info);
-    if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
-    if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
+    li.appendChild(domainInfo(dm));
+    domainNotes(li, dm);
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
+  }
+  // DNS state · certificate (yours: its issuer) · expiry.
+  function domainInfo(dm) {
+    var info = WS.node('div', 'small text-secondary');
+    info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', dnsLabel(dm)));
+    info.appendChild(document.createTextNode(' · '));
+    var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
+    var own = dm.cert_mode === 'own' && dm.own_cert && dm.cert_state !== 'tunnel';   // a tunnel serves its own
+    info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(own ? 'Your own certificate' : WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
+    if (own) {
+      info.appendChild(document.createTextNode(' · '));
+      info.appendChild(WS.node('span', null, WS.T('issuer')));
+      info.appendChild(WS.raw('span', 'ms-1 text-break', String(dm.own_cert.issuer || '')));
+      info.appendChild(document.createTextNode(' ·'));
+    }
+    if (dm.cert_not_after) {
+      info.appendChild(WS.node('span', 'ms-1', WS.T('expires')));
+      info.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(dm.cert_not_after).slice(0, 10)));
+    }
+    return info;
+  }
+  function domainNotes(li, dm) {
+    if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
+    if (dm.cert_warning && WS.can.sup) li.appendChild(proxyLink());
+    if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
+    if (dm.cdn_note) {
+      // Folded: the steps matter once, and the row stays short on a phone.
+      var det = WS.node('details', 'small text-secondary');
+      det.appendChild(WS.node('summary', null, WS.TF('Behind {provider}: getting its certificate', {provider: String(dm.cdn_name || '')})));
+      det.appendChild(WS.raw('div', 'text-break', dm.cdn_note));
+      li.appendChild(det);
+    }
+  }
+  // Where a host-wide setting is changed (a superadmin's Websites page), from the line that names it.
+  function proxyLink() {
+    var a = WS.node('a', 'small d-inline-block', WS.T("Open the web proxy's security settings"));
+    a.href = WS.url('/websites#wp-opts-box');
+    return a;
   }
   function domainButtons(dm) {
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     row.appendChild(WS.button(WS.T('Check again'), 'arrow-repeat', 'wsDomain', ['check', Number(dm.id)]));
     if (!dm.is_primary) row.appendChild(WS.button(WS.T('Make primary'), 'star', 'wsDomain', ['primary', Number(dm.id)]));
+    row.appendChild(WS.button(WS.T('Certificate'), 'shield-lock', 'wsCertOpen', [Number(dm.id)]));
     row.appendChild(WS.button(WS.T('Remove'), 'x-lg', 'wsDomain', ['remove', Number(dm.id)], 'btn-outline-danger'));
     return row;
   }
@@ -194,11 +265,33 @@
     var doms = d.domains || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
-    renderRecords(doms, d.dns || {});
+    renderRecords(doms, d.dns || {}, d.tunnel);
   }
-  function renderRecords(doms, dns) {
+  // The record's name as most DNS providers ask for it inside the domain's zone: @ for the zone itself, else the
+  // labels before it ("www"). The zone is guessed as the last two labels (three under a two-letter country code
+  // with a common second level such as co.uk), so the full name stays beside it.
+  var SLD = ['co', 'com', 'org', 'net', 'ac', 'gov', 'edu'];
+  function shortName(domain) {
+    var labels = String(domain).split('.');
+    var n = labels.length > 2 && labels[labels.length - 1].length === 2 && SLD.indexOf(labels[labels.length - 2]) >= 0 ? 3 : 2;
+    return labels.length <= n ? '@' : labels.slice(0, labels.length - n).join('.');
+  }
+  WS.shortName = shortName;
+  function nameCell(domain) {
+    var td = WS.node('td', 'text-break');
+    td.appendChild(WS.raw('span', 'font-monospace fw-semibold', shortName(domain)));
+    td.appendChild(WS.raw('span', 'd-block small text-secondary font-monospace', domain));
+    return td;
+  }
+  // On a host in tunnel mode no record points here: the domain is routed to the tunnel in the provider's
+  // dashboard, to the service address the server sends. The A/AAAA table is for the other modes.
+  function renderRecords(doms, dns, tunnel) {
+    WS.show('wd-tunnel', !!tunnel);
+    var svc = WS.el('wd-tunnel-service');
+    if (svc) svc.textContent = tunnel ? String(tunnel.service || '') : '';
     var body = WS.clear(WS.el('wd-records'));
-    var want = doms.filter(function (x) { return x.dns_state !== 'matching'; });
+    if (tunnel) { WS.show('wd-dns', false); return; }
+    var want = doms.filter(function (x) { return SERVED.indexOf(x.dns_state) < 0; });
     var rows = [];
     want.forEach(function (x) {
       (dns.a || []).forEach(function (ip) { rows.push(['A', x.domain, ip]); });
@@ -207,7 +300,9 @@
     WS.show('wd-dns', rows.length > 0);
     rows.forEach(function (r) {
       var tr = WS.node('tr');
-      r.forEach(function (c) { tr.appendChild(WS.raw('td', 'text-break font-monospace', c)); });
+      tr.appendChild(WS.raw('td', 'text-break font-monospace', r[0]));
+      tr.appendChild(nameCell(r[1]));
+      tr.appendChild(WS.raw('td', 'text-break font-monospace', r[2]));
       body.appendChild(tr);
     });
   }
@@ -217,6 +312,40 @@
     WS.say('wd-msg', WS.T('Adding…'));
     WS.post(WS.R.act(ID, 'domains/add'), {domain: inp.value.trim()}).then(function (d) {
       if (WS.done(d, 'wd-msg')) { inp.value = ''; WS.reload(); }
+    });
+  };
+  // ── a domain's certificate: automatic, or the operator's own (chain and key pasted) ──
+  var certFor = null;
+  window.wsCertOpen = function (domainId) {
+    var dm = ((st.d && st.d.domains) || []).filter(function (x) { return Number(x.id) === Number(domainId); })[0];
+    var form = WS.el('wd-cert');
+    if (!dm || !form) return;
+    certFor = Number(dm.id);
+    WS.el('wd-cert-domain').textContent = dm.domain;
+    WS.el(dm.cert_mode === 'own' ? 'wd-cert-own' : 'wd-cert-acme').checked = true;
+    WS.el('wd-cert-pem').value = '';
+    WS.el('wd-cert-key').value = '';
+    WS.say('wd-cert-msg', '');
+    WS.clear(WS.el('wd-cert-notes'));
+    window.wsCertMode();
+    WS.show(form, true);
+    form.scrollIntoView({block: 'nearest'});
+  };
+  window.wsCertMode = function () { WS.show('wd-cert-own-fields', WS.el('wd-cert-own').checked); };
+  window.wsCertCancel = function () { WS.el('wd-cert-key').value = ''; WS.show('wd-cert', false); };
+  window.wsCertSave = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var own = WS.el('wd-cert-own').checked;
+    var body = {id: certFor, mode: own ? 'own' : 'acme'};
+    var key = WS.el('wd-cert-key');
+    if (own) { body.cert = WS.el('wd-cert-pem').value; body.key = key.value; }
+    key.value = '';                         // the key never stays in the page after it is sent
+    WS.say('wd-cert-msg', WS.T('Saving…'));
+    WS.post(WS.R.act(ID, 'domains/cert'), body).then(function (d) {
+      var ok = WS.done(d, 'wd-cert-msg');
+      var notes = WS.clear(WS.el('wd-cert-notes'));
+      ((d && d.notes) || []).forEach(function (n) { notes.appendChild(WS.raw('li', 'text-warning-emphasis', n)); });
+      if (ok) { WS.el('wd-cert-pem').value = ''; WS.reload(); }
     });
   };
   window.wsDomain = function (verb, domainId) {
@@ -254,7 +383,18 @@
     var inp = WS.el('wdb-name');
     WS.say('wdb-msg', WS.T('Creating…'));
     WS.post(WS.R.act(ID, 'databases/add'), {name: inp.value.trim()}).then(function (d) {
-      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); }
+      if (WS.done(d, 'wdb-msg')) { inp.value = ''; WS.reload(); return; }
+      var need = d && d.missing && d.missing[0];
+      if (need && need.key === 'database' && WS.can.sup) {
+        WS.el('wdb-msg').appendChild(WS.button(WS.T('Set up databases'), 'database-add', 'wsDbSetupHost', [Number(need.host_id) || 0], 'btn-warning ms-2'));
+      }
+    });
+  };
+  // A host with no database server (a superadmin): MariaDB set up in the background by the Databases code.
+  window.wsDbSetupHost = function (hostId) {
+    WS.stepUp(function () {
+      WS.say('wdb-msg', WS.T('Setting up databases…'));
+      WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
     });
   };
   // A new password for the database's own user (the app's settings must then be given it).
@@ -294,7 +434,7 @@
       });
     });
   };
-  WS.onSite(function (d) { renderDomains(d); renderDatabases(d); });
+  WS.onSite(function (d) { st.d = d; renderDomains(d); renderDatabases(d); });
 })();
 
 // Backups and the administrators' Settings panel.
@@ -309,7 +449,7 @@
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline justify-content-between');
     top.appendChild(WS.raw('span', 'text-break fw-semibold', b.name));
-    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, b.size].filter(Boolean).join(' · ')));
+    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, WS.size(b.size)].filter(Boolean).join(' · ')));
     li.appendChild(top);
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (WS.can.files) {
@@ -367,8 +507,8 @@
       if (v != null) inp.value = String(v);
     });
     WS.el('wset-log').checked = !!s.access_log;
-    var eg = WS.el('wset-egress');      // a superadmin's page only
-    if (eg) eg.checked = !!s.full_egress;
+    var eg = WS.el('wset-egress');      // read-only below a superadmin
+    if (eg) { eg.checked = !!s.full_egress; eg.disabled = !WS.can.sup; }
     WS.el('wset-note').value = s.customer_note || '';
     window.wsEgressCheck();
   }
@@ -385,12 +525,20 @@
     });
     var body = {limits: limits, access_log: WS.el('wset-log').checked, customer_note: WS.el('wset-note').value};
     var eg = WS.el('wset-egress');
-    if (eg) body.full_egress = eg.checked;
+    if (eg && !eg.disabled) body.full_egress = eg.checked;
     WS.stepUp(function () { WS.say('wset-msg', WS.T('Saving…')); WS.siteAct('settings', body, 'wset-msg'); });
   };
+  // What Delete removes, the site's databases by name (the list the page last read), each kept as a 30-day copy.
+  var siteDbs = null;
+  function deleteText() {
+    var names = (siteDbs || []).map(function (x) { return String(x.name || ''); }).filter(Boolean);
+    if (names.length) return WS.TF('Its files, backups and account are removed for good, and its databases: {names}. A copy of each database is kept on the host for 30 days. Type the website name to confirm.', {names: names.join(', ')});
+    if (siteDbs) return WS.T('Its files, backups and account are removed for good. Type the website name to confirm.');
+    return WS.T('Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.');
+  }
   window.wsDelete = function () {
     window.confirmDialog({title: WS.T('Delete this website?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete website'),
-      bodyText: WS.T('Its files, backups and account are removed for good. Type the website name to confirm.'),
+      bodyText: deleteText(),
       requireText: F.name, requireLabel: WS.T('Website name'), onConfirm: function () {
         WS.stepUp(function () {
           WS.post(WS.R.act(ID, 'delete'), {confirm: F.name}).then(function (d) {
@@ -400,7 +548,7 @@
       }});
   };
   WS.loadBackups = loadBackups;
-  WS.onSite(function (d) { renderSettings(d.site || {}); });
+  WS.onSite(function (d) { renderSettings(d.site || {}); siteDbs = Array.isArray(d.databases) ? d.databases : null; });
 })();
 
 // Start: the panel the address names, then the site's state.

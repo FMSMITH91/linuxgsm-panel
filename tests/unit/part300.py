@@ -134,6 +134,8 @@ def _stub_host300():
                  "php_apply", "php_effective", "cache_purge", "app_build", "env_apply", "app_install_step",
                  "app_undo_step"):
         _p9_patch(_sw300, name, rec(name))
+    # This part's host stands in for one that runs websites (the add refuses any other since part315's C5).
+    _p9_patch(_sw300, "runs_websites", lambda remote: True)
     _p9_patch(_wp300, "render", lambda sites, proxy=None, opts=None: "# %d sites" % len(sites))
     _p9_patch(_wp300, "rules_problems", lambda rules: [])
     _p9_patch(_svc300, "php_ini_problems", lambda text: [] if "extension" not in text else ["no extension="])
@@ -748,7 +750,9 @@ def _s11_errors(st):
     log, handler = _logging300.getLogger("panel.ssh"), _Logged300()
     log.addHandler(handler)
     try:
-        r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id, json={"limits": {"mem_mb": 512}})
+        # A changed limit: a save that changes none no longer installs the site again.
+        r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id,
+                                      json={"limits": {"mem_mb": _db300.session.get(_Site300, st.a.id).mem_mb + 64}})
     finally:
         log.removeHandler(handler)
     eq("install (settings route): a site whose files cannot be built answers the generic sentence; the exception's "
@@ -784,6 +788,8 @@ def _s11_read_log(st):
 
 def _state300():
     host = _host300("p300-host")
+    _w300.proxy_row(host.id).installed_version = "2.10.2"     # a site goes online only where the web proxy is
+    _db300.session.commit()
     a, b = _site300(host, "p300-a", kind="php"), _site300(host, "p300-b")
     W = _auth300
     st = _NS300(host=host, a=a, b=b, su=_super300())

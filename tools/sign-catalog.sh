@@ -4,7 +4,7 @@
 # Panels take the images and versions their add-ons run from a catalog signed with the release key,
 # fetched from the release-signatures branch, so a new add-on image needs no panel update. The same
 # catalog carries the websites' pins in its `sites` section (proxy binary, site images, runtimes, app
-# recipes, the Cloudflare ranges); tools/addon_catalog.py refuses a catalog without a valid one, checked
+# recipes, the CDN ranges); tools/addon_catalog.py refuses a catalog without a valid one, checked
 # by the panels' own panel/services/websites_catalog.py. The source
 # is panel/addon_images/catalog.json at the commit given. tools/sign-release.sh runs this after it
 # signs a main commit (with --yes, its own confirmation already typed); run it by hand to publish or

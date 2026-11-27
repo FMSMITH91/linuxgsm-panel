@@ -19,7 +19,7 @@ import re
 import secrets
 import threading
 
-from flask import abort, current_app, jsonify
+from flask import abort, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from panel.core import i18n
@@ -38,6 +38,16 @@ DB_STEP = "create-database"
 S_DB_LEFT = ("The database {name} could not be removed ({why}), so it is still on the database server; delete the "
              "website to try again.")
 S_ALL_UNDONE = "Every step was undone."
+# The install steps in plain words, by the recipe engine's step type (websites_catalog.STEP_TYPES), and a plain
+# site's parts (ssh_manager.websites.INSTALL_PARTS): the dialog, a failure and the audit name a step by these, never
+# by its id (create-database-0). A type a recipe uses more than once is numbered (S_STEP_PART).
+STEP_WORDS = {"account": "Create the site account", "image": "Build or download the site image (a few minutes on a "
+              "small host)", "container": "Start the site container", "create-database": "Create the database",
+              "download-verify-unpack": "Download and check the app", "render-config": "Write the app settings",
+              "run-in-container": "Run the app's setup", "set-permissions": "Set file permissions",
+              "drive-web-installer": "Run the app installer", "verify-install": "Check the install"}
+S_STEP_PART = "{step} ({n} of {total})"
+S_STEP_OTHER = "Install step {n}"
 # site id -> the job's state while it runs and after: {"state", "step", "error"}. Never a password.
 _JOBS = {}
 _LOCK = threading.Lock()
@@ -79,6 +89,21 @@ def _steps(site):
     """The recipe's steps for `site` (a list of dicts with a "name" and a "type")."""
     steps = _svc.recipe_steps(site.app_recipe)
     return [s for s in steps if isinstance(s, dict) and s.get("name")]
+
+
+def step_labels(steps):
+    """{step name: its plain words, an i18n.Sentence} for the site account and the recipe's `steps`.
+
+    As a str each is English (the audit's); i18n.tr() gives the viewer's language (the page's).
+    """
+    out = {"account": i18n.Sentence(STEP_WORDS["account"])}
+    for i, step in enumerate(steps):
+        same = [t.get("name") for t in steps if t.get("type") == step.get("type")]
+        words = STEP_WORDS.get(step.get("type"))
+        label = i18n.Sentence(words) if words else i18n.Sentence(S_STEP_OTHER, n=i + 1)
+        out[step["name"]] = label if len(same) < 2 else i18n.Sentence(S_STEP_PART, step=label,
+                                                                       n=same.index(step["name"]) + 1, total=len(same))
+    return out
 
 
 def _mark(site, step_name, finished):
@@ -127,13 +152,13 @@ def undo(site, steps, done):
     """
     import json
     failed, left = [], set()
-    by_name = {s["name"]: s for s in steps}
+    by_name, labels = {s["name"]: s for s in steps}, step_labels(steps)
     for name in reversed(done):
         if name == "account":
             continue
         ok, said = _undo_step(site, by_name.get(name, {"name": name, "type": ""}))
         if not ok:
-            failed.append("%s: %s" % (name, i18n.tr(said)))
+            failed.append("%s: %s" % (i18n.tr(labels.get(name, name)), i18n.tr(said)))
             left.add(name)
     if "account" in done:
         ok, said = _w.host_call(_sw.remove, site.remote, site)
@@ -207,12 +232,15 @@ def _finish(site, user, ok, step, said, steps):
     # The step's own sentence never speaks for the undo (it is worded before the undo runs): this line does.
     _job(site.id, state="failed", step=step, error=("%s %s" % (reason, left or i18n.tr(S_ALL_UNDONE))).strip())
     _w.audit_as(user, site, "website_app_install", "%s failed at %s: %s; %s" % (
-        site.app_recipe, step, reason, left or "undone"), False)
+        site.app_recipe, str(step_labels(steps).get(step, step)), reason, left or "undone"), False)
     if failed:
         # The site's row stays (failed, saying what is left), and so do its database rows: a delete retries them.
         site.state, site.state_reason = "failed", left[:200]
         db.session.commit()
     else:
+        # Nothing is left, so the row goes; the job keeps its outcome and its steps for the dialog that started it
+        # (job_status), which would otherwise read the deleted site as a finished one.
+        _job(site.id, steps=install_json(site)["steps"], gone=True)
         db.session.delete(site)
         db.session.commit()
 
@@ -265,17 +293,37 @@ def install_json(site):
     """
     import json
     if not site.app_recipe:
-        return dict(_NO_INSTALL)
+        return _plain_json(site)
     with _LOCK:
         job = dict(_JOBS.get(site.id) or {})
     state = _job_state(site, job)
     done = json.loads(site.install_steps_done or "[]")
     current = job.get("step") or site.install_step or ""
-    order = ["account"] + [s["name"] for s in _safe_steps(site)]
-    steps = [{"key": n, "label": n, "state": _step_word(n, done, current, state, order)} for n in order]
+    recipe_steps = _safe_steps(site)
+    order, labels = ["account"] + [s["name"] for s in recipe_steps], step_labels(recipe_steps)
+    steps = [{"key": n, "label": i18n.tr(labels.get(n, n)), "state": _step_word(n, done, current, state, order)}
+             for n in order]
     site_url, admin_url = _urls(site, state)
     return {"state": state, "steps": steps, "error": job.get("error", "") or (site.state_reason or ""),
             "site_url": site_url, "admin_url": admin_url}
+
+
+def _plain_json(site):
+    """The install block of a site added without an app, while (and once) this process sets it up.
+
+    Its steps are ssh_manager.websites.INSTALL_PARTS as the install reports them (websites.PLAIN): the account,
+    the image (built on the host for a PHP site: minutes on a small one), the container. Empty when this process
+    did not set it up (an older site, or a panel restarted since).
+    """
+    got = _w.PLAIN.get(site.id)
+    if not got:
+        return dict(_NO_INSTALL)
+    parts = list(_sw.INSTALL_PARTS)
+    at = parts.index(got["step"]) if got["step"] in parts else 0
+    state = got["state"]
+    steps = [{"key": p, "label": i18n.tr(STEP_WORDS.get(p, p)), "state": "done" if i < at or state == "done" else
+              ("pending" if i > at else "running" if state == "running" else "failed")} for i, p in enumerate(parts)]
+    return dict(_NO_INSTALL, state=state, steps=steps, error=(site.state_reason or "") if state == "failed" else "")
 
 
 def app_php_version(recipe, data):
@@ -322,7 +370,22 @@ def _start_refusal(data):
     version, bad = app_php_version(recipe, data) if not refusal else (None, None)
     if refusal or bad:
         return None, _w.say(*(refusal or bad))
+    no_db = _database_refusal(remote, recipe)
+    if no_db is not None:
+        return None, no_db
     return (recipe_name, dict(recipe, _php_version=version), fields, remote, group, name), None
+
+
+def _database_refusal(remote, recipe):
+    """The refusal of an app that needs a database on a host with no server it could use, or None.
+
+    Asked before anything is made (the host is probed when the Databases code knows nothing yet), so the install
+    no longer fails at its database step after the account and container were made. The answer carries the add
+    dialog's entry, with the button that sets databases up for a superadmin.
+    """
+    from panel.routes.websites_view import database_missing
+    entry = database_missing(remote, probe=True) if recipe.get("database") else None
+    return _w.say(409, entry["text"], missing=[entry]) if entry else None
 
 
 def _start(data):
@@ -342,7 +405,7 @@ def _start(data):
         return _w.say(400, refused)
     _w.audit(site, "website_app_install", "started %s %s, admin %s%s" % (recipe_name, site.app_version, user,
                                                                          " (generated password)" if generated else ""))
-    _job(site.id, state="running", step="account", error="")
+    _job(site.id, state="running", step="account", error="", uid=current_user.id, gone=False)
     secret_vals = {"admin_user": user, "admin_email": email, "admin_password": password}
     app = current_app._get_current_object()
     _w.threading.Thread(target=_worker, args=(app, site.id, current_user.id, secret_vals), daemon=True).start()
@@ -352,8 +415,35 @@ def _start(data):
     return resp
 
 
+def job_status(site_id, user):
+    """GET /websites/install-app/status?id=<site id>: an app install's outcome for the user who started it, or None.
+
+    A failed install that undid every step deletes its site, so the site's own answer is a 404; the job (in
+    this process) keeps its state, steps and reason. Only its starter reads it: anyone else gets None (a 404,
+    the same answer as for no job at all; OWASP Insecure Direct Object Reference Prevention Cheat Sheet,
+    "Mitigation"). Never a password: the job holds none.
+    """
+    with _LOCK:
+        job = dict(_JOBS.get(site_id) or {})
+    if not job or job.get("uid") != getattr(user, "id", None):
+        return None
+    return {"state": job.get("state") or "running", "steps": list(job.get("steps") or []), "error": job.get("error", ""),
+            "site_url": "", "admin_url": "", "gone": bool(job.get("gone"))}
+
+
 def register(app):
     """The one-click install routes."""
+    @app.route("/websites/install-app/status")
+    @login_required
+    def website_install_status():
+        # Only someone who may add sites starts an install, and only its starter reads its outcome. The id is a
+        # query value, not part of the path: the site it names is gone (there is nothing for site_for to find).
+        sid = request.args.get("id", type=int)
+        got = job_status(sid, current_user) if sid and _wa.can_create(current_user) else None
+        if got is None:
+            abort(404)
+        return jsonify({"success": True, "install": got})
+
     @app.route("/websites/install-app", methods=["POST"])
     @login_required
     def website_install_app():

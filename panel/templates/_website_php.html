@@ -9,6 +9,7 @@
         <label for="wphp-version" class="form-label small mb-1">PHP version</label>
         <select id="wphp-version" class="form-select form-select-sm" data-no-i18n></select>
         <div id="wphp-eol" class="small text-warning" hidden></div>
+        <div id="wphp-version-who" class="form-text mt-0" hidden>Only an administrator of this website can change the PHP version.</div>
       </div>
       <div class="col-6 col-sm-4">
         <label for="wphp-memory_limit" class="form-label small mb-1" data-no-i18n>memory_limit</label>
@@ -58,7 +59,7 @@
     </div>
     <div id="wphp-notes" class="small text-warning mt-1" role="status"></div>
     <details id="wphp-adv" class="mt-2">
-      <summary class="small">Advanced php.ini</summary>
+      <summary class="small" id="wphp-adv-sum">Advanced php.ini</summary>
       <label for="wphp-ini" class="visually-hidden">Advanced php.ini</label>
       <textarea id="wphp-ini" class="form-control form-control-sm font-monospace mt-1" rows="6" maxlength="8192" spellcheck="false"
                 data-action="wsIniCheck" data-on="input" aria-describedby="wphp-ini-help"></textarea>

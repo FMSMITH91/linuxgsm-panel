@@ -17,6 +17,7 @@ from panel.core import i18n
 from panel.core.config import decrypt_secret, encrypt_secret, load_config
 from panel.db.models import GameDatabase, db
 from panel.ops.ssh_manager import databases as _dbs
+from panel.ops.ssh_manager import websites as _sw
 from panel.routes import databases as _d
 from panel.routes import websites as _w
 from panel.security.account_guard import step_up_needed, step_up_refusal
@@ -101,6 +102,32 @@ def restore_after_backup(site):
     return True, "Backup restored."
 
 
+S_ADDED_RESTARTED = "Database added. The website was restarted so it can reach it."
+S_ADDED_NEXT_START = "Database added. The website reaches it from its next start."
+S_ADDED_NOT_REACHED = ("Database added, but the website could not be set up to reach it ({why}). Retry from its "
+                       "page.")
+
+
+def _reach(site):
+    """(True, sentence) for a database just added, once the site's container can reach the database server.
+
+    A site's container gets the server's port forwarded only when it is installed with a database
+    (websites.site_db), so the first database added on this tab was unreachable until something reinstalled
+    the site. The site is installed again then (as an app install does after its database step): a running
+    site is restarted, a stopped one gets its new unit for its next start. A later database is on the same,
+    already forwarded server. A site being set up, removed or failed is left to its own install or Retry, which
+    forwards the port. The database stays whatever the host answers.
+    """
+    if len(site_rows(site)) > 1 or site.state not in ("running", "stopped") or _w.setting_up(site.id):
+        return True, "Database added."
+    running = site.state == "running"
+    ok, said = _w.host_call(_sw.install, site.remote, site, _w.site_db(site), running)
+    _w.forget_status(site.id)
+    if not ok:
+        return True, i18n.Sentence(S_ADDED_NOT_REACHED, why=i18n.tr(said))
+    return True, S_ADDED_RESTARTED if running else S_ADDED_NEXT_START
+
+
 def _reveal(site, r):
     secret = decrypt_secret(r.secret)
     if not secret:
@@ -145,7 +172,12 @@ def register(app):
         name = _dbs.site_db_name(site.id, slug)
         _w.audit(site, "website_db_create", "created database %s" % name if ok else "database %s not created: %s"
                  % (name, i18n.tr(said)), ok)
-        return _w.done(ok, said or "Database added.", id=row.id if row else None)
+        if not ok:
+            # No database server the panel can use: the tab offers the button that sets one up (a superadmin).
+            from panel.routes.websites_view import database_missing
+            entry = database_missing(site.remote)
+            return _w.done(ok, said, id=None, missing=[entry] if entry else [])
+        return _w.done(*_reach(site), id=row.id)
 
     @app.route("/websites/<int:site_id>/databases/credentials", methods=["POST"])
     @login_required

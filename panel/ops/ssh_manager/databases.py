@@ -445,6 +445,21 @@ def _apt_install(remote, package="mariadb-server"):
     return _core.run_privileged(remote, "apt-install", [package], timeout=APT_TIMEOUT)[2] == 0
 
 
+S_STARTED = "The database server was started, and starts with the host from now on."
+S_START_FAILED = "The database server did not start. Look at its log on the host (journalctl -u {unit})."
+
+
+def start_server(remote, flavor):
+    """Start the installed, stopped database server (`flavor` mariadb or mysql) and enable it: (ok, sentence)."""
+    unit = "mysql" if flavor == "mysql" else "mariadb"
+    with db_lock(remote):
+        try:
+            _out, _err, rc = _core.run_privileged(remote, "service-enable-now", [unit], timeout=120)
+        except _priv.VerbError:
+            rc = 2
+    return (True, S_STARTED) if rc == 0 else (False, i18n.Sentence(S_START_FAILED, unit=unit))
+
+
 def install_mariadb(remote):
     """Install MariaDB from the Ubuntu archive and set it up: (ok, sentence, panel admin password).
 

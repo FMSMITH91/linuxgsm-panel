@@ -24,5 +24,7 @@
       <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesClose">Close</button>
     </div>
   </form>
+  <p class="form-text mb-1"><span>Largest file sent here:</span> <span data-no-i18n>{{ (config.MAX_CONTENT_LENGTH or 0) // 1048576 }} MB</span>.
+    <span>For bigger files, or many at once, use SFTP: its address, your keys and the folders you may open are on your</span> <a href="{{ url_for('account') }}#sec-sftp">Account page</a>.</p>
   <p class="form-text mb-0">Files here run as this website: a PHP file you upload runs on the site. An archive is checked before it is unpacked: nothing outside the site, no links, and a size limit.</p>
 </section>

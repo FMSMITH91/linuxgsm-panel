@@ -92,6 +92,13 @@
               <div id="ws-add-pass-help" class="form-text">Leave it empty for a strong one, shown once. A typed one needs 15 characters or more.</div>
             </div>
           </div>
+          {% if site_admin|default(false) %}
+          <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="ws-add-online" aria-describedby="ws-add-online-help">
+            <label class="form-check-label small" for="ws-add-online">Put it online when it is installed</label>
+            <div id="ws-add-online-help" class="form-text mt-0">Opens ports 80 and 443 and gets a certificate. Its domain must point at this host first.</div>
+          </div>
+          {% endif %}
         </form>
         <div id="ws-progress-wrap" hidden>
           <h3 class="fs-6 mb-2">Setting up your website</h3>

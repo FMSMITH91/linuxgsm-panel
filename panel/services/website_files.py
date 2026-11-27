@@ -45,7 +45,8 @@ S_TOO_DEEP = "The archive has folders more than {n} levels deep. Nothing was unp
 S_BOMB = "The archive's entry {name} expands far more than real files do. Nothing was unpacked."
 S_TOO_BIG = "The archive unpacks to more than the {mb} MB this website has free. Nothing was unpacked."
 S_NOT_ARCHIVE = "This is not a zip or .tar.gz archive the panel can read. Nothing was unpacked."
-S_DISK_FULL = "This website has used all of its {mb} MB of disk. Delete something first."
+S_DISK_FULL = ("This website has used all of its {mb} MB of disk. Delete something first: its backups count too (delete "
+               "an old one on the Backups tab), or an administrator can raise its disk limit on its Settings tab.")
 S_DISK_UNREAD = "Couldn't measure how much disk this website uses, so nothing was written. Try again."
 
 
