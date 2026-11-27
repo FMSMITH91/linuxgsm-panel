@@ -135,9 +135,10 @@ eq("site: ...and keeps the main button and the panels manage_website gives (PHP,
 eq("site: a viewer has no main button and no panel that changes anything",
    _has301(_site_vw301, 'id="ws-main"', 'data-ws-pane="files"', 'data-ws-pane="php"', 'data-ws-pane="rules"',
            'data-ws-pane="backups"', 'data-ws-pane="domains"', 'id="wd-add"'), (False, False, False, False, False, True, False))
-eq("site: an administrator who is not a superadmin gets Settings but not the full internet access switch "
-   "(the routes take it from a superadmin only)",
-   _has301(_site_na301, 'data-ws-pane="settings"', 'data-action="wsDelete"', 'id="wset-egress"'), (True, True, False))
+eq("site: an administrator who is not a superadmin gets Settings, and the full internet access switch only read-only "
+   "(the routes take a change from a superadmin only)",
+   _has301(_site_na301, 'data-ws-pane="settings"', 'data-action="wsDelete"', 'id="wset-egress" disabled',
+           'data-action="wsEgressCheck"'), (True, True, True, False))
 _side_re301 = _re301.compile(r'<a href="/websites" class="[^"]*">\s*<i class="bi bi-globe2"></i> Websites</a>')
 eq("sidebar: Websites appears when websites_nav() answers a URL, under 'Hosting' for a user with no server entry",
    (bool(_side_re301.search(_list_cu301)), '<div class="sidebar-section">Hosting</div>' in _list_cu301),

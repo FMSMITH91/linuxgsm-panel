@@ -48,6 +48,14 @@
     </div>
   </form>
   {% endif %}
+  <div id="wd-tunnel" class="card mt-2" hidden>
+    <div class="card-body py-2 small">
+      <div class="fw-semibold mb-1">This host is reached through a Cloudflare tunnel</div>
+      <div>In Cloudflare's dashboard, give each domain above a Public Hostname on this host's tunnel, with this service:</div>
+      <code id="wd-tunnel-service" class="user-select-all" data-no-i18n></code>
+      <div class="form-text">Cloudflare serves HTTPS for the domain, so no DNS record points here and the web proxy holds no certificate.</div>
+    </div>
+  </div>
   <div id="wd-dns" class="card mt-2" hidden>
     <div class="card-body py-2 small">
       <div class="fw-semibold mb-1">Create these DNS records at your domain's provider</div>

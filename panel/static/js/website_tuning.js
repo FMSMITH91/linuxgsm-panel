@@ -16,6 +16,13 @@
   var ID = WS.siteId;
   var st = {envNames: [], rules: []};
 
+  // A control only an administrator of the site may change: shown to everyone who runs it, read-only with the
+  // reason for the others (the server refuses their change anyway).
+  function adminOnly(el, whoId) {
+    if (!el) return;
+    el.disabled = !WS.can.admin;
+    WS.show(whoId, !WS.can.admin);
+  }
   // ── PHP ──
   function bytes(v) {
     var m = /^(-1|\d+)([KMG]?)$/i.exec(String(v || '').trim());
@@ -40,8 +47,15 @@
     if (!box) return;
     WS.phpNotes().forEach(function (n) { box.appendChild(WS.node('div', null, n)); });
   };
+  // The folded Advanced box says how many settings it holds, so none sits unseen behind an unlabelled toggle.
+  function iniCount(text) {
+    return String(text || '').split('\n').filter(function (ln) { ln = ln.trim(); return ln && ln.charAt(0) !== ';'; }).length;
+  }
   window.wsIniCheck = function () {
     var box = WS.clear(WS.el('wphp-ini-problems'));
+    var count = iniCount(WS.el('wphp-ini').value);
+    var sum = WS.el('wphp-adv-sum');
+    if (sum) sum.textContent = WS.TF('Advanced php.ini: {n} settings', {n: count});
     var probs = WS.iniProblems(WS.el('wphp-ini').value);
     probs.slice(0, 10).forEach(function (p) {
       box.appendChild(WS.node('li', null, p.line ? WS.TF('Line {n}: {problem}', {n: p.line, problem: WS.T(p.problem)}) : WS.T(p.problem)));
@@ -53,18 +67,20 @@
     if (!sel || !php) return;
     WS.clear(sel);
     (php.versions || []).forEach(function (v) {
-      var o = WS.node('option', null, String(v.version));
+      var o = WS.node('option', null, v.eol ? WS.TF('{version} (end of support)', {version: String(v.version)}) : String(v.version));
       o.value = String(v.version);
       sel.appendChild(o);
     });
     sel.value = php.version || '';
+    adminOnly(sel, 'wphp-version-who');
     var eol = WS.el('wphp-eol');
     WS.show(eol, !!php.eol_note);
     if (php.eol_note) eol.textContent = php.eol_note;
     var s = php.settings || {};
     document.querySelectorAll('[data-php]').forEach(function (inp) {
       var v = s[inp.getAttribute('data-php')];
-      if (inp.type === 'checkbox') inp.checked = !!v; else inp.value = v == null ? '' : String(v);
+      // A switch is saved as On or Off: the text "Off" is not on.
+      if (inp.type === 'checkbox') inp.checked = v === true || v === 'On'; else inp.value = v == null ? '' : String(v);
     });
     WS.el('wphp-ini').value = php.custom || '';
     window.wsPhpCheck();
@@ -107,6 +123,9 @@
     Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id]; });
     var nums = {'wperf-op-mem': p.opcache_memory_mb, 'wperf-op-reval': p.opcache_revalidate_s, 'wperf-ttl': p.page_cache_ttl};
     Object.keys(nums).forEach(function (id) { var e = WS.el(id); if (e && nums[id] != null) e.value = String(nums[id]); });
+    adminOnly(WS.el('wperf-obj'), 'wperf-obj-who');
+    st.perf = p;
+    window.wsPageCacheCheck();
     var info = WS.el('wperf-obj-info');
     if (info) {
       WS.clear(info);
@@ -127,6 +146,25 @@
     WS.post(WS.R.act(ID, 'performance'), body).then(function (d) {
       if (WS.done(d, 'wperf-msg')) { st.perfDone = false; WS.reload(); }
     });
+  };
+  // Keep pages for and Purge cache only do something while the page cache is on (saved) and the host's web proxy
+  // has it: otherwise they stay in view, disabled, with the reason and where to change it.
+  function pageCacheWhy(p, on) {
+    if (!on) return WS.T('Turn the page cache on first.');
+    return p.page_cache_ready ? '' : (p.page_cache_why || '');
+  }
+  function setDisabled(id, off) { var e = WS.el(id); if (e) e.disabled = off; }
+  window.wsPageCacheCheck = function () {
+    var p = st.perf || {}, box = WS.el('wperf-page');
+    var on = !!(box && box.checked);
+    var why = pageCacheWhy(p, on);
+    setDisabled('wperf-ttl', !!why);
+    // Purge empties what the saved setting stores: never while the switch is only flipped and not yet saved.
+    setDisabled('wperf-purge', !!why || !p.page_cache);
+    var text = why || (p.page_cache ? '' : WS.T('Save first: the page cache starts with the next visits.'));
+    var line = WS.el('wperf-page-why');
+    if (line) { line.textContent = text; WS.show(line, !!text); }
+    WS.show('wperf-page-link', !!why && on && WS.can.sup);
   };
   window.wsPurge = function () {
     WS.say('wperf-msg', WS.T('Purging…'));
@@ -245,6 +283,7 @@
     WS.el('wapp-port').value = app.port == null ? '' : String(app.port);
     WS.el('wapp-build').value = app.build || '';
     WS.el('wapp-start').value = app.start || '';
+    ['wapp-version', 'wapp-port', 'wapp-build', 'wapp-start'].forEach(function (id) { adminOnly(WS.el(id), 'wapp-who'); });
     st.envNames = (app.env_names || []).slice();
     var box = WS.clear(WS.el('wapp-env'));
     st.envNames.forEach(function (n) { box.appendChild(envRow(n, true)); });
@@ -274,6 +313,12 @@
       Array.prototype.slice.call(document.querySelectorAll('[data-env="value"]')).forEach(function (v) { v.value = ''; });
       if (WS.done(d, 'wapp-msg')) WS.reload();
     });
+  };
+
+  // Build and start: the app's install and build command over its current files, then a restart (its settings as saved).
+  window.wsAppBuild = function () {
+    WS.say('wapp-msg', WS.T('Building…'));
+    WS.post(WS.R.act(ID, 'app/build'), {}).then(function (d) { if (WS.done(d, 'wapp-msg')) WS.reload(); });
   };
 
   // Each panel is filled once, from the first answer: a status poll while the site starts must not

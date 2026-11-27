@@ -26,7 +26,9 @@ processes, largest upload) takes the defaults from the web proxy card's Security
 
 If something the host needs is missing (for example the web proxy is not installed yet), the dialog
 says so on its first line, with one button that fixes it for a superadmin; anyone else is told to ask
-a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button.
+a superadmin. A site that fails to start shows why, its last log lines and a **Retry** button. In a site's log
+lines, requests its server refused ("client denied", nearly always scanners trying private pages such as
+`/server-status`) are counted in one line instead of being listed.
 
 Websites run in Podman, like add-ons. The first website on a host installs Podman and its two helpers from
 Ubuntu's archive; a host where that fails is refused before anything is made. A first install that fails
@@ -100,12 +102,16 @@ the Websites page:
   extra); you can add any other network, IPv4 or IPv6, such as another CDN's or your own. The visitor's
   real address is read from the CDN's header only when a request comes from one of those networks.
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
-  and Cloudflare brings visitors in. Paste the token once: the panel stores it encrypted, never shows it
+  and Cloudflare brings visitors in. In Cloudflare's dashboard, give each website's domain a **Public
+  Hostname** on that tunnel with the service `http://localhost:19080` (the card and each site's Domains tab
+  show it). A domain needs no DNS check in this mode (its DNS points at Cloudflare, not the host): the web
+  proxy serves every domain of an online site, and its Domains tab says HTTPS comes from the tunnel. Paste the token once: the panel stores it encrypted, never shows it
   again, and keeps it off every command line and log. Leave the box empty to keep the saved one. If the
   connector cannot start (a wrong token, or the host cannot reach the internet), the card says so;
   applying again tries at once, even after several failures in a row. An apply waits a few seconds after
   starting the connector and says it did not start when it stopped in that time (Cloudflare refuses a
-  wrong token only once the connector has started), and the proxy's status shows the connector's state.
+  wrong token only once the connector has started). **Check the web proxy** on the card shows the proxy's
+  version and state and, in tunnel mode, the connector's; **Apply again** applies the host's settings again.
 
 In Public and Restricted mode, ports 80 and 443 are opened in the host's firewall when the first site
 goes online and closed again when the last one goes offline; the web proxy stops too, so nothing
@@ -123,8 +129,11 @@ really runs; otherwise the previous settings are put back and the proxy's own er
 
 ### Security settings
 
-The same card has a folded **Security settings** section. Every value can be changed; OWASP's
-recommended value is printed beside the field, and a value outside it shows a note but is still saved.
+The same card has a folded **Security settings** section (the **Web proxy & security settings** button at the
+top of the Websites page leads to the card). Every value can be changed; OWASP's recommended value is printed
+beside the field, and a value outside it shows a note but is still saved. **Save settings** applies the proxy's
+settings to every host with an online site at once; if a host's proxy refuses them, nothing is saved and the card
+says why.
 
 | Setting | Default | OWASP's recommendation |
 |---------|---------|------------------------|
@@ -174,7 +183,9 @@ host: a superadmin gets a link to install it, anyone else is told to ask one. A 
 when an app install finishes, the dialog's main button is **Put it online** (for an administrator of the
 site, who can also tick **Put it online when it is installed** before Create), and the site's Overview
 says it is offline with the same button. When some of its domains are served
-and others are not yet, the answer says which ones it does not answer on.
+and others are not yet, the answer says which ones it does not answer on. On a host in Tunnel mode
+there is no DNS rule: every domain of the site is served through the tunnel (the web proxy must still
+be installed).
 
 Certificates come from Let's Encrypt automatically, for the domains you added and no others.
 Let's Encrypt sees your domain names, the host's address and, if you set one, the contact email. A
@@ -228,6 +239,9 @@ certificate, the domain keeps the one it had, the proxy is put back as it was, a
 panel never renews your certificate: the domain's line warns from 30 days before it expires, and so does
 the **A TLS certificate is expiring soon** alert (once a week per domain, under Settings > Notifications).
 A host in Tunnel mode serves no certificate of its own: the tunnel's provider serves the one visitors see.
+Your certificate stays saved and its key is not sent to the host while the tunnel is in use; it is
+served again if the host leaves Tunnel mode. In Tunnel mode no domain is marked as failing to get a
+certificate, since the web proxy asks for none.
 
 ### Behind Cloudflare
 
@@ -256,7 +270,9 @@ The **Files** tab is a file manager for the site's folder: browse, edit, upload,
 **Upload archive and extract** (zip or tar.gz). An archive is checked before anything is unpacked:
 nothing may land outside the site's folder, links and device files are refused, and the unpacked size
 is capped. The same folder appears in the panel's [SFTP service](sftp.md#websites) for users who may
-change the site's files. The site's disk limit counts this folder, its backups and its settings, not the
+change the site's files: one file sent through the page may be at most 50 MB, so bigger files go through
+SFTP (the Account page has its address and your keys). Uploading a file whose name is already there says so
+and offers **Replace them**. The site's disk limit counts this folder, its backups and its settings, not the
 container images the panel keeps for it ([how websites run](websites-runtime.md#disk)).
 
 ## PHP
@@ -264,7 +280,8 @@ container images the panel keeps for it ([how websites run](websites-runtime.md#
 PHP sites and the PHP apps have a **PHP** tab:
 
 - **PHP version**: only versions that PHP still supports with security fixes. When a version reaches the
-  end of its support it leaves the catalog, and the tab says so.
+  end of its support it leaves the catalog: a site still on it keeps it selected, marked "end of support", with a
+  note to choose a newer one. Only an administrator of the site can change the version; others see it read-only.
 - The common `php.ini` values: `memory_limit`, `upload_max_filesize`, `post_max_size`,
   `max_execution_time`, `max_input_time`, `max_input_vars`, `date.timezone` and `display_errors`. OWASP's
   figure is shown beside each one it has a figure for; a value above it shows a note and is saved
@@ -285,7 +302,10 @@ Saving restarts the site's PHP gracefully.
   starts or removes the cache beside the running site; the site itself is not restarted.
 - **Page cache**: the web proxy keeps whole pages for visitors who are not signed in, for the time you
   set. Sign-ins, form posts, any answer that sets a cookie, and admin pages (`/wp-admin`, `/adm`,
-  `/admin`) always skip it. **Purge cache** empties it. Off by default.
+  `/admin`) always skip it. **Purge cache** empties this site's cached pages only, through the page cache's own
+  interface: nothing restarts and other sites keep theirs. It can be pressed once a minute. **Keep pages for**
+  and **Purge cache** stay disabled, with the reason, while the page cache is off or the host's web proxy was
+  not built with it. Off by default.
 - **Static file caching**: browsers keep images, styles and scripts longer, and pages are sent
   compressed. On by default.
 
@@ -326,10 +346,19 @@ never reaches the host's other services. Plugins and themes for other apps are u
 
 **Backups** holds the site's files and its databases, kept on the host as the site's own account (the
 newest 7 by default). Restoring stops the site, takes a safety backup first, then puts the files and
-databases back. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
+databases back, and starts the site again only if it was running. The Overview shows when the newest backup
+was taken. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
 their connection settings on request, which is written to the audit log. Deleting a site (on its Settings
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
 site stays offline for another try.
+
+## Updates and settings
+
+When the signed catalog has a newer image for a site (a security rebuild), or the panel changed the files it
+writes for a site, the site's Overview offers **Update**, which installs it again from that image and restarts
+it (a few seconds offline; building a PHP image can take a few minutes first). Its files, databases and settings
+stay. Saving a site's Settings restarts it only when one of its limits changed; the note and the access log
+alone never do.
 
 ## Access logs
 
@@ -347,5 +376,9 @@ a site's account limit its own containers, it also says the CPU limit is set on 
 A customer is a panel user whose group holds only website permissions and has their sites in it. They
 see only those sites and none of the administrator's controls (limits, putting a site online, deleting
 it, full internet access), and cannot see other users, hosts, game servers or other customers' sites.
+Controls a customer may see but not change (the PHP version, the object cache, an app's runtime, port and
+commands) are shown read-only with who can change them. The invite link uses the panel's site domain from
+Settings; without one it uses the address the administrator is on, and says so, since a customer must be able
+to reach it.
 A customer group can be allowed to add its own sites up to a limit (3 by default). Two-factor sign-in
 is required for customers by default. The permissions are in [permissions.md](permissions.md#permissions).

@@ -14,6 +14,7 @@ Cheat Sheet (the hardening lines the panel always appends), Input Validation Che
 Management Cheat Sheet (environment variables encrypted at rest, never logged, never shown back).
 """
 import json
+import time
 
 from flask import abort, jsonify
 from flask_login import current_user, login_required
@@ -37,6 +38,12 @@ S_PAGE_CACHE_WAITS = ("Saved. The page cache starts once this host's web proxy h
 S_PAGE_CACHE_BUILDING = ("Saved. The page cache starts once this host's web proxy with the page cache is built, which "
                          "takes a few minutes.")
 S_PAGE_CACHE_FAILED = "Saved. The page cache starts once this host's web proxy has it, but its build failed: {why}"
+S_PURGE_OFF = "Turn the page cache on first."
+S_PURGE_NOT_BUILT = ("The web proxy's page cache isn't installed: a superadmin turns on \"Page cache in the web proxy\" in "
+                     "the Websites security settings.")
+S_PURGE_WAIT = "This website's page cache was emptied a moment ago. Try again in {n} seconds."
+PURGE_EVERY = 60                  # seconds between two purges of one site's page cache
+_PURGED = {}                      # site id -> monotonic time of its last purge
 S_CACHE_ON = "The object cache was turned on and started beside the website, which was not restarted."
 S_CACHE_OFF = "The object cache was turned off and removed; the website was not restarted."
 
@@ -278,6 +285,22 @@ def _rules_store(site, rules, form):
     return ok, said
 
 
+def _purge_refusal(site):
+    """Why the site's page cache cannot be emptied now (a JSON refusal), or None.
+
+    It must be on, and in force on the host's proxy. One purge per site per PURGE_EVERY seconds: whoever runs a
+    site may press it, and each one makes the site's next visits build every page again.
+    """
+    if not site.page_cache:
+        return _w.say(409, S_PURGE_OFF)
+    if not _w.page_cache_ready(site.remote):
+        return _w.say(409, S_PURGE_NOT_BUILT)
+    since = time.monotonic() - _PURGED.get(site.id, -PURGE_EVERY)
+    if since < PURGE_EVERY:
+        return _w.say(429, i18n.Sentence(S_PURGE_WAIT, n=int(PURGE_EVERY - since) + 1))
+    return None
+
+
 def _perf_routes(app):
     @app.route("/websites/<int:site_id>/performance", methods=["POST"])
     @login_required
@@ -289,8 +312,10 @@ def _perf_routes(app):
     @login_required
     def website_cache_purge(site_id):
         site = _wa.site_for(current_user, site_id, _w.manage_perm(site_id))
-        if not site.page_cache:
-            return _w.say(409, "This website's page cache is off.")
+        refused = _purge_refusal(site)
+        if refused:
+            return refused
+        _PURGED[site.id] = time.monotonic()
         ok, said = _w.host_call(_sw.cache_purge, site.remote, site)
         return _w.acted(site, "website_cache_purge", ok, said or "Cache emptied.")
 
@@ -378,6 +403,8 @@ def _app_apply(site, fields, env_changed):
     ok, said = True, ""
     if fields:
         ok, said = _w.host_call(_sw.install, site.remote, site, _w.site_db(site), False)
+        if ok:
+            _w.note_installed(site)
     if ok and said != _sw.OK_WAITING and env_changed:
         ok, said = _w.host_call(_sw.env_apply, site.remote, site, False)
     if ok and said != _sw.OK_WAITING:

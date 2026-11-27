@@ -26,7 +26,8 @@
           {% if can_manage|default(false) %}<button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsRestart"><i class="bi bi-arrow-clockwise"></i> Restart</button>{% endif %}
           {% if site_admin|default(false) %}<button type="button" id="ws-update" class="btn btn-sm btn-outline-primary" data-action="wsUpdateImage" hidden><i class="bi bi-cloud-arrow-down"></i> Update</button>{% endif %}
         </div>
-        <div id="ws-update-note" class="form-text" hidden>A newer signed image is available.</div>
+        <div id="ws-update-note" class="form-text" hidden>A newer signed image is available. Update installs the website again from it and restarts it: a few seconds offline (building a PHP image can take a few minutes first). Its files, databases and settings stay.</div>
+        <div class="form-text">{% if site.kind == 'static' %}A plain site has no PHP, Database or App tab: it serves its files as they are.{% elif site.kind == 'app' %}No PHP tab: this app runs on Node.js.{% else %}No App tab: that one is for Node.js apps.{% endif %}</div>
       </div>
     </div>
     <div class="card">

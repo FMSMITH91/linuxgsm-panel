@@ -23,8 +23,13 @@ THE PROXY TOKEN
     site's server answers 403 without it, so another account on the host reaching the loopback port
     directly gets nothing. nginx (static sites, and the gate in front of a runtime app) compares it in
     its config; Apache (PHP kinds) refuses the request in a <Location> <If> that applies after every
-    .htaccess, and removes the header before PHP runs. The token lives in ~/site/conf (0600), written
-    from stdin, never on a command line.
+    .htaccess, and removes the header before PHP runs. The header is removed in the fixup phase, so a
+    request a site's .htaccess rewrites (WordPress sends every path that is not a file to index.php:
+    pretty links, robots.txt, a missing favicon) reaches index.php as an internal redirect without it;
+    the gate lets such a redirect through only when the request it came from passed (Apache sets
+    REDIRECT_STATUS=200 on it, and a client cannot set a request's environment). A redirect to an error
+    page after a refusal carries REDIRECT_STATUS=403 and is refused too. The token lives in
+    ~/site/conf (0600), written from stdin, never on a command line.
 
 THE NETWORK (pasta; see addons.network)
     No route out: the container reaches only what pasta forwards to the host's loopback: its database
@@ -72,6 +77,10 @@ OBJECT_CACHE_MB = 64
 TUNNEL_MEMORY_MB = 256
 STOP_TIMEOUT = 20
 KINDS_PHP = ("php", "wordpress", "phpbb")
+# The revision of the files an install writes for a site (its server's config, its units). Raised when a change to
+# them must reach the sites already installed: a site installed with an older one is offered Update, which installs
+# it again. 2: the Apache gate lets a request the site's .htaccess rewrote through (see THE PROXY TOKEN).
+SITE_FILES_REV = "files-2"
 DOCROOT = {"static": "/usr/share/nginx/html", "app": "/app"}
 DOCROOT_PHP = "/var/www/html"
 GATE_HEADER = "X-Panel-Proxy-Token"
@@ -392,7 +401,7 @@ def apache_conf(token):
         "<VirtualHost *:%d>" % INNER_PORT, "    DocumentRoot %s" % DOCROOT_PHP,
         "    <Directory %s>" % DOCROOT_PHP, "        Options -Indexes +SymLinksIfOwnerMatch", "        AllowOverride All",
         "        Require all granted", "    </Directory>",
-        '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s'\">" % (GATE_HEADER, token),
+        '    <Location "/">', "        <If \"%%{HTTP:%s} != '%s' && %%{ENV:REDIRECT_STATUS} != '200'\">" % (GATE_HEADER, token),
         "            Require all denied", "        </If>", "    </Location>",
         "    RequestHeader unset %s" % GATE_HEADER,
         "    ErrorLog /proc/self/fd/2", "    CustomLog /dev/null common", "</VirtualHost>", ""])
@@ -1057,6 +1066,9 @@ def probe_sh(account, site):
             + "echo \"stats=$(podman stats --no-stream --format '{{.MemUsage}}|{{.CPUPerc}}' %s 2>&1 | head -n 1)\"; "
             % UNIT
             + "d=$(du -sxm %s 2>/dev/null) && echo \"disk_mb=${d%%%%[[:space:]]*}\"; " % _q(SITE)
+            # The newest backup's time (seconds since the epoch), for the Overview's "Last backup".
+            + "b=$(find %s -maxdepth 1 -name 'backup-*.tar.gz' -printf '%%T@\\n' 2>/dev/null | sort -n | tail -n 1) "
+              "&& [ -n \"$b\" ] && echo \"last_backup=${b%%%%.*}\"; " % _q(SITE + "/backups")
             + 'u=$(id -u); grep -qw cpu "/sys/fs/cgroup/user.slice/user-$u.slice/user@$u.service/cgroup.controllers" '
               '2>/dev/null && echo cpu_delegated=1; '
             + "[ -f %s ] && echo installed=1; true" % _q(HOME_DIR + "/" + META_FILE))
@@ -1111,7 +1123,8 @@ def parse_probe(out):
             "gid": int(kv["gid"]) if kv.get("gid", "").isdecimal() else None,
             "installed": kv.get("installed") == "1", "splice": kv.get("splice") == "1",
             "cpu_delegated": kv.get("cpu_delegated") == "1",
-            "os": kv.get("os", ""), "podman": kv.get("podman", "")}
+            "os": kv.get("os", ""), "podman": kv.get("podman", ""),
+            "last_backup": int(kv["last_backup"]) if kv.get("last_backup", "").isdecimal() else None}
 
 
 def runtime_refusal(os_version, podman_version):

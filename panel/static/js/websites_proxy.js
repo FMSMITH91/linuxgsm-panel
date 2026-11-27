@@ -38,13 +38,27 @@
     }
     var s = WS.el('wp-cf-state');
     if (s) s.textContent = on ? WS.T("Cloudflare's networks are on the list (from the signed catalog). Tap again to remove them.") : '';
+    renderCfList();
+  }
+  // Every network the preset admits, from the signed catalog, and where they come from.
+  function renderCfList() {
+    var info = (cur().preset_info || {}).cloudflare || {}, ranges = info.ranges || [];
+    var sum = WS.el('wp-cf-sum');
+    if (sum) sum.textContent = WS.TF("Cloudflare's networks ({n})", {n: ranges.length});
+    var src = WS.el('wp-cf-src');
+    if (src) {
+      src.textContent = (info.issued ? WS.TF('From the signed catalog of {date}.', {date: info.issued}) : WS.T("From the panel's built-in catalog.")) + ' ' +
+        WS.T('Read from cloudflare.com/ips-v4 and /ips-v6 by a daily check, and updated by themselves with the signed catalog.');
+    }
+    var ul = WS.clear(WS.el('wp-cf-ranges'));
+    if (ul) ranges.forEach(function (r) { ul.appendChild(WS.node('li', null, String(r))); });
   }
   function stateLine(p) {
     var e = WS.el('wp-state');
     if (!e) return;
     WS.show('wp-install', !p.installed);
     if (!p.installed) { e.textContent = WS.T('The web proxy is not installed on this host yet. Sites cannot go online until it is.'); return; }
-    e.textContent = WS.TF('Web proxy {version} is installed.', {version: p.version || '?'});
+    e.textContent = WS.TF('Web proxy: Caddy {version}, installed.', {version: p.version || '?'});
     if (p.last_error) e.appendChild(WS.raw('span', 'd-block text-danger', p.last_error));
   }
   var MODE_NAME = {public: 'Public', restricted: 'Restricted', tunnel: 'Tunnel'};
@@ -61,7 +75,30 @@
     var tok = WS.el('wp-token');
     if (tok) tok.value = '';
     WS.show('wp-token-state', !!p.tunnel_token_set);
+    renderTools(p);
   }
+  function renderTools(p) {
+    var svc = WS.el('wp-tunnel-service');
+    if (svc) svc.textContent = p.tunnel_service || '';
+    ['wp-check', 'wp-apply'].forEach(function (id) { var b = WS.el(id); if (b) b.disabled = !p.installed; });
+  }
+  // The proxy's state as the host reports it (version, running, the tunnel connector's state in tunnel mode).
+  var ACTIVE = {active: 'running', inactive: 'stopped', failed: 'failed', activating: 'starting'};
+  window.wsProxyStatus = function () {
+    WS.say('wp-status', WS.T('Checking…'));
+    WS.get('/websites/proxy/status?host_id=' + encodeURIComponent(st.host)).then(function (d) {
+      if (!d || !d.status_ok) { WS.done(d, 'wp-status'); return; }
+      var s = d.status || {}, parts = [WS.TF('Caddy {version}: {state}.', {version: s.version || '?', state: WS.T(WS.pick(ACTIVE, s.active, 'state unknown'))})];
+      if (d.exposure_mode === 'tunnel') parts.push(WS.TF('Tunnel connector: {state}.', {state: WS.T(WS.pick(ACTIVE, s.tunnel, 'state unknown'))}));
+      parts.push(WS.TF('{n} websites online.', {n: d.online_sites || 0}));
+      WS.say('wp-status', parts.join(' '), 'ok');
+    });
+  };
+  // Apply the host's configuration again (after a failure the card shows, or a change made on the host).
+  window.wsProxyApply = function () {
+    WS.say('wp-status', WS.T('Applying…'));
+    WS.post('/websites/proxy/apply', {host_id: st.host}).then(function (d) { if (WS.done(d, 'wp-status') && WS.loadList) WS.loadList(); });
+  };
   function setVal(id, v) {
     var e = WS.el(id);
     if (!e || v == null) return;
@@ -87,6 +124,14 @@
     var o = d.options || {};
     Object.keys(OPT_FIELDS).forEach(function (k) { setVal(OPT_FIELDS[k], o[k]); });
     window.wsOptCheck();
+    foldedSections();
+  };
+  function foldedSections() {
+    var sum = WS.el('wp-opts-sum');
+    if (sum) sum.textContent = WS.TF('Security settings: {n} settings', {n: Object.keys(OPT_FIELDS).length});
+    // A link to a folded section (from a site's page) opens it, so the setting it points at is in view.
+    var hash = String((window.location && window.location.hash) || '');
+    if (hash === '#wp-opts-box' || hash === '#wp-mode-box') { var box = WS.el(hash.slice(1)); if (box) box.open = true; }
   };
   window.wsProxyHost = function () { var s = WS.el('wp-host'); st.host = s ? s.value : null; renderHost(); };
   window.wsExposure = function (mode) { setMode(mode); };

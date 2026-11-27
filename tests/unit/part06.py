@@ -6007,9 +6007,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # 324, was 323: panel/routes/addons.py's Refresh of the signed add-on catalog (MANAGE_ADDONS and server access).
 # 377, was 324: the Websites tab's 53 views (panel/routes/websites*.py and databases_sites.py), every per-site
 # one through websites_access.site_for (404 for no access and no site alike), the proxy ones superadmin only.
-# 378, was 377: a website domain's own certificate (POST .../domains/cert, through site_for like the other domain routes).
-check("register_routes: every one of the 378 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 378,
+# 377: +1 a website domain's own certificate (POST .../domains/cert, through site_for like the other domain routes);
+# -1 GET /websites/<id>/domains had no button and is gone (the page reads a site's domains from /api/websites/<id>).
+check("register_routes: every one of the 377 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 377,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

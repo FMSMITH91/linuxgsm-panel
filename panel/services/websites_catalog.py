@@ -540,6 +540,14 @@ def caddy_asset(arch):
     return dict(asset, version=caddy["version"]) if asset else None
 
 
+def preset_info(name):
+    """{ranges, issued}: preset `name`'s networks and the date of the signed catalog they came from ("" for the floor's)."""
+    sites, source = section()
+    if name not in sites["presets"]:
+        raise KeyError(name)
+    return {"ranges": list(sites["presets"][name]), "issued": str((source or {}).get("issued") or "")[:10]}
+
+
 def preset_ranges(name):
     """The networks of allow-list preset `name` ("cloudflare"), IPv4 and IPv6, as canonical strings."""
     sites, _source = section()

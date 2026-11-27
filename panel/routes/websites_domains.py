@@ -46,7 +46,6 @@ from panel.core.validation import website_domain
 from panel.db.models import Website, WebsiteDomain, db
 from panel.ops.ssh_manager import websites as _sw
 from panel.routes import websites as _w
-from panel.security.auth import VIEW_WEBSITES
 from panel.services import tls_own
 from panel.services import website_certs as _wcert
 from panel.services import website_dns as _dns
@@ -108,12 +107,15 @@ def apply_certs(remote, status):
     errors = (status or {}).get("cert_errors") or {}
     rows = (WebsiteDomain.query.join(Website, WebsiteDomain.website_id == Website.id)
             .filter(Website.remote_id == remote.id, WebsiteDomain.cert_mode == "acme").all())
+    tunnel = _w.tunnel_mode(remote.id)      # the proxy asks for no certificate: none is missing
     for row in rows:
         got = certs.get(row.domain)
         if got:
             _MISSING_SINCE.pop(row.domain, None)
             row.cert_state, row.cert_error = cert_kind(got["issuer"]), ""
             row.cert_not_after = datetime.fromtimestamp(got["not_after"], timezone.utc).replace(tzinfo=None)
+        elif tunnel:
+            _MISSING_SINCE.pop(row.domain, None)
         else:
             _note_missing(row, errors.get(row.domain, ""))
     db.session.commit()
@@ -255,25 +257,40 @@ def _row(site, form):
     return next((d for d in site.domains if d.domain == clean), None) if clean else None
 
 
-def domain_json(site, row):
-    """A domain as the Domains tab shows it."""
+def domain_json(site, row, tunnel=None):
+    """A domain as the Domains tab shows it.
+
+    On a host in tunnel mode (`tunnel`, read from the host's proxy row when None) the proxy holds no certificate:
+    the tunnel's provider serves HTTPS, so the state is "tunnel", never a certificate pending for good.
+    """
+    tunnel = _w.tunnel_mode(site.remote_id) if tunnel is None else tunnel
+    return {**_cert_part(row, tunnel), **_cert_json(row, tunnel), "id": row.id, "domain": row.domain,
+            "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
+            "cert_error": "" if tunnel else _error_text(row),
+            "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
+
+
+def _cert_part(row, tunnel):
+    """The domain's certificate fields: its state, expiry and warning; the tunnel's state in tunnel mode."""
+    if tunnel:
+        return {"cert_state": "tunnel", "cert_not_after": None, "cert_warning": ""}
     note = cert_note(row)
-    out = {"id": row.id, "domain": row.domain, "is_primary": bool(row.is_primary), "dns_state": row.dns_state or "unchecked",
-           "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None,
-           "cert_state": row.cert_state or "pending", "cert_error": _error_text(row),
-           "cert_warning": i18n.tr(note) if note else "",
-           "records": [{"type": t, "value": a} for t, a in _dns.records(site.remote)]}
-    out.update(_cert_json(row))
-    return out
+    return {"cert_state": row.cert_state or "pending", "cert_warning": i18n.tr(note) if note else "",
+            "cert_not_after": row.cert_not_after.isoformat() if row.cert_not_after else None}
 
 
-def _cert_json(row):
-    """A domain's certificate source for the Domains tab: its own certificate's public facts, or the CDN note."""
+def _cert_json(row, tunnel=False):
+    """A domain's certificate source for the Domains tab: its own certificate's public facts, or the CDN note.
+
+    In tunnel mode the tunnel's provider holds the certificate visitors see, so there is no CDN note about an
+    automatic one; an own certificate's facts still show (it is used again if the host stops using the tunnel).
+    """
     own = _wcert.info(row.own_cert_pem) if row.cert_mode == "own" else None
     if own:
         return {"cert_mode": "own", "cdn_note": "",
                 "own_cert": {k: own[k] for k in ("issuer", "subject", "names", "not_after", "fingerprint", "cdn_origin")}}
-    return {"cert_mode": "acme", "own_cert": None, "cdn_note": i18n.tr(S_CDN_AUTO) if row.dns_state == "cdn" else ""}
+    cdn = row.dns_state == "cdn" and not tunnel
+    return {"cert_mode": "acme", "own_cert": None, "cdn_note": i18n.tr(S_CDN_AUTO) if cdn else ""}
 
 
 # ── a domain's own certificate ────────────────────────────────────────────────────────────────
@@ -380,13 +397,6 @@ def _wp_address(site, row):
 
 def register(app):
     """The domain routes."""
-    @app.route("/websites/<int:site_id>/domains")
-    @login_required
-    def website_domains(site_id):
-        site = _wa.site_for(current_user, site_id, VIEW_WEBSITES)
-        refresh_certs(site.remote)
-        return jsonify({"domains": [domain_json(site, d) for d in site.domains]})
-
     @app.route("/websites/<int:site_id>/domains/add", methods=["POST"])
     @login_required
     def website_domain_add(site_id):

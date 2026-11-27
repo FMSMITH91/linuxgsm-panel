@@ -124,7 +124,7 @@
     setText('ws-ov-image', img.name ? [img.name, img.version].filter(Boolean).join(' ') : unread(why.image));
     var ver = s.app_version || s.php_version || s.runtime_version;
     setText('ws-ov-version', ver);
-    setText('ws-ov-backup', s.last_backup || WS.T('None yet'));
+    setText('ws-ov-backup', backupText(s.last_backup));
     WS.show('ws-update', !!img.update_available);
     WS.show('ws-update-note', !!img.update_available);
     renderUsage(u, s.limits || {}, why);
@@ -138,6 +138,8 @@
     var note = WS.el('ws-cpu-note');
     if (note) { note.textContent = u.cpu_note || ''; WS.show(note, !!u.cpu_note); }
   }
+  // The newest backup's time; "" when the host said there is none; null when it could not be read (a dash).
+  function backupText(when) { return when || (when === '' ? WS.T('None yet') : ''); }
   window.wsLoadLogs = function () {
     WS.get(WS.R.act(ID, 'logs')).then(function (d) {
       WS.el('ws-logs').textContent = (d && d.lines && d.lines.length) ? d.lines.join('\n') : WS.T('No log lines yet.');
@@ -192,7 +194,7 @@
     info.appendChild(WS.node('span', SERVED.indexOf(dm.dns_state) >= 0 ? 'text-success' : '', WS.T(WS.pick(DNS, dm.dns_state, DNS.unchecked))));
     info.appendChild(document.createTextNode(' · '));
     var trusted = !dm.cert_warning && WS.TRUSTED.indexOf(dm.cert_state) >= 0;
-    var own = dm.cert_mode === 'own' && dm.own_cert;
+    var own = dm.cert_mode === 'own' && dm.own_cert && dm.cert_state !== 'tunnel';   // a tunnel serves its own
     info.appendChild(WS.node('span', trusted ? 'text-success' : '', WS.T(own ? 'Your own certificate' : WS.pick(WS.CERT, dm.cert_state, 'No certificate yet'))));
     if (own) {
       info.appendChild(document.createTextNode(' · '));
@@ -208,6 +210,7 @@
   }
   function domainNotes(li, dm) {
     if (dm.cert_warning) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.cert_warning));
+    if (dm.cert_warning && WS.can.sup) li.appendChild(proxyLink());
     if (dm.cert_error) li.appendChild(WS.raw('div', 'small text-danger text-break', dm.cert_error));
     if (dm.cdn_note) {
       // Folded: the steps matter once, and the row stays short on a phone.
@@ -216,6 +219,12 @@
       det.appendChild(WS.raw('div', 'text-break', dm.cdn_note));
       li.appendChild(det);
     }
+  }
+  // Where a host-wide setting is changed (a superadmin's Websites page), from the line that names it.
+  function proxyLink() {
+    var a = WS.node('a', 'small d-inline-block', WS.T("Open the web proxy's security settings"));
+    a.href = WS.url('/websites#wp-opts-box');
+    return a;
   }
   function domainButtons(dm) {
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
@@ -230,7 +239,7 @@
     var doms = d.domains || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
-    renderRecords(doms, d.dns || {});
+    renderRecords(doms, d.dns || {}, d.tunnel);
   }
   // The record's name as most DNS providers ask for it inside the domain's zone: @ for the zone itself, else the
   // labels before it ("www"). The zone is guessed as the last two labels (three under a two-letter country code
@@ -248,8 +257,14 @@
     td.appendChild(WS.raw('span', 'd-block small text-secondary font-monospace', domain));
     return td;
   }
-  function renderRecords(doms, dns) {
+  // On a host in tunnel mode no record points here: the domain is routed to the tunnel in the provider's
+  // dashboard, to the service address the server sends. The A/AAAA table is for the other modes.
+  function renderRecords(doms, dns, tunnel) {
+    WS.show('wd-tunnel', !!tunnel);
+    var svc = WS.el('wd-tunnel-service');
+    if (svc) svc.textContent = tunnel ? String(tunnel.service || '') : '';
     var body = WS.clear(WS.el('wd-records'));
+    if (tunnel) { WS.show('wd-dns', false); return; }
     var want = doms.filter(function (x) { return SERVED.indexOf(x.dns_state) < 0; });
     var rows = [];
     want.forEach(function (x) {
@@ -397,7 +412,7 @@
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline justify-content-between');
     top.appendChild(WS.raw('span', 'text-break fw-semibold', b.name));
-    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, b.size].filter(Boolean).join(' · ')));
+    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, WS.size(b.size)].filter(Boolean).join(' · ')));
     li.appendChild(top);
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (WS.can.files) {
@@ -455,8 +470,8 @@
       if (v != null) inp.value = String(v);
     });
     WS.el('wset-log').checked = !!s.access_log;
-    var eg = WS.el('wset-egress');      // a superadmin's page only
-    if (eg) eg.checked = !!s.full_egress;
+    var eg = WS.el('wset-egress');      // read-only below a superadmin
+    if (eg) { eg.checked = !!s.full_egress; eg.disabled = !WS.can.sup; }
     WS.el('wset-note').value = s.customer_note || '';
     window.wsEgressCheck();
   }
@@ -473,7 +488,7 @@
     });
     var body = {limits: limits, access_log: WS.el('wset-log').checked, customer_note: WS.el('wset-note').value};
     var eg = WS.el('wset-egress');
-    if (eg) body.full_egress = eg.checked;
+    if (eg && !eg.disabled) body.full_egress = eg.checked;
     WS.stepUp(function () { WS.say('wset-msg', WS.T('Saving…')); WS.siteAct('settings', body, 'wset-msg'); });
   };
   window.wsDelete = function () {

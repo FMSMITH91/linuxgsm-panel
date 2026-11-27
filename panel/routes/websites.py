@@ -48,6 +48,9 @@ S_NO_HOST = "Choose the host the website runs on."
 S_QUOTA = "Your group already has as many websites as it may have."
 S_CONFIRM = "Type the website's name to confirm."
 S_BAD_LIMIT = "{field} must be a whole number from {low} to {high}."
+# The Settings form's labels, so a refusal names the field the way the page does (never the column's name).
+LIMIT_LABELS = {"mem_mb": "Memory (MB)", "cpu_milli": "CPU (1000 = one core)", "pids": "Processes", "disk_mb": "Disk (MB)",
+                "max_body_mb": "Largest upload (MB)", "backup_keep": "Backups to keep"}
 S_STRANDED = "The panel stopped before this website was finished. Delete it and add it again."
 STATUS_FRESH = 10                 # seconds a site's status probe is reused
 _STATUS = {}                      # site id -> (monotonic time, probe dict)
@@ -60,6 +63,11 @@ _SWEPT = []                       # [True] once this process has swept
 # Limits an administrator may set: (low, high) per column.
 LIMITS = {"mem_mb": (64, 65536), "cpu_milli": (100, 64000), "pids": (32, 32768), "disk_mb": (64, 1048576),
           "max_body_mb": (1, 4096)}
+# Apache's "client denied" line (AH01630): a request the site's server refused. Nearly always a scanner reaching for a
+# private page such as /server-status; hundreds of them would bury the site's own lines, so the page gets their count.
+DENIED_MARK = "AH01630"
+S_DENIED = ("{n} refused requests (client denied by server configuration) are left out: nearly always scanners "
+            "trying private pages such as /server-status.")
 
 
 # ── answers ─────────────────────────────────────────────────────────────────────────────────────
@@ -146,10 +154,44 @@ def install_site(site, restart=True):
     """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
 
     `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
+    A done install records the image and the files' revision it wrote (note_installed), which Update compares.
     """
     if restart:
-        return host_call(_sw.install, site.remote, site, site_db(site))
-    return host_call(_sw.install, site.remote, site, site_db(site), True, False)
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site))
+    else:
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site), True, False)
+    if ok:
+        note_installed(site)
+    return ok, said
+
+
+def current_image(site):
+    """The image the signed catalog has for `site` now (services.websites.image_for), or "" when it has none."""
+    from panel.services import websites as _svc
+    try:
+        return str(_svc.image_for(site) or "")[:200]
+    except (NotImplementedError, KeyError, TypeError, ValueError):
+        return ""
+
+
+def note_installed(site):
+    """Record on `site` the image and the files' revision an install just wrote (committed)."""
+    from panel.services import websites as _svc
+    site.image_digest, site.image_key = current_image(site), _svc.SITE_FILES_REV
+    db.session.commit()
+
+
+def update_available(site):
+    """Whether Update would bring `site` something: the catalog's image or the files' revision changed since its install.
+
+    A site installed before the panel recorded them has neither, and is offered Update once (its next install records
+    both). A site being made or removed is never offered it.
+    """
+    from panel.services import websites as _svc
+    if site.state not in ("running", "stopped", "failed"):
+        return False
+    now = current_image(site)
+    return bool(now) and (site.image_digest != now or site.image_key != _svc.SITE_FILES_REV)
 
 
 def acted(site, action, ok, said, detail=""):
@@ -200,6 +242,12 @@ def proxy_row(remote_id):
         db.session.add(row)
         db.session.flush()
     return row
+
+
+def tunnel_mode(remote_id):
+    """Whether the host's web proxy is in tunnel mode (visitors come in through the operator's tunnel)."""
+    row = WebsiteProxy.query.filter_by(remote_id=remote_id).first()
+    return row is not None and row.exposure_mode == "tunnel"
 
 
 def _cache_checked(remote, opts):
@@ -539,8 +587,15 @@ def _run_routes(app):
         if reader is None:
             return say(501, S_NOT_READY)
         ok, said = host_call(reader, site.remote, site)
-        lines = said.splitlines()[-500:] if ok and isinstance(said, str) else []
+        lines = readable_logs(said.splitlines()[-500:]) if ok and isinstance(said, str) else []
         return jsonify({"success": bool(ok), "lines": lines, "message": "" if ok else i18n.tr(said)})
+
+
+def readable_logs(lines):
+    """The site's log lines for the page: refused requests (DENIED_MARK) left out and counted in one last line."""
+    kept = [ln for ln in lines if DENIED_MARK not in ln]
+    left = len(lines) - len(kept)
+    return kept + ([i18n.tr(S_DENIED, n=left)] if left else [])
 
 
 def _ran(site, action, ok, said, state):
@@ -562,20 +617,26 @@ S_NO_PROXY_SUPER = ("The web proxy is not installed on this host yet. Install it
 S_NO_PROXY = "The web proxy is not installed on this host yet. Ask a superadmin to install it."
 
 
+def _exposure(site):
+    """How the proxy serves `site`'s domains: "tunnel" on a host in tunnel mode, else "public" (websites_proxy._served)."""
+    return "tunnel" if tunnel_mode(site.remote_id) else "public"
+
+
 def _unserved(site):
     """The site's domains the web proxy would not serve, each with its DNS state ("x.org (mismatch)")."""
     from panel.services import websites_proxy as _wp
-    served = set(_wp.site_domains(site))
+    served = set(_wp.site_domains(site, _exposure(site)))
     return ["%s (%s)" % (d.domain, d.dns_state or "unchecked") for d in site.domains or [] if d.domain not in served]
 
 
 def online_refusal(site):
     """Why `site` may not go online now (a sentence), or None.
 
-    It needs a domain, and every domain's DNS must point at the host or go through Cloudflare
-    (website_dns.VERIFIED) unless a superadmin puts it online anyway, which is audited as such. Even
-    then, a site the web proxy would serve on no domain at all (none verified yet) is refused: it would
-    say online and answer nothing.
+    It needs a domain and the host's web proxy, and every domain's DNS must point at the host or go
+    through Cloudflare (website_dns.VERIFIED) unless a superadmin puts it online anyway, which is audited
+    as such. Even then, a site the web proxy would serve on no domain at all (none verified yet) is
+    refused: it would say online and answer nothing. A host in tunnel mode has no DNS rule: its domains
+    point at the tunnel's provider, the tunnel is the way in, and the proxy serves every valid domain.
     """
     from panel.services import website_dns
     from panel.services import websites_proxy as _wp
@@ -584,10 +645,12 @@ def online_refusal(site):
         return i18n.Sentence("Add a domain to this website before putting it online.")
     if not proxy_row(site.remote_id).installed_version:
         return i18n.Sentence(S_NO_PROXY_SUPER if current_user.is_superadmin else S_NO_PROXY)
-    if not current_user.is_superadmin and any(d.dns_state not in website_dns.VERIFIED for d in domains):
+    mode = _exposure(site)
+    if mode != "tunnel" and not current_user.is_superadmin and any(
+            d.dns_state not in website_dns.VERIFIED for d in domains):
         return i18n.Sentence("A domain of this website does not point at its host yet. Check its DNS on the "
                              "Domains tab, then try again.")
-    if not _wp.site_domains(site):
+    if not _wp.site_domains(site, mode):
         return i18n.Sentence(S_NOT_SERVED, domains=", ".join(_unserved(site)))
     return None
 
@@ -690,9 +753,14 @@ def _delete(site):
     return done(True, "Website removed.")
 
 
+def _bad_limit(key, low, high):
+    db.session.rollback()
+    return say(400, i18n.Sentence(S_BAD_LIMIT, field=i18n.Sentence(LIMIT_LABELS[key]), low=low, high=high))
+
+
 def _limits(site, fields):
-    """Set the limits in `fields` on `site` (not committed): None, or the refusal naming the first bad one."""
-    changed = {}
+    """Set the limits in `fields` on `site` (not committed): (None, [the limits whose value changed]) or (refusal, [])."""
+    given = {}
     for key, (low, high) in LIMITS.items():
         if key not in fields:
             continue
@@ -701,12 +769,12 @@ def _limits(site, fields):
         except (TypeError, ValueError):
             v = None
         if v is None or not low <= v <= high:
-            db.session.rollback()
-            return say(400, i18n.Sentence(S_BAD_LIMIT, field=key, low=low, high=high))
-        changed[key] = v
-    for key, v in changed.items():
-        setattr(site, key, v)
-    return None
+            return _bad_limit(key, low, high), []
+        given[key] = v
+    changed = sorted(k for k, v in given.items() if v != getattr(site, k))
+    for key in changed:
+        setattr(site, key, given[key])
+    return None, changed
 
 
 def _keep(site, fields):
@@ -718,8 +786,7 @@ def _keep(site, fields):
     except (TypeError, ValueError):
         keep = 0
     if not 1 <= keep <= 60:
-        db.session.rollback()
-        return say(400, i18n.Sentence(S_BAD_LIMIT, field="backup_keep", low=1, high=60))
+        return _bad_limit("backup_keep", 1, 60)
     site.backup_keep = keep
     return None
 
@@ -737,15 +804,17 @@ def _settings_flags(site, form):
     return words
 
 
-def _settings_apply(site, limits, form):
-    """Apply a saved Settings form on the host: (ok, sentence)."""
-    if not any(k in LIMITS for k in limits):
-        ok, said = True, "Saved."
-    else:
-        ok, said = install_site(site)
-    if ok and "disk_mb" in limits:
+def _settings_apply(site, changed, form, log_was):
+    """Apply a saved Settings form on the host: (ok, sentence).
+
+    The site is installed again (and restarted) only when a limit's value changed: the form sends every field, and
+    a note or the access log alone never restarts the site. The proxy is applied again only when the access log
+    of an online site was switched.
+    """
+    ok, said = install_site(site) if changed else (True, "Saved.")
+    if ok and "disk_mb" in changed:
         host_call(_sw.quota_set, site.remote, site)
-    if ok and site.enabled and "access_log" in form:
+    if ok and site.enabled and "access_log" in form and bool(site.access_log) != log_was:
         ok, said = reconcile_proxy(site.remote)
     return ok, said
 
@@ -761,13 +830,15 @@ def _settings(site, form):
     """The Settings form: {limits: {..., backup_keep}, access_log, full_egress, customer_note}."""
     limits = dict(form.get("limits")) if isinstance(form.get("limits"), dict) else {}
     _egress_refusal(site, form)
-    refused = _limits(site, limits) or _keep(site, limits)
+    log_was = bool(site.access_log)
+    refused, changed = _limits(site, limits)
+    refused = refused or _keep(site, limits)
     if refused is not None:
         return refused
     words = ["%s=%s" % (k, limits[k]) for k in sorted(limits) if k in LIMITS or k == "backup_keep"]
     words += _settings_flags(site, form)
     db.session.commit()
-    ok, said = _settings_apply(site, limits, form)
+    ok, said = _settings_apply(site, changed, form, log_was)
     return acted(site, "website_settings", ok, said, ", ".join(words) or "none")
 
 

@@ -19,6 +19,10 @@ pinned image as it is; see "Images built on the host" below). The container runs
 with every capability dropped, no new privileges, a read-only system and limits on memory (no swap), processes
 and open files. Its server listens only on the host's loopback address, and it refuses any request that
 does not carry the web proxy's secret token, so another account on the host cannot reach it directly.
+A PHP site's server checks the token once per request: a path its `.htaccess` rewrites (WordPress sends every
+path that is not a file to `index.php`) continues as the same request, so real visitors are never refused
+there, while a request that did not come through the proxy is refused, its error page included. The token is
+made once, with the site, and no action changes it.
 
 A site has no route to the internet. WordPress reaches only its own update hosts (api.wordpress.org and
 downloads.wordpress.org), through a small proxy that refuses any name resolving to a private or local
@@ -63,7 +67,7 @@ now fails at once instead of waiting.
 
 ## CPU limits
 
-A site's CPU limit is applied in one of three ways, and the site card says which one:
+A site's CPU limit is applied in one of three ways, which the panel picks for the host:
 
 - **On the container**, when the host lets the site's account control its own CPU (the usual case on
   Ubuntu 24.04 and later).
@@ -96,7 +100,10 @@ through it.
 
 ### Page cache
 
-The page cache needs Caddy built with the cache module. The panel builds it on each host that has a web
+The page cache needs Caddy built with the cache module. While it is on, Caddy's admin interface listens on a
+unix socket in the proxy's runtime folder (owner-only; never a network port), so **Purge cache** empties one
+site's pages through the cache module's own interface without restarting the proxy; with the page cache off
+the admin interface stays off. The panel builds it on each host that has a web
 proxy when a superadmin turns on **Page cache in the web proxy** in the Websites security settings (and again
 after the plain proxy is installed while it is on). The build runs in the background and takes a few minutes;
 a failure is shown on the security settings card, saying which part failed (the build, the check or the

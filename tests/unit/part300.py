@@ -748,7 +748,9 @@ def _s11_errors(st):
     log, handler = _logging300.getLogger("panel.ssh"), _Logged300()
     log.addHandler(handler)
     try:
-        r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id, json={"limits": {"mem_mb": 512}})
+        # A changed limit: a save that changes none no longer installs the site again.
+        r = _Client300(st.su.id).post("/websites/%d/settings" % st.a.id,
+                                      json={"limits": {"mem_mb": _db300.session.get(_Site300, st.a.id).mem_mb + 64}})
     finally:
         log.removeHandler(handler)
     eq("install (settings route): a site whose files cannot be built answers the generic sentence; the exception's "

@@ -6,7 +6,10 @@ helper verb website-proxy-apply validates the text with the proxy's own `caddy v
 user before it replaces the running file, so a bad site rule never takes down the other sites.
 
 WHAT EVERY CONFIGURATION HOLDS
-    `admin off` and `persist_config off` (no admin API, nothing written back); HTTP/1.1 and HTTP/2 only
+    `persist_config off` (nothing written back) and `admin off` (no admin API), except while the page cache is on:
+    then the admin API listens on a unix socket in the proxy's runtime folder (ADMIN_SOCKET, mode 0200: the proxy's
+    own user, and root), never on a TCP port, so the root helper can empty one site's cache through the cache's
+    API without restarting the proxy (website-proxy-apply purge); a site's account cannot reach it. HTTP/1.1 and HTTP/2 only
     (no HTTP/3: no UDP port to open); server timeouts against slow clients; a catch-all that aborts any
     request for a name the configuration does not hold, the bare IP included, so the panel's own name
     and port are never reachable through the proxy (an `http://` catch-all and, outside tunnel mode, an
@@ -52,6 +55,7 @@ STORAGE = "/var/lib/lgsm-web-proxy"
 CERT_DIR = "/etc/lgsm-web-proxy/certs"
 ORIGIN_PULL_CA = "/etc/lgsm-web-proxy/origin-pull-ca.pem"
 GATE_HEADER = "X-Panel-Proxy-Token"
+ADMIN_SOCKET = "/run/lgsm-web-proxy/admin.sock"
 # Tunnel mode: the proxy listens on this loopback port only, plain HTTP; the connector reaches it.
 TUNNEL_PORT = 19080
 LE_STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
@@ -205,20 +209,31 @@ def _secret_of(site):
     return decrypt_secret(site.proxy_secret or "")
 
 
-def _served(site):
-    """The site's domain rows the proxy serves: verified, valid, primary first."""
+def _served(site, mode="public"):
+    """The site's domain rows the proxy serves: verified, valid, primary first.
+
+    In tunnel mode every valid domain of the site, checked or not: its DNS points at the tunnel's provider, never
+    at this host, so no check could ever pass. The tunnel is the only way in (the proxy listens on the loopback
+    and asks for no certificate), and it reaches only the names the operator routes to it in the provider's
+    dashboard; a domain is still unique across sites and never the panel's own name (websites_domains).
+    """
     rows = sorted(site.domains or [], key=lambda d: (not d.is_primary, d.id or 0))
-    return [d for d in rows if d.verified_at is not None and _DOMAIN_RE.match(d.domain or "")]
+    return [d for d in rows if (mode == "tunnel" or d.verified_at is not None) and _DOMAIN_RE.match(d.domain or "")]
 
 
-def _domains(site):
-    """The names of the site's domains the proxy serves (_served)."""
-    return [d.domain for d in _served(site)]
+def _domains(site, mode="public"):
+    """The names of the site's domains the proxy serves (_served) under exposure mode `mode`."""
+    return [d.domain for d in _served(site, mode)]
 
 
-def site_domains(site):
-    """The names render() serves for `site` once it is online: [] means it would answer on none of them."""
-    return _domains(site)
+def site_domains(site, mode="public"):
+    """The names render() serves for `site` once it is online under exposure mode `mode`: [] means none."""
+    return _domains(site, mode)
+
+
+def _admin_line(opts):
+    """The admin API's line: on the owner-only unix socket while the page cache is on (its purge), else off."""
+    return "\tadmin unix/%s|0200" % ADMIN_SOCKET if opts["cache_build"] else "\tadmin off"
 
 
 def own_cert(domain):
@@ -236,7 +251,8 @@ def _cert_groups(site):
 
     The automatic names share one block; each name with its own certificate gets a block of its own, since
     a block's `tls <cert> <key>` line covers every name in it and turns automatic certificates off for all
-    of them. The primary name's block comes first.
+    of them. The primary name's block comes first. Not used in tunnel mode, where the tunnel's provider holds
+    the certificate and every name shares one plain-HTTP block.
     """
     groups, auto = [], []
     for d in _served(site):
@@ -250,7 +266,7 @@ def _cert_groups(site):
 
 
 def _global(mode, opts, proxy, trusted):
-    lines = ["{", "\tadmin off", "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
+    lines = ["{", _admin_line(opts), "\tpersist_config off", "\tgrace_period 10s", "\tstorage file_system %s" % STORAGE]
     if mode == "tunnel":
         lines += ["\tauto_https off", "\tdefault_bind 127.0.0.1", "\thttp_port %d" % TUNNEL_PORT]
     else:
@@ -262,7 +278,7 @@ def _global(mode, opts, proxy, trusted):
             lines.append("\tacme_ca %s" % LE_STAGING)
         lines.append("\tskip_install_trust")
     if opts["cache_build"]:
-        lines += ["\torder cache before rewrite", "\tcache {", "\t\tttl 300s", "\t}"]
+        lines += ["\torder cache before rewrite", "\tcache {", "\t\tttl 300s", "\t\tapi {", "\t\t\tsouin", "\t\t}", "\t}"]
     lines += ["\tservers {", "\t\tprotocols h1 h2",
               "\t\ttimeouts {", "\t\t\tread_header 10s", "\t\t\tread_body 60s", "\t\t\twrite 120s", "\t\t\tidle 2m",
               "\t\t}"]
@@ -358,7 +374,7 @@ def _snippet_lines(site):
 
 
 def _site_lines(site, opts, proxy, mode, secret_of):
-    names = _domains(site)
+    names = _domains(site, mode)
     token = secret_of(site) or ""
     if not (names and site.port and _TOKEN_RE.match(token)):
         return []

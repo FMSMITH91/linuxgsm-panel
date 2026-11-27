@@ -8,6 +8,7 @@ administrator of that site, the proxy and its settings only for a superadmin, a 
 for someone who may manage it. The caller has already passed site_for.
 """
 import json
+import time
 
 from flask_login import current_user
 
@@ -115,7 +116,42 @@ def _ports(sites):
         WebsiteProxy.remote_id.in_(sorted({s.remote_id for s in sites}) or [0])).all()}
     modes = [rows[s.remote_id].exposure_mode for s in online if s.remote_id in rows]
     mode = max(set(modes), key=modes.count) if modes else "public"
-    return {"mode": mode, "open": bool(online) and mode != "tunnel", "sites_enabled": len(online), "firewall": "unknown"}
+    return {"mode": mode, "open": bool(online) and mode != "tunnel", "sites_enabled": len(online),
+            "firewall": _ports_firewall(online, mode)}
+
+
+def _ports_firewall(online, mode):
+    """The firewall's state where it matters: hosts with an online site, outside tunnel mode (no port is open)."""
+    return _firewall({s.remote for s in online}) if online and mode != "tunnel" else "unknown"
+
+
+FIREWALL_FRESH = 60               # seconds a host's firewall reading is reused by the list
+_FIREWALL = {}                    # remote id -> (monotonic time, "on" | "off" | "unknown")
+
+
+def _firewall_of(remote):
+    """"on" or "off" for the host's firewall (ufw; not installed is off), "unknown" when it could not be read."""
+    hit = _FIREWALL.get(remote.id)
+    if hit and time.monotonic() - hit[0] < FIREWALL_FRESH:
+        return hit[1]
+    from panel.ops.ssh_manager import firewall as _fw
+    try:
+        got = _fw.remote_ufw_status(remote) or {}
+    except Exception:  # noqa: BLE001 - a host that cannot be read is "unknown", never a broken list
+        got = {"unreachable": True}
+    state = "unknown" if got.get("unreachable") or got.get("permission_denied") else "on" if got.get("enabled") else "off"
+    _FIREWALL[remote.id] = (time.monotonic(), state)
+    return state
+
+
+def _firewall(remotes):
+    """The firewall line's state for the hosts with an online site.
+
+    "off" when any one's is off (80 and 443 are then reachable there whatever the mode), "on" when every one's is
+    on, else "unknown".
+    """
+    states = {_firewall_of(r) for r in remotes if r is not None}
+    return "off" if "off" in states else "on" if states == {"on"} else "unknown"
 
 
 def _missing(admin):
@@ -170,6 +206,19 @@ def _admin_parts(out, sites, admin):
         out["options"] = options()
 
 
+def _listed(row, site, tunnels):
+    """A list row, its certificate said as the tunnel's on a host in tunnel mode (the provider serves HTTPS there)."""
+    if site.remote_id in tunnels and row.get("domain"):
+        row["cert_state"] = "tunnel"
+    return row
+
+
+def _tunnel_part(tunnel):
+    """What the Domains tab says on a host in tunnel mode (the service address to route in the provider), or None."""
+    from panel.services.websites_proxy import TUNNEL_PORT
+    return {"service": "http://localhost:%d" % TUNNEL_PORT} if tunnel else None
+
+
 def list_answer(site_json):
     """GET /api/websites."""
     from sqlalchemy.orm import selectinload
@@ -179,7 +228,8 @@ def list_answer(site_json):
     sites = _wa.visible_sites(current_user, VIEW_WEBSITES).options(selectinload(Website.domains)).all()
     admin = is_admin(current_user)
     mine = {sid for (sid,) in _wa.visible_sites(current_user, MANAGE_WEBSITES).with_entities(Website.id)}
-    out = {"success": True, "sites": [site_json(s, s.id in mine) for s in sites],
+    tunnels = {p.remote_id for p in WebsiteProxy.query.filter_by(exposure_mode="tunnel")}
+    out = {"success": True, "sites": [_listed(site_json(s, s.id in mine), s, tunnels) for s in sites],
            "can_create": _wa.can_create(current_user), "missing": _missing(admin), "quota": _quota(),
            "php_versions": php_versions(), "runtimes": runtime_versions(), "apps": _apps()}
     _admin_parts(out, sites, admin)
@@ -187,6 +237,9 @@ def list_answer(site_json):
 
 
 # ── one site ────────────────────────────────────────────────────────────────────────────────────
+FAILED_LOG_LINES = 20             # the last lines a failed site's alert shows
+
+
 def _holds(site, perm):
     return _wa.visible_sites(current_user, perm).filter(Website.id == site.id).first() is not None
 
@@ -223,15 +276,35 @@ def _usage(probe):
 
 
 def _image(site, probe):
-    """The Software line: the signed image the panel recorded, else the reference the running container names."""
-    if site.image_key:
-        return site.image_key, (site.image_digest or "")[-12:]
+    """The Software line and whether Update would bring the site a newer image (websites.update_available)."""
+    from panel.routes.websites import update_available
+    name, version = _image_ref(site, probe)
+    return {"name": name, "version": version, "update_available": update_available(site)}
+
+
+def _image_ref(site, probe):
+    """The Software line's (name, version).
+
+    The image the last install recorded (image_digest, image_for's reference), else the reference the running
+    container names (a site installed before the panel recorded its image).
+    """
+    ref = site.image_digest or ""
+    if ref:
+        return ref.split("@", 1)[0].rsplit(":", 1)[0].rsplit("/", 1)[-1], ref[-12:]
     ref = ((probe or {}).get("facts") or {}).get("image") or ""
     name, _sep, digest = ref.partition("@sha256:")
     if digest:
         return name, digest[:12]
     head, colon, tag = name.rpartition(":")
     return (head, tag) if colon and "/" not in tag else (name, "")
+
+
+def _last_backup(probe):
+    """The newest backup's time as the Backups tab writes it; "" when the host said there is none; None when unread."""
+    if not (probe or {}).get("ok"):
+        return None
+    when = ((probe or {}).get("facts") or {}).get("last_backup")
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(when)) if isinstance(when, int) else ""
 
 
 def _open_url(site):
@@ -242,32 +315,62 @@ def _open_url(site):
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
-           "image": dict(zip(("name", "version"), _image(site, probe)), update_available=False),
+           "image": _image(site, probe),
            "app_version": site.app_version or "", "php_version": site.php_version or "",
-           "runtime_version": site.runtime_version or "", "last_backup": None, "usage": _usage(probe)}
+           "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe)}
     if admin:
         out["limits"] = {k: getattr(site, k) for k in ("mem_mb", "cpu_milli", "pids", "disk_mb", "max_body_mb", "backup_keep")}
         out.update(access_log=bool(site.access_log), full_egress=bool(site.full_egress), customer_note=site.customer_note or "")
     return out
 
 
+S_PHP_EOL = "PHP {version} reached the end of its security support and is no longer offered: choose a newer version."
+
+
+def php_in_force(site):
+    """{php.ini key: the value the site's php.ini holds}: its saved value where that is valid, else the panel's default.
+
+    What services.websites.php_ini writes, so the PHP and Performance tabs show the values in force from the first
+    visit (a new site has saved none), never an empty field.
+    """
+    from panel.services import websites as _svc
+    try:
+        saved = json.loads(site.php_settings or "{}")
+    except ValueError:
+        saved = {}
+    saved = saved if isinstance(saved, dict) else {}
+    return {key: (saved[key] if key in saved and not check(saved[key]) else default)
+            for key, default, check in _svc.PHP_FORM}
+
+
 def _php(site):
-    settings = json.loads(site.php_settings or "{}")
-    return {"versions": [{"version": v, "eol": False} for v in php_versions()], "version": site.php_version or "",
-            "settings": {k: v for k, v in settings.items() if not k.startswith("opcache.")},
-            "custom": site.php_ini_custom or "", "eol_note": ""}
+    versions = [{"version": v, "eol": False} for v in php_versions()]
+    current = site.php_version or ""
+    left = bool(current) and current not in {v["version"] for v in versions}
+    if left:        # a version the catalog no longer offers stays in the list, marked, so the select is never blank
+        versions.append({"version": current, "eol": True})
+    return {"versions": versions, "version": current,
+            "settings": {k: v for k, v in php_in_force(site).items() if not k.startswith("opcache.")},
+            "custom": site.php_ini_custom or "", "eol_note": i18n.tr(S_PHP_EOL, version=current) if left else ""}
+
+
+def _page_cache_state(site):
+    """(whether the page cache takes effect on the site's host, why not as a sentence or "")."""
+    from panel.routes import websites_settings
+    from panel.routes.websites import page_cache_ready
+    if page_cache_ready(site.remote):
+        return True, ""
+    return False, i18n.tr(websites_settings.S_PURGE_NOT_BUILT)
 
 
 def _perf(site):
-    settings = json.loads(site.php_settings or "{}")
-    return {"opcache": bool(site.opcache), "opcache_memory_mb": _int(settings.get("opcache.memory_consumption")),
-            "opcache_revalidate_s": _int(settings.get("opcache.revalidate_freq")), "object_cache": bool(site.object_cache),
+    values = php_in_force(site)
+    ready, why = _page_cache_state(site)
+    return {"opcache": bool(site.opcache), "opcache_memory_mb": int(values["opcache.memory_consumption"]),
+            "opcache_revalidate_s": int(values["opcache.revalidate_freq"]), "object_cache": bool(site.object_cache),
             "object_cache_host": "127.0.0.1" if site.object_cache else "", "object_cache_port": 6379 if site.object_cache else None,
-            "page_cache": bool(site.page_cache), "page_cache_ttl": site.page_cache_ttl, "static_cache": bool(site.static_cache)}
-
-
-def _int(v):
-    return int(v) if isinstance(v, str) and v.isdecimal() else None
+            "page_cache": bool(site.page_cache), "page_cache_ttl": site.page_cache_ttl, "static_cache": bool(site.static_cache),
+            "page_cache_ready": ready, "page_cache_why": why}
 
 
 def _app(site):
@@ -290,16 +393,27 @@ def _manager_parts(out, site):
         out["raw_rules"] = site.raw_proxy_snippet or ""
 
 
+def _failed_logs(site):
+    """A failed site's last log lines, read from its host (refused requests counted, not listed); [] otherwise."""
+    if site.state != "failed":
+        return []
+    from panel.ops.ssh_manager import websites as _sw
+    from panel.routes.websites import host_call, readable_logs
+    ok, said = host_call(_sw.site_logs, site.remote, site)
+    return readable_logs(said.splitlines())[-FAILED_LOG_LINES:] if ok and isinstance(said, str) else []
+
+
 def site_answer(site, probe, install):
     """GET /api/websites/<id>."""
-    from panel.routes.websites import is_admin
+    from panel.routes.websites import is_admin, tunnel_mode
     from panel.routes.websites_domains import domain_json
     from panel.services import website_dns
     admin = is_admin(current_user, site)
     manage = admin or _holds(site, MANAGE_WEBSITE)
     records = website_dns.records(site.remote)
-    out = {"success": True, "site": _site_block(site, admin, probe), "install": install, "logs": [],
-           "domains": [domain_json(site, d) for d in site.domains],
+    tunnel = tunnel_mode(site.remote_id)
+    out = {"success": True, "site": _site_block(site, admin, probe), "install": install, "logs": _failed_logs(site),
+           "domains": [domain_json(site, d, tunnel) for d in site.domains], "tunnel": _tunnel_part(tunnel),
            "dns": {"a": [v for t, v in records if t == "A"], "aaaa": [v for t, v in records if t == "AAAA"]},
            "can": {"manage": manage, "files": _holds(site, EDIT_WEBSITE_FILES), "admin": admin}}
     if manage:
