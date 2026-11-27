@@ -9,6 +9,7 @@
    the recipe's wp-config turns off the run a visitor's request started (a request to the site's own name, which
    the visitor waited for, a 504 behind the page cache). The timer is written and started with the site and
    removed with it, by a delete and by an install's undo.
+3. Re-applying tunnel mode clears the connector's start limit first, and a failure names the tunnel.
 
 HOW IT RUNS. part12's app and its database for the routes. ssh_manager.websites' seams answer for the host (Podman
 ready, the helper, the account's ids), and every shell it would run as a site's account runs in real bash over a
@@ -337,6 +338,40 @@ def _s2_removed(st):
        "site", got, {"undo": (True, 200, True, []), "delete": (True, 200, True, [])})
 
 
+# ── 3. The tunnel's re-apply ──────────────────────────────────────────────────────────────────────
+def _s3_tunnel(st):
+    _seams311()
+    _p9_patch(_sw311, "_tunnel_ids", lambda remote: (1100, 1100))
+    _p9_patch(_sw311, "tunnel_apply", _REAL311["tunnel_apply"])
+    proxy = _Proxy311(remote_id=st.host.id, exposure_mode="tunnel", tunnel_provider="cloudflare",
+                      tunnel_token_enc=_cfg311.encrypt_secret("tk-p311-" + "x" * 30))
+    _db311.session.add(proxy)
+    _db311.session.commit()
+    su = _Client311(st.su.id)
+    home = _home311(_ws311.TUNNEL_ACCOUNT)
+    os.makedirs(home, exist_ok=True)
+    unit = _ws311.unit_service(_ws311.TUNNEL_UNIT)
+    with open(os.path.join(home, ".limit-" + unit), "w", encoding="utf-8") as fh:
+        fh.write("5")
+    _reset311()
+    r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
+    eq("M15 (POST /websites/proxy/apply, tunnel mode, the connector at its start limit after five failures): the "
+       "limit is cleared before the restart, so the apply works", (r.status_code, (r.get_json() or {}).get("success")),
+       (200, True))
+    _reset311(FAKE_RESTART_RC=1)
+    r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
+    _db311.session.expire_all()
+    said = (r.get_json() or {}).get("message")
+    eq("M15 (POST /websites/proxy/apply, the connector does not start): the sentence names the tunnel connector, not "
+       "\"the site's log\" (a host's tunnel has none)",
+       (r.status_code, said, _db311.session.get(_Proxy311, proxy.id).last_error), (502, _sw311.TUNNEL_FAILED,
+                                                                                  _sw311.TUNNEL_FAILED))
+    _reset311(FAKE_IMAGE_EXISTS=1, FAKE_BUILD_RC=1)
+    r = su.post("/websites/proxy/apply", json={"host_id": st.host.id})
+    eq("M15 control (the connector's image build fails): that failure keeps its own sentence",
+       (r.status_code, (r.get_json() or {}).get("message")), (502, _ws311.FAIL_MARKS["SITE_BUILD_FAILED"]))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup311():
     _db311.session.rollback()
@@ -380,7 +415,7 @@ with _p9.app_context():
         _p9_patch(_sw311, "quota_set", lambda *a, **k: (True, _sw311.OK_QUOTA))
         _p9_patch(_sw311, "cpu_limit", lambda *a, **k: (True, "container"))
         _st311 = _rows311()
-        for _sec311 in (_s1_resolv, _s2_cron):
+        for _sec311 in (_s1_resolv, _s2_cron, _s3_tunnel):
             check("part311: %s ran to the end" % _sec311.__name__, _ran311(_sec311, _st311), _ran311.last)
         eq("part311: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips311:], [])
     finally:

@@ -68,6 +68,8 @@ OK_PROXY_STOPPED = "The web proxy was stopped: nothing listens on ports 80 and 4
 FAILED = "That did not work on the host. Try again; if it keeps failing, look at the site's log."
 OK_PORTS = "Ports 80 and 443 are set for the web proxy's exposure mode."
 OK_TUNNEL = "The tunnel connector was updated."
+TUNNEL_FAILED = ("The tunnel connector did not start on the host. Check its token, and that the host can reach the "
+                 "internet, then apply again.")
 OK_GUARD = "The egress guard is on: websites cannot reach this host's other addresses."
 OK_QUOTA = "The website's disk quota is set."
 NO_QUOTA = "This host's file system has no user quotas, so the panel measures the website's disk use instead."
@@ -535,10 +537,16 @@ def tunnel_apply(remote, proxy):
         return False, NO_IMAGE
     files = {"%s/%s.container" % (_ws().QUADLET_DIR, _ws().TUNNEL_UNIT): _ws().tunnel_quadlet(proxy, ids, b["tag"]),
              "tunnel/token": token, _ws().BUILD_FILE: _ws().containerfile(b["folder"])}
+    # The start limit is cleared first (as start_sh does for a site): a connector that failed five times in its
+    # window (a bad token, the network down) was refused by systemd until the window passed.
     sh = (_ws()._ENV + _ws().write_files_sh(True) + _ws().image_build_sh(b)
-          + "systemctl --user daemon-reload && systemctl --user restart %s" % unit)
+          + "systemctl --user daemon-reload && { systemctl --user reset-failed %s 2>/dev/null; "
+            "systemctl --user restart %s; }" % (unit, unit))
     ok, out = _as_site(remote, acct, sh, timeout=1800, stdin_text=_ws().bundle(files))
-    return (True, OK_TUNNEL) if ok else (False, _mark(out))
+    if ok:
+        return True, OK_TUNNEL
+    said = _mark(out)
+    return False, TUNNEL_FAILED if said == FAILED else said
 
 
 def egress_guard(remote):

@@ -73,7 +73,9 @@ the Websites page:
   real address is read from the CDN's header only when a request comes from one of those networks.
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
   and Cloudflare brings visitors in. Paste the token once: the panel stores it encrypted, never shows it
-  again, and keeps it off every command line and log. Leave the box empty to keep the saved one.
+  again, and keeps it off every command line and log. Leave the box empty to keep the saved one. If the
+  connector cannot start (a wrong token, or the host cannot reach the internet), the card says so;
+  applying again tries at once, even after several failures in a row.
 
 In Public and Restricted mode, ports 80 and 443 are opened in the host's firewall when the first site
 goes online and closed again when the last one goes offline; the web proxy stops too, so nothing

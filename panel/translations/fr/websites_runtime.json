@@ -15,6 +15,7 @@
   "That did not work on the host. Try again; if it keeps failing, look at the site's log.": "Cela n'a pas fonctionné sur l'hôte. Réessayez ; si l'échec persiste, consultez le journal du site.",
   "Ports 80 and 443 are set for the web proxy's exposure mode.": "Les ports 80 et 443 sont réglés pour le mode d'exposition du proxy web.",
   "The tunnel connector was updated.": "Le connecteur du tunnel a été mis à jour.",
+  "The tunnel connector did not start on the host. Check its token, and that the host can reach the internet, then apply again.": "Le connecteur du tunnel n'a pas démarré sur l'hôte. Vérifiez son jeton et que l'hôte peut joindre Internet, puis appliquez de nouveau.",
   "The egress guard is on: websites cannot reach this host's other addresses.": "La protection de sortie est active : les sites web ne peuvent pas joindre les autres adresses de cet hôte.",
   "The website's disk quota is set.": "Le quota de disque du site web est fixé.",
   "This host's file system has no user quotas, so the panel measures the website's disk use instead.": "Le système de fichiers de cet hôte n'a pas de quotas utilisateur ; le panneau mesure donc l'espace disque utilisé par le site web.",
