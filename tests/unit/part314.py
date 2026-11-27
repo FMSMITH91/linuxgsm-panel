@@ -9,18 +9,32 @@
 2. The catalog's site recipes and images are whole: each download recipe has a version, an https url on the
    allowed hosts that names it and a 64-hex sha256, WordPress's recipe has the version of its image, and every
    image in `sites` is pinned by digest.
+3. .github/scripts/site_app_versions.py against stand-in upstreams: a newer stable release whose publisher's
+   checksum matches is written (version, url, sha256 and a strip folder that names the version, nothing else);
+   a mismatched checksum, a missing folder, another branch or an older release is not; WordPress moves with its
+   image's digests; nothing is written by `plan`; its fetch follows a redirect only to an allowed host.
+4. .github/workflows/site-app-versions.yml: daily, blocked egress to exactly the script's hosts, the job token's
+   two write scopes, one pull request at a time, a refused release fails the run.
 
-HOW IT RUNS. Pure functions over the catalog's text and copies of it. No network, no git.
+HOW IT RUNS. Pure functions over copies of the catalog in this part's scratch directory; the script's own `fetch`
+runs a stand-in curl (a Python script first on PATH). No network, no git, nothing outside the scratch directory.
 """
 import copy as _copy314
 import hashlib as _hash314
+import importlib.util as _ilu314
+import io as _io314
 import json as _json314
 import os
 import re as _re314
 import shutil as _sh314
+import sys as _sys314
+import tarfile as _tar314
 import tempfile as _tf314
+import zipfile as _zip314
 
 from unit.part01 import _root, eq
+from unit.part29 import _code29, _job29, _name29, _steps29, _wf29
+from unit.part223 import _egress223
 from panel.services import websites_catalog as _wc314
 
 _TMP314 = _tf314.mkdtemp(prefix="p314-")
@@ -29,6 +43,10 @@ with open(_CATALOG314, encoding="utf-8") as _fh314:
     _TEXT314 = _fh314.read()
 with open(os.path.join(_root, ".github", "renovate.json"), encoding="utf-8") as _fh314:
     _RN314 = _json314.load(_fh314)
+_SPEC314 = _ilu314.spec_from_file_location("site_app_versions_p314",
+                                           os.path.join(_root, ".github", "scripts", "site_app_versions.py"))
+_SAV314 = _ilu314.module_from_spec(_SPEC314)
+_SPEC314.loader.exec_module(_SAV314)
 _PIN314 = _re314.compile(r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)+@sha256:[0-9a-f]{64}")
 
 
@@ -284,6 +302,304 @@ def _s314_shape():
         "static.image: not pinned by digest"])
 
 
-for _step314 in (_s314_renovate_pins, _s314_renovate_updates, _s314_rules, _s314_shape):
+# ── 3. the script, against stand-in upstreams ───────────────────────────────────────────────────
+def _zipped314(files):
+    buf = _io314.BytesIO()
+    with _zip314.ZipFile(buf, "w") as zf:
+        for name in files:
+            zf.writestr(name, "x")
+    return buf.getvalue()
+
+
+def _tarred314(files):
+    buf = _io314.BytesIO()
+    with _tar314.open(fileobj=buf, mode="w:gz") as tf:
+        for name in files:
+            info = _tar314.TarInfo(name)
+            info.size = 1
+            tf.addfile(info, _io314.BytesIO(b"x"))
+    return buf.getvalue()
+
+
+def _sha314(data):
+    return _hash314.sha256(data).hexdigest()
+
+
+def _upstream314(**over):
+    """{url: body or (body, headers)}: one newer release of every app, and WordPress's image on every PHP series.
+
+    Each release carries its publisher's checksum; `over` replaces entries (None: the url answers 404).
+    """
+    phpbb, drupal = _zipped314(["phpBB3/index.php"]), _tarred314(["drupal-11.4.15/index.php"])
+    mybb, smf = _zipped314(["Upload/index.php", "Documentation/readme.html"]), _tarred314(["SMF-2.1.9/index.php"])
+    d_url = "https://ftp.drupal.org/files/projects/drupal-11.4.15.tar.gz"
+    rel = ("<release><name>drupal {v}</name><version>{v}</version><status>published</status><release_link>"
+           "https://www.drupal.org/project/drupal/releases/{v}</release_link><files><file><url>"
+           "https://ftp.drupal.org/files/projects/drupal-{v}.tar.gz</url><archive_type>tar.gz</archive_type>"
+           "<md5>{md5}</md5><size>{size}</size></file></files><terms><term><name>Release type</name><value>{t}</value>"
+           "</term></terms><security covered=\"1\">Covered</security></release>")
+    history = ("<project><supported_branches>10.6.,11.4.,11.5.,12.0.</supported_branches><releases>"
+               + rel.format(v="12.0.1", md5="0" * 32, size=1, t="Bug fixes")
+               + rel.format(v="11.5.0-beta1", md5="0" * 32, size=1, t="New features")
+               + rel.format(v="11.4.15", md5=_hash314.md5(drupal, usedforsecurity=False).hexdigest(), size=len(drupal),
+                            t="Security update")
+               + rel.format(v="11.4.14", md5="0" * 32, size=1, t="Insecure") + "</releases></project>")
+    page = ('<a href="%s" class="download">Download tar.gz</a><div class="views-field-field-release-file-sha256">'
+            '<span class="views-label views-label-field-release-file-sha256">SHA-256: </span><span class="field-'
+            'content hash">%s</span></div>' % (d_url, _sha314(drupal)))
+    gh_asset = {"name": "mybb_1842.zip", "digest": "sha256:" + _sha314(mybb),
+                "browser_download_url": "https://github.com/mybb/mybb/releases/download/mybb_1842/mybb_1842.zip"}
+    wp = {"https://registry-1.docker.io/v2/library/wordpress/manifests/7.1.6-php%s-apache" % s:
+          (b"", {"docker-content-digest": "sha256:" + _sha314(s.encode())}) for s in ("8.3", "8.4", "8.5")}
+    up = {"https://version.phpbb.com/phpbb/versions.json": _json314.dumps({"stable": {"3.3": {
+              "current": "3.3.20", "announcement": "https://www.phpbb.com/community/viewtopic.php?t=1"}}}).encode(),
+          "https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip": phpbb,
+          "https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip.sha256":
+              ("%s  phpBB-3.3.20.zip\n" % _sha314(phpbb)).encode(),
+          _SAV314.DRUPAL_HISTORY: history.encode(), d_url: drupal,
+          "https://www.drupal.org/project/drupal/releases/11.4.15": page.encode(),
+          "https://mybb.com/version_check.php": b"<mybb><latest_version>1.8.42</latest_version>"
+                                                b"<version_code>1842</version_code></mybb>",
+          "https://api.github.com/repos/mybb/mybb/releases/tags/mybb_1842": _json314.dumps({
+              "draft": False, "prerelease": False, "assets": [gh_asset],
+              "html_url": "https://github.com/mybb/mybb/releases/tag/mybb_1842"}).encode(),
+          gh_asset["browser_download_url"]: mybb,
+          "https://api.github.com/repos/SimpleMachines/SMF/releases?per_page=50": _json314.dumps([
+              {"tag_name": "v3.0.0", "prerelease": True}, {"tag_name": "v2.1.9"}, {"tag_name": "v2.1.8"}]).encode(),
+          "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.9.tar.gz": smf,
+          _SAV314.WP_CHECK: _json314.dumps({"offers": [{"response": "upgrade", "current": "7.1.6"}]}).encode(),
+          _SAV314.WP_TOKEN: _json314.dumps({"token": "t" * 40}).encode()}
+    up.update(wp)
+    up.update(over)
+    return up
+
+
+def _getter314(up, seen=None):
+    """A stand-in for the script's fetch over `up`: an unknown url is an error, None answers 404."""
+    def get(url, limit=_SAV314.META_MAX, headers=None, method="GET"):
+        if seen is not None:
+            seen.append(url)
+        _SAV314.allowed(url)
+        if url not in up:
+            raise OSError("no stand-in for %s" % url)
+        got = up[url]
+        if got is None:
+            return None, {}
+        body, hdrs = got if isinstance(got, tuple) else (got, {})
+        if len(body) > limit and method != "HEAD":
+            raise _SAV314.Refused("larger than expected")
+        return body, hdrs
+    return get
+
+
+def _run314(argv_tail, up, catalog_text=None):
+    """(exit status, stdout, the catalog after, the body file's text or None) of main() over a scratch catalog."""
+    d = _tf314.mkdtemp(prefix="run-", dir=_TMP314)
+    path, body = os.path.join(d, "catalog.json"), os.path.join(d, "body.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(catalog_text or _TEXT314)
+    argv = ["site_app_versions.py"] + [body if a == "BODY" else a for a in argv_tail]
+    out, saved = _io314.StringIO(), (_sys314.stdout, _sys314.stderr)
+    _sys314.stdout, _sys314.stderr = out, _io314.StringIO()
+    try:
+        rc = _SAV314.main(argv, get=_getter314(up), catalog=path)
+    finally:
+        _sys314.stdout, _sys314.stderr = saved
+    with open(path, encoding="utf-8") as fh:
+        after = fh.read()
+    text = open(body, encoding="utf-8").read() if os.path.exists(body) else None
+    return rc, out.getvalue(), after, text
+
+
+def _s314_script_writes():
+    rc, out, after, body = _run314(["check", "BODY"], _upstream314())
+    old, new = _json314.loads(_TEXT314), _json314.loads(after)
+    r = new["sites"]["recipes"]
+    eq("site app versions (main, check): a newer stable release of every app whose publisher's checksum matches is "
+       "written as version, url and sha256 (and the strip folder that names the version: Drupal's, SMF's), "
+       "WordPress's version with its image on each PHP series; nothing else changes and the panel accepts it",
+       (rc, out, _changed314(old, new), _wc314.sites_problems(new["sites"]),
+        [(a, r[a]["version"], r[a]["url"]) for a in ("drupal", "mybb", "phpbb", "smf")], after.endswith("}\n")),
+       (0, "changed=true\nrefused=\n", sorted(
+           ["sites.recipes.%s.%s" % (a, k) for a in ("drupal", "mybb", "phpbb", "smf") for k in ("version", "url", "sha256")]
+           + ["sites.recipes.drupal.steps.1.strip", "sites.recipes.smf.steps.1.strip", "sites.recipes.wordpress.version",
+              "sites.wordpress.version"] + ["sites.wordpress.php.%s.image" % s for s in ("8.3", "8.4", "8.5")]),
+        [], [("drupal", "11.4.15", "https://ftp.drupal.org/files/projects/drupal-11.4.15.tar.gz"),
+             ("mybb", "1.8.42", "https://github.com/mybb/mybb/releases/download/mybb_1842/mybb_1842.zip"),
+             ("phpbb", "3.3.20", "https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip"),
+             ("smf", "2.1.9", "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.9.tar.gz")], True))
+    up = _upstream314()
+    eq("site app versions: the sha256 written is the archive's own, and the pull request names each old and new "
+       "version with its release notes and how it was checked",
+       ([r["phpbb"]["sha256"] == _sha314(up["https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip"]),
+         r["drupal"]["steps"][1]["strip"], r["smf"]["steps"][1]["strip"]],
+        [ln[:ln.index(":")] for ln in (body or "").splitlines() if ln.startswith("- ")],
+        "https://www.drupal.org/project/drupal/releases/11.4.15" in (body or ""),
+        "An existing site is not changed" in (body or "") and "Approve workflows to run" in (body or "")),
+       ([True, "drupal-11.4.15", "SMF-2.1.9"],
+        ["- **Drupal** 11.4.14 -> 11.4.15", "- **MyBB** 1.8.41 -> 1.8.42", "- **phpBB** 3.3.19 -> 3.3.20",
+         "- **SMF** 2.1.8 -> 2.1.9", "- **WordPress** 7.1.5 -> 7.1.6"], True, True))
+
+
+def _s314_script_refuses():
+    up = _upstream314()
+    tampered = _upstream314(**{
+        "https://download.phpbb.com/pub/release/3.3/3.3.20/phpBB-3.3.20.zip.sha256": ("%s  phpBB-3.3.20.zip\n" % ("0" * 64)).encode(),
+        "https://www.drupal.org/project/drupal/releases/11.4.15":
+            up["https://www.drupal.org/project/drupal/releases/11.4.15"].replace(
+                _sha314(up["https://ftp.drupal.org/files/projects/drupal-11.4.15.tar.gz"]).encode(), b"1" * 64),
+        "https://api.github.com/repos/mybb/mybb/releases/tags/mybb_1842":
+            up["https://api.github.com/repos/mybb/mybb/releases/tags/mybb_1842"].replace(
+                _sha314(up["https://github.com/mybb/mybb/releases/download/mybb_1842/mybb_1842.zip"]).encode(), b"2" * 64),
+        "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.9.tar.gz": _tarred314(["SMF-other/index.php"])})
+    rc, out, after, body = _run314(["check", "BODY"], tampered)
+    new = _json314.loads(after)["sites"]
+    eq("site app versions (main, check): an archive that does not match its publisher's SHA-256 (phpBB's .sha256 file, "
+       "Drupal's release page, MyBB's GitHub asset) or lacks the recipe's folder (SMF) is refused and its recipe left "
+       "as it was; WordPress, which passed, is still written",
+       (rc, out, [new["recipes"][a]["version"] for a in ("drupal", "mybb", "phpbb", "smf", "wordpress")],
+        [ln[:ln.index(" ->")] for ln in (body or "").splitlines() if ln.startswith("- ")]),
+       (0, "changed=true\nrefused=drupal,mybb,phpbb,smf\n", ["11.4.14", "1.8.41", "3.3.19", "2.1.8", "7.1.6"],
+        ["- **WordPress** 7.1.5"]))
+    d_url = "https://ftp.drupal.org/files/projects/drupal-11.4.15.tar.gz"
+    real_md5 = _hash314.md5(up[d_url], usedforsecurity=False).hexdigest().encode()
+    cases = {"md5": {_SAV314.DRUPAL_HISTORY: up[_SAV314.DRUPAL_HISTORY].replace(real_md5, b"3" * 32)},
+             "size": {d_url: up[d_url] + b"\0"}}
+    said = {k: [ln for ln in _run314(["plan"], _upstream314(**v))[1].splitlines() if ln.startswith("drupal:")]
+            for k, v in cases.items()}
+    eq("site app versions (main, plan): a Drupal archive unlike the one its release history describes (its MD5, its "
+       "size) is refused",
+       said, {"md5": ["drupal: refused: %s does not match its published MD5" % d_url],
+              "size": ["drupal: refused: %s is %d bytes, not the published %d" % (d_url, len(up[d_url]) + 1, len(up[d_url]))]})
+
+
+def _s314_script_skips():
+    older = _upstream314(**{
+        "https://version.phpbb.com/phpbb/versions.json": _json314.dumps({"stable": {"3.3": {"current": "4.0.0"}}}).encode(),
+        _SAV314.DRUPAL_HISTORY: b"<project><supported_branches>11.4.,12.0.</supported_branches><releases><release>"
+                                b"<version>12.0.1</version><status>published</status></release></releases></project>",
+        "https://mybb.com/version_check.php": b"<mybb><latest_version>1.8.41</latest_version>"
+                                              b"<version_code>1841</version_code></mybb>",
+        "https://api.github.com/repos/mybb/mybb/releases/tags/mybb_1841": _json314.dumps({"assets": [{
+            "name": "mybb_1841.zip", "digest": "sha256:" + "4" * 64,
+            "browser_download_url": "https://github.com/mybb/mybb/releases/download/mybb_1841/mybb_1841.zip"}]}).encode(),
+        "https://api.github.com/repos/SimpleMachines/SMF/releases?per_page=50":
+            _json314.dumps([{"tag_name": "v2.1.7"}, {"tag_name": "v3.0.1"}]).encode(),
+        "https://registry-1.docker.io/v2/library/wordpress/manifests/7.1.6-php8.5-apache": None})
+    rc, out, after, body = _run314(["check", "BODY"], older)
+    eq("site app versions (main, check): a release on another branch (phpBB 4, Drupal 12) is refused, one not newer "
+       "than the catalog's (MyBB's same, SMF's older 2.1, never its 3.0) is not written, and WordPress waits while "
+       "its image for one PHP series is not published: nothing changes and no pull request text is written",
+       (rc, out, after == _TEXT314, body), (0, "changed=false\nrefused=drupal,phpbb\n", True, None))
+    rc3, plan_out, after3, body3 = _run314(["plan"], _upstream314())
+    eq("site app versions (main, plan): finds and checks every newer release but writes nothing",
+       (rc3, after3 == _TEXT314, sorted(ln.split(":")[0] for ln in plan_out.splitlines()), body3),
+       (0, True, ["drupal", "mybb", "phpbb", "smf", "wordpress"], None))
+    saved_problems = _SAV314._site_problems
+    _SAV314._site_problems = lambda sites: ["a stand-in refusal"]
+    try:
+        rc4, out4, after4, body4 = _run314(["check", "BODY"], _upstream314())
+    finally:
+        _SAV314._site_problems = saved_problems
+    eq("site app versions (main, check): a new catalog the panel's own check refuses is not written at all",
+       (rc4, out4, after4 == _TEXT314, body4), (0, "changed=false\nrefused=drupal,mybb,phpbb,smf,wordpress\n", True, None))
+
+
+_FAKE_CURL314 = r'''
+import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+url = args[args.index("--") + 1]
+hin = args[args.index("--header") + 1][1:]
+with open(os.path.join(here, "log.jsonl"), "a") as fh:
+    fh.write(json.dumps([url, open(hin).read()]) + "\n")
+status, headers, body = json.load(open(os.path.join(here, "responses.json"))).get(url, [404, {}, ""])
+with open(args[args.index("--dump-header") + 1], "w") as fh:
+    fh.write("HTTP/2 %d\r\n" % status + "".join("%s: %s\r\n" % kv for kv in headers.items()) + "\r\n")
+with open(args[args.index("--output") + 1], "w") as fh:
+    fh.write(body)
+sys.stdout.write(str(status))
+'''
+
+
+def _curl_run314(responses, url, headers=None, limit=_SAV314.META_MAX):
+    """(result or the refusal's text, [(url, request headers)] the stand-in curl saw) of the script's fetch."""
+    d = _tf314.mkdtemp(prefix="curl-", dir=_TMP314)
+    with open(os.path.join(d, "curl"), "w", encoding="utf-8") as fh:
+        fh.write("#!%s -I\n%s" % (_sys314.executable, _FAKE_CURL314))
+    os.chmod(os.path.join(d, "curl"), 0o700)
+    with open(os.path.join(d, "responses.json"), "w", encoding="utf-8") as fh:
+        _json314.dump(responses, fh)
+    old = os.environ.get("PATH", "")
+    os.environ["PATH"] = d + os.pathsep + old
+    try:
+        got = _SAV314.fetch(url, limit, headers)
+    except _SAV314.Refused as exc:
+        got = "refused: " + str(exc)
+    finally:
+        os.environ["PATH"] = old
+    log = os.path.join(d, "log.jsonl")
+    seen = [tuple(_json314.loads(ln)) for ln in open(log, encoding="utf-8")] if os.path.exists(log) else []
+    return got, seen
+
+
+def _s314_fetch():
+    a, b = "https://github.com/o/r/releases/download/t/f.zip", "https://release-assets.githubusercontent.com/f?sig=1"
+    ok, seen = _curl_run314({a: [302, {"location": b}, ""], b: [200, {"x-k": "v"}, "data"]}, a, {"Authorization": "Bearer x"})
+    eq("site app versions (fetch): a redirect to another allowed host is followed by curl without the request's own "
+       "headers, and the body comes back",
+       (ok, seen), ((b"data", {"x-k": "v"}), [(a, "Authorization: Bearer x\n"), (b, "")]))
+    evil, seen2 = _curl_run314({a: [302, {"location": "https://evil.example/f"}, ""]}, a)
+    plain, seen3 = _curl_run314({}, "http://github.com/o/r")
+    other = [_curl_run314({}, u)[0][:9] for u in ("https://example.org/x", "https://github.com:8443/x",
+                                                  "https://user@github.com/x")]
+    missing, _s4 = _curl_run314({}, "https://github.com/o/r/none")
+    big, _s5 = _curl_run314({a: [200, {}, "x" * 20]}, a, limit=10)
+    eq("site app versions (fetch): a redirect off the allowed hosts is refused and never requested, as is a plain "
+       "http URL, another host, a port or a user part; a 404 is (None, {}); a body over the cap is refused",
+       (evil[:9], [u for u, _h in seen2], plain[:9], seen3, other, missing, big[:9]),
+       ("refused: ", [a], "refused: ", [], ["refused: "] * 3, (None, {}), "refused: "))
+
+
+# ── 4. the workflow ─────────────────────────────────────────────────────────────────────────────
+def _s314_workflow():
+    text = _wf29("site-app-versions.yml")
+    code, job = _code29(text), _job29(text, "versions")
+    steps = _steps29(job)
+    mode, hosts = _egress223(job)
+    on = code[code.find("\non:"):code.find("\nconcurrency:")]
+    check_step = [s for s in steps if _name29(s) == "Find, download and check the newest releases"]
+    pr_step = [s for s in steps if _name29(s) == "Open a pull request with the new releases"]
+    fail_step = [s for s in steps if _name29(s) == "Fail when a release source or archive was refused"]
+    eq("site app versions (workflow): daily and on demand only, no top-level grant, the job token may write contents "
+       "and pull requests and nothing else, Harden-Runner first in block mode with exactly the script's hosts, a "
+       "checkout that keeps no credentials, and no secret but the job token",
+       (_re314.findall(r"^  ([a-z_]+):", on, _re314.M), "permissions: {}" in code,
+        _re314.findall(r"^      ([a-z-]+): write", job, _re314.M), _name29(steps[0]) if steps else None, mode,
+        sorted(hosts), "persist-credentials: false" in steps[1] if len(steps) > 1 else False,
+        sorted(set(_re314.findall(r"secrets\.[A-Za-z0-9_]+", code)))),
+       (["schedule", "workflow_dispatch"], True, ["contents", "pull-requests"], "Harden Runner", "block",
+        sorted(h + ":443" for h in _SAV314.HOSTS), True, []))
+    eq("site app versions (workflow): the check step runs the script isolated into the step's outputs, a pull request "
+       "is opened only when the catalog changed and no other from this workflow is open, with the script's text, and "
+       "a refused release fails the run",
+       (len(check_step) == 1 and 'python3 -I .github/scripts/site_app_versions.py check "${RUNNER_TEMP}/site-app-versions.md"'
+        ' >> "$GITHUB_OUTPUT"' in check_step[0],
+        len(pr_step) == 1 and "if: steps.check.outputs.changed == 'true'" in pr_step[0]
+        and 'startswith("site-app-versions/")' in pr_step[0] and '--body-file "${RUNNER_TEMP}/site-app-versions.md"' in pr_step[0]
+        and pr_step[0].count("exit 0") == 1,
+        len(fail_step) == 1 and "if: steps.check.outputs.refused != ''" in fail_step[0] and "exit 1" in fail_step[0]),
+       (True, True, True))
+    scan = _code29(_wf29("addon-images.yml"))
+    with open(os.path.join(_root, ".github", "required-checks.txt"), encoding="utf-8") as fh:
+        required = fh.read()
+    eq("site app versions (gate): the image scan, a required check, builds and scans the images of a pull request that "
+       "changes the catalog",
+       ("github-actions | Add-on images (Trivy, hadolint)" in required.splitlines(), "    name: Add-on images (Trivy, hadolint)"
+        in scan, "              'panel/addon_images/**'" in scan), (True, True, True))
+
+
+for _step314 in (_s314_renovate_pins, _s314_renovate_updates, _s314_rules, _s314_shape, _s314_script_writes,
+                 _s314_script_refuses, _s314_script_skips, _s314_fetch, _s314_workflow):
     _step314()
 _sh314.rmtree(_TMP314, ignore_errors=True)
