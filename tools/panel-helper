@@ -195,7 +195,7 @@ SYSTEMCTL = "systemctl"
 # asked it to control. sshd is here because the ssh unit is called ssh on Debian/Ubuntu and sshd
 # elsewhere, and the panel tries both.
 UNITS = ("ssh", "sshd", "ssh.socket", "fail2ban", "whoopsie", "cups", "modemmanager",
-         "unattended-upgrades")
+         "unattended-upgrades", "mariadb", "mysql")
 
 # The panel's OWN systemd unit, and the transient-unit runner used to restart it. Deliberately a
 # separate constant from UNITS: UNITS is what the panel may start/stop/reload on the host (ssh,

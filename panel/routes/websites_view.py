@@ -159,6 +159,7 @@ S_NO_DB = ("This host has no database server yet, and an app needs one. Set up d
 S_DB_SETTING_UP = "Databases are being set up on this host. An app can be installed once that is done."
 S_DB_NOT_READY = ("This host's database server cannot be used by the panel yet, and an app needs one. See the "
                   "Databases tab of a game server on this host.")
+S_DB_STOPPED = "This host's database server is installed but stopped, and an app needs it running."
 
 
 def database_missing(remote, probe=False):
@@ -174,6 +175,10 @@ def database_missing(remote, probe=False):
     state = _d.host_state(remote, may_probe=probe)[0]
     if state in ("ready", "unknown", "unreadable"):
         return None
+    if state == "unsupported" and _d.probe_detail(remote) == "stopped":
+        # Installed but stopped: the dialog's button starts it (POST /api/remote/<id>/databases/start).
+        return {"key": "database-stopped", "text": S_DB_STOPPED, "kinds": ["install"], "host_id": remote.id,
+                "fix_url": ""}
     text = S_NO_DB if state == "none" else S_DB_SETTING_UP if state == "setting_up" else S_DB_NOT_READY
     return {"key": "database" if state == "none" else "database-wait", "text": text, "kinds": ["install"],
             "host_id": remote.id, "fix_url": ""}

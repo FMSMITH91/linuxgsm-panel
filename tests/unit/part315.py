@@ -66,6 +66,10 @@ WP2 A fresh WordPress install removes the bundled plugins and the default themes
     active theme and WordPress's default one as its fallback), so Site Health has no inactive plugin or theme to
     recommend removing.
 
+U8  A database server installed but stopped is the add dialog's own entry with Start the database server, which
+    starts and enables it through the helper's service verb (POST /api/remote/<id>/databases/start) and then reads
+    the host again; another unusable server keeps its sentence.
+
 U1  The add dialog reads the host's state again when it opens and after Set up databases (every 5 seconds while a
     database entry is still listed), so Create is available once the database server is ready, with no reload.
 
@@ -91,6 +95,7 @@ from panel.db.models import (RemoteServer as _Remote315, User as _User315, Websi
 from panel.ops.ssh_manager import websites as _sw315
 from panel.services import websites as _ws315
 from panel.routes import websites as _w315
+from panel.routes import databases as _dbroutes315
 from panel.routes import websites_apps as _wapps315
 
 _TOKEN315 = "q" * 40
@@ -101,6 +106,7 @@ _BLANK315 = ""
 _SHOWN_ONCE315 = "shown-once"
 _DB_PW315 = "p"
 _REAL315 = {"_worker": _wapps315._worker}
+_REAL315["host_state"] = _dbroutes315.host_state
 
 
 class _Client315:
@@ -657,6 +663,82 @@ def _u1_reopen(entry):
        out, {"ready now": (True, False, False), "still missing": (True, True, True)})
 
 
+# ── U8. A database server installed but stopped ───────────────────────────────────────────────────
+def _u8_db_stopped(st):
+    """U8: an app's Create said "See the Databases tab of a game server", with no button, for a stopped server."""
+    import time as _time315
+    from panel.db.models import AuditLog as _Audit315
+    from panel.ops.ssh_manager import databases as _dbs315
+    from panel.routes import databases as _dbr315
+    from panel.security import privileged as _priv315
+    su = _Client315(st.su.id)
+    entries = {}
+    local = _w315._local_host()
+    for detail in ("stopped", "percona"):
+        _no_db_check315("unsupported")
+        _dbr315._PROBES[local.id] = (_time315.monotonic(), {"state": "unsupported", "detail": detail})
+        lst = _p9_json(su.get("/api/websites")).get("missing") or []
+        entries[detail] = [(m.get("key"), m.get("text"), m.get("host_id")) for m in lst if "database" in m.get("key", "")]
+    eq("U8 (GET /api/websites, a host whose database server is installed but stopped): the dialog's entry says so "
+       "and is the one the Start button fixes; another unusable server keeps the Databases tab's sentence (control)",
+       entries, {"stopped": [("database-stopped", _view315().S_DB_STOPPED, local.id)],
+                 "percona": [("database-wait", _view315().S_DB_NOT_READY, local.id)]})
+    _dbr315._PROBES.pop(local.id, None)
+    _p9_patch(_dbr315, "host_state", _REAL315["host_state"])
+    ran, probes = [], [{"state": "unsupported", "detail": "stopped", "flavor": "mariadb"}, {"state": "ready"}]
+    _p9_patch(_dbs315, "probe", lambda remote: probes.pop(0) if probes else {"state": "ready"})
+    _p9_patch(_dbs315._core, "run_privileged", lambda remote, verb, args=(), **k: ran.append((verb, list(args))) or
+              ("", "", 0))
+    before = _Audit315.query.filter_by(action="db_start").count()
+    r = su.post("/api/remote/%d/databases/start" % st.host.id, json={})
+    rows = _Audit315.query.filter_by(action="db_start").count() - before
+    again = su.post("/api/remote/%d/databases/start" % st.host.id, json={})
+    eq("U8 (POST /api/remote/<id>/databases/start): the stopped server is started and enabled through the helper's "
+       "service verb (mariadb is on its list of units), the host is probed again and the answer says it is ready, "
+       "audited as db_start; a server that is not a stopped one is refused with nothing run (control)",
+       (r.status_code, _p9_json(r).get("state"), ran[:1], rows, _unit_ok315(_priv315, "mariadb"), again.status_code,
+        ran[1:]),
+       (200, "ready", [("service-enable-now", ["mariadb"])], 1, True, 409, []))
+    _dbr315._PROBES.pop(st.host.id, None)
+    _u8_dialog()
+
+
+def _unit_ok315(priv, unit):
+    """Whether the panel's verb table accepts `unit` for the helper's service-enable-now verb."""
+    try:
+        priv.check_args("service-enable-now", [unit])
+    except priv.VerbError:
+        return False
+    return True
+
+
+def _u8_dialog():
+    entry = {"key": "database-stopped", "text": "Installed but stopped.", "kinds": ["install"], "host_id": 4,
+             "fix_url": ""}
+    got = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      window.wsOpenAdd();
+      $('ws-kind-install').checked = true; window.wsKind('install'); window.wsPickApp('wordpress');
+      $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
+      $('ws-add-admin-user').value = 'boss'; $('ws-add-admin-email').value = 'boss@example.org';
+      window.wsAddSubmit({preventDefault: function () {}});
+      for (let i = 0; i < 6; i++) await tick();
+      const b = $('ws-missing-fix').querySelector('button');
+      const offered = {action: b ? b.getAttribute('data-action') : null, label: b ? b.textContent.trim() : '',
+                       disabled: $('ws-add-create').disabled};
+      if (b) window.wsDbStart(JSON.parse(b.getAttribute('data-args'))[0]);
+      for (let i = 0; i < 12; i++) await tick();
+      return {offered: offered, shown: !$('ws-missing').hidden, disabled: $('ws-add-create').disabled,
+              posts: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[1]; })};
+    """, {"/api/websites": _LIST315, "/websites/install-app": {"success": False, "message": "Installed but stopped.",
+                                                               "missing": [entry]},
+          "/api/remote/4/databases/start": {"success": True, "state": "ready", "message": "Started."}})
+    eq("U8 (the add dialog, js/websites.js): a stopped database server's line offers Start the database server (it "
+       "offered nothing), which starts it; the dialog then reads the host again and Create is available",
+       (got.get("offered"), got.get("shown"), got.get("disabled"), got.get("posts")),
+       ({"action": "wsDbStart", "label": "Start the database server", "disabled": True}, False, False,
+        ["/m/websites/install-app", "/m/api/remote/4/databases/start"]))
+
+
 # ── C5. Hosts that cannot run websites ────────────────────────────────────────────────────────────
 def _c5_hosts(st):
     managed = _Remote315(name="p315-managed", host="198.51.100.89", port=22, username="u", auth_method="key",
@@ -1185,7 +1267,7 @@ with _p9.app_context():
         _p9_arm(who="part315")
         _st315 = _rows315()
         for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db,
-                        _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache,
+                        _u8_db_stopped, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress, _b4_cache,
                         _wp2_clean):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])

@@ -732,6 +732,24 @@ def _setup_answer(app, remote):
                     "message": i18n.tr("Setting up databases on this host. This takes a minute or two.")}), 202
 
 
+def probe_detail(remote):
+    """What the host's last probe said beside its state ("stopped": a server installed but not running), or ""."""
+    hit = _PROBES.get(remote.id)
+    return str((hit[1] if hit else {}).get("detail") or "")
+
+
+def _start_answer(remote):
+    """POST: start the database server the probe finds installed but stopped (and enable it), then probe again."""
+    p = _probe(remote, force=True)
+    if p.get("state") != "unsupported" or p.get("detail") != "stopped":
+        return _say(409, "This host's database server is not one the panel can start: it is not installed and stopped.")
+    ok, said = _dbs.start_server(remote, p.get("flavor") or "mariadb")
+    state = _probe(remote, force=True).get("state") if ok else p.get("state")
+    log_action(current_user, "db_start", target=remote.name, success=bool(ok), remote=remote,
+               detail="database server started" if ok else "start failed: %s" % i18n.tr(said))
+    return jsonify({"success": bool(ok), "state": state, "message": i18n.tr(said)}), (200 if ok else 502)
+
+
 def _admin_clear_answer(remote):
     """POST {"clear": true}: drop the stored admin login, once root signs in over the socket again."""
     hd = _host_row(remote.id)
@@ -1115,6 +1133,16 @@ def _remote_routes(app):
         if step_up_needed():          # a root install on the host: the password again past the window
             return step_up_refusal()
         return _setup_answer(app, get_host_remote(remote_id))
+
+    @app.route("/api/remote/<int:remote_id>/databases/start", methods=["POST"])
+    @login_required
+    def api_remote_databases_start(remote_id):
+        """Start this host's installed but stopped database server, and enable it (the add-website dialog's fix)."""
+        if not (has_permission(current_user, MANAGE_DATABASES) and has_permission(current_user, MANAGE_REMOTES)):
+            return _say(403, _DENIED)
+        if step_up_needed():          # a root action on the host: the password again past the window
+            return step_up_refusal()
+        return _start_answer(get_host_remote(remote_id))
 
     @app.route("/api/remote/<int:remote_id>/databases/admin-login", methods=["POST"])
     @login_required

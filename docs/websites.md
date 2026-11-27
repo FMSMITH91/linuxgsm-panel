@@ -68,8 +68,10 @@ password you type needs at least 15 characters). The panel then:
 
 Every app needs a database server on the host. When it has none, the dialog says so before anything is made,
 with **Set up databases** for a superadmin (MariaDB, reached from this machine only, the same setup as the
-Databases tab of a game server); create the app again once it is done. The site's Database tab offers the same
-button.
+Databases tab of a game server). The dialog follows the setup and makes **Create** available once the server is
+ready, with no reload; it reads the host's state again each time it opens. A database server that is installed
+but stopped gets **Start the database server** instead, which starts it and enables it at boot. The site's
+Database tab offers Set up databases too.
 
 The admin password and the database password never appear on a command line or in a log: each reaches the
 installer as a file that only the site's account can read, removed when the step ends, and the installers'

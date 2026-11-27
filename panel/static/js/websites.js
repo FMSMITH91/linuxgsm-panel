@@ -127,7 +127,8 @@
   // unavailable, with the reason beside it; one that does not is a note, and Create stays available, so
   // the line and the button never disagree. An entry with `kinds` concerns only those kinds of site.
   var FIX = {proxy: {label: 'Install the web proxy', action: 'wsProxyInstall', icon: 'download', args: ['add']},
-    database: {label: 'Set up databases', action: 'wsDbSetup', icon: 'database-add', host: true}};
+    database: {label: 'Set up databases', action: 'wsDbSetup', icon: 'database-add', host: true},
+    'database-stopped': {label: 'Start the database server', action: 'wsDbStart', icon: 'play-circle', host: true}};
   function blocks(m) { return !!m && m.blocking !== false; }
   WS.renderMissing = function (missing) {
     var box = WS.el('ws-missing');
@@ -370,6 +371,17 @@
       WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) {
         if (!d || !d.success) { WS.done(d, 'ws-add-msg'); return; }
         WS.say('ws-add-msg', WS.T('Databases are being set up. Create becomes available here when they are ready.'), 'ok');
+        refreshMissing(true);
+      });
+    });
+  };
+
+  // The host's database server is installed but stopped: start it (and enable it), then follow the dialog's line.
+  window.wsDbStart = function (hostId) {
+    WS.stepUp(function () {
+      WS.say('ws-add-msg', WS.T('Starting the database server…'));
+      WS.post('/api/remote/' + Number(hostId) + '/databases/start', {}).then(function (d) {
+        if (!WS.done(d, 'ws-add-msg')) return;
         refreshMissing(true);
       });
     });
