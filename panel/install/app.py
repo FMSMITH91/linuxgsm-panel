@@ -143,11 +143,11 @@ from panel.core.http import _r23c_error_json, _wants_json, http_error_page, http
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _player_poll_cadence, _player_poll_wait, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _record_metric_samples, _refresh_player_counts)
-from panel.services import host_reboot as _host_reboot
+from panel.services import history_rollup as _history_rollup, host_reboot as _host_reboot
 from panel.core.panel_state import (_install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
-    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, RowReplaced, claim_row,
+    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, RowReplaced, claim_row,
     row_birth, row_label, still_held, each_held_row, _r21c_host_label, _r21c_host_text)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, game_engine as
@@ -603,15 +603,15 @@ def _player_count_watch(app):
 
 
 def _prune_metric_samples(app):
-    """Drop samples older than the retention window — at most every 30 min so it isn't per-pass churn."""
+    """Roll complete hours into the year-long hourly history, then drop samples past the retention window.
+
+    At most every 30 min so it isn't per-pass churn (panel/services/history_rollup.py).
+    """
     if time.time() - _last_sample_prune[0] < 1800:
         return
     _last_sample_prune[0] = time.time()
     with app.app_context():
-        cutoff = utcnow() - timedelta(days=_METRIC_RETENTION_DAYS)
-        MetricSample.query.filter(MetricSample.ts < cutoff).delete(synchronize_session=False)
-        HostSample.query.filter(HostSample.ts < cutoff).delete(synchronize_session=False)
-        db.session.commit()
+        _history_rollup.tick(utcnow(), _METRIC_RETENTION_DAYS)
 
 
 def _metrics_history_watch(app):

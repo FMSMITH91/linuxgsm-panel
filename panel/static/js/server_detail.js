@@ -2055,13 +2055,15 @@ window.loadHistory = function(){
       if(_r25c_histUnread(d)) return;
       var s = d.server || [], h = d.host || [];
       var empty = document.getElementById('hist-empty'), charts = document.getElementById('hist-charts');
-      if(!s.length && !h.length){ if(empty)empty.style.display=''; if(charts)charts.style.display='none'; return; }
+      if(!s.length && !h.length){
+        if(empty)empty.style.display=''; if(charts)charts.style.display='none'; _histOlder('hist', d.older); return;
+      }
       if(empty)empty.style.display='none'; if(charts)charts.style.display='';
       var sL = s.map(function(p){ return _histLbl(p.t, _histRange); }), hL = h.map(function(p){ return _histLbl(p.t, _histRange); });
       // Parsed timestamps for the date-aware 24h axis; refreshed every load so in-place updates stay in sync.
       _histTimes['hist-players'] = _histTimes['hist-server'] = s.map(function(p){ return new Date(p.t); });
       _histTimes['hist-host'] = h.map(function(p){ return new Date(p.t); });
-      var _xs = function(id){ return _histRange==='7d' ? _histX() : _histXScale(id); };
+      var _xs = function(id){ return _histAxis(id, _histRange); };
       var pctY = { y:{ min:0, max:100, ticks:{color:_cmpbInk().tick, maxTicksLimit:5}, grid:{color:_cmpbInk().grid} } };
       _histChart('hist-players', sL,
         [ _ds(_hch_t('Players'), s.map(function(p){return p.players;}), '#58a6ff', true) ],
@@ -2087,12 +2089,14 @@ document.addEventListener('click', function(e){
   _histRange = rng;
   if(b.parentNode) b.parentNode.querySelectorAll('[data-hist-range]').forEach(function(x){ x.classList.toggle('active', x===b); });
   // Recreate the charts on range change so the x-axis swaps between the date-aware (24h) and plain
-  // (7d) formatter — the live-refresh path deliberately reuses the chart and won't re-apply scales.
+  // (7d and longer) formatter — the live-refresh path deliberately reuses the chart and won't re-apply scales.
   Object.keys(_histCharts).forEach(function(id){ try{ _histCharts[id].destroy(); }catch(err){} delete _histCharts[id]; });
   window.loadHistory();
 });
 
-if(window.pollWhenVisible) pollWhenVisible(function(){ if(window._sdTab==='history') window.loadHistory(); }, 30000);
+if(window.pollWhenVisible) pollWhenVisible(function(){
+  if(window._sdTab==='history' && _histDue('hist', _histRange, Date.now())) window.loadHistory();
+}, 30000);
 
 // The card re-polls only while a content job runs. A poll the host did not answer (its content scan
 // or mount read, an error reply, no reply at all) used to return before scheduling the next one, so

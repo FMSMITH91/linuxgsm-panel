@@ -22,7 +22,7 @@ run yourself: there is no service behind it, no account to make, and nothing is 
 | Sign-in sessions: when, from which address, which browser | "Sign out everywhere", spotting a stolen session | Address and browser text encrypted |
 | Audit log: who changed what, when, from which address | Accountability; the sign-in attack counter | The address is reduced to its network (a /24 for IPv4, a /64 for IPv6) after `audit_ip_retention_days` (90 by default) |
 | Remote hosts: address, SSH user, SSH password or key **path**, pinned host key | Managing them over SSH | Encrypted; an SSH key file stays where you keep it |
-| Game servers, their settings and stats history (CPU, memory, players) | The dashboard and charts | Stats older than 14 days are deleted |
+| Game servers, their settings and stats history (CPU, memory, players; a host's CPU, memory, disk and network traffic) | The dashboard and the History charts | Per-minute stats older than 14 days are deleted; hourly summaries older than a year are deleted; both go when you delete the server or host |
 | Database logins for game databases | The Databases page | Encrypted |
 | Alert devices (browser push subscriptions) and linked Telegram chats | Sending you your alerts | Encrypted; removed when you remove the device, unlink, or the account is deleted |
 | Alert channel tokens (Telegram, Discord, ntfy) | Sending alerts | Encrypted |
@@ -44,7 +44,7 @@ a stolen disk.
 | --- | --- |
 | Full IP addresses in the audit log | 90 days (`audit_ip_retention_days`; 0 keeps them), then reduced to the network |
 | Audit log entries | Until you set `audit_log_retention_days` in `config.json` (off by default) |
-| Stats history | 14 days |
+| Stats history | Per-minute samples 14 days; hourly summaries (average, peak, low) 1 year |
 | Panel backups | 14 days by default (1–365) |
 | "Remember me" sign-in | 3 days by default (Settings → Sessions & Security) |
 | Device cookie (in your browser: your account's number and a random value, so wrong passwords sent from elsewhere do not pause your sign-in) | 180 days from your last sign-in; signing out clears it |

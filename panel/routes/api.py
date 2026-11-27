@@ -24,6 +24,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
 # — a search box is the wrong place to reach uninstall or a branch switch, both of which have a
 # confirmation flow on the page that owns them.
 PALETTE_ACTIONS = ("start", "restart", "stop")
+from panel.services import history_rollup as _hr
 from panel.services.monitoring import (_PLAYER_POLL_WORKERS, _cached_player_count,
     _host_metrics_work, _query_host_metrics, want_fresh_player_counts)
 import concurrent.futures
@@ -91,14 +92,20 @@ def _register_metrics(app):
     @login_required
     @server_access_required
     def api_server_history(server_id):
-        """Down-sampled CPU/RAM/player time series for the history charts (range=24h|7d).
+        """Down-sampled CPU/RAM/player time series for the history charts (range=24h|7d|30d|90d|6mo|1y).
 
         The host's CPU/RAM/disk over the same window comes with it. Capped to ~240 points so the
-        chart stays light.
+        chart stays light. Any other range is the 24h one, as it always was.
         """
         gs = get_game(server_id)
-        rng = "7d" if request.args.get("range") == "7d" else "24h"
-        since = utcnow() - timedelta(hours=(168 if rng == "7d" else 24))
+        rng = request.args.get("range") if request.args.get("range") in _hch_ranges else "24h"
+        since = utcnow() - timedelta(hours=_hch_ranges[rng])
+        pairs = [(_hr.SERVER, server_id)] + ([(_hr.HOST, gs.remote_id)] if gs.remote_id else [])
+        if rng not in _HCH_RAW:
+            # Past a week the samples are gone or too many: the hourly rollups, merged to MAX_POINTS.
+            return jsonify(_hch_reply({"server": _hourly_series(_hr.SERVER, server_id, since, rng),
+                                       "host": _hourly_series(_hr.HOST, gs.remote_id, since, rng)
+                                       if gs.remote_id else [], "range": rng}, pairs, rng))
         # with_entities, not the mapped class: the 7-day window is ~10k samples, of which at most
         # 240 survive down-sampling. Building a full ORM instance (and an identity-map entry) for
         # every discarded row was ~80% of this endpoint's time. Rows are plain named tuples.
@@ -117,14 +124,14 @@ def _register_metrics(app):
             pv = [w.players for w in srows[i:i + sstep] if w.players is not None]
             server.append({"t": r.ts.isoformat() + "Z", "cpu": r.cpu, "ram": r.ram_mb,
                            "players": max(pv) if pv else None})
-        host = _hch_host_series(gs.remote_id, since) if gs.remote_id else []
-        return jsonify({"server": server, "host": host, "range": rng})
+        host = _hch_host_series(gs.remote_id, since, rng) if gs.remote_id else []
+        return jsonify(_hch_reply({"server": server, "host": host, "range": rng}, pairs, rng))
 
     @app.route("/api/remote/<int:remote_id>/history")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_history(remote_id):
-        """One host's CPU/RAM/disk/network series for the host page's History card (range=24h|7d).
+        """One host's CPU/RAM/disk/network series for the host page's History card (_hch_ranges).
 
         The same access as the host page itself (MANAGE_REMOTES and get_remote), and the same
         series and down-sampling the server page's host chart gets. Any other range is refused
@@ -133,20 +140,62 @@ def _register_metrics(app):
         get_remote(remote_id)
         rng = request.args.get("range") or "24h"
         if rng not in _hch_ranges:
-            return jsonify({"error": "range must be 24h or 7d"}), 400
+            return jsonify({"error": "range must be one of 24h, 7d, 30d, 90d, 6mo, 1y"}), 400
         since = utcnow() - timedelta(hours=_hch_ranges[rng])
-        return jsonify({"host": _hch_host_series(remote_id, since), "range": rng})
+        return jsonify(_hch_reply({"host": _hch_host_series(remote_id, since, rng), "range": rng},
+                                  [(_hr.HOST, remote_id)], rng))
 
 
-# The history windows, in hours.
-_hch_ranges = {"24h": 24, "7d": 168}
+# The history windows, in hours. 24h and 7d read the per-minute samples (kept 14 days); the longer
+# ones read the hourly rollups (kept a year, panel/services/history_rollup.py).
+_hch_ranges = {"24h": 24, "7d": 168, "30d": 30 * 24, "90d": 90 * 24, "6mo": 182 * 24, "1y": 365 * 24}
+_HCH_RAW = ("24h", "7d")
 
 
-def _hch_host_series(remote_id, since):
-    """Host `remote_id`'s samples since `since`, down-sampled to about 240 points, oldest first.
+def _hch_reply(out, pairs, rng):
+    """`out`, plus "older" when every series in it is empty: the shortest longer range that has history.
 
-    rx/tx are the network rates in kbit/s, None where the sample has no rate.
+    An empty 24h chart of a server that was stopped last week is not "no history": the page names
+    the range that has some and offers it. Asked only for an empty reply, so a chart with points
+    costs nothing more.
     """
+    if not any(out.get(k) for k in ("server", "host")):
+        out["older"] = _hch_older(pairs, rng)
+    return out
+
+
+def _hch_older(pairs, rng):
+    """The shortest range after `rng` with history for any (kind, id) in `pairs`, or None.
+
+    24h and 7d read the samples, so they count only a sample; the longer ranges read the rollups and the
+    samples, so either counts, from the hour the range's first point starts.
+    """
+    newest = [_hr.newest(kind, key_id) for kind, key_id in pairs]
+    floor = _hr.floor_hour(utcnow() - timedelta(days=3650))
+    raw = max([r or floor for r, _h in newest] or [floor])
+    either = max([raw] + [h or floor for _r, h in newest])
+    names = list(_hch_ranges)
+    for name in names[names.index(rng) + 1:]:
+        since = utcnow() - timedelta(hours=_hch_ranges[name])
+        got, start = (raw, since) if name in _HCH_RAW else (either, _hr.floor_hour(since))
+        if got >= start:
+            return name
+    return None
+
+
+def _hourly_series(kind, key_id, since, rng):
+    """`key_id`'s hourly history for range `rng` (from `since`), at most _hr.MAX_POINTS points (_hr.series)."""
+    return _hr.series(kind, key_id, since, _hch_ranges[rng])
+
+
+def _hch_host_series(remote_id, since, rng="24h"):
+    """Host `remote_id`'s history since `since`, down-sampled to about 240 points, oldest first.
+
+    rx/tx are the network rates in kbit/s, None where the sample has no rate. Ranges past a week come
+    from the hourly rollups (_hourly_series).
+    """
+    if rng not in _HCH_RAW:
+        return _hourly_series(_hr.HOST, remote_id, since, rng)
     hrows = (db.session.query(HostSample.ts, HostSample.cpu, HostSample.ram_pct,
                               HostSample.disk_pct, HostSample.net_rx_kbps, HostSample.net_tx_kbps)
              .filter(HostSample.remote_id == remote_id, HostSample.ts >= since)

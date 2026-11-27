@@ -1360,6 +1360,59 @@ class HostSample(db.Model):
     net_tx_kbps = db.Column(db.Float, nullable=True)
 
 
+class MetricHourly(db.Model):
+    """One game server's MetricSamples over one hour: the History ranges from 30 days to a year read these.
+
+    Built by panel/services/history_rollup.py from the samples (average, highest and lowest CPU% and RAM
+    MB, the most players seen) and kept a year, so a year is ~8,760 rows per server where the samples
+    would be ~525,000. Cleared with its server, like MetricSample.
+    """
+
+    __tablename__ = "metric_hourly"
+    # One row per server per hour: the rollup replaces an hour it builds again, never adds to it.
+    # The year's prune deletes on `hour < cutoff` alone, hence the single-column index too.
+    __table_args__ = (db.Index("ux_metric_hourly_server_hour", "server_id", "hour", unique=True),)
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, nullable=False)
+    hour = db.Column(db.DateTime, nullable=False, index=True)   # the hour's start, UTC
+    n = db.Column(db.Integer, nullable=False, default=0)        # samples in the hour
+    cpu_avg = db.Column(db.Float)
+    cpu_max = db.Column(db.Float)
+    cpu_min = db.Column(db.Float)
+    ram_avg = db.Column(db.Float)
+    ram_max = db.Column(db.Float)
+    ram_min = db.Column(db.Float)
+    players_max = db.Column(db.Integer, nullable=True)          # None = no sample knew the count
+
+
+class HostHourly(db.Model):
+    """One host's HostSamples over one hour, for the host History ranges from 30 days to a year.
+
+    Average, highest and lowest CPU%, RAM% and disk%, and the average and highest network rates.
+    Built and kept like MetricHourly; cleared with its host.
+    """
+
+    __tablename__ = "host_hourly"
+    __table_args__ = (db.Index("ux_host_hourly_remote_hour", "remote_id", "hour", unique=True),)
+    id = db.Column(db.Integer, primary_key=True)
+    remote_id = db.Column(db.Integer, nullable=False)
+    hour = db.Column(db.DateTime, nullable=False, index=True)
+    n = db.Column(db.Integer, nullable=False, default=0)
+    cpu_avg = db.Column(db.Float)
+    cpu_max = db.Column(db.Float)
+    cpu_min = db.Column(db.Float)
+    ram_avg = db.Column(db.Float)
+    ram_max = db.Column(db.Float)
+    ram_min = db.Column(db.Float)
+    disk_avg = db.Column(db.Float)
+    disk_max = db.Column(db.Float)
+    disk_min = db.Column(db.Float)
+    rx_avg = db.Column(db.Float, nullable=True)
+    rx_max = db.Column(db.Float, nullable=True)
+    tx_avg = db.Column(db.Float, nullable=True)
+    tx_max = db.Column(db.Float, nullable=True)
+
+
 class UserSession(db.Model):
     """One active login (a device/browser).
 
@@ -1892,8 +1945,10 @@ _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, S
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {
-    "game_server": (AuditLog.__table__.c.game_server_id, MetricSample.__table__.c.server_id),
-    "remote_server": (AuditLog.__table__.c.remote_id, HostSample.__table__.c.remote_id),
+    "game_server": (AuditLog.__table__.c.game_server_id, MetricSample.__table__.c.server_id,
+                    MetricHourly.__table__.c.server_id),
+    "remote_server": (AuditLog.__table__.c.remote_id, HostSample.__table__.c.remote_id,
+                      HostHourly.__table__.c.remote_id),
     # An account-security row names its account by id (account_notices reads it back by that id).
     "user": (AuditLog.__table__.c.target_user_id,),
     # The site an audit row is about (audit_scope reads it to show a customer their own sites' rows).
@@ -2283,7 +2338,7 @@ def _create_declared_indexes(existing):
     # The history tables' (id, ts) composites — same reason as above: create_all() adds them to a
     # fresh DB only, so an upgraded install would keep the slow plans forever without this. And the
     # user table's one-owner index, which an upgraded install must have as much as a fresh one.
-    for _model in (MetricSample, HostSample, User):
+    for _model in (MetricSample, HostSample, MetricHourly, HostHourly, User):
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)
@@ -2678,8 +2733,11 @@ def _register_sample_pruning():
                 _log.debug("sample prune failed for a deleted row", exc_info=True)
         return _handler
 
-    event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
-    event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
+    # ...and their hourly rollups (MetricHourly, HostHourly), which hold the same figures for a year.
+    for model, column in ((MetricSample, MetricSample.server_id), (MetricHourly, MetricHourly.server_id)):
+        event.listen(GameServer, "after_delete", _prune(model, column))
+    for model, column in ((HostSample, HostSample.remote_id), (HostHourly, HostHourly.remote_id)):
+        event.listen(RemoteServer, "after_delete", _prune(model, column))
 
 
 def _register_invite_revocation():
@@ -2810,9 +2868,9 @@ def _register_host_sample_pruning():
     @event.listens_for(RemoteServer, "after_delete")
     def _prune_host_game_samples(_mapper, connection, target):
         try:
-            connection.execute(MetricSample.__table__.delete().where(
-                MetricSample.server_id.in_(
-                    db.select(GameServer.id).where(GameServer.remote_id == target.id))))
+            for model in (MetricSample, MetricHourly):
+                connection.execute(model.__table__.delete().where(
+                    model.server_id.in_(db.select(GameServer.id).where(GameServer.remote_id == target.id))))
         except Exception:
             _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
 
