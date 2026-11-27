@@ -72,8 +72,8 @@ forwarding or adds firewall chains. The binary is then taken out of the image, w
 proxy with its owner and mode, run as the proxy's own unprivileged user to check that it contains the module,
 and moved over the plain proxy. Every image the build made (its builder stage and the images it pulled, about
 3 GB) is removed from root's image store afterwards, whether the build worked or not; no other image is
-touched.
-Until then, a site's page cache is left out and nothing breaks.
+touched. Until then, a site's page cache is left out and nothing breaks, and a site's Performance tab says
+whether the proxy is still being built or why its build failed.
 The page cache is off by default. Logged-in visitors, form posts and admin pages always bypass it.
 
 ## The PHP sites' image

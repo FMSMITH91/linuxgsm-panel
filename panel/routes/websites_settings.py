@@ -34,6 +34,9 @@ S_NOT_APP = "This website is not an app."
 S_RULES_MAX = 50
 S_PAGE_CACHE_WAITS = ("Saved. The page cache starts once this host's web proxy has it: a superadmin turns on \"Page cache "
                       "in the web proxy\" in the Websites security settings.")
+S_PAGE_CACHE_BUILDING = ("Saved. The page cache starts once this host's web proxy with the page cache is built, which "
+                         "takes a few minutes.")
+S_PAGE_CACHE_FAILED = "Saved. The page cache starts once this host's web proxy has it, but its build failed: {why}"
 S_CACHE_ON = "The object cache was turned on and started beside the website, which was not restarted."
 S_CACHE_OFF = "The object cache was turned off and removed; the website was not restarted."
 
@@ -197,8 +200,17 @@ def _perf_apply(site, changes, cache_turned):
     if ok and site.enabled and proxied:
         ok, said = _w.reconcile_proxy(site.remote)
     if ok and changes.get("page_cache") and not _w.page_cache_ready(site.remote):
-        said = S_PAGE_CACHE_WAITS
+        said = _page_cache_waits(site.remote)
     return ok, said
+
+
+def _page_cache_waits(remote):
+    """Why a site's page cache waits: the option is off, its proxy is being built, or that build failed (and why)."""
+    from panel.routes.websites_view import options
+    if not options()["cache_build"]:
+        return S_PAGE_CACHE_WAITS
+    why = (_w.proxy_row(remote.id).last_error or "").strip()
+    return i18n.Sentence(S_PAGE_CACHE_FAILED, why=why) if why else S_PAGE_CACHE_BUILDING
 
 
 def _performance(site, form):

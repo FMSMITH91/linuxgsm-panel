@@ -33,6 +33,7 @@ From the fourth round (P4a):
 F30. The page cache's proxy is checked as the proxy's user where that user can reach it (it ran inside root's 0700
      build folder and was never installed), each failure has its own sentence, and the build's images are removed.
 F31. Turning the object cache on or off starts or removes it beside the running site, which is not restarted.
+M12. A page cache that waits for its proxy says whether that proxy is being built or why its build failed.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -599,16 +600,34 @@ def _f27_wiring_failure(st, su, built, cache):
     _db306.session.expire_all()
     eq("F27 wiring: a build that fails is the proxy row's last error (the Security settings card shows it)",
        (built, _w306.proxy_row(st.host.id).last_error), ([st.host.id], _sw306.CACHE_BUILD_FAILED))
+    _m12_waits(st, su, cache)
+
+
+def _m12_waits(st, su, cache):
     _bash_seams306()
     site = _site306(st, "p306-pc", kind="php")
     _reset306()
-    r = su.post("/websites/%d/performance" % site.id, json={"page_cache": True})
+    url = "/websites/%d/performance" % site.id
+    r = su.post(url, json={"page_cache": True})
+    failed = getattr(_wset306, "S_PAGE_CACHE_FAILED", "(none)").replace("{why}", _sw306.CACHE_BUILD_FAILED)
+    eq("M12 (POST /websites/<id>/performance): a page cache turned on while this host's proxy build failed says that "
+       "build failed and why (it said to turn on the option, which was on)", (r.status_code, _p9_json(r).get("message")),
+       (200, failed))
+    row = _w306.proxy_row(st.host.id)
+    row.last_error = ""
+    _db306.session.commit()
+    r1 = su.post(url, json={"page_cache": True})
+    _cfg306.update_config(_forget_cache306)
+    r0 = su.post(url, json={"page_cache": True})
+    eq("M12 (POST /websites/<id>/performance): with no failure recorded it says the proxy is being built, and with the "
+       "option off it says a superadmin turns it on (controls)", [_p9_json(x).get("message") for x in (r1, r0)],
+       [getattr(_wset306, "S_PAGE_CACHE_BUILDING", "(none)"), _wset306.S_PAGE_CACHE_WAITS])
+    _cfg306.update_config(lambda cfg: cfg.update(websites_cache_build=True))
     cache["have"] = "yes"
-    r2 = su.post("/websites/%d/performance" % site.id, json={"page_cache": True, "page_cache_ttl": 120})
-    eq("F27 wiring (POST /websites/<id>/performance): a page cache turned on while this host's proxy lacks the module "
-       "says it waits for it; once the proxy has it, the plain answer (control)",
-       (r.status_code, _p9_json(r).get("message"), r2.status_code, _p9_json(r2).get("message") == _w306.i18n.tr(
-           getattr(_wset306, "S_PAGE_CACHE_WAITS", "(none)"))), (200, getattr(_wset306, "S_PAGE_CACHE_WAITS", "(none)"), 200, False))
+    r2 = su.post(url, json={"page_cache": True, "page_cache_ttl": 120})
+    eq("F27 wiring (POST /websites/<id>/performance): once the proxy has the module, the plain answer (control)",
+       (r2.status_code, _p9_json(r2).get("message") in [getattr(_wset306, n, "(none)") for n in (
+           "S_PAGE_CACHE_WAITS", "S_PAGE_CACHE_BUILDING")]), (200, False))
 
 
 # ── F28. A Node.js site from the page ──────────────────────────────────────────────────────────
