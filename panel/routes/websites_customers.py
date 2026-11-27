@@ -65,6 +65,34 @@ def _make(name, perms, sites, max_sites):
     return group, token, code
 
 
+S_INVITE_AT = "The customer opens this link at {address}, the panel's site domain. They must be able to reach the panel there."
+S_INVITE_HERE = ("The customer opens this link at {address}, the address you are using now, because the panel has no site "
+                 "domain in Settings. Check that they can reach the panel there (a tailnet-only address cannot be reached "
+                 "from outside it).")
+
+
+def invite_link(token):
+    """(the invite's address, the sentence saying where the customer opens it).
+
+    The panel's site domain (Settings) when one is set, with the port the panel answers on unless the domain names
+    its own; else the address the administrator reached the panel by, said plainly, since a customer may not reach
+    that one (a tailnet-only panel).
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    from panel.core.config import load_config
+    from panel.core.origins import _host_port
+    # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
+    link = url_for("redeem_invite", token=token, _external=True)
+    url = urlsplit(link)
+    domain = _host_port(load_config().get("site_domain"))
+    if not domain:
+        return link, i18n.tr(S_INVITE_HERE, address=url.netloc)
+    host, port = domain[0], domain[1] or url.port
+    host = "[%s]" % host if ":" in host else host
+    netloc = "%s:%d" % (host, port) if port else host
+    return urlunsplit(url._replace(netloc=netloc)), i18n.tr(S_INVITE_AT, address=netloc)
+
+
 def register(app):
     """The add-a-customer route."""
     @app.route("/websites/customers/add", methods=["POST"])
@@ -88,10 +116,8 @@ def register(app):
         group, token, code = _make(name, perms, sites, _max_sites(data, len(sites)))
         for site in sites:
             _w.audit(site, "website_customer_add", "customer group %s (%s), invite made" % (group.name, ", ".join(perms)))
-        # Shown once to the administrator who made it, on the address they reached the panel by.
-        # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
-        link = url_for("redeem_invite", token=token, _external=True)
-        resp = jsonify({"success": True, "group_id": group.id, "invite": link, "code": code,
+        link, where = invite_link(token)
+        resp = jsonify({"success": True, "group_id": group.id, "invite": link, "invite_note": where, "code": code,
                         "message": i18n.tr("Customer added. Send them the invite link and its code; both are shown once.")})
         resp.headers["Cache-Control"] = "no-store"
         return resp

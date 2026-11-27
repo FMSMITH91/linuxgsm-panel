@@ -334,6 +334,7 @@
     p.appendChild(WS.node('div', 'fw-semibold', WS.T('Send the customer this link and its code. Both are shown only this once:')));
     p.appendChild(WS.raw('code', 'ws-secret user-select-all', d.invite || ''));
     p.appendChild(WS.raw('code', 'ws-secret user-select-all', d.code || ''));
+    if (d.invite_note) p.appendChild(WS.node('div', 'mt-1', d.invite_note));
     box.appendChild(p);
   }
   window.wsCustomerAdd = function (e) {
