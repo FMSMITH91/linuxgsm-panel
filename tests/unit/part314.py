@@ -208,8 +208,8 @@ def _changed314(a, b):
 
 def _s314_renovate_updates():
     base = _json314.loads(_TEXT314)
-    bad = []
-    for dep in _deps314(_site_mgrs314(), _TEXT314):
+    bad, deps = [], _deps314(_site_mgrs314(), _TEXT314)
+    for dep in deps:
         new_value = "2026.12.0" if dep["depName"].endswith("/cloudflared") else "11.99.0" if dep["depName"] == "npm" \
             else dep["currentValue"]
         new_digest = "sha256:" + _hash314.sha256(dep["replaceString"].encode()).hexdigest() if dep["currentDigest"] else None
@@ -219,8 +219,8 @@ def _s314_renovate_updates():
         if len(changed) != want or problems or not all(p.startswith("sites.") for p in changed):
             bad.append((dep["depName"], dep["currentValue"], changed, problems[:2]))
     eq("renovate (websites): each update applied as Renovate applies it (the digest, and cloudflared's version with "
-       "it) changes that one pin alone, and the catalog still passes the panel's check",
-       bad, [])
+       "it) changes that one pin alone, and the catalog still passes the panel's check (all 17 tried)",
+       (bad, len(deps)), ([], 17))
 
 
 def _rule_on314(rules, datasource, dep, update):
