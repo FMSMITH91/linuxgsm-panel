@@ -115,7 +115,37 @@ def _ports(sites):
         WebsiteProxy.remote_id.in_(sorted({s.remote_id for s in sites}) or [0])).all()}
     modes = [rows[s.remote_id].exposure_mode for s in online if s.remote_id in rows]
     mode = max(set(modes), key=modes.count) if modes else "public"
-    return {"mode": mode, "open": bool(online) and mode != "tunnel", "sites_enabled": len(online), "firewall": "unknown"}
+    return {"mode": mode, "open": bool(online) and mode != "tunnel", "sites_enabled": len(online),
+            "firewall": _firewall({s.remote for s in online}) if online and mode != "tunnel" else "unknown"}
+
+
+FIREWALL_FRESH = 60               # seconds a host's firewall reading is reused by the list
+_FIREWALL = {}                    # remote id -> (monotonic time, "on" | "off" | "unknown")
+
+
+def _firewall_of(remote):
+    """"on" or "off" for the host's firewall (ufw; not installed is off), "unknown" when it could not be read."""
+    hit = _FIREWALL.get(remote.id)
+    if hit and time.monotonic() - hit[0] < FIREWALL_FRESH:
+        return hit[1]
+    from panel.ops.ssh_manager import firewall as _fw
+    try:
+        got = _fw.remote_ufw_status(remote) or {}
+    except Exception:  # noqa: BLE001 - a host that cannot be read is "unknown", never a broken list
+        got = {"unreachable": True}
+    state = "unknown" if got.get("unreachable") or got.get("permission_denied") else "on" if got.get("enabled") else "off"
+    _FIREWALL[remote.id] = (time.monotonic(), state)
+    return state
+
+
+def _firewall(remotes):
+    """The firewall line's state for the hosts with an online site.
+
+    "off" when any one's is off (80 and 443 are then reachable there whatever the mode), "on" when every one's is
+    on, else "unknown".
+    """
+    states = {_firewall_of(r) for r in remotes if r is not None}
+    return "off" if "off" in states else "on" if states == {"on"} else "unknown"
 
 
 def _missing(admin):
