@@ -90,8 +90,8 @@ _HOSTS223 = {"github.com:443", "api.github.com:443", "uploads.github.com:443", "
              "*.archive.ubuntu.com:80", "archive.ubuntu.com:443", "security.ubuntu.com:443",
              "packages.microsoft.com:443", "esm.ubuntu.com:443",
              "raw.githubusercontent.com:443", "linuxgsm.com:443", "app.codacy.com:443", "api.codacy.com:443",
-             # The Cloudflare ranges job's one non-GitHub host: the published lists it checks.
-             "www.cloudflare.com:443"}
+             # The CDN ranges job's non-GitHub hosts: the published lists it checks.
+             "www.cloudflare.com:443", "api.fastly.com:443"}
 _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), ("ci.yml", "coverage"),
              ("ci.yml", "js-coverage"), ("ci.yml", "checks"), ("ci.yml", "checks-verdict"),
              ("ci.yml", "coverage-verdict"), ("ci.yml", "js-coverage-verdict"), ("lighthouse.yml", "lighthouse"),
@@ -103,7 +103,7 @@ _BLOCK223 = {("actionlint.yml", "actionlint"), ("ci.yml", "gamedig-lockfile"), (
              ("sonar-new-issues.yml", "sonar-new-issues"), ("zizmor.yml", "zizmor"), ("zizmor.yml", "upload"),
              ("codacy-alerts.yml", "open-errors"), ("codacy-coverage.yml", "upload"),
              ("sonar-main-issues.yml", "sonar-main-issues"), ("codeql-alerts.yml", "open-alerts"),
-             ("cflite_cleanup.yml", "cleanup"), ("cloudflare-ranges.yml", "ranges")}
+             ("cflite_cleanup.yml", "cleanup"), ("cdn-ranges.yml", "ranges")}
 _MAIN_ONLY223 = "runs only on main (a push, a schedule or workflow_run), so no pull request can show a block list " \
                 "is complete before it holds every panel's update"
 _AUDIT223 = {

@@ -198,5 +198,10 @@ How the one-click app releases were pinned:
   installer's form fields were read from the tagged source. To update it, download the new tag's archive,
   record its sha256 in the catalog, and repeat both checks.
 
-The Cloudflare network list used by the "restricted" exposure mode is also part of the catalog. A daily CI
-job compares it with Cloudflare's published lists and opens a pull request when they change.
+The CDN network lists used by the "restricted" exposure mode (Cloudflare's and Fastly's presets) are also
+part of the catalog. A daily CI job (`.github/workflows/cdn-ranges.yml`, `.github/scripts/cdn_ranges.py`)
+reads each CDN's official list from fixed https URLs (no redirect, size capped), checks every entry is a
+canonical public network, and opens one pull request when they change. Other CDNs are not presets: Amazon
+CloudFront's list is over the 200-network cap (each network is two firewall rules), Bunny's and Gcore's
+are single server addresses by the hundred that change often, and Sucuri and KeyCDN publish no official
+machine-readable list. Add their networks by hand.

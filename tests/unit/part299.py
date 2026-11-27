@@ -1024,14 +1024,10 @@ def _s299_egress():
        [[], [], [], [], [], [], [], ["93.184.215.14"]])
 
 
-# ── 7. the page cache build, the CPU fallback, the image scan and the Cloudflare list ────────────
+# ── 7. the page cache build, the CPU fallback and the image scan (the CDN lists: part318) ────────
 _AI_SPEC299 = _ilu299.spec_from_file_location("addon_images_p299", os.path.join(_root, ".github", "scripts", "addon_images.py"))
 _AI299 = _ilu299.module_from_spec(_AI_SPEC299)
 _AI_SPEC299.loader.exec_module(_AI299)
-_CF_SPEC299 = _ilu299.spec_from_file_location("cloudflare_ranges_p299",
-                                              os.path.join(_root, ".github", "scripts", "cloudflare_ranges.py"))
-_CF299 = _ilu299.module_from_spec(_CF_SPEC299)
-_CF_SPEC299.loader.exec_module(_CF299)
 _CACHE_CF299 = os.path.join(_root, "panel", "website_images", "caddy-cache", "Containerfile")
 
 
@@ -1279,33 +1275,6 @@ def _s299_image_scan2():
        ("docker.io/nginx/nginx-unprivileged", True, True))
 
 
-def _s299_cloudflare():
-    lists = {_CF299.URLS[0]: "173.245.48.0/20\n103.21.244.0/22\n", _CF299.URLS[1]: "2400:cb00::/32\n"}
-    hostile = ["10.0.0.0/8\n", "173.245.48.1/20\n", "0.0.0.0/0\n", "173.245.48.0/20; rm -rf /\n", ""]
-    eq("cloudflare ranges: a private, non-canonical, too-wide, malformed or empty list is refused",
-       [_refused299(_CF299.networks, t) for t in hostile], [True] * 5)
-    d = _tf299.mkdtemp(prefix="ww2-cf-")
-    try:
-        path = os.path.join(d, "catalog.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            _json299.dump(_FLOOR_DOC299, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        rc = _CF299.main(["x", "check"], fetcher=lists.get, catalog=path)
-        with open(path, encoding="utf-8") as fh:
-            got = _json299.load(fh)["sites"]["presets"]["cloudflare"]
-        rc2 = _CF299.main(["x", "check"], fetcher=lambda u: "10.0.0.0/8\n", catalog=path)
-        with open(path, encoding="utf-8") as fh:
-            after = _json299.load(fh)["sites"]["presets"]["cloudflare"]
-    finally:
-        __import__("shutil").rmtree(d, ignore_errors=True)
-    eq("cloudflare ranges (main): published lists that pass replace the catalog's preset (and the result passes the "
-       "panel's own check); a bad list changes nothing",
-       (rc, got, rc2, after, _wc299.sites_problems(dict(_SITES299, presets={"cloudflare": got}))),
-       (0, ["173.245.48.0/20", "103.21.244.0/22", "2400:cb00::/32"], 1, got, []))
-    eq("cloudflare ranges: only the two fixed https URLs are ever fetched", _refused299(_CF299.fetch, "https://evil.example/ips"),
-       True)
-
-
 def _unb64_299(word):
     """`word` decoded from base64 when it is valid base64, else ""."""
     import binascii
@@ -1359,5 +1328,5 @@ for _step299 in (_s299_floor, _s299_refusals, _s299_stored, _s299_versions, _s29
                  _s299_guard_no_accounts, _s299_guard_refuses_root,
                  _s299_ports, _s299_recipe_steps, _s299_unpacker, _s299_egress, _s299_proxy_base2, _s299_proxy_rules2,
                  _s299_helper_guard2, _s299_ports1b, _s299_ports2, _s299_recipe_steps2, _s299_recipe_steps3,
-                 _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_cloudflare, _s299_w3_calls, _s299_image_scan2):
+                 _s299_cache_build, _s299_helper_modes, _s299_cpu, _s299_image_scan, _s299_w3_calls, _s299_image_scan2):
     _step299()

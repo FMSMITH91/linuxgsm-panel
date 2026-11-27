@@ -265,7 +265,7 @@ class WebsiteProxy(db.Model):
     """The web proxy on one host: how its sites are reached, and what the panel last applied.
 
     exposure_mode 'public' opens 80/443 to everyone while a site is enabled; 'restricted' opens them
-    only to `allow_cidrs` plus the networks of `allow_presets` (the catalog's Cloudflare ranges), and
+    only to `allow_cidrs` plus the networks of `allow_presets` (the catalog's CDN ranges), and
     the proxy trusts a client-address header only from those; 'tunnel' opens nothing and connects out
     with `tunnel_token_enc` (encrypt_secret, at_rest.SECRET_COLUMNS; never logged, never on argv).
     allow_cidrs / allow_presets are JSON lists, written only through validation.website_cidr and

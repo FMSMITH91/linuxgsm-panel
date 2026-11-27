@@ -53,7 +53,10 @@ OPTIONAL_KEYS = ()
 # helper): this module, at an exact version, compiled into Caddy by xcaddy in the pinned builder image.
 CACHE_MODULE = "github.com/caddyserver/cache-handler"
 TUNNEL_PROVIDERS = ("cloudflare",)
-PRESETS = ("cloudflare",)
+# The CDNs whose published networks the catalog carries as allow-list presets (.github/scripts/cdn_ranges.py keeps
+# them current), and the ones of them whose client certificate authority it carries for authenticated origin pulls.
+PRESETS = ("cloudflare", "fastly")
+ORIGIN_PULL = ("cloudflare",)
 # A CDN's client certificate authority for authenticated origin pulls (public; PEM).
 _PEM = r"-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{100,8000}-----END CERTIFICATE-----\n"
 
@@ -441,9 +444,9 @@ def _recipes_problems(recipes):
 
 
 def _origin_pull_problems(entry):
-    if _obj(entry, PRESETS) and all(_full(_PEM, v) for v in entry.values()):
+    if _obj(entry, ORIGIN_PULL) and all(_full(_PEM, v) for v in entry.values()):
         return []
-    return ["origin_pull: one PEM certificate per preset"]
+    return ["origin_pull: one PEM certificate for each of %s" % ", ".join(ORIGIN_PULL)]
 
 
 def sites_problems(obj):
@@ -549,7 +552,7 @@ def preset_info(name):
 
 
 def preset_ranges(name):
-    """The networks of allow-list preset `name` ("cloudflare"), IPv4 and IPv6, as canonical strings."""
+    """The networks of allow-list preset `name` (one of PRESETS), IPv4 and IPv6, as canonical strings."""
     sites, _source = section()
     if name not in PRESETS:
         raise KeyError(name)
@@ -557,9 +560,9 @@ def preset_ranges(name):
 
 
 def origin_pull_ca(name):
-    """The PEM certificate a CDN (`name`, "cloudflare") presents for authenticated origin pulls."""
+    """The PEM certificate a CDN (`name`, one of ORIGIN_PULL) presents for authenticated origin pulls."""
     sites, _source = section()
-    if name not in PRESETS:
+    if name not in ORIGIN_PULL:
         raise KeyError(name)
     return sites["origin_pull"][name]
 

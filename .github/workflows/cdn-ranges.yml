@@ -1,13 +1,15 @@
-name: Cloudflare ranges
+name: CDN ranges
 
-# The catalog's Cloudflare allow-list preset (panel/addon_images/catalog.json, sites.presets.cloudflare)
-# follows Cloudflare's published lists: daily, .github/scripts/cloudflare_ranges.py fetches
-# https://www.cloudflare.com/ips-v4 and /ips-v6, accepts them only when every line is a canonical public
-# network and both families are there, and when the catalog changed this opens a pull request with the
-# new ranges (one branch per day; the commit is made through GitHub's API, so GitHub signs it). Panels
-# get the ranges in the next signed catalog, never by fetching them. Nothing merges by itself.
+# The catalog's CDN allow-list presets (panel/addon_images/catalog.json, sites.presets.<cdn>) follow
+# each CDN's official published list: daily, .github/scripts/cdn_ranges.py fetches Cloudflare's
+# https://www.cloudflare.com/ips-v4 and /ips-v6 and Fastly's https://api.fastly.com/public-ip-list,
+# accepts a CDN's list only when every entry is a canonical public network and both families are there,
+# and when the catalog changed this opens one pull request with the new ranges (one branch per day; the
+# commit is made through GitHub's API, so GitHub signs it). A CDN whose list is refused keeps its
+# networks and turns the run red; the others are still proposed. Panels get the ranges in the next
+# signed catalog, never by fetching them. Nothing merges by itself.
 #
-# Egress is blocked except Cloudflare's list host and GitHub's API (OWASP Top 10 CI/CD Security Risks,
+# Egress is blocked except the CDNs' list hosts and GitHub's API (OWASP Top 10 CI/CD Security Risks,
 # CICD-SEC-7 and CICD-SEC-8); the job's token may write contents and pull requests only.
 on:
   schedule:
@@ -22,7 +24,7 @@ permissions: {}
 
 jobs:
   ranges:
-    name: Cloudflare ranges
+    name: CDN ranges
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -37,27 +39,29 @@ jobs:
             api.github.com:443
             github.com:443
             www.cloudflare.com:443
+            api.fastly.com:443
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Fetch and check the published ranges
         id: check
-        run: python3 -I .github/scripts/cloudflare_ranges.py check | tee -a "$GITHUB_OUTPUT"
+        shell: bash   # pipefail: a refused list fails this step through the tee
+        run: python3 -I .github/scripts/cdn_ranges.py check | tee -a "$GITHUB_OUTPUT"
       - name: Open a pull request with the new ranges
-        if: steps.check.outputs.changed == 'true'
+        if: ${{ !cancelled() && steps.check.outputs.changed == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          branch="cloudflare-ranges/$(date -u +%Y-%m-%d)"
+          branch="cdn-ranges/$(date -u +%Y-%m-%d)"
           path="panel/addon_images/catalog.json"
           base="$(gh api "repos/${REPO}/git/ref/heads/main" --jq .object.sha)"
           gh api "repos/${REPO}/git/refs" -f ref="refs/heads/${branch}" -f sha="${base}" >/dev/null
           blob="$(gh api "repos/${REPO}/contents/${path}?ref=${branch}" --jq .sha)"
           gh api -X PUT "repos/${REPO}/contents/${path}" -f branch="${branch}" -f sha="${blob}" \
-            -f message="Catalog: Cloudflare's published ranges changed" \
+            -f message="Catalog: a CDN's published ranges changed" \
             -f content="$(base64 -w0 "${path}")" >/dev/null
           gh pr create --repo "${REPO}" --base main --head "${branch}" \
-            --title "Catalog: Cloudflare's published ranges changed" \
-            --body "Cloudflare's published ranges (www.cloudflare.com/ips-v4 and ips-v6) differ from the catalog's sites.presets.cloudflare. Every line was checked as a canonical public network by .github/scripts/cloudflare_ranges.py. Panels receive them with the next signed catalog."
+            --title "Catalog: a CDN's published ranges changed" \
+            --body "A CDN's published ranges (Cloudflare: www.cloudflare.com/ips-v4 and ips-v6; Fastly: api.fastly.com/public-ip-list) differ from the catalog's sites.presets. Every entry was checked as a canonical public network by .github/scripts/cdn_ranges.py. Panels receive them with the next signed catalog."

@@ -1,6 +1,6 @@
 {# The web proxy and how visitors reach the sites (superadmin only: it changes a root service and the
    public listener). Exposure is a proxy-wide choice per host: Public, Restricted (an allow list,
-   with Cloudflare's networks one tap away), or Tunnel (no inbound port; a token). The token is
+   with each CDN's networks one tap away), or Tunnel (no inbound port; a token). The token is
    write-only: the page is told only whether one is saved. The security settings below show OWASP's
    recommended value beside each field and a note, never a block, when a value is outside it
    (js/websites_proxy.js). #}
@@ -44,14 +44,21 @@
       </fieldset>
       <div id="wp-restricted" class="mb-2" hidden>
         <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
-          <button type="button" id="wp-cf" class="btn btn-sm btn-outline-secondary" data-action="wsCfPreset" aria-pressed="false">
+          <button type="button" id="wp-cf" class="btn btn-sm btn-outline-secondary" data-action="wsPreset" data-args='["cloudflare"]' aria-pressed="false">
             <i class="bi bi-cloud"></i> Use Cloudflare's networks</button>
-          <span id="wp-cf-state" class="small text-secondary"></span>
+          <button type="button" id="wp-fastly" class="btn btn-sm btn-outline-secondary" data-action="wsPreset" data-args='["fastly"]' aria-pressed="false">
+            <i class="bi bi-cloud"></i> Use Fastly's networks</button>
+          <span id="wp-preset-state" class="small text-secondary"></span>
         </div>
         <details id="wp-cf-list" class="mb-1">
           <summary class="small" id="wp-cf-sum">Cloudflare's networks</summary>
           <div id="wp-cf-src" class="form-text mt-0"></div>
           <ul id="wp-cf-ranges" class="small font-monospace list-unstyled mb-1 ws-ranges" data-no-i18n></ul>
+        </details>
+        <details id="wp-fastly-list" class="mb-1">
+          <summary class="small" id="wp-fastly-sum">Fastly's networks</summary>
+          <div id="wp-fastly-src" class="form-text mt-0"></div>
+          <ul id="wp-fastly-ranges" class="small font-monospace list-unstyled mb-1 ws-ranges" data-no-i18n></ul>
         </details>
         <label for="wp-cidrs" class="form-label small mb-1">Other networks, one per line</label>
         <textarea id="wp-cidrs" class="form-control form-control-sm font-monospace" rows="3" maxlength="4000"

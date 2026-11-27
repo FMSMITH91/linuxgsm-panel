@@ -1,0 +1,8 @@
+{
+  "Fastly's networks": "Redes de Fastly",
+  "Fastly's networks ({n})": "Redes de Fastly ({n})",
+  "List at least one network, or use a CDN's networks.": "Indica al menos una red, o usa las redes de una CDN.",
+  "On the list: {names}. Tap a button again to remove its networks.": "En la lista: {names}. Pulsa de nuevo un botón para quitar sus redes.",
+  "Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor's address only for HTTPS visitors: turn on Force TLS for the service at Fastly.": "Se leen de api.fastly.com/public-ip-list en una comprobación diaria y se actualizan solas con el catálogo firmado. Fastly da la dirección del visitante solo para visitantes HTTPS: activa Force TLS para el servicio en Fastly.",
+  "Use Fastly's networks": "Usar las redes de Fastly"
+}

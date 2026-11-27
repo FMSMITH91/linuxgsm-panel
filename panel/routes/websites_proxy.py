@@ -6,7 +6,7 @@ superadmin). The host is named by `remote_id` in the query or the body.
 
 Exposure modes (WebsiteProxy.exposure_mode): 'public' opens 80/443 to everyone while a site is
 online; 'restricted' opens them only to an allow list (custom networks, held to
-validation.website_cidr, and presets such as the signed catalog's Cloudflare ranges), and the proxy
+validation.website_cidr, and presets: the signed catalog's CDN ranges), and the proxy
 trusts a client-address header only from those; 'tunnel' opens nothing and connects out with the
 operator's tunnel token. The token is stored encrypted (encrypt_secret), sent to the host on stdin by
 the runtime layer, never shown back, never logged; the page sees only whether one is set (OWASP

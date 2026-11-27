@@ -488,7 +488,7 @@ _exp301 = _ran301('exposure', _node301(_list_sa301, _COMMON301 + ["websites.js",
   const vis = function () { return [$('wp-restricted').hidden, $('wp-tunnel').hidden]; };
   const start = vis();
   $('wp-mode-restricted').checked = true; window.wsExposure('restricted'); const r = vis();
-  window.wsCfPreset(); $('wp-cidrs').value = ' 203.0.113.0/24 \n\n2001:db8::/32 ';
+  window.wsPreset('cloudflare'); $('wp-cidrs').value = ' 203.0.113.0/24 \n\n2001:db8::/32 ';
   const rb = WS.exposureBody();
   $('wp-mode-restricted').checked = false; $('wp-mode-tunnel').checked = true; window.wsExposure('tunnel'); const tv = vis();
   const tb = WS.exposureBody();

@@ -73,9 +73,13 @@ the Websites page:
 
 - **Public**: anyone on the internet reaches your sites on ports 80 and 443.
 - **Restricted**: ports 80 and 443 are open only to the networks you list. **Use Cloudflare's networks**
-  adds Cloudflare's published ranges (they come with the signed catalog, so the panel fetches nothing
-  extra); you can add any other network, IPv4 or IPv6, such as another CDN's or your own. The visitor's
-  real address is read from the CDN's header only when a request comes from one of those networks.
+  and **Use Fastly's networks** add that CDN's official published ranges (they come with the signed
+  catalog, so the panel fetches nothing extra; each list folds open under the buttons, with its source
+  and the catalog's date); you can add any other network, IPv4 or IPv6, such as your own. The visitor's
+  real address is read from a CDN's header only for requests from that CDN's networks: Cloudflare's
+  `CF-Connecting-IP` while Cloudflare's are the only trusted networks, otherwise `X-Forwarded-For`, read
+  from the right to the first address that is not a trusted network. Fastly adds the visitor's address
+  only for HTTPS visitors, so turn on Force TLS for the service at Fastly.
 - **Tunnel**: no port is opened at all. The host connects out to Cloudflare with your tunnel's token,
   and Cloudflare brings visitors in. In Cloudflare's dashboard, give each website's domain a **Public
   Hostname** on that tunnel with the service `http://localhost:19080` (the card and each site's Domains tab

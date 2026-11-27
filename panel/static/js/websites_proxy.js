@@ -29,28 +29,38 @@
     WS.show('wp-restricted', mode === 'restricted');
     WS.show('wp-tunnel', mode === 'tunnel');
   }
-  function renderCf() {
-    var on = st.presets.indexOf('cloudflare') >= 0;
-    var b = WS.el('wp-cf');
-    if (b) {
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      b.className = 'btn btn-sm ' + (on ? 'btn-secondary' : 'btn-outline-secondary');
-    }
-    var s = WS.el('wp-cf-state');
-    if (s) s.textContent = on ? WS.T("Cloudflare's networks are on the list (from the signed catalog). Tap again to remove them.") : '';
-    renderCfList();
+  // The allow-list presets: each CDN's networks from the signed catalog, its elements (wp-<id>-...) and its source.
+  var PRESETS = {
+    cloudflare: {id: 'cf', name: 'Cloudflare', sum: "Cloudflare's networks ({n})",
+      src: 'Read from cloudflare.com/ips-v4 and /ips-v6 by a daily check, and updated by themselves with the signed catalog.'},
+    fastly: {id: 'fastly', name: 'Fastly', sum: "Fastly's networks ({n})",
+      src: 'Read from api.fastly.com/public-ip-list by a daily check, and updated by themselves with the signed catalog. Fastly gives the visitor\'s address only for HTTPS visitors: turn on Force TLS for the service at Fastly.'}
+  };
+  function renderPresets() {
+    var on = [];
+    Object.keys(PRESETS).forEach(function (name) {
+      var pressed = st.presets.indexOf(name) >= 0, b = WS.el('wp-' + PRESETS[name].id);
+      if (pressed) on.push(PRESETS[name].name);
+      if (b) {
+        b.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+        b.className = 'btn btn-sm ' + (pressed ? 'btn-secondary' : 'btn-outline-secondary');
+      }
+      renderPresetList(name);
+    });
+    var s = WS.el('wp-preset-state');
+    if (s) s.textContent = on.length ? WS.TF('On the list: {names}. Tap a button again to remove its networks.', {names: on.join(', ')}) : '';
   }
-  // Every network the preset admits, from the signed catalog, and where they come from.
-  function renderCfList() {
-    var info = (cur().preset_info || {}).cloudflare || {}, ranges = info.ranges || [];
-    var sum = WS.el('wp-cf-sum');
-    if (sum) sum.textContent = WS.TF("Cloudflare's networks ({n})", {n: ranges.length});
-    var src = WS.el('wp-cf-src');
+  // Every network a preset admits, from the signed catalog, and where they come from.
+  function renderPresetList(name) {
+    var p = PRESETS[name], info = (cur().preset_info || {})[name] || {}, ranges = info.ranges || [];
+    var sum = WS.el('wp-' + p.id + '-sum');
+    if (sum) sum.textContent = WS.TF(p.sum, {n: ranges.length});
+    var src = WS.el('wp-' + p.id + '-src');
     if (src) {
       src.textContent = (info.issued ? WS.TF('From the signed catalog of {date}.', {date: info.issued}) : WS.T("From the panel's built-in catalog.")) + ' ' +
-        WS.T('Read from cloudflare.com/ips-v4 and /ips-v6 by a daily check, and updated by themselves with the signed catalog.');
+        WS.T(p.src);
     }
-    var ul = WS.clear(WS.el('wp-cf-ranges'));
+    var ul = WS.clear(WS.el('wp-' + p.id + '-ranges'));
     if (ul) ranges.forEach(function (r) { ul.appendChild(WS.node('li', null, String(r))); });
   }
   function stateLine(p) {
@@ -69,7 +79,7 @@
     if (sum) sum.textContent = WS.TF('How visitors reach your sites: {mode}', {mode: WS.T(WS.pick(MODE_NAME, p.exposure_mode, 'Public'))});
     st.presets = (p.allow_presets || []).slice();
     setMode(p.exposure_mode || 'public');
-    renderCf();
+    renderPresets();
     var c = WS.el('wp-cidrs');
     if (c) c.value = (p.allow_cidrs || []).join('\n');
     var tok = WS.el('wp-token');
@@ -135,10 +145,11 @@
   };
   window.wsProxyHost = function () { var s = WS.el('wp-host'); st.host = s ? s.value : null; renderHost(); };
   window.wsExposure = function (mode) { setMode(mode); };
-  window.wsCfPreset = function () {
-    var i = st.presets.indexOf('cloudflare');
-    if (i >= 0) st.presets.splice(i, 1); else st.presets.push('cloudflare');
-    renderCf();
+  window.wsPreset = function (name) {
+    if (!PRESETS[name]) return;
+    var i = st.presets.indexOf(name);
+    if (i >= 0) st.presets.splice(i, 1); else st.presets.push(name);
+    renderPresets();
   };
   function mode() {
     var m = 'public';
@@ -161,7 +172,7 @@
   };
   function exposureProblem(body) {
     if (body.exposure_mode === 'restricted' && !body.allow_presets.length && !body.allow_cidrs.length) {
-      return WS.T("List at least one network, or use Cloudflare's networks.");
+      return WS.T("List at least one network, or use a CDN's networks.");
     }
     if (body.exposure_mode === 'tunnel' && !body.tunnel_token && !cur().tunnel_token_set) return WS.T('Paste the tunnel token first.');
     return '';
