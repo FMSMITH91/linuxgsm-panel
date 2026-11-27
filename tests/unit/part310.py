@@ -160,7 +160,8 @@ def _status_run310(sh):
             # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700: an owner-only stand-in program this part runs
             os.chmod(os.path.join(bin_, name), 0o700)
         env = {"PATH": bin_ + ":/usr/bin:/bin", "TMPDIR": tmp, "P310_LOG": os.path.join(base, "log"), "LC_ALL": "C.UTF-8"}
-        out = _sp310.run(["bash", "-c", sh], capture_output=True, text=True, env=env, timeout=60, check=False).stdout
+        out = _sp310.run(["/bin/bash", "-c", sh],  # nosec B603 - bash on this part's own stand-in script
+                         capture_output=True, text=True, env=env, timeout=60, check=False).stdout
         log = []
         if os.path.exists(env["P310_LOG"]):
             with open(env["P310_LOG"], encoding="utf-8") as fh:

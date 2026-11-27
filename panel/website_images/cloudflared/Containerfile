@@ -24,7 +24,7 @@ FROM ${BASE_IMAGE} AS cloudflared
 
 FROM ${CERTS_IMAGE} AS certs
 # The new image's whole file system outside the program, laid out in /out: the certificate bundle where Go
-# and SSL_CERT_FILE look, an empty /tmp and the nonroot user's home (its working folder).
+# and SSL_CERT_FILE look, and a /tmp and home that only the nonroot user (the one user this image runs) may use.
 RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
@@ -32,8 +32,8 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /out/etc/ssl/certs /out/tmp /out/home/nonroot \
     && cp /etc/ssl/certs/ca-certificates.crt /out/etc/ssl/certs/ \
-    && chmod 1777 /out/tmp \
-    && chown 65532:65532 /out/home/nonroot
+    && chmod 0700 /out/tmp /out/home/nonroot \
+    && chown 65532:65532 /out/tmp /out/home/nonroot
 
 FROM scratch
 LABEL org.opencontainers.image.title="cloudflared for linuxgsm-panel websites"
