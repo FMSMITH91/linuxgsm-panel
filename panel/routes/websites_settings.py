@@ -378,6 +378,8 @@ def _app_apply(site, fields, env_changed):
     ok, said = True, ""
     if fields:
         ok, said = _w.host_call(_sw.install, site.remote, site, _w.site_db(site), False)
+        if ok:
+            _w.note_installed(site)
     if ok and said != _sw.OK_WAITING and env_changed:
         ok, said = _w.host_call(_sw.env_apply, site.remote, site, False)
     if ok and said != _sw.OK_WAITING:

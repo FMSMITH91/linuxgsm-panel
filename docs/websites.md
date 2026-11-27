@@ -231,6 +231,14 @@ their connection settings on request, which is written to the audit log. Deletin
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
 site stays offline for another try.
 
+## Updates and settings
+
+When the signed catalog has a newer image for a site (a security rebuild), or the panel changed the files it
+writes for a site, the site's Overview offers **Update**, which installs it again from that image and restarts
+it (a few seconds offline; building a PHP image can take a few minutes first). Its files, databases and settings
+stay. Saving a site's Settings restarts it only when one of its limits changed; the note and the access log
+alone never do.
+
 ## Access logs
 
 Off by default, for visitors' privacy. When an administrator turns them on for a site, visitor

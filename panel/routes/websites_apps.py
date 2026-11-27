@@ -163,6 +163,7 @@ def _install(site, secret_vals):
     ok, said = _w.host_call(_sw.install, site.remote, site)
     if not ok:
         return False, "account", said, steps
+    _w.note_installed(site)
     for step in steps:
         _job(site.id, step=step["name"])
         _mark(site, step["name"], False)

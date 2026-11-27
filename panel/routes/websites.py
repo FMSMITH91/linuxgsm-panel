@@ -154,10 +154,44 @@ def install_site(site, restart=True):
     """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
 
     `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
+    A done install records the image and the files' revision it wrote (note_installed), which Update compares.
     """
     if restart:
-        return host_call(_sw.install, site.remote, site, site_db(site))
-    return host_call(_sw.install, site.remote, site, site_db(site), True, False)
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site))
+    else:
+        ok, said = host_call(_sw.install, site.remote, site, site_db(site), True, False)
+    if ok:
+        note_installed(site)
+    return ok, said
+
+
+def current_image(site):
+    """The image the signed catalog has for `site` now (services.websites.image_for), or "" when it has none."""
+    from panel.services import websites as _svc
+    try:
+        return str(_svc.image_for(site) or "")[:200]
+    except (NotImplementedError, KeyError, TypeError, ValueError):
+        return ""
+
+
+def note_installed(site):
+    """Record on `site` the image and the files' revision an install just wrote (committed)."""
+    from panel.services import websites as _svc
+    site.image_digest, site.image_key = current_image(site), _svc.SITE_FILES_REV
+    db.session.commit()
+
+
+def update_available(site):
+    """Whether Update would bring `site` something: the catalog's image or the files' revision changed since its install.
+
+    A site installed before the panel recorded them has neither, and is offered Update once (its next install records
+    both). A site being made or removed is never offered it.
+    """
+    from panel.services import websites as _svc
+    if site.state not in ("running", "stopped", "failed"):
+        return False
+    now = current_image(site)
+    return bool(now) and (site.image_digest != now or site.image_key != _svc.SITE_FILES_REV)
 
 
 def acted(site, action, ok, said, detail=""):

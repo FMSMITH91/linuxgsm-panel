@@ -226,10 +226,18 @@ def _open_url(site):
     return "https://%s/" % dom.domain if dom and site.enabled else ""
 
 
+def _image(site):
+    """The image the site runs (as its last install recorded it) and whether Update would bring it a newer one."""
+    from panel.routes.websites import update_available
+    ref = site.image_digest or ""
+    name = ref.split("@", 1)[0].rsplit(":", 1)[0].rsplit("/", 1)[-1] if ref else ""
+    return {"name": name, "version": ref[-12:], "update_available": update_available(site)}
+
+
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
-           "image": {"name": site.image_key or "", "version": (site.image_digest or "")[-12:], "update_available": False},
+           "image": _image(site),
            "app_version": site.app_version or "", "php_version": site.php_version or "",
            "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe)}
     if admin:
