@@ -228,7 +228,10 @@ left as it was.
 
 A site's container reaches its own database and nothing else: it cannot call out to the internet or
 reach the host's other services. This keeps a compromised site from attacking anything else. WordPress
-is the one exception: it may reach WordPress's own update servers, so its security updates work. An
+is the one exception: it may reach WordPress's own update servers, so its security updates work. It goes
+through a small proxy that connects only to those servers on port 443, trying each of their checked addresses
+in turn; when it refuses or cannot connect, its journal (the site account's `lgsm-site-egress` unit) says
+which host and why, and nothing more. An
 administrator can give one site full internet access on its Settings tab, with a warning; even then it
 never reaches the host's other services. Plugins and themes for other apps are uploaded through Files.
 

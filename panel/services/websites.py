@@ -688,6 +688,11 @@ def tunnel_quadlet(proxy, ids, image=None):
     return "\n".join(lines + _tail())
 
 
+# Two threads per connection (one each way) at the proxy's connection cap (websites_egress.MAX_CONNECTIONS), its main
+# thread and a margin: the old 64 fell one short at the cap, and the proxy's accept loop then died for want of a thread.
+EGRESS_TASKS = 2 * 32 + 8
+
+
 def egress_unit(site, hosts):
     """The site's egress proxy user unit: CONNECT to `hosts` on 443 only, listening on 127.0.0.1."""
     from panel.services import websites_catalog as _wc
@@ -698,8 +703,8 @@ def egress_unit(site, hosts):
     return ("# Written by linuxgsm-panel: this website's only way out (CONNECT to the listed hosts on 443).\n"
             "[Unit]\nDescription=linuxgsm-panel website egress proxy\n\n[Service]\n"
             "ExecStart=/usr/bin/python3 -I %%h/%s/egress_proxy.py %d %s\nRestart=on-failure\nRestartSec=10\n"
-            "MemoryMax=64M\nTasksMax=64\n\n[Install]\nWantedBy=default.target\n"
-            % (HOME_DIR, port, " ".join(sorted(set(hosts)))))
+            "MemoryMax=64M\nTasksMax=%d\n\n[Install]\nWantedBy=default.target\n"
+            % (HOME_DIR, port, " ".join(sorted(set(hosts))), EGRESS_TASKS))
 
 
 # WordPress's scheduled tasks (wp-cron). Its recipe's wp-config sets DISABLE_WP_CRON, so no visitor's request

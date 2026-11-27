@@ -51,6 +51,11 @@ C1  A plain, PHP or Node.js site being added shows its setup's steps as an app i
 C2  A new Node.js app that waits for its files says so under its header, with the way to upload them, and its main
     button builds and starts it (it showed Stopped and a Start that could only fail).
 
+WP3 The egress proxy (WordPress's only way to WordPress.org): each validated address is tried in turn, bytes
+    sent after the CONNECT head are passed on, every refusal and failed connection is a line in its journal (the
+    host and the reason only), a thread it cannot start costs one connection and not the proxy, and its unit's
+    task limit fits its connection cap.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -891,6 +896,82 @@ def _c2_waiting(st):
        (False, "Start"))
 
 
+# ── WP3. The egress proxy ─────────────────────────────────────────────────────────────────────────
+def _wp3_egress(st):
+    import socket as _so315
+    from panel.services import websites_egress as _eg315
+    listener = _so315.socket(_so315.AF_INET, _so315.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    port = listener.getsockname()[1]
+    said = []
+    _p9_patch(_eg315, "say", said.append)
+    try:
+        conn = _eg315.connect(["127.0.0.3", "127.0.0.1"], port)
+        ok = conn is not None and conn.getpeername()[0] == "127.0.0.1"
+        if conn is not None:
+            conn.close()
+        none = _eg315.connect(["127.0.0.3"], port)
+    finally:
+        listener.close()
+    eq("WP3 (websites_egress.connect): the first validated address that does not answer is passed over for the next "
+       "(the proxy tried only the first), only those addresses tried, and each failure is a journal line",
+       (ok, none, len(said) >= 2, all("127.0.0.3" in x for x in said)), (True, None, True, True))
+    _wp3_handle(st, _eg315)
+
+
+def _recv315(sock):
+    """Up to 64 bytes from `sock`, or b"" when none come within its timeout (a check then fails by its name)."""
+    import socket as _so315
+    try:
+        return sock.recv(64)
+    except (_so315.timeout, OSError):
+        return b""
+
+
+def _wp3_handle(st, eg):
+    import socket as _so315
+    import threading as _th315
+    client, proxy_side = _so315.socketpair()
+    upstream, far = _so315.socketpair()
+    said = []
+    _p9_patch(eg, "say", said.append)
+    _p9_patch(eg, "resolve", lambda host, port, getaddrinfo=None: ["192.0.2.10"])
+    _p9_patch(eg, "connect", lambda addrs, port=443: upstream)
+    slots = _th315.BoundedSemaphore(1)
+    slots.acquire()
+    t = _th315.Thread(target=eg.handle, args=(proxy_side, frozenset(["api.wordpress.org"]), slots), daemon=True)
+    t.start()
+    client.sendall(b"CONNECT api.wordpress.org:443 HTTP/1.1\r\nHost: api.wordpress.org:443\r\n\r\nHELLO-TLS")
+    client.settimeout(5)
+    far.settimeout(5)
+    reply, early = _recv315(client), _recv315(far)
+    client.close()
+    far.close()
+    t.join(5)
+    eq("WP3 (websites_egress.handle): the CONNECT is answered 200 and the bytes the client sent after its head (a TLS "
+       "hello) reach the upstream (they were dropped)", (reply, early), (b"HTTP/1.1 200 Connection established\r\n\r\n",
+                                                                         b"HELLO-TLS"))
+    client, proxy_side = _so315.socketpair()
+    slots.acquire(timeout=5)
+    t = _th315.Thread(target=eg.handle, args=(proxy_side, frozenset(["api.wordpress.org"]), slots), daemon=True)
+    t.start()
+    client.sendall(b"CONNECT evil.example:443 HTTP/1.1\r\nProxy-Authorization: Basic c2VjcmV0\r\n\r\n")
+    client.settimeout(5)
+    refused = _recv315(client)
+    client.close()
+    t.join(5)
+    eq("WP3 (a host not on the list): refused 403, and the journal says which host and why, never a header",
+       (refused.startswith(b"HTTP/1.1 403"), [x for x in said if "evil.example" in x],
+        any("c2VjcmV0" in x or "Basic" in x for x in said)),
+       (True, ["refused CONNECT evil.example:443: not an allowed host on 443"], False))
+    site = _NS315(port=20001)
+    unit = _ws315.egress_unit(site, ["api.wordpress.org"])
+    eq("WP3 (the egress unit): its task limit fits two threads per connection at the cap, the main thread and a margin "
+       "(64 fell one short, and the accept loop died)", ("TasksMax=%d" % _ws315.EGRESS_TASKS in unit,
+                                                         _ws315.EGRESS_TASKS >= 2 * eg.MAX_CONNECTIONS + 1), (True, True))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -930,7 +1011,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text, _b5_database, _m7_note, _c4_no_db, _c5_hosts, _b10_admin, _m2_limits, _wp1_loopback, _c1_steps, _c2_waiting, _wp3_egress):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:
