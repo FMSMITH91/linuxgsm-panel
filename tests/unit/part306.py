@@ -34,6 +34,7 @@ F30. The page cache's proxy is checked as the proxy's user where that user can r
      build folder and was never installed), each failure has its own sentence, and the build's images are removed.
 F31. Turning the object cache on or off starts or removes it beside the running site, which is not restarted.
 M12. A page cache that waits for its proxy says whether that proxy is being built or why its build failed.
+M13. A failed undo's error never also says every step was undone. M14: the step whose undo failed shows as not undone.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -368,10 +369,29 @@ def _f25_undo(st):
         "ws%d_app" % sid in (getattr(site, "state_reason", "") or ""), [r.name for r in rows],
         "NOT undone" in audit.detail and "still on the database server" in audit.detail),
        ("failed", True, True, ["ws%d_app" % sid], True))
+    _m13_m14_left(site, sid)
     site2, sid2 = _f25_app_job(st, "p306-wpgone", drop_ok=True)
     eq("F25 (the app job): when every step is undone the site's row goes and the audit row says undone (control)",
        (site2 is None, _GDB306.query.filter_by(website_id=sid2).count(), _p9_audit("website_app_install").detail.endswith(
            "; undone")), (True, 0, True))
+    error2 = (_wapps306._JOBS.get(sid2) or {}).get("error", "")
+    eq("M13 (the app job): when every step was undone the job's error says so, once (control)",
+       (error2.count("Every step was undone."), "NOT undone" in error2), (1, False))
+
+
+def _m13_m14_left(site, sid):
+    error = (_wapps306._JOBS.get(sid) or {}).get("error", "")
+    eq("M13 (the app job): a failed undo's error says NOT undone and never also \"Every step was undone\" (the "
+       "failed step's own sentence said it before the undo ran)", ("NOT undone" in error, "Every step was undone" in error),
+       (True, False))
+    steps = {s["key"]: s["state"] for s in _wapps306.install_json(site)["steps"]}
+    db_step = next((k for k in steps if k.startswith("create-database")), "")
+    failed = [k for k, v in steps.items() if v == "failed"]
+    order = list(steps)
+    before = order[:order.index(failed[0])] if failed else []
+    eq("M14 (GET /api/websites/<id>, install block): the step whose undo failed shows as not undone and every other "
+       "step before the failed one as undone (all showed undone, the database left behind included)",
+       (steps.get(db_step), sorted({steps[k] for k in before if k != db_step}), len(failed)), ("left", ["undone"], 1))
 
 
 # ── F26. The containers that join the site's network namespace ─────────────────────────────────

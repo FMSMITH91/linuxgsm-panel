@@ -105,5 +105,6 @@
   "Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; the websites' page caches start when it is done.": "Enregistré. Le proxy web avec le cache de pages est en cours de compilation sur l'hôte, ce qui prend quelques minutes ; les caches de pages des sites web démarrent quand c'est terminé.",
   "Saved. The page cache starts once this host's web proxy has it: a superadmin turns on \"Page cache in the web proxy\" in the Websites security settings.": "Enregistré. Le cache de pages démarre dès que le proxy web de cet hôte l'a : un superadministrateur active « Cache de pages dans le proxy web » dans les paramètres de sécurité des sites web.",
   "Saved. The page cache starts once this host's web proxy with the page cache is built, which takes a few minutes.": "Enregistré. Le cache de pages démarre dès que le proxy web de cet hôte avec le cache de pages est construit, ce qui prend quelques minutes.",
-  "Saved. The page cache starts once this host's web proxy has it, but its build failed: {why}": "Enregistré. Le cache de pages démarre dès que le proxy web de cet hôte l'a, mais sa construction a échoué : {why}"
+  "Saved. The page cache starts once this host's web proxy has it, but its build failed: {why}": "Enregistré. Le cache de pages démarre dès que le proxy web de cet hôte l'a, mais sa construction a échoué : {why}",
+  "Every step was undone.": "Toutes les étapes ont été annulées."
 }

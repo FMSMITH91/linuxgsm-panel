@@ -121,8 +121,9 @@
 
   // The steps of an app install or a site being set up: one row each, with its state.
   var STEP_ICON = {done: 'check-circle-fill text-success', running: 'arrow-repeat ws-spin', failed: 'x-circle-fill text-danger',
-    undone: 'arrow-counterclockwise text-secondary', pending: 'circle text-secondary'};
-  var STEP_WORD = {done: 'Done', running: 'Working…', failed: 'Failed', undone: 'Undone', pending: 'Waiting'};
+    undone: 'arrow-counterclockwise text-secondary', left: 'exclamation-triangle-fill text-warning', pending: 'circle text-secondary'};
+  // left: a step whose undo failed after the install failed (it is still in place; deleting the site tries again).
+  var STEP_WORD = {done: 'Done', running: 'Working…', failed: 'Failed', undone: 'Undone', left: 'Not undone', pending: 'Waiting'};
   // The recipe engine's step types (and the setup of a plain site), in plain words; a step the page
   // does not know shows the label the server sent.
   var STEP_LABEL = {account: 'Create the site account', database: 'Create the database',
