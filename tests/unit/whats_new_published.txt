@@ -965,3 +965,4 @@ e39699e0 Panel updates wait for the secret and dependency scans.
 012055d0 B3's country database updates itself every month.
 5a5f18f1 History goes back a year.
 1b49a096 Add-on downloads go only to public addresses.
+46bdb6ce Website pages reached through WordPress's pretty links load again.
