@@ -151,7 +151,7 @@
   "No game servers are configured yet.": "Todavía no hay servidores de juego configurados.",
   "No game servers have been shared with you yet.": "Todavía no se ha compartido contigo ningún servidor de juego.",
   "If you expected to see some, ask an administrator to give your group access.": "Si esperabas ver alguno, pide a un administrador que dé acceso a tu grupo.",
-  "No history yet — a sample is recorded every minute. Check back shortly.": "Aún no hay historial: se registra una muestra cada minuto. Vuelve en un momento.",
+  "No history in this range yet — a sample is recorded every minute. Check back shortly.": "Aún no hay historial en este intervalo: se registra una muestra cada minuto. Vuelve en un momento.",
   "No hosts configured yet.": "Aún no hay hosts configurados.",
   "No players connected.": "No hay jugadores conectados.",
   "No reason was recorded — most likely a panel restart interrupted it. Trying again is the quickest way to find out.": "No se registró ningún motivo: lo más probable es que un reinicio del panel la interrumpiera. Reintentar es la forma más rápida de averiguarlo.",

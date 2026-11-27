@@ -530,7 +530,8 @@ class _Js261:
 _PUSH_POSTS261 = {"/account/push/subscribe", "/account/telegram/link"}
 # Step-up routes no page script or form sends a changing request to (grepped: no URL text, no url_for), kept
 # as API routes. Taking one off when a page starts to call it is checked below.
-_NO_PAGE261 = {"/api/remote/<int:remote_id>/firewall/close": "the Firewall tab deletes a rule by number instead",
+_NO_PAGE261 = {
+               "/api/remote/<int:remote_id>/firewall/close": "the Firewall tab deletes a rule by number instead",
                "/api/remote/<int:remote_id>/game-port/<int:port>/open": "Sync ports opens a server's ports",
                "/api/remote/<int:remote_id>/run-updates": "the host page runs os-update/start and polls it",
                "/api/server-management/os-update-run": "the panel host's updates run as a host's os-update",

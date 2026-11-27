@@ -103,7 +103,7 @@ def run_loop(app):
         _WAKE.clear()
         spawn, why = spawn_config(app)
         if spawn is None:
-            _set_status("off" if why is None else "waiting", error=why or "")
+            _set_status("off" if why is None else "waiting", error=why or "", detail=_STATE.pop("wait_detail", ""))
             _WAKE.wait(None if why is None else RETRY_SECONDS)
             continue
         ended_ok = run_once(app, spawn)
@@ -122,13 +122,88 @@ def spawn_config(app):
         return None, None
     ts_ips = tailscale_ips()
     choice = s["bind"] or sc.default_bind(bool(ts_ips))
-    binds = sc.bind_addresses(choice, ts_ips, sc.host_has_ipv6())
+    if choice == sc.BIND_ADDRESS:
+        why = address_wait(app, s["address"])
+        if why:
+            return None, why
+    binds = sc.bind_addresses(choice, ts_ips, sc.host_has_ipv6(), s["address"])
     if not binds:
         return None, "Waiting for this host's Tailscale address."
     key = sc.ensure_host_key(update_config, load_config, encrypt_secret, decrypt_secret)
     return {"ok": True, "binds": binds, "port": s["port"], "password": s["password"],
             "cap_mb": s["cap_mb"], "idle_min": s["idle_min"], "absolute_h": s["absolute_h"],
             "absolute_grace_min": sc.ABSOLUTE_GRACE_MINUTES, "host_key": key, "choice": choice}, None
+
+
+# ── "A specific address" ───────────────────────────────────────────────────────────────────────
+# The service listens on that address alone. When the host no longer has it (a DHCP lease moved, an
+# interface went down), the service stops and waits for it, saying so on the card and in the audit
+# log; it never listens on any other address instead.
+ADDRESS_GONE = ("The chosen address is not on this host now, so the SFTP service has stopped. It starts again "
+                "when the address is back, and never listens on another address instead.")
+ADDRESS_UNREAD = "This host's addresses could not be read; the SFTP service waits to check its address."
+ADDRESS_CHECK_SECONDS = RETRY_SECONDS
+
+
+def host_address_rows():
+    """List this host's addresses as `ip -o addr show` lists them in the C locale (ufweval); None when unread."""
+    from panel.ops.ssh_manager import ufweval
+    return ufweval.local_addrs()
+
+
+def address_present(address):
+    """True when this host has `address` now, False when it does not, None when its addresses were not read."""
+    rows = host_address_rows()
+    if rows is None:
+        return None
+    return any(str(addr) == address for _iface, addr, _scope in rows)
+
+
+def address_wait(app, address):
+    """Why the service waits instead of listening on `address`, or None when the host has it.
+
+    Its going and its coming back are each audited once (_STATE["address_gone"] holds the address
+    that went), with the address in the card's detail line.
+    """
+    present = address_present(address) if address else False
+    if present is None:
+        return ADDRESS_UNREAD
+    gone = _STATE.get("address_gone")
+    if present:
+        _STATE.pop("address_gone", None)
+        if gone == address:
+            _address_audit(app, "sftp_address_back", "SFTP service starting again: %s is an address of this "
+                                                     "host again" % address)
+        return None
+    _STATE["wait_detail"] = address
+    if gone != address:
+        _STATE["address_gone"] = address
+        _address_audit(app, "sftp_address_gone", "SFTP service stopped: %s is no longer an address of this "
+                                                 "host. It waits for the address and listens nowhere else."
+                       % (address or "(none chosen)"))
+    return ADDRESS_GONE
+
+
+def _address_audit(app, action, detail):
+    """One audit row about the service's address, by the panel itself."""
+    try:
+        with app.app_context():
+            _sftp_audit("unknown", None, action, target="SFTP", detail=detail, actor="system")
+    except Exception:  # noqa: BLE001 - a lost audit row must not stop the service loop
+        _log.exception("SFTP address audit row failed")
+
+
+def _watch_address(address, ended):
+    """While the service runs on `address`, stop it once the host no longer has that address.
+
+    Asked every ADDRESS_CHECK_SECONDS until `ended` is set. An unread address list changes nothing.
+    The loop then waits in address_wait, which audits the address's going.
+    """
+    while not ended.wait(ADDRESS_CHECK_SECONDS):
+        if address_present(address) is False:
+            _set_status("waiting", error=ADDRESS_GONE, detail=address)
+            _stop_child()
+            return
 
 
 def tailscale_ips():
@@ -160,9 +235,14 @@ def run_once(app, spawn, argv=None):
     theirs.close()
     _STATE.update(proc=proc, spawn=spawn)
     listening = False
+    ended = threading.Event()
+    if spawn.get("choice") == sc.BIND_ADDRESS:
+        threading.Thread(target=_watch_address, args=(spawn["binds"][0], ended), name="sftp-address",
+                         daemon=True).start()
     try:
         listening = serve(app, ours, spawn)
     finally:
+        ended.set()
         ours.close()
         _stop_child()
         _STATE["proc"] = None
@@ -575,32 +655,72 @@ def editable(user):
     return {name: servers[sid] for name, sid in sc.folder_names((gs.id, gs.name) for gs in servers.values()).items()}
 
 
+def site_folders(user, taken=()):
+    """{folder name: Website} of the websites `user` may edit files on (EDIT_WEBSITE_FILES on the site).
+
+    A site's folder is its name; one that a game server's folder already has gets " (website)" after
+    it. Each maps to the site's document root, as the site's own account (describe_site).
+    """
+    from panel.security.auth import EDIT_WEBSITE_FILES
+    from panel.services import websites_access
+    out = {}
+    for site in websites_access.visible_sites(user, EDIT_WEBSITE_FILES).all():
+        name = site.name if site.name not in taken else "%s (website)" % site.name
+        out[name] = site
+    return out
+
+
 def _h_servers(_app, req, _spawn):
     user, why = _session_user(req)
     if user is None:
         return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
-    return {"ok": True, "folders": sorted(editable(user))}
+    servers = editable(user)
+    return {"ok": True, "folders": sorted(servers) + sorted(site_folders(user, servers))}
 
 
-def _h_authz(_app, req, _spawn):
+def _site_authz(user, folder, write, taken):
+    """_h_authz's answer for a website's folder, or None when `folder` names none of the user's sites."""
+    site = site_folders(user, taken).get(folder)
+    if site is None:
+        return None
+    if not _host_claim(site.remote_id):
+        return {"ok": False, "busy": True, "reason": HOST_BUSY}
+    try:
+        from panel.routes._shared import game_account_write_refusal
+        why = game_account_write_refusal(site.remote, site.account, reading=not write)
+    finally:
+        _host_release(site.remote_id)
+    if why:
+        return {"ok": False, "reason": str(why)}
+    return dict(ok=True, **describe_site(site))
+
+
+def _server_authz(user, gs, write):
+    """_h_authz's answer for a game server's folder."""
     from panel.security.auth import VIEW_FILES, get_user_permissions
-    user, why = _session_user(req)
-    if user is None:
-        return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
-    gs = editable(user).get(str(req.get("folder") or ""))
-    if gs is None:
-        return {"ok": False, "gone": True}
-    if not req.get("write") and not (user.is_superadmin or VIEW_FILES in get_user_permissions(user)):
+    if not write and not (user.is_superadmin or VIEW_FILES in get_user_permissions(user)):
         return {"ok": False, "reason": "Reading files needs the view_files permission too."}
     if not _host_claim(gs.remote_id):
         return {"ok": False, "busy": True, "reason": HOST_BUSY}
     try:
-        refusal = account_refusal(gs, bool(req.get("write")))
+        refusal = account_refusal(gs, write)
     finally:
         _host_release(gs.remote_id)
     if refusal:
         return {"ok": False, "reason": refusal}
     return dict(ok=True, **describe(gs))
+
+
+def _h_authz(_app, req, _spawn):
+    user, why = _session_user(req)
+    if user is None:
+        return {"ok": False, "reason": "Your SFTP session has ended (%s)." % why}
+    servers = editable(user)
+    folder, write = str(req.get("folder") or ""), bool(req.get("write"))
+    gs = servers.get(folder)
+    if gs is None:
+        return _site_authz(user, folder, write, servers) or {"ok": False, "gone": True}
+    return _server_authz(user, gs, write)
 
 
 def _host_claim(rid):
@@ -646,6 +766,44 @@ def describe(gs):
             "home": home_of(gs), "transport": transport, "remote_id": gs.remote_id}
 
 
+def describe_site(site):
+    """How the service reaches a website's files: its account, its document root as the home, the transport.
+
+    The sid is "w<id>", never a game server's number, so neither the service's connection cache nor an
+    audit row can mistake one for the other.
+    """
+    from panel.ops.ssh_manager import _core
+    remote = site.remote
+    if _core.is_local_server(remote):
+        transport = "local"
+    elif getattr(remote, "auth_method", "") == "tailscale":
+        transport = "tailscale"
+    else:
+        transport = "paramiko"
+    return {"sid": "w%d" % site.id, "name": site.name, "user": site.account, "selfname": site.account,
+            "home": "/home/%s/site/html" % site.account, "transport": transport, "remote_id": site.remote_id}
+
+
+# An SFTP change to a website's files, as the web file manager's audit actions name it.
+_SITE_AUDIT = {"upload_file": "website_files_upload", "delete_file": "website_files_delete",
+               "rename_file": "website_files_rename", "create_folder": "website_files_mkdir",
+               "edit_file": "website_files_save"}
+
+
+def _site_audit(ip, user, req):
+    from panel.db.models import Website, db
+    from panel.routes.server_files import _audit_safe
+    from panel.routes.websites import audit_as
+    sid = str(req.get("sid") or "")
+    site = db.session.get(Website, int(sid[1:])) if sid[1:].isdecimal() else None
+    if site is None:
+        return {"ok": False}
+    with _as_request(ip):
+        audit_as(user, site, _SITE_AUDIT[req["action"]], _audit_safe(str(req.get("detail") or ""), 2000),
+                 bool(req.get("success")))
+    return {"ok": True}
+
+
 def _h_audit(_app, req, _spawn):
     from panel.db.models import GameServer, User, db
     from panel.routes.server_files import _audit_safe
@@ -653,6 +811,8 @@ def _h_audit(_app, req, _spawn):
     if action not in AUDIT_ACTIONS:
         return {"ok": False}
     user = db.session.get(User, int(req.get("uid") or 0))
+    if user is not None and str(req.get("sid") or "").startswith("w"):
+        return _site_audit(_ip(req), user, req)
     gs = db.session.get(GameServer, int(req.get("sid") or 0))
     if user is None or gs is None:
         return {"ok": False}

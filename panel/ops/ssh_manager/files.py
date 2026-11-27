@@ -4,6 +4,8 @@ Part of the SSH connection manager for remote LinuxGSM servers, which also suppo
 execution for running on the panel's own machine (see the package docstring for how names
 resolve across its submodules).
 """
+import contextlib
+import contextvars
 import re
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 from panel.core import i18n, terminal
@@ -77,6 +79,49 @@ def _parse_cfg(text):
 # security rule is how one of them stops being the rule.
 
 
+# A folder of the account's home every file operation of this context stays in (confined_to), "" for
+# the whole home. A website's file manager is held to the site's document root this way: the same
+# lexical and host-side checks, one level further in.
+_CONFINE = contextvars.ContextVar("lgsm_files_confine", default="")
+
+
+@contextlib.contextmanager
+def confined_to(rel):
+    """Hold every file operation in the block to the folder `rel` of the account's home.
+
+    _safe_abspath refuses a path outside it by its text, and the host-side guards (_guarded,
+    _protected_resolved, the SSH download) by where it resolves, a symbolic link included, as they
+    already do for the home. Removing or renaming the folder itself is refused as the home's is.
+    """
+    sub = _pp.normpath(str(rel or "")).strip("/")
+    if not sub or sub == "." or sub.startswith("..") or not _is_text(sub):
+        raise ValueError("not a folder inside the home: %r" % (rel,))
+    token = _CONFINE.set(sub)
+    try:
+        yield
+    finally:
+        _CONFINE.reset(token)
+
+
+def _confine_root(user):
+    """The absolute folder this context's file operations stay in: the confined folder, else the home."""
+    sub = _CONFINE.get()
+    return f"/home/{user}/{sub}" if sub else f"/home/{user}"
+
+
+def _confine_guard(user, var):
+    """Shell refusing (exit 9, _OUTSIDE_HOME) when "$var" resolves outside the confined folder ("" when none).
+
+    The folder is resolved on the host as the home is (_r21b_real_home's sentinel form), and the
+    literal form is accepted too: a path realpath resolved never passes through a link.
+    """
+    if not _CONFINE.get():
+        return ""
+    rq = _core._quote(_confine_root(user))
+    return (f"cr=$(cd -P -- {rq} 2>/dev/null && pwd -P && printf x) && cr=${{cr%?x}} || cr={rq}; "
+            f'case "${var}" in {rq}|{rq}/*|"$cr"|"$cr"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
+
+
 def _safe_abspath(user, relpath):
     """Resolve a user-supplied relative path under /home/<user>, rejecting any traversal outside it.
 
@@ -96,7 +141,8 @@ def _safe_abspath(user, relpath):
         # save then raised while encoding the command: a generic 500 and no audit row.
         return None
     ap = _pp.normpath(_pp.join(home, rel.lstrip("/")))
-    if ap == home or ap.startswith(home + "/"):
+    root = _confine_root(user)
+    if ap == root or ap.startswith(root + "/"):
         return ap
     return None
 
@@ -225,7 +271,8 @@ def _guarded(user, abspath, inner):
     aq = _core._quote(abspath)
     return (_r21b_real_home(hq)
             + f"p=$(realpath -m {aq} 2>/dev/null && printf x) && p=${{p%?x}} || p={aq}; "
-            f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + inner)
+            f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
+            + _confine_guard(user, "p") + inner)
 
 
 def _guarded_write(user, abspath, inner):
@@ -1322,7 +1369,7 @@ def _protected_resolved(user, ap, selfname, inner):
             f"&& d=${{d%?x}} || {{ echo '{_NO_SUCH_DIR}' >&2; exit 1; }}; "
             f't="$d"/{_core._quote(_pp.basename(ap))}; '
             f'case "$t" in {hq}/*) r=${{t#{hq}/}} ;; "$h"/*) r=${{t#"$h"/}} ;; '
-            f'*) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
+            f'*) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ' + _confine_guard(user, "t") +
             f'case "$r" in lgsm|lgsm/*|{names}) echo {_PROTECTED_MARK}; exit 8 ;; esac; '
             + inner)
 
@@ -1453,7 +1500,7 @@ def read_file(server, user, relpath, max_bytes=1048576):
         f"1) echo __BINARY__;; *) echo __UNREADABLE__;; esac"
     )
     out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
-    return _read_file_reply(out, ap, _rc)
+    return _read_file_reply(out, _rc)
 
 
 # What read_file's script prints INSTEAD of a frame, and what each one tells the editor.
@@ -1465,7 +1512,7 @@ _READ_REFUSALS = {
 }
 
 
-def _decode_read_frame(framed, ap):
+def _decode_read_frame(framed):
     """The (content, error) for the base64 text between read_file's sentinels."""
     if not framed:
         return "", None          # a genuinely empty file, framed and confirmed
@@ -1475,11 +1522,12 @@ def _decode_read_frame(framed, ap):
         # UTF-8: grep -qI calls it text, and the editor still has to show something.
         return _b64.b64decode(framed, validate=True).decode("utf-8", "replace"), None
     except Exception:
-        _core._log.warning("read_file: framed body for %s was not valid base64", ap)
+        # No path in the line: it is the browser's text (OWASP Logging Cheat Sheet, "Data to exclude").
+        _core._log.warning("read_file: the framed body was not valid base64")
         return None, "Could not read that file — the host did not answer. Nothing has been changed."
 
 
-def _read_file_reply(out, ap, _rc):
+def _read_file_reply(out, _rc):
     """Turn read_file's script output into (content, error) — see read_file."""
     if _r12b_outside_home(out):
         return None, "Invalid path"
@@ -1492,7 +1540,7 @@ def _read_file_reply(out, ap, _rc):
     i = body.find(_READ_BEGIN)
     j = body.rfind(_READ_END)
     if i != -1 and j > i:
-        return _decode_read_frame(body[i + len(_READ_BEGIN):j].strip(), ap)
+        return _decode_read_frame(body[i + len(_READ_BEGIN):j].strip())
     # No frame, and none of the three sentinels above: the read never got as far as `cat`. This
     # used to `return body, None` — i.e. "" with no error — and that is destructive, not merely
     # wrong. run_command does not raise on the local or Tailscale transports; it returns
@@ -1503,7 +1551,7 @@ def _read_file_reply(out, ap, _rc):
     # The sentinel framing already distinguishes "got as far as cat" from "did not"; it just has to
     # say so. (The repo's own "empty is not a measurement", with a destructive consequence rather
     # than a merely wrong readout.)
-    _core._log.warning("read_file: no sentinel frame for %s (rc=%s) — reporting a failed read", ap, _rc)
+    _core._log.warning("read_file: no sentinel frame (rc=%s) — reporting a failed read", _rc)
     return None, "Could not read that file — the host did not answer. Nothing has been changed."
 
 
@@ -1802,8 +1850,7 @@ def _delete_refusal(user, relpath, selfname, ap):
     folders above it are the host's to refuse (_console_guard), because only the host can say
     whether the server is running: a stopped server's are deleted like any other.
     """
-    home = f"/home/{user}"
-    if ap is None or ap == home or not (relpath or "").strip("/"):
+    if ap is None or ap in (f"/home/{user}", _confine_root(user)) or not (relpath or "").strip("/"):
         return DELETE_REFUSED
     if _is_protected_path(relpath, selfname):
         return DELETE_PROTECTED
@@ -1986,7 +2033,7 @@ def rename_refusal(user, relpath, new_name, selfname=None):
     refuse, while the server runs (_console_guard).
     """
     ap = _safe_abspath(user, relpath) if isinstance(relpath, str) else None
-    if ap is None or ap == f"/home/{user}" or not relpath.strip("/") or not _is_text(relpath):
+    if ap is None or ap in (f"/home/{user}", _confine_root(user)) or not relpath.strip("/") or not _is_text(relpath):
         return RENAME_REFUSED
     return (rename_name_problem(new_name)
             or _rename_ends_refusal(user, relpath, ap, new_name, selfname))
@@ -2442,7 +2489,8 @@ def _remote_read_command(user, as_tar):
     # -- everywhere, so a name can never be read as an option.
     body = (f"rel=$(cat; printf x); rel=${{rel%x}}; home={hq}; " + _r21b_real_home(hq)
             + 'p=$(realpath -m "$home/$rel" 2>/dev/null && printf x) && p=${p%?x} || p="$home/$rel"; '
-            f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
+            f'case "$p" in {hq}|{hq}/*|"$h"|"$h"/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; '
+            + _confine_guard(user, "p"))
     body += ('d=${p%/*}; tar czf - -C "${d:-/}" -- "${p##*/}"' if as_tar
              else 'cat -- "$p"')
     return _core.game_user_cmd(user, body)

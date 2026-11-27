@@ -72,17 +72,20 @@ paths-ignore:
 #   geoip._get                         GET on https://db-ip.com (its download page) and
 #                                      https://download.db-ip.com (the month's country database the page
 #                                      links); _allowed runs at the call (https, those two hosts, port 443,
-#                                      no userinfo), and a redirect is followed only to those hosts. Only
+#                                      no userinfo), and the opener's handlers are public_https's. Only
 #                                      while outside_dbip is not off, for a B3 add-on set to offline
 #                                      geolocation. A size cap, a timeout; the file is kept only when its
 #                                      SHA1 is the page's and it is an MMDB file.
 #   addons_bluemap._get                GET on https://piston-meta.mojang.com only (Mojang's fixed version
 #                                      list, then the version detail URL the list names, matched to
 #                                      /v1/packages/<sha1>/<id>.json); _allowed runs at the call (https,
-#                                      that host, port 443, no userinfo), and a redirect is followed only
-#                                      to that host. Only on a BlueMap install or update whose admin
+#                                      that host, port 443, no userinfo), and the opener's handlers are
+#                                      public_https's. Only on a BlueMap install or update whose admin
 #                                      accepted Mojang's EULA. A size cap, a timeout; the detail is used
 #                                      only when its SHA-1 is the list's.
+#   public_https.handlers              The handlers geoip._get and addons_bluemap._get build their opener
+#                                      with: every redirect refused, no proxy, and a connect only when every
+#                                      address the host name resolves to is public (webpush._connect_checked).
 #   webpush._post                      POST (http.client, a _PushConnection) of an encrypted web-push
 #                                      message to the endpoint a signed-in user's browser subscribed
 #                                      with: https only, a host that parse_endpoint matched against the
@@ -103,9 +106,14 @@ paths-ignore:
 #                                      panel's own host), tunnel._paramiko (an SSH direct-tcpip channel)
 #                                      and tunnel._ssh_cli_argv (ssh -W, Tailscale hosts). Not HTTP and
 #                                      sending nothing: hosts._tcp_reachable, the SSH-address reach test.
+#   websites_egress.handle             A website's egress proxy (run as the site's own account, not by
+#                                      the panel): a TCP connect to port 443 of a host on its fixed
+#                                      list only, after every resolved address passed address_ok
+#                                      (public unicast; no private, mapped or NAT64); TLS passes
+#                                      through untouched, the proxy writes no request of its own.
 # The three HTTP requests in notifications and the ones in game_icons, modrinth, steam_workshop,
-# breached_passwords and webpush refuse every redirect; geoip follows one only to db-ip.com's two hosts,
-# addons_bluemap only to piston-meta.mojang.com.
+# breached_passwords, webpush, geoip and addons_bluemap refuse every redirect (geoip and addons_bluemap, like
+# webpush, connect only when every address the name resolves to is public: services/public_https.py).
 # The three others use urlopen, which follows one, but only from GitHub's own fixed hosts. Of the fourteen, only webpush takes a host and path from a
 # request (the add-on page proxy above takes a path, never a host), and only one parse_endpoint accepts as a known push service. The ntfy server is the one host
 # an admin chooses: it is stored in config.json and read back later, a flow neither SSRF query traces,

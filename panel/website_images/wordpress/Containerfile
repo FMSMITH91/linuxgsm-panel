@@ -1,0 +1,24 @@
+# The WordPress websites' image for linuxgsm-panel: the official WordPress image (Apache) the signed catalog
+# pins for one PHP version, with Debian's security updates applied. Built on the host, as the site's own
+# account, by rootless Podman (panel/services/websites.py install_sh writes this file into the site's home
+# and runs `podman build` with the build argument below); CI builds this copy and scans the result.
+#
+# Why built and not pulled: the official images are rebuilt some days after Debian publishes a fix, and
+# until then the pinned image carries it unfixed (OWASP Docker Security Cheat Sheet, rule 0: keep images
+# up to date). The upgrade below takes every published fix at build time.
+#
+# What the build trusts: the base image, by its digest, and Debian's packages, each checked by apt against
+# Debian's signing keys. The package lists are removed in the same layer.
+#
+# The value has no default here: it comes from the signed add-on catalog (its source is
+# panel/addon_images/catalog.json, sites.wordpress.php.<version>.image), passed as --build-arg by the
+# panel and by CI's image scan. So a new WordPress image changes no file a panel runs.
+#   BASE_IMAGE  the catalog's sites.wordpress.php.<version>.image: wordpress:<version>-php<x.y>-apache by digest
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+LABEL org.opencontainers.image.title="WordPress for linuxgsm-panel websites"
+# The base image runs as root and Apache drops to www-data; the site's unit sets its own account's user.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*

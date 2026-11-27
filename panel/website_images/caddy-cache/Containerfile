@@ -1,0 +1,35 @@
+# The websites' web proxy with the page cache module: Caddy built by xcaddy with
+# github.com/caddyserver/cache-handler at the exact version the signed catalog names. The root helper
+# builds it on the host (website-proxy-install-cache) from its own copy of this file and takes the binary
+# out; CI builds and scans this copy. Every value comes from the catalog (sites.caddy_cache): no ARG has a
+# default (the one dependency floor below only raises a minimum version; it pins nothing). Go checks every module
+# it downloads against the checksum database (GOSUMDB) before using it.
+ARG BUILDER_IMAGE
+ARG BASE_IMAGE
+FROM ${BUILDER_IMAGE} AS build
+# PANEL_CADDY_VERSION, not CADDY_VERSION: the builder image sets ENV CADDY_VERSION (v2.x.y), and an ENV wins over
+# an ARG of the same name, which made "vv2.x.y". XCADDY_SETCAP=0: the builder's default (1) runs setcap on the
+# binary, which a build with every capability dropped may not do; the proxy's unit grants the bind right itself.
+# `env -u` clears what would let a module skip the checksum database or the proxy (GOPRIVATE, GONOSUMDB, GONOPROXY,
+# GOINSECURE), whatever the builder image sets: unset, Go checks every module. An empty GONOSUMDB is not enough, as
+# Go then falls back to GOPRIVATE. The module list is read from a file, not a pipe, so either command failing fails
+# the build without relying on the shell's pipefail.
+# golang.org/x/net/html at v0.62.0 or later: Caddy 2.11.9 asks for v0.60.0, whose HTML parser has a denial of service
+# (CVE-2026-78661) and is linked into the binary. Go builds with the highest version any module asks for, so this
+# only raises the floor: a later Caddy that needs a newer x/net still gets its own. It is a no-op once the catalog's
+# Caddy asks for v0.62.0 or later itself, and can then go.
+ARG PANEL_CADDY_VERSION
+ARG CACHE_MODULE
+ARG CACHE_VERSION
+ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org XCADDY_SETCAP=0
+RUN env -u GOPRIVATE -u GONOSUMDB -u GONOPROXY -u GOINSECURE \
+        xcaddy build "v${PANEL_CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" \
+        --with golang.org/x/net/html@v0.62.0 --output /usr/bin/caddy-cache \
+    && /usr/bin/caddy-cache list-modules > /tmp/caddy-modules \
+    && grep -qx "http.handlers.cache" /tmp/caddy-modules
+
+FROM ${BASE_IMAGE}
+COPY --from=build /usr/bin/caddy-cache /usr/bin/caddy
+USER 65534:65534
+ENTRYPOINT ["/usr/bin/caddy"]
+CMD ["version"]

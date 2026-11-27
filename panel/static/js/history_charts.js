@@ -88,12 +88,88 @@ if (_r37d_inkWatch && document.documentElement) {
   _r37d_inkWatch.observe(document.documentElement, {attributes: true, attributeFilter: ['data-bs-theme']});
 }
 
+// How a point's time reads, per range: every range carries the date so a hovered point is never
+// ambiguous about which day it is (the compact date-at-change of the 24h axis is _histXScale). 7d and
+// 30d points are hours; 90d points are days, and 6mo and 1y add the year, which their span crosses.
+var _histLblFmt = {
+  '24h': {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'},
+  '7d': {month:'short', day:'numeric', hour:'2-digit'},
+  '30d': {month:'short', day:'numeric', hour:'2-digit'},
+  '90d': {month:'short', day:'numeric'},
+  '6mo': {year:'numeric', month:'short', day:'numeric'},
+  '1y': {year:'numeric', month:'short', day:'numeric'}
+};
 function _histLbl(iso, rng){
-  // Tooltip title (per point). Both ranges carry the date so a hovered point is never ambiguous
-  // about which day it is; the compact date-at-change lives on the x-axis ticks (_histXScale).
-  var d = new Date(iso);
-  return rng==='7d' ? d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit'})
-                           : d.toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  return new Date(iso).toLocaleString([], _histLblFmt[rng] || _histLblFmt['24h']);
+}
+
+// The x axis past 24h: each tick is the day, with the hour under it for 7d and the year under it for 6mo
+// and 1y. Two short lines, not the tooltip's one long label: "Nov 26, 2025" side by side ran into each
+// other at phone width.
+var _histTickSub = {'7d': {hour:'2-digit'}, '6mo': {year:'numeric'}, '1y': {year:'numeric'}};
+function _histXDays(id, rng){
+  var sc = _histX();
+  sc.ticks.callback = function(value){
+    var t = (_histTimes[id] || [])[value]; if (!t) return '';
+    var day = t.toLocaleDateString([], {month:'short', day:'numeric'});
+    var sub = _histTickSub[rng];
+    return sub ? [day, t.toLocaleString([], sub)] : day;
+  };
+  return sc;
+}
+
+// The x axis for a range: the 24h one puts the date under the time where the day changes; the longer
+// ones the day (_histXDays). At phone width four ticks, not six, so the labels never meet.
+function _histAxis(id, rng){
+  var sc = rng === '24h' ? _histXScale(id) : _histXDays(id, rng);
+  var box = document.getElementById(id);
+  if (box && box.parentNode && box.parentNode.clientWidth < 420) sc.ticks.maxTicksLimit = 4;
+  return sc;
+}
+
+// Whether a poll should read range `rng` again for chart set `key`: the 24h and 7d ranges every poll
+// (a new sample lands each minute); the hourly ranges every ten minutes, since a point there spans
+// hours to a day and a minute's poll would read the same rows again for nothing.
+var _histPolled = {};
+function _histDue(key, rng, now){
+  if (rng !== '24h' && rng !== '7d' && _histPolled[key] !== undefined && now - _histPolled[key] < 600000) return false;
+  _histPolled[key] = now;
+  return true;
+}
+
+// Which "nothing here" line an empty reply shows (prefix: 'hist' on the server page, 'hh' on the host
+// page). With `older` (the shortest longer range that has history, from the reply) it says there is
+// older history and offers that range as one button, labelled as that range's own button is titled;
+// without it, the "nothing recorded yet" line.
+function _histOlder(prefix, older){
+  var none = document.getElementById(prefix + '-empty-none'), more = document.getElementById(prefix + '-empty-older');
+  if (none) none.style.display = older ? 'none' : '';
+  if (!more) return;
+  more.style.display = older ? '' : 'none';
+  var go = more.querySelector('[data-hist-go]');
+  if (!older || !go) return;
+  go.setAttribute('data-hist-go', older);
+  var target = document.querySelector('[' + go.getAttribute('data-hist-go-for') + '="' + older + '"]');
+  // The range button's title, already in the viewer's language (the i18n walker translates titles).
+  var label = target && target.getAttribute('title');
+  if (label) go.textContent = label;  // i18n-ignore - an attribute name; the text is the translated title
+}
+
+// The offered range's button: presses that range's own button, so the toggle, the active state and the
+// reload are the ones a direct tap gives.
+document.addEventListener('click', function(e){
+  var go = e.target.closest && e.target.closest('[data-hist-go]'); if (!go) return;
+  var target = document.querySelector('[' + go.getAttribute('data-hist-go-for') + '="' + go.getAttribute('data-hist-go') + '"]');
+  if (target) target.click();
+});
+
+// A dashed "Peak" line beside an average, for the ranges whose points are hourly rollups (they carry
+// cpu_max and the like); none for the 24h and 7d ranges, whose points are single samples.
+function _hch_peak(datasets, points, key, color){
+  if (!points.length || points[0][key] === undefined) return datasets;
+  var peak = Object.assign(_ds(_hch_t('Peak'), points.map(function(p){ return p[key]; }), color, false),
+                           {borderDash: [4, 3], borderWidth: 1});
+  return datasets.concat([peak]);
 }
 
 function _ds(label, data, color, fill){

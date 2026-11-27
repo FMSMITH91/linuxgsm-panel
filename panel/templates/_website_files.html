@@ -1,0 +1,28 @@
+{# Files: the site's docroot through the site's own account (js/website_files.js). Paths are
+   relative to the docroot; the server keeps every operation inside it. #}
+<section data-ws-pane="files" hidden>
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesUp" aria-label="Up one folder"><i class="bi bi-arrow-90deg-up"></i></button>
+    <span id="wf-path" class="small font-monospace text-break minw-0" data-no-i18n>/</span>
+  </div>
+  <div class="d-flex flex-wrap gap-2 mb-2">
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesNew" data-args='["dir"]'><i class="bi bi-folder-plus"></i> New folder</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesNew" data-args='["file"]'><i class="bi bi-file-earmark-plus"></i> New file</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesPick" data-args='["wf-upload"]'><i class="bi bi-upload"></i> Upload files</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesPick" data-args='["wf-archive"]'><i class="bi bi-file-earmark-zip"></i> Upload archive and extract</button>
+    <input type="file" id="wf-upload" class="visually-hidden" multiple tabindex="-1" aria-label="Upload files" data-action="wsFilesUpload" data-on="change">
+    <input type="file" id="wf-archive" class="visually-hidden" tabindex="-1" accept=".zip,.tar.gz,.tgz" aria-label="Upload archive and extract" data-action="wsFilesExtract" data-on="change">
+  </div>
+  <div id="wf-msg" class="small mb-1" role="status"></div>
+  <ul id="wf-list" class="list-unstyled ws-files mb-2"></ul>
+  <form id="wf-editor" class="mb-2" hidden data-action="wsFilesSave" data-args='["@event"]' data-on="submit">
+    <div id="wf-editing" class="small font-monospace text-break mb-1" data-no-i18n></div>
+    <label for="wf-text" class="visually-hidden">File contents</label>
+    <textarea id="wf-text" class="form-control form-control-sm font-monospace" rows="14" spellcheck="false"></textarea>
+    <div class="d-flex flex-wrap gap-2 mt-2">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsFilesClose">Close</button>
+    </div>
+  </form>
+  <p class="form-text mb-0">Files here run as this website: a PHP file you upload runs on the site. An archive is checked before it is unpacked: nothing outside the site, no links, and a size limit.</p>
+</section>

@@ -91,6 +91,17 @@ An installed B3 has a folded **B3 settings** section on its row: **Apply** rewri
     unpacked database), and keeps it for the month. Turn the download off in Settings → Outside services →
     *Country database for B3*; B3 then keeps the copy it has, the card says the download is off, and no update for
     a newer month is offered. Geolocation Off downloads nothing.
+
+    **Monthly refresh, by itself.** Every 30 minutes the panel checks whether any B3 set to offline has an older
+    month than the current one. Once DB-IP has published the month's file (early on the 1st, UTC), the panel
+    downloads it **once** (whatever the number of servers), checks it as above, and gives it to each offline B3,
+    which reloads it without a restart (B3 2.0.2 and later: no player is disconnected). A B3 built from an earlier
+    commit, or one that didn't answer the reload, is restarted instead, and **only when its game server has no
+    players on**; until then its card says it is waiting. The card shows the month B3 has (*Country database:
+    2026-12.*), and each refresh is in the audit log (`addon_geoip`). While DB-IP hasn't published yet the panel
+    asks again every 6 hours; after a failed download it waits an hour, then 2, 4, … up to a day, keeps the last
+    good file, and the card says the download didn't work. With the download turned off, nothing is fetched and the
+    card says B3 keeps the database it has.
   - **Online: city.** Each joining player's IP address goes to ipwho.is, through a relay (the only service the
     container can reach for it).
 - **Plugins**: B3's own plugins that work on these games. Admin is always on. Never offered: adv (an internet
@@ -159,7 +170,8 @@ BlueMap's command-line build renders the world, keeps watching it for changes, a
   refused, since BlueMap can't render anything without that file. The audit log records who accepted it and
   when (the install's entry), and so do the add-on's `addon.json` and a comment in its `core.conf`.
 - **The client file.** The container reaches no network at all, so the panel fetches the file for it: the
-  panel's host reads Mojang's version list (`piston-meta.mojang.com`, the version's details checked against
+  panel's host reads Mojang's version list (`piston-meta.mojang.com` over HTTPS, following no redirect and
+  connecting only when every address the name resolves to is public; the version's details checked against
   the list's SHA-1), and the game's host downloads the client jar (`piston-data.mojang.com`, about 30 MB)
   into the add-on's `data` folder and checks the SHA-1 Mojang publishes for it. BlueMap then starts with
   that version (`-v`); its own attempt to reach Mojang fails, and it uses the file it was given.

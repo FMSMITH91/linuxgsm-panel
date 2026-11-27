@@ -171,7 +171,8 @@ jobs:
         with:
           name: zizmor-sarif
           path: zizmor.sarif
-          retention-days: 5
+          # 7 days, as for every report of one run: the upload job below reads it minutes later.
+          retention-days: 7
           if-no-files-found: error
 
   upload:

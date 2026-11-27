@@ -13,13 +13,19 @@ Usage:
       Stdin is one check run a line, `name TAB status TAB conclusion`; exit 0 when every check the
       commit must pass has passed, else 1 and why on stderr.
 
+The source holds `schema`, `addons` and `sites` (the websites' pins, checked by the same function the
+panels use: panel/services/websites_catalog.py's sites_problems, loaded by path). A catalog without
+`sites` is refused: signing one would drop the websites' pins from every panel.
+
 The published catalog is the source object plus `seq` (the previous published seq + 1), `issued` and
 `expires` (issued + LIFETIME_DAYS), serialized as json.dumps(obj, indent=2, sort_keys=True) + "\n":
 the version number and expiry The Update Framework gives its metadata against rollback and freeze
 attacks. Panels refuse a catalog whose seq is not above the last one they accepted, or that expired.
 """
 import calendar
+import importlib.util
 import json
+import os
 import re
 import sys
 import time
@@ -38,6 +44,19 @@ _FIELDS = {"image": _IMAGE_RE, "base": _IMAGE_RE, "sha256": re.compile(r"[0-9a-f
            "commit": re.compile(r"[0-9a-f]{40}\Z"), "tag": re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")}
 _NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 _PUBLISHED_KEYS = ("expires", "issued", "seq")
+_SOURCE_KEYS = ["addons", "schema", "sites"]
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The panels' own check of the `sites` section (standard library only at import), from this checkout.
+_WC_SPEC = importlib.util.spec_from_file_location(
+    "websites_catalog_for_signing", os.path.join(_REPO, "panel", "services", "websites_catalog.py"))
+_WC = importlib.util.module_from_spec(_WC_SPEC)
+_WC_SPEC.loader.exec_module(_WC)
+
+
+def _sites_problems(sites):
+    """websites_catalog.sites_problems(sites): why the section is refused, [] when it passes."""
+    return _WC.sites_problems(sites)
+
 
 # The checks a commit must have passed before its catalog is signed: the set deploy.yml's verify step
 # waits for (a unit check holds the two lists equal). A name ending in "(" is a prefix, for a matrix job.
@@ -48,10 +67,10 @@ IGNORED = ("deploy", "Upload coverage to Codacy", "Code-scanning alerts gate", "
 _FAILED = ("failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale")
 
 
-
 def _whole(value):
     """Whether `value` is an int and not a bool (True and False are ints in Python)."""
     return isinstance(value, int) and not isinstance(value, bool)
+
 
 def serialize(obj):
     """The exact bytes that are signed and published (and that panels verify)."""
@@ -75,17 +94,23 @@ def _field_problems(name, entry):
     return out
 
 
-def source_problems(obj):
-    """Why `obj` is not a catalog source (schema 1); [] when it is."""
-    if not isinstance(obj, dict) or sorted(obj) != ["addons", "schema"]:
-        return ["the catalog must hold exactly `schema` and `addons`"]
+def source_problems(obj, need_sites=True):
+    """Why `obj` is not a catalog source (schema 1); [] when it is.
+
+    Without `need_sites`: a catalog published before the websites' pins existed (schema and addons only).
+    """
+    keys = _SOURCE_KEYS if need_sites else ["addons", "schema"]
+    if not isinstance(obj, dict) or sorted(obj) != keys:
+        return ["the catalog must hold exactly %s" % ", ".join("`%s`" % k for k in keys)]
     out = [] if obj["schema"] == SCHEMA and _whole(obj["schema"]) else ["schema %r is not %d" % (obj["schema"], SCHEMA)]
-    addons = obj["addons"]
+    out += _sites_problems(obj["sites"]) if need_sites else []
+    return out + _addons_problems(obj["addons"])
+
+
+def _addons_problems(addons):
     if not isinstance(addons, dict) or not addons:
-        return out + ["`addons` must be a non-empty object"]
-    for name in sorted(addons):
-        out += _entry_problems(name, addons[name])
-    return out
+        return ["`addons` must be a non-empty object"]
+    return [p for name in sorted(addons) for p in _entry_problems(name, addons[name])]
 
 
 def _parse_time(text):
@@ -99,9 +124,17 @@ def _parse_time(text):
 
 def published_problems(obj):
     """Why `obj` is not a published catalog; [] when it is."""
-    if not isinstance(obj, dict) or sorted(obj) != ["addons", "expires", "issued", "schema", "seq"]:
-        return ["a published catalog holds exactly schema, addons, seq, issued and expires"]
-    out = source_problems(core(obj))
+    if not isinstance(obj, dict) or sorted(obj) not in (sorted(_SOURCE_KEYS + list(_PUBLISHED_KEYS)),
+                                                        ["addons", "expires", "issued", "schema", "seq"]):
+        return ["a published catalog holds exactly schema, addons, sites, seq, issued and expires"]
+    if "sites" not in obj:      # published before the websites' pins existed: its add-ons alone are checked
+        return _published_extra(obj, source_problems(core(obj), need_sites=False))
+    return _published_extra(obj, source_problems(core(obj)))
+
+
+def _published_extra(obj, out):
+    """`out` plus what is wrong with a published catalog's seq and times."""
+    out = list(out)
     seq = obj["seq"]
     if not _whole(seq) or seq < 1:
         out.append("seq %r is not a positive whole number" % (seq,))
@@ -123,7 +156,13 @@ def changes(before, after):
         a, b = old.get(name) or {}, new.get(name) or {}
         lines += ["  %s.%s: %s -> %s" % (name, k, a.get(k, "(none)"), b.get(k, "(none)"))
                   for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
-    return lines
+    return lines + _sites_changes(before, after)
+
+
+def _sites_changes(before, after):
+    """Lines naming each part of the `sites` section that differs."""
+    olds, news = (before or {}).get("sites") or {}, after.get("sites") or {}
+    return ["  sites.%s: changed" % k for k in sorted(set(olds) | set(news)) if olds.get(k) != news.get(k)]
 
 
 def _loaded(text, check):

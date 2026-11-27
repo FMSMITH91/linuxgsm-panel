@@ -1,0 +1,10 @@
+{# Backups: the site's files and databases, kept on the host as the site's account. #}
+<section data-ws-pane="backups" hidden>
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    {% if can_manage|default(false) %}<button type="button" class="btn btn-sm btn-primary" data-action="wsBackupNow"><i class="bi bi-archive"></i> Back up now</button>{% endif %}
+    <span id="wb-keep" class="small text-secondary"></span>
+  </div>
+  <div id="wb-msg" class="small mb-1" role="status"></div>
+  <ul id="wb-list" class="list-unstyled mb-2"></ul>
+  <div class="form-text">A backup holds the site's files and its databases. Restoring takes a safety backup first, then puts the files and databases back.</div>
+</section>

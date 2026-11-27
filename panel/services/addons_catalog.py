@@ -63,6 +63,10 @@ FIELDS = {
                   "sha256": r"[0-9a-f]{64}"},
 }
 _TOP = {"schema", "seq", "issued", "expires", "addons"}
+# Top-level sections other features read through section(); this module only carries them. The
+# floor may hold them, and a signed catalog's copy is passed on unchecked: its owner checks it and
+# falls back to the floor's (websites_catalog for "sites").
+SECTIONS = ("sites",)
 _TIME = "%Y-%m-%dT%H:%M:%SZ"
 _TIME_RE = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"
 
@@ -117,17 +121,25 @@ def _check_addons(addons, strict=False):
 
 def read_floor(path=FLOOR_FILE):
     """The floor's add-on map from `path` (the repository's catalog.json). Raises ValueError when it is not one."""
-    with open(path, encoding="utf-8") as fh:
-        doc = json.load(fh)
-    if not isinstance(doc, dict) or set(doc) != {"schema", "addons"} or doc["schema"] != SCHEMA:
-        raise ValueError("%s: not a schema %d add-on catalog" % (path, SCHEMA))
+    doc = _floor_doc(path)
     why = _check_addons(doc["addons"], strict=True)
     if why:
         raise ValueError("%s: %s, or names one it does not know" % (path, why))
     return {k: dict(v) for k, v in doc["addons"].items()}
 
 
+def _floor_doc(path):
+    """The floor file's object: `schema` 1 and `addons`, plus any of SECTIONS. Raises ValueError otherwise."""
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    if (not isinstance(doc, dict) or not {"schema", "addons"} <= set(doc)
+            or not set(doc) <= {"schema", "addons"}.union(SECTIONS) or doc["schema"] != SCHEMA):
+        raise ValueError("%s: not a schema %d add-on catalog" % (path, SCHEMA))
+    return doc
+
+
 FLOOR = read_floor()
+FLOOR_SECTIONS = {k: v for k, v in _floor_doc(FLOOR_FILE).items() if k in SECTIONS}
 
 
 def _when(text):
@@ -223,6 +235,7 @@ def _known(doc):
         _log.info("add-on catalog #%d: %d add-on(s) this panel does not know skipped", doc["seq"], len(skipped))
     out = {k: doc[k] for k in _TOP}
     out["addons"] = {k: doc["addons"][k] for k in FIELDS}
+    out.update({k: doc[k] for k in SECTIONS if k in doc})
     return out
 
 
@@ -312,6 +325,28 @@ def current():
     """effective() for the stored catalog, this panel's commit time and the clock."""
     stored = _state["stored"]
     return effective(stored, _floor_time() if stored else None, time.time())
+
+
+def section(name):
+    """(the floor's section `name`, the signed catalog's or None, where that one came from) for its owner to check.
+
+    The catalog's copy counts under effective()'s rule (issued after this panel's commit) and is None
+    otherwise or when the catalog has none; its source is a source as effective() gives one, else
+    {"kind": "floor"}. Nothing here checks the section: its owner does, and uses the floor's when the
+    catalog's is refused.
+    """
+    if name not in SECTIONS:
+        raise KeyError(name)
+    ensure_loaded()
+    floor = FLOOR_SECTIONS.get(name)
+    stored = _state["stored"] or {}
+    if name not in stored:
+        return floor, None, {"kind": "floor"}
+    floor_time, now = _floor_time(), time.time()
+    if not floor_time or _when(stored["issued"]) <= floor_time:
+        return floor, None, {"kind": "floor"}
+    return floor, stored[name], {"kind": "catalog", "seq": stored["seq"], "issued": stored["issued"],
+                                 "expired": _when(stored["expires"]) <= now}
 
 
 def _apply():

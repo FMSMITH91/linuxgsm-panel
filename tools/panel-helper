@@ -48,6 +48,7 @@ USAGE
     panel-helper --list-verbs          print the verb table (used by the panel's tests)
 """
 import base64
+import calendar
 import errno
 import fcntl
 import filecmp
@@ -136,6 +137,17 @@ TOOLS = {
     "mysql": ("/usr/bin/mysql",),
     "mariadb-dump": ("/usr/bin/mariadb-dump",),
     "mysqldump": ("/usr/bin/mysqldump",),
+    # The websites (website-* verbs): the egress guard's nftables table, a site account's disk quota,
+    # and the certificate dates the proxy status reads. The proxy binary itself is WEB_PROXY_BIN, a
+    # fixed root-owned path this helper installs (WEB_FILE_EXEC).
+    "nft": ("/usr/sbin/nft", "/sbin/nft"),
+    "setquota": ("/usr/sbin/setquota", "/sbin/setquota"),
+    "openssl": ("/usr/bin/openssl", "/bin/openssl"),
+    # The web proxy's listen addresses (website-proxy-apply): `ip -j addr show`, read only.
+    "ip": ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"),
+    # The page cache's proxy build (website-proxy-install-cache) and nothing else: a fixed argv over the
+    # helper's own Containerfile.
+    "podman": ("/usr/bin/podman",),
 }
 # The ENTIRE environment a child of this helper starts with. Every child used to get
 # `dict(os.environ)` -- whatever sudo let through -- and the ones with no env= at all inherited it
@@ -2574,6 +2586,1220 @@ _R31B_OWN_UPDATE_RE = ("[p]anel-helper( [^ ]+)* os-update-run( |$)"
 _R30A_UPGRADE_RE = ("[a]pt-get( (-[^s -][^ ]*|--[^ ]+|[^- ][^ ]*))* "
                     "(upgrade|dist-upgrade|full-upgrade)( |$)|" + _R31B_OWN_UPDATE_RE)
 
+# ── Websites: site accounts, the web proxy, the egress guard, disk quotas ─────────────────────
+# A website runs under its own account (ws<site id>; the tunnel connector under WEB_TUNNEL_ACCOUNT),
+# made here and nowhere else, and marked made by a root-owned file in WEB_MARK_DIR: no website verb
+# acts on an account that holds no mark, so a name that happens to match (an operator's own `ws1`)
+# is never touched. The web proxy (Caddy, from the release pinned in the signed catalog) runs as the
+# system user WEB_PROXY_USER (no shell, no sudo, not in GAME_GROUP) with CAP_NET_BIND_SERVICE only.
+WEB_ACCOUNT_RE = r"ws[1-9][0-9]{0,8}"
+WEB_TUNNEL_ACCOUNT = "lgsmtunnel"
+WEB_MARK_DIR = "/var/lib/linuxgsm-panel-websites"
+WEB_PROXY_USER = "lgsmweb"
+WEB_PROXY_DIR = "/usr/local/lib/lgsm-web-proxy"
+WEB_PROXY_BIN = WEB_PROXY_DIR + "/caddy"
+WEB_PROXY_ETC = "/etc/lgsm-web-proxy"
+WEB_PROXY_CONF = WEB_PROXY_ETC + "/Caddyfile"
+WEB_PROXY_CERTS = WEB_PROXY_ETC + "/certs"
+WEB_PROXY_STATE = "/var/lib/lgsm-web-proxy"
+WEB_PROXY_UNIT = "lgsm-web-proxy.service"
+WEB_PROXY_UNIT_FILE = "/etc/systemd/system/" + WEB_PROXY_UNIT
+WEB_JOURNAL_CONF = "/etc/systemd/journald@lgsm-web-proxy.conf"
+WEB_GUARD_FILE = WEB_PROXY_ETC + "/egress-guard.nft"
+WEB_GUARD_UNIT = "lgsm-web-egress-guard.service"
+WEB_GUARD_UNIT_FILE = "/etc/systemd/system/" + WEB_GUARD_UNIT
+# The listen addresses re-read: before every start of the proxy (its unit's ExecStartPre, so a reboot
+# with a new address still serves) and by a timer while it runs (website-proxy-rebind).
+WEB_REBIND_UNIT = "lgsm-web-proxy-rebind.service"
+WEB_REBIND_TIMER = "lgsm-web-proxy-rebind.timer"
+WEB_REBIND_UNIT_FILE = "/etc/systemd/system/" + WEB_REBIND_UNIT
+WEB_REBIND_TIMER_FILE = "/etc/systemd/system/" + WEB_REBIND_TIMER
+WEB_BIND_MARK = "\t# the host's own addresses: re-read at each apply, each start and every 10 minutes"
+WEB_CADDY_URL = "https://github.com/caddyserver/caddy/releases/download/v%s/caddy_%s_linux_%s.tar.gz"
+WEB_CADDY_MAX_BYTES = 100 * 1024 * 1024
+WEB_CONF_MAX = 1024 * 1024
+WEB_CONF_HEAD = "# Written by linuxgsm-panel from its database"
+_WEB_CERT_NAME_RE = r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\.(?:crt|key)"
+_WEB_PEM_RE = r"-----BEGIN [A-Z ]{1,40}-----\n[A-Za-z0-9+/=\n]{40,16000}-----END [A-Z ]{1,40}-----\n?"
+# The addresses a site account never reaches: the host's own (except loopback) and the private,
+# link-local, tailnet, mapped and NAT64 ranges (OWASP SSRF Prevention Cheat Sheet: network layer).
+WEB_GUARD_V4 = ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
+                "224.0.0.0/4", "240.0.0.0/4")
+WEB_GUARD_V6 = ("::ffff:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48", "fc00::/7", "fe80::/10", "ff00::/8")
+# The proxy's unit (systemd.exec(5); OWASP has no cheat sheet for a service unit): its own user, the
+# one capability that binds 80/443, a read-only system, its state folder alone writable.
+WEB_PROXY_UNIT_TEXT = """# Written by linuxgsm-panel: the websites' web proxy. The panel rewrites it.
+[Unit]
+Description=linuxgsm-panel web proxy (websites)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=lgsmweb
+Group=lgsmweb
+ExecStartPre=+/usr/local/lib/linuxgsm-panel/panel-helper website-proxy-rebind start
+ExecStart=/usr/local/lib/lgsm-web-proxy/caddy run --environ=false --config /etc/lgsm-web-proxy/Caddyfile --adapter caddyfile
+Environment=HOME=/var/lib/lgsm-web-proxy XDG_DATA_HOME=/var/lib/lgsm-web-proxy XDG_CONFIG_HOME=/var/lib/lgsm-web-proxy
+TimeoutStopSec=15s
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=5
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+ReadWritePaths=/var/lib/lgsm-web-proxy
+LogNamespace=lgsm-web-proxy
+
+[Install]
+WantedBy=multi-user.target
+"""
+# Access logs (off unless a site turns them on) are kept 7 days in the proxy's own journal namespace.
+WEB_JOURNAL_TEXT = "# Written by linuxgsm-panel: the web proxy's own journal.\n[Journal]\nMaxRetentionSec=7day\n"
+WEB_REBIND_UNIT_TEXT = """# Written by linuxgsm-panel: the web proxy's listen addresses, re-read (website-proxy-rebind).
+[Unit]
+Description=linuxgsm-panel web proxy listen addresses
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/linuxgsm-panel/panel-helper website-proxy-rebind check
+"""
+WEB_REBIND_TIMER_TEXT = """# Written by linuxgsm-panel: the web proxy's listen addresses, re-read every 10 minutes.
+[Unit]
+Description=linuxgsm-panel web proxy listen addresses, every 10 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
+"""
+WEB_GUARD_UNIT_TEXT = """# Written by linuxgsm-panel: the websites' egress guard (nftables table lgsm_web).
+[Unit]
+Description=linuxgsm-panel websites egress guard
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/lgsm-web-proxy/egress-guard.nft
+ExecStop=/usr/sbin/nft delete table inet lgsm_web
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def v_website_account(s):
+    """A website account by SHAPE: ws<digits> (no leading zero) or the tunnel connector's own account."""
+    if not (re.fullmatch(WEB_ACCOUNT_RE, s) or s == WEB_TUNNEL_ACCOUNT):
+        raise ValueError("not a website account")
+    return s
+
+
+def v_caddy_version(s):
+    """The web proxy's release, x.y.z (it names the one upstream URL the helper downloads)."""
+    if not re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", s):
+        raise ValueError("not a release version")
+    return s
+
+
+def v_sha256(s):
+    if not re.fullmatch(r"[0-9a-f]{64}", s):
+        raise ValueError("not a sha256")
+    return s
+
+
+def v_quota_mb(s):
+    if not (s.isdecimal() and 0 <= int(s) <= 10 * 1024 * 1024):
+        raise ValueError("not a size in MB")
+    return s
+
+
+def _web_mark(user):
+    return os.path.join(WEB_MARK_DIR, user)
+
+
+def _web_made(user):
+    """Whether `user` is a website account this helper made (its root-owned mark exists, a regular file)."""
+    try:
+        st = os.lstat(_web_mark(user))
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_uid == 0
+
+
+def _run_quiet(argv, timeout=60, **kw):
+    """Run a fixed argv; (rc, stdout text). Its stderr is written (cut short) on a failure."""
+    r = subprocess.run(argv, shell=False, capture_output=True, timeout=timeout,  # nosec B603 - fixed argv
+                       env=kw.pop("env", _clean_env()), **kw)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr.decode("utf-8", "replace")[:600])
+    return r.returncode, r.stdout.decode("utf-8", "replace")
+
+
+def _web_useradd(user):
+    """(rc, passwd entry) of a new website account: useradd, then its root-owned mark."""
+    os.makedirs(WEB_MARK_DIR, mode=0o700, exist_ok=True)
+    rc, _out = _run_quiet([resolve("useradd"), "-m", "-d", HOME_ROOT + "/" + user, "-s", "/usr/sbin/nologin", "-U", user])
+    if rc:
+        return rc, None
+    fd = os.open(_web_mark(user), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    os.close(fd)
+    sys.stdout.write("account=created\n")
+    return 0, pwd.getpwnam(user)
+
+
+def _web_present(pw):
+    sys.stdout.write("account=present\n")
+    return 0, pw
+
+
+def _web_enrol(user, pw):
+    """Home 0700, then GAME_GROUP (user-create's checks) when not a member yet; 0 or the failing rc."""
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- owner-only home
+    os.chmod(pw.pw_dir, 0o700)
+    if GAME_GROUP in _groups_of(user):
+        return 0
+    reason = _enrolment_refusal(user, need_install=False)
+    if reason:
+        sys.stderr.write("refusing to enrol %s in %s: %s\n" % (user, GAME_GROUP, reason))
+        return 1
+    return _enrol(user)
+
+
+def do_website_account_create(args, content):
+    """Make a website account: useradd (home 0700, no login shell), mark it, enrol it, subordinate ids, lingering.
+
+    An account of that name that this helper did not make is refused, never adopted. One it made is
+    brought up to date (idempotent). Enrolment in GAME_GROUP comes FIRST, with user-create's checks
+    (_enrolment_refusal, the account just made), so the panel can become it like a game account;
+    then the rootless runtime as for add-ons (_subid_add, loginctl enable-linger). The egress guard,
+    when it is on, is refreshed to hold the new uid. Prints account=, subids=, linger=on.
+    """
+    user = args[0]
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None
+    if pw is not None and not _web_made(user):
+        sys.stderr.write("refusing %s: an account of that name exists and the panel did not make it\n" % user)
+        return 1
+    rc, pw = _web_present(pw) if pw is not None else _web_useradd(user)
+    rc = rc or _web_enrol(user, pw)
+    if rc:
+        return rc
+    rc, added = _subid_add(pw, user)
+    if rc:
+        return rc
+    sys.stdout.write("subids=%s\n" % ("added" if added else "present"))
+    rc, _out = _run_quiet([resolve("loginctl"), "enable-linger", user])
+    if rc:
+        return rc
+    sys.stdout.write("linger=on\n")
+    return _web_guard_refresh()
+
+
+def _web_exists(user):
+    try:
+        pwd.getpwnam(user)
+    except KeyError:
+        return False
+    return True
+
+
+# userdel refuses (exit 8) while a process of the user is still running. Right after the account's user
+# manager was stopped, its last processes can still be ending (its slice removed a moment later): the
+# account is then deleted on a later try, each after killing what is left again.
+WEB_USERDEL_TRIES = 20
+WEB_USERDEL_WAIT = 0.5
+
+
+def _web_userdel(user):
+    """Delete `user` (userdel -r), again while it refuses for a process still running (exit 8): its exit code."""
+    rc = 8
+    for attempt in range(WEB_USERDEL_TRIES):
+        if attempt:
+            time.sleep(WEB_USERDEL_WAIT)
+            _run_quiet([resolve("pkill"), "-9", "-u", user])
+        rc, _out = _run_quiet([resolve("userdel"), "-r", user])
+        if rc != 8:
+            break
+    return rc
+
+
+def do_website_account_remove(args, content):
+    """Remove a website account this helper made: lingering off, its manager stopped, its processes, userdel -r.
+
+    Refused for an account without the mark (one with neither the mark nor an entry is already gone:
+    account=absent, rc 0). Its user journal and /tmp folders go too
+    (_addon_forget_account, _forget_account_tmp), then the mark, then the egress guard is refreshed.
+    """
+    user = args[0]
+    if not _web_made(user):
+        if not _web_exists(user):   # already removed (an install's undo, then the caller's own): nothing to do
+            sys.stdout.write("account=absent\n")
+            return 0
+        sys.stderr.write("refusing %s: not a website account the panel made\n" % user)
+        return 1
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        os.unlink(_web_mark(user))
+        sys.stdout.write("account=absent\n")
+        return _web_guard_refresh()
+    _run_quiet([resolve("loginctl"), "disable-linger", user])
+    unit = "user@%d.service" % uid
+    try:
+        _run_quiet([resolve("systemctl"), "stop", unit], timeout=ADDON_MANAGER_STOP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("the account's user manager did not stop in time\n")
+    _run_quiet([resolve("systemctl"), "reset-failed", unit])
+    _run_quiet([resolve("pkill"), "-9", "-u", user])
+    forgotten = _addon_forget_account(uid, True) + _forget_account_tmp(user, uid)
+    rc = _web_userdel(user)
+    if rc not in (0, 12):           # 12: the home was already gone
+        return rc
+    os.unlink(_web_mark(user))
+    sys.stdout.write("account=removed\nforgotten=%d\n" % forgotten)
+    return _web_guard_refresh()
+
+
+def _web_arch():
+    m = os.uname().machine
+    return {"x86_64": "amd64", "aarch64": "arm64"}.get(m)
+
+
+def _web_proxy_user():
+    """Make the proxy's system user when missing: no home, no shell, its own group, nothing else."""
+    try:
+        return pwd.getpwnam(WEB_PROXY_USER)
+    except KeyError:
+        rc, _out = _run_quiet([resolve("useradd"), "--system", "--no-create-home", "-d", WEB_PROXY_STATE,
+                               "-s", "/usr/sbin/nologin", "-U", WEB_PROXY_USER])
+        if rc:
+            raise OSError("useradd failed") from None
+        return pwd.getpwnam(WEB_PROXY_USER)
+
+
+def _web_caddy_member(path):
+    """The bytes of the `caddy` binary in the release tarball at `path` (a regular file member), or None."""
+    with tarfile.open(path, "r:gz") as tar:
+        for m in tar:
+            if m.name == "caddy" and m.isreg() and 0 < m.size <= WEB_CADDY_MAX_BYTES:
+                fh = tar.extractfile(m)
+                return fh.read() if fh else None
+    return None
+
+
+# The web proxy's files, by who must read them (the narrowest mode that works for each):
+#   WEB_FILE_ROOT   units, journald's drop-in, the egress guard's ruleset: read by systemd, journald
+#                   and nft, all root. Nobody else needs them.
+#   WEB_FILE_PROXY  the Caddyfile (it holds every site's proxy token), its candidate and the
+#                   certificates: read by the proxy as WEB_PROXY_USER through its group, written by
+#                   root alone, so the proxy cannot change its own configuration.
+#   WEB_FILE_EXEC   the proxy binary: run by systemd as WEB_PROXY_USER (through its group) and by this
+#                   helper as root (version, list-modules); no other account runs it.
+WEB_FILE_ROOT = 0o600
+WEB_FILE_PROXY = 0o640
+WEB_FILE_EXEC = 0o750
+
+
+def _web_write(path, data, mode, uid=0, gid=0):
+    """Write `data` (bytes) to `path` atomically, owned uid:gid with `mode`.
+
+    The temporary file is created owner-only (0600) and gets its owner, its content and only then its
+    final mode, so no other account can open it while it is incomplete or before its group is set.
+    """
+    tmp = path + ".lgsm-new"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)        # O_TRUNC kept the mode of a leftover temporary file: narrow it first
+        os.fchown(fd, uid, gid)
+        os.write(fd, data)
+        os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
+def _web_dirs(pw):
+    os.makedirs(WEB_PROXY_DIR, mode=0o755, exist_ok=True)
+    for path, mode, uid, gid in ((WEB_PROXY_ETC, 0o750, 0, pw.pw_gid), (WEB_PROXY_CERTS, 0o750, 0, pw.pw_gid),
+                                 (WEB_PROXY_STATE, 0o700, pw.pw_uid, pw.pw_gid)):
+        os.makedirs(path, mode=mode, exist_ok=True)
+        os.chown(path, uid, gid)
+        os.chmod(path, mode)
+
+
+def do_website_proxy_install(args, content):
+    """Install the web proxy: download the pinned release, check its sha256, install the binary and its unit.
+
+    args: version, architecture (amd64|arm64, must be this host's), sha256. The URL is built here from
+    the version and architecture (the upstream release asset), never passed in. The archive's sha256
+    is checked BEFORE it is opened; only its `caddy` member is installed (root:lgsmweb 0750). The proxy's
+    user and folders are made only after that check, so a refused release leaves nothing behind. The proxy
+    is not started: website-proxy-apply starts it when a site is enabled. Prints version=.
+    """
+    version, arch, sha = args
+    if arch != _web_arch():
+        sys.stderr.write("this host is not %s\n" % arch)
+        return 1
+    url = WEB_CADDY_URL % (version, version, arch)
+    with tempfile.TemporaryDirectory(prefix="lgsm-web-proxy-") as d:
+        archive = os.path.join(d, "caddy.tar.gz")
+        rc, _out = _run_quiet([resolve("curl"), "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
+                               "--max-redirs", "5", "--max-time", "600", "--max-filesize", str(WEB_CADDY_MAX_BYTES),
+                               "-o", archive, url], timeout=660)
+        if rc:
+            sys.stderr.write("the web proxy's release could not be downloaded\n")
+            return rc
+        with open(archive, "rb") as fh:
+            got = hashlib.sha256(fh.read()).hexdigest()
+        if got != sha:
+            sys.stderr.write("the web proxy's release does not match its sha256: nothing was installed\n")
+            return 1
+        binary = _web_caddy_member(archive)
+    if not binary:
+        sys.stderr.write("the release holds no caddy binary\n")
+        return 1
+    pw = _web_proxy_user()          # only now: a refused download leaves no account and no folder behind
+    _web_dirs(pw)
+    _web_write(WEB_PROXY_BIN, binary, WEB_FILE_EXEC, 0, pw.pw_gid)
+    _web_write(WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT.encode(), WEB_FILE_ROOT)
+    _web_write(WEB_REBIND_UNIT_FILE, WEB_REBIND_UNIT_TEXT.encode(), WEB_FILE_ROOT)
+    _web_write(WEB_REBIND_TIMER_FILE, WEB_REBIND_TIMER_TEXT.encode(), WEB_FILE_ROOT)
+    _web_write(WEB_JOURNAL_CONF, WEB_JOURNAL_TEXT.encode(), WEB_FILE_ROOT)
+    if not os.path.exists(WEB_PROXY_CONF):
+        empty = WEB_CONF_HEAD + ": no site yet.\n{\n\tadmin off\n\tpersist_config off\n}\nhttp:// {\n\tabort\n}\n"
+        _web_write(WEB_PROXY_CONF, empty.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
+    _run_quiet([resolve("systemctl"), "daemon-reload"])
+    sys.stdout.write("version=%s\n" % version)
+    return 0
+
+
+def _web_apply_doc(content):
+    """(caddyfile text, {cert file name: pem}) from website-proxy-apply's stdin JSON, or raise ValueError."""
+    doc = json.loads(content)
+    if not isinstance(doc, dict) or set(doc) - {"caddyfile", "files"}:
+        raise ValueError("not an apply document")
+    text, files = doc.get("caddyfile"), doc.get("files") or {}
+    if not _web_conf_ok(text):
+        raise ValueError("not a configuration the panel wrote")
+    if not isinstance(files, dict) or len(files) > 400:
+        raise ValueError("too many files")
+    bad = [name for name, pem in files.items() if not _web_cert_file_ok(name, pem)]
+    if bad:
+        raise ValueError("not a certificate file name or not a PEM file")
+    return text, files
+
+
+def _web_conf_ok(text):
+    return isinstance(text, str) and text.startswith(WEB_CONF_HEAD) and len(text) <= WEB_CONF_MAX and "\x00" not in text
+
+
+def _web_cert_file_ok(name, pem):
+    named = bool(re.fullmatch(_WEB_CERT_NAME_RE, name)) or name == "origin-pull-ca.pem"
+    return named and isinstance(pem, str) and bool(re.fullmatch(r"(?:%s)+" % _WEB_PEM_RE, pem))
+
+
+# Where the proxy listens. Tailscale Serve (and any tailnet service) holds the tailnet addresses' 443, so
+# the proxy never binds every address: each apply reads this host's own addresses NOW (they can change:
+# DHCP, a new IPv6 prefix) and binds only those outside the loopback, link-local and tailnet ranges. The
+# tunnel mode's configuration names its own loopback bind and is left as it is. No address left is a
+# refusal in words, never a proxy that binds everything.
+WEB_TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+WEB_START_POLLS = 8                 # reads of the unit's state after a start, WEB_START_POLL seconds apart
+WEB_START_POLL = 1.0
+_WEB_BIND_RE = re.compile(r"^\tdefault_bind (.+)$", re.M)
+
+
+def _web_addr_ok(ifname, info):
+    """Whether one `ip -j addr` entry is an address of this host the proxy may listen on."""
+    try:
+        addr = ipaddress.ip_address(info.get("local", ""))
+    except ValueError:
+        return False
+    if info.get("scope") != "global" or info.get("temporary") or info.get("deprecated") or ifname.startswith("tailscale"):
+        return False
+    return not (addr.is_loopback or addr.is_link_local or any(addr in n for n in WEB_TAILNET_NETS if n.version == addr.version))
+
+
+def _web_link_addrs(link):
+    """The proxy's addresses on one `ip -j addr` link (IPv6 in brackets)."""
+    ifname = str(link.get("ifname", "")) if isinstance(link, dict) else ""
+    infos = (link.get("addr_info") or []) if ifname else []
+    texts = [str(ipaddress.ip_address(i["local"])) for i in infos if isinstance(i, dict) and _web_addr_ok(ifname, i)]
+    return ["[%s]" % t if ":" in t else t for t in texts]
+
+
+def web_bind_addresses(ip_json):
+    """Return the host's addresses for the proxy's default_bind (IPv4 first), from `ip -j addr show` output."""
+    try:
+        links = json.loads(ip_json or "[]")
+    except ValueError:
+        return []
+    out = {a for link in (links if isinstance(links, list) else []) for a in _web_link_addrs(link)}
+    return sorted(out, key=lambda a: (":" in a, a))
+
+
+def _web_bind(text):
+    """Return (text, [bind addresses]) the proxy will use; the addresses are [] when the host has none.
+
+    The configuration's own default_bind (tunnel mode) is kept; otherwise the host's addresses are put in
+    as the first global option.
+    """
+    m = _WEB_BIND_RE.search(text)
+    if m:
+        return text, m.group(1).split()
+    _rc, out = _run_quiet([resolve("ip"), "-j", "addr", "show"], timeout=20)
+    addrs = web_bind_addresses(out)
+    if not addrs:
+        return text, []
+    bind = "%s\n\tdefault_bind %s\n" % (WEB_BIND_MARK, " ".join(addrs))
+    head, sep, rest = text.partition("\n{\n")
+    if not sep:                     # no global options block: one is put in after the header line
+        head, sep, rest = text.partition("\n")
+        return head + "\n{\n" + bind + "}\n" + rest, addrs
+    return head + sep + bind + rest, addrs
+
+
+def _web_ports(text):
+    """The TCP ports the configuration listens on: its http_port (tunnel), else 80, and 443 unless auto_https is off."""
+    m = re.search(r"^\thttp_port ([0-9]{1,5})$", text, re.M)
+    ports = [m.group(1) if m else "80"]
+    return ports if re.search(r"^\tauto_https off$", text, re.M) else ports + ["443"]
+
+
+def _web_listener(line):
+    """(port, address, program, pid) of one `ss -Hltnp` line, or None."""
+    f = line.split()
+    if len(f) < 4 or ":" not in f[3]:
+        return None
+    host, _sep, port = f[3].rpartition(":")
+    m = re.search(r'users:\(\("([^"]{1,40})",pid=([0-9]+)', line)
+    return port, host.strip("[]").split("%")[0], m.group(1) if m else "another program", m.group(2) if m else ""
+
+
+def web_port_holders(ss_out, binds, ports, own_uid):
+    """[(port, address, program)] of listeners on `ports` that collide with `binds`, from `ss -Hltnp` output.
+
+    A listener on one of the bind addresses or on a wildcard address collides; one the proxy's own user
+    holds (the running proxy, which the restart replaces) does not.
+    """
+    want = {b.strip("[]") for b in binds} | {"*", "0.0.0.0", "::"}
+    busy = []
+    for got in filter(None, map(_web_listener, (ss_out or "").splitlines())):
+        port, host, program, pid = got
+        if port in ports and host in want and not (pid and _web_pid_uid(pid) == own_uid):
+            busy.append((port, host, program))
+    return busy
+
+
+def _web_pid_uid(pid):
+    try:
+        return os.stat("/proc/" + pid).st_uid
+    except OSError:
+        return None
+
+
+def _web_unit_state():
+    """(ActiveState, SubState, NRestarts) of the proxy's unit."""
+    _rc, out = _run_quiet([resolve("systemctl"), "show", "-p", "ActiveState", "-p", "SubState", "-p", "NRestarts",
+                           WEB_PROXY_UNIT], timeout=20)
+    kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    return kv.get("ActiveState", ""), kv.get("SubState", ""), kv.get("NRestarts", "")
+
+
+def _web_running():
+    """Whether the proxy is running and stays so: two reads in a row active/running with no restart between.
+
+    A unit that is `activating (auto-restart)` (Restart=on-failure after a failed start) never passes.
+    """
+    last = None
+    for _i in range(WEB_START_POLLS):
+        state = _web_unit_state()
+        if state[:2] == ("active", "running"):
+            if last == state:
+                return True
+            last = state
+        else:
+            last = None
+        time.sleep(WEB_START_POLL)
+    return False
+
+
+_WEB_PREFIXES = re.compile(r"^(?:Error: |loading (?:new |initial )?config: |adapting config using caddyfile: )+")
+
+
+def web_plain_error(line):
+    """One of the proxy's error lines in plain words: its JSON log record's message, no file path, no JSON."""
+    text = (line or "").strip()
+    if text.startswith("{"):
+        try:
+            rec = json.loads(text)
+        except ValueError:
+            rec = None
+        if isinstance(rec, dict):
+            text = ": ".join(str(rec[k]) for k in ("msg", "error") if rec.get(k))
+    busy = re.search(r"listen tcp ([^ ]+): bind: address already in use", text)
+    if busy:
+        return "another program already listens on %s" % busy.group(1)
+    text = re.sub(r"(?:/etc/lgsm-web-proxy/)?Caddyfile(?:\.candidate)?:([0-9]+)", r"line \1", _WEB_PREFIXES.sub("", text))
+    return "".join(c for c in text if c.isprintable())[:200].strip()
+
+
+def _web_last_error(since):
+    """The proxy's last error line in its own journal since `since` (epoch), in plain words, or a fixed sentence."""
+    try:
+        _rc, out = _run_quiet([resolve("journalctl"), "--namespace=lgsm-web-proxy", "-u", WEB_PROXY_UNIT, "--since",
+                               "@%d" % since, "-n", "40", "--no-pager", "-q", "-o", "cat"], timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        out = ""
+    lines = [ln for ln in out.splitlines() if "error" in ln.lower()]
+    return web_plain_error(lines[-1]) if lines else "the proxy stopped right after it started"
+
+
+def do_website_proxy_apply(args, content):
+    """Validate a rendered proxy configuration as the proxy's user, then swap it in; keep the old one on failure.
+
+    stdin: {"caddyfile": text, "files": {name: PEM}} (certificates an operator supplied, the CDN's
+    origin-pull CA). The listen addresses are this host's own, read now (_web_bind; none prints
+    bind=none), and a port another program holds on them is refused first (busy=<port> <address>
+    <program>): nothing changes. The candidate is checked with `caddy validate` run as WEB_PROXY_USER;
+    only one that passes replaces the running file (os.replace). Then the proxy is enabled and restarted
+    (`admin off` leaves no API to reload through, and a restart is what loads a changed file), whatever
+    the argument (start, reload): an apply that leaves it running leaves it enabled. Success is printed
+    only when the unit is really running afterwards (_web_running); otherwise the previous file is put
+    back and the journal's last error line is printed in plain words (applied=no, error=).
+    """
+    if args[0] == "restart":       # the page cache's purge: the running configuration, restarted
+        rc, _out = _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
+        sys.stdout.write("restarted=%s\n" % ("yes" if rc == 0 else "no"))
+        return rc
+    try:
+        text, files = _web_apply_doc(content)
+    except ValueError as e:
+        sys.stderr.write("refused: %s\n" % e)
+        return 2
+    if not os.path.isfile(WEB_PROXY_BIN):
+        sys.stderr.write("the web proxy is not installed\n")
+        return 1
+    pw = pwd.getpwnam(WEB_PROXY_USER)
+    text, binds = _web_listen_ok(text, pw)
+    if not binds:
+        return 1
+    for name, pem in files.items():
+        dest = WEB_PROXY_ETC + "/" + name if name == "origin-pull-ca.pem" else WEB_PROXY_CERTS + "/" + name
+        _web_write(dest, pem.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
+    old = _web_read(WEB_PROXY_CONF)
+    if not _web_validated(text, pw):
+        return 1
+    sys.stdout.write("valid=yes\nbind=%s\n" % " ".join(binds))
+    return _web_start(old, pw)
+
+
+def _web_listen_ok(text, pw):
+    """Return (text with its binds, binds), or (text, []) after printing bind=none or busy= lines."""
+    text, binds = _web_bind(text)
+    if not binds:
+        sys.stdout.write("bind=none\n")
+        return text, []
+    _rc, ss_out = _run_quiet([resolve("ss"), "-Hltnp"], timeout=20)
+    busy = web_port_holders(ss_out, binds, _web_ports(text), pw.pw_uid)
+    if busy:
+        sys.stdout.write("".join("busy=%s %s %s\n" % b for b in busy))
+        return text, []
+    return text, binds
+
+
+def _web_read(path):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _web_units_current():
+    """Write the proxy's unit and the rebind service and timer when they differ from this helper's text.
+
+    A proxy installed by an older helper gets the re-read before each start at its next apply.
+    """
+    changed = False
+    for path, text in ((WEB_PROXY_UNIT_FILE, WEB_PROXY_UNIT_TEXT), (WEB_REBIND_UNIT_FILE, WEB_REBIND_UNIT_TEXT),
+                       (WEB_REBIND_TIMER_FILE, WEB_REBIND_TIMER_TEXT)):
+        if _web_read(path) != text.encode():
+            _web_write(path, text.encode(), WEB_FILE_ROOT)
+            changed = True
+    if changed:
+        _run_quiet([resolve("systemctl"), "daemon-reload"], timeout=60)
+
+
+def web_rebound(conf, addrs):
+    """`conf` with its marked default_bind line set to `addrs`, or None when there is nothing to change.
+
+    Only the line the helper put in after WEB_BIND_MARK is touched: a tunnel's own loopback bind has no
+    mark. No address at all keeps the line as it is (the start then says why in the journal).
+    """
+    m = re.search(re.escape(WEB_BIND_MARK) + r"\n\tdefault_bind ([^\n]+)\n", conf or "")
+    if not m or not addrs or m.group(1).split() == addrs:
+        return None
+    return conf[:m.start(1)] + " ".join(addrs) + conf[m.end(1):]
+
+
+def do_website_proxy_rebind(args, content):
+    """Re-read the host's addresses into the proxy's bind line: `start` (ExecStartPre) or `check` (the timer).
+
+    `start` only rewrites the file (the start that follows reads it). `check` rewrites it and restarts
+    the proxy when it is running and the addresses changed. Prints rebind=changed|unchanged; always 0,
+    so a failed read never stops the proxy from starting on the addresses it had.
+    """
+    conf = (_web_read(WEB_PROXY_CONF) or b"").decode("utf-8", "replace")
+    _rc, out = _run_quiet([resolve("ip"), "-j", "addr", "show"], timeout=20)
+    new = web_rebound(conf, web_bind_addresses(out))
+    if new is None:
+        sys.stdout.write("rebind=unchanged\n")
+        return 0
+    pw = pwd.getpwnam(WEB_PROXY_USER)
+    _web_write(WEB_PROXY_CONF, new.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
+    sys.stdout.write("rebind=changed\n")
+    if args[0] == "check" and _web_unit_state()[0] == "active":
+        _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
+    return 0
+
+
+def _web_start(old, pw):
+    """Enable and restart the proxy on the new file; when it does not stay running, put `old` back. 0 or 1."""
+    was_active = _web_unit_state()[0] == "active"
+    since = int(time.time()) - 1
+    systemctl = resolve("systemctl")
+    _web_units_current()
+    _run_quiet([systemctl, "enable", WEB_PROXY_UNIT], timeout=60)
+    _run_quiet([systemctl, "enable", "--now", WEB_REBIND_TIMER], timeout=60)
+    _run_quiet([systemctl, "restart", WEB_PROXY_UNIT], timeout=120)
+    if _web_running():
+        sys.stdout.write("applied=yes\n")
+        return 0
+    why = _web_last_error(since)
+    if old is not None:
+        _web_write(WEB_PROXY_CONF, old, WEB_FILE_PROXY, 0, pw.pw_gid)
+    if was_active and old is not None:
+        _run_quiet([systemctl, "restart", WEB_PROXY_UNIT], timeout=120)
+    else:
+        _run_quiet([systemctl, "disable", "--now", WEB_PROXY_UNIT], timeout=120)
+    sys.stdout.write("applied=no\nerror=%s\n" % why)
+    return 1
+
+
+def _web_validated(text, pw):
+    """Whether `text` passes `caddy validate` run as the proxy's user; when it does, it replaces the running file."""
+    cand = WEB_PROXY_CONF + ".candidate"
+    _web_write(cand, text.encode(), WEB_FILE_PROXY, 0, pw.pw_gid)
+    r = subprocess.run([WEB_PROXY_BIN, "validate", "--config", cand, "--adapter", "caddyfile"],  # nosec B603
+                       shell=False, capture_output=True, timeout=120, user=pw.pw_uid, group=pw.pw_gid,
+                       extra_groups=[], cwd=WEB_PROXY_STATE,
+                       env=_clean_env(HOME=WEB_PROXY_STATE, XDG_DATA_HOME=WEB_PROXY_STATE,
+                                      XDG_CONFIG_HOME=WEB_PROXY_STATE))
+    if r.returncode != 0:
+        os.unlink(cand)
+        lines = [ln for ln in r.stderr.decode("utf-8", "replace").splitlines() if "error" in ln.lower()][-3:]
+        sys.stdout.write("valid=no\n" + "".join("error=%s\n" % web_plain_error(ln) for ln in lines))
+        return False
+    os.replace(cand, WEB_PROXY_CONF)
+    return True
+
+
+# The page cache's proxy build. The helper keeps its OWN copy of the Containerfile (a unit check holds it
+# equal to panel/website_images/caddy-cache/Containerfile, which CI builds and scans): root never builds
+# from a file in the panel's checkout, which the panel account can rewrite. Root Podman runs the build with
+# every capability dropped and no new privileges; the binary is taken out, checked to hold the cache
+# module, and installed in place of the plain release's.
+WEB_CACHE_MODULE = "github.com/caddyserver/cache-handler"
+WEB_CACHE_TAG = "localhost/lgsm-web-proxy-cache:build"
+WEB_CACHE_CONTAINERFILE = r'''# The websites' web proxy with the page cache module: Caddy built by xcaddy with
+# github.com/caddyserver/cache-handler at the exact version the signed catalog names. The root helper
+# builds it on the host (website-proxy-install-cache) from its own copy of this file and takes the binary
+# out; CI builds and scans this copy. Every value comes from the catalog (sites.caddy_cache): no ARG has a
+# default (the one dependency floor below only raises a minimum version; it pins nothing). Go checks every module
+# it downloads against the checksum database (GOSUMDB) before using it.
+ARG BUILDER_IMAGE
+ARG BASE_IMAGE
+FROM ${BUILDER_IMAGE} AS build
+# PANEL_CADDY_VERSION, not CADDY_VERSION: the builder image sets ENV CADDY_VERSION (v2.x.y), and an ENV wins over
+# an ARG of the same name, which made "vv2.x.y". XCADDY_SETCAP=0: the builder's default (1) runs setcap on the
+# binary, which a build with every capability dropped may not do; the proxy's unit grants the bind right itself.
+# `env -u` clears what would let a module skip the checksum database or the proxy (GOPRIVATE, GONOSUMDB, GONOPROXY,
+# GOINSECURE), whatever the builder image sets: unset, Go checks every module. An empty GONOSUMDB is not enough, as
+# Go then falls back to GOPRIVATE. The module list is read from a file, not a pipe, so either command failing fails
+# the build without relying on the shell's pipefail.
+# golang.org/x/net/html at v0.62.0 or later: Caddy 2.11.9 asks for v0.60.0, whose HTML parser has a denial of service
+# (CVE-2026-78661) and is linked into the binary. Go builds with the highest version any module asks for, so this
+# only raises the floor: a later Caddy that needs a newer x/net still gets its own. It is a no-op once the catalog's
+# Caddy asks for v0.62.0 or later itself, and can then go.
+ARG PANEL_CADDY_VERSION
+ARG CACHE_MODULE
+ARG CACHE_VERSION
+ENV GOFLAGS=-mod=mod GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org XCADDY_SETCAP=0
+RUN env -u GOPRIVATE -u GONOSUMDB -u GONOPROXY -u GOINSECURE \
+        xcaddy build "v${PANEL_CADDY_VERSION}" --with "${CACHE_MODULE}@${CACHE_VERSION}" \
+        --with golang.org/x/net/html@v0.62.0 --output /usr/bin/caddy-cache \
+    && /usr/bin/caddy-cache list-modules > /tmp/caddy-modules \
+    && grep -qx "http.handlers.cache" /tmp/caddy-modules
+
+FROM ${BASE_IMAGE}
+COPY --from=build /usr/bin/caddy-cache /usr/bin/caddy
+USER 65534:65534
+ENTRYPOINT ["/usr/bin/caddy"]
+CMD ["version"]
+'''
+
+
+def v_image_digest(s):
+    """A container image pinned by a full sha256 digest (registry/name@sha256:<64 hex>)."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}", s):
+        raise ValueError("not an image pinned by digest")
+    return s
+
+
+def v_module_version(s):
+    if not re.fullmatch(r"v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", s):
+        raise ValueError("not an exact module version")
+    return s
+
+
+def v_cpu_milli(s):
+    if not (s.isdecimal() and 100 <= int(s) <= 64000):
+        raise ValueError("not a CPU share in thousandths")
+    return s
+
+
+# The build's RUN steps use the host's network (--network=host), and the container the binary is copied out of
+# has none: root Podman's default bridge network made netavark turn on the host's IP forwarding and add its own
+# iptables chains, which stay after the build (and after Podman is removed). The build's last lines go to the
+# helper's stderr, which the panel logs: they hold the public pins and Go's output, no secret.
+WEB_CACHE_TAIL = 20
+# Podman's blob-info cache in root's store, which the first root build on a host makes (a few KB). The cache build
+# removes it afterwards only when it was not there before the build: one that was belongs to another tool's Podman.
+WEB_PODMAN_CACHE = "/var/lib/containers/cache"
+
+
+def _web_images(podman):
+    """{image id: its names} of every image in root's Podman store, intermediate ones included; None when unread."""
+    rc, out = _run_quiet([podman, "images", "-a", "--no-trunc", "--format", "{{.ID}} {{.Repository}}:{{.Tag}}"],
+                         timeout=120)
+    if rc != 0:
+        return None
+    images = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            images.setdefault(parts[0], set()).add(parts[1])
+    return images
+
+
+def _web_cache_clean(podman, before):
+    """Remove every image the cache build made, and no other: each id new since `before` that only the build names.
+
+    The build leaves its builder stage (about 2 GB), the images it pulled by digest and its own tag in root's
+    store; an image that was there before, or one with a name of its own (pulled or tagged meanwhile), stays.
+    Where the store could not be read before the build, only the build's own tag is removed.
+    """
+    after = _web_images(podman) if before is not None else None
+    made = sorted(i for i, names in (after or {}).items()
+                  if i not in before and all(n == WEB_CACHE_TAG or n.endswith(":<none>") for n in names))
+    _run_quiet([podman, "rmi", "-f"] + (made or [WEB_CACHE_TAG]), timeout=300)
+
+
+def _web_cache_build(args, d):
+    """Build the cache-enabled proxy image from WEB_CACHE_CONTAINERFILE in `d`; the binary's path, or None.
+
+    --layers=false: no image is committed per instruction (each was a few hundred MB). Whatever the build
+    still made is removed afterwards, the binary already copied out (_web_cache_clean).
+    """
+    version, builder, base, module_version = args
+    with open(os.path.join(d, "Containerfile"), "w", encoding="utf-8") as fh:
+        fh.write(WEB_CACHE_CONTAINERFILE)
+    podman = resolve("podman")
+    build = [podman, "build", "--no-cache", "--layers=false", "--pull=missing", "--network=host", "--cap-drop=ALL",
+             "--security-opt", "no-new-privileges", "-t", WEB_CACHE_TAG,
+             "--build-arg", "BUILDER_IMAGE=" + builder, "--build-arg", "BASE_IMAGE=" + base,
+             "--build-arg", "PANEL_CADDY_VERSION=" + version, "--build-arg", "CACHE_MODULE=" + WEB_CACHE_MODULE,
+             "--build-arg", "CACHE_VERSION=" + module_version, "-f", os.path.join(d, "Containerfile"), d]
+    before = _web_images(podman)
+    podman_cache_was_there = os.path.lexists(WEB_PODMAN_CACHE)
+    try:
+        r = subprocess.run(build, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosec B603
+                           timeout=1800, env=_clean_env())
+        if r.returncode != 0:
+            tail = (r.stdout or b"").decode("utf-8", "replace").splitlines()[-WEB_CACHE_TAIL:]
+            sys.stderr.write("the build failed (rc %d); its last lines:\n%s" % (
+                r.returncode, "".join("build: %s\n" % ln[:300] for ln in tail)))
+            return None
+        return _web_cache_copy_out(podman, d)
+    finally:
+        _web_cache_clean(podman, before)
+        _web_podman_cache_clean(podman_cache_was_there)
+
+
+def _web_podman_cache_clean(was_there):
+    """Remove WEB_PODMAN_CACHE when the cache build made it (`was_there` False); never one that was there, or a link."""
+    if was_there or os.path.islink(WEB_PODMAN_CACHE) or not os.path.isdir(WEB_PODMAN_CACHE):
+        return
+    shutil.rmtree(WEB_PODMAN_CACHE, ignore_errors=True)
+
+
+def _web_cache_copy_out(podman, d):
+    """Copy the built binary out of WEB_CACHE_TAG (a container with no network, removed after): its path, or None."""
+    rc, cid = _run_quiet([podman, "create", "--network=none", WEB_CACHE_TAG], timeout=120)
+    out = os.path.join(d, "caddy")
+    try:
+        rc = rc or _run_quiet([podman, "cp", cid.strip() + ":/usr/bin/caddy", out], timeout=120)[0]
+    finally:
+        _run_quiet([podman, "rm", "-f", cid.strip()], timeout=120)
+    return out if rc == 0 and os.path.isfile(out) else None
+
+
+def _web_has_cache(binary, pw):
+    """Whether `binary`, run as the proxy's user, lists the cache handler module (why not: on stderr)."""
+    try:
+        r = subprocess.run([binary, "list-modules"], shell=False, capture_output=True, timeout=60,  # nosec B603
+                           user=pw.pw_uid, group=pw.pw_gid, extra_groups=[], cwd="/", env=_clean_env())
+    except (OSError, subprocess.SubprocessError) as exc:
+        sys.stderr.write("the new binary could not be run as %s: %s\n" % (WEB_PROXY_USER, type(exc).__name__))
+        return False
+    if r.returncode != 0 or "http.handlers.cache" not in r.stdout.decode("utf-8", "replace").split():
+        sys.stderr.write("the new binary did not list the cache module (rc %d)\n" % r.returncode)
+        return False
+    return True
+
+
+def _web_cache_failed(cause, why):
+    """End website-proxy-install-cache on a failure: `why` on stderr (the panel's log), failed=<cause> for its page."""
+    sys.stderr.write("%s: nothing was installed\n" % why)
+    sys.stdout.write("failed=%s\n" % cause)
+    return 1
+
+
+def _web_cache_stage(binary, staged, pw):
+    """Write the built binary to `staged`, beside the installed one with its owner and mode; an error, or ""."""
+    try:
+        with open(binary, "rb") as fh:
+            _web_write(staged, fh.read(), WEB_FILE_EXEC, 0, pw.pw_gid)
+    except OSError as exc:
+        return "the new binary could not be written: %s" % type(exc).__name__
+    return ""
+
+
+def do_website_proxy_install_cache(args, content):
+    """Build the web proxy with the page cache module (catalog pins as args) and install it; prints cache=yes.
+
+    args: Caddy version, builder image, base image (both by digest), the module's exact version. The
+    plain proxy must be installed first (its user, folders and unit). Nothing is installed unless the
+    build succeeds and the binary holds the module; the running proxy is restarted only when active.
+    The binary is checked as the proxy's own user (never root: OWASP Docker Security Cheat Sheet, rule #2,
+    an unprivileged user), so it is checked where that user can reach it: written first beside the installed
+    one with the installed one's owner and mode (the build's own folder is root's, 0700), then moved over it.
+    A failure prints failed=build, check or install (the page's sentence) and its reason on stderr.
+    """
+    if not os.path.isfile(WEB_PROXY_BIN):
+        return _web_cache_failed("install", "install the web proxy first")
+    pw = pwd.getpwnam(WEB_PROXY_USER)
+    staged = WEB_PROXY_BIN + ".lgsm-check"
+    with tempfile.TemporaryDirectory(prefix="lgsm-web-cache-") as d:
+        binary = _web_cache_build(args, d)
+        if not binary:
+            return _web_cache_failed("build", "the cache-enabled web proxy could not be built")
+        why = _web_cache_stage(binary, staged, pw)
+    if why:
+        return _web_cache_failed("install", why)
+    if not _web_has_cache(staged, pw):
+        _web_unlink(staged)
+        return _web_cache_failed("check", "the cache-enabled web proxy failed its check")
+    try:
+        os.replace(staged, WEB_PROXY_BIN)
+    except OSError as exc:
+        _web_unlink(staged)
+        return _web_cache_failed("install", "the new binary could not be installed: %s" % type(exc).__name__)
+    _rc, active = _run_quiet([resolve("systemctl"), "is-active", WEB_PROXY_UNIT], timeout=20)
+    if active.strip() == "active":
+        _run_quiet([resolve("systemctl"), "restart", WEB_PROXY_UNIT], timeout=120)
+    sys.stdout.write("version=%s\ncache=yes\n" % args[0])
+    return 0
+
+
+def _web_unlink(path):
+    """Remove `path` when it is there."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass    # already gone: there is nothing to remove
+
+
+def do_website_cpu_limit(args, content):
+    """Limit a website account's CPU at its user slice (CPUQuota, CPUWeight) where the container cannot.
+
+    Rootless Podman's --cpus needs the cpu controller delegated to the account's user manager; where the
+    host does not delegate it, the system manager still can limit the account's whole slice. The limit
+    is persistent (systemctl set-property writes a drop-in). Only an account this helper made.
+    """
+    user, milli = args[0], int(args[1])
+    if not _web_made(user):
+        sys.stderr.write("refusing %s: not a website account the panel made\n" % user)
+        return 1
+    uid = pwd.getpwnam(user).pw_uid
+    weight = max(1, min(10000, milli // 10))
+    rc, _out = _run_quiet([resolve("systemctl"), "set-property", "user-%d.slice" % uid,
+                           "CPUQuota=%d%%" % max(1, milli // 10), "CPUWeight=%d" % weight], timeout=60)
+    sys.stdout.write("cpu=%s\n" % ("slice" if rc == 0 else "none"))
+    return rc
+
+
+def do_website_proxy_stop(args, content):
+    """Stop and disable the web proxy and its address timer (the last site went offline): nothing listens on 80/443."""
+    _run_quiet([resolve("systemctl"), "disable", "--now", WEB_REBIND_TIMER], timeout=60)
+    rc, _out = _run_quiet([resolve("systemctl"), "disable", "--now", WEB_PROXY_UNIT], timeout=120)
+    sys.stdout.write("stopped=%s\n" % ("yes" if rc == 0 else "no"))
+    return rc
+
+
+def web_issuer_in_use(conf):
+    """The storage folder of the issuer the configuration `conf` uses: local, the ACME CA it names, else Let's Encrypt."""
+    if re.search(r"^\tlocal_certs$", conf or "", re.M):
+        return "local"
+    m = re.search(r"^\tacme_ca https://([A-Za-z0-9./-]{1,200})$", conf or "", re.M)
+    return m.group(1).strip("/").replace("/", "-") if m else "acme-v02.api.letsencrypt.org-directory"
+
+
+def _web_not_after(path):
+    """A stored certificate's notAfter as an epoch (it is GMT: calendar.timegm, never local time), or None."""
+    try:
+        rc, text = _run_quiet([resolve("openssl"), "x509", "-noout", "-enddate", "-in", path], timeout=20)
+    except FileNotFoundError:
+        return None
+    m = re.search(r"notAfter=(.+)", text) if rc == 0 else None
+    try:
+        return int(calendar.timegm(time.strptime(m.group(1).strip().replace(" GMT", ""), "%b %d %H:%M:%S %Y"))) if m else None
+    except ValueError:
+        return None
+
+
+def _web_cert_lines():
+    """`cert=<domain> issuer=<folder> not_after=<epoch>`: one line per domain, the certificate the proxy serves.
+
+    The storage keeps every issuer's certificate (a move from the local CA to Let's Encrypt leaves the
+    local one behind). The one from the issuer the running configuration uses wins, else the latest.
+    """
+    in_use = web_issuer_in_use((_web_read(WEB_PROXY_CONF) or b"").decode("utf-8", "replace"))
+    best = {}
+    for path in sorted(glob.glob(WEB_PROXY_STATE + "/certificates/*/*/*.crt"))[:500]:
+        domain = os.path.basename(os.path.dirname(path))
+        issuer = os.path.basename(os.path.dirname(os.path.dirname(path)))
+        if not re.fullmatch(r"[a-z0-9.-]{1,253}", domain) or not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", issuer):
+            continue
+        when = _web_not_after(path)
+        if when is None:
+            continue
+        rank = (issuer == in_use, when)
+        if domain not in best or rank > best[domain][0]:
+            best[domain] = (rank, issuer, when)
+    return ["cert=%s issuer=%s not_after=%d" % (d, best[d][1], best[d][2]) for d in sorted(best)]
+
+
+def do_website_proxy_status(args, content):
+    """The web proxy's state: installed=, version=, active=, then one cert= line per stored certificate."""
+    installed = os.path.isfile(WEB_PROXY_BIN)
+    sys.stdout.write("installed=%s\n" % ("yes" if installed else "no"))
+    if installed:
+        rc, ver = _run_quiet([WEB_PROXY_BIN, "version"], timeout=20)
+        sys.stdout.write("version=%s\n" % (ver.split()[0] if rc == 0 and ver.split() else ""))
+        rc, mods = _run_quiet([WEB_PROXY_BIN, "list-modules"], timeout=20)
+        sys.stdout.write("cache=%s\n" % ("yes" if rc == 0 and "http.handlers.cache" in mods.split() else "no"))
+    _rc, active = _run_quiet([resolve("systemctl"), "is-active", WEB_PROXY_UNIT], timeout=20)
+    sys.stdout.write("active=%s\n" % (active.strip().splitlines() or ["unknown"])[0])
+    for line in _web_cert_lines():
+        sys.stdout.write(line + "\n")
+    return 0
+
+
+def _web_site_uids():
+    """The uids of every website account this helper made (its marks), sorted."""
+    uids = []
+    for name in sorted(os.listdir(WEB_MARK_DIR)) if os.path.isdir(WEB_MARK_DIR) else []:
+        if (re.fullmatch(WEB_ACCOUNT_RE, name) or name == WEB_TUNNEL_ACCOUNT) and _web_made(name):
+            try:
+                uids.append(pwd.getpwnam(name).pw_uid)
+            except KeyError:
+                continue
+    return uids
+
+
+def web_guard_uid_refusal(uids):
+    """Why `uids` cannot go in the egress guard's set, or None.
+
+    A website account is made by useradd as an ordinary account, so its uid is in login.defs'
+    UID_MIN..UID_MAX (_login_defs); root (0) is refused whatever that file says.
+    """
+    defs = _login_defs()
+    low, high = max(defs["UID_MIN"], 1), defs["UID_MAX"]
+    bad = [u for u in uids if isinstance(u, bool) or not isinstance(u, int) or not low <= u <= high]
+    if bad:
+        return "uid %s is not a website account's (they are %d to %d)" % (bad[0], low, high)
+    return None
+
+
+def web_guard_ruleset(uids):
+    """The egress guard's nftables text (loaded atomically with nft -f) for site account `uids`.
+
+    For those uids' sockets: loopback addresses stay reachable (their own forwards and relays; not
+    "oif lo", which a packet to the host's own tailnet address also leaves by), any other address of
+    this host (fib daddr type local: its LAN, tailnet and public addresses, so the panel's port and
+    SSH) is dropped, and so are the private, link-local, tailnet, mapped and NAT64 ranges.
+    The internet stays reachable for what needs it (an image pull, an app's download, the egress
+    proxy, the tunnel); a container without egress cannot leave its loopback anyway.
+
+    The uid test is a positive match that jumps to site_out. A packet with no full socket of its own
+    (the kernel's TCP resets and ICMP replies, a TIME_WAIT pair's ACK) has no uid to read: the
+    kernel's meta skuid expression then ends the rule without a match (NFT_BREAK). With a negative
+    test ("!= @site_uids accept") such a packet skipped the accept and met the drops, for every
+    account; with a positive one it falls through to the chain's accept. A site account's own
+    connection still starts from a socket that has its uid, so nothing it opens gets past site_out.
+
+    With no site account the set is empty (no elements line), so the jump matches nothing. A uid outside
+    the host's range for ordinary accounts (web_guard_uid_refusal) is refused with ValueError: uid 0 or a
+    service's uid in the set would hold root or that service to site_out, and the replies of every
+    listener it owns (sshd's handshake among them) to the host's other addresses would be dropped.
+    """
+    reason = web_guard_uid_refusal(uids)
+    if reason:
+        raise ValueError(reason)
+    elements = ["\t\telements = { %s }" % ", ".join(str(u) for u in uids)] if uids else []
+    return "\n".join([
+        "# Written by linuxgsm-panel: the websites' egress guard.",
+        "table inet lgsm_web {}", "delete table inet lgsm_web", "table inet lgsm_web {",
+        "\tset site_uids {", "\t\ttype uid"] + elements + ["\t}",
+        "\tchain site_out {",
+        "\t\tip daddr 127.0.0.0/8 accept", "\t\tip6 daddr ::1 accept",
+        "\t\tfib daddr type local counter drop",
+        "\t\tip daddr { %s } counter drop" % ", ".join(WEB_GUARD_V4),
+        "\t\tip6 daddr { %s } counter drop" % ", ".join(WEB_GUARD_V6),
+        "\t}",
+        "\tchain output {", "\t\ttype filter hook output priority 0; policy accept;",
+        "\t\tmeta skuid @site_uids jump site_out",
+        "\t}", "}", ""])
+
+
+def _web_guard_refresh():
+    """Rewrite and reload the guard for the current accounts when it is on; 0 when it is off or reloaded."""
+    if not os.path.exists(WEB_GUARD_FILE):
+        return 0
+    return _web_guard_load()
+
+
+def _web_guard_load():
+    try:
+        text = web_guard_ruleset(_web_site_uids())
+    except ValueError as e:
+        sys.stderr.write("refusing to load the egress guard: %s\n" % e)
+        return 1
+    _web_write(WEB_GUARD_FILE, text.encode(), WEB_FILE_ROOT)
+    rc, _out = _run_quiet([resolve("nft"), "-f", WEB_GUARD_FILE])
+    if rc == 0:
+        sys.stdout.write("guard=on\n")
+    return rc
+
+
+def do_website_egress_guard(args, content):
+    """Turn the egress guard on (written, loaded and kept across boots by its unit) or off (table and unit removed)."""
+    os.makedirs(WEB_PROXY_ETC, mode=0o750, exist_ok=True)
+    if args[0] == "off":
+        _run_quiet([resolve("systemctl"), "disable", "--now", WEB_GUARD_UNIT])
+        for path in (WEB_GUARD_FILE, WEB_GUARD_UNIT_FILE):
+            if os.path.exists(path):
+                os.unlink(path)
+        _rc, tables = _run_quiet([resolve("nft"), "list", "tables"])
+        if "table inet lgsm_web" in tables.splitlines():     # the unit's ExecStop usually removed it already
+            _run_quiet([resolve("nft"), "delete", "table", "inet", "lgsm_web"])
+        _run_quiet([resolve("systemctl"), "daemon-reload"])
+        sys.stdout.write("guard=off\n")
+        return 0
+    rc = _web_guard_load()
+    if rc:
+        return rc
+    _web_write(WEB_GUARD_UNIT_FILE, WEB_GUARD_UNIT_TEXT.encode(), WEB_FILE_ROOT)
+    _run_quiet([resolve("systemctl"), "daemon-reload"])
+    rc, _out = _run_quiet([resolve("systemctl"), "enable", WEB_GUARD_UNIT])
+    return rc
+
+
+def _web_quota_mount(path):
+    """(mount point, whether user quotas are on) of the file system holding `path`, from /proc/mounts."""
+    best, opts = "", ""
+    with open("/proc/mounts", encoding="utf-8") as fh:
+        for line in fh:
+            parts = line.split()
+            if len(parts) >= 4 and (path == parts[1] or path.startswith(parts[1].rstrip("/") + "/")) \
+                    and len(parts[1]) > len(best):
+                best, opts = parts[1], parts[3]
+    on = any(o in ("usrquota", "usrjquota", "quota", "uquota") or o.startswith("usrjquota=")
+             for o in opts.split(","))
+    return best, on
+
+
+# A website account's rootless image store is in its home and mostly owned by the account itself (an image's
+# root is the account's own uid), so a user quota counts it. The site's disk limit is for its own folder
+# (website_files.used_bytes), so the quota adds this allowance for the account's images: the test host's
+# largest measured store was WordPress's, 2154 MB (its image and wp-cli's), and an update keeps the old image
+# beside the new one until it is pruned.
+WEB_IMAGE_ALLOWANCE_MB = 4096
+
+
+def do_website_quota_set(args, content):
+    """Set a website account's disk quota (MB, 0 = none) where its home's file system has user quotas on.
+
+    The quota is the site's limit plus WEB_IMAGE_ALLOWANCE_MB for the account's container images (none
+    when the limit is 0). Prints quota=set, or quota=unavailable when the file system has none (the panel
+    then measures the site with du instead and says which mode the host is in).
+    """
+    user, mb = args[0], int(args[1])
+    if not _web_made(user):
+        sys.stderr.write("refusing %s: not a website account the panel made\n" % user)
+        return 1
+    home = pwd.getpwnam(user).pw_dir
+    mount, on = _web_quota_mount(home)
+    if not on:
+        sys.stdout.write("quota=unavailable\n")
+        return 0
+    kb = (mb + WEB_IMAGE_ALLOWANCE_MB) * 1024 if mb else 0
+    rc, _out = _run_quiet([resolve("setquota"), "-u", user, str(kb), str(kb + kb // 10), "0", "0", mount])
+    sys.stdout.write("quota=%s\n" % ("set" if rc == 0 else "failed"))
+    return rc
+
+
 # ── The verb table ────────────────────────────────────────────────────────────────────────────
 # verb -> (validators, build(args) -> argv, stdin or None)
 #
@@ -2870,6 +4096,20 @@ VERBS = {
     # again -- see do_addon_account_prepare. Never the panel's own account.
     "addon-account-prepare": ([v_destroyable_user], lambda a: [], None),
     "addon-account-release": ([v_destroyable_user, v_choice("keep", "forget")], lambda a: [], None),
+    # The websites -- see the Websites block above the verb table. Each acts only on an account this
+    # helper made (its mark), or on the web proxy's own fixed paths.
+    "website-account-create": ([v_website_account], lambda a: [], None),
+    "website-account-remove": ([v_website_account], lambda a: [], None),
+    "website-proxy-install": ([v_caddy_version, v_choice("amd64", "arm64"), v_sha256], lambda a: [], None),
+    "website-proxy-apply": ([v_choice("start", "reload", "restart")], lambda a: [], None),
+    "website-proxy-stop": ([], lambda a: [], None),
+    "website-proxy-rebind": ([v_choice("start", "check")], lambda a: [], None),
+    "website-proxy-status": ([], lambda a: [], None),
+    "website-egress-guard": ([v_choice("on", "off")], lambda a: [], None),
+    "website-quota-set": ([v_website_account, v_quota_mb], lambda a: [], None),
+    "website-proxy-install-cache": ([v_caddy_version, v_image_digest, v_image_digest, v_module_version],
+                                    lambda a: [], None),
+    "website-cpu-limit": ([v_website_account, v_cpu_milli], lambda a: [], None),
     # apt's default set: Ubuntu's phased rollouts are never forced. A deferred update installs
     # once its rollout reaches this host; the OS Updates card lists it apart until then.
     "apt-full-upgrade": ([], lambda a: [APT, "full-upgrade", "-y"] + APT_CONFOLD, None),
@@ -7679,7 +8919,7 @@ def _root_cron_refusal(_args):
 # the client prints is scrubbed of both passwords before it is passed on: a syntax error can quote
 # the statement it failed on.
 DB_FLAVORS = ("mariadb", "mysql")
-DB_NAME_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
+DB_NAME_RE = r"[gw]s[1-9][0-9]{0,9}_[a-z0-9]{1,16}"
 DB_PW_RE = r"[A-Za-z][A-Za-z0-9._-]{23,63}"
 DB_ADMIN_USER_RE = r"[A-Za-z0-9_.@-]{1,32}"
 DB_ADMIN_PW_RE = r"[\x20-\x7e]{1,128}"
@@ -7690,7 +8930,7 @@ DB_DUMP_DIR = "panel-db-dumps"
 DB_ARCHIVE_ROOT = "/var/backups/linuxgsm-panel"
 DB_ARCHIVE_DIR = DB_ARCHIVE_ROOT + "/databases"
 DB_ARCHIVE_DAYS = 30
-DB_ARCHIVE_FILE_RE = r"gs[1-9][0-9]{0,9}_[a-z0-9]{1,16}-[0-9]{8}T[0-9]{6}Z\.sql\.gz"
+DB_ARCHIVE_FILE_RE = r"[gw]s[1-9][0-9]{0,9}_[a-z0-9]{1,16}-[0-9]{8}T[0-9]{6}Z\.sql\.gz"
 DB_IMPORT_MAX = 2 * 1024 * 1024 * 1024
 DB_HARDEN_CNF = "/etc/mysql/mariadb.conf.d/60-linuxgsm-panel.cnf"
 DB_HARDEN_CNF_TEXT = ("# Written by linuxgsm-panel when it installed this database server.\n"
@@ -8966,6 +10206,17 @@ ACTIONS = {
     "steam-dumps-sweep": do_steam_dumps_sweep,
     "gameuser-group": do_gameuser_group,
     "addon-account-prepare": do_addon_account_prepare,
+    "website-account-create": do_website_account_create,
+    "website-account-remove": do_website_account_remove,
+    "website-proxy-install": do_website_proxy_install,
+    "website-proxy-apply": do_website_proxy_apply,
+    "website-proxy-stop": do_website_proxy_stop,
+    "website-proxy-status": do_website_proxy_status,
+    "website-egress-guard": do_website_egress_guard,
+    "website-quota-set": do_website_quota_set,
+    "website-proxy-install-cache": do_website_proxy_install_cache,
+    "website-cpu-limit": do_website_cpu_limit,
+    "website-proxy-rebind": do_website_proxy_rebind,
     "addon-account-release": do_addon_account_release,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
@@ -8996,7 +10247,7 @@ ACTIONS = {
 # The database verbs (but db-probe) read their sign-in document (db_read_doc).
 STDIN_VERBS = frozenset({"write-file", "content-cron-write", "root-crontab-write", "db-harden", "db-create",
                          "db-password", "db-sizes", "db-dump", "db-import", "db-drop", "db-admin-check", "db-rehost",
-                         "db-query"})
+                         "db-query", "website-proxy-apply"})
 
 # Verbs whose arguments are fine but which may still be refused by the state of the host, read
 # here as root: {verb: a function answering why not, or ""}. Run after validation and before the

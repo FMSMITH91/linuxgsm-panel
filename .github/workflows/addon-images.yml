@@ -4,6 +4,13 @@ name: Add-on images
 # add-on catalog (panel/addon_images/catalog.json, the source of the signed catalog panels fetch)
 # names by digest, pulled by that digest, and each image the panel builds on the host
 # (panel/addon_images/<name>/Containerfile), built here from the catalog's values.
+# The same for the websites, as hosts run them: each image the panel builds on the host from a `sites`
+# pin (panel/website_images/<name>/Containerfile: the PHP and WordPress images once per PHP version, the
+# Node.js image once per version with the catalog's npm, wp-cli, the tunnel connector and the page cache's
+# proxy) is built here from the catalog's values and the BUILT image is scanned; each image a site runs
+# exactly as pinned (the static sites' nginx, the object cache) is pulled and scanned. A pin that is only a
+# build's base is not scanned on its own: no host runs it, and the fixes its build applies would fail the
+# scan for issues no site has. The severity, --ignore-unfixed and the ignore file are the same for both.
 # Trivy fails the run on a High or Critical vulnerability that has a fixed version, or a secret in an
 # image; an accepted finding is an entry in .github/trivyignore.yaml with its reason and an expiry
 # date. hadolint lints each Containerfile, and ClusterFuzzLite's build image
@@ -74,6 +81,7 @@ jobs:
           if [ "$EVENT" = "pull_request" ]; then
             scope=(
               'panel/addon_images/**'
+              'panel/website_images/**'
               'panel/services/addons.py'
               '.clusterfuzzlite/Dockerfile'
               '.github/workflows/addon-images.yml'

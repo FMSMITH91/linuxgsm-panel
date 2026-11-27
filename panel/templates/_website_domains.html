@@ -1,0 +1,24 @@
+{# Domains: each with its DNS and certificate state; the records to create, exactly; Check again. The
+   panel compares DNS answers with this host's addresses and never connects to the domain. #}
+<section data-ws-pane="domains" hidden>
+  <ul id="wd-list" class="list-unstyled mb-2"></ul>
+  {% if can_manage|default(false) %}
+  <form id="wd-add" class="d-flex flex-wrap gap-2" data-action="wsDomainAdd" data-args='["@event"]' data-on="submit">
+    <label for="wd-domain" class="visually-hidden">Domain</label>
+    <input type="text" id="wd-domain" class="form-control form-control-sm fx-14" maxlength="253" inputmode="url" required
+           autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="www.example.org" data-no-i18n>
+    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Add domain</button>
+  </form>
+  {% endif %}
+  <div id="wd-msg" class="small mt-1" role="status"></div>
+  <div id="wd-dns" class="card mt-2" hidden>
+    <div class="card-body py-2 small">
+      <div class="fw-semibold mb-1">Create these DNS records at your domain's provider</div>
+      <div class="table-responsive"><table class="table table-sm mb-1">
+        <thead><tr><th scope="col">Type</th><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+        <tbody id="wd-records"></tbody>
+      </table></div>
+      <div class="form-text">Then press Check again. A domain goes online once its records point here.</div>
+    </div>
+  </div>
+</section>

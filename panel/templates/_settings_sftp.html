@@ -46,6 +46,21 @@
           <label class="form-check-label small" for="sftp-bind-all"><span>All addresses</span> <code data-no-i18n>0.0.0.0{% if sf.ipv6 %}, ::{% endif %}</code></label>
           <div class="small text-warning" id="sftp-all-warning">{{ t(sf.all_warning) }}</div>
         </div>
+        <div class="form-check mt-1">
+          <input class="form-check-input" type="radio" name="sftp_bind" id="sftp-bind-addr" value="address"
+                 {% if sf.bind == 'address' %}checked{% endif %}{% if not sf.addresses %} disabled{% endif %}>
+          <label class="form-check-label small" for="sftp-bind-addr">A specific address</label>
+          <div class="small text-secondary">Only that one address. If this host loses it, the service stops until it is back.</div>
+          {% if sf.addresses %}
+          <select class="form-select form-select-sm mt-1" id="sftp-bind-address" name="sftp_bind_address" aria-label="{{ t('Address to listen on') }}">
+            {% for a in sf.addresses %}
+            <option value="{{ a.addr }}"{% if a.addr == sf.s.address %} selected{% endif %}>{{ a.addr }}{% if a.iface %} ({{ a.iface }}){% endif %}{% if a.gone %} · {{ t('not on this host now') }}{% endif %}{% if a.public %} · {{ t('public: reachable from the internet') }}{% endif %}</option>
+            {% endfor %}
+          </select>
+          {% endif %}
+          {% if sf.addresses_unread %}<div class="small text-secondary">This host's addresses could not be read.</div>{% endif %}
+          {% if sf.bind == 'address' and sf.address_public %}<div class="small text-warning" id="sftp-public-warning">{{ t(sf.public_warning) }}</div>{% endif %}
+        </div>
       </fieldset>
 
       <div class="row g-2">

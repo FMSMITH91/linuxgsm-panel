@@ -192,14 +192,17 @@ def _read227(*parts):
 
 
 def _b3_renovate227():
-    """Renovate's built-in dockerfile manager stays off the add-ons' build files (B3's and IW4MAdmin's)."""
+    """Renovate's built-in dockerfile manager stays off every add-on and website build file (their pins are the catalog's)."""
     rules = _json227.loads(_read227(".github", "renovate.json")).get("packageRules") or []
+    files = sorted("panel/%s/%s/Containerfile" % (top, d) for top in ("addon_images", "website_images")
+                   for d in _os227.listdir(_os227.path.join(_ROOT227, "panel", top))
+                   if _os227.path.isfile(_os227.path.join(_ROOT227, "panel", top, d, "Containerfile")))
     off = [r for r in rules if r.get("matchManagers") == ["dockerfile"] and r.get("enabled") is False
-           and r.get("matchFileNames") == ["panel/addon_images/b3/Containerfile",
-                                                  "panel/addon_images/iw4madmin/Containerfile"] and len(r) == 4]
-    eq("ci images: Renovate's built-in dockerfile manager is off for the add-ons' build files (it read B3's tagless "
-       "base digest as python:latest), so only the custom managers (3.15-slim, aspnet 10.0) propose their bases",
-       len(off), 1)
+           and r.get("matchFileNames") == files and len(r) == 4]
+    eq("ci images: Renovate's built-in dockerfile manager is off for every add-on and website build file (it read "
+       "B3's tagless base digest as python:latest), so only the custom managers (3.15-slim, aspnet 10.0) propose "
+       "their bases",
+       (len(off), len(files) >= 8), (1, True))
 
 
 def _docker_pins227():

@@ -348,7 +348,7 @@ def _s293_scan():
     seen, real_run = [], _AI293._run
     _AI293._run = lambda argv, **kw: seen.append(argv) or 0
     try:
-        _AI293._images(dict(p, upstream={}), _TMP293, [])   # builds only: a pull also asks docker for its date
+        _AI293._images(dict(p, upstream={}, sites={}), _TMP293, [])   # add-on builds only: a pull asks docker its date
     finally:
         _AI293._run = real_run
     builds = [a for a in seen if a[:2] == ["docker", "build"]]

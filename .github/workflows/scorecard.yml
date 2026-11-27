@@ -110,7 +110,9 @@ jobs:
         with:
           name: scorecard-results
           path: results.sarif
-          retention-days: 5
+          # 7 days, as for every report of one run: published_results sends the score itself; nothing
+          # reads this copy after the run.
+          retention-days: 7
 
   image-pulled:
     name: Scorecard image pulled

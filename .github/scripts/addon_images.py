@@ -5,6 +5,12 @@ What is scanned is what the add-on catalog names, read from the repository, neve
 workflow. panel/addon_images/catalog.json is the source of the catalog that tools/sign-catalog.sh
 signs and panels fetch, so a catalog change cannot merge without this scan passing:
   * every add-on whose entry has an `image` (`registry/name@sha256:...`), pulled by that digest;
+  * the websites' images as hosts run them: each image the panel builds on the host from a `sites` pin
+    (panel/website_images/<name>/Containerfile: php@<version> and wordpress@php<version> per PHP version,
+    node@<version> per Node.js version with the catalog's npm, wpcli, cloudflared and the page cache's
+    proxy), built from `sites`, and each image a site runs exactly as pinned (static, object cache, and
+    any runtime or tunnel the panel has no Containerfile for), pulled by digest. A pin that is only a
+    build's base is not scanned on its own: no host runs it (sites_images, site_builds);
   * every add-on the panel builds on the host (panel/addon_images/<name>/Containerfile, an entry with
     a `base`), built here with the catalog's values passed as build arguments, as the panel passes
     them (BASE_IMAGE is `base`; <NAME>_TAG, <NAME>_SHA256 and <NAME>_COMMIT are `tag`, `sha256` and
@@ -31,6 +37,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 IMAGES_DIR = os.path.join(ROOT, "panel", "addon_images")
+WEBSITE_IMAGES_DIR = os.path.join(ROOT, "panel", "website_images")
 CATALOG = os.path.join(IMAGES_DIR, "catalog.json")
 TRIVY_IGNORE = os.path.join(ROOT, ".github", "trivyignore.yaml")
 HADOLINT_CONFIG = os.path.join(ROOT, ".github", "hadolint.yaml")
@@ -109,16 +116,16 @@ def _image_problems(addons, builds):
     return out
 
 
-def _build_plan(name, entry, images_dir, problems):
+def _build_plan(name, entry, images_dir, problems, offered=None):
     """[(ARG, value)] that build `name` takes from its catalog entry; what is wrong is appended to `problems`.
 
     Only the ARGs its Containerfile declares, as the panel passes them; every one must come from the catalog,
-    and none may have a default.
+    and none may have a default. `offered` is the catalog's [(ARG, value)] for it (an add-on's by default).
     """
     with open(os.path.join(images_dir, name, "Containerfile"), encoding="utf-8") as fh:
         text = fh.read()
     declared = set(DECLARED_RE.findall(text))
-    args = [(n, v) for n, v in build_args(name, entry) if n in declared]
+    args = [(n, v) for n, v in (build_args(name, entry) if offered is None else offered) if n in declared]
     if not declared:
         problems.append("%s: its Containerfile declares no ARG to take the catalog's values" % name)
     problems.extend("%s: ARG %s has a default (%s); its value must come from the catalog alone" % (name, n, v)
@@ -127,8 +134,132 @@ def _build_plan(name, entry, images_dir, problems):
     return args
 
 
-def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR):
-    """{"upstream": {name: image}, "builds": {name: [(ARG, value)]}, "problems": [text]} for the tree as it is."""
+def read_sites(path=CATALOG):
+    """The catalog source's `sites` section, or {} when it has none."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            obj = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    sites = obj.get("sites") if isinstance(obj, dict) else None
+    return sites if isinstance(sites, dict) else {}
+
+
+def _image_of(entry):
+    return entry.get("image") if isinstance(entry, dict) else None
+
+
+def _versioned(prefix, entries):
+    """{prefix + version: image} for {version: {"image": ...}}."""
+    return {prefix + v: _image_of(e) for v, e in (entries or {}).items()}
+
+
+# The website images the panel builds on the host from an upstream pin (each pin is then that build's base
+# and only its build is scanned): {folder of panel/website_images: (what the folder builds, sites key it reads)}.
+# A runtime (sites.runtimes.<name>) is built when a folder has its name; the tunnel's provider by its program.
+TUNNEL_FOLDERS = {"cloudflare": "cloudflared"}
+
+
+def _pin_groups(sites):
+    """[(the folder that would build them, {label: image})] of every image pin of the `sites` section.
+
+    The folder is "" for the images no folder builds (static, object cache).
+    """
+    groups = [("", {"sites-static": _image_of(sites.get("static")),
+                    "sites-object-cache": _image_of(sites.get("object_cache"))}),
+              ("wpcli", {"sites-wpcli": _image_of(sites.get("wpcli"))}),
+              ("php", _versioned("sites-php-", sites.get("php"))),
+              ("wordpress", _versioned("sites-wordpress-php", (sites.get("wordpress") or {}).get("php")))]
+    groups += [(TUNNEL_FOLDERS.get(k, ""), _versioned("sites-tunnel-", {k: v}))
+               for k, v in (sites.get("tunnel") or {}).items()]
+    return groups + [(r, _versioned("sites-%s-" % r, (e or {}).get("versions")))
+                     for r, e in (sites.get("runtimes") or {}).items()]
+
+
+def sites_images(sites, folders=()):
+    """{label: image} of every image a website runs as the `sites` section pins it, unmodified.
+
+    An image the panel builds on the host from a pin (a folder of `folders` builds it: site_builds) is a build
+    input there, not run, so it is scanned as that build's result and not here.
+    """
+    out = {}
+    for folder, images in _pin_groups(sites):
+        if not folder or folder not in folders:
+            out.update(images)
+    return {k: v for k, v in sorted(out.items()) if isinstance(v, str)}
+
+
+def _bases(prefix, entries, extra=()):
+    """{prefix + version: [("BASE_IMAGE", image)] + extra} for {version: {"image": ...}}."""
+    return {prefix + v: [("BASE_IMAGE", e["image"])] + list(extra) for v, e in sorted((entries or {}).items())
+            if isinstance(e, dict) and isinstance(e.get("image"), str)}
+
+
+def _tunnel_builds(name, sites):
+    """The tunnel connector's build: its provider's program image and the certificate authorities' image."""
+    provider = {v: k for k, v in TUNNEL_FOLDERS.items()}[name]
+    e = (sites.get("tunnel") or {}).get(provider) or {}
+    return _bases(name, {"": e}, [("CERTS_IMAGE", e["certs"])] if isinstance(e.get("certs"), str) else [])
+
+
+def _runtime_builds(name, runtime):
+    """A runtime's builds, once per version, with the runtime's exact npm version when it names one."""
+    npm = [("NPM_VERSION", runtime["npm"])] if isinstance(runtime.get("npm"), str) else []
+    return _bases(name + "@", runtime.get("versions"), npm)
+
+
+_FOLDER_BUILDS = {"php": lambda sites: _bases("php@", sites.get("php")),
+                  "wordpress": lambda sites: _bases("wordpress@php", (sites.get("wordpress") or {}).get("php")),
+                  "wpcli": lambda sites: _bases("wpcli", {"": sites.get("wpcli")})}
+
+
+def site_builds(name, sites):
+    """{label: [(ARG, value)]} of the builds of website folder `name`, each from its catalog pins.
+
+    php: once per PHP version (php@8.4); wordpress: once per PHP version (wordpress@php8.4); a runtime's
+    folder (node): once per version, with the runtime's npm (node@24); cloudflared: the tunnel's program on
+    an empty base, with the certificate authorities' image; wpcli and caddy-cache: once.
+    """
+    if name in _FOLDER_BUILDS:
+        return _FOLDER_BUILDS[name](sites)
+    if name in TUNNEL_FOLDERS.values():
+        return _tunnel_builds(name, sites)
+    runtime = (sites.get("runtimes") or {}).get(name)
+    if isinstance(runtime, dict):
+        return _runtime_builds(name, runtime)
+    return {name: site_build_args(name, sites)}
+
+
+def build_folder(label):
+    """The folder of a build's label: "php@8.4" is built from php/, every other label from its own name."""
+    return label.split("@", 1)[0]
+
+
+def site_build_args(name, sites):
+    """[(ARG, value)] a websites build takes from `sites` (the page cache's proxy: caddy-cache)."""
+    c = (sites.get("caddy_cache") or {}) if name == "caddy-cache" else {}
+    keys = (("BUILDER_IMAGE", "builder"), ("BASE_IMAGE", "base"), ("PANEL_CADDY_VERSION", "caddy"),
+            ("CACHE_MODULE", "module"), ("CACHE_VERSION", "version"))
+    return [(arg, c[k]) for arg, k in keys if isinstance(c.get(k), str)]
+
+
+def sites_plan(catalog_path, images_dir, problems):
+    """{"upstream": {label: image}, "builds": {name: [(ARG, value)]}} of the websites; problems appended."""
+    sites = read_sites(catalog_path)
+    if not sites:
+        return {"upstream": {}, "builds": {}}
+    folders = build_dirs(images_dir)
+    up = sites_images(sites, folders)
+    problems.extend("%s: image %s is not pinned by digest" % (k, v) for k, v in up.items() if not PINNED_RE.match(v))
+    builds = {label: _build_plan(b, {}, images_dir, problems, args)
+              for b in folders for label, args in site_builds(b, sites).items()}
+    problems.extend("%s: base %s is not pinned by digest" % (b, v) for b, args in builds.items() for n, v in args
+                    if n.endswith("_IMAGE") and not PINNED_RE.match(v))
+    return {"upstream": up, "builds": builds}
+
+
+def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR, website_dir=WEBSITE_IMAGES_DIR):
+    """{"upstream": {name: image}, "builds": {name: [(ARG, value)]}, "sites": {upstream, builds}, "problems": [text]}."""
     addons, problem = read_catalog(catalog_path)
     builds = build_dirs(images_dir)
     problems = [problem] if problem else _image_problems(addons, builds)
@@ -136,7 +267,7 @@ def plan(catalog_path=CATALOG, images_dir=IMAGES_DIR):
     up = upstream_images(addons)
     if not up and not builds and not problems:
         problems.append("nothing to scan: no pulled image in the catalog and no build folder")
-    return {"upstream": up, "builds": args, "problems": problems}
+    return {"upstream": up, "builds": args, "sites": sites_plan(catalog_path, website_dir, problems), "problems": problems}
 
 
 def trivy_argv(trivy_image, cache, tars, tar_name):
@@ -172,17 +303,31 @@ def _created(ref):
 
 def _images(p, work, results):
     """Pull or build each image and save it to `work`; [(label, tar name)] of those that got there."""
+    sites = p.get("sites") or {}
+    return (_pull_all(dict(p["upstream"], **(sites.get("upstream") or {})), work, results)
+            + _build_all(p["builds"], IMAGES_DIR, work, results)
+            + _build_all(sites.get("builds") or {}, WEBSITE_IMAGES_DIR, work, results))
+
+
+def _pull_all(upstream, work, results):
+    """Pull and save each image of {label: ref}; [(label, tar name)] of those saved."""
     saved = []
-    for name, ref in p["upstream"].items():
+    for name, ref in upstream.items():
         tar = "pull-%s.tar" % name
         if _run(["docker", "pull", "--quiet", ref]) or _run(["docker", "save", "-o", os.path.join(work, tar), ref]):
             results.append((name, "could not be pulled or saved"))
             continue
         print("%s: %s, created %s" % (name, ref, _created(ref)), flush=True)
         saved.append((name, tar))
-    for b, args in p["builds"].items():
-        tag, tar = "localhost/addon-scan-%s:ci" % b, "build-%s.tar" % b
-        d = os.path.join(IMAGES_DIR, b)
+    return saved
+
+
+def _build_all(builds, images_dir, work, results):
+    """Build and save each {name: [(ARG, value)]} from `images_dir`/<name>; [(label, tar name)] of those saved."""
+    saved = []
+    for b, args in builds.items():
+        tag, tar = "localhost/addon-scan-%s:ci" % b.replace("@", "-"), "build-%s.tar" % b.replace("@", "-")
+        d = os.path.join(images_dir, build_folder(b))
         if (_run(["docker", "build", "--quiet", "-t", tag, *build_arg_flags(args), "-f", os.path.join(d, "Containerfile"), d])
                 or _run(["docker", "save", "-o", os.path.join(work, tar), tag])):
             results.append((b + " (built)", "could not be built or saved"))
@@ -211,7 +356,9 @@ def _scan_images(p, trivy_image, results):
 
 def lint_targets(p):
     """[(label, path)] of every file hadolint lints: each build's Containerfile, then OTHER_DOCKERFILES."""
+    sites = sorted({build_folder(b) for b in (p.get("sites") or {}).get("builds") or {}})
     return ([(b + " Containerfile", os.path.join(IMAGES_DIR, b, "Containerfile")) for b in p["builds"]]
+            + [("websites " + b + " Containerfile", os.path.join(WEBSITE_IMAGES_DIR, b, "Containerfile")) for b in sites]
             + [(rel, os.path.join(ROOT, *rel.split("/"))) for rel in OTHER_DOCKERFILES])
 
 

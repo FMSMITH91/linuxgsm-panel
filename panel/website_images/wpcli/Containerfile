@@ -1,0 +1,23 @@
+# The image WordPress's install steps run wp-cli in, for linuxgsm-panel: the official wp-cli image the
+# signed catalog pins (Alpine), with Alpine's security updates applied. Built on the host, as the site's
+# own account, by rootless Podman the first time an install step needs it (panel/services/websites.py install_sh
+# writes this file into the site's home; websites_recipes.py builds it); CI builds this copy and scans the result.
+#
+# Why built and not pulled: Alpine's packages are fixed in its repository well before the official image
+# is rebuilt, and until then the pinned image carries the fixes unapplied (OWASP Docker Security Cheat
+# Sheet, rule 0: keep images up to date). The upgrade below takes every published fix at build time.
+#
+# What the build trusts: the base image, by its digest, and Alpine's packages, each checked by apk against
+# Alpine's signing keys. --no-cache leaves no package index in the layer.
+#
+# The value has no default here: it comes from the signed add-on catalog (its source is
+# panel/addon_images/catalog.json, sites.wpcli.image), passed as --build-arg by the panel and by CI.
+#   BASE_IMAGE  the catalog's sites.wpcli.image: wordpress:cli-<version>-php<x.y> by digest
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+LABEL org.opencontainers.image.title="wp-cli for linuxgsm-panel websites"
+# The base image runs as www-data (82:82 on Alpine), which may not upgrade packages: root for the upgrade only,
+# then back. Numeric, so the user does not depend on the image's own account files.
+USER 0:0
+RUN apk upgrade --no-cache
+USER 82:82

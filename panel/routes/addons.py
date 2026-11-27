@@ -26,6 +26,7 @@ from panel.core.http import _json_body, _log_and_generic, _unreachable
 from panel.db.models import GameDatabase, GameServer, HostDatabaseServer, claim_row, db, row_birth
 from panel.ops import ssh_manager as _sm
 from panel.routes import addon_web as _web, addons_change as _change, databases_net as _net
+from panel.routes import addons_geoip as _geo_refresh
 from panel.routes._shared import _reboot_holds, game_account_write_refusal, uninstall_running
 from panel.security.account_guard import step_up_needed, step_up_refusal
 from panel.security.auth import MANAGE_ADDONS, get_game, has_permission, log_action, server_access_required
@@ -43,6 +44,7 @@ _BUSY_REMOVING = "The add-on is being removed. Wait for it to finish."
 _BUSY_UPDATE = "The add-on is being updated. Wait for it to finish."
 _BUSY_SETTINGS = "The add-on's settings are being applied. Wait for it to finish."
 _BUSY_UNINSTALL = "This server is being uninstalled, with its add-ons."
+_BUSY_GEOIP = "B3 is getting this month's country database. Wait a few seconds and try again."
 # For the Databases tab and the uninstall: an add-on job on the server is still running.
 ADDON_BUSY = "An add-on is being installed, updated or removed on this server. Try again once it has finished."
 _INSTALLED_ALREADY = "That add-on is already installed on this server."
@@ -148,7 +150,7 @@ def _databases(gs, found):
 def busy_sentence(job):
     """The 409 sentence for an add-on job already running (`job`: its _JOBS entry)."""
     return {"start": _BUSY_START, "remove": _BUSY_REMOVING, "update": _BUSY_UPDATE, "settings": _BUSY_SETTINGS,
-            "other": ADDON_BUSY, "uninstall": _BUSY_UNINSTALL}.get(job.get("kind"), _BUSY)
+            "other": ADDON_BUSY, "uninstall": _BUSY_UNINSTALL, "geoip": _BUSY_GEOIP}.get(job.get("kind"), _BUSY)
 
 
 def claim_job(gs_id, addon_id, kind):
@@ -309,6 +311,8 @@ def _b3_fields(gs, meta, got=None):
                  "credit": _geoip.CREDIT, "alerts": bool(getattr(gs, "b3_alerts", False)),
                  # Offline needs DB-IP's database: with its Outside services switch off, the card says so.
                  "geoip_off": "" if _geoip.download_allowed() else i18n.tr(_geoip.OFF),
+                 # The monthly refresh (addons_geoip): a restart it waits for, the download off or failing.
+                 "geoip_note": _geo_refresh.card_note(meta),
                  "note": i18n.tr(_PUBLIC_REPLIES[gs.game_type]) if gs.game_type in _PUBLIC_REPLIES else ""}, **own)
 
 

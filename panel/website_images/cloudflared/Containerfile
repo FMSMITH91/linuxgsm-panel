@@ -1,0 +1,47 @@
+# The web proxy's tunnel connector for linuxgsm-panel: the cloudflared program from the official image the
+# signed catalog pins, on an empty base with only the certificate authorities and the account files it
+# reads. Built on the host, as the tunnel's own account, by rootless Podman (panel/ops/ssh_manager/websites.py
+# tunnel_apply writes this file into that account's home and runs `podman build`); CI builds this copy and
+# scans the result.
+#
+# Why built and not pulled: the official image is a Debian "distroless" image whose system libraries get
+# their fixes only when Cloudflare rebuilds it, and it has no package manager to apply them. cloudflared
+# is one statically linked Go program that loads none of those libraries, so the image here has none
+# (OWASP Docker Security Cheat Sheet, rule 0: keep images up to date; minimal images; rule 2: a non-root
+# user). No shell, no package manager.
+#
+# What the build trusts: both images, by their digests; Debian's ca-certificates package, checked by apt
+# against Debian's signing keys and upgraded to its newest published version.
+#
+# The values have no default here: they come from the signed add-on catalog (its source is
+# panel/addon_images/catalog.json, sites.tunnel.cloudflare), passed as --build-arg by the panel and by CI.
+#   BASE_IMAGE   the catalog's sites.tunnel.cloudflare.image: cloudflare/cloudflared:<version> by digest
+#   CERTS_IMAGE  the catalog's sites.tunnel.cloudflare.certs: debian:<release>-slim by digest, for the
+#                certificate authorities only (nothing else of it is kept)
+ARG BASE_IMAGE
+ARG CERTS_IMAGE
+FROM ${BASE_IMAGE} AS cloudflared
+
+FROM ${CERTS_IMAGE} AS certs
+# The new image's whole file system outside the program, laid out in /out: the certificate bundle where Go
+# and SSL_CERT_FILE look, and a /tmp and home that only the nonroot user (the one user this image runs) may use.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /out/etc/ssl/certs /out/tmp /out/home/nonroot \
+    && cp /etc/ssl/certs/ca-certificates.crt /out/etc/ssl/certs/ \
+    && chmod 0700 /out/tmp /out/home/nonroot \
+    && chown 65532:65532 /out/tmp /out/home/nonroot
+
+FROM scratch
+LABEL org.opencontainers.image.title="cloudflared for linuxgsm-panel websites"
+COPY --from=certs /out/ /
+COPY --from=cloudflared /etc/passwd /etc/group /etc/
+COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt NO_AUTOUPDATE=true
+USER 65532:65532
+WORKDIR /home/nonroot
+ENTRYPOINT ["/usr/local/bin/cloudflared"]
+CMD ["version"]

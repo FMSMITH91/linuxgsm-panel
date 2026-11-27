@@ -678,3 +678,102 @@ def host_key_sha256(keystr):
     if not raw:
         return ""
     return "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
+
+
+# ── Websites (panel/services/websites_access.py, the Websites tab) ──────────────────────────────────
+# A site's name: a slug, because it names the site's SFTP folder and appears in its audit rows. The
+# account and port are the panel's own choice (ws<id>, 20000-20999), never typed by anyone.
+# "app" is a runtime app (Node.js first): which runtimes and versions exist is the signed catalog's data
+# (Website.runtime / runtime_version), so a new runtime is a catalog entry, never a new kind.
+WEBSITE_KINDS = ("static", "php", "wordpress", "phpbb", "app")
+WEBSITE_STATES = ("creating", "stopped", "running", "failed", "removing")
+WEBSITE_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?\Z")
+WEBSITE_ACCOUNT_RE = re.compile(r"^ws[1-9][0-9]{0,8}\Z")
+# A site's PHP version: "" (a static site) or major.minor; which versions exist is the signed catalog's.
+WEBSITE_PHP_VERSION_RE = re.compile(r"^(?:[0-9]\.[0-9]{1,2})?\Z")
+WEBSITE_RUNTIME_RE = re.compile(r"^[a-z0-9]{0,16}\Z")
+WEBSITE_RUNTIME_VERSION_RE = re.compile(r"^(?:[0-9][0-9.]{0,15})?\Z")
+# An app's own port inside its container: any unprivileged port.
+WEBSITE_APP_PORT_MIN = 1024
+WEBSITE_COMMAND_MAX = 1000
+# A one-click app's recipe name and version, as the signed catalog names them ("wordpress", "6.8.3").
+WEBSITE_APP_RECIPE_RE = re.compile(r"^(?:[a-z0-9][a-z0-9-]{0,31})?\Z")
+WEBSITE_APP_VERSION_RE = re.compile(r"^(?:[0-9A-Za-z][0-9A-Za-z.+-]{0,31})?\Z")
+WEBSITE_PORT_MIN = 20000
+WEBSITE_PORT_MAX = 20999
+# How a host's sites are reached (the proxy-wide setting): open to all, open only to an allow list
+# of networks, or through an outbound tunnel with no inbound port at all.
+WEBSITE_EXPOSURE_MODES = ("public", "restricted", "tunnel")
+WEBSITE_TUNNEL_PROVIDERS = ("", "cloudflare")
+WEBSITE_ORIGIN_TLS = ("letsencrypt", "origin_ca", "custom")
+WEBSITE_ALLOW_PRESETS = ("cloudflare",)
+WEBSITE_DOMAIN_MAX = 253
+_DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+_DOMAIN_TLD_RE = re.compile(r"^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})\Z")
+# Names no public certificate is issued for, or that would point a site at a private network: the
+# special-use names of RFC 6761 / RFC 6762 / RFC 8375 / RFC 9476 and the tailnet's own suffix.
+WEBSITE_RESERVED_SUFFIXES = ("localhost", "local", "internal", "ts.net", "home.arpa", "arpa", "test",
+                             "example", "invalid", "onion", "alt", "lan", "localdomain")
+
+
+def website_name_problem(name):
+    """A human error when `name` cannot be a website's name, else None (format only)."""
+    if not isinstance(name, str) or not WEBSITE_NAME_RE.match(name):
+        return ("A website name is 1 to 32 lowercase letters, digits and hyphens, and starts and ends "
+                "with a letter or digit.")
+    return None
+
+
+def website_domain(value):
+    """`value` as the lowercase ASCII (punycode) domain a site may serve, or None when it may not be one.
+
+    An allow-list, matched whole: 2 or more labels of letters, digits and hyphens (1-63 each, no
+    hyphen at either end), at most 253 characters, a top-level label of letters or an IDN (xn--). So
+    an IP literal, a wildcard, a port, a path, a trailing dot and a single label are all refused, as
+    are the reserved suffixes above. A Unicode name is converted to punycode first and the result is
+    held to the same rules. Whether the name is the panel's own or already taken is the caller's
+    question (websites_access.domain_refusal), as is whether its DNS points at the host.
+    """
+    text = _domain_ascii(value)
+    if text is None or not _domain_shape_ok(text):
+        return None
+    if any(text == s or text.endswith("." + s) for s in WEBSITE_RESERVED_SUFFIXES):
+        return None
+    return text
+
+
+def _domain_ascii(value):
+    """`value` stripped, lowercased and (when it has non-ASCII letters) in punycode; None when it cannot be."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text or len(text) > WEBSITE_DOMAIN_MAX * 4:
+        return None
+    if text.isascii():
+        return text
+    try:
+        return text.encode("idna").decode("ascii")
+    except (UnicodeError, ValueError):
+        return None
+
+
+def _domain_shape_ok(text):
+    """Whether ASCII `text` is 2+ LDH labels, at most 253 characters, ending in a letters or xn-- label."""
+    labels = text.split(".")
+    return (len(text) <= WEBSITE_DOMAIN_MAX and len(labels) >= 2
+            and all(_DOMAIN_LABEL_RE.match(lb) for lb in labels) and bool(_DOMAIN_TLD_RE.match(labels[-1])))
+
+
+def website_cidr(value):
+    """`value` as a canonical network ("203.0.113.0/24", "2001:db8::/32") for a site's allow list, or None.
+
+    A bare address is taken as its /32 or /128; host bits are cleared ("203.0.113.7/24" is the /24).
+    The proxy and the firewall are given only what this returns, never the typed text.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > 64:
+        return None
+    try:
+        net = ipaddress.ip_network(value.strip(), strict=False)
+    except ValueError:
+        return None
+    return str(net)

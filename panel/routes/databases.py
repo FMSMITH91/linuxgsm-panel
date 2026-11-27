@@ -1172,3 +1172,7 @@ def register(app):
     addons.register(app)          # the Add-ons card: its add-ons each use one of these databases
     databases_data.register(app)
     databases_files.register(app)
+    # The Websites tab: a site's database is one of these (routes/databases_sites), so its routes are
+    # registered from here, which keeps app.py's route table as it is.
+    from panel.routes import websites
+    websites.register(app)

@@ -9,11 +9,14 @@ from panel.core.clock import utcnow
 from panel.core.validation import (canonical_host, replace_text_ips, unzoned_ip_address_or_none,
                                    unzoned_ip_or_network)
 from flask_login import UserMixin
-from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from sqlalchemy.orm import validates
 
-db = SQLAlchemy()
+from panel.db.sqla import db
+from panel.db.history_models import HostHourly, MetricHourly
+from panel.db.website_models import (Website, WebsiteDomain, WebsiteProxy,
+                                     group_websites)
+
 _log = logging.getLogger("panel.models")
 
 
@@ -529,7 +532,13 @@ class Group(db.Model):
                                    back_populates="groups")
     custom_commands = db.relationship("CustomCommand", secondary=group_custom_commands,
                                       back_populates="groups")
+    websites = db.relationship("Website", secondary=group_websites, back_populates="groups")
     permissions = db.Column(db.Text, default="[]")  # JSON list of permission strings
+    # A customer group (websites_access): its members see only the websites in `websites`, and nobody
+    # below a superadmin can give it a permission outside auth.CUSTOMER_PERMS, a host or a game server.
+    is_customer = db.Column(db.Boolean, default=False, nullable=False)
+    # How many websites a customer group's members may have in all (websites_access.can_create).
+    max_sites = db.Column(db.Integer, default=3, nullable=False)
 
     def get_permissions(self):
         return set(json.loads(self.permissions or "[]"))
@@ -1087,6 +1096,10 @@ class AuditLog(db.Model):
     # of an older table starts above any id this column holds, _ID_REFS_WITHOUT_FK), so no FK and no
     # clearing on delete. NULL on rows written before it existed (account_notices bounds those).
     target_user_id = db.Column(db.Integer, nullable=True, index=True)
+    # The website a row is about (log_action's `website=`): audit_scope shows it to the users who hold
+    # a website permission on that site, a customer included, and never by `target`. Website ids are
+    # never handed out again (AUTOINCREMENT), so no FK and no clearing on delete.
+    website_id = db.Column(db.Integer, nullable=True, index=True)
 
 
 # Which audit actions are ABOUT a game server, and which about a host — used ONCE, to backfill
@@ -1114,6 +1127,7 @@ AUDIT_SERVER_ACTIONS = frozenset({
     "db_create", "db_reveal", "db_password", "db_delete", "db_restore", "db_rehost",
     "db_browse", "db_row_insert", "db_row_update", "db_row_delete", "db_sql", "db_dump_download", "db_upload",
     "addon_install", "addon_start", "addon_stop", "addon_remove", "addon_refused", "addon_settings", "addon_update",
+    "addon_geoip",
     "b3_player_search", "b3_player_view", "b3_penalties_view", "b3_unban", "b3_kick", "b3_warn", "b3_alerts_set",
     "addon_web_opened", "addon_web_refused",
 })
@@ -1755,6 +1769,10 @@ class GameDatabase(db.Model):
     # server, with the two accounts 'name'@'localhost' and 'name'@'127.0.0.1'.
     endpoint_id = db.Column(db.Integer, nullable=True, index=True)
     account_host = db.Column(db.String(45), nullable=True)
+    # A website's database (name ws<site id>_<slug>, game_server_id NULL). A site removed leaves it
+    # an orphan on the host, as a game server removed does (_register_website_cleanup).
+    website_id = db.Column(db.Integer, db.ForeignKey("website.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
 
 
 class DatabaseEndpoint(db.Model):
@@ -1871,14 +1889,18 @@ class SftpKey(db.Model):
 # a unit check holds the two lists together.
 _AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
                          GlobalBan, Invite, UserSession, HostDatabaseServer, GameDatabase, DatabaseEndpoint,
-                         EndpointClient, PushSubscription, SftpKey)
+                         EndpointClient, PushSubscription, SftpKey, Website, WebsiteDomain, WebsiteProxy)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {
-    "game_server": (AuditLog.__table__.c.game_server_id, MetricSample.__table__.c.server_id),
-    "remote_server": (AuditLog.__table__.c.remote_id, HostSample.__table__.c.remote_id),
+    "game_server": (AuditLog.__table__.c.game_server_id, MetricSample.__table__.c.server_id,
+                    MetricHourly.__table__.c.server_id),
+    "remote_server": (AuditLog.__table__.c.remote_id, HostSample.__table__.c.remote_id,
+                      HostHourly.__table__.c.remote_id),
     # An account-security row names its account by id (account_notices reads it back by that id).
     "user": (AuditLog.__table__.c.target_user_id,),
+    # The site an audit row is about (audit_scope reads it to show a customer their own sites' rows).
+    "website": (AuditLog.__table__.c.website_id,),
 }
 
 
@@ -1973,6 +1995,13 @@ _LIGHT_MIGRATIONS = {
     # NULL on upgrade: every database made before is on its game host's own server.
     ("game_database", "endpoint_id"): "ALTER TABLE game_database ADD COLUMN endpoint_id INTEGER",
     ("game_database", "account_host"): "ALTER TABLE game_database ADD COLUMN account_host VARCHAR(45)",
+    # NULL on upgrade: every database made before websites existed belongs to a game server or none.
+    ("game_database", "website_id"): "ALTER TABLE game_database ADD COLUMN website_id INTEGER",
+    # NULL on upgrade: no row written before websites existed is about one.
+    ("audit_log", "website_id"): "ALTER TABLE audit_log ADD COLUMN website_id INTEGER",
+    # 0 on upgrade: every group that exists is an ordinary one; a customer group is only ever made new.
+    ("group", "is_customer"): "ALTER TABLE `group` ADD COLUMN is_customer BOOLEAN DEFAULT 0 NOT NULL",
+    ("group", "max_sites"): "ALTER TABLE `group` ADD COLUMN max_sites INTEGER DEFAULT 3 NOT NULL",
 }
 
 
@@ -2257,7 +2286,7 @@ def _create_declared_indexes(existing):
     # The history tables' (id, ts) composites — same reason as above: create_all() adds them to a
     # fresh DB only, so an upgraded install would keep the slow plans forever without this. And the
     # user table's one-owner index, which an upgraded install must have as much as a fresh one.
-    for _model in (MetricSample, HostSample, User):
+    for _model in (MetricSample, HostSample, MetricHourly, HostHourly, User):
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)
@@ -2652,8 +2681,11 @@ def _register_sample_pruning():
                 _log.debug("sample prune failed for a deleted row", exc_info=True)
         return _handler
 
-    event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
-    event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
+    # ...and their hourly rollups (MetricHourly, HostHourly), which hold the same figures for a year.
+    for model, column in ((MetricSample, MetricSample.server_id), (MetricHourly, MetricHourly.server_id)):
+        event.listen(GameServer, "after_delete", _prune(model, column))
+    for model, column in ((HostSample, HostSample.remote_id), (HostHourly, HostHourly.remote_id)):
+        event.listen(RemoteServer, "after_delete", _prune(model, column))
 
 
 def _register_invite_revocation():
@@ -2784,9 +2816,9 @@ def _register_host_sample_pruning():
     @event.listens_for(RemoteServer, "after_delete")
     def _prune_host_game_samples(_mapper, connection, target):
         try:
-            connection.execute(MetricSample.__table__.delete().where(
-                MetricSample.server_id.in_(
-                    db.select(GameServer.id).where(GameServer.remote_id == target.id))))
+            for model in (MetricSample, MetricHourly):
+                connection.execute(model.__table__.delete().where(
+                    model.server_id.in_(db.select(GameServer.id).where(GameServer.remote_id == target.id))))
         except Exception:
             _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
 
@@ -2815,6 +2847,40 @@ def _register_database_cleanup():
                                .values(game_server_id=None))
         except Exception:
             _log.debug("detaching a deleted server's databases failed", exc_info=True)
+
+
+def _register_website_cleanup():
+    """Remove a deleted host's website rows, and detach a deleted website's databases."""
+    from sqlalchemy import event
+
+    # The ON DELETE rules on Website, WebsiteDomain, WebsiteProxy and group_websites, done here because
+    # the panel never turns on PRAGMA foreign_keys. A host's sites go with it, with their domains (a
+    # domain left behind would stay globally taken) and their group grants. A site's databases stay on
+    # the host as orphans, like a removed game server's.
+    @event.listens_for(RemoteServer, "after_delete")
+    def _drop_website_rows_of_deleted_host(_mapper, connection, target):
+        try:
+            _w = Website.__table__
+            ids = db.select(_w.c.id).where(_w.c.remote_id == target.id)
+            _gd = GameDatabase.__table__
+            connection.execute(_gd.update().where(_gd.c.website_id.in_(ids)).values(website_id=None))
+            connection.execute(group_websites.delete().where(group_websites.c.website_id.in_(ids)))
+            _d = WebsiteDomain.__table__
+            connection.execute(_d.delete().where(_d.c.website_id.in_(ids)))
+            connection.execute(_w.delete().where(_w.c.remote_id == target.id))
+            _p = WebsiteProxy.__table__
+            connection.execute(_p.delete().where(_p.c.remote_id == target.id))
+        except Exception:
+            _log.debug("removing a deleted host's website rows failed", exc_info=True)
+
+    @event.listens_for(Website, "after_delete")
+    def _detach_databases_of_deleted_website(_mapper, connection, target):
+        try:
+            _gd = GameDatabase.__table__
+            connection.execute(_gd.update().where(_gd.c.website_id == target.id).values(website_id=None))
+            connection.execute(group_websites.delete().where(group_websites.c.website_id == target.id))
+        except Exception:
+            _log.debug("detaching a deleted website's databases failed", exc_info=True)
 
 
 def _register_new_row_forgetting():
@@ -3089,6 +3155,7 @@ _register_audit_object_detach()
 _register_host_sample_pruning()
 _register_new_row_forgetting()
 _register_database_cleanup()
+_register_website_cleanup()
 _register_row_identity_guard()
 
 

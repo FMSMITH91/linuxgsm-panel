@@ -1,0 +1,8 @@
+{
+  "B3 is getting this month's country database. Wait a few seconds and try again.": "B3 reçoit la base de données des pays de ce mois. Attendez quelques secondes et réessayez.",
+  "B3 still uses its earlier country database: the panel restarts it with the {month} one once the server is empty.": "B3 utilise encore sa base de données des pays précédente : le panneau le redémarre avec celle de {month} dès que le serveur est vide.",
+  "Couldn't put this month's country database in B3's folder. The panel tries again later.": "Impossible de placer la base de données des pays de ce mois dans le dossier de B3. Le panneau réessaiera plus tard.",
+  "Getting this month's country database…": "Réception de la base de données des pays de ce mois…",
+  "No monthly refresh while the download is off: B3 keeps the country database it has.": "Pas de mise à jour mensuelle tant que le téléchargement est désactivé : B3 garde la base de données des pays qu’il a.",
+  "The monthly download of the country database didn't work: {why} B3 keeps the one it has, and the panel tries again later.": "Le téléchargement mensuel de la base de données des pays n’a pas fonctionné : {why} B3 garde celle qu’il a, et le panneau réessaiera plus tard."
+}

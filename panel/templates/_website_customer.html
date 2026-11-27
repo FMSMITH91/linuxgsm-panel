@@ -1,0 +1,29 @@
+{# Add a customer (administrators): a customer group holding the chosen sites, and a one-time invite
+   link with its code, both shown once (js/websites.js, wsCustomerAdd; POST /websites/customers/add,
+   a step-up route). The customer opens the link and chooses their own name and password. #}
+<details id="wc-box" class="card mt-3">
+  <summary class="card-header small"><i class="bi bi-person-plus"></i> Add a customer</summary>
+  <form id="wc-form" class="card-body row g-2" data-action="wsCustomerAdd" data-args='["@event"]' data-on="submit">
+    <div class="col-sm-6">
+      <label for="wc-name" class="form-label small mb-1">Customer name</label>
+      <input type="text" id="wc-name" class="form-control form-control-sm" maxlength="32" required
+             pattern="[a-z0-9]([a-z0-9\-]{0,30}[a-z0-9])?" autocomplete="off" autocapitalize="off" spellcheck="false"
+             aria-describedby="wc-name-help">
+      <div id="wc-name-help" class="form-text">Lowercase letters, digits and hyphens.</div>
+    </div>
+    <div class="col-sm-6">
+      <label for="wc-max" class="form-label small mb-1">Most websites they may have</label>
+      <input type="number" id="wc-max" class="form-control form-control-sm" min="1" max="100" step="1" value="3">
+    </div>
+    <fieldset class="col-12">
+      <legend class="form-label small mb-1">Their websites</legend>
+      <div id="wc-sites" class="d-flex flex-wrap gap-2"></div>
+    </fieldset>
+    <div class="col-12 d-flex flex-wrap gap-2 align-items-center">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-person-plus"></i> Add customer</button>
+      <span id="wc-msg" class="small" role="status"></span>
+    </div>
+    <div id="wc-result" class="col-12" hidden></div>
+    <p class="form-text col-12 mb-0">The panel makes a one-time invite link and its code, each shown once. The customer opens the link and chooses their own name and password.</p>
+  </form>
+</details>

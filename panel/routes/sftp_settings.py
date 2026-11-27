@@ -38,6 +38,12 @@ _DUPLICATE_KEY = "That key is already on your account."
 ALL_ADDRESSES_WARNING = ("All addresses: the SFTP port is reachable from the internet, and anyone can try to "
                          "sign in. Sign-in stays limited to SSH keys unless you allow passwords below. The "
                          "panel does not open the port in the firewall: see the SFTP guide for how.")
+# OWASP Attack Surface Analysis Cheat Sheet, "Measuring and Assessing the Attack Surface": network-facing,
+# especially internet-facing, code is the high-risk part of an attack surface; "Managing the Attack Surface":
+# reduce it where you can. A note beside the choice, never a refusal (the operator's call).
+PUBLIC_ADDRESS_WARNING = ("Public address: the SFTP port is reachable from the internet, and anyone can try to sign "
+                          "in. OWASP counts internet-facing services as the highest risk: prefer the Tailscale address "
+                          "or a private one. The panel's fail2ban jail bans on this port too.")
 
 
 def register(app):
@@ -53,7 +59,10 @@ def register(app):
     def sftp_settings_save():
         """Save the SFTP card and restart the service with it."""
         before = sc.settings(load_config())
-        changes, why = sc.parse_form(request.form, bool(sftp_broker.tailscale_ips()), before["bind"])
+        # The host's addresses are read only for "A specific address", the one choice that needs them.
+        host = ([a["addr"] for a in sc.host_addresses(sftp_broker.host_address_rows())]
+                if request.form.get("sftp_bind") == sc.BIND_ADDRESS else ())
+        changes, why = sc.parse_form(request.form, bool(sftp_broker.tailscale_ips()), before["bind"], host, before)
         if why:
             flash(i18n.tr(why), "danger")
             return redirect(url_for("panel_settings", _anchor=_SETTINGS_ANCHOR))
@@ -64,8 +73,8 @@ def register(app):
             sc.ensure_host_key(update_config, load_config, encrypt_secret, decrypt_secret)
         log_action(current_user, "settings_update", target="panel", detail=change_note(before, after))
         sftp_broker.restart()
-        # The jail lists the SFTP port only while it listens on every address; off, or another
-        # address, has no start to rewrite it from (sftp_broker.f2b_follow).
+        # The jail lists the SFTP port only while it listens on every address or on one public
+        # address; off, or another address, has no start to rewrite it from (sftp_broker.f2b_follow).
         sftp_broker.f2b_follow(current_app._get_current_object())
         flash(i18n.tr("SFTP settings saved."), "success")
         for note in notes(after):
@@ -171,10 +180,11 @@ def change_note(before, after):
     words = []
     if before["enabled"] != after["enabled"]:
         words.append("SFTP service %s" % ("on" if after["enabled"] else "off"))
-    for key, label in (("bind", "address"), ("port", "port"), ("cap_mb", "upload limit MiB"),
+    for key, label in (("bind", "address"), ("address", "specific address"), ("port", "port"), ("cap_mb", "upload limit MiB"),
                        ("idle_min", "idle timeout min"), ("absolute_h", "absolute limit h")):
         if before[key] != after[key]:
-            words.append("SFTP %s %s -> %s" % (label, before[key], after[key]))
+            words.append("SFTP %s %s -> %s" % (label, before[key] if before[key] != "" else "(none)",
+                                                after[key] if after[key] != "" else "(none)"))
     if before["password"] != after["password"]:
         words.append("SFTP password and code sign-in %s" % ("allowed" if after["password"] else "off"))
     return "; ".join(words) or "SFTP settings saved unchanged"
@@ -182,9 +192,7 @@ def change_note(before, after):
 
 def notes(s):
     """The non-blocking notes for saved settings outside the recommendation."""
-    out = []
-    if s["enabled"] and s["bind"] == sc.BIND_ALL:
-        out.append(ALL_ADDRESSES_WARNING)
+    out = _bind_notes(s)
     if s["password"]:
         out.append("Password and code sign-in is on. The recommended setting is SSH keys only: a key "
                    "cannot be guessed.")
@@ -201,6 +209,17 @@ def notes(s):
         out.append(i18n.Sentence("The upload size limit is above the recommended {mib} MiB.",
                                  mib=sc.RECOMMENDED_CAP_MB))
     return out
+
+
+def _bind_notes(s):
+    """The note for a listening choice reachable from the internet: every address, or a public one."""
+    if not s["enabled"]:
+        return []
+    if s["bind"] == sc.BIND_ALL:
+        return [ALL_ADDRESSES_WARNING]
+    if s["bind"] == sc.BIND_ADDRESS and sc.is_public(s["address"]):
+        return [PUBLIC_ADDRESS_WARNING]
+    return []
 
 
 def settings_card():
@@ -222,7 +241,22 @@ def settings_card():
         "recommended_idle": sc.RECOMMENDED_IDLE_MINUTES, "idle_outside": sc.idle_outside_owasp(s["idle_min"]),
         "absolute_past": sc.absolute_past_owasp(s["absolute_h"]), "grace_min": sc.ABSOLUTE_GRACE_MINUTES,
         "notes": notes(s), "all_warning": ALL_ADDRESSES_WARNING,
+        "public_warning": PUBLIC_ADDRESS_WARNING, "address_public": sc.is_public(s["address"]),
+        **card_addresses(s),
     }
+
+
+def card_addresses(s):
+    """The card's "A specific address" list: this host's addresses, and the saved one when it is not among them.
+
+    {"addresses": [...], "addresses_unread": whether `ip -o addr` could not be read}. The saved address
+    is marked gone only when the list was read: an unread list says nothing about it.
+    """
+    rows = sftp_broker.host_address_rows()
+    out = sc.host_addresses(rows)
+    if s["address"] and s["address"] not in {a["addr"] for a in out}:
+        out.append({"addr": s["address"], "iface": "", "public": sc.is_public(s["address"]), "gone": rows is not None})
+    return {"addresses": out, "addresses_unread": rows is None}
 
 
 def account_card(user):

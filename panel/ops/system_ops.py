@@ -4144,12 +4144,13 @@ def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
 
 
 def _panel_f2b_sftp_port():
-    """The SFTP service's port while it is on and listens on every address, else None.
+    """The SFTP service's port while it is on and reachable from the internet, else None.
 
-    Then its failed sign-ins (auth.log, "panel sftp login failed from <ip>") are banned on that port
-    too, beside the web port. On the Tailscale address or 127.0.0.1 the client is a tailnet peer or
-    a local tunnel, which the jail's ignoreip never bans; the panel's own throttle holds those.
-    Unreadable config: None (the web port alone, as before the SFTP service existed).
+    Reachable: it listens on every address, or on one specific address that is public
+    (sftp_common.is_public). Then its failed sign-ins (auth.log, "panel sftp login failed from <ip>")
+    are banned on that port too, beside the web port. On the Tailscale address, 127.0.0.1 or a
+    private address the client is a tailnet peer, a local tunnel or the local network; the panel's
+    own throttle holds those. Unreadable config: None (the web port alone, as before the SFTP service existed).
     """
     try:
         from panel.core import config as _cfg
@@ -4158,7 +4159,8 @@ def _panel_f2b_sftp_port():
     except Exception:  # noqa: BLE001 - no SFTP port is the answer that changes nothing
         _log.debug("f2b: SFTP settings unreadable", exc_info=True)
         return None
-    return s["port"] if s["enabled"] and s["bind"] == _sc.BIND_ALL else None
+    public = s["bind"] == _sc.BIND_ALL or (s["bind"] == _sc.BIND_ADDRESS and _sc.is_public(s["address"]))
+    return s["port"] if s["enabled"] and public else None
 
 
 def _panel_f2b_ports(web_port):

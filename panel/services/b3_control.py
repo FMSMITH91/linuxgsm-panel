@@ -312,20 +312,43 @@ def reload_sh(user, who):
     reload_plugins answers {reloaded, failed}); else SIGHUP, and the config_reload line B3 then writes to
     events.jsonl. Prints ADDON_RELOADED and reload.b64= (the answer, "" when none came).
     """
+    unit = _ad.unit_name(_ad.B3)
+    ini = shlex.quote(_ad.addon_dir(user, _ad.B3) + "/Data/b3.ini")
+    return ("st=$(systemctl --user show -p ExecMainStartTimestamp --value --timestamp=unix %s.service 2>/dev/null); "
+            "st=${st#@}; if systemctl --user is-active -q %s.service && [ -n \"$st\" ] "
+            "&& [ \"$(stat -c %%Y %s 2>/dev/null || echo 9999999999)\" -le \"$st\" ]; then "
+            "%secho ADDON_RELOADED; %s"
+            "echo; exit 0; fi; "
+            % (unit, unit, ini, reload_core_sh(user, who), RELOAD_PRINT_SH))
+
+
+# Prints the reload's answer ($r, set by reload_core_sh) as reload.b64= (the line is "reload.b64=" when none came).
+RELOAD_PRINT_SH = "printf %s \"$r\" | head -c 20000 | base64 -w0 | sed 's/^/reload.b64=/'; "
+
+
+def reload_core_sh(user, who):
+    """Shell asking the running B3 to reload its plugin settings; sets $r to its answer ("" when none came).
+
+    Through the control socket when b3.ini turns it on (its reload_plugins answers {reloaded, failed});
+    else SIGHUP, then up to RELOAD_WAIT seconds for the config_reload line B3 writes to events.jsonl.
+    Only for a B3 built from a commit that has the reload (since v2.0.2): to an older one, SIGHUP is the
+    default action, the end of the process.
+    """
     d = _ad.addon_dir(user, _ad.B3)
     ini, ev, unit = shlex.quote(d + "/Data/b3.ini"), shlex.quote(d + "/Data/events.jsonl"), _ad.unit_name(_ad.B3)
     last = "tail -c 65536 %s 2>/dev/null | grep -F '\"event\": \"config_reload\"' | tail -n 1" % ev
     sock = "printf %%s %s | %s 2>/dev/null" % (shlex.quote(request("reload_plugins", {}, who)),
                                                "podman exec -i %s python -c %s" % (unit, shlex.quote(_CLIENT)))
-    return ("st=$(systemctl --user show -p ExecMainStartTimestamp --value --timestamp=unix %s.service 2>/dev/null); "
-            "st=${st#@}; if systemctl --user is-active -q %s.service && [ -n \"$st\" ] "
-            "&& [ \"$(stat -c %%Y %s 2>/dev/null || echo 9999999999)\" -le \"$st\" ]; then "
-            "if grep -qiE '^[[:space:]]*control_socket[[:space:]]*[:=][[:space:]]*@conf/b3\\.sock[[:space:]]*$' %s; "
+    return ("if grep -qiE '^[[:space:]]*control_socket[[:space:]]*[:=][[:space:]]*@conf/b3\\.sock[[:space:]]*$' %s; "
             "then r=$(%s); else b=$(%s); podman kill --signal HUP %s >/dev/null 2>&1; r=; i=0; "
             "while [ $i -lt %d ]; do sleep 1; i=$((i + 1)); r=$(%s); [ -n \"$r\" ] && [ \"$r\" != \"$b\" ] && break; "
-            "r=; done; fi; echo ADDON_RELOADED; printf %%s \"$r\" | head -c 20000 | base64 -w0 | sed 's/^/reload.b64=/'; "
-            "echo; exit 0; fi; "
-            % (unit, unit, ini, ini, sock, last, unit, RELOAD_WAIT, last))
+            "r=; done; fi; "
+            % (ini, sock, last, unit, RELOAD_WAIT, last))
+
+
+def reload_answered(text):
+    """Whether `text` (reload.b64='s answer) is B3's report of a plugin reload: the reload happened."""
+    return _reload_answer(text) is not None
 
 
 def _reload_answer(text):

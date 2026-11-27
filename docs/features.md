@@ -6,6 +6,7 @@ Back to the [README](README.md). Who may do what: [permissions.md](permissions.m
 
 - One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), with search and game icons.
 - Real-time console with command history and quick commands, LinuxGSM's script log and the game's own log, per-game CPU/RAM/uptime, and live player counts.
+- **History charts** on the server page and the host page: CPU, RAM, disk, network and players over the last 24 hours, 7 days, 30 days, 90 days, 6 months or year. The last 14 days keep a sample a minute; past that each hour is kept as its average, peak and low, for a year.
 - Start/stop/restart/update/validate and more; restart, stop, backups and mod changes can wait until a server is empty.
 - **Clean host reboots** — game servers are stopped cleanly first and the ones that were running come back. See [Rebooting a host](#rebooting-a-host).
 - Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL, per-server schedules with autostart and restart-when-empty, and a file browser with upload, download and in-browser editing.
@@ -14,6 +15,13 @@ Back to the [README](README.md). Who may do what: [permissions.md](permissions.m
 - **Garry's Mod content mounting** — one shared copy of CS:Source and other Source games' content per host, mounted read-only into each GMod server.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
 - **Add-ons in containers**: admin tools beside a game server, each in a rootless Podman container as the server's own account. See [addons.md](addons.md).
+
+## Websites
+
+- **Websites** beside Databases: plain HTML sites, your own PHP code or a Node.js app, or WordPress, phpBB, Drupal, Simple Machines Forum and MyBB installed in one step, each in its own rootless container under its own account. See [websites.md](websites.md).
+- One web proxy per host serves every site with automatic Let's Encrypt certificates, reached publicly, only from networks you list (a one-tap Cloudflare preset), or through a Cloudflare Tunnel with no open port.
+- Per site: a file manager with archive upload, SFTP, backups, its databases, PHP version and `php.ini` settings with OWASP's values beside them, OPcache, an object cache, a page cache with Purge, redirects and header rules, and limits on memory, CPU, processes and disk.
+- Customers: panel logins that see and run only their own sites, with two-factor sign-in required by default.
 
 ## Backups
 

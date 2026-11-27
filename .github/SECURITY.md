@@ -38,9 +38,9 @@ version only, so please update before reporting.
 
 [docs/THREAT-MODEL.md](../docs/THREAT-MODEL.md) is the panel's threat model (OWASP Threat Modeling
 Cheat Sheet): its assets, the trust boundaries (the browser, the panel, root through the helper, game
-accounts, remote hosts, push services and chat bots, database servers, the update path and CI), STRIDE
-against each one with the controls that answer it and the file that holds them, and the risks
-accepted. The sections below are the parts an operator acts on.
+accounts, remote hosts, push services and chat bots, database servers, the update path, CI, the internet
+to the websites' proxy, and websites' own code), STRIDE against each one with the controls that answer it
+and the file that holds them, and the risks accepted. The sections below are the parts an operator acts on.
 
 ## Deploying securely
 
@@ -206,6 +206,24 @@ ssh-keygen -Y verify -f panel/install/release-signers -I release -n linuxgsm-pan
   -s ../catalog.json.sig < ../catalog.json
 ```
 
+### Hosting websites
+
+The [Websites](../docs/websites.md) page puts sites on the public internet, so it changes what an
+attacker can reach. What it keeps true:
+
+- Only ports 80 and 443 are opened, labelled, and only while a site is online (Public or Restricted
+  mode); Tunnel mode opens none. The panel's own port is never served through the web proxy, and a
+  request for a name the proxy does not serve is dropped.
+- Each site runs in a rootless container under its own account, with every capability dropped, a
+  read-only system, limits on memory, CPU, processes and disk, and no outbound network beyond its
+  database (WordPress: its own update servers). Treat a site's code as hostile: `edit_website_files`
+  amounts to running code in that site's container ([permissions](../docs/permissions.md#permissions)).
+- A customer login reaches only its own sites; any other site answers "not found". Customers must use
+  two-factor sign-in by default.
+- Proxy, tunnel token and exposure settings are for superadmins. Secrets (the tunnel token, a site's
+  proxy token, app environment variables, database passwords) are stored encrypted and never shown in
+  logs. Images, the web proxy and app releases are pinned in the signed add-on catalog.
+
 ## Known trust-model limitation: the panel has root on its own host
 
 When the installer is run as **root** it creates a dedicated service user and grants it
@@ -274,7 +292,8 @@ It covers ufw, fail2ban, systemd, apt/dpkg, log reads, cron and user management,
 change, reboots, Ubuntu Pro, Tailscale on the panel's own host, the panel's restore, repair and
 self-update, LinuxGSM actions as the game user, dependency installs, the GMod shared-content box,
 a game server's MariaDB/MySQL databases, the panel's own Let's Encrypt certificate, root's crontab for the
-owner's root cron page, readying a game account for add-on containers, and more — 137 verbs.
+owner's root cron page, readying a game account for add-on containers, websites' accounts and their
+web proxy, and more — 148 verbs.
 The narrowing is in the argument types:
 
 - The systemd verbs take a unit from an **exhaustive list** (`ssh`, `sshd`, `fail2ban`,
@@ -376,6 +395,10 @@ account or script name that is not a plain identifier, or is `root` (GHSA-hh39-7
 reported by kta1kri; GHSA-c49r-gmr2-6qf5). A login or host handed to the system `ssh` client is checked the same way
 and placed after `--`. A panel backup restore re-checks every such name in the archive's database
 and refuses the restore naming the bad row.
+
+### Websites are a third line, and a tenant boundary
+
+A website runs as its own account (`ws<id>`, home 0700), made by the helper and marked as the panel's, in a rootless container with every capability dropped, a read-only root file system, memory, CPU, process and disk limits, and no outbound network by default (an nftables egress guard also keeps it off the host's own addresses; required for customers' sites). The panel never runs a site's code as root or as its own account. A customer is a panel user in a customer group: every `/websites` request goes through one check (`site_for`, `panel/services/websites_access.py`) that pairs the permission with the site per group, and a site the user cannot reach answers 404, exactly like one that does not exist. Below a superadmin, nobody can give a customer group a permission other than the website ones, a host or a game server. Ports 80 and 443 belong to one web proxy per host, run as its own unprivileged account, and are open only while a site is online: to everyone, to an allow list (a CDN's ranges or your own networks), or not at all with a tunnel. The threat model's TB10 and TB11 hold the details.
 
 ### Root never runs or installs from the panel's checkout
 

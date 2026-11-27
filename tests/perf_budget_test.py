@@ -222,7 +222,7 @@ _lgsm._CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _lgsm._mem.clear()
 
 from app import create_app  # noqa: E402
-from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState  # noqa: E402
+from panel.db.models import db, User, Group, RemoteServer, GameServer, SetupState, Website, WebsiteDomain  # noqa: E402
 from panel.security import auth  # noqa: E402
 from panel.ops.ssh_manager import _core as _sm_core  # noqa: E402
 
@@ -289,6 +289,26 @@ def seed_servers(first, count):
                                       game_type="csgo", port=27015 + i,
                                       remote_id=remotes[i % len(remotes)].id, installed=True))
         db.session.commit()
+
+
+def seed_websites(first, count):
+    """`count` websites (each with a domain) spread over the hosts; the first one's id.
+
+    Seeded beside the game servers, so the second sweep has 5x the websites too and a Websites page whose
+    queries grow with the number of sites fails the N+1 check like any other page.
+    """
+    with app.app_context():
+        remotes = RemoteServer.query.all()
+        ids = []
+        for i in range(first, first + count):
+            site = Website(name="site%03d" % i, kind="php", state="running", remote_id=remotes[i % len(remotes)].id)
+            db.session.add(site)
+            db.session.flush()
+            site.account, site.port = "ws%d" % site.id, 20000 + i
+            db.session.add(WebsiteDomain(website_id=site.id, domain="site%03d.example.org" % i, is_primary=True))
+            ids.append(site.id)
+        db.session.commit()
+        return ids[0]
 
 
 def seed_minecraft_server():
@@ -391,7 +411,7 @@ def _seed_admin_and_hosts():
         return admin.id
 
 
-def _get_page_paths(admin_id, mc_server, addon_server):
+def _get_page_paths(admin_id, mc_server, addon_server, site_id):
     """Every GET page in the url map, with a real row's id in place of each id placeholder.
 
     The Minecraft lists page gets the Minecraft server and the add-on pages the Call of Duty 4 one: any
@@ -407,7 +427,9 @@ def _get_page_paths(admin_id, mc_server, addon_server):
             # An add-on id is a catalog name, not a row: the first one stands in for the add-on routes.
             "<addon_id>": "b3",
             # A B3 player id is a row of B3's own database, not the panel's: any id stands in.
-            "<int:client_id>": "1"}
+            "<int:client_id>": "1",
+            # A website's pages read the first seeded website.
+            "<int:site_id>": str(site_id)}
     with app.app_context():
         paths = []
         for rule in app.url_map.iter_rules():
@@ -570,12 +592,78 @@ def _check_api_servers_scans_concurrently(client):
           "every host scanned in sequence — this endpoint costs hosts x SSH latency")
 
 
+# The History ranges: the sweep above asks each history page once, at its default range (24h). This asks
+# every range, with no history and then with a year of it (a day of per-minute samples and 8,760 hourly
+# rows for one server and its host), and holds each to no more queries with the year than without: a read that grew
+# with the rows (a query per hour, a lazy load per row) would run thousands at a year.
+HIST_RANGES = ("24h", "7d", "30d", "90d", "6mo", "1y")
+HIST_QUERY_BUDGET = 12
+
+
+def _seed_year_of_history(sid, rid):
+    """A day of per-minute samples and a year of hourly rows for server `sid` and host `rid`."""
+    from datetime import timedelta
+    from panel.core.clock import utcnow
+    from panel.db.models import HostHourly, HostSample, MetricHourly, MetricSample
+    now = utcnow().replace(minute=0, second=0, microsecond=0)
+    with app.app_context():
+        db.session.execute(MetricSample.__table__.insert(), [
+            {"server_id": sid, "ts": now - timedelta(minutes=m), "cpu": 1.0, "ram_mb": 1, "players": 1}
+            for m in range(1, 1441)])
+        db.session.execute(HostSample.__table__.insert(), [
+            {"remote_id": rid, "ts": now - timedelta(minutes=m), "cpu": 1.0, "ram_pct": 1.0, "disk_pct": 1.0}
+            for m in range(1, 1441)])
+        hours = [now - timedelta(hours=h) for h in range(1, 8761)]
+        db.session.execute(MetricHourly.__table__.insert(), [
+            {"server_id": sid, "hour": h, "n": 60, "cpu_avg": 1.0, "players_max": 1} for h in hours])
+        db.session.execute(HostHourly.__table__.insert(), [
+            {"remote_id": rid, "hour": h, "n": 60, "cpu_avg": 1.0, "rx_avg": 1.0} for h in hours])
+        db.session.commit()
+
+
+def _history_paths():
+    """The server and host History reads at every range, for the first server that has a host."""
+    with app.app_context():
+        gs = GameServer.query.filter(GameServer.remote_id.isnot(None)).order_by(GameServer.id.asc()).first()
+        sid, rid = gs.id, gs.remote_id
+    return sid, rid, (["/api/server/%d/history?range=%s" % (sid, r) for r in HIST_RANGES]
+                      + ["/api/remote/%d/history?range=%s" % (rid, r) for r in HIST_RANGES])
+
+
+def _history_grew(paths, empty, year):
+    """The reads that ran more queries with a year of rows than with none, or went past HIST_QUERY_BUDGET.
+
+    An empty reply runs a few more than a full one (it looks up the longer range that has history), so the
+    year may read fewer; never more.
+    """
+    return ["%s %d->%d" % (p, empty.get(p, -1), year.get(p, -1)) for p in paths
+            if year.get(p, 99) > min(empty.get(p, -1), HIST_QUERY_BUDGET)]
+
+
+def _check_history_ranges_bounded(client):
+    """Each History range of the server and host pages reads no more queries with a year of rows than with none."""
+    sid, rid, paths = _history_paths()
+    st_empty, st_year = {}, {}
+    empty = probe(client, paths, st_empty)
+    _seed_year_of_history(sid, rid)
+    year = probe(client, paths, st_year)
+    replies = [len((client.get(p).get_json() or {}).get("host") or []) for p in paths[len(HIST_RANGES):]]
+    answered = [(p, st_empty.get(p), st_year.get(p)) for p in paths]
+    check("perf: every History range of the server and host pages answers 200, with no history and with a year "
+          "of it (the year's replies are not empty)",
+          {(a, b) for _p, a, b in answered} == {(200, 200)} and all(replies), repr((answered, replies)))
+    grew = _history_grew(paths, empty, year)
+    check("perf: each History range reads no more queries with a year of rows than with none (at most %d)"
+          % HIST_QUERY_BUDGET, not grew, "; ".join(grew[:6]))
+
+
 try:
     admin_id = _seed_admin_and_hosts()
     seed_servers(0, SERVERS_SMALL)
+    site_id = seed_websites(0, SERVERS_SMALL)
     mc_server = seed_minecraft_server()
     addon_server = seed_addon_server()
-    paths = _get_page_paths(admin_id, mc_server, addon_server)
+    paths = _get_page_paths(admin_id, mc_server, addon_server, site_id)
     check("perf: the sweep requests every GET page but the pinned few it cannot (a new page left out "
           "is named here)", set(_r41t_unswept) == _r41t_unswept_known,
           repr(sorted(set(_r41t_unswept) ^ _r41t_unswept_known)))
@@ -588,6 +676,7 @@ try:
     small_st, large_st = {}, {}
     small = probe(c, paths, small_st)
     seed_servers(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
+    seed_websites(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
     large = probe(c, paths, large_st)
     elapsed = time.perf_counter() - t0
 
@@ -619,8 +708,14 @@ try:
     grew = _pages_that_grew(small, large)
     check("perf: no page's query count grows with the number of game servers (N+1)",
           not grew, "; ".join(grew[:4]))
+    _site_pages = [p for p in paths if p.startswith(("/websites", "/api/websites"))]
+    check("perf: the Websites pages were in both sweeps (the list and a site's own pages, with 5x the websites "
+          "in the second), and the list answered 200 in both",
+          len(_site_pages) >= 12 and small_st.get("/api/websites") == 200 and large_st.get("/api/websites") == 200,
+          repr((len(_site_pages), small_st.get("/api/websites"), large_st.get("/api/websites"))))
     _check_no_growth_with_groups(paths)
     _check_api_servers_scans_concurrently(c)
+    _check_history_ranges_bounded(c)
 
     worst = sorted(large.items(), key=lambda kv: -kv[1])[:5]
     print("busiest pages at %d hosts / %d servers: %s"

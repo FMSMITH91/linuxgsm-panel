@@ -1,0 +1,16 @@
+{# Database: the site's databases, made by the Databases tab's own code with the site's prefix. The
+   connection settings are shown on request, and that is written to the audit log. #}
+<section data-ws-pane="database" hidden>
+  <ul id="wdb-list" class="list-unstyled mb-2"></ul>
+  <form id="wdb-add" class="d-flex flex-wrap gap-2" data-action="wsDbAdd" data-args='["@event"]' data-on="submit">
+    <div class="input-group input-group-sm fx-14">
+      <span class="input-group-text" id="wdb-prefix" data-no-i18n>ws{{ site.id }}_</span>
+      <input type="text" id="wdb-name" class="form-control" maxlength="16" pattern="[a-z0-9]{1,16}" required
+             autocomplete="off" spellcheck="false" aria-label="Database name" aria-describedby="wdb-prefix">
+    </div>
+    <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Create database</button>
+  </form>
+  <div id="wdb-msg" class="small mt-1" role="status"></div>
+  <div class="form-text">The panel makes the database's own user and password. Showing them is written to the audit log.</div>
+  {% if site_admin|default(false) %}<a href="{{ url_for('databases_overview') }}" class="btn btn-sm btn-outline-secondary mt-2"><i class="bi bi-database"></i> Open in Databases</a>{% endif %}
+</section>

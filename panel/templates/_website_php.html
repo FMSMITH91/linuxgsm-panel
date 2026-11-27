@@ -1,0 +1,80 @@
+{# PHP for this site: the version (only versions PHP still supports with security fixes), the common
+   php.ini values with OWASP's recommendation beside each (a note, never a block, when outside it),
+   an Advanced php.ini box checked line by line, and the values PHP really uses (js/website_tuning.js).
+   OWASP PHP Configuration Cheat Sheet, "php.ini". #}
+<section data-ws-pane="php" hidden>
+  <form id="wphp-form" data-action="wsPhpSave" data-args='["@event"]' data-on="submit">
+    <div class="row g-2">
+      <div class="col-sm-4">
+        <label for="wphp-version" class="form-label small mb-1">PHP version</label>
+        <select id="wphp-version" class="form-select form-select-sm" data-no-i18n></select>
+        <div id="wphp-eol" class="small text-warning" hidden></div>
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-memory_limit" class="form-label small mb-1" data-no-i18n>memory_limit</label>
+        <input type="text" id="wphp-memory_limit" class="form-control form-control-sm" maxlength="8" pattern="-1|[0-9]{1,6}[KMG]?"
+               data-php="memory_limit" data-owasp="50M" data-action="wsPhpCheck" data-on="input" autocomplete="off" spellcheck="false">
+        <div class="form-text">OWASP recommends 50M.</div>
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-upload_max_filesize" class="form-label small mb-1" data-no-i18n>upload_max_filesize</label>
+        <input type="text" id="wphp-upload_max_filesize" class="form-control form-control-sm" maxlength="8" pattern="[0-9]{1,6}[KMG]?"
+               data-php="upload_max_filesize" data-owasp="2M" data-action="wsPhpCheck" data-on="input" autocomplete="off" spellcheck="false">
+        <div class="form-text">OWASP recommends 2M.</div>
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-post_max_size" class="form-label small mb-1" data-no-i18n>post_max_size</label>
+        <input type="text" id="wphp-post_max_size" class="form-control form-control-sm" maxlength="8" pattern="[0-9]{1,6}[KMG]?"
+               data-php="post_max_size" data-owasp="20M" data-action="wsPhpCheck" data-on="input" autocomplete="off" spellcheck="false">
+        <div class="form-text">OWASP recommends 20M.</div>
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-max_execution_time" class="form-label small mb-1" data-no-i18n>max_execution_time (s)</label>
+        <input type="number" id="wphp-max_execution_time" class="form-control form-control-sm" min="0" max="3600" step="1"
+               data-php="max_execution_time" data-owasp="60" data-action="wsPhpCheck" data-on="input">
+        <div class="form-text">OWASP recommends 60.</div>
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-max_input_time" class="form-label small mb-1" data-no-i18n>max_input_time (s)</label>
+        <input type="number" id="wphp-max_input_time" class="form-control form-control-sm" min="-1" max="3600" step="1" data-php="max_input_time">
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-max_input_vars" class="form-label small mb-1" data-no-i18n>max_input_vars</label>
+        <input type="number" id="wphp-max_input_vars" class="form-control form-control-sm" min="100" max="100000" step="1" data-php="max_input_vars">
+      </div>
+      <div class="col-6 col-sm-4">
+        <label for="wphp-date.timezone" class="form-label small mb-1" data-no-i18n>date.timezone</label>
+        <input type="text" id="wphp-date.timezone" class="form-control form-control-sm" maxlength="64" pattern="[A-Za-z0-9_+\-/]{1,64}"
+               data-php="date.timezone" autocomplete="off" spellcheck="false" placeholder="UTC" data-no-i18n>
+      </div>
+      <div class="col-6 col-sm-4 d-flex flex-column justify-content-end">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" role="switch" id="wphp-display_errors" data-php="display_errors"
+                 data-action="wsPhpCheck" data-on="change">
+          <label class="form-check-label small" for="wphp-display_errors" data-no-i18n>display_errors</label>
+        </div>
+        <div class="form-text">OWASP recommends Off.</div>
+      </div>
+    </div>
+    <div id="wphp-notes" class="small text-warning mt-1" role="status"></div>
+    <details id="wphp-adv" class="mt-2">
+      <summary class="small">Advanced php.ini</summary>
+      <label for="wphp-ini" class="visually-hidden">Advanced php.ini</label>
+      <textarea id="wphp-ini" class="form-control form-control-sm font-monospace mt-1" rows="6" maxlength="8192" spellcheck="false"
+                data-action="wsIniCheck" data-on="input" aria-describedby="wphp-ini-help"></textarea>
+      <ul id="wphp-ini-problems" class="small text-danger mb-1 ps-3"></ul>
+      <div id="wphp-ini-help" class="form-text">One key = value per line, for this site only. Loading extensions, or files from outside the site, is refused.</div>
+    </details>
+    <div class="form-text mt-2">Always added after your settings, and cannot be removed:</div>
+    <ul class="small mb-2 ps-3"><li><code>expose_php = Off</code></li><li><code>allow_url_include = Off</code></li></ul>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save and restart PHP</button>
+      <span id="wphp-msg" class="small" role="status"></span>
+    </div>
+  </form>
+  <details id="wphp-eff" class="mt-3">
+    <summary class="small" data-action="wsPhpEffective">Effective values</summary>
+    <div class="table-responsive"><table class="table table-sm small mb-1"><thead><tr><th scope="col">Setting</th><th scope="col">Value</th></tr></thead><tbody id="wphp-eff-rows"></tbody></table></div>
+    <div class="form-text">Read from PHP inside this site's container: what really applies.</div>
+  </details>
+</section>

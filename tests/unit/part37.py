@@ -265,6 +265,7 @@ _RAW_REVIEWED37 = {
     ("panel/ops/ssh_manager/tunnel.py", "_paramiko", "open_channel direct-tcpip"),
     ("panel/ops/ssh_manager/tunnel.py", "_ssh_cli_argv", "ssh -W"),
     ("panel/ops/ssh_manager/hosts.py", "_tcp_reachable", "socket.create_connection"),
+    ("panel/services/websites_egress.py", "handle", "socket.create_connection"),
 }
 # Every socket the shipped code makes itself (review 1124: `socket.socket` + `connect` opened a stream the
 # scanner did not see). None carries a browser's bytes to a host's port, so they are not named with the

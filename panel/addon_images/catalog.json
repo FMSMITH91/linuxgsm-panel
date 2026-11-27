@@ -14,5 +14,595 @@
       "tag": "2026.2.4.1-prerelease"
     }
   },
-  "schema": 1
+  "schema": 1,
+  "sites": {
+    "caddy": {
+      "assets": {
+        "amd64": {
+          "sha256": "5b8cb7faf8726a2028ad96a66e54e6e81e8f361bc6175e5d22bbd997cc5177fb",
+          "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_linux_amd64.tar.gz"
+        },
+        "arm64": {
+          "sha256": "5e377cff994fc9362a6fcf695c53f226cfca3a3ef85bd3a3687cf252d6310165",
+          "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.9/caddy_2.11.9_linux_arm64.tar.gz"
+        }
+      },
+      "version": "2.11.9"
+    },
+    "caddy_cache": {
+      "base": "docker.io/library/caddy@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b",
+      "builder": "docker.io/library/caddy@sha256:cda07fe9d82728c7ac44d844306d435e98131423dc7b114f05a8a8ecfff94707",
+      "caddy": "2.11.9",
+      "module": "github.com/caddyserver/cache-handler",
+      "version": "v0.17.0"
+    },
+    "object_cache": {
+      "image": "docker.io/valkey/valkey@sha256:3ad5a213cb1bc2fd4a113c89b6248a88655a6bf1dda69519d04e03cd3e3d2742",
+      "version": "9"
+    },
+    "origin_pull": {
+      "cloudflare": "-----BEGIN CERTIFICATE-----\nMIIGCjCCA/KgAwIBAgIIV5G6lVbCLmEwDQYJKoZIhvcNAQENBQAwgZAxCzAJBgNV\nBAYTAlVTMRkwFwYDVQQKExBDbG91ZEZsYXJlLCBJbmMuMRQwEgYDVQQLEwtPcmln\naW4gUHVsbDEWMBQGA1UEBxMNU2FuIEZyYW5jaXNjbzETMBEGA1UECBMKQ2FsaWZv\ncm5pYTEjMCEGA1UEAxMab3JpZ2luLXB1bGwuY2xvdWRmbGFyZS5uZXQwHhcNMTkx\nMDEwMTg0NTAwWhcNMjkxMTAxMTcwMDAwWjCBkDELMAkGA1UEBhMCVVMxGTAXBgNV\nBAoTEENsb3VkRmxhcmUsIEluYy4xFDASBgNVBAsTC09yaWdpbiBQdWxsMRYwFAYD\nVQQHEw1TYW4gRnJhbmNpc2NvMRMwEQYDVQQIEwpDYWxpZm9ybmlhMSMwIQYDVQQD\nExpvcmlnaW4tcHVsbC5jbG91ZGZsYXJlLm5ldDCCAiIwDQYJKoZIhvcNAQEBBQAD\nggIPADCCAgoCggIBAN2y2zojYfl0bKfhp0AJBFeV+jQqbCw3sHmvEPwLmqDLqynI\n42tZXR5y914ZB9ZrwbL/K5O46exd/LujJnV2b3dzcx5rtiQzso0xzljqbnbQT20e\nihx/WrF4OkZKydZzsdaJsWAPuplDH5P7J82q3re88jQdgE5hqjqFZ3clCG7lxoBw\nhLaazm3NJJlUfzdk97ouRvnFGAuXd5cQVx8jYOOeU60sWqmMe4QHdOvpqB91bJoY\nQSKVFjUgHeTpN8tNpKJfb9LIn3pun3bC9NKNHtRKMNX3Kl/sAPq7q/AlndvA2Kw3\nDkum2mHQUGdzVHqcOgea9BGjLK2h7SuX93zTWL02u799dr6Xkrad/WShHchfjjRn\naL35niJUDr02YJtPgxWObsrfOU63B8juLUphW/4BOjjJyAG5l9j1//aUGEi/sEe5\nlqVv0P78QrxoxR+MMXiJwQab5FB8TG/ac6mRHgF9CmkX90uaRh+OC07XjTdfSKGR\nPpM9hB2ZhLol/nf8qmoLdoD5HvODZuKu2+muKeVHXgw2/A6wM7OwrinxZiyBk5Hh\nCvaADH7PZpU6z/zv5NU5HSvXiKtCzFuDu4/Zfi34RfHXeCUfHAb4KfNRXJwMsxUa\n+4ZpSAX2G6RnGU5meuXpU5/V+DQJp/e69XyyY6RXDoMywaEFlIlXBqjRRA2pAgMB\nAAGjZjBkMA4GA1UdDwEB/wQEAwIBBjASBgNVHRMBAf8ECDAGAQH/AgECMB0GA1Ud\nDgQWBBRDWUsraYuA4REzalfNVzjann3F6zAfBgNVHSMEGDAWgBRDWUsraYuA4REz\nalfNVzjann3F6zANBgkqhkiG9w0BAQ0FAAOCAgEAkQ+T9nqcSlAuW/90DeYmQOW1\nQhqOor5psBEGvxbNGV2hdLJY8h6QUq48BCevcMChg/L1CkznBNI40i3/6heDn3IS\nzVEwXKf34pPFCACWVMZxbQjkNRTiH8iRur9EsaNQ5oXCPJkhwg2+IFyoPAAYURoX\nVcI9SCDUa45clmYHJ/XYwV1icGVI8/9b2JUqklnOTa5tugwIUi5sTfipNcJXHhgz\n6BKYDl0/UP0lLKbsUETXeTGDiDpxZYIgbcFrRDDkHC6BSvdWVEiH5b9mH2BON60z\n0O0j8EEKTwi9jnafVtZQXP/D8yoVowdFDjXcKkOPF/1gIh9qrFR6GdoPVgB3SkLc\n5ulBqZaCHm563jsvWb/kXJnlFxW+1bsO9BDD6DweBcGdNurgmH625wBXksSdD7y/\nfakk8DagjbjKShYlPEFOAqEcliwjF45eabL0t27MJV61O/jHzHL3dknXeE4BDa2j\nbA+JbyJeUMtU7KMsxvx82RmhqBEJJDBCJ3scVptvhDMRrtqDBW5JShxoAOcpFQGm\niYWicn46nPDjgTU0bX1ZPpTpryXbvciVL5RkVBuyX2ntcOLDPlZWgxZCBp96x07F\nAnOzKgZk4RzZPNAxCXERVxajn/FLcOhglVAKo5H0ac+AitlQ0ip55D2/mf8o72tM\nfVQ6VpyjEXdiIXWUq/o=\n-----END CERTIFICATE-----\n"
+    },
+    "php": {
+      "8.3": {
+        "eol": "2027-12-31",
+        "image": "docker.io/library/php@sha256:28e8ffe3a7265b554113c252d42f1367edcc7f2d4d925f87c31b8529e1e58fcd"
+      },
+      "8.4": {
+        "eol": "2028-12-31",
+        "image": "docker.io/library/php@sha256:95c1a1dfaaffef4bcfee563838c50620457a3c00196c4bf5ddb66934d707fea2"
+      },
+      "8.5": {
+        "eol": "2029-12-31",
+        "image": "docker.io/library/php@sha256:256c25149bca6639f538ece3c5dda90684409227dec546b87ca174950569b8f1"
+      }
+    },
+    "presets": {
+      "cloudflare": [
+        "173.245.48.0/20",
+        "103.21.244.0/22",
+        "103.22.200.0/22",
+        "103.31.4.0/22",
+        "141.101.64.0/18",
+        "108.162.192.0/18",
+        "190.93.240.0/20",
+        "188.114.96.0/20",
+        "197.234.240.0/22",
+        "198.41.128.0/17",
+        "162.158.0.0/15",
+        "104.16.0.0/13",
+        "104.24.0.0/14",
+        "172.64.0.0/13",
+        "131.0.72.0/22",
+        "2400:cb00::/32",
+        "2606:4700::/32",
+        "2803:f800::/32",
+        "2405:b500::/32",
+        "2405:8100::/32",
+        "2a06:98c0::/29",
+        "2c0f:f248::/32"
+      ]
+    },
+    "recipes": {
+      "drupal": {
+        "admin_path": "/user/login",
+        "database": true,
+        "kind": "php",
+        "name": "Drupal",
+        "php": [
+          "8.3",
+          "8.4",
+          "8.5"
+        ],
+        "sha256": "2cd724ca1e93acf05993398533ecd274f0b6b167824638874f3dc1c12732c773",
+        "steps": [
+          {
+            "type": "create-database"
+          },
+          {
+            "strip": "drupal-11.4.14",
+            "type": "download-verify-unpack"
+          },
+          {
+            "argv": [
+              "php",
+              "-r",
+              "$l = require 'autoload.php'; require_once 'core/includes/install.core.inc'; $d = 'Drupal\\\\mysql\\\\Driver\\\\Database\\\\mysql'; $e = function ($n) { return file_get_contents('/run/panel-values/' . $n); }; install_drupal($l, ['interactive' => FALSE, 'parameters' => ['profile' => 'standard', 'langcode' => 'en'], 'forms' => ['install_settings_form' => ['driver' => $d, $d => ['database' => $e('DB_NAME'), 'username' => $e('DB_USER'), 'password' => $e('DB_PASSWORD'), 'host' => $e('DB_HOST_NAME'), 'port' => $e('DB_PORT'), 'prefix' => '']], 'install_configure_form' => ['site_name' => $e('SITE_NAME'), 'site_mail' => $e('ADMIN_EMAIL'), 'account' => ['name' => $e('ADMIN_USER'), 'mail' => $e('ADMIN_EMAIL'), 'pass' => ['pass1' => $e('ADMIN_PASSWORD'), 'pass2' => $e('ADMIN_PASSWORD')]], 'enable_update_status_module' => FALSE, 'enable_update_status_emails' => FALSE]]]);"
+            ],
+            "image": "site",
+            "type": "run-in-container",
+            "values": {
+              "ADMIN_EMAIL": "admin_email",
+              "ADMIN_PASSWORD": "admin_password",
+              "ADMIN_USER": "admin_user",
+              "DB_HOST_NAME": "db_host_name",
+              "DB_NAME": "db_name",
+              "DB_PASSWORD": "db_password",
+              "DB_PORT": "db_port",
+              "DB_USER": "db_user",
+              "SITE_NAME": "site_name"
+            }
+          },
+          {
+            "append": true,
+            "dest": "sites/default/settings.php",
+            "escape": "php",
+            "template": "\n$settings['trusted_host_patterns'] = [{trusted_hosts}];\n",
+            "type": "render-config"
+          },
+          {
+            "readonly": [
+              "sites/default/settings.php",
+              "sites/default"
+            ],
+            "type": "set-permissions"
+          },
+          {
+            "files": [
+              "sites/default/settings.php"
+            ],
+            "page": {
+              "expect": "user-login-form",
+              "path": "/user/login"
+            },
+            "tables": "users",
+            "type": "verify-install"
+          }
+        ],
+        "url": "https://ftp.drupal.org/files/projects/drupal-11.4.14.tar.gz",
+        "version": "11.4.14"
+      },
+      "mybb": {
+        "admin_path": "/admin/",
+        "database": true,
+        "installer_path": "/install/",
+        "kind": "php",
+        "name": "MyBB",
+        "php": [
+          "8.3",
+          "8.4"
+        ],
+        "sha256": "48cc76e9e1146ea052756575991f43f51a634f125eea06d05ce9041b03eedeaa",
+        "steps": [
+          {
+            "type": "create-database"
+          },
+          {
+            "strip": "Upload",
+            "type": "download-verify-unpack"
+          },
+          {
+            "pages": [
+              {
+                "expect": "MyBB Installation Wizard",
+                "form": {},
+                "method": "GET",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "License Agreement",
+                "form": {
+                  "action": "license"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Requirements Check",
+                "form": {
+                  "action": "requirements_check"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Database Configuration",
+                "form": {
+                  "action": "database_info"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Table Creation",
+                "form": {
+                  "action": "create_tables",
+                  "config[mysqli][dbhost]": "{db_host}",
+                  "config[mysqli][dbname]": "{db_name}",
+                  "config[mysqli][dbpass]": "{db_password}",
+                  "config[mysqli][dbuser]": "{db_user}",
+                  "config[mysqli][encoding]": "utf8mb4",
+                  "config[mysqli][tableprefix]": "mybb_",
+                  "dbengine": "mysqli"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Table Population",
+                "form": {
+                  "action": "populate_tables"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Theme Installation",
+                "form": {
+                  "action": "templates"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Board Configuration",
+                "form": {
+                  "action": "configuration"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Create Administrator Account",
+                "form": {
+                  "action": "adminuser",
+                  "bbname": "{site_name}",
+                  "bburl": "{site_url}",
+                  "contactemail": "{admin_email}",
+                  "cookiedomain": "{domain}",
+                  "cookiepath": "/",
+                  "pin": "",
+                  "websitename": "{site_name}",
+                  "websiteurl": "{site_url}"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              },
+              {
+                "expect": "Finish Setup",
+                "form": {
+                  "action": "final",
+                  "adminemail": "{admin_email}",
+                  "adminpass": "{admin_password}",
+                  "adminpass2": "{admin_password}",
+                  "adminuser": "{admin_user}"
+                },
+                "method": "POST",
+                "path": "/install/index.php"
+              }
+            ],
+            "type": "drive-web-installer"
+          },
+          {
+            "readonly": [
+              "inc/config.php"
+            ],
+            "remove": [
+              "install"
+            ],
+            "type": "set-permissions"
+          },
+          {
+            "files": [
+              "inc/config.php"
+            ],
+            "page": {
+              "expect": "MyBB",
+              "path": "/index.php"
+            },
+            "tables": "mybb_",
+            "type": "verify-install"
+          }
+        ],
+        "url": "https://github.com/mybb/mybb/releases/download/mybb_1841/mybb_1841.zip",
+        "version": "1.8.41"
+      },
+      "phpbb": {
+        "admin_path": "/adm/",
+        "database": true,
+        "installer_path": "/install/",
+        "kind": "php",
+        "name": "phpBB",
+        "php": [
+          "8.3",
+          "8.4"
+        ],
+        "sha256": "1530e5cabf7ecc9ecfaed3fa13da79f9e8a514623beafababc8800b5ce966de9",
+        "steps": [
+          {
+            "type": "create-database"
+          },
+          {
+            "strip": "phpBB3",
+            "type": "download-verify-unpack"
+          },
+          {
+            "dest": "install/panel-install.yml",
+            "escape": "yaml",
+            "template": "installer:\n    admin:\n        name: \"{admin_user}\"\n        password: \"{admin_password}\"\n        email: \"{admin_email}\"\n    board:\n        lang: en\n        name: \"{site_name}\"\n        description: \"{site_name}\"\n    database:\n        dbms: mysqli\n        dbhost: \"{db_host_name}\"\n        dbport: {db_port}\n        dbuser: \"{db_user}\"\n        dbpasswd: \"{db_password}\"\n        dbname: \"{db_name}\"\n        table_prefix: phpbb_\n    email:\n        enabled: false\n    server:\n        cookie_secure: true\n        server_protocol: https://\n        force_server_vars: false\n        server_name: \"{domain}\"\n        server_port: 443\n        script_path: /\n    extensions: []\n",
+            "type": "render-config"
+          },
+          {
+            "argv": [
+              "php",
+              "install/phpbbcli.php",
+              "install",
+              "install/panel-install.yml"
+            ],
+            "image": "site",
+            "type": "run-in-container"
+          },
+          {
+            "readonly": [
+              "config.php"
+            ],
+            "remove": [
+              "install"
+            ],
+            "type": "set-permissions"
+          },
+          {
+            "files": [
+              "config.php"
+            ],
+            "page": {
+              "expect": "phpBB",
+              "path": "/index.php"
+            },
+            "tables": "phpbb_",
+            "type": "verify-install"
+          }
+        ],
+        "url": "https://download.phpbb.com/pub/release/3.3/3.3.19/phpBB-3.3.19.zip",
+        "version": "3.3.19"
+      },
+      "smf": {
+        "admin_path": "/index.php",
+        "database": true,
+        "installer_path": "/install.php",
+        "kind": "php",
+        "name": "Simple Machines Forum",
+        "php": [
+          "8.3",
+          "8.4"
+        ],
+        "sha256": "e71819b5d9516c4ecea5e46957c13a37d6a751908c36ad6715e54636917862bc",
+        "steps": [
+          {
+            "type": "create-database"
+          },
+          {
+            "strip": "SMF-2.1.8",
+            "type": "download-verify-unpack"
+          },
+          {
+            "argv": [
+              "sh",
+              "-c",
+              "cp other/install.php other/install_2-1_mysql.sql other/Settings.php other/Settings_bak.php other/db_last_error.php . && rm -rf other .github"
+            ],
+            "image": "site",
+            "type": "run-in-container"
+          },
+          {
+            "pages": [
+              {
+                "expect": "Welcome",
+                "form": {},
+                "method": "GET",
+                "path": "/install.php"
+              },
+              {
+                "expect": "Database Server Settings",
+                "form": {
+                  "contbutt": "1"
+                },
+                "method": "POST",
+                "path": "/install.php?step=0"
+              },
+              {
+                "expect": "Forum Settings",
+                "form": {
+                  "contbutt": "1",
+                  "db_name": "{db_name}",
+                  "db_passwd": "{db_password}",
+                  "db_port": "{db_port}",
+                  "db_prefix": "smf_",
+                  "db_server": "{db_host_name}",
+                  "db_type": "mysql",
+                  "db_user": "{db_user}"
+                },
+                "method": "POST",
+                "path": "/install.php?step=2"
+              },
+              {
+                "expect": "Populated Database",
+                "form": {
+                  "boardurl": "{site_url}",
+                  "compress": "1",
+                  "contbutt": "1",
+                  "dbsession": "1",
+                  "force_ssl": "1",
+                  "mbname": "{site_name}",
+                  "reg_mode": "0"
+                },
+                "method": "POST",
+                "path": "/install.php?step=3"
+              },
+              {
+                "expect": "Create your account",
+                "form": {
+                  "contbutt": "1",
+                  "pop_done": "1"
+                },
+                "method": "POST",
+                "path": "/install.php?step=4"
+              },
+              {
+                "expect": "Congratulations, the installation process is complete!",
+                "form": {
+                  "contbutt": "1",
+                  "email": "{admin_email}",
+                  "password1": "{admin_password}",
+                  "password2": "{admin_password}",
+                  "server_email": "{admin_email}",
+                  "username": "{admin_user}"
+                },
+                "method": "POST",
+                "path": "/install.php?step=5"
+              }
+            ],
+            "type": "drive-web-installer"
+          },
+          {
+            "readonly": [
+              "Settings.php"
+            ],
+            "remove": [
+              "install.php",
+              "install_2-1_mysql.sql"
+            ],
+            "type": "set-permissions"
+          },
+          {
+            "files": [
+              "Settings.php"
+            ],
+            "page": {
+              "expect": "Simple Machines",
+              "path": "/index.php"
+            },
+            "tables": "smf_",
+            "type": "verify-install"
+          }
+        ],
+        "url": "https://github.com/SimpleMachines/SMF/archive/refs/tags/v2.1.8.tar.gz",
+        "version": "2.1.8"
+      },
+      "wordpress": {
+        "admin_path": "/wp-admin/",
+        "database": true,
+        "egress": [
+          "api.wordpress.org",
+          "downloads.wordpress.org"
+        ],
+        "kind": "wordpress",
+        "name": "WordPress",
+        "php": [
+          "8.3",
+          "8.4",
+          "8.5"
+        ],
+        "steps": [
+          {
+            "type": "create-database"
+          },
+          {
+            "argv": [
+              "cp",
+              "-a",
+              "/usr/src/wordpress/.",
+              "/var/www/html/"
+            ],
+            "image": "site",
+            "type": "run-in-container"
+          },
+          {
+            "dest": "wp-config.php",
+            "escape": "php",
+            "template": "<?php\n/* Written by linuxgsm-panel when it installed this site. */\ndefine( 'DB_NAME', '{db_name}' );\ndefine( 'DB_USER', '{db_user}' );\ndefine( 'DB_PASSWORD', '{db_password}' );\ndefine( 'DB_HOST', '{db_host}' );\ndefine( 'DB_CHARSET', 'utf8mb4' );\ndefine( 'DB_COLLATE', '' );\ndefine( 'AUTH_KEY', '{salt}' );\ndefine( 'SECURE_AUTH_KEY', '{salt}' );\ndefine( 'LOGGED_IN_KEY', '{salt}' );\ndefine( 'NONCE_KEY', '{salt}' );\ndefine( 'AUTH_SALT', '{salt}' );\ndefine( 'SECURE_AUTH_SALT', '{salt}' );\ndefine( 'LOGGED_IN_SALT', '{salt}' );\ndefine( 'NONCE_SALT', '{salt}' );\n$table_prefix = 'wp_';\ndefine( 'WP_DEBUG', false );\ndefine( 'DISALLOW_FILE_EDIT', true );\ndefine( 'WP_AUTO_UPDATE_CORE', 'minor' );\ndefine( 'FORCE_SSL_ADMIN', true );\n/* Scheduled tasks run from the panel's timer, never during a visitor's request. */\ndefine( 'DISABLE_WP_CRON', true );\n/* The site's only way out: its egress proxy (update hosts only). */\ndefine( 'WP_PROXY_HOST', '127.0.0.1' );\ndefine( 'WP_PROXY_PORT', '3128' );\nif ( isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) && 'https' === $_SERVER['HTTP_X_FORWARDED_PROTO'] ) {\n\t$_SERVER['HTTPS'] = 'on';\n}\nif ( ! defined( 'ABSPATH' ) ) {\n\tdefine( 'ABSPATH', __DIR__ . '/' );\n}\nrequire_once ABSPATH . 'wp-settings.php';\n",
+            "type": "render-config"
+          },
+          {
+            "argv": [
+              "sh",
+              "-c",
+              "wp core install --url=\"$(cat /run/panel-values/SITE_URL)\" --title=\"$(cat /run/panel-values/SITE_NAME)\" --admin_user=\"$(cat /run/panel-values/ADMIN_USER)\" --admin_email=\"$(cat /run/panel-values/ADMIN_EMAIL)\" --skip-email --quiet && wp eval '$v = function ($n) { return file_get_contents(\"/run/panel-values/\" . $n); }; $u = get_user_by(\"login\", $v(\"ADMIN_USER\")); if (! $u) { exit(1); } wp_set_password($v(\"ADMIN_PASSWORD\"), $u->ID);'"
+            ],
+            "image": "wpcli",
+            "type": "run-in-container",
+            "values": {
+              "ADMIN_EMAIL": "admin_email",
+              "ADMIN_PASSWORD": "admin_password",
+              "ADMIN_USER": "admin_user",
+              "SITE_NAME": "site_name",
+              "SITE_URL": "site_url"
+            }
+          },
+          {
+            "readonly": [
+              "wp-config.php"
+            ],
+            "type": "set-permissions"
+          },
+          {
+            "files": [
+              "wp-config.php"
+            ],
+            "page": {
+              "expect": "name=\"log\"",
+              "path": "/wp-login.php"
+            },
+            "tables": "wp_",
+            "type": "verify-install"
+          }
+        ],
+        "version": "7.1.5"
+      }
+    },
+    "runtimes": {
+      "node": {
+        "build": "npm ci --omit=dev && npm run build --if-present",
+        "egress": [
+          "registry.npmjs.org"
+        ],
+        "npm": "11.21.3",
+        "port": 3000,
+        "start": "npm start",
+        "versions": {
+          "22": {
+            "eol": "2027-04-30",
+            "image": "docker.io/library/node@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb"
+          },
+          "24": {
+            "eol": "2028-04-30",
+            "image": "docker.io/library/node@sha256:873f586f3794f52281bd039bf02c048a0be08fde619338f9941bad1eb6b34530"
+          },
+          "26": {
+            "eol": "2029-04-30",
+            "image": "docker.io/library/node@sha256:0042e17d232a87a2cd485be1da7900fca4d10a4ad11b29e9285da1d2e54798c9"
+          }
+        }
+      }
+    },
+    "static": {
+      "image": "docker.io/nginx/nginx-unprivileged@sha256:04c98c78c1de60ddeada00d7d2207dcd146ecd07b61b9941c9a5799cfb258d28",
+      "version": "1.30"
+    },
+    "tunnel": {
+      "cloudflare": {
+        "certs": "docker.io/library/debian@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0",
+        "image": "docker.io/cloudflare/cloudflared@sha256:55c7e3e8d89d5e8d20b75a82f3602cbf98e06db406e73e282073cfdc5a9a3af6",
+        "version": "2026.11.2"
+      }
+    },
+    "wordpress": {
+      "php": {
+        "8.3": {
+          "image": "docker.io/library/wordpress@sha256:9b46af6a41fd0dcb2e5cf85033a6350d05010356847ede1cfcac5cf94292eb26"
+        },
+        "8.4": {
+          "image": "docker.io/library/wordpress@sha256:98a3fba3639b89fe1ade0cf6d37e61bc8934de872cf26d9dc5286962b554e3d1"
+        },
+        "8.5": {
+          "image": "docker.io/library/wordpress@sha256:05feeed1131c96103154f7a7a405a983a5b65a197b812f68cade590d3189d1de"
+        }
+      },
+      "version": "7.1.5"
+    },
+    "wpcli": {
+      "image": "docker.io/library/wordpress@sha256:df224f633697444bbd1d2ca54b357b4f86834f82a74881b3e1acfbcc761025bb",
+      "version": "2.12.0"
+    }
+  }
 }

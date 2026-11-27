@@ -8,7 +8,7 @@
   var st = {d: null, loaded: false, busy: false, poll: null, watch: false};
   var STATE = {active: 'Running', activating: 'Starting', deactivating: 'Stopping', inactive: 'Stopped',
     failed: 'Failed', reloading: 'Starting', unknown: 'State unknown'};
-  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…', remove: 'Removing…'};
+  var JOB = {install: 'Installing…', update: 'Updating…', settings: 'Applying settings…', start: 'Starting…', remove: 'Removing…', geoip: 'Getting this month\'s country database…'};
 
   function T(s) { return window.t ? window.t(s) : s; }
   function TF(s, v) { return window.tf ? window.tf(s, v) : s; }
@@ -71,7 +71,7 @@
     box.appendChild(BM.updateLine(a));
     // An install, update, settings change or remove still running: nothing to press until it ends (a
     // start being watched can still be stopped; a Remove meanwhile is refused with the reason).
-    if ({install: 1, update: 1, settings: 1, remove: 1}[a.job]) return;
+    if ({install: 1, update: 1, settings: 1, remove: 1, geoip: 1}[a.job]) return;
     var bar = node('div', 'd-flex flex-wrap gap-2 mt-1');
     WEB.open(a, bar);
     if (a.state === 'active') bar.appendChild(button(T('Stop'), 'bi-stop-circle', 'adAct', [a.id, 'stop']));
@@ -318,6 +318,8 @@
     if (a.geolocation === 'offline') {
       if (a.geoip_off) box.appendChild(node('div', 'small text-warning', a.geoip_off));
       if (a.geoip) box.appendChild(node('div', 'small text-secondary', TF('Country database: {month}.', {month: a.geoip})));
+      // The monthly refresh: a restart waiting for an empty server, the download off or failing (translated).
+      if (a.geoip_note) box.appendChild(node('div', 'small text-warning', a.geoip_note));
       creditLine(a, box);
     }
   }

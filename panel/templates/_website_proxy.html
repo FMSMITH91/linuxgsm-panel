@@ -1,0 +1,176 @@
+{# The web proxy and how visitors reach the sites (superadmin only: it changes a root service and the
+   public listener). Exposure is a proxy-wide choice per host: Public, Restricted (an allow list,
+   with Cloudflare's networks one tap away), or Tunnel (no inbound port; a token). The token is
+   write-only: the page is told only whether one is saved. The security settings below show OWASP's
+   recommended value beside each field and a note, never a block, when a value is outside it
+   (js/websites_proxy.js). #}
+<div class="card mt-3" id="wp-card">
+  <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <span><i class="bi bi-shield-lock"></i> Web proxy and public access</span>
+    <button type="button" id="wp-install" class="btn btn-sm btn-outline-primary" data-action="wsProxyInstall" hidden>
+      <i class="bi bi-download"></i> Install the web proxy</button>
+  </div>
+  <div class="card-body">
+    <p id="wp-state" class="small mb-2" role="status"></p>
+    <details id="wp-mode-box">
+    <summary class="small" id="wp-mode-summary">How visitors reach your sites</summary>
+    <form id="wp-form" class="mt-2" data-action="wsSaveExposure" data-args='["@event"]' data-on="submit">
+      <div id="wp-host-wrap" class="mb-2" hidden>
+        <label for="wp-host" class="form-label small mb-1">Host</label>
+        <select id="wp-host" class="form-select form-select-sm fx-14" data-no-i18n data-action="wsProxyHost" data-on="change"></select>
+      </div>
+      <fieldset class="mb-2">
+        <legend class="visually-hidden">How visitors reach your sites</legend>
+        <div class="ws-modes">
+          <input type="radio" class="btn-check" name="wp-mode" id="wp-mode-public" value="public"
+                 data-action="wsExposure" data-args='["public"]' data-on="change">
+          <label class="ws-mode" for="wp-mode-public"><span class="ws-tile-name">Public</span>
+            <span class="ws-tile-sub">Anyone on the internet reaches your sites on ports 80 and 443.</span></label>
+          <input type="radio" class="btn-check" name="wp-mode" id="wp-mode-restricted" value="restricted"
+                 data-action="wsExposure" data-args='["restricted"]' data-on="change">
+          <label class="ws-mode" for="wp-mode-restricted"><span class="ws-tile-name">Restricted</span>
+            <span class="ws-tile-sub">Ports 80 and 443 open only to the networks you list, such as a CDN's.</span></label>
+          <input type="radio" class="btn-check" name="wp-mode" id="wp-mode-tunnel" value="tunnel"
+                 data-action="wsExposure" data-args='["tunnel"]' data-on="change">
+          <label class="ws-mode" for="wp-mode-tunnel"><span class="ws-tile-name">Tunnel</span>
+            <span class="ws-tile-sub">No port is opened: this host connects out to Cloudflare, which brings visitors in.</span></label>
+        </div>
+      </fieldset>
+      <div id="wp-restricted" class="mb-2" hidden>
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
+          <button type="button" id="wp-cf" class="btn btn-sm btn-outline-secondary" data-action="wsCfPreset" aria-pressed="false">
+            <i class="bi bi-cloud"></i> Use Cloudflare's networks</button>
+          <span id="wp-cf-state" class="small text-secondary"></span>
+        </div>
+        <label for="wp-cidrs" class="form-label small mb-1">Other networks, one per line</label>
+        <textarea id="wp-cidrs" class="form-control form-control-sm font-monospace" rows="3" maxlength="4000"
+                  spellcheck="false" autocomplete="off" aria-describedby="wp-cidrs-help"></textarea>
+        <div id="wp-cidrs-help" class="form-text">An address or a network, IPv4 or IPv6, for example 203.0.113.0/24. The visitor's own address is read from the CDN's header only when the request comes from one of these networks.</div>
+      </div>
+      <div id="wp-tunnel" class="mb-2" hidden>
+        <label for="wp-token" class="form-label small mb-1">Cloudflare tunnel token</label>
+        <input type="password" id="wp-token" class="form-control form-control-sm" autocomplete="off"
+               spellcheck="false" aria-describedby="wp-token-help">
+        <div id="wp-token-help" class="form-text">Create the tunnel in your Cloudflare account and paste its token. The panel stores it encrypted and never shows it again.</div>
+        <div id="wp-token-state" class="small text-secondary" hidden>A token is saved. Leave the box empty to keep it.</div>
+      </div>
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save</button>
+        <span id="wp-msg" class="small" role="status"></span>
+      </div>
+      <p class="form-text mb-0">A cloud provider's own firewall is outside the panel's reach: open or close 80 and 443 there yourself.</p>
+    </form>
+    </details>
+
+    <details id="wp-opts-box" class="mt-2">
+      <summary class="small">Security settings</summary>
+      <form id="wp-opts" class="row g-2 mt-1" data-action="wsSaveOptions" data-args='["@event"]' data-on="submit">
+        <div class="col-sm-6">
+          <label for="wp-hsts" class="form-label small mb-1">HSTS max-age (seconds)</label>
+          <input type="number" id="wp-hsts" class="form-control form-control-sm" min="0" max="315360000" step="1"
+                 data-action="wsOptCheck" data-on="input">
+          <div class="form-text">OWASP recommends 63072000 (two years).</div>
+          <div id="wp-hsts-note" class="form-text text-warning" hidden>Shorter than OWASP's recommendation. It is still saved.</div>
+        </div>
+        <div class="col-sm-6">
+          <label for="wp-tls" class="form-label small mb-1">Lowest TLS version</label>
+          <select id="wp-tls" class="form-select form-select-sm" data-no-i18n data-action="wsOptCheck" data-on="change">
+            <option value="1.3">TLS 1.3</option>
+            <option value="1.2">TLS 1.2</option>
+          </select>
+          <div class="form-text">OWASP: TLS 1.3 preferred; TLS 1.2 allowed for compatibility. With TLS 1.2 here, every browser that has TLS 1.3 still uses it.</div>
+          <div id="wp-tls-note" class="form-text text-warning" hidden>With TLS 1.3 only, every current browser connects; older phones and computers that lack TLS 1.3 do not.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-hsts-sub" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-hsts-sub">HSTS for every subdomain (includeSubDomains)</label>
+          </div>
+          <div class="form-text">OWASP recommends: on, once every subdomain of every site is served over HTTPS.</div>
+          <div id="wp-hsts-sub-note" class="form-text text-warning" hidden>Subdomains are not covered, so a subdomain reached over plain HTTP can set cookies for your sites. It is still saved.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-hsts-preload" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-hsts-preload">Ask browsers to preload HTTPS (preload)</label>
+          </div>
+          <div class="form-text">OWASP's example header includes preload, and warns it is hard to undo: once a domain is on the browsers' list, it stays HTTPS-only.</div>
+          <div id="wp-hsts-preload-note" class="form-text text-warning" hidden>Preload is not requested, unlike OWASP's example. It is still saved.</div>
+          <div id="wp-hsts-preload-sub" class="form-text text-warning" hidden>Preload is sent only together with HSTS for every subdomain.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-local-certs" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-local-certs">Use the web proxy's own local certificates</label>
+          </div>
+          <div class="form-text">For testing only. OWASP recommends: off (a certificate authority your visitors' browsers trust).</div>
+          <div id="wp-local-certs-note" class="form-text text-warning" hidden>Browsers do not trust these certificates: every visitor sees a warning. It is still saved.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-cache-build">
+            <label class="form-check-label small" for="wp-cache-build">Page cache in the web proxy</label>
+          </div>
+          <div class="form-text">OWASP has no recommendation for this. Turning it on builds the web proxy with the page cache on the host, which takes a few minutes; until then the websites' page caches are left out and nothing breaks.</div>
+        </div>
+        <div class="col-sm-6">
+          <label for="wp-acme-email" class="form-label small mb-1">Let's Encrypt contact email</label>
+          <input type="email" id="wp-acme-email" class="form-control form-control-sm" maxlength="254" autocomplete="off">
+          <div class="form-text">Optional. Let's Encrypt sees it; without one it only sees your domains and this host's address.</div>
+        </div>
+        <div class="col-sm-6">
+          <label for="wp-log-days" class="form-label small mb-1">Keep access logs (days)</label>
+          <input type="number" id="wp-log-days" class="form-control form-control-sm" min="1" max="90" step="1">
+          <div class="form-check form-switch mt-1">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-log-default">
+            <label class="form-check-label small" for="wp-log-default">Access logs on for new sites</label>
+          </div>
+          <div class="form-text">Off by default. When on, visitor addresses are shortened before they are kept.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-staging">
+            <label class="form-check-label small" for="wp-staging">Use Let's Encrypt's test service</label>
+          </div>
+          <div class="form-text">For trying things out: browsers do not trust its certificates.</div>
+        </div>
+        <div class="col-sm-6">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="wp-2fa" data-action="wsOptCheck" data-on="change">
+            <label class="form-check-label small" for="wp-2fa">Customers must use two-factor sign-in</label>
+          </div>
+          <div class="form-text">OWASP recommends: on.</div>
+          <div id="wp-2fa-note" class="form-text text-warning" hidden>Customers can sign in with a password alone. It is still saved.</div>
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-max-sites" class="form-label small mb-1">Sites per customer</label>
+          <input type="number" id="wp-max-sites" class="form-control form-control-sm" min="0" max="100" step="1">
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-mem" class="form-label small mb-1">Memory per site (MB)</label>
+          <input type="number" id="wp-mem" class="form-control form-control-sm" min="64" max="65536" step="1">
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-cpu" class="form-label small mb-1">CPU per site (1000 = one core)</label>
+          <input type="number" id="wp-cpu" class="form-control form-control-sm" min="100" max="64000" step="100">
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-pids" class="form-label small mb-1">Processes per site</label>
+          <input type="number" id="wp-pids" class="form-control form-control-sm" min="16" max="32768" step="1">
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-disk" class="form-label small mb-1">Disk per site (MB)</label>
+          <input type="number" id="wp-disk" class="form-control form-control-sm" min="64" max="10485760" step="1">
+        </div>
+        <div class="col-6 col-sm-4">
+          <label for="wp-body" class="form-label small mb-1">Largest upload (MB)</label>
+          <input type="number" id="wp-body" class="form-control form-control-sm" min="1" max="10240" step="1">
+        </div>
+        <div class="col-12 d-flex flex-wrap gap-2 align-items-center">
+          <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-check-lg"></i> Save settings</button>
+          <span id="wp-opts-msg" class="small" role="status"></span>
+        </div>
+      </form>
+    </details>
+  </div>
+</div>

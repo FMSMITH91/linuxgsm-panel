@@ -13,8 +13,8 @@ two pages):
   first HostSample after a start has no rate, the next one has it.
 * The two new columns' migration entries, run on an old host_sample table.
 * The routes on part12's app: the server history's host points carry rx/tx; the host history answers
-  24h and 7d, refuses any other range, needs MANAGE_REMOTES and the host in the caller's reach, and
-  is down-sampled like the server history.
+  24h and 7d (the longer ranges are part309's), refuses any other range, needs MANAGE_REMOTES and the
+  host in the caller's reach, and is down-sampled like the server history.
 * The pages: the host page's History card, drawn in the state the reply will confirm (the chart area
   or one line of "No history yet"), its scripts in order, the server page's network chart; the
   shared chart script and the host card's script in node.
@@ -287,7 +287,7 @@ try:
     _g177["host24"] = _A177.get("/api/remote/%d/history?range=24h" % P9_HOST)
     _g177["hostdef"] = _A177.get("/api/remote/%d/history" % P9_HOST)
     _g177["bad"] = [_A177.get("/api/remote/%d/history?range=%s" % (P9_HOST, r)).status_code
-                    for r in ("1h", "30d", "24H", "7d%20")]
+                    for r in ("1h", "2y", "24H", "7d%20")]
     _g177["viewer"] = _V177.get("/api/remote/%d/history" % P9_HOST).status_code
     _g177["scoped"] = _S177.get("/api/remote/%d/history" % P9_HOST).status_code
     _g177["scoped_other"] = _S177.get("/api/remote/%d/history" % P9_HOST2).status_code
@@ -319,7 +319,7 @@ check("host history: one host's CPU, RAM, disk and network series, oldest first,
       [["cpu", "disk", "ram", "rx", "t", "tx"]] * 3 and _hh177["host"][0]["t"] < _hh177["host"][2]["t"]
       and (_hh177["host"][0]["cpu"], _hh177["host"][0]["ram"], _hh177["host"][0]["disk"]) == (1.0, 2.0, 3.0)
       and _j177(_g177["hostdef"]) == _hh177, repr(_hh177)[:300])
-eq("host history: any range but 24h and 7d is refused (400), not answered as another window",
+eq("host history: any range but 24h, 7d, 30d, 90d, 6mo and 1y is refused (400), not answered as another window",
    _g177["bad"], [400, 400, 400, 400])
 eq("host history: the host page's access: refused without MANAGE_REMOTES, allowed with it for a host in the "
    "caller's groups, refused for a host outside them",

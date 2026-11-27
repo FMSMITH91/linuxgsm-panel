@@ -11,17 +11,25 @@ WHAT AND WHY
     which CREDIT is, shown on the add-on's card and in docs/addons.md.
 
 HOW IT IS FETCHED
-    Only when a B3 add-on is set to offline geolocation (install, settings or update), and only while
-    Settings -> Outside services has DB-IP on. The panel's host asks for the page, then the file, over
-    HTTPS from those two hosts only (a redirect anywhere else is refused), with a size cap on each. The
-    file must unpack to at most UNPACKED_CAP bytes, match the SHA1 the page shows for it, and end with
-    MaxMind's metadata marker. It is
-    kept in data/geoip/ for the month, so every add-on that month gets the same file from one download.
-    No player data is sent: the request carries only the panel's User-Agent.
+    Only when a B3 add-on is set to offline geolocation (install, settings, update, or the monthly
+    refresh: routes/addons_geoip.py), and only while Settings -> Outside services has DB-IP on. The
+    panel's host asks for the page, then the file, over HTTPS from those two hosts only, with a size cap
+    on each. The file must unpack to at most UNPACKED_CAP bytes, match the SHA1 the page shows for it,
+    and end with MaxMind's metadata marker. It is kept in data/geoip/ (mode 0600) for the month, so
+    every add-on that month gets the same file from one download. No player data is sent: the request
+    carries only the panel's User-Agent.
 
-    OWASP's cheat sheets have no rule for a downloaded data file. The checks follow the OWASP Top 10
-    A08 (Software and Data Integrity Failures) advice: a trusted source over TLS, and an integrity check
-    before use.
+    OWASP Server Side Request Forgery Prevention Cheat Sheet, "Case 1" (requests only to identified and
+    trusted applications), "Application layer": the URLs are the panel's own (the page's, and the file's
+    link once it matches _FILE_RE), checked against HOSTS before each request; no redirect is followed,
+    to any host (neither db-ip.com URL redirects, checked 2026-11-26); and since a host-name allowlist
+    alone does not stop DNS rebinding, the connection goes only to an address the name resolved to, and
+    only when every address it resolved to is a public one, with the name kept for TLS's SNI and
+    certificate check (services/public_https.py, web push's checked connect). No proxy is used.
+    File Upload Cheat Sheet ("Upload and Download Limits", "File Signature Validation", "Filename
+    Safety", "Filesystem Permissions"): caps before and after unpacking, the MMDB marker and the
+    published SHA1, a file name the panel picks, mode 0600. Input Validation Cheat Sheet (syntactic and
+    semantic validity): the page's month must also be one that has begun.
 """
 import gzip
 import hashlib
@@ -35,6 +43,7 @@ import urllib.request
 
 from panel import REPO_ROOT as _ROOT
 from panel.core import outside_services as _outside
+from panel.services import public_https as _https
 
 PAGE = "https://db-ip.com/db/download/ip-to-country-lite"
 HOSTS = frozenset({"db-ip.com", "download.db-ip.com"})
@@ -82,21 +91,12 @@ def _allowed(url):
             and not p.username and not p.password)
 
 
-class _AllowedRedirect(urllib.request.HTTPRedirectHandler):
-    """Follow a redirect only to an https URL on HOSTS."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Refuse (None) a redirect off HOSTS; follow one on them."""
-        if not _allowed(newurl):
-            return None
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def _get(url, cap):
     """GET `url` from HOSTS: (body bytes, None) or (None, why). Never raises."""
     if not _allowed(url):
         return None, "not an allowed URL"
-    opener = urllib.request.build_opener(_AllowedRedirect)
+    # No redirect, no proxy, public addresses only (services/public_https.py).
+    opener = urllib.request.build_opener(*_https.handlers())
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "*/*"})
     try:
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
@@ -172,7 +172,8 @@ def _keep(data, month, sha1):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = CACHE_DIR / FILE_NAME
     tmp = CACHE_DIR / (FILE_NAME + ".new")
-    with open(tmp, "wb") as fh:
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as fh:
+        os.fchmod(fh.fileno(), 0o600)     # a .new an older panel left keeps its own mode through O_TRUNC
         fh.write(data)
     os.replace(tmp, path)
     rec = CACHE_DIR / "current.json.new"
@@ -197,11 +198,17 @@ def latest():
     if page is None:
         return path, month, UNREACHABLE
     found = parse_page(page.decode("utf-8", "replace"))
-    if found is None:
+    # A month that has not begun is not a release DB-IP has made: the page is not read as the panel expects.
+    if found is None or found[1] > month_now():
         return path, month, UNREADABLE
-    url, new_month, sha1 = found
-    if path is not None and new_month <= month:
+    if path is not None and found[1] <= month:
         return path, month, ""
+    return _download(found, path, month)
+
+
+def _download(found, path, month):
+    """latest()'s last step: the file `found` (parse_page's) fetched, checked and kept, or the kept one and why not."""
+    url, new_month, sha1 = found
     gz, _why = _get(url, GZ_CAP)
     if gz is None:
         return path, month, UNREACHABLE

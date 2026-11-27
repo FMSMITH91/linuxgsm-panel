@@ -1,0 +1,12 @@
+{
+  "A specific address": "Una dirección concreta",
+  "Address to listen on": "Dirección en la que escuchar",
+  "Choose one of this host's addresses for the SFTP service.": "Elige una de las direcciones de este host para el servicio SFTP.",
+  "Only that one address. If this host loses it, the service stops until it is back.": "Solo esa dirección. Si este host la pierde, el servicio se detiene hasta que vuelva.",
+  "Public address: the SFTP port is reachable from the internet, and anyone can try to sign in. OWASP counts internet-facing services as the highest risk: prefer the Tailscale address or a private one. The panel's fail2ban jail bans on this port too.": "Dirección pública: el puerto SFTP es accesible desde internet y cualquiera puede intentar iniciar sesión. OWASP considera los servicios expuestos a internet los de mayor riesgo: es preferible la dirección de Tailscale o una privada. La jaula fail2ban del panel también bloquea en este puerto.",
+  "The chosen address is not on this host now, so the SFTP service has stopped. It starts again when the address is back, and never listens on another address instead.": "La dirección elegida ya no está en este host, así que el servicio SFTP se ha detenido. Vuelve a arrancar cuando la dirección regrese y nunca escucha en otra dirección en su lugar.",
+  "This host's addresses could not be read.": "No se pudieron leer las direcciones de este host.",
+  "This host's addresses could not be read; the SFTP service waits to check its address.": "No se pudieron leer las direcciones de este host; el servicio SFTP espera para comprobar su dirección.",
+  "not on this host now": "no está en este host ahora",
+  "public: reachable from the internet": "pública: accesible desde internet"
+}
