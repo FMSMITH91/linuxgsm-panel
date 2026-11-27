@@ -1,4 +1,6 @@
 {
   "Cloudflare refused the tunnel's token, so no visitor gets through. Copy this tunnel's token from Cloudflare's dashboard, paste it again, then apply.": "Cloudflare a refusé le jeton du tunnel : aucun visiteur ne passe. Copiez le jeton de ce tunnel depuis le tableau de bord de Cloudflare, collez-le à nouveau, puis appliquez.",
-  "Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again.": "Connecteur du tunnel : Cloudflare a refusé son jeton, aucun visiteur ne passe. Collez à nouveau le jeton du tunnel."
+  "Tunnel connector: Cloudflare refused its token, so no visitor gets through. Paste the tunnel's token again.": "Connecteur du tunnel : Cloudflare a refusé son jeton, aucun visiteur ne passe. Collez à nouveau le jeton du tunnel.",
+  "The database server is ready. Create the app now.": "Le serveur de bases de données est prêt. Créez l'application maintenant.",
+  "Databases are being set up. Create becomes available here when they are ready.": "Les bases de données sont en cours de configuration. Créer sera disponible ici quand elles seront prêtes."
 }

@@ -66,6 +66,9 @@ WP2 A fresh WordPress install removes the bundled plugins and the default themes
     active theme and WordPress's default one as its fallback), so Site Health has no inactive plugin or theme to
     recommend removing.
 
+U1  The add dialog reads the host's state again when it opens and after Set up databases (every 5 seconds while a
+    database entry is still listed), so Create is available once the database server is ready, with no reload.
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -611,18 +614,47 @@ def _c4_dialog(st):
       const after = {shown: !$('ws-missing').hidden, text: $('ws-missing-text').textContent,
                      action: b ? b.getAttribute('data-action') : null, disabled: $('ws-add-create').disabled};
       if (b) window.wsDbSetup(JSON.parse(b.getAttribute('data-args'))[0]);
-      for (let i = 0; i < 6; i++) await tick();
+      for (let i = 0; i < 12; i++) await tick();
       return {before: before, after: after, msg: $('ws-add-msg').textContent,
+              ready: {shown: !$('ws-missing').hidden, disabled: $('ws-add-create').disabled},
               posts: calls.filter(function (c) { return c[0] === 'POST'; }).map(function (c) { return c[1]; })};
     """, {"/api/websites": _LIST315, "/websites/install-app": {"success": False, "message": "No database server yet.",
                                                                "missing": [entry]},
           "/api/remote/4/databases/setup": {"success": True, "message": "Setting up databases on this host."}})
     eq("C4 (the add dialog, js/websites.js): the app install's refusal becomes the dialog's first line with Set up "
-       "databases, Create unavailable; the button starts the host's database setup and says to create the app again",
-       (got.get("before"), got.get("after"), got.get("posts"), got.get("msg")),
+       "databases, Create unavailable; the button starts the host's database setup",
+       (got.get("before"), got.get("after"), got.get("posts")),
        (False, {"shown": True, "text": "No database server yet.", "action": "wsDbSetup", "disabled": True},
-        ["/m/websites/install-app", "/m/api/remote/4/databases/setup"],
-        "Databases are being set up. Create the app again in a few minutes."))
+        ["/m/websites/install-app", "/m/api/remote/4/databases/setup"]))
+    eq("U1 (the add dialog after Set up databases, js/websites.js): the dialog reads the host's state again, and once "
+       "the list says nothing is missing the line goes, Create is available and the dialog says so (Create stayed "
+       "unavailable until a page reload)",
+       (got.get("ready"), got.get("msg")),
+       ({"shown": False, "disabled": False}, "The database server is ready. Create the app now."))
+    _u1_reopen(entry)
+
+
+def _u1_reopen(entry):
+    """U1: closing and opening the dialog again kept the refusal's line and Create unavailable."""
+    out = {}
+    for name, listed in (("ready now", []), ("still missing", [entry])):
+        got = _node315(_list_page315(), ["websites_common.js", "websites.js"], r"""
+      window.wsOpenAdd();
+      $('ws-kind-install').checked = true; window.wsKind('install'); window.wsPickApp('wordpress');
+      $('ws-add-name').value = 'blog'; $('ws-add-domain').value = 'blog.example.org';
+      $('ws-add-admin-user').value = 'boss'; $('ws-add-admin-email').value = 'boss@example.org';
+      window.wsAddSubmit({preventDefault: function () {}});
+      for (let i = 0; i < 6; i++) await tick();
+      const refused = $('ws-add-create').disabled;
+      window.wsOpenAdd();
+      for (let i = 0; i < 6; i++) await tick();
+      return {refused: refused, shown: !$('ws-missing').hidden, disabled: $('ws-add-create').disabled};
+    """, {"/api/websites": dict(_LIST315, missing=listed),
+          "/websites/install-app": {"success": False, "message": "No database server yet.", "missing": [entry]}})
+        out[name] = (got.get("refused"), got.get("shown"), got.get("disabled"))
+    eq("U1 (the add dialog opened again, js/websites.js): it reads the host's state again, so a database server set "
+       "up since makes Create available; one still missing keeps the line and Create unavailable (control)",
+       out, {"ready now": (True, False, False), "still missing": (True, True, True)})
 
 
 # ── C5. Hosts that cannot run websites ────────────────────────────────────────────────────────────

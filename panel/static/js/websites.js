@@ -163,7 +163,24 @@
     WS.show('ws-progress-wrap', false);
     WS.renderMissing(st.d ? st.d.missing : []);
     window.bootstrap.Modal.getOrCreateInstance(m).show();
+    refreshMissing(false);
   };
+  // The dialog's first line read again from the server, so Create follows what changed since the page loaded (a
+  // database server set up meanwhile). With `poll`, asked again every 5 seconds, up to 10 minutes, while a
+  // database entry is still there; once it is gone, the dialog says Create works now.
+  function refreshMissing(poll, left) {
+    clearTimeout(st.dbPoll);
+    return WS.get(WS.R.list).then(function (d) {
+      if (!d || d.success === false || !st.d) return;
+      st.d = Object.assign({}, st.d, {missing: d.missing || []});
+      WS.renderMissing(st.d.missing);
+      var waiting = st.d.missing.some(function (m) { return String(m.key || '').indexOf('database') === 0; });
+      var n = left == null ? 120 : left;
+      if (!poll) return;
+      if (!waiting) WS.say('ws-add-msg', WS.T('The database server is ready. Create the app now.'), 'ok');
+      else if (n > 0) st.dbPoll = setTimeout(function () { refreshMissing(true, n - 1); }, 5000);
+    });
+  }
   window.wsKind = function (kind) {
     st.kind = kind;
     WS.renderMissing(st.d ? st.d.missing : []);
@@ -233,7 +250,8 @@
     var more = (d && d.missing) || [];
     if (more.length && st.d) {
       var key = more[0].key;
-      st.d.missing = (st.d.missing || []).filter(function (m) { return m.key !== key; }).concat(more);
+      // A copy: the list's own answer is left as the server sent it.
+      st.d = Object.assign({}, st.d, {missing: (st.d.missing || []).filter(function (m) { return m.key !== key; }).concat(more)});
       WS.renderMissing(st.d.missing);
     }
     WS.done(d, 'ws-add-msg');
@@ -345,13 +363,14 @@
   }
 
   // MariaDB installed on the host, reached from this machine only (the Databases code's own setup, in the
-  // background); the dialog says to create the app again once it is done.
+  // background); the dialog follows it and makes Create available once it is done.
   window.wsDbSetup = function (hostId) {
     WS.stepUp(function () {
       WS.say('ws-add-msg', WS.T('Setting up databases…'));
       WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) {
-        if (d && d.success) WS.say('ws-add-msg', WS.T('Databases are being set up. Create the app again in a few minutes.'), 'ok');
-        else WS.done(d, 'ws-add-msg');
+        if (!d || !d.success) { WS.done(d, 'ws-add-msg'); return; }
+        WS.say('ws-add-msg', WS.T('Databases are being set up. Create becomes available here when they are ready.'), 'ok');
+        refreshMissing(true);
       });
     });
   };
