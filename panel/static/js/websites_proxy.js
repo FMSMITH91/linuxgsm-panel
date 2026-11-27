@@ -61,17 +61,20 @@
     if (ul) ranges.forEach(function (r) { ul.appendChild(WS.node('li', null, String(r))); });
   }
   // The list read from an address: its networks, when it was read, and why the last read failed (the old list kept).
+  function urlState(p, n) {
+    var parts = [];
+    if (p.allow_url && p.allow_url_at) parts.push(WS.TF('Read on {date}: {n} networks.', {date: p.allow_url_at, n: n}));
+    if (p.allow_url_error) parts.push(WS.TF('The last read failed, so the list read before is kept: {why}', {why: p.allow_url_error}));
+    if (p.allow_url && p.allow_url_on === false) parts.push(WS.T('Reading lists from an address is turned off in Settings, Outside services: this list is not read again.'));
+    return parts.join(' ');
+  }
   function renderUrl(p) {
     var u = WS.el('wp-url'), nets = p.allow_url_nets || [];
     if (u) u.value = p.allow_url || '';
     var sum = WS.el('wp-url-sum');
     if (sum) sum.textContent = p.allow_url ? WS.TF('A list from an address: {n} networks', {n: nets.length}) : WS.T('A list from an address');
-    var parts = [];
-    if (p.allow_url && p.allow_url_at) parts.push(WS.TF('Read on {date}: {n} networks.', {date: p.allow_url_at, n: nets.length}));
-    if (p.allow_url_error) parts.push(WS.TF('The last read failed, so the list read before is kept: {why}', {why: p.allow_url_error}));
-    if (p.allow_url && p.allow_url_on === false) parts.push(WS.T('Reading lists from an address is turned off in Settings, Outside services: this list is not read again.'));
     var s = WS.el('wp-url-state');
-    if (s) s.textContent = parts.join(' ');
+    if (s) s.textContent = urlState(p, nets.length);
     var ul = WS.clear(WS.el('wp-url-nets'));
     if (ul) nets.forEach(function (n) { ul.appendChild(WS.node('li', null, String(n))); });
   }

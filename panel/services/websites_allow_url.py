@@ -68,18 +68,24 @@ def allowed():
     return _outside.enabled(_outside.WEBSITE_ALLOW_URL)
 
 
-def url_problem(url):
-    """Why `url` is not an address the panel reads a list from ("" when it is)."""
-    if not isinstance(url, str) or not 0 < len(url) <= MAX_URL or any(not " " < c <= "~" for c in url):
-        return S_URL
+def _plain_text(url):
+    """Whether `url` is a string of 1 to MAX_URL printable ASCII characters (no space, no control)."""
+    return isinstance(url, str) and 0 < len(url) <= MAX_URL and all(" " < c <= "~" for c in url)
+
+
+def _https_443(url):
+    """Whether `url` is https to a host name on port 443, with no user, password or fragment."""
     try:
         p = urllib.parse.urlsplit(url)
         port = p.port
     except ValueError:
-        return S_URL
-    if p.scheme != "https" or not p.hostname or port not in (None, 443) or p.username or p.password or p.fragment:
-        return S_URL
-    return ""
+        return False
+    return p.scheme == "https" and bool(p.hostname) and port in (None, 443) and not (p.username or p.password or p.fragment)
+
+
+def url_problem(url):
+    """Why `url` is not an address the panel reads a list from ("" when it is)."""
+    return "" if _plain_text(url) and _https_443(url) else S_URL
 
 
 def where(url):

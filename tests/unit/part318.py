@@ -247,12 +247,13 @@ def _s1_workflow():
     steps = text.split("\n      - ")
     check_step = next((s for s in steps if "id: check" in s), "")
     pr_step = next((s for s in steps if "gh pr create" in s), "")
+    hosts = sorted(ln.strip() for ln in text.splitlines() if ln.strip().endswith(":443"))
     eq("CDN ranges (workflow): egress allows Fastly's list host beside Cloudflare's; the check step runs bash with "
        "pipefail, so a refused list fails it through the tee; the pull request is still opened for the CDNs that "
        "passed",
-       ("api.fastly.com:443" in text, "www.cloudflare.com:443" in text, "shell: bash" in check_step,
+       (hosts, "shell: bash" in check_step,
         "cdn_ranges.py check" in check_step, "!cancelled()" in pr_step, "steps.check.outputs.changed == 'true'" in pr_step),
-       (True, True, True, True, True, True))
+       (["api.fastly.com:443", "api.github.com:443", "github.com:443", "www.cloudflare.com:443"], True, True, True, True))
 
 
 def _s1_render(st):
@@ -365,6 +366,14 @@ def _s2_card():
 _LIST_URL318 = "https://lists.example.org/office.txt?key=abc"
 
 
+def _switch_off318(cfg):
+    cfg[_outside318.WEBSITE_ALLOW_URL] = False
+
+
+def _switch_back318(cfg):
+    cfg.pop(_outside318.WEBSITE_ALLOW_URL, None)
+
+
 def _answer318(body):
     """Stand in for the list's host at the module's one request: record the address, answer `body` (or a failure)."""
     asked = []
@@ -446,20 +455,20 @@ def _s3_save(st):
     _db318.session.refresh(row)
     eq("allow list from an address: a list with a line that is not a network is refused whole, the line named; "
        "nothing is saved or applied, the last good list stays",
-       (r.status_code, "2: nope" in (_j(r).get("message") or ""), row.allow_url, row.url_nets(), _REC318["apply"]),
-       (400, True, _LIST_URL318, ["203.0.113.0/24", "2001:db8:318::/48"], []))
+       (r.status_code, asked, "2: nope" in (_j(r).get("message") or ""), row.allow_url, row.url_nets(), _REC318["apply"]),
+       (400, ["https://lists.example.org/other.txt"], True, _LIST_URL318, ["203.0.113.0/24", "2001:db8:318::/48"], []))
     asked = _answer318(b"203.0.113.0/24\n")
     r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
         "exposure_mode": "restricted", "allow_url": _LIST_URL318}})
     eq("allow list from an address: saving the same address again does not read it again (control: the daily "
        "refresh does)", (r.status_code, asked), (200, []))
-    _cfg318.update_config(lambda c: c.update({_outside318.WEBSITE_ALLOW_URL: False}))
+    _cfg318.update_config(_switch_off318)
     try:
         asked = _answer318(b"203.0.113.0/24\n")
         r = su.post("/websites/proxy/settings", json={"host_id": st.host.id, "exposure": {
             "exposure_mode": "restricted", "allow_url": "https://lists.example.org/new.txt"}})
     finally:
-        _cfg318.update_config(lambda c: c.pop(_outside318.WEBSITE_ALLOW_URL, None))
+        _cfg318.update_config(_switch_back318)
     eq("allow list from an address: with its Outside services switch off, a new address is refused in words and "
        "nothing is fetched", (r.status_code, asked, _wau318.S_OFF.split(" in ")[0] in (_j(r).get("message") or "")),
        (400, [], True))
@@ -503,12 +512,12 @@ def _s3_tick(st):
     _wau318.tick(_p9)
     eq("allow list from an address (tick): after a failure the address is not asked again for hours", asked, [])
     _wau318._TRIED.clear()
-    _cfg318.update_config(lambda c: c.update({_outside318.WEBSITE_ALLOW_URL: False}))
+    _cfg318.update_config(_switch_off318)
     try:
         asked = _answer318(b"203.0.113.0/24\n")
         _wau318.tick(_p9)
     finally:
-        _cfg318.update_config(lambda c: c.pop(_outside318.WEBSITE_ALLOW_URL, None))
+        _cfg318.update_config(_switch_back318)
     eq("allow list from an address (tick): with the Outside services switch off nothing is fetched", asked, [])
 
 

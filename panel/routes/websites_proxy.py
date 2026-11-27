@@ -174,13 +174,17 @@ def parse_settings(row, data):
     return changes, problems + _mode_problems(row, changes)
 
 
+def _allows_nothing(row, changes):
+    """Whether a restricted host would be left with no network, preset or list address at all."""
+    cidrs = json.loads(changes.get("allow_cidrs", row.allow_cidrs or "[]"))
+    presets = json.loads(changes.get("allow_presets", row.allow_presets or "[]"))
+    return not cidrs and not presets and not changes.get("allow_url", row.allow_url)
+
+
 def _mode_problems(row, changes):
     mode = changes.get("exposure_mode", row.exposure_mode)
-    if mode == "restricted":
-        cidrs = json.loads(changes.get("allow_cidrs", row.allow_cidrs or "[]"))
-        presets = json.loads(changes.get("allow_presets", row.allow_presets or "[]"))
-        if not cidrs and not presets and not changes.get("allow_url", row.allow_url):
-            return [i18n.tr(S_RESTRICTED_EMPTY)]
+    if mode == "restricted" and _allows_nothing(row, changes):
+        return [i18n.tr(S_RESTRICTED_EMPTY)]
     if mode != "tunnel":
         return []
     # Both are needed: without a provider the apply only stops the connector, while the firewall's
