@@ -1,6 +1,7 @@
 {
   "Ask an administrator to delete it": "Pide a un administrador que lo elimine",
   "Delete and add again": "Eliminar y volver a añadir",
+  "Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.": "Sus archivos, bases de datos, copias de seguridad y cuenta se eliminan para siempre. Se guarda una copia de cada base de datos en el servidor durante 30 días. Escribe el nombre del sitio web para confirmar.",
   "The install failed, and nothing of it was left on the host.": "La instalación falló y no quedó nada de ella en el servidor.",
   "This app's install did not finish, so it cannot be set up again here. Delete the website and add it again.": "La instalación de esta aplicación no terminó, así que no se puede volver a configurar aquí. Elimina el sitio web y vuelve a añadirlo.",
   "This website is still being set up. Wait until that finishes (or fails), then delete it.": "Este sitio web todavía se está configurando. Espera a que termine (o falle) y luego elimínalo.",

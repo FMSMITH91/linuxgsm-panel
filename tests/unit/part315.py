@@ -11,6 +11,9 @@ B3  Retry on a failed site installs it again (account, files, image, units) and 
 C9  Delete is refused while the site's install (a plain install's thread, or an app install's job) runs, plainly:
     it would remove the account the install still runs as.
 
+P8  The delete confirmation says the site's databases are dropped too, and that a copy of each is kept on the host
+    for 30 days (the database archive's retention).
+
 HOW IT RUNS. part12's app and its database for the routes, every host call at ssh_manager.websites' seams;
 the scripts run in node over the real rendered pages (part301's harness). Nothing reaches a host (part12's
 tripwire is armed).
@@ -270,6 +273,18 @@ def _c9_delete_busy(st):
     eq("C9 control (the same site once its install ended): deleted", (r3.status_code, removed), (200, [plain.id]))
 
 
+# ── P8. The delete confirmation ───────────────────────────────────────────────────────────────────
+def _p8_delete_text(st):
+    got = _node315(_site_page315(), ["websites_common.js", "website_site.js"], r"""
+      window.wsDelete();
+      return {body: dialogs.length ? dialogs[0].bodyText : '', need: dialogs.length ? dialogs[0].requireText : ''};
+    """, {"/api/websites/7": _b3_site_answer(state="running")})
+    body = got.get("body") or ""
+    eq("P8 (Delete website's confirmation, js/website_site.js): it says the databases are removed too and that a "
+       "copy of each is kept on the host for 30 days; the name is still typed to confirm",
+       ("databases" in body, "kept on the host for 30 days" in body, got.get("need")), (True, True, "shop"))
+
+
 # ── running the sections ──────────────────────────────────────────────────────────────────────────
 def _cleanup315():
     _db315.session.rollback()
@@ -306,7 +321,7 @@ with _p9.app_context():
     try:
         _p9_arm(who="part315")
         _st315 = _rows315()
-        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy):
+        for _sec315 in (_b2_failed_undone, _b3_retry, _c9_delete_busy, _p8_delete_text):
             check("part315: %s ran to the end" % _sec315.__name__, _ran315(_sec315, _st315), _ran315.last)
         eq("part315: nothing reached a host (part12's tripwire)", _P9_TRIPPED[_trips315:], [])
     finally:

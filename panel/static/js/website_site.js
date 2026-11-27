@@ -397,7 +397,7 @@
   };
   window.wsDelete = function () {
     window.confirmDialog({title: WS.T('Delete this website?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete website'),
-      bodyText: WS.T('Its files, backups and account are removed for good. Type the website name to confirm.'),
+      bodyText: WS.T('Its files, databases, backups and account are removed for good. A copy of each database is kept on the host for 30 days. Type the website name to confirm.'),
       requireText: F.name, requireLabel: WS.T('Website name'), onConfirm: function () {
         WS.stepUp(function () {
           WS.post(WS.R.act(ID, 'delete'), {confirm: F.name}).then(function (d) {
