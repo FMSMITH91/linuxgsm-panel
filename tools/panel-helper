@@ -3782,13 +3782,15 @@ def _web_deny_dir(gid):
     """
     os.makedirs(WEB_DENY_DIR, mode=0o700, exist_ok=True)
     os.chown(WEB_DENY_DIR, 0, gid)
-    os.chmod(WEB_DENY_DIR, stat.S_IRWXU | stat.S_IXGRP)       # 0710: the group may search, never read or write
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0710, group search only
+    os.chmod(WEB_DENY_DIR, stat.S_IRWXU | stat.S_IXGRP)
 
 
 def _web_log_dir(pw):
     """The proxy's log folder, made when missing: the proxy's own, nobody else's (0700)."""
     os.makedirs(WEB_LOG_DIR, mode=0o700, exist_ok=True)
     os.chown(WEB_LOG_DIR, pw.pw_uid, pw.pw_gid)
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- owner-only folder
     os.chmod(WEB_LOG_DIR, 0o700)
 
 
