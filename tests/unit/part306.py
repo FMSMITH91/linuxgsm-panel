@@ -35,6 +35,7 @@ F30. The page cache's proxy is checked as the proxy's user where that user can r
 F31. Turning the object cache on or off starts or removes it beside the running site, which is not restarted.
 M12. A page cache that waits for its proxy says whether that proxy is being built or why its build failed.
 M13. A failed undo's error never also says every step was undone. M14: the step whose undo failed shows as not undone.
+Info. An app's build container logs nowhere: its output is build.log's, never the account's journal.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -700,6 +701,9 @@ def _f28_rebuild(su, sid):
        "(its packages installed) and then started with its gate, and the site reads running",
        (r2.status_code, len(built), [("lgsm-site.service" in a and "lgsm-site-gate.service" in a) for a in restarted],
         site.state, site.state_reason), (200, 1, [True], "running", ""))
+    eq("Info (POST /websites/<id>/app, the app's build): its one-off container logs nowhere (npm's output reached the "
+       "account's journal); the build's output is still the page's, through build.log (control: its last lines)",
+       (["--log-driver=none" in a for a in built], "build.log" in " ".join(_RUN306["shells"])), ([True], True))
     _reset306()
     r3 = su.post("/websites/%d/app/build" % sid)
     eq("F28b (POST /websites/<id>/app/build): the build route builds and starts it too (control)",

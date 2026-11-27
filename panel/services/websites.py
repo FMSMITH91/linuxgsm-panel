@@ -698,7 +698,9 @@ def build_sh(account, site, ids=None, image=None):
     home = _home(account)
     image = image or image_for(site)
     eport = EGRESS_PORT_BASE + int(site.port) - 20000
-    args = ["podman", "run", "--rm", "--name", "lgsm-site-build", "--pull=never", "--userns=keep-id",
+    # --log-driver=none: the build's output reaches only build.log (the page shows its last lines), never the
+    # account's journal; nothing reads lgsm-site-build there (logs_sh reads the site's own containers).
+    args = ["podman", "run", "--rm", "--name", "lgsm-site-build", "--pull=never", "--log-driver=none", "--userns=keep-id",
             "--read-only", "--cap-drop=all", "--security-opt=no-new-privileges", "--pids-limit=%d" % int(site.pids),
             "--memory=%dm" % int(site.mem_mb), "--memory-swap=%dm" % int(site.mem_mb), "--dns=none",
             "--network=pasta:-4,-o,127.0.0.1,-T,%d:%d" % (EGRESS_INNER_PORT, eport),
