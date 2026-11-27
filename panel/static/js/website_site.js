@@ -324,7 +324,7 @@
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline justify-content-between');
     top.appendChild(WS.raw('span', 'text-break fw-semibold', b.name));
-    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, b.size].filter(Boolean).join(' · ')));
+    top.appendChild(WS.raw('span', 'small text-secondary', [b.when, WS.size(b.size)].filter(Boolean).join(' · ')));
     li.appendChild(top);
     var row = WS.node('div', 'd-flex flex-wrap gap-2 mt-1');
     if (WS.can.files) {

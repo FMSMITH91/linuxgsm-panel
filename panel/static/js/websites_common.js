@@ -82,6 +82,13 @@
   // A high-risk action asks for the password again first when the sign-in is old (step_up_form.js).
   WS.stepUp = function (go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); };
   WS.toast = function (msg, kind) { if (window.toast) window.toast(msg, kind || 'info'); };
+  // A size in bytes as people read it: 512 B, 3.4 KB, 12 MB, 1.2 GB (1024 per step); '' for no number.
+  WS.size = function (n) {
+    if (typeof n !== 'number' || !isFinite(n) || n < 0) return '';
+    var units = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 || n >= 10 ? String(Math.round(n)) : n.toFixed(1)) + ' ' + units[i];
+  };
   WS.done = function (d, msgId) {
     var ok = !!(d && d.success);
     var text = (d && d.message) || (ok ? WS.T('Saved.') : WS.T('That did not work. Nothing was changed.'));

@@ -25,7 +25,7 @@
     name.setAttribute('data-action', e.dir ? 'wsFilesGo' : (e.editable ? 'wsFilesEdit' : 'wsFilesDownload'));
     name.setAttribute('data-args', JSON.stringify([p]));
     li.appendChild(name);
-    if (!e.dir && e.size != null) li.appendChild(WS.raw('span', 'small text-secondary ws-file-size', String(e.size)));
+    if (!e.dir && e.size != null) li.appendChild(WS.raw('span', 'small text-secondary ws-file-size', WS.size(e.size)));
     var acts = WS.node('span', 'ws-file-acts');
     if (!e.dir) acts.appendChild(iconButton('download', 'Download', 'wsFilesDownload', p));
     acts.appendChild(iconButton('pencil', 'Rename', 'wsFilesRename', p));
@@ -104,20 +104,49 @@
       }});
   };
   window.wsFilesPick = function (id) { var i = WS.el(id); if (i) i.click(); };
-  function send(verb, field, file) {
+  function send(verb, field, file, overwrite) {
     var fd = new FormData();
     fd.append('path', st.path);
     fd.append(field, file);
+    if (overwrite) fd.append('overwrite', '1');
     return WS.postForm(f(verb), fd);
   }
+  // Each file in turn. The end says how many went up and why the others did not; a file whose name is already
+  // there is offered Replace, which sends it again with overwrite (the server refuses to overwrite otherwise).
+  function upload(files, overwrite) {
+    var res = {ok: 0, exists: [], failed: []};
+    WS.say('wf-msg', WS.TF('Uploading {n} files…', {n: files.length}));
+    return files.reduce(function (p, file) {
+      return p.then(function () {
+        return send('upload', 'file', file, overwrite).then(function (d) {
+          if (d && d.success) res.ok++;
+          else if (d && d.exists) res.exists.push(file);
+          else res.failed.push((d && d.message) || WS.T('That did not work. Nothing was changed.'));
+        });
+      });
+    }, Promise.resolve()).then(function () { uploaded(res, files.length); list(st.path); });
+  }
+  function uploaded(res, total) {
+    var box = WS.el('wf-msg');
+    var parts = [WS.TF('{ok} of {n} files uploaded.', {ok: res.ok, n: total})];
+    if (res.exists.length) parts.push(WS.TF('Already there: {names}.', {names: res.exists.map(function (f) { return f.name; }).join(', ')}));
+    parts = parts.concat(res.failed.slice(0, 3));
+    WS.say('wf-msg', parts.join(' '), res.ok === total ? 'ok' : 'err');
+    if (!res.exists.length || !box) return;
+    st.replace = res.exists;
+    box.appendChild(document.createTextNode(' '));
+    box.appendChild(WS.button(WS.T('Replace them'), 'arrow-repeat', 'wsFilesReplace', [], 'btn-outline-warning py-0'));
+  }
+  window.wsFilesReplace = function () {
+    var files = st.replace || [];
+    st.replace = [];
+    if (files.length) upload(files, true);
+  };
   window.wsFilesUpload = function () {
     var inp = WS.el('wf-upload');
     var files = Array.prototype.slice.call(inp.files || []);
-    if (!files.length) return;
-    WS.say('wf-msg', WS.TF('Uploading {n} files…', {n: files.length}));
-    files.reduce(function (p, file) {
-      return p.then(function () { return send('upload', 'file', file).then(function (d) { if (!d.success) WS.done(d, 'wf-msg'); }); });
-    }, Promise.resolve()).then(function () { inp.value = ''; WS.say('wf-msg', WS.T('Upload finished.'), 'ok'); list(st.path); });
+    inp.value = '';
+    if (files.length) upload(files, false);
   };
   window.wsFilesExtract = function () {
     var inp = WS.el('wf-archive');
