@@ -292,6 +292,7 @@ El.prototype.hasAttribute = function (k) { return k in this.attrs; };
 El.prototype.removeAttribute = function (k) { delete this.attrs[k]; };
 El.prototype.appendChild = function (c) { if (c.parentNode) c.parentNode.removeChild(c); this.children.push(c); c.parentNode = this; return c; };
 El.prototype.removeChild = function (c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); c.parentNode = null; return c; };
+El.prototype.replaceChildren = function () { this.children.forEach(function (c) { c.parentNode = null; }); this.children = []; };
 El.prototype.remove = function () { if (this.parentNode) this.parentNode.removeChild(this); };
 El.prototype.click = function () { clicked.push(this.id); };
 function matches(el, sel) {
