@@ -100,8 +100,8 @@
   "website": "site web",
   "This app needs a PHP version this panel no longer offers.": "Cette application a besoin d'une version de PHP que ce panneau ne propose plus.",
   "The database {name} could not be removed ({why}), so it is still on the database server; delete the website to try again.": "La base de données {name} n'a pas pu être supprimée ({why}) : elle est toujours sur le serveur de bases de données ; supprimez le site web pour réessayer.",
-  "The object cache was turned on, and the website was restarted with it.": "Le cache d'objets a été activé, et le site web a été redémarré avec lui.",
-  "The object cache was turned off and removed, and the website was restarted.": "Le cache d'objets a été désactivé et retiré, et le site web a été redémarré.",
+  "The object cache was turned on and started beside the website, which was not restarted.": "Le cache d'objets a été activé et démarré à côté du site web, qui n'a pas été redémarré.",
+  "The object cache was turned off and removed; the website was not restarted.": "Le cache d'objets a été désactivé et retiré ; le site web n'a pas été redémarré.",
   "Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; the websites' page caches start when it is done.": "Enregistré. Le proxy web avec le cache de pages est en cours de compilation sur l'hôte, ce qui prend quelques minutes ; les caches de pages des sites web démarrent quand c'est terminé.",
   "Saved. The page cache starts once this host's web proxy has it: a superadmin turns on \"Page cache in the web proxy\" in the Websites security settings.": "Enregistré. Le cache de pages démarre dès que le proxy web de cet hôte l'a : un superadministrateur active « Cache de pages dans le proxy web » dans les paramètres de sécurité des sites web."
 }

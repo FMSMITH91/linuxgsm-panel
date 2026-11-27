@@ -207,7 +207,7 @@ def runtime_ready(remote):
     return _ws().runtime_refusal(os_version, podman) if podman else NO_PODMAN
 
 
-def install(remote, site, db=None, start_it=True):
+def install(remote, site, db=None, start_it=True, restart=True):
     """Create the site's account and folders, pull its image, write its unit and start it.
 
     `db` is (host, port) of the site's database as the host sees it, or None. Podman is made ready
@@ -215,7 +215,8 @@ def install(remote, site, db=None, start_it=True):
     (remove), so a failed first install leaves no account, folder or unit behind. An account that was
     already there (an update, a settings change) is never removed by a failure. A runtime app with no
     files yet is installed and not started (OK_WAITING): its first start could only fail. `start_it`
-    False writes everything and starts nothing (an app's rebuild starts it after its build).
+    False writes everything and starts nothing (an app's rebuild starts it after its build). `restart` False
+    starts what is not running and leaves a running site alone (a unit only added beside it, the object cache).
     """
     why = runtime_ready(remote)
     if why:
@@ -223,14 +224,14 @@ def install(remote, site, db=None, start_it=True):
     ok, out = _helper(remote, "website-account-create", [site.account])
     if not ok:
         return False, out if out in (ONLY_LOCAL, NO_HELPER) else FAILED
-    ok, said = _install_made(remote, site, db, start_it)
+    ok, said = _install_made(remote, site, db, start_it, restart)
     if not ok and "account=created" in out.splitlines():
         undone, _t = remove(remote, site)
         _core._log.warning("website %s: the failed install was %s", site.id, "undone" if undone else "NOT undone")
     return ok, said
 
 
-def _install_made(remote, site, db, start_it=True):
+def _install_made(remote, site, db, start_it=True, restart=True):
     """Run install's steps once the account exists: (ok, sentence)."""
     ids, probe = _ids(remote, site)
     if ids is None:
@@ -255,7 +256,7 @@ def _install_made(remote, site, db, start_it=True):
     if site.kind == "app" and _ws().MARK_APP_EMPTY in out.split():
         # Installed, not started: the app's files come next (a start now would fail, and undo the install).
         return True, OK_WAITING
-    return start(remote, site, restart=True) if start_it else (True, OK_INSTALLED)
+    return start(remote, site, restart=restart) if start_it else (True, OK_INSTALLED)
 
 
 def cpu_limit(remote, site, probe=None):

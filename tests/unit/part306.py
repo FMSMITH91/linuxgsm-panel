@@ -32,6 +32,7 @@ S11. A new website account is enrolled in the panel's game group first (with use
 From the fourth round (P4a):
 F30. The page cache's proxy is checked as the proxy's user where that user can reach it (it ran inside root's 0700
      build folder and was never installed), each failure has its own sentence, and the build's images are removed.
+F31. Turning the object cache on or off starts or removes it beside the running site, which is not restarted.
 
 HOW IT RUNS. part12's app and its database for the routes, with the host stand-ins at ssh_manager.websites' own
 seams (its helper, the account's ids). A site's account shells run in real bash over a scratch home, with stand-in
@@ -421,8 +422,9 @@ def _f26a_cache_switch(st):
     _reset306(FAKE_IMAGE_EXISTS=0)
     r_on = su.post("/websites/%d/performance" % site.id, json={"object_cache": True})
     unit_on, conf_on = _unit306(site, "lgsm-site-cache"), os.path.exists(conf)
-    started = _called306("systemctl", "restart", "lgsm-site-cache.service")
+    started = _called306("systemctl", "start", "lgsm-site-cache.service")
     pulled = _called306("podman", "pull", valkey)
+    restarted = [_called306("systemctl", "restart", "lgsm-site.service")]
     eq("F26a (POST /websites/<id>/performance, object cache on): its unit and its 0600 config are written, its image "
        "pulled and the unit started with the site (it only rewrote the php.ini: no cache ever ran)",
        (r_on.status_code, "Network=container:lgsm-site" in unit_on, conf_on, pulled, started),
@@ -430,13 +432,19 @@ def _f26a_cache_switch(st):
     _reset306(FAKE_IMAGE_EXISTS=0)
     r_off = su.post("/websites/%d/performance" % site.id, json={"object_cache": False})
     stopped = _called306("systemctl", "stop", "lgsm-site-cache.service")
+    restarted.append(_called306("systemctl", "restart", "lgsm-site.service"))
     eq("F26a (POST /websites/<id>/performance, object cache off): its container is stopped and its unit and config "
        "(with its password) removed", (r_off.status_code, _unit306(site, "lgsm-site-cache"), os.path.exists(conf), stopped),
        (200, "", False, True))
+    eq("F31 (POST /websites/<id>/performance, object cache on, then off): the site's own container is never restarted "
+       "and the page says so (each switch restarted it: about 13 s of 502s through the proxy)",
+       (restarted, [_p9_json(r).get("message") for r in (r_on, r_off)]),
+       ([False, False], [getattr(_wset306, "S_CACHE_ON", ""), getattr(_wset306, "S_CACHE_OFF", "")]))
     _reset306()
     r_op = su.post("/websites/%d/performance" % site.id, json={"opcache": False})
     eq("F26a (POST /websites/<id>/performance, OPcache only): the php.ini is rewritten and the site restarted, with "
-       "no install (control)", (r_op.status_code, [c["argv"][:1] for c in _calls306("podman")]), (200, []))
+       "no install (control)", (r_op.status_code, [c["argv"][:1] for c in _calls306("podman")],
+                                _called306("systemctl", "restart", "lgsm-site.service")), (200, [], True))
 
 
 # ── F27. The page cache's proxy build ──────────────────────────────────────────────────────────

@@ -100,8 +100,8 @@
   "website": "sitio web",
   "This app needs a PHP version this panel no longer offers.": "Esta aplicación necesita una versión de PHP que este panel ya no ofrece.",
   "The database {name} could not be removed ({why}), so it is still on the database server; delete the website to try again.": "No se pudo eliminar la base de datos {name} ({why}), así que sigue en el servidor de bases de datos; elimina el sitio web para intentarlo de nuevo.",
-  "The object cache was turned on, and the website was restarted with it.": "Se activó la caché de objetos y el sitio web se reinició con ella.",
-  "The object cache was turned off and removed, and the website was restarted.": "Se desactivó y se quitó la caché de objetos, y el sitio web se reinició.",
+  "The object cache was turned on and started beside the website, which was not restarted.": "Se activó la caché de objetos y se inició junto al sitio web, que no se reinició.",
+  "The object cache was turned off and removed; the website was not restarted.": "Se desactivó y se quitó la caché de objetos; el sitio web no se reinició.",
   "Saved. The web proxy with the page cache is being built on the host, which takes a few minutes; the websites' page caches start when it is done.": "Guardado. Se está compilando en el host el proxy web con la caché de páginas, lo que tarda unos minutos; las cachés de páginas de los sitios web empiezan cuando termine.",
   "Saved. The page cache starts once this host's web proxy has it: a superadmin turns on \"Page cache in the web proxy\" in the Websites security settings.": "Guardado. La caché de páginas empieza cuando el proxy web de este host la tenga: un superadministrador activa «Caché de páginas en el proxy web» en los ajustes de seguridad de Sitios web."
 }

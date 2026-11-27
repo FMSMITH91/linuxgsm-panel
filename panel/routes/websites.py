@@ -134,9 +134,14 @@ def site_db(site):
     return "127.0.0.1", int(getattr(hd, "port", None) or 3306)
 
 
-def install_site(site):
-    """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence)."""
-    return host_call(_sw.install, site.remote, site, site_db(site))
+def install_site(site, restart=True):
+    """(Re)install `site` on its host with its database forwarded, and restart it: (ok, sentence).
+
+    `restart` False starts only what is not running yet: the site keeps serving (the object cache turned on or off).
+    """
+    if restart:
+        return host_call(_sw.install, site.remote, site, site_db(site))
+    return host_call(_sw.install, site.remote, site, site_db(site), True, False)
 
 
 def acted(site, action, ok, said, detail=""):

@@ -34,8 +34,8 @@ S_NOT_APP = "This website is not an app."
 S_RULES_MAX = 50
 S_PAGE_CACHE_WAITS = ("Saved. The page cache starts once this host's web proxy has it: a superadmin turns on \"Page cache "
                       "in the web proxy\" in the Websites security settings.")
-S_CACHE_ON = "The object cache was turned on, and the website was restarted with it."
-S_CACHE_OFF = "The object cache was turned off and removed, and the website was restarted."
+S_CACHE_ON = "The object cache was turned on and started beside the website, which was not restarted."
+S_CACHE_OFF = "The object cache was turned off and removed; the website was not restarted."
 
 
 def _php_versions():
@@ -170,8 +170,12 @@ def _perf_store(site, changes, opcache):
 
 
 def _cache_install(site):
-    """The site installed again for its object cache turned on or off: (ok, sentence)."""
-    ok, said = _w.install_site(site)
+    """The site installed again for its object cache turned on or off: (ok, sentence).
+
+    The site's own container is not restarted: its unit does not change, and the cache joins its running network
+    namespace (it is started beside it, or stopped and removed by the install), so the site keeps serving.
+    """
+    ok, said = _w.install_site(site, restart=False)
     return ok, (S_CACHE_ON if site.object_cache else S_CACHE_OFF) if ok else said
 
 
@@ -184,7 +188,8 @@ def _perf_apply(site, changes, cache_turned):
     """Apply a saved Performance card: (ok, sentence).
 
     The object cache turned on or off is a container of its own: the site is installed again, which writes (or
-    removes) its unit and config with the site's other files, pulls its image and starts (or stops) it. Any
+    removes) its unit and config with the site's other files, pulls its image and starts (or stops) it, the
+    site itself left running. Any
     other change rewrites the php.ini and restarts the site; a proxy setting re-applies the proxy.
     """
     ok, said = _cache_install(site) if cache_turned else _php_restart(site)
