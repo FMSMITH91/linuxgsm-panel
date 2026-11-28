@@ -33,7 +33,7 @@ from panel.security.account_guard import step_up_required
 from panel.security.auth import (MANAGE_ADDONS, MANAGE_REMOTES, MANAGE_WEBSITES, VIEW_CONSOLE, VIEW_WEBSITES,
                                  _perm_for_action, get_user_servers, has_permission, log_action, superadmin_required)
 from panel.routes import updates_game as _ug
-from panel.services import updates as U, updates_auto as UA, websites_access as _wa
+from panel.services import update_versions as _uv, updates as U, updates_auto as UA, websites_access as _wa
 
 HISTORY_ACTIONS = ("panel_self_update", "os_update_run", "remote_os_update", "update-lgsm_server", "update_server",
                    "force-update_server", "update_complete", "update_when_empty", "update_warned", "addon_update",
@@ -96,9 +96,9 @@ def _when_auto(auto, security, cfg, tried=False, remote=None):
 
 
 def _row(kind, ref, name, **kw):
-    row = {"kind": kind, "ref": ref, "name": name, "host": "", "what": [], "notes": [], "cost": "", "security": False,
-           "safe": False, "auto": None, "auto_editable": False, "when": "", "when_link": None, "action": None,
-           "link": ""}
+    row = {"kind": kind, "ref": ref, "name": name, "title": "", "versions": [], "host": "", "what": [], "notes": [],
+           "cost": "", "security": False, "safe": False, "auto": None, "auto_editable": False, "when": "",
+           "when_link": None, "action": None, "link": ""}
     row.update(kw)
     return row
 
@@ -108,12 +108,38 @@ def _panel_rows(user):
     st = so.panel_update_cached() if user.is_superadmin else None
     if not st or not st.get("update_available"):
         return []
-    ver = "%s (%s)" % (st.get("remote_version") or "", (st.get("target_sha") or st.get("remote_sha") or "")[:7])
-    return [_row("panel", "panel", "LinuxGSM Panel", what=[U.tr("Update available: {version}", version=ver)]
-                 + [c[:120] for c in (st.get("changes") or [])[:8]], cost=U.tr(U.COST_PANEL),
+    return [_row("panel", "panel", "LinuxGSM Panel", title=U.tr(_uv.S_TITLE_PANEL), versions=_panel_versions(st),
+                 what=[c[:120] for c in (st.get("changes") or [])[:8]], cost=U.tr(U.COST_PANEL),
                  when=U.tr("Waits for Update now: the panel never updates itself."),
                  action={"href": url_for("server_management", update="panel") + "#updates"},
                  link=url_for("server_management") + "#updates")]
+
+
+S_PANEL_NOT_KNOWN = "not known (the panel could not read its own version)"
+S_PANEL_NEW = "a newer release (its version is not read yet)"
+
+
+def _version_sha(version, sha, unknown):
+    """Say a release as "<version> (<sha>)", either part alone when the other is not known, else `unknown` in words."""
+    version, sha = (version or "").strip(), (sha or "").strip()[:7]
+    if version and sha:
+        return "%s (%s)" % (version, sha)
+    return version or sha or U.tr(unknown)
+
+
+def _panel_versions(st):
+    """The panel row's Installed and Available lines, from its cached update check (system_ops.panel_update_cached)."""
+    return _uv.labelled(_version_sha(st.get("current_version"), st.get("current_sha"), S_PANEL_NOT_KNOWN),
+                        _version_sha(st.get("remote_version"), st.get("target_sha") or st.get("remote_sha"),
+                                     S_PANEL_NEW))
+
+
+def _pkg_change(p):
+    """One package of a host's upgrade as "name old to new" (apt's versions), or its name when apt gave none."""
+    name = p.get("label") or p.get("name") or ""
+    if p.get("from") and p.get("version"):
+        return U.tr("{name} {old} to {new}", name=name, old=p["from"], new=p["version"])
+    return name or U.tr("a package apt did not name")
 
 
 def _os_rows(user):
@@ -124,9 +150,10 @@ def _os_rows(user):
     rows = []
     for h in os_update_hosts(user):
         pkgs = (_os_update_seen.get(h["id"]) or {}).get("packages") or []
-        names = [p.get("label") or p.get("name", "?") for p in pkgs][:10]
+        names = [_pkg_change(p) for p in pkgs][:10]
         what = [U.tr("{n} package(s), {sec} of them security updates.", n=h["count"], sec=h["security"])]
-        rows.append(_row("os", "os:%d" % h["id"], h["name"], what=what + ([", ".join(names)] if names else []),
+        rows.append(_row("os", "os:%d" % h["id"], h["name"], title=U.tr(_uv.S_TITLE_OS),
+                         what=what + ([", ".join(names)] if names else []),
                          security=bool(h["security"]), cost=U.tr(U.COST_OS),
                          when=U.tr("Security packages install by themselves where automatic security updates are on "
                                    "(the host's page says); the rest wait for Update now."),
@@ -164,7 +191,9 @@ def _lgsm_rows(user, servers):
         notes = [{"title": r["tag"], "url": r["url"]} for r in _lgsm_update.notes_behind(info)][:6]
         when, when_link = _lgsm_when(gs)
         rows.append(_row("lgsm", "lgsm:%d" % gs.id, gs.name, host=gs.remote.display_name if gs.remote else "",
-                         what=[U.tr("LinuxGSM {old} to {new}.", old=info["release"], new=info["latest"])], notes=notes,
+                         title=U.tr(_uv.S_TITLE_LGSM), notes=notes,
+                         versions=_uv.labelled(U.tr("LinuxGSM {version}", version=info["release"]),
+                                               U.tr("LinuxGSM {version}", version=info["latest"])),
                          cost=U.tr(U.COST_LGSM), safe=True, when=when, when_link=when_link,
                          action={"post": url_for("api_server_action", server_id=gs.id), "body": {"action": _LGSM}},
                          link=url_for("server_detail", server_id=gs.id)))
@@ -179,17 +208,21 @@ def _addon_rows(user, servers, cfg, sec):
             if seen.get("reason") == "image" and k in _ad.CATALOG]
 
 
+S_ADDON_OLD = "not recorded (the panel did not read the running image's version)"
+
+
 def _addon_row(gs, k, seen, cfg, sec):
     """The row of add-on `k` on server `gs`, whose image differs from the catalog's (`seen`: note_addons's)."""
     from panel.services import addons as _ad
     ref, security = "addon:%d:%s" % (gs.id, k), k in sec["addons"]
     auto = U.auto_on(ref, cfg)
     tried = UA.tried_now(ref, gs.remote, cfg)
-    what = [U.tr("{old} to {new}.", old=seen.get("version") or "?",
-                 new=seen.get("new") or U.tr("a newer version of the add-on"))]
+    versions = _uv.labelled(seen.get("version") or U.tr(S_ADDON_OLD),
+                            seen.get("new") or U.tr("a newer version of the add-on"))
     return _row("addon", ref, "%s · %s" % (_ad.CATALOG[k]["name"], gs.name),
-                host=gs.remote.display_name if gs.remote else "",
-                what=what + ([sec["note"]] if security and sec["note"] else []),
+                host=gs.remote.display_name if gs.remote else "", versions=versions,
+                title=U.tr(_uv.S_TITLE_ADDON, addon=_ad.CATALOG[k]["name"]),
+                what=[sec["note"]] if security and sec["note"] else [],
                 notes=[{"title": U.tr("Release notes"), "url": _ad.CATALOG[k]["source"] + "/releases"}],
                 cost=U.tr(U.COST_ADDON), safe=True, security=security, auto=auto, auto_editable=True,
                 when=_when_auto(auto, security, cfg, tried, gs.remote),
@@ -235,6 +268,30 @@ def site_changes(site):
     return out
 
 
+S_SITE_OLD = "not recorded (installed before the panel kept it)"
+S_SITE_IMAGE = "image {name} ({digest})"
+S_SITE_FILES = "the panel's server settings, revision {rev}"
+
+
+def _image_said(ref):
+    """Say an image reference as "image <name> (<its last 12 characters>)", as the website's Software line does."""
+    name = ref.split("@", 1)[0].rsplit(":", 1)[0].rsplit("/", 1)[-1]
+    return U.tr(S_SITE_IMAGE, name=name, digest=ref[-12:])
+
+
+def site_versions(site):
+    """A website row's Installed and Available lines: its software image, else the revision of its server settings."""
+    from panel.routes import websites as _w
+    from panel.services import websites as _svc
+    now = _w.current_image(site)
+    if site.image_digest != now:
+        old = _image_said(site.image_digest) if site.image_digest else U.tr(S_SITE_OLD)
+        return _uv.labelled(old, _image_said(now))
+    old = (site.image_key or "").rpartition("-")[2]
+    return _uv.labelled(U.tr(S_SITE_FILES, rev=old) if old else U.tr(S_SITE_OLD),
+                        U.tr(S_SITE_FILES, rev=_svc.SITE_FILES_REV.rpartition("-")[2]))
+
+
 def site_cost(site):
     """What a website's Update costs: a build first only when its image changes and the panel builds it on the host."""
     from panel.routes import websites as _w
@@ -263,7 +320,8 @@ def _site_rows(user, cfg, sec):
         if not what:
             continue
         sched = site_schedule(site, cfg, sec)
-        rows.append(_row("website", "website:%d" % site.id, site.name, what=what
+        rows.append(_row("website", "website:%d" % site.id, site.name, title=_uv.site_title(site),
+                         versions=site_versions(site), what=what
                          + ([sec["note"]] if sched["security"] and sec["note"] else []),
                          cost=sched["cost"], safe=True, security=sched["security"], auto=sched["auto"],
                          auto_editable=site.id in admin, when=sched["when"],

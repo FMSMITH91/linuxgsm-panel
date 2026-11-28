@@ -24,6 +24,8 @@ AUTOMATIC UPDATES IN THE NIGHTLY WINDOW, by family (default_auto; the reason is 
     Steam games: on. Players' Steam clients update themselves, and a server behind them refuses them.
     Minecraft (Java, Bedrock, and LinuxGSM's Paper, Velocity and Waterfall), OpenRA, Vintage Story: off. Players
         need the same release: a new one locks out players who have not updated, and can break plugins and mods.
+        A new Paper/Velocity/Waterfall build of the same version locks nobody out: its row says so instead
+        (services/update_versions.auto_reason); the default stays off.
     The other games LinuxGSM updates from their own releases: on, as OWASP recommends.
 OWASP Top 10 2025 A03 Software Supply Chain Failures asks for timely patching and a patch management process; the
 recommended value (on) is shown beside every switch, and off is a note, never a block.
