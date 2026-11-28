@@ -40,6 +40,7 @@
   "Uses the site's certificate": "Usa el certificado del sitio",
   "Within (minutes)": "En (minutos)",
   "fail2ban is not installed on this host, so no visitor is blocked.": "fail2ban no está instalado en este host, así que no se bloquea a ningún visitante.",
+  "since": "desde",
   "until": "hasta",
   "used for": "usado para",
   "{domain} stays automatic: {why}": "{domain} sigue en automático: {why}",

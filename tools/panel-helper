@@ -3825,6 +3825,7 @@ def _web_guard_files(guard, pw):
     _web_write(WEB_GUARD_ACTION_FILE, WEB_GUARD_ACTION_TEXT.encode(), 0o644)
     _web_write(WEB_GUARD_JAIL_FILE, web_guard_jails(guard, own).encode(), 0o644)
     _web_deny_prune()
+    _web_deny_modes(pw.pw_gid)
 
 
 def _web_f2b_reload():
@@ -3849,6 +3850,8 @@ def _web_guard_apply(guard, pw):
     if not os.path.isdir(WEB_F2B_DIR):
         sys.stdout.write("guard=on\nfail2ban=absent\n")
         return
+    old = (_web_read(WEB_GUARD_JAIL_FILE) or b"").decode("utf-8", "replace")
+    action_changed = _web_read(WEB_GUARD_ACTION_FILE) not in (None, WEB_GUARD_ACTION_TEXT.encode())
     _web_guard_files(guard, pw)
     sys.stdout.write("guard=on\nfail2ban=%s\n" % _web_f2b_reload())
 
@@ -4106,15 +4109,16 @@ def do_website_guard_release(args, content):
     """The panel's Unban: fail2ban told to lift the address (its firewall ban too), and its entry removed. Prints released=."""
     ip = args[0]
     entry = _web_deny_entries().get(ip)
-    for jail in ([entry["jail"]] if entry else sorted(WEB_GUARD_JAILS)):
+    if entry is not None and _web_deny_remove(ip):
+        _web_guard_event("release", ip, entry["jail"], entry["host"])
+    jails = sorted(WEB_GUARD_JAILS)
+    for jail in jails:
         try:
             _run_quiet([resolve(F2B), "set", jail, "unbanip", ip], timeout=30)
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass    # no fail2ban, or it did not answer: the proxy's entry is removed below all the same
-    removed = _web_deny_remove(ip)
-    if removed:
-        _web_guard_event("release", ip, entry["jail"], entry["host"])
-    sys.stdout.write("released=%s\n" % ("yes" if removed or entry is None else "no"))
+            pass    # no fail2ban, or it did not answer: what it still bans is read below
+    gone = ip not in _web_deny_entries() and not any(_web_f2b_banned(jail, ip) for jail in jails)
+    sys.stdout.write("released=%s\n" % ("yes" if gone else "no"))
     return 0
 
 

@@ -14,6 +14,8 @@
     top.appendChild(WS.raw('span', 'text-secondary', String(e.reason || '')));
     li.appendChild(top);
     var when = WS.node('div', 'text-secondary');
+    when.appendChild(WS.node('span', null, WS.T('since')));
+    when.appendChild(WS.raw('span', 'ms-1 me-1 text-nowrap', String(e.since || '')));
     when.appendChild(WS.node('span', null, WS.T('until')));
     when.appendChild(WS.raw('span', 'ms-1 text-nowrap', String(e.until || '')));
     li.appendChild(when);

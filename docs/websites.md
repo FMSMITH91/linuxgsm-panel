@@ -234,10 +234,16 @@ Stuffing Prevention Cheat Sheet, "IP Mitigation and Intelligence"). Never blocke
 the host's own addresses, the loopback, your tailnet, every CDN preset's networks, the allow list above and
 the panel's login whitelist, so a CDN's own address is never blocked.
 
-Each website's **Rules** tab lists the addresses blocked while attacking it (why, and until when), with
-**Unblock**. Every ban, every ban's end and every Unblock is in the audit log (a ban is recorded within 30
-minutes even when nobody opens the list, with the time it happened). Blocking needs fail2ban on the host
-(the panel's installer puts it there); the card says when it is missing.
+Each website's **Rules** tab lists the addresses blocked while attacking it (why, since when and until
+when), with **Unblock**, and counts the host's other blocked addresses, which are kept off this website too
+(they attacked another one, so they are not named). Unblock lifts the address in fail2ban and in the web
+proxy, and its row leaves the list at once. Every ban, every ban's end and every Unblock is in the audit
+log, each end in its own words: the ban ran its time, it was lifted on the host (fail2ban's `unbanip`), or
+the jail stopped or restarted (a restart blocks the addresses whose ban is still running again). A ban is
+recorded within 30 minutes even when nobody opens the list, with the time it happened. Switching the
+exposure mode restarts the websites' two jails only, so the firewall ban comes or goes at once; live bans
+are kept. Blocking needs fail2ban on the host (the panel's installer puts it there); the card says when it
+is missing.
 
 The proxy has no request rate limiting of its own: Caddy's rate-limit module is not one of its official
 modules, has no tagged release to pin, would need the web proxy rebuilt on every host (as the page cache's
