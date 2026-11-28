@@ -89,6 +89,8 @@ OK_WAITING = ("The app's account and folders are ready, and it waits for its fil
               "press Save and rebuild on the App tab, which installs its packages and starts it.")
 OK_ENV = "The app's variables were written and it was restarted."
 OK_STEP = "Step done."
+NOT_IN_SETTINGS = ("The app's settings file does not hold this database's current password, so the password was not "
+                   "changed: the site keeps working.")
 STEP_DETAIL = "{why} The host said: {detail}."
 # A line an install step's own shell prints (never an installer's): a mark, or one of its key=value lines.
 _OWN_LINE_RE = re.compile(r"(SITE_[A-Z_]{1,40}|(error|check|page|code)=[^\x00-\x1f]{1,200})\Z")
@@ -450,20 +452,26 @@ def proxy_apply(remote, text, sites=(), proxy=None, start_it=False):
 _PAGE_CACHE_NOTED = {}
 
 
-def note_page_cache(remote, text, sites):
-    """Write each WordPress site's page cache state, as the applied configuration `text` has it, into its files.
+def page_cache_noted(site_id):
+    """Whether this process has written site `site_id`'s page cache state into its files."""
+    return site_id in _PAGE_CACHE_NOTED
+
+
+def note_page_cache(remote, text, sites, force=False):
+    """Write each WordPress site's page cache state, as the configuration `text` has it, into its files.
 
     Site Health's page cache test reads it (the loopback plugin): WordPress's own test looks for caching headers on
     requests that never pass the proxy. Written as the site's account (PAGE_CACHE_FILE, no secret), and only when it
-    changed since this process last wrote it. A write that fails is logged and the apply still stands: Site Health
-    then keeps the last word.
+    changed since this process last wrote it, or always with `force` (the site's files may have been written again
+    since). A write that fails is logged and the apply still stands; the panel's next pass writes it again
+    (routes/websites.page_cache_tick).
     """
     cached = _wp().cached_sites(text)
     for site in sites:
         if site.kind != "wordpress" or not site.account:
             continue
         value = _ws().page_cache_text(cached.get(site.id))
-        if _PAGE_CACHE_NOTED.get(site.id) == value:
+        if not force and _PAGE_CACHE_NOTED.get(site.id) == value:
             continue
         sh = _ws()._ENV + "umask 077; mkdir -p %s || exit 1; " % _ws()._q(_ws().RUN_DIR) + _ws().write_files_sh()
         ok, _out = _as_site(remote, site.account, sh, timeout=60,
@@ -994,6 +1002,61 @@ def app_undo_step(remote, site, step):
         return True, OK_STEP
     ok, _out = _as_site(remote, site.account, body, timeout=300)
     return (True, OK_STEP) if ok else (False, FAILED)
+
+
+def _wp_cli(remote, site, step, values, db_port):
+    """(ok, out) of a wp-cli step (services.website_app_admin) in the site's network, its values on stdin only."""
+    from panel.services import websites_recipes as _wr
+    values = dict(values, _db_port=db_port)
+    if not _container_values(remote, site, {"database": True}, values):
+        return False, ""
+    body, stdin = _wr.step_sh(site.account, site, step, values)
+    return _as_site(remote, site.account, body, timeout=600, stdin_text=stdin)
+
+
+def wp_admins(remote, site, db_port=3306):
+    """A WordPress site's administrators: (True, [logins]) or (False, sentence)."""
+    from panel.services import website_app_admin as _wa
+    ok, out = _wp_cli(remote, site, _wa.list_step(), {}, db_port)
+    if "SITE_BUILD_FAILED" in (out or ""):
+        return False, _mark(out)
+    got = _wa.logins(out)
+    return (True, got) if ok and got else (False, _wa.S_NOT_SET_UP)
+
+
+def wp_admin_reset(remote, site, user, password, email="", db_port=3306):
+    """Give WordPress administrator `user` `password` (and `email` when not ""): (ok, sentence)."""
+    from panel.services import website_app_admin as _wa
+    _ok, out = _wp_cli(remote, site, _wa.reset_step(), _wa.reset_values(user, password, email), db_port)
+    if "SITE_BUILD_FAILED" in (out or ""):
+        return False, _mark(out)
+    return _wa.reset_answer(out)
+
+
+def app_db_password(remote, site, files, before, old, new):
+    """Put database password `new` where `old` is in the app's settings `files` (services.website_db_password).
+
+    As the site's account, both passwords on stdin only. (ok, sentence); a file that does not hold `old` is
+    NOT_IN_SETTINGS, and nothing was written then.
+    """
+    from panel.services import website_db_password as _wdp
+    ok, out = _as_site(remote, site.account, _ws()._ENV + _wdp.rewrite_sh(files, before), timeout=120,
+                       stdin_text=_wdp.rewrite_stdin(old, new))
+    if ok and _wdp.MARK_DONE in (out or ""):
+        return True, OK_STEP
+    if _wdp.MARK_NOT_FOUND in (out or ""):
+        return False, NOT_IN_SETTINGS
+    return False, step_failure(site, {"name": "db-password", "type": "render-config"}, out)
+
+
+def db_reaches(remote, site, values, prefix, db_port):
+    """Whether the site's database answers `values`' password from the site's own network, its tables there.
+
+    verify-install's table check (a one-off container of the site's image, every value from its read-only
+    values folder) with the app's table prefix: (ok, sentence).
+    """
+    step = {"name": "db-check", "type": "verify-install", "tables": prefix}
+    return app_install_step(remote, site, step, dict(values, _db_port=db_port))
 
 
 def new_token():

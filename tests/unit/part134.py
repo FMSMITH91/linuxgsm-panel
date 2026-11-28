@@ -12,8 +12,8 @@ three alerts half a phone screen tall. Sections now sit behind tabs and folds. H
   puts the section in the address.
 * Alerts on Files & Config: only the services in use are open; the rest are one "Add a service" tap away
   and keep their fields (saveAlerts still reads them).
-* Notifications: every field the save route reads is still in the form; the command-bot folds open by
-  themselves when the bot is in use.
+* Notifications: every field the save route reads is still in the form; the command-bot folds are drawn
+  open, in use or not.
 * The server page: the console first by DEFAULT, a saved order still wins; the eight maintenance commands
   are the same actions in a menu, each keeping its confirmation.
 * The page alerts: one line each, every action still there (2FA's three buttons, the reboot banner's two,
@@ -308,7 +308,7 @@ else:
           repr(_ad134))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# 2. Notifications: every field still in the form; the bot folds open when the bot is in use
+# 2. Notifications: every field still in the form; the bot folds are drawn open
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 _ANR134 = _read134("panel", "routes", "admin_notifications.py")
 _ANI134 = _ANR134.find("def notifications_save(")
@@ -349,9 +349,10 @@ check("notifications: every field the save route reads is still in the form, fol
       "event's switch included",
       bool(_SAVE_NAMES134) and len(_ev_names134) >= 10 and _SAVE_NAMES134 | _ev_names134 <= _form_names134,
       repr(sorted((_SAVE_NAMES134 | _ev_names134) - _form_names134)))
-check("notifications: the setup help and the command bots are folded on a panel that does not use them",
-      _np134 is not None and _np134.folded.get("tg-cmd") is True and _np134.folded.get("dc-cmd") is True
-      and _np134.folded.get("notifications-discord_bot_token") is True
+check("notifications: the command bots' settings are drawn open even on a panel that does not use them (settings are "
+      "never tucked away; part329), and the channel settings stay unfolded",
+      _np134 is not None and _np134.folded.get("tg-cmd") is False and _np134.folded.get("dc-cmd") is False
+      and _np134.folded.get("notifications-discord_bot_token") is False
       and _np134.folded.get("tg-en") is False and _np134.folded.get("notifications-telegram_chat_id") is False,
       repr({i: _np134.folded.get(i) for i in ("tg-cmd", "dc-cmd", "tg-en")} if _np134 else None))
 _nu134 = _NP134.get("inuse")

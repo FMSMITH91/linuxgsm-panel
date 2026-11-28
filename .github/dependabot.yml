@@ -115,6 +115,22 @@ updates:
       - dependency-name: "gamedig"
         update-types: ["version-update:semver-major"]
 
+  # Lighthouse CI, which the lighthouse workflow installs with `npm ci --ignore-scripts` from
+  # .github/lhci/package-lock.json (every package by sha512). Its package.json pins @lhci/cli and the
+  # puppeteer-core its sign-in script drives exactly, so the folder moves only through these pull
+  # requests, both bumps in one, and the Lighthouse check runs on each.
+  - package-ecosystem: "npm"
+    directory: "/.github/lhci"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["ci"]
+    cooldown:
+      default-days: 7
+    groups:
+      lighthouse-ci:
+        patterns: ["*"]
+
   # Keep the GitHub Actions themselves current (this is what clears a "Node.js N is deprecated"
   # runner warning once new majors ship).
   # Every `uses:` under .github/workflows, step-security/harden-runner (the first step of every job)

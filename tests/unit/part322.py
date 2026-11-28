@@ -626,10 +626,11 @@ def _s9_sites(st):
     su = _Client322(st.su.id)
     rows, body = _updates322(su)
     r_wp, r_php, r_busy = (rows.get("website:%d" % s.id) or {} for s in (wp, php, busy))
+    from panel.routes.updates import FILES_NOTES as _notes322
     eq("Updates (GET /api/updates, websites): a WordPress site whose only change is the site files' new revision says "
-       "what it is (Site Health reads the page cache) and costs a few seconds, no build; a PHP site with a new image "
-       "says its image is built first",
-       (any("Site Health" in w for w in r_wp.get("what") or []), r_wp.get("cost"), r_php.get("cost")),
+       "what it is (that revision's note) and costs a few seconds, no build; a PHP site with a new image says its "
+       "image is built first",
+       (_notes322[_svc.SITE_FILES_REV][1] in (r_wp.get("what") or []), r_wp.get("cost"), r_php.get("cost")),
        (True, _u.tr(_u.COST_SITE), _u.tr(_u.COST_SITE_BUILD)))
     eq("Updates (the nightly window tried a busy site tonight): its row says it waits for the next night, not "
        "\"tonight\" again; a site not tried yet says it updates now, in tonight's window (control)",

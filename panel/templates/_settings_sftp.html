@@ -18,7 +18,7 @@
     <div class="small mb-2"><span>Host key</span> <code class="text-break" data-no-i18n>{{ sf.fingerprint }}</code>
       <div class="text-secondary">An SFTP client shows this on its first connection: check it matches before trusting the server.</div></div>
     {% endif %}
-    <details id="sftp-change"{% if not sf.s.enabled %} open{% endif %}>
+    <details id="sftp-change" open data-fold="sftp-change">
     <summary class="small fw-semibold mb-2">Change the SFTP settings</summary>
     <form method="POST" action="{{ url_for('sftp_settings_save') }}"
           data-step-up data-step-up-totp="{{ '1' if current_user.totp_enabled else '0' }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

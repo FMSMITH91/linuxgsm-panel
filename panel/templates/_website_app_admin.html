@@ -1,0 +1,40 @@
+{# The app's administrator: a new password (and, if asked, a new email) for a WordPress administrator, after
+   the password check (js/website_app_admin.js, routes/websites_app_admin.py). Other apps: how to do it. #}
+<div class="card mt-2" id="wadm-card">
+  <div class="card-body py-2">
+    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between">
+      <span class="fw-semibold">App administrator</span>
+      {% if site.kind == 'wordpress' %}
+      <button type="button" id="wadm-open" class="btn btn-sm btn-outline-warning" data-action="wsAdminOpen"><i class="bi bi-key"></i> Reset admin password</button>
+      {% endif %}
+    </div>
+    {% if site.kind == 'wordpress' %}
+    <form id="wadm-form" class="mt-2" data-action="wsAdminReset" data-args='["@event"]' data-on="submit" hidden>
+      <div class="row g-2">
+        <div class="col-12 col-md-4">
+          <label for="wadm-user" class="form-label small mb-0">Administrator</label>
+          <select id="wadm-user" class="form-select form-select-sm" data-no-i18n required></select>
+        </div>
+        <div class="col-12 col-md-4">
+          <label for="wadm-pw" class="form-label small mb-0">New password (optional)</label>
+          <input type="password" id="wadm-pw" class="form-control form-control-sm" minlength="15"
+                 autocomplete="new-password" spellcheck="false" aria-describedby="wadm-pw-help">
+          <div id="wadm-pw-help" class="form-text mt-0">Leave it empty and the panel makes a 24-character one. Typed: 15 to 128 characters.</div>
+        </div>
+        <div class="col-12 col-md-4">
+          <label for="wadm-email" class="form-label small mb-0">New email (optional)</label>
+          <input type="email" id="wadm-email" class="form-control form-control-sm" maxlength="254" autocomplete="off"
+                 spellcheck="false" aria-describedby="wadm-email-help">
+          <div id="wadm-email-help" class="form-text mt-0">An address that receives mail lets WordPress's own "Lost your password?" work.</div>
+        </div>
+      </div>
+      <button type="submit" id="wadm-go" class="btn btn-sm btn-warning mt-2"><i class="bi bi-key"></i> Set the new password</button>
+    </form>
+    <div id="wadm-msg" class="small mt-1" role="status"></div>
+    <div id="wadm-result" class="small mt-1" hidden></div>
+    <div class="form-text">The administrator is signed out of WordPress everywhere. The panel never stores the password; this is written to the audit log.</div>
+    {% else %}
+    <div class="form-text">The panel resets the administrator password of WordPress sites. For this app, use its own "Forgot password" link on its sign-in page: it emails the administrator, so the site needs outgoing mail.</div>
+    {% endif %}
+  </div>
+</div>

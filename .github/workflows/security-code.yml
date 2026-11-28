@@ -43,7 +43,8 @@ jobs:
   # first half. The second, osv-scanner, reads what pip-audit cannot: gamedig's npm tree, which
   # every host installs (tools/gamedig, `npm ci`), the browser libraries panel/static/vendor/ ships to
   # every page (its package-lock.json records what the bundles carry; nothing installs from it),
-  # and the CI tools' pip lockfiles, which run in
+  # Lighthouse CI's npm tree (.github/lhci, which the lighthouse job installs), and the CI tools'
+  # pip lockfiles, which run in
   # jobs holding security-events: write. Until it was added the only npm check was Dependency
   # Review, which judges what a pull request ADDS, so an advisory disclosed against the tree already
   # on main (GHSA-ch52-4w7c-c8xp, 2026-10-02) turned nothing red.
@@ -181,6 +182,7 @@ jobs:
         run: |
           set -uo pipefail
           lockfiles=(tools/gamedig/package-lock.json panel/static/vendor/package-lock.json
+                     .github/lhci/package-lock.json
                      panel/install/requirements.txt panel/install/requirements-bootstrap.txt
                      panel/addon_images/b3/requirements.txt .github/ci-requirements*/*.txt)
           args=()

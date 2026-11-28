@@ -51,10 +51,12 @@
             </div>
             <div class="col-sm-6">
               <label for="ws-add-domain" class="form-label small mb-1">Domain</label>
-              <input type="text" id="ws-add-domain" class="form-control form-control-sm" maxlength="253" inputmode="url"
+              <input type="text" id="ws-add-domain" class="form-control form-control-sm" maxlength="318" inputmode="url"
                      autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="www.example.org" data-no-i18n
-                     aria-describedby="ws-add-domain-help" data-action="wsDomainTyped" data-on="input">
+                     aria-describedby="ws-add-domain-help ws-add-folder-help" data-action="wsDomainTyped" data-on="input">
               <div id="ws-add-domain-help" class="form-text">Optional: add it later. An app needs one.</div>
+              {# A site in a folder of a domain another of the user's sites has (services/website_folders). #}
+              <div id="ws-add-folder-help" class="form-text">In a folder of a domain one of your websites has: type the folder after the domain, like example.org/forums. OWASP recommends a separate subdomain for each app instead (forums.example.org), so browsers keep each app's sign-ins and data apart.</div>
             </div>
             <div class="col-sm-6" id="ws-add-php" hidden>
               <label for="ws-add-php-version" class="form-label small mb-1">PHP version</label>

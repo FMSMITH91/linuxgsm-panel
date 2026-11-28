@@ -120,7 +120,8 @@
   function setPerf(p) {
     if (!p || !WS.el('wperf-page')) return;
     var map = {'wperf-opcache': p.opcache, 'wperf-obj': p.object_cache, 'wperf-page': p.page_cache, 'wperf-static': p.static_cache};
-    Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id]; });
+    // A setting that does not apply (greyed: a site without PHP) reads off, never on behind the grey.
+    Object.keys(map).forEach(function (id) { var e = WS.el(id); if (e) e.checked = !!map[id] && !!live(id); });
     var nums = {'wperf-op-mem': p.opcache_memory_mb, 'wperf-op-reval': p.opcache_revalidate_s, 'wperf-ttl': p.page_cache_ttl};
     Object.keys(nums).forEach(function (id) { var e = WS.el(id); if (e && nums[id] != null) e.value = String(nums[id]); });
     adminOnly(WS.el('wperf-obj'), 'wperf-obj-who');
@@ -151,17 +152,21 @@
         var box = WS.el('wperf-obj-conn');
         if (!box || !d || !d.success) { WS.done(d, 'wperf-msg'); return; }
         WS.clear(box);
-        [['Host', d.host], ['Port', d.port], ['Password', d.password]].forEach(function (kv) {
-          var line = WS.node('div');
+        // The password masked until Show is pressed, with Copy (secret_field.js): never in the page's text before.
+        [['Host', d.host], ['Port', d.port], ['Password', null]].forEach(function (kv) {
+          var line = WS.node('div', 'd-flex flex-wrap gap-1 align-items-center');
           line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
-          line.appendChild(WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
+          line.appendChild(kv[1] === null ? window.secretField({value: String(d.password == null ? '' : d.password)})
+            : WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
           box.appendChild(line);
         });
       });
     });
   };
-  function checked(id) { var e = WS.el(id); return e ? e.checked : undefined; }
-  function num(id) { var e = WS.el(id); return e && e.value !== '' ? Number(e.value) : undefined; }
+  // A field in a disabled fieldset (the PHP caches of a site without PHP) is shown greyed and never sent.
+  function live(id) { var e = WS.el(id); return e && !(e.closest && e.closest('fieldset[disabled]')) ? e : null; }
+  function checked(id) { var e = live(id); return e ? e.checked : undefined; }
+  function num(id) { var e = live(id); return e && e.value !== '' ? Number(e.value) : undefined; }
   window.wsPerfSave = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     var body = {opcache: checked('wperf-opcache'), opcache_memory_mb: num('wperf-op-mem'), opcache_revalidate_s: num('wperf-op-reval'),
@@ -188,7 +193,6 @@
     var text = why || (p.page_cache ? '' : WS.T('Save first: the page cache starts with the next visits.'));
     var line = WS.el('wperf-page-why');
     if (line) { line.textContent = text; WS.show(line, !!text); }
-    WS.show('wperf-page-link', !!why && on && WS.can.sup);
   };
   window.wsPurge = function () {
     WS.say('wperf-msg', WS.T('Purging…'));

@@ -80,6 +80,16 @@ def _web_guard_tick(app):
     websites_guard.tick(app)
 
 
+def _web_page_cache_tick(app):
+    """Write WordPress sites' page cache state into their files where this process has not written it yet. Never raises.
+
+    The first pass, 30 seconds after boot, writes every one (routes/websites.page_cache_tick); a failed write is
+    tried again 30 minutes later.
+    """
+    from panel.routes import websites     # imported here, as websites_guard is above
+    websites.page_cache_tick(app)
+
+
 def _renew_tls(app):
     """The daily Let's Encrypt refresh (tls_own.maybe_renew), in an app context. Never raises.
 
@@ -177,6 +187,7 @@ def register(app, supervise):
             _addons_geoip.tick(app)        # B3's country database: this month's, once DB-IP has it
             _allow_url.tick(app)           # web proxy allow lists read from an address: once a day
             _web_guard_tick(app)           # websites' ban events (fail2ban's, kept by the helper) into the audit log
+            _web_page_cache_tick(app)      # WordPress sites' page cache state for Site Health, where not written yet
             time.sleep(1800)
 
     # This module owns both the ticker and the helper the tests drive, so it supervises and

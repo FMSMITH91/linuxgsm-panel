@@ -9,9 +9,10 @@
 (function () {
   'use strict';
   var WS = window.WS;
-  var st = {d: null, kind: 'static', app: '', poll: null, siteId: null};
-  var PAGE = WS.el('ws-page');
-  var FLAGS = PAGE ? PAGE.dataset : {};
+  // adminPass: an admin password the person typed, held here once Create has been sent (never written back into the
+  // page), so a refused Create (no database server yet), a failed install and Try again all install with it.
+  var st = {d: null, kind: 'static', app: '', poll: null, siteId: null, adminPass: ''};
+  var PAGE = WS.el('ws-page'), FLAGS = PAGE ? PAGE.dataset : {};
 
   function portsLine(p) {
     p = p || {};
@@ -195,7 +196,10 @@
   window.wsDomainTyped = function () {
     var name = WS.el('ws-add-name'), dom = WS.el('ws-add-domain');
     if (!name || !dom || name.dataset.typed === '1') return;
-    var label = dom.value.trim().toLowerCase().replace(/^www\./, '').split('.')[0] || '';
+    // In a folder (example.org/forums): the folder's last part names the site.
+    var typed = dom.value.trim().toLowerCase(), cut = typed.indexOf('/');
+    var folder = cut >= 0 ? typed.slice(cut + 1).split('/').filter(Boolean).pop() || '' : '';
+    var label = folder || typed.replace(/^www\./, '').split('.')[0] || '';
     name.value = trimHyphens(label.replace(/[^a-z0-9-]/g, '')).slice(0, 32);
   };
   // `text` without its leading and trailing hyphens (an index scan, not a backtracking pattern).
@@ -219,8 +223,17 @@
     body.admin_user = val('ws-add-admin-user');
     body.admin_email = val('ws-add-admin-email');
     var pass = WS.el('ws-add-admin-pass');
-    body.admin_password = pass ? pass.value : '';
+    body.admin_password = (pass && pass.value) || st.adminPass;
     return body;
+  }
+  // The typed password leaves the field once Create is sent; the field's placeholder says it is still the one used
+  // (typing another replaces it). Without one typed, the panel makes a strong one and shows it, masked, once.
+  function holdPass(typed) {
+    st.adminPass = typed || '';
+    var pass = WS.el('ws-add-admin-pass');
+    if (!pass) return;
+    pass.value = '';
+    pass.placeholder = st.adminPass ? WS.T('The password you typed is kept. Type another to change it.') : '';
   }
   function addProblem(body) {
     if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(body.name)) return WS.T('A website name is 1 to 32 lowercase letters, digits and hyphens, and starts and ends with a letter or digit.');
@@ -237,9 +250,8 @@
     var problem = addProblem(body);
     if (problem) { WS.say('ws-add-msg', problem, 'err'); return; }
     WS.say('ws-add-msg', WS.T('Creating…'));
+    if (st.kind === 'install') holdPass(body.admin_password);
     WS.post(st.kind === 'install' ? WS.R.installApp : WS.R.add, body).then(function (d) {
-      var pass = WS.el('ws-add-admin-pass');
-      if (pass) pass.value = '';
       if (!d || !d.id) { refused(d); return; }
       startProgress(Number(d.id), d.password || '');
     });
@@ -268,12 +280,13 @@
     if (password) showPassword(password);
     pollOnce();
   }
+  // The generated password, masked like every stored secret (js/secret_field.js): dots until Show, Copy without
+  // showing it, hidden again by itself.
   function showPassword(password) {
     var box = WS.el('ws-result');
     var p = WS.node('div', 'alert alert-info py-2 px-2 small mb-2');
     p.appendChild(WS.node('div', 'fw-semibold', WS.T('The app admin password, shown only this once:')));
-    var code = WS.raw('code', 'ws-secret user-select-all', password);
-    p.appendChild(code);
+    p.appendChild(window.secretField({value: password}));
     box.appendChild(p);
   }
   function pollOnce() {
@@ -354,6 +367,7 @@
       row.appendChild(WS.node('span', 'text-danger small', inst.error || (d.site && d.site.state_reason) || WS.T('A step failed, and every step done before it was undone.')));
     } else {
       row.appendChild(WS.node('span', 'text-success small', WS.T('Done.')));
+      holdPass('');       // installed with it: the next site's Create starts without it
       if (d.site && d.site.enabled) openLinks(row, inst); else offlineRow(row, d, inst);
     }
     var go = WS.node('a', 'btn btn-sm btn-primary', WS.T('Go to the website'));
@@ -387,7 +401,8 @@
     });
   };
 
-  // Back to the form as it was filled in (the typed password is never kept), to change something and Create again.
+  // Back to the form as it was filled in, to change something and Create again (a typed password still held, its
+  // field empty: holdPass).
   window.wsAddAgain = function () {
     clearTimeout(st.poll);
     WS.show('ws-progress-wrap', false);

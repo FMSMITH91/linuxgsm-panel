@@ -763,6 +763,48 @@ def _domain_shape_ok(text):
             and all(_DOMAIN_LABEL_RE.match(lb) for lb in labels) and bool(_DOMAIN_TLD_RE.match(labels[-1])))
 
 
+# A site in a folder of a domain (example.org/forums): one or more segments of lowercase letters, digits, "-" and
+# "_" after a "/", no "." (so no "..", no dot file, no extension), no trailing "/", at most WEBSITE_FOLDER_MAX
+# characters. The proxy matches it and each app is told it, so only this shape is ever stored.
+WEBSITE_FOLDER_MAX = 64
+_FOLDER_RE = re.compile(r"(?:/[a-z0-9_-]{1,63}){1,8}\Z")
+
+
+def website_folder(value):
+    """`value` as the canonical folder a site may live in ("/forums", "/a/b"), "" for none, or None when refused.
+
+    A leading "/" is added and a trailing one taken off, so "forums", "/forums" and "/forums/" are one folder.
+    Letters are lowercased: the proxy matches paths as typed, and one spelling per folder keeps (domain, folder)
+    unique however it was written.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower().strip("/")
+    if not text:
+        return ""
+    text = "/" + text
+    return text if len(text) <= WEBSITE_FOLDER_MAX and _FOLDER_RE.match(text) else None
+
+
+def website_address(value):
+    """(domain, folder) of a typed site address ("example.org" or "example.org/forums"), or None when refused."""
+    if not isinstance(value, str):
+        return None
+    head, slash, tail = value.strip().partition("/")
+    domain = website_domain(head)
+    folder = website_folder(slash + tail) if slash else ""
+    if domain is None or folder is None:
+        return None
+    return domain, folder
+
+
+def folders_overlap(one, other):
+    """Whether folder `one` is `other`, or one holds the other ("/forums" and "/forums/old"); "" holds none."""
+    if not one or not other:
+        return False
+    return one == other or one.startswith(other + "/") or other.startswith(one + "/")
+
+
 def website_cidr(value):
     """`value` as a canonical network ("203.0.113.0/24", "2001:db8::/32") for a site's allow list, or None.
 

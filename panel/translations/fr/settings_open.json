@@ -1,0 +1,9 @@
+{
+  "Certificate settings for every site": "Réglages des certificats pour tous les sites",
+  "PHP caches": "Caches PHP",
+  "Only for PHP sites: this website runs no PHP.": "Uniquement pour les sites PHP : ce site web n'exécute pas PHP.",
+  "The web proxy's page cache (every site)": "Le cache de pages du proxy web (tous les sites)",
+  "Blocked visitors: on, {n} settings": "Visiteurs bloqués : activé, {n} réglages",
+  "Blocked visitors: off, {n} settings": "Visiteurs bloqués : désactivé, {n} réglages",
+  "Its files, served as they are": "Ses fichiers, servis tels quels"
+}

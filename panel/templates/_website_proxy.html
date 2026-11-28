@@ -1,7 +1,9 @@
 {# The web proxy and how visitors reach the sites (superadmin only: it changes a root service and the
    public listener). Exposure is a proxy-wide choice per host: Public, Restricted (an allow list,
    with each CDN's networks one tap away), or Tunnel (no inbound port; a token). The token is
-   write-only: the page is told only whether one is saved. The security settings below show OWASP's
+   write-only: the page is told only whether one is saved. Every fold below that holds a setting starts open
+   (js/fold_memory.js keeps a viewer's own close of one); its label still says what is inside when closed.
+   The security settings below show OWASP's
    recommended value beside each field and a note, never a block, when a value is outside it
    (js/websites_proxy.js). #}
 <div class="card mt-3" id="wp-card">
@@ -18,7 +20,7 @@
       <button type="button" id="wp-apply" class="btn btn-sm btn-outline-secondary" data-action="wsProxyApply"><i class="bi bi-arrow-repeat"></i> Apply again</button>
       <span id="wp-status" class="small" role="status"></span>
     </div>
-    <details id="wp-mode-box">
+    <details id="wp-mode-box" open data-fold="wp-mode-box">
     <summary class="small" id="wp-mode-summary">How visitors reach your sites</summary>
     <form id="wp-form" class="mt-2" data-action="wsSaveExposure" data-args='["@event"]' data-on="submit">
       <div id="wp-host-wrap" class="mb-2" hidden>
@@ -64,7 +66,7 @@
         <textarea id="wp-cidrs" class="form-control form-control-sm font-monospace" rows="3" maxlength="4000"
                   spellcheck="false" autocomplete="off" aria-describedby="wp-cidrs-help"></textarea>
         <div id="wp-cidrs-help" class="form-text mt-0">IPv4 or IPv6, for example 203.0.113.0/24.</div>
-        <details id="wp-url-box" class="mt-1">
+        <details id="wp-url-box" class="mt-1" open data-fold="wp-url-box">
           <summary class="small" id="wp-url-sum">A list from an address</summary>
           <label for="wp-url" class="form-label small mb-1 mt-1">The list's address</label>
           <input type="url" id="wp-url" class="form-control form-control-sm font-monospace" maxlength="500" spellcheck="false"
@@ -101,7 +103,7 @@
 
     {# Blocked visitors (services/websites_guard): fail2ban's bans kept inside the web proxy. OWASP's words beside each
        field come from the server (guard.owasp); a value outside them shows a note and is saved anyway. #}
-    <details id="wp-guard-box" class="mt-2">
+    <details id="wp-guard-box" class="mt-2" open data-fold="wp-guard-box">
       <summary class="small" id="wp-guard-sum">Blocked visitors</summary>
       <form id="wp-guard" class="row g-2 mt-1" data-action="wsSaveGuard" data-args='["@event"]' data-on="submit">
         <p class="col-12 form-text mt-0 mb-0">A visitor that tries too many sign-ins, or asks for paths only scanners ask for, is blocked by the web proxy itself for a while, so this works behind Cloudflare too. In Public mode the firewall blocks it as well. Each website lists its own on its Rules tab.</p>
@@ -160,7 +162,7 @@
       </form>
     </details>
 
-    <details id="wp-opts-box" class="mt-2">
+    <details id="wp-opts-box" class="mt-2" open data-fold="wp-opts-box">
       <summary class="small" id="wp-opts-sum">Security settings</summary>
       <form id="wp-opts" class="row g-2 mt-1" data-action="wsSaveOptions" data-args='["@event"]' data-on="submit">
         <div class="col-sm-6">

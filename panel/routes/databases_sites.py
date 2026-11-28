@@ -46,9 +46,10 @@ def _row(site, db_id):
 
 def row_json(site, r, hd):
     """A database as the site's Database tab shows it: never its password."""
+    from panel.routes.databases_sites_reset import confirm_words
     return {"id": r.id, "name": r.name, "user": r.name, "host": "127.0.0.1",
             "port": int(getattr(hd, "port", None) or 3306), "created_by": r.created_by or "",
-            "website": site.name}
+            "website": site.name, "app_settings": confirm_words(site, r)}
 
 
 def create_for(site, slug):
@@ -137,18 +138,6 @@ def _reveal(site, r):
     return _d._no_store(jsonify(dict(row_json(site, r, hd), success=True, password=secret)))
 
 
-def _reset(site, r):
-    remote, hd = site.remote, _d._host_row(site.remote_id)
-    if hd is None:
-        return _w.say(409, _d._NOT_READY)
-    secret = _dbs.new_password()
-    ok, said = _dbs.set_password(remote, hd, r.name, secret)
-    if ok:
-        r.secret = encrypt_secret(secret)
-        db.session.commit()
-    return _w.acted(site, "website_db_password", ok, said, "new password for database %s" % r.name)
-
-
 def register(app):
     """The site database routes."""
     @app.route("/websites/<int:site_id>/databases")
@@ -198,7 +187,8 @@ def register(app):
         r = _row(site, db_id)
         if r is None:
             return _w.say(404, S_NO_SUCH)
-        return step_up_refusal() if step_up_needed() else _reset(site, r)
+        from panel.routes import databases_sites_reset
+        return step_up_refusal() if step_up_needed() else databases_sites_reset.reset(site, r)
 
     @app.route("/websites/<int:site_id>/databases/<int:db_id>/delete", methods=["POST"])
     @login_required

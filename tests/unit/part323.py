@@ -133,13 +133,13 @@ def _s1_check(host, su):
     r = _client323(su.id).post("/api/server/%d/action" % gs.id, json={"action": "check-update"})
     row = _rows323(su.id)[0].get("game:%d" % gs.id) or {}
     eq("game updates (the server page's check-update, POST /api/server/<id>/action): what it printed is the Updates "
-       "page's game row: the installed and the available build, the branch, SteamDB's history, Update now and Update "
-       "when empty, never a security mark",
-       (r.status_code, row.get("what", [None])[0], len(row.get("what") or []),
+       "page's game row: the installed and the available build (labelled, the branch with it), SteamDB's history, "
+       "Update now and Update when empty, never a security mark",
+       (r.status_code, row.get("versions"), len(row.get("what") or []),
         [n.get("url") for n in row.get("notes") or []], bool((row.get("action") or {}).get("post")),
         bool(row.get("later")), row.get("security"), row.get("safe")),
-       (200, "12345678 to 12399999 (branch public).", 2, ["https://steamdb.info/app/4020/history"], True, True, False,
-        False))
+       (200, ["Installed: build 12345678", "Available: build 12399999 (branch public)"], 1,
+        ["https://steamdb.info/app/4020/history"], True, True, False, False))
     said["out"] = "Server details: nothing about builds\n"
     _client323(su.id).post("/api/server/%d/action" % gs.id, json={"action": "details"})
     check("game updates control: another read-only action (details) leaves the row as check-update left it",
@@ -189,10 +189,11 @@ def _s2_rows(host, su, nobody, gmod):
     eq("game rows: a Steam game updates by itself in the window (its reason beside the switch) and costs a restart "
        "measured on its last update; Minecraft is off by default with its own reason, and costs nothing while stopped",
        (g.get("auto"), g.get("auto_why"), g.get("when"), g.get("cost"), m.get("auto"), m.get("auto_why"), m.get("when"),
-        m.get("cost"), m.get("what", [None])[0]),
+        m.get("cost"), m.get("versions")),
        (True, _gu323.WHY_STEAM, "By itself tonight at 04:00 (the host's clock), if no players are on.",
         "Players are kicked: the server restarts (about 1 min, as its last update took).", False, _gu323.WHY_MINECRAFT,
-        "Automatic updates are off for it: it waits for Update now.", _ug323.COST_STOPPED, "1.21.4 to 1.21.5."))
+        "Automatic updates are off for it: it waits for Update now.", _ug323.COST_STOPPED,
+        ["Installed: Minecraft 1.21.4", "Available: Minecraft 1.21.5"]))
     addons, upd = _member323("p323-addons", [_auth323.MANAGE_ADDONS], gmod), _member323("p323-upd", [_auth323.UPDATE_SERVER], gmod)
     a_rows, a_body = _rows323(addons.id)
     eq("game rows: a viewer who opens the page for the server's add-ons but may not run its Update sees no game row; "

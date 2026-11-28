@@ -9,7 +9,8 @@ account on the host, and one web proxy on the host serves every site and gets th
 
 Not included: mail, DNS hosting, FTP accounts (use the panel's [SFTP service](sftp.md)), and a web
 application firewall. Without mail, an app's "forgot password" email cannot be sent: an administrator
-resets the password from the app's own admin page instead.
+resets the password from the app's own admin page instead, and a WordPress administrator's password can be reset
+from the site's Overview (see [Forgot the admin password](#forgot-the-admin-password)).
 
 ## Adding a website
 
@@ -47,8 +48,10 @@ it again. The delete removes whatever part of it reached the host.
 ## Installing an app
 
 Choose **Install an app**, pick the app, and enter its domain and the app's admin username and email.
-Leave the password empty and the panel makes a strong one, shown once when the install starts (a
-password you type needs at least 15 characters). The panel then:
+Leave the password empty and the panel makes a strong one, shown once when the install starts, as dots
+until you press Show (Copy copies it without showing it). A password you type needs at least 15 characters;
+if Create first asks you to set up databases, the password you typed is kept for the install (the field says
+so). The panel then:
 
 1. creates the site's account and container, and the app's database (a scoped user with a generated
    password, stored encrypted, the same way as the [Databases](permissions.md#the-databases-manager)
@@ -87,6 +90,23 @@ and that nothing was left on the host, with **Try again**, which brings the form
 server that does not answer, say), the dialog marks that step **Not undone** and says what is left; the
 site stays in the list, and deleting it tries again. New app versions arrive through the
 signed catalog, like add-on updates: see [New app versions](#new-app-versions).
+
+### Forgot the admin password
+
+A WordPress site's Overview has **Reset admin password** for whoever runs the site. After your panel password
+check it lists the site's WordPress administrators; pick one, and press **Set the new password**. Leave the
+password empty and the panel makes a 24-character one, shown once, as dots until you press Show (Copy copies it
+without showing it; a shown password hides again after 30 seconds, or when you leave the tab). A password you
+type needs 15 to 128 characters and is not shown back. You can set the administrator's email in the same step:
+an address that receives mail lets WordPress's own "Lost your password?" work later.
+
+The panel runs WordPress's own command-line tool (wp-cli) in a one-off locked-down container as the site's
+account, with plugins and themes not loaded: the administrator's name, the password and the email reach it as
+files only the site's account can read, never on a command line or in a log. Only an account with the
+administrator role can be changed, and it is signed out of WordPress everywhere. The panel never stores the
+password; the audit log records who reset which administrator of which site, and whether the email changed,
+never the password or the address. For phpBB, Drupal, MyBB and SMF the card says to use the app's own "Forgot
+password" link, which needs the site to send mail.
 
 ## New app versions
 
@@ -168,8 +188,10 @@ really runs; otherwise the previous settings are put back and the proxy's own er
 
 ### Security settings
 
-The same card has a folded **Security settings** section (the **Web proxy & security settings** button at the
-top of the Websites page leads to the card). Every value can be changed; OWASP's recommended value is printed
+The same card has a **Security settings** section (the **Web proxy & security settings** button at the top of the
+Websites page leads to the card, and a site's Domains and Performance tabs link to it for a superadmin). It is drawn
+open, like **How visitors reach your sites** and **Blocked visitors** above it; close one and it stays closed for you
+(in this browser), and its label still says what is inside ("Security settings: 17 settings"). Every value can be changed; OWASP's recommended value is printed
 beside the field, and a value outside it shows a note but is still saved. **Save settings** applies the proxy's
 settings to every host with an online site at once; if a host's proxy refuses them, nothing is saved and the card
 says why.
@@ -303,6 +325,51 @@ WordPress's own address (WordPress Address and Site Address, its home and siteur
 domain, with WordPress's own code in the site's running container. If that cannot be done (the site is
 stopped, say), the primary domain stays as it was and the answer says why.
 
+### A website in a folder of a domain
+
+One domain can hold several websites: one at its root (`example.org`) and others each in a folder
+(`example.org/forums`, `example.org/wiki`). On a site's **Domains** tab, **Add a folder on a domain you
+already have** lists the domains your websites already have on the same host; pick one and type the folder.
+In the add dialog (Add a website, Install an app) type the folder after the domain, `example.org/forums`.
+
+- A folder is lowercase letters, digits, `-` and `_`, one or more parts (`/docs/v2`), at most 64
+  characters; no dots, so no `..` and no file name.
+- A folder never holds, or sits inside, another website's folder on the same domain, and every address of
+  one website is in the same folder (its app is told one base path).
+- The domain must already be on one of **your** websites on the same host: nobody can put a site under a
+  domain they do not run.
+- Overview, the Websites list and **Open site** show and open the full address.
+
+**OWASP recommends a separate subdomain for each app instead** (`forums.example.org`). Websites in folders
+of one domain are one origin to a browser: a script one of them serves can read the others' pages and
+stored data and set cookies for their folders, so a flaw in one app can reach another app's sign-ins. A
+subdomain is a separate origin and does not have that problem. Each folder address on the Domains tab says
+so. The panel still sets each app's cookie path to its folder, which keeps their cookies from colliding,
+but a cookie path is not a security boundary.
+
+How it works:
+
+- The web proxy gives the domain one block with a route per folder, the longest first, then the site at
+  the root (or "not found" when no site holds the root). It works the same in Public, Restricted and Tunnel
+  mode, and the certificate is the domain's (the root site's, when there is one). The folder without its
+  slash (`example.org/forums`) is sent on to `example.org/forums/` by the web proxy itself, with the same
+  address, https and any query kept.
+- The folder stays in the path: each site's own server maps it to its files (Apache for PHP sites, nginx
+  for static sites), so links, redirects and cookies name the folder the visitor asked for. A redirect
+  Apache or nginx makes itself names the visitor's address over https, never their inside port. A Node.js app
+  is sent the whole path: set its base path to the folder.
+- The apps are installed for the folder: WordPress's address (WordPress Address and Site Address, from
+  which it sets its cookie paths), phpBB's script path and cookie path, MyBB's board URL and cookie path,
+  Simple Machines Forum's board URL with its cookies on the board's path, and Drupal, which reads its base
+  path from each request.
+- A site's rules, the page cache's skipped paths and Blocked visitors' watched sign-in and scanner paths are
+  the folder's. A ban still holds for every site on the host; a site's Blocked visitors list names the folder
+  address the visitor was refused on. **Purge cache** on a site in a folder empties the whole domain's cache
+  (the other sites refill theirs on the next visit).
+- A static, PHP or Node.js site with no address yet moves into a folder when you add the folder: its own
+  server is written again (a running site restarts). A one-click app keeps the address it was installed with
+  in its own settings, so its folder is chosen when it is installed.
+
 ### Your own certificate
 
 A website has one **Certificate** button, at the top of its Domains tab: **Automatic (Let's Encrypt)**,
@@ -410,6 +477,9 @@ Saving restarts the site's PHP gracefully.
 
 ## Performance
 
+A site without PHP (a plain site or a Node.js app) still shows OPcache and the object cache, greyed with the line
+"Only for PHP sites": they are never removed from the page, and never sent when you save.
+
 - **OPcache** (PHP): keeps compiled PHP in memory. On by default.
 - **Object cache** (PHP): a private Redis-compatible store for this site only, with no copy on disk. Off
   by default. Turning it on or off starts or removes the cache beside the running site; the site itself is
@@ -474,13 +544,29 @@ the site's own name to the site's own server inside its container, with the web 
 only the site's account can read (never a command line or a log). The request never leaves the container, so no
 outbound access is added. The panel writes the file again at the next install if it is changed or removed.
 
+The same plugin answers Site Health's **Page cache** test from the panel's word, because WordPress's own test
+looks for caching headers on requests that never pass the web proxy. The panel writes whether the proxy caches
+the site's pages, and for how long, into `/run/panel/page-cache` (read-only in the container, no secret in it):
+at every proxy apply, when the site's Performance settings are saved, and on a pass
+30 seconds after the panel starts and every 30 minutes for any WordPress site it has not written yet (a write
+that fails is tried again on the next pass). Until that file exists, Site Health says the panel has not reported
+the page cache yet, rather than calling it off.
+
 ## Backups and databases
 
 **Backups** holds the site's files and its databases, kept on the host as the site's own account (the
 newest 7 by default). Restoring stops the site, takes a safety backup first, then puts the files and
 databases back, and starts the site again only if it was running. The Overview shows when the newest backup
 was taken. The **Database** tab creates the site's databases (named `ws<site>_<name>`) and shows
-their connection settings on request, which is written to the audit log. The site's first database restarts a
+their connection settings on request, which is written to the audit log. Every stored password the panel shows
+(a database's, the object cache's, a game server's database on its Databases tab) is a row of dots until you press
+Show (the eye; Copy copies it without showing it), and goes back to dots by itself after 30 seconds or when you
+leave the tab. **Reset password** gives the database's user a new password. For the database a one-click app was
+installed with (WordPress, phpBB, Drupal, MyBB, SMF), the app's settings file gets the new password in the same
+step, and the panel checks that the site's database answers it from the site's own network: if anything fails, the
+old password is put back in both places and the site keeps working. A Node.js app's variable that holds the
+password gets the new one, and the app is restarted. For any other database the dialog warns that the site's code
+must be given the new password, which is then shown under the row (as dots until Show). The site's first database restarts a
 running site (a stopped one from its next start), so its code reaches the database server at once. Deleting a site (on its Settings
 tab) removes its databases and their database user too; if one cannot be removed, nothing else is, and the
 site stays offline for another try. A site still being set up cannot be deleted until that finishes or fails.
@@ -503,7 +589,10 @@ Off by default, for visitors' privacy. When an administrator turns them on for a
 addresses are shortened before they are kept, and they are kept for the days set in Security settings.
 The site's own error log is always readable on its Overview tab.
 
-The Overview shows what the site runs (the image of its container) and what it uses: memory, disk and CPU,
+The Overview shows what the site runs, as you know it: "WordPress 7.1.5 · PHP 8.4", "phpBB 3.3.19 · PHP 8.4",
+"PHP 8.3" or "Node.js 22", each product with its own version (an app is named by what the panel installed, with the
+version it installed or updated to; the container's image name and id are only the line's tooltip), and what it uses:
+memory, disk and CPU,
 read from the host when the page is opened. A figure that cannot be read says so and why (the site is not
 running, the host did not answer, or Podman's own words), never an empty bar. On a host that does not let
 a site's account limit its own containers, it also says the CPU limit is set on the whole account.

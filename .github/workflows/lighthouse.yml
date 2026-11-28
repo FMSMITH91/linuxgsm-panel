@@ -56,7 +56,8 @@ jobs:
     steps:
       # Block mode. The hosts are the ones this job's Harden-Runner insights recorded over pull
       # request runs from 2026-11-17 and 2026-11-18, beyond the Actions service names the agent
-      # allows by itself: GitHub (the scope and reuse steps), PyPI (the pip install), and the two the
+      # allows by itself: GitHub (the scope and reuse steps), PyPI (the pip install), npm's registry
+      # (Lighthouse CI's `npm ci`; setup-node takes Node from the image's tool cache), and the two the
       # throwaway PANEL fetches for the pages it renders, LinuxGSM's game list from
       # raw.githubusercontent.com and its game icons from linuxgsm.com, so the pages audited are the
       # ones a panel with its outside services on serves. What it refuses is Chrome's own traffic
@@ -75,6 +76,7 @@ jobs:
             linuxgsm.com:443
             pypi.org:443
             raw.githubusercontent.com:443
+            registry.npmjs.org:443
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -141,18 +143,49 @@ jobs:
           done
           curl -sf http://127.0.0.1:5000/healthz > /dev/null || { echo "panel failed to start"; cat panel.log; exit 1; }
 
+      # Lighthouse CI comes from .github/lhci: package.json pins @lhci/cli (and the puppeteer-core
+      # the sign-in script drives) exactly, and package-lock.json pins every package beneath them
+      # with its sha512, which `npm ci` checks, refusing the install on any mismatch or on a lockfile
+      # that disagrees with package.json. No package's install script runs (--ignore-scripts, and
+      # the folder's .npmrc for anyone running npm there), and nothing downloads a browser: the
+      # tree has no install scripts and the audit drives the runner image's own Chrome. Dependabot
+      # moves the folder (.github/dependabot.yml); osv-scanner audits its lockfile
+      # (security-code.yml). It replaced a third-party action whose newest release resolved an
+      # @lhci/cli with sixteen published advisories.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse != 'true'
+        with:
+          node-version: "24"
+
+      - name: Install Lighthouse CI from its lockfile
+        if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse != 'true'
+        working-directory: .github/lhci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Run Lighthouse CI
         if: steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse != 'true'
         # URL + puppeteer login live in .github/lighthouserc.json so we audit the real
-        # (authenticated) dashboard, not just the login page.
-        # No artifact: the action's own upload has no retention setting, so every run kept its
-        # reports for 90 days and nothing reads them. The assertions fail this step and print
-        # their results in the log. Never temporaryPublicStorage: that sends the reports to a
-        # public third-party host.
-        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # 12.6.2
-        with:
-          configPath: .github/lighthouserc.json
-          uploadArtifacts: false
+        # (authenticated) dashboard, not just the login page. collect audits the pages, and assert
+        # exits non-zero on any failed "error" assertion, failing this step with each result printed
+        # in the log. No upload: no artifact (nothing reads the reports, and the log holds the
+        # result), and never temporaryPublicStorage, which sends the reports to a public
+        # third-party host. CHROME_PATH is the browser both Lighthouse and puppeteer launch.
+        run: |
+          set -euo pipefail
+          chrome=""
+          for c in google-chrome chromium; do
+            if command -v "${c}" >/dev/null; then chrome="$(command -v "${c}")"; break; fi
+          done
+          if [ -z "${chrome}" ]; then
+            echo "::error::no Chrome on this runner image; Lighthouse did not run."
+            exit 1
+          fi
+          export CHROME_PATH="${chrome}"
+          lhci=.github/lhci/node_modules/.bin/lhci
+          "${lhci}" collect --config=.github/lighthouserc.json
+          "${lhci}" assert --config=.github/lighthouserc.json
 
       - name: Stop the panel
         if: always() && steps.scope.outputs.skip != 'true' && steps.reuse.outputs.reuse != 'true'

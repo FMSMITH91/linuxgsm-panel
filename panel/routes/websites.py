@@ -224,7 +224,7 @@ def site_json(site, admin=False):
     dom = site.primary_domain
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state,
            "state_reason": site.state_reason or "", "enabled": bool(site.enabled),
-           "domain": dom.domain if dom else "", "cert_state": dom.cert_state if dom else "",
+           "domain": dom.address if dom else "", "cert_state": dom.cert_state if dom else "",
            "php_version": site.php_version or "", "runtime": site.runtime or "", "app": site.app_recipe or ""}
     if admin:
         out.update({k: getattr(site, k) for k in LIMITS})
@@ -295,6 +295,45 @@ def reconcile_proxy(remote):
         return False, S_NOT_READY
     ok, said = host_call(_sw.ports_apply, remote, proxy, True)
     return host_call(_sw.proxy_apply, remote, text, online, proxy, True) if ok else (ok, said)
+
+
+def page_cache_note(remote, only=None):
+    """Write the page cache state of `remote`'s WordPress sites into their files, without applying the proxy.
+
+    The state is read from the configuration reconcile_proxy renders (the saved sites and options, the proxy's cache
+    module checked), which is what the proxy runs: every change to them is applied at once. An apply writes it too,
+    but only a site this process has not written yet, or whose state changed: a site applied before its plugin read
+    the file, or before a restart (the record is per process), had no file. An install never removes it (it writes
+    only its own bundle's files). `only`: these sites, written even when the same state was written before (a
+    Performance save). A write that fails is logged by ssh_manager.websites.note_page_cache; page_cache_tick tries
+    it again.
+    """
+    from panel.routes.websites_view import proxy_options
+    from panel.services import websites_proxy as _wp
+    sites = only if only is not None else Website.query.filter_by(remote_id=remote.id, kind="wordpress").all()
+    if not sites:
+        return
+    online = Website.query.filter_by(remote_id=remote.id, enabled=True).order_by(Website.id).all()
+    try:
+        text = _wp.render(online, proxy_row(remote.id), _cache_checked(remote, proxy_options())) if online else ""
+        _sw.note_page_cache(remote, text, sites, force=only is not None)
+    except Exception:  # noqa: BLE001 - Site Health keeps its last word; the next pass tries again
+        _log.warning("page cache state not written on host %s", remote.id, exc_info=True)
+
+
+def page_cache_tick(app):
+    """Write the page cache state of each WordPress site this process has not written it for yet. Never raises.
+
+    One pass from the update-check thread: 30 seconds after boot, then every 30 minutes, one host at a time.
+    """
+    try:
+        with app.app_context():
+            todo = {s.remote_id for s in Website.query.filter_by(kind="wordpress").all()
+                    if s.account and not _sw.page_cache_noted(s.id)}
+            for remote in RemoteServer.query.filter(RemoteServer.id.in_(sorted(todo) or [0])).all():
+                page_cache_note(remote)
+    except Exception:  # noqa: BLE001 - a background pass: the next one tries again
+        _log.warning("page cache pass failed", exc_info=True)
 
 
 # ── list and pages ──────────────────────────────────────────────────────────────────────────────
@@ -683,7 +722,7 @@ def _unserved(site):
     """The site's domains the web proxy would not serve, each with its DNS state ("x.org (mismatch)")."""
     from panel.services import websites_proxy as _wp
     served = set(_wp.site_domains(site, _exposure(site)))
-    return ["%s (%s)" % (d.domain, d.dns_state or "unchecked") for d in site.domains or [] if d.domain not in served]
+    return ["%s (%s)" % (d.address, d.dns_state or "unchecked") for d in site.domains or [] if d.address not in served]
 
 
 def online_refusal(site):
@@ -907,13 +946,14 @@ def _settings(site, form):
 
 def register(app):
     """The Websites routes: these, and the sibling modules'."""
-    from panel.routes import (databases_sites, websites_apps, websites_backups, websites_customers, websites_domains,
-                              websites_files, websites_guard, websites_proxy, websites_settings, websites_view)
+    from panel.routes import (databases_sites, websites_app_admin, websites_apps, websites_backups, websites_customers,
+                              websites_domains, websites_files, websites_guard, websites_proxy, websites_settings,
+                              websites_view)
     app.jinja_env.globals["websites_nav"] = websites_view.nav_url
     _list_routes(app)
     _add_route(app)
     _run_routes(app)
     _admin_routes(app)
     for mod in (websites_domains, websites_files, websites_backups, websites_settings, websites_apps,
-                websites_customers, websites_proxy, websites_guard, databases_sites):
+                websites_customers, websites_proxy, websites_guard, databases_sites, websites_app_admin):
         mod.register(app)

@@ -356,6 +356,52 @@ def _image_ref(site, probe):
     return (head, tag) if colon and "/" not in tag else (name, "")
 
 
+# The Overview's Software line names what a person knows, each with its own version, never the image's name and hash.
+APP_NAMES = {"wordpress": "WordPress", "phpbb": "phpBB"}
+# The floor catalog's one-click apps by recipe, for a recipe the catalog in use no longer names.
+RECIPE_NAMES = {"drupal": "Drupal", "mybb": "MyBB", "phpbb": "phpBB", "smf": "Simple Machines Forum",
+                "wordpress": "WordPress"}
+S_STATIC_SOFTWARE = "Its files, served as they are"
+
+
+def app_name(site):
+    """The app a site runs, as people know it ("phpBB"), or "": its one-click recipe's name, else its kind's.
+
+    A one-click app's kind is the server it runs on ("php" for phpBB, Drupal, MyBB and SMF), so the kind alone said
+    "PHP site" for a forum.
+    """
+    recipe = getattr(site, "app_recipe", "") or ""
+    if recipe:
+        from panel.services import websites_catalog
+        try:
+            name = (websites_catalog.recipe(recipe) or {}).get("name")
+        except NotImplementedError:
+            name = None
+        return name if isinstance(name, str) and name else RECIPE_NAMES.get(recipe, recipe)
+    return APP_NAMES.get(site.kind, "")
+
+
+def software_line(site):
+    """The Overview's Software line: "phpBB 3.3.19 · PHP 8.4", "PHP 8.4", "Node.js 22" or a plain site's words.
+
+    Each product names its own version, so a bare "Version 7.1.5" never leaves the reader guessing which one. A
+    one-click app is named by its recipe with the version the panel installed or updated it to.
+    """
+    def named(product, version):
+        return ("%s %s" % (product, version)).strip()
+    parts = []
+    app = app_name(site)
+    if app:
+        parts.append(named(app, site.app_version or ""))
+    if site.kind in ("php", "wordpress", "phpbb") and site.php_version:
+        parts.append(named("PHP", site.php_version))
+    if site.kind == "app":
+        parts.append(named("Node.js", site.runtime_version or ""))
+    if parts:
+        return " · ".join(parts)
+    return i18n.tr(S_STATIC_SOFTWARE) if site.kind == "static" else ""
+
+
 def _last_backup(probe):
     """The newest backup's time as the Backups tab writes it; "" when the host said there is none; None when unread."""
     if not (probe or {}).get("ok"):
@@ -366,7 +412,7 @@ def _last_backup(probe):
 
 def _open_url(site):
     dom = site.primary_domain
-    return "https://%s/" % dom.domain if dom and site.enabled else ""
+    return "https://%s/" % dom.address if dom and site.enabled else ""
 
 
 def _setup_unfinished(site):
@@ -377,7 +423,7 @@ def _setup_unfinished(site):
 def _site_block(site, admin, probe):
     out = {"id": site.id, "name": site.name, "kind": site.kind, "state": site.state, "state_reason": site.state_reason or "",
            "enabled": bool(site.enabled), "open_url": _open_url(site),
-           "image": _image(site, probe),
+           "image": _image(site, probe), "software": software_line(site),
            "app_version": site.app_version or "", "php_version": site.php_version or "",
            "runtime_version": site.runtime_version or "", "last_backup": _last_backup(probe), "usage": _usage(probe),
            "setup_unfinished": _setup_unfinished(site)}
@@ -454,13 +500,22 @@ def _app(site):
 def _manager_parts(out, site):
     """Add what someone who runs the site reads: its databases, PHP, performance, rules and app."""
     from panel.routes.databases_sites import site_rows
-    out["databases"] = [{"id": r.id, "name": r.name, "user": r.name} for r in site_rows(site)]
+    from panel.routes.databases_sites_reset import confirm_words
+    out["databases"] = [{"id": r.id, "name": r.name, "user": r.name, "app_settings": confirm_words(site, r)}
+                        for r in site_rows(site)]
     out["php"] = _php(site)
     out["perf"] = _perf(site)
     out["rules"] = json.loads(site.custom_rules or "[]")
     out["app"] = _app(site) if site.kind == "app" else None
+    out["folder_domains"] = _folder_domains(site)
     if current_user.is_superadmin:
         out["raw_rules"] = site.raw_proxy_snippet or ""
+
+
+def _folder_domains(site):
+    """The domains the Domains tab's folder form offers: those held by sites the viewer manages on this host."""
+    from panel.services import website_folders
+    return website_folders.host_domains(current_user, site)
 
 
 def _failed_logs(site):

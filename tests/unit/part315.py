@@ -1059,7 +1059,7 @@ def _c1_update(su, sid):
     eq("Update (GET /api/websites/<id>): a site installed with files revision 2 (the gate fix alone) is offered Update, "
        "which brings it the folder its code reads, WordPress's loopback plugin and the egress unit; one installed with "
        "the current revision is not (control)",
-       (_ws315.SITE_FILES_REV, offered), ("files-7", {"files-2": True, "files-7": False}))
+       (_ws315.SITE_FILES_REV, offered), ("files-10", {"files-2": True, "files-10": False}))
 
 
 def _c1_dialog():
@@ -1239,7 +1239,7 @@ def _b4_reveal(st):
         su.post("/websites/%d/object-cache/credentials" % (site.id + 100000)).status_code), (409, 404))
     perf = {"opcache": True, "object_cache": True, "object_cache_host": "127.0.0.1", "object_cache_port": 6379,
             "object_cache_file": "/run/panel/object-cache-password", "page_cache": False, "static_cache": False}
-    got = _node315(_site_page315(), ["websites_common.js", "website_site.js", "website_tuning.js"], r"""
+    got = _node315(_site_page315(), ["websites_common.js", "website_site.js", "secret_field.js", "website_tuning.js"], r"""
       for (let i = 0; i < 6; i++) await tick();
       const info = $('wperf-obj-info');
       const b = info.querySelector('button');
@@ -1252,9 +1252,10 @@ def _b4_reveal(st):
           "/websites/7/object-cache/credentials": {"success": True, "host": "127.0.0.1", "port": 6379,
                                                    "password": _SHOWN_ONCE315}})
     eq("B4 (the Performance tab, js/website_tuning.js): WordPress is told its address and password are set and which "
-       "plugin to install; Show connection settings gives the password after the password check",
-       ("Redis Object Cache plugin" in (got.get("text") or ""), got.get("action"), "shown-once" in (got.get("conn") or "")),
-       (True, "wsCacheReveal", True))
+       "plugin to install; Show connection settings gives the password after the password check, masked until Show "
+       "(secret_field.js; part330 drives Show and Copy)",
+       ("Redis Object Cache plugin" in (got.get("text") or ""), got.get("action"), "shown-once" in (got.get("conn") or ""),
+        "••••••••••••" in (got.get("conn") or "")), (True, "wsCacheReveal", False, True))
 
 
 # ── WP2. No inactive plugin or theme on a fresh WordPress ─────────────────────────────────────────

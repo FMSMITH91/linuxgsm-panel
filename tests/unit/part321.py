@@ -353,7 +353,7 @@ def _s4_plugin():
     eq("Site Health (the file the plugin reads): one of the files the panel writes for a site, and a new files "
        "revision so installed WordPress sites are offered Update for the new plugin",
        (_ws321.PAGE_CACHE_FILE in _ws321.FILE_NAMES, _ws321.PAGE_CACHE_FILE, _ws321.SITE_FILES_REV),
-       (True, "site/conf/panel/page-cache", "files-7"))
+       (True, "site/conf/panel/page-cache", "files-10"))
 
 
 # ── 5. One certificate per site ────────────────────────────────────────────────────────────────────

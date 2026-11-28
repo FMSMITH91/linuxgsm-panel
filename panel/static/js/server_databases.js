@@ -116,9 +116,17 @@ function dbDrawGrant(g, st) {
 // what was typed stays on the page; without it the server's 403 sends the tab to the confirm page and back.
 function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STEP_UP_TOTP === true); else go(); }
 
+// Stop showing database `id`'s password: its hiding by itself cancelled, the mask drawn at the next redraw.
+function _dbUnshow(st, id) {
+  if (st.hide[id]) st.hide[id]();
+  delete st.hide[id];
+  delete st.pw[id];
+}
+
 (function () {
   'use strict';
-  var st = {d: null, pw: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false, grantPw: ''};
+  // pw: the passwords shown now; hide: each shown one's cancel of its hiding by itself (secret_field.js).
+  var st = {d: null, pw: {}, hide: {}, kind: {}, open: {}, loaded: false, busy: false, edited: false, poll: null, loginOpen: false, grantPw: ''};
 
   var node = dbNode, iconButton = dbIconButton, textButton = dbTextButton, kvRow = dbKvRow;
   function T(s) { return window.t ? window.t(s) : s; }
@@ -282,8 +290,9 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
       kvs.appendChild(kvRow(T(f[0]), String(db[f[1]]), [iconButton('bi-clipboard', TF('Copy {what}', {what: T(f[0])}), 'dbCopy', [db.id, f[1]])]));
     });
     var pw = st.pw[db.id];
-    kvs.appendChild(kvRow(T('Password'), pw || st.d.pw_mark, [
-      iconButton(pw ? 'bi-eye-slash' : 'bi-eye', pw ? T('Hide the password') : T('Show the password'), 'dbReveal', [db.id], 'fpm-edit'),
+    var eye = iconButton(pw ? 'bi-eye-slash' : 'bi-eye', pw ? T('Hide the password') : T('Show the password'), 'dbReveal', [db.id], 'fpm-edit');
+    eye.setAttribute('aria-pressed', pw ? 'true' : 'false');
+    kvs.appendChild(kvRow(T('Password'), pw || st.d.pw_mark, [eye,
       iconButton('bi-clipboard', T('Copy the password'), 'dbCopy', [db.id, 'password'], 'fpm-edit')]));
     card.appendChild(snippetBlock(db));
     var foot = node('div', 'd-flex flex-wrap gap-1 mt-2 align-items-center');
@@ -434,10 +443,15 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     if (old) list.replaceChild(dbCard(db), old);
   }
 
+  // A shown password is masked again by itself after 30 seconds and when the tab is hidden (secret_field.js).
   window.dbReveal = function (id) {
-    if (st.pw[id]) { delete st.pw[id]; redraw(id); return Promise.resolve(true); }
-    return password(id).then(function (pw) { st.pw[id] = pw; redraw(id); return true; },
-                             function (e) { say('✗ ' + e.message, 'text-danger'); return false; });
+    if (st.pw[id]) { _dbUnshow(st, id); redraw(id); return Promise.resolve(true); }
+    return password(id).then(function (pw) {
+      st.pw[id] = pw;
+      if (window.secretHideLater) st.hide[id] = window.secretHideLater(function () { delete st.hide[id]; _dbUnshow(st, id); redraw(id); });
+      redraw(id);
+      return true;
+    }, function (e) { say('✗ ' + e.message, 'text-danger'); return false; });
   };
 
   window.dbShowSnippet = function (id) { st.open[id] = !st.open[id]; redraw(id); };
@@ -453,7 +467,7 @@ function _dbStepUp(go) { if (window.stepUpThen) window.stepUpThen(go, window.STE
     st.busy = true;
     say(busyText);
     return postJson(api('/' + id + '/' + tail), body).then(function (r) {
-      if (tail !== 'restore') delete st.pw[id];
+      if (tail !== 'restore') _dbUnshow(st, id);
       var done = after(r, true);
       // No dump on the host after all: the row is drawn again without Restore, the answer kept.
       return r.d.no_dump ? window.dbLoad(true).then(function () { return false; }) : done;

@@ -78,6 +78,8 @@
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites_common.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_site.js') }}"></script>
 {% if can_files|default(false) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_files.js') }}"></script>{% endif %}
-{% if can_manage|default(false) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_tuning.js') }}"></script>
+{% if can_manage|default(false) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/secret_field.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_app_admin.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_tuning.js') }}"></script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/website_blocked.js') }}"></script>{% endif %}
 {% endblock %}

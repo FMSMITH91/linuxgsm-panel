@@ -820,7 +820,7 @@ def _s7_overview(st, _rec):
 
 # ── 8. the scripts: Put it online, and figures that could not be read ────────────────────────────
 _SITE_API313 = {"success": True, "site": {"id": 7, "name": "shop", "kind": "wordpress", "state": "running", "enabled": False,
-                                          "image": {"name": "", "version": ""},
+                                          "image": {"name": "", "version": ""}, "software": "WordPress 7.1.5 · PHP 8.4",
                                           "usage": {"disk_mb": 12, "unread": {"mem_mb": "The website is not running.",
                                                                               "cpu_pct": "The website is not running.",
                                                                               "image": "The website is not running."}},
@@ -875,14 +875,14 @@ def _s8_scripts(_st, _rec):
   const b = $('ws-offline').querySelector('button');
   return {shown: !$('ws-offline').hidden, action: b ? b.getAttribute('data-action') : null,
           mem: $('ws-mem-text').textContent, memBar: $('ws-mem').hidden, disk: $('ws-disk-text').textContent,
-          diskBar: $('ws-disk').hidden, image: $('ws-ov-image').textContent};
+          diskBar: $('ws-disk').hidden, image: $('ws-ov-software').textContent};
 """, routes={"/api/websites/7": _SITE_API313}))
     eq("node: the site's Overview says it is offline with the Put it online button for its administrator",
        (page.get("shown"), page.get("action")), (True, "wsPutOnline"))
-    eq("node: a figure that could not be read says so with why, its bar hidden; a figure read keeps its bar (control)",
+    eq("node: a figure that could not be read says so with why, its bar hidden; a figure read keeps its bar, and the "
+       "software line, from the panel's own records, reads even then (controls)",
        (page.get("mem"), page.get("memBar"), page.get("image"), page.get("disk"), page.get("diskBar")),
-       ("Couldn't read: The website is not running.", True, "Couldn't read: The website is not running.", "12 / 2048 MB",
-        False))
+       ("Couldn't read: The website is not running.", True, "WordPress 7.1.5 · PHP 8.4", "12 / 2048 MB", False))
     cust = _ran301("overview offline (manager)", _node301(_site_cu301, _COMMON301 + ["website_site.js"], r"""
   return {shown: !$('ws-offline').hidden, button: !!$('ws-offline').querySelector('button'), text: $('ws-offline').textContent};
 """, routes={"/api/websites/7": dict(_SITE_API313, can={"manage": True, "admin": False})}))

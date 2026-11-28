@@ -402,15 +402,16 @@ def _allowed242(workflow, job):
 
 _hr242 = {"checks": _allowed242("ci.yml", "checks"), "lighthouse": _allowed242("lighthouse.yml", "lighthouse")}
 check("harden-runner: the unit suites' checks matrix blocks all but GitHub, PyPI, GitHub's release downloads "
-      "and apt's mirrors (the region's plain-http one by wildcard), and Lighthouse all but GitHub, PyPI and "
-      "the two hosts its panel fetches from",
+      "and apt's mirrors (the region's plain-http one by wildcard), and Lighthouse all but GitHub, PyPI, npm's "
+      "registry (its lockfile install) and the two hosts its panel fetches from",
       _hr242 == {"checks": ("block", ["*.archive.ubuntu.com:80", "api.github.com:443", "archive.ubuntu.com:443",
                                       "esm.ubuntu.com:443", "files.pythonhosted.org:443", "github.com:443",
                                       "objects.githubusercontent.com:443",
                                       "pypi.org:443", "release-assets.githubusercontent.com:443",
                                       "security.ubuntu.com:443"]),
                  "lighthouse": ("block", ["api.github.com:443", "files.pythonhosted.org:443", "github.com:443",
-                                          "linuxgsm.com:443", "pypi.org:443", "raw.githubusercontent.com:443"])},
+                                          "linuxgsm.com:443", "pypi.org:443", "raw.githubusercontent.com:443",
+                                          "registry.npmjs.org:443"])},
       repr(_hr242))
 
 _shutil242.rmtree(_TMP242, ignore_errors=True)

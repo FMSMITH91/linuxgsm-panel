@@ -1,5 +1,6 @@
 // The Updates page (templates/updates.html). GET /api/updates:
-//   {groups: [{key, title, items: [{kind, ref, name, host, what: [..], notes: [{title, url}], cost, security,
+//   {groups: [{key, title, items: [{kind, ref, name, title (its kind and what it updates), versions: [Installed line,
+//     Available line] | [], host, what: [..], notes: [{title, url}], cost, security,
 //     safe, auto, auto_editable, when, when_link: {href, title} | null, action: {post, body, step_up, confirm,
 //     confirm_title} | {href} | null, link; a game row also: auto_why, backup, backup_post, later: {post, queued}}]}],
 //    count, settings: {start, end, can_edit, owasp_auto, off, checking, can_check},
@@ -17,10 +18,8 @@
   var ACTIONS = {panel_self_update: 'Panel', os_update_run: 'Host system', remote_os_update: 'Host system',
     'update-lgsm_server': 'LinuxGSM', update_server: 'Game update', 'force-update_server': 'Game update',
     update_complete: 'Game update', update_when_empty: 'Game update', update_warned: 'Game update',
-    update_left_stopped: 'Game update',
-    addon_update: 'Add-on', website_update: 'Website', update_skipped: 'Skipped'};
-  var polls = 0;
-  var last = null;
+    update_left_stopped: 'Game update', addon_update: 'Add-on', website_update: 'Website', update_skipped: 'Skipped'};
+  var polls = 0, last = null;
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -130,10 +129,16 @@
     return card;
   }
 
-  // A row's first line: its name (a link to its page), its host, and the security mark.
+  // A row's first line says, first, what kind of update it is and what it updates ("Game update: PaperMC"); then its
+  // name (a link to its page), its host, and the security mark. One line where it fits: less to scroll.
   function rowHead(r) {
-    var top = el('div', 'd-flex flex-wrap gap-2 align-items-baseline');
-    var name = r.link ? el('a', 'fw-semibold text-break', r.name) : el('span', 'fw-semibold text-break', r.name);
+    var top = el('div', 'd-flex flex-wrap column-gap-2 align-items-baseline');
+    if (r.title) {
+      var t = el('span', 'upd-title fw-semibold text-break', r.title);
+      t.setAttribute('data-no-i18n', '');
+      top.appendChild(t);
+    }
+    var name = r.link ? el('a', 'text-break', r.name) : el('span', 'text-break', r.name);
     if (r.link) name.href = r.link;
     name.setAttribute('data-no-i18n', '');
     top.appendChild(name);
@@ -141,12 +146,14 @@
     if (r.security) top.appendChild(el('span', 'badge text-bg-danger', T('Security update')));
     return top;
   }
-  function row(r) {
-    var wrap = el('div', 'upd-row py-2');
-    wrap.appendChild(rowHead(r));
-    wrap.appendChild(lines(r.what));
+  // What the row says before its cost: the two version lines, what the update changes, and its notes' links.
+  function rowBody(r, wrap) {
+    if ((r.versions || []).length) wrap.appendChild(versions(r.versions));
+    if ((r.what || []).length) wrap.appendChild(lines(r.what));
     if ((r.notes || []).length) wrap.appendChild(notes(r.notes));
-    wrap.appendChild(line('hourglass-split', r.cost, 'text-secondary'));
+  }
+  // When it updates by itself, with the link that changes it where there is one.
+  function whenLine(r) {
     var when = line('clock', r.when, r.auto === false && !r.security ? 'text-warning-emphasis' : '');
     if (r.when_link && r.when_link.href) {
       var wl = el('a', 'ms-1', r.when_link.title || '');
@@ -154,6 +161,14 @@
       wl.setAttribute('data-no-i18n', '');
       when.appendChild(wl);
     }
+    return when;
+  }
+  function row(r) {
+    var wrap = el('div', 'upd-row py-2');
+    wrap.appendChild(rowHead(r));
+    rowBody(r, wrap);
+    wrap.appendChild(line('hourglass-split', r.cost, 'text-secondary'));
+    var when = whenLine(r);
     wrap.appendChild(when);
     var out = el('div', 'small mt-1');
     out.setAttribute('role', 'status');
@@ -214,6 +229,18 @@
       }).catch(function () { cb.disabled = false; cb.checked = !cb.checked; });
     });
     box.appendChild(cb); box.appendChild(lab);
+    return box;
+  }
+  // The version it runs and the one it moves to, one labelled line each (the server's words: "Installed: ...").
+  function versions(pair) {
+    var box = el('div', 'upd-versions small mb-1');
+    box.setAttribute('data-no-i18n', '');
+    pair.forEach(function (v, i) {
+      var d = el('div', 'text-break' + (i ? ' fw-semibold' : ''));
+      d.appendChild(icon(i ? 'arrow-right-circle' : 'box'));
+      d.appendChild(el('span', 'ms-1', v));
+      box.appendChild(d);
+    });
     return box;
   }
   function lines(what) {

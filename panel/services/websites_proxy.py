@@ -44,6 +44,25 @@ BLOCKED VISITORS (services/websites_guard)
     Requests the guard does not watch are logged only by a site's own access log, as before; the catch-alls log
     nothing.
 
+SITES IN FOLDERS (services/website_folders)
+    A domain that has a site in a folder (example.org/forums) gets ONE block of its own, whichever sites hold it: a
+    `handle` per folder, the longest folder first (a folder never holds another site's, but the order is still
+    written out, not left to Caddy's sorting of named matchers), each matching the folder itself and everything
+    under it (`path /forums /forums/*`, so /forumsx is not the folder's), then the root site's `handle`, or a 404
+    when no site holds the root. The folder without its slash (/forums) is answered here with a 308 to /forums/
+    (a path, so the browser keeps its own scheme and host; the query kept): the site's own server would build
+    that redirect from its inside port (http://<domain>:8080/forums/). The prefix is KEPT, never stripped: each site's own server maps its folder to its
+    files (services/websites: an Alias in Apache, an alias in nginx) and each app is told it (its URLs and cookie
+    path, websites_recipes), so redirects, links and cookies name the folder the browser asked for. A runtime app
+    gets the folder too and is told so on its Domains tab. The certificate is the domain's: the root site's
+    source, else the first address's, as in every mode before. A loggers' definitions are site-block options, so
+    each site's (the guard's security logger, its access log) is defined on the domain's block and each handle names
+    its own for every request it serves (`log_name`, or `log_skip`); the guard's watched paths and a site's rules
+    are its folder's paths, and a watched request carries its folder (`lgsm_folder`) so a ban is shown on the right
+    site. A refused request of a banned visitor (`error` runs first) is logged untagged by every logger the block
+    maps, as in a block of one site; no jail counts an untagged line. Validate-then-swap is unchanged: the whole
+    configuration is checked before it replaces the running one.
+
 HEADERS (OWASP HTTP Headers and HTTP Strict Transport Security cheat sheets)
     Strict-Transport-Security with the operator's max-age (OWASP's 63072000 by default), with
     includeSubDomains and preload only when the operator turns them on: the panel cannot know a
@@ -261,7 +280,7 @@ def _secret_of(site):
 
 
 def _served(site, mode="public"):
-    """The site's domain rows the proxy serves: verified, valid, primary first.
+    """The site's address rows the proxy serves: verified, valid, primary first.
 
     In tunnel mode every valid domain of the site, checked or not: its DNS points at the tunnel's provider, never
     at this host, so no check could ever pass. The tunnel is the only way in (the proxy listens on the loopback
@@ -272,14 +291,19 @@ def _served(site, mode="public"):
     return [d for d in rows if (mode == "tunnel" or d.verified_at is not None) and _DOMAIN_RE.match(d.domain or "")]
 
 
+def _path(row):
+    """A served row's folder ("" for a whole domain, and for a row of a version before folders)."""
+    return getattr(row, "path", "") or ""
+
+
 def _domains(site, mode="public"):
     """The names of the site's domains the proxy serves (_served) under exposure mode `mode`."""
     return [d.domain for d in _served(site, mode)]
 
 
 def site_domains(site, mode="public"):
-    """The names render() serves for `site` once it is online under exposure mode `mode`: [] means none."""
-    return _domains(site, mode)
+    """The addresses render() serves for `site` once it is online under exposure mode `mode` (example.org/forums): [] means none."""
+    return [d.domain + _path(d) for d in _served(site, mode)]
 
 
 def _admin_line(opts):
@@ -314,7 +338,7 @@ def own_cert(domain):
     return cert_source(domain) is not None
 
 
-def _cert_groups(site):
+def _cert_groups(site, skip=()):
     """[(names, certificate file stem or None)]: one site block per certificate source.
 
     The automatic names share one block, and so do the names on the site's own certificate; a name with a
@@ -325,6 +349,8 @@ def _cert_groups(site):
     """
     groups, by_stem = [], {}
     for d in _served(site):
+        if d.domain in skip:
+            continue        # a domain with a site in a folder: its own block (_folder_block)
         src = cert_source(d)
         stem = src[0] if src else None
         if stem not in by_stem:
@@ -409,17 +435,23 @@ def _rules(site):
     return rules if not rules_problems(rules) else []
 
 
-def _rule_lines(site):
+def _in_folder(prefix, path):
+    """A site's own path (a rule's, a watched one) as the proxy sees it: under the site's folder `prefix` ("" at a root)."""
+    return prefix + path if prefix and path.startswith("/") else path
+
+
+def _rule_lines(site, prefix=""):
     lines = []
     for i, rule in enumerate(_rules(site)):
         if rule["type"] == "deny":
-            lines += ["\t@deny%d path %s" % (i, rule["path"]), "\trespond @deny%d 404" % i]
+            lines += ["\t@deny%d path %s" % (i, _in_folder(prefix, rule["path"])), "\trespond @deny%d 404" % i]
         elif rule["type"] == "redirect":
-            lines.append("\tredir %s %s %d" % (rule["from"], _quote(rule["to"]), rule["code"]))
+            lines.append("\tredir %s %s %d" % (_in_folder(prefix, rule["from"]), _quote(_in_folder(prefix, rule["to"])),
+                                                 rule["code"]))
     return lines
 
 
-def _cache_lines(site, opts):
+def _cache_lines(site, opts, prefix=""):
     if not (opts["cache_build"] and site.page_cache):
         return []
     ttl = max(10, min(int(site.page_cache_ttl or 300), 86400))
@@ -428,7 +460,7 @@ def _cache_lines(site, opts):
     # what the module stores (it reads a missing header as public), so the empty header alone is taken away, as the
     # response leaves; a site's own value, WordPress's no-cache for a signed-in visitor among them, is left as sent.
     return ["\t@pagecache {", "\t\tmethod GET HEAD", "\t\tnot header_regexp Cookie %s" % _quote(CACHE_BYPASS_COOKIES),
-            "\t\tnot path %s" % " ".join(CACHE_BYPASS_PATHS), "\t}",
+            "\t\tnot path %s" % " ".join(_in_folder(prefix, p) for p in CACHE_BYPASS_PATHS), "\t}",
             "\tcache @pagecache {", "\t\tttl %ds" % ttl, "\t}",
             "\theader {", "\t\t-Cache-Control", '\t\tmatch header Cache-Control ""', "\t}"]
 
@@ -449,32 +481,154 @@ def _snippet_lines(site):
         "\t" + ln for ln in site.raw_proxy_snippet.strip("\n").split("\n")]
 
 
-def _site_body(site, opts, mode, token, guard, block):
-    """A site block's body. With the guard on (`guard`), its lines first and the access logger named per block."""
-    body = _wg.guard_lines(site.id, block, [r["path"] for r in _rules(site) if r["type"] == "deny"],
-                           bool(site.access_log)) if guard else []
+def _deny_paths(site):
+    return [r["path"] for r in _rules(site) if r["type"] == "deny"]
+
+
+def _log_routing(site, guard, block, folder):
+    """The lines that log a request of a site in a folder block, or define its logger in a block of its own.
+
+    In a block of its own, the access logger (named while the guard is on, which routes each request itself). In a
+    folder block the loggers are the block's (_folder_loggers): with the guard on its lines name them; off, every
+    request is named to the site's access logger, or skipped when the site has none.
+    """
+    if not folder:
+        return _log_lines(site, _wg.access_name(site.id, block) if guard else None)
+    if guard:
+        return []
+    return ["\tlog_name %s" % _wg.access_name(site.id, block)] if site.access_log else ["\tlog_skip"]
+
+
+def _site_body(site, opts, mode, token, guard, block, prefix="", folder=False):
+    """A site block's body, or (`folder`) a handle's in a folder block, without its closing brace.
+
+    With the guard on (`guard`), its lines first. `prefix` is the site's folder: its rules', the guard's and the
+    page cache's paths are under it.
+    """
+    body = _wg.guard_lines(site.id, block, _deny_paths(site), bool(site.access_log), prefix=prefix,
+                           logger=not folder) if guard else []
     body += ["\tencode zstd gzip", "\trequest_body {", "\t\tmax_size %dMB" % max(1, int(site.max_body_mb or 1)), "\t}"]
-    body += (_header_lines(site, opts, mode) + _rule_lines(site) + _cache_lines(site, opts)
-             + _log_lines(site, _wg.access_name(site.id, block) if guard else None) + _snippet_lines(site))
+    body += (_header_lines(site, opts, mode) + _rule_lines(site, prefix) + _cache_lines(site, opts, prefix)
+             + _log_routing(site, guard, block, folder) + _snippet_lines(site))
     return body + ["\treverse_proxy 127.0.0.1:%d {" % int(site.port),
                    "\t\theader_up %s %s" % (GATE_HEADER, _quote(token)),
                    "\t\ttransport http {", "\t\t\tdial_timeout 5s", "\t\t\tresponse_header_timeout 120s", "\t\t}",
-                   "\t}", "}", ""]
+                   "\t}"]
 
 
-def _site_lines(site, opts, proxy, mode, secret_of):
-    names = _domains(site, mode)
+def _token_of(site, secret_of):
+    """The site's proxy token in clear when the site can be served (a port and a token of its shape), else ""."""
     token = secret_of(site) or ""
-    if not (names and site.port and _TOKEN_RE.match(token)):
+    return token if site.port and _TOKEN_RE.match(token) else ""
+
+
+def _site_lines(site, opts, proxy, mode, token, blocks, skip=()):
+    """The blocks of `site`'s whole domains (`skip`: the domains with a site in a folder, written by _folder_block)."""
+    names = [n for n in _domains(site, mode) if n not in skip]
+    if not names:
         return []
     guard = _wg.enabled(proxy)
     if mode == "tunnel":        # the tunnel's provider holds the certificate: one plain-HTTP block for every name
         return (["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join("http://%s" % n for n in names)]
-                + _site_body(site, opts, mode, token, guard, 0))
+                + _site_body(site, opts, mode, token, guard, _next_block(blocks, site)) + ["}", ""])
     lines = []
-    for block, (group, stem) in enumerate(_cert_groups(site)):
+    for group, stem in _cert_groups(site, skip):
         lines += (["# site %s (%s)" % (site.id, site.name), "%s {" % ", ".join(group)] + _tls_lines(stem, opts, proxy)
-                  + _site_body(site, opts, mode, token, guard, block))
+                  + _site_body(site, opts, mode, token, guard, _next_block(blocks, site)) + ["}", ""])
+    return lines
+
+
+def _next_block(blocks, site):
+    """The next number of `site`'s blocks (its loggers' names are numbered per block, so each is its own)."""
+    n = blocks.get(site.id, 0)
+    blocks[site.id] = n + 1
+    return n
+
+
+def _folder_entries(served, domain):
+    """[(row, site, token)] of `domain`: the folders longest first, then the root. `served` holds every served row."""
+    rows = [e for e in served if e[0].domain == domain]
+    return sorted(rows, key=lambda e: (not _path(e[0]), -len(_path(e[0])), _path(e[0])))
+
+
+def _folder_loggers(entries, guard, numbers):
+    """The loggers of a folder block's sites, defined on the block (a `log` is a site-block option)."""
+    lines = []
+    for row, site, _token in entries:
+        n = numbers[row.id]
+        if guard:
+            lines += _wg.security_log("lgsmsec%d_%d" % (site.id, n))
+        if site.access_log:
+            lines += _log_lines(site, _wg.access_name(site.id, n))
+    return lines
+
+
+def _indented(lines):
+    return ["\t" + ln if ln else ln for ln in lines]
+
+
+def _bare_folder_lines(site, folder):
+    """The folder asked for without its slash (/forums): a 308 to /forums/, query kept, before the site sees it.
+
+    The site's own server would answer it with a redirect built from its inside address (Apache's DirectorySlash
+    named http://<domain>:8080/forums/). The Location is a path, so the browser keeps the scheme and the host it
+    asked; 308 keeps the method and body. A banned visitor's 403 still comes first (`order error first`).
+    """
+    bare = "@lgsmbare%d" % site.id
+    return ["\t\t%s path %s" % (bare, folder), "\t\tredir %s %s/{?query} 308" % (bare, folder)]
+
+
+def _folder_handles(entries, opts, mode, guard, numbers):
+    lines = []
+    for row, site, token in entries:
+        body = _indented(_site_body(site, opts, mode, token, guard, numbers[row.id], prefix=_path(row), folder=True))
+        if _path(row):
+            matcher = "@lgsmfolder%d" % site.id
+            lines += ["\t# site %s (%s) in %s" % (site.id, site.name, _path(row)),
+                      "\t%s path %s %s/*" % (matcher, _path(row), _path(row)), "\thandle %s {" % matcher]
+            lines += _bare_folder_lines(site, _path(row)) + body + ["\t}"]
+        else:
+            lines += ["\t# site %s (%s)" % (site.id, site.name), "\thandle {"] + body + ["\t}"]
+    if all(_path(row) for row, _s, _t in entries):
+        quiet = ["\t\tlog_skip"] if guard or any(s.access_log for _r, s, _t in entries) else []
+        lines += ["\t# no website at the root of this domain", "\thandle {"] + quiet + ["\t\trespond 404", "\t}"]
+    return lines
+
+
+def _folder_block(domain, entries, opts, proxy, mode, blocks):
+    """The block of a domain that has a site in a folder: a handle per site, the longest folder first (SITES IN FOLDERS)."""
+    guard = _wg.enabled(proxy)
+    numbers = {row.id: _next_block(blocks, site) for row, site, _t in entries}
+    if mode == "tunnel":
+        head = ["# domain %s (websites in folders)" % domain, "http://%s {" % domain]
+    else:
+        root = next((row for row, _s, _t in entries if not _path(row)), None)
+        src = cert_source(root if root is not None else min((r for r, _s, _t in entries), key=lambda r: r.id or 0))
+        head = (["# domain %s (websites in folders)" % domain, "%s {" % domain]
+                + _tls_lines(src[0] if src else None, opts, proxy))
+    return head + _folder_loggers(entries, guard, numbers) + _folder_handles(entries, opts, mode, guard, numbers) + ["}", ""]
+
+
+def _live(sites, secret_of):
+    """[(site, its token in clear)] of the enabled sites that can be served, by id."""
+    out = []
+    for site in sorted(sites, key=lambda s: s.id or 0):
+        token = _token_of(site, secret_of) if site.enabled else ""
+        if token:
+            out.append((site, token))
+    return out
+
+
+def _site_blocks(sites, opts, proxy, mode, secret_of):
+    """Every site block: each site's whole domains, then each domain with a site in a folder (one block per domain)."""
+    live = _live(sites, secret_of)
+    served = [(d, s, t) for s, t in live for d in _served(s, mode)]
+    shared = sorted({d.domain for d, _s, _t in served if _path(d)})
+    lines, blocks = [], {}
+    for site, token in live:
+        lines += _site_lines(site, opts, proxy, mode, token, blocks, set(shared))
+    for domain in shared:
+        lines += _folder_block(domain, _folder_entries(served, domain), opts, proxy, mode, blocks)
     return lines
 
 
@@ -491,9 +645,7 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     trusted = {"restricted": trusted_list(proxy), "tunnel": ["127.0.0.1/32", "::1/128"]}.get(mode, [])
     lines = ["# Written by linuxgsm-panel from its database: the panel rewrites this file; edits are lost.", ""]
     lines += _global(mode, opts, proxy, trusted)
-    for site in sorted(sites, key=lambda s: s.id or 0):
-        if site.enabled:
-            lines += _site_lines(site, opts, proxy, mode, secret_of)
+    lines += _site_blocks(sites, opts, proxy, mode, secret_of)
     quiet = ["\tlog_skip"] if _wg.enabled(proxy) else []      # the guard's loggers never see a catch-all's request
     if mode != "tunnel":
         # A request over HTTPS whose Host is none of the names above (a served certificate's name, any Host):
@@ -503,8 +655,8 @@ def render(sites, proxy=None, opts=None, secret_of=None):
     return "\n".join(lines)
 
 
-_SITE_MARK_RE = re.compile(r"# site ([0-9]+) \(")
-_CACHE_TTL_RE = re.compile(r"\t\tttl ([0-9]+)s\Z")
+_SITE_MARK_RE = re.compile(r"\s*# site ([0-9]+) \(")
+_CACHE_TTL_RE = re.compile(r"\s*ttl ([0-9]+)s\Z")
 
 
 def cached_sites(text):
@@ -518,7 +670,7 @@ def cached_sites(text):
         m = _SITE_MARK_RE.match(line)
         if m:
             site, in_cache = int(m.group(1)), False
-        elif line == "\tcache @pagecache {":
+        elif line.strip() == "cache @pagecache {":
             in_cache = True
         elif in_cache and site is not None:
             t = _CACHE_TTL_RE.match(line)
@@ -529,5 +681,5 @@ def cached_sites(text):
 
 
 def served_domains(sites):
-    """Every domain render() serves for `sites`, sorted (what the certificate probe asks about)."""
-    return sorted(d for s in sites if s.enabled for d in _domains(s))
+    """Every domain render() serves for `sites`, sorted, each once (what the certificate probe asks about)."""
+    return sorted({d for s in sites if s.enabled for d in _domains(s)})

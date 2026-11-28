@@ -22,7 +22,8 @@ from panel.core.http import _json_body
 from panel.db.models import GameServer, db
 from panel.security.auth import (VIEW_CONSOLE, _perm_for_action, get_game, get_user_servers, has_permission,
                                  log_action, server_access_required)
-from panel.services import game_updates as _gu, game_updates_run as _gur, updates as U, updates_auto as UA
+from panel.services import (game_updates as _gu, game_updates_run as _gur, update_versions as _uv, updates as U,
+                            updates_auto as UA)
 
 S_DENIED = "You can't change that."
 S_NO_UPDATE = "This server has no game update to install."
@@ -121,18 +122,19 @@ def game_row(gs, got, cfg):
     """The row of server `gs`, whose last check found a newer build (`got`: game_updates.seen)."""
     from panel.routes.updates import _row
     auto = U.game_auto_on(gs, cfg)
-    old, new = got.get("local") or "?", got.get("remote") or "?"
-    what = [U.tr("{old} to {new} (branch {branch}).", old=old, new=new, branch=got["branch"]) if got.get("branch")
-            else U.tr("{old} to {new}.", old=old, new=new)]
-    what.append(U.tr("LinuxGSM's check, {at} (the host's clock).", at=_checked_at(gs, got.get("at") or 0)))
+    said_builds = _uv.game_versions(gs.game_type, got, _gu.family(gs.game_type) == "steam")
+    what = said_builds["notes"] + [U.tr("LinuxGSM's check, {at} (the host's clock).",
+                                        at=_checked_at(gs, got.get("at") or 0))]
     notes = ([{"title": "SteamDB", "url": "https://steamdb.info/app/%s/history" % got["appid"]}]
              if got.get("appid") else [])
     said, link = when(gs, auto, cfg)
     post = url_for("api_updates_game", server_id=gs.id)
     title, body = confirm(gs)
     return _row("game", "game:%d" % gs.id, gs.name, host=gs.remote.display_name if gs.remote else "", what=what,
-                notes=notes, cost=cost(gs), auto=auto, auto_editable=True, when=said, when_link=link,
-                auto_why=U.tr(_gu.default_auto(gs.game_type)[1]), backup=str(gs.id) in cfg["backup"],
+                title=U.tr(_uv.S_TITLE_GAME, game=_uv.game_name(gs.game_type, gs.game_display)),
+                versions=said_builds["versions"], notes=notes, cost=cost(gs), auto=auto, auto_editable=True,
+                when=said, when_link=link, backup=str(gs.id) in cfg["backup"],
+                auto_why=_uv.auto_reason(gs.game_type, got, _gu.default_auto(gs.game_type)[1]),
                 action={"post": post, "body": {"when": "now"}, "confirm": body, "confirm_title": title},
                 later={"post": post, "queued": bool(gs.update_pending)},
                 backup_post=url_for("api_updates_game_backup", server_id=gs.id),

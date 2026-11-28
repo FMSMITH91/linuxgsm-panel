@@ -33,7 +33,7 @@
   <div class="card-header"><i class="bi bi-database"></i> Databases</div>
   <div class="card-body">
     {% if manage and servers %}
-    <details id="dbm-add" class="mb-2">
+    <details id="dbm-add" class="mb-2" open data-fold="dbm-add">
       <summary class="small">Add a database</summary>
       <form class="d-flex flex-wrap gap-2 mt-2" data-action="dbmAdd" data-args='["@event"]' data-on="submit">
         <label for="dbm-add-server" class="visually-hidden">Game server</label>
@@ -174,5 +174,6 @@
 {% endif %}
 {% endblock %}
 {% block scripts %}
-{% if manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/databases_manager.js') }}"></script>{% endif %}
+{% if manage %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/secret_field.js') }}"></script>
+<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/databases_manager.js') }}"></script>{% endif %}
 {% endblock %}

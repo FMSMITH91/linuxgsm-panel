@@ -1,11 +1,12 @@
 // One website's page (templates/website.html and its _website_*.html panels). Reads
 // GET /api/websites/<id> (one probe, cached briefly by the server):
 //   {success, site: {id, name, kind, state, state_reason, enabled, open_url, image: {name, version,
-//      update_available}, app_version, php_version, runtime_version, last_backup, usage: {mem_mb, disk_mb,
+//      update_available}, software, app_version, php_version, runtime_version, last_backup, usage: {mem_mb, disk_mb,
 //      cpu_pct}, limits: {mem_mb, cpu_milli, pids, disk_mb, max_body_mb, backup_keep}, access_log,
 //      full_egress, customer_note}, install: {state, steps, error, site_url, admin_url},
-//    logs: [last lines when failed], domains: [{id, domain, is_primary, dns_state, cert_state,
-//      cert_not_after, cert_error}], dns: {a: [..], aaaa: [..]}, databases: [{id, name, user}], ...}
+//    logs: [last lines when failed], domains: [{id, domain, path, address, shared_note, is_primary, dns_state,
+//      cert_state, cert_not_after, cert_error}], folder_domains: [..], dns: {a: [..], aaaa: [..]},
+//    databases: [{id, name, user}], ...}
 // The PHP, Performance, Rules and App panels (website_tuning.js) and Files (website_files.js) are fed
 // from here through WS.onSite. Actions POST to /websites/<id>/<verb>; the page decides nothing the
 // server does not check again (websites_access.site_for on every route).
@@ -142,9 +143,10 @@
   function renderOverview(s) {
     setText('ws-ov-kind', WS.kindLabel(s.kind));
     var img = s.image || {}, u = s.usage || {}, why = u.unread || {};
-    setText('ws-ov-image', img.name ? [img.name, img.version].filter(Boolean).join(' ') : unread(why.image));
-    var ver = s.app_version || s.php_version || s.runtime_version;
-    setText('ws-ov-version', ver);
+    // What runs, in a person's words (the server's software line); the image it runs from only as the tooltip.
+    setText('ws-ov-software', s.software);
+    var sw = WS.el('ws-ov-software');
+    if (sw) sw.title = img.name ? [img.name, img.version].filter(Boolean).join(' ') : '';
     setText('ws-ov-backup', backupText(s.last_backup));
     renderUpdate(img);
     renderUsage(u, s.limits || {}, why);
@@ -218,10 +220,12 @@
   function domainRow(dm) {
     var li = WS.node('li', 'ws-row');
     var top = WS.node('div', 'd-flex flex-wrap gap-2 align-items-baseline');
-    top.appendChild(WS.raw('strong', 'text-break', dm.domain));
+    top.appendChild(WS.raw('strong', 'text-break', dm.address || dm.domain));
     if (dm.is_primary) top.appendChild(WS.node('span', 'ws-chip', WS.T('Primary')));
     li.appendChild(top);
     li.appendChild(domainInfo(dm));
+    // A site in a folder shares its domain's origin with the other sites on it (services/website_folders).
+    if (dm.shared_note) li.appendChild(WS.raw('div', 'small text-warning text-break', dm.shared_note));
     domainNotes(li, dm);
     if (WS.can.manage) li.appendChild(domainButtons(dm));
     return li;
@@ -285,6 +289,7 @@
     var doms = d.domains || [];
     if (!doms.length) list.appendChild(WS.node('li', 'small text-secondary', WS.T('No domain yet. A site is reached by its domain once one points here.')));
     doms.forEach(function (dm) { list.appendChild(domainRow(dm)); });
+    renderFolderForm(d.folder_domains || []);
     renderSiteCert(d.site_cert);
     renderRecords(doms, d.dns || {}, d.tunnel);
   }
@@ -313,8 +318,11 @@
     var body = WS.clear(WS.el('wd-records'));
     if (tunnel) { WS.show('wd-dns', false); return; }
     var want = doms.filter(function (x) { return SERVED.indexOf(x.dns_state) < 0; });
-    var rows = [];
+    var rows = [], seen = {};
+    // A folder's record is its domain's: each domain once.
     want.forEach(function (x) {
+      if (seen[x.domain]) return;
+      seen[x.domain] = true;
       (dns.a || []).forEach(function (ip) { rows.push(['A', x.domain, ip]); });
       (dns.aaaa || []).forEach(function (ip) { rows.push(['AAAA', x.domain, ip]); });
     });
@@ -327,6 +335,36 @@
       body.appendChild(tr);
     });
   }
+  // The folder form: the domains the viewer's sites hold on this host, or greyed with the reason when there are none
+  // (never hidden: it is an action the page offers).
+  function renderFolderForm(doms) {
+    var sel = WS.el('wd-folder-domain');
+    if (!sel) return;
+    var keep = sel.value;
+    WS.clear(sel);
+    doms.forEach(function (name) {
+      var o = document.createElement('option');
+      o.value = String(name);
+      o.textContent = String(name);
+      sel.appendChild(o);
+    });
+    if (keep && doms.indexOf(keep) >= 0) sel.value = keep;
+    var none = !doms.length;
+    ['wd-folder-domain', 'wd-folder-path', 'wd-folder-add'].forEach(function (id) { var e = WS.el(id); if (e) e.disabled = none; });
+    WS.show('wd-folder-none', none);
+  }
+  window.wsFolderAdd = function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    var inp = WS.el('wd-folder-path'), sel = WS.el('wd-folder-domain');
+    WS.say('wd-msg', WS.T('Adding…'));
+    WS.post(WS.R.act(ID, 'domains/add'), {domain: sel.value, folder: inp.value.trim()}).then(function (d) {
+      if (WS.done(d, 'wd-msg')) {
+        inp.value = '';
+        if (d.moved_note) WS.say('wd-msg', d.moved_note, 'err');
+        WS.reload();
+      }
+    });
+  };
   window.wsDomainAdd = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     var inp = WS.el('wd-domain');
@@ -402,7 +440,7 @@
       li.appendChild(WS.raw('span', 'fw-semibold text-break', db.name));
       var acts = WS.node('span', 'd-flex flex-wrap gap-2');
       acts.appendChild(WS.button(WS.T('Show connection settings'), 'key', 'wsDbReveal', [Number(db.id)]));
-      acts.appendChild(WS.button(WS.T('Reset password'), 'arrow-repeat', 'wsDbReset', [Number(db.id)], 'btn-outline-warning'));
+      acts.appendChild(WS.button(WS.T('Reset password'), 'arrow-repeat', 'wsDbReset', [Number(db.id), String(db.app_settings || '')], 'btn-outline-warning'));
       if (WS.can.admin) acts.appendChild(WS.button(WS.T('Delete'), 'trash', 'wsDbDelete', [Number(db.id), String(db.name)], 'btn-outline-danger'));
       li.appendChild(acts);
       li.appendChild(WS.node('div', 'w-100 small font-monospace ws-db-conn', ''));
@@ -429,16 +467,34 @@
       WS.post('/api/remote/' + Number(hostId) + '/databases/setup', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
     });
   };
-  // A new password for the database's own user (the app's settings must then be given it).
-  window.wsDbReset = function (dbId) {
+  // A new password for the database's own user. `app` (the server's words): what happens to the site's app, which
+  // gets the new password in the same step; "" for a database no app is known to use, whose code must then be given
+  // it, shown masked under the row.
+  window.wsDbReset = function (dbId, app) {
     window.confirmDialog({title: WS.T('Reset this database password?'), icon: 'key', confirmClass: 'btn-warning',
-      confirmLabel: WS.T('Reset password'), bodyText: WS.T('The site stops reaching the database until its settings have the new password.'),
+      confirmLabel: WS.T('Reset password'),
+      bodyText: app || WS.T('The site stops reaching the database until its settings have the new password.'),
       onConfirm: function () {
         WS.stepUp(function () {
-          WS.post('/websites/' + ID + '/databases/' + Number(dbId) + '/reset-password', {}).then(function (d) { WS.done(d, 'wdb-msg'); });
+          WS.post('/websites/' + ID + '/databases/' + Number(dbId) + '/reset-password', {}).then(function (d) {
+            if (WS.done(d, 'wdb-msg') && d.password) showConn(dbId, [['New password', null]], String(d.password));
+          });
         });
       }});
   };
+  // The connection settings under a database's row: `rows` as [label, value]; the password (`secret`) masked until
+  // Show is pressed, with Copy (secret_field.js), never in the page's text before.
+  function showConn(dbId, rows, secret) {
+    var box = WS.el('wdb-conn-' + Number(dbId));
+    if (!box) return;
+    WS.clear(box);
+    rows.forEach(function (kv) {
+      var line = WS.node('div', 'd-flex flex-wrap gap-1 align-items-center');
+      line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
+      line.appendChild(kv[1] === null ? window.secretField({value: secret}) : WS.raw('span', 'user-select-all', String(kv[1])));
+      box.appendChild(line);
+    });
+  }
   // Administrators only, with the database's name typed.
   window.wsDbDelete = function (dbId, name) {
     window.confirmDialog({title: WS.T('Delete this database?'), icon: 'trash', confirmClass: 'btn-danger', confirmLabel: WS.T('Delete'),
@@ -454,15 +510,10 @@
   window.wsDbReveal = function (dbId) {
     WS.stepUp(function () {
       WS.post('/websites/' + ID + '/databases/credentials', {id: dbId}).then(function (d) {
-        var box = WS.el('wdb-conn-' + dbId);
-        if (!box || !d || !d.success) { WS.done(d, 'wdb-msg'); return; }
-        WS.clear(box);
-        [['Host', d.host], ['Port', d.port], ['Database', d.name], ['User', d.user], ['Password', d.password]].forEach(function (kv) {
-          var line = WS.node('div');
-          line.appendChild(WS.node('span', 'text-secondary', WS.T(kv[0]) + ': '));
-          line.appendChild(WS.raw('span', 'user-select-all', kv[1] == null ? '' : String(kv[1])));
-          box.appendChild(line);
-        });
+        if (!WS.el('wdb-conn-' + dbId) || !d || !d.success) { WS.done(d, 'wdb-msg'); return; }
+        var val = function (v) { return v == null ? '' : v; };
+        showConn(dbId, [['Host', val(d.host)], ['Port', val(d.port)], ['Database', val(d.name)], ['User', val(d.user)],
+                        ['Password', null]], String(val(d.password)));
       });
     });
   };

@@ -36,6 +36,7 @@
 {% endblock %}
 {% block scripts %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites_common.js') }}"></script>
+{% if can_add|default(false) %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/secret_field.js') }}"></script>{% endif %}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites.js') }}"></script>
 {% if current_user.is_superadmin %}<script nonce="{{ csp_nonce }}" src="{{ asset_url('js/websites_proxy.js') }}"></script>{% endif %}
 {% endblock %}

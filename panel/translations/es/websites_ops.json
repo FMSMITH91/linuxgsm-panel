@@ -1,6 +1,5 @@
 {
   "A newer signed image is available. Update installs the website again from it and restarts it: a few seconds offline (building a PHP image can take a few minutes first). Its files, databases and settings stay.": "Hay una imagen firmada más reciente. Actualizar vuelve a instalar el sitio web desde ella y lo reinicia: unos segundos sin servicio (construir una imagen PHP puede tardar antes unos minutos). Sus archivos, bases de datos y ajustes se conservan.",
-  "A plain site has no PHP, Database or App tab: it serves its files as they are.": "Un sitio sencillo no tiene pestañas PHP, Base de datos ni App: sirve sus archivos tal cual.",
   "Account page": "página de cuenta",
   "Advanced php.ini: {n} settings": "php.ini avanzado: {n} ajustes",
   "Already there: {names}.": "Ya existen: {names}.",
@@ -21,8 +20,6 @@
   "How visitors reach the sites is a superadmin's setting.": "Cómo llegan los visitantes a los sitios lo decide un superadministrador.",
   "In Cloudflare's dashboard, give each domain above a Public Hostname on this host's tunnel, with this service:": "En el panel de Cloudflare, da a cada dominio de arriba un Public Hostname en el túnel de este host, con este servicio:",
   "Largest file sent here:": "Archivo más grande que se puede enviar aquí:",
-  "No App tab: that one is for Node.js apps.": "Sin pestaña App: esa es para apps de Node.js.",
-  "No PHP tab: this app runs on Node.js.": "Sin pestaña PHP: esta app funciona con Node.js.",
   "Not saved: the web proxy refused the new settings, so it kept the running ones. {why}": "No se ha guardado: el proxy web rechazó los nuevos ajustes y mantuvo los que usaba. {why}",
   "Only a superadmin can change this.": "Solo un superadministrador puede cambiar esto.",
   "Only an administrator of this website can change the PHP version.": "Solo un administrador de este sitio web puede cambiar la versión de PHP.",

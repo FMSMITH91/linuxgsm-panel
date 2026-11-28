@@ -210,6 +210,7 @@
   "Take offline": "Mettre hors ligne",
   "That did not work. Nothing was changed.": "Cela n'a pas fonctionné. Rien n'a été modifié.",
   "The app admin password, shown only this once:": "Le mot de passe de l'administrateur de l'application, affiché cette seule fois :",
+  "The password you typed is kept. Type another to change it.": "Le mot de passe saisi est gardé. Saisissez-en un autre pour le changer.",
   "The app runs in its own container from an official Node.js image, not on the host's Node.js: that copy is shared with the panel, and the container keeps this site's limits and network rules. The build may reach the npm registry; the running app has no internet access unless an administrator allows it.": "L'application tourne dans son propre conteneur à partir d'une image officielle de Node.js, pas avec le Node.js de l'hôte : cette copie est partagée avec le panneau, et le conteneur garde les limites et les règles réseau de ce site. La compilation peut joindre le registre npm ; l'application en marche n'a pas accès à Internet sauf si un administrateur l'autorise.",
   "The app's port": "Port de l'application",
   "The box holds at most 8192 characters.": "Le champ contient au plus 8192 caractères.",

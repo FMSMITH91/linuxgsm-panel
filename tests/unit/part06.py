@@ -6022,8 +6022,10 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # everything safe now (step-up).
 # 392, was 389: panel/routes/updates_game.py's game rows: Update now / when empty and Back up first (UPDATE_SERVER on a
 # server the viewer can reach), and Check games now (VIEW_CONSOLE, the viewer's own servers).
-check("register_routes: every one of the 392 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 392,
+# 394, was 392: panel/routes/websites_app_admin.py's WordPress administrators and their password reset (through
+# site_for with the site's manage permission, step-up).
+check("register_routes: every one of the 394 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 394,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -7524,7 +7526,8 @@ check("workflows: every tool pin file is a pip-compile lockfile beside its .in, 
 # query types are written for 5). Dependency Review must see the change, or a bump that adds a
 # vulnerable package slides past it: it is path-filtered.
 _ci_dep_blocks = re.split(r"\n(?=  - package-ecosystem: )", _ci_dep)
-_ci_npm = [_b for _b in _ci_dep_blocks if '- package-ecosystem: "npm"' in _b]
+# gamedig's entry alone: .github/lhci (the Lighthouse job's tree) has an npm entry of its own (part327).
+_ci_npm = [_b for _b in _ci_dep_blocks if _b.lstrip().startswith('- package-ecosystem: "npm"\n    directory: "/tools/gamedig"\n')]
 
 
 def _ci_on_block(w):

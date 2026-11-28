@@ -56,7 +56,8 @@ it is also where you manage them: **Add a database** (choose the game server, gi
 **Manage** button per database that opens it:
 
 - **Connection**: host, port, database, user and password, each with a copy button (revealing or copying
-  the password is audited).
+  the password is audited). The password shows as dots until **Show the password** is pressed, and goes back to
+  dots by itself after 30 seconds or when you leave the tab.
 - **Tables**: each table's approximate row count, size and columns, and its rows 50 at a time. Long values
   are cut (**Show all** reads the whole one), binary values show their length, and a NUL character inside
   text shows as ␀ (such a value is changed through the SQL box, not the row editor). With `edit_database_data`,

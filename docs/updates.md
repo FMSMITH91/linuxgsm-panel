@@ -11,8 +11,13 @@
 | Add-ons | An add-on whose image differs from the signed catalog's | The add-on restarts (about a minute); players stay on | The nightly window |
 | Websites | A site with a newer image or new server settings from the panel (the row says what they change) | A few seconds offline; a few minutes first when its new image is built on the host | The nightly window |
 
-Each row says what the update changes, what it costs, whether it is a **security update**, and when it installs by
-itself. **Update now** runs the item's own update (the same as its own page's button, with the same password
+Each row opens with what kind of update it is and what it updates, in bold ("Game update: PaperMC", "LinuxGSM
+update: the scripts that run the server", "Add-on update: B3", "Website update: WordPress", "Panel update", "Host
+system update: packages"), then the server, site or host it is on. Then two lines: **Installed:** the version it runs
+and **Available:** the one it moves to. A version the panel does not know is said in words (for example "not known
+(LinuxGSM could not read the installed build)"), never as a question mark. A host's packages list each package with
+its old and new version, as apt gives them. Then the row says what the update changes, what it costs, whether it is
+a **security update**, and when it installs by itself. **Update now** runs the item's own update (the same as its own page's button, with the same password
 confirmation where that asks for one); for the panel and a host's packages it opens that card, which asks you to
 confirm. The pages that had their own Update buttons keep them, with a link here.
 
@@ -33,6 +38,18 @@ game server's game and its LinuxGSM whoever may update it; its add-ons whoever h
 see it. A customer sees only their own sites, and when each updates by itself.
 
 ## Game updates
+
+**What the row says.** The game's name is LinuxGSM's own (its game list's name for the server's game). The two
+versions are LinuxGSM's own "Local build" and "Remote build", labelled by game:
+
+| Game | Installed / Available say | And below them |
+|---|---|---|
+| Paper (LinuxGSM `pmc`) | "Minecraft 26.3, Paper build 257" / "Minecraft 26.3, Paper build 263" | Same Minecraft version: "a new Paper build (fixes). Players are not locked out." A new Minecraft version: players whose game is older cannot join until they update it, and plugins may need updating. |
+| Velocity, Waterfall (`vpmc`, `wmc`) | "Velocity 3.4.0-SNAPSHOT, build 500" | The same, for the proxy's own version. |
+| Minecraft Java (`mc`) | "Minecraft 1.21.5"; a snapshot, pre-release or release candidate says so ("a test version"), read from the version itself (a release on the snapshot branch is a release) | A new version: players whose game is older cannot join until they update it. |
+| Minecraft Bedrock (`mcb`) | "Minecraft Bedrock 1.21.70.03" | The same. |
+| Steam games | "build 25375524" / "build 25375525 (branch public)" | The game's SteamDB history link. |
+| Other games | LinuxGSM's own strings for the two builds | |
 
 **Where the row comes from.** Once a day per game server, staggered (one server every few minutes, the one checked
 longest ago first), the panel runs LinuxGSM's `check-update`, which only reads the installed and the available build
@@ -67,7 +84,7 @@ yet. The default, with its reason shown beside the switch:
 | Game | Default | Why |
 |---|---|---|
 | Steam games (Garry's Mod, Counter-Strike, Rust, ...) | On | Players' Steam clients update themselves, and a server behind them refuses them. |
-| Minecraft Java and Bedrock, and LinuxGSM's Paper, Velocity and Waterfall | Off | A new release can lock out players whose game is older, and break plugins and mods. The row shows the new version with a one-click update. |
+| Minecraft Java and Bedrock, and LinuxGSM's Paper, Velocity and Waterfall | Off | A new release can lock out players whose game is older, and break plugins and mods. The row shows the new version with a one-click update. A new Paper, Velocity or Waterfall build of the SAME version says that instead: every player can still join, but a new build can change how plugins behave. |
 | OpenRA, Vintage Story | Off | Players need the same release as the server, and a new one can break mods. |
 | The other games LinuxGSM updates from their own releases (TeamSpeak 3, Factorio, FiveM, MTA, ...) | On | As OWASP recommends; switch it off if a release breaks your mods. |
 
@@ -99,7 +116,8 @@ the weakness, and asks for a patch management process and staged rollouts instea
 
 ## History
 
-The **History** fold lists the last 40 updates you may see: what, when, who started it (or *automatic*), and how it
+The **Nightly window** section is drawn open (close it and it stays closed for you, in this browser). The **History**
+fold lists the last 40 updates you may see: what, when, who started it (or *automatic*), and how it
 ended (done, failed, waited for the next window, queued for when players leave). Each time is on the clock of the
 host the update ran on, as the window's times are. A game update's end reads as one line (the build it installed,
 when LinuxGSM printed it); its full output stays in the audit log. It is read from the audit log, so it shows the same

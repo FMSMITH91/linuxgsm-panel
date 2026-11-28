@@ -8,6 +8,8 @@
     {% if can_manage|default(false) %}
     <button type="button" class="btn btn-sm btn-outline-secondary" data-action="wsCertOpen"><i class="bi bi-shield-lock"></i> Certificate</button>
     {% endif %}
+    {# Where the host-wide certificate settings live (the Let's Encrypt email, its test service, local certificates). #}
+    {% if current_user.is_superadmin %}<a id="wd-proxy-certs" class="small" href="{{ url_for('websites_page') }}#wp-opts-box">Certificate settings for every site</a>{% endif %}
   </div>
   <ul id="wd-list" class="list-unstyled mb-2"></ul>
   {% if can_manage|default(false) %}
@@ -16,6 +18,23 @@
     <input type="text" id="wd-domain" class="form-control form-control-sm fx-14" maxlength="253" inputmode="url" required
            autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="www.example.org" data-no-i18n>
     <button type="submit" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg"></i> Add domain</button>
+  </form>
+  {# A folder of a domain one of the viewer's sites already has (services/website_folders): the domains come from
+     the site's answer (folder_domains). Always shown; with no such domain its controls are greyed with the reason. #}
+  <form id="wd-folder" class="mt-2" data-action="wsFolderAdd" data-args='["@event"]' data-on="submit">
+    <div class="small fw-semibold mb-1">Add a folder on a domain you already have</div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <label for="wd-folder-domain" class="visually-hidden">Domain</label>
+      <select id="wd-folder-domain" class="form-select form-select-sm w-auto mw-100" data-no-i18n></select>
+      <span aria-hidden="true">/</span>
+      <label for="wd-folder-path" class="visually-hidden">Folder</label>
+      <input type="text" id="wd-folder-path" class="form-control form-control-sm fx-14" maxlength="64" required
+             autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="forums" data-no-i18n
+             aria-describedby="wd-folder-help wd-folder-none">
+      <button type="submit" id="wd-folder-add" class="btn btn-sm btn-outline-primary"><i class="bi bi-folder-plus"></i> Add folder</button>
+    </div>
+    <div id="wd-folder-help" class="form-text">OWASP recommends a separate subdomain for each app (forums.example.org), so browsers keep each app's sign-ins and data apart. A folder shares its domain with the other apps on it.</div>
+    <div id="wd-folder-none" class="form-text" hidden>Add a domain to one of your websites on this host first.</div>
   </form>
   {% endif %}
   <div id="wd-msg" class="small mt-1" role="status"></div>
