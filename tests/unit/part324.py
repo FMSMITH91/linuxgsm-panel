@@ -360,6 +360,7 @@ def _s5_left_stopped(host, su):
     _p9_patch(_ua324, "_pending_addons", lambda g, cfg: [])
     _p9_patch(_gu324, "check_pass", lambda now=None: None)
     _p9_patch(_sh324, "game_account_write_refusal", lambda *a, **k: None)
+    _p9_patch_sm("list_cron_jobs", lambda remote, user, selfname=None: [])    # the window's crontab read: no task
     _p9_patch(_mon324, "_cached_player_count", lambda sid: 0)
     _p9_patch(_sh324, "get_server_status", lambda remote, g, distinguish_unresponsive=False: "online")
     refused = "That server is already running. Use 'restart' if you want it bounced."

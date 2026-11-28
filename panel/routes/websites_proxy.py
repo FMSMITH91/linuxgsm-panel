@@ -320,11 +320,13 @@ def _restore_options(before):
 def _apply_options(changed):
     """Apply changed proxy options to every host with an online site: (ok, sentence, [hosts applied]).
 
-    Only the options the proxy's configuration reads (websites_view.PROXY_OPTION_NAMES) are applied; the page
-    cache's own switch is applied by its build (cache_build_start). Stops at the first host that refuses.
+    Only the options the proxy's configuration reads (websites_view.PROXY_OPTION_NAMES) are applied. The page
+    cache's switch turned on is applied by its build (cache_build_start, minutes); turned off, it is applied here
+    at once like any other option: the configuration without the cache (and its admin socket) is loaded now.
+    Stops at the first host that refuses.
     """
     from panel.routes.websites_view import PROXY_OPTION_NAMES
-    if not {k for k in changed if k != "cache_build"} & set(PROXY_OPTION_NAMES):
+    if not {k for k in changed if k != "cache_build" or not changed[k]} & set(PROXY_OPTION_NAMES):
         return True, "", []
     hosts = sorted({s.remote_id for s in Website.query.filter_by(enabled=True)})
     done = []

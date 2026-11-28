@@ -58,7 +58,11 @@ server by itself, and an update straight after would stop it while it is still s
 server again, is in the history, and sends the **Automatic update failed** alert. A server the window stopped and
 could not start again has a history row saying it was left stopped, and why, and the alert says so too. Each start is
 the dashboard's Start (its checks and history rows). A server whose own scheduled task
-runs `update` is left to that task. The default, with its reason shown beside the switch:
+runs `update` is left to that task: the window reads the server's crontab itself, as the game account, before it
+updates it. When that read fails (the host does not answer, or the account is not confirmed a plain game account),
+the window leaves the server alone that night and the history says why; the row says so too. Until the crontab is
+read (after a panel restart, before the window or the Scheduled tasks card reads it), the row says it is not read
+yet. The default, with its reason shown beside the switch:
 
 | Game | Default | Why |
 |---|---|---|

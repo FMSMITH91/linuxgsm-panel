@@ -7,12 +7,16 @@ that is not running) first looks:
 
 1. another server on the same host, set to the same game or query port, that reads online: the
    start is refused naming it. Two servers may be configured on one port; only one may run.
-2. a listener on the server's game port on the host (TCP or UDP), from one unprivileged
-   `ss -H -lntu` (ssh_manager._remote_listening_ports, which every dashboard poll already runs and
-   caches for a few seconds; `-n` prints numbers only, so the locale changes nothing it reads):
-   the start is refused as a port in use by something the panel does not know. Unless a process of
-   the server's own game account runs (its status may be stale): a Restart then goes ahead, and a
-   Start is refused saying the server may already be up.
+2. a listener on the server's game port on the host, from one unprivileged `ss -H -lntue`
+   (ssh_manager._remote_listening_ports, which every dashboard poll already runs and caches for a
+   few seconds; `-n` prints numbers only, so the locale changes nothing it reads). Only a socket of
+   the protocol the game binds there counts (portscan.game_protocols: TCP for Minecraft Java and the
+   few other TCP-only games, both for the rest), so another server's UDP query socket on a Minecraft
+   server's TCP port is no clash. A socket another account holds (`ss -e`'s owner) refuses the start
+   naming that account. A socket with no owner printed (root's) is refused as a port in use by
+   something the panel does not know, unless a process of the server's own game account runs (its
+   status may be stale): a Restart then goes ahead, and a Start is refused saying the server may
+   already be up.
 
 Either refusal is a PortBusy, which the page offers to send again with `force` ("Start anyway").
 The check fails OPEN: a read that fails, raises, times out or comes back empty starts the server
@@ -165,13 +169,21 @@ def _pck_live_refusal(gs, remote, action, mine):
             _log.info("port check: no listening ports read for %s; starting without the check",
                       gs.name)
         return None
-    # Every port the game listens on: a crossplay Valheim is up on its port + 1 only.
-    hit = next((p for p in mine if p in live), None)
-    return _pck_live_hit(gs, remote, action, hit) if hit is not None else None
+    # Every port the game listens on: a crossplay Valheim is up on its port + 1 only. Only the protocol the game
+    # binds there counts (portscan.port_holders): a UDP query socket on a Minecraft server's TCP port is no clash.
+    protos = _ps.game_protocols(gs.game_type)
+    for p in mine:
+        held = _ps.port_holders(live, p, protos) if p in live else set()
+        if held is None or held:
+            return _pck_live_hit(gs, remote, action, p, held)
+    return None
 
 
-def _pck_live_hit(gs, remote, action, port):
-    """The answer when `port` is already listening: maybe the server itself, with a stale status.
+def _pck_live_hit(gs, remote, action, port, held=None):
+    """The answer when `port` is already listening: another account's socket, or maybe the server itself.
+
+    `held`: the accounts holding its sockets of the game's protocol, as the scan named them (None: not read). A
+    named account other than the server's own is not this server: the start is refused naming it.
 
     The stored status is refreshed by the monitor pass and the page polls, so a server started a
     moment ago (or one whose status went stale) reads "not online" while it is up on its own port.
@@ -181,6 +193,10 @@ def _pck_live_hit(gs, remote, action, port):
     a start of a server that is up is only LinuxGSM saying so. Only when none of the account's
     processes runs, or that cannot be read, is the port someone else's.
     """
+    others = sorted(o for o in held or () if o and o != gs.short_name)
+    if others:
+        return PortBusy("Port {port} is already in use on this host by the {account} account, not by this server. "
+                        "Start anyway?", port=port, account=_pck_account(others[0]))
     if _pck_own_process(gs, remote):
         if action == "restart":
             return None
@@ -188,6 +204,11 @@ def _pck_live_hit(gs, remote, action, port):
                         "server may already be up. Refresh the page to see, or start anyway.", port=port)
     return PortBusy("Port {port} is already in use on this host (not by a server the panel knows). "
                     "Start anyway?", port=port)
+
+
+def _pck_account(owner):
+    """An account as the port check names it: its name, or "uid N" for a uid with no name on the host."""
+    return "uid %s" % owner if owner.isdecimal() else "'%s'" % owner
 
 
 def follow_pending(gs, remote, rules):

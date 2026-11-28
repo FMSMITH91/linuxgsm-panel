@@ -3052,12 +3052,13 @@ def host_live_metrics(server, force=False):
 # answered: a host where `ss` printed nothing is a read that did not happen, the same rule as
 # portscan._remote_listening_ports, so only an answered scan is shared with it.
 #
-# Each port is printed once per account holding it (PORT <port> <account>; root's, or an owner `ss -e` did not
-# print, with none): portscan.held_by counts a port for a game only when its own account holds it (_OWN_PORT_AWK's
-# rule). Accounts are named from /etc/passwd; one not there is printed as its uid.
+# Each port is printed once per protocol and account holding it (PORT <port> <tcp|udp> <account>; root's, or an
+# owner `ss -e` did not print, with none): portscan.held_by counts a port for a game only when its own account holds
+# it (_OWN_PORT_AWK's rule), and the start's port check counts only the protocol the game binds (port_holders).
+# Accounts are named from /etc/passwd; one not there is printed as its uid.
 _HOST_SS = ("ss -H -ltnue 2>/dev/null | awk 'BEGIN {while ((getline l < \"/etc/passwd\") > 0) {split(l, p, \":\"); "
             "u[p[3]] = p[1]}} {n = split($5, a, \":\"); o = \"\"; for (i = 6; i <= NF; i++) if ($i ~ /^uid:/) "
-            "{o = substr($i, 5); if (o in u) o = u[o]} if (!s[a[n] \" \" o]++) print \"PORT\", a[n], o} "
+            "{o = substr($i, 5); if (o in u) o = u[o]} if (!s[a[n] \" \" $1 \" \" o]++) print \"PORT\", a[n], $1, o} "
             "END {if (NR) print \"PORTS\", NR}'")
 
 
@@ -3130,8 +3131,9 @@ def _hs_gup(f, _host, acc):
 
 def _hs_port(f, _host, acc):
     if len(f) >= 2 and f[1].isdecimal():
-        acc["ports"].add(int(f[1]))
-        acc["ports"].owners.setdefault(int(f[1]), set()).add(f[2] if len(f) >= 3 else "")
+        proto = f[2] if len(f) >= 3 and f[2] in ("tcp", "udp") else ""
+        rest = f[3:] if proto else f[2:]
+        acc["ports"].add_socket(int(f[1]), rest[0] if rest else "", proto)
 
 
 def _hs_ports_read(f, _host, acc):

@@ -271,6 +271,28 @@ def lgsm_cron_seen(gs_id):
         return dict(got) if got else None
 
 
+def read_lgsm_cron(gs):
+    """Read server `gs`'s crontab now, as its Scheduled tasks card does, and remember it: lgsm_cron_seen's answer.
+
+    None when it was not read: the account is not confirmed a plain game account (the card's read refusal),
+    a restore holds the crontab aside, or the host did not answer. A caller never takes None as "no task".
+    """
+    from panel.ops import ssh_manager as _sm
+    from panel.routes._shared import game_account_write_refusal, grs_restore_running
+    if gs.remote is None or not gs.short_name or grs_restore_running(gs.id):
+        return None
+    try:
+        if game_account_write_refusal(gs.remote, gs.short_name, reading=True) is not None:
+            return None
+        jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
+    except Exception:  # noqa: BLE001 - a host that could not be asked is "not read", never "no task"
+        return None
+    if not isinstance(jobs, list):
+        return None
+    note_lgsm_cron(gs.id, jobs)
+    return lgsm_cron_seen(gs.id)
+
+
 def forget_server(gs_id):
     """Drop what was read for a server (it was removed, or its id may be handed out again)."""
     with _SEEN_LOCK:

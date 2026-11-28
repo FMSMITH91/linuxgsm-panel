@@ -181,6 +181,7 @@ def _wait323(cond, secs=10):
 # ── 2. the rows ───────────────────────────────────────────────────────────────────────────────────
 def _s2_rows(host, su, nobody, gmod):
     mc = _gs323(host, "p323-mc", "mc", "p323mc", status="offline")
+    _u323.note_lgsm_cron(gmod.id, [])       # its crontab read: no update task of its own
     _gu323.note_output(gmod.id, _STEAM323)
     _gu323.note_output(mc.id, _MC323)
     rows, _d = _rows323(su.id)
@@ -302,7 +303,9 @@ def _tick323(now):
 
 
 def _s5_window(host, su, gmod, mc):
-    ran, checks = [], []
+    ran, checks, cron = [], [], []
+    # The window reads each server's crontab as its account (updates.read_lgsm_cron): `cron` is what it holds.
+    _p9_patch_sm("list_cron_jobs", lambda remote, user, selfname=None: [dict(j) for j in cron])
     _p9_patch(_sd323, "_run_action", _actions_stub323(ran))
     _p9_patch(_gu323, "check_pass", lambda now=None: checks.append(now))
     _p9_patch(_mon323, "_cached_player_count", lambda sid: 0)
@@ -323,9 +326,9 @@ def _s5_window(host, su, gmod, mc):
        (ran, "it has players on" in (skip.detail if skip else "")), ([], True))
     del ran[:]
     _p9_patch(_mon323, "_cached_player_count", lambda sid: 0)
-    _u323.note_lgsm_cron(gmod.id, [{"command": "./gmodserver update", "schedule": "15 5 * * *"}])
+    cron[:] = [{"command": "./gmodserver update", "schedule": "15 5 * * *"}]
     _tick323(_IN323)
-    _u323.note_lgsm_cron(gmod.id, [])
+    del cron[:]
     check("nightly window: a server whose own scheduled task runs update is left to it", ran == [], ran)
     _u323.set_backup_first(gmod.id, True)
     _tick323(_IN323)
