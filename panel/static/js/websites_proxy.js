@@ -131,6 +131,12 @@
     var ban = WS.el('wp-guard-bantime'), mins = ban ? Number(String(ban.value || '').trim()) : NaN;
     WS.show('wp-guard-bantime-note', Number.isFinite(mins) && mins > 0 && mins < 10);
   };
+  // A save that applies the configuration again replaces what the status line said of the last apply: a refusal shows
+  // there too, so the line never still reads "checked and applied" above a refusal.
+  function appliedLine(d) {
+    if (d && d.success) WS.say('wp-status', '');
+    else WS.done(d, 'wp-status');
+  }
   window.wsSaveGuard = function (e) {
     if (e && e.preventDefault) e.preventDefault();
     var body = {enabled: switchOn('wp-guard-on') === true, increment: switchOn('wp-guard-increment') === true,
@@ -139,6 +145,7 @@
     WS.stepUp(function () {
       WS.say('wp-guard-msg', WS.T('Saving…'));
       WS.post('/websites/proxy/settings', {host_id: st.host, guard: body}).then(function (d) {
+        appliedLine(d);
         if (WS.done(d, 'wp-guard-msg') && WS.loadList) WS.loadList();
       });
     });
@@ -250,6 +257,7 @@
       WS.post('/websites/proxy/settings', {host_id: st.host, exposure: body}).then(function (d) {
         var tok = WS.el('wp-token');
         if (tok) tok.value = '';
+        appliedLine(d);
         if (WS.done(d, 'wp-msg') && WS.loadList) WS.loadList();
       });
     });

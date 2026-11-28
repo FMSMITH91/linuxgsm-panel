@@ -482,6 +482,34 @@ def _node322(page, scripts, scenario, routes):
         _shutil322.rmtree(tmp, ignore_errors=True)
 
 
+def _s8_proxy_card():
+    from unit.part301 import _LIST301, _list_sa301
+    answer = dict(_LIST301, proxies=[{"host_id": 1, "host_name": "h", "installed": True, "version": "2.11.9",
+                                      "exposure_mode": "public", "allow_cidrs": [], "allow_presets": [],
+                                      "tunnel_service": "http://localhost:19080", "guard": {"bantime": 10}}], options={})
+    out = {}
+    for name, said in (("refused", {"success": False, "message": "Cloudflare refused the tunnel's token."}),
+                       ("saved", {"success": True, "message": "Saved and applied."})):
+        got = _node322(_list_sa301, ["websites_common.js", "websites.js", "websites_proxy.js"], r"""
+  for (let i = 0; i < 4; i++) await tick();
+  WS.say('wp-status', "The web proxy's configuration was checked and applied.", 'ok');
+  window.wsSaveExposure({preventDefault: function () {}});
+  for (let i = 0; i < 4; i++) await tick();
+  const before = $('wp-guard-bantime-note').hidden;
+  $('wp-guard-bantime').value = '1';
+  window.wsGuardCheck();
+  return {status: $('wp-status').textContent, red: $('wp-status').className.indexOf('text-danger') >= 0,
+          noteAt10: before, noteAt1: $('wp-guard-bantime-note').hidden};
+""", {"/api/websites": answer, "/websites/proxy/settings": said})
+        out[name] = (got.get("status"), got.get("red"), got.get("noteAt10"), got.get("noteAt1"), got.get("error"))
+    eq("proxy card (js/websites_proxy.js, a save that applies the configuration again): a refusal replaces the status "
+       "line's \"checked and applied\" (in red)", (out["refused"][:2], out["refused"][4]),
+       (("Cloudflare refused the tunnel's token.", True), None))
+    eq("proxy card (control: the save worked): the old status line is cleared", out["saved"][:2], ("", False))
+    eq("proxy card (Blocked visitors): a first ban below OWASP's 10-minute example shows its note at once, none at 10",
+       out["refused"][2:4], (True, False))
+
+
 def _s8_blocked_page():
     from unit.part301 import _site_ad301
     entry = {"ip": _VISITOR322, "jail": "lgsm-web-login", "reason": "Too many sign-in attempts",
@@ -635,7 +663,7 @@ def _ran322(step, *args):
 
 
 _ran322.last = ""
-for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_blocked_page):
+for _sec322 in (_s1_log_dir, _s3_deny_modes, _s5_restart, _s8_proxy_card, _s8_blocked_page):
     check("part322: %s ran to the end" % _sec322.__name__, _ran322(_sec322), _ran322.last)
 _trips322 = len(_P9_TRIPPED)
 with _p9.app_context():
